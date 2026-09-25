@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Switch } from '@renderer/ui/Switch'
 import { useSettings } from '@renderer/state/settings'
 import { usePhonePairing } from './settings/usePhonePairing'
-import { IOS_APP_STORE_URL } from '@renderer/lib/links'
+import { ANDROID_APP_URL, IOS_APP_STORE_URL } from '@renderer/lib/links'
 import { hostOsFromNavigator, sshServerCopy } from '@shared/ssh-server'
 import {
   pairingEndedMessage,
@@ -117,7 +117,7 @@ export function PhonePairPopover({
           ) : (
             <>
               <img src={qr} width={208} height={208} alt="Pairing QR code" className="phone-pair__qr" />
-              <div className="phone-pair__hint">Scan with the nodeterm iOS app · waiting (10 min)</div>
+              <div className="phone-pair__hint">Scan from the nodeterm phone app · waiting (10 min)</div>
               {!sshKey ? (
                 <div className="phone-pair__hint">{relayOnlyExplanation(windowsKeyFile)}</div>
               ) : relayPlan === 'dev' ? (
@@ -193,6 +193,12 @@ export function PhonePairPopover({
           onClick={() => window.nodeTerminal.shell.openExternal(IOS_APP_STORE_URL)}
         >
           Get the nodeterm iOS app ↗
+        </button>
+        <button
+          className="phone-pair__link phone-pair__footer"
+          onClick={() => window.nodeTerminal.shell.openExternal(ANDROID_APP_URL)}
+        >
+          nodeterm for Android ↗
         </button>
         <button className="phone-pair__link phone-pair__footer" onClick={onOpenSettings}>
           All phone settings…

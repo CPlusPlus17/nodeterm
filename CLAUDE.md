@@ -5384,7 +5384,21 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      — outside contributors cannot see or PR it, so a mobile implication is raised in the
      desktop PR and **@eneskirca** is mentioned to carry it over
      (SwiftUI + SwiftTerm/Citadel, tmux-integrated, talks the `TerminalTransport`/RemoteTransport
-     protocol).
+     protocol). **The Android companion lives in THIS repo** (`android/`, docs/android.md): a
+     pure-Kotlin wire layer (`android/protocol`, JVM-tested against this repo's own
+     `connectHostSession` / `createPairingService` through a local broker, and against a real SSH
+     server + sandboxed tmux) under a Compose app. It speaks exactly what the standing phone host
+     serves — the legacy relay dialect of `host-service.ts` and the direct-SSH/tmux conventions —
+     so **a change to a `host-service.ts` verb, the `projects.list` blob, the pairing payload, the
+     mirror file, or the SSH-visible file contracts (`~/.nodeterm/pending`, `~/.nodeterm/acks`,
+     `~/.nodeterm/relay.json`) owes the Android client (and its interop fixture,
+     `android/protocol/src/test/interop/host-fixture.ts`) in the same PR**; the Android workflow
+     (`.github/workflows/android.yml`) runs on those paths. Two relay verbs exist for a relay-only
+     phone and must not be dropped: `approvals.answer` (answers a held hook-reply approval through
+     the SAME `answerPermission` the canvas button uses — typing `1` is wrong there, the prompt is
+     not on screen while the hook holds it) and `inbox.ack` (the read-ack the `~/.nodeterm/acks`
+     sweep runs for an SSH phone). An exact-match tmux PANE target is `=name:`; `=name` alone is
+     refused ("can't find pane", measured on 3.4) — session commands take `=name`.
 
   **The canvas and the kanban board are TWO VIEWS of the same nodes — treat the board as a
   first-class surface, not an afterthought.** Every session/node feature you add to a canvas node

@@ -104,6 +104,11 @@ applicable here":
    cannot open a PR against it, so this is normally a follow-up note rather than same-PR
    work: say in your PR what the mobile side would need, and **mention @eneskirca** so it
    gets picked up there. "Not applicable" is a fine answer — just make it a stated one.
+   The **Android** companion is in this repo (`android/`, see docs/android.md). If you change what
+   a phone sees — a `host-service.ts` relay verb, the `projects.list` blob, the pairing payload,
+   the agent-status mirror, or the `~/.nodeterm/{pending,acks,relay.json}` files — update the
+   Android client in the same PR; `./gradlew -p protocol test` (from `android/`, after
+   `npm ci --ignore-scripts`) runs it against this repo's own host code.
 
 Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate

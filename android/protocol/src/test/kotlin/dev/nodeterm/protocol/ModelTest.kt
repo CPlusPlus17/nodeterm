@@ -64,7 +64,21 @@ class ModelTest {
         assertEquals(false, p.sshAvailable)
         assertNull(p.relay, "ws:// to a non-loopback host is refused (pairing.ts R5)")
         assertNull(PairingPayload.parse("""{"v":2,"host":"x"}"""))
-        assertNull(PairingPayload.parse("nodeterm://pair?code=abc"), "a desktop-peer offer is not a phone pairing")
+        assertNull(PairingPayload.parse("nodeterm://pair?code=abc"), "not a payload")
+    }
+
+    @Test
+    fun `the URL and bare-code envelopes of pair-qr ts decode to the same payload`() {
+        val json = """{"v":1,"host":"10.0.0.2","user":"u","token":"t","pairPort":1,"nodeterm":true,"name":"Box é"}"""
+        val code = dev.nodeterm.protocol.crypto.B64.encodeUrl(json.toByteArray())
+        val viaUrl = assertNotNull(PairingPayload.parse("nodeterm://pair?code=$code"))
+        assertEquals("Box é", viaUrl.name)
+        assertEquals(viaUrl, PairingPayload.parse(code))
+        assertEquals(viaUrl, PairingPayload.parse(json))
+        // A desktop-peer relay offer uses the same envelope with a different payload: refused.
+        val offer = dev.nodeterm.protocol.crypto.B64.encodeUrl("""{"relayEndpoint":"wss://r","pairingToken":"x","hostPublicKeyB64":"y"}""".toByteArray())
+        assertNull(PairingPayload.parse("nodeterm://pair?code=$offer"))
+        assertNull(PairingPayload.parse("https://pair?code=$code"))
     }
 
     @Test

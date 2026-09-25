@@ -31,9 +31,35 @@ data class PairingPayload(
     val sshAvailable: Boolean
 ) {
     companion object {
-        /** Null for anything that is not a nodeterm pairing payload — never throws. */
+        /** `@shared/pair-qr` PAIR_URL_PREFIX: the URL envelope a system camera can open. */
+        const val PAIR_URL_PREFIX = "nodeterm://pair?code="
+
+        /**
+         * The three shapes the desktop can hand over (`@shared/pair-qr`, and what the iOS app's
+         * `PairingService.decode` accepts): the raw payload JSON, the `nodeterm://pair?code=`
+         * URL wrapping base64url(JSON), or the bare base64url code.
+         */
+        fun unwrap(text: String): String? {
+            val t = text.trim()
+            if (t.isEmpty()) return null
+            if (t.startsWith("{")) return t
+            val code = if (t.contains("://")) {
+                val uri = try {
+                    URI(t)
+                } catch (_: Exception) {
+                    return null
+                }
+                if (uri.scheme != "nodeterm" || uri.host != "pair") return null
+                if (!uri.path.isNullOrEmpty() && uri.path != "/") return null
+                uri.rawQuery?.split('&')?.firstOrNull { it.startsWith("code=") }?.removePrefix("code=") ?: return null
+            } else t
+            return B64.decodeUrl(code)?.toString(Charsets.UTF_8)
+        }
+
+        /** Null for anything that is not a nodeterm PHONE pairing payload — never throws. (A desktop-peer
+         *  relay offer shares the URL envelope but not the payload, and is refused here.) */
         fun parse(text: String): PairingPayload? {
-            val o = J.obj(J.parse(text.trim())) ?: return null
+            val o = J.obj(J.parse(unwrap(text) ?: return null)) ?: return null
             if (o.l("v") != 1L || o.b("nodeterm") != true) return null
             val host = o.s("host")?.takeIf { it.isNotBlank() } ?: return null
             val user = o.s("user")?.takeIf { it.isNotBlank() } ?: return null

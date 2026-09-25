@@ -14,7 +14,7 @@ import kotlinx.serialization.json.longOrNull
  * hand-editable and hostile (project.json is git-shared), so a wrong-typed field degrades to
  * "absent" — it never throws and never takes the whole listing down with it.
  */
-internal object J {
+object J {
     fun parse(text: String): JsonElement? = try {
         if (text.isBlank()) null else Json.parseToJsonElement(text)
     } catch (_: Exception) {

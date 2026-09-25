@@ -65,13 +65,35 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     @Volatile private var onClosed: ((String?) -> Unit)? = null
     @Volatile private var userData: String? = null
 
-    /** Run a script through `/bin/sh -c` and return stdout (bounded wait). */
+    @Volatile private var closedFired = false
+
+    private fun fireClosed(reason: String?) {
+        if (closedFired) return
+        closedFired = true
+        onClosed?.invoke(reason)
+    }
+
+    /** True while the SSH transport is up. */
+    val isConnected: Boolean get() = client.isConnected && client.isAuthenticated
+
+    /**
+     * Run a script through `/bin/sh -c` and return stdout (bounded wait). A dead transport is
+     * reported through `onClosed` (so the owner reconnects) and surfaces as a [HostException] —
+     * never as a raw sshj exception a caller would have to know about.
+     */
     internal fun run(script: String, timeoutSec: Long = 20): Pair<Int?, String> {
-        client.startSession().use { session ->
-            val cmd = session.exec("/bin/sh -c " + SshScripts.q(script))
-            val out = cmd.inputStream.readBytes()
-            cmd.join(timeoutSec, TimeUnit.SECONDS)
-            return cmd.exitStatus to String(out, Charsets.UTF_8)
+        try {
+            client.startSession().use { session ->
+                val cmd = session.exec("/bin/sh -c " + SshScripts.q(script))
+                val out = cmd.inputStream.readBytes()
+                cmd.join(timeoutSec, TimeUnit.SECONDS)
+                return cmd.exitStatus to String(out, Charsets.UTF_8)
+            }
+        } catch (e: HostException) {
+            throw e
+        } catch (e: Exception) {
+            if (!isConnected) fireClosed(e.message)
+            throw HostException("The SSH connection failed: ${e.message ?: e.javaClass.simpleName}")
         }
     }
 
@@ -277,6 +299,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     }
 
     override fun close() {
+        closedFired = true // an intentional close is not a drop
         runCatching { client.disconnect() }
     }
 
@@ -333,7 +356,13 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                 mismatch?.let { throw it }
                 throw HostException("Couldn't connect over SSH to $user@$host:$port (${e.message ?: e.javaClass.simpleName}).")
             }
-            return SshHostConnection(client)
+            val conn = SshHostConnection(client)
+            // The transport dying (network change, sleep, the computer going away) is the one event
+            // nothing else would report: without this the owner keeps a dead connection forever.
+            client.transport.disconnectListener = net.schmizz.sshj.transport.DisconnectListener { _, message ->
+                conn.fireClosed(message)
+            }
+            return conn
         }
     }
 }

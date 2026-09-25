@@ -7,7 +7,7 @@ import { Button } from '@renderer/ui/Button'
 import { Switch } from '@renderer/ui/Switch'
 import { useSettings } from '@renderer/state/settings'
 import { usePhonePairing } from '../usePhonePairing'
-import { IOS_APP_STORE_URL } from '@renderer/lib/links'
+import { ANDROID_APP_URL, IOS_APP_STORE_URL } from '@renderer/lib/links'
 import { hostOsFromNavigator, sshServerCopy } from '@shared/ssh-server'
 import {
   pairingEndedMessage,
@@ -169,7 +169,7 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
     <SettingsSection
       id="phone"
       title="Phone"
-      description="Pair the nodeterm iOS app so it can connect to this machine over your local network — no terminal commands needed."
+      description="Pair the nodeterm phone app (iPhone or Android) so it can connect to this machine over your local network — no terminal commands needed."
       isActive={isActive}
       searchEntries={ENTRIES}
     >
@@ -198,8 +198,9 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
         <div className="space-y-4">
           <h4 className="text-[13px] font-medium text-text">Pair phone</h4>
           <p className="text-sm text-muted">
-            Pair the nodeterm iOS app: scan this QR with your phone. Your phone generates its own
-            key on-device — nothing secret leaves this machine except a single-use pairing token.
+            Pair the nodeterm phone app (iPhone or Android): scan this QR from inside the app. Your
+            phone generates its own key on-device — nothing secret leaves this machine except a
+            single-use pairing token.
           </p>
           <p className="text-sm text-muted">
             Don&apos;t have the app yet?{' '}
@@ -208,6 +209,13 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
               onClick={() => window.nodeTerminal.shell.openExternal(IOS_APP_STORE_URL)}
             >
               Get nodeterm for iOS on the App Store
+            </button>{' '}
+            ·{' '}
+            <button
+              className="cursor-pointer underline hover:text-text"
+              onClick={() => window.nodeTerminal.shell.openExternal(ANDROID_APP_URL)}
+            >
+              nodeterm for Android
             </button>
           </p>
 
@@ -277,12 +285,12 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
                     >
                       {qrForm === 'url'
                         ? 'Show the in-app code instead'
-                        : 'Scan with the iPhone Camera app instead'}
+                        : "Scan with the phone's Camera app instead"}
                     </button>
                     {qrForm === 'url' ? (
                       <p className="text-xs text-muted">
-                        Point the iPhone&apos;s own Camera at this and tap the nodeterm banner.
-                        Needs a recent version of the iOS app — if your phone doesn&apos;t
+                        Point the phone&apos;s own Camera at this and tap the nodeterm link.
+                        Needs a recent version of the nodeterm app — if your phone doesn&apos;t
                         recognise it, switch back and scan from inside nodeterm. Same code
                         either way; switching doesn&apos;t restart pairing.
                       </p>
