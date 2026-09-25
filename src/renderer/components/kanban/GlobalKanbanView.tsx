@@ -55,6 +55,7 @@ import { stationNodeFromState } from '../../state/teamStations'
 interface SwimlaneProps {
   projectId: string
   projectName: string
+  projectIndex: number
   projectColor?: string
   board: ProjectKanban
   sessions: KanbanSession[]
@@ -85,7 +86,7 @@ interface SwimlaneProps {
 }
 
 const Swimlane = memo(function Swimlane({
-  projectId, projectName, projectColor, board, sessions, ropes, nodes, onChangeBoard, onOpenNode, onCreateNode, onDeleteNode, onRenameNode, onEditSticky, onBrowserNav, onSetIcon, modalNodeId, onModalChange, liveTeams, highlight, liveLinkMenuItems
+  projectId, projectName, projectIndex, projectColor, board, sessions, ropes, nodes, onChangeBoard, onOpenNode, onCreateNode, onDeleteNode, onRenameNode, onEditSticky, onBrowserNav, onSetIcon, modalNodeId, onModalChange, liveTeams, highlight, liveLinkMenuItems
 }: SwimlaneProps) {
   const dragRef = useRef<{ kind: 'column'; id: string } | { kind: 'card'; id: string } | null>(null)
   const setModalNodeId = useCallback((nodeId: string | null) => onModalChange(projectId, nodeId), [onModalChange, projectId])
@@ -270,7 +271,7 @@ const Swimlane = memo(function Swimlane({
       >
         <span className="kanban-swimlane__toggle" aria-hidden="true">{collapsed ? '▸' : '▾'}</span>
         <span className="kanban-header__dot" style={{ background: projectColor || '#444' }} />
-        <span className="kanban-header__name">{projectName}</span>
+        <span className="kanban-header__name">{projectIndex}. {projectName}</span>
         <span className="kanban-swimlane__count">{sessions.length} sessions</span>
       </div>
       {!collapsed && (
@@ -308,6 +309,8 @@ const Swimlane = memo(function Swimlane({
       )}
       {modalNodeId && byId.has(modalNodeId) && (
         <CardModal
+          projectName={projectName}
+          projectColor={projectColor}
           session={byId.get(modalNodeId)!}
           projectId={projectId}
           columnTitle={columnForNode(board, modalNodeId)?.title ?? null}
@@ -483,7 +486,8 @@ export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, on
             <Swimlane
               key={p.id}
               projectId={p.id}
-              projectName={`${idx+1}. ${p.name}`}
+              projectName={p.name}
+              projectIndex={idx + 1}
               projectColor={p.color}
               board={board}
               sessions={sessions}

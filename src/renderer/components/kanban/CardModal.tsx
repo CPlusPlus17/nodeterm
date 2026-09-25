@@ -79,6 +79,9 @@ interface CardModalProps {
    *  here is the app's local session), so anything that depends on which machine the node runs
    *  on resolves through this id: the LIVE chip (R57) and the "Share live link" action (H4). */
   projectId: string
+  /** Owning project, supplied by the board (not necessarily the active project in Omni). */
+  projectName?: string
+  projectColor?: string
   /** Column title shown as a chip; null = Ungrouped. */
   columnTitle: string | null
   /** The live board + its pruned commit — the Members/Due strip edits through them. */
@@ -115,7 +118,7 @@ interface CardModalProps {
  *  canvas under it) stay mounted. Terminal cards carry the node header's actions too:
  *  search / dictate / AI-name / the ⌘M view — ChatPanel or the output markdown, the same face the
  *  canvas node shows (the node itself is hidden under the board). */
-export function CardModal({ session, projectId, columnTitle, board, onChangeBoard, onClose, portsProjectId, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel }: CardModalProps) {
+export function CardModal({ session, projectId, projectName, projectColor, columnTitle, board, onChangeBoard, onClose, portsProjectId, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel }: CardModalProps) {
   const { api } = useSession()
   // The header slot decides "icon or smiley" on the NORMALIZED value, the answer NodeIconView
   // itself gives — on the raw one, an invalid stored icon drew an empty, un-muted slot.
@@ -376,31 +379,40 @@ export function CardModal({ session, projectId, columnTitle, board, onChangeBoar
           >
             {sessionIcon ? <NodeIconView icon={sessionIcon} size={16} /> : <IconSmiley />}
           </button>
-          {editingTitle ? (
-            <input
-              className="kanban-modal__rename"
-              autoFocus
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onBlur={commitTitle}
-              onKeyDown={(e) => {
-                // Esc is owned by the capture-phase handler (cancels the edit).
-                if (e.key === 'Enter') commitTitle()
-              }}
-            />
-          ) : (
-            <span
-              className="kanban-modal__title"
-              onClick={() => {
-                if (session.kind === 'sticky') return // a note's label IS its first line
-                setTitle(session.title)
-                setEditingTitle(true)
-              }}
-            >
-              {session.title}
-            </span>
-          )}
-          <span className="kanban-modal__column">{columnTitle ?? 'Ungrouped'}</span>
+          <div className="kanban-modal__identity">
+            {editingTitle ? (
+              <input
+                className="kanban-modal__rename"
+                autoFocus
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onBlur={commitTitle}
+                onKeyDown={(e) => {
+                  // Esc is owned by the capture-phase handler (cancels the edit).
+                  if (e.key === 'Enter') commitTitle()
+                }}
+              />
+            ) : (
+              <span
+                className="kanban-modal__title"
+                title={session.title}
+                onClick={() => {
+                  if (session.kind === 'sticky') return // a note's label IS its first line
+                  setTitle(session.title)
+                  setEditingTitle(true)
+                }}
+              >
+                {session.title}
+              </span>
+            )}
+            {projectName && (
+              <span className="kanban-modal__project" title={projectName} aria-label={`Project: ${projectName}`}>
+                <span className="kanban-modal__project-dot" style={{ background: projectColor || 'currentColor' }} aria-hidden="true" />
+                <span className="kanban-modal__project-name">{projectName}</span>
+              </span>
+            )}
+            <span className="kanban-modal__column" title={columnTitle ?? 'Ungrouped'}>{columnTitle ?? 'Ungrouped'}</span>
+          </div>
           {isTerminal && onOpenIssue && <IssueRefChip issueRef={session.issueRef} onOpen={onOpenIssue} />}
           {isTerminal && team && team.length > 0 && onTravel && <TeamProgressChip stations={team} onTravel={onTravel} />}
           {/* The same Ports chip as the canvas node header. Opening a port places the browser node

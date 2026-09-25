@@ -1252,6 +1252,8 @@ export const KanbanView = memo(function KanbanView({
       )}
       {modalNodeId && byId.has(modalNodeId) && (
         <CardModal
+          projectName={projectName}
+          projectColor={projectColor}
           session={byId.get(modalNodeId)!}
           projectId={projectId}
           mentionables={mentionables}
