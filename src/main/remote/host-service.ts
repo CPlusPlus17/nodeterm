@@ -34,6 +34,7 @@ import { PtyManager, type DetachedSinks } from '../../core/pty-manager'
 import * as fsOps from '../../core/fs-ops'
 import { TITLE_MAX, type RemoteNodeInput } from '../../core/project-node-append'
 import { parseCardLabelEdit, type CardLabelEdit } from '../../core/project-kanban-write'
+import { isValidPendingId } from '../../core/agents/pending-approvals'
 import { getStoredEntitlement, isPremium } from '../../core/license'
 import { publicKeyToB64, type KeyPair } from './e2ee'
 import { loadOrCreateHostKeyPair, HostKeyLockedError } from './host-identity'
@@ -179,6 +180,27 @@ export interface HostKanbanOps {
   ): Promise<{ edited: boolean; labels: KanbanLabel[]; cardLabelIds: string[] } | null>
 }
 
+/**
+ * The phone's Inbox actions that need the DESKTOP rather than the pane (`approvals.answer` /
+ * `inbox.ack`). A phone on direct SSH does both by writing files on the host (the hook-reply
+ * `~/.nodeterm/pending/<id>.answer`, the `~/.nodeterm/acks/<nodeId>.seen` read-ack); a phone on the
+ * relay cannot — `fs.*` is jailed to the project roots, and rightly so — so without these verbs a
+ * relay-only phone (every Windows host, and any phone off the LAN) could neither answer a held
+ * approval nor tell the desktop it read a finished session. Typing `1` instead is NOT a substitute:
+ * while the hook holds the request the prompt is not on screen yet, so the keystroke would land in
+ * the agent's composer.
+ *
+ * Both land on the SAME functions the desktop's own surfaces use (the canvas Approve/Deny button's
+ * `agent:answer-permission` handler; the ack sweeper's `ackDone` + unread-clear), so a relay answer
+ * cannot drift from a local one. Absent ⇒ the verbs answer an honest "not served".
+ */
+export interface HostInboxOps {
+  /** Answer a held permission hook. Resolves false when nothing was written. */
+  answerPermission(nodeId: string, pendingId: string, decision: 'allow' | 'deny'): Promise<boolean>
+  /** The phone READ a finished session: resolve its done event(s) and clear the desktop unread. */
+  ackRead(nodeId: string): void
+}
+
 interface Stream {
   sessionId: string
   /** The node id (tmux persistKey) this stream attached to. The ONLY tmux target a client can
@@ -263,7 +285,9 @@ export function createHostHandlers(
   nodeActions?: HostNodeActions,
   // Kanban board writes on the phone's behalf (`projects.ensureBoard` / `projects.setCardColumn`).
   // Absent ⇒ the verbs answer an honest "not served".
-  kanban?: HostKanbanOps
+  kanban?: HostKanbanOps,
+  // Inbox actions (`approvals.answer` / `inbox.ack`). Absent ⇒ the verbs answer "not served".
+  inbox?: HostInboxOps
 ): HostHandlers {
   // streamId -> Stream. PTY callbacks close over their own `streamId` directly, so no
   // reverse (sessionId -> streamId) index is needed.
@@ -659,6 +683,48 @@ export function createHostHandlers(
       .catch(() => socket.respond(req.id, true, { moved: false }))
   }
 
+  /**
+   * `approvals.answer {nodeId, pendingId, decision}` → `{answered}` and `inbox.ack {nodeId}` → `{}`
+   * (see `HostInboxOps`). Every field is client-sent and validated here before it reaches a path: the
+   * pendingId with the SAME rule the answer writer applies (`isValidPendingId` — it becomes a file
+   * name), the node id with the rule `node.*` applies. `answered:false` is an ANSWER (the hook already
+   * timed out, the host could not write), not a protocol error, so the phone can say "already handled".
+   */
+  function handleInbox(req: RpcRequest): void {
+    if (!inbox) {
+      socket.respond(req.id, false, { message: `${req.method} is not served on this host.` })
+      return
+    }
+    const p = asRecord(req.params)
+    const nodeId = str(p.nodeId)
+    // eslint-disable-next-line no-control-regex -- refusing control chars is the point
+    if (!nodeId || nodeId.length > REF_MAX_LEN || /[\x00-\x1f\x7f-\x9f]/.test(nodeId)) {
+      socket.respond(req.id, false, { message: 'Invalid node id.' })
+      return
+    }
+    if (req.method === 'inbox.ack') {
+      try {
+        inbox.ackRead(nodeId)
+      } catch {
+        /* best-effort, exactly like the file-drop sweep it mirrors */
+      }
+      socket.respond(req.id, true, {})
+      return
+    }
+    const pendingId = str(p.pendingId) ?? ''
+    const decision = p.decision
+    if (!isValidPendingId(pendingId) || (decision !== 'allow' && decision !== 'deny')) {
+      socket.respond(req.id, false, {
+        message: 'approvals.answer requires a pendingId and a decision of allow or deny.'
+      })
+      return
+    }
+    void inbox
+      .answerPermission(nodeId, pendingId, decision)
+      .then((answered) => socket.respond(req.id, true, { answered }))
+      .catch(() => socket.respond(req.id, true, { answered: false }))
+  }
+
   function handleKill(req: RpcRequest): void {
     const streamId = num(asRecord(req.params).streamId, -1)
     const stream = streams.get(streamId)
@@ -831,6 +897,10 @@ export function createHostHandlers(
         case 'node.refresh':
         case 'node.rename':
           handleNodeAction(req)
+          break
+        case 'approvals.answer':
+        case 'inbox.ack':
+          handleInbox(req)
           break
         case 'projects.list':
           // Read-only enumeration of the host's projects/sessions/agent-status (no client params —
@@ -1076,6 +1146,9 @@ export interface HostSessionOptions {
   /** Kanban board writes for the phone's Board sheet (`projects.ensureBoard` /
    *  `projects.setCardColumn`). Optional: absent ⇒ the verbs answer an honest "not served". */
   kanban?: HostKanbanOps
+  /** Inbox actions for a relay phone (`approvals.answer` / `inbox.ack`). Optional: absent ⇒ the
+   *  verbs answer an honest "not served". */
+  inbox?: HostInboxOps
   /** Extra fs/git jail roots beyond the shared canvas's node cwds — production passes the
    *  workspace's local project cwds: the phone browses EVERY project over `projects.list`, so a
    *  canvas-only jail denied whichever project the desktop didn't happen to have focused. */
@@ -1200,7 +1273,8 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
     opts.destroyNode,
     opts.remoteViewer,
     opts.nodeActions,
-    opts.kanban
+    opts.kanban,
+    opts.inbox
   )
   canvasSync = createHostCanvasSync(socket, opts.applyMutation)
   unsubCanvas = opts.subscribeCanvas(() => scheduleBroadcast())
@@ -1231,6 +1305,8 @@ export interface HostBridgeDeps {
   nodeActions?: HostNodeActions
   /** Kanban board writes for the phone's Board sheet — see main/index.ts's WorkspaceStore wiring. */
   kanban?: HostKanbanOps
+  /** Inbox actions for a relay phone — the same answer writer / read-ack the desktop itself uses. */
+  inbox?: HostInboxOps
   /** Workspace-level jail roots (local project cwds) merged with the canvas node cwds. */
   workspaceRoots?: () => string[]
 }
@@ -1305,6 +1381,7 @@ export function initRemoteHost(
       remoteViewer: bridge.remoteViewer,
       nodeActions: bridge.nodeActions,
       kanban: bridge.kanban,
+      inbox: bridge.inbox,
       extraRoots: bridge.workspaceRoots,
       // Typing attribution: this session's input frames are this phone's keystrokes.
       getClientId: () => phone.id(),

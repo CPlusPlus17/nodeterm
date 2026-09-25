@@ -1,0 +1,309 @@
+package dev.nodeterm.protocol.host
+
+import dev.nodeterm.protocol.model.InboxEvent
+import dev.nodeterm.protocol.model.J
+import dev.nodeterm.protocol.model.J.b
+import dev.nodeterm.protocol.model.J.l
+import dev.nodeterm.protocol.model.J.objects
+import dev.nodeterm.protocol.model.J.s
+import dev.nodeterm.protocol.model.J.strings
+import dev.nodeterm.protocol.model.KanbanColumn
+import dev.nodeterm.protocol.model.KanbanLabel
+import dev.nodeterm.protocol.model.ProjectsParser
+import dev.nodeterm.protocol.model.ProjectsSnapshot
+import dev.nodeterm.protocol.relay.Frame
+import dev.nodeterm.protocol.relay.Framing
+import dev.nodeterm.protocol.relay.Op
+import dev.nodeterm.protocol.relay.RelaySocket
+import dev.nodeterm.protocol.relay.RelaySocketListener
+import dev.nodeterm.protocol.relay.RpcException
+import dev.nodeterm.protocol.relay.SnapshotReassembler
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+/**
+ * [HostConnection] over the standing phone host's relay dialect — `createHostHandlers` in
+ * `src/main/remote/host-service.ts` is the other end, verb for verb:
+ *
+ *  `projects.list` → `{output}` · `pty.attach {nodeId, cols, rows}` → `{streamId, fresh}` then
+ *  Snapshot Start, Chunk…, End and Output frames · `pty.kill|destroy|scroll {streamId…}` ·
+ *  `node.wake|refresh|rename {nodeId, title?}` · `projects.ensureBoard|setCardColumn|
+ *  editCardLabels|registerNode` · `git.*` · Input/Resize frames up, Output/Resized/Error down.
+ *
+ * `resizedFrames` is deliberately NOT sent on attach, exactly like the iOS app: a phone is a
+ * CEILING on the shared pty (a session never grows wider than its screen). An `OP.Resized` still
+ * arrives when a desktop viewer sized the session, and is surfaced so the UI can offer "fit".
+ */
+class RelayHostConnection private constructor() : HostConnection, RelaySocketListener {
+    private lateinit var socket: RelaySocket
+    private val streams = ConcurrentHashMap<Long, Stream>()
+    @Volatile private var onChanged: (() -> Unit)? = null
+    @Volatile private var onClosed: ((String?) -> Unit)? = null
+    @Volatile private var readyListener: ((String) -> Unit)? = null
+
+    override val kind = TransportKind.RELAY
+    override val capabilities = HostCapabilities(
+        boardWrites = true, git = true, nodeActions = true, registerNode = true, answerApprovals = true
+    )
+
+    private inner class Stream(val id: Long, override val fresh: Boolean, val sink: TerminalSink) : TerminalStream {
+        private val snapshot = SnapshotReassembler()
+        private var outSeq = 0L
+
+        fun accept(frame: Frame) {
+            when (frame.op) {
+                Op.SNAPSHOT_START, Op.SNAPSHOT_CHUNK -> snapshot.accept(frame)
+                Op.SNAPSHOT_END -> snapshot.accept(frame)?.let { if (it.isNotEmpty()) sink.onPaint(it) }
+                Op.OUTPUT -> sink.onOutput(frame.payload)
+                Op.RESIZED -> Framing.readSize(frame.payload)?.let { (c, r) -> sink.onResized(c, r) }
+                Op.ERROR -> {
+                    streams.remove(id)
+                    val code = J.obj(J.parse(String(frame.payload, Charsets.UTF_8)))?.l("exitCode")?.toInt()
+                    sink.onExit(code)
+                }
+            }
+        }
+
+        override fun write(text: String) {
+            synchronized(this) { socket.sendFrame(Op.INPUT, id, outSeq++, text.toByteArray(Charsets.UTF_8)) }
+        }
+
+        override fun resize(cols: Int, rows: Int) {
+            synchronized(this) { socket.sendFrame(Op.RESIZE, id, outSeq++, Framing.sizePayload(cols, rows)) }
+        }
+
+        override suspend fun scroll(up: Boolean, lines: Int) {
+            call("pty.scroll", buildJsonObject {
+                put("streamId", id)
+                put("dir", if (up) "up" else "down")
+                put("lines", lines)
+            })
+        }
+
+        override suspend fun detach() {
+            streams.remove(id)
+            runCatching { call("pty.kill", buildJsonObject { put("streamId", id) }) }
+        }
+
+        override suspend fun endSession() {
+            try {
+                call("pty.destroy", buildJsonObject { put("streamId", id) })
+            } finally {
+                streams.remove(id)
+            }
+        }
+    }
+
+    // ---- RelaySocketListener ------------------------------------------------------------------
+
+    override fun onReady(sas: String) {
+        readyListener?.invoke(sas)
+    }
+
+    override fun onNotify(method: String, params: JsonElement?) {
+        // `canvas:state` is pushed on approval and on every host canvas change: a cheap "re-list".
+        if (method == "canvas:state") onChanged?.invoke()
+    }
+
+    override fun onFrame(frame: Frame) {
+        streams[frame.streamId]?.accept(frame)
+    }
+
+    override fun onClosed(reason: String?) {
+        val live = streams.values.toList()
+        streams.clear()
+        for (s in live) s.sink.onExit(null)
+        onClosed?.invoke(reason)
+    }
+
+    // ---- RPC plumbing ---------------------------------------------------------------------
+
+    private suspend fun call(method: String, params: JsonElement? = null): JsonElement? = try {
+        socket.call(method, params)
+    } catch (e: RpcException) {
+        throw HostException(e.message ?: "Request failed.")
+    }
+
+    override suspend fun listProjects(): ProjectsSnapshot {
+        val body = J.obj(call("projects.list")) ?: return ProjectsSnapshot.EMPTY
+        return ProjectsParser.parseBlob(body.s("output") ?: "")
+    }
+
+    override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink): TerminalStream =
+        suspendCancellableCoroutine { cont ->
+            val params = buildJsonObject {
+                put("nodeId", nodeId)
+                put("cols", cols)
+                put("rows", rows)
+            }
+            socket.request("pty.attach", params) { r ->
+                r.fold(
+                    onSuccess = { body ->
+                        val o = J.obj(body)
+                        val streamId = o?.l("streamId")
+                        if (streamId == null) {
+                            cont.resumeWithException(HostException("The host did not open a terminal stream."))
+                        } else {
+                            // Registered HERE, on the reader thread, before the snapshot frames that
+                            // follow the response are processed.
+                            val s = Stream(streamId, o.b("fresh") == true, sink)
+                            streams[streamId] = s
+                            cont.resume(s)
+                        }
+                    },
+                    onFailure = { cont.resumeWithException(HostException(it.message ?: "Attach failed.")) }
+                )
+            }
+        }
+
+    override suspend fun wake(nodeId: String) {
+        call("node.wake", buildJsonObject { put("nodeId", nodeId) })
+    }
+
+    override suspend fun refresh(nodeId: String) {
+        call("node.refresh", buildJsonObject { put("nodeId", nodeId) })
+    }
+
+    override suspend fun rename(nodeId: String, title: String) {
+        call("node.rename", buildJsonObject {
+            put("nodeId", nodeId)
+            put("title", title)
+        })
+    }
+
+    override suspend fun ensureBoard(projectId: String): List<KanbanColumn>? {
+        val o = J.obj(call("projects.ensureBoard", buildJsonObject { put("projectId", projectId) })) ?: return null
+        val cols = o["columns"] as? JsonArray ?: return null
+        return cols.mapNotNull { J.obj(it) }.mapNotNull { c ->
+            val id = c.s("id") ?: return@mapNotNull null
+            KanbanColumn(id, c.s("title") ?: "", c.s("color"))
+        }
+    }
+
+    override suspend fun setCardColumn(projectId: String, nodeId: String, columnId: String?): Boolean {
+        val o = J.obj(call("projects.setCardColumn", buildJsonObject {
+            put("projectId", projectId)
+            put("nodeId", nodeId)
+            // null is REAL here: the virtual Ungrouped column.
+            put("columnId", columnId?.let(::JsonPrimitive) ?: JsonNull)
+        }))
+        return o?.b("moved") == true
+    }
+
+    override suspend fun editCardLabels(projectId: String, nodeId: String, edit: CardLabelEdit): LabelEditResult? {
+        val o = J.obj(call("projects.editCardLabels", buildJsonObject {
+            put("projectId", projectId)
+            put("nodeId", nodeId)
+            if (edit.add.isNotEmpty()) put("add", JsonArray(edit.add.map(::JsonPrimitive)))
+            if (edit.remove.isNotEmpty()) put("remove", JsonArray(edit.remove.map(::JsonPrimitive)))
+            if (edit.create.isNotEmpty()) put("create", JsonArray(edit.create.map { (name, color) ->
+                buildJsonObject {
+                    put("name", name)
+                    put("color", color)
+                }
+            }))
+        })) ?: return null
+        if (o["labels"] !is JsonArray) return null
+        return LabelEditResult(
+            edited = o.b("edited") == true,
+            labels = o.objects("labels").mapNotNull { l ->
+                val id = l.s("id") ?: return@mapNotNull null
+                KanbanLabel(id, l.s("name") ?: "", l.s("color") ?: "default")
+            },
+            cardLabelIds = o.strings("cardLabelIds")
+        )
+    }
+
+    override suspend fun registerNode(projectId: String, node: NewNode): Boolean {
+        val o = J.obj(call("projects.registerNode", buildJsonObject {
+            put("projectId", projectId)
+            put("node", buildJsonObject {
+                put("id", node.id)
+                node.title?.let { put("title", it) }
+                node.agentId?.let { put("agentId", it) }
+                node.accountId?.let { put("accountId", it) }
+            })
+        }))
+        return o?.b("registered") == true
+    }
+
+    /** `approvals.answer` (host-service.ts `HostInboxOps`). A desktop that predates the verb answers
+     *  "not served", which is [ApprovalOutcome.UNSUPPORTED] — never a guess. */
+    override suspend fun answerApproval(event: InboxEvent, allow: Boolean): ApprovalOutcome {
+        val pendingId = event.pendingId ?: return ApprovalOutcome.UNSUPPORTED
+        val body = try {
+            J.obj(call("approvals.answer", buildJsonObject {
+                put("nodeId", event.nodeId)
+                put("pendingId", pendingId)
+                put("decision", if (allow) "allow" else "deny")
+            }))
+        } catch (e: HostException) {
+            if (e.message?.contains("not served") == true || e.message?.startsWith("Unknown method") == true) {
+                return ApprovalOutcome.UNSUPPORTED
+            }
+            throw e
+        }
+        return if (body?.b("answered") == true) ApprovalOutcome.SENT else ApprovalOutcome.ALREADY_HANDLED
+    }
+
+    override suspend fun ackRead(nodeId: String, eventId: String?) {
+        try {
+            call("inbox.ack", buildJsonObject { put("nodeId", nodeId) })
+        } catch (_: HostException) {
+            // An older desktop: the read stays phone-local, exactly as before the verb existed.
+        }
+    }
+
+    override suspend fun sendKeys(nodeId: String, keys: String) {
+        val sink = object : TerminalSink {
+            override fun onPaint(text: String) {}
+            override fun onOutput(bytes: ByteArray) {}
+            override fun onExit(code: Int?) {}
+        }
+        val stream = attach(nodeId, 80, 24, sink)
+        try {
+            stream.write(keys)
+        } finally {
+            stream.detach()
+        }
+    }
+
+    override suspend fun git(verb: GitVerb, cwd: String, args: Map<String, JsonElement>): JsonElement? =
+        call(verb.wire, JsonObject(args + ("cwd" to JsonPrimitive(cwd))))
+
+    override fun setOnChanged(listener: (() -> Unit)?) {
+        onChanged = listener
+    }
+
+    override fun setOnClosed(listener: ((String?) -> Unit)?) {
+        onClosed = listener
+    }
+
+    override fun close() {
+        streams.clear()
+        socket.close()
+    }
+
+    companion object {
+        /**
+         * Open the socket and wire this connection as its listener. [onReady] fires with the SAS once
+         * the E2EE handshake completes; APPROVAL is separate (the desktop human, or a pin) — see
+         * [RelayConnector].
+         */
+        fun open(build: (RelaySocketListener) -> RelaySocket, onReady: (String) -> Unit): RelayHostConnection {
+            val conn = RelayHostConnection()
+            conn.readyListener = onReady
+            conn.socket = build(conn)
+            return conn
+        }
+    }
+}

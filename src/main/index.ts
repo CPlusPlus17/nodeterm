@@ -2767,26 +2767,37 @@ app.whenReady().then(async () => {
   // project: an SSH project's hook runs on the REMOTE host (write over its ControlMaster), a local
   // project's on THIS machine (write under os.homedir() — the hook uses $HOME, which may differ from
   // the project cwd). pendingId is validated before it is interpolated into any path/command.
+  //
+  // ONE writer for every answerer: the canvas IPC below and the relay phone's `approvals.answer`
+  // verb (host-service.ts `HostInboxOps`) both call `answerPermission`, so a phone answer can never
+  // take a different route than a desktop one.
+  async function answerPermission(
+    nodeId: string,
+    pendingId: string,
+    decision: 'allow' | 'deny'
+  ): Promise<boolean> {
+    if (!isValidPendingId(pendingId)) return false
+    if (decision !== 'allow' && decision !== 'deny') return false
+    const sshProjectId = workspaceStore.sshProjectIdForNode(nodeId)
+    const ok =
+      sshProjectId && sshProjectManager
+        ? await sshProjectManager.writePendingAnswer(sshProjectId, pendingId, decision)
+        : await writePendingAnswerLocal(pendingId, decision, homedir())
+    // Optimistic flip: on a successful write, emit the same synthetic "answered" transition the
+    // held hook's second POST will produce, so the NEEDS YOU badge clears instantly instead of
+    // waiting for that POST to round-trip. The later hook POST is an idempotent duplicate (a
+    // same-state working re-assert is a no-op). See docs/hook-reply-approvals.md.
+    if (ok) {
+      const ev = syntheticAnsweredEvent(nodeId, pendingId, decision)
+      if (ev) emitAgentStatus(ev)
+    }
+    return ok
+  }
   corePlatform.handle(
     IPC.agentAnswerPermission,
     async (payload: { nodeId: string; pendingId: string; decision: 'allow' | 'deny' }) => {
       const { nodeId, pendingId, decision } = payload ?? ({} as typeof payload)
-      if (!isValidPendingId(pendingId)) return false
-      if (decision !== 'allow' && decision !== 'deny') return false
-      const sshProjectId = workspaceStore.sshProjectIdForNode(nodeId)
-      const ok =
-        sshProjectId && sshProjectManager
-          ? await sshProjectManager.writePendingAnswer(sshProjectId, pendingId, decision)
-          : await writePendingAnswerLocal(pendingId, decision, homedir())
-      // Optimistic flip: on a successful write, emit the same synthetic "answered" transition the
-      // held hook's second POST will produce, so the NEEDS YOU badge clears instantly instead of
-      // waiting for that POST to round-trip. The later hook POST is an idempotent duplicate (a
-      // same-state working re-assert is a no-op). See docs/hook-reply-approvals.md.
-      if (ok) {
-        const ev = syntheticAnsweredEvent(nodeId, pendingId, decision)
-        if (ev) emitAgentStatus(ev)
-      }
-      return ok
+      return answerPermission(nodeId, pendingId, decision)
     }
   )
   // Read-a-finished-session ack (this feature): the renderer's unread-clear funnel calls it when the
@@ -4005,6 +4016,17 @@ app.whenReady().then(async () => {
         rename: (nodeId: string, title: string) => deliver(IPC.agentRenameNode, { nodeId, title })
       }
     })(),
+    // A relay phone's Inbox actions (`approvals.answer` / `inbox.ack`): the SAME answer writer the
+    // canvas Approve/Deny button uses, and the SAME ack pair the `~/.nodeterm/acks` sweep runs for a
+    // phone on direct SSH — `ackDone` (resolve the done event, dismiss other phones' activities)
+    // plus the desktop unread clear, WITHOUT a re-ack (the external-clear channel).
+    inbox: {
+      answerPermission,
+      ackRead: (nodeId: string) => {
+        ackDone(nodeId)
+        sendToMain(IPC.agentUnreadClear, nodeId)
+      }
+    },
     // Jail roots beyond the active canvas: the phone browses EVERY project (projects.list), so
     // its fs/git access spans every local project root — not just the tab the desktop happens
     // to have focused (that gap read as "cwd is outside the shared project roots" on the phone).
