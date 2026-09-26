@@ -11,13 +11,31 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 - The Android app exists (`android/`), and **CI built its debug APK successfully with AGP** (run
   [36109984730](https://github.com/CPlusPlus17/nodeterm/actions/runs/36109984730), artifact
   `nodeterm-android-debug`, which expires 2026-12-24). The protocol tests pass in CI too.
-- **It has never been run on a phone.** A 170-agent audit found **9 distinct release blockers**. The
-  worst: typing in a direct-SSH terminal drops the connection (`A01`), and the direct-SSH session
-  list is empty on every real desktop (`A02`). Do not hand the APK to anyone until the next section
-  is done.
+- **It has never been run on a phone.** A 170-agent audit found **9 distinct release blockers**.
+  WP1 (the unambiguous ones, including `A01` typing drops the SSH connection and `A02` the empty
+  SSH session list) is fixed on the branch; see the progress log below. Do not hand the APK to
+  anyone until WP2 is done and the device pass has run.
 - The next session should **fix the blockers**, then do a **device test pass** using the checklist
   below, then work down the medium findings. No PR is open, and none should be opened unless the
   user asks.
+
+## Progress log
+
+Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
+audit's proposal.
+
+### WP1 (blockers): done on the branch, not device-verified
+
+| Finding | Commit | What changed | Checked by |
+|---|---|---|---|
+| A01 / A04 | `af1f820` | `SshStream` owns one single-thread writer for write/resize/scroll; a non-IO exception out of sshj's write path tears the transport down and fires `onClosed` instead of being swallowed. `SshHostConnection.close()` and `HostSession.disconnect()` never touch the socket on the caller's thread, and a failed `SSH_MSG_DISCONNECT` still closes the socket. | `SshTransportTest`: a socket factory that throws when used from a thread marked "main" (a JVM stand-in for StrictMode) drives resize/write/close from that thread; a poisoned transport must surface as `onClosed`. Mutation-checked. |
+| A02 | `e7c22eb` | Prelude probes `…/node-terminal` first, `…/nodeterm` as a legacy fallback. A listing with no userData dir is now an explicit error, not an empty computer. `scripts/uninstall.sh` + `docs/uninstall.md` remove `node-terminal` (and legacy `nodeterm`) data, caches, logs and either Keychain spelling. | Fixture uses the real name; new `SshScriptsTest` runs the prelude under `/bin/sh` on Linux, macOS, XDG, legacy and both-present HOMEs. |
+| A03 | `cd69a1e` | Attach script exports a UTF-8 LANG by the desktop's `resolveLocaleLang` rule (`en_US.UTF-8` on macOS, `C.UTF-8` elsewhere) and passes `-u`. | Harness no longer leaks the JVM's LANG; `╭é` from ASCII input must arrive intact. Mutation-checked. |
+| A06 / A35 | `16706f4` | Desktop writers check `<pendingId>.json` before writing (`fs.access`; `[ -f … ] \|\| exit 3` in the same SSH command) and return `sent \| gone \| failed`; only `sent` emits the synthetic answered event. `approvals.answer` adds `reason` (additive). Phone: `ApprovalOutcome.GONE`; if the node is still blocked, `QuickActions` returns `EXPIRED`, which opens the session with an explanation. | vitest (pending-approvals, ssh-project incl. the remote command under a real `/bin/sh`, host inbox verbs); SSH transport test; relay interop through the desktop's real verb. |
+| A10 | `fcda932` | `android/app/debug.keystore` committed and wired as the debug signing config. **Departs from the verifier's advice** (it warned that a public key lets anyone sign an update that inherits the app's data); the user chose it for sideloading. The trade-off is written in `build.gradle.kts` and both READMEs. | CI build (AGP cannot run in the sandbox). |
+
+The iOS-facing part of A06: `approvals.answer` now replies `{answered:false, reason:"gone"|"failed"}`
+when it did not deliver. iOS can adopt `reason` unchanged; an older phone keeps reading `answered`.
 
 ## Where things are
 

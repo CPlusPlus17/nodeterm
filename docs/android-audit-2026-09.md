@@ -6,20 +6,24 @@ Severity is the impact judge's rating, not the auditor's claim. **BLOCK** means 
 
 Prioritised plan and handover: [`android-handover.md`](android-handover.md).
 
+**Status of fixes.** A fixed finding is marked `✅ fixed in <sha>` in the index; its section below
+keeps the original audit text (line numbers still refer to `2f58918`). Where the fix departs from
+the audit's proposal, the handover's progress log says how and why.
+
 ## Index
 
 | ID | Sev | Block | Effort | Area | Title |
 |---|---|---|---|---|---|
-| [A01](#a01) | high | BLOCK | small | build/bug | Direct-SSH terminal writes and resizes run on the Android main thread, which breaks the SSH connection as soon as the keyboard opens |
-| [A02](#a02) | high | BLOCK | small | protocol/bug | SSH browse looks for the desktop's userData under 'nodeterm', but the desktop writes it under 'node-terminal', so every direct-SSH listing comes back empty |
-| [A03](#a03) | high | BLOCK | small | protocol/bug | The direct-SSH tmux client starts without a UTF-8 locale, so tmux replaces every non-ASCII character with '_' |
-| [A04](#a04) | high | BLOCK | small | runtime/bug | SSH terminal writes and resizes run on the main thread, and the NetworkOnMainThreadException that runCatching swallows leaves sshj's cipher state out of sync, which drops the whole SSH connection |
+| [A01](#a01) | high | BLOCK | small | build/bug | ✅ fixed in `af1f820` · Direct-SSH terminal writes and resizes run on the Android main thread, which breaks the SSH connection as soon as the keyboard opens |
+| [A02](#a02) | high | BLOCK | small | protocol/bug | ✅ fixed in `e7c22eb` · SSH browse looks for the desktop's userData under 'nodeterm', but the desktop writes it under 'node-terminal', so every direct-SSH listing comes back empty |
+| [A03](#a03) | high | BLOCK | small | protocol/bug | ✅ fixed in `cd69a1e` · The direct-SSH tmux client starts without a UTF-8 locale, so tmux replaces every non-ASCII character with '_' |
+| [A04](#a04) | high | BLOCK | small | runtime/bug | ✅ fixed in `af1f820` · SSH terminal writes and resizes run on the main thread, and the NetworkOnMainThreadException that runCatching swallows leaves sshj's cipher state out of sync, which drops the whole SSH connection |
 | [A05](#a05) | high | BLOCK | small | runtime/risk | The background InboxWorker can open a never-approved relay handshake and raise the desktop's SAS approval dialog while the phone shows no code |
-| [A06](#a06) | high | BLOCK | small | security/bug | approvals.answer reports success for a hold that already timed out, and clears NEEDS YOU on every surface |
+| [A06](#a06) | high | BLOCK | small | security/bug | ✅ fixed in `16706f4` · approvals.answer reports success for a hold that already timed out, and clears NEEDS YOU on every surface |
 | [A07](#a07) | high | BLOCK | medium | critic/bug | Remote access fails the first time you are away from the computer: Auto never does the first relay handshake while the phone is at the desk, and pairing does not pin the phone's relay key |
 | [A08](#a08) | high | BLOCK | small | critic/bug | A cold attach over direct SSH creates the desktop's tmux session with no hook environment, so an agent resumed there never reports status, and the desktop never repairs it |
 | [A09](#a09) | medium | BLOCK | small | protocol/bug | Nodes of SSH projects open against the desktop's LOCAL tmux, creating an empty phantom session and offering to resume the conversation on the wrong machine |
-| [A10](#a10) | medium | BLOCK | small | ci-docs/risk | Debug APKs from CI change signature from run to run; README offers them as the install route, and updating means uninstalling, which wipes pairings |
+| [A10](#a10) | medium | BLOCK | small | ci-docs/risk | ✅ fixed in `fcda932` · Debug APKs from CI change signature from run to run; README offers them as the install route, and updating means uninstalling, which wipes pairings |
 | [A11](#a11) | medium |  | small | build/bug | Tapping an Inbox notification while the app is in the background does not open that computer |
 | [A12](#a12) | medium |  | medium | protocol/bug | Relay sendKeys (question answers, legacy approvals) writes into a pty that does not exist yet and then kills it immediately, so the keystroke can be lost while the UI reports success |
 | [A13](#a13) | medium |  | medium | protocol/bug | Registering a phone-started node while the phone is attached lets the desktop's own client attach with `-D`, which detaches the phone; Android then reports the session as ended |
@@ -44,7 +48,7 @@ Prioritised plan and handover: [`android-handover.md`](android-handover.md).
 | [A32](#a32) | medium |  | medium | critic/gap | No way to open a URL or copy text from the phone terminal: no link detection, no touch selection, and the WebView cannot show xterm's link confirm |
 | [A33](#a33) | medium |  | medium | critic/bug | On a Windows computer, 'New session' starts the agent in the user's home folder instead of the project, and silently drops the chosen Claude account while still registering it |
 | [A34](#a34) | medium |  | small | critic/bug | The Ctrl key-row chip does not apply to text sent from the input bar: arming Ctrl and sending 'z' submits a literal 'z' plus Enter |
-| [A35](#a35) | medium |  | small | critic/bug | approvals.answer returns `answered:false` both for 'already handled' and for 'the write failed'; the phone always says 'Already handled.' |
+| [A35](#a35) | medium |  | small | critic/bug | ✅ fixed in `16706f4` · approvals.answer returns `answered:false` both for 'already handled' and for 'the write failed'; the phone always says 'Already handled.' |
 | [A36](#a36) | medium |  | small | critic/gap | After any connection drop the terminal stays on 'Disconnected. [Reattach]' even though the host connection reconnects by itself |
 | [A37](#a37) | low |  | small | build/risk | proguard-rules.pro would not survive turning on minification (R8 missing-class errors) |
 | [A38](#a38) | low |  | small | protocol/bug | Quick approve requires the node to be exactly 'blocked', but the desktop publishes approval tickets while the node stays 'waiting' on a held question |

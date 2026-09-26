@@ -41,7 +41,7 @@ describes as the future. The Android client implements what the host actually se
 | Wake, refresh, rename | `node.wake|refresh|rename` | — (needs the desktop app) |
 | Board | `projects.ensureBoard|setCardColumn|editCardLabels` | read-only |
 | New session | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | — |
-| Answer a held approval | **`approvals.answer`** (new) | write `~/.nodeterm/pending/<id>.answer` |
+| Answer a held approval | **`approvals.answer`** (new) → `{answered}`, plus `reason: gone\|failed` when not | write `~/.nodeterm/pending/<id>.answer` (prints `gone` when the hold ended) |
 | Read-ack | **`inbox.ack`** (new) | write `~/.nodeterm/acks/<nodeId>.seen` |
 
 `resizedFrames` is deliberately not sent on attach, matching iOS: the phone is a size *ceiling* on
@@ -85,13 +85,20 @@ unchanged.
 The **app** module is built by CI (`.github/workflows/android.yml`) against the runner's Android
 SDK. The first run, [36109984730](https://github.com/CPlusPlus17/nodeterm/actions/runs/36109984730)
 on `2f58918`, built the debug APK successfully. The app has no instrumented tests and has **not been
-run on a device**. An audit of the code found release blockers, all still open:
-[`android-audit-2026-09.md`](android-audit-2026-09.md). The plan, the device checklist and the
+run on a device**. An audit of the code found release blockers; the fixed ones are marked in its
+index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md). The plan, the device checklist and the
 decisions still open are in [`android-handover.md`](android-handover.md).
 
-Two test caveats. The fixtures hand-copy some desktop shapes: the mirror, the `projects.list` blob
-and the `~/.nodeterm` files (audit `A64`). Because of that, one wrong path (`A02`, the desktop's
-userData directory is `node-terminal`, not `nodeterm`) passed its test.
+A test caveat: the fixtures hand-copy some desktop shapes — the mirror, the `projects.list` blob
+and the `~/.nodeterm` files (audit `A64`). That is how a wrong userData path (`A02`: the desktop's
+directory is `node-terminal`, not `nodeterm`) once passed its test; the fixture now uses the real
+name, and `SshScriptsTest` runs the prelude under `/bin/sh` against both spellings.
+
+Since the audit, the SSH tests also cover: resize/keystrokes/close from a thread that must not do
+network I/O (a JVM stand-in for Android's StrictMode, `A01`), a transport that breaks mid-write
+(`A01`), and non-ASCII through an attach whose host sets no locale (`A03`). The relay interop tests
+cover an approval answered after the hook's hold ended (`A06`), and the desktop tests run the
+generated SSH answer command under a real `/bin/sh`.
 
 ## Known gaps
 
