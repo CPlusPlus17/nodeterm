@@ -39,9 +39,10 @@ android {
         }
         release {
             // R8 (shrink + obfuscate) runs for release only; debug stays unminified and is the APK that
-            // is distributed. CI builds this unsigned release on every change so a missing rule fails CI
-            // (audit A37). That proves R8 accepts proguard-rules.pro and that its keeps matched
-            // (tools/check-r8-output.sh); it does NOT prove the reflection-loaded code (BouncyCastle's
+            // is distributed. CI builds this unsigned release on every change (audit A37), so a missing
+            // -dontwarn fails CI (R8 reports the missing class), and tools/check-r8-output.sh checks that
+            // the keeps it names matched. A keep that NEW reflection needs is not detected: R8 renames or
+            // drops such code silently. None of it proves the reflection-loaded code (BouncyCastle's
             // provider tables, the WebView bridge, the WorkManager worker) works on a device, which
             // nobody has run a release build on. There is no release signing config yet.
             isMinifyEnabled = true

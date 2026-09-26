@@ -116,11 +116,16 @@ unchanged.
 The **app** module is built by CI (`.github/workflows/android.yml`) against the runner's Android
 SDK. The first run, [36109984730](https://github.com/CPlusPlus17/nodeterm/actions/runs/36109984730)
 on `2f58918`, built the debug APK successfully. CI also builds an unsigned release APK, the only build
-type R8 minifies (audit `A37`). A missing `-dontwarn` or `-keep` then fails CI instead of the first
-release, and `tools/check-r8-output.sh` checks that the keeps for reflection-loaded code (the WebView
-bridge, the WorkManager worker, BouncyCastle's provider tables) matched. `R8RulesTest` re-derives the
-classes Android lacks from the jars the app ships. The debug APK stays unminified and is the one
-distributed. The app has no instrumented tests and has **not been run on a device**, minified or not. An audit of the code found release blockers; the fixed ones are marked in its
+type R8 minifies (audit `A37`). A missing `-dontwarn` then fails CI instead of the first release,
+because R8 reports the missing class. `tools/check-r8-output.sh` then checks that these existing
+keeps for code reached by name matched: the WebView bridge's methods, the WorkManager worker's constructor,
+BouncyCastle's provider tables, and one exception class's name (error text can fall back to it). A
+missing `-keep` is otherwise not detected: R8 renames or drops code it cannot see used and reports
+nothing, so a new reflection or name-dependent target (a new `Class.forName`, a class a library loads
+from a string) builds green without its keep. It needs its own keep and a line in
+`tools/check-r8-output.sh`. `R8RulesTest` re-derives the classes Android lacks from the jars the
+protocol module ships to the app, and requires a keep for every WorkManager worker in the app sources.
+The debug APK stays unminified and is the one distributed. The app has no instrumented tests and has **not been run on a device**, minified or not. An audit of the code found release blockers; the fixed ones are marked in its
 index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md). The plan, the device checklist and the
 decisions still open are in [`android-handover.md`](android-handover.md).
 

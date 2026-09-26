@@ -80,10 +80,13 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
 
   # R8 runs only for the release build type, and the debug APK above is the one distributed. Building
-  # the release here (unsigned; no signing secrets exist or are needed) makes a missing -dontwarn or
-  # -keep in app/proguard-rules.pro fail CI instead of the first real release (audit A37). A separate
-  # job so an R8 failure never withholds the debug APK. Green proves the build and that the runtime
-  # keeps matched (tools/check-r8-output.sh); it does not prove reflection-loaded code works on a phone.
+  # the release here (unsigned; no signing secrets exist or are needed) makes a missing -dontwarn in
+  # app/proguard-rules.pro fail CI instead of the first real release (audit A37): R8 reports the missing
+  # class. It reports no missing -keep, so tools/check-r8-output.sh then checks that the keeps it names
+  # matched (the WebView bridge, the worker, BouncyCastle's provider tables, one exception name). A NEW
+  # reflection target without a keep is not detected: it needs its own keep and a line in that script.
+  # A separate job so an R8 failure never withholds the debug APK. Green does not prove reflection-loaded
+  # code works on a phone.
   app-release:
     name: App release (R8, unsigned)
     runs-on: ubuntu-latest

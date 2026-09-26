@@ -1,15 +1,20 @@
 # R8 rules for the RELEASE build type (audit A37). Debug is not minified, and the debug APK is the
 # one distributed. CI builds an unsigned release APK (`:app:assembleRelease`) on every change, so R8
-# runs against these rules and a missing one fails CI instead of the first real release.
+# runs against these rules: a missing -dontwarn fails CI instead of the first real release. A missing
+# -keep does not fail R8: it renames or drops code it cannot see used and reports nothing. So code
+# reached by a NEW name (a new Class.forName, a class a new library loads from a string) needs its own
+# keep here AND a line in tools/check-r8-output.sh, or CI stays green without it.
 #
 # What is verified, and by what:
 #  - R8 finishing in CI: the build accepts these rules (no missing-class errors). Nothing more.
-#  - tools/check-r8-output.sh (CI, after that build): the runtime keeps below MATCHED. The bridge
-#    methods, the worker, the BouncyCastle provider tables and an exception class are in R8's seeds
-#    and keep their names in its mapping. A keep whose class was renamed matches nothing, silently.
+#  - tools/check-r8-output.sh (CI, after that build): the keeps it names MATCHED. The bridge methods,
+#    the worker, the BouncyCastle provider tables and an exception class are in R8's seeds and keep
+#    their names in its mapping. A keep whose class was renamed matches nothing, silently. It checks
+#    nothing about the sshj and EdDSA keeps, nor about any target it does not name.
 #  - R8RulesTest (android/protocol, runs without AGP): re-derives the missing classes from the jars
-#    the app ships and checks every one is covered below or by the library's own consumer rules, and
-#    pins the runtime keeps against the app's sources.
+#    the protocol module ships to the app and checks every one is covered below or by the library's
+#    own consumer rules, and pins the bridge, worker and exception-name keeps against the app's
+#    sources (a new WorkManager worker without its keep fails it).
 #  - NOT verified: that the reflection-loaded code works on a device. The release APK has never run
 #    on one. R8 passing proves the build, not the runtime.
 #

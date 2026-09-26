@@ -46,9 +46,12 @@ Needs JDK 17+ and the Android SDK (Android Studio's, or `ANDROID_HOME`). `minSdk
 CI builds the debug APK on every change under `android/` (`.github/workflows/android.yml`) and
 attaches it to the run. The debug APK is not minified. Only the release build type runs R8
 (`app/proguard-rules.pro`), and CI builds it too, unsigned and not published
-(`./gradlew :app:assembleRelease`, then `tools/check-r8-output.sh`). A missing R8 rule therefore
-fails CI rather than a first release. That proves the rules build and that their keeps matched,
-not that a minified APK works on a phone; none has been run on one.
+(`./gradlew :app:assembleRelease`, then `tools/check-r8-output.sh`). A missing `-dontwarn` therefore
+fails CI rather than a first release (R8 reports the missing class), and so does one of the keeps the
+script checks when it stops matching (the WebView bridge, the worker, BouncyCastle's provider tables,
+one exception name). A keep that NEW reflection needs is not detected, because R8 renames or drops
+such code without a word; add the keep and a line in `tools/check-r8-output.sh`. None of this proves
+a minified APK works on a phone; none has been run on one.
 
 **Debug builds are signed with a public key that is committed on purpose**
 (`app/debug.keystore`, password `android`). That is what lets you install a newer CI or local

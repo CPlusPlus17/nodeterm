@@ -8,6 +8,10 @@
 # nothing and R8 does not say so, so this checks the keeps MATCHED what they exist for:
 #   seeds.txt    every class and member a keep rule pinned, under its original name;
 #   mapping.txt  "original -> output:" for every class that survived.
+# It checks only the targets named below (bridge methods are read from the source, so a new one is
+# covered). A NEW class or member reached by name needs its keep in proguard-rules.pro, which nothing
+# in CI asks for (except for a WorkManager worker: R8RulesTest does), and a line here so CI checks
+# that the keep matched.
 # It does not prove that the reflection-loaded code works on a device; nothing here runs the APK.
 set -eu
 
