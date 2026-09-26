@@ -12,6 +12,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.TransactionTooLargeException
 import android.util.Base64
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
@@ -35,6 +36,7 @@ import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.Keys
 import dev.nodeterm.protocol.model.Launch
+import dev.nodeterm.protocol.model.Osc52
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -175,17 +177,54 @@ class TerminalController(
             graph.scope.launch { runCatching { s.scroll(up, notches) } }
         }
 
+        /** The OSC 52 base64 cap terminal.js applies before a copy crosses this bridge (A53). */
         @JavascriptInterface
-        fun onCopy(b64: String) {
-            val text = runCatching { String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8) }.getOrNull() ?: return
-            main.post {
-                val ctx = webView?.context ?: return@post
-                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("nodeterm", text))
-                val lines = text.count { it == '\n' } + 1
-                Toast.makeText(ctx, "Copied $lines line${if (lines == 1) "" else "s"}", Toast.LENGTH_SHORT).show()
+        fun copyLimit(): Int = Osc52.MAX_BASE64
+
+        /** An OSC 52 terminal.js refused as over [copyLimit]; the payload itself never crossed. */
+        @JavascriptInterface
+        fun onCopyTooLarge() {
+            main.post { toast(COPY_TOO_LARGE, Toast.LENGTH_LONG) }
+        }
+
+        /** A whole OSC 52 sequence (`<selection>;<base64>`), parsed here on the bridge thread. */
+        @JavascriptInterface
+        fun onCopy(data: String) {
+            when (val r = Osc52.parse(data)) {
+                is Osc52.Result.Copy -> main.post { writeClipboard(r.text) }
+                Osc52.Result.TooLarge -> main.post { toast(COPY_TOO_LARGE, Toast.LENGTH_LONG) }
+                // A read query, an empty write or a malformed one: the desktop ignores these too.
+                Osc52.Result.Ignored, Osc52.Result.Invalid -> Unit
             }
         }
+    }
+
+    /**
+     * The clipboard write is a binder call into the system server, and a failed one (too large for
+     * the shared transaction buffer, or refused) is rethrown here as a RuntimeException. Uncaught,
+     * pane output could crash the app (A53); caught, the user is told the copy did not happen.
+     */
+    private fun writeClipboard(text: String) {
+        val ctx = webView?.context ?: return
+        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        if (cm == null) {
+            toast(COPY_FAILED, Toast.LENGTH_LONG)
+            return
+        }
+        try {
+            cm.setPrimaryClip(ClipData.newPlainText("nodeterm", text))
+        } catch (e: Exception) {
+            val tooLarge = generateSequence<Throwable>(e) { it.cause }.take(8).any { it is TransactionTooLargeException }
+            toast(if (tooLarge) COPY_REJECTED_SIZE else COPY_FAILED, Toast.LENGTH_LONG)
+            return
+        }
+        val lines = text.count { it == '\n' } + 1
+        toast("Copied $lines line${if (lines == 1) "" else "s"}", Toast.LENGTH_SHORT)
+    }
+
+    private fun toast(message: String, length: Int) {
+        val ctx = webView?.context ?: return
+        Toast.makeText(ctx, message, length).show()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -440,6 +479,10 @@ class TerminalController(
             "The computer didn't add this session to the project, so it won't appear on the canvas. It keeps running; " +
                 "end it here when you are done, or find it in nodeterm's session list (the RAM pill) on the computer."
         private const val CHUNK = 192 * 1024
+        private val COPY_TOO_LARGE =
+            "Too large to copy: nodeterm copies up to %,d characters to the clipboard.".format(Osc52.MAX_TEXT_CHARS)
+        private const val COPY_REJECTED_SIZE = "Could not copy: too large for the clipboard."
+        private const val COPY_FAILED = "Could not copy to the clipboard."
         private fun b64(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP)
     }
 }

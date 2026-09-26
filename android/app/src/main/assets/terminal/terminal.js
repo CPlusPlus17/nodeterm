@@ -50,12 +50,18 @@
   term.onData(function (d) { bridge.onInput(d) })
   term.onBinary(function (d) { bridge.onInput(d) })
 
-  // Copy: tmux's copy-mode emits OSC 52 (set-clipboard on). Write-only — a read query ('?') is
-  // refused, exactly as the desktop's handler refuses it.
+  // Copy: tmux's copy-mode emits OSC 52 (set-clipboard on). The whole sequence goes to Kotlin's
+  // Osc52.parse, which mirrors the desktop's parseOsc52: the ';' is required, a read query ('?') is
+  // refused (write-only), and base64 and UTF-8 are decoded strictly. The one check made here is the
+  // size cap (audit A53): xterm accepts OSC payloads up to 10,000,000 characters, and a copy that
+  // big must neither cross the bridge nor reach the clipboard's binder call. The cap is Kotlin's
+  // own constant, read once over the bridge so there is one definition; Kotlin checks it again.
+  var copyLimit = bridge.copyLimit()
   term.parser.registerOscHandler(52, function (data) {
     var idx = data.indexOf(';')
-    var payload = idx >= 0 ? data.slice(idx + 1) : data
-    if (payload && payload !== '?') bridge.onCopy(payload)
+    if (idx < 0) return true
+    if (data.length - idx - 1 > copyLimit) bridge.onCopyTooLarge()
+    else bridge.onCopy(data)
     return true
   })
 
