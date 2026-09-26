@@ -47,11 +47,12 @@ tasks.test {
     // Files some tests run or read that are not on the test classpath: the node drivers, the app's
     // terminal page (TerminalJs*Test), the app's sources (the source pins in TerminalKeyboardChipTest,
     // SettingsLeaveTest and R8RulesTest), the release build's R8 rules, its build type and the CI
-    // workflow that runs R8 (R8RulesTest), the CI config GradleCiCoverageTest checks: the workflows
-    // that run Gradle, the Dependabot config, the root build's settings and the build scripts whose
-    // dependencies it matches against the Dependabot groups (the app's is named above), and the
-    // contributor docs and the wrapper's Gradle version ContributorDocsTest checks against each other,
-    // and the audit whose finding ids DeviceChecklistDocsTest checks the device checklist against.
+    // workflow that runs R8 (R8RulesTest), the CI config GradleCiCoverageTest checks: that workflow
+    // (every job that runs Gradle is in it), the Dependabot config, the root build's settings and the
+    // build scripts whose dependencies it matches against the Dependabot groups (the app's is named
+    // above), and the contributor docs and the wrapper's Gradle version ContributorDocsTest checks
+    // against each other, and the audit whose finding ids DeviceChecklistDocsTest checks the device
+    // checklist against.
     // Declared so a change to one of them re-runs the tests instead of leaving them "up to date".
     inputs.dir("src/test/interop").withPathSensitivity(PathSensitivity.RELATIVE)
     // The desktop code the interop fixture bundles (the same dirs as android.yml's path filter). Without
@@ -66,7 +67,6 @@ tasks.test {
     inputs.file(rootDir.resolve("../app/proguard-rules.pro")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../app/build.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../../.github/workflows/android.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
-    inputs.file(rootDir.resolve("../../.github/workflows/security.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../../.github/dependabot.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../settings.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../build.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)

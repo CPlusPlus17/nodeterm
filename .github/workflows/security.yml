@@ -1,11 +1,9 @@
 name: Security
 
-# Independent security gates on every PR into main (and a weekly baseline scan):
+# Two independent security gates on every PR into main (and a weekly baseline scan):
 #   - CodeQL static analysis of the JS/TS sources (main + preload + renderer + server).
-#   - CodeQL static analysis of the Android companion's Kotlin (android/: the app and the protocol
-#     module), in its own job; see the note above it.
 #   - Dependency review: blocks a PR that adds a vulnerable or disallowed-license dep.
-# All are free on public repos and add no secrets to the PR runner.
+# Both are free on public repos and add no secrets to the PR runner.
 on:
   # Merge-queue runs: required checks must also report on the queue's synthetic
   # merge commits, or every queued PR times out waiting for them.
@@ -24,7 +22,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Least privilege: only the CodeQL jobs need security-events:write to upload results.
+# Least privilege: only CodeQL needs security-events:write to upload results.
 permissions:
   contents: read
 
@@ -45,51 +43,6 @@ jobs:
       - uses: github/codeql-action/analyze@v4
         with:
           category: '/language:javascript-typescript'
-
-  # The Android companion's Kotlin (audit A69): the protocol module (the NaCl box, the relay client,
-  # pairing, SSH host-key pinning) and the app (the Keystore-held secrets, the terminal WebView bridge).
-  # A job of its own rather than a second language in the job above, so that job's name and required
-  # check (`CodeQL`) stay exactly as they were; this one is not a required check.
-  # build-mode none would analyse nothing: for java-kotlin it reads Java sources only, and android/ is all
-  # Kotlin. So CodeQL traces a build of it (manual). `:app:compileDebugKotlin` compiles the app and,
-  # through settings.gradle.kts' includeBuild("protocol"), the protocol module's main sources (tests are
-  # not analysed); it needs the Android SDK that ubuntu-latest ships, as android.yml's app job does.
-  # --no-daemon keeps the build in a process CodeQL traces; the in-process strategy keeps the Kotlin
-  # compiler inside it rather than in a separate Kotlin daemon (the property reaches an included build
-  # too: checked locally on tools/typecheck, which includes the protocol build the same way; with it no
-  # KotlinCompileDaemon starts, without it one does);
-  # --no-build-cache keeps a cache hit from skipping the compile CodeQL extracts from.
-  # It runs on this workflow's triggers, not android.yml's path filter, so main's baseline, the merge
-  # queue and the weekly re-scan all carry the analysis and every pull request is compared with it.
-  # setup-gradle validates the wrapper jar before ./gradlew runs and reads the Gradle cache android.yml's
-  # app job writes (see the note there). GradleCiCoverageTest (android/protocol) pins this job.
-  codeql-kotlin:
-    name: CodeQL (Kotlin)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: gradle/actions/setup-gradle@v6
-        with:
-          cache-provider: basic
-          cache-read-only: true
-      - uses: github/codeql-action/init@v4
-        with:
-          languages: java-kotlin
-          build-mode: manual
-          queries: security-extended
-      - name: Build the Kotlin (app + protocol) under CodeQL
-        working-directory: android
-        run: ./gradlew --no-daemon --no-build-cache -Pkotlin.compiler.execution.strategy=in-process :app:compileDebugKotlin --stacktrace
-      - uses: github/codeql-action/analyze@v4
-        with:
-          category: '/language:java-kotlin'
 
   dependency-review:
     name: Dependency review

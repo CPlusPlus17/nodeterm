@@ -67,8 +67,11 @@ weekly Gradle update PRs for `android/`, the protocol build and the wrapper incl
 `tools/typecheck`, whose pins follow the app's by hand). The protocol's network and crypto libraries
 (okhttp, sshj, eddsa, BouncyCastle) come in a PR of their own, so an androidx bump the app cannot take
 yet (one that demands a higher `compileSdk`, say) does not hold them back. CodeQL analyses the app's
-and the protocol module's Kotlin on every pull request (`.github/workflows/security.yml`, job
-`CodeQL (Kotlin)`). `GradleCiCoverageTest` pins all of this. The wrapper properties carry no
+and the protocol module's Kotlin (`.github/workflows/android.yml`, job `CodeQL (Kotlin)`) whenever
+that workflow runs: on a branch push or a pull request that changes an Android-relevant file, on
+`main` when such a change lands, and by hand (workflow_dispatch). A pull request that changes none is
+compared with `main`'s analysis. There is no weekly re-scan of unchanged Kotlin, and the job is not a
+required check. `GradleCiCoverageTest` pins all of this. The wrapper properties carry no
 `distributionSha256Sum` yet, so the Gradle distribution itself is not pinned.
 
 **Debug builds are signed with a public key that is committed on purpose**

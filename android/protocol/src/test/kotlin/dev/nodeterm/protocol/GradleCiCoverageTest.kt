@@ -16,7 +16,10 @@ import kotlin.test.assertTrue
  *     the jobs share (android.yml says why).
  *  2. CodeQL analyses the Kotlin. A `java-kotlin` analysis with build mode `none` reads Java sources
  *     only, and everything under android/ is Kotlin, so it would scan nothing while looking like
- *     coverage; the Kotlin has to be compiled between CodeQL's `init` and `analyze`.
+ *     coverage; the Kotlin has to be compiled between CodeQL's `init` and `analyze`. The job is in
+ *     android.yml, not security.yml: security.yml has no workflow_dispatch and runs on no feature
+ *     branch, so a job there could first run on somebody's pull request into main (android.yml says why
+ *     and what its path filter costs).
  *  3. Dependabot watches every Gradle build under android/ exactly once: a build another build
  *     includes is covered by that build's entry (Dependabot follows `includeBuild`), and a second
  *     entry would open each of its bumps twice. Except the builds in [notWatched].
@@ -29,11 +32,10 @@ import kotlin.test.assertTrue
  * does; what these readers do not understand fails rather than being guessed.
  */
 class GradleCiCoverageTest {
-    private val workflows = listOf(
-        File(InteropHarness.repoRoot, ".github/workflows/android.yml"),
-        File(InteropHarness.repoRoot, ".github/workflows/security.yml"),
-    )
-    private val securityWorkflow = File(InteropHarness.repoRoot, ".github/workflows/security.yml")
+    private val androidWorkflow = File(InteropHarness.repoRoot, ".github/workflows/android.yml")
+
+    /** The workflows whose jobs run `./gradlew`: android.yml alone, the Kotlin CodeQL job included. */
+    private val workflows = listOf(androidWorkflow)
     private val dependabot = File(InteropHarness.repoRoot, ".github/dependabot.yml")
     private val androidSettings = File(InteropHarness.repoRoot, "android/settings.gradle.kts")
 
@@ -76,7 +78,7 @@ class GradleCiCoverageTest {
                 )
             }
         }
-        // android.yml's protocol, app and app-release jobs and security.yml's CodeQL (Kotlin) job.
+        // android.yml's protocol, app, app-release and CodeQL (Kotlin) jobs.
         assertTrue(gradleJobs >= 4, "found only $gradleJobs jobs running ./gradlew; has the reader stopped seeing them?")
     }
 
@@ -101,10 +103,14 @@ class GradleCiCoverageTest {
 
     @Test
     fun `CodeQL compiles and analyses the app's and the protocol module's Kotlin`() {
-        val kotlinJobs = jobs(read(securityWorkflow)).filter { (_, job) ->
+        val kotlinJobs = jobs(read(androidWorkflow)).filter { (_, job) ->
             steps(job).any { isCodeqlInit(it) && "java-kotlin" in value(it, "languages").orEmpty() }
         }
-        assertEquals(1, kotlinJobs.size, "security.yml must have one CodeQL job for java-kotlin (audit A69)")
+        assertEquals(
+            1, kotlinJobs.size,
+            "android.yml must have one CodeQL job for java-kotlin (audit A69); it lives there, where a feature " +
+                "branch can run it, not in security.yml"
+        )
         val (id, job) = kotlinJobs.entries.single()
         val steps = steps(job)
         val init = steps.indexOfFirst(::isCodeqlInit)
