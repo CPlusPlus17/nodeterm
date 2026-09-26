@@ -25,6 +25,21 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
 
+### WP6 batch C (CI, test harness and docs): done on the branch
+
+| Finding | Commits | What changed | Checked by |
+|---|---|---|---|
+| A60 | `67e6297` | The interop bundle aliases `electron` to a throwing stub instead of loading the real package (whose binary was downloaded at test time); a failed fixture start kills its node process. | `InteropHarnessTest` (no `require("electron")` in the bundle; a never-ready start leaves no process). |
+| A62 | `77c760d`, `bf24cfc` | The SSH tests make a short, realpath'd tmux socket root (macOS's 103-character limit) and drive either util-linux or BSD `script`; POSIX-only helper tests skip elsewhere. | `SshTestHostTest`; not run on a Mac. |
+| A70 | `68d5da6` | The fixture is bundled through esbuild's JS API by `node` (no `.bin` shim for CreateProcess); the pairing fixture pins its platform and the test isolates `USERPROFILE`. | Bundle byte-identical to the old CLI output; not run on Windows. |
+| A67 | `696fd10` | `tsconfig.node.json` includes the interop fixture, so `npm run typecheck` checks it; `HostSessionOptions.pty` narrowed to `HostPtyManager`, removing the fixture's cast. | `npm run typecheck`; a guard test pins the include and bans the casts. |
+| A63 | `b3d4c6e`, `9d19bd1` | `android.yml` runs on every file the fixture bundles (`src/core/**`, `src/shared/**`, `src/main/*.ts`, `src/main/remote/**`, `package*.json`, `tsconfig.json`) and on the docs the tests read; the list is derived from esbuild's metafile. | `WorkflowPathFilterTest` re-derives it. |
+| A64 | `f9782da` | The relay `projects.list` blob comes from `buildProjectsListBlob` (one assembly for `index.ts` and the fixture); mirror entries from the real writer. Docs now say which contracts are still hand-copied. | vitest `projects-list-blob.test.ts`; a guard test refuses a hand-written blob. |
+| A69 | `6f3a8da`, `4806b92` | `setup-gradle` (wrapper validation, a read-mostly cache) in every Gradle job; Dependabot `gradle` for `/android` with the network/crypto stack in its own group; a Kotlin CodeQL job built under CodeQL (`build-mode: manual`). The gradle-8.14.3 distribution checksum is not pinned yet (no network here). | `GradleCiCoverageTest`; the CodeQL job's first CI run is below. |
+| A61 / A71 | `39e7995`, `9d19bd1` | Docs: an existing `npm install` is enough for the interop tests; `npm ci --ignore-scripts` is CI's and replaces `node_modules`. JDK 17–24 (Gradle 8.14.3 cannot start on 25). | `ContributorDocsTest`. |
+| A65 / A50 | `33af5e7`, `d092639` | `docs/android.md` gets the numbered device checklist; the READMEs say the debug APK is debuggable, and that a phone exposed over adb needs a new identity (uninstall or clear storage) before re-pairing, not just re-pairing. A signed non-debuggable release is still open (`A50`). | `DeviceChecklistDocsTest`. |
+| A66 | `61e218b` | The desktop's Android link reads "nodeterm for Android (build from source)" and is derived from `REPO_URL`. The link resolves once `android/` is on upstream `main`. | vitest `androidAppLink.test.tsx`. |
+
 ### WP6 batch B (app-only low-severity items): done on the branch, not device-verified
 
 Most of the logic moved into pure, JVM-tested classes in `android/protocol` (the Compose wiring is
@@ -185,9 +200,13 @@ Verified:
   and accepts `pairingToken | token | joinToken` in the reply, but it has not been checked against
   the live backend (the backend repo is not here).
 - Release/minified builds on a device. R8 runs for release in CI (`A37`: `assembleRelease` plus `tools/check-r8-output.sh`), but no minified APK has been installed or run, and no release signing key exists.
-- **Caveat on the tests:** their fixtures hand-copy some desktop shapes: the mirror, the
-  `projects.list` blob and the `~/.nodeterm` files (`A64`). That is how `A02` passed its test while
-  being wrong on every real desktop.
+- **Caveat on the tests:** since `A64` the relay leg's `projects.list` blob comes from the
+  desktop's own assembly (`src/core/projects-list-blob.ts`, shared with `src/main/index.ts`) and its
+  mirror entries from the real mirror writer; the session list inside the blob and the mirror's
+  `settings` provider are still fixture-authored. The SSH leg's shapes (the v3 index, project files,
+  `agent-status.json`, the pending/acks files, `relay.json`) are still hand-copied in
+  `SshTransportTest`; `docs/android.md` names them. That hand-copying is how `A02` passed its test
+  while being wrong on every real desktop.
 
 ## Environment notes for a cloud session
 
@@ -199,8 +218,10 @@ Verified:
   - Rely on CI for the real AGP build: push, then read the Android workflow run.
 - Maven Central sometimes answers 429. Retrying works.
 - System `gradle` is 8.14.3 on JDK 21 in the sandbox; the wrapper pins 8.14.3 and CI uses JDK 17.
-- The protocol tests need `npm ci --ignore-scripts` at the repo root first (for the esbuild-bundled
-  interop fixture) and a `tmux` on PATH. Run them with
+- The protocol tests need the repo's `node_modules` (an existing `npm install` is enough; on a
+  machine without the native toolchain use `npm ci --ignore-scripts`, as CI does — it replaces
+  `node_modules`, so a desktop checkout then needs `npm install` or `npm run rebuild`) and a `tmux`
+  on PATH. Run them with
   `cd android/protocol && gradle test --offline`, or `cd android && ./gradlew -p protocol test`.
   Without node the interop tests skip.
 - Desktop checks for any change to `src/main/remote/*`:
@@ -240,7 +261,9 @@ below use the audit IDs.
 
 ### WP3: device test pass (after WP1 + WP2)
 
-Install the CI APK (from the new stable debug key) on a real phone and walk the checklist below.
+Install the CI APK (from the new stable debug key) on a real phone and walk the numbered checklist in
+[`android.md` → Device checklist](android.md#device-checklist) (51 items, each naming the finding it
+checks).
 Record results in `docs/android.md` → "What is verified". Anything that fails becomes a new finding.
 
 ### WP4: medium bugs (after the device pass)
@@ -288,45 +311,11 @@ template. Mention @eneskirca for the mobile implications: the pairing-key pin fr
 4. **Distribution**: a committed public debug key for sideloading (`A10`). Done. A real release
    signing key and a store listing are still to come.
 
-## Device checklist (owed; nothing here has been run)
+## Device checklist
 
-Run each on a real phone against a real desktop, and note OS versions.
-
-1. Install the CI APK. Install the next CI APK over it without uninstalling (checks `A10`).
-2. Pair by QR with a macOS desktop, then with a Linux desktop, then with a Windows desktop (the
-   Windows QR carries `"ssh":false`, so pairing is relay-only).
-3. Pair by pasting the code, and by opening a `nodeterm://pair?code=…` link.
-4. On the LAN (Auto route): the session list shows the desktop's projects and sessions (checks
-   `A02`).
-5. Open a terminal and type with the soft keyboard. Rotate. Use A−/A+ and each key chip. The
-   connection must survive (checks `A01`).
-6. Non-ASCII renders correctly: Claude's rounded borders, accented letters, CJK, emoji (checks
-   `A03`).
-7. Swipe to scroll tmux history. Copy via tmux selection (OSC 52 reaches the Android clipboard).
-8. "Sized to another screen · Fit this screen" appears when the desktop is larger, and Fit works.
-9. On cellular (not the LAN): connect through the relay. The desktop shows the SAS; the phone shows
-   the same code; approve. Reconnect later: no second prompt.
-10. With the phone backgrounded for 15+ minutes, no unexpected SAS dialog appears on the desktop
-    (checks `A05`).
-11. Approve and deny a held Claude permission from the Inbox within 45 s. Retry after the hold
-    expired: the phone must not report success (checks `A06`).
-12. Answer an AskUserQuestion from the Inbox.
-13. Open a finished session on the phone: the desktop's unread dot clears.
-14. Board: move a card, add/remove/create a label; the desktop board updates without a reload.
-15. New session (Claude, shell) from the phone: the node appears on the canvas, the agent runs, and
-    status badges update.
-16. Wake / refresh / rename / end session from the phone.
-17. Reboot the desktop, then open a session from the phone: the resume offer appears and resumes
-    the right conversation under the right account (checks `A15`).
-18. A background notification arrives (within ~15 min); tapping it opens that computer (checks
-    `A11`).
-19. Kill the app process in the background (via developer options) and reopen it: the screen and
-    back stack are sensible (checks `A22`).
-20. Forget a host; change a host's route in Settings; pair two computers at once.
-21. Put the desktop to sleep while the phone is connected over SSH: the phone notices and falls back
-    (checks `A31`).
-22. Android 15 edge-to-edge: the keyboard does not double-pad the terminal (checks `A77`).
-23. Light and dark system theme; a tablet or foldable if available.
+Moved to [`android.md` → Device checklist](android.md#device-checklist) (`A65`): one numbered list,
+grouped by area, each item naming the finding it checks, including every device check the fix
+commits asked for. Nothing on it has been run.
 
 ## Conventions for whoever continues
 

@@ -64,7 +64,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76` · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
 | [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b` · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
-| [A50](#a50) | low |  | medium | security/risk | The only distributable build is a debuggable APK, so Keystore-protected secrets can be pulled over adb/JDWP |
+| [A50](#a50) | low |  | medium | security/risk | 📝 documented in `33af5e7` (README warning); the signed non-debuggable release is still open · The only distributable build is a debuggable APK, so Keystore-protected secrets can be pulled over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
@@ -74,18 +74,18 @@ the audit's proposal, the handover's progress log says how and why.
 | [A57](#a57) | low |  | small | parity/gap | ✅ fixed in `8dbeb48` · Multi-select AskUserQuestion cards fall back to "Open session" |
 | [A58](#a58) | low |  | small | parity/gap | ✅ fixed in `a44f16c` · Usage and feed cards omit iOS's pace line and the context indicator on event cards |
 | [A59](#a59) | low |  | small | parity/gap | No built-in dictation (iOS has on-device Whisper plus a Cloud engine) |
-| [A60](#a60) | low |  | small | ci-docs/bug | Interop fixture needs the Electron binary, which is downloaded at test time inside the 20 s ready window, despite the workflow saying 'not Electron' |
-| [A61](#a61) | low |  | small | ci-docs/bug | Following CONTRIBUTING / android/README (`npm ci --ignore-scripts`) wipes a desktop developer's patched node_modules |
-| [A62](#a62) | low |  | small | ci-docs/bug | SSH transport tests fail, not skip, on macOS: the gate checks only that /usr/bin/script exists, then runs util-linux-only flags |
-| [A63](#a63) | low |  | small | ci-docs/gap | Android workflow path filters miss files that change the tested wire behavior, contrary to CLAUDE.md |
-| [A64](#a64) | low |  | small | ci-docs/gap | Docs say the protocol tests check the mirror, the projects.list blob and the ~/.nodeterm files against desktop code, but those shapes are hand-copied in the tests |
-| [A65](#a65) | low |  | small | ci-docs/gap | User-facing docs and desktop UI present the Android app as working, but it has never been built by AGP or run on a device, and no device checklist exists |
-| [A66](#a66) | low |  | small | ci-docs/gap | ANDROID_APP_URL points at a folder that exists on neither upstream nor fork main yet, and it points at source code rather than an installable |
-| [A67](#a67) | low |  | small | ci-docs/gap | The interop fixture is excluded from every tsconfig, so `npm run typecheck` never checks it against the desktop interfaces it implements |
+| [A60](#a60) | low |  | small | ci-docs/bug | ✅ fixed in `67e6297` · Interop fixture needs the Electron binary, which is downloaded at test time inside the 20 s ready window, despite the workflow saying 'not Electron' |
+| [A61](#a61) | low |  | small | ci-docs/bug | ✅ fixed in `39e7995` · Following CONTRIBUTING / android/README (`npm ci --ignore-scripts`) wipes a desktop developer's patched node_modules |
+| [A62](#a62) | low |  | small | ci-docs/bug | ✅ fixed in `77c760d` · SSH transport tests fail, not skip, on macOS: the gate checks only that /usr/bin/script exists, then runs util-linux-only flags |
+| [A63](#a63) | low |  | small | ci-docs/gap | ✅ fixed in `b3d4c6e` · Android workflow path filters miss files that change the tested wire behavior, contrary to CLAUDE.md |
+| [A64](#a64) | low |  | small | ci-docs/gap | ✅ fixed in `f9782da` · Docs say the protocol tests check the mirror, the projects.list blob and the ~/.nodeterm files against desktop code, but those shapes are hand-copied in the tests |
+| [A65](#a65) | low |  | small | ci-docs/gap | ✅ fixed in `33af5e7` · User-facing docs and desktop UI present the Android app as working, but it has never been built by AGP or run on a device, and no device checklist exists |
+| [A66](#a66) | low |  | small | ci-docs/gap | ✅ fixed in `61e218b` · ANDROID_APP_URL points at a folder that exists on neither upstream nor fork main yet, and it points at source code rather than an installable |
+| [A67](#a67) | low |  | small | ci-docs/gap | ✅ fixed in `696fd10` · The interop fixture is excluded from every tsconfig, so `npm run typecheck` never checks it against the desktop interfaces it implements |
 | [A68](#a68) | low |  | small | ci-docs/risk | Workflow triggers break repo conventions: every branch push plus pull_request doubles runs, and there is no merge_group |
-| [A69](#a69) | low |  | small | ci-docs/gap | The Gradle/Kotlin code has no dependency-update, CodeQL or wrapper-validation coverage |
-| [A70](#a70) | low |  | small | ci-docs/bug | On Windows the interop tests fail with CreateProcess instead of skipping |
-| [A71](#a71) | low |  | small | ci-docs/gap | android/README says 'JDK 17+', but the pinned Gradle 8.14.3 cannot run on JDK 25 |
+| [A69](#a69) | low |  | small | ci-docs/gap | ✅ fixed in `6f3a8da` · The Gradle/Kotlin code has no dependency-update, CodeQL or wrapper-validation coverage |
+| [A70](#a70) | low |  | small | ci-docs/bug | ✅ fixed in `68d5da6` · On Windows the interop tests fail with CreateProcess instead of skipping |
+| [A71](#a71) | low |  | small | ci-docs/gap | ✅ fixed in `39e7995` · android/README says 'JDK 17+', but the pinned Gradle 8.14.3 cannot run on JDK 25 |
 | [A72](#a72) | low |  | medium | critic/gap | ✅ fixed in `71290de` · Phone-started sessions are created without the agent-specific env, so for their whole life they get no hook-reply approvals, no canvas control and no pane ownership |
 | [A73](#a73) | low |  | small | critic/bug | ✅ fixed in `e055f37` · Notifications are documented as 'live every 8 seconds while a computer is open', but the in-app poll never posts a notification |
 | [A74](#a74) | low |  | small | critic/bug | ✅ fixed in `a40d11b` · The LAN leg dials a DHCP IPv4 frozen at pairing time; when another SSH host answers at that address, the host-key 'hard stop' also blocks the relay fallback |
