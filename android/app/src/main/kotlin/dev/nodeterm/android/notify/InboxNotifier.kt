@@ -79,16 +79,14 @@ object InboxNotifier {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) return 0
-        val seen = graph.hosts.seenEvents()
-        val fresh = snapshot.status?.inbox?.events.orEmpty().filter { ev ->
-            ev.id !in seen && !ev.resolved && System.currentTimeMillis() - ev.ts < 6 * 3_600_000L
-        }
+        // Decided and recorded in one locked step (SeenLog, audit A48): unresolved, younger than the
+        // announce window, and never announced or read on this phone.
+        val fresh = graph.hosts.claimAnnounceable(snapshot.status?.inbox?.events.orEmpty())
         if (fresh.isEmpty()) return 0
         val nm = NotificationManagerCompat.from(context)
         for (ev in fresh.takeLast(5)) {
             nm.notify("${host.id}:${ev.id}".hashCode(), build(context, host, snapshot, ev))
         }
-        graph.hosts.markSeen(fresh.map { it.id })
         return fresh.size
     }
 

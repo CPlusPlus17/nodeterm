@@ -347,7 +347,7 @@ class TerminalController(
             val ev = snap.status?.inbox?.events?.lastOrNull { it.nodeId == nodeId && it.kind == InboxKind.DONE && !it.resolved }
             if (ev != null) {
                 runCatching { conn.ackRead(nodeId, ev.id) }
-                graph.hosts.markSeen(listOf(ev.id))
+                graph.hosts.markSeen(listOf(ev))
             }
         }
     }

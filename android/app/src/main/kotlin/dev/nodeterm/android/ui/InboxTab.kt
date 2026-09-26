@@ -81,7 +81,7 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
     val working = snapshot.status?.nodes.orEmpty()
         .filter { (id, st) -> st.state == AgentState.WORKING && inbox?.nodes?.get(id)?.activity != null }
 
-    LaunchedEffect(actionable.map { it.id }) { graph.hosts.markSeen(actionable.map { it.id }) }
+    LaunchedEffect(actionable.map { it.id }) { graph.hosts.markSeen(actionable) }
 
     fun titleOf(nodeId: String): String =
         snapshot.findNode(nodeId)?.second?.let { displayTitle(it, snapshot) } ?: snapshot.statusOf(nodeId)?.name ?: "Session"

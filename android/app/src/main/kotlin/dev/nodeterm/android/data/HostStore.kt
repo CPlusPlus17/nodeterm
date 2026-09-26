@@ -1,7 +1,9 @@
 package dev.nodeterm.android.data
 
 import android.content.Context
+import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.PairedHost
+import dev.nodeterm.protocol.model.SeenLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -103,12 +105,28 @@ class HostStore(context: Context) {
             prefs.edit().putInt("fontSize", value.coerceIn(8, 24)).apply()
         }
 
-    /** Inbox events this phone has seen/read (phone-local, like iOS). Bounded. */
-    fun seenEvents(): Set<String> = prefs.getStringSet("seenEvents", emptySet()) ?: emptySet()
+    /**
+     * Inbox events this phone has announced or read (phone-local, like iOS), trimmed by age and
+     * locked across each update — see [SeenLog] (audit A48). The pre-A48 build kept a bare id set
+     * under `seenEvents`; [SeenLog] migrates it on first use and the same edit removes it.
+     */
+    private val seenLog = SeenLog(object : SeenLog.Storage {
+        override fun read(): String? = prefs.getString(SEEN_LOG_KEY, null)
+        override fun readLegacy(): Set<String>? = prefs.getStringSet(LEGACY_SEEN_KEY, null)
+        override fun write(encoded: String) {
+            // apply() publishes to the in-memory map before it returns; SeenLog holds the lock.
+            prefs.edit().putString(SEEN_LOG_KEY, encoded).remove(LEGACY_SEEN_KEY).apply()
+        }
+    })
 
-    fun markSeen(ids: Collection<String>) {
-        if (ids.isEmpty()) return
-        val next = (seenEvents() + ids).toList().takeLast(500).toSet()
-        prefs.edit().putStringSet("seenEvents", next).apply()
+    /** The phone has seen [events]: the user read them here. */
+    fun markSeen(events: Collection<InboxEvent>) = seenLog.markSeen(events)
+
+    /** The events of a feed to notify about now, recorded as announced in the same locked step. */
+    fun claimAnnounceable(events: List<InboxEvent>): List<InboxEvent> = seenLog.claimAnnounceable(events)
+
+    private companion object {
+        const val SEEN_LOG_KEY = "seenEvents.v2"
+        const val LEGACY_SEEN_KEY = "seenEvents"
     }
 }

@@ -77,6 +77,10 @@ leg, so this app checks each computer's Inbox periodically in the background (Wo
 is ~15 minutes) and live every 8 seconds while a computer is open. Real-time push on Android needs
 an FCM leg in the backend.
 
+Each Inbox event raises at most one notification: only events younger than 6 hours are announced,
+and the phone remembers the ones it has announced or you have read for a day after it last saw them
+(longer when the computer's clock runs ahead), so nothing still eligible is forgotten.
+
 ## Security
 
 - The phone's relay identity (a Curve25519 box key) and SSH identity (an Ed25519 seed) are
