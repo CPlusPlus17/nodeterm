@@ -122,8 +122,11 @@ class TerminalController(
                 // Our own detach on ON_STOP ends the stream too; that is not a drop to recover from.
                 if (stopped) return@post
                 stream = null
-                if (code == null && !disposed && autoReattach()) {
-                    state = TermState.Ended("Disconnected. Reconnecting…")
+                // exit 0 with the session still running = another client attached with -D and
+                // detached us (the desktop mounting a phone-started node does this) — audit A13.
+                // It is checked, not assumed: a killed session also exits 0.
+                if ((code == null || code == 0) && !disposed && autoReattach(requireLive = code == 0)) {
+                    state = TermState.Ended(if (code == null) "Disconnected. Reconnecting…" else "Another screen took over this session. Reattaching…")
                 } else {
                     state = TermState.Ended(if (code == null) "Disconnected." else "The session ended (exit $code).")
                 }
@@ -226,7 +229,7 @@ class TerminalController(
      * lived a minute resets the count), and only while this screen is showing. Returns false when
      * out of tries.
      */
-    private fun autoReattach(): Boolean {
+    private fun autoReattach(requireLive: Boolean = false): Boolean {
         if (System.currentTimeMillis() - attachedAt > 60_000) autoReattaches = 0
         if (autoReattaches >= 3) return false
         autoReattaches++
@@ -234,7 +237,11 @@ class TerminalController(
             delay(1_500L * autoReattaches)
             // A re-list notices a dead SSH transport (and drops it) before we ask for a connection,
             // so the attach below does not get the stale one back.
-            if (!useRelay) session.refreshNow()
+            if (!useRelay || requireLive) session.refreshNow()
+            if (requireLive && !session.snapshot.value.isLive(nodeId)) {
+                main.post { if (!disposed && stream == null) state = TermState.Ended("The session ended (exit 0).") }
+                return@launch
+            }
             val up = if (useRelay) true else withTimeoutOrNull(120_000) { session.state.first { it is ConnState.Connected } } != null
             main.post {
                 if (disposed || stream != null || attachJob != null) return@post
