@@ -233,6 +233,7 @@ import { isLiquidGlass } from '../lib/appTheme'
 import { readsClaudeTranscript } from '../lib/transcriptGates'
 import { liveProjectJumpTarget } from '../lib/projectJump'
 import { pushSessionRename } from '../lib/sessionRename'
+import { announceUserClosedSession } from '../lib/lastSessionClose'
 import { useSettings } from '../state/settings'
 import { useCodexIdentity, codexSharedIdentity, codexFallbackText } from '../state/codexIdentity'
 import { ensureCodexLaunchCaps } from '../state/codexCli'
@@ -6355,6 +6356,10 @@ export function TerminalNode({
             aria-label="Close"
             onClick={() => {
               transport.destroy(id)
+              // Issue #848: THIS click — and no other teardown — may offer to close the project
+              // when it removes the last session node. Announced before `deleteElements`, so
+              // Canvas still sees the node it is deciding about (lib/lastSessionClose).
+              announceUserClosedSession(id)
               deleteElements({ nodes: [{ id }] })
             }}
           >

@@ -40,6 +40,10 @@ const ROWS = {
     title: 'Zoom when going to a node',
     keywords: ['zoom', 'focus', 'go to', 'node', 'jump', 'camera', 'session', 'sidebar']
   },
+  closeProjectOnLastSession: {
+    title: 'Offer to close a project after its last session',
+    keywords: ['close', 'project', 'last', 'session', 'node', 'tab', 'recently closed', 'cleanup', 'agent', 'terminal']
+  },
   rememberLock: {
     title: 'Remember the canvas lock',
     keywords: ['lock', 'canvas', 'view', 'pan', 'zoom', 'freeze', 'remember', 'restart', 'persist']
@@ -233,6 +237,19 @@ export function BehaviorSection({ isActive }: { isActive: boolean }): React.JSX.
               checked={settings.focusZoomToNode}
               onChange={(v) => update({ focusZoomToNode: v })}
               ariaLabel="Zoom when going to a node"
+            />
+          }
+        />
+      </SearchableRow>
+      <SearchableRow {...ROWS.closeProjectOnLastSession}>
+        <FieldRow
+          label="Offer to close a project after its last session"
+          description="When you close the last terminal or agent node in a project with ×, ask whether to close the project too. It stays reopenable from Recently closed."
+          control={
+            <Switch
+              checked={settings.offerCloseProjectOnLastSession}
+              onChange={(v) => update({ offerCloseProjectOnLastSession: v })}
+              ariaLabel="Offer to close a project after its last session"
             />
           }
         />

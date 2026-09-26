@@ -539,3 +539,40 @@ describe('the canvas lock is remembered only when the user opted in', () => {
     expect(effect).toContain('if (!canvasLockRestored.current) {')
   })
 })
+
+describe('the last-session close offer is wired to the × and to the existing close path (issue #848)', () => {
+  // The decision lives in lib/lastSessionClose and is tested there; what those tests cannot see is
+  // WHO raises it and WHAT accepting it does. Both are a line each in files with no render harness.
+  const TERMINAL_SRC = fs.readFileSync(path.join(__dirname, '..', 'nodes', 'TerminalNode.tsx'), 'utf8')
+  const closeButton = TERMINAL_SRC.slice(
+    TERMINAL_SRC.indexOf('<Tooltip label="Close (ends the session)">'),
+    TERMINAL_SRC.indexOf('<IconClose />', TERMINAL_SRC.indexOf('<Tooltip label="Close (ends the session)">'))
+  )
+
+  it('only the × announces a user close, and before the node leaves the canvas', () => {
+    // Before `deleteElements`: the decision needs the closed node still present, so a second
+    // click on a node already gone finds nothing to offer.
+    expect(indexOfPresent(closeButton, 'announceUserClosedSession(id)')).toBeLessThan(
+      indexOfPresent(closeButton, 'deleteElements({ nodes: [{ id }] })')
+    )
+    // Exactly one announcer in the node: no other teardown (restart, respawn, exit) may ask.
+    expect(TERMINAL_SRC.split('announceUserClosedSession(').length - 1).toBe(1)
+  })
+
+  it('Canvas decides with the opt-in setting and the live canvas, and accepts through closeProject', () => {
+    const listener = CANVAS_SRC.slice(
+      CANVAS_SRC.indexOf('window.addEventListener(USER_CLOSED_SESSION_EVENT'),
+      CANVAS_SRC.indexOf('window.removeEventListener(USER_CLOSED_SESSION_EVENT')
+    )
+    expect(CANVAS_SRC).toContain('const onUserClosedSession = (e: Event): void => {')
+    const handler = CANVAS_SRC.slice(
+      CANVAS_SRC.indexOf('const onUserClosedSession = (e: Event): void => {'),
+      CANVAS_SRC.indexOf('window.addEventListener(USER_CLOSED_SESSION_EVENT')
+    )
+    expect(listener).toContain('onUserClosedSession')
+    expect(handler).toContain('useSettings.getState().settings.offerCloseProjectOnLastSession')
+    expect(handler).toContain('nodes: nodesRef.current')
+    const dialog = CANVAS_SRC.slice(CANVAS_SRC.indexOf('{lastSessionOffer && ('))
+    expect(dialog.slice(0, 1500)).toContain('closeProject(lastSessionOffer.id)')
+  })
+})

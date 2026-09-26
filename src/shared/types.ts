@@ -1822,6 +1822,12 @@ export interface Settings {
    *  costs them the sense of where they were. Either way the node is centred and kept clear of the
    *  floating chrome (renderer/lib/nodeFocus). */
   focusZoomToNode: boolean
+  /** Closing the LAST session (terminal/agent) node of a project with its × offers to close the
+   *  project too (issue #848). Opt-in — default OFF, because not everyone closes their last
+   *  session when they are done with a project. Only the user's × click asks; a restart, an exit,
+   *  a hibernated agent (still a node) or a bulk/programmatic close never does
+   *  (renderer/lib/lastSessionClose). Declining keeps the project open. */
+  offerCloseProjectOnLastSession: boolean
   /** Whether the bottom-left canvas lock survives a restart. OFF by default, and deliberately so:
    *  the lock was transient by design, because a canvas that will not pan on the next launch reads
    *  as "the app is frozen" to whoever opens it, and the lit button is a small thing to spot. Users
@@ -2240,6 +2246,7 @@ export const DEFAULT_SETTINGS: Settings = {
   panHoverDelay: 600,
   doubleClickFocus: true,
   focusZoomToNode: true,
+  offerCloseProjectOnLastSession: false,
   rememberCanvasLock: false,
   openMarkdownPreview: true,
   openMarkdownPreviewMigrated: true,
