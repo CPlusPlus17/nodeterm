@@ -68,6 +68,7 @@ import {
   recordAgentEvent,
   ackDone,
   setMirrorSettingsProvider,
+  mirrorClaudeAccount,
   setMirrorServerProvider,
   onInboxActionable,
   onNodeStateChange,
@@ -459,7 +460,7 @@ export async function startServer(
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
-        .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) }))
+        .map((a) => mirrorClaudeAccount(a, claudeConfigDirFor(a.id)))
     }
   })
   // Advertise this install's version/commit/installedAt to the phone (spec: server-update). The

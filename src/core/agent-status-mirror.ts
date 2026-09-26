@@ -180,8 +180,9 @@ export interface MirrorSettings {
    *  on it only for claude (the desktop does exactly that — activePermissionMode in
    *  renderer/state/permissionMode.ts). */
   autoSupported?: boolean
-  /** Managed accounts usable on THIS host; dirs are absolute on that host. */
-  claudeAccounts?: { id: string; dir: string }[]
+  /** Managed accounts usable on THIS host; dirs are absolute on that host. Build every entry with
+   *  `mirrorClaudeAccount` — both shells and the SSH slice do — so the display half cannot drift. */
+  claudeAccounts?: MirrorClaudeAccount[]
   /**
    * Which values THIS host's `codex` accepts for `--ask-for-approval`, read from its own `--help`.
    * Absent = not probed / not knowable for this host, which means "use `on-request` and `never`
@@ -194,6 +195,42 @@ export interface MirrorSettings {
    * *this* host and generalizes to neither another agent nor another machine.
    */
   codexApprovalValues?: string[]
+}
+
+/**
+ * One managed Claude account as the mirror advertises it. `id` + `dir` are what a phone launches
+ * with (`CLAUDE_CONFIG_DIR`); `label` + `email` are what it SHOWS, so a picker or a session row
+ * never has to print the account's raw UUID. The `usage` block also carries a label per account,
+ * but it is local-only (dropped from SSH slices), only the desktop shell publishes it, and it is
+ * empty until the first usage poll — so the name has to ride here too.
+ *
+ * `label` and `email` are additive (absent on files written before them; old readers ignore
+ * them) and absent when blank.
+ */
+export interface MirrorClaudeAccount {
+  id: string
+  /** Absolute on the host whose mirror this is. */
+  dir: string
+  /** The account's display label from settings (Settings → Accounts; defaults to its email). */
+  label?: string
+  /** The login email captured when the account signed in. */
+  email?: string
+}
+
+/**
+ * Build one `MirrorSettings.claudeAccounts` entry. The ONE definition, used by the desktop shell,
+ * the Server Edition and the desktop's per-host SSH slice. `label`/`email` come out of a
+ * hand-editable settings.json that nothing checks field by field on load, so each is re-validated
+ * as a string here and a blank or wrong-typed value is simply left out.
+ */
+export function mirrorClaudeAccount(
+  account: { id: string; label?: unknown; email?: unknown },
+  dir: string
+): MirrorClaudeAccount {
+  const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+  const label = text(account.label)
+  const email = text(account.email)
+  return { id: account.id, dir, ...(label ? { label } : {}), ...(email ? { email } : {}) }
 }
 
 export interface MirrorFile {

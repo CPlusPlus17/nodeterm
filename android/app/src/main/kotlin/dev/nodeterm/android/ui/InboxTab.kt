@@ -44,8 +44,10 @@ import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.QuickActions
+import dev.nodeterm.protocol.model.AccountNames
 import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.AgentState
+import dev.nodeterm.protocol.model.AgentStatusFile
 import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.ProjectsSnapshot
@@ -236,19 +238,22 @@ fun UsageTab(snapshot: ProjectsSnapshot) {
         return
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        items(usage.accounts, key = { it.accountId ?: "system" }) { account -> UsageCard(account) }
+        items(usage.accounts, key = { it.accountId ?: "system" }) { account -> UsageCard(account, snapshot.status) }
         item { Text("Updated ${relativeAge(usage.updatedAt)} ago", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }
 
 @Composable
-private fun UsageCard(account: UsageAccount) {
+private fun UsageCard(account: UsageAccount, status: AgentStatusFile?) {
+    // The same resolver the sessions list uses, so a managed account is never titled by its UUID.
+    val title = account.accountId?.let { AccountNames.managed(it, status) }
+        ?: account.label ?: account.email ?: AccountNames.SYSTEM
     Column(
         Modifier.fillMaxWidth().background(NtColors.panel, RoundedCornerShape(10.dp)).padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text(account.label ?: account.email ?: if (account.accountId == null) "System account" else account.accountId!!, fontWeight = FontWeight.SemiBold)
-        if (account.email != null && account.label != null) Text(account.email!!, style = MaterialTheme.typography.bodySmall)
+        Text(title, fontWeight = FontWeight.SemiBold)
+        account.email?.takeIf { it != title }?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (account.status != "ok" && account.limits.isEmpty()) {
             Text(if (account.status == "error") "Could not read usage." else "Usage unavailable.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

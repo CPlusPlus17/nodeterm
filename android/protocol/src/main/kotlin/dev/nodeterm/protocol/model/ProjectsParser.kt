@@ -120,7 +120,6 @@ object ProjectsParser {
         val nodes = LinkedHashMap<String, AgentNodeStatus>()
         root.o("nodes")?.forEach { (nodeId, raw) ->
             val e = J.obj(raw) ?: return@forEach
-            val account = e.o("account")
             nodes[nodeId] = AgentNodeStatus(
                 state = AgentState.of(e.s("state")),
                 agentId = e.s("agentId"),
@@ -128,7 +127,7 @@ object ProjectsParser {
                 name = e.s("name"),
                 hibernated = e.b("hibernated") == true,
                 updatedAt = e.l("updatedAt") ?: 0,
-                accountLabel = account?.let { it.s("label") ?: it.s("accountId") }
+                account = e.o("account")?.let(::parseObservedAccount)
             )
         }
         return AgentStatusFile(
@@ -141,13 +140,21 @@ object ProjectsParser {
         )
     }
 
+    /** `ObservedClaudeAccount`. A wrong-typed `known` reads as false: the entry then names its dir,
+     *  which is the label that claims least. */
+    private fun parseObservedAccount(a: JsonObject) = ObservedAccount(
+        configDir = a.s("configDir"),
+        accountId = a.s("accountId"),
+        known = a.b("known") == true
+    )
+
     private fun parseSettings(s: JsonObject) = MirrorSettings(
         claudePermissionMode = s.s("claudePermissionMode"),
         autoSupported = s.b("autoSupported"),
         claudeAccounts = s.objects("claudeAccounts").mapNotNull { a ->
             val id = a.s("id") ?: return@mapNotNull null
             val dir = a.s("dir") ?: return@mapNotNull null
-            ManagedAccount(id, dir)
+            ManagedAccount(id, dir, label = a.s("label"), email = a.s("email"))
         },
         codexApprovalValues = s.strings("codexApprovalValues")
     )

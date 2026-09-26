@@ -41,6 +41,7 @@ import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TransportKind
+import dev.nodeterm.protocol.model.AccountNames
 import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.Launch
 import dev.nodeterm.protocol.model.NodeInfo
@@ -273,7 +274,7 @@ private fun SessionRow(node: NodeInfo, snapshot: ProjectsSnapshot, onClick: () -
                 add(agent?.label ?: "Terminal")
                 now?.activity?.let { add(it) }
                 now?.contextPercent?.let { add("${it.toInt()}% context") }
-                status?.accountLabel?.let { add(it) }
+                AccountNames.observed(status?.account, snapshot.status)?.let { add(it) }
                 if (!live) add("not running")
             }.joinToString(" · ")
             Text(
@@ -333,7 +334,7 @@ fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate
                     items(listOf<String?>(null) + accounts.map { it.id }, key = { "acct-${it ?: "system"}" }) { id ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             RadioButton(selected = accountId == id, onClick = { accountId = id })
-                            Text(id ?: "System account")
+                            Text(id?.let { AccountNames.managed(it, snapshot.status) } ?: AccountNames.SYSTEM)
                         }
                     }
                 }

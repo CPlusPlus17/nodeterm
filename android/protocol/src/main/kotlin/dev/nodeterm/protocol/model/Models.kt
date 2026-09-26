@@ -119,8 +119,9 @@ data class AgentNodeStatus(
     val name: String?,
     val hibernated: Boolean,
     val updatedAt: Long,
-    /** Observed account label for a non-system Claude account, when the hook reported one. */
-    val accountLabel: String?
+    /** Which Claude account the session was OBSERVED running under, when a hook reported one.
+     *  Name it with [AccountNames.observed]; the mirror carries no display name of its own here. */
+    val account: ObservedAccount?
 ) {
     val bucket: SessionBucket
         get() = when {
@@ -130,6 +131,13 @@ data class AgentNodeStatus(
             else -> SessionBucket.UNKNOWN
         }
 }
+
+/**
+ * `ObservedClaudeAccount` (src/shared/types.ts): the account a running session's hooks reported,
+ * classified by the desktop from the transcript path. `accountId` null + [known] = the system
+ * `~/.claude`; `accountId` null + not [known] = a config dir the desktop has no record of.
+ */
+data class ObservedAccount(val configDir: String?, val accountId: String?, val known: Boolean)
 
 data class AgentStatusFile(
     val updatedAt: Long,
@@ -149,7 +157,12 @@ data class MirrorSettings(
     val codexApprovalValues: List<String>
 )
 
-data class ManagedAccount(val id: String, val dir: String)
+/**
+ * One `MirrorSettings.claudeAccounts` entry (`mirrorClaudeAccount`, agent-status-mirror.ts): [id] and
+ * [dir] are what a launch uses; [label] and [email] are what the phone shows (absent on a desktop
+ * older than them). Show it through [AccountNames], never by printing [id].
+ */
+data class ManagedAccount(val id: String, val dir: String, val label: String? = null, val email: String? = null)
 
 data class MirrorUsage(val updatedAt: Long, val accounts: List<UsageAccount>)
 

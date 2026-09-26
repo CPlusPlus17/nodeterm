@@ -17,6 +17,7 @@ import {
   flush,
   initAgentStatusMirror,
   setMirrorSettingsProvider,
+  mirrorClaudeAccount,
   setNodeHibernated,
   setMirrorServerProvider,
   setMirrorUsageProvider,
@@ -308,6 +309,66 @@ describe('settings block', () => {
     setMirrorSettingsProvider(() => { throw new Error('boom') })
     await flush()
     expect('settings' in JSON.parse(fs.readFileSync(file, 'utf-8'))).toBe(false)
+  })
+})
+
+// The phone names a managed account from this entry (audit A39/A75): without `label`/`email` it had
+// only the id, and every picker row and session row printed the account's raw UUID.
+describe('settings.claudeAccounts entries (mirrorClaudeAccount)', () => {
+  let tmpDir: string
+
+  beforeEach(() => {
+    _resetForTest()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-status-'))
+  })
+
+  afterEach(() => {
+    _resetForTest()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('carries the label and email a phone shows beside the id and dir it launches with', () => {
+    expect(
+      mirrorClaudeAccount({ id: 'a1', label: 'Work', email: 'me@work.example' }, '/data/claude-accounts/a1')
+    ).toEqual({ id: 'a1', dir: '/data/claude-accounts/a1', label: 'Work', email: 'me@work.example' })
+  })
+
+  it('trims, and leaves out a blank or wrong-typed value from a hand-edited settings.json', () => {
+    expect(mirrorClaudeAccount({ id: 'a1', label: '  Work  ', email: '' }, '/d')).toEqual({
+      id: 'a1',
+      dir: '/d',
+      label: 'Work'
+    })
+    expect(mirrorClaudeAccount({ id: 'a1', label: 123, email: { x: 1 } }, '/d')).toEqual({ id: 'a1', dir: '/d' })
+    // No settings-only field (host, configDir, color, createdAt…) leaks into the mirror.
+    const acct = { id: 'a1', label: 'L', host: 'u@h', configDir: '/x', color: '#fff', createdAt: 1 }
+    expect(Object.keys(mirrorClaudeAccount(acct, '/d')).sort()).toEqual(['dir', 'id', 'label'])
+  })
+
+  it('rides the flushed file unchanged', async () => {
+    const file = path.join(tmpDir, 'status.json')
+    initAgentStatusMirror(file)
+    setMirrorSettingsProvider(() => ({
+      claudeAccounts: [mirrorClaudeAccount({ id: 'a1', label: 'Work', email: 'me@work.example' }, '/d/a1')]
+    }))
+    await flush()
+    expect(JSON.parse(fs.readFileSync(file, 'utf-8')).settings.claudeAccounts).toEqual([
+      { id: 'a1', dir: '/d/a1', label: 'Work', email: 'me@work.example' }
+    ])
+  })
+
+  // Both shells and the desktop's per-host SSH slice publish this list. A site that went back to an
+  // inline `{ id, dir }` would type-check (the display half is optional) and pass every other test,
+  // while its phones fell back to printing ids — so every producer is pinned to the one builder.
+  it('every producer of the list builds its entries with mirrorClaudeAccount', () => {
+    const root = path.resolve(__dirname, '../..')
+    const sites: Record<string, number> = { 'src/main/index.ts': 2, 'src/server/index.ts': 1 }
+    for (const [rel, expected] of Object.entries(sites)) {
+      const src = fs.readFileSync(path.join(root, rel), 'utf8').replace(/\r\n/g, '\n')
+      const producers = [...src.matchAll(/claudeAccounts: \(s\.claudeAccounts \?\? \[\]\)([\s\S]*?)\.map\(\(a\) => ([^\n]*)/g)]
+      expect(producers.length, `${rel}: producer count`).toBe(expected)
+      for (const m of producers) expect(m[2], `${rel}: ${m[0]}`).toMatch(/^mirrorClaudeAccount\(a, /)
+    }
   })
 })
 

@@ -21,6 +21,7 @@ import {
   type HostSession
 } from '../../../../../src/main/remote/host-service'
 import { createHostNewSessions } from '../../../../../src/main/remote/host-new-sessions'
+import { mirrorClaudeAccount } from '../../../../../src/core/agent-status-mirror'
 import { createPairingService } from '../../../../../src/main/pairing-service'
 import type { DetachedSinks } from '../../../../../src/core/pty-manager'
 import type { PtyManager } from '../../../../../src/core/pty-manager'
@@ -159,7 +160,19 @@ async function runRelay(): Promise<void> {
     JSON.stringify({
       v: 1,
       updatedAt: 1,
-      nodes: { 'term-abc-1': { state: 'blocked', agentId: 'claude', sessionId: 's-1', name: 'fix bug', updatedAt: 2 } },
+      nodes: {
+        'term-abc-1': {
+          state: 'blocked', agentId: 'claude', sessionId: 's-1', name: 'fix bug', updatedAt: 2,
+          account: { configDir: '/data/claude-accounts/acct-1', accountId: 'acct-1', known: true }
+        }
+      },
+      // A39/A75: each entry is built by the desktop's real builder, so the phone is checked against
+      // what both shells write (label + email beside id + dir), not against a copy of it.
+      settings: {
+        claudePermissionMode: 'manual',
+        autoSupported: false,
+        claudeAccounts: [mirrorClaudeAccount({ id: 'acct-1', label: 'Work', email: 'me@work.example' }, '/data/claude-accounts/acct-1')]
+      },
       inbox: {
         events: [{ id: 'e1', ts: 3, nodeId: 'term-abc-1', kind: 'approval', title: 'Approve Bash', pendingId: 'term-abc-1-1700000000000-42' }],
         nodes: { 'term-abc-1': { activity: 'Running npm test', updatedAt: 4 } }

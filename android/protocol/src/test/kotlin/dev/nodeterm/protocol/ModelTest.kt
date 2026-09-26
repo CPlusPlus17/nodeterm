@@ -1,16 +1,20 @@
 package dev.nodeterm.protocol
 
+import dev.nodeterm.protocol.model.AccountNames
 import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.Launch
 import dev.nodeterm.protocol.model.ManagedAccount
 import dev.nodeterm.protocol.model.MirrorSettings
+import dev.nodeterm.protocol.model.MirrorUsage
 import dev.nodeterm.protocol.model.NodeInfo
 import dev.nodeterm.protocol.model.NodeKind
+import dev.nodeterm.protocol.model.ObservedAccount
 import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.ProjectsParser
 import dev.nodeterm.protocol.model.SessionBucket
 import dev.nodeterm.protocol.model.TmuxNames
+import dev.nodeterm.protocol.model.UsageAccount
 import dev.nodeterm.protocol.pairing.PairingPayload
 import dev.nodeterm.protocol.relay.Framing
 import dev.nodeterm.protocol.relay.Op
@@ -158,5 +162,88 @@ class ModelTest {
         assertEquals("/abs", p.absoluteCwdOf(n("/abs")))
         assertEquals("/repo/", p.absoluteCwdOf(n(null)))
         assertNull(p.copy(cwd = null).absoluteCwdOf(n("./sub")))
+    }
+
+    // ---- account names (A39, A75) -------------------------------------------------------------
+
+    private val uuid = "3f2a9c1e-5b7d-4e8a-9c0f-1a2b3c4d5e6f"
+    private val linked = "7d1e0b2a-9f8c-4d3e-8a1b-0c9d8e7f6a5b"
+
+    /** A mirror as a current desktop writes it: settings entries built by `mirrorClaudeAccount`
+     *  (label + email), a usage block, and nodes observed on each kind of account. */
+    private val accountsBlob = """
+        --NT-STATUS-SPLIT--
+        {"v":1,"updatedAt":1,"nodes":{
+          "managed":{"agentId":"claude","updatedAt":1,"account":{"configDir":"/data/claude-accounts/$uuid","accountId":"$uuid","known":true}},
+          "linked":{"agentId":"claude","updatedAt":1,"account":{"configDir":"/home/me/.claude-2","accountId":"$linked","known":true}},
+          "unlinked":{"agentId":"claude","updatedAt":1,"account":{"configDir":"/home/me/.claude-work/","accountId":null,"known":false}},
+          "system":{"agentId":"claude","updatedAt":1,"account":{"configDir":"/home/me/.claude","accountId":null,"known":true}},
+          "none":{"agentId":"claude","updatedAt":1}
+        },
+        "settings":{"claudeAccounts":[
+          {"id":"$uuid","dir":"/data/claude-accounts/$uuid","label":"Work","email":"me@work.example"},
+          {"id":"$linked","dir":"/home/me/.claude-2","email":"side@example.com"}
+        ]},
+        "usage":{"updatedAt":1,"accounts":[{"accountId":null,"label":null,"email":"me@home.example","agentId":"claude","status":"ok","updatedAt":1,"limits":[]}]}}
+    """.trimIndent()
+
+    @Test
+    fun `the mirror's account label, email and observed account are parsed`() {
+        val status = ProjectsParser.parseBlob(accountsBlob).status!!
+        assertEquals(ManagedAccount(uuid, "/data/claude-accounts/$uuid", "Work", "me@work.example"), status.settings!!.claudeAccounts[0])
+        assertEquals(ManagedAccount(linked, "/home/me/.claude-2", null, "side@example.com"), status.settings!!.claudeAccounts[1])
+        assertEquals(ObservedAccount("/data/claude-accounts/$uuid", uuid, true), status.nodes["managed"]!!.account)
+        assertEquals(ObservedAccount("/home/me/.claude-work/", null, false), status.nodes["unlinked"]!!.account)
+        assertNull(status.nodes["none"]!!.account)
+        // A desktop older than the label keeps parsing: the entry is still a launchable account.
+        val old = ProjectsParser.parseStatus("""{"settings":{"claudeAccounts":[{"id":"a","dir":"/d","label":7}]}}""")!!
+        assertEquals(ManagedAccount("a", "/d"), old.settings!!.claudeAccounts.single())
+    }
+
+    @Test
+    fun `a session row names the account it was observed on, never by its UUID (A39)`() {
+        val status = ProjectsParser.parseBlob(accountsBlob).status!!
+        fun row(node: String) = AccountNames.observed(status.nodes[node]!!.account, status)
+        assertEquals("Work", row("managed"))
+        assertEquals("side@example.com", row("linked"), "no label: the email")
+        assertEquals(".claude-work", row("unlinked"), "a dir with no record: its last segment")
+        assertNull(row("system"), "the system account is the unremarkable case")
+        assertNull(row("none"))
+        // An id this mirror cannot name: a linked account's dir says more than its id; a managed
+        // account's dir is only its id again, so the short form.
+        val bare = status.copy(settings = null)
+        assertEquals(".claude-2", AccountNames.observed(bare.nodes["linked"]!!.account, bare))
+        assertEquals("Account 3f2a9c1e", AccountNames.observed(bare.nodes["managed"]!!.account, bare))
+        for (n in status.nodes.keys) assertTrue(AccountNames.observed(status.nodes[n]!!.account, bare)?.contains(uuid) != true, n)
+    }
+
+    @Test
+    fun `the new session picker names accounts label, then usage label, then email, then a short id (A75)`() {
+        val status = ProjectsParser.parseBlob(accountsBlob).status!!
+        assertEquals("Work", AccountNames.managed(uuid, status))
+        assertEquals("side@example.com", AccountNames.managed(linked, status))
+        // A desktop older than the settings label: the usage block's label still names it.
+        val usageOnly = status.copy(
+            settings = MirrorSettings(null, null, listOf(ManagedAccount(uuid, "/d")), emptyList()),
+            usage = MirrorUsage(1, listOf(UsageAccount(uuid, "From usage", "u@example.com", "claude", "ok", 1, emptyList())))
+        )
+        assertEquals("From usage", AccountNames.managed(uuid, usageOnly))
+        assertEquals(
+            "u@example.com",
+            AccountNames.managed(uuid, usageOnly.copy(usage = MirrorUsage(1, listOf(UsageAccount(uuid, "  ", "u@example.com", "claude", "ok", 1, emptyList()))))),
+            "a blank label is absent"
+        )
+        assertEquals("Account 3f2a9c1e", AccountNames.managed(uuid, null))
+        assertEquals("Account acct-1", AccountNames.managed("acct-1", null), "a short id is shown whole")
+    }
+
+    @Test
+    fun `a config dir is named by the separator its shape implies`() {
+        assertEquals(".claude-2", AccountNames.configDirLabel("/home/me/.claude-2/"))
+        assertEquals("a\\b", AccountNames.configDirLabel("/home/me/a\\b"), "a POSIX backslash is filename text")
+        assertEquals(".claude-2", AccountNames.configDirLabel("C:\\Users\\me\\.claude-2"))
+        assertEquals(".claude-2", AccountNames.configDirLabel("C:/Users/me/.claude-2"))
+        assertEquals("/", AccountNames.configDirLabel("/"))
+        assertEquals("", AccountNames.configDirLabel("  "))
     }
 }

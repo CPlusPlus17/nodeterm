@@ -11,6 +11,7 @@ import dev.nodeterm.protocol.host.RelayApprovalRefusedException
 import dev.nodeterm.protocol.host.RelayApprovalRequiredException
 import dev.nodeterm.protocol.host.RelayApprovalTimeoutException
 import dev.nodeterm.protocol.host.TerminalSink
+import dev.nodeterm.protocol.model.AccountNames
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.NodeKind
@@ -165,6 +166,10 @@ class RelayInteropTest {
             assertEquals(AgentState.BLOCKED, st.state)
             assertEquals(SessionBucket.NEEDS_YOU, st.bucket)
             assertEquals("fix bug", st.name)
+            // A39/A75: the account is named by the label the desktop's own builder wrote, never its id.
+            assertEquals("Work", AccountNames.observed(st.account, snap.status))
+            assertEquals("Work", AccountNames.managed("acct-1", snap.status))
+            assertEquals("me@work.example", snap.status!!.settings!!.claudeAccounts.single().email)
             val ev = snap.status!!.inbox!!.events.single()
             assertEquals(InboxKind.APPROVAL, ev.kind)
             assertEquals("term-abc-1-1700000000000-42", ev.pendingId)

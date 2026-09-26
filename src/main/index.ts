@@ -171,6 +171,7 @@ import {
   recordRawToolEvent,
   recordContextUsage,
   setMirrorSettingsProvider,
+  mirrorClaudeAccount,
   setMirrorUsageProvider,
   buildMirrorUsage,
   onInboxActionable,
@@ -2119,7 +2120,7 @@ app.whenReady().then(async () => {
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
-        .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) }))
+        .map((a) => mirrorClaudeAccount(a, claudeConfigDirFor(a.id)))
     }
   })
   // Desktop → paired-phone APNs push (spec: apns-push). Feeds off the SAME actionable-event seam
@@ -2325,7 +2326,7 @@ app.whenReady().then(async () => {
           ? {
               claudeAccounts: (s.claudeAccounts ?? [])
                 .filter((a) => a.host === hostKey && !a.pending)
-                .map((a) => ({ id: a.id, dir: remoteAccountConfigDirAbs(home, a.id) }))
+                .map((a) => mirrorClaudeAccount(a, remoteAccountConfigDirAbs(home, a.id)))
             }
           : {}) // unresolved home ⇒ no accounts advertised (fail-open), autoSupported still ships
       }
