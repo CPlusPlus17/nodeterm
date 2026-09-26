@@ -375,7 +375,12 @@ later fix left to a device.
    still shows one entry for this phone, and no new relay approval is asked for. *(A24, A65)*
 3. Uninstall, then install again: the app starts with no computers (its Keystore key and data went
    with it). Pairing the same computer again works, relay included, also on a desktop without Pro.
-   Revoke the stale entry on the desktop. *(A51, A65)*
+   Revoke the stale entry on the desktop. Then do it once more with Clear storage (Android Settings →
+   Apps → nodeterm → Storage) in place of the uninstall. After either one the phone has a new
+   identity, which the README's recovery after adb access depends on: on a macOS or Linux desktop the
+   key the new pairing adds to `~/.ssh/authorized_keys` differs from the stale entry's, and the box key
+   the desktop pins (`remote-approved-devices.json` in its app data) differs from the old one.
+   *(A51, A65, A50)*
 4. Android 12 or later, with a second phone: a device-to-device transfer ("copy apps and data" in the
    new phone's setup) leaves the app there with no computers and no pins. Pair it too, then revoke
    one of the two phones on an entitled (Pro) desktop: the other keeps working. A cloud backup
@@ -392,9 +397,12 @@ later fix left to a device.
 6. Pair by QR from the Pair screen's scanner with a macOS desktop, then a Linux desktop, then a
    Windows desktop. The Windows QR carries `"ssh":false`, so that pairing is relay-only, and a failed
    relay mint pairs nothing. *(A65)*
-7. Pair by pasting the code's text, and by scanning the desktop's QR with the phone's own camera app,
-   which hands the `nodeterm://pair?code=…` link to the app: once with the app closed, once with it
-   open on another screen. Deny the camera permission: pasting still pairs. *(A65)*
+7. Pair by pasting the code's text, and by scanning the desktop's QR with the phone's own camera app.
+   The desktop's QR is raw JSON by default, which a camera app shows only as text: check that nothing
+   opens. For the camera, first choose "Scan with the phone's Camera app instead" under the QR in the
+   desktop's Settings → Phone (the quick-pair popover has no such switch); that QR carries the
+   `nodeterm://pair?code=…` link, which the camera hands to the app. Scan it once with the app closed,
+   once with it open on another screen. Deny the camera permission: pasting still pairs. *(A65)*
 8. With remote access on, against a current desktop: the Pair screen says "Remote access is on", the
    pairing ends with "Paired, and approved for remote access.", and the first relay connect later
    raises no SAS dialog on the desktop. Revoke the phone there (Settings → Phone → Revoke): SSH is

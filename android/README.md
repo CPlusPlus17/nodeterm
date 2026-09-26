@@ -148,9 +148,21 @@ iOS app does receive the detail, in the push the desktop sends.
   Keystore never hands out the key those files are sealed under, but it lets any code running as the
   app use it, so that is enough to pull the phone's pairing credentials: the SSH private key your computers
   accept, the relay box secret and the relay device token. A signed, non-debuggable release build does
-  not exist yet. Until it does, keep USB and wireless debugging off when you are not using them; if
-  someone else may have had adb access, revoke the phone on each computer (nodeterm → Settings →
-  Phone → Revoke) and pair it again.
+  not exist yet. Until it does, keep USB and wireless debugging off when you are not using them.
+- **If someone else may have had adb access, pairing again is not enough.** The phone keeps its SSH
+  key, its relay box key and its relay device id through a re-pair, so each computer would trust the
+  same keys again. Give the phone a new identity before it pairs:
+  1. Revoke every entry for this phone on each computer (nodeterm → Settings → Phone → Revoke).
+  2. Uninstall the app, or clear its storage (Android Settings → Apps → nodeterm → Storage → Clear
+     storage; the names vary by phone). Either one deletes the app's stored keys and every pairing,
+     and the app then makes a new SSH key, relay box key and relay device id.
+  3. Pair each computer again.
+
+  A computer without Pro cannot revoke the old relay device token at the relay (that request is
+  signed with the Pro entitlement), so whoever took it may still reach that computer through the
+  relay with the old box key. The revoke unpinned that key, so the computer shows its approval dialog
+  with a code before it lets it in: approve a phone there only while your own phone is showing the
+  same code.
 - Nothing of the app's goes into a backup or a phone-to-phone transfer. `allowBackup="false"` stops
   cloud backup, and the manifest's data extraction rules stop the Android 12+ device-to-device
   transfer, which ignores `allowBackup`. A new phone starts unpaired; pair it again.

@@ -19,6 +19,10 @@ import kotlin.test.fail
  *  - Audit A50: the only APK to install is the debug build, which AGP marks debuggable, so adb access
  *    to the phone yields its pairing credentials. While the release build type has no signing config
  *    (so there is no release to install instead), the README must say so.
+ *    Its recovery must give the phone a new identity (uninstall, or clear its storage) before it pairs
+ *    again, since a re-pair keeps the same keys (review of A50).
+ *  - The camera-app pairing check must name the desktop's switch to the link QR while the QR defaults
+ *    to raw JSON (review of A65).
  *
  * The audit and the handover are logs, so only the audit's section headings are read (for the ids).
  */
@@ -93,6 +97,65 @@ class DeviceChecklistDocsTest {
             "android/README.md's Security section must warn that the debug APK is debuggable, so adb access " +
                 "(`run-as`, a debugger) yields the phone's pairing credentials (audit A50):\n$security"
         )
+    }
+
+    @Test
+    fun `the README's recovery after adb access gives the phone a new identity before it pairs again`() {
+        // Review of A50: the first text said "revoke the phone on each computer and pair it again". That
+        // gives back what the warning says was taken: the SSH seed and the relay box secret are
+        // get-or-create (NodetermApp, PhoneIdentity), nothing in the app removes them (Forget drops a
+        // relay token only), and the desktop appends whatever key a pairing sends and re-pins the box
+        // key. Only an uninstall or clearing the app's storage makes new ones.
+        val protocolMain = File(InteropHarness.repoRoot, "android/protocol/src/main/kotlin")
+        val app = (AppSourcePins.appSrc.walkTopDown() + protocolMain.walkTopDown())
+            .filter { it.extension == "kt" }
+            .joinToString("\n") { it.readText() }
+        assertTrue(
+            "getOrCreate32(SecureStore.SSH_SEED)" in app,
+            "the app no longer gets-or-creates its SSH seed; re-check the README's recovery after adb access"
+        )
+        Assumptions.assumeFalse(
+            Regex("""remove\(\s*(SecureStore\.)?SSH_SEED\b|remove\(\s*(PhoneIdentity\.)?BOX_SECRET\b""").containsMatchIn(app),
+            "the app can drop its own identity now: point the README's recovery at that instead of an uninstall"
+        )
+        val security = section(readme, "## Security")
+        // Markdown wraps anywhere, so the phrases are looked for with the line breaks folded away.
+        val flat = security.replace(Regex("""\s+"""), " ")
+        val revoke = flat.indexOf("Settings → Phone → Revoke")
+        assertTrue(revoke >= 0, "android/README.md's Security section no longer tells the user to revoke the phone:\n$security")
+        val after = flat.substring(revoke)
+        val renew = Regex("""\b[Uu]ninstall\b.*?\bclear its storage\b""").find(after)
+        val pair = Regex("""\b[Pp]air\b""").find(after)
+        assertTrue(
+            renew != null && pair != null && renew.range.first < pair.range.first,
+            "android/README.md's recovery after adb access must have the phone uninstall the app or clear its " +
+                "storage (a new SSH key, box key and device id) after the revoke and before it pairs again: a " +
+                "re-pair alone trusts the same keys again:\n$security"
+        )
+    }
+
+    @Test
+    fun `while the pairing QR defaults to JSON, the camera-app check names the desktop's switch`() {
+        // Review of A65: item 7 had the tester scan the desktop's QR with the camera app, "which hands the
+        // nodeterm://pair link to the app". The QR is raw JSON unless the user picks the URL form on the
+        // desktop, so a tester following it would record a false failure.
+        val pairQr = read(File(InteropHarness.repoRoot, "src/shared/pair-qr.ts"))
+        val default = Regex("""DEFAULT_PAIR_QR_FORM\s*:\s*PairQrForm\s*=\s*'(\w+)'""").find(pairQr)?.groupValues?.get(1)
+            ?: fail("src/shared/pair-qr.ts no longer declares DEFAULT_PAIR_QR_FORM as a literal")
+        Assumptions.assumeTrue(default == "json", "the pairing QR is a link by default now: item 7 can drop the switch")
+        val phone = read(File(InteropHarness.repoRoot, "src/renderer/components/settings/sections/PhoneSection.tsx"))
+        val switch = Regex("""qrForm === 'url'\s*\?\s*'[^']*'\s*:\s*"([^"]+)"""").find(phone)?.groupValues?.get(1)
+            ?: fail("PhoneSection.tsx no longer has the JSON → URL QR switch this test reads its label from")
+        val items = checklistItems().filter { "nodeterm://pair" in it.second }
+        assertTrue(items.isNotEmpty(), "no checklist item checks the `nodeterm://pair` link from the camera app")
+        for ((n, text) in items) {
+            val flat = text.replace(Regex("""\s+"""), " ")
+            assertTrue(
+                "\"$switch\"" in flat && "Settings → Phone" in flat,
+                "checklist item $n has the camera app open the `nodeterm://pair` link, but the desktop's QR is raw " +
+                    "JSON unless \"$switch\" is chosen in its Settings → Phone; the item must say so:\n$text"
+            )
+        }
     }
 
     /** (number, text) for each item of docs/android.md's device checklist, continuation lines included. */
