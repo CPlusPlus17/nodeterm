@@ -122,7 +122,9 @@ applicable here":
    `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.
    The Android workflow runs on every file that fixture bundles (`src/core`, `src/shared`,
    `src/main/*.ts`, `src/main/remote`); an import that pulls a file from elsewhere into it fails
-   `WorkflowPathFilterTest` until the workflow's `paths` list it. Do not copy CI's
+   `WorkflowPathFilterTest` until the workflow's `paths` list it, and so does a protocol test that
+   reads a repo file outside `android/` (name it by a literal path from `InteropHarness.repoRoot`; a
+   computed path fails that test unless its `computedReads` says why it is covered). Do not copy CI's
    `npm ci --ignore-scripts` onto a desktop checkout; it is for a machine without the native
    toolchain. `npm ci` deletes `node_modules` first and the flag skips the node-pty patch and build,
    so node-pty stays unpatched (unbuilt on Linux) until `npm install` or `npm run rebuild` runs again.

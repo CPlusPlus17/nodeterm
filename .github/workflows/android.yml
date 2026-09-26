@@ -26,11 +26,15 @@ name: Android
 #                         reads them: the Kotlin CodeQL job and the Gradle Dependabot entry (audit A69)
 #   docs/android.md, docs/android-audit-2026-09.md   DeviceChecklistDocsTest reads them: the device
 #                         checklist and the audit ids its items name (audit A65)
+#   CONTRIBUTING.md       ContributorDocsTest reads it (with docs/android.md and the two READMEs under
+#                         android/): the JDK range and the `npm ci --ignore-scripts` warning (A61, A71)
 # To re-derive: `node android/protocol/src/test/interop/bundle-fixture.cjs <out.cjs>
 # android/protocol/src/test/interop/electron-stub.ts` from the repo root writes <out.cjs>.meta.json,
 # whose `inputs` are the bundled files. WorkflowPathFilterTest (android/protocol) fails when one is not
 # matched by both filters. A change that adds an input edits a file that is already one (or the bundler
-# or tsconfig.json), so it runs this workflow and that test.
+# or tsconfig.json), so it runs this workflow and that test. The same test fails on a repo file a
+# protocol test reads by a literal path (from InteropHarness.repoRoot or a val bound to it) that the
+# filters miss, and on a read by a computed path it has not been told about.
 on:
   push:
     paths:
@@ -47,6 +51,7 @@ on:
       - '.github/dependabot.yml'
       - 'docs/android.md'
       - 'docs/android-audit-2026-09.md'
+      - 'CONTRIBUTING.md'
   pull_request:
     paths:
       - 'android/**'
@@ -62,6 +67,7 @@ on:
       - '.github/dependabot.yml'
       - 'docs/android.md'
       - 'docs/android-audit-2026-09.md'
+      - 'CONTRIBUTING.md'
   workflow_dispatch:
 
 concurrency:

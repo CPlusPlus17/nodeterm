@@ -25,6 +25,9 @@ import kotlin.test.assertTrue
  * file already in it (an import), the bundler's aliases (under android/) or tsconfig.json, so it runs
  * the workflow, and this test then fails until the new path is listed.
  *
+ * The second test does the same for the repo files the protocol tests read, found by [repoReads]; a
+ * read it cannot resolve to a path has to be explained in `computedReads`.
+ *
  * The filter semantics are GitHub's (`*` stays within one path segment, `**` crosses them); syntax this
  * reader does not implement is refused rather than guessed.
  */
@@ -43,6 +46,19 @@ class WorkflowPathFilterTest {
      * - the workflow file itself.
      */
     private val unbundledInputs = listOf("tsconfig.json", "package.json", "package-lock.json", workflowPath)
+
+    /**
+     * Test files that read a repo file through a computed path, which [repoReads] cannot resolve, with
+     * why the paths they read run the workflow anyway. Any other computed read fails the test: it is how
+     * ContributorDocsTest came to read CONTRIBUTING.md with that file missing from the filter (review
+     * of A61/A71), because it read its docs as `File(root, path)` over a list of strings.
+     */
+    private val computedReads = mapOf(
+        "WorkflowPathFilterTest.kt" to "the bundle's metafile inputs and the paths this test requires, which it checks itself",
+        "GradleCiCoverageTest.kt" to "the gradle directories .github/dependabot.yml names (in the filter); each must " +
+            "hold a Gradle build, and this repo's are all under android/",
+        "InteropHarnessTest.kt" to "the bundler script InteropHarness.bundleCommand names, under android/",
+    )
 
     @Test
     fun `every file the fixture bundle is built from runs the workflow`() {
@@ -64,15 +80,58 @@ class WorkflowPathFilterTest {
 
     @Test
     fun `the files the workflow uses without bundling them run it`() {
-        // Repo files the protocol tests read by a literal path (ResumeOfferTest reads a src/shared file).
+        // Repo files the protocol tests read (ResumeOfferTest reads a src/shared file, ContributorDocsTest
+        // reads CONTRIBUTING.md): each read by a literal path must run the workflow, and a read by a
+        // computed path must be explained in computedReads.
         val testSources = File(root, "android/protocol/src/test/kotlin")
-        val literalReads = testSources.walkTopDown().filter { it.extension == "kt" }.flatMap { file ->
-            Regex("""File\(\s*InteropHarness\.repoRoot\s*,\s*"([^"$]+)"\s*\)""").findAll(file.readText()).map { it.groupValues[1] }
-        }.toSortedSet()
-        assertTrue(literalReads.isNotEmpty(), "found no File(InteropHarness.repoRoot, \"…\") read in $testSources")
+        val reads = testSources.walkTopDown().filter { it.extension == "kt" }.flatMap { file ->
+            repoReads(file.readText()).map { file.name to it }
+        }.toList()
+        val literalReads = reads.mapNotNull { it.second }.toSortedSet()
+        assertTrue(literalReads.isNotEmpty(), "found no repo file read by a literal path in $testSources")
+        val computed = reads.filter { it.second == null }.map { it.first }.toSortedSet()
+        val unexplained = computed - computedReads.keys
+        assertTrue(
+            unexplained.isEmpty(),
+            "these test files read a repo file through a computed path, so this test cannot check that editing " +
+                "the file runs the workflow: $unexplained. Name each file by a literal path from " +
+                "InteropHarness.repoRoot (or from a val bound to it), or list the test file in computedReads " +
+                "with why its paths are in the filter anyway."
+        )
+        val stale = computedReads.keys - computed
+        assertTrue(stale.isEmpty(), "computedReads lists $stale, which read no repo file through a computed path now; remove it")
         val required = (unbundledInputs + literalReads).toSortedSet()
         for (path in required) assertTrue(File(root, path).exists(), "$path does not exist; update this test")
         assertCovered(required, "read by the workflow or its tests")
+    }
+
+    @Test
+    fun `the read scanner sees literal, aliased and computed reads`() {
+        // Built from a template so that this file's own source names no repo file by a literal path.
+        val h = "InteropHarness" + ".repoRoot"
+        val source = """
+            /** File($h, "in/a/kdoc.md") is not a read. */
+            class X {
+                // File($h, "in/a/comment.md") is not either
+                private val base = $h
+                var dir: File = $h
+                private val other = File("/tmp")
+                val a = File($h, "CONTRIBUTING.md")
+                val b = File( base , "docs/android.md" )
+                val c = base.resolve("android/README.md")
+                val d = File(dir, "src/shared/types.ts")
+                val e = $h.resolve("docs/SERVER.md")
+                val f = File(base, path)
+                val g = File(base, "docs/" + name)
+                val i = File($h, "x/${'$'}name.md")
+                val j = File(other, "not/the/repo.md")
+                val k = other.base.resolve("not/an/alias.md")
+            }
+        """.trimIndent()
+        assertEquals(
+            listOf("CONTRIBUTING.md", "docs/android.md", "android/README.md", "src/shared/types.ts", "docs/SERVER.md", null, null, null),
+            repoReads(source)
+        )
     }
 
     @Test
@@ -130,6 +189,23 @@ class WorkflowPathFilterTest {
     }
 
     companion object {
+        /**
+         * The repo files [source] (a Kotlin test file) reads, one entry per read in source order: the path
+         * when it is a string literal, null when it is computed. A read is `File(<root>, …)` or
+         * `<root>.resolve(…)`, where <root> is `InteropHarness.repoRoot` or a `val`/`var` the same file binds
+         * to it. Whole-line and block comments are skipped. The scan is textual: a root handed in through a
+         * parameter is not seen, and a string that quotes a read counts as a computed one (the safe side).
+         */
+        internal fun repoReads(source: String): List<String?> {
+            val code = source.replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), " ")
+                .lines().filterNot { it.trimStart().startsWith("//") }.joinToString("\n")
+            val aliases = Regex("""\b(?:val|var)\s+(\w+)\s*(?::\s*File\s*)?=\s*InteropHarness\.repoRoot(?![\w.])""")
+                .findAll(code).map { Regex.escape(it.groupValues[1]) }
+            val root = (sequenceOf("""InteropHarness\.repoRoot""") + aliases).joinToString("|")
+            val read = Regex("""(?:\bFile\(\s*(?:$root)\s*,|(?<![\w.])(?:$root)\.resolve\()\s*(?:"([^"\\$]*)"\s*\))?""")
+            return read.findAll(code).map { it.groups[1]?.value }.toList()
+        }
+
         /**
          * The `paths:` list of [trigger] under the workflow's top-level `on:`, or null when the trigger
          * has none (it then runs on every change). Only the block style this repo's workflows use is

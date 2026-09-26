@@ -26,12 +26,16 @@ import kotlin.test.fail
 class ContributorDocsTest {
     private val root = InteropHarness.repoRoot
 
-    /** Contributor-facing docs that say how to build or test the Android side. */
+    /**
+     * Contributor-facing docs that say how to build or test the Android side. Each is named by a literal
+     * path so that WorkflowPathFilterTest sees the read and fails while an edit to the doc would not run
+     * the Android workflow (CONTRIBUTING.md was missing from its filter while this was a list of strings).
+     */
     private val docs = listOf(
-        "CONTRIBUTING.md",
-        "docs/android.md",
-        "android/README.md",
-        "android/tools/typecheck/README.md",
+        File(root, "CONTRIBUTING.md"),
+        File(root, "docs/android.md"),
+        File(root, "android/README.md"),
+        File(root, "android/tools/typecheck/README.md"),
     )
 
     /**
@@ -52,8 +56,9 @@ class ContributorDocsTest {
         val target = jvmTarget()
         val ci = ciJavaVersions()
         var ranges = 0
-        for (path in docs) {
-            val text = read(File(root, path))
+        for (doc in docs) {
+            val path = doc.repoPath()
+            val text = read(doc)
             openEnded.findAll(text).forEach {
                 fail(
                     "$path says `${it.value}`, but the wrapper's Gradle $gradle runs on JDK $newestJdk at most. " +
@@ -76,14 +81,15 @@ class ContributorDocsTest {
             }
         }
         assertTrue(range.containsMatchIn(read(File(root, "android/README.md"))), "android/README.md no longer states a JDK range")
-        assertTrue(ranges >= 2, "found only $ranges JDK ranges in $docs; has the reader stopped seeing them?")
+        assertTrue(ranges >= 2, "found only $ranges JDK ranges in ${docs.map { it.repoPath() }}; has the reader stopped seeing them?")
     }
 
     @Test
     fun `a paragraph that mentions npm ci --ignore-scripts says how a desktop checkout recovers`() {
         var mentions = 0
-        for (path in docs) {
-            for (paragraph in read(File(root, path)).split(Regex("""\n\s*\n"""))) {
+        for (doc in docs) {
+            val path = doc.repoPath()
+            for (paragraph in read(doc).split(Regex("""\n\s*\n"""))) {
                 if (!paragraph.contains("--ignore-scripts")) continue
                 mentions++
                 assertTrue(
@@ -104,6 +110,8 @@ class ContributorDocsTest {
         assertTrue(compareVersions("8.14.3", "9.1") < 0)
         assertEquals(0, compareVersions("9.1", "9.1.0"))
     }
+
+    private fun File.repoPath() = relativeTo(root).invariantSeparatorsPath
 
     private fun wrapperGradleVersion(): String {
         val props = read(File(root, "android/gradle/wrapper/gradle-wrapper.properties"))
