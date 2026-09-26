@@ -1,5 +1,8 @@
 package dev.nodeterm.android.ui
 
+import dev.nodeterm.android.conn.ConnState
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
 import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -29,6 +32,7 @@ import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
+import dev.nodeterm.protocol.model.Keys
 import dev.nodeterm.protocol.model.Launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -113,7 +117,11 @@ class TerminalController(
         override fun onExit(code: Int?) {
             main.post {
                 stream = null
-                state = TermState.Ended(if (code == null) "Disconnected." else "The session ended (exit $code).")
+                if (code == null && !disposed && autoReattach()) {
+                    state = TermState.Ended("Disconnected. Reconnecting…")
+                } else {
+                    state = TermState.Ended(if (code == null) "Disconnected." else "The session ended (exit $code).")
+                }
             }
         }
     }
@@ -144,8 +152,7 @@ class TerminalController(
         fun onInput(data: String) {
             var out = data
             if (ctrlArmed && data.length == 1) {
-                val ch = data[0].uppercaseChar()
-                if (ch in '@'..'_') out = (ch.code - 64).toChar().toString()
+                Keys.ctrl(data)?.let { out = it }
                 main.post { ctrlArmed = false }
             }
             stream?.write(out)
@@ -204,6 +211,34 @@ class TerminalController(
         wv.evaluateJavascript(code, null)
     }
 
+    private var attachedAt = 0L
+    private var autoReattaches = 0
+
+    /**
+     * A null exit is the CONNECTION going away, not the pane ending. The host connection reconnects
+     * on its own; this follows it back into the session instead of leaving "Disconnected" until the
+     * user taps Reattach (audit A36). Bounded: three tries per stretch of flapping (a stream that
+     * lived a minute resets the count), and only while this screen is showing. Returns false when
+     * out of tries.
+     */
+    private fun autoReattach(): Boolean {
+        if (System.currentTimeMillis() - attachedAt > 60_000) autoReattaches = 0
+        if (autoReattaches >= 3) return false
+        autoReattaches++
+        graph.scope.launch {
+            delay(1_500L * autoReattaches)
+            // A re-list notices a dead SSH transport (and drops it) before we ask for a connection,
+            // so the attach below does not get the stale one back.
+            if (!useRelay) session.refreshNow()
+            val up = if (useRelay) true else withTimeoutOrNull(120_000) { session.state.first { it is ConnState.Connected } } != null
+            main.post {
+                if (disposed || stream != null || attachJob != null) return@post
+                if (up) attach() else state = TermState.Ended("Disconnected.")
+            }
+        }
+        return true
+    }
+
     /** Set once the user chose "Open through the relay": later reattaches stay on the relay. */
     private var useRelay = false
 
@@ -234,6 +269,7 @@ class TerminalController(
                 }
                 main.post {
                     stream = s
+                    attachedAt = System.currentTimeMillis()
                     state = TermState.Attached
                     if (cols > 0 && (cols != c || rows != r)) s.resize(cols, rows)
                 }
@@ -307,7 +343,21 @@ class TerminalController(
         sizedElsewhere = null
     }
 
+    /**
+     * Send the input bar's text. An armed Ctrl applies to it (audit A34): the bar goes through
+     * xterm's bracketed paste, so the per-keystroke Ctrl in [Bridge.onInput] never saw a single
+     * character — arming Ctrl and sending `z` used to submit a literal `z` plus Enter. One character
+     * with a control byte is sent as that byte alone, with no Enter (^Z then Enter is not ^Z);
+     * anything else just disarms the chip and is sent as typed.
+     */
     fun submit(text: String, enter: Boolean) {
+        if (ctrlArmed) {
+            ctrlArmed = false
+            Keys.ctrl(text)?.let {
+                raw(it)
+                return
+            }
+        }
         js("nt.submit('${b64(text.toByteArray(Charsets.UTF_8))}', $enter)")
     }
 
