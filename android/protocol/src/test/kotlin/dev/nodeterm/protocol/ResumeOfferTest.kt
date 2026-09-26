@@ -16,8 +16,9 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Audit A76 (and A15): what the terminal screen offers to type after an attach. The screen
- * (TerminalController) is only type-checked; these pin the rule it delegates to.
+ * Audit A76 (and A15, and the A41 review): what the terminal screen offers to type after an attach,
+ * and what it keeps across a reattach. The screen (TerminalController) is only type-checked; these
+ * pin the rule it delegates to.
  */
 class ResumeOfferTest {
     private val account = "/Users/me/Library/Application Support/node-terminal/claude-accounts/acct-1"
@@ -133,6 +134,64 @@ class ResumeOfferTest {
         assertFalse(offer.stillOffered(snapshot(awake), "n1"))
         val resume = assertNotNull(ResumeOffer.afterAttach(fresh = true, TransportKind.RELAY, snapshot(awake), "n1"))
         assertTrue(resume.stillOffered(snapshot(awake), "n1"), "a cold pane's resume does not depend on the flag")
+    }
+
+    /**
+     * The A41 review: a reattach of the same screen (the stream dropped, the app went to the
+     * background) is warm, because the cold attach before it created the session. Re-deriving the
+     * offer from `fresh` alone dropped an unanswered resume on every reconnect.
+     */
+    @Test
+    fun `an unanswered resume is kept through a warm reattach of the pane it was made for`() {
+        val offered = assertNotNull(ResumeOffer.afterAttach(fresh = true, TransportKind.RELAY, snapshot(awake), "n1"))
+        for (transport in TransportKind.entries) {
+            assertEquals(offered, ResumeOffer.afterAttach(fresh = false, transport, snapshot(awake), "n1", carried = offered))
+        }
+        // Nothing carried (answered, dismissed, or never offered): a warm attach still offers nothing.
+        assertNull(ResumeOffer.afterAttach(fresh = false, TransportKind.RELAY, snapshot(awake), "n1", carried = null))
+    }
+
+    @Test
+    fun `a carried resume still wins over a stale Sleeping flag`() {
+        // The pane is the cold one the first attach created, not the shell a CLI exited back to, so
+        // the wake line (no cd, no account) would still be the wrong one there.
+        val offered = assertNotNull(ResumeOffer.afterAttach(fresh = true, TransportKind.RELAY, snapshot(sleeping), "n1"))
+        val kept = assertNotNull(ResumeOffer.afterAttach(fresh = false, TransportKind.SSH, snapshot(sleeping), "n1", carried = offered))
+        assertEquals(ResumeOffer.Kind.RESUME, kept.kind)
+        assertEquals(offered, kept)
+    }
+
+    @Test
+    fun `a carried resume is dropped once the computer describes something else`() {
+        val offered = assertNotNull(ResumeOffer.afterAttach(fresh = true, TransportKind.RELAY, snapshot(awake), "n1"))
+        // A hook event from the node since the offer: a CLI ran in that pane while the phone was away
+        // (say, resumed on the computer), and the resume line would reach it as a prompt.
+        val heard = """{"state":"done","agentId":"claude","sessionId":"sid-7","updatedAt":9}"""
+        assertNull(ResumeOffer.afterAttach(fresh = false, TransportKind.RELAY, snapshot(heard), "n1", carried = offered))
+        // Another conversation.
+        val other = """{"state":"done","agentId":"claude","sessionId":"sid-8","updatedAt":5}"""
+        assertNull(ResumeOffer.afterAttach(fresh = false, TransportKind.RELAY, snapshot(other), "n1", carried = offered))
+        // The node is gone from the canvas and the mirror.
+        val gone = ProjectsParser.parseBlob("""{"version":2,"projects":[{"id":"p1","name":"Repo","cwd":"/repo","nodes":[]}]}""")
+        assertNull(ResumeOffer.afterAttach(fresh = false, TransportKind.RELAY, gone, "n1", carried = offered))
+    }
+
+    @Test
+    fun `a fresh reattach is a new cold pane and gets the line built now`() {
+        val offered = assertNotNull(ResumeOffer.afterAttach(fresh = true, TransportKind.RELAY, snapshot(awake), "n1"))
+        val other = """{"state":"done","agentId":"claude","sessionId":"sid-8","updatedAt":9}"""
+        val rebuilt = assertNotNull(ResumeOffer.afterAttach(fresh = true, TransportKind.RELAY, snapshot(other), "n1", carried = offered))
+        assertEquals(ResumeOffer.Kind.RESUME, rebuilt.kind)
+        assertTrue(rebuilt.command.contains("--resume sid-8"), rebuilt.command)
+    }
+
+    @Test
+    fun `a wake is not carried, since each attach re-derives it`() {
+        val wake = assertNotNull(ResumeOffer.afterAttach(fresh = false, TransportKind.SSH, snapshot(sleeping), "n1"))
+        assertEquals(wake, ResumeOffer.afterAttach(fresh = false, TransportKind.SSH, snapshot(sleeping), "n1", carried = wake))
+        // Woken on the computer meanwhile, or reopened through the relay (whose attach wakes it).
+        assertNull(ResumeOffer.afterAttach(fresh = false, TransportKind.SSH, snapshot(awake), "n1", carried = wake))
+        assertNull(ResumeOffer.afterAttach(fresh = false, TransportKind.RELAY, snapshot(sleeping), "n1", carried = wake))
     }
 
     @Test

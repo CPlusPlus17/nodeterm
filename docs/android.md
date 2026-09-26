@@ -177,7 +177,8 @@ is released), and SSH detaches a stream whose blocking open finished after its c
 stays armed, instead of clearing text that reached nothing. Attached, Ctrl plus one character sends
 that control byte alone, and anything else goes as a paste followed by Enter. The screen disables
 Send, the Resume offer and the sending key chips while nothing is attached; that part is only
-type-checked.
+type-checked. An unanswered Resume offer stays on screen, disabled, through the reattach, and can
+be tapped again once the reattach has settled it (see `ResumeOfferTest`).
 
 `TerminalPageTest` pins what happens when the terminal WebView's renderer process goes away
 (`A45`). The app handles `onRenderProcessGone` instead of being killed with the renderer: it
@@ -199,6 +200,13 @@ desktop's kill-line) and re-checks that the node is still Sleeping. Through the 
 node gets no offer: the attach already asked the desktop to wake it. A shallow "Pause session" is
 Sleeping in the mirror (it carries no `paused`), so it too gets only the offer, which is the explicit
 Resume the desktop's PAUSED chip is; a deep pause leaves no Sleeping flag and gets nothing.
+A reattach of the same screen (the stream dropped, the app went to the background) is warm, because
+the cold attach created the session, so an unanswered resume is carried through it rather than
+re-derived from the attach: it is kept while the computer still builds that same line and has heard
+nothing from the node since (its mirror entry's `updatedAt`), re-listed right after the reattach, and
+dropped otherwise, since a CLI started in the pane meanwhile would take the line as a prompt. Until
+the reattach has settled it, it cannot be tapped. A wake is not carried; every attach re-derives it.
+Leaving the screen and opening the node again is a new screen, whose warm attach offers nothing.
 `SshTransportTest` runs the offer end to end against the real tmux: the line it types starts the
 stand-in CLI in the node's own folder even with a half-typed line left at the prompt. The banner
 itself is only type-checked.

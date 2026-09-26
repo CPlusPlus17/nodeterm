@@ -94,9 +94,23 @@ class TerminalController(
      * Offered after an attach of an agent node: its resume line after a COLD attach (the desktop's
      * cold restore), or its wake line when the session is Sleeping over direct SSH (audit A76).
      * Typed only when the user taps it. See [ResumeOffer].
+     *
+     * It stays on screen while the stream is down: a reattach of this screen is warm (the cold attach
+     * created the session), so an unanswered resume is handed back to [ResumeOffer.afterAttach] as
+     * `carried` and kept while the computer still describes that conversation (the A41 review).
      */
     var resumeOffer by mutableStateOf<ResumeOffer?>(null)
         private set
+
+    /**
+     * [resumeOffer] was decided by the attach the screen shows now, so a tap may type it. False from
+     * the start of every attach until its offer is settled: a carried offer is not typed on the strength
+     * of the previous attach while the reattach is still checking it.
+     */
+    private var resumeSettled by mutableStateOf(false)
+
+    /** The offer's button may be tapped: attached, and the offer settled by this attach. */
+    val canResume: Boolean get() = attached && resumeSettled
     /** A desktop viewer sized the shared pty differently from this screen. */
     var sizedElsewhere by mutableStateOf<Pair<Int, Int>?>(null)
         private set
@@ -454,7 +468,9 @@ class TerminalController(
     fun attach() {
         if (disposed || stopped) return
         state = TermState.Connecting
-        resumeOffer = null
+        // The offer stays on screen (A41 review): this attach settles it, keeping an unanswered
+        // resume or dropping it (afterAttach). Until then it cannot be typed.
+        resumeSettled = false
         val ticket = slot.begin()
         val sink = sinkFor(ticket)
         attachJob = graph.scope.launch {
@@ -495,6 +511,8 @@ class TerminalController(
                         if (!slot.accept(ticket, lease)) return@post
                         attachedAt = System.currentTimeMillis()
                         state = TermState.Attached
+                        // A session started for a launch types its own line: nothing to offer.
+                        if (launch != null) resumeOffer = null
                         if (cols > 0 && (cols != c || rows != r)) s.resize(cols, rows)
                     }
                     s to launch
@@ -537,15 +555,22 @@ class TerminalController(
     }
 
     private suspend fun afterAttach(s: TerminalStream, conn: HostConnection, ticket: Long) {
+        // A resume carried through a warm reattach is checked against what the computer says NOW:
+        // the listing from before the drop cannot show a CLI started in the pane meanwhile. (Read
+        // here only to decide on the re-list; the carry itself reads the offer again on main.)
+        if (!s.fresh && resumeOffer?.kind == ResumeOffer.Kind.RESUME) session.refreshNow()
         val snap = session.snapshot.value
         val status = snap.statusOf(nodeId)
         // A cold pane (a reboot) gets the agent's own resume, built like the desktop's cold restore
         // (A15/A16); a Sleeping one over direct SSH gets the desktop's wake line, since nothing tells
         // the desktop about an SSH attach (A76). Over the relay the attach itself asks the desktop to
         // wake it, so nothing is offered there. Never typed unasked into a pane we cannot see.
-        ResumeOffer.afterAttach(s.fresh, conn.kind, snap, nodeId)?.let { offer ->
-            // Only for the attach the screen still shows: a newer one cleared the offer when it began.
-            main.post { if (slot.isCurrent(ticket)) resumeOffer = offer }
+        main.post {
+            // Only for the attach the screen still shows: a newer one settles the offer itself.
+            if (!slot.isCurrent(ticket)) return@post
+            // The offer still on screen is carried: one the user answered or dismissed is not.
+            resumeOffer = ResumeOffer.afterAttach(s.fresh, conn.kind, snap, nodeId, carried = resumeOffer)
+            resumeSettled = true
         }
         // Reading a finished session on the phone is a READ: tell the computer (unread clears there,
         // other phones archive the card), exactly what the SSH read-ack file does.
@@ -560,8 +585,9 @@ class TerminalController(
 
     fun acceptResume() {
         val offer = resumeOffer ?: return
-        // Not attached (the stream dropped under the offer): keep it rather than spend it on nothing.
-        if (!attached) return
+        // Not attached (the stream dropped under the offer), or a reattach is still settling it: keep
+        // it rather than spend it on nothing. The reattach keeps it or drops it (see [resumeOffer]).
+        if (!canResume) return
         resumeOffer = null
         // Re-asked at the tap (A76): the desktop may have woken the session since the offer appeared,
         // and a wake line typed into that CLI would arrive as a prompt.

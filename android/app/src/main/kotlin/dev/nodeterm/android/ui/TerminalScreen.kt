@@ -149,7 +149,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                         Text(offer.message)
                         Text(offer.command, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { controller.acceptResume() }, enabled = controller.attached) { Text(offer.button) }
+                            Button(onClick = { controller.acceptResume() }, enabled = controller.canResume) { Text(offer.button) }
                             OutlinedButton(onClick = { controller.dismissResume() }) { Text("Not now") }
                         }
                     }

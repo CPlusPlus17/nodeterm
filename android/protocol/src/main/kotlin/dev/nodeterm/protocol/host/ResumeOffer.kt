@@ -33,8 +33,19 @@ import dev.nodeterm.protocol.model.ProjectsSnapshot
  * shallow-paused node reads as Sleeping here too; an offer the user taps is that explicit Resume,
  * never an automatic one. A deep pause ("pause & end session") recycles the tmux session and leaves
  * `hibernated` unset, so it gets no wake offer.
+ *
+ * A reattach of the same screen (the stream dropped, the app went to the background) is warm: the
+ * cold attach before it created the session. An unanswered [Kind.RESUME] is therefore handed back in
+ * as `carried` and kept, not re-derived from `fresh` (which would drop it: the A41 review). It is kept
+ * only while the computer still describes the conversation it was made for, with nothing reported
+ * from the node since ([statusAt]): the phone did not see the pane while it was away, and a CLI
+ * started there meanwhile would take the resume line as a prompt. A wake needs no carrying; every
+ * attach re-derives it.
+ *
+ * [statusAt] is the node's mirror entry `updatedAt` the offer was built against (null: the computer
+ * had no entry). The mirror moves it only when a hook event from the node arrives.
  */
-data class ResumeOffer(val kind: Kind, val agent: Agent, val command: String) {
+data class ResumeOffer(val kind: Kind, val agent: Agent, val command: String, val statusAt: Long?) {
     enum class Kind { RESUME, WAKE }
 
     /** What accepting the offer writes into the pane. */
@@ -76,8 +87,25 @@ data class ResumeOffer(val kind: Kind, val agent: Agent, val command: String) {
         /**
          * The offer after an attach of [nodeId] over [transport], or null. [fresh] is the attach's
          * own answer ([TerminalStream.fresh]); [snapshot] is the phone's latest view of the computer.
+         * [carried] is the offer the screen still shows from its previous attach, unanswered: a
+         * [Kind.RESUME] survives a warm reattach while the computer builds exactly that offer again
+         * for a cold pane (same line, and no hook event from the node since, [statusAt]); otherwise
+         * it is dropped. A fresh reattach is a new cold pane and gets the line built now.
          */
-        fun afterAttach(fresh: Boolean, transport: TransportKind, snapshot: ProjectsSnapshot, nodeId: String): ResumeOffer? {
+        fun afterAttach(
+            fresh: Boolean,
+            transport: TransportKind,
+            snapshot: ProjectsSnapshot,
+            nodeId: String,
+            carried: ResumeOffer? = null
+        ): ResumeOffer? {
+            // The pane is still the cold one the earlier attach created, so the cold line, and it
+            // wins over a Sleeping flag as it did then.
+            if (!fresh && carried?.kind == Kind.RESUME) return build(cold = true, transport, snapshot, nodeId).takeIf { it == carried }
+            return build(fresh, transport, snapshot, nodeId)
+        }
+
+        private fun build(cold: Boolean, transport: TransportKind, snapshot: ProjectsSnapshot, nodeId: String): ResumeOffer? {
             val found = snapshot.findNode(nodeId)
             val project = found?.first
             val node = found?.second
@@ -85,13 +113,14 @@ data class ResumeOffer(val kind: Kind, val agent: Agent, val command: String) {
             val agent = Agent.of(node?.agentId ?: status?.agentId) ?: return null
             val sid = status?.sessionId ?: node?.agentSessionId ?: return null
             val settings = snapshot.status?.settings
+            val at = status?.updatedAt
             return when {
                 // A cold pane wins over a stale Sleeping flag: the shell the CLI exited to is gone
                 // with the old tmux session, so the new one needs the full cold-restore line.
-                fresh -> Launch.resumeLine(agent, sid, settings, node?.accountId, project?.absoluteCwdOf(node), project?.defaultPermissionMode)
-                    ?.let { ResumeOffer(Kind.RESUME, agent, it) }
+                cold -> Launch.resumeLine(agent, sid, settings, node?.accountId, project?.absoluteCwdOf(node), project?.defaultPermissionMode)
+                    ?.let { ResumeOffer(Kind.RESUME, agent, it, at) }
                 status?.hibernated == true && transport == TransportKind.SSH ->
-                    Launch.wakeLine(agent, sid, settings, project?.defaultPermissionMode)?.let { ResumeOffer(Kind.WAKE, agent, it) }
+                    Launch.wakeLine(agent, sid, settings, project?.defaultPermissionMode)?.let { ResumeOffer(Kind.WAKE, agent, it, at) }
                 else -> null
             }
         }
