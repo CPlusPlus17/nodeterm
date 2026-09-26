@@ -93,7 +93,7 @@ when it did not deliver. iOS can adopt `reason` unchanged; an older phone keeps 
 | | |
 |---|---|
 | Repo / branch | `CPlusPlus17/nodeterm`, branch `claude/android-ios-parity-75kfem` (pushed) |
-| Commits | `a0c07e6` protocol module + the two desktop relay verbs; `2f58918` the Compose app, docs, CI, desktop copy; plus the handover commit that adds this file |
+| Commits | `a0c07e6` protocol module + the two desktop relay verbs; `2f58918` the Compose app, docs, CI, desktop copy; `2dd539f` this handover; then the WP1/WP2/WP4 fixes listed in the progress log (`af1f820` … `0db0b6e`) |
 | PR | none (do not open one unless asked) |
 | CI | `.github/workflows/android.yml`: **Protocol** (JVM + desktop interop) and **App** (`assembleDebug`). Both green on `2f58918` |
 
