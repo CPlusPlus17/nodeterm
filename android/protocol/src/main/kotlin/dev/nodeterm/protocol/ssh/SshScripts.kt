@@ -98,23 +98,28 @@ object SshScripts {
     }
 
     /**
-     * Attach a pty to the node's session, creating it when absent — `new-session -A` WITHOUT `-D`:
-     * the desktop's own client must stay attached (`-D` is what "[detached]" dead terminals are made
-     * of). `-f` only when the config exists (a missing file is a tmux error, not a default), and it
-     * only matters when this attach STARTS the server. `-c` only applies to a created session.
+     * Attach a pty to the node's EXISTING session — `attach-session`, never `new-session`: a session
+     * created over SSH gets none of the hook environment the desktop gives it (`NODETERM_NODE_ID`,
+     * the hook endpoint), so an agent resumed there never reports status, and the desktop never
+     * repairs it because tmux reads `-e` only at creation — or it inherits ANOTHER node's id from the
+     * tmux server's global env (audit A08). A missing session exits [NO_SESSION_EXIT] instead, and
+     * the app offers the relay, where the desktop creates it properly. Without `-d`: the desktop's
+     * own client must stay attached (`-d` is what "[detached]" dead terminals are made of).
      */
-    fun attach(nodeId: String, cwd: String?): String {
+    fun attach(nodeId: String): String {
         val target = target(nodeId)
-        val cd = cwd?.takeIf { it.startsWith("/") }?.let { " -c ${q(it)}" } ?: ""
         return """
             $PRELUDE
             if [ -z "${'$'}NT_TMUX" ]; then echo 'nodeterm: tmux was not found on this computer.' >&2; exit 127; fi
-            if [ -n "${'$'}NT_UD" ] && [ -f "${'$'}NT_UD/tmux.conf" ]; then set -- -f "${'$'}NT_UD/tmux.conf"; else set --; fi
+            "${'$'}NT_TMUX" -L ${TmuxNames.SOCKET} has-session -t ${q("=$target")} 2>/dev/null || exit $NO_SESSION_EXIT
             TERM=xterm-256color; export TERM
             $LOCALE
-            exec "${'$'}NT_TMUX" -u -L ${TmuxNames.SOCKET} "${'$'}@" new-session -A -s ${q(target)}$cd
+            exec "${'$'}NT_TMUX" -u -L ${TmuxNames.SOCKET} attach-session -t ${q("=$target")}
         """.trimIndent()
     }
+
+    /** [attach]'s exit status when the node's session is not running. */
+    const val NO_SESSION_EXIT = 3
 
     fun killSession(nodeId: String): String {
         val target = target(nodeId)

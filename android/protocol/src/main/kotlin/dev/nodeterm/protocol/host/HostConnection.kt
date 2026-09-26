@@ -113,3 +113,11 @@ enum class GitVerb(val wire: String) {
 }
 
 open class HostException(message: String) : Exception(message)
+
+/**
+ * The direct-SSH transport will not do this for [nodeId], and the relay should: the node's tmux
+ * session is not running (creating it over SSH would give it no hook environment — audit A08), or
+ * the node belongs to one of the desktop's SSH projects and lives on another host (audit A09). The
+ * app offers to open it through the relay, where the desktop attaches it properly.
+ */
+class NeedsRelayException(val nodeId: String, message: String) : HostException(message)

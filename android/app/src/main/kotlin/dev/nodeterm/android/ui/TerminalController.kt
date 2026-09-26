@@ -20,6 +20,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.nodeterm.android.AppGraph
 import dev.nodeterm.android.conn.HostSession
+import dev.nodeterm.protocol.host.HostConnection
+import dev.nodeterm.protocol.host.NeedsRelayException
+import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.NewNode
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
@@ -36,6 +39,11 @@ sealed interface TermState {
     data object Connecting : TermState
     data object Attached : TermState
     data class Ended(val message: String) : TermState
+    /** Direct SSH refused this session (not running, or on another host — audit A08/A09); the
+     *  relay can open it. Shown with an "Open through the relay" button. */
+    data class RelayOffer(val message: String) : TermState
+    /** Opening through the relay for the first time: the computer shows this code to approve. */
+    data class AwaitingApproval(val sas: String) : TermState
 }
 
 /**
@@ -196,13 +204,27 @@ class TerminalController(
         wv.evaluateJavascript(code, null)
     }
 
+    /** Set once the user chose "Open through the relay": later reattaches stay on the relay. */
+    private var useRelay = false
+
+    fun openThroughRelay() {
+        useRelay = true
+        attach()
+    }
+
     fun attach() {
         if (disposed) return
         state = TermState.Connecting
         resumeOffer = null
         attachJob = graph.scope.launch {
             try {
-                val conn = session.ensureConnected()
+                val conn = if (useRelay) {
+                    session.viaRelay { st ->
+                        if (st is RelayConnectStatus.AwaitingApproval) main.post { state = TermState.AwaitingApproval(st.sas) }
+                    }
+                } else {
+                    session.ensureConnected()
+                }
                 val c = if (cols > 0) cols else 80
                 val r = if (rows > 0) rows else 24
                 val s = conn.attach(nodeId, c, r, sink)
@@ -215,7 +237,13 @@ class TerminalController(
                     state = TermState.Attached
                     if (cols > 0 && (cols != c || rows != r)) s.resize(cols, rows)
                 }
-                afterAttach(s)
+                afterAttach(s, conn)
+            } catch (e: NeedsRelayException) {
+                val msg = e.message ?: "This session opens through the relay."
+                main.post {
+                    state = if (session.hasRelay) TermState.RelayOffer(msg)
+                    else TermState.Ended("$msg Remote access isn't set up for this computer, so open it in nodeterm on the computer.")
+                }
             } catch (e: Exception) {
                 main.post { state = TermState.Ended(e.message ?: "Couldn't open the terminal.") }
             } finally {
@@ -224,8 +252,7 @@ class TerminalController(
         }
     }
 
-    private suspend fun afterAttach(s: TerminalStream) {
-        val conn = session.connection ?: return
+    private suspend fun afterAttach(s: TerminalStream, conn: HostConnection) {
         val launch = PendingLaunches.take(nodeId)
         if (launch != null) {
             // A session this phone just started: type its launch line once the shell has settled

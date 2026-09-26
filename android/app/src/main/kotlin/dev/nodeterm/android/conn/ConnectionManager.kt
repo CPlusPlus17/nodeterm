@@ -109,21 +109,13 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 val requireApproved = (decision as? RelayApprovalGate.Decision.Dial)?.requireApproved == true
                 _state.value = ConnState.Connecting("Connecting through the relay…")
                 try {
-                    val join = RelayApi(graph.hosts.apiBase).join(token, relay.hostId)
-                    val connected = RelayConnector.connect(
-                        relayUrl = relay.relayEndpoint,
-                        token = join.pairingToken,
-                        deviceKeys = graph.boxKeys,
-                        hostPublicKeyB64 = hostKey,
-                        requireApproved = requireApproved,
-                        onStatus = { st ->
-                            when (st) {
-                                is RelayConnectStatus.AwaitingApproval -> _state.value = ConnState.AwaitingApproval(st.sas)
-                                RelayConnectStatus.Handshaking -> _state.value = ConnState.Connecting("Verifying your computer…")
-                                RelayConnectStatus.MintingToken -> Unit
-                            }
+                    val connected = dialRelay(relay, token, hostKey, requireApproved) { st ->
+                        when (st) {
+                            is RelayConnectStatus.AwaitingApproval -> _state.value = ConnState.AwaitingApproval(st.sas)
+                            RelayConnectStatus.Handshaking -> _state.value = ConnState.Connecting("Verifying your computer…")
+                            RelayConnectStatus.MintingToken -> Unit
                         }
-                    )
+                    }
                     graph.relayGate.onConnected(hostId)
                     _snapshot.value = connected.first
                     adopt(connected.connection)
@@ -143,6 +135,79 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         val msg = errors.joinToString("\n").ifEmpty { "Couldn't connect." }
         _state.value = ConnState.Failed(msg)
         throw HostException(msg)
+    }
+
+    private suspend fun dialRelay(
+        relay: RelayBlock,
+        token: String,
+        hostKey: String,
+        requireApproved: Boolean,
+        onStatus: (RelayConnectStatus) -> Unit
+    ): RelayConnector.Connected {
+        val join = RelayApi(graph.hosts.apiBase).join(token, relay.hostId)
+        return RelayConnector.connect(
+            relayUrl = relay.relayEndpoint,
+            token = join.pairingToken,
+            deviceKeys = graph.boxKeys,
+            hostPublicKeyB64 = hostKey,
+            requireApproved = requireApproved,
+            onStatus = onStatus
+        )
+    }
+
+    /** A relay connection held NEXT TO a direct-SSH one, for what SSH must not do (see [viaRelay]). */
+    @Volatile private var sideRelay: HostConnection? = null
+    private val sideMutex = Mutex()
+
+    /** This computer can be reached through the relay at all (a relay leg and its device token). */
+    val hasRelay: Boolean
+        get() {
+            val host = graph.hosts.get(hostId) ?: return false
+            return host.relay != null && host.relayHostKeyB64 != null &&
+                graph.secure.getString(SecureStore.relayTokenKey(host.id)) != null &&
+                graph.hosts.route(hostId) != RoutePreference.SSH_ONLY
+        }
+
+    /**
+     * A relay connection for one action the direct-SSH transport refuses
+     * ([dev.nodeterm.protocol.host.NeedsRelayException]): a session that is not running (creating it
+     * over SSH would leave it without its hook environment — audit A08), or a node of the desktop's
+     * SSH projects, which the desktop reaches on its host (audit A09). The primary connection when
+     * it already IS the relay; otherwise one opened next to it and kept until [disconnect]. The user
+     * asked (they tapped "Open through the relay"), so a held approval is released and, the first
+     * time, the desktop's approval code is reported through [onStatus].
+     */
+    suspend fun viaRelay(onStatus: (RelayConnectStatus) -> Unit = {}): HostConnection {
+        conn?.takeIf { it.kind == TransportKind.RELAY }?.let { return it }
+        sideRelay?.let { return it }
+        return sideMutex.withLock {
+            sideRelay ?: run {
+                val host = graph.hosts.get(hostId) ?: throw HostException("This computer is no longer paired.")
+                val relay = host.relay
+                val token = graph.secure.getString(SecureStore.relayTokenKey(host.id))
+                val hostKey = host.relayHostKeyB64
+                if (relay == null || token == null || hostKey == null || graph.hosts.route(hostId) == RoutePreference.SSH_ONLY) {
+                    throw HostException("Remote access isn't set up for this computer. Open the session in nodeterm on the computer instead.")
+                }
+                when (val d = graph.relayGate.decide(hostId, Trigger.USER)) {
+                    is RelayApprovalGate.Decision.Skip -> throw HostException(d.reason)
+                    is RelayApprovalGate.Decision.Dial -> Unit
+                }
+                val connected = try {
+                    dialRelay(relay, token, hostKey, requireApproved = false, onStatus = onStatus)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    graph.relayGate.onFailed(hostId, e)
+                    throw e
+                }
+                graph.relayGate.onConnected(hostId)
+                val c = connected.connection
+                c.setOnClosed { if (sideRelay === c) sideRelay = null }
+                sideRelay = c
+                c
+            }
+        }
     }
 
     private fun adopt(c: HostConnection) {
@@ -257,7 +322,12 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     fun disconnect() {
         val c = conn
         conn = null
-        if (c != null) scope.launch(Dispatchers.IO) { runCatching { c.close() } }
+        val side = sideRelay
+        sideRelay = null
+        if (c != null || side != null) scope.launch(Dispatchers.IO) {
+            runCatching { c?.close() }
+            runCatching { side?.close() }
+        }
         _state.value = ConnState.Idle
     }
 

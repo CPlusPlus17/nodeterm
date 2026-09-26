@@ -2,6 +2,7 @@ package dev.nodeterm.protocol
 
 import dev.nodeterm.protocol.host.ApprovalOutcome
 import dev.nodeterm.protocol.host.HostException
+import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxEvent
@@ -10,6 +11,7 @@ import dev.nodeterm.protocol.pairing.SshIdentity
 import dev.nodeterm.protocol.ssh.HostKeyChangedException
 import dev.nodeterm.protocol.ssh.HostKeyPin
 import dev.nodeterm.protocol.ssh.SshHostConnection
+import dev.nodeterm.protocol.ssh.SshScripts
 import kotlinx.coroutines.runBlocking
 import org.apache.sshd.server.Environment
 import org.apache.sshd.server.ExitCallback
@@ -369,16 +371,48 @@ class SshTransportTest {
     }
 
     @Test
-    fun `attaching an unknown node reports a cold start and creates the session`() = runBlocking<Unit> {
+    fun `a session that is not running is never created over SSH`() = runBlocking<Unit> {
+        // A08: `new-session -A` over SSH created the desktop's session with no hook env. Now the
+        // phone is told to use the relay, and nothing appears on the computer's tmux.
         connect().use { conn ->
-            val sink = Sink()
-            val stream = conn.attach("term-z-9", 80, 24, sink)
-            assertTrue(stream.fresh)
-            Thread.sleep(600)
-            assertEquals(0, tmux("has-session", "-t", "=nt-term-z-9").first)
-            stream.detach()
-            conn.killSession("term-z-9")
-            assertEquals(1, tmux("has-session", "-t", "=nt-term-z-9").first)
+            conn.listProjects()
+            val e = assertFailsWith<NeedsRelayException> { conn.attach("term-z-9", 80, 24, Sink()) }
+            assertEquals("term-z-9", e.nodeId)
+            Thread.sleep(300)
+            assertEquals(1, tmux("has-session", "-t", "=nt-term-z-9").first, "no session was created")
+        }
+    }
+
+    @Test
+    fun `the attach script itself refuses to create a missing session`() {
+        // Belt and braces for the race where the session ends between the check and the attach.
+        val (code, _) = run {
+            val pb = ProcessBuilder("script", "-qfec", SshScripts.attach("term-y-8"), "/dev/null").directory(home)
+            pb.environment().clear()
+            pb.environment().putAll(childEnv())
+            val p = pb.start()
+            p.outputStream.close()
+            p.waitFor(10, TimeUnit.SECONDS)
+            p.exitValue() to p.inputStream.bufferedReader().readText()
+        }
+        assertEquals(SshScripts.NO_SESSION_EXIT, code)
+        assertEquals(1, tmux("has-session", "-t", "=nt-term-y-8").first)
+    }
+
+    @Test
+    fun `nodes of the desktop's SSH projects are never reached on the desktop's own tmux`() = runBlocking<Unit> {
+        // A09: term-b-2 belongs to the ssh project "Server" (me@box). Its session, approvals and acks
+        // live on that host; over direct SSH the phone refuses instead of acting on the wrong machine.
+        connect().use { conn ->
+            conn.listProjects()
+            val e = assertFailsWith<NeedsRelayException> { conn.attach("term-b-2", 80, 24, Sink()) }
+            assertTrue(e.message!!.contains("me@box"), e.message)
+            assertFailsWith<NeedsRelayException> { conn.sendKeys("term-b-2", "1") }
+            val ev = InboxEvent("e2", 1, "term-b-2", "claude", null, InboxKind.APPROVAL, "Approve", null, false, false, emptyList(), false, "term-b-2-1-1")
+            assertFailsWith<NeedsRelayException> { conn.answerApproval(ev, allow = true) }
+            conn.ackRead("term-b-2", "e2")
+            assertFalse(File(home, ".nodeterm/acks/term-b-2.seen").exists(), "no ack written on the wrong machine")
+            assertEquals(1, tmux("has-session", "-t", "=nt-term-b-2").first, "no phantom session")
         }
     }
 

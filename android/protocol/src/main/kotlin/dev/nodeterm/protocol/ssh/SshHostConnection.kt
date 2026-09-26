@@ -7,6 +7,7 @@ import dev.nodeterm.protocol.host.HostCapabilities
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.LabelEditResult
+import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.NewNode
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
@@ -121,7 +122,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         } else {
             base
         }
-        rememberCwds(snapshot)
+        rememberRemoteNodes(snapshot)
         snapshot
     }
 
@@ -178,27 +179,47 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
 
     override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink): TerminalStream =
         withContext(Dispatchers.IO) {
-            val exists = run(SshScripts.hasSession(nodeId)).second.trim() == "yes"
+            refuseRemoteNode(nodeId)
+            if (run(SshScripts.hasSession(nodeId)).second.trim() != "yes") throw notRunning(nodeId)
             val session = client.startSession()
             try {
                 session.allocatePTY("xterm-256color", cols, rows, 0, 0, emptyMap())
-                val cwd = if (!exists) projectCwdFor(nodeId) else null
-                val cmd = session.exec("/bin/sh -c " + SshScripts.q(SshScripts.attach(nodeId, cwd)))
-                SshStream(session, cmd, !exists, sink).also { it.start() }
+                val cmd = session.exec("/bin/sh -c " + SshScripts.q(SshScripts.attach(nodeId)))
+                SshStream(session, cmd, fresh = false, sink = sink).also { it.start() }
             } catch (e: Exception) {
                 runCatching { session.close() }
                 throw HostException("Couldn't open the terminal over SSH: ${e.message}")
             }
         }
 
-    @Volatile private var lastCwds: Map<String, String> = emptyMap()
+    /** Node ids of the desktop's SSH projects → `user@host`, from the latest listing. */
+    @Volatile private var remoteNodes: Map<String, String> = emptyMap()
 
-    private fun projectCwdFor(nodeId: String): String? = lastCwds[nodeId]
-
-    /** Remember node cwds from the latest listing so a cold attach opens where the node lives. */
-    fun rememberCwds(snapshot: ProjectsSnapshot) {
-        lastCwds = snapshot.projects.flatMap { p -> p.nodes.mapNotNull { n -> (n.cwd ?: p.cwd)?.let { n.id to it } } }.toMap()
+    /** Remember which nodes belong to the desktop's SSH projects (their tmux is on another host). */
+    fun rememberRemoteNodes(snapshot: ProjectsSnapshot) {
+        remoteNodes = snapshot.projects.filter { it.sshTarget != null }
+            .flatMap { p -> p.nodes.map { it.id to p.sshTarget!! } }.toMap()
     }
+
+    /**
+     * A node of one of the desktop's SSH projects lives on ANOTHER host: its tmux session, its
+     * pending approvals and its read-acks are all there, not on this computer. Over direct SSH we can
+     * only reach this computer, so every node-scoped action refuses (audit A09) — attaching would
+     * create a phantom local session and offer to resume the agent on the wrong machine.
+     */
+    private fun refuseRemoteNode(nodeId: String) {
+        val where = remoteNodes[nodeId] ?: return
+        throw NeedsRelayException(
+            nodeId,
+            "This session runs on $where, which the phone reaches through your computer: it opens through the relay, not over your network."
+        )
+    }
+
+    private fun notRunning(nodeId: String) = NeedsRelayException(
+        nodeId,
+        "This session isn't running on the computer right now. Starting it over your network would leave it " +
+            "without status reporting, so it opens through the relay instead (or open it in nodeterm on the computer)."
+    )
 
     /**
      * The terminal stream over one exec'd pty channel.
@@ -348,6 +369,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         throw HostException("$what needs the relay connection (turn on remote access in nodeterm → Settings → Phone).")
 
     override suspend fun answerApproval(event: InboxEvent, allow: Boolean): ApprovalOutcome = withContext(Dispatchers.IO) {
+        refuseRemoteNode(event.nodeId)
         val pendingId = event.pendingId ?: return@withContext ApprovalOutcome.UNSUPPORTED
         if (!SshScripts.PENDING_ID.matches(pendingId)) return@withContext ApprovalOutcome.UNSUPPORTED
         when (run(SshScripts.answerApproval(pendingId, allow)).second.trim()) {
@@ -359,18 +381,24 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
 
     /** The phone→host read-ack (src/core/ack-sweep.ts): `~/.nodeterm/acks/<nodeId>.seen`. */
     override suspend fun ackRead(nodeId: String, eventId: String?) {
+        // A remote node's read-ack belongs on ITS host; writing it here would ack nothing.
+        if (remoteNodes.containsKey(nodeId)) return
         withContext(Dispatchers.IO) { runCatching { run(SshScripts.ackRead(nodeId, eventId ?: "")) } }
     }
 
     override suspend fun sendKeys(nodeId: String, keys: String) {
         withContext(Dispatchers.IO) {
+            refuseRemoteNode(nodeId)
             val (code, _) = run(SshScripts.sendKeys(nodeId, keys))
             if (code != null && code != 0) throw HostException("Couldn't type into the session (tmux exited $code).")
         }
     }
 
     /** Kill the node's tmux session (the node stays on the canvas; the desktop shows it as ended). */
-    suspend fun killSession(nodeId: String) = withContext(Dispatchers.IO) { run(SshScripts.killSession(nodeId)) }
+    suspend fun killSession(nodeId: String) = withContext(Dispatchers.IO) {
+        refuseRemoteNode(nodeId)
+        run(SshScripts.killSession(nodeId))
+    }
 
     /** `~/.nodeterm/relay.json`, when the computer advertises its relay identity (late adoption). */
     suspend fun readRelayAdvertisement(): JsonObject? = withContext(Dispatchers.IO) {

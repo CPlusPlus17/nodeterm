@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.Route
 import dev.nodeterm.android.conn.HostSession
+import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.model.Agent
@@ -209,14 +210,21 @@ fun SessionsTab(nav: Navigator, hostId: String, session: HostSession, snapshot: 
                     ending = null
                     val c = conn ?: return@TextButton
                     act("End session") {
+                        val quiet = object : TerminalSink {
+                            override fun onPaint(text: String) {}
+                            override fun onOutput(bytes: ByteArray) {}
+                            override fun onExit(code: Int?) {}
+                        }
                         if (c is SshHostConnection) {
-                            c.killSession(node.id)
-                        } else {
-                            val quiet = object : TerminalSink {
-                                override fun onPaint(text: String) {}
-                                override fun onOutput(bytes: ByteArray) {}
-                                override fun onExit(code: Int?) {}
+                            try {
+                                c.killSession(node.id)
+                            } catch (e: NeedsRelayException) {
+                                // A node of an SSH project lives on its host: end it through the
+                                // relay, where the desktop reaches that host (audit A09).
+                                if (!session.hasRelay) throw e
+                                session.viaRelay().attach(node.id, 80, 24, quiet).endSession()
                             }
+                        } else {
                             c.attach(node.id, 80, 24, quiet).endSession()
                         }
                     }

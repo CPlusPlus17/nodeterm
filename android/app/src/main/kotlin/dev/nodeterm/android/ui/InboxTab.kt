@@ -41,6 +41,8 @@ import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.Route
 import dev.nodeterm.android.conn.HostSession
+import dev.nodeterm.protocol.host.HostConnection
+import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.QuickActions
 import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.AgentState
@@ -80,10 +82,18 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
 
     fun open(nodeId: String) = nav.push(Route.Terminal(hostId, nodeId, titleOf(nodeId)))
 
-    fun run(label: String, block: suspend () -> QuickActions.Result, nodeId: String) {
+    fun run(label: String, block: suspend (HostConnection) -> QuickActions.Result, nodeId: String) {
         scope.launch {
             try {
-                when (block()) {
+                val result = try {
+                    block(session.ensureConnected())
+                } catch (e: NeedsRelayException) {
+                    // Direct SSH reaches only this computer; a node of one of its SSH projects is
+                    // answered where it lives, through the relay (audit A09).
+                    if (!session.hasRelay) throw e
+                    block(session.viaRelay())
+                }
+                when (result) {
                     QuickActions.Result.SENT -> Toast.makeText(context, label, Toast.LENGTH_SHORT).show()
                     QuickActions.Result.ALREADY_HANDLED -> Toast.makeText(context, "Already handled.", Toast.LENGTH_SHORT).show()
                     QuickActions.Result.OPEN_SESSION -> open(nodeId)
@@ -112,10 +122,10 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
                 if (ev.kind == InboxKind.APPROVAL) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = {
-                            run("Approved.", { QuickActions.answerApproval(session.ensureConnected(), ev, allow = true) }, ev.nodeId)
+                            run("Approved.", { c -> QuickActions.answerApproval(c, ev, allow = true) }, ev.nodeId)
                         }) { Text("Approve") }
                         OutlinedButton(onClick = {
-                            run("Denied.", { QuickActions.answerApproval(session.ensureConnected(), ev, allow = false) }, ev.nodeId)
+                            run("Denied.", { c -> QuickActions.answerApproval(c, ev, allow = false) }, ev.nodeId)
                         }) { Text("Deny") }
                         TextButton(onClick = { open(ev.nodeId) }) { Text("Open") }
                     }
@@ -123,7 +133,7 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         ev.options.forEachIndexed { i, opt ->
                             OutlinedButton(onClick = {
-                                run("Answered.", { QuickActions.answerQuestion(session.ensureConnected(), ev, i) }, ev.nodeId)
+                                run("Answered.", { c -> QuickActions.answerQuestion(c, ev, i) }, ev.nodeId)
                             }, modifier = Modifier.fillMaxWidth()) { Text("${i + 1}. $opt", maxLines = 2) }
                         }
                     }

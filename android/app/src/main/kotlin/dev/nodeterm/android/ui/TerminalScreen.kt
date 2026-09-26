@@ -94,6 +94,26 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                         Text(st.message)
                         Button(onClick = { controller.attach() }) { Text("Reattach") }
                     }
+                    is TermState.RelayOffer -> Column(
+                        Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(st.message)
+                        Button(onClick = { controller.openThroughRelay() }) { Text("Open through the relay") }
+                    }
+                    is TermState.AwaitingApproval -> Column(
+                        Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("Approve this phone on your computer")
+                        Text(st.sas, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.headlineMedium, color = NtColors.accent)
+                        Text(
+                            "Approve only if the code on the computer matches this one.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                     TermState.Attached -> Unit
                 }
                 controller.resumeOffer?.let { (agent, cmd) ->
