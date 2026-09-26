@@ -741,15 +741,33 @@ export interface DetachedSinks {
 /**
  * tmux attach flags. `-A` = attach-or-create. `-D` = detach OTHER clients on attach.
  *
- * `-D` STAYS for the app's own client, and co-attach does not change that: a second viewer
- * subscribes to the existing `Session` in this process — it does NOT start a second tmux client.
- * The app therefore always has exactly ONE tmux client per session, so tmux's own multi-client
- * size negotiation never engages and "smallest subscriber wins" is decided by us (pty-size.ts).
- * A relay-served (detached) pty is the one exception: the host's local client is already attached
- * to the same session and must be mirrored, not kicked off.
+ * `-D` STAYS for the app's own (renderer) client, and co-attach does not change that: a second
+ * viewer subscribes to the existing `Session` in this process — it does NOT start a second tmux
+ * client. With no phone attached the app therefore has exactly ONE tmux client per session, so
+ * tmux's own multi-client size negotiation never engages and "smallest subscriber wins" is decided
+ * by us (pty-size.ts).
+ *
+ * A relay-served (phone) client is the exception, in both orders, and gets `-A` alone:
+ *  - `detached`: the relay-served pty itself. The host's own local client may already be attached
+ *    to the same session and must be mirrored, not kicked off.
+ *  - `relayClientLive`: the app's client arrives while a relay-served client of the SAME node is
+ *    already attached to the same tmux server (audit A13) — a phone that started a session and then
+ *    registered it as a node (the desktop mounts it), or a node remounting on a project switch, a
+ *    park expiry or an offscreen revive while a phone watches it. `-D` there detached the phone's
+ *    client, which exits 0, and the phone read that as "the session ended". Relay ptys are
+ *    deliberately not indexed in `byPersistKey`, so co-attach cannot join them; the caller asks
+ *    `relayClientOnLocalTmux` instead. The result is the same two-client session the other order
+ *    (phone attaches after the app) has always produced.
+ *
+ * Only clients THIS process spawned are visible. A phone attached over direct SSH, the user's own
+ * `tmux attach` and a second nodeterm on the socket are still detached by `-D` (the Android app
+ * reattaches on an exit 0 while its session is still listed live). And a relay client whose pty is
+ * spawned after the app's own, but whose attach reaches the tmux server first, is still kicked:
+ * the check is decided synchronously with the app's spawn, so that window is the few milliseconds
+ * the app's tmux client takes to connect.
  */
-export function tmuxAttachFlags(detached: boolean): string[] {
-  return detached ? ['-A'] : ['-A', '-D']
+export function tmuxAttachFlags(detached: boolean, relayClientLive = false): string[] {
+  return detached || relayClientLive ? ['-A'] : ['-A', '-D']
 }
 
 // Output coalescing: a fast producer (e.g. `yes`, a verbose build, tmux full-screen
@@ -2562,6 +2580,25 @@ export class PtyManager {
     return !this.tmuxPath && this.getSettings().tmuxEnabled && sessionHostSupported()
   }
 
+  /**
+   * Is a relay-served (detached) client of this node attached to the LOCAL tmux server right now?
+   * The question `tmuxAttachFlags` needs answered before the app's own client attaches (audit A13):
+   * relay ptys are deliberately not indexed in `byPersistKey`, so this walks the sessions.
+   *
+   * Local tmux only. A relay client of an SSH-project node rides that project's ControlMaster to
+   * another host's tmux server (and the remote attach never passes `-D` anyway); a session-host
+   * viewer is not a tmux client. `onData` is the sink: `kill(null, …)` clears it and releases the
+   * pty in the same tick, and an exited relay pty is forgotten, so a phone that has left never
+   * keeps `-D` off.
+   */
+  private relayClientOnLocalTmux(persistKey: string): boolean {
+    for (const s of this.sessions.values()) {
+      if (s.nodeId === persistKey && s.onData && s.tmuxBacked && !s.sshRemote && !s.sessionHost)
+        return true
+    }
+    return false
+  }
+
   /** The exact live generation for a node id, including a non-persistent indexed plain shell. */
   private liveSessionForPersistKey(persistKey: string): Session | undefined {
     const indexedId = this.byPersistKey.get(persistKey)
@@ -3251,11 +3288,16 @@ export class PtyManager {
       // PTY (sinks set) MUST NOT detach others: the host's own local client is attached to the same
       // `nt-<id>` session, and a connecting client should MIRROR it (tmux co-attach), not kick it
       // off — `-D` there is exactly what showed "[detached]" in every host window on connect.
+      // The reverse order owes the same: a renderer client arriving while a relay-served client of
+      // this node is attached co-attaches beside it instead of detaching the phone (audit A13; see
+      // `tmuxAttachFlags`). Asked HERE, synchronously with the `pty.spawn` below, so nothing can
+      // register or drop a relay client between the answer and the attach it governs.
       // (tmux sizes a co-attached session to the smallest client — the accepted mirroring tradeoff.)
       // `-e` sets the session environment explicitly (the tmux server is shared, so relying
       // on the client's inherited env would leak the first session's values into later ones).
       file = this.tmuxPath
       useLocalTmux = true
+      const besideRelay = !sinks && this.relayClientOnLocalTmux(options.persistKey)
       if (warmWindowsBackend === 'tmux') {
         // Attach-only is the critical distinction from `new-session -A`: if the proven warm
         // generation disappears in this window, tmux rejects instead of cold-spawning a shell
@@ -3266,7 +3308,7 @@ export class PtyManager {
           '-f',
           this.confPath,
           'attach-session',
-          ...(sinks ? [] : ['-d']),
+          ...(sinks || besideRelay ? [] : ['-d']),
           '-t',
           sessionName(options.persistKey)
         ]
@@ -3307,7 +3349,7 @@ export class PtyManager {
         ...Object.keys(customEnvMerged),
         ...Object.keys(projectEnv ?? {})
       ])
-      const attachFlags = tmuxAttachFlags(!!sinks)
+      const attachFlags = tmuxAttachFlags(!!sinks, besideRelay)
       args = [
         '-L',
         TMUX_SOCKET,

@@ -527,7 +527,9 @@ project's nodes only.** The contract:
 ## Terminal session continuity (tmux)
 
 `src/core/pty-manager.ts` runs each terminal inside a persistent tmux session
-(`tmux new-session -A -D -s nt-<nodeId>`) on a dedicated socket (`-L node-terminal`) with
+(`tmux new-session -A -D -s nt-<nodeId>`; `-D` is left off while a relay-served phone client of
+that node is attached, so mounting the node does not detach the phone — `tmuxAttachFlags`, audit
+A13) on a dedicated socket (`-L node-terminal`) with
 a generated config (`-f <userData>/tmux.conf`, so the user's `~/.tmux.conf` never
 interferes; status bar off, **mouse on**, 50k history, `set-clipboard on` + `terminal-features
 ",*:clipboard"`, and the copy-mode mouse bindings). Because the tmux *server* outlives the app,

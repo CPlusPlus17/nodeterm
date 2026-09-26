@@ -124,7 +124,9 @@ class TerminalController(
                 if (stopped) return@post
                 stream = null
                 // exit 0 with the session still running = another client attached with -D and
-                // detached us (the desktop mounting a phone-started node does this) — audit A13.
+                // detached us — audit A13. A current desktop no longer does this to a relay-attached
+                // phone, but an older desktop does, and any desktop still does it to a phone attached
+                // over direct SSH (its client is not one the desktop spawned, so it cannot see it).
                 // It is checked, not assumed: a killed session also exits 0.
                 if ((code == null || code == 0) && !disposed && autoReattach(requireLive = code == 0)) {
                     state = TermState.Ended(if (code == null) "Disconnected. Reconnecting…" else "Another screen took over this session. Reattaching…")

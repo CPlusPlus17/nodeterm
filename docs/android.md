@@ -124,6 +124,11 @@ generated SSH answer command under a real `/bin/sh`.
   need the relay. iOS writes `project.json` over SSH for some of these; Android deliberately does
   not (the host verbs exist because that write breaks past `MAX_ARG_STRLEN` and cannot reach an SSH
   project's file at all).
+- **A desktop mounting a node can still detach a direct-SSH phone.** The desktop leaves `-D` off
+  its own tmux client only while a relay-served client of that node is attached (it spawned that
+  one itself, so it can see it). A phone attached over direct SSH is detached (exit 0), and so is a
+  relay phone on a desktop older than that change; the app checks that the session is still live
+  and reattaches.
 - **Codex/Gemini/… launch flags.** A phone-started non-Claude agent launches bare (its own default
   approval mode): the per-agent approval table needs host facts (codex's vocabulary moved between
   releases, #785) the mirror only partly publishes.
