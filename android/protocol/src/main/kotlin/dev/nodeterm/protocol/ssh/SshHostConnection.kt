@@ -22,8 +22,10 @@ import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.ProjectsParser
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.pairing.SshIdentity
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import net.schmizz.sshj.DefaultConfig
@@ -38,7 +40,11 @@ import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.PublicKey
 import java.util.Base64
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
+import javax.net.SocketFactory
 
 /** Trust-on-first-use pin for the computer's SSH host key (`SHA256:<base64>`, OpenSSH's format). */
 interface HostKeyPin {
@@ -74,7 +80,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     }
 
     /** True while the SSH transport is up. */
-    val isConnected: Boolean get() = client.isConnected && client.isAuthenticated
+    val isConnected: Boolean get() = client.isConnected && client.isAuthenticated && client.socket?.isClosed != true
 
     /**
      * Run a script through `/bin/sh -c` and return stdout (bounded wait). A dead transport is
@@ -191,6 +197,23 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         lastCwds = snapshot.projects.flatMap { p -> p.nodes.mapNotNull { n -> (n.cwd ?: p.cwd)?.let { n.id to it } } }.toMap()
     }
 
+    /**
+     * The terminal stream over one exec'd pty channel.
+     *
+     * EVERY socket write goes through ONE serial executor owned by the stream ([io]), never the
+     * caller's thread (audit A01/A04). [TerminalStream] is a non-suspend contract, and its callers
+     * include the Android MAIN thread (resize on a keyboard/rotation/A−/A+, the ^C key chips, Resume,
+     * Fit) as well as the WebView's JavaBridge thread (typed input). A socket write on the main thread
+     * throws `NetworkOnMainThreadException` — and it throws AFTER sshj's `Encoder.encode` has advanced
+     * the packet sequence number and the cipher stream, so the transport is corrupt from then on and
+     * the very next packet drops the connection. One executor also keeps the two producers IN ORDER
+     * (a ^C chip can neither overtake nor split typed bytes), which fixing each call site would not.
+     *
+     * Failures are never swallowed: a [RuntimeException] out of the write path means the transport's
+     * state is unknown, so the whole connection is torn down ([breakTransport]) and reported through
+     * `onClosed`; an [java.io.IOException] with the transport still up is only this CHANNEL closing
+     * (tmux exited), which the reader thread reports as the stream's exit.
+     */
     private inner class SshStream(
         private val session: Session,
         private val cmd: Session.Command,
@@ -198,6 +221,10 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         private val sink: TerminalSink
     ) : TerminalStream {
         private val stdin: OutputStream = cmd.outputStream
+        private val io: ExecutorService = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "nodeterm-ssh-writer").apply { isDaemon = true }
+        }
+        @Volatile private var ended = false
 
         fun start() {
             Thread({
@@ -213,23 +240,45 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                     // channel closed
                 }
                 runCatching { cmd.join(2, TimeUnit.SECONDS) }
+                ended = true
+                io.shutdown()
                 sink.onExit(cmd.exitStatus)
                 runCatching { session.close() }
             }, "nodeterm-ssh-stream").apply { isDaemon = true }.start()
         }
 
-        override fun write(text: String) {
-            synchronized(this) {
-                runCatching {
-                    stdin.write(text.toByteArray(Charsets.UTF_8))
-                    stdin.flush()
+        /** Queue [block] on the stream's writer; a stream that has ended drops it. */
+        private fun enqueue(block: () -> Unit) {
+            if (ended) return
+            try {
+                io.execute {
+                    if (ended) return@execute
+                    try {
+                        block()
+                    } catch (e: java.io.IOException) {
+                        if (!isConnected) fireClosed(e.message)
+                        // else: this channel closed under us; the reader thread reports the exit.
+                    } catch (e: Throwable) {
+                        ended = true
+                        breakTransport(e)
+                    }
                 }
+            } catch (_: RejectedExecutionException) {
+                // detached or exited: nothing left to write to
+            }
+        }
+
+        override fun write(text: String) {
+            val bytes = text.toByteArray(Charsets.UTF_8)
+            enqueue {
+                stdin.write(bytes)
+                stdin.flush()
             }
         }
 
         override fun resize(cols: Int, rows: Int) {
             // The exec'd channel is a SessionChannel, which is also a Session.Shell (the window-change owner).
-            runCatching { (session as Session.Shell).changeWindowDimensions(cols.coerceAtLeast(1), rows.coerceAtLeast(1), 0, 0) }
+            enqueue { (session as Session.Shell).changeWindowDimensions(cols.coerceAtLeast(1), rows.coerceAtLeast(1), 0, 0) }
         }
 
         /** The same SGR wheel event the relay host writes (host-service.ts `handleScroll`): tmux's
@@ -240,12 +289,47 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         }
 
         override suspend fun detach() {
+            // Close BEHIND the writes already queued, so a keystroke typed just before leaving lands.
+            val done = CompletableDeferred<Unit>()
+            try {
+                io.execute {
+                    runCatching { session.close() }
+                    done.complete(Unit)
+                }
+                io.shutdown()
+                withTimeoutOrNull(3_000) { done.await() }
+            } catch (_: RejectedExecutionException) {
+                // already ended
+            }
+            ended = true
             withContext(Dispatchers.IO) { runCatching { session.close() } }
         }
 
         override suspend fun endSession() {
             throw HostException("Ending a session needs the relay connection (it also removes the node from the canvas).")
         }
+    }
+
+    /**
+     * An exception escaped sshj's write path that was not a plain I/O failure: the packet sequence
+     * number and cipher may already have advanced, so every later packet would be garbage to the
+     * server. Tear the transport down now and say so, rather than leaving a connection that looks
+     * alive until its next packet.
+     */
+    private fun breakTransport(e: Throwable) {
+        disconnectQuietly()
+        fireClosed("the SSH connection broke (${e.message ?: e.javaClass.simpleName})")
+    }
+
+    /** `client.disconnect()`, and if that could not finish (its own write failed), the socket itself. */
+    private fun disconnectQuietly() {
+        try {
+            client.disconnect()
+        } catch (_: Throwable) {
+            // fall through: make sure the socket and sshj's reader thread do not leak
+        }
+        // Idempotent, and `Socket.isConnected` stays true after a close, so do not gate on it.
+        runCatching { client.socket?.close() }
     }
 
     override suspend fun wake(nodeId: String) { relayOnly("Waking a sleeping session") }
@@ -298,9 +382,14 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         onClosed = listener
     }
 
+    /**
+     * Intentional close. Never on the caller's thread: it is called from click handlers (Forget, a
+     * route change, re-pairing) on the Android main thread, where `SSH_MSG_DISCONNECT` would throw
+     * `NetworkOnMainThreadException` before sshj closes the socket — leaking it and its reader thread.
+     */
     override fun close() {
         closedFired = true // an intentional close is not a drop
-        runCatching { client.disconnect() }
+        Thread({ disconnectQuietly() }, "nodeterm-ssh-close").apply { isDaemon = true }.start()
     }
 
     companion object {
@@ -317,9 +406,11 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             user: String,
             identity: SshIdentity,
             pin: HostKeyPin,
-            connectTimeoutMs: Int = 8_000
+            connectTimeoutMs: Int = 8_000,
+            socketFactory: SocketFactory? = null
         ): SshHostConnection {
             val client = SSHClient(DefaultConfig())
+            if (socketFactory != null) client.socketFactory = socketFactory
             var mismatch: HostKeyChangedException? = null
             client.addHostKeyVerifier(object : HostKeyVerifier {
                 override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {
@@ -353,6 +444,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                 client.connection.keepAlive.keepAliveInterval = 20
             } catch (e: Exception) {
                 runCatching { client.disconnect() }
+                if (client.isConnected) runCatching { client.socket?.close() }
                 mismatch?.let { throw it }
                 throw HostException("Couldn't connect over SSH to $user@$host:$port (${e.message ?: e.javaClass.simpleName}).")
             }

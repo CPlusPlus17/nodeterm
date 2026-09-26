@@ -187,7 +187,51 @@ class SshTransportTest {
         assertEquals(0, code, out)
     }
 
-    private fun connect(pin: HostKeyPin = MemoryPin()) = SshHostConnection.connect("127.0.0.1", port, "dev", identity, pin)
+    private fun connect(pin: HostKeyPin = MemoryPin(), factory: javax.net.SocketFactory? = null) =
+        SshHostConnection.connect("127.0.0.1", port, "dev", identity, pin, socketFactory = factory)
+
+    /**
+     * Android's StrictMode, reproduced on the JVM (which has no BlockGuard): a socket whose streams
+     * throw a RuntimeException — like `NetworkOnMainThreadException` — when used from a thread marked
+     * as "main". The JVM tests could not see audit A01/A04 without this.
+     */
+    private class MainThreadGuard : javax.net.SocketFactory() {
+        val main = ThreadLocal.withInitial { false }
+        val sockets = java.util.Collections.synchronizedList(ArrayList<java.net.Socket>())
+        val violations = java.util.concurrent.atomic.AtomicInteger()
+        @Volatile var poisonAll = false
+
+        private fun check() {
+            if (poisonAll) throw IllegalStateException("simulated failure after the cipher advanced")
+            if (main.get()) {
+                violations.incrementAndGet()
+                throw IllegalStateException("NetworkOnMainThreadException (simulated)")
+            }
+        }
+
+        private fun guarded(): java.net.Socket = object : java.net.Socket() {
+            override fun getOutputStream(): OutputStream {
+                val real = super.getOutputStream()
+                return object : OutputStream() {
+                    override fun write(b: Int) { check(); real.write(b) }
+                    override fun write(b: ByteArray, off: Int, len: Int) { check(); real.write(b, off, len) }
+                    override fun flush() { check(); real.flush() }
+                    override fun close() = real.close()
+                }
+            }
+        }.also { sockets.add(it) }
+
+        override fun createSocket(): java.net.Socket = guarded()
+        override fun createSocket(host: String, port: Int) = guarded().apply { connect(java.net.InetSocketAddress(host, port)) }
+        override fun createSocket(host: String, port: Int, l: java.net.InetAddress, lp: Int) = createSocket(host, port)
+        override fun createSocket(host: java.net.InetAddress, port: Int) = guarded().apply { connect(java.net.InetSocketAddress(host, port)) }
+        override fun createSocket(a: java.net.InetAddress, p: Int, l: java.net.InetAddress, lp: Int) = createSocket(a, p)
+
+        fun <T> onMain(block: () -> T): T {
+            main.set(true)
+            try { return block() } finally { main.set(false) }
+        }
+    }
 
     private class MemoryPin(var value: String? = null) : HostKeyPin {
         override fun pinned() = value
@@ -246,6 +290,63 @@ class SshTransportTest {
             Thread.sleep(300)
             val (code, out) = tmux("has-session", "-t", "=nt-term-a-1")
             assertEquals(0, code, "detaching never ends the session: $out / ${tmux("ls").second}")
+        }
+    }
+
+    @Test
+    fun `resizes and key chips from the main thread never touch the socket there, and keep order`() = runBlocking<Unit> {
+        // A01/A04: before the fix the resize threw on the "main" thread after sshj had advanced its
+        // cipher state, and the next packet dropped the connection.
+        val guard = MainThreadGuard()
+        val conn = connect(factory = guard)
+        var closedReason: String? = null
+        conn.setOnClosed { closedReason = it ?: "closed" }
+        try {
+            conn.listProjects()
+            val sink = Sink()
+            val stream = conn.attach("term-a-1", 100, 30, sink)
+            Thread.sleep(400)
+            guard.onMain {
+                stream.resize(90, 28)
+                stream.write("echo ma")
+                stream.write("in_\$((5*5))\r")
+                stream.resize(100, 30)
+            }
+            sink.waitFor("main_25")
+            // The connection is still usable for other work (listing, the Inbox) afterwards.
+            conn.listProjects()
+            assertEquals(0, guard.violations.get(), "no socket I/O ran on the main thread")
+            assertEquals(null, closedReason)
+            stream.detach()
+        } finally {
+            guard.onMain { conn.close() }
+        }
+        // close() from the main thread still really closes the socket (it used to leak).
+        val end = System.currentTimeMillis() + 5_000
+        while (guard.sockets.any { !it.isClosed } && System.currentTimeMillis() < end) Thread.sleep(50)
+        assertTrue(guard.sockets.all { it.isClosed }, "close() from the main thread leaked the socket")
+        assertEquals(0, guard.violations.get())
+    }
+
+    @Test
+    fun `a write failure that corrupts the transport closes the connection instead of hiding it`() = runBlocking<Unit> {
+        val guard = MainThreadGuard()
+        val conn = connect(factory = guard)
+        val closed = java.util.concurrent.CountDownLatch(1)
+        conn.setOnClosed { closed.countDown() }
+        try {
+            conn.listProjects()
+            val stream = conn.attach("term-a-1", 100, 30, Sink())
+            Thread.sleep(300)
+            // Every socket write now fails with a RuntimeException, on whatever thread it runs —
+            // including the stream's own writer: the transport must be torn down, not ignored.
+            guard.poisonAll = true
+            stream.write("x")
+            assertTrue(closed.await(10, TimeUnit.SECONDS), "the broken transport was reported through onClosed")
+            assertFalse(conn.isConnected)
+        } finally {
+            guard.poisonAll = false
+            conn.close()
         }
     }
 

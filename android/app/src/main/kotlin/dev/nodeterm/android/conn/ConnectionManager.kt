@@ -230,10 +230,15 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         }
     }
 
+    /**
+     * Drop the connection. Callers include click handlers on the MAIN thread (Forget, a route change,
+     * re-pairing), so the close itself runs on [Dispatchers.IO]: a socket write there throws
+     * `NetworkOnMainThreadException` and would leak the socket (audit A01).
+     */
     fun disconnect() {
         val c = conn
         conn = null
-        runCatching { c?.close() }
+        if (c != null) scope.launch(Dispatchers.IO) { runCatching { c.close() } }
         _state.value = ConnState.Idle
     }
 
