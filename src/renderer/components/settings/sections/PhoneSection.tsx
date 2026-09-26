@@ -7,7 +7,7 @@ import { Button } from '@renderer/ui/Button'
 import { Switch } from '@renderer/ui/Switch'
 import { useSettings } from '@renderer/state/settings'
 import { usePhonePairing } from '../usePhonePairing'
-import { ANDROID_APP_URL, IOS_APP_STORE_URL } from '@renderer/lib/links'
+import { ANDROID_APP_LABEL, ANDROID_APP_URL, IOS_APP_STORE_URL } from '@renderer/lib/links'
 import { hostOsFromNavigator, sshServerCopy } from '@shared/ssh-server'
 import {
   pairingEndedMessage,
@@ -215,7 +215,7 @@ export function PhoneSection({ isActive }: { isActive: boolean }): React.JSX.Ele
               className="cursor-pointer underline hover:text-text"
               onClick={() => window.nodeTerminal.shell.openExternal(ANDROID_APP_URL)}
             >
-              nodeterm for Android
+              {ANDROID_APP_LABEL}
             </button>
           </p>
 

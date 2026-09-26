@@ -610,5 +610,7 @@ later fix left to a device.
   credentials: the SSH key its computers accept, the relay box secret and the relay device token.
   android/README.md says so under Security. A signed, non-debuggable release needs a release
   `signingConfig` fed from CI secrets, published artifacts, and the README and `ANDROID_APP_URL`
-  pointed at them.
+  pointed at them. Until then the desktop's Android link opens the `android/` source folder and both
+  phone surfaces label it "nodeterm for Android (build from source)" (`ANDROID_APP_LABEL` in
+  `src/renderer/lib/links.ts`, audit `A66`); drop that label when the link points at a release.
 - **Instrumented UI tests** and a store listing do not exist yet.
