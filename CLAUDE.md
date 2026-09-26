@@ -5398,7 +5398,12 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      mirror file, or the SSH-visible file contracts (`~/.nodeterm/pending`, `~/.nodeterm/acks`,
      `~/.nodeterm/relay.json`) owes the Android client (and its interop fixture,
      `android/protocol/src/test/interop/host-fixture.ts`) in the same PR**; the Android workflow
-     (`.github/workflows/android.yml`) runs on those paths. The fixture implements host-service's
+     (`.github/workflows/android.yml`) runs on those paths: its filter covers every input of the
+     fixture's esbuild bundle (`src/core`, `src/shared`, `src/main/*.ts`, `src/main/remote`), which
+     also holds the producers the bundle leaves out (`listProjectsOutput` in `src/main/index.ts`,
+     `src/core/ack-sweep.ts`, `src/shared/pair-qr.ts`), and `WorkflowPathFilterTest` fails on a
+     bundle input the filter misses (audit A63). Running is not testing: the fixture's blob and
+     mirror are hand-written (audit A64). The fixture implements host-service's
      interfaces (`HostPtyManager`, the kanban/inbox/nodeActions bridge) and esbuild only strips its
      types, so it sits in `tsconfig.node.json` and `npm run typecheck` checks it on every CI run;
      it passes nothing through a cast (`android-interop-fixture.guard.test.ts`, audit A67). Two

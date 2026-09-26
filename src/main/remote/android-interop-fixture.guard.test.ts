@@ -5,9 +5,10 @@
 //
 // Nothing checked it against them (audit A67). InteropHarness.kt bundles the fixture with esbuild,
 // which strips types without checking them; no tsconfig included the file; and the Android workflow's
-// path filter skips most of src/, so a desktop change could break the fixture's fit to an interface
-// without any check noticing until an interop test failed at run time, or never, where the broken
-// member is one no test exercises. It passed tsc when the audit tried it, but nothing kept it so.
+// path filter then skipped most of src/ (audit A63), so a desktop change could break the fixture's fit
+// to an interface without any check noticing until an interop test failed at run time, or never, where
+// the broken member is one no test exercises. It passed tsc when the audit tried it, but nothing kept
+// it so.
 //
 // tsconfig.node.json now includes the fixture, so `npm run typecheck` (every CI run, every platform)
 // checks it. These two guards keep that true: the file stays in the project, and it hands the desktop

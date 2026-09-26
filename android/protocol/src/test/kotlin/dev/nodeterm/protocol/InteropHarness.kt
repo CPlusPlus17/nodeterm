@@ -87,11 +87,18 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
 
         internal val bundle: File by lazy {
             val out = File(repoRoot, "android/protocol/build/interop/host-fixture.cjs")
+            File(out.path + ".meta.json").delete() // never read a previous build's metafile
             val proc = ProcessBuilder(bundleCommand(out)).directory(repoRoot).redirectErrorStream(true).start()
             val log = proc.inputStream.bufferedReader().readText()
             check(proc.waitFor() == 0) { "esbuild failed: $log" }
             out
         }
+
+        /**
+         * esbuild's metafile for [bundle], which the bundler writes beside it: its `inputs` are the files
+         * the bundle was built from, repo-relative and `/`-separated (audit A63, [WorkflowPathFilterTest]).
+         */
+        internal val bundleMeta: File by lazy { File(bundle.path + ".meta.json") }
 
         /**
          * Home-directory variables pointing a fixture at [home]. `os.homedir()` reads HOME on POSIX and

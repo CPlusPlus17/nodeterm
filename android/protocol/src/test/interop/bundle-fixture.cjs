@@ -15,7 +15,12 @@
 // aliased to the stub (audit A60), `ws` external (it resolves from the repo's node_modules at run
 // time), and the repo's two path aliases. Relative alias targets resolve against the cwd, as they did
 // for the CLI.
+//
+// It also writes esbuild's metafile beside the bundle, as `<outfile>.meta.json`: the repo files the
+// bundle was built from. WorkflowPathFilterTest checks that the Android workflow's path filters
+// cover every one of them (audit A63).
 'use strict'
+const fs = require('fs')
 const path = require('path')
 
 const [outfile, electronStub] = process.argv.slice(2)
@@ -42,10 +47,16 @@ esbuild
       '@renderer': './src/renderer'
     },
     external: ['ws'],
+    metafile: true,
     logLevel: 'warning'
   })
-  .catch(() => {
-    // esbuild has already printed the errors (logLevel 'warning' includes them) to stderr, which the
-    // harness folds into its failure message.
+  .then((result) => {
+    fs.writeFileSync(path.resolve(root, outfile) + '.meta.json', JSON.stringify(result.metafile))
+  })
+  .catch((err) => {
+    // A build failure: esbuild has already printed the errors (logLevel 'warning' includes them) to
+    // stderr, which the harness folds into its failure message. Anything else (the metafile write)
+    // has printed nothing yet.
+    if (!err || !Array.isArray(err.errors)) console.error(err)
     process.exitCode = 1
   })

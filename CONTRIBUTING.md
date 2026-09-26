@@ -111,6 +111,9 @@ applicable here":
    `npm ci --ignore-scripts`) runs it against this repo's own host code. Its interop fixture
    (`android/protocol/src/test/interop/`) implements host-service's interfaces and is part of
    `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.
+   The Android workflow runs on every file that fixture bundles (`src/core`, `src/shared`,
+   `src/main/*.ts`, `src/main/remote`); an import that pulls a file from elsewhere into it fails
+   `WorkflowPathFilterTest` until the workflow's `paths` list it.
 
 Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate

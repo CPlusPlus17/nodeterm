@@ -622,9 +622,12 @@ ptyManager.setProjectSpawnOverrides(
   })
 )
 
-// Markers delimiting the `projects.list` relay blob. The iOS client splits on these exact
+// Markers delimiting the `projects.list` relay blob. Both phone clients split on these exact
 // strings to recover [workspace.json | newline-joined tmux session names | agent-status.json],
-// matching the SSH browse pipeline it already uses — keep them in sync with NodetermProjects.swift.
+// matching the SSH browse pipeline they already use — keep them in sync with NodetermProjects.swift
+// (iOS, nodeterm-ios) and android/protocol/src/main/kotlin/dev/nodeterm/protocol/model/ProjectsParser.kt.
+// The Android interop fixture (android/protocol/src/test/interop/host-fixture.ts) serves a
+// hand-written blob, not this function's output, so a change to the shape owes it too.
 const NT_PROJECTS_MARK = '--NT-PROJECTS-SPLIT--'
 const NT_STATUS_MARK = '--NT-STATUS-SPLIT--'
 

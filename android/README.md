@@ -43,9 +43,10 @@ cd android
 ```
 
 Needs JDK 17+ and the Android SDK (Android Studio's, or `ANDROID_HOME`). `minSdk` 26, `targetSdk` 35.
-CI builds the debug APK on every change under `android/` (`.github/workflows/android.yml`) and
-attaches it to the run. The debug APK is not minified. Only the release build type runs R8
-(`app/proguard-rules.pro`), and CI builds it too, unsigned and not published
+CI builds the debug APK on every change under `android/` or to the desktop code the protocol tests
+run (`.github/workflows/android.yml`; its path filter says which) and attaches it to the run. The
+debug APK is not minified. Only the release build type runs R8 (`app/proguard-rules.pro`), and CI
+builds it too, unsigned and not published
 (`./gradlew :app:assembleRelease`, then `tools/check-r8-output.sh`). A missing `-dontwarn` therefore
 fails CI rather than a first release (R8 reports the missing class), and so does one of the keeps the
 script checks when it stops matching (the WebView bridge, the worker, BouncyCastle's provider tables,
