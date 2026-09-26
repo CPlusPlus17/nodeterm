@@ -350,6 +350,9 @@ class SshTransportTest {
             guard.poisonAll = true
             stream.write("x")
             assertTrue(closed.await(10, TimeUnit.SECONDS), "the broken transport was reported through onClosed")
+            // sshj's own disconnect listener may report first; the socket close lands right after.
+            val end = System.currentTimeMillis() + 5_000
+            while (conn.isConnected && System.currentTimeMillis() < end) Thread.sleep(20)
             assertFalse(conn.isConnected)
         } finally {
             guard.poisonAll = false
