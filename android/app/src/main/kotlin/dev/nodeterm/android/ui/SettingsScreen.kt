@@ -87,10 +87,13 @@ fun SettingsScreen(nav: Navigator) {
     // by the system back (gesture or button), which used to pop without saving (audit A44). Not per
     // keystroke: a half-typed address would be the one the relay calls used. An address that is not
     // https is not stored, and the user is told so rather than finding the old one still in place.
+    // Leaving without an edit stores nothing. While nothing is stored, the name follows the phone's
+    // model and the address the build's default relay; storing either would pin it.
     fun leave() {
-        graph.hosts.deviceName = name
+        if (name.trim() != graph.hosts.deviceName) graph.hosts.deviceName = name
         when (val edit = ApiBaseSetting.onLeave(apiBase, graph.hosts.apiBase)) {
             is ApiBaseSetting.OnLeave.Save -> graph.hosts.apiBase = edit.value
+            ApiBaseSetting.OnLeave.UseDefault -> graph.hosts.useDefaultApiBase()
             ApiBaseSetting.OnLeave.Keep -> {}
             ApiBaseSetting.OnLeave.Rejected -> Toast.makeText(
                 context,

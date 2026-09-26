@@ -53,13 +53,36 @@ class SettingsLeaveTest {
     }
 
     @Test
-    fun `leaving stores an accepted address and reports a refused one`() {
+    fun `leaving stores an edited address and reports a refused one`() {
         val stored = RelayApi.DEFAULT_API_BASE
         assertEquals(OnLeave.Save("https://relay.example.com"), ApiBaseSetting.onLeave("https://relay.example.com/", stored))
-        assertEquals(OnLeave.Save(stored), ApiBaseSetting.onLeave(stored, stored))
+        assertEquals(OnLeave.Save("https://other.example.com"), ApiBaseSetting.onLeave("https://other.example.com", "https://relay.example.com"))
         assertEquals(OnLeave.Rejected, ApiBaseSetting.onLeave("http://relay.example.com", stored))
         assertEquals(OnLeave.Rejected, ApiBaseSetting.onLeave("", stored))
         assertEquals(OnLeave.Rejected, ApiBaseSetting.onLeave("https://", stored))
+    }
+
+    @Test
+    fun `leaving without an edit stores nothing`() {
+        // The first A44 fix stored the unedited address on every leave. Only the arrow used to, and
+        // the system back (what most users press) stored nothing.
+        val custom = "https://relay.example.com"
+        assertEquals(OnLeave.Keep, ApiBaseSetting.onLeave(custom, custom))
+        assertEquals(OnLeave.Keep, ApiBaseSetting.onLeave(" $custom/ ", custom))
+        assertEquals(OnLeave.Keep, ApiBaseSetting.onLeave("https://relay.example.com:8443/api", "https://relay.example.com:8443/api/"))
+    }
+
+    @Test
+    fun `the built-in default is never stored as an address`() {
+        // A phone that stores no address reads the default, and follows a later build's default. The
+        // first A44 fix stored it on every leave, pinning the phone to this build's default for good.
+        // The unedited default: forgetting an address the phone does not have writes nothing, and
+        // it unpins a phone an earlier build did store the default on (Keep would leave it pinned).
+        val default = RelayApi.DEFAULT_API_BASE
+        assertEquals(OnLeave.UseDefault, ApiBaseSetting.onLeave(default, default))
+        // "Reset to default" over a custom address forgets it rather than storing the default.
+        assertEquals(OnLeave.UseDefault, ApiBaseSetting.onLeave(default, "https://relay.example.com"))
+        assertEquals(OnLeave.UseDefault, ApiBaseSetting.onLeave(" $default/ ", "https://relay.example.com"))
     }
 
     @Test
@@ -89,12 +112,26 @@ class SettingsLeaveTest {
         val leave = AppSourcePins.blockAfter(settings, "fun leave()")
         AppSourcePins.assertInOrder(
             leave,
-            "graph.hosts.deviceName = name",
+            // An unedited name is not stored: a phone that stores no name is named after its model.
+            "if (name.trim() != graph.hosts.deviceName) graph.hosts.deviceName = name",
             "ApiBaseSetting.onLeave(apiBase, graph.hosts.apiBase)",
             "OnLeave.Save -> graph.hosts.apiBase = edit.value",
+            "OnLeave.UseDefault -> graph.hosts.useDefaultApiBase()",
+            "OnLeave.Keep -> {}",
             "OnLeave.Rejected -> Toast.makeText(",
             ".show()",
             "nav.pop()"
+        )
+    }
+
+    @Test
+    fun `using the default forgets the stored address, so the getter falls back to the default`() {
+        val store = AppSourcePins.app("data/HostStore.kt")
+        val forget = AppSourcePins.blockAfter(store, "fun useDefaultApiBase()")
+        assertEquals("""prefs.edit().remove("apiBase").apply()""", forget.removeSurrounding("{", "}").trim())
+        assertTrue(
+            store.contains("""get() = prefs.getString("apiBase", null) ?: dev.nodeterm.protocol.relay.RelayApi.DEFAULT_API_BASE"""),
+            "HostStore.apiBase no longer answers the built-in default while no address is stored"
         )
     }
 
@@ -105,6 +142,7 @@ class SettingsLeaveTest {
         assertEquals(1, Regex("""nav\.pop\(\)""").findAll(src).count())
         assertEquals(1, Regex("""graph\.hosts\.apiBase\s*=(?!=)""").findAll(src).count())
         assertEquals(1, Regex("""graph\.hosts\.deviceName\s*=(?!=)""").findAll(src).count())
+        assertEquals(1, Regex("""graph\.hosts\.useDefaultApiBase\(\)""").findAll(src).count())
         // The field warns with the same decision leaving acts on.
         assertTrue(src.contains("val apiBaseRejected = ApiBaseSetting.onLeave(apiBase, graph.hosts.apiBase) == ApiBaseSetting.OnLeave.Rejected"))
         assertTrue(src.contains("isError = apiBaseRejected"))

@@ -241,9 +241,12 @@ Whether the keyboard comes up, and stays up, is a device check.
 the screen without storing the edited phone name or relay API address; only the top-bar arrow stored
 them. Both now run one `leave()`, which stores, then pops. Nothing is stored per keystroke. The relay
 address must be a full `https://` URL (`ApiBaseSetting`: a host, no query or fragment); one that is
-not is left unstored, the field says so while it is being typed, and leaving shows a message. The
-address rule is unit-tested; the wiring is pinned in the source, and whether the back gesture reaches
-it is a device check.
+not is left unstored, the field says so while it is being typed, and leaving shows a message.
+Leaving without an edit stores nothing, and the built-in relay address is never stored: "Reset to
+default" forgets the stored address instead. A phone that stores none follows the default of the build
+it runs, so storing the default would pin it to this build's for good. The address rule and the leave
+decision are unit-tested; the wiring is pinned in the source, and whether the back gesture reaches it
+is a device check.
 
 `InboxNotificationTextTest` pins what an Inbox notification says (`A52`). An approval's notification
 used to carry the desktop's tool summary (the command's first line, a file path, a fetched URL), and

@@ -7,6 +7,12 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
  * does with it (audit A44). The address is stored only when the user leaves the screen, never per
  * keystroke: a half-typed value such as `https://a` would otherwise be the one every relay call
  * used until the typing was done.
+ *
+ * Leaving without an edit stores nothing, and the built-in default is never stored as an address.
+ * The app's store answers [RelayApi.DEFAULT_API_BASE] while it holds no address, so a phone that
+ * holds none follows the default of whichever build it runs. Storing the default (as the first A44
+ * fix did on every leave) would pin the phone to this build's default for good, and the field could
+ * not show the difference: the pinned and the followed default read the same.
  */
 object ApiBaseSetting {
     /** What leaving Settings does with the typed address. */
@@ -15,8 +21,15 @@ object ApiBaseSetting {
         data class Save(val value: String) : OnLeave
 
         /**
-         * Not an address we accept, but it is what is already stored (a value an older build
-         * saved): nothing to store, and nothing to tell a user who did not type it.
+         * The built-in default: forget any stored address, so the phone follows the default,
+         * including a later build's. It is also the answer for an unedited field on a phone that
+         * stores no address, where forgetting one changes nothing.
+         */
+        data object UseDefault : OnLeave
+
+        /**
+         * What is already stored: nothing to store. That is an unedited address, or one we would
+         * not accept that an older build saved, which a user who did not type it is not told about.
          */
         data object Keep : OnLeave
 
@@ -43,10 +56,18 @@ object ApiBaseSetting {
         return base
     }
 
-    /** What leaving Settings does with [typed], given the address [stored] now. */
+    /**
+     * What leaving Settings does with [typed], given the address [stored] now ([RelayApi.DEFAULT_API_BASE]
+     * when none is stored). The default is checked first: it heals a phone an earlier build pinned to it.
+     */
     fun onLeave(typed: String, stored: String): OnLeave {
-        accept(typed)?.let { return OnLeave.Save(it) }
-        return if (normalize(typed) == normalize(stored)) OnLeave.Keep else OnLeave.Rejected
+        val unchanged = normalize(typed) == normalize(stored)
+        val accepted = accept(typed) ?: return if (unchanged) OnLeave.Keep else OnLeave.Rejected
+        return when {
+            accepted == RelayApi.DEFAULT_API_BASE -> OnLeave.UseDefault
+            unchanged -> OnLeave.Keep
+            else -> OnLeave.Save(accepted)
+        }
     }
 
     /** The form the app stores an address in (HostStore's setter trims the same way). */

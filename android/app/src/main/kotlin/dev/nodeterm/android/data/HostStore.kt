@@ -108,6 +108,15 @@ class HostStore(context: Context) {
             prefs.edit().putString("apiBase", value.trim().trimEnd('/')).apply()
         }
 
+    /**
+     * Forget the stored relay address, so [apiBase] answers the built-in default, a later build's
+     * included (dev.nodeterm.protocol.relay.ApiBaseSetting.OnLeave.UseDefault). Removing a key
+     * that is not there changes nothing.
+     */
+    fun useDefaultApiBase() {
+        prefs.edit().remove("apiBase").apply()
+    }
+
     var notificationsEnabled: Boolean
         get() = prefs.getBoolean("notify", true)
         set(value) {
