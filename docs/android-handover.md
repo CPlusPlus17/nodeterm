@@ -8,17 +8,19 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 ## TL;DR
 
-- The Android app exists (`android/`), and **CI built its debug APK successfully with AGP** (run
-  [36109984730](https://github.com/CPlusPlus17/nodeterm/actions/runs/36109984730), artifact
-  `nodeterm-android-debug`, which expires 2026-12-24). The protocol tests pass in CI too.
-- **It has never been run on a phone.** A 170-agent audit found **9 distinct release blockers**.
-  All nine (WP1 + WP2) and every WP4 medium bug are fixed on the branch (A13 on the phone side
-  only); see the progress log below. Everything is unit/interop-tested where the layer allows and
-  type-checked, and CI builds the APK — but **nothing has run on a device**. Do not hand the APK to
-  anyone until the device pass (WP3) has run.
-- The next session should run the **device test pass** (the checklist below), then the open items
-  in "What is still open", then WP5/WP6. No PR is open, and none should be opened unless the user
-  asks.
+- The Android app exists (`android/`), and **CI builds it with AGP**: a debug APK and, since `A37`,
+  a minified release build that runs R8 (unsigned; no release key exists). The protocol tests pass in
+  CI too.
+- **It has never been run on a phone.** Of the audit's 77 findings, all 9 release blockers (WP1 +
+  WP2), every WP4 medium bug and nearly all of WP6 are fixed on the branch; `A56` was deliberately
+  not built and `A50` is documented only. The WP5 parity gaps and a handful of follow-ups remain (see
+  "What is still open"). Everything is unit/interop-tested where the layer allows and type-checked,
+  but **nothing has run on a device**. Do not hand the APK to anyone until the device pass (WP3) has
+  run.
+- The next session should run the **device checklist** in
+  [`android.md`](android.md#device-checklist) if a phone is available, then batch D (WP5), batch E
+  (follow-ups) and last `A68`, as listed under "What is still open". No PR is open, and none should be
+  opened unless the user asks.
 
 ## Progress log
 
@@ -35,7 +37,7 @@ audit's proposal.
 | A67 | `696fd10` | `tsconfig.node.json` includes the interop fixture, so `npm run typecheck` checks it; `HostSessionOptions.pty` narrowed to `HostPtyManager`, removing the fixture's cast. | `npm run typecheck`; a guard test pins the include and bans the casts. |
 | A63 | `b3d4c6e`, `9d19bd1` | `android.yml` runs on every file the fixture bundles (`src/core/**`, `src/shared/**`, `src/main/*.ts`, `src/main/remote/**`, `package*.json`, `tsconfig.json`) and on the docs the tests read; the list is derived from esbuild's metafile. | `WorkflowPathFilterTest` re-derives it. |
 | A64 | `f9782da` | The relay `projects.list` blob comes from `buildProjectsListBlob` (one assembly for `index.ts` and the fixture); mirror entries from the real writer. Docs now say which contracts are still hand-copied. | vitest `projects-list-blob.test.ts`; a guard test refuses a hand-written blob. |
-| A69 | `6f3a8da`, `4806b92` | `setup-gradle` (wrapper validation, a read-mostly cache) in every Gradle job; Dependabot `gradle` for `/android` with the network/crypto stack in its own group; a Kotlin CodeQL job built under CodeQL (`build-mode: manual`). The gradle-8.14.3 distribution checksum is not pinned yet (no network here). | `GradleCiCoverageTest`; the CodeQL job's first CI run is below. |
+| A69 | `6f3a8da`, `4806b92`, `86d059d` | `setup-gradle` (wrapper validation, a read-mostly cache) in every Gradle job; Dependabot `gradle` for `/android` with the network/crypto stack in its own group; a Kotlin CodeQL job built under CodeQL (`build-mode: manual`), moved into `android.yml` by `86d059d` so a branch push runs it (`security.yml` has no `workflow_dispatch` and runs only on `main`/PRs/the queue). The gradle-8.14.3 distribution checksum is not pinned yet (no network here). | `GradleCiCoverageTest`. |
 | A61 / A71 | `39e7995`, `9d19bd1` | Docs: an existing `npm install` is enough for the interop tests; `npm ci --ignore-scripts` is CI's and replaces `node_modules`. JDK 17–24 (Gradle 8.14.3 cannot start on 25). | `ContributorDocsTest`. |
 | A65 / A50 | `33af5e7`, `d092639` | `docs/android.md` gets the numbered device checklist; the READMEs say the debug APK is debuggable, and that a phone exposed over adb needs a new identity (uninstall or clear storage) before re-pairing, not just re-pairing. A signed non-debuggable release is still open (`A50`). | `DeviceChecklistDocsTest`. |
 | A66 | `61e218b` | The desktop's Android link reads "nodeterm for Android (build from source)" and is derived from `REPO_URL`. The link resolves once `android/` is on upstream `main`. | vitest `androidAppLink.test.tsx`. |
@@ -97,6 +99,36 @@ are listed with it.
 | A33 | `0db0b6e` | New optional `pty.attach` fields `projectId`/`accountId`/`agentId` (additive). The desktop resolves the project folder and a local, logged-in managed Claude account itself, applied only when the attach creates the session. The phone sends them for a session it starts. | vitest `remote-security.test.ts` (3 new cases); relay interop through the real handler. |
 
 ### What is still open
+
+**Next work, in order** (item lists were written for this session's workflows; re-read each audit
+section before starting, since the verifier corrections take precedence):
+
+1. **Batch D — WP5 parity features.**
+   - `A26`: while connected over direct SSH, open the relay leg on demand for the relay-only verbs
+     (register node, board writes, `node.*`, git), reusing HostSession's side relay and the
+     `RelayApprovalGate` (a user action is `USER`; a background path never makes a first handshake);
+     show New session and board controls disabled with the reason when there is no relay leg.
+   - `A29`: a Source Control screen over `conn.git(...)` (relay, gated on the git capability), with a
+     relay interop test through the desktop's real git bridge.
+   - `A32`: port the desktop's wrapped-row URL link provider into terminal.js (not addon-web-links), an
+     OSC 8 `linkHandler`, `openUrl` for http(s) only, and a "Copy lines" sheet from `term.buffer`.
+   - `A25` (in-app part): Approve/Deny and option actions on notifications (never a first relay
+     handshake from an action), and a tap that opens the node's terminal. FCM stays a backend gap.
+   - `A55`: a needs-you count per computer, and a merged "All computers" Inbox + Usage screen.
+   - `A59`: a SpeechRecognizer mic in the input bar that fills the draft and never submits.
+   - `A27`: (a) direct-SSH browse of a Server Edition host (`~/.nodeterm-server`, both tmux sockets
+     tracked per session, the per-project status slices); (b) a manual "Add SSH server" flow (show the
+     phone's public key; TOFU-after-auth pin; SSH only).
+2. **Batch E — follow-ups.** `node.sendKeys` for SSH-project nodes over their ControlMaster (`A12`);
+   a device revoke cuts its live relay session (`A07`); late relay adoption pins the box key (`A07`,
+   probably a new SSH-visible file, so iOS and the fixture are owed); the SSH host keys in the sealed
+   `/pair` answer anchor the pin (`A49`); a relay-authenticated refresh of the LAN address (`A74`);
+   the notification seen log keyed per computer.
+3. **`A68` last.** `push: branches: [main]` + `pull_request`, no `merge_group` (see the verifier).
+   After it, pushes to this branch no longer run the Android workflow until a PR exists, which is why
+   it waits until everything else is verified.
+
+**Known gaps and caveats:**
 
 - **A13 for direct-SSH phones.** The desktop fix covers phones attached through the relay. A phone
   attached over direct SSH (Android or iOS) is still detached by the app's `-D`, because its tmux
@@ -345,20 +377,19 @@ Paste this into the next session.
 ```text
 Continue the Android companion work on branch claude/android-ios-parity-75kfem of CPlusPlus17/nodeterm.
 
-Start by reading docs/android-handover.md (progress log, what is still open, environment notes,
-conventions) and docs/android-audit-2026-09.md (fixed findings are marked in the index). WP1, WP2
-and WP4 are fixed on the branch but nothing has run on a device.
+Start by reading docs/android-handover.md (progress log, "What is still open", environment notes,
+conventions) and docs/android-audit-2026-09.md (fixed findings are marked in the index). WP1, WP2,
+WP4 and nearly all of WP6 are fixed on the branch, but nothing has run on a device.
 
-1. If a phone is available: run the device checklist in the handover (WP3) with the latest CI APK,
-   record results in docs/android.md → "What is verified", and turn every failure into a finding.
-2. The desktop root cause of A13 (a renderer client attaching with -D over a live relay-served
-   client), with tests in pty-manager.
-3. WP5 parity gaps and WP6 low-severity items, starting with A37 (R8 rules), A52 (lock-screen
-   content), A53/A54 (size caps), A63/A68 (CI triggers and path filters).
+1. If a phone is available: run the device checklist in docs/android.md (#device-checklist) with the
+   latest CI APK, record results in docs/android.md → "What is verified", and turn every failure into
+   a finding.
+2. Batch D (WP5 parity: A26, A29, A32, A25, A55, A59, A27), then batch E (the follow-ups listed under
+   "What is still open"), then A68 last.
 
-Before each push run the protocol tests (cd android/protocol && gradle test --offline, after npm ci
---ignore-scripts at the repo root), the offline type-check (cd android/tools/typecheck && gradle
-compileKotlin), and for desktop changes the affected vitest files plus npm run typecheck; after each
-push confirm the Android workflow is green. Keep docs/android.md, android/README.md, the handover and
-the audit index in sync. Do not open a PR unless asked.
+Before each push run the protocol tests (cd android/protocol && gradle test --offline; an existing
+npm install at the repo root is enough), the offline type-check (cd android/tools/typecheck && gradle
+compileKotlin --offline), and for desktop changes the affected vitest files plus npm run typecheck;
+after each push confirm the Android workflow is green. Keep docs/android.md, android/README.md, the
+handover and the audit index in sync. Do not open a PR unless asked.
 ```
