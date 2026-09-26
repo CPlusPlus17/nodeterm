@@ -109,6 +109,9 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         val meta = if (metaEnd >= 0) raw.substring(0, metaEnd) else ""
         val blob = if (metaEnd >= 0) raw.substring(metaEnd + SshScripts.META_END.length).removePrefix("\n") else raw
         val ud = meta.lineSequence().firstOrNull { it.startsWith("ud=") }?.removePrefix("ud=")?.takeIf { it.isNotBlank() }
+        // No userData dir is not "a computer with no sessions": it means we are looking in the wrong
+        // place (audit A02 shipped exactly that as an empty list). Say so instead.
+        if (ud == null && metaEnd >= 0) throw HostException(NO_USER_DATA)
         userData = ud
         val base = ProjectsParser.parseBlob(blob)
         val wsText = blob.substringBefore(ProjectsParser.PROJECTS_MARK)
@@ -393,6 +396,10 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     }
 
     companion object {
+        const val NO_USER_DATA = "nodeterm's data wasn't found on this computer over SSH (looked for " +
+            "~/Library/Application Support/node-terminal and ~/.config/node-terminal). Open nodeterm on the computer " +
+            "once, or connect through the relay."
+
         /** OpenSSH-style `SHA256:<unpadded base64>` of the host key blob. */
         fun fingerprint(key: PublicKey): String {
             val blob = Buffer.PlainBuffer().putPublicKey(key).compactData

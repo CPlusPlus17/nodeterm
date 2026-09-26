@@ -151,7 +151,8 @@ class SshTransportTest {
     private val repo get() = File(root, "repo")
 
     private fun layOutDesktop() {
-        val ud = File(home, ".config/nodeterm").apply { mkdirs() }
+        // The REAL directory name (audit A02): Electron's userData is package.json `name`.
+        val ud = File(home, ".config/node-terminal").apply { mkdirs() }
         File(repo, ".nodeterm").mkdirs()
         File(repo, ".nodeterm/project.json").writeText(
             """{"version":1,"rev":3,"savedAt":"x","name":"file name ignored","color":"#000",

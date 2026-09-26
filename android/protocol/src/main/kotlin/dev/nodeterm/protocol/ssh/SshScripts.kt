@@ -15,8 +15,11 @@ import dev.nodeterm.protocol.model.TmuxNames
  *    (`Contents/Resources/bin/tmux`) is the last resort, as it is for the desktop's own `findTmux`;
  *  - the desktop's sessions live on the `-L node-terminal` socket (src/core/tmux-naming.ts), and its
  *    generated config is `<userData>/tmux.conf`;
- *  - userData is `~/Library/Application Support/nodeterm` on macOS and `$XDG_CONFIG_HOME/nodeterm`
- *    (default `~/.config/nodeterm`) on Linux.
+ *  - userData is `~/Library/Application Support/node-terminal` on macOS and
+ *    `$XDG_CONFIG_HOME/node-terminal` (default `~/.config/node-terminal`) on Linux: Electron names it
+ *    after package.json `name`, and the desktop has no top-level `productName` (the desktop's own
+ *    hook shell walks the same dirs, src/core/agents/hook-endpoint-failover-sh.ts). The `nodeterm`
+ *    spelling is probed after it as a legacy fallback (audit A02).
  */
 object SshScripts {
     const val META_START = "##NT-META"
@@ -35,7 +38,8 @@ object SshScripts {
           done
         fi
         NT_UD=""
-        for d in "${'$'}HOME/Library/Application Support/nodeterm" "${'$'}{XDG_CONFIG_HOME:-${'$'}HOME/.config}/nodeterm"; do
+        for d in "${'$'}HOME/Library/Application Support/node-terminal" "${'$'}{XDG_CONFIG_HOME:-${'$'}HOME/.config}/node-terminal" \
+                 "${'$'}HOME/Library/Application Support/nodeterm" "${'$'}{XDG_CONFIG_HOME:-${'$'}HOME/.config}/nodeterm"; do
           if [ -f "${'$'}d/workspace.json" ]; then NT_UD="${'$'}d"; break; fi
         done
     """.trimIndent()
