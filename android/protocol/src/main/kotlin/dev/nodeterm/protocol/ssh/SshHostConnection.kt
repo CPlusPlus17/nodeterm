@@ -447,6 +447,19 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         }
     }
 
+    override suspend fun paneCommand(nodeId: String): String? = withContext(Dispatchers.IO) {
+        // A remote node's pane is on ITS host; this computer's tmux has nothing to say about it.
+        if (remoteNodes.containsKey(nodeId)) return@withContext null
+        try {
+            val (code, out) = run(SshScripts.paneCommand(nodeId))
+            out.trim().takeIf { code == 0 && it.isNotEmpty() && '\n' !in it }
+        } catch (e: HostException) {
+            null // the transport dropped; `run` has already reported it through onClosed
+        } catch (e: IllegalArgumentException) {
+            null // not a node id this app generates: no tmux target is ever built from it
+        }
+    }
+
     /** Kill the node's tmux session (the node stays on the canvas; the desktop shows it as ended). */
     suspend fun killSession(nodeId: String) = withContext(Dispatchers.IO) {
         refuseRemoteNode(nodeId)

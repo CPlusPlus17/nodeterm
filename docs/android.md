@@ -62,7 +62,7 @@ describes as the future. The Android client implements what the host actually se
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
 | Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
-| Wake on open | the attach itself: host-service reports the viewer (`remoteViewer.attached` → `agent:wake`) and the desktop wakes a Sleeping node it has mounted; the phone offers nothing, so it never types a second `--resume` | nothing reaches the desktop, so opening a Sleeping node offers the desktop's wake line (the agent's `--resume <id>` plus the permission mode, no `cd` or account: the pane's shell already has both), typed only on a tap, after a kill-line |
+| Wake on open | the attach itself: host-service reports the viewer (`remoteViewer.attached` → `agent:wake`) and the desktop wakes a Sleeping node it has mounted; the phone offers nothing, so it never types a second `--resume` | nothing reaches the desktop, so opening a Sleeping node offers the desktop's wake line (the agent's `--resume <id>`, plus the permission mode for Claude only, no `cd` or account: the pane's shell already has both), only while a shell owns the pane (`#{pane_current_command}`, read on open and again at the tap), typed only on a tap, after a kill-line |
 | Wake, refresh, rename | `node.wake|refresh|rename` | — (needs the desktop app) |
 | Board | `projects.ensureBoard|setCardColumn|editCardLabels` | read-only |
 | New session | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | — |
@@ -197,10 +197,21 @@ handling itself is only type-checked.
 
 `ResumeOfferTest` pins what the terminal screen offers to type after an attach (`A15`, `A76`). A cold
 attach (the computer rebooted; only the relay creates a session) gets the cold-restore line: `cd` into
-the node's folder, its managed account, the permission mode. A Sleeping (Eco-hibernated) node opened over direct
+the node's folder, its managed account, and for Claude the permission mode. A Sleeping (Eco-hibernated) node opened over direct
 SSH gets the desktop's own wake line instead, with no `cd` and no account prefix, since the pane's
-shell is the one the CLI exited back to; accepting it clears the prompt's line first (Ctrl-U, the
-desktop's kill-line) and re-checks that the node is still Sleeping. Through the relay a Sleeping
+shell is the one the CLI exited back to (again the permission mode for Claude only). It is offered
+only while a shell owns the pane: the phone reads the pane's foreground command
+(`#{pane_current_command}`) and requires one of the desktop's own shell names (`isShellCommand`,
+src/shared/agents/pane.ts, pinned by the test), the gate the desktop's wake keeps. The Sleeping flag
+alone is not enough, because it can outlive the sleep. Until the A76 review the desktop cleared it
+in the mirror only through its own wake, so a CLI resumed any other way stayed Sleeping there (codex
+reports its start as a live state, which the renderer cleared only in its own store). The renderer
+now reports that clear and the mirror applies the same rule to the hook events it records, but an
+older desktop does not, and with the desktop app not running nothing hears the resumed CLI at all. So after the phone wakes a codex session, the node can still
+read Sleeping, and without the pane check every later open would offer `codex resume` into the
+running CLI, as a prompt. Accepting a wake clears the prompt's line first (Ctrl-U, the desktop's
+kill-line) and re-checks, at the tap, that the node is still Sleeping and that a shell still owns
+the pane. A shell outside the desktop's list (nu, pwsh) gets no offer. Through the relay a Sleeping
 node gets no offer: the attach already asked the desktop to wake it. A shallow "Pause session" is
 Sleeping in the mirror (it carries no `paused`), so it too gets only the offer, which is the explicit
 Resume the desktop's PAUSED chip is; a deep pause leaves no Sleeping flag and gets nothing.
@@ -212,7 +223,9 @@ dropped otherwise, since a CLI started in the pane meanwhile would take the line
 the reattach has settled it, it cannot be tapped. A wake is not carried; every attach re-derives it.
 Leaving the screen and opening the node again is a new screen, whose warm attach offers nothing.
 `SshTransportTest` runs the offer end to end against the real tmux: the line it types starts the
-stand-in CLI in the node's own folder even with a half-typed line left at the prompt. The banner
+stand-in CLI in the node's own folder even with a half-typed line left at the prompt, and a stand-in
+codex the phone woke, still running under a flag nothing cleared, is not offered the wake again on
+the next open. The banner
 itself is only type-checked.
 
 `TerminalKeyboardChipTest` covers the key row's ⌨ chip (`A46`), which used to leave the soft keyboard
@@ -333,7 +346,13 @@ how the screens and the dialogs look with the keyboard up is a device check.
   as a prompt. Typing the resume by hand, or opening the node over direct SSH, works.
 - **Codex/Gemini/… launch flags.** A phone-started non-Claude agent launches bare (its own default
   approval mode): the per-agent approval table needs host facts (codex's vocabulary moved between
-  releases, #785) the mirror only partly publishes.
+  releases, #785) the mirror only partly publishes. The same holds for the resume lines the phone
+  offers: a cold-attach resume and a Sleeping node's wake carry the permission mode for Claude only,
+  where the desktop's own wake and cold restore append each capable agent's flag. Some of those
+  sessions come back looser than their mode: a Gemini or Grok session whose mode is `plan` (read-only)
+  resumes in its CLI's default, which can edit after asking, and a Codex node in `manual` on a
+  codex before 0.149 loses `--ask-for-approval untrusted` and resumes in `on-request`, where the
+  model decides when to ask.
 - **The SSH pin is not anchored in pairing, and the LAN address is frozen at pairing** (audit
   `A49`/`A74`). Neither the QR nor the sealed `/pair` answer carries the computer's SSH host key, so
   the first connect is trust on first use (on the pairing LAN, right after the QR, so normally the

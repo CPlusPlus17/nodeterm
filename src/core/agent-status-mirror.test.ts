@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import type { NormalizedAgentEvent } from '@shared/agents/normalize'
+import { normalizeCodex, type NormalizedAgentEvent } from '@shared/agents/normalize'
 import { syntheticAnsweredEvent } from './agents/pending-approvals'
 import {
   reduceEntry,
@@ -2531,6 +2531,37 @@ describe('hibernated flag (Eco × phone — SLEEPING on external readers)', () =
     recordAgentEvent(ev({ nodeId: 'n1', kind: 'session' }))
     expect(_snapshot().n1.state).toBeUndefined()
     expect(_snapshot().n1.hibernated).toBe(true)
+  })
+
+  // The A76 review: the phone offers to type a wake line off this flag, so a flag left standing on
+  // a running CLI is a resume line typed into that CLI's composer. The renderer drops its own copy
+  // on these edges; the mirror hears the same hook events (with or without a renderer) and does too.
+  it('a live state drops the flag — including a codex SessionStart, which arrives as `working`', () => {
+    for (const state of ['working', 'blocked', 'waiting'] as const) {
+      recordAgentEvent(ev({ nodeId: 'n1', state: 'done', sessionId: 's1' }))
+      setNodeHibernated('n1', true)
+      recordAgentEvent(ev({ nodeId: 'n1', state, sessionId: 's1', newTurn: true }))
+      expect(_snapshot().n1.hibernated, state).toBeUndefined()
+    }
+    // The resume the phone types into a Sleeping codex pane, through the real normalizer: codex
+    // maps SessionStart to a state, never to the session start Canvas also clears on.
+    setNodeHibernated('cx', true)
+    const start = normalizeCodex({ nodeId: 'cx', agentId: 'codex', payload: { hook_event_name: 'SessionStart', session_id: 't1' } })
+    expect(start?.kind).toBe('state')
+    recordAgentEvent(start!)
+    expect(_snapshot().cx.hibernated).toBeUndefined()
+  })
+
+  it('a session START drops the flag; `done` and a session END leave it', () => {
+    recordAgentEvent(ev({ nodeId: 'n1', state: 'done', sessionId: 's1' }))
+    setNodeHibernated('n1', true)
+    // A late Stop after the /exit must not undo the hibernation just performed.
+    recordAgentEvent(ev({ nodeId: 'n1', state: 'done', sessionId: 's1' }))
+    recordAgentEvent(ev({ nodeId: 'n1', kind: 'session', sessionPhase: 'end', sessionId: 's1' }))
+    expect(_snapshot().n1.hibernated).toBe(true)
+    // A claude/gemini/grok resume starts its session: a CLI is in the pane again.
+    recordAgentEvent(ev({ nodeId: 'n1', kind: 'session', sessionPhase: 'start', sessionId: 's1' }))
+    expect(_snapshot().n1.hibernated).toBeUndefined()
   })
 })
 

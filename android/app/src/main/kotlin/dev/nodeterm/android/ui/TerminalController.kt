@@ -102,6 +102,9 @@ class TerminalController(
     var resumeOffer by mutableStateOf<ResumeOffer?>(null)
         private set
 
+    /** The connection of the attach that settled [resumeOffer]: a tapped wake re-reads its pane. */
+    private var resumeConn: HostConnection? = null
+
     /**
      * [resumeOffer] was decided by the attach the screen shows now, so a tap may type it. False from
      * the start of every attach until its offer is settled: a carried offer is not typed on the strength
@@ -589,6 +592,10 @@ class TerminalController(
         if (!s.fresh && resumeOffer?.kind == ResumeOffer.Kind.RESUME) session.refreshNow()
         val snap = session.snapshot.value
         val status = snap.statusOf(nodeId)
+        // A Sleeping flag is only half the answer: a wake is offered while a SHELL owns the pane, the
+        // desktop's own gate (the A76 review: the flag outlives a CLI resumed outside the desktop's
+        // wake, this phone's included, and the line would land in that CLI as a prompt).
+        val pane = if (ResumeOffer.wantsPane(s.fresh, conn.kind, snap, nodeId)) conn.paneCommand(nodeId) else null
         // A cold pane (a reboot) gets the agent's own resume, built like the desktop's cold restore
         // (A15/A16); a Sleeping one over direct SSH gets the desktop's wake line, since nothing tells
         // the desktop about an SSH attach (A76). Over the relay the attach itself asks the desktop to
@@ -597,7 +604,8 @@ class TerminalController(
             // Only for the attach the screen still shows: a newer one settles the offer itself.
             if (!slot.isCurrent(ticket)) return@post
             // The offer still on screen is carried: one the user answered or dismissed is not.
-            resumeOffer = ResumeOffer.afterAttach(s.fresh, conn.kind, snap, nodeId, carried = resumeOffer)
+            resumeOffer = ResumeOffer.afterAttach(s.fresh, conn.kind, snap, nodeId, carried = resumeOffer, paneCommand = pane)
+            resumeConn = conn
             resumeSettled = true
         }
         // Reading a finished session on the phone is a READ: tell the computer (unread clears there,
@@ -617,13 +625,24 @@ class TerminalController(
         // it rather than spend it on nothing. The reattach keeps it or drops it (see [resumeOffer]).
         if (!canResume) return
         resumeOffer = null
-        // Re-asked at the tap (A76): the desktop may have woken the session since the offer appeared,
-        // and a wake line typed into that CLI would arrive as a prompt.
-        if (!offer.stillOffered(session.snapshot.value, nodeId)) {
-            notice = "This session is no longer sleeping on the computer, so nothing was typed."
+        val s = stream ?: return
+        if (offer.kind != ResumeOffer.Kind.WAKE) {
+            s.write(offer.keys)
             return
         }
-        stream?.write(offer.keys)
+        val conn = resumeConn
+        // Re-asked at the tap (A76 and its review), the pane read LAST: the desktop may have woken the
+        // session since the offer appeared, or something else started a CLI in the pane, and a wake
+        // line typed into that CLI would arrive as a prompt.
+        graph.scope.launch {
+            val pane = conn?.paneCommand(nodeId)
+            val snap = session.snapshot.value
+            main.post {
+                // The screen moved on meanwhile (a reattach, or it left): not this tap's stream.
+                if (stream !== s) return@post
+                if (offer.stillOffered(snap, nodeId, pane)) s.write(offer.keys) else notice = ResumeOffer.WITHDRAWN
+            }
+        }
     }
 
     fun dismissResume() {

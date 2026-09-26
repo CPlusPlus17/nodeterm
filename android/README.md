@@ -23,7 +23,7 @@ it is talking to.
 | Late relay adoption (paired while remote access was off) | ✓ | Reads `~/.nodeterm/relay.json` over SSH, mints its own device token |
 | Sessions, grouped like the desktop sidebar | ✓ | Needs you / Running / Sleeping, activity + context % |
 | Terminal (co-attach to the live tmux session) | ✓ | xterm.js renderer, native input bar, special keys, swipe = tmux scroll, OSC 52 copy |
-| Sleeping (Eco) session opened | ✓ | Through the relay the computer wakes it on open. Over SSH the phone offers the desktop's wake line (`--resume <id>` + permission mode), typed only on a tap |
+| Sleeping (Eco) session opened | ✓ | Through the relay the computer wakes it on open. Over SSH the phone offers the desktop's wake line (`--resume <id>`, + permission mode for Claude only), while a shell owns the pane, typed only on a tap |
 | Cold-start resume offer (the computer rebooted) | relay | Offers the agent's own `--resume <id>`; never types it unasked. Over SSH a session that is not running is never created (it would lack its hook environment): the phone offers to open it through the relay |
 | Sessions of the computer's SSH projects | relay | They run on another host; the computer attaches them over its SSH connection. Over direct SSH the phone offers the relay instead |
 | New session (agent / shell) → registered on the canvas | relay | `projects.registerNode`, launched before registration so the desktop never double-launches |

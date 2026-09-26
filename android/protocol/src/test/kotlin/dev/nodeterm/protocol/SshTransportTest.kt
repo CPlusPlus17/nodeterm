@@ -8,6 +8,7 @@ import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.InboxKind
+import dev.nodeterm.protocol.model.Pane
 import dev.nodeterm.protocol.pairing.SshIdentity
 import dev.nodeterm.protocol.ssh.HostKeyChangedException
 import dev.nodeterm.protocol.ssh.HostKeyPin
@@ -471,7 +472,10 @@ class SshTransportTest {
             connect().use { conn ->
                 val snap = conn.listProjects()
                 val stream = conn.attach("term-a-1", 100, 30, Sink())
-                val offer = assertNotNull(ResumeOffer.afterAttach(stream.fresh, conn.kind, snap, "term-a-1"))
+                assertTrue(ResumeOffer.wantsPane(stream.fresh, conn.kind, snap, "term-a-1"))
+                val owner = conn.paneCommand("term-a-1")
+                assertTrue(Pane.isShell(owner), "Eco's shell owns the pane: $owner")
+                val offer = assertNotNull(ResumeOffer.afterAttach(stream.fresh, conn.kind, snap, "term-a-1", paneCommand = owner))
                 assertEquals(ResumeOffer.Kind.WAKE, offer.kind)
                 assertEquals("claude --resume sid-7 --permission-mode plan", offer.command, "no cd: the pane is already there")
                 Thread.sleep(400)
@@ -493,6 +497,84 @@ class SshTransportTest {
             }
         } finally {
             status.writeText(before)
+        }
+    }
+
+    /**
+     * The A76 review: the mirror's `hibernated` flag outlives a CLI resumed outside the desktop's own
+     * wake (here the desktop app is not running at all, so nothing hears the resumed CLI). The phone
+     * wakes a Sleeping codex session, codex keeps running, and the node still reads Sleeping; the next
+     * open must not offer `codex resume` into it, where it would be sent as a prompt.
+     */
+    @Test
+    fun `a codex session the phone woke is not offered the wake again while it runs, though the flag stays`() = runBlocking<Unit> {
+        val status = File(home, ".config/node-terminal/agent-status.json")
+        val before = status.readText()
+        // term-a-1 runs codex for this test.
+        val project = File(repo, ".nodeterm/project.json")
+        val projectBefore = project.readText()
+        project.writeText(projectBefore.replace("\"agentId\":\"claude\"", "\"agentId\":\"codex\""))
+        // A stand-in codex that stays in the foreground, like the real TUI (its argv[0] is not a shell).
+        val bin = File(root, "fake-codex").apply { mkdirs() }
+        File(bin, "codex").apply {
+            writeText("#!/bin/sh\necho \"codex-up:\$*\"\nexec sleep 60\n")
+            setExecutable(true)
+        }
+        status.writeText(
+            """{"v":1,"updatedAt":1,"nodes":{"term-a-1":{"state":"done","agentId":"codex","sessionId":"t-9","hibernated":true,"updatedAt":5}},
+               "inbox":{"events":[],"nodes":{}}}"""
+        )
+        fun paneOwner(): String = tmux("display-message", "-p", "-t", "=nt-term-a-1:", "#{pane_current_command}").second.trim()
+        try {
+            connect().use { conn ->
+                val snap = conn.listProjects()
+                assertEquals(true, snap.statusOf("term-a-1")?.hibernated)
+                val first = conn.attach("term-a-1", 100, 30, Sink())
+                val wake = assertNotNull(
+                    ResumeOffer.afterAttach(first.fresh, conn.kind, snap, "term-a-1", paneCommand = conn.paneCommand("term-a-1"))
+                )
+                assertEquals("codex resume t-9", wake.command)
+                Thread.sleep(400)
+                first.write("PATH='${bin.path}':\$PATH; export PATH\r")
+                first.write(wake.keys)
+                val end = System.currentTimeMillis() + 8_000
+                while (paneOwner() != "sleep" && System.currentTimeMillis() < end) Thread.sleep(100)
+                assertEquals("sleep", paneOwner(), "the stand-in codex holds the pane")
+                first.detach()
+
+                // Nothing cleared the flag: the listing still says Sleeping. The next open reads the pane.
+                val again = conn.listProjects()
+                assertEquals(true, again.statusOf("term-a-1")?.hibernated, "the flag outlived the sleep")
+                val second = conn.attach("term-a-1", 100, 30, Sink())
+                assertTrue(ResumeOffer.wantsPane(second.fresh, conn.kind, again, "term-a-1"))
+                val pane = conn.paneCommand("term-a-1")
+                assertEquals("sleep", pane)
+                assertNull(ResumeOffer.afterAttach(second.fresh, conn.kind, again, "term-a-1", paneCommand = pane), "no wake over a running CLI")
+                // An offer still on screen from before is withdrawn at the tap by the same read.
+                assertFalse(wake.stillOffered(again, "term-a-1", pane))
+                second.detach()
+            }
+        } finally {
+            status.writeText(before)
+            project.writeText(projectBefore)
+            // Hand the shared session back to its shell for the other tests.
+            tmux("send-keys", "-t", "=nt-term-a-1:", "C-c")
+            val end = System.currentTimeMillis() + 5_000
+            while (!Pane.isShell(paneOwner()) && System.currentTimeMillis() < end) Thread.sleep(100)
+        }
+    }
+
+    @Test
+    fun `a pane that cannot be read is unknown, never a shell`() = runBlocking<Unit> {
+        connect().use { conn ->
+            // No such session, a node of the desktop's SSH projects (its pane is on another host), an id
+            // no tmux target can be built from, and shell text (it becomes a session name that does not
+            // exist): all null, none of them a shell.
+            assertNull(conn.paneCommand("term-z-9"))
+            conn.rememberRemoteNodes(conn.listProjects())
+            assertNull(conn.paneCommand("term-b-2"))
+            assertNull(conn.paneCommand(""))
+            assertNull(conn.paneCommand("x; rm -rf ~"))
         }
     }
 

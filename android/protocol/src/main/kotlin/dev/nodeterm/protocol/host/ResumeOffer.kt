@@ -2,6 +2,7 @@ package dev.nodeterm.protocol.host
 
 import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.Launch
+import dev.nodeterm.protocol.model.Pane
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 
 /**
@@ -12,13 +13,23 @@ import dev.nodeterm.protocol.model.ProjectsSnapshot
  *  - [Kind.RESUME] (audit A15): the attach had to CREATE the tmux session, because the computer
  *    rebooted. The conversation is on disk and the pane is a new shell (in `$HOME` when the relay
  *    created it), so the line is built like the desktop's cold restore: `cd` into the node's folder,
- *    the node's managed Claude account, the permission mode ([Launch.resumeLine]).
+ *    the node's managed Claude account, and for Claude the permission mode ([Launch.resumeLine]).
  *  - [Kind.WAKE] (audit A76): the session is Sleeping. Eco (or a shallow "Pause session") exited the
  *    CLI and left the pane's shell behind. That shell already sits in the node's folder, and its tmux
- *    env already carries the account's CLAUDE_CONFIG_DIR / CODEX_HOME, so the line is what the
- *    desktop's own wake types: the bare resume plus the permission mode ([Launch.wakeLine]), after a
- *    kill-line so a half-typed line left at that prompt is not spliced into it. A `cd` or an account
- *    prefix could only be wrong there: the pane's shell and env are the authority, not project.json.
+ *    env already carries the account's CLAUDE_CONFIG_DIR / CODEX_HOME, so the line is the desktop's
+ *    own wake line: the bare resume, plus the permission mode for Claude only ([Launch.wakeLine]; the
+ *    desktop also adds each other agent's own approval flag, which the phone cannot build, so those
+ *    wake in their CLI's default policy: docs/android.md "Known gaps"). It is typed after a kill-line
+ *    so a half-typed line left at that prompt is not spliced into it. A `cd` or an account prefix
+ *    could only be wrong there: the pane's shell and env are the authority, not project.json.
+ *
+ * A wake is offered only while a SHELL owns the pane ([Pane.isShell] of the pane's foreground
+ * command, read over SSH right before), the gate the desktop's own wake keeps. The mirror's
+ * `hibernated` flag alone is not enough, because it can outlive the sleep. A desktop older than the
+ * A76 review dropped its own copy on a resumed CLI's first live hook event without telling the
+ * mirror (and codex reports its start only that way), so a CLI started outside the desktop's own
+ * wake, this phone's included, stayed Sleeping there. With the desktop app not running, nothing
+ * hears the resumed CLI at all. A running CLI would take the wake line as a prompt.
  *
  * A wake is offered over DIRECT SSH only. A relay attach tells the desktop that a phone opened the
  * node (host-service `remoteViewer.attached` → `agent:wake`), and the desktop wakes it itself, after
@@ -70,19 +81,31 @@ data class ResumeOffer(val kind: Kind, val agent: Agent, val command: String, va
         }
 
     /**
-     * Re-asked when the user taps the offer, against the snapshot at that moment (the same rule as
-     * the Inbox quick actions: act only on what is still true). A wake is withdrawn once the node is
-     * no longer Sleeping: the desktop resumed it meanwhile, and a resume line typed now would land
-     * in that CLI's composer as a prompt.
+     * Re-asked when the user taps the offer, against the snapshot at that moment and the pane's
+     * foreground command read just then ([paneCommand]; the same rule as the Inbox quick actions:
+     * act only on what is still true). A wake is withdrawn once the node is no longer Sleeping, or
+     * once anything but a shell owns the pane: a CLI started there meanwhile (the desktop woke it, or
+     * someone typed the resume) would take the line as a prompt. An unread pane (null) withdraws it.
      */
-    fun stillOffered(current: ProjectsSnapshot, nodeId: String): Boolean = when (kind) {
+    fun stillOffered(current: ProjectsSnapshot, nodeId: String, paneCommand: String? = null): Boolean = when (kind) {
         Kind.RESUME -> true
-        Kind.WAKE -> current.statusOf(nodeId)?.hibernated == true
+        Kind.WAKE -> current.statusOf(nodeId)?.hibernated == true && Pane.isShell(paneCommand)
     }
 
     companion object {
         /** `KILL_LINE` (src/shared/shell-kill-line.ts): Ctrl-U, the POSIX shells' line discard. */
         const val KILL_LINE = "\u0015"
+
+        /** Shown when a tapped wake is withdrawn ([stillOffered]): nothing was typed. */
+        const val WITHDRAWN = "This session is no longer sleeping on the computer, so nothing was typed."
+
+        /**
+         * Whether [afterAttach] could offer a wake for this attach, i.e. whether the caller must read
+         * the pane's foreground command ([HostConnection.paneCommand]) to pass it in. Only then: the
+         * read is one more command over SSH.
+         */
+        fun wantsPane(fresh: Boolean, transport: TransportKind, snapshot: ProjectsSnapshot, nodeId: String): Boolean =
+            !fresh && transport == TransportKind.SSH && snapshot.statusOf(nodeId)?.hibernated == true
 
         /**
          * The offer after an attach of [nodeId] over [transport], or null. [fresh] is the attach's
@@ -91,21 +114,24 @@ data class ResumeOffer(val kind: Kind, val agent: Agent, val command: String, va
          * [Kind.RESUME] survives a warm reattach while the computer builds exactly that offer again
          * for a cold pane (same line, and no hook event from the node since, [statusAt]); otherwise
          * it is dropped. A fresh reattach is a new cold pane and gets the line built now.
+         * [paneCommand] is the pane's foreground command, read after this attach when [wantsPane]
+         * said so; a wake needs it to name a shell, and omitting it (null: unread) offers no wake.
          */
         fun afterAttach(
             fresh: Boolean,
             transport: TransportKind,
             snapshot: ProjectsSnapshot,
             nodeId: String,
-            carried: ResumeOffer? = null
+            carried: ResumeOffer? = null,
+            paneCommand: String? = null
         ): ResumeOffer? {
             // The pane is still the cold one the earlier attach created, so the cold line, and it
             // wins over a Sleeping flag as it did then.
-            if (!fresh && carried?.kind == Kind.RESUME) return build(cold = true, transport, snapshot, nodeId).takeIf { it == carried }
-            return build(fresh, transport, snapshot, nodeId)
+            if (!fresh && carried?.kind == Kind.RESUME) return build(cold = true, transport, snapshot, nodeId, null).takeIf { it == carried }
+            return build(fresh, transport, snapshot, nodeId, paneCommand)
         }
 
-        private fun build(cold: Boolean, transport: TransportKind, snapshot: ProjectsSnapshot, nodeId: String): ResumeOffer? {
+        private fun build(cold: Boolean, transport: TransportKind, snapshot: ProjectsSnapshot, nodeId: String, paneCommand: String?): ResumeOffer? {
             val found = snapshot.findNode(nodeId)
             val project = found?.first
             val node = found?.second
@@ -119,7 +145,8 @@ data class ResumeOffer(val kind: Kind, val agent: Agent, val command: String, va
                 // with the old tmux session, so the new one needs the full cold-restore line.
                 cold -> Launch.resumeLine(agent, sid, settings, node?.accountId, project?.absoluteCwdOf(node), project?.defaultPermissionMode)
                     ?.let { ResumeOffer(Kind.RESUME, agent, it, at) }
-                status?.hibernated == true && transport == TransportKind.SSH ->
+                // Sleeping by the mirror AND a shell in the pane: the flag can outlive the sleep.
+                status?.hibernated == true && transport == TransportKind.SSH && Pane.isShell(paneCommand) ->
                     Launch.wakeLine(agent, sid, settings, project?.defaultPermissionMode)?.let { ResumeOffer(Kind.WAKE, agent, it, at) }
                 else -> null
             }

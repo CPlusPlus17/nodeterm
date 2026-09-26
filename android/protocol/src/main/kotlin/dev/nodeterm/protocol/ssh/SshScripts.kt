@@ -131,6 +131,21 @@ object SshScripts {
     }
 
     /**
+     * What owns the node's pane: tmux's `#{pane_current_command}`, the fact the desktop's wake reads
+     * (`PtyManager.paneCommand`) before it types a resume line. Prints nothing when there is no tmux
+     * or no such session.
+     */
+    fun paneCommand(nodeId: String): String {
+        // A PANE target, like [sendKeys]: the exact-session form for a pane command is `=name:`.
+        val pane = q("=" + target(nodeId) + ":")
+        return """
+            $PRELUDE
+            [ -n "${'$'}NT_TMUX" ] || exit 127
+            "${'$'}NT_TMUX" -L ${TmuxNames.SOCKET} display-message -p -t $pane '#{pane_current_command}'
+        """.trimIndent()
+    }
+
+    /**
      * Type into a pane. `-l --` so text is literal and a leading `-` is never an option (the
      * leading-dash hazard documented in tmux-naming.ts). A lone ESC is sent as the `Escape` key.
      */

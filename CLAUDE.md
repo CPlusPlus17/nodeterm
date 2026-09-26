@@ -824,7 +824,10 @@ Lifecycle, by intent:
   (`dismissed: true`); clearing it would let Eco `/exit` a CLI whose cron wakeup lives in that
   process. (2) **Fire-time re-asks**: still-offscreen, remote, eligibility — a plan-time verdict
   is stale by seconds. (3) `hibernated` **self-heals** on live hook states + SessionStart (never
-  on `done` — a late Stop POST must not undo a just-performed hibernate); cold restore (`fresh`)
+  on `done` — a late Stop POST must not undo a just-performed hibernate), and so does the
+  agent-status mirror the phone reads SLEEPING (and offers a wake) from: the renderer reports its
+  clear, and the mirror applies the same rule to the hook events it records, renderer or not (a
+  codex SessionStart arrives as `working`, never as a session start); cold restore (`fresh`)
   clears `hibernated` UNCONDITIONALLY and normally lets auto-resume own the node — **`paused` (see
   below) is what makes that auto-resume itself conditional**, the one deliberate exception: the
   flag it gates is still cleared, only the relaunch is skipped. (4) **Ordering with offscreen

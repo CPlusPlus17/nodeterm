@@ -105,6 +105,14 @@ interface HostConnection : Closeable {
     /** Type raw keys into a node's pane (quick approve / answer fallback). */
     suspend fun sendKeys(nodeId: String, keys: String)
 
+    /**
+     * What owns [nodeId]'s pane right now (tmux `#{pane_current_command}`: a shell, or the CLI
+     * running in it), or null when it cannot be read. Never throws for a failed read: null is
+     * "unknown", and every caller treats unknown as "not a shell". The relay serves no such verb;
+     * nothing asks it there, since through the relay the desktop does its own wake ([ResumeOffer]).
+     */
+    suspend fun paneCommand(nodeId: String): String? = null
+
     suspend fun git(verb: GitVerb, cwd: String, args: Map<String, JsonElement> = emptyMap()): JsonElement?
 
     /** Fires when the host signals a change worth a re-list (a canvas push, a reconnect). */

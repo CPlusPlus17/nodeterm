@@ -603,6 +603,16 @@ export function createAgentStatusSession(
         if (alive && prev.hibernated) {
           next.hibernated = undefined
           next.hibernatedContext = undefined // goes with the flag, always
+          // Reported like every other change of the flag (see `setHibernated`): the agent-status
+          // mirror only carries it, and the phone reads SLEEPING — and offers a wake line — off
+          // that mirror. Unreported, a CLI resumed by anything but our own wake closure (the
+          // phone's wake over SSH, a hand-typed resume) stayed SLEEPING there for good: a codex
+          // SessionStart arrives as `working`, never as the session start Canvas also clears on.
+          try {
+            window.nodeTerminal?.reportHibernated?.(id, false)
+          } catch {
+            /* the mirror is a side-channel; a failed report must never break the store */
+          }
         }
         // Same self-heal, same reasoning: a live hook event is proof the CLI is running, whatever
         // brought it back (our own resume, or the user typing the launch line by hand) — a standing

@@ -79,7 +79,8 @@ object Launch {
 
     /**
      * The resume line for a cold attach, built like the desktop's cold restore (audit A15): in the
-     * node's own directory, under the node's managed Claude account, with the permission mode. A
+     * node's own directory, under the node's managed Claude account, with the permission mode (for
+     * Claude only, as in [launchCommand]). A
      * bare `claude --resume <id>` typed into a relay-created pane in `$HOME`, under the default
      * config dir, finds no transcript for a managed account (and, by the transcript path's encoded
      * cwd, likely none at all). Null when the agent or id cannot be resumed.
@@ -94,11 +95,13 @@ object Launch {
     ): String? = resumeCommand(agent, sessionId)?.let { compose(agent, it, settings, accountId, cwd, projectMode) }
 
     /**
-     * The line that wakes a Sleeping (Eco-hibernated) session, as the desktop's own wake types it
-     * (TerminalNode's wake closure: the resume with the permission mode re-resolved, audit A76). It
-     * carries no `cd` and no account: the pane's shell is the one the CLI exited back to, so it already
-     * sits in the node's directory and its tmux env already names the account's config dir. Null
-     * when the agent or id cannot be resumed.
+     * The line that wakes a Sleeping (Eco-hibernated) session, after the desktop's own wake
+     * (TerminalNode's wake closure: the resume with the permission mode re-resolved, audit A76). Only
+     * CLAUDE gets that mode, as in [launchCommand]: the desktop also appends each other agent's own
+     * approval flag, which the phone does not build, so they wake bare, in their CLI's default
+     * policy. It carries no `cd` and no account: the pane's shell is the one the CLI exited back to,
+     * so it already sits in the node's directory and its tmux env already names the account's config
+     * dir. Null when the agent or id cannot be resumed.
      */
     fun wakeLine(
         agent: Agent,

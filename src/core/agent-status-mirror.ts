@@ -138,6 +138,12 @@ export interface MirrorEntry {
    * render SLEEPING instead of an unexplained idle shell (`setNodeHibernated`). Present = true,
    * absent = not hibernated — like `restored`/`idleInferred`, so old files keep their shape.
    *
+   * The one thing the mirror decides for itself is the renderer's own self-heal: a live state
+   * (working/blocked/waiting) or a session START recorded for the node drops the flag
+   * (`reduceEffectiveEntry`). The phone offers to type a wake line off this flag, so a stale one is
+   * not cosmetic, and the mirror hears every hook event even when no renderer does (a Server
+   * Edition with no browser tab, a reloading window). A codex SessionStart arrives as `working`.
+   *
    * A hibernated entry is EXEMPT from the expiry sweep: hibernation is precisely "idle for hours",
    * so the 6 h staleness rule would erase the one durable fact this field exists to carry. The
    * renderer re-reports its persisted set at boot, and a wake (or `clearNode`) drops the flag.
@@ -543,6 +549,11 @@ function reduceEffectiveEntry(
     // it was. `restored` means "this state came off disk", not "we have heard something since
     // boot", and gate 2 will read it as the former.
     delete next.restored
+    // A LIVE state is the CLI reporting from inside the pane, so "its CLI was exited" (Eco's
+    // `hibernated`) no longer holds — the renderer's own self-heal (`agentStatus.setState`),
+    // applied here too. Never on `done` (a late Stop must not undo a hibernation just performed)
+    // and never on a stateless commit (the /exit's own SessionEnd lands as one).
+    if (state === 'working' || state === 'blocked' || state === 'waiting') delete next.hibernated
   }
   // Unrelated tool hooks (including untagged child hooks) are not answers. Keep both
   // the state and its original evidence/identity until a correlated result or explicit reset.
@@ -640,6 +651,9 @@ function reduceEffectiveEntry(
     // and is what makes a refusal retryable.
     commitState(undefined, false)
     next.awaitingInput = undefined
+    // A START is a CLI launching in that pane (Canvas's session-start clear, applied here too);
+    // an END is what the hibernating /exit itself fires, so it must leave the flag alone.
+    if (ev.sessionPhase === 'start') delete next.hibernated
     // The boundary proves nothing about a state (and leaves `verifiedAt` alone), but a VERIFIED
     // start arms the idle rescue above.
     if (ev.sessionPhase === 'start' && ev.verified === true && ev.sessionId) {
@@ -1967,7 +1981,8 @@ export function setNodeSessionName(nodeId: string, name: string): boolean {
 /**
  * Record (or clear) a node's Eco hibernation flag — the `agent:hibernated` cast's only writer.
  * The renderer owns the flag; this is a mirror of it, like `terminalFocused` in main (see
- * MirrorEntry.hibernated). Unlike `setNodeSessionName`, an UNKNOWN node id creates a minimal
+ * MirrorEntry.hibernated, which also names the live-state self-heal `reduceEffectiveEntry`
+ * applies on its own). Unlike `setNodeSessionName`, an UNKNOWN node id creates a minimal
  * entry: a hibernated session is typically one the mirror has expired (hibernation is hours of
  * idleness) or one reported at boot before any hook event of this run — exactly when the flag
  * matters most. Clearing an unknown id stays a no-op.
