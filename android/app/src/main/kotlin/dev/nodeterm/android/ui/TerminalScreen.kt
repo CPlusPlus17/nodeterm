@@ -129,6 +129,15 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                         }
                     }
                 }
+                controller.notice?.let { msg ->
+                    Row(
+                        Modifier.align(Alignment.TopCenter).fillMaxWidth().background(NtColors.panel2).padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(msg, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { controller.notice = null }) { Text("OK") }
+                    }
+                }
                 controller.sizedElsewhere?.let { (c, r) ->
                     Row(
                         Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(NtColors.panel2).padding(horizontal = 12.dp, vertical = 4.dp),

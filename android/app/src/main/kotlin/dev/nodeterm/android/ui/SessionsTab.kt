@@ -294,11 +294,17 @@ private fun SessionRow(node: NodeInfo, snapshot: ProjectsSnapshot, onClick: () -
 /** New session: a project on THIS computer, an agent (or a plain shell), and for Claude an account. */
 @Composable
 fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate: (LaunchRequest) -> Unit) {
-    val projects = snapshot.openProjects().filter { it.sshTarget == null }
+    // Only projects the desktop can register a node in: on this computer (not an SSH project) AND
+    // with a folder — it refuses cwd-less (inline) canvases, which would orphan the session (A14).
+    val projects = snapshot.openProjects().filter { it.sshTarget == null && it.cwd != null }
     var projectId by remember { mutableStateOf(projects.firstOrNull()?.id) }
     var agent by remember { mutableStateOf<Agent?>(Agent.CLAUDE) }
-    val accounts = snapshot.status?.settings?.claudeAccounts.orEmpty()
-    var accountId by remember { mutableStateOf<String?>(null) }
+    val settings = snapshot.status?.settings
+    val accounts = settings?.claudeAccounts.orEmpty()
+    // The project's own default account, when this host still has it (A16).
+    var accountId by remember(projectId) {
+        mutableStateOf(Launch.defaultAccount(settings, projects.firstOrNull { it.id == projectId }))
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -335,7 +341,7 @@ fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate
                 val p = projects.first { it.id == projectId }
                 val a = agent
                 val acct = if (a == Agent.CLAUDE) accountId else null
-                val cmd = if (a != null) Launch.launchCommand(a, snapshot.status?.settings, acct, p.cwd)
+                val cmd = if (a != null) Launch.launchCommand(a, settings, acct, p.cwd, p.defaultPermissionMode)
                 else p.cwd?.let { if (Regex("^/[^'\\u0000-\\u001f]*$").matches(it)) "cd '$it'" else null }
                 onCreate(
                     LaunchRequest(

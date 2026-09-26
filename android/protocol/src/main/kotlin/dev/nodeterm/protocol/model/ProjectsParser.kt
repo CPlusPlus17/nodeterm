@@ -57,7 +57,9 @@ object ProjectsParser {
             sshTarget = sshTarget,
             closed = p.b("closed") == true,
             nodes = p.objects("nodes").mapNotNull(::parseNode),
-            board = p.o("kanban")?.let(::parseBoard)
+            board = p.o("kanban")?.let(::parseBoard),
+            defaultPermissionMode = p.s("defaultPermissionMode"),
+            defaultAccountId = p.s("defaultAccountId")
         )
     }
 

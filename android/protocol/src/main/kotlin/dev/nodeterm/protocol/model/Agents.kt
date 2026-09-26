@@ -40,23 +40,76 @@ object Launch {
     }
 
     /**
+     * The permission mode a Claude session starts in on this host: the project's own override when
+     * it names a valid mode, else the global setting — the desktop's `resolvePermissionMode(project,
+     * settings)` (audit A16). Both values come from hand-editable files, so both are re-validated.
+     * No mirror settings at all = `manual` (no flag): the phone never invents one.
+     */
+    fun permissionMode(settings: MirrorSettings?, projectMode: String? = null): String =
+        projectMode?.takeIf { it in PERMISSION_MODES }
+            ?: settings?.claudePermissionMode?.takeIf { it in PERMISSION_MODES }
+            ?: "manual"
+
+    /**
+     * The managed Claude account a new session in [project] starts under by default: the project's
+     * default, but only when this host still has that account (a stale id falls back to System,
+     * exactly as the desktop validates an id before stamping it on a node).
+     */
+    fun defaultAccount(settings: MirrorSettings?, project: ProjectInfo?): String? {
+        val id = project?.defaultAccountId ?: return null
+        return id.takeIf { settings?.claudeAccounts?.any { it.id == id } == true }
+    }
+
+    /**
      * A first launch of [agent] on a host whose mirror advertised [settings]. Only CLAUDE gets a
      * permission-mode flag, and only as the desktop would emit it: `manual` = no flag, `auto` only
      * when the HOST's claude supports it (`autoSupported` answers for claude alone), and an unknown
      * value = no flag (the value came from a file; re-validated here like `permissionModeFlag`).
-     * Every other agent launches bare — its own default — because the phone does not have the
-     * per-agent approval table's host facts (codex's vocabulary moved between releases, #785).
+     * [projectMode] is the project's own override (see [permissionMode]). Every other agent
+     * launches bare — its own default — because the phone does not have the per-agent approval
+     * table's host facts (codex's vocabulary moved between releases, #785).
      */
-    fun launchCommand(agent: Agent, settings: MirrorSettings?, accountId: String?, cwd: String?): String {
+    fun launchCommand(
+        agent: Agent,
+        settings: MirrorSettings?,
+        accountId: String?,
+        cwd: String?,
+        projectMode: String? = null
+    ): String = compose(agent, agent.launchCmd, settings, accountId, cwd, projectMode)
+
+    /**
+     * The resume line for a cold attach, built like the desktop's cold restore (audit A15): in the
+     * node's own directory, under the node's managed Claude account, with the permission mode. A
+     * bare `claude --resume <id>` typed into a relay-created pane in `$HOME`, under the default
+     * config dir, finds no transcript for a managed account (and, by the transcript path's encoded
+     * cwd, likely none at all). Null when the agent or id cannot be resumed.
+     */
+    fun resumeLine(
+        agent: Agent,
+        sessionId: String,
+        settings: MirrorSettings?,
+        accountId: String?,
+        cwd: String?,
+        projectMode: String? = null
+    ): String? = resumeCommand(agent, sessionId)?.let { compose(agent, it, settings, accountId, cwd, projectMode) }
+
+    private fun compose(
+        agent: Agent,
+        command: String,
+        settings: MirrorSettings?,
+        accountId: String?,
+        cwd: String?,
+        projectMode: String?
+    ): String {
         val parts = ArrayList<String>()
         if (!cwd.isNullOrBlank() && SAFE_DIR.matches(cwd)) parts += "cd '${cwd}' &&"
         val account = accountId?.let { id -> settings?.claudeAccounts?.firstOrNull { it.id == id } }
         if (agent == Agent.CLAUDE && account != null && SAFE_DIR.matches(account.dir)) {
             parts += "CLAUDE_CONFIG_DIR='${account.dir}'"
         }
-        parts += agent.launchCmd
+        parts += command
         if (agent == Agent.CLAUDE) {
-            val mode = settings?.claudePermissionMode?.takeIf { it in PERMISSION_MODES } ?: "manual"
+            val mode = permissionMode(settings, projectMode)
             val emit = when (mode) {
                 "manual" -> false
                 "auto" -> settings?.autoSupported == true

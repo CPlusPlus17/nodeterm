@@ -4,6 +4,9 @@ import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.Launch
 import dev.nodeterm.protocol.model.ManagedAccount
 import dev.nodeterm.protocol.model.MirrorSettings
+import dev.nodeterm.protocol.model.NodeInfo
+import dev.nodeterm.protocol.model.NodeKind
+import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.ProjectsParser
 import dev.nodeterm.protocol.model.SessionBucket
@@ -111,5 +114,49 @@ class ModelTest {
         assertEquals("codex", Launch.launchCommand(Agent.CODEX, s.copy(claudePermissionMode = "plan"), "a1", null))
         assertEquals("gemini", Launch.launchCommand(Agent.GEMINI, s, null, "/it's/unsafe"), "a quote-bearing cwd is dropped, not escaped")
         assertTrue(Regex("^term-[a-z0-9]+-[a-z0-9]{1,16}$").matches(Launch.newNodeId()))
+    }
+
+    private val acctSettings = MirrorSettings("acceptEdits", true, listOf(ManagedAccount("acct-1", "/Users/me/Library/Application Support/node-terminal/claude-accounts/acct-1")), emptyList())
+
+    @Test
+    fun `the project's own permission mode wins over the global one, both re-validated (A16)`() {
+        assertEquals("plan", Launch.permissionMode(acctSettings, "plan"))
+        assertEquals("acceptEdits", Launch.permissionMode(acctSettings, null))
+        assertEquals("acceptEdits", Launch.permissionMode(acctSettings, "constructor"), "an unknown project value falls through")
+        assertEquals("manual", Launch.permissionMode(null, null))
+        assertEquals("claude --permission-mode plan", Launch.launchCommand(Agent.CLAUDE, acctSettings, null, null, "plan"))
+        // manual in the project = the bare command, even when the global is looser.
+        assertEquals("claude", Launch.launchCommand(Agent.CLAUDE, acctSettings, null, null, "manual"))
+        assertEquals("codex", Launch.launchCommand(Agent.CODEX, acctSettings, null, null, "plan"), "only claude gets the flag")
+    }
+
+    @Test
+    fun `the project's default account is preselected only while the host still has it (A16)`() {
+        val p = ProjectInfo("p", "P", null, "/repo", null, false, emptyList(), null, defaultAccountId = "acct-1")
+        assertEquals("acct-1", Launch.defaultAccount(acctSettings, p))
+        assertNull(Launch.defaultAccount(acctSettings, p.copy(defaultAccountId = "gone")))
+        assertNull(Launch.defaultAccount(null, p))
+    }
+
+    @Test
+    fun `the resume line runs where the desktop's cold restore would (A15)`() {
+        assertEquals(
+            "cd '/repo/sub' && CLAUDE_CONFIG_DIR='/Users/me/Library/Application Support/node-terminal/claude-accounts/acct-1' " +
+                "claude --resume abc-1 --permission-mode plan",
+            Launch.resumeLine(Agent.CLAUDE, "abc-1", acctSettings, "acct-1", "/repo/sub", "plan")
+        )
+        assertEquals("cd '/repo' && codex resume abc", Launch.resumeLine(Agent.CODEX, "abc", acctSettings, "acct-1", "/repo"))
+        assertNull(Launch.resumeLine(Agent.CLAUDE, "abc; rm -rf ~", acctSettings, null, "/repo"))
+    }
+
+    @Test
+    fun `portable node cwds resolve against the project folder`() {
+        val p = ProjectInfo("p", "P", null, "/repo/", null, false, emptyList(), null)
+        fun n(cwd: String?) = NodeInfo("n", NodeKind.TERMINAL, "t", null, null, null, cwd, null, null, null, null)
+        assertEquals("/repo/sub", p.absoluteCwdOf(n("./sub")))
+        assertEquals("/repo", p.absoluteCwdOf(n(".")))
+        assertEquals("/abs", p.absoluteCwdOf(n("/abs")))
+        assertEquals("/repo/", p.absoluteCwdOf(n(null)))
+        assertNull(p.copy(cwd = null).absoluteCwdOf(n("./sub")))
     }
 }

@@ -38,10 +38,30 @@ data class ProjectInfo(
     val closed: Boolean,
     val nodes: List<NodeInfo>,
     /** The persisted board, or null when the project has never had one (the desktop's lazy default). */
-    val board: KanbanBoard?
+    val board: KanbanBoard?,
+    /** The project's own permission mode (project.json `defaultPermissionMode`), overriding the
+     *  global one exactly as the desktop's `resolvePermissionMode` does. Unvalidated here. */
+    val defaultPermissionMode: String? = null,
+    /** The machine-local default Claude account for new sessions in this project. */
+    val defaultAccountId: String? = null
 ) {
     /** Session nodes — what the phone lists and can attach to. */
     val sessions: List<NodeInfo> get() = nodes.filter { it.kind == NodeKind.TERMINAL }
+
+    /**
+     * Where [node] runs, as an absolute path: its own cwd, resolved against the project folder when
+     * it is stored portable (`./sub`, the git-shared form), else the project folder. Null when
+     * neither is absolute.
+     */
+    fun absoluteCwdOf(node: NodeInfo?): String? {
+        val own = node?.cwd
+        val root = cwd?.takeIf { it.startsWith("/") }
+        return when {
+            own != null && own.startsWith("/") -> own
+            own != null && (own == "." || own.startsWith("./")) -> root?.let { it.trimEnd('/') + own.removePrefix(".") }
+            else -> root
+        }
+    }
 }
 
 enum class NodeKind(val wire: String) {

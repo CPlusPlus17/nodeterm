@@ -69,7 +69,7 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
 
     val needsYou = snapshot.status?.inbox?.events?.count { it.actionable } ?: 0
     val canCreate = (state as? ConnState.Connected)?.kind == TransportKind.RELAY &&
-        snapshot.projects.any { !it.closed && it.sshTarget == null }
+        snapshot.projects.any { !it.closed && it.sshTarget == null && it.cwd != null }
 
     Scaffold(
         topBar = {

@@ -70,6 +70,9 @@ class TerminalController(
         private set
     var ctrlArmed by mutableStateOf(false)
 
+    /** A one-line message over the terminal (dismissable), e.g. a session the desktop refused to add. */
+    var notice by mutableStateOf<String?>(null)
+
     private val main = Handler(Looper.getMainLooper())
     private var webView: WebView? = null
     private var pageReady = false
@@ -297,9 +300,12 @@ class TerminalController(
             delay(900)
             launch.command?.let { s.write(it + "\r") }
             if (conn.capabilities.registerNode) {
-                runCatching {
+                // A refusal is an ANSWER (host-service: the session stays open, just unregistered):
+                // say so, instead of leaving a session no canvas shows (audit A14).
+                val registered = runCatching {
                     conn.registerNode(launch.projectId, NewNode(nodeId, launch.title, launch.agentId, launch.accountId))
-                }
+                }.getOrDefault(false)
+                if (!registered) main.post { notice = UNREGISTERED_NOTICE }
             }
             session.refreshNow()
             return
@@ -310,10 +316,14 @@ class TerminalController(
         if (s.fresh) {
             // The computer's tmux session was gone (a reboot): the conversation is on disk, not in the
             // pane. Offer the agent's own resume — never type it unasked into a pane we cannot see.
+            // Built like the desktop's cold restore: the node's directory, its managed account, the
+            // project's permission mode (audit A15/A16) — a relay-created pane starts in $HOME.
             val agent = Agent.of(node?.agentId ?: status?.agentId)
             val sid = status?.sessionId ?: node?.agentSessionId
+            val project = snap.findNode(nodeId)?.first
             if (agent != null && sid != null) {
-                Launch.resumeCommand(agent, sid)?.let { cmd -> main.post { resumeOffer = agent.label to cmd } }
+                Launch.resumeLine(agent, sid, snap.status?.settings, node?.accountId, project?.absoluteCwdOf(node), project?.defaultPermissionMode)
+                    ?.let { cmd -> main.post { resumeOffer = agent.label to cmd } }
             }
         }
         // Reading a finished session on the phone is a READ: tell the computer (unread clears there,
@@ -388,6 +398,9 @@ class TerminalController(
     }
 
     companion object {
+        const val UNREGISTERED_NOTICE =
+            "The computer didn't add this session to the project, so it won't appear on the canvas. It keeps running; " +
+                "end it here when you are done, or find it in nodeterm's session list (the RAM pill) on the computer."
         private const val CHUNK = 192 * 1024
         private fun b64(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.NO_WRAP)
     }
