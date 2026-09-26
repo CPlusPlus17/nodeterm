@@ -12,6 +12,11 @@ import java.util.concurrent.TimeUnit
  * Runs `src/test/interop/host-fixture.ts` — the DESKTOP's own relay host / pairing code — in a node
  * child process. Skips (never fails) when this checkout has no node or no `npm ci` yet, so a
  * JVM-only contributor still gets a green protocol build; CI installs both and runs everything.
+ *
+ * The bundle aliases `electron` to `src/test/interop/electron-stub.ts` (audit A60): the real package's
+ * `require` downloads the Electron binary when it is missing, as it is after any fresh `npm ci` (the
+ * package has no install script), and that download ran inside the 20 s ready wait.
+ * [InteropHarnessTest] pins the alias and the kill of a process whose ready wait failed.
  */
 class InteropHarness private constructor(private val process: Process) : AutoCloseable {
     private val lines = LinkedBlockingQueue<JsonObject>()
@@ -54,14 +59,20 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
         await(timeoutMs) { it["event"]?.toString() == "\"$name\"" }
 
     override fun close() {
+        // Taken before node exits: after that its children are re-parented and unreachable from here.
+        val descendants = process.descendants().toList()
         process.destroy()
         if (!process.waitFor(3, TimeUnit.SECONDS)) process.destroyForcibly()
+        descendants.forEach { it.destroy() }
     }
 
     companion object {
         val repoRoot: File = File(System.getProperty("nodeterm.repoRoot") ?: "../..").canonicalFile
 
-        private val bundle: File by lazy {
+        /** Where the fixture's `electron` import resolves to instead of the npm package. */
+        const val ELECTRON_STUB = "android/protocol/src/test/interop/electron-stub.ts"
+
+        internal val bundle: File by lazy {
             val out = File(repoRoot, "android/protocol/build/interop/host-fixture.cjs")
             val esbuild = File(repoRoot, "node_modules/.bin/esbuild")
             val proc = ProcessBuilder(
@@ -69,7 +80,7 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
                 "android/protocol/src/test/interop/host-fixture.ts",
                 "--bundle", "--platform=node", "--format=cjs",
                 "--outfile=${out.path}",
-                "--external:electron", "--external:ws",
+                "--alias:electron=./$ELECTRON_STUB", "--external:ws",
                 "--alias:@shared=./src/shared", "--alias:@renderer=./src/renderer",
                 "--log-level=warning"
             ).directory(repoRoot).redirectErrorStream(true).start()
@@ -78,19 +89,35 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
             out
         }
 
-        private fun available(): Boolean {
+        internal fun available(): Boolean {
             val node = runCatching { ProcessBuilder("node", "--version").start().waitFor() == 0 }.getOrDefault(false)
             return node && File(repoRoot, "node_modules/.bin/esbuild").exists() &&
                 File(repoRoot, "node_modules/ws").exists() && File(repoRoot, "node_modules/tweetnacl").exists()
         }
 
-        fun start(mode: String, env: Map<String, String> = emptyMap()): InteropHarness {
+        /**
+         * Starts the fixture in [mode] and waits for its ready line. When that wait fails (a timeout, or
+         * a `fatal` event), the process is killed before the error propagates: the caller never gets a
+         * handle, so nothing else would ever close it. [onSpawn] is a test seam for exactly that check.
+         */
+        fun start(
+            mode: String,
+            env: Map<String, String> = emptyMap(),
+            readyTimeoutMs: Long = 20_000,
+            onSpawn: (Process) -> Unit = {}
+        ): InteropHarness {
             assumeTrue(available(), "node + repo node_modules (npm ci) are needed for interop tests")
             val pb = ProcessBuilder("node", bundle.path, mode).directory(repoRoot)
             pb.environment().putAll(env)
             val h = InteropHarness(pb.start())
-            h.startReader()
-            h.ready = h.await(20_000) { it["ready"] != null }
+            try {
+                onSpawn(h.process)
+                h.startReader()
+                h.ready = h.await(readyTimeoutMs) { it["ready"] != null }
+            } catch (t: Throwable) {
+                h.close()
+                throw t
+            }
             return h
         }
     }

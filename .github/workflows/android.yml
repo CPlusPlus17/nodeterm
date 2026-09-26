@@ -37,7 +37,11 @@ jobs:
           cache: 'npm'
 
       # The interop tests run the desktop's relay host / pairing code through esbuild + node. They
-      # need tweetnacl, ws and esbuild — not Electron or a rebuilt node-pty, hence no scripts.
+      # need tweetnacl, ws and esbuild, not a rebuilt node-pty, hence no scripts. They do not need
+      # Electron either: InteropHarness aliases `electron` to a stub
+      # (android/protocol/src/test/interop/electron-stub.ts), because the real package's first
+      # `require` downloads the ~110 MB Electron binary when it is not there yet, as on a fresh
+      # runner, inside the harness's 20 s ready wait (audit A60).
       - name: Install desktop dependencies (no scripts)
         run: npm ci --ignore-scripts
 

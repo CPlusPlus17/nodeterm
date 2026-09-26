@@ -7,10 +7,13 @@
 //                 serving a FAKE pty/kanban/inbox bridge that records what the phone asked for.
 //   mode "pair":  the desktop's real `createPairingService` (src/main/pairing-service.ts) with HOME
 //                 pointed at a temp dir by the caller, and a fake `/v1/relay/device` API.
+//   mode "never-ready": prints nothing and stays alive, so InteropHarnessTest can check that a
+//                 harness whose ready wait fails still kills the process.
 //
 // Protocol with the Kotlin test: line 1 on stdout is a JSON "ready" object; every later line is a
-// JSON event. Bundled by esbuild at test time (see InteropHarness.kt); `electron` and `ws` stay
-// external and resolve from the repo's node_modules.
+// JSON event. Bundled by esbuild at test time (see InteropHarness.kt); `ws` stays external and
+// resolves from the repo's node_modules, and `electron` is aliased to ./electron-stub.ts, so the
+// real package (whose first `require` downloads the Electron binary) is never loaded (audit A60).
 import http from 'http'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { initPlatform } from '../../../../../src/core/platform'
@@ -297,7 +300,11 @@ async function runPair(): Promise<void> {
 }
 
 const mode = process.argv[2]
-;(mode === 'pair' ? runPair() : runRelay()).catch((err) => {
-  emit({ event: 'fatal', message: String((err as Error)?.stack ?? err) })
-  process.exit(1)
-})
+if (mode === 'never-ready') {
+  setInterval(() => {}, 60_000)
+} else {
+  ;(mode === 'pair' ? runPair() : runRelay()).catch((err) => {
+    emit({ event: 'fatal', message: String((err as Error)?.stack ?? err) })
+    process.exit(1)
+  })
+}
