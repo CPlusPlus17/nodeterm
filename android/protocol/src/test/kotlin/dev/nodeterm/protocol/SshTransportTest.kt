@@ -33,7 +33,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
-import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
@@ -46,12 +45,15 @@ import kotlin.test.assertTrue
 
 /**
  * The direct-SSH transport end to end: a real SSH server (Apache MINA) running every command
- * through `/bin/sh` as the phone would get from sshd, against a fake HOME laid out like a desktop's
+ * through a shell as the phone would get from sshd, against a fake HOME laid out like a desktop's
  * (a v3 workspace index + project files + agent-status.json) and a REAL tmux — on a private
  * `TMUX_TMPDIR`, so no test ever touches a tmux server a developer is using (issue #629's rule).
  *
- * A pty-requesting exec runs under `script`, standing in for sshd's pty allocation (MINA's process
- * bridge has none of its own); that wrapper is harness, the scripts it runs are the product's.
+ * An exec without a pty runs as `/bin/sh -c`. A pty-requesting exec runs under `script`, standing in
+ * for sshd's pty allocation (MINA's process bridge has none of its own); that wrapper is harness, the
+ * scripts it runs are the product's. Linux's util-linux `script` (which runs the command through
+ * `$SHELL`) and macOS's BSD one take different arguments, and the macOS temp dir is too long for a
+ * tmux socket: [PtyScript] and [ShortTmuxRoot] handle both (audit A62).
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class SshTransportTest {
@@ -59,11 +61,11 @@ class SshTransportTest {
     private lateinit var home: File
     private lateinit var tmuxDir: File
     private lateinit var server: SshServer
+    private lateinit var ptyScript: PtyScript
     private val identity = SshIdentity.generate()
     private var port = 0
 
-    private fun tmuxAvailable() = runCatching { ProcessBuilder("tmux", "-V").start().waitFor() == 0 }.getOrDefault(false) &&
-        File("/usr/bin/script").exists()
+    private fun tmuxAvailable() = runCatching { ProcessBuilder("tmux", "-V").start().waitFor() == 0 }.getOrDefault(false)
 
     // No locale at all, like an sshd exec channel on a stock macOS host (audit A03): passing the JVM's
     // own LANG through is what hid that bug.
@@ -102,7 +104,7 @@ class SshTransportTest {
             val cols = env.env["COLUMNS"] ?: "80"
             val lines = env.env["LINES"] ?: "24"
             val pty = env.env.containsKey("TERM")
-            val argv = if (pty) listOf("script", "-qfec", "stty cols $cols rows $lines 2>/dev/null; $command", "/dev/null")
+            val argv = if (pty) ptyScript.argv("stty cols $cols rows $lines 2>/dev/null; $command")
             else listOf("/bin/sh", "-c", command)
             val pb = ProcessBuilder(argv).directory(home)
             pb.environment().clear()
@@ -123,9 +125,10 @@ class SshTransportTest {
             }.apply { isDaemon = true; start() }
             val outPump = pump(p.inputStream, output, false)
             val errPump = pump(p.errorStream, error, false)
-            // For a pty session, channel EOF must NOT become stdin EOF: util-linux `script` turns that
-            // into a ^D typed into the pty (measured), which ends the pane's shell — a harness artifact
-            // real sshd does not have (it closes the pty and the tmux client just detaches).
+            // For a pty session, channel EOF must NOT become stdin EOF: `script` turns that into a ^D
+            // typed into the pty (util-linux measured; FreeBSD's source does the same), which ends the
+            // pane's shell — a harness artifact real sshd does not have (it closes the pty and the tmux
+            // client just detaches).
             pump(input, p.outputStream, !pty)
             Thread {
                 val code = p.waitFor()
@@ -143,8 +146,12 @@ class SshTransportTest {
 
     @BeforeAll
     fun setUp() {
-        assumeTrue(tmuxAvailable(), "tmux + script are needed for the SSH transport tests")
-        root = Files.createTempDirectory("nt-ssh").toFile()
+        assumeTrue(tmuxAvailable(), "${PtyScript.SKIP_REASON}; no tmux on PATH")
+        val script = PtyScript.detect()
+        assumeTrue(script != null, "${PtyScript.SKIP_REASON}; `script` answered neither form")
+        ptyScript = script!!
+        // Short and resolved, so the tmux socket fits in sun_path on a Mac too (audit A62).
+        root = ShortTmuxRoot.create("nt-ssh", "tmux", "node-terminal")
         home = File(root, "home").apply { mkdirs() }
         tmuxDir = File(root, "tmux").apply { mkdirs() }
         server = SshServer.setUpDefaultServer()
@@ -582,7 +589,7 @@ class SshTransportTest {
     fun `the attach script itself refuses to create a missing session`() {
         // Belt and braces for the race where the session ends between the check and the attach.
         val (code, _) = run {
-            val pb = ProcessBuilder("script", "-qfec", SshScripts.attach("term-y-8"), "/dev/null").directory(home)
+            val pb = ProcessBuilder(ptyScript.argv(SshScripts.attach("term-y-8"))).directory(home)
             pb.environment().clear()
             pb.environment().putAll(childEnv())
             val p = pb.start()

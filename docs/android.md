@@ -107,9 +107,15 @@ unchanged.
   above 64 KiB or below zero before anything is allocated, a body with no length stops at 64 KiB,
   and the whole exchange ends at a 45 s deadline (or when the caller is cancelled) by closing the
   socket, so a server that trickles bytes cannot hold the pairing screen.
-- **SSH** — against Apache MINA sshd running every command through `/bin/sh`, with real tmux on a
+- **SSH** — against Apache MINA sshd running every command through a shell, with real tmux on a
   private `TMUX_TMPDIR`: v3 index resolution, attach with keystrokes both ways, cold-start
   detection, literal `send-keys` (a leading `-` is text), answer files, read-acks, host-key pinning.
+  A command without a pty runs as `/bin/sh -c <cmd>`. One that asks for a pty runs under `script(1)`
+  in place of sshd's pty: util-linux's `script -qfec <cmd> /dev/null` on Linux (which runs `<cmd>`
+  through `$SHELL`), BSD's `script -q /dev/null /bin/sh -c <cmd>` on macOS. They are told apart by
+  `script --version` and a probe (`SshTestHost.kt`); with neither, or without tmux, the class skips.
+  The temp root is short and resolved (`/tmp` first): under macOS's `/private/var/folders/…` the
+  socket path passed the 103-character `sun_path` limit (audit A62). Only the Linux leg has run.
   One tmux fact measured along the way: an exact-match **pane** target is `=name:`, not `=name`
   (tmux 3.4 answers "can't find pane").
 
