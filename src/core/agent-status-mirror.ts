@@ -37,6 +37,9 @@ export const DONE_HOLDOFF_MS = 3000
 export const EXPIRE_MS = 6 * 60 * 60_000
 // Coalesce bursty hook POSTs (a single turn fires many tool events) into one disk write.
 export const WRITE_DEBOUNCE_MS = 300
+/** The mirror's file name under userData. Read back by the `projects.list` blob
+ *  (core/projects-list-blob.ts) and, over SSH, by the phones themselves. */
+export const AGENT_STATUS_FILE = 'agent-status.json'
 
 export interface MirrorEntry {
   /** Tickets introduced concurrently with a picker, retained until reply or explicit reset. */
@@ -1484,7 +1487,7 @@ function loadPersisted(file: string): void {
  * field bug).
  */
 export function initAgentStatusMirror(filePath?: string): void {
-  targetFile = filePath ?? path.join(platform().userDataDir, 'agent-status.json')
+  targetFile = filePath ?? path.join(platform().userDataDir, AGENT_STATUS_FILE)
   loadPersisted(targetFile)
   startStaleSweep()
 }
@@ -1492,7 +1495,7 @@ export function initAgentStatusMirror(filePath?: string): void {
 function resolveFile(): string | null {
   if (targetFile) return targetFile
   try {
-    targetFile = path.join(platform().userDataDir, 'agent-status.json')
+    targetFile = path.join(platform().userDataDir, AGENT_STATUS_FILE)
     return targetFile
   } catch {
     return null

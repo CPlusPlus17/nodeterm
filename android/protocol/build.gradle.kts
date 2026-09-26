@@ -50,6 +50,13 @@ tasks.test {
     // workflow that runs R8 (R8RulesTest).
     // Declared so a change to one of them re-runs the tests instead of leaving them "up to date".
     inputs.dir("src/test/interop").withPathSensitivity(PathSensitivity.RELATIVE)
+    // The desktop code the interop fixture bundles (the same dirs as android.yml's path filter). Without
+    // them a desktop change, say to the projects.list assembly or the agent-status mirror the relay
+    // tests read (audit A64), left the tests "up to date" locally and was never run against.
+    for (dir in listOf("src/core", "src/shared", "src/main")) {
+        inputs.dir(rootDir.resolve("../../$dir")).withPathSensitivity(PathSensitivity.RELATIVE)
+    }
+    inputs.file(rootDir.resolve("../../tsconfig.json")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootDir.resolve("../app/src/main/assets/terminal")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootDir.resolve("../app/src/main/kotlin")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../app/proguard-rules.pro")).withPathSensitivity(PathSensitivity.RELATIVE)

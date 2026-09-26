@@ -5,6 +5,9 @@
 //                 frames preserving text/binary — all the real relay does) plus the desktop's
 //                 `connectHostSession` (src/main/remote/host-service.ts → relay-socket.ts host role)
 //                 serving a FAKE pty/kanban/inbox bridge that records what the phone asked for.
+//                 `projects.list` is NOT faked: the desktop's `buildProjectsListBlob` over a real
+//                 `WorkspaceStore` and a mirror file the real agent-status mirror wrote, all under
+//                 FIXTURE_USERDATA (see seedDesktopState; audit A64).
 //   mode "pair":  the desktop's real `createPairingService` (src/main/pairing-service.ts) with the
 //                 home dir pointed at a temp dir by the caller (HOME, and USERPROFILE for Windows, see
 //                 InteropHarness.scratchHomeEnv; refused unless `os.homedir()` is FIXTURE_HOME), and a
@@ -24,7 +27,7 @@ import http from 'http'
 import os from 'os'
 import path from 'path'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { initPlatform } from '../../../../../src/core/platform'
+import { initPlatform, platform } from '../../../../../src/core/platform'
 import { genKeyPair, publicKeyToB64 } from '../../../../../src/main/remote/e2ee'
 import {
   connectHostSession,
@@ -32,10 +35,27 @@ import {
   type HostSession
 } from '../../../../../src/main/remote/host-service'
 import { createHostNewSessions } from '../../../../../src/main/remote/host-new-sessions'
-import { mirrorClaudeAccount } from '../../../../../src/core/agent-status-mirror'
+import {
+  flush as flushMirror,
+  initAgentStatusMirror,
+  mirrorClaudeAccount,
+  recordAgentEvent,
+  recordRawToolEvent,
+  setMirrorSettingsProvider,
+  setNodeSessionName
+} from '../../../../../src/core/agent-status-mirror'
+import {
+  claudeAccountsSnapshot,
+  claudeConfigDirFor,
+  observedClaudeAccount,
+  registerClaudeAccountsSource
+} from '../../../../../src/core/claude-config-dir'
+import { buildProjectsListBlob } from '../../../../../src/core/projects-list-blob'
+import { WorkspaceStore } from '../../../../../src/core/workspace-store'
+import { normalizeFor } from '../../../../../src/shared/agents/normalize'
 import { createPairingService } from '../../../../../src/main/pairing-service'
 import type { DetachedSinks } from '../../../../../src/core/pty-manager'
-import { DEFAULT_SETTINGS } from '../../../../../src/shared/types'
+import { DEFAULT_SETTINGS, type ClaudeAccount, type Workspace } from '../../../../../src/shared/types'
 
 const emit = (obj: unknown): void => {
   process.stdout.write(JSON.stringify(obj) + '\n')
@@ -97,7 +117,87 @@ function startBroker(): Promise<number> {
 
 // ---- mode "relay" ----------------------------------------------------------------------------------
 
+/**
+ * What the phone lists (`projects.list`), produced by the desktop's own code (audit A64), under the
+ * caller's scratch userData (FIXTURE_USERDATA; the Kotlin test deletes it):
+ *  - the workspace: the real `WorkspaceStore` writes it as the desktop does (a v3 index plus the
+ *    folder's `.nodeterm/project.json`), and the blob serves the store's read-only `load()` of it;
+ *  - `agent-status.json`: the real mirror, fed the hook POSTs a Claude session makes, as both shells
+ *    feed it (the raw listener's `recordRawToolEvent`, then the normalized event with the hook
+ *    server's account label into `recordAgentEvent`), and flushed by its own writer;
+ *  - the mirror's settings block: the shells' provider body over one managed Claude account.
+ * Hand-written here: the workspace the renderer would hand the store, the hook payloads (with the
+ * `nodeterm_pending_id` the hook server merges in from its form field), the session name the
+ * name sweep would publish, and the tmux session list (there is no tmux).
+ */
+async function seedDesktopState(): Promise<WorkspaceStore> {
+  const userData = platform().userDataDir
+  const workspace: Workspace = {
+    version: 2,
+    activeProjectId: 'p1',
+    projects: [
+      {
+        id: 'p1',
+        name: 'Demo',
+        color: '#0a84ff',
+        cwd: path.join(userData, 'demo'),
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [
+          { id: 'term-abc-1', kind: 'terminal', title: 'Claude', color: '#d97757', agentId: 'claude', group: null, position: { x: 0, y: 0 }, size: { width: 1, height: 1 } },
+          { id: 'note-1', kind: 'sticky', title: 'Note', color: '#fff', group: null, text: 'hi', position: { x: 0, y: 0 }, size: { width: 1, height: 1 } }
+        ],
+        kanban: {
+          columns: [{ id: 'c1', title: 'To Do', color: '#0a84ff' }],
+          assignments: [{ nodeId: 'term-abc-1', columnId: 'c1' }],
+          labels: [{ id: 'l1', name: 'bug', color: 'red' }],
+          meta: [{ nodeId: 'term-abc-1', labels: ['l1'], priority: 'high' }]
+        }
+      }
+    ]
+  }
+  const store = new WorkspaceStore()
+  await store.save(workspace)
+
+  // A39/A75: one managed Claude account, registered the way both shells register settings.
+  const accounts: ClaudeAccount[] = [{ id: 'acct-1', label: 'Work', email: 'me@work.example', createdAt: 0 }]
+  registerClaudeAccountsSource(() => accounts)
+  setMirrorSettingsProvider(() => ({
+    claudePermissionMode: 'manual',
+    autoSupported: false,
+    claudeAccounts: claudeAccountsSnapshot()
+      .filter((a) => !a.host && !a.pending)
+      .map((a) => mirrorClaudeAccount(a, claudeConfigDirFor(a.id)))
+  }))
+
+  // As both shells do at boot: the mirror's default file, `<userData>/agent-status.json`, which is
+  // where `buildProjectsListBlob` reads it back.
+  initAgentStatusMirror()
+  const nodeId = 'term-abc-1'
+  const session = {
+    session_id: 's-1',
+    // Under the account's config dir, so the hook server's label names acct-1.
+    transcript_path: path.join(claudeConfigDirFor('acct-1'), 'projects', '-demo', 's-1.jsonl'),
+    cwd: workspace.projects[0].cwd
+  }
+  const hook = (payload: Record<string, unknown>): void => {
+    recordRawToolEvent(nodeId, payload)
+    const ev = normalizeFor('claude', { nodeId, agentId: 'claude', payload })
+    const account = observedClaudeAccount('claude', payload)
+    if (ev) recordAgentEvent({ ...ev, ...(account ? { account } : {}) })
+  }
+  const bash = { tool_name: 'Bash', tool_input: { command: 'npm test' } }
+  hook({ ...session, hook_event_name: 'PreToolUse', ...bash })
+  // A held hook-reply approval: the managed hook's deterministic ticket.
+  hook({ ...session, hook_event_name: 'PermissionRequest', ...bash, nodeterm_pending_id: 'term-abc-1-1700000000000-42' })
+  setNodeSessionName(nodeId, 'fix bug')
+  await flushMirror()
+  return store
+}
+
 async function runRelay(): Promise<void> {
+  // Relay mode writes a workspace and the agent-status mirror under userData: never into the
+  // checkout the fixture runs from.
+  if (!process.env.FIXTURE_USERDATA) throw new Error('relay mode needs FIXTURE_USERDATA (a scratch dir)')
   const port = await startBroker()
   const keys = genKeyPair()
   const approveAfter = Number(process.env.FIXTURE_APPROVE_AFTER_MS ?? '0')
@@ -147,55 +247,7 @@ async function runRelay(): Promise<void> {
     }
   }
 
-  const blob = [
-    JSON.stringify({
-      version: 2,
-      activeProjectId: 'p1',
-      projects: [
-        {
-          id: 'p1',
-          name: 'Demo',
-          color: '#0a84ff',
-          cwd: '/work/demo',
-          viewport: { x: 0, y: 0, zoom: 1 },
-          nodes: [
-            { id: 'term-abc-1', kind: 'terminal', title: 'Claude', color: '#d97757', agentId: 'claude', group: null, position: { x: 0, y: 0 }, size: { width: 1, height: 1 } },
-            { id: 'note-1', kind: 'sticky', title: 'Note', color: '#fff', group: null, text: 'hi', position: { x: 0, y: 0 }, size: { width: 1, height: 1 } }
-          ],
-          kanban: {
-            columns: [{ id: 'c1', title: 'To Do', color: '#0a84ff' }],
-            assignments: [{ nodeId: 'term-abc-1', columnId: 'c1' }],
-            labels: [{ id: 'l1', name: 'bug', color: 'red' }],
-            meta: [{ nodeId: 'term-abc-1', labels: ['l1'], priority: 'high' }]
-          }
-        }
-      ]
-    }),
-    '--NT-PROJECTS-SPLIT--',
-    'nt-term-abc-1',
-    '--NT-STATUS-SPLIT--',
-    JSON.stringify({
-      v: 1,
-      updatedAt: 1,
-      nodes: {
-        'term-abc-1': {
-          state: 'blocked', agentId: 'claude', sessionId: 's-1', name: 'fix bug', updatedAt: 2,
-          account: { configDir: '/data/claude-accounts/acct-1', accountId: 'acct-1', known: true }
-        }
-      },
-      // A39/A75: each entry is built by the desktop's real builder, so the phone is checked against
-      // what both shells write (label + email beside id + dir), not against a copy of it.
-      settings: {
-        claudePermissionMode: 'manual',
-        autoSupported: false,
-        claudeAccounts: [mirrorClaudeAccount({ id: 'acct-1', label: 'Work', email: 'me@work.example' }, '/data/claude-accounts/acct-1')]
-      },
-      inbox: {
-        events: [{ id: 'e1', ts: 3, nodeId: 'term-abc-1', kind: 'approval', title: 'Approve Bash', pendingId: 'term-abc-1-1700000000000-42' }],
-        nodes: { 'term-abc-1': { activity: 'Running npm test', updatedAt: 4 } }
-      }
-    })
-  ].join('\n')
+  const store = await seedDesktopState()
 
   let session: HostSession | null = null
   const approveNow = (): void => {
@@ -212,7 +264,10 @@ async function runRelay(): Promise<void> {
     getLatestCanvas: () => null,
     subscribeCanvas: () => () => {},
     applyMutation: () => {},
-    listProjects: async () => blob,
+    // The desktop's own assembly (listProjectsOutput in src/main/index.ts calls the same function):
+    // the store's read-only load, the mirror file, and the session names, between the markers.
+    listProjects: () =>
+      buildProjectsListBlob({ workspace: store, userDataDir: platform().userDataDir, listSessions: async () => ['nt-term-abc-1'] }),
     // A viewer on a node is an Eco shield and a size ceiling on the desktop (A18): the phone must
     // never leave one behind.
     remoteViewer: {
@@ -254,7 +309,8 @@ async function runRelay(): Promise<void> {
     },
     // A33/A72: the desktop's REAL resolver decides what a phone-started session is created with —
     // folder, account, agent and pane owner — over a fake index (local folder project p1) and one
-    // logged-in managed Claude account.
+    // logged-in managed Claude account. Kept apart from the store behind `projects.list` on purpose:
+    // the fixed `/repo` lets RelayInteropTest assert the folder without knowing the scratch dir.
     newSessions: createHostNewSessions({
       projectTargetInfo: (projectId) => (projectId === 'p1' ? { cwd: '/repo' } : null),
       claudeAccounts: () => [{ id: 'acct-1' }]

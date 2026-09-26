@@ -12,7 +12,8 @@ import kotlinx.serialization.json.JsonObject
 
 /**
  * Parses the `projects.list` blob: `<workspace json>\n--NT-PROJECTS-SPLIT--\n<tmux session
- * names>\n--NT-STATUS-SPLIT--\n<agent-status.json>` (src/main/index.ts `listProjectsOutput`). The
+ * names>\n--NT-STATUS-SPLIT--\n<agent-status.json>` (`buildProjectsListBlob` in
+ * src/core/projects-list-blob.ts, which the desktop's `listProjectsOutput` serves). The
  * direct-SSH browse produces the same shape, so both transports share this parser. Every section
  * is best-effort: a missing or corrupt one degrades to empty, never to an exception.
  */

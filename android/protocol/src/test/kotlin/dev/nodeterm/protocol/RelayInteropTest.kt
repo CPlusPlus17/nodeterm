@@ -24,6 +24,8 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -38,19 +40,37 @@ import kotlin.test.assertTrue
 /**
  * The Kotlin relay client against the DESKTOP's real host code: `connectHostSession` +
  * `createHostHandlers` (host-service.ts) over `connectRelay` (relay-socket.ts, host role), through a
- * local broker. Everything the phone does over the relay goes across this wire at least once.
+ * local broker. Everything the phone does over the relay goes across this wire at least once. The
+ * `projects.list` blob it parses is the desktop's own (`buildProjectsListBlob` over a real
+ * `WorkspaceStore` and a mirror file the real agent-status mirror wrote, audit A64); the pty,
+ * kanban, inbox and node-action bridges behind the verbs are fakes that record what was asked.
  */
 class RelayInteropTest {
     private val harnesses = ArrayList<InteropHarness>()
+    private val userDataDirs = ArrayList<File>()
 
     @AfterTest
-    fun tearDown() = harnesses.forEach { it.close() }
+    fun tearDown() {
+        harnesses.forEach { it.close() }
+        userDataDirs.forEach { it.deleteRecursively() }
+    }
 
-    private fun start(approveAfterMs: Long = 0, rejectAfterMs: Long = -1, extra: Map<String, String> = emptyMap()): InteropHarness =
-        InteropHarness.start(
+    /**
+     * The fixture's userData is a scratch dir per harness: relay mode writes the desktop's workspace
+     * (a v3 index and the project's `.nodeterm/project.json`) and its agent-status mirror there, and
+     * serves `projects.list` from them through the desktop's own assembly (audit A64).
+     */
+    private fun start(approveAfterMs: Long = 0, rejectAfterMs: Long = -1, extra: Map<String, String> = emptyMap()): InteropHarness {
+        val userData = Files.createTempDirectory("nt-relay-ud").toFile().also { userDataDirs += it }
+        return InteropHarness.start(
             "relay",
-            mapOf("FIXTURE_APPROVE_AFTER_MS" to approveAfterMs.toString(), "FIXTURE_REJECT_AFTER_MS" to rejectAfterMs.toString()) + extra
+            mapOf(
+                "FIXTURE_APPROVE_AFTER_MS" to approveAfterMs.toString(),
+                "FIXTURE_REJECT_AFTER_MS" to rejectAfterMs.toString(),
+                "FIXTURE_USERDATA" to userData.path
+            ) + extra
         ).also { harnesses += it }
+    }
 
     private fun InteropHarness.str(key: String) = ready[key]!!.jsonPrimitive.content
     private fun JsonObject.str(key: String) = this[key]!!.jsonPrimitive.content
@@ -176,6 +196,11 @@ class RelayInteropTest {
             val ev = snap.status!!.inbox!!.events.single()
             assertEquals(InboxKind.APPROVAL, ev.kind)
             assertEquals("term-abc-1-1700000000000-42", ev.pendingId)
+            // The mirror's own summary of the held Bash call (A64: nothing here is hand-written).
+            assertEquals("Run command", ev.title)
+            assertEquals("npm test", ev.detail)
+            assertEquals("s-1", ev.sessionId)
+            assertFalse(ev.resolved)
             assertEquals("Running npm test", snap.status!!.inbox!!.nodes["term-abc-1"]!!.activity)
             val board = p.board!!
             assertEquals("c1", board.columnOf("term-abc-1"))

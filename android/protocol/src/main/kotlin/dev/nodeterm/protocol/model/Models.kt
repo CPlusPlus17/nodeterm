@@ -2,8 +2,9 @@ package dev.nodeterm.protocol.model
 
 /**
  * The phone's view of one paired computer: its projects (the ASSEMBLED v2 workspace the desktop's
- * `listProjectsOutput` serves), which tmux sessions are live, and the agent-status mirror file
- * (`agent-status.json`, see `src/core/agent-status-mirror.ts` and docs/mobile-usage-inbox.md).
+ * `projects.list` serves, src/core/projects-list-blob.ts), which tmux sessions are live, and the
+ * agent-status mirror file (`agent-status.json`, see `src/core/agent-status-mirror.ts` and
+ * docs/mobile-usage-inbox.md).
  */
 data class ProjectsSnapshot(
     val projects: List<ProjectInfo>,

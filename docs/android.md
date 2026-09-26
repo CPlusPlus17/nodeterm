@@ -96,7 +96,12 @@ unchanged.
   through a local broker: handshake, SAS agreement, approval wait, `projects.list`, attach with
   snapshot paint (including a >256 KB snapshot whose chunk boundary splits a code point), input,
   resize/`OP.Resized`, exit codes, scroll, detach/destroy, node actions, board verbs (`null` =
-  Ungrouped), `approvals.answer`, `inbox.ack`, registration.
+  Ungrouped), `approvals.answer`, `inbox.ack`, registration. What is real is the verb routing and
+  its validation; the pty, board, inbox and node-action bridges behind the verbs are fakes that
+  record what was asked. The `projects.list` blob is the desktop's own: `buildProjectsListBlob`
+  (`src/core/projects-list-blob.ts`, which the desktop's `listProjectsOutput` calls too) over a real
+  `WorkspaceStore` (it writes the v3 index and the project file, then assembles them) and an
+  `agent-status.json` written by the real mirror from Claude hook payloads (audit `A64`).
 - **Relay security** — scripted-host tests for: no re-key after ready, reflected boxes (own role)
   dropped, replayed/reordered sequence numbers dropped, boxes under a foreign key dropped.
 - **Pairing** — against the desktop's real `createPairingService` with HOME in a temp dir: the
@@ -110,6 +115,10 @@ unchanged.
 - **SSH** — against Apache MINA sshd running every command through a shell, with real tmux on a
   private `TMUX_TMPDIR`: v3 index resolution, attach with keystrokes both ways, cold-start
   detection, literal `send-keys` (a leading `-` is text), answer files, read-acks, host-key pinning.
+  No desktop code runs on this leg: the test writes the files the desktop would have (the v3
+  `workspace.json` index and project files, `agent-status.json`, the held request in
+  `~/.nodeterm/pending`), and checks what the phone writes against file names copied from
+  `pending-approvals.ts` and `ack-sweep.ts`.
   A command without a pty runs as `/bin/sh -c <cmd>`. One that asks for a pty runs under `script(1)`
   in place of sshd's pty: util-linux's `script -qfec <cmd> /dev/null` on Linux (which runs `<cmd>`
   through `$SHELL`), BSD's `script -q /dev/null /bin/sh -c <cmd>` on macOS. They are told apart by
@@ -135,10 +144,15 @@ The debug APK stays unminified and is the one distributed. The app has no instru
 index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md). The plan, the device checklist and the
 decisions still open are in [`android-handover.md`](android-handover.md).
 
-A test caveat: the fixtures hand-copy some desktop shapes — the mirror, the `projects.list` blob
-and the `~/.nodeterm` files (audit `A64`). That is how a wrong userData path (`A02`: the desktop's
+A test caveat (audit `A64`): the relay leg's `projects.list` blob and mirror now come from the
+desktop's code, but the SSH leg still hand-copies desktop shapes — the v3 index and project files,
+`agent-status.json`, and the `~/.nodeterm/pending` and `acks` files — and nothing tests
+`~/.nodeterm/relay.json`. A desktop change to one of those fails no Android test; it needs the
+matching hand edit in `SshTransportTest`. That is how a wrong userData path (`A02`: the desktop's
 directory is `node-terminal`, not `nodeterm`) once passed its test; the fixture now uses the real
-name, and `SshScriptsTest` runs the prelude under `/bin/sh` against both spellings.
+name, and `SshScriptsTest` runs the prelude under `/bin/sh` against both spellings. The parser unit
+tests (`ModelTest`, `UsagePaceTest`) also feed hand-written blobs, on purpose: they pin how the
+client reads malformed and edge-case input, not what the desktop writes.
 
 Since the audit, the SSH tests also cover: resize/keystrokes/close from a thread that must not do
 network I/O (a JVM stand-in for Android's StrictMode, `A01`), a transport that breaks mid-write

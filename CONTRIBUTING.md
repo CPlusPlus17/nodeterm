@@ -107,8 +107,17 @@ applicable here":
    The **Android** companion is in this repo (`android/`, see docs/android.md). If you change what
    a phone sees — a `host-service.ts` relay verb, the `projects.list` blob, the pairing payload,
    the agent-status mirror, or the `~/.nodeterm/{pending,acks,relay.json}` files — update the
-   Android client in the same PR; `./gradlew -p protocol test` (from `android/`, after
-   `npm ci --ignore-scripts`) runs it against this repo's own host code. Its interop fixture
+   Android client in the same PR. `./gradlew -p protocol test` (from `android/`, after
+   `npm ci --ignore-scripts`) runs the relay leg against this repo's own host code: the handshake
+   and host-service's verb routing (`connectHostSession`; the pty, board, inbox and node-action
+   bridges behind the verbs are fakes), pairing (`createPairingService`), and the `projects.list`
+   blob as the desktop builds it (`buildProjectsListBlob` in `src/core/projects-list-blob.ts` over
+   a real `WorkspaceStore` and an `agent-status.json` written by the real mirror). The SSH leg is
+   **hand-copied**: `SshTransportTest` writes the v3 `workspace.json` index, the project files,
+   `agent-status.json` and the held request in `~/.nodeterm/pending` itself, and checks the
+   `.answer` and `acks/<node>.seen` files the phone writes against names copied from
+   `pending-approvals.ts` and `ack-sweep.ts`; nothing tests `relay.json`. A change to one of those
+   needs the matching hand edit in the Android tests. Its interop fixture
    (`android/protocol/src/test/interop/`) implements host-service's interfaces and is part of
    `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.
    The Android workflow runs on every file that fixture bundles (`src/core`, `src/shared`,

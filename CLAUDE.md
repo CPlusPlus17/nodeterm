@@ -5400,10 +5400,20 @@ sessions is a hazard whatever kills it; this removes the hazard, not a proven ca
      `android/protocol/src/test/interop/host-fixture.ts`) in the same PR**; the Android workflow
      (`.github/workflows/android.yml`) runs on those paths: its filter covers every input of the
      fixture's esbuild bundle (`src/core`, `src/shared`, `src/main/*.ts`, `src/main/remote`), which
-     also holds the producers the bundle leaves out (`listProjectsOutput` in `src/main/index.ts`,
-     `src/core/ack-sweep.ts`, `src/shared/pair-qr.ts`), and `WorkflowPathFilterTest` fails on a
-     bundle input the filter misses (audit A63). Running is not testing: the fixture's blob and
-     mirror are hand-written (audit A64). The fixture implements host-service's
+     also holds the producers the bundle leaves out (`src/core/ack-sweep.ts`, `src/shared/pair-qr.ts`,
+     and `src/main/index.ts`, which names the blob's sources), and `WorkflowPathFilterTest` fails on
+     a bundle input the filter misses (audit A63). Running is not testing, so know what is real
+     (audit A64): the relay tests run `connectHostSession`'s handshake and verb routing (the pty,
+     board, inbox and node-action bridges behind the verbs are fakes), `createPairingService`, and
+     the `projects.list` blob as the desktop builds it — `buildProjectsListBlob`
+     (`src/core/projects-list-blob.ts`, the one assembly `listProjectsOutput` also calls) over a real
+     `WorkspaceStore` and an `agent-status.json` the real mirror wrote from hook payloads
+     (`android-interop-fixture.guard.test.ts` refuses a hand-written blob or mirror there). The SSH
+     leg is HAND-COPIED: `SshTransportTest` writes the v3 index, the project files,
+     `agent-status.json` and the held `~/.nodeterm/pending` request itself and checks the phone's
+     `.answer` / `acks/<node>.seen` against names copied from `pending-approvals.ts` /
+     `ack-sweep.ts`, and nothing tests `relay.json` — a change to those owes a hand edit of the
+     Android tests. The fixture implements host-service's
      interfaces (`HostPtyManager`, the kanban/inbox/nodeActions bridge) and esbuild only strips its
      types, so it sits in `tsconfig.node.json` and `npm run typecheck` checks it on every CI run;
      it passes nothing through a cast (`android-interop-fixture.guard.test.ts`, audit A67). Two

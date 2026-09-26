@@ -9,13 +9,13 @@ name: Android
 # desktop sources bundled into the fixture on 2026-09-26 (all 13 from src/core, all 21 from src/shared,
 # and src/main/windows-ssh-keys.ts), so a change to one ran no Android test. Each entry and why:
 #   android/**            the Kotlin modules, the fixture and its bundler, the app sources tests read
-#   src/core/**           bundled (pending-approvals, project-kanban-write, agent-status-mirror, ...);
-#                         also the other producers of what a phone reads: the workspace store behind
-#                         the projects.list blob, ack-sweep behind ~/.nodeterm/acks
+#   src/core/**           bundled (pending-approvals, project-kanban-write, agent-status-mirror, and
+#                         since A64 projects-list-blob + workspace-store, which build the projects.list
+#                         blob, ...); also ack-sweep behind ~/.nodeterm/acks, which is not bundled
 #   src/shared/**         bundled (types, agents/*, kanban-labels, ssh, ...); also pair-qr.ts (the
 #                         pairing QR envelope) and agents/pane.ts (read by ResumeOfferTest)
 #   src/main/*.ts         bundled: pairing-core, pairing-service, windows-ssh-keys; also index.ts, which
-#                         builds the projects.list blob and wires the relay verbs
+#                         names the projects.list blob's sources and wires the relay verbs
 #   src/main/remote/**    bundled: host-service, connectHostSession and the relay/E2EE code under it
 #   tsconfig.json         esbuild applies its compilerOptions to every bundled file (the root one; it
 #                         does not follow the references to tsconfig.node.json, so that file is absent:

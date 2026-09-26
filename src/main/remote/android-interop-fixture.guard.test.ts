@@ -65,6 +65,30 @@ describe('the Android interop fixture is type-checked against the desktop interf
     expect(missing, 'add these to tsconfig.node.json\'s include (see the comment there)').toEqual([])
   }, 60_000)
 
+  it('serves projects.list from the desktop\'s own assembly, never a hand-written blob or mirror (audit A64)', () => {
+    // The fixture used to serve a blob it wrote by hand, markers and agent-status mirror included, so a
+    // desktop change to either could not fail an Android test. Now both it and `listProjectsOutput`
+    // call core's `buildProjectsListBlob`, and the fixture's mirror file comes out of the mirror.
+    const code = (file: string): string =>
+      readFileSync(file, 'utf8')
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+        .join('\n')
+    const fixture = code(join(INTEROP_DIR, 'host-fixture.ts'))
+    const index = code(join(REPO_ROOT, 'src', 'main', 'index.ts'))
+    for (const [name, src] of [['host-fixture.ts', fixture], ['src/main/index.ts', index]]) {
+      expect(src, `${name} spells a projects.list marker; import it from src/core/projects-list-blob.ts`).not.toMatch(
+        /--NT-(PROJECTS|STATUS)-SPLIT--/
+      )
+      expect(src, `${name} must build the blob with buildProjectsListBlob`).toMatch(/\bbuildProjectsListBlob\(/)
+    }
+    expect(fixture).toMatch(/\blistProjects:\s*\(\)\s*=>\s*buildProjectsListBlob\(/)
+    // A mirror document written by hand carries its version key; the real one comes from the writer.
+    expect(fixture, 'write agent-status.json with the mirror (recordAgentEvent + flush), not by hand').not.toMatch(/\bv:\s*1\b/)
+    expect(fixture).toMatch(/\brecordAgentEvent\(/)
+  })
+
   it('hands the desktop code nothing through a cast that would switch the type check off', () => {
     const CAST = /\bas\s+(?:unknown\s+as|never|any)\b/
     const offenders: string[] = []

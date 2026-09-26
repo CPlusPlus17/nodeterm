@@ -7,7 +7,7 @@ import { join, resolve, posix } from 'path'
 import { startSessionNameSweep, displayNodeTitle } from '../core/session-name-sweep'
 import { startTriggerService } from '../core/trigger-service'
 import { readAgentSessionName, type AgentSessionNameDeps } from '../core/agent-session-name'
-import { readFile, realpath as fsRealpath, lstat as fsLstat, writeFile as fsWriteFile } from 'fs/promises'
+import { realpath as fsRealpath, lstat as fsLstat, writeFile as fsWriteFile } from 'fs/promises'
 import { existsSync, statSync, openSync, fstatSync, readFileSync, closeSync } from 'fs'
 import { homedir, hostname } from 'os'
 import { randomUUID } from 'crypto'
@@ -186,6 +186,7 @@ import {
   nodeSessionName,
   workingNodes
 } from '../core/agent-status-mirror'
+import { buildProjectsListBlob } from '../core/projects-list-blob'
 import { paneOwnerProject } from '../core/agents/pane-ownership'
 import { createPushNotify, createLiveUpdatePush } from '../core/push-notify'
 import { createGrantsAccessor, type PushGrant } from '../core/push-grants'
@@ -622,37 +623,18 @@ ptyManager.setProjectSpawnOverrides(
   })
 )
 
-// Markers delimiting the `projects.list` relay blob. Both phone clients split on these exact
-// strings to recover [workspace.json | newline-joined tmux session names | agent-status.json],
-// matching the SSH browse pipeline they already use — keep them in sync with NodetermProjects.swift
-// (iOS, nodeterm-ios) and android/protocol/src/main/kotlin/dev/nodeterm/protocol/model/ProjectsParser.kt.
-// The Android interop fixture (android/protocol/src/test/interop/host-fixture.ts) serves a
-// hand-written blob, not this function's output, so a change to the shape owes it too.
-const NT_PROJECTS_MARK = '--NT-PROJECTS-SPLIT--'
-const NT_STATUS_MARK = '--NT-STATUS-SPLIT--'
-
 /**
- * Build the marker-delimited projects blob served over the relay's `projects.list` RPC. Reads the
- * same files the SSH browse path reads locally on the host (no SSH): `workspace.json` +
- * `agent-status.json` under userData, plus the live nodeterm tmux session names. Every read is
- * best-effort (missing files degrade to an empty section) so this never throws.
+ * The `projects.list` relay blob. Assembled by `buildProjectsListBlob` (src/core/projects-list-blob.ts),
+ * which the Android interop fixture calls too, so the markers, the section order and the read-only
+ * workspace load live in one place; this shell only names its sources: the workspace store, userData
+ * (where the agent-status mirror writes its file) and the live nodeterm tmux session names.
  */
 async function listProjectsOutput(): Promise<string> {
-  const dir = app.getPath('userData')
-  // Serve the ASSEMBLED v2-shaped workspace, never the raw workspace.json. Post-migration the file
-  // is a v3 index ({version:3, entries:[…]}) whose local-ref entries hold no node data at all — the
-  // paired iOS client decodes `{ projects: [Project] }`, so a raw v3 file lists zero projects.
-  // load() re-reads each ref's .nodeterm/project.json and returns {version:2, projects:[…]}; it is
-  // idempotent (and re-syncs the watcher via onPersist), so calling it here is safe.
-  const workspace = await workspaceStore
-    // Read-only: a phone listing projects mid git-merge must NOT sideline a conflict-marked
-    // project.json to `.corrupt-<ts>` (the probe/watcher-path fix); sideline is boot/renderer-only.
-    .load({ sideline: false })
-    .then((w) => JSON.stringify(w))
-    .catch(() => '')
-  const status = await readFile(join(dir, 'agent-status.json'), 'utf8').catch(() => '')
-  const sessions = (await ptyManager.listNodetermSessions().catch(() => [])).join('\n')
-  return `${workspace}\n${NT_PROJECTS_MARK}\n${sessions}\n${NT_STATUS_MARK}\n${status}`
+  return buildProjectsListBlob({
+    workspace: workspaceStore,
+    userDataDir: app.getPath('userData'),
+    listSessions: () => ptyManager.listNodetermSessions()
+  })
 }
 
 // Remote git routing is scoped to the ACTIVE project only (set via `git:set-active-remote`).
