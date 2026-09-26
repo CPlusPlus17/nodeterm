@@ -189,7 +189,11 @@ the new page exists is kept for it. A renderer the system killed (the terminal's
 is waived while the screen is not visible) is reattached automatically once the new page has
 reported its size. A crash is not, because the reattach would repaint the same screen: the screen
 offers "Reopen terminal" instead. More than two kills within a minute fall back to that offer too.
-The WebView handling itself is only type-checked.
+A screen that was showing an answer with its own button (the session ended, the connection
+dropped, "Open through the relay", or an earlier "Reopen terminal") keeps it, and nothing
+reattaches unasked: over the relay, an attach to a pane that has exited creates a new, empty
+session. The offer says the session is still running only when a stream was attached. The WebView
+handling itself is only type-checked.
 
 `ResumeOfferTest` pins what the terminal screen offers to type after an attach (`A15`, `A76`). A cold
 attach (the computer rebooted; only the relay creates a session) gets the cold-restore line: `cd` into

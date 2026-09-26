@@ -1,19 +1,21 @@
 package dev.nodeterm.protocol
 
 import dev.nodeterm.protocol.host.RendererRecovery
-import dev.nodeterm.protocol.host.RendererRecovery.Action
+import dev.nodeterm.protocol.host.RendererRecovery.Outcome
+import dev.nodeterm.protocol.host.RendererRecovery.Showing
 import dev.nodeterm.protocol.host.TerminalPage
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
  * Audit A45: the terminal WebView's renderer can go away (killed by the system, or crashed), and the
  * screen then builds a new WebView. The screen (TerminalController) is only type-checked; these pin
- * the rules it delegates to: which page's callbacks count, where queued JavaScript goes, and who
- * reattaches.
+ * the rules it delegates to: which page's callbacks count, where queued JavaScript goes, who
+ * reattaches, and what the screen shows meanwhile.
  */
 class TerminalPageTest {
     // ---- the page generation -----------------------------------------------------------------
@@ -96,35 +98,76 @@ class TerminalPageTest {
 
     // ---- who reattaches --------------------------------------------------------------------
 
+    private fun RendererRecovery.gone(didCrash: Boolean, now: Long) = onGone(didCrash, now, Showing.ATTACHED)
+
     @Test
     fun `a crashed renderer is offered to the user, never reattached by itself`() {
         val recovery = RendererRecovery()
-        assertEquals(Action.OFFER, recovery.onGone(didCrash = true, now = 0))
-        assertEquals(Action.OFFER, recovery.onGone(didCrash = true, now = 3_600_000))
+        assertIs<Outcome.Offer>(recovery.gone(didCrash = true, now = 0))
+        assertIs<Outcome.Offer>(recovery.gone(didCrash = true, now = 3_600_000))
+        assertIs<Outcome.Offer>(recovery.onGone(didCrash = true, now = 3_600_001, showing = Showing.OPENING))
     }
 
     @Test
     fun `a renderer the system killed is reattached by itself`() {
-        val recovery = RendererRecovery()
-        assertEquals(Action.REATTACH, recovery.onGone(didCrash = false, now = 0))
+        assertEquals(Outcome.Reattach, RendererRecovery().gone(didCrash = false, now = 0))
+        assertEquals(Outcome.Reattach, RendererRecovery().onGone(didCrash = false, now = 0, showing = Showing.OPENING))
     }
 
     @Test
     fun `repeated kills fall back to the offer, and recover once the window has passed`() {
         val recovery = RendererRecovery(windowMs = 60_000, maxAutomatic = 2)
-        assertEquals(Action.REATTACH, recovery.onGone(didCrash = false, now = 0))
-        assertEquals(Action.REATTACH, recovery.onGone(didCrash = false, now = 10_000))
-        assertEquals(Action.OFFER, recovery.onGone(didCrash = false, now = 20_000))
-        assertEquals(Action.OFFER, recovery.onGone(didCrash = false, now = 59_999))
+        assertEquals(Outcome.Reattach, recovery.gone(didCrash = false, now = 0))
+        assertEquals(Outcome.Reattach, recovery.gone(didCrash = false, now = 10_000))
+        assertIs<Outcome.Offer>(recovery.gone(didCrash = false, now = 20_000))
+        assertIs<Outcome.Offer>(recovery.gone(didCrash = false, now = 59_999))
         // The first automatic reattach has left the window: one more is allowed.
-        assertEquals(Action.REATTACH, recovery.onGone(didCrash = false, now = 60_000))
-        assertEquals(Action.OFFER, recovery.onGone(didCrash = false, now = 60_001))
+        assertEquals(Outcome.Reattach, recovery.gone(didCrash = false, now = 60_000))
+        assertIs<Outcome.Offer>(recovery.gone(didCrash = false, now = 60_001))
     }
 
     @Test
     fun `an offer is not counted as an automatic reattach`() {
         val recovery = RendererRecovery(windowMs = 60_000, maxAutomatic = 1)
-        assertEquals(Action.OFFER, recovery.onGone(didCrash = true, now = 0))
-        assertEquals(Action.REATTACH, recovery.onGone(didCrash = false, now = 1))
+        assertIs<Outcome.Offer>(recovery.gone(didCrash = true, now = 0))
+        assertEquals(Outcome.Reattach, recovery.gone(didCrash = false, now = 1))
+    }
+
+    // ---- what the screen was showing (A45 review) --------------------------------------------
+
+    @Test
+    fun `an answer on screen is kept, whether the renderer was killed or crashed`() {
+        // "The session ended (exit 1).", "Disconnected.", the relay offer, or an earlier "Reopen
+        // terminal": the screen keeps it and its button. A kill must not turn an ended session into an
+        // attach of its own (over the relay that creates a new, empty session), and a kill after a
+        // crash offer must not reattach what the user was asked about.
+        val recovery = RendererRecovery()
+        assertEquals(Outcome.Keep, recovery.onGone(didCrash = false, now = 0, showing = Showing.SETTLED))
+        assertEquals(Outcome.Keep, recovery.onGone(didCrash = true, now = 1, showing = Showing.SETTLED))
+    }
+
+    @Test
+    fun `a kept answer does not use up the automatic reattaches`() {
+        val recovery = RendererRecovery(windowMs = 60_000, maxAutomatic = 2)
+        repeat(5) { recovery.onGone(didCrash = false, now = it.toLong(), showing = Showing.SETTLED) }
+        assertEquals(Outcome.Reattach, recovery.gone(didCrash = false, now = 10))
+        assertEquals(Outcome.Reattach, recovery.gone(didCrash = false, now = 11))
+        assertIs<Outcome.Offer>(recovery.gone(didCrash = false, now = 12))
+    }
+
+    @Test
+    fun `the offer says the session is running only when a stream was attached`() {
+        val running = "The session is still running on the computer."
+        val crashed = assertIs<Outcome.Offer>(RendererRecovery().gone(didCrash = true, now = 0))
+        assertEquals("The terminal view crashed. $running", crashed.message)
+        val opening = assertIs<Outcome.Offer>(RendererRecovery().onGone(didCrash = true, now = 0, showing = Showing.OPENING))
+        assertEquals("The terminal view crashed.", opening.message)
+        assertFalse(running in opening.message, "nothing was known about the session while the terminal was opening")
+
+        val loop = RendererRecovery(maxAutomatic = 0)
+        val killedAttached = assertIs<Outcome.Offer>(loop.gone(didCrash = false, now = 0))
+        assertEquals("Android keeps closing the terminal view to free memory. $running", killedAttached.message)
+        val killedOpening = assertIs<Outcome.Offer>(loop.onGone(didCrash = false, now = 1, showing = Showing.OPENING))
+        assertEquals("Android keeps closing the terminal view to free memory.", killedOpening.message)
     }
 }

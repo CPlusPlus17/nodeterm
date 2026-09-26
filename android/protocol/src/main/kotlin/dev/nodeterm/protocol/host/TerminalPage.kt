@@ -82,37 +82,77 @@ class TerminalPage {
 }
 
 /**
- * What the terminal screen does once its page's renderer is gone (audit A45). Either way a new page
- * is built; the question is only who reattaches the terminal to it.
+ * What the terminal screen does once its page's renderer is gone (audit A45). A new page is built
+ * either way; the question is what the screen shows over it, and who reattaches the terminal.
  *
- * - The system KILLED the renderer (`didCrash` false): nothing is wrong with what the page showed, so
- *   the screen reattaches by itself once the new page is ready. With the renderer's priority waived
- *   while the screen is not visible, this is the normal way a backgrounded terminal loses its page.
- * - The renderer CRASHED: the cause may be what the pane printed, and a reattach paints the same
- *   screen again, so reattaching unasked could crash it over and over. The screen offers "Reopen
- *   terminal" and the user decides.
- * - A kill also falls back to the offer after [maxAutomatic] automatic reattaches within [windowMs]:
- *   a device that keeps killing a visible renderer should not have the app fight it in a loop.
+ * It depends first on what the screen was [Showing]:
+ * - An ANSWER with its own button ([Showing.SETTLED]: the session ended or the connection dropped,
+ *   the session opens through the relay, or the view was already lost) is kept as it was, and its
+ *   button drives the next attach. Nothing reattaches unasked: over the relay an attach to a pane that
+ *   has exited creates a new, empty session, and after a crash offer an automatic reattach would repaint
+ *   the screen the user was asked about.
+ * - Otherwise ([Showing.ATTACHED] or [Showing.OPENING]) the attach the loss retired is replaced:
+ *   - the system KILLED the renderer (`didCrash` false): nothing is wrong with what the page showed,
+ *     so the screen reattaches by itself once the new page is ready. With the renderer's priority
+ *     waived while the screen is not visible, this is the normal way a backgrounded terminal loses its
+ *     page;
+ *   - the renderer CRASHED: the cause may be what the pane printed, and a reattach paints the same
+ *     screen again, so reattaching unasked could crash it over and over. The screen offers "Reopen
+ *     terminal" and the user decides;
+ *   - a kill also falls back to the offer after [maxAutomatic] automatic reattaches within [windowMs]:
+ *     a device that keeps killing a visible renderer should not have the app fight it in a loop.
+ *
+ * The offer says the session is still running only when a stream was attached ([Showing.ATTACHED]):
+ * that is the only case in which the screen knew. While it was still opening the terminal, it knew
+ * nothing about the session yet (it may not exist, or not on this host).
  *
  * Thread-safe; [now] is a millisecond clock supplied by the caller.
  */
 class RendererRecovery(private val windowMs: Long = 60_000L, private val maxAutomatic: Int = 2) {
-    enum class Action {
-        /** Reattach by itself once the new page is ready. */
-        REATTACH,
+    /** What the terminal screen was showing when its renderer went away. */
+    enum class Showing {
+        /** A stream was attached: the session was running a moment ago. */
+        ATTACHED,
 
-        /** Offer "Reopen terminal"; the user decides when to reattach. */
-        OFFER
+        /**
+         * Opening the terminal: connecting, waiting for the computer to approve this phone, waiting
+         * for a page, or in the background. The loss retires the attach in flight.
+         */
+        OPENING,
+
+        /** An answer with its own button (ended, disconnected, relay offer, view lost). Nothing in flight. */
+        SETTLED
+    }
+
+    sealed interface Outcome {
+        /** Keep what the screen shows; its own button drives the next attach. */
+        data object Keep : Outcome
+
+        /** Reattach by itself once the new page is ready. */
+        data object Reattach : Outcome
+
+        /** Offer "Reopen terminal" with [message]; the user decides when to reattach. */
+        data class Offer(val message: String) : Outcome
     }
 
     private val automatic = ArrayDeque<Long>()
 
     @Synchronized
-    fun onGone(didCrash: Boolean, now: Long): Action {
-        if (didCrash) return Action.OFFER
-        while (automatic.isNotEmpty() && now - automatic.first() >= windowMs) automatic.removeFirst()
-        if (automatic.size >= maxAutomatic) return Action.OFFER
-        automatic.addLast(now)
-        return Action.REATTACH
+    fun onGone(didCrash: Boolean, now: Long, showing: Showing): Outcome {
+        // Not counted against the automatic reattaches: none happens.
+        if (showing == Showing.SETTLED) return Outcome.Keep
+        if (!didCrash) {
+            while (automatic.isNotEmpty() && now - automatic.first() >= windowMs) automatic.removeFirst()
+            if (automatic.size < maxAutomatic) {
+                automatic.addLast(now)
+                return Outcome.Reattach
+            }
+        }
+        return Outcome.Offer(offerMessage(didCrash, showing))
+    }
+
+    private fun offerMessage(didCrash: Boolean, showing: Showing): String {
+        val what = if (didCrash) "The terminal view crashed." else "Android keeps closing the terminal view to free memory."
+        return if (showing == Showing.ATTACHED) "$what The session is still running on the computer." else what
     }
 }

@@ -355,12 +355,16 @@ class TerminalController(
      * The renderer behind [view] is gone (audit A45): Android killed it to reclaim memory, or it
      * crashed. That WebView can never be used again. The stream is detached (it would paint into
      * nothing), the WebView leaves the view tree and is destroyed, and [webViewKey] changes so the
-     * screen builds a new one. Then, per [RendererRecovery], the screen reattaches by itself once the
-     * new page is ready (a kill), or offers "Reopen terminal" (a crash, or kills in a loop).
+     * screen builds a new one. Then, per [RendererRecovery] and what the screen was showing: an answer
+     * with its own button (ended, disconnected, relay offer, view lost) stays, and nothing reattaches
+     * unasked; otherwise the screen reattaches by itself once the new page is ready (a kill), or offers
+     * "Reopen terminal" (a crash, or kills in a loop).
      */
     private fun rendererGone(view: WebView, didCrash: Boolean) {
         // A view this screen already let go of (a repeated callback, or one after dispose).
         if (view !== webView) return
+        // Read before anything below changes it.
+        val showing = showing(state)
         webView = null
         page.lost()
         // Detached as on ON_STOP. A launch still holding the stream finishes first (A40), and the
@@ -379,15 +383,28 @@ class TerminalController(
         sizedElsewhere = null
         destroyWebView(view, rendererAlive = false)
         webViewKey++
-        state = when (recovery.onGone(didCrash, System.currentTimeMillis())) {
+        when (val outcome = recovery.onGone(didCrash, System.currentTimeMillis(), showing)) {
+            // The screen keeps its answer, and its button reattaches once the new page is ready
+            // (attachWhenPageReady). Moving it to Connecting would attach unasked: over the relay, to
+            // a pane that exited, that creates a new, empty session.
+            RendererRecovery.Outcome.Keep -> Unit
             // Reattached by attachIfWaiting once the new page reports in (or by onStart, when the
             // screen is in the background now).
-            RendererRecovery.Action.REATTACH -> TermState.Connecting
-            RendererRecovery.Action.OFFER -> TermState.ViewLost(
-                (if (didCrash) "The terminal view crashed." else "Android keeps closing the terminal view to free memory.") +
-                    " The session is still running on the computer."
-            )
+            RendererRecovery.Outcome.Reattach -> state = TermState.Connecting
+            is RendererRecovery.Outcome.Offer -> state = TermState.ViewLost(outcome.message)
         }
+    }
+
+    /**
+     * What [st] tells [RendererRecovery] (A45). Exhaustive on purpose: a new state has to say whether
+     * an attach is in flight behind it, and whether the screen knew the session was running.
+     */
+    private fun showing(st: TermState): RendererRecovery.Showing = when (st) {
+        TermState.Attached -> RendererRecovery.Showing.ATTACHED
+        // An attach in flight (the loss retires it), or waiting for a page or for onStart. The code of
+        // a retired approval dial is not kept: nothing would be behind it, and it has no button.
+        TermState.Connecting, is TermState.AwaitingApproval -> RendererRecovery.Showing.OPENING
+        is TermState.Ended, is TermState.RelayOffer, is TermState.ViewLost -> RendererRecovery.Showing.SETTLED
     }
 
     /**
@@ -420,6 +437,14 @@ class TerminalController(
     /** "Reopen terminal", after the view was lost with its renderer (A45). */
     fun reopenTerminal() {
         if (state is TermState.ViewLost) attachWhenPageReady()
+    }
+
+    /**
+     * "Reattach", from an ended or disconnected session. Through [attachWhenPageReady]: the screen
+     * keeps this answer over a page that is being replaced after a renderer loss (A45 review).
+     */
+    fun reattach() {
+        if (state is TermState.Ended) attachWhenPageReady()
     }
 
     private var attachedAt = 0L
@@ -461,11 +486,14 @@ class TerminalController(
     private var useRelay = false
 
     fun openThroughRelay() {
+        if (state !is TermState.RelayOffer) return
         useRelay = true
-        attach()
+        // The offer can be on screen over a page being replaced (A45 review): wait for its size.
+        attachWhenPageReady()
     }
 
-    fun attach() {
+    /** Attach now. The screen's buttons go through [attachWhenPageReady] ([reattach], [openThroughRelay]). */
+    private fun attach() {
         if (disposed || stopped) return
         state = TermState.Connecting
         // The offer stays on screen (A41 review): this attach settles it, keeping an unanswered

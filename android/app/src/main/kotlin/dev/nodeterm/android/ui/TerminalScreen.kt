@@ -109,7 +109,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(st.message)
-                        Button(onClick = { controller.attach() }) { Text("Reattach") }
+                        Button(onClick = { controller.reattach() }) { Text("Reattach") }
                     }
                     is TermState.RelayOffer -> Column(
                         Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
