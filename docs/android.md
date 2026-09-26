@@ -133,7 +133,9 @@ Inbox quick answer needs (`A38`): a ticketed approval is judged by its card, so 
 the node still shows WAITING for a held question; keys are typed only for a ticketless approval on a
 BLOCKED node or a question on a WAITING one. `UsagePaceTest` pins the Usages pace line (`A58`): no line
 without a reset time, 300/10080-minute defaults for the session/weekly kinds (Claude reports no
-window length), none for an unknown kind, and an injected clock. `Osc52Test` pins OSC 52 copy
+window length), none for an unknown kind, and injected clocks; the elapsed share is taken at the
+account's `updatedAt` (when the percentage was measured), so a stale snapshot never drifts toward
+"slower". `Osc52Test` pins OSC 52 copy
 (`A53`): parsed like the desktop's `parseOsc52` (the `;` is required, a `?` read query is refused,
 base64 and UTF-8 are decoded strictly), but capped at 100,000 characters, because the clipboard
 write is a binder call whose buffer (about 1 MB, shared) the desktop's 1,000,000-character base64

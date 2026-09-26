@@ -15,7 +15,16 @@ package dev.nodeterm.protocol.model
  *  - more time left than the whole window: the length we used is wrong for this limit (a plan whose
  *    session window is not five hours), so any verdict built on it would be too.
  *
- * `now` is always passed in, so the verdict is a pure function of its inputs.
+ * The elapsed share is taken at the moment `usedPercent` was MEASURED (the account's `updatedAt`),
+ * not at the moment the phone draws it. The desktop fetches Claude usage every 15 minutes
+ * (`POLL_MS`, usage-service.ts), and a mirror read over SSH can be far older than that when the
+ * desktop app is not running. Usage only grows inside a window, so comparing an old percentage with
+ * the elapsed share NOW can only push the verdict toward "slower": 15 minutes is five points of a
+ * 5h window, the whole [ON_PACE_BAND], so someone burning through the window would be told they are
+ * on pace. Measured at the snapshot's own time, the line describes the same moment as the bar above
+ * it. `now` is still what decides the "already reset" refusal.
+ *
+ * Both clocks are passed in, so the verdict is a pure function of its inputs.
  */
 object UsagePace {
     /** Claude's session window, the only length its `/api/oauth/usage` implies by `kind`. Claude
@@ -34,7 +43,8 @@ object UsagePace {
 
     /**
      * One limit's pace. [usedPercent] and [elapsedPercent] are both 0–100 shares of the SAME
-     * window ([windowMinutes] long), which is what makes them comparable.
+     * window ([windowMinutes] long), taken at the SAME moment (when the percentage was measured),
+     * which is what makes them comparable.
      */
     data class Reading(
         val pace: Pace,
@@ -72,15 +82,32 @@ object UsagePace {
         }
     }
 
-    /** The pace of [limit] at [now] (unix ms), or null when there is nothing honest to say. */
-    fun of(limit: UsageLimit, now: Long): Reading? {
+    /**
+     * When a limit's `usedPercent` was measured, given the snapshot's [updatedAt]: that time, unless
+     * it is unknown (0, the parser's default for a missing field, or a hostile negative) or later
+     * than [now] (a desktop clock ahead of the phone's), in which case [now]: with no usable
+     * measurement time there is nothing to correct the drift with.
+     */
+    fun measurementTime(updatedAt: Long, now: Long): Long = if (updatedAt in 1..now) updatedAt else now
+
+    /**
+     * The pace of [limit] as measured at [measuredAt] (unix ms; pass the account's `updatedAt`,
+     * see [measurementTime] for how an unusable one is treated), read at [now] (unix ms), or
+     * null when there is nothing honest to say.
+     */
+    fun of(limit: UsageLimit, measuredAt: Long, now: Long): Reading? {
         val resetsAt = limit.resetsAt ?: return null
         val minutes = windowMinutes(limit) ?: return null
+        val at = measurementTime(measuredAt, now)
         // Doubles, not Longs: both values come from a hand-editable file, and `resetsAt - now` or
         // `minutes * 60_000` on a hostile value would wrap around instead of being refused.
         val windowMs = minutes.toDouble() * 60_000.0
-        val remainingMs = resetsAt.toDouble() - now.toDouble()
-        if (remainingMs <= 0.0 || remainingMs > windowMs) return null
+        // The window has reset by the time the phone draws it: the percentage is the old window's.
+        if (resetsAt.toDouble() - now.toDouble() <= 0.0) return null
+        // `at <= now < resetsAt`, so this is positive. More than the whole window means the length
+        // is wrong for this limit, or the measurement time does not belong to this window.
+        val remainingMs = resetsAt.toDouble() - at.toDouble()
+        if (remainingMs > windowMs) return null
         val elapsedPercent = (1.0 - remainingMs / windowMs) * 100.0
         val used = limit.usedPercent
         if (used.isNaN()) return null

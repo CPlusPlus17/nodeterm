@@ -294,12 +294,12 @@ private fun UsageCard(account: UsageAccount, status: AgentStatusFile?) {
         if (account.status != "ok" && account.limits.isEmpty()) {
             Text(if (account.status == "error") "Could not read usage." else "Usage unavailable.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        account.limits.forEach { UsageBar(it) }
+        account.limits.forEach { UsageBar(it, measuredAt = account.updatedAt) }
     }
 }
 
 @Composable
-private fun UsageBar(limit: UsageLimit, now: Long = System.currentTimeMillis()) {
+private fun UsageBar(limit: UsageLimit, measuredAt: Long, now: Long = System.currentTimeMillis()) {
     val pct = limit.usedPercent.coerceIn(0.0, 100.0)
     val color: Color = when (limit.severity) {
         "critical", "error", "red" -> NtColors.attention
@@ -324,8 +324,9 @@ private fun UsageBar(limit: UsageLimit, now: Long = System.currentTimeMillis()) 
             trackColor = NtColors.panel2,
             modifier = Modifier.fillMaxWidth().height(6.dp)
         )
-        // Only when the window's end and length are known (UsagePace says why it would refuse).
-        UsagePace.of(limit, now)?.let { reading ->
+        // Only when the window's end and length are known (UsagePace says why it would refuse),
+        // judged at the time the percentage was measured, not now (UsagePace says why).
+        UsagePace.of(limit, measuredAt = measuredAt, now = now)?.let { reading ->
             Text(
                 reading.line,
                 style = MaterialTheme.typography.labelSmall,
