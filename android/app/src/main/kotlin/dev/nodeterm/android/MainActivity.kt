@@ -16,7 +16,12 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import androidx.core.content.ContextCompat
 import dev.nodeterm.android.ui.HostScreen
 import dev.nodeterm.android.ui.HostsScreen
@@ -34,8 +39,10 @@ sealed interface Route {
     data class Terminal(val hostId: String, val nodeId: String, val title: String) : Route
 }
 
-class Navigator(initial: Route) {
-    val stack = mutableStateListOf(initial)
+class Navigator(initial: List<Route>) {
+    constructor(initial: Route) : this(listOf(initial))
+
+    val stack = mutableStateListOf<Route>().apply { addAll(initial.ifEmpty { listOf(Route.Hosts) }) }
     val current: Route get() = stack.last()
 
     fun push(route: Route) {
@@ -51,6 +58,44 @@ class Navigator(initial: Route) {
     fun replaceAll(route: Route) {
         stack.clear()
         stack.add(route)
+    }
+
+    companion object {
+        /**
+         * Saves the back stack across activity recreation (a density, font-scale or locale change,
+         * or process death) — it used to reset to the computers list (audit A22). Each route is a
+         * JSON array of strings; an entry that no longer decodes is dropped, never guessed.
+         */
+        val Saver: Saver<Navigator, String> = Saver(
+            save = { nav -> JsonArray(nav.stack.map { encode(it) }).toString() },
+            restore = { raw ->
+                val routes = runCatching { (Json.parseToJsonElement(raw) as JsonArray).mapNotNull { decode(it) } }.getOrNull()
+                Navigator(routes ?: listOf(Route.Hosts))
+            }
+        )
+
+        private fun encode(r: Route): JsonArray = JsonArray(
+            when (r) {
+                Route.Hosts -> listOf("hosts")
+                is Route.PairHost -> listOfNotNull("pair", r.code)
+                Route.Settings -> listOf("settings")
+                is Route.Host -> listOf("host", r.hostId, r.tab.toString())
+                is Route.Terminal -> listOf("terminal", r.hostId, r.nodeId, r.title)
+            }.map { JsonPrimitive(it) }
+        )
+
+        private fun decode(e: JsonElement): Route? {
+            val parts = (e as? JsonArray)?.map { (it as? JsonPrimitive)?.content ?: return null } ?: return null
+            return when (parts.firstOrNull()) {
+                "hosts" -> Route.Hosts
+                // A pairing code is single-use: coming back to it would only fail. Drop it.
+                "pair" -> null
+                "settings" -> Route.Settings
+                "host" -> parts.getOrNull(1)?.let { Route.Host(it, parts.getOrNull(2)?.toIntOrNull() ?: 0) }
+                "terminal" -> if (parts.size == 4) Route.Terminal(parts[1], parts[2], parts[3]) else null
+                else -> null
+            }
+        }
     }
 }
 
@@ -94,13 +139,31 @@ class MainActivity : ComponentActivity() {
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        val openHost = intent?.getStringExtra(EXTRA_HOST_ID)
-        takePairLink(intent)
+        // The launch intent (a notification tap, a pairing link) is applied on a FRESH start only: on a
+        // recreation the saved back stack already reflects it, and re-applying it would push the
+        // same screen again (audit A22).
+        val fresh = savedInstanceState == null
+        val openHost = if (fresh) intent?.getStringExtra(EXTRA_HOST_ID) else null
+        if (fresh) takePairLink(intent)
         setContent {
             NodetermTheme {
-                val nav = remember {
+                val nav = rememberSaveable(saver = Navigator.Saver) {
                     Navigator(Route.Hosts).also { n ->
                         if (openHost != null && graph.hosts.get(openHost) != null) n.push(Route.Host(openHost, tab = 2))
+                    }
+                }
+                // A restored stack may name a computer that was forgotten meanwhile.
+                LaunchedEffect(Unit) {
+                    val known = nav.stack.filter { r ->
+                        when (r) {
+                            is Route.Host -> graph.hosts.get(r.hostId) != null
+                            is Route.Terminal -> graph.hosts.get(r.hostId) != null
+                            else -> true
+                        }
+                    }
+                    if (known.size != nav.stack.size) {
+                        nav.stack.clear()
+                        nav.stack.addAll(known.ifEmpty { listOf(Route.Hosts) })
                     }
                 }
                 val hostTap = incomingHost
