@@ -29,8 +29,11 @@ import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.NewNode
 import dev.nodeterm.protocol.host.NewSessionHint
+import dev.nodeterm.protocol.host.PhoneLaunch
+import dev.nodeterm.protocol.host.StreamLease
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
+import dev.nodeterm.protocol.host.ViewerSlot
 import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
@@ -80,7 +83,12 @@ class TerminalController(
     private var webView: WebView? = null
     private var pageReady = false
     private val pendingJs = ArrayList<String>()
-    private var stream: TerminalStream? = null
+    /**
+     * The attach hand-off (audit A40): which attach may still install its stream, and the stream this
+     * screen shows. Thread-safe; [stream] is also read on the WebView's bridge thread.
+     */
+    private val slot = ViewerSlot()
+    private val stream: TerminalStream? get() = slot.stream
     private var attachJob: Job? = null
     private var cols = 0
     private var rows = 0
@@ -101,12 +109,18 @@ class TerminalController(
         }
     }
 
-    private val sink = object : TerminalSink {
+    /**
+     * One sink per attach, tied to its [ViewerSlot] ticket: a stream this screen no longer shows (a
+     * superseded attach, or one a launch still holds after the screen left) must not paint into it,
+     * and its exit is not this screen's to report.
+     */
+    private fun sinkFor(ticket: Long) = object : TerminalSink {
         override fun onPaint(text: String) {
-            main.post { js("nt.paint('${b64(text.toByteArray(Charsets.UTF_8))}')") }
+            main.post { if (slot.isCurrent(ticket)) js("nt.paint('${b64(text.toByteArray(Charsets.UTF_8))}')") }
         }
 
         override fun onOutput(bytes: ByteArray) {
+            if (!slot.isCurrent(ticket)) return
             synchronized(outBuf) {
                 outBuf.write(bytes)
                 if (!flushScheduled) {
@@ -117,14 +131,17 @@ class TerminalController(
         }
 
         override fun onResized(cols: Int, rows: Int) {
-            main.post { sizedElsewhere = if (cols != this@TerminalController.cols || rows != this@TerminalController.rows) cols to rows else null }
+            main.post {
+                if (!slot.isCurrent(ticket)) return@post
+                sizedElsewhere = if (cols != this@TerminalController.cols || rows != this@TerminalController.rows) cols to rows else null
+            }
         }
 
         override fun onExit(code: Int?) {
             main.post {
-                // Our own detach on ON_STOP ends the stream too; that is not a drop to recover from.
-                if (stopped) return@post
-                stream = null
+                // Not the stream this screen shows: our own detach on ON_STOP or on leaving (it ends the
+                // stream too), or a stream a superseded attach or a launch held. Not a drop to recover from.
+                if (!slot.ended(ticket)) return@post
                 // exit 0 with the session still running = another client attached with -D and
                 // detached us — audit A13. A current desktop no longer does this to a relay-attached
                 // phone, but an older desktop does, and any desktop still does it to a phone attached
@@ -305,7 +322,10 @@ class TerminalController(
         if (disposed || stopped) return
         state = TermState.Connecting
         resumeOffer = null
+        val ticket = slot.begin()
+        val sink = sinkFor(ticket)
         attachJob = graph.scope.launch {
+            val job = coroutineContext[Job]
             try {
                 val conn = if (useRelay) {
                     session.viaRelay { st ->
@@ -320,50 +340,58 @@ class TerminalController(
                 // the chosen account (audit A33).
                 val hint = PendingLaunches.peek(nodeId)?.let { NewSessionHint(it.projectId, it.accountId, it.agentId) }
                 val s = conn.attach(nodeId, c, r, sink, hint)
-                if (disposed || stopped) {
-                    s.detach()
-                    return@launch
-                }
+                val lease = StreamLease(s) { st -> graph.scope.launch { runCatching { st.detach() } } }
+                // The host created this session for the launch just now, and the request is consumed
+                // here: the launch holds the stream until it is done, whatever this screen does next
+                // (audit A40). Started BEFORE the hand-off, so a screen that already left cannot
+                // detach the stream under it.
+                val launch = if (hint != null) PendingLaunches.take(nodeId) else null
+                if (launch != null) startLaunch(launch, lease, conn)
+                // The hand-off re-checks the screen: it may have left, or started a newer attach,
+                // since this one began. Then the stream is let go of instead of installed (A40).
                 main.post {
-                    stream = s
+                    if (!slot.accept(ticket, lease)) return@post
                     attachedAt = System.currentTimeMillis()
                     state = TermState.Attached
                     if (cols > 0 && (cols != c || rows != r)) s.resize(cols, rows)
                 }
-                afterAttach(s, conn)
+                if (launch == null && slot.isCurrent(ticket)) afterAttach(s, conn)
             } catch (e: NeedsRelayException) {
                 val msg = e.message ?: "This session opens through the relay."
                 main.post {
+                    if (!slot.isCurrent(ticket)) return@post
                     state = if (session.hasRelay) TermState.RelayOffer(msg)
                     else TermState.Ended("$msg Remote access isn't set up for this computer, so open it in nodeterm on the computer.")
                 }
             } catch (e: Exception) {
-                main.post { state = TermState.Ended(e.message ?: "Couldn't open the terminal.") }
+                // Includes our own cancel on ON_STOP: the ticket is stale by then, so nothing is shown.
+                main.post { if (slot.isCurrent(ticket)) state = TermState.Ended(e.message ?: "Couldn't open the terminal.") }
             } finally {
-                main.post { attachJob = null }
+                // Only this attach's own reference: a newer attach may have replaced it meanwhile.
+                main.post { if (attachJob === job) attachJob = null }
             }
         }
     }
 
-    private suspend fun afterAttach(s: TerminalStream, conn: HostConnection) {
-        val launch = PendingLaunches.take(nodeId)
-        if (launch != null) {
-            // A session this phone just started: type its launch line once the shell has settled
-            // (a line delivered across the rc-file tty flush comes out mangled), THEN put it on the
-            // canvas — registering first would let the desktop mount it cold and launch the agent too.
-            delay(900)
-            launch.command?.let { s.write(it + "\r") }
-            if (conn.capabilities.registerNode) {
-                // A refusal is an ANSWER (host-service: the session stays open, just unregistered):
-                // say so, instead of leaving a session no canvas shows (audit A14).
-                val registered = runCatching {
-                    conn.registerNode(launch.projectId, NewNode(nodeId, launch.title, launch.agentId, launch.accountId))
-                }.getOrDefault(false)
-                if (!registered) main.post { notice = UNREGISTERED_NOTICE }
-            }
+    /**
+     * A session this phone just started: type its launch line once the shell has settled, THEN put
+     * it on the canvas (registering first would let the desktop mount it cold and launch the agent
+     * too). Runs in the app scope, not in [attachJob], so neither ON_STOP nor leaving the screen
+     * drops it half-done (audit A40).
+     */
+    private fun startLaunch(launch: LaunchRequest, lease: StreamLease, conn: HostConnection) {
+        val register: (suspend () -> Boolean)? = if (conn.capabilities.registerNode) {
+            { conn.registerNode(launch.projectId, NewNode(nodeId, launch.title, launch.agentId, launch.accountId)) }
+        } else null
+        PhoneLaunch.start(graph.scope, lease, launch.command, register) { outcome ->
+            // A refusal is an ANSWER (host-service: the session stays open, just unregistered): say
+            // so, instead of leaving a session no canvas shows (audit A14).
+            if (outcome == PhoneLaunch.Outcome.REFUSED) main.post { notice = UNREGISTERED_NOTICE }
             session.refreshNow()
-            return
         }
+    }
+
+    private suspend fun afterAttach(s: TerminalStream, conn: HostConnection) {
         val snap = session.snapshot.value
         val node = snap.findNode(nodeId)?.second
         val status = snap.statusOf(nodeId)
@@ -446,9 +474,8 @@ class TerminalController(
         stopped = true
         attachJob?.cancel()
         attachJob = null
-        val s = stream
-        stream = null
-        if (s != null) graph.scope.launch { runCatching { s.detach() } }
+        // Detaches the stream, unless a launch still holds it: then once that launch is done (A40).
+        slot.leave()
         webView?.onPause()
         state = TermState.Connecting
     }
@@ -463,9 +490,10 @@ class TerminalController(
 
     fun dispose() {
         disposed = true
-        val s = stream
-        stream = null
-        if (s != null) graph.scope.launch { runCatching { s.detach() } }
+        // Detaches the stream (after a launch that still holds it, A40), and refuses every attach
+        // still on its way. attachJob is deliberately not cancelled: an attach that lands now is
+        // let go of by the hand-off, and a session it created still gets its launch.
+        slot.close()
         main.removeCallbacks(flush)
         webView?.let {
             it.removeJavascriptInterface("NodetermBridge")

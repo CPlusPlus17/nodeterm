@@ -149,6 +149,14 @@ leg (`A74`): a changed key goes on to the relay in Auto with a warning, stops on
 and its text names "Only through the relay" rather than only re-pairing. The app's use of it (the
 relay dial behind `RelayApprovalGate`, the warning on the host screen) is only type-checked.
 
+`TerminalHandoffTest` pins the terminal screen's attach hand-off (`A40`). A stream that arrives
+after the screen left (back, or the app going to the background), or from an attach a newer one
+replaced, is detached instead of shown. A session the phone starts keeps its stream until its launch
+line is typed and the node is registered, even when the user leaves during the settle delay: the
+request was consumed to get there, so a launch dropped half-way could not be retried, and would
+leave an unregistered shell no canvas shows. The terminal screen's use of these rules is only
+type-checked.
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
