@@ -46,6 +46,7 @@ import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.conn.ConnState
 import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.TransportKind
+import dev.nodeterm.protocol.model.NewSessionChoice
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,7 +78,7 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
 
     val needsYou = snapshot.status?.inbox?.events?.count { it.actionable } ?: 0
     val canCreate = (state as? ConnState.Connected)?.kind == TransportKind.RELAY &&
-        snapshot.projects.any { !it.closed && it.sshTarget == null && it.cwd != null }
+        NewSessionChoice.offeredProjects(snapshot).isNotEmpty()
 
     Scaffold(
         topBar = {

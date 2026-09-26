@@ -45,6 +45,7 @@ import dev.nodeterm.protocol.model.AccountNames
 import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.ContextFill
 import dev.nodeterm.protocol.model.Launch
+import dev.nodeterm.protocol.model.NewSessionChoice
 import dev.nodeterm.protocol.model.NodeInfo
 import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.ProjectsSnapshot
@@ -299,17 +300,20 @@ private fun SessionRow(node: NodeInfo, snapshot: ProjectsSnapshot, onClick: () -
 /** New session: a project on THIS computer, an agent (or a plain shell), and for Claude an account. */
 @Composable
 fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate: (LaunchRequest) -> Unit) {
-    // Only projects the desktop can register a node in: on this computer (not an SSH project) AND
-    // with a folder — it refuses cwd-less (inline) canvases, which would orphan the session (A14).
-    val projects = snapshot.openProjects().filter { it.sshTarget == null && it.cwd != null }
+    // Only projects the desktop can register a node in: on this computer, with a folder (A14).
+    val projects = NewSessionChoice.offeredProjects(snapshot)
+    // The user's taps are remembered, but the listing is re-fetched under the open dialog, so a tap
+    // can name a project or account the desktop has since removed. What the dialog draws as selected,
+    // and what Start uses, is derived from the CURRENT listing — the same answer for both (A42).
     var projectId by remember { mutableStateOf(projects.firstOrNull()?.id) }
+    val selected = NewSessionChoice.project(projects, projectId)
     var agent by remember { mutableStateOf<Agent?>(Agent.CLAUDE) }
     val settings = snapshot.status?.settings
     val accounts = settings?.claudeAccounts.orEmpty()
-    // The project's own default account, when this host still has it (A16).
-    var accountId by remember(projectId) {
-        mutableStateOf(Launch.defaultAccount(settings, projects.firstOrNull { it.id == projectId }))
-    }
+    // Starts at the selected project's own default account, when this host still has it (A16), and
+    // again whenever the selection moves to another project.
+    var accountPick by remember(selected?.id) { mutableStateOf(Launch.defaultAccount(settings, selected)) }
+    val accountId = NewSessionChoice.account(settings, selected, accountPick)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -317,9 +321,18 @@ fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 item { Text("Project", style = MaterialTheme.typography.labelLarge) }
+                if (projects.isEmpty()) {
+                    item {
+                        Text(
+                            "No open project on this computer has a folder to start a session in.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 items(projects, key = { "proj-${it.id}" }) { p ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = projectId == p.id, onClick = { projectId = p.id })
+                        RadioButton(selected = selected?.id == p.id, onClick = { projectId = p.id })
                         Text(p.name)
                     }
                 }
@@ -334,7 +347,7 @@ fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate
                     item { Text("Claude account", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp)) }
                     items(listOf<String?>(null) + accounts.map { it.id }, key = { "acct-${it ?: "system"}" }) { id ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = accountId == id, onClick = { accountId = id })
+                            RadioButton(selected = accountId == id, onClick = { accountPick = id })
                             Text(id?.let { AccountNames.managed(it, snapshot.status) } ?: AccountNames.SYSTEM)
                         }
                     }
@@ -342,8 +355,8 @@ fun NewSessionDialog(snapshot: ProjectsSnapshot, onDismiss: () -> Unit, onCreate
             }
         },
         confirmButton = {
-            TextButton(enabled = projectId != null, onClick = {
-                val p = projects.first { it.id == projectId }
+            TextButton(enabled = selected != null, onClick = start@{
+                val p = selected ?: return@start
                 val a = agent
                 val acct = if (a == Agent.CLAUDE) accountId else null
                 val cmd = if (a != null) Launch.launchCommand(a, settings, acct, p.cwd, p.defaultPermissionMode)
