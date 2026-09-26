@@ -15,6 +15,8 @@ export interface ClickToFocusHost {
   xtermTextarea: () => HTMLTextAreaElement | undefined
   /** The ⌘M (Markdown / chat) view covers the xterm. */
   mdMode: () => boolean
+  /** True while focus mode is moving the root; the blur that move causes is not the user leaving. */
+  reparenting: () => boolean
   /** The node's `enterNow` — the acknowledgement a dwell or a guard click runs. */
   acknowledge: () => void
   /** `focusXtermUnlessCovered` for this node. */
@@ -111,6 +113,8 @@ export function useClickToFocus(enabled: boolean, host: ClickToFocusHost): void 
     }
 
     const onFocusOut = (e: FocusEvent) => {
+      // Focus mode's own reparent (reparentKeepingFocus re-focuses the element right after).
+      if (h().reparenting()) return
       const outcome = focusLossOutcome({
         nodeRoot: root,
         lost: e.target,

@@ -182,6 +182,13 @@ describe('terminal focus mode (#757)', () => {
       expect(src).toContain('hoverTakesKeyboard(focusFollowsPointer)')
       expect(src).toContain('pointerLeaveReleases(focusFollowsPointer)')
       expect(src).toContain('useClickToFocus(!focusFollowsPointer,')
+      // A dwell already running when the setting is switched off must not still take the keyboard:
+      // the timer re-reads the LIVE setting, and switching off cancels a pending dwell.
+      expect(src).toContain('if (!hoverTakesKeyboard(focusFollowsPointerRef.current)) return')
+      expect(src).toMatch(/if \(focusFollowsPointer\) return\s*\n\s*if \(dwellRef\.current\) clearTimeout\(dwellRef\.current\)/)
+      // Focus mode keeps the keyboard across its reparent in BOTH modes, and tells the hook.
+      expect(src.match(/reparentKeepingFocus\(/g)?.length).toBe(2)
+      expect(src).toContain('reparenting: () => reparentingRef.current')
       const hook = read('src/renderer/nodes/useClickToFocus.ts')
       for (const call of ['focusLossOutcome(', 'outsidePressReleases(', 'bodyPressAcknowledges(', 'reclaimTarget(']) {
         expect(hook).toContain(call)

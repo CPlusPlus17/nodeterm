@@ -215,6 +215,7 @@ import {
   resolveFocusFollowsPointer
 } from '../lib/terminalFocusMode'
 import { useClickToFocus } from './useClickToFocus'
+import { reparentKeepingFocus } from './reparentKeepingFocus'
 import { isHidden } from '../lib/ui-visibility'
 import { useTerminalGlass } from '../lib/useTerminalGlass'
 import { isLiquidGlass } from '../lib/appTheme'
@@ -1515,6 +1516,8 @@ export function TerminalNode({
   const [, bumpFocused] = useState(0)
   const focused = focusedNodeId() === id
   const focusedRef = useRef(focused)
+  /** True only while focus mode's reparent is moving the root (see reparentKeepingFocus). */
+  const reparentingRef = useRef(false)
   focusedRef.current = focused
   useEffect(() => {
     const read = (): void => {
@@ -1546,10 +1549,15 @@ export function TerminalNode({
     // effect then re-runs with the same answer and no-ops. (Review finding on #267.)
     glyphSyncRef.current?.(false)
     const home = root.parentElement
-    surface.appendChild(root)
+    // The move blurs a focused xterm (MEASURED) — give it back, and tell click-to-focus the blur
+    // is ours, not the user leaving (reparentKeepingFocus).
+    const setMoving = (moving: boolean): void => {
+      reparentingRef.current = moving
+    }
+    reparentKeepingFocus(root, surface, setMoving)
     return () => {
       try {
-        home?.appendChild(root)
+        if (home) reparentKeepingFocus(root, home, setMoving)
       } catch {
         /* home unmounted with the project — React already gave up on this subtree */
       }
@@ -5232,6 +5240,14 @@ export function TerminalNode({
     // enterNow closes over live refs/setters; re-running on its identity would fire spuriously.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusReq])
+  const focusFollowsPointerRef = useRef(focusFollowsPointer)
+  focusFollowsPointerRef.current = focusFollowsPointer
+  // Switching to click to focus cancels a dwell that was already counting down.
+  useEffect(() => {
+    if (focusFollowsPointer) return
+    if (dwellRef.current) clearTimeout(dwellRef.current)
+    dwellRef.current = null
+  }, [focusFollowsPointer])
   const onBodyEnter = () => {
     if (dwellRef.current) clearTimeout(dwellRef.current)
     // Click to focus (#757): hovering never takes the keyboard. A click still does, at once, through
@@ -5239,6 +5255,8 @@ export function TerminalNode({
     // correctly, arms nothing.
     if (!hoverTakesKeyboard(focusFollowsPointer)) return
     const enter = () => {
+      // The setting can flip while this dwell is pending; the closure's value would be stale.
+      if (!hoverTakesKeyboard(focusFollowsPointerRef.current)) return
       // While Cmd/Ctrl is held the user is zooming the canvas — don't grab focus / enter the
       // terminal; just keep checking until the modifier is released.
       if (isZoomModifierHeld()) {
@@ -5278,6 +5296,7 @@ export function TerminalNode({
     root: () => rootRef.current,
     xtermTextarea: () => termRef.current?.textarea,
     mdMode: () => mdModeRef.current,
+    reparenting: () => reparentingRef.current,
     acknowledge: () => enterNow(),
     focusXterm: () => focusXtermUnlessCovered(termRef.current, mdModeRef.current),
     setArmed,

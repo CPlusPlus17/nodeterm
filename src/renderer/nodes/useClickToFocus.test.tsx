@@ -33,7 +33,7 @@ describe('useClickToFocus', () => {
   let handle: HTMLDivElement
   let outside: HTMLDivElement
   let surface: HTMLDivElement
-  let host: ClickToFocusHost & { active: boolean; md: boolean }
+  let host: ClickToFocusHost & { active: boolean; md: boolean; moving: boolean }
   const calls: string[] = []
 
   beforeEach(() => {
@@ -68,6 +68,8 @@ describe('useClickToFocus', () => {
     host = {
       active: false,
       md: false,
+      moving: false,
+      reparenting: () => host.moving,
       id: 'n1',
       root: () => node,
       xtermTextarea: () => xterm,
@@ -157,6 +159,16 @@ describe('useClickToFocus', () => {
     press(outside)
     expect(calls).toContain('release')
     expect(calls).toContain('active:false')
+  })
+
+  it('keeps the node across focus mode\'s reparent blur (the move re-focuses it afterwards)', () => {
+    act(() => xterm.focus())
+    calls.length = 0
+    host.moving = true
+    act(() => xterm.blur()) // Blink blurs the focused textarea synchronously inside appendChild
+    host.moving = false
+    expect(calls).not.toContain('release')
+    expect(calls).not.toContain('armed:true')
   })
 
   it('releases when focus leaves for something outside the node', () => {

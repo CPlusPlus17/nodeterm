@@ -1283,7 +1283,11 @@ session.
   (`bodyPressAcknowledges`) — guard down, xterm focused, ⌘M view open, all the same — so an unread
   finish is cleared by clicking the terminal, not only by clicking the guard. A focus RESTORE that
   no press caused (window activation) never acknowledges. The xterm blur that OPENING the ⌘M view
-  causes is `keep`, not a release (`lostIsCoveredXterm`). The guard listens to POINTER events
+  causes is `keep`, not a release (`lostIsCoveredXterm`). Focus mode's reparent blurs a focused xterm SYNCHRONOUSLY inside
+  `appendChild` (MEASURED, Electron 42: `relatedTarget` null, root still connected — so an
+  `isConnected` test cannot see it); `nodes/reparentKeepingFocus.ts` brackets the move with a flag the
+  hook honours (`reparenting`) and re-focuses the element that held the keyboard, in BOTH modes —
+  before it, entering/leaving focus mode dropped the keyboard in the default mode too. The guard listens to POINTER events
   (`nodes/HoverGuard.tsx`): React Flow's d3-drag swallows a left `mousedown`/`mouseup` on a
   draggable node before React sees them, so the old mouse-event guard never received a left click
   (#87's click-to-focus only ever worked through the dwell). Only a literal `false` in
