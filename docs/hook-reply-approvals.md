@@ -37,7 +37,10 @@ must be a **no-op** when the env var is absent (user's own terminals, older node
 **Answerers** (all write the same one-line answer file, atomically `printf > tmp && mv`):
 - **Phone (SSH)** — `InboxApproval` writes it over the connection when the approval event
   carries `pendingId`; else falls back to send-keys. Digit `2`/"Always allow" keeps using
-  send-keys in v1 (hook `updatedPermissions` is out of scope).
+  send-keys in v1 (hook `updatedPermissions` is out of scope). Caveat: option 2 is not fixed.
+  In the Claude Code 2.1.283 bundle (read, not measured live) the Bash prompt shows a "don't ask
+  again" row only when Claude offers one for that ask, so `2` can be `No` or "Yes, and switch to
+  auto mode". Android therefore has no "Always allow" (docs/android.md, Known gaps).
 - **Desktop canvas** — the NEEDS-YOU badge gains Approve/Deny buttons (approval events with
   `pendingId` only), routed over IPC to a main-side writer: local project → local fs; SSH
   project → write via the project's ControlMaster. So desktop users are not left staring at

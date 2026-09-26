@@ -132,6 +132,17 @@ BLOCKED node or a question on a WAITING one.
   one itself, so it can see it). A phone attached over direct SSH is detached (exit 0), and so is a
   relay phone on a desktop older than that change; the app checks that the session is still live
   and reattaches.
+- **No "Always allow" on approval cards** (audit `A56`; iOS has one). iOS types `2`, and
+  docs/hook-reply-approvals.md is the only place the repo states that digit. Read from the Claude
+  Code 2.1.283 bundle (not measured on a live prompt), option 2 depends on the ask: the Bash prompt
+  offers `Yes`, then a "don't ask again" row only when Claude has one for this ask, then an
+  optional "Yes, and switch to auto mode", then `No`. So a blind `2` can deny the request or switch
+  the session to auto mode, and the phone cannot see which. A held ticket (the default, since
+  `hookReplyApprovals` is on) has no prompt on screen at all. The layout-independent route is the
+  hook's own: answer `allow` with `updatedPermissions` taken from the request's
+  `permission_suggestions` (both fields exist in that CLI's hook schema). That changes the
+  `~/.nodeterm/pending` answer file and `approvals.answer`, so it needs the desktop, iOS and Android
+  together.
 - **Codex/Gemini/… launch flags.** A phone-started non-Claude agent launches bare (its own default
   approval mode): the per-agent approval table needs host facts (codex's vocabulary moved between
   releases, #785) the mirror only partly publishes.

@@ -25,6 +25,17 @@ import dev.nodeterm.protocol.model.ProjectsSnapshot
  * badge for a held question (`recordAgentEvent`, src/core/agent-status-mirror.ts; pinned by
  * src/core/pending-question.test.ts), so a ticketed answer is judged by its CARD, and the host
  * refuses it ("gone") once the hook's hold has ended.
+ *
+ * There is deliberately NO "Always allow" here (audit A56), although iOS types `2` for it
+ * (docs/hook-reply-approvals.md, "Digit `2`/Always allow keeps using send-keys"). That line is the
+ * only place the repo states the digit: no desktop code types it, and no captured prompt pins it.
+ * What option 2 IS depends on the ask. Read from the Claude Code 2.1.283 bundle (not run against a
+ * live prompt): the Bash prompt is `Yes`, then a "don't ask again" row only when Claude offers one
+ * (it is withheld when `suppressAlwaysAllowRule` is set, and feature-gated), then an optional
+ * "Yes, and switch to auto mode", then `No`. So a blind `2` can DENY the request or switch the
+ * whole session to auto mode, and a ticketed approval has no prompt on screen to type into at all.
+ * The phone cannot see the prompt, and a guess must degrade to nothing: docs/android.md "Known
+ * gaps" names the layout-independent route (the hook's `updatedPermissions`).
  */
 object QuickActions {
     /**
