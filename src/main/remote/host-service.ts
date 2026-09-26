@@ -151,7 +151,21 @@ export interface HostNodeActions {
   refresh(nodeId: string): boolean
   /** Rename a node through the renderer's `renameSession` funnel (title pre-sanitized here). */
   rename(nodeId: string, title: string): boolean
+  /**
+   * Type a short quick answer (`node.sendKeys`) into the node's session without attaching a new
+   * client. Resolves whether it was delivered. Optional: absent ⇒ "not served", and the phone falls
+   * back to its old attach-and-write.
+   */
+  sendKeys?(nodeId: string, keys: string): Promise<boolean>
 }
+
+/**
+ * What `node.sendKeys` accepts: a SHORT quick answer — a digit or a few printable characters, ESC,
+ * Enter. It exists for the Inbox's question/approval shortcuts, not as a general input channel
+ * (`pty.attach` is that), so anything longer or carrying other control bytes is refused.
+ */
+// eslint-disable-next-line no-control-regex -- the allowed controls are exactly ESC and CR
+export const SEND_KEYS_RE = /^[\x1b\r\x20-\x7e]{1,16}$/
 
 /**
  * The kanban board writes the phone may ask this host to make on its behalf (`projects.ensureBoard`
@@ -862,6 +876,36 @@ export function createHostHandlers(
    * "delivered to a live desktop window", never "the action happened" — that contract is in the
    * verb docs the iOS client mirrors.
    */
+  /**
+   * `node.sendKeys {nodeId, keys}` → `{sent}`. The phone's Inbox answers used to attach a throwaway
+   * 80x24 tmux client, write, and kill it at once: an Input that beat the async attach was dropped
+   * (no session yet), and one that did not could die with the client before tmux read it — a lone
+   * ESC (Deny) nearly always, inside tmux's escape-time (audit A12). This types through the node's
+   * existing session instead. `sent:false` is an ANSWER (not delivered: open the session).
+   */
+  function handleSendKeys(req: RpcRequest): void {
+    if (!nodeActions?.sendKeys) {
+      socket.respond(req.id, false, { message: `${req.method} is not served on this host.` })
+      return
+    }
+    const p = asRecord(req.params)
+    const nodeId = str(p.nodeId)
+    // eslint-disable-next-line no-control-regex -- refusing control chars is the point
+    if (!nodeId || nodeId.length > REF_MAX_LEN || /[\x00-\x1f\x7f-\x9f]/.test(nodeId)) {
+      socket.respond(req.id, false, { message: 'Invalid node id.' })
+      return
+    }
+    const keys = str(p.keys) ?? ''
+    if (!SEND_KEYS_RE.test(keys)) {
+      socket.respond(req.id, false, { message: 'node.sendKeys takes a short answer: up to 16 printable characters, Esc or Enter.' })
+      return
+    }
+    void nodeActions
+      .sendKeys(nodeId, keys)
+      .then((sent) => socket.respond(req.id, true, { sent }))
+      .catch(() => socket.respond(req.id, true, { sent: false }))
+  }
+
   function handleNodeAction(req: RpcRequest): void {
     if (!nodeActions) {
       socket.respond(req.id, false, { message: `${req.method} is not served on this host.` })
@@ -952,6 +996,9 @@ export function createHostHandlers(
         case 'node.refresh':
         case 'node.rename':
           handleNodeAction(req)
+          break
+        case 'node.sendKeys':
+          handleSendKeys(req)
           break
         case 'approvals.answer':
         case 'inbox.ack':

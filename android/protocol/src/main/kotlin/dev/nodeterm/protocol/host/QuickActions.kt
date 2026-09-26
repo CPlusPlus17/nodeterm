@@ -41,8 +41,7 @@ object QuickActions {
         // while the hook holds it, so keys are wrong. Send the user to the session instead.
         if (event.pendingId != null) return Result.OPEN_SESSION
         if (event.agentId != "claude") return Result.OPEN_SESSION
-        conn.sendKeys(event.nodeId, if (allow) "1" else "\u001b")
-        return Result.SENT
+        return typeOrOpen(conn, event, if (allow) "1" else "\u001b")
     }
 
     /** AskUserQuestion: choices are digits on screen (a hook cannot inject an answer value). */
@@ -50,8 +49,18 @@ object QuickActions {
         if (event.kind != InboxKind.QUESTION || event.multiSelect) return Result.OPEN_SESSION
         if (optionIndex !in event.options.indices || optionIndex > 8) return Result.OPEN_SESSION
         if (!stillWaiting(conn, event, AgentState.WAITING)) return Result.ALREADY_HANDLED
-        conn.sendKeys(event.nodeId, (optionIndex + 1).toString())
-        return Result.SENT
+        return typeOrOpen(conn, event, (optionIndex + 1).toString())
+    }
+
+    /** Keys the host could not deliver are not "sent": the prompt is on screen, so open it. A
+     *  [NeedsRelayException] propagates — the caller retries through the relay. */
+    private suspend fun typeOrOpen(conn: HostConnection, event: InboxEvent, keys: String): Result = try {
+        conn.sendKeys(event.nodeId, keys)
+        Result.SENT
+    } catch (e: NeedsRelayException) {
+        throw e
+    } catch (_: HostException) {
+        Result.OPEN_SESSION
     }
 
     private suspend fun stillWaiting(conn: HostConnection, event: InboxEvent, expected: AgentState): Boolean {

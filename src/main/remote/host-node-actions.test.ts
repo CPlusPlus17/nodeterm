@@ -162,3 +162,57 @@ describe('delivery is the answer, never assumed', () => {
     ])
   })
 })
+
+// Audit A12: quick answers used to go through a throwaway attach + write + kill, which dropped
+// input that beat the async attach and killed the client before tmux read an ESC. `node.sendKeys`
+// types through the node's existing session instead.
+describe('node.sendKeys', () => {
+  const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
+  it('types a short answer through the injected writer and reports it', async () => {
+    const sendKeys = vi.fn(async () => true)
+    const { handlers, responses } = makeFakes({ sendKeys })
+    handlers.onRpc({ id: '1', method: 'node.sendKeys', params: { nodeId: 'term-a-1', keys: '2' } })
+    await flush()
+    expect(sendKeys).toHaveBeenCalledWith('term-a-1', '2')
+    expect(responses[0]).toEqual({ id: '1', ok: true, body: { sent: true } })
+  })
+
+  it('accepts a lone Esc (Deny) and Enter', async () => {
+    const sendKeys = vi.fn(async () => true)
+    const { handlers, responses } = makeFakes({ sendKeys })
+    handlers.onRpc({ id: '1', method: 'node.sendKeys', params: { nodeId: 'n', keys: '\u001b' } })
+    handlers.onRpc({ id: '2', method: 'node.sendKeys', params: { nodeId: 'n', keys: '\r' } })
+    await flush()
+    expect(responses.map((r) => r.ok)).toEqual([true, true])
+  })
+
+  it('answers {sent:false} — not an error — when nothing was delivered', async () => {
+    const { handlers, responses } = makeFakes({ sendKeys: async () => false })
+    handlers.onRpc({ id: '1', method: 'node.sendKeys', params: { nodeId: 'n', keys: '1' } })
+    await flush()
+    expect(responses[0]).toEqual({ id: '1', ok: true, body: { sent: false } })
+  })
+
+  it.each([
+    ['an empty answer', ''],
+    ['a long input', 'x'.repeat(17)],
+    ['other control bytes', '\u0003'],
+    ['a newline', 'a\nb']
+  ])('refuses %s before the writer is asked', async (_label, keys) => {
+    const sendKeys = vi.fn(async () => true)
+    const { handlers, responses } = makeFakes({ sendKeys })
+    handlers.onRpc({ id: '1', method: 'node.sendKeys', params: { nodeId: 'n', keys } })
+    await flush()
+    expect(sendKeys).not.toHaveBeenCalled()
+    expect(responses[0].ok).toBe(false)
+  })
+
+  it('is "not served" without the injection', async () => {
+    const { handlers, responses } = makeFakes()
+    handlers.onRpc({ id: '1', method: 'node.sendKeys', params: { nodeId: 'n', keys: '1' } })
+    await flush()
+    expect(responses[0].ok).toBe(false)
+    expect((responses[0].body as { message: string }).message).toMatch(/not served/)
+  })
+})

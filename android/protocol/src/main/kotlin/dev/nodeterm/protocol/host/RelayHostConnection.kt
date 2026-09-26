@@ -18,6 +18,9 @@ import dev.nodeterm.protocol.relay.RelaySocket
 import dev.nodeterm.protocol.relay.RelaySocketListener
 import dev.nodeterm.protocol.relay.RpcException
 import dev.nodeterm.protocol.relay.SnapshotReassembler
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -269,15 +272,46 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
         }
     }
 
+    /**
+     * Type a quick answer. `node.sendKeys` types through the node's EXISTING session on the desktop
+     * (audit A12); `sent:false` means it could not be delivered, which is a [HostException] so the
+     * caller opens the session instead. A desktop that predates the verb gets the old
+     * attach-and-write, made less lossy: the keys go only after the pane has painted (proof the
+     * desktop has attached its client), and the stream stays open well past tmux's escape-time so a
+     * lone ESC is not killed with the client.
+     */
     override suspend fun sendKeys(nodeId: String, keys: String) {
+        val body = try {
+            J.obj(call("node.sendKeys", buildJsonObject {
+                put("nodeId", nodeId)
+                put("keys", keys)
+            }))
+        } catch (e: HostException) {
+            if (e.message?.contains("not served") == true || e.message?.startsWith("Unknown method") == true) {
+                legacySendKeys(nodeId, keys)
+                return
+            }
+            throw e
+        }
+        if (body?.b("sent") != true) throw HostException("The answer couldn't be typed into the session. Open it to answer there.")
+    }
+
+    private suspend fun legacySendKeys(nodeId: String, keys: String) {
+        val painted = CompletableDeferred<Unit>()
         val sink = object : TerminalSink {
             override fun onPaint(text: String) {}
-            override fun onOutput(bytes: ByteArray) {}
-            override fun onExit(code: Int?) {}
+            override fun onOutput(bytes: ByteArray) {
+                painted.complete(Unit)
+            }
+            override fun onExit(code: Int?) {
+                painted.complete(Unit)
+            }
         }
         val stream = attach(nodeId, 80, 24, sink)
         try {
+            withTimeoutOrNull(3_000) { painted.await() }
             stream.write(keys)
+            delay(400)
         } finally {
             stream.detach()
         }

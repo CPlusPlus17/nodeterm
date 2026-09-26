@@ -55,6 +55,7 @@ describes as the future. The Android client implements what the host actually se
 | New session | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | — |
 | Answer a held approval | **`approvals.answer`** (new) → `{answered}`, plus `reason: gone\|failed` when not | write `~/.nodeterm/pending/<id>.answer` (prints `gone` when the hold ended) |
 | Read-ack | **`inbox.ack`** (new) | write `~/.nodeterm/acks/<nodeId>.seen` |
+| Quick answer keys (question digits, legacy approve/deny) | **`node.sendKeys {nodeId, keys}`** (new) → `{sent}`, typed through the node's existing session; an older desktop gets attach → wait for paint → write → linger | `tmux send-keys -l` |
 
 `resizedFrames` is deliberately not sent on attach, matching iOS: the phone is a size *ceiling* on
 the shared pty. An `OP.Resized` still shows a "sized to another screen · fit this screen" hint.

@@ -42,10 +42,10 @@ class RelayInteropTest {
     @AfterTest
     fun tearDown() = harnesses.forEach { it.close() }
 
-    private fun start(approveAfterMs: Long = 0, rejectAfterMs: Long = -1): InteropHarness =
+    private fun start(approveAfterMs: Long = 0, rejectAfterMs: Long = -1, extra: Map<String, String> = emptyMap()): InteropHarness =
         InteropHarness.start(
             "relay",
-            mapOf("FIXTURE_APPROVE_AFTER_MS" to approveAfterMs.toString(), "FIXTURE_REJECT_AFTER_MS" to rejectAfterMs.toString())
+            mapOf("FIXTURE_APPROVE_AFTER_MS" to approveAfterMs.toString(), "FIXTURE_REJECT_AFTER_MS" to rejectAfterMs.toString()) + extra
         ).also { harnesses += it }
 
     private fun InteropHarness.str(key: String) = ready[key]!!.jsonPrimitive.content
@@ -306,6 +306,29 @@ class RelayInteropTest {
             val late = live.copy(id = "e-late", pendingId = "term-abc-1-1700000000000-43-expired")
             assertEquals(dev.nodeterm.protocol.host.ApprovalOutcome.GONE, conn.answerApproval(late, allow = true))
             assertEquals(QuickActions.Result.EXPIRED, QuickActions.answerApproval(conn, late, allow = false))
+        }
+    }
+
+    @Test
+    fun `quick answers are typed through the node's session, not a throwaway client`() = runBlocking<Unit> {
+        // A12: node.sendKeys through the desktop's real verb handler.
+        val h = start()
+        connect(h).connection.use { conn ->
+            conn.sendKeys("term-abc-1", "\u001b")
+            val ev = h.awaitEvent("sendKeys")
+            assertEquals("term-abc-1", ev.str("nodeId"))
+            assertEquals("\u001b", ev.str("keys"))
+            // Not delivered is not "sent": the caller opens the session instead.
+            assertFailsWith<HostException> { conn.sendKeys("term-gone-1", "1") }
+        }
+    }
+
+    @Test
+    fun `an older desktop without the verb still gets the keys, after the pane painted`() = runBlocking<Unit> {
+        val h = start(extra = mapOf("FIXTURE_NO_SENDKEYS" to "1"))
+        connect(h).connection.use { conn ->
+            conn.sendKeys("term-abc-1", "2")
+            assertEquals("2", h.awaitEvent("write").str("data"))
         }
     }
 }

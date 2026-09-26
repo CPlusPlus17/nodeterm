@@ -192,7 +192,12 @@ async function runRelay(): Promise<void> {
     nodeActions: {
       wake: (nodeId) => (emit({ event: 'wake', nodeId }), true),
       refresh: (nodeId) => (emit({ event: 'refresh', nodeId }), true),
-      rename: (nodeId, title) => (emit({ event: 'rename', nodeId, title }), true)
+      rename: (nodeId, title) => (emit({ event: 'rename', nodeId, title }), true),
+      // A12. `FIXTURE_NO_SENDKEYS=1` stands for a desktop that predates the verb; a node id
+      // containing `gone` stands for a session the background write could not reach.
+      ...(process.env.FIXTURE_NO_SENDKEYS === '1'
+        ? {}
+        : { sendKeys: async (nodeId: string, keys: string) => (emit({ event: 'sendKeys', nodeId, keys }), !nodeId.includes('gone')) })
     },
     kanban: {
       ensureBoard: async (projectId) => (emit({ event: 'ensureBoard', projectId }), [{ id: 'c1', title: 'To Do', color: '#0a84ff' }]),

@@ -4026,13 +4026,15 @@ app.whenReady().then(async () => {
       return {
         wake: (nodeId: string) => deliver(IPC.agentWake, nodeId),
         refresh: (nodeId: string) => deliver(IPC.agentRefreshNode, nodeId),
-        rename: (nodeId: string, title: string) => deliver(IPC.agentRenameNode, { nodeId, title })
+        rename: (nodeId: string, title: string) => deliver(IPC.agentRenameNode, { nodeId, title }),
+        // A quick answer typed WITHOUT a throwaway tmux client (audit A12): the painter pty or a
+        // control client, via the existing background write. A node of an SSH project is refused
+        // (its tmux is on the host; background writes do not reach it yet) — the phone then opens
+        // the session instead of guessing.
+        sendKeys: async (nodeId: string, keys: string) =>
+          workspaceStore.sshProjectIdForNode(nodeId) ? false : ptyManager.backgroundWrite(nodeId, keys)
       }
     })(),
-    // A relay phone's Inbox actions (`approvals.answer` / `inbox.ack`): the SAME answer writer the
-    // canvas Approve/Deny button uses, and the SAME ack pair the `~/.nodeterm/acks` sweep runs for a
-    // phone on direct SSH — `ackDone` (resolve the done event, dismiss other phones' activities)
-    // plus the desktop unread clear, WITHOUT a re-ack (the external-clear channel).
     // A phone opening a node of an SSH project reaches THAT host's tmux over the project's master,
     // or is told why not — never a phantom local session (audit A09).
     remoteNodes: {
@@ -4045,6 +4047,10 @@ app.whenReady().then(async () => {
         return sshRemote ? { where, sshRemote } : { where }
       }
     },
+    // A relay phone's Inbox actions (`approvals.answer` / `inbox.ack`): the SAME answer writer the
+    // canvas Approve/Deny button uses, and the SAME ack pair the `~/.nodeterm/acks` sweep runs for a
+    // phone on direct SSH — `ackDone` (resolve the done event, dismiss other phones' activities)
+    // plus the desktop unread clear, WITHOUT a re-ack (the external-clear channel).
     inbox: {
       answerPermission,
       ackRead: (nodeId: string) => {
