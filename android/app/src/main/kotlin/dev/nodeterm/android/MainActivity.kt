@@ -12,6 +12,7 @@ import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateListOf
@@ -64,9 +65,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** A notification tap naming a computer (at launch or while running) that awaits the UI. */
+    private var incomingHost by mutableStateOf<String?>(null)
+
+    /**
+     * A live activity gets later intents HERE, not in onCreate (it is `singleTask`): a notification
+     * tapped while the app sat in the background used to open whatever screen was last showing
+     * instead of that computer's Inbox (audit A11/A19).
+     */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         takePairLink(intent)
+        intent.getStringExtra(EXTRA_HOST_ID)?.let { incomingHost = it }
     }
 
     private val notificationPermission =
@@ -87,6 +98,16 @@ class MainActivity : ComponentActivity() {
                 val nav = remember {
                     Navigator(Route.Hosts).also { n ->
                         if (openHost != null && graph.hosts.get(openHost) != null) n.push(Route.Host(openHost, tab = 2))
+                    }
+                }
+                val hostTap = incomingHost
+                LaunchedEffect(hostTap) {
+                    if (hostTap != null) {
+                        incomingHost = null
+                        if (graph.hosts.get(hostTap) != null) {
+                            nav.replaceAll(Route.Hosts)
+                            nav.push(Route.Host(hostTap, tab = 2))
+                        }
                     }
                 }
                 val code = incomingPairCode
@@ -113,7 +134,9 @@ private fun AppContent(nav: Navigator) {
         Route.Hosts -> HostsScreen(nav)
         is Route.PairHost -> PairScreen(nav, r.code)
         Route.Settings -> SettingsScreen(nav)
-        is Route.Host -> HostScreen(nav, r.hostId, r.tab)
+        // Keyed on the route: a Host screen for another computer, or for the same one opened on a
+        // different tab (a notification → Inbox), must not inherit the showing screen's saved state.
+        is Route.Host -> key(r) { HostScreen(nav, r.hostId, r.tab) }
         is Route.Terminal -> TerminalScreen(nav, r.hostId, r.nodeId, r.title)
     }
 }
