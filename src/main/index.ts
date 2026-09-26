@@ -215,7 +215,6 @@ import { codexHome } from '../core/usage/codex-usage'
 import { isAsyncSubagentLaunch, grokRawFields, type NormalizedAgentEvent } from '../shared/agents/normalize'
 import { applyGrokHookSession } from '../core/grok-hook-session'
 import { agentAccountColor } from '../shared/agents/account-color'
-import { AGENT_CONFIG, type BuiltinAgentId } from '../shared/agents/config'
 import {
   setRemoteTranscriptReader,
   TITLE_TAIL_BYTES,
@@ -301,6 +300,7 @@ import {
   RELAY_URL
 } from './remote/host-service'
 import { initStandingHost } from './remote/standing-host'
+import { createHostNewSessions } from './remote/host-new-sessions'
 import { killRelayHostsByPeerKey } from './remote/relay-host'
 import { initRelayHost } from './remote/relay-host-service'
 import { createRevoker } from './remote/revocation'
@@ -4048,23 +4048,15 @@ app.whenReady().then(async () => {
         return sshRemote ? { where, sshRemote } : { where }
       }
     },
-    // A session the phone starts is created in its project's folder, under the account it chose,
-    // resolved HERE from the host's own registry and settings (audit A33: the phone's `cd`/env launch
-    // prefix is POSIX-only, so on Windows it was dropped). Only a local folder project qualifies —
-    // the same set the registrar accepts — and only a local, logged-in managed Claude account.
-    newSessions: {
-      resolve: ({ projectId, accountId, agentId }: { projectId: string; accountId?: string; agentId?: string }) => {
-        const info = workspaceStore.projectTargetInfo(projectId)
-        if (!info || info.ssh || !info.cwd) return null
-        const account =
-          accountId && agentId === 'claude' &&
-          (settingsStore.get().claudeAccounts ?? []).some((a) => a.id === accountId && !a.pending && !a.host)
-            ? accountId
-            : undefined
-        const agent = agentId && Object.prototype.hasOwnProperty.call(AGENT_CONFIG, agentId) ? (agentId as BuiltinAgentId) : undefined
-        return { cwd: info.cwd, ...(account ? { accountId: account } : {}), ...(agent ? { agentId: agent } : {}) }
-      }
-    },
+    // A session the phone starts is created in its project's folder, under the account and agent it
+    // chose, owned by that project — all resolved HERE from the host's own registry and settings
+    // (audit A33: the phone's `cd`/env launch prefix is POSIX-only, so on Windows it was dropped;
+    // audit A72: without the agent the session kept a bare hook env for life, and without an owner
+    // its pane stayed unproven for agent messaging). See host-new-sessions.ts.
+    newSessions: createHostNewSessions({
+      projectTargetInfo: (projectId) => workspaceStore.projectTargetInfo(projectId),
+      claudeAccounts: () => settingsStore.get().claudeAccounts ?? []
+    }),
     // A relay phone's Inbox actions (`approvals.answer` / `inbox.ack`): the SAME answer writer the
     // canvas Approve/Deny button uses, and the SAME ack pair the `~/.nodeterm/acks` sweep runs for a
     // phone on direct SSH — `ackDone` (resolve the done event, dismiss other phones' activities)

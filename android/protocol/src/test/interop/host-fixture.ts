@@ -20,6 +20,7 @@ import {
   type HostPtyManager,
   type HostSession
 } from '../../../../../src/main/remote/host-service'
+import { createHostNewSessions } from '../../../../../src/main/remote/host-new-sessions'
 import { createPairingService } from '../../../../../src/main/pairing-service'
 import type { DetachedSinks } from '../../../../../src/core/pty-manager'
 import type { PtyManager } from '../../../../../src/core/pty-manager'
@@ -103,7 +104,7 @@ async function runRelay(): Promise<void> {
     attachDetached(persistKey, s, options) {
       sinks = s
       const id = `sess-${++sessionCounter}`
-      emit({ event: 'attach', persistKey, cols: options?.cols, rows: options?.rows, adaptsToSize: s.adaptsToSize, cwd: options?.cwd, accountId: options?.accountId })
+      emit({ event: 'attach', persistKey, cols: options?.cols, rows: options?.rows, adaptsToSize: s.adaptsToSize, cwd: options?.cwd, accountId: options?.accountId, agentId: options?.agentId, ownerProjectId: options?.ownerProjectId })
       setTimeout(() => s.onData(`hello ${persistKey}\r\n`), 20)
       return id
     },
@@ -215,10 +216,13 @@ async function runRelay(): Promise<void> {
       ),
       ackRead: (nodeId) => emit({ event: 'ack', nodeId })
     },
-    // A33: the host resolves where a phone-started session is created (fake registry: project p1).
-    newSessions: {
-      resolve: ({ projectId, accountId }) => (projectId === 'p1' ? { cwd: '/repo', ...(accountId ? { accountId } : {}) } : null)
-    },
+    // A33/A72: the desktop's REAL resolver decides what a phone-started session is created with —
+    // folder, account, agent and pane owner — over a fake index (local folder project p1) and one
+    // logged-in managed Claude account.
+    newSessions: createHostNewSessions({
+      projectTargetInfo: (projectId) => (projectId === 'p1' ? { cwd: '/repo' } : null),
+      claudeAccounts: () => [{ id: 'acct-1' }]
+    }),
     onPeerReady: (s) => {
       emit({ event: 'peer-ready', sas: s.sas(), pub: s.peerPublicKeyB64() })
       if (approveAfter >= 0) setTimeout(approveNow, approveAfter)

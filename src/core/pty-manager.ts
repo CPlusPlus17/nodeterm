@@ -2272,10 +2272,15 @@ export class PtyManager {
     //
     // Those two are NOT merely attaches — `attachDetached` goes through `tmux new-session -A`, which
     // CREATES when the host's session died (that is exactly what `sessionExists` is asked ahead of,
-    // and what `fresh` reports). What makes them override-less is narrower and true either way: the
-    // relay host passes only `{cols, rows}` (host-service.ts), so those spawns carry no
-    // `ownerProjectId` — and no cwd, agent, account or hook env either. A mirrored client that
-    // lands on a re-created session gets the same bare login shell it got before this feature.
+    // and what `fresh` reports). They get no project overrides (`.nodeterm/settings.json` env and
+    // shell): being synchronous, nothing awaits that read for them. What the relay host DOES pass
+    // depends on who is attaching — a phone joining or re-creating an existing node sends
+    // `{cols, rows}` only, so that spawn keeps the bare login shell it always got (the hook env's
+    // node id and endpoint included, as for every persistKey); a phone STARTING a session names
+    // its project, and the host resolves a cwd, account, agent and `ownerProjectId` for it (audits
+    // A33, A72 — `HostNewSessions`), applied only when that attach creates the session. The agent
+    // gives that session the same agent-gated hook env a canvas spawn gets, and `attachDetached`
+    // records the owner.
     const projectOverrides = await this.projectSpawnOverrides(options)
     // Resolved HERE for the same synchronous-spawnSession reason as projectOverrides — and the
     // relay host's detached callers pass no `sshRemote` at all, so this is the one path that needs
@@ -2732,7 +2737,20 @@ export class PtyManager {
     sinks: DetachedSinks,
     options: Omit<PtyCreateOptions, 'persistKey'> = { cols: 80, rows: 24 }
   ): string {
-    return this.spawnSession({ ...options, persistKey }, null, sinks)
+    // PANE OWNERSHIP for a session the relay host CREATES (audit A72) — the counterpart of the
+    // `spawnNew` record, for the one spawn path that never goes through it. `ownerProjectId` has a
+    // single caller: the relay host's `pty.attach`, which passes it only when (a) this manager's
+    // own `sessionExists` probe (fail-safe toward "exists") found no session, so this attach is the
+    // one creating it, and (b) the owner came from the host's own index (`HostNewSessions` — the
+    // entry id the canvas passes as ITS `ownerProjectId`), never off the wire. One more refusal is
+    // answered here, from this process's own state: a live generation of this node means the
+    // attach is a JOIN whatever the caller probed, and a join never records
+    // (`agents/pane-ownership.ts`). No owner — every join, every older phone — records nothing.
+    const joining = !!this.liveSessionForPersistKey(persistKey)
+    const sessionId = this.spawnSession({ ...options, persistKey }, null, sinks)
+    if (shouldRecordOwnership(!joining, persistKey, options.ownerProjectId))
+      recordFreshSpawnOwner(persistKey, options.ownerProjectId)
+    return sessionId
   }
 
   /**

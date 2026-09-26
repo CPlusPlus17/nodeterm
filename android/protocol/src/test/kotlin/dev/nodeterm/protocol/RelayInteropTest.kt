@@ -334,8 +334,10 @@ class RelayInteropTest {
 
     @Test
     fun `a session the phone starts is created in its project by the desktop`() = runBlocking<Unit> {
-        // A33, through the desktop's real pty.attach handler: the host applies the project folder
-        // and account (the fixture's session "does not exist", so this attach creates it).
+        // A33 + A72, through the desktop's real pty.attach handler and its real resolver: the host
+        // applies the project folder and account, the AGENT (what gives the session its
+        // agent-specific hook env: approvals, canvas control) and the pane OWNER it resolved from
+        // its own index. The fixture's session "does not exist", so this attach creates it.
         val h = start()
         connect(h).connection.use { conn ->
             val s = conn.attach("term-new-9", 90, 30, RecordingSink(), dev.nodeterm.protocol.host.NewSessionHint("p1", "acct-1", "claude"))
@@ -344,6 +346,25 @@ class RelayInteropTest {
             assertTrue(s.fresh)
             assertEquals("/repo", ev.str("cwd"))
             assertEquals("acct-1", ev.str("accountId"))
+            assertEquals("claude", ev.str("agentId"))
+            assertEquals("p1", ev.str("ownerProjectId"))
+            s.detach()
+        }
+    }
+
+    @Test
+    fun `a hint on an attach that joins a live session changes nothing, the owner included`() = runBlocking<Unit> {
+        // A72: the phone must not be able to claim a running pane for its project by naming one.
+        // The fixture's `term-a` exists, so this attach is a join and the host applies nothing.
+        val h = start()
+        connect(h).connection.use { conn ->
+            val s = conn.attach("term-a", 90, 30, RecordingSink(), dev.nodeterm.protocol.host.NewSessionHint("p1", null, "claude"))
+            val ev = h.awaitEvent("attach")
+            assertEquals("term-a", ev.str("persistKey"))
+            assertEquals(false, s.fresh)
+            assertEquals(null, ev["cwd"])
+            assertEquals(null, ev["agentId"])
+            assertEquals(null, ev["ownerProjectId"])
             s.detach()
         }
     }

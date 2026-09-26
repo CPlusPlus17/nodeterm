@@ -245,13 +245,18 @@ export interface HostRemoteNodes {
  * folder and silently dropped the account. The phone now names the project (and account/agent) on
  * the attach, and the HOST resolves them from its own registry and settings, applied only when the
  * attach creates the session. Everything is validated here; anything unknown is simply not applied.
+ *
+ * The agent id is what gives the created session its agent-specific hook env, and
+ * `ownerProjectId` — the index entry id, resolved by the host, never the phone's string unchecked —
+ * records the pane's owner the way a canvas-started spawn does (audit A72). Production:
+ * `createHostNewSessions` (host-new-sessions.ts).
  */
 export interface HostNewSessions {
   resolve(req: {
     projectId: string
     accountId?: string
     agentId?: string
-  }): Pick<PtyCreateOptions, 'cwd' | 'accountId' | 'agentId'> | null
+  }): Pick<PtyCreateOptions, 'cwd' | 'accountId' | 'agentId' | 'ownerProjectId'> | null
 }
 
 interface Stream {
@@ -469,8 +474,11 @@ export function createHostHandlers(
     }
 
     // A phone starting a NEW session names its project (and account/agent): the host resolves the
-    // folder and account itself (A33). Resolved now, applied only if this attach creates the session.
-    let create: Pick<PtyCreateOptions, 'cwd' | 'accountId' | 'agentId'> | null = null
+    // folder, account, agent and pane owner itself (A33, A72). Resolved now, applied only if this
+    // attach creates the session — `created` below, from this machine's own `sessionExists` probe,
+    // which fails toward "exists". That gate is what keeps a JOIN from claiming a pane's ownership
+    // (`agents/pane-ownership.ts`: ownership is recorded on a genuine fresh spawn only).
+    let create: Pick<PtyCreateOptions, 'cwd' | 'accountId' | 'agentId' | 'ownerProjectId'> | null = null
     const projectId = str(p.projectId)
     if (!remote && newSessions && projectId && projectId.length <= REF_MAX_LEN) {
       try {

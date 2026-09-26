@@ -714,10 +714,15 @@ describe('pty.attach creates a phone-started session in its project', () => {
       undefined, ns
     )
 
-  it('applies the host-resolved cwd/account/agent when the attach creates the session', async () => {
+  it('applies the host-resolved cwd/account/agent/owner when the attach creates the session', async () => {
     const { socket, fs, pty } = makeHostFakes()
     ;(pty.sessionExists as ReturnType<typeof vi.fn>).mockResolvedValue(false)
-    const resolve = vi.fn(() => ({ cwd: 'C:\\repo', accountId: 'acct-1', agentId: 'claude' as const }))
+    const resolve = vi.fn(() => ({
+      cwd: 'C:\\repo',
+      accountId: 'acct-1',
+      agentId: 'claude' as const,
+      ownerProjectId: 'p1'
+    }))
     const handlers = handlersWith(pty, socket, fs, newSessions(resolve))
     handlers.onRpc({
       id: 'n',
@@ -726,17 +731,57 @@ describe('pty.attach creates a phone-started session in its project', () => {
     })
     await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
     expect(resolve).toHaveBeenCalledWith({ projectId: 'p1', accountId: 'acct-1', agentId: 'claude' })
+    // The agent is what gives the created session its agent-gated hook env, and the owner is what
+    // makes its pane messageable (audit A72) — both reach the spawn, exactly once, on the create.
     expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({
-      cols: 80, rows: 24, cwd: 'C:\\repo', accountId: 'acct-1', agentId: 'claude'
+      cols: 80, rows: 24, cwd: 'C:\\repo', accountId: 'acct-1', agentId: 'claude', ownerProjectId: 'p1'
     })
   })
+
+  // Everything the resolver answers — the pane OWNER above all — is create-only. A join must not
+  // claim a live pane for the phone's project (agents/pane-ownership.ts: ownership is recorded on a
+  // genuine fresh spawn only), and "could not tell" is a join, never a create.
+  const RESOLVED = { cwd: '/repo', agentId: 'claude' as const, ownerProjectId: 'p1' }
 
   it('applies nothing when the session already exists (a join, not a create)', async () => {
     const { socket, fs, pty } = makeHostFakes()
     ;(pty.sessionExists as ReturnType<typeof vi.fn>).mockResolvedValue(true)
-    const handlers = handlersWith(pty, socket, fs, newSessions(() => ({ cwd: '/repo' })))
-    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'term-a', cols: 80, rows: 24, projectId: 'p1' } })
+    const handlers = handlersWith(pty, socket, fs, newSessions(() => RESOLVED))
+    handlers.onRpc({
+      id: 'n',
+      method: 'pty.attach',
+      params: { nodeId: 'term-a', cols: 80, rows: 24, projectId: 'p1', agentId: 'claude' }
+    })
     await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
+    expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({ cols: 80, rows: 24 })
+  })
+
+  it('a probe that FAILS is a join: no owner, no agent, no folder', async () => {
+    const { socket, fs, pty } = makeHostFakes()
+    ;(pty.sessionExists as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('EAGAIN'))
+    const handlers = handlersWith(pty, socket, fs, newSessions(() => RESOLVED))
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'term-c', cols: 80, rows: 24, projectId: 'p1' } })
+    await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
+    expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({ cols: 80, rows: 24 })
+  })
+
+  it('a probe that never answers is a join once its budget runs out', async () => {
+    const { socket, fs, pty } = makeHostFakes()
+    ;(pty.sessionExists as ReturnType<typeof vi.fn>).mockReturnValue(new Promise<boolean>(() => {}))
+    const handlers = handlersWith(pty, socket, fs, newSessions(() => RESOLVED))
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'term-d', cols: 80, rows: 24, projectId: 'p1' } })
+    await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled(), { timeout: 3000 })
+    expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({ cols: 80, rows: 24 })
+  })
+
+  it('an older phone that names no project creates exactly as before, owner-less', async () => {
+    const { socket, fs, pty } = makeHostFakes()
+    ;(pty.sessionExists as ReturnType<typeof vi.fn>).mockResolvedValue(false)
+    const resolve = vi.fn(() => RESOLVED)
+    const handlers = handlersWith(pty, socket, fs, newSessions(resolve))
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'term-e', cols: 80, rows: 24 } })
+    await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
+    expect(resolve).not.toHaveBeenCalled()
     expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({ cols: 80, rows: 24 })
   })
 
