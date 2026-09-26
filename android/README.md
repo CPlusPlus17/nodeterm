@@ -6,6 +6,13 @@ from anywhere through the end-to-end encrypted relay. It is the Android counterp
 and speaks the same protocol to the same desktop; nothing on the computer needs to know which phone
 it is talking to.
 
+> **Status (2026-09-26): not ready for users.** CI builds the debug APK, but the app has not yet
+> been run on a phone, and an audit found release blockers, including that typing in a
+> direct-SSH terminal drops the connection. The plan and the full list are in
+> [`docs/android-handover.md`](../docs/android-handover.md) and
+> [`docs/android-audit-2026-09.md`](../docs/android-audit-2026-09.md). The table below describes what
+> the code is written to do, not what has been verified on a device.
+
 ## What it does
 
 | | Android | Notes |

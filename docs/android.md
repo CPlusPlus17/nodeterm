@@ -83,7 +83,15 @@ unchanged.
   (tmux 3.4 answers "can't find pane").
 
 The **app** module is built by CI (`.github/workflows/android.yml`) against the runner's Android
-SDK; it has no instrumented tests yet.
+SDK. The first run, [36109984730](https://github.com/CPlusPlus17/nodeterm/actions/runs/36109984730)
+on `2f58918`, built the debug APK successfully. The app has no instrumented tests and has **not been
+run on a device**. An audit of the code found release blockers, all still open:
+[`android-audit-2026-09.md`](android-audit-2026-09.md). The plan, the device checklist and the
+decisions still open are in [`android-handover.md`](android-handover.md).
+
+Two test caveats. The fixtures hand-copy some desktop shapes: the mirror, the `projects.list` blob
+and the `~/.nodeterm` files (audit `A64`). Because of that, one wrong path (`A02`, the desktop's
+userData directory is `node-terminal`, not `nodeterm`) passed its test.
 
 ## Known gaps
 
