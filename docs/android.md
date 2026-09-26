@@ -62,6 +62,7 @@ describes as the future. The Android client implements what the host actually se
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
 | Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
+| Wake on open | the attach itself: host-service reports the viewer (`remoteViewer.attached` → `agent:wake`) and the desktop wakes a Sleeping node it has mounted; the phone offers nothing, so it never types a second `--resume` | nothing reaches the desktop, so opening a Sleeping node offers the desktop's wake line (the agent's `--resume <id>` plus the permission mode, no `cd` or account: the pane's shell already has both), typed only on a tap, after a kill-line |
 | Wake, refresh, rename | `node.wake|refresh|rename` | — (needs the desktop app) |
 | Board | `projects.ensureBoard|setCardColumn|editCardLabels` | read-only |
 | New session | `pty.attach` of a fresh `term-…` id, launch line, then `projects.registerNode` | — |
@@ -175,6 +176,19 @@ reported its size. A crash is not, because the reattach would repaint the same s
 offers "Reopen terminal" instead. More than two kills within a minute fall back to that offer too.
 The WebView handling itself is only type-checked.
 
+`ResumeOfferTest` pins what the terminal screen offers to type after an attach (`A15`, `A76`). A cold
+attach (the computer rebooted; only the relay creates a session) gets the cold-restore line: `cd` into
+the node's folder, its managed account, the permission mode. A Sleeping (Eco-hibernated) node opened over direct
+SSH gets the desktop's own wake line instead, with no `cd` and no account prefix, since the pane's
+shell is the one the CLI exited back to; accepting it clears the prompt's line first (Ctrl-U, the
+desktop's kill-line) and re-checks that the node is still Sleeping. Through the relay a Sleeping
+node gets no offer: the attach already asked the desktop to wake it. A shallow "Pause session" is
+Sleeping in the mirror (it carries no `paused`), so it too gets only the offer, which is the explicit
+Resume the desktop's PAUSED chip is; a deep pause leaves no Sleeping flag and gets nothing.
+`SshTransportTest` runs the offer end to end against the real tmux: the line it types starts the
+stand-in CLI in the node's own folder even with a half-typed line left at the prompt. The banner
+itself is only type-checked.
+
 `TerminalKeyboardChipTest` covers the key row's ⌨ chip (`A46`), which used to leave the soft keyboard
 down: it only called `focus()` in the page. The chip now releases the input bar's focus, gives the
 WebView Android's focus, moves the page's focus onto xterm's textarea (blurring it first, because
@@ -212,6 +226,11 @@ Whether the keyboard comes up, and stays up, is a device check.
   from the request's `permission_suggestions` (both fields exist in that CLI's hook schema). That
   changes the `~/.nodeterm/pending` answer file and `approvals.answer`, so it needs the desktop,
   iOS and Android together.
+- **A Sleeping node the desktop has not mounted stays asleep through the relay** (`A76`). The relay
+  attach's wake is the desktop's `wakeHibernatedNode` nudge, which does nothing for a node that is
+  not on screen (a project other than the active one), and the phone offers no wake there because
+  it cannot tell the two apart: a second `--resume` typed into a CLI the desktop just woke arrives
+  as a prompt. Typing the resume by hand, or opening the node over direct SSH, works.
 - **Codex/Gemini/… launch flags.** A phone-started non-Claude agent launches bare (its own default
   approval mode): the per-agent approval table needs host facts (codex's vocabulary moved between
   releases, #785) the mirror only partly publishes.

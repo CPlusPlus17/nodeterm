@@ -93,6 +93,20 @@ object Launch {
         projectMode: String? = null
     ): String? = resumeCommand(agent, sessionId)?.let { compose(agent, it, settings, accountId, cwd, projectMode) }
 
+    /**
+     * The line that wakes a Sleeping (Eco-hibernated) session, as the desktop's own wake types it
+     * (TerminalNode's wake closure: the resume with the permission mode re-resolved, audit A76). It
+     * carries no `cd` and no account: the pane's shell is the one the CLI exited back to, so it already
+     * sits in the node's directory and its tmux env already names the account's config dir. Null
+     * when the agent or id cannot be resumed.
+     */
+    fun wakeLine(
+        agent: Agent,
+        sessionId: String,
+        settings: MirrorSettings?,
+        projectMode: String? = null
+    ): String? = resumeCommand(agent, sessionId)?.let { compose(agent, it, settings, null, null, projectMode) }
+
     private fun compose(
         agent: Agent,
         command: String,

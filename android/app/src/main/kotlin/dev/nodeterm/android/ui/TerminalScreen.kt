@@ -137,15 +137,15 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                     }
                     TermState.Attached -> Unit
                 }
-                controller.resumeOffer?.let { (agent, cmd) ->
+                controller.resumeOffer?.let { offer ->
                     Column(
                         Modifier.align(Alignment.TopCenter).fillMaxWidth().background(NtColors.panel2).padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text("This session had ended on the computer (it restarted). Resume the $agent conversation?")
-                        Text(cmd, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                        Text(offer.message)
+                        Text(offer.command, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { controller.acceptResume() }, enabled = controller.attached) { Text("Resume") }
+                            Button(onClick = { controller.acceptResume() }, enabled = controller.attached) { Text(offer.button) }
                             OutlinedButton(onClick = { controller.dismissResume() }) { Text("Not now") }
                         }
                     }

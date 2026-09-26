@@ -32,6 +32,7 @@ import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.RendererRecovery
+import dev.nodeterm.protocol.host.ResumeOffer
 import dev.nodeterm.protocol.host.NewNode
 import dev.nodeterm.protocol.host.NewSessionHint
 import dev.nodeterm.protocol.host.PhoneLaunch
@@ -40,12 +41,10 @@ import dev.nodeterm.protocol.host.TerminalPage
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.host.ViewerSlot
-import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.InputBar
 import dev.nodeterm.protocol.model.Keys
-import dev.nodeterm.protocol.model.Launch
 import dev.nodeterm.protocol.model.Osc52
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -88,8 +87,12 @@ class TerminalController(
      */
     val attached: Boolean get() = state == TermState.Attached
 
-    /** Offered after a COLD attach of an agent node: its resume line (the desktop's cold restore). */
-    var resumeOffer by mutableStateOf<Pair<String, String>?>(null)
+    /**
+     * Offered after an attach of an agent node: its resume line after a COLD attach (the desktop's
+     * cold restore), or its wake line when the session is Sleeping over direct SSH (audit A76).
+     * Typed only when the user taps it. See [ResumeOffer].
+     */
+    var resumeOffer by mutableStateOf<ResumeOffer?>(null)
         private set
     /** A desktop viewer sized the shared pty differently from this screen. */
     var sizedElsewhere by mutableStateOf<Pair<Int, Int>?>(null)
@@ -482,7 +485,7 @@ class TerminalController(
                     state = TermState.Attached
                     if (cols > 0 && (cols != c || rows != r)) s.resize(cols, rows)
                 }
-                if (launch == null && slot.isCurrent(ticket)) afterAttach(s, conn)
+                if (launch == null && slot.isCurrent(ticket)) afterAttach(s, conn, ticket)
             } catch (e: NeedsRelayException) {
                 val msg = e.message ?: "This session opens through the relay."
                 main.post {
@@ -518,22 +521,16 @@ class TerminalController(
         }
     }
 
-    private suspend fun afterAttach(s: TerminalStream, conn: HostConnection) {
+    private suspend fun afterAttach(s: TerminalStream, conn: HostConnection, ticket: Long) {
         val snap = session.snapshot.value
-        val node = snap.findNode(nodeId)?.second
         val status = snap.statusOf(nodeId)
-        if (s.fresh) {
-            // The computer's tmux session was gone (a reboot): the conversation is on disk, not in the
-            // pane. Offer the agent's own resume — never type it unasked into a pane we cannot see.
-            // Built like the desktop's cold restore: the node's directory, its managed account, the
-            // project's permission mode (audit A15/A16) — a relay-created pane starts in $HOME.
-            val agent = Agent.of(node?.agentId ?: status?.agentId)
-            val sid = status?.sessionId ?: node?.agentSessionId
-            val project = snap.findNode(nodeId)?.first
-            if (agent != null && sid != null) {
-                Launch.resumeLine(agent, sid, snap.status?.settings, node?.accountId, project?.absoluteCwdOf(node), project?.defaultPermissionMode)
-                    ?.let { cmd -> main.post { resumeOffer = agent.label to cmd } }
-            }
+        // A cold pane (a reboot) gets the agent's own resume, built like the desktop's cold restore
+        // (A15/A16); a Sleeping one over direct SSH gets the desktop's wake line, since nothing tells
+        // the desktop about an SSH attach (A76). Over the relay the attach itself asks the desktop to
+        // wake it, so nothing is offered there. Never typed unasked into a pane we cannot see.
+        ResumeOffer.afterAttach(s.fresh, conn.kind, snap, nodeId)?.let { offer ->
+            // Only for the attach the screen still shows: a newer one cleared the offer when it began.
+            main.post { if (slot.isCurrent(ticket)) resumeOffer = offer }
         }
         // Reading a finished session on the phone is a READ: tell the computer (unread clears there,
         // other phones archive the card), exactly what the SSH read-ack file does.
@@ -551,7 +548,13 @@ class TerminalController(
         // Not attached (the stream dropped under the offer): keep it rather than spend it on nothing.
         if (!attached) return
         resumeOffer = null
-        stream?.write(offer.second + "\r")
+        // Re-asked at the tap (A76): the desktop may have woken the session since the offer appeared,
+        // and a wake line typed into that CLI would arrive as a prompt.
+        if (!offer.stillOffered(session.snapshot.value, nodeId)) {
+            notice = "This session is no longer sleeping on the computer, so nothing was typed."
+            return
+        }
+        stream?.write(offer.keys)
     }
 
     fun dismissResume() {

@@ -1,0 +1,99 @@
+package dev.nodeterm.protocol.host
+
+import dev.nodeterm.protocol.model.Agent
+import dev.nodeterm.protocol.model.Launch
+import dev.nodeterm.protocol.model.ProjectsSnapshot
+
+/**
+ * The agent line the terminal screen OFFERS right after an attach. It is typed only when the user
+ * taps it, never unasked into a pane the phone cannot see. There are two cases, and they build
+ * different lines on purpose:
+ *
+ *  - [Kind.RESUME] (audit A15): the attach had to CREATE the tmux session, because the computer
+ *    rebooted. The conversation is on disk and the pane is a new shell (in `$HOME` when the relay
+ *    created it), so the line is built like the desktop's cold restore: `cd` into the node's folder,
+ *    the node's managed Claude account, the permission mode ([Launch.resumeLine]).
+ *  - [Kind.WAKE] (audit A76): the session is Sleeping. Eco (or a shallow "Pause session") exited the
+ *    CLI and left the pane's shell behind. That shell already sits in the node's folder, and its tmux
+ *    env already carries the account's CLAUDE_CONFIG_DIR / CODEX_HOME, so the line is what the
+ *    desktop's own wake types: the bare resume plus the permission mode ([Launch.wakeLine]), after a
+ *    kill-line so a half-typed line left at that prompt is not spliced into it. A `cd` or an account
+ *    prefix could only be wrong there: the pane's shell and env are the authority, not project.json.
+ *
+ * A wake is offered over DIRECT SSH only. A relay attach tells the desktop that a phone opened the
+ * node (host-service `remoteViewer.attached` → `agent:wake`), and the desktop wakes it itself, after
+ * checking that the pane is still the one its CLI exited from. Offering the line on the phone as well
+ * would type `--resume` into the CLI the desktop just started, where it arrives as a prompt. (The
+ * desktop's wake does nothing for a node it has not mounted, a project other than the active one,
+ * and the phone cannot tell that case apart: docs/android.md "Known gaps".) Over SSH nothing tells
+ * the desktop about the attach, which is why the phone offers it there.
+ *
+ * `paused`: the desktop never wakes a paused node on its own, but its own UI offers the explicit
+ * Resume (the PAUSED chip, the node menu). The mirror carries `hibernated` and not `paused`, so a
+ * shallow-paused node reads as Sleeping here too; an offer the user taps is that explicit Resume,
+ * never an automatic one. A deep pause ("pause & end session") recycles the tmux session and leaves
+ * `hibernated` unset, so it gets no wake offer.
+ */
+data class ResumeOffer(val kind: Kind, val agent: Agent, val command: String) {
+    enum class Kind { RESUME, WAKE }
+
+    /** What accepting the offer writes into the pane. */
+    val keys: String
+        get() = when (kind) {
+            Kind.RESUME -> command + "\r"
+            // The desktop's wake clears the line first (TerminalNode's wake closure, KILL_LINE in
+            // src/shared/shell-kill-line.ts). The host is POSIX: a Windows desktop pairs relay-only.
+            Kind.WAKE -> KILL_LINE + command + "\r"
+        }
+
+    val message: String
+        get() = when (kind) {
+            Kind.RESUME -> "This session had ended on the computer (it restarted). Resume the ${agent.label} conversation?"
+            Kind.WAKE -> "This session is sleeping: ${agent.label} was closed on the computer to save memory. Wake the conversation?"
+        }
+
+    val button: String
+        get() = when (kind) {
+            Kind.RESUME -> "Resume"
+            Kind.WAKE -> "Wake ${agent.label}"
+        }
+
+    /**
+     * Re-asked when the user taps the offer, against the snapshot at that moment (the same rule as
+     * the Inbox quick actions: act only on what is still true). A wake is withdrawn once the node is
+     * no longer Sleeping: the desktop resumed it meanwhile, and a resume line typed now would land
+     * in that CLI's composer as a prompt.
+     */
+    fun stillOffered(current: ProjectsSnapshot, nodeId: String): Boolean = when (kind) {
+        Kind.RESUME -> true
+        Kind.WAKE -> current.statusOf(nodeId)?.hibernated == true
+    }
+
+    companion object {
+        /** `KILL_LINE` (src/shared/shell-kill-line.ts): Ctrl-U, the POSIX shells' line discard. */
+        const val KILL_LINE = "\u0015"
+
+        /**
+         * The offer after an attach of [nodeId] over [transport], or null. [fresh] is the attach's
+         * own answer ([TerminalStream.fresh]); [snapshot] is the phone's latest view of the computer.
+         */
+        fun afterAttach(fresh: Boolean, transport: TransportKind, snapshot: ProjectsSnapshot, nodeId: String): ResumeOffer? {
+            val found = snapshot.findNode(nodeId)
+            val project = found?.first
+            val node = found?.second
+            val status = snapshot.statusOf(nodeId)
+            val agent = Agent.of(node?.agentId ?: status?.agentId) ?: return null
+            val sid = status?.sessionId ?: node?.agentSessionId ?: return null
+            val settings = snapshot.status?.settings
+            return when {
+                // A cold pane wins over a stale Sleeping flag: the shell the CLI exited to is gone
+                // with the old tmux session, so the new one needs the full cold-restore line.
+                fresh -> Launch.resumeLine(agent, sid, settings, node?.accountId, project?.absoluteCwdOf(node), project?.defaultPermissionMode)
+                    ?.let { ResumeOffer(Kind.RESUME, agent, it) }
+                status?.hibernated == true && transport == TransportKind.SSH ->
+                    Launch.wakeLine(agent, sid, settings, project?.defaultPermissionMode)?.let { ResumeOffer(Kind.WAKE, agent, it) }
+                else -> null
+            }
+        }
+    }
+}

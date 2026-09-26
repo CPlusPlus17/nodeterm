@@ -3,6 +3,7 @@ package dev.nodeterm.protocol
 import dev.nodeterm.protocol.host.ApprovalOutcome
 import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.NeedsRelayException
+import dev.nodeterm.protocol.host.ResumeOffer
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxEvent
@@ -33,6 +34,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -398,6 +400,51 @@ class SshTransportTest {
             assertEquals("term-z-9", e.nodeId)
             Thread.sleep(300)
             assertEquals(1, tmux("has-session", "-t", "=nt-term-z-9").first, "no session was created")
+        }
+    }
+
+    @Test
+    fun `a Sleeping session opened over SSH offers its wake line, which a tap types at the pane's own prompt (A76)`() = runBlocking<Unit> {
+        // Eco exited the CLI: term-a-1's pane is a shell again, still in the node's folder, and the
+        // mirror says Sleeping. Nothing tells the desktop about an SSH attach, so the phone offers it.
+        val status = File(home, ".config/node-terminal/agent-status.json")
+        val before = status.readText()
+        // A stand-in CLI that reports where it ran and with what.
+        val bin = File(root, "fake-bin").apply { mkdirs() }
+        File(bin, "claude").apply {
+            writeText("#!/bin/sh\necho \"woke:\$(pwd -P):\$*\"\n")
+            setExecutable(true)
+        }
+        status.writeText(
+            """{"v":1,"updatedAt":1,"nodes":{"term-a-1":{"agentId":"claude","sessionId":"sid-7","hibernated":true,"updatedAt":5}},
+               "settings":{"claudePermissionMode":"plan","claudeAccounts":[]},"inbox":{"events":[],"nodes":{}}}"""
+        )
+        try {
+            connect().use { conn ->
+                val snap = conn.listProjects()
+                val stream = conn.attach("term-a-1", 100, 30, Sink())
+                val offer = assertNotNull(ResumeOffer.afterAttach(stream.fresh, conn.kind, snap, "term-a-1"))
+                assertEquals(ResumeOffer.Kind.WAKE, offer.kind)
+                assertEquals("claude --resume sid-7 --permission-mode plan", offer.command, "no cd: the pane is already there")
+                Thread.sleep(400)
+                stream.write("PATH='${bin.path}':\$PATH; export PATH\r")
+                // A line someone left half-typed at the Sleeping prompt: the wake clears it first,
+                // or the shell would run `echo half_typedclaude …` and the CLI would never start.
+                stream.write("echo half_typed")
+                stream.write(offer.keys)
+                val want = "woke:${File(repo, "sub").canonicalPath}:--resume sid-7 --permission-mode plan"
+                val end = System.currentTimeMillis() + 8_000
+                var pane = ""
+                while (System.currentTimeMillis() < end) {
+                    pane = tmux("capture-pane", "-p", "-J", "-t", "=nt-term-a-1:").second
+                    if (pane.contains(want)) break
+                    Thread.sleep(100)
+                }
+                assertTrue(pane.contains(want), pane)
+                stream.detach()
+            }
+        } finally {
+            status.writeText(before)
         }
     }
 
