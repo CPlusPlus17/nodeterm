@@ -77,16 +77,24 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
 
         if (route != RoutePreference.RELAY_ONLY && host.sshAvailable) {
             _state.value = ConnState.Connecting("Connecting on your network…")
+            // The blocking dial finishes even when this coroutine is cancelled meanwhile (the poll
+            // job stops when a screen goes away), and withContext then drops its result: close it,
+            // or it stays open, keep-alive and all, for the life of the process (audit A20).
+            var dialed: SshHostConnection? = null
             try {
                 val ssh = withContext(Dispatchers.IO) {
                     SshHostConnection.connect(
                         host.host, host.port, host.user, graph.sshIdentity, pinFor(host),
                         connectTimeoutMs = if (route == RoutePreference.AUTO) 4_000 else 10_000
-                    )
+                    ).also { dialed = it }
                 }
                 adopt(ssh)
                 scope.launch { runCatching { adoptRelayIfAdvertised(ssh, host) } }
                 return ssh
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                dialed?.let { c -> scope.launch(Dispatchers.IO) { runCatching { c.close() } } }
+                _state.value = ConnState.Idle
+                throw e
             } catch (e: HostKeyChangedException) {
                 // A changed host key is a security signal, not a network hiccup: say so, and do not
                 // quietly route around it.
@@ -121,6 +129,8 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                     adopt(connected.connection)
                     return connected.connection
                 } catch (e: kotlinx.coroutines.CancellationException) {
+                    // A cancelled dial is not a failed one: no "offline", no error text (A20).
+                    _state.value = ConnState.Idle
                     throw e
                 } catch (e: Exception) {
                     graph.relayGate.onFailed(hostId, e)
