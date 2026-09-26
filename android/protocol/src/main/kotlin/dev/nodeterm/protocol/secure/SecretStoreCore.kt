@@ -1,5 +1,9 @@
 package dev.nodeterm.protocol.secure
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.AEADBadTagException
@@ -44,6 +48,26 @@ class SecretStoreCore(private val storage: SecretStorage, private val sealer: Se
         data class Lost(val reason: String) : Read
     }
 
+    private val _revision = MutableStateFlow(0L)
+
+    /**
+     * Bumped by every write and removal (never by a read), so a screen that shows [contains] can ask
+     * again when a secret comes or goes — a relay token minted by a late adoption, one dropped when
+     * its computer is forgotten — even when nothing else it shows has changed (audit A47).
+     */
+    val revision: StateFlow<Long> = _revision.asStateFlow()
+
+    /**
+     * Whether a value is STORED under [name], from the storage alone: nothing is opened, so no
+     * Keystore round trip, and this store's lock is not taken, so the answer never waits behind a
+     * decrypt another thread is in the middle of (audit A47 — the host list asked this per row, per
+     * recomposition, on the main thread, by decrypting the relay token). "Stored" is what a label
+     * needs: a value that cannot be read right now still counts (the keystore will answer later),
+     * and so does one the Keystore can no longer open at all (its key was lost), which only opening
+     * it can tell. Anything that USES the value reads it with [getBytes].
+     */
+    fun contains(name: String): Boolean = storage.get(name) != null
+
     @Synchronized
     fun read(name: String): Read {
         val raw = storage.get(name) ?: return Read.Absent
@@ -68,10 +92,14 @@ class SecretStoreCore(private val storage: SecretStorage, private val sealer: Se
     @Synchronized
     fun putBytes(name: String, value: ByteArray, durable: Boolean = false) {
         storage.put(name, Base64.getEncoder().encodeToString(sealer.seal(value)), durable)
+        _revision.update { it + 1 }
     }
 
     @Synchronized
-    fun remove(name: String) = storage.remove(name)
+    fun remove(name: String) {
+        storage.remove(name)
+        _revision.update { it + 1 }
+    }
 
     /**
      * Get-or-create 32 random bytes under [name] (the box secret, the SSH seed). Creates only when

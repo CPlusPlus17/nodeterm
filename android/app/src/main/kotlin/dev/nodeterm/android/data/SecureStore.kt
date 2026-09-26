@@ -12,6 +12,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Secrets at rest: AES-256-GCM under a key that lives in the Android Keystore (it never leaves the
@@ -101,6 +102,19 @@ class SecureStore(context: Context) {
     fun getString(name: String): String? = getBytes(name)?.toString(Charsets.UTF_8)
 
     fun remove(name: String) = core.remove(name)
+
+    /**
+     * A value is stored under [name]: answered from the preferences alone — no Keystore decrypt and
+     * no waiting on this store's lock — so a screen may ask it while composing (audit A47). What it
+     * cannot tell is whether the value still opens; anything that uses the value reads it instead.
+     */
+    fun contains(name: String): Boolean = core.contains(name)
+
+    /** This phone holds a relay device token for the computer paired as [hostId] (see [contains]). */
+    fun hasRelayToken(hostId: String): Boolean = contains(relayTokenKey(hostId))
+
+    /** Changes whenever a secret is stored or removed: the key to re-ask [contains] on. */
+    val revision: StateFlow<Long> get() = core.revision
 
     /**
      * Get-or-create 32 random bytes under [name] (the box secret, the SSH seed). Replaces a stored

@@ -52,6 +52,9 @@ import dev.nodeterm.protocol.model.PairedHost
 fun HostsScreen(nav: Navigator) {
     val graph = NodetermApp.graph(LocalContext.current)
     val hosts by graph.hosts.hosts.collectAsState()
+    // Re-asks each row's relay-token check when a token is stored or removed (a late relay
+    // adoption can mint one without changing the host record; a forget drops one).
+    val secretsRevision by graph.secure.revision.collectAsState()
     var removing by remember { mutableStateOf<PairedHost?>(null) }
 
     Scaffold(
@@ -96,6 +99,10 @@ fun HostsScreen(nav: Navigator) {
                 items(hosts, key = { it.id }) { host ->
                     val session = graph.connections.session(host.id)
                     val state by session.state.collectAsState()
+                    // Whether a token is STORED, never its value: decrypting it here was a Keystore
+                    // round trip on the main thread per row per recomposition, and it waited on
+                    // SecureStore's lock behind any connection decrypting meanwhile (audit A47).
+                    val relayTokenStored = remember(host.id, secretsRevision) { graph.secure.hasRelayToken(host.id) }
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                         modifier = Modifier
@@ -118,7 +125,7 @@ fun HostsScreen(nav: Navigator) {
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Text(
-                                routeSummary(host, graph.secure.getString(SecureStore.relayTokenKey(host.id)) != null) +
+                                routeSummary(host, relayTokenStored) +
                                     stateSuffix(state),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
