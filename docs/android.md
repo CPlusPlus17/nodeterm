@@ -255,6 +255,21 @@ It also no longer shares a device row with the phone it was copied from, so remo
 an entitled desktop cannot revoke the other phone. The old row is left unused on the backend, as
 after an uninstall. An existing install keeps its id while its key still opens.
 
+`KeyboardInsetsTest` covers the soft keyboard on Android 15 (`A77`). The app targets API 35, so on
+Android 15 its window is edge-to-edge whether it asks or not: the keyboard no longer resizes the
+window, and its inset reaches Compose instead. The terminal screen added the keyboard's inset on top
+of the Scaffold's padding, which already held the navigation bar, so with the keyboard up the
+navigation bar was counted twice. Pair and Settings, whose text fields sit in a scrolling column,
+made no room for the keyboard at all. All three now go through one helper (`aboveKeyboard`), which
+consumes the Scaffold's padding before it adds the keyboard's inset, and which comes before the
+scroll, so the keyboard shrinks the visible part instead of padding the end. The app still does not
+call `enableEdgeToEdge()`: on Android 8 to 14 the window keeps fitting the system bars and makes room
+for the keyboard itself, as before, and the helper adds nothing there. Text fields in dialogs are left
+alone: a dialog is a floating window, and the framework clears inset fitting only for non-floating
+windows (read from Android 15's `PhoneWindow` classes, not measured). The test pins the helper, that
+nothing else asks for the keyboard's inset, and that every Scaffold body with a text field uses it;
+how the screens and the dialogs look with the keyboard up is a device check.
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's

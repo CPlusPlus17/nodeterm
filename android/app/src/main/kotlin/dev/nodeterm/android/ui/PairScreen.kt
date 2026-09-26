@@ -92,7 +92,7 @@ fun PairScreen(nav: Navigator, initialCode: String? = null) {
         }
     ) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).padding(20.dp).verticalScroll(rememberScrollState()),
+            Modifier.fillMaxSize().aboveKeyboard(padding).padding(20.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             val p = payload

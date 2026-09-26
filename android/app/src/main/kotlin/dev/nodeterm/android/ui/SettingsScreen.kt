@@ -114,7 +114,7 @@ fun SettingsScreen(nav: Navigator) {
         }
     ) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
+            Modifier.fillMaxSize().aboveKeyboard(padding).padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text("This phone", style = MaterialTheme.typography.titleMedium)

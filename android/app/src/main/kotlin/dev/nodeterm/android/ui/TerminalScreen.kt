@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -89,7 +88,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
             )
         }
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
+        Column(Modifier.fillMaxSize().aboveKeyboard(padding)) {
             Box(Modifier.weight(1f).fillMaxWidth().background(NtColors.canvas)) {
                 // A new key = a new WebView: the old one was destroyed with its renderer (audit A45).
                 key(controller.webViewKey) {
