@@ -38,8 +38,13 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
         release {
-            // sshj + BouncyCastle rely on reflection; shrinking needs keep rules nobody has written yet.
-            isMinifyEnabled = false
+            // R8 (shrink + obfuscate) runs for release only; debug stays unminified and is the APK that
+            // is distributed. CI builds this unsigned release on every change so a missing rule fails CI
+            // (audit A37). That proves R8 accepts proguard-rules.pro and that its keeps matched
+            // (tools/check-r8-output.sh); it does NOT prove the reflection-loaded code (BouncyCastle's
+            // provider tables, the WebView bridge, the WorkManager worker) works on a device, which
+            // nobody has run a release build on. There is no release signing config yet.
+            isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

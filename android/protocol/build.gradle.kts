@@ -45,12 +45,21 @@ tasks.test {
     // from here and skip themselves (with a reason) when node or node_modules are missing.
     systemProperty("nodeterm.repoRoot", rootDir.resolve("../..").canonicalPath)
     // Files some tests run or read that are not on the test classpath: the node drivers, the app's
-    // terminal page (TerminalJs*Test) and the app's screen sources (the source pins in
-    // TerminalKeyboardChipTest and SettingsLeaveTest).
+    // terminal page (TerminalJs*Test), the app's sources (the source pins in TerminalKeyboardChipTest,
+    // SettingsLeaveTest and R8RulesTest), and the release build's R8 rules, its build type and the CI
+    // workflow that runs R8 (R8RulesTest).
     // Declared so a change to one of them re-runs the tests instead of leaving them "up to date".
     inputs.dir("src/test/interop").withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.dir(rootDir.resolve("../app/src/main/assets/terminal")).withPathSensitivity(PathSensitivity.RELATIVE)
-    inputs.dir(rootDir.resolve("../app/src/main/kotlin/dev/nodeterm/android/ui")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootDir.resolve("../app/src/main/kotlin")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("../app/proguard-rules.pro")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("../app/build.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("../../.github/workflows/android.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
+    // R8RulesTest reads the jars this module ships to the app (its runtime classpath, not the test one)
+    // for the classes they reference that Android lacks (audit A37).
+    val shippedJars: FileCollection = configurations.runtimeClasspath.get()
+    inputs.files(shippedJars).withPropertyName("shippedJars").withNormalizer(ClasspathNormalizer::class.java)
+    jvmArgumentProviders.add(CommandLineArgumentProvider { listOf("-Dnodeterm.runtimeClasspath=${shippedJars.asPath}") })
     systemProperty("org.slf4j.simpleLogger.defaultLogLevel", "warn")
     testLogging {
         events("failed", "skipped")

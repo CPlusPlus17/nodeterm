@@ -115,8 +115,12 @@ unchanged.
 
 The **app** module is built by CI (`.github/workflows/android.yml`) against the runner's Android
 SDK. The first run, [36109984730](https://github.com/CPlusPlus17/nodeterm/actions/runs/36109984730)
-on `2f58918`, built the debug APK successfully. The app has no instrumented tests and has **not been
-run on a device**. An audit of the code found release blockers; the fixed ones are marked in its
+on `2f58918`, built the debug APK successfully. CI also builds an unsigned release APK, the only build
+type R8 minifies (audit `A37`). A missing `-dontwarn` or `-keep` then fails CI instead of the first
+release, and `tools/check-r8-output.sh` checks that the keeps for reflection-loaded code (the WebView
+bridge, the WorkManager worker, BouncyCastle's provider tables) matched. `R8RulesTest` re-derives the
+classes Android lacks from the jars the app ships. The debug APK stays unminified and is the one
+distributed. The app has no instrumented tests and has **not been run on a device**, minified or not. An audit of the code found release blockers; the fixed ones are marked in its
 index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md). The plan, the device checklist and the
 decisions still open are in [`android-handover.md`](android-handover.md).
 

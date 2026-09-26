@@ -44,7 +44,11 @@ cd android
 
 Needs JDK 17+ and the Android SDK (Android Studio's, or `ANDROID_HOME`). `minSdk` 26, `targetSdk` 35.
 CI builds the debug APK on every change under `android/` (`.github/workflows/android.yml`) and
-attaches it to the run.
+attaches it to the run. The debug APK is not minified. Only the release build type runs R8
+(`app/proguard-rules.pro`), and CI builds it too, unsigned and not published
+(`./gradlew :app:assembleRelease`, then `tools/check-r8-output.sh`). A missing R8 rule therefore
+fails CI rather than a first release. That proves the rules build and that their keeps matched,
+not that a minified APK works on a phone; none has been run on one.
 
 **Debug builds are signed with a public key that is committed on purpose**
 (`app/debug.keystore`, password `android`). That is what lets you install a newer CI or local
