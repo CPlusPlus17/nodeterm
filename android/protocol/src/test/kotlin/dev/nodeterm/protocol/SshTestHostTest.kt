@@ -2,6 +2,7 @@ package dev.nodeterm.protocol
 
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.io.File
+import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -21,12 +22,25 @@ import kotlin.test.assertTrue
 class SshTestHostTest {
     private val socket = "node-terminal"
 
+    /**
+     * [ShortTmuxRoot] is POSIX-only by construction: it reads the owning uid through the `unix`
+     * attribute view (absent on Windows, where the read throws UnsupportedOperationException) and its
+     * first base is `/tmp`. So its tests skip where that is missing, the way [SshScriptsTest] gates on
+     * `/bin/sh`, instead of failing, which is the shape A62 was about. [SshTransportTest] never gets
+     * that far there: its tmux and `script(1)` gates skip it first.
+     */
+    private fun assumePosixTemp() = assumeTrue(
+        "unix" in FileSystems.getDefault().supportedFileAttributeViews() && File("/tmp").isDirectory,
+        "ShortTmuxRoot needs a POSIX filesystem (the unix attribute view) and /tmp"
+    )
+
     /** A real directory whose socket path cannot fit, whatever temp root it sits under. */
     private fun longDir(parent: File): File =
         File(parent, "x".repeat(maxOf(1, 100 - parent.path.length))).apply { mkdirs() }.toPath().toRealPath().toFile()
 
     @Test
     fun `a base that resolves to a long path is passed over, however short its own spelling`() {
+        assumePosixTemp()
         // macOS's shape: the JVM's temp dir is spelled /var/folders/…, but tmux binds under
         // /private/var/folders/…, 8 characters longer. Measuring the spelling said it fit when it did not.
         val scratch = Files.createTempDirectory("nt-a62").toFile()
@@ -57,6 +71,7 @@ class SshTestHostTest {
 
     @Test
     fun `no base with room is a failure naming the lengths, never a path that fails at bind time`() {
+        assumePosixTemp()
         val scratch = Files.createTempDirectory("nt-a62").toFile()
         try {
             val long = longDir(scratch)
