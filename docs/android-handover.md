@@ -12,9 +12,8 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   [36109984730](https://github.com/CPlusPlus17/nodeterm/actions/runs/36109984730), artifact
   `nodeterm-android-debug`, which expires 2026-12-24). The protocol tests pass in CI too.
 - **It has never been run on a phone.** A 170-agent audit found **9 distinct release blockers**.
-  WP1 (the unambiguous ones, including `A01` typing drops the SSH connection and `A02` the empty
-  SSH session list) is fixed on the branch; see the progress log below. Do not hand the APK to
-  anyone until WP2 is done and the device pass has run.
+  WP1 and WP2 (all nine) are fixed on the branch; see the progress log below. Do not hand the APK
+  to anyone until the device pass (WP3) has run.
 - The next session should **fix the blockers**, then do a **device test pass** using the checklist
   below, then work down the medium findings. No PR is open, and none should be opened unless the
   user asks.
@@ -23,6 +22,20 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
+
+### WP2 (blockers with decisions): done on the branch, not device-verified
+
+| Finding | Commit | What changed | Checked by |
+|---|---|---|---|
+| A05 / A17 / A23 / A30 | `3d36d60` | `RelayApprovalGate` (protocol): the background worker dials the relay only for a computer where a relay connect has succeeded (persisted `relayApproved.<id>`), and then with `requireApproved`, so a revoked pin gives up instead of waiting and clears the flag. A refused (Deny) or unanswered approval holds automatic dials until the user taps Try again / Refresh or opens the computer. `RelayConnector` reports typed `RelayApprovalRefused/Timeout/RequiredException`. | `RelayApprovalGateTest`; relay interop through the desktop's real host session: Deny reads as a refusal (fixture gained a reject mode), and a `requireApproved` dial fails fast without showing a code. |
+| A07 | `0fa0646` | Option (b), additive. The phone sends its box key inside the SEALED `/pair` body; the desktop pins it (same `updateApprovedDevices`/`pinDevice` a SAS approval writes) when the relay leg was minted, answers `relayPinned: true`, records `relayBoxKey` on the device, and unpins it on revoke unless another pairing of the same phone remains. A plaintext body never pins. PairScreen says "Remote access is on" and tells the user after pairing whether one approval is still owed. | vitest `pairing-service.test.ts` (5 new cases); pairing interop through the real `createPairingService`. |
+| A08 | `1cdd2f0` | Chose "refuse and route to the relay". SSH attach runs `attach-session` after a `has-session` check (exit 3), never `new-session`; a session that is not running raises `NeedsRelayException`, and the terminal offers "Open through the relay" (`HostSession.viaRelay`, a relay connection held next to the SSH one), where the desktop creates it with its hook env. | SSH transport tests: nothing is created by the transport or by the script itself. |
+| A09 / A28 | `726271a` (desktop), `1cdd2f0` (phone) | **Desktop:** the relay `pty.attach` of an SSH-project node now attaches over that project's ControlMaster (`requireRemote`, host-side freshness and snapshot) or refuses with the host's name — never locally. **Phone:** over direct SSH, attach/keys/approvals/kill for those nodes raise `NeedsRelayException` and read-acks are skipped; the terminal, the Inbox and End session retry through the relay. | vitest `remote-security.test.ts` (4 new cases); SSH transport test for the refusals. |
+
+Not done here, noted for later: late relay adoption (`adoptRelayIfAdvertised`) does not pin, so a phone
+adopted that way still approves on its first relay connect; revoking a device unpins its key but
+does not cut a relay session that is open at that moment (the standing host's revocation path does
+that). iOS can adopt `boxPublicKey`/`relayPinned` unchanged.
 
 ### WP1 (blockers): done on the branch, not device-verified
 

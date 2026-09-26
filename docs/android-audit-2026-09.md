@@ -18,11 +18,11 @@ the audit's proposal, the handover's progress log says how and why.
 | [A02](#a02) | high | BLOCK | small | protocol/bug | ✅ fixed in `e7c22eb` · SSH browse looks for the desktop's userData under 'nodeterm', but the desktop writes it under 'node-terminal', so every direct-SSH listing comes back empty |
 | [A03](#a03) | high | BLOCK | small | protocol/bug | ✅ fixed in `cd69a1e` · The direct-SSH tmux client starts without a UTF-8 locale, so tmux replaces every non-ASCII character with '_' |
 | [A04](#a04) | high | BLOCK | small | runtime/bug | ✅ fixed in `af1f820` · SSH terminal writes and resizes run on the main thread, and the NetworkOnMainThreadException that runCatching swallows leaves sshj's cipher state out of sync, which drops the whole SSH connection |
-| [A05](#a05) | high | BLOCK | small | runtime/risk | The background InboxWorker can open a never-approved relay handshake and raise the desktop's SAS approval dialog while the phone shows no code |
+| [A05](#a05) | high | BLOCK | small | runtime/risk | ✅ fixed in `3d36d60` · The background InboxWorker can open a never-approved relay handshake and raise the desktop's SAS approval dialog while the phone shows no code |
 | [A06](#a06) | high | BLOCK | small | security/bug | ✅ fixed in `16706f4` · approvals.answer reports success for a hold that already timed out, and clears NEEDS YOU on every surface |
-| [A07](#a07) | high | BLOCK | medium | critic/bug | Remote access fails the first time you are away from the computer: Auto never does the first relay handshake while the phone is at the desk, and pairing does not pin the phone's relay key |
-| [A08](#a08) | high | BLOCK | small | critic/bug | A cold attach over direct SSH creates the desktop's tmux session with no hook environment, so an agent resumed there never reports status, and the desktop never repairs it |
-| [A09](#a09) | medium | BLOCK | small | protocol/bug | Nodes of SSH projects open against the desktop's LOCAL tmux, creating an empty phantom session and offering to resume the conversation on the wrong machine |
+| [A07](#a07) | high | BLOCK | medium | critic/bug | ✅ fixed in `0fa0646` · Remote access fails the first time you are away from the computer: Auto never does the first relay handshake while the phone is at the desk, and pairing does not pin the phone's relay key |
+| [A08](#a08) | high | BLOCK | small | critic/bug | ✅ fixed in `1cdd2f0` · A cold attach over direct SSH creates the desktop's tmux session with no hook environment, so an agent resumed there never reports status, and the desktop never repairs it |
+| [A09](#a09) | medium | BLOCK | small | protocol/bug | ✅ fixed in `726271a,1cdd2f0` · Nodes of SSH projects open against the desktop's LOCAL tmux, creating an empty phantom session and offering to resume the conversation on the wrong machine |
 | [A10](#a10) | medium | BLOCK | small | ci-docs/risk | ✅ fixed in `fcda932` · Debug APKs from CI change signature from run to run; README offers them as the install route, and updating means uninstalling, which wipes pairings |
 | [A11](#a11) | medium |  | small | build/bug | Tapping an Inbox notification while the app is in the background does not open that computer |
 | [A12](#a12) | medium |  | medium | protocol/bug | Relay sendKeys (question answers, legacy approvals) writes into a pty that does not exist yet and then kills it immediately, so the keystroke can be lost while the UI reports success |
@@ -30,20 +30,20 @@ the audit's proposal, the handover's progress log says how and why.
 | [A14](#a14) | medium |  | small | protocol/bug | New sessions in cwd-less (inline) projects are never registered: the desktop refuses them, the refusal is ignored, and the session is orphaned |
 | [A15](#a15) | medium |  | small | protocol/bug | The cold-attach resume offer drops the node's managed Claude account (and on the relay, its cwd), so the resume fails with 'No conversation found' |
 | [A16](#a16) | medium |  | small | protocol/gap | The phone's launch ignores the project's own permission mode (and default account), so a project the user set to a stricter mode starts in the global mode |
-| [A17](#a17) | medium |  | small | protocol/risk | The background inbox worker dials the relay for unapproved phones, putting the desktop's SAS approval dialog up every 15 minutes with no code on the phone to compare it against |
+| [A17](#a17) | medium |  | small | protocol/risk | ✅ fixed in `3d36d60` · The background inbox worker dials the relay for unapproved phones, putting the desktop's SAS approval dialog up every 15 minutes with no code on the phone to compare it against |
 | [A18](#a18) | medium |  | small | runtime/bug | No lifecycle handling: a backgrounded app keeps the 8 s poll and its relay terminal stream alive indefinitely |
 | [A19](#a19) | medium |  | small | runtime/bug | Tapping an inbox notification while the activity is alive ignores the target computer |
 | [A20](#a20) | medium |  | small | runtime/bug | Cancelling an in-flight connect leaks the SSH connection and records the cancellation as a connection failure |
 | [A21](#a21) | medium |  | small | runtime/bug | A denied POST_NOTIFICATIONS is never re-requested, and the Settings switch still reads On |
 | [A22](#a22) | medium |  | small | runtime/bug | The Navigator back stack is not saved across activity recreation, and the original launch intent is re-applied |
-| [A23](#a23) | medium |  | small | security/risk | Background inbox worker opens unapproved relay connections, raising desktop SAS approval dialogs the phone never shows |
+| [A23](#a23) | medium |  | small | security/risk | ✅ fixed in `3d36d60` · Background inbox worker opens unapproved relay connections, raising desktop SAS approval dialogs the phone never shows |
 | [A24](#a24) | medium |  | small | security/bug | SecureStore treats ANY decrypt error as 'absent', so getOrCreate32 permanently overwrites the phone's identity |
 | [A25](#a25) | medium |  | medium | parity/gap | No real push notifications: 15-minute background polling, no notification actions, no Live-Activity equivalent, and the desktop's phone-push switches are ignored |
 | [A26](#a26) | medium |  | medium | parity/gap | New session and board edits are unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH |
 | [A27](#a27) | medium |  | large | parity/gap | Cannot connect straight to a Linux dev host or a headless Server Edition (iOS's "phone SSHes into the host" setup) |
-| [A28](#a28) | medium |  | small | parity/gap | SSH-project sessions over direct SSH are attached, approved and resumed on the wrong machine |
+| [A28](#a28) | medium |  | small | parity/gap | ✅ fixed in `726271a,1cdd2f0` · SSH-project sessions over direct SSH are attached, approved and resumed on the wrong machine |
 | [A29](#a29) | medium |  | medium | parity/gap | No source-control screen, although the protocol layer already implements the git verbs iOS uses |
-| [A30](#a30) | medium |  | small | critic/bug | Pressing Deny on the desktop is not respected: the phone re-dials about 8 s later and the SAS approval dialog reappears |
+| [A30](#a30) | medium |  | small | critic/bug | ✅ fixed in `3d36d60` · Pressing Deny on the desktop is not respected: the phone re-dials about 8 s later and the SAS approval dialog reappears |
 | [A31](#a31) | medium |  | small | critic/bug | A silently dead SSH peer (laptop asleep, desktop IP or VPN change) wedges the host as 'On your network' for many minutes: no detection, no relay fallback, and the error is never shown |
 | [A32](#a32) | medium |  | medium | critic/gap | No way to open a URL or copy text from the phone terminal: no link detection, no touch selection, and the WebView cannot show xterm's link confirm |
 | [A33](#a33) | medium |  | medium | critic/bug | On a Windows computer, 'New session' starts the agent in the user's home folder instead of the project, and silently drops the chosen Claude account while still registering it |

@@ -19,11 +19,12 @@ it is talking to.
 |---|---|---|
 | Pair by QR (or pasted code, or a `nodeterm://pair` link) | ✓ | E2EE-sealed `/pair`, Ed25519 key made on the phone |
 | Direct connection on your network (SSH + tmux) | ✓ | TOFU-pinned host key; the desktop's own tmux socket |
-| From anywhere (relay, E2EE, SAS approval) | ✓ | Pin-once: approve the phone on the computer the first time |
+| From anywhere (relay, E2EE, SAS approval) | ✓ | A current desktop approves the phone at the scan (its relay key rides the sealed `/pair` body); an older one shows a code on the first relay connect |
 | Late relay adoption (paired while remote access was off) | ✓ | Reads `~/.nodeterm/relay.json` over SSH, mints its own device token |
 | Sessions, grouped like the desktop sidebar | ✓ | Needs you / Running / Sleeping, activity + context % |
 | Terminal (co-attach to the live tmux session) | ✓ | xterm.js renderer, native input bar, special keys, swipe = tmux scroll, OSC 52 copy |
-| Cold-start resume offer (the computer rebooted) | ✓ | Offers the agent's own `--resume <id>`; never types it unasked |
+| Cold-start resume offer (the computer rebooted) | relay | Offers the agent's own `--resume <id>`; never types it unasked. Over SSH a session that is not running is never created (it would lack its hook environment): the phone offers to open it through the relay |
+| Sessions of the computer's SSH projects | relay | They run on another host; the computer attaches them over its SSH connection. Over direct SSH the phone offers the relay instead |
 | New session (agent / shell) → registered on the canvas | relay | `projects.registerNode`, launched before registration so the desktop never double-launches |
 | Wake / refresh / rename / end session | relay (end: both) | `node.*` verbs; over SSH "end" stops the tmux session only |
 | Kanban board, move cards, labels | relay (read-only on SSH) | `projects.ensureBoard/setCardColumn/editCardLabels` |
@@ -64,6 +65,12 @@ or your own build.** Release builds will need their own private key; none exists
   Inbox / Usage tabs, the terminal screen, settings, background notifications.
 
 ## Notifications
+
+The background check never makes a first relay connection (that would put the approval dialog on
+an unattended computer): it uses the relay only for a computer that has already approved this
+phone. After Deny, or an approval nobody answered, the app stops re-dialing the relay until you tap
+Try again or open that computer.
+
 
 The iOS app is woken by APNs pushes the nodeterm backend sends. That backend has no Android (FCM)
 leg, so this app checks each computer's Inbox periodically in the background (WorkManager's floor

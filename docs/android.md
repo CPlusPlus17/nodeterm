@@ -25,6 +25,18 @@ A phone reaches a paired computer one of two ways, and the app tries them in the
 `Auto` tries SSH with a 4 s budget and falls back to the relay; a changed SSH host key is a hard
 stop, never a fallback. Per-computer overrides live in Settings.
 
+**Relay approval.** The standing host raises its SAS dialog as soon as an unpinned phone completes
+the handshake, so the phone decides *before dialing* (`RelayApprovalGate`): the background worker
+dials only a computer that has approved this phone, and a refused or unanswered approval suspends
+automatic dials until the user asks again. A current desktop pins the phone's relay key at pairing
+(the phone sends `boxPublicKey` inside the sealed `/pair` body; the answer says `relayPinned`), so
+most phones never see the dialog. The pin is dropped when the device is revoked.
+
+**What direct SSH will not do.** It never creates a tmux session (the desktop injects the hook
+environment at creation, which the phone cannot reproduce) and never touches nodes of the desktop's
+SSH projects (they live on another host). Both surface as `NeedsRelayException`, and the app opens
+the session through a relay connection held next to the SSH one (`HostSession.viaRelay`).
+
 ## Protocol mapping
 
 The standing phone host still speaks the **legacy relay dialect** (`host-service.ts`
@@ -34,7 +46,7 @@ describes as the future. The Android client implements what the host actually se
 | Phone action | Relay (host-service.ts) | Direct SSH |
 |---|---|---|
 | List projects/sessions/status | `projects.list` → the `--NT-PROJECTS-SPLIT--` blob | same blob, from `workspace.json` + `tmux ls` + `agent-status.json`; the v3 index is resolved like `WorkspaceStore` (folder refs → `.nodeterm/project.json`, SSH refs → `cache`, data refs → `inline-projects/<id>.json`) |
-| Open a terminal | `pty.attach` → `{streamId, fresh}`, Snapshot frames, Output frames | `has-session` (fresh) then a pty exec of `tmux new-session -A` |
+| Open a terminal | `pty.attach` → `{streamId, fresh}`, Snapshot frames, Output frames; a node of an SSH project is attached over that project's ControlMaster (`requireRemote`) or refused | `has-session`, then a pty exec of `tmux attach-session` — never `new-session`: a session that is not running, or a node of an SSH project, is refused with `NeedsRelayException` and the app offers the relay |
 | Type / resize | `OP.Input` / `OP.Resize` frames | channel stdin / window-change |
 | Scroll | `pty.scroll` (host writes SGR wheel events) | the phone writes the same SGR wheel events |
 | Detach / end | `pty.kill` / `pty.destroy` | close channel / `kill-session` |
