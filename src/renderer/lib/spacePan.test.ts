@@ -28,6 +28,20 @@ describe('spacePanKeydown', () => {
     expect(typingTarget(el('TEXTAREA'))).toBe(true)
   })
 
+  it('leaves the Monaco EDITOR alone — it types through an EditContext, not a textarea (#930)', () => {
+    // Monaco 0.56 turns `editContext` on by default wherever the browser has the API (Electron's
+    // Chromium does), and then the focused element is a plain `div.native-edit-context` with an
+    // EditContext attached: not a TEXTAREA, not contentEditable. Every space typed in an editor
+    // node was being taken for panning.
+    const monacoInput = {
+      tagName: 'DIV',
+      isContentEditable: false,
+      editContext: {}
+    } as unknown as Element
+    expect(typingTarget(monacoInput)).toBe(true)
+    expect(spacePanKeydown({ key: ' ' }, monacoInput)).toBe('ignore')
+  })
+
   it('ignores a MODIFIED space, which belongs to someone else', () => {
     // ⌘Space is the OS switcher; Ctrl/Alt+Space are other people's bindings.
     expect(spacePanKeydown({ key: ' ', metaKey: true }, null)).toBe('ignore')
