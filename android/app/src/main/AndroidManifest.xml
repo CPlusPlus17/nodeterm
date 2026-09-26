@@ -8,9 +8,16 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
+    <!-- Nothing of this app's leaves the phone in a backup or a phone-to-phone transfer (audit A51).
+         allowBackup="false" stops cloud backup, and on Android 11 and lower device transfer too (so
+         no fullBackupContent is needed); on Android 12+ an app targeting 31+ is still copied by a
+         device-to-device transfer unless its data extraction rules exclude it. Every file here is tied to this phone: the secrets are
+         sealed under a Keystore key that stays behind, and the paired computers, their pins and the
+         relay deviceId belong to those secrets. A new phone starts unpaired, like a fresh install. -->
     <application
         android:name=".NodetermApp"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:label="@string/app_name"

@@ -11,6 +11,7 @@ import dev.nodeterm.protocol.host.RelayApprovalGate
 import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.pairing.SshIdentity
+import dev.nodeterm.protocol.secure.PhoneIdentity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,6 +22,13 @@ import java.security.Security
 class AppGraph(context: Context) {
     val secure = SecureStore(context)
     val hosts = HostStore(context)
+
+    /**
+     * The phone's relay identity: the box key and the relay deviceId, kept together — a new box key
+     * always comes with a new deviceId (audit A51). Read the deviceId as `identity.deviceId()`.
+     */
+    val identity: PhoneIdentity = secure.phoneIdentity(hosts.identityStorage)
+
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val connections = ConnectionManager(this)
 
@@ -28,7 +36,7 @@ class AppGraph(context: Context) {
     val relayGate = RelayApprovalGate(hosts::relayApproved, hosts::setRelayApproved)
 
     /** The phone's persistent relay identity — the key every paired desktop PINS. */
-    val boxKeys: BoxKeyPair by lazy { BoxKeyPair.fromSecretKey(secure.getOrCreate32(SecureStore.BOX_SECRET)) }
+    val boxKeys: BoxKeyPair by lazy { BoxKeyPair.fromSecretKey(identity.boxSecret()) }
 
     /** The phone's SSH identity (Ed25519); its public half is in each computer's authorized_keys. */
     val sshIdentity: SshIdentity by lazy { SshIdentity.fromSeed(secure.getOrCreate32(SecureStore.SSH_SEED)) }

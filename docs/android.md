@@ -238,6 +238,23 @@ listing already arrived), and the check writes the phone's seen-log only when so
 decision and the screen bookkeeping are unit-tested; the wiring into the refresh, the worker and the
 two screens is pinned in the source, and whether a notification appears on a phone is a device check.
 
+`PhoneIdentityTest` and `BackupRulesTest` cover what leaves the phone (`A51`). `allowBackup="false"`
+stops cloud backup, but an app that targets Android 12 or later is still copied by a
+device-to-device transfer unless its data extraction rules exclude it. The transfer carried
+`nodeterm.hosts` (every paired computer, its SSH pin and the phone's relay deviceId) to the new
+phone, while the Keystore-sealed secrets could not follow. The manifest now names rules that exclude
+every domain from both cloud backup and device transfer, so a new phone starts unpaired.
+`BackupRulesTest` pins those files and checks that every preferences file the app opens is covered;
+what a real transfer copies is a device check. Independently of the rules, the relay deviceId now
+goes with the box key (`PhoneIdentity`): when the key has to be created (absent, or provably lost),
+the stored deviceId is removed first, durably, and a deviceId is minted only once the key exists. A
+phone whose key was lost therefore registers with the relay backend under a new id instead of
+re-registering the old one without its previous device token, which the free tier can refuse (per
+the desktop's note on `priorDeviceToken` in `pairing-service.ts`; the backend is not in this repo).
+It also no longer shares a device row with the phone it was copied from, so removing one pairing on
+an entitled desktop cannot revoke the other phone. The old row is left unused on the backend, as
+after an uninstall. An existing install keeps its id while its key still opens.
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's

@@ -100,6 +100,12 @@ computer's name either way. The iOS app does receive the detail, in the push the
 - The phone's relay identity (a Curve25519 box key) and SSH identity (an Ed25519 seed) are
   generated on the device and stored encrypted under an Android Keystore AES-GCM key. Only their
   public halves ever leave the phone.
+- Nothing of the app's goes into a backup or a phone-to-phone transfer. `allowBackup="false"` stops
+  cloud backup, and the manifest's data extraction rules stop the Android 12+ device-to-device
+  transfer, which ignores `allowBackup`. A new phone starts unpaired; pair it again.
+- The relay device id goes with the relay key: if the key ever has to be created again (it was
+  lost), a new device id is minted with it, so the phone never presents an old device id with new
+  keys.
 - Relay traffic is end-to-end encrypted (NaCl box under a per-session HKDF key) and checked exactly
   as the desktop checks it: role byte (no reflections), strictly increasing sequence numbers (no
   replays), no re-key once ready, and the host key pinned from pairing.

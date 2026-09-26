@@ -293,7 +293,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         // not this computer's relay identity.
         if (host.hostKeyB64 != null && host.hostKeyB64 != pub) return
         val minted = RelayApi(graph.hosts.apiBase).mintDevice(
-            deviceId = graph.hosts.deviceId,
+            deviceId = graph.identity.deviceId(),
             hostDeviceId = hostDeviceId,
             hostPublicKeyB64 = pub,
             label = graph.hosts.deviceName,

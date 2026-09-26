@@ -149,7 +149,7 @@ fun PairScreen(nav: Navigator, initialCode: String? = null) {
                                     payload = p,
                                     sshPublicKeyLine = graph.sshIdentity.authorizedKeysLine("nodeterm-android"),
                                     deviceName = graph.hosts.deviceName,
-                                    deviceId = graph.hosts.deviceId,
+                                    deviceId = graph.identity.deviceId(),
                                     priorDeviceToken = prior,
                                     boxPublicKeyB64 = graph.boxKeys.publicKeyB64
                                 )

@@ -5,13 +5,13 @@ import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.SeenLog
+import dev.nodeterm.protocol.secure.PlainStorage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
-import java.util.UUID
 
 /** How to reach a computer. Auto = direct SSH on the LAN first, the relay when that fails. */
 enum class RoutePreference { AUTO, SSH_ONLY, RELAY_ONLY }
@@ -76,11 +76,25 @@ class HostStore(context: Context) {
         prefs.edit().putString("route.$id", route.name).apply()
     }
 
-    /** The phone's own stable id — the key the relay backend stores its device row under. */
-    val deviceId: String
-        get() = prefs.getString("deviceId", null) ?: UUID.randomUUID().toString().also {
-            prefs.edit().putString("deviceId", it).apply()
+    /**
+     * Where the phone's relay deviceId is kept (under `deviceId`, as before). It is read and minted
+     * only through dev.nodeterm.protocol.secure.PhoneIdentity (`AppGraph.identity`), which keeps it
+     * coupled to the box key it belongs to (audit A51). Durable writes use commit() and throw when it
+     * fails: the deviceId must be gone from disk before a new box key is written to the other
+     * preferences file, and a failed removal must stop that key from being written.
+     */
+    val identityStorage: PlainStorage = object : PlainStorage {
+        override fun get(name: String): String? = prefs.getString(name, null)
+        override fun put(name: String, value: String, durable: Boolean) =
+            write(prefs.edit().putString(name, value), durable)
+        override fun remove(name: String, durable: Boolean) =
+            write(prefs.edit().remove(name), durable)
+
+        private fun write(edit: android.content.SharedPreferences.Editor, durable: Boolean) {
+            if (!durable) return edit.apply()
+            if (!edit.commit()) throw java.io.IOException("Couldn't save the phone's relay id.")
         }
+    }
 
     var deviceName: String
         get() = prefs.getString("deviceName", null) ?: (android.os.Build.MODEL ?: "Android phone")

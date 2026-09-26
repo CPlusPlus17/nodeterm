@@ -3,6 +3,8 @@ package dev.nodeterm.android.data
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import dev.nodeterm.protocol.secure.PhoneIdentity
+import dev.nodeterm.protocol.secure.PlainStorage
 import dev.nodeterm.protocol.secure.SecretStorage
 import dev.nodeterm.protocol.secure.SecretStoreCore
 import dev.nodeterm.protocol.secure.SecretUnavailableException
@@ -24,8 +26,10 @@ import kotlinx.coroutines.flow.StateFlow
  *  - the phone's Ed25519 SSH seed (its public half sits in the computer's authorized_keys);
  *  - relay device tokens, one per paired computer (bearer credentials for `/v1/relay/join`).
  *
- * `allowBackup="false"` in the manifest keeps the ciphertext off cloud backups too; a restored
- * copy could not be decrypted on another device anyway.
+ * Nothing here leaves the phone in a backup or a device-to-device transfer: `allowBackup="false"`
+ * covers cloud backup, and the data extraction rules (res/xml/data_extraction_rules.xml) cover the
+ * Android 12+ transfer, which ignores `allowBackup` (audit A51). A copied blob could not be opened on
+ * another device anyway; [PhoneIdentity] makes sure the relay deviceId never outlives the box key.
  */
 class SecureStore(context: Context) {
     private val prefs = context.getSharedPreferences("nodeterm.secure", Context.MODE_PRIVATE)
@@ -123,13 +127,19 @@ class SecureStore(context: Context) {
      */
     fun getOrCreate32(name: String): ByteArray = core.getOrCreate32(name)
 
+    /**
+     * The phone's relay identity (box secret + deviceId), with the deviceId kept in [plain]. The box
+     * secret is read and created ONLY through it, never through [getOrCreate32]: that is what drops
+     * the deviceId whenever the key it belongs to has to be created again (audit A51).
+     */
+    fun phoneIdentity(plain: PlainStorage): PhoneIdentity = PhoneIdentity(core, plain)
+
     companion object {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val ALIAS = "nodeterm.secure.v1"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val IV_BYTES = 12
 
-        const val BOX_SECRET = "box.secret"
         const val SSH_SEED = "ssh.seed"
         fun relayTokenKey(hostId: String) = "relay.token.$hostId"
     }

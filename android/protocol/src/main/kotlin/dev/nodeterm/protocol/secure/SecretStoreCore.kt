@@ -104,13 +104,18 @@ class SecretStoreCore(private val storage: SecretStorage, private val sealer: Se
     /**
      * Get-or-create 32 random bytes under [name] (the box secret, the SSH seed). Creates only when
      * nothing is stored or the stored value is provably lost; the first write is durable.
+     *
+     * [beforeCreate] runs, under this store's lock, only when a new value is about to be written,
+     * and before it is: what belonged to the old value can be dropped first ([PhoneIdentity] drops
+     * the relay deviceId). If it throws, nothing is created.
      */
     @Synchronized
-    fun getOrCreate32(name: String): ByteArray {
+    fun getOrCreate32(name: String, beforeCreate: () -> Unit = {}): ByteArray {
         when (val r = read(name)) {
             is Read.Value -> if (r.bytes.size == 32) return r.bytes
             Read.Absent, is Read.Lost -> Unit
         }
+        beforeCreate()
         val fresh = ByteArray(32).also { SecureRandom().nextBytes(it) }
         putBytes(name, fresh, durable = true)
         return fresh
