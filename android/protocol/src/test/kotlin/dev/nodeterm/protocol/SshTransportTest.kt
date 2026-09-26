@@ -408,7 +408,7 @@ class SshTransportTest {
             assertEquals(ApprovalOutcome.SENT, conn.answerApproval(event, allow = false))
             assertEquals("deny", File(pending, "$id.answer").readText())
             File(pending, "$id.json").delete()
-            assertEquals(ApprovalOutcome.ALREADY_HANDLED, conn.answerApproval(event, allow = true))
+            assertEquals(ApprovalOutcome.GONE, conn.answerApproval(event, allow = true))
             conn.ackRead("term-a-1", "e1")
             assertEquals("e1", File(home, ".nodeterm/acks/term-a-1.seen").readText())
         }

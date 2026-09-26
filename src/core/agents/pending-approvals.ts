@@ -34,28 +34,58 @@ export function pendingDir(homeDir: string = os.homedir()): string {
 }
 
 /**
- * Write the one-line answer file for a held permission hook, atomically (tmp + rename, mode 0600).
- * Resolves true on success, false on an invalid pendingId or any fs error (fail-open — the hook
- * simply times out to the interactive prompt). The `decision` is written verbatim as the hook
- * script compares it against the literals `allow` / `deny`.
+ * What writing an answer did. `gone` is the hook's hold having ENDED — it deletes
+ * `<pendingId>.json` when it times out (managed-script.ts) or when another surface answered — so no
+ * answer can reach it any more and the interactive prompt is (or was) on screen instead. `failed` is
+ * a write that could not happen. The two are different facts for a caller: one says "go to the
+ * session", the other "try again" (audit A06/A35).
+ */
+export type PendingAnswerResult = 'sent' | 'gone' | 'failed'
+
+/**
+ * Answer a held permission hook: check its request file still exists, then write the one-line answer
+ * file atomically (tmp + rename, mode 0600). The `decision` is written verbatim as the hook script
+ * compares it against the literals `allow` / `deny`. Never throws.
+ *
+ * The existence check is what stops a late answer (the phone's usual case: the hold is 45 s) from
+ * being reported — and optimistically broadcast — as delivered. A hook that times out between the
+ * check and the write leaves an orphan `.answer`, which the sweep removes; closing that window fully
+ * would need the hook to announce its timeout.
+ */
+export async function answerPendingLocal(
+  pendingId: string,
+  decision: 'allow' | 'deny',
+  homeDir: string = os.homedir()
+): Promise<PendingAnswerResult> {
+  if (!isValidPendingId(pendingId)) return 'failed'
+  if (decision !== 'allow' && decision !== 'deny') return 'failed'
+  const dir = pendingDir(homeDir)
+  try {
+    await fs.promises.access(path.join(dir, `${pendingId}.json`))
+  } catch (e) {
+    // Only a definite ENOENT is evidence the hold ended; anything else is a failed read.
+    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'gone' : 'failed'
+  }
+  const file = path.join(dir, `${pendingId}.answer`)
+  try {
+    // writeFileAtomic: unique tmp + retrying rename (core/fs-atomic.ts); removes its temp on failure.
+    await writeFileAtomic(file, decision, { mode: 0o600 })
+    return 'sent'
+  } catch {
+    return 'failed'
+  }
+}
+
+/**
+ * Boolean form of [answerPendingLocal] for callers that only report success: true ONLY when the
+ * answer reached a hold that still exists.
  */
 export async function writePendingAnswerLocal(
   pendingId: string,
   decision: 'allow' | 'deny',
   homeDir: string = os.homedir()
 ): Promise<boolean> {
-  if (!isValidPendingId(pendingId)) return false
-  if (decision !== 'allow' && decision !== 'deny') return false
-  const dir = pendingDir(homeDir)
-  const file = path.join(dir, `${pendingId}.answer`)
-  try {
-    await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 })
-    // writeFileAtomic: unique tmp + retrying rename (core/fs-atomic.ts); removes its temp on failure.
-    await writeFileAtomic(file, decision, { mode: 0o600 })
-    return true
-  } catch {
-    return false
-  }
+  return (await answerPendingLocal(pendingId, decision, homeDir)) === 'sent'
 }
 
 /**

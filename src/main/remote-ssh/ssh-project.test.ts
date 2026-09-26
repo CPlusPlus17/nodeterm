@@ -129,11 +129,61 @@ describe('SshProjectManager', () => {
     for (let i = 0; i < commands.length; i++) {
       expect(commands[i]).toContain('umask 077')
       expect(commands[i]).toContain('.nodeterm/pending')
+      // The hold is checked in the SAME remote command (A06).
+      expect(commands[i]).toContain(`[ -f ~/'${'/.nodeterm/pending/node-1-2.json'.slice(1)}' ] || exit 3;`)
       expect(commands[i]).toContain(`mv -f -- ${temps[i]} ~/'${'/.nodeterm/pending/node-1-2.answer'.slice(1)}'`)
       expect(commands[i]).toContain(`rm -f -- ${temps[i]}`)
     }
     expect(calls.map((call) => call[1])).toEqual(['allow', 'deny']) // decisions stay on stdin
   })
+
+  it('answerPending tells a hold that ended (exit 3) from a failed write', async () => {
+    const { mgr, run } = makeMgr()
+    await mgr.connect('p1', conn)
+    run.mockImplementationOnce(async () => ({ code: 3, stdout: '' }))
+    expect(await mgr.answerPending('p1', 'node-1-2', 'allow')).toBe('gone')
+    run.mockImplementationOnce(async () => ({ code: 255, stdout: '' }))
+    expect(await mgr.answerPending('p1', 'node-1-2', 'allow')).toBe('failed')
+    run.mockImplementationOnce(async () => {
+      throw new Error('spawn failed')
+    })
+    expect(await mgr.answerPending('p1', 'node-1-2', 'allow')).toBe('failed')
+    expect(await mgr.answerPending('p9', 'node-1-2', 'allow')).toBe('failed')
+    run.mockImplementationOnce(async () => ({ code: 3, stdout: '' }))
+    expect(await mgr.writePendingAnswer('p1', 'node-1-2', 'allow')).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'the generated answer command, run under a real /bin/sh, answers a live hold and refuses an ended one',
+    async () => {
+      // POSIX-only: it runs the command the HOST would run, which is always sh.
+      const { execFileSync } = await import('child_process')
+      const { mgr, run } = makeMgr()
+      await mgr.connect('p1', conn)
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), 'nt-pend-'))
+      const pending = path.join(home, '.nodeterm', 'pending')
+      await fs.mkdir(pending, { recursive: true })
+      const exec = (command: string, stdin: string): number => {
+        try {
+          execFileSync('/bin/sh', ['-c', command], { input: stdin, env: { HOME: home, PATH: '/usr/bin:/bin' } })
+          return 0
+        } catch (e) {
+          return (e as { status?: number }).status ?? 1
+        }
+      }
+      run.mockImplementation(async (args: string[], stdin?: string) => ({ code: exec(args.at(-1)!, stdin ?? ''), stdout: '' }))
+      try {
+        expect(await mgr.answerPending('p1', 'late-1', 'allow')).toBe('gone')
+        expect(await fs.readdir(pending)).toEqual([])
+        writeFileSync(path.join(pending, 'live-1.json'), '{}')
+        expect(await mgr.answerPending('p1', 'live-1', 'deny')).toBe('sent')
+        expect(await fs.readFile(path.join(pending, 'live-1.answer'), 'utf8')).toBe('deny')
+        expect((await fs.readdir(pending)).sort()).toEqual(['live-1.answer', 'live-1.json'])
+      } finally {
+        await fs.rm(home, { recursive: true, force: true })
+      }
+    }
+  )
 
   it('pushAgentStatus gives overlapping pushes separate temps and preserves private permissions', async () => {
     const { mgr, run } = makeMgr()

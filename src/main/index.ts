@@ -126,10 +126,11 @@ import { projectCapabilityGrantedFor } from '../shared/project-capability-consen
 import { askpassServer, ensureAskpassScript } from './remote-ssh/ssh-askpass'
 import { appSshAgent } from './remote-ssh/ssh-agent'
 import {
-  writePendingAnswerLocal,
+  answerPendingLocal,
   startPendingSweep,
   isValidPendingId,
-  syntheticAnsweredEvent
+  syntheticAnsweredEvent,
+  type PendingAnswerResult
 } from '../core/agents/pending-approvals'
 import { setMainWindow, getMainWindow, sendToMain, closeAction, createCrashReloadPolicy } from './main-window'
 import {
@@ -2771,33 +2772,39 @@ app.whenReady().then(async () => {
   // ONE writer for every answerer: the canvas IPC below and the relay phone's `approvals.answer`
   // verb (host-service.ts `HostInboxOps`) both call `answerPermission`, so a phone answer can never
   // take a different route than a desktop one.
+  //
+  // The writer checks the hold still exists (its `<pendingId>.json`) before writing: a late answer
+  // (the phone's usual case — the hold is 45 s) used to be reported, and broadcast, as delivered,
+  // clearing NEEDS YOU while the prompt still waited on screen (audit A06). `gone` vs `failed` is
+  // kept apart so the phone can say "open the session" rather than "already handled" (A35).
   async function answerPermission(
     nodeId: string,
     pendingId: string,
     decision: 'allow' | 'deny'
-  ): Promise<boolean> {
-    if (!isValidPendingId(pendingId)) return false
-    if (decision !== 'allow' && decision !== 'deny') return false
+  ): Promise<PendingAnswerResult> {
+    if (!isValidPendingId(pendingId)) return 'failed'
+    if (decision !== 'allow' && decision !== 'deny') return 'failed'
     const sshProjectId = workspaceStore.sshProjectIdForNode(nodeId)
-    const ok =
-      sshProjectId && sshProjectManager
-        ? await sshProjectManager.writePendingAnswer(sshProjectId, pendingId, decision)
-        : await writePendingAnswerLocal(pendingId, decision, homedir())
+    const result: PendingAnswerResult = sshProjectId
+      ? sshProjectManager
+        ? await sshProjectManager.answerPending(sshProjectId, pendingId, decision)
+        : 'failed'
+      : await answerPendingLocal(pendingId, decision, homedir())
     // Optimistic flip: on a successful write, emit the same synthetic "answered" transition the
     // held hook's second POST will produce, so the NEEDS YOU badge clears instantly instead of
     // waiting for that POST to round-trip. The later hook POST is an idempotent duplicate (a
     // same-state working re-assert is a no-op). See docs/hook-reply-approvals.md.
-    if (ok) {
+    if (result === 'sent') {
       const ev = syntheticAnsweredEvent(nodeId, pendingId, decision)
       if (ev) emitAgentStatus(ev)
     }
-    return ok
+    return result
   }
   corePlatform.handle(
     IPC.agentAnswerPermission,
     async (payload: { nodeId: string; pendingId: string; decision: 'allow' | 'deny' }) => {
       const { nodeId, pendingId, decision } = payload ?? ({} as typeof payload)
-      return answerPermission(nodeId, pendingId, decision)
+      return (await answerPermission(nodeId, pendingId, decision)) === 'sent'
     }
   )
   // Read-a-finished-session ack (this feature): the renderer's unread-clear funnel calls it when the

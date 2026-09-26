@@ -252,7 +252,13 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
             }
             throw e
         }
-        return if (body?.b("answered") == true) ApprovalOutcome.SENT else ApprovalOutcome.ALREADY_HANDLED
+        if (body?.b("answered") == true) return ApprovalOutcome.SENT
+        // `reason` (additive, audit A35): `gone` = the hold ended; `failed` = the host could not write.
+        return when (body?.s("reason")) {
+            "gone" -> ApprovalOutcome.GONE
+            "failed" -> throw HostException("The computer couldn't write the answer. Try again, or open the session.")
+            else -> ApprovalOutcome.ALREADY_HANDLED
+        }
     }
 
     override suspend fun ackRead(nodeId: String, eventId: String?) {

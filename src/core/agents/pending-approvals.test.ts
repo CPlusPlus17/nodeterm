@@ -6,6 +6,7 @@ import {
   isValidPendingId,
   pendingDir,
   writePendingAnswerLocal,
+  answerPendingLocal,
   sweepPendingDir,
   syntheticAnsweredEvent,
   PENDING_MAX_AGE_MS
@@ -36,8 +37,15 @@ describe('isValidPendingId', () => {
   })
 })
 
+/** A hook currently holding `id` (the request file the managed script writes and deletes). */
+function hold(id: string): void {
+  fs.mkdirSync(pendingDir(home), { recursive: true })
+  fs.writeFileSync(path.join(pendingDir(home), `${id}.json`), '{}')
+}
+
 describe('writePendingAnswerLocal', () => {
   it('writes the one-line answer file for a valid id + decision', async () => {
+    hold('node-1-2')
     const ok = await writePendingAnswerLocal('node-1-2', 'allow', home)
     expect(ok).toBe(true)
     const file = path.join(pendingDir(home), 'node-1-2.answer')
@@ -45,14 +53,16 @@ describe('writePendingAnswerLocal', () => {
   })
 
   it('writes deny too', async () => {
+    hold('n')
     expect(await writePendingAnswerLocal('n', 'deny', home)).toBe(true)
     expect(fs.readFileSync(path.join(pendingDir(home), 'n.answer'), 'utf8')).toBe('deny')
   })
 
   it('leaves no .tmp behind (atomic rename)', async () => {
+    hold('n')
     await writePendingAnswerLocal('n', 'allow', home)
-    const entries = fs.readdirSync(pendingDir(home))
-    expect(entries).toEqual(['n.answer'])
+    const entries = fs.readdirSync(pendingDir(home)).sort()
+    expect(entries).toEqual(['n.answer', 'n.json'])
   })
 
   it('refuses an invalid pendingId and writes nothing', async () => {
@@ -61,8 +71,41 @@ describe('writePendingAnswerLocal', () => {
   })
 
   it('refuses an out-of-contract decision', async () => {
+    hold('n')
     // @ts-expect-error — exercising the runtime guard against a bad value
     expect(await writePendingAnswerLocal('n', 'always', home)).toBe(false)
+  })
+
+  // A06: the hook deletes <id>.json when its 45 s hold ends. Writing the answer anyway used to
+  // report success (and clear NEEDS YOU everywhere) for an answer nothing would ever read.
+  it('reports false and writes nothing once the hold has ended', async () => {
+    fs.mkdirSync(pendingDir(home), { recursive: true })
+    expect(await writePendingAnswerLocal('late-1', 'allow', home)).toBe(false)
+    expect(fs.existsSync(path.join(pendingDir(home), 'late-1.answer'))).toBe(false)
+  })
+})
+
+describe('answerPendingLocal', () => {
+  it('says sent for a live hold', async () => {
+    hold('live-1')
+    expect(await answerPendingLocal('live-1', 'deny', home)).toBe('sent')
+  })
+
+  it('says gone — not failed — when the hold ended (A35)', async () => {
+    expect(await answerPendingLocal('late-1', 'allow', home)).toBe('gone')
+    fs.mkdirSync(pendingDir(home), { recursive: true })
+    expect(await answerPendingLocal('late-1', 'allow', home)).toBe('gone')
+  })
+
+  it('says failed when the answer cannot be written', async () => {
+    hold('ro-1')
+    // A directory where the answer file should go makes the rename fail.
+    fs.mkdirSync(path.join(pendingDir(home), 'ro-1.answer'))
+    expect(await answerPendingLocal('ro-1', 'allow', home)).toBe('failed')
+  })
+
+  it('says failed for an invalid id', async () => {
+    expect(await answerPendingLocal('../x', 'allow', home)).toBe('failed')
   })
 })
 

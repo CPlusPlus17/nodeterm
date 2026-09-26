@@ -260,4 +260,17 @@ class RelayInteropTest {
             assertNotNull(event)
         }
     }
+
+    @Test
+    fun `an answer that arrives after the hold ended opens the session instead of claiming success`() = runBlocking<Unit> {
+        // A06/A35 against the desktop's real verb: `{answered:false, reason:"gone"}`, and the node is
+        // still blocked, so the prompt is on screen now.
+        val h = start()
+        connect(h).connection.use { conn ->
+            val live = conn.listProjects().status!!.inbox!!.events.single()
+            val late = live.copy(id = "e-late", pendingId = "term-abc-1-1700000000000-43-expired")
+            assertEquals(dev.nodeterm.protocol.host.ApprovalOutcome.GONE, conn.answerApproval(late, allow = true))
+            assertEquals(QuickActions.Result.EXPIRED, QuickActions.answerApproval(conn, late, allow = false))
+        }
+    }
 }

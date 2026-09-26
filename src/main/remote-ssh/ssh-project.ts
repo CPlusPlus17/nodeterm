@@ -72,6 +72,11 @@ import { appSshAgent } from './ssh-agent'
 import { probeAgentSockToPin } from '../../core/remote-ssh/agent-probe'
 import { sessionName } from '../../core/tmux-naming'
 import { remoteAtomicWrite } from '../remote-atomic-write'
+import type { PendingAnswerResult } from '../../core/agents/pending-approvals'
+
+/** The remote answer command's exit status for "the hook's hold already ended" (no request file).
+ *  ssh itself uses 255 and tmux/sh 1/2/126/127, so 3 cannot be mistaken for a transport failure. */
+const PENDING_GONE_EXIT = 3
 import { buildCodexLauncherScript } from '../../core/codex-identity-proxy'
 import {
   ACCOUNT_ID_RE,
@@ -1818,30 +1823,40 @@ export class SshProjectManager {
    * tmp+mv, 0600 via umask). The hook is polling `~/.nodeterm/pending/<pendingId>.answer` on that
    * host. `pendingId` is validated by the caller (main) before it reaches here; this method also
    * refuses anything but the safe charset as defense-in-depth, since it interpolates into a remote
-   * shell command. No-ops (false) when the project isn't connected or the write fails.
+   * shell command.
+   *
+   * The request file `<pendingId>.json` is checked IN THE SAME remote command (`exit 3` when it is
+   * missing): the hook deletes it when its hold ends, and an answer written after that is read by
+   * nobody — reporting it as delivered is what cleared NEEDS YOU for a prompt still waiting on the
+   * host (audit A06). `gone` is that case; `failed` is a disconnected project or a failed write.
    */
+  async answerPending(
+    projectId: string,
+    pendingId: string,
+    decision: 'allow' | 'deny'
+  ): Promise<PendingAnswerResult> {
+    const c = this.conns.get(projectId)
+    if (!c) return 'failed'
+    if (!/^[A-Za-z0-9_-]+$/.test(pendingId)) return 'failed'
+    if (decision !== 'allow' && decision !== 'deny') return 'failed'
+    const dir = c.remoteHome ? `${c.remoteHome}/.nodeterm/pending` : '~/.nodeterm/pending'
+    const file = `${dir}/${pendingId}.answer`
+    const request = quoteRemotePath(`${dir}/${pendingId}.json`)
+    const write = remoteAtomicWrite(file, { restrictPermissions: true, makeParent: false }).command
+    const { code } = await this.r
+      .run(childArgs(c.conn, c.controlPath, `[ -f ${request} ] || exit ${PENDING_GONE_EXIT}; ${write}`), decision)
+      .catch(() => ({ code: 1, stdout: '' }))
+    if (code === 0) return 'sent'
+    return code === PENDING_GONE_EXIT ? 'gone' : 'failed'
+  }
+
+  /** Boolean form of [answerPending]: true only when the answer reached a hold that still exists. */
   async writePendingAnswer(
     projectId: string,
     pendingId: string,
     decision: 'allow' | 'deny'
   ): Promise<boolean> {
-    const c = this.conns.get(projectId)
-    if (!c) return false
-    if (!/^[A-Za-z0-9_-]+$/.test(pendingId)) return false
-    if (decision !== 'allow' && decision !== 'deny') return false
-    const dir = c.remoteHome ? `${c.remoteHome}/.nodeterm/pending` : '~/.nodeterm/pending'
-    const file = `${dir}/${pendingId}.answer`
-    const { code } = await this.r
-      .run(
-        childArgs(
-          c.conn,
-          c.controlPath,
-          remoteAtomicWrite(file, { restrictPermissions: true }).command
-        ),
-        decision
-      )
-      .catch(() => ({ code: 1, stdout: '' }))
-    return code === 0
+    return (await this.answerPending(projectId, pendingId, decision)) === 'sent'
   }
 
   /**

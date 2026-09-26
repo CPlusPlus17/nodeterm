@@ -352,7 +352,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         if (!SshScripts.PENDING_ID.matches(pendingId)) return@withContext ApprovalOutcome.UNSUPPORTED
         when (run(SshScripts.answerApproval(pendingId, allow)).second.trim()) {
             "sent" -> ApprovalOutcome.SENT
-            "gone" -> ApprovalOutcome.ALREADY_HANDLED
+            "gone" -> ApprovalOutcome.GONE
             else -> throw HostException("Couldn't write the answer on the computer.")
         }
     }

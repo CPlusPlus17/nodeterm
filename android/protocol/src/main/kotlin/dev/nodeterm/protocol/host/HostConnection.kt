@@ -56,7 +56,14 @@ data class CardLabelEdit(
 
 data class LabelEditResult(val edited: Boolean, val labels: List<KanbanLabel>, val cardLabelIds: List<String>)
 
-enum class ApprovalOutcome { SENT, ALREADY_HANDLED, UNSUPPORTED }
+/**
+ * What answering a held approval did. [GONE]: the hook's hold had already ended (it deletes its
+ * request file when it times out after ~45 s, or someone else answered), so nothing was written —
+ * the interactive prompt may be on screen now. [ALREADY_HANDLED]: a desktop that predates the
+ * `reason` field said "not answered" without saying why. [FAILED] is never returned: a failed
+ * write throws [HostException] so the UI can offer a retry.
+ */
+enum class ApprovalOutcome { SENT, GONE, ALREADY_HANDLED, UNSUPPORTED }
 
 /**
  * One live connection to a paired computer, over either transport. Every call is honest about

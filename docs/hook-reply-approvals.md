@@ -43,6 +43,17 @@ must be a **no-op** when the env var is absent (user's own terminals, older node
   project → write via the project's ControlMaster. So desktop users are not left staring at
   a held prompt — they get one-click approval the moment the badge pulses.
 
+- **Phone (relay)** — the `approvals.answer` verb (host-service.ts `HostInboxOps`), which lands
+  on the same main-side writer as the canvas buttons.
+
+**A late answer is not an answer.** The hook deletes `<pendingId>.json` when its hold ends (timeout
+or another answerer), and nothing reads an `.answer` after that. So every writer checks the request
+file first — locally with `fs.access`, over SSH with `[ -f … ] || exit 3` in the same remote
+command — and reports `sent` / `gone` / `failed` (`PendingAnswerResult`). Only `sent` emits the
+optimistic "answered" event; the relay verb replies `{answered:false, reason:"gone"|"failed"}`, and
+a phone that still sees the node blocked after `gone` opens the session, where the prompt now is.
+A hook that times out between the check and the write leaves an orphan `.answer` for the sweep.
+
 **Event plumbing** — the hook server's raw `PermissionRequest` payload now carries
 `nodeterm_pending_id` (added by the script to its POST body); the mirror's approval
 `InboxEvent` gains `pendingId?: string`, riding the mirror (phone) and dropped from the

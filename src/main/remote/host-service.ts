@@ -34,7 +34,7 @@ import { PtyManager, type DetachedSinks } from '../../core/pty-manager'
 import * as fsOps from '../../core/fs-ops'
 import { TITLE_MAX, type RemoteNodeInput } from '../../core/project-node-append'
 import { parseCardLabelEdit, type CardLabelEdit } from '../../core/project-kanban-write'
-import { isValidPendingId } from '../../core/agents/pending-approvals'
+import { isValidPendingId, type PendingAnswerResult } from '../../core/agents/pending-approvals'
 import { getStoredEntitlement, isPremium } from '../../core/license'
 import { publicKeyToB64, type KeyPair } from './e2ee'
 import { loadOrCreateHostKeyPair, HostKeyLockedError } from './host-identity'
@@ -195,8 +195,12 @@ export interface HostKanbanOps {
  * cannot drift from a local one. Absent ⇒ the verbs answer an honest "not served".
  */
 export interface HostInboxOps {
-  /** Answer a held permission hook. Resolves false when nothing was written. */
-  answerPermission(nodeId: string, pendingId: string, decision: 'allow' | 'deny'): Promise<boolean>
+  /**
+   * Answer a held permission hook. `sent` = the answer reached a hold that still exists; `gone` =
+   * the hold had already ended (the hook timed out, or another surface answered) so nothing was
+   * written; `failed` = the write could not happen. See `PendingAnswerResult`.
+   */
+  answerPermission(nodeId: string, pendingId: string, decision: 'allow' | 'deny'): Promise<PendingAnswerResult>
   /** The phone READ a finished session: resolve its done event(s) and clear the desktop unread. */
   ackRead(nodeId: string): void
 }
@@ -687,8 +691,10 @@ export function createHostHandlers(
    * `approvals.answer {nodeId, pendingId, decision}` → `{answered}` and `inbox.ack {nodeId}` → `{}`
    * (see `HostInboxOps`). Every field is client-sent and validated here before it reaches a path: the
    * pendingId with the SAME rule the answer writer applies (`isValidPendingId` — it becomes a file
-   * name), the node id with the rule `node.*` applies. `answered:false` is an ANSWER (the hook already
-   * timed out, the host could not write), not a protocol error, so the phone can say "already handled".
+   * name), the node id with the rule `node.*` applies. `answered:false` is an ANSWER, not a protocol
+   * error, and it carries WHY in `reason`: `gone` (the hook's hold already ended — its request file is
+   * gone, so the interactive prompt is on screen now or someone else answered) or `failed` (the host
+   * could not write). `reason` is additive: a phone that predates it reads only `answered`.
    */
   function handleInbox(req: RpcRequest): void {
     if (!inbox) {
@@ -721,8 +727,10 @@ export function createHostHandlers(
     }
     void inbox
       .answerPermission(nodeId, pendingId, decision)
-      .then((answered) => socket.respond(req.id, true, { answered }))
-      .catch(() => socket.respond(req.id, true, { answered: false }))
+      .then((result) =>
+        socket.respond(req.id, true, result === 'sent' ? { answered: true } : { answered: false, reason: result })
+      )
+      .catch(() => socket.respond(req.id, true, { answered: false, reason: 'failed' }))
   }
 
   function handleKill(req: RpcRequest): void {

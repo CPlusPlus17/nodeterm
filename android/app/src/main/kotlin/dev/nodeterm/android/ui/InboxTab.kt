@@ -87,6 +87,10 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
                     QuickActions.Result.SENT -> Toast.makeText(context, label, Toast.LENGTH_SHORT).show()
                     QuickActions.Result.ALREADY_HANDLED -> Toast.makeText(context, "Already handled.", Toast.LENGTH_SHORT).show()
                     QuickActions.Result.OPEN_SESSION -> open(nodeId)
+                    QuickActions.Result.EXPIRED -> {
+                        Toast.makeText(context, "The request timed out on the computer. Answer it in the session.", Toast.LENGTH_LONG).show()
+                        open(nodeId)
+                    }
                 }
                 session.refreshNow()
             } catch (e: Exception) {

@@ -201,7 +201,11 @@ async function runRelay(): Promise<void> {
       )
     },
     inbox: {
-      answerPermission: async (nodeId, pendingId, decision) => (emit({ event: 'answer', nodeId, pendingId, decision }), true),
+      // A pendingId ending in `-expired` stands for a hold that already ended (the real writer finds
+      // no request file and answers `gone`, audit A06).
+      answerPermission: async (nodeId, pendingId, decision) => (
+        emit({ event: 'answer', nodeId, pendingId, decision }), pendingId.endsWith('-expired') ? 'gone' : 'sent'
+      ),
       ackRead: (nodeId) => emit({ event: 'ack', nodeId })
     },
     onPeerReady: (s) => {

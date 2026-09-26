@@ -18,7 +18,11 @@ import dev.nodeterm.protocol.model.InboxKind
  *     claude's prompt layout is known; anything else is "open the session".
  */
 object QuickActions {
-    enum class Result { SENT, ALREADY_HANDLED, OPEN_SESSION }
+    /**
+     * [EXPIRED]: the hook's hold ended before the answer arrived (audit A06) and the node still
+     * waits, so the prompt is on screen in the session — open it (with an explanation).
+     */
+    enum class Result { SENT, ALREADY_HANDLED, OPEN_SESSION, EXPIRED }
 
     suspend fun answerApproval(conn: HostConnection, event: InboxEvent, allow: Boolean): Result {
         if (event.kind != InboxKind.APPROVAL) return Result.OPEN_SESSION
@@ -26,7 +30,10 @@ object QuickActions {
         if (event.pendingId != null && conn.capabilities.answerApprovals) {
             when (conn.answerApproval(event, allow)) {
                 ApprovalOutcome.SENT -> return Result.SENT
-                ApprovalOutcome.ALREADY_HANDLED -> return Result.ALREADY_HANDLED
+                // Nothing was written. If the node STILL waits, the hold timed out and the prompt is
+                // on screen now: "already handled" would be false — send the user to the session.
+                ApprovalOutcome.GONE, ApprovalOutcome.ALREADY_HANDLED ->
+                    return if (stillWaiting(conn, event, AgentState.BLOCKED)) Result.EXPIRED else Result.ALREADY_HANDLED
                 ApprovalOutcome.UNSUPPORTED -> Unit
             }
         }

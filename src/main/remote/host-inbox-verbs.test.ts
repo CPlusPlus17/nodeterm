@@ -3,8 +3,9 @@
 //   - Every client-sent field is validated BEFORE the writer is asked: the pendingId becomes a file
 //     name (`~/.nodeterm/pending/<id>.answer`), so a traversal-shaped id must never reach it, and the
 //     decision is exactly `allow` | `deny` — the literals the held hook script compares against.
-//   - A writer that answers false (hook already timed out, write failed) comes back as an ok ANSWER
-//     `{answered:false}`, so the phone can say "already handled" instead of showing a protocol error.
+//   - A writer that did not deliver comes back as an ok ANSWER `{answered:false, reason}`: `gone` (the
+//     hook's hold already ended — A06: the writer checks the request file first) or `failed` (the write
+//     could not happen), so the phone can open the session or offer a retry instead of a protocol error.
 //   - `inbox.ack` runs the SAME ack the `~/.nodeterm/acks` sweep runs for a phone on direct SSH.
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -28,7 +29,7 @@ function makeFakes(over: Partial<HostInboxOps> = {}, served = true) {
     writeText: async () => true
   }
   const inbox: HostInboxOps = {
-    answerPermission: vi.fn(async () => true),
+    answerPermission: vi.fn(async () => 'sent' as const),
     ackRead: vi.fn(),
     ...over
   }
@@ -55,15 +56,26 @@ describe('approvals.answer', () => {
     expect(responses[0]).toEqual({ id: '1', ok: true, body: { answered: true } })
   })
 
-  it('answers {answered:false} — an ANSWER, not an error — when nothing was written', async () => {
-    const { handlers, responses } = makeFakes({ answerPermission: async () => false })
+  it('answers {answered:false, reason:"gone"} — an ANSWER, not an error — when the hold had ended', async () => {
+    const { handlers, responses } = makeFakes({ answerPermission: async () => 'gone' })
     handlers.onRpc({
       id: '2',
       method: 'approvals.answer',
       params: { nodeId: 'term-abc-1', pendingId: 'p-1', decision: 'deny' }
     })
     await flush()
-    expect(responses[0]).toEqual({ id: '2', ok: true, body: { answered: false } })
+    expect(responses[0]).toEqual({ id: '2', ok: true, body: { answered: false, reason: 'gone' } })
+  })
+
+  it('tells a failed write apart from an ended hold (A35)', async () => {
+    const { handlers, responses } = makeFakes({ answerPermission: async () => 'failed' })
+    handlers.onRpc({
+      id: '2b',
+      method: 'approvals.answer',
+      params: { nodeId: 'term-abc-1', pendingId: 'p-1', decision: 'allow' }
+    })
+    await flush()
+    expect(responses[0]).toEqual({ id: '2b', ok: true, body: { answered: false, reason: 'failed' } })
   })
 
   it('a writer that throws is still an answer, not a hung request', async () => {
@@ -74,7 +86,7 @@ describe('approvals.answer', () => {
     })
     handlers.onRpc({ id: '3', method: 'approvals.answer', params: { nodeId: 'n', pendingId: 'p', decision: 'allow' } })
     await flush()
-    expect(responses[0]).toEqual({ id: '3', ok: true, body: { answered: false } })
+    expect(responses[0]).toEqual({ id: '3', ok: true, body: { answered: false, reason: 'failed' } })
   })
 
   it.each([
