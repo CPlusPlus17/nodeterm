@@ -7,7 +7,7 @@ plain Kotlin/JVM against:
 - `org.robolectric:android-all` (the Android framework classes, from Maven Central),
 - Compose Multiplatform **desktop** artifacts (the same Compose APIs, from Maven Central), and
 - hand-written stubs in `stubs/` for the androidx / zxing classes that exist only on Google Maven
-  (activity-compose, work, core, the zxing scanner contract, and `R`).
+  (activity-compose, lifecycle-runtime-compose, work, core, the zxing scanner contract, and `R`).
 
 ```bash
 cd android/tools/typecheck

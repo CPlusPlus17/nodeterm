@@ -119,6 +119,8 @@ class TerminalController(
 
         override fun onExit(code: Int?) {
             main.post {
+                // Our own detach on ON_STOP ends the stream too; that is not a drop to recover from.
+                if (stopped) return@post
                 stream = null
                 if (code == null && !disposed && autoReattach()) {
                     state = TermState.Ended("Disconnected. Reconnecting…")
@@ -147,7 +149,7 @@ class TerminalController(
                 rows = r
                 sizedElsewhere = null
                 val s = stream
-                if (s != null) s.resize(c, r) else if (attachJob == null && state == TermState.Connecting) attach()
+                if (s != null) s.resize(c, r) else if (!stopped && attachJob == null && state == TermState.Connecting) attach()
             }
         }
 
@@ -251,7 +253,7 @@ class TerminalController(
     }
 
     fun attach() {
-        if (disposed) return
+        if (disposed || stopped) return
         state = TermState.Connecting
         resumeOffer = null
         attachJob = graph.scope.launch {
@@ -266,7 +268,7 @@ class TerminalController(
                 val c = if (cols > 0) cols else 80
                 val r = if (rows > 0) rows else 24
                 val s = conn.attach(nodeId, c, r, sink)
-                if (disposed) {
+                if (disposed || stopped) {
                     s.detach()
                     return@launch
                 }
@@ -382,6 +384,29 @@ class TerminalController(
     fun setFontSize(size: Int) {
         graph.hosts.fontSize = size
         js("nt.setFontSize(${graph.hosts.fontSize})")
+    }
+
+    /** The screen went to the background: detach (the session keeps running on the computer). */
+    private var stopped = false
+
+    fun onStop() {
+        if (disposed || stopped) return
+        stopped = true
+        attachJob?.cancel()
+        attachJob = null
+        val s = stream
+        stream = null
+        if (s != null) graph.scope.launch { runCatching { s.detach() } }
+        webView?.onPause()
+        state = TermState.Connecting
+    }
+
+    /** Back in the foreground: reattach where it left off (a first start is the normal attach). */
+    fun onStart() {
+        if (disposed || !stopped) return
+        stopped = false
+        webView?.onResume()
+        if (stream == null && attachJob == null) attach()
     }
 
     fun dispose() {

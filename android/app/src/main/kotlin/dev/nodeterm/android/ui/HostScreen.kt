@@ -24,7 +24,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -62,9 +62,11 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     var tab by rememberSaveable { mutableIntStateOf(initialTab) }
     var newSession by remember { mutableStateOf(false) }
 
-    DisposableEffect(hostId) {
+    // Watch (the 8 s poll) only while the screen is STARTED: a backgrounded app used to keep
+    // polling, and keep its relay stream open, for as long as the process ran (audit A18).
+    LifecycleStartEffect(hostId) {
         session.startWatching()
-        onDispose { session.stopWatching() }
+        onStopOrDispose { session.stopWatching() }
     }
 
     val needsYou = snapshot.status?.inbox?.events?.count { it.actionable } ?: 0

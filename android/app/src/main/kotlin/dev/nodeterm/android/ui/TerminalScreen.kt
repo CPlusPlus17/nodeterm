@@ -32,6 +32,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,12 +55,19 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
     val controller = remember(hostId, nodeId) { TerminalController(graph, session, nodeId) }
     var draft by remember { mutableStateOf("") }
 
-    DisposableEffect(controller) {
+    // Attached and watching only while the screen is STARTED (audit A18): in the background the
+    // relay stream kept the desktop treating the session as watched (Eco shield, and the phone's
+    // size as a ceiling) and kept the radio busy. Stop detaches; start reattaches.
+    LifecycleStartEffect(controller) {
         session.startWatching()
-        onDispose {
-            controller.dispose()
+        controller.onStart()
+        onStopOrDispose {
+            controller.onStop()
             session.stopWatching()
         }
+    }
+    DisposableEffect(controller) {
+        onDispose { controller.dispose() }
     }
 
     Scaffold(
