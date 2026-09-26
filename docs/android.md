@@ -157,6 +157,13 @@ request was consumed to get there, so a launch dropped half-way could not be ret
 leave an unregistered shell no canvas shows. The terminal screen's use of these rules is only
 type-checked.
 
+`InputBarTest` pins the terminal input bar's Send (`A34`, `A41`). While no stream is attached
+(connecting, disconnected, ended), nothing is sent: the screen keeps the draft and an armed Ctrl
+stays armed, instead of clearing text that reached nothing. Attached, Ctrl plus one character sends
+that control byte alone, and anything else goes as a paste followed by Enter. The screen disables
+Send, the Resume offer and the sending key chips while nothing is attached; that part is only
+type-checked.
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's

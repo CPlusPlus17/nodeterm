@@ -132,7 +132,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                         Text("This session had ended on the computer (it restarted). Resume the $agent conversation?")
                         Text(cmd, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { controller.acceptResume() }) { Text("Resume") }
+                            Button(onClick = { controller.acceptResume() }, enabled = controller.attached) { Text("Resume") }
                             OutlinedButton(onClick = { controller.dismissResume() }) { Text("Not now") }
                         }
                     }
@@ -157,6 +157,10 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                 }
             }
             KeyRow(controller)
+            // The draft is cleared only once it was sent: while nothing is attached (connecting,
+            // disconnected, ended) Send is disabled and the keyboard's Send leaves the text in place,
+            // with the overlay above saying why (A41). Typing a draft meanwhile stays possible.
+            val send: () -> Unit = { if (controller.submit(draft, enter = true)) draft = "" }
             Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = draft,
@@ -165,52 +169,51 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                     placeholder = { Text("Type a command or a prompt") },
                     maxLines = 4,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = {
-                        controller.submit(draft, enter = true)
-                        draft = ""
-                    })
+                    keyboardActions = KeyboardActions(onSend = { send() })
                 )
-                IconButton(onClick = {
-                    controller.submit(draft, enter = true)
-                    draft = ""
-                }) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
+                IconButton(onClick = send, enabled = controller.attached) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
             }
         }
     }
 }
 
-/** The keys a phone keyboard does not have, one tap each. Arrows honour the pane's cursor mode. */
+/**
+ * The keys a phone keyboard does not have, one tap each. Arrows honour the pane's cursor mode. The
+ * sending keys are disabled while nothing is attached (A41): they used to look sent and reach nothing.
+ * Ctrl (a modifier for the next key) and ⌨ (opens the keyboard) send nothing themselves.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun KeyRow(controller: TerminalController) {
+    val on = controller.attached
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         FilterChip(selected = controller.ctrlArmed, onClick = { controller.ctrlArmed = !controller.ctrlArmed }, label = { Text("Ctrl") })
-        KeyChip("Esc") { controller.key("esc") }
-        KeyChip("Tab") { controller.key("tab") }
-        KeyChip("⇧Tab") { controller.key("stab") }
-        KeyChip("↑") { controller.key("up") }
-        KeyChip("↓") { controller.key("down") }
-        KeyChip("←") { controller.key("left") }
-        KeyChip("→") { controller.key("right") }
-        KeyChip("⏎") { controller.key("enter") }
-        KeyChip("⇧⏎") { controller.key("nl") }
-        KeyChip("^C") { controller.raw("\u0003") }
-        KeyChip("^D") { controller.raw("\u0004") }
-        KeyChip("^R") { controller.raw("\u0012") }
-        KeyChip("^L") { controller.raw("\u000c") }
-        KeyChip("Home") { controller.key("home") }
-        KeyChip("End") { controller.key("end") }
-        KeyChip("PgUp") { controller.key("pgup") }
-        KeyChip("PgDn") { controller.key("pgdn") }
+        KeyChip("Esc", on) { controller.key("esc") }
+        KeyChip("Tab", on) { controller.key("tab") }
+        KeyChip("⇧Tab", on) { controller.key("stab") }
+        KeyChip("↑", on) { controller.key("up") }
+        KeyChip("↓", on) { controller.key("down") }
+        KeyChip("←", on) { controller.key("left") }
+        KeyChip("→", on) { controller.key("right") }
+        KeyChip("⏎", on) { controller.key("enter") }
+        KeyChip("⇧⏎", on) { controller.key("nl") }
+        KeyChip("^C", on) { controller.raw("\u0003") }
+        KeyChip("^D", on) { controller.raw("\u0004") }
+        KeyChip("^R", on) { controller.raw("\u0012") }
+        KeyChip("^L", on) { controller.raw("\u000c") }
+        KeyChip("Home", on) { controller.key("home") }
+        KeyChip("End", on) { controller.key("end") }
+        KeyChip("PgUp", on) { controller.key("pgup") }
+        KeyChip("PgDn", on) { controller.key("pgdn") }
         KeyChip("⌨") { controller.focusTerminal() }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun KeyChip(label: String, onClick: () -> Unit) {
-    FilterChip(selected = false, onClick = onClick, label = { Text(label, fontFamily = FontFamily.Monospace) })
+private fun KeyChip(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    FilterChip(selected = false, onClick = onClick, enabled = enabled, label = { Text(label, fontFamily = FontFamily.Monospace) })
 }

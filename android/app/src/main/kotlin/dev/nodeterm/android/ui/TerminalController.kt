@@ -37,6 +37,7 @@ import dev.nodeterm.protocol.host.ViewerSlot
 import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
+import dev.nodeterm.protocol.model.InputBar
 import dev.nodeterm.protocol.model.Keys
 import dev.nodeterm.protocol.model.Launch
 import dev.nodeterm.protocol.model.Osc52
@@ -68,6 +69,14 @@ class TerminalController(
 ) {
     var state by mutableStateOf<TermState>(TermState.Connecting)
         private set
+
+    /**
+     * Input can reach the pane. Read [state], not [stream]: the two change together in one main-thread
+     * post, and every caller of this is on the main thread (A41). Anything sent while it is false
+     * reached a null stream and was dropped silently.
+     */
+    val attached: Boolean get() = state == TermState.Attached
+
     /** Offered after a COLD attach of an agent node: its resume line (the desktop's cold restore). */
     var resumeOffer by mutableStateOf<Pair<String, String>?>(null)
         private set
@@ -421,6 +430,8 @@ class TerminalController(
 
     fun acceptResume() {
         val offer = resumeOffer ?: return
+        // Not attached (the stream dropped under the offer): keep it rather than spend it on nothing.
+        if (!attached) return
         resumeOffer = null
         stream?.write(offer.second + "\r")
     }
@@ -436,27 +447,38 @@ class TerminalController(
     }
 
     /**
-     * Send the input bar's text. An armed Ctrl applies to it (audit A34): the bar goes through
-     * xterm's bracketed paste, so the per-keystroke Ctrl in [Bridge.onInput] never saw a single
-     * character — arming Ctrl and sending `z` used to submit a literal `z` plus Enter. One character
-     * with a control byte is sent as that byte alone, with no Enter (^Z then Enter is not ^Z);
-     * anything else just disarms the chip and is sent as typed.
+     * Send the input bar's text, as [InputBar.plan] says. An armed Ctrl applies to it (audit A34): the
+     * bar goes through xterm's bracketed paste, so the per-keystroke Ctrl in [Bridge.onInput] never saw
+     * a single character — arming Ctrl and sending `z` used to submit a literal `z` plus Enter. One
+     * character with a control byte is sent as that byte alone, with no Enter (^Z then Enter is not
+     * ^Z); anything else just disarms the chip and is sent as typed.
+     *
+     * Returns whether the text went to the attached stream. False while nothing is attached: nothing
+     * is sent, Ctrl stays armed, and the caller keeps its draft (A41 — it used to clear it).
      */
-    fun submit(text: String, enter: Boolean) {
-        if (ctrlArmed) {
-            ctrlArmed = false
-            Keys.ctrl(text)?.let {
-                raw(it)
-                return
+    fun submit(text: String, enter: Boolean): Boolean {
+        when (val send = InputBar.plan(attached, ctrlArmed, text, enter)) {
+            InputBar.Send.NotAttached -> return false
+            is InputBar.Send.Control -> {
+                ctrlArmed = false
+                raw(send.bytes)
+            }
+            is InputBar.Send.Paste -> {
+                ctrlArmed = false
+                js("nt.submit('${b64(send.text.toByteArray(Charsets.UTF_8))}', ${send.enter})")
             }
         }
-        js("nt.submit('${b64(text.toByteArray(Charsets.UTF_8))}', $enter)")
+        return true
     }
 
-    fun key(name: String) = js("nt.key('$name')")
+    /** A key-row key. Nothing while not [attached]: the key row shows disabled then (A41). */
+    fun key(name: String) {
+        if (attached) js("nt.key('$name')")
+    }
 
+    /** Raw bytes (the ^C/^D/^R/^L chips). Nothing while not [attached] (A41). */
     fun raw(data: String) {
-        stream?.write(data)
+        if (attached) stream?.write(data)
     }
 
     fun focusTerminal() = js("nt.focus()")
