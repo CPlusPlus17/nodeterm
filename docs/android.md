@@ -175,6 +175,15 @@ reported its size. A crash is not, because the reattach would repaint the same s
 offers "Reopen terminal" instead. More than two kills within a minute fall back to that offer too.
 The WebView handling itself is only type-checked.
 
+`TerminalKeyboardChipTest` covers the key row's ⌨ chip (`A46`), which used to leave the soft keyboard
+down: it only called `focus()` in the page. The chip now releases the input bar's focus, gives the
+WebView Android's focus, moves the page's focus onto xterm's textarea (blurring it first, because
+Blink ignores `focus()` on the element that already has focus, which is the usual state after a tap),
+and then asks `InputMethodManager` for the keyboard, after the next frame, so the focus change has
+been processed first. The page half runs the real `terminal.js` in node against a textarea stub that
+follows Blink's rule. The Android half cannot run on a JVM, so the test pins its order in the source.
+Whether the keyboard comes up, and stays up, is a device check.
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's

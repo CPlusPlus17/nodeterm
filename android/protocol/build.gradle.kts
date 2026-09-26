@@ -44,6 +44,12 @@ tasks.test {
     // Interop tests drive this repo's TypeScript host code through node. They locate the repo root
     // from here and skip themselves (with a reason) when node or node_modules are missing.
     systemProperty("nodeterm.repoRoot", rootDir.resolve("../..").canonicalPath)
+    // Files some tests run or read that are not on the test classpath: the node drivers, the app's
+    // terminal page (TerminalJs*Test) and the terminal screen's source (TerminalKeyboardChipTest).
+    // Declared so a change to one of them re-runs the tests instead of leaving them "up to date".
+    inputs.dir("src/test/interop").withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootDir.resolve("../app/src/main/assets/terminal")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.dir(rootDir.resolve("../app/src/main/kotlin/dev/nodeterm/android/ui")).withPathSensitivity(PathSensitivity.RELATIVE)
     systemProperty("org.slf4j.simpleLogger.defaultLogLevel", "warn")
     testLogging {
         events("failed", "skipped")

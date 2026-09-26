@@ -97,6 +97,12 @@
     reset: function () { term.reset() },
     focus: function () { term.focus() },
     blur: function () { term.blur() },
+    // The ⌨ chip (audit A46): the Kotlin side has just given the WebView Android's focus and asks
+    // the system for the soft keyboard; this puts the page's focus on xterm's textarea for it.
+    // Blur first: Blink's focus() on the element that already has focus returns early and does
+    // nothing, and that is the normal state once the terminal has been tapped. (With focus
+    // reporting on, xterm reports a focus-out and a focus-in to the pane for this.)
+    focusForKeyboard: function () { term.blur(); term.focus() },
     setFontSize: function (n) { fontSize = n; term.options.fontSize = n; doFit(true) },
     refit: function () { doFit(true) },
     // A composed line from the native input bar. `term.paste` frames it as a bracketed paste when

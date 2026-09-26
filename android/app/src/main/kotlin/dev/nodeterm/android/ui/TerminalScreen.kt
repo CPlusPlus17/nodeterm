@@ -41,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -198,6 +199,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
 @Composable
 private fun KeyRow(controller: TerminalController) {
     val on = controller.attached
+    val focusManager = LocalFocusManager.current
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -220,7 +222,11 @@ private fun KeyRow(controller: TerminalController) {
         KeyChip("End", on) { controller.key("end") }
         KeyChip("PgUp", on) { controller.key("pgup") }
         KeyChip("PgDn", on) { controller.key("pgdn") }
-        KeyChip("⌨") { controller.focusTerminal() }
+        // The input bar's field lets go of focus first, or it keeps the keyboard (audit A46).
+        KeyChip("⌨") {
+            focusManager.clearFocus()
+            controller.showKeyboard()
+        }
     }
 }
 

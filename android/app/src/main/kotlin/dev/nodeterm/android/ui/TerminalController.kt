@@ -14,7 +14,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.TransactionTooLargeException
 import android.util.Base64
+import android.view.Choreographer
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
@@ -597,7 +599,36 @@ class TerminalController(
         if (attached) stream?.write(data)
     }
 
-    fun focusTerminal() = js("nt.focus()")
+    /**
+     * The ⌨ chip: bring up the soft keyboard to type straight into the terminal (audit A46). It used
+     * to run only `term.focus()` in the page, which cannot do that: Blink ignores focus() on the
+     * element that already has focus (the textarea, once the terminal was tapped), and the keyboard
+     * attaches to the focused Android view, which is the input bar's text field or nothing. The
+     * caller releases Compose's focus first, so that field lets go of the keyboard. Here, in order:
+     * the WebView takes Android's focus, the page moves its focus onto xterm's textarea
+     * (`nt.focusForKeyboard`, which blurs first), and the keyboard is asked for through
+     * InputMethodManager, which does not depend on the page having seen a touch since it loaded.
+     *
+     * That request waits for the next frame and then one more main-thread turn. The input method
+     * serves the newly focused view only once its focus change has been processed, and the text
+     * field that lost focus can hide the keyboard from a frame callback rather than at once
+     * (Compose's text input has queued its keyboard commands to the next frame): asked for before
+     * either, the keyboard would not come up, or would be hidden again straight away. None of this
+     * has run on a device.
+     */
+    fun showKeyboard() {
+        val wv = webView ?: return
+        wv.requestFocus()
+        js("nt.focusForKeyboard()")
+        Choreographer.getInstance().postFrameCallback {
+            wv.post {
+                // The view was replaced (renderer lost, A45) or the screen left meanwhile.
+                if (webView !== wv) return@post
+                val imm = wv.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                imm?.showSoftInput(wv, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }
+    }
 
     fun setFontSize(size: Int) {
         graph.hosts.fontSize = size
