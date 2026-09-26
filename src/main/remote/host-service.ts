@@ -1257,8 +1257,10 @@ export interface HostSessionOptions {
   token: string
   /** The long-lived host NaCl keypair. */
   ourKeys: KeyPair
-  /** The real pty-manager whose tmux sessions the peer attaches to. */
-  pty: PtyManager
+  /** The pty-manager whose tmux sessions the peer attaches to: the real PtyManager in both hosts.
+   *  Typed as the slice the session uses (it only hands it to createHostHandlers), so the Android
+   *  interop fixture's fake is checked against exactly that, with no cast (audit A67). */
+  pty: HostPtyManager
   /** The host renderer's latest active-project canvas snapshot (source of the mirror). */
   getLatestCanvas(): CanvasState | null
   /** Subscribe to canvas updates so the mirror re-broadcasts. Returns unsubscribe. */

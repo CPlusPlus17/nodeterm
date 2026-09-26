@@ -16,6 +16,10 @@
 // JSON event. Bundled by esbuild at test time (see InteropHarness.kt); `ws` stays external and
 // resolves from the repo's node_modules, and `electron` is aliased to ./electron-stub.ts, so the
 // real package (whose first `require` downloads the Electron binary) is never loaded (audit A60).
+// esbuild only strips types, so this file is type-checked by `npm run typecheck` as part of
+// tsconfig.node.json (audit A67): a desktop interface it implements cannot drift from it unseen.
+// Do not cast what it hands to the desktop code (`as unknown as`, `as never`); a cast turns that
+// check off for the value, and the drift then shows up only at run time.
 import http from 'http'
 import os from 'os'
 import path from 'path'
@@ -31,7 +35,7 @@ import { createHostNewSessions } from '../../../../../src/main/remote/host-new-s
 import { mirrorClaudeAccount } from '../../../../../src/core/agent-status-mirror'
 import { createPairingService } from '../../../../../src/main/pairing-service'
 import type { DetachedSinks } from '../../../../../src/core/pty-manager'
-import type { PtyManager } from '../../../../../src/core/pty-manager'
+import { DEFAULT_SETTINGS } from '../../../../../src/shared/types'
 
 const emit = (obj: unknown): void => {
   process.stdout.write(JSON.stringify(obj) + '\n')
@@ -204,7 +208,7 @@ async function runRelay(): Promise<void> {
     url: `ws://127.0.0.1:${port}`,
     token: 'host-room',
     ourKeys: keys,
-    pty: pty as unknown as PtyManager,
+    pty,
     getLatestCanvas: () => null,
     subscribeCanvas: () => () => {},
     applyMutation: () => {},
@@ -301,7 +305,7 @@ async function runPair(): Promise<void> {
   const withRelay = process.env.FIXTURE_RELAY === '1'
   const service = createPairingService(
     {
-      getSettings: () => ({ phoneAccessEnabled: withRelay }) as never,
+      getSettings: () => ({ ...DEFAULT_SETTINGS, phoneAccessEnabled: withRelay }),
       getEntitlement: () => null,
       loadHostKeyPair: async () => keys,
       relayEndpoint: 'wss://relay.example.test',

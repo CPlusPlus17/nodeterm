@@ -1,0 +1,83 @@
+// The Android companion's interop fixture (android/protocol/src/test/interop/host-fixture.ts) runs
+// this directory's real host code against the Kotlin client: `connectHostSession` over a local relay
+// broker and `createPairingService` for the pairing tests. To do that it implements the interfaces
+// host-service.ts takes from its callers — HostPtyManager and the kanban / inbox / nodeActions bridge.
+//
+// Nothing checked it against them (audit A67). InteropHarness.kt bundles the fixture with esbuild,
+// which strips types without checking them; no tsconfig included the file; and the Android workflow's
+// path filter skips most of src/, so a desktop change could break the fixture's fit to an interface
+// without any check noticing until an interop test failed at run time, or never, where the broken
+// member is one no test exercises. It passed tsc when the audit tried it, but nothing kept it so.
+//
+// tsconfig.node.json now includes the fixture, so `npm run typecheck` (every CI run, every platform)
+// checks it. These two guards keep that true: the file stays in the project, and it hands the desktop
+// code nothing through a cast, which would switch the check off for exactly the value it exists for.
+// The fixture used to pass its fake pty `as unknown as PtyManager` (HostSessionOptions demanded the
+// whole class) and its settings `as never`; the option now names the slice the session uses.
+
+import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'child_process'
+import { readdirSync, readFileSync, statSync } from 'fs'
+import { join, relative } from 'path'
+
+const REPO_ROOT = join(__dirname, '..', '..', '..')
+const INTEROP_DIR = join(REPO_ROOT, 'android', 'protocol', 'src', 'test', 'interop')
+
+/** Repo-relative, `/`-separated, whatever the host running Vitest. */
+function repoPath(file: string): string {
+  return relative(REPO_ROOT, file).replace(/\\/g, '/')
+}
+
+function interopSources(dir: string = INTEROP_DIR, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir)) {
+    const p = join(dir, entry)
+    if (statSync(p).isDirectory()) interopSources(p, out)
+    else if (/\.ts$/.test(entry)) out.push(p)
+  }
+  return out
+}
+
+describe('the Android interop fixture is type-checked against the desktop interfaces (audit A67)', () => {
+  it('every .ts file under the interop dir is in the project `npm run typecheck` checks', () => {
+    const sources = interopSources().map(repoPath)
+    // Not vacuous: a moved or renamed fixture must fail here, not pass over an empty directory.
+    expect(sources).toEqual(
+      expect.arrayContaining([
+        'android/protocol/src/test/interop/host-fixture.ts',
+        'android/protocol/src/test/interop/electron-stub.ts'
+      ])
+    )
+
+    // Ask the compiler, not the include globs: an `exclude`, a narrower glob or a moved file all
+    // show up here. `--listFilesOnly` resolves the project without type-checking it (that is
+    // `npm run typecheck`'s job), and runs the package's own bin script, so no npm shim is involved.
+    const tsc = join(REPO_ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
+    const listed = execFileSync(process.execPath, [tsc, '-p', 'tsconfig.node.json', '--listFilesOnly'], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8'
+    })
+      .split('\n')
+      .map((line) => line.trim().replace(/\\/g, '/'))
+      .filter(Boolean)
+    // Matched by suffix: tsc may print a realpath where the checkout sits behind a symlink.
+    const missing = sources.filter((rel) => !listed.some((abs) => abs.endsWith('/' + rel)))
+    expect(missing, 'add these to tsconfig.node.json\'s include (see the comment there)').toEqual([])
+  }, 60_000)
+
+  it('hands the desktop code nothing through a cast that would switch the type check off', () => {
+    const CAST = /\bas\s+(?:unknown\s+as|never|any)\b/
+    const offenders: string[] = []
+    for (const file of interopSources()) {
+      readFileSync(file, 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          if (/^\s*(\/\/|\*|\/\*)/.test(line)) return // comments may name the casts they forbid
+          if (CAST.test(line)) offenders.push(`${repoPath(file)}:${i + 1}: ${line.trim()}`)
+        })
+    }
+    expect(
+      offenders,
+      'type the value as the interface the desktop code takes (widen that interface if it demands more than it uses)'
+    ).toEqual([])
+  })
+})

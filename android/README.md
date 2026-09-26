@@ -67,7 +67,8 @@ or your own build.** Release builds will need their own private key; none exists
   RPC vocabulary, pairing, the direct-SSH transport, and the parsers for what the computer serves.
   Its tests run the **desktop's own code** on the other end of the wire — `connectHostSession` and
   `createPairingService` through a local relay broker (`src/test/interop/host-fixture.ts`, bundled
-  with the repo's esbuild), and the SSH transport against a real SSH server and a sandboxed tmux.
+  with the repo's esbuild and type-checked by the repo's `npm run typecheck` against the desktop
+  interfaces it implements), and the SSH transport against a real SSH server and a sandboxed tmux.
   Run `npm ci --ignore-scripts` at the repo root first; without node the interop tests skip. The SSH
   tests need tmux and `script(1)` (util-linux on Linux, BSD on macOS) and skip without them.
 - **`app/`** — the Compose UI on top: pairing, the computers list, a computer's Sessions / Board /

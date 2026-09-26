@@ -108,7 +108,9 @@ applicable here":
    a phone sees — a `host-service.ts` relay verb, the `projects.list` blob, the pairing payload,
    the agent-status mirror, or the `~/.nodeterm/{pending,acks,relay.json}` files — update the
    Android client in the same PR; `./gradlew -p protocol test` (from `android/`, after
-   `npm ci --ignore-scripts`) runs it against this repo's own host code.
+   `npm ci --ignore-scripts`) runs it against this repo's own host code. Its interop fixture
+   (`android/protocol/src/test/interop/`) implements host-service's interfaces and is part of
+   `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.
 
 Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate
