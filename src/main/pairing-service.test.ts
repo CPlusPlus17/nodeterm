@@ -45,7 +45,7 @@ vi.mock('../core/device-id', () => ({ getDeviceId: () => 'test-host-device-id' }
 import os from 'os'
 import { createPairingService, type PairingRelayDeps } from './pairing-service'
 import { rewriteKeyComment, type DeviceEntry } from './pairing-core'
-import { genKeyPair, publicKeyToB64 } from './remote/e2ee'
+import { decrypt, deriveSharedKey, encrypt, genKeyPair, publicKeyToB64 } from './remote/e2ee'
 import type { Settings } from '../shared/types'
 
 const HOME = os.homedir()
@@ -407,6 +407,123 @@ describe('pairing remembers the phone’s relay device id', () => {
 
       const { deviceId } = JSON.parse(respText) as { deviceId: string }
       expect(paired(deviceId).relayDeviceId).toBe('phone-relay-1')
+    } finally {
+      service.stop()
+    }
+  })
+})
+
+describe('pairing pins the phone relay key it sent sealed (audit A07)', () => {
+  // Pin-once used to mean "approve on the first relay connect", which the Auto route makes happen
+  // away from the desk. The scan is already the human's approval — the same one-time token that
+  // installs an SSH key — so the phone's box key, sent INSIDE the sealed body, is pinned here.
+  const hostKeys = genKeyPair()
+  const phoneBox = publicKeyToB64(genKeyPair().publicKey)
+  const pins: string[] = []
+  const unpins: string[] = []
+  const relayDeps = (withPin = true): PairingRelayDeps => ({
+    getSettings: () => ({ phoneAccessEnabled: true }) as unknown as Settings,
+    getEntitlement: () => null,
+    loadHostKeyPair: async () => hostKeys,
+    relayEndpoint: 'wss://relay.example/ws',
+    apiBase: 'https://api.example',
+    relayAllowed: () => true,
+    ...(withPin
+      ? {
+          pinRelayKey: async (pub: string) => void pins.push(pub),
+          unpinRelayKey: async (pub: string) => void unpins.push(pub)
+        }
+      : {})
+  })
+
+  /** POST /pair SEALED, the way the Android/iOS app does: `{epk, box}` to the QR's host key. */
+  async function postSealed(port: number, body: unknown): Promise<Record<string, unknown>> {
+    const eph = genKeyPair()
+    const shared = deriveSharedKey(publicKeyToB64(hostKeys.publicKey), eph.secretKey)
+    const box = encrypt(Uint8Array.from(Buffer.from(JSON.stringify(body), 'utf8')), shared)
+    const text = await post(port, { epk: publicKeyToB64(eph.publicKey), box: Buffer.from(box).toString('base64') })
+    const outer = JSON.parse(text) as { box: string }
+    const plain = decrypt(Uint8Array.from(Buffer.from(outer.box, 'base64')), shared)
+    return JSON.parse(Buffer.from(plain!).toString('utf8'))
+  }
+
+  beforeEach(() => {
+    pins.length = 0
+    unpins.length = 0
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ deviceToken: 'device-token', hostId: 'host-id', exp: 0 })
+    } as unknown as Response)
+  })
+
+  it('pins the sealed box key, says so, records it, and unpins it on revoke', async () => {
+    const service = createPairingService(relayDeps())
+    try {
+      const { token, pairPort } = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const resp = await postSealed(pairPort, { token, publicKey: freshEd25519Line(), deviceId: 'p1', boxPublicKey: phoneBox })
+      expect(resp.relayPinned).toBe(true)
+      expect(pins).toEqual([phoneBox])
+      const entry = ((agentJson().devices as DeviceEntry[]) ?? []).find((d) => d.id === resp.deviceId)!
+      expect(entry.relayBoxKey).toBe(phoneBox)
+      await service.revokeDevice(String(resp.deviceId))
+      expect(unpins).toEqual([phoneBox])
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('keeps the pin while another pairing of the same phone is still listed', async () => {
+    const service = createPairingService(relayDeps())
+    try {
+      const first = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const a = await postSealed(first.pairPort, { token: first.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
+      const second = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      await postSealed(second.pairPort, { token: second.token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
+      await service.revokeDevice(String(a.deviceId))
+      expect(unpins).toEqual([])
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('never pins a key from the PLAINTEXT body (it could be rewritten on the LAN)', async () => {
+    const service = createPairingService(relayDeps())
+    try {
+      const { token, pairPort } = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const resp = JSON.parse(await post(pairPort, { token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox }))
+      expect(resp.ok).toBe(true)
+      expect(resp.relayPinned).toBeUndefined()
+      expect(pins).toEqual([])
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('ignores a malformed key, and an older phone that sends none still pairs unchanged', async () => {
+    const service = createPairingService(relayDeps())
+    try {
+      const s1 = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const bad = await postSealed(s1.pairPort, { token: s1.token, publicKey: freshEd25519Line(), boxPublicKey: 'not-a-key' })
+      expect(bad.ok).toBe(true)
+      expect(bad.relayPinned).toBeUndefined()
+      const s2 = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const old = await postSealed(s2.pairPort, { token: s2.token, publicKey: freshEd25519Line() })
+      expect(old.ok).toBe(true)
+      expect(old.relayPinned).toBeUndefined()
+      expect(pins).toEqual([])
+    } finally {
+      service.stop()
+    }
+  })
+
+  it('does not pin when the relay leg failed (nothing to connect through yet)', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({ ok: false, status: 503, json: async () => ({}) } as unknown as Response)
+    const service = createPairingService(relayDeps())
+    try {
+      const { token, pairPort } = JSON.parse((await service.start(() => {})).payload) as { token: string; pairPort: number }
+      const resp = await postSealed(pairPort, { token, publicKey: freshEd25519Line(), boxPublicKey: phoneBox })
+      expect(resp.relayPinned).toBeUndefined()
+      expect(pins).toEqual([])
     } finally {
       service.stop()
     }

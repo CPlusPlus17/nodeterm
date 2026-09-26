@@ -154,6 +154,12 @@ export interface DeviceEntry {
    */
   relayDeviceId?: string
   /**
+   * The phone's relay (NaCl box) public key, base64, when it sent one inside the SEALED `/pair`
+   * body. Pairing pins it on the standing host (audit A07), so revoking the device unpins it again.
+   * Absent for pairings made before this field existed and for phones that do not send it.
+   */
+  relayBoxKey?: string
+  /**
    * `false` = no SSH key was installed for this device (a Windows pairing: the phone reaches this
    * host through the relay only). Absent on every pairing that did install one, including all
    * pairings made before this field existed. Revoke still sweeps the key files either way.
@@ -186,6 +192,13 @@ export function readDevices(agentJson: unknown): DeviceEntry[] {
 /** Append `entry`, or replace an existing device with the same id (idempotent by id). */
 export function upsertDevice(devices: DeviceEntry[], entry: DeviceEntry): DeviceEntry[] {
   return [...devices.filter((d) => d.id !== entry.id), entry]
+}
+
+/** A NaCl box public key as base64: exactly 32 bytes. */
+export function isValidBoxPublicKeyB64(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 64) return false
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false
+  return Buffer.from(value, 'base64').length === 32
 }
 
 /** Drop the device with the given id (no-op if absent). */

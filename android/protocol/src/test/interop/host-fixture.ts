@@ -248,7 +248,9 @@ async function runPair(): Promise<void> {
       loadHostKeyPair: async () => keys,
       relayEndpoint: 'wss://relay.example.test',
       apiBase: `http://127.0.0.1:${apiPort}`,
-      relayAllowed: () => withRelay
+      relayAllowed: () => withRelay,
+      pinRelayKey: async (pub) => emit({ event: 'pin', pub }),
+      unpinRelayKey: async (pub) => emit({ event: 'unpin', pub })
     },
     { timeoutMs: 60_000 }
   )

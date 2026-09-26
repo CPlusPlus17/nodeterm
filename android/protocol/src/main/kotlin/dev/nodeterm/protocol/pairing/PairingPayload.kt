@@ -111,5 +111,8 @@ data class PairingResult(
     val deviceId: String,
     val agentToken: String,
     val relay: RelayBlock?,
-    val relayDeviceToken: String?
+    val relayDeviceToken: String?,
+    /** The computer pinned this phone's relay key at pairing (audit A07): no SAS on first relay use.
+     *  False from a desktop that predates it — the phone is approved on its first relay connect. */
+    val relayPinned: Boolean = false
 )

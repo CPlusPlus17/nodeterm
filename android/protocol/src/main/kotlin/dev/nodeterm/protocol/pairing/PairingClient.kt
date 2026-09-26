@@ -22,7 +22,10 @@ class PairingException(message: String) : Exception(message)
 /**
  * The phone side of `src/main/pairing-service.ts`'s `/pair` listener.
  *
- * Request body `{token, publicKey, deviceName, deviceId, priorDeviceToken?}`. When the QR carried a
+ * Request body `{token, publicKey, deviceName, deviceId, priorDeviceToken?, boxPublicKey?}`.
+ * `boxPublicKey` (the phone's persistent relay identity) is sent ONLY inside the sealed body; a
+ * desktop that knows it pins it on its standing host and answers `relayPinned: true`, so the first
+ * relay connect needs no approval at the desk (audit A07). An older desktop ignores it. When the QR carried a
  * `hostKey`, the whole body is sealed to it — `{epk: <ephemeral box pubkey>, box: base64(nonce ‖
  * secretbox)}` under `box.before(hostKey, ephemeralSecret)` — and the answer comes back sealed the
  * same way, so the relay device token never crosses the LAN in the clear.
@@ -39,7 +42,8 @@ class PairingClient(private val connectTimeoutMs: Int = 8_000, private val readT
         sshPublicKeyLine: String,
         deviceName: String,
         deviceId: String,
-        priorDeviceToken: String? = null
+        priorDeviceToken: String? = null,
+        boxPublicKeyB64: String? = null
     ): PairingResult = withContext(Dispatchers.IO) {
         val inner = buildJsonObject {
             put("token", payload.token)
@@ -47,6 +51,9 @@ class PairingClient(private val connectTimeoutMs: Int = 8_000, private val readT
             put("deviceName", deviceName)
             put("deviceId", deviceId)
             priorDeviceToken?.let { put("priorDeviceToken", it) }
+            // Only ever sealed: a plaintext body could be rewritten on the LAN, and the desktop
+            // ignores the field there anyway.
+            if (payload.hostKey != null) boxPublicKeyB64?.let { put("boxPublicKey", it) }
         }.toString()
 
         var shared: ByteArray? = null
@@ -83,7 +90,8 @@ class PairingClient(private val connectTimeoutMs: Int = 8_000, private val readT
             deviceId = obj.s("deviceId") ?: throw PairingException("The computer did not assign a device id."),
             agentToken = obj.s("agentToken") ?: "",
             relay = obj.o("relay")?.let(PairingPayload::parseRelayBlock),
-            relayDeviceToken = obj.s("relayDeviceToken")
+            relayDeviceToken = obj.s("relayDeviceToken"),
+            relayPinned = obj.b("relayPinned") == true
         )
     }
 

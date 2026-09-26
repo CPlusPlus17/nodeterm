@@ -304,6 +304,7 @@ import { killRelayHostsByPeerKey } from './remote/relay-host'
 import { initRelayHost } from './remote/relay-host-service'
 import { createRevoker } from './remote/revocation'
 import { loadApprovedDevices, saveApprovedDevices, updateApprovedDevices } from './remote/approved-devices'
+import { pinDevice, unpinDevice } from './remote/approved-devices-core'
 import { publicKeyToB64 } from './remote/e2ee'
 import { connectRelayClient, type RelayClientSession } from './remote/relay-client'
 import { decodeOffer } from './remote/pairing'
@@ -1655,7 +1656,12 @@ app.whenReady().then(async () => {
     loadHostKeyPair: loadOrCreateKeyPair,
     relayEndpoint: RELAY_URL,
     apiBase: RELAY_API_BASE,
-    relayAllowed
+    relayAllowed,
+    // A phone that sends its relay key in the sealed /pair body is approved by the scan itself
+    // (audit A07): the same pin a SAS approval writes, so its first remote connect needs nobody at
+    // the desk. Revoking the device takes the pin away again.
+    pinRelayKey: (pub) => updateApprovedDevices((store) => pinDevice(store, pub)),
+    unpinRelayKey: (pub) => updateApprovedDevices((store) => unpinDevice(store, pub))
   })
   ipcMain.handle(IPC.pairingStart, () =>
     pairingService.start((result) => {

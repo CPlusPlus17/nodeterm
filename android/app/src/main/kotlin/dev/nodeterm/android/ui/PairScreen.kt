@@ -1,5 +1,6 @@
 package dev.nodeterm.android.ui
 
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -57,7 +58,8 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PairScreen(nav: Navigator, initialCode: String? = null) {
-    val graph = NodetermApp.graph(LocalContext.current)
+    val context = LocalContext.current
+    val graph = NodetermApp.graph(context)
     val scope = rememberCoroutineScope()
     var raw by remember { mutableStateOf("") }
     var payload by remember { mutableStateOf<PairingPayload?>(null) }
@@ -120,7 +122,10 @@ fun PairScreen(nav: Navigator, initialCode: String? = null) {
                         Text("${p.user}@${p.host}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(if (p.hostKey != null) "✓ The pairing exchange is end-to-end encrypted" else "⚠ This computer's nodeterm is too old to encrypt pairing")
                         Text(if (p.sshAvailable) "✓ Direct connection on your network (SSH)" else "Relay-only computer (no SSH)")
-                        Text(if (p.relay != null) "✓ Reachable from anywhere (remote access is on)" else "Remote access is off — this phone will only reach the computer on your network")
+                        // Not "reachable from anywhere": that is only true once the computer has
+                        // approved this phone for the relay (at the scan on a current desktop, or on
+                        // the first relay connect on an older one) — audit A07.
+                        Text(if (p.relay != null) "Remote access is on" else "Remote access is off — this phone will only reach the computer on your network")
                     }
                 }
                 if (!p.sshAvailable && p.relay == null) {
@@ -144,7 +149,8 @@ fun PairScreen(nav: Navigator, initialCode: String? = null) {
                                     sshPublicKeyLine = graph.sshIdentity.authorizedKeysLine("nodeterm-android"),
                                     deviceName = graph.hosts.deviceName,
                                     deviceId = graph.hosts.deviceId,
-                                    priorDeviceToken = prior
+                                    priorDeviceToken = prior,
+                                    boxPublicKeyB64 = graph.boxKeys.publicKeyB64
                                 )
                                 val host = PairedHost.from(p, result)
                                 result.relayDeviceToken?.let { graph.secure.putString(SecureStore.relayTokenKey(host.id), it) }
@@ -154,6 +160,16 @@ fun PairScreen(nav: Navigator, initialCode: String? = null) {
                                     graph.hosts.remove(it.id)
                                 }
                                 graph.hosts.upsert(host)
+                                if (result.relayPinned) graph.hosts.setRelayApproved(host.id, true)
+                                Toast.makeText(
+                                    context,
+                                    when {
+                                        result.relayDeviceToken == null -> "Paired. This phone reaches the computer on your network."
+                                        result.relayPinned -> "Paired, and approved for remote access."
+                                        else -> "Paired. The first time you connect from outside your network, approve this phone on the computer."
+                                    },
+                                    Toast.LENGTH_LONG
+                                ).show()
                                 nav.replaceAll(Route.Hosts)
                                 nav.push(Route.Host(host.id))
                             } catch (e: Exception) {

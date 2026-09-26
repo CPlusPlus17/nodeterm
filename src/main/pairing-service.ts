@@ -25,6 +25,7 @@ import path from 'path'
 import {
   buildPairingPayload,
   filterAuthorizedKeys,
+  isValidBoxPublicKeyB64,
   isValidEd25519PublicKey,
   normalizeAuthorizedKeysLine,
   normalizeDeviceName,
@@ -65,6 +66,13 @@ export interface PairingRelayDeps {
   apiBase: string
   /** Dev gate: never hit the prod relay/API from an unpackaged build (mirrors host-service). */
   relayAllowed(): boolean
+  /**
+   * Pin a phone's relay (box) public key on the standing host, as its SAS approval would (audit
+   * A07). Optional: absent ⇒ the phone approves on its first relay connect, as before.
+   */
+  pinRelayKey?(boxPublicKeyB64: string): Promise<void>
+  /** Undo [pinRelayKey] when the device is revoked. */
+  unpinRelayKey?(boxPublicKeyB64: string): Promise<void>
 }
 
 interface RelayDeviceResponse {
@@ -694,6 +702,7 @@ export function createPairingService(
           deviceName?: unknown
           deviceId?: unknown
           priorDeviceToken?: unknown
+          boxPublicKey?: unknown
         }
         let sealed: Uint8Array | null = null // the shared key, set only on the encrypted path
         if (typeof outer.epk === 'string') {
@@ -728,6 +737,7 @@ export function createPairingService(
             deviceName?: unknown
             deviceId?: unknown
             priorDeviceToken?: unknown
+            boxPublicKey?: unknown
           }
         }
         if (body.token !== token) {
@@ -750,6 +760,22 @@ export function createPairingService(
         // unchanged, and the mint still reads this same value.
         const phoneDeviceId =
           typeof body.deviceId === 'string' && body.deviceId.trim() ? body.deviceId.trim() : deviceId
+        // The phone's relay identity (audit A07). Taken ONLY from the sealed body: that body is
+        // sealed to the QR's host key and authorized by the one-time token on this screen — the same
+        // authority that installs an SSH key with full shell access — so pinning it here is the
+        // human's approval, given by scanning. A plaintext body could be rewritten on the LAN.
+        const relayBoxKey = sealed && isValidBoxPublicKeyB64(body.boxPublicKey) ? body.boxPublicKey : undefined
+        let relayPinned = false
+        const pinRelay = async (): Promise<void> => {
+          if (!relayBoxKey || !relayFields.relayDeviceToken || !relayDeps?.pinRelayKey) return
+          try {
+            await relayDeps.pinRelayKey(relayBoxKey)
+            relayPinned = true
+          } catch (err) {
+            // Not fatal: the phone approves on its first relay connect instead, as before.
+            console.warn('[pairing] could not pin the phone relay key:', err)
+          }
+        }
         let relayFields: { relay?: RelayPairingBlock; relayDeviceToken?: string } = {}
         const mint = async (): Promise<void> => {
           if (!relayCtx) return
@@ -780,12 +806,14 @@ export function createPairingService(
               token: agentToken,
               pairedAt: Date.now(),
               lastSeenAt: 0,
-              relayDeviceId: phoneDeviceId
+              relayDeviceId: phoneDeviceId,
+              ...(relayBoxKey ? { relayBoxKey } : {})
             })
           })
           // Provision relay access for the phone when enabled. Any failure ⇒ LAN-only: we never
           // fail the pairing over a relay hiccup (the phone still got its SSH key installed).
           await mint()
+          await pinRelay()
         } else {
           // Relay-only (Windows). The relay IS the connection, so there is nothing to fall back
           // to: no relay leg ⇒ nothing is paired, and both ends are told so. Minted BEFORE the
@@ -818,13 +846,16 @@ export function createPairingService(
               pairedAt: Date.now(),
               lastSeenAt: 0,
               relayDeviceId: phoneDeviceId,
+              ...(relayBoxKey ? { relayBoxKey } : {}),
               ssh: false
             })
           )
+          await pinRelay()
         }
         // Build the response exactly as before; wrap it in the box only when the request was
         // encrypted (same shared key), so the relay device token never crosses the LAN in cleartext.
-        const responseObj = { ok: true, deviceId, agentToken, ...relayFields }
+        // `relayPinned` (additive): the phone may treat the relay as approved — no SAS on first use.
+        const responseObj = { ok: true, deviceId, agentToken, ...relayFields, ...(relayPinned ? { relayPinned: true } : {}) }
         if (sealed) {
           const respBox = encrypt(
             Uint8Array.from(Buffer.from(JSON.stringify(responseObj), 'utf8')),
@@ -886,9 +917,10 @@ export function createPairingService(
   // entitlement is what authorizes the server leg, not the local write's success, and a phone the
   // user asked to remove should stop being minted Pro either way.
   const revokeDevice = async (id: string): Promise<DeviceRevokeResult> => {
-    const { local, relayId, found } = await serialize(async () => {
+    const { local, relayId, found, unpin } = await serialize(async () => {
       const entry = readDevices(await readAgentJson()).find((d) => d.id === id)
       const relayId = entry?.relayDeviceId
+      const boxKey = entry?.relayBoxKey
       const found = !!entry
       try {
         await removeAuthorizedKeysForDevice(id)
@@ -896,14 +928,22 @@ export function createPairingService(
         const obj = await readAgentJson()
         const devices = removeDevice(readDevices(obj), id)
         await writeAgentJson({ ...obj, devices })
-        return { local: true, relayId, found }
+        // The relay pin made at pairing goes with the device — unless another pairing of the same
+        // phone (a re-pair keeps its box key) is still listed.
+        const unpin = boxKey && !devices.some((d) => d.relayBoxKey === boxKey) ? boxKey : undefined
+        return { local: true, relayId, found, unpin }
       } catch (err) {
         // Reported, not thrown: `local:false` is what the UI turns into "try again", and the
         // server leg below is still worth running. The detail belongs in the log.
         console.warn('[pairing] local revoke failed:', err)
-        return { local: false, relayId, found }
+        return { local: false, relayId, found, unpin: undefined }
       }
     })
+    if (unpin && relayDeps?.unpinRelayKey) {
+      // Refuses the NEXT relay handshake from that key; a relay session open right now is cut by
+      // the standing host's own revocation path, not here.
+      await relayDeps.unpinRelayKey(unpin).catch((err) => console.warn('[pairing] could not unpin the phone relay key:', err))
+    }
     // A device paired before `relayDeviceId` was recorded still falls back to OUR id — which is
     // not a guess. `id` is the per-pairing `randomUUID()` above, and when the phone sent no id of
     // its own the mint sent exactly this value as the row's `deviceId` (see `phoneDeviceId`), so

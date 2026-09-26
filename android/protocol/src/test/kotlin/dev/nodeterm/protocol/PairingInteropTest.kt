@@ -94,4 +94,26 @@ class PairingInteropTest {
         assertTrue(e.message!!.contains("bad token"), e.message)
         assertTrue(!File(home, ".ssh/authorized_keys").exists())
     }
+
+    @Test
+    fun `the phone's relay key rides the sealed body and the desktop pins it`() = runBlocking<Unit> {
+        // A07: approving at the scan, so the first remote connect needs nobody at the desk.
+        val (h, _) = start(withRelay = true)
+        val box = dev.nodeterm.protocol.crypto.BoxKeyPair.generate()
+        val result = PairingClient().pair(
+            payloadOf(h), SshIdentity.generate().authorizedKeysLine(), "Pixel", "android-device-3", boxPublicKeyB64 = box.publicKeyB64
+        )
+        assertTrue(result.relayPinned)
+        assertEquals(box.publicKeyB64, h.awaitEvent("pin")["pub"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `without a relay leg nothing is pinned and the answer says so`() = runBlocking<Unit> {
+        val (h, _) = start(withRelay = false)
+        val box = dev.nodeterm.protocol.crypto.BoxKeyPair.generate()
+        val result = PairingClient().pair(
+            payloadOf(h), SshIdentity.generate().authorizedKeysLine(), "Pixel", "android-device-4", boxPublicKeyB64 = box.publicKeyB64
+        )
+        assertTrue(!result.relayPinned)
+    }
 }
