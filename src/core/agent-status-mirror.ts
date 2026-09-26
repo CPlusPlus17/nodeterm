@@ -201,8 +201,8 @@ export interface MirrorSettings {
  * One managed Claude account as the mirror advertises it. `id` + `dir` are what a phone launches
  * with (`CLAUDE_CONFIG_DIR`); `label` + `email` are what it SHOWS, so a picker or a session row
  * never has to print the account's raw UUID. The `usage` block also carries a label per account,
- * but it is local-only (dropped from SSH slices), only the desktop shell publishes it, and it is
- * empty until the first usage poll — so the name has to ride here too.
+ * but it is local-only (dropped from SSH slices) and empty until the first usage poll — so the
+ * name has to ride here too.
  *
  * `label` and `email` are additive (absent on files written before them; old readers ignore
  * them) and absent when blank.

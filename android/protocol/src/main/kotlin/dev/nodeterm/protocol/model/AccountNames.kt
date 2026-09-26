@@ -6,10 +6,11 @@ package dev.nodeterm.protocol.model
  * sessions row — so the two cannot disagree about the same id.
  *
  * Where a name comes from, in order:
- *  1. `settings.claudeAccounts[].label` — written by every desktop shell and the per-host SSH slice
- *     (`mirrorClaudeAccount`), so it is the one source that is there whenever the account is;
- *  2. `usage.accounts[].label` — a desktop older than (1) still has it, but only the desktop shell
- *     publishes it, only for local accounts, and only after the first usage poll;
+ *  1. `settings.claudeAccounts[].label` — written by both shells (desktop and Server Edition) and
+ *     the desktop's per-host SSH slice (`mirrorClaudeAccount`), so it is the one source that is
+ *     there whenever the account is;
+ *  2. `usage.accounts[].label` — a host older than (1) still has it, but only for local accounts
+ *     (it is dropped from SSH slices) and only after the first usage poll;
  *  3. the email, from either block;
  *  4. a short form of the id ([fallbackName]) — never the whole UUID.
  *

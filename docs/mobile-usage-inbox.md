@@ -33,8 +33,8 @@ export interface MirrorFile {
 `mirrorClaudeAccount` in both shells and in the desktop's per-host SSH slice. `label` and `email`
 are display-only, and absent when blank or on an older desktop. A reader names a managed account by
 that `label`, else the `usage` row's label, else an email, else a short form of the id — never by
-the raw id (Android: `AccountNames`). The `usage` block alone is not enough for this: only the
-desktop shell publishes it, it is dropped from SSH slices, and it is empty until the first poll.
+the raw id (Android: `AccountNames`). The `usage` block alone is not enough for this: it is
+dropped from SSH slices, and it is empty until the first poll.
 
 ### Usage
 
