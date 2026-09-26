@@ -1277,8 +1277,9 @@ session.
   (`onPaneClick` blurs the xterm textarea, `shouldReleasePaneFocus`) — releases it and re-arms the
   guard. One document capture `pointerdown` does the rest: outside the node it releases activity
   claimed WITHOUT focus (go-to-node under the ⌘M view, Canvas's own `setActive` on a jump — no
-  focusout ever comes, `outsidePressReleases`), else the stale `activeId` suppresses that node's
-  unread dot; inside the BODY, any deliberate primary press that is not on the guard runs `enterNow`
+  focusout ever comes, `outsidePressReleases`), and a document capture `focusin` landing outside
+  the node (its own wrapper counts as inside) does the same for KEYBOARD focus moves — ⌘M open,
+  then ⌘K's autofocus — else the stale `activeId` suppresses that node's unread dot; inside the BODY, any deliberate primary press that is not on the guard runs `enterNow`
   (`bodyPressAcknowledges`) — guard down, xterm focused, ⌘M view open, all the same — so an unread
   finish is cleared by clicking the terminal, not only by clicking the guard. A focus RESTORE that
   no press caused (window activation) never acknowledges. The xterm blur that OPENING the ⌘M view

@@ -169,6 +169,50 @@ describe('useClickToFocus', () => {
     expect(calls).toContain('armed:true')
   })
 
+  it('releases a focusless active node when keyboard focus lands outside it (⌘M open, then ⌘K)', () => {
+    // Opening the ⌘M view blurs the xterm but keeps the node active; the palette's autofocus then
+    // arrives with no root focusout and no pointerdown.
+    host.md = true
+    host.active = true
+    const palette = document.createElement('input')
+    outside.append(palette)
+    act(() => palette.focus())
+    expect(calls).toContain('release')
+    expect(calls).toContain('active:false')
+    expect(calls).toContain('armed:true')
+  })
+
+  it('keeps a focusless active node when focus moves to the composer inside it', () => {
+    host.md = true
+    host.active = true
+    const composer = document.createElement('textarea')
+    body.append(composer)
+    act(() => composer.focus())
+    expect(calls).not.toContain('release')
+  })
+
+  it('keeps a focusless active node when a press on its own header focuses the wrapper', () => {
+    host.md = true
+    host.active = true
+    press(header)
+    act(() => wrapper.focus())
+    expect(calls).not.toContain('release')
+  })
+
+  it('does not release on window re-activation restoring focus to the xterm', () => {
+    host.active = true
+    act(() => xterm.focus())
+    expect(calls).not.toContain('release')
+    expect(host.active).toBe(true)
+  })
+
+  it('leaves an inactive node alone when focus lands elsewhere', () => {
+    const field = document.createElement('input')
+    outside.append(field)
+    act(() => field.focus())
+    expect(calls).not.toContain('release')
+  })
+
   it('hands the keyboard back to the xterm after a press on the node’s own chrome moved it to the wrapper', async () => {
     act(() => xterm.focus())
     press(header)

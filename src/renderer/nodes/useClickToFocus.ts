@@ -142,13 +142,34 @@ export function useClickToFocus(enabled: boolean, host: ClickToFocusHost): void 
       }, 0)
     }
 
+    // Activity claimed WITHOUT focus (the ⌘M view blurs the xterm and keeps the node active) never
+    // sees a root focusout, and keyboard focus moving elsewhere (⌘K's autofocus) sends no
+    // pointerdown. So a focus landing outside this node is the same "the user went elsewhere" as an
+    // outside press. The node's own wrapper counts as inside: a header press focuses it on the way
+    // to `reclaim`.
+    const onDocFocusIn = (e: FocusEvent) => {
+      const target = e.target instanceof Node ? e.target : null
+      const ownNode = root.closest('.react-flow__node') ?? root
+      if (
+        outsidePressReleases({
+          isActive: h().isActive(),
+          pressInsideNode: !!target && ownNode.contains(target),
+          focusInsideNode: !!target && root.contains(target)
+        })
+      ) {
+        release()
+      }
+    }
+
     document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('focusin', onDocFocusIn, true)
     root.addEventListener('focusin', onFocusIn)
     root.addEventListener('focusout', onFocusOut)
     return () => {
       if (pressTimer) clearTimeout(pressTimer)
       if (reclaimTimer) clearTimeout(reclaimTimer)
       document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('focusin', onDocFocusIn, true)
       root.removeEventListener('focusin', onFocusIn)
       root.removeEventListener('focusout', onFocusOut)
     }
