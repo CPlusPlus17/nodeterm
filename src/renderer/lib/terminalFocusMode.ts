@@ -151,21 +151,17 @@ export function reclaimTarget(p: { lostIsXterm: boolean; lostStillInNode: boolea
 }
 
 /**
- * Click to focus: does this press acknowledge the node while its ⌘M (Markdown / chat) view is open?
+ * Click to focus: does this press ACKNOWLEDGE the node (the `enterNow` routine — active flag,
+ * `clearUnread`, presence, remember, and the xterm focused unless the ⌘M view covers it)?
  *
- * With focus-follows-pointer, the hover dwell over that view runs the whole "I am here" routine —
- * active flag, `clearUnread` (the cross-surface finish ACK), presence, remember — while
- * `focusXtermUnlessCovered` leaves the hidden xterm unfocused. Click to focus has no dwell, and the
- * hover guard is not rendered over the view (`armed && !mdMode`), so without this a user could click
- * into an unread conversation, read it, type in its composer, and it stayed unread. A primary press
- * inside the node BODY (the view) is the click equivalent; the header is chrome and a right click
- * opens the menu.
+ * Focus-follows-pointer acknowledges on every dwell. Click to focus has no dwell, so a deliberate
+ * primary press anywhere in the node BODY is the acknowledgement: on the xterm even when the guard is
+ * already down (Codex round 3 — a finish that turned unread while the window was inactive could not
+ * be cleared by clicking the terminal it belongs to), on the open ⌘M view, on its composer. Three
+ * exclusions: the guard itself, because a press there may start a node drag and `HoverGuard` owns
+ * that decision on release; the header chrome; and non-primary buttons (the context menu). A focus
+ * restore with no press (window activation) is never an acknowledgement — only presses reach this.
  */
-export function mdViewPressAcknowledges(p: {
-  focusFollowsPointer: boolean
-  mdMode: boolean
-  primary: boolean
-  inBody: boolean
-}): boolean {
-  return !p.focusFollowsPointer && p.mdMode && p.primary && p.inBody
+export function bodyPressAcknowledges(p: { primary: boolean; inBody: boolean; onGuard: boolean }): boolean {
+  return p.primary && p.inBody && !p.onGuard
 }

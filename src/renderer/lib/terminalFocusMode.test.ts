@@ -4,7 +4,7 @@ import { join } from 'path'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import {
   focusLossOutcome,
-  mdViewPressAcknowledges,
+  bodyPressAcknowledges,
   outsidePressReleases,
   reclaimTarget,
   hoverTakesKeyboard,
@@ -152,22 +152,22 @@ describe('terminal focus mode (#757)', () => {
     })
   })
 
-  describe('mdViewPressAcknowledges', () => {
-    // With focus-follows-pointer, a dwell over the ⌘M view acknowledges the node (setActive,
-    // clearUnread, presence) without focusing the covered xterm. Click to focus has no dwell and no
-    // guard over that view (the guard renders only when !mdMode), so a click is the replacement.
-    it('acknowledges a primary press on the covered view in click-to-focus mode', () => {
-      expect(mdViewPressAcknowledges({ focusFollowsPointer: false, mdMode: true, primary: true, inBody: true })).toBe(true)
+  describe('bodyPressAcknowledges', () => {
+    // Click to focus has no dwell, so a deliberate press is the acknowledgement (active,
+    // clearUnread, presence) — on the xterm with the guard already down (a finish that turned unread
+    // while the window was inactive), on the ⌘M view, on its composer. Only a press can: a focus
+    // restore on window activation is not the user aiming at the node.
+    it('acknowledges any primary press inside the node body', () => {
+      expect(bodyPressAcknowledges({ primary: true, inBody: true, onGuard: false })).toBe(true)
     })
 
-    it('does nothing where something else already owns it', () => {
-      // the dwell owns it
-      expect(mdViewPressAcknowledges({ focusFollowsPointer: true, mdMode: true, primary: true, inBody: true })).toBe(false)
-      // the guard / xterm own it
-      expect(mdViewPressAcknowledges({ focusFollowsPointer: false, mdMode: false, primary: true, inBody: true })).toBe(false)
-      // a right click opens the menu; the header is chrome, not the view
-      expect(mdViewPressAcknowledges({ focusFollowsPointer: false, mdMode: true, primary: false, inBody: true })).toBe(false)
-      expect(mdViewPressAcknowledges({ focusFollowsPointer: false, mdMode: true, primary: true, inBody: false })).toBe(false)
+    it('leaves the guard to HoverGuard, since a press there may be the start of a node drag', () => {
+      expect(bodyPressAcknowledges({ primary: true, inBody: true, onGuard: true })).toBe(false)
+    })
+
+    it('ignores the header chrome and non-primary buttons', () => {
+      expect(bodyPressAcknowledges({ primary: true, inBody: false, onGuard: false })).toBe(false)
+      expect(bodyPressAcknowledges({ primary: false, inBody: true, onGuard: false })).toBe(false)
     })
   })
 
@@ -181,10 +181,12 @@ describe('terminal focus mode (#757)', () => {
       expect(src).toContain('useSettings((s) => s.settings.terminalFocusFollowsPointer)')
       expect(src).toContain('hoverTakesKeyboard(focusFollowsPointer)')
       expect(src).toContain('pointerLeaveReleases(focusFollowsPointer)')
-      expect(src).toContain('focusLossOutcome(')
-      expect(src).toContain('outsidePressReleases(')
-      expect(src).toContain('mdViewPressAcknowledges(')
-      expect(src).toContain('lostIsCoveredXterm:')
+      expect(src).toContain('useClickToFocus(!focusFollowsPointer,')
+      const hook = read('src/renderer/nodes/useClickToFocus.ts')
+      for (const call of ['focusLossOutcome(', 'outsidePressReleases(', 'bodyPressAcknowledges(', 'reclaimTarget(']) {
+        expect(hook).toContain(call)
+      }
+      expect(hook).toContain('lostIsCoveredXterm:')
     })
 
     it('Settings → Behavior offers the toggle, findable by search', () => {

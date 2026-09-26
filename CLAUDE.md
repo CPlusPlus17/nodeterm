@@ -1264,19 +1264,25 @@ session.
 - **Click to focus** (`settings.terminalFocusFollowsPointer`, default ON = the dwell above; issue
   #757, Settings → Behavior). Off, the pointer decides nothing: no dwell, and `mouseleave` no
   longer blurs, re-arms or releases. A click (`HoverGuard` pointer events → `onGuardClick` → `enterNow`) or a "go to node" takes the
-  keyboard, and the node's active flag, presence focus AND guard then follow DOM focus through a
-  `focusin`/`focusout` listener on the node root (`lib/terminalFocusMode.ts` `focusLossOutcome`):
-  focus moving inside the node or the WINDOW blurring (Cmd+Tab) keeps it, a press on the node's own
-  chrome (header drag — React Flow focuses its wrapper, MEASURED in Electron 42) hands it back to
-  the element that lost it (the ⌘M composer) or the xterm (`reclaimTarget`), anything else —
-  another node, a field, the empty canvas (`onPaneClick` blurs the xterm textarea,
-  `shouldReleasePaneFocus`) — releases it and re-arms the guard. Activity claimed WITHOUT focus
-  (go-to-node under the ⌘M view, Canvas's own `setActive` on a jump) has no focusout, so a
-  document capture `pointerdown` outside the node releases it (`outsidePressReleases`) — else the
-  stale `activeId` suppresses that node's unread dot. The ⌘M view has no guard (`armed && !mdMode`)
-  and no dwell here, so a primary press in the node body while it is open runs `enterNow`
-  (`mdViewPressAcknowledges` — the dwell's ack, xterm left unfocused), and the xterm blur that
-  OPENING the view causes is `keep`, not a release (`lostIsCoveredXterm`). The guard listens to POINTER events
+  keyboard, and the node's active flag, presence focus AND guard then follow DOM focus. ONE hook
+  owns all of it, `nodes/useClickToFocus.ts`, and it binds to the stable `.term-node` ROOT, never
+  the React Flow wrapper: focus mode MOVES that root into the fullscreen surface
+  (`surface.appendChild(root)`), so a listener or containment check captured on the wrapper went
+  deaf there and read every body press as an outside press. The wrapper is re-resolved at event
+  time only to recognise the node's own React Flow chrome (resize handles). Root `focusin`/
+  `focusout` run `focusLossOutcome` (`lib/terminalFocusMode.ts`): focus moving inside the node or
+  the WINDOW blurring (Cmd+Tab) keeps it, a press on the node's own chrome (header drag — React Flow
+  focuses its wrapper, MEASURED in Electron 42) hands it back to the element that lost it (the ⌘M
+  composer) or the xterm (`reclaimTarget`), anything else — another node, a field, the empty canvas
+  (`onPaneClick` blurs the xterm textarea, `shouldReleasePaneFocus`) — releases it and re-arms the
+  guard. One document capture `pointerdown` does the rest: outside the node it releases activity
+  claimed WITHOUT focus (go-to-node under the ⌘M view, Canvas's own `setActive` on a jump — no
+  focusout ever comes, `outsidePressReleases`), else the stale `activeId` suppresses that node's
+  unread dot; inside the BODY, any deliberate primary press that is not on the guard runs `enterNow`
+  (`bodyPressAcknowledges`) — guard down, xterm focused, ⌘M view open, all the same — so an unread
+  finish is cleared by clicking the terminal, not only by clicking the guard. A focus RESTORE that
+  no press caused (window activation) never acknowledges. The xterm blur that OPENING the ⌘M view
+  causes is `keep`, not a release (`lostIsCoveredXterm`). The guard listens to POINTER events
   (`nodes/HoverGuard.tsx`): React Flow's d3-drag swallows a left `mousedown`/`mouseup` on a
   draggable node before React sees them, so the old mouse-event guard never received a left click
   (#87's click-to-focus only ever worked through the dwell). Only a literal `false` in
