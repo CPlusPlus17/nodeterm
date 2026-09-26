@@ -32,6 +32,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -59,7 +60,12 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     val session = remember(hostId) { graph.connections.session(hostId) }
     val state by session.state.collectAsState()
     val snapshot by session.snapshot.collectAsState()
+    // Saved under this back-stack entry's key (AppContent), so it survives a terminal pushed on top
+    // and a recreation (audit A43); [initialTab] only picks the tab a NEW entry opens on.
     var tab by rememberSaveable { mutableIntStateOf(initialTab) }
+    // Each tab's own saved state (scroll position, the Board's project, the Inbox's archive toggle),
+    // kept while another tab shows. The holder itself lives in this entry's saved state.
+    val tabStates = rememberSaveableStateHolder()
     var newSession by remember { mutableStateOf(false) }
 
     // Watch (the 8 s poll) only while the screen is STARTED: a backgrounded app used to keep
@@ -137,11 +143,13 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
                 Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text(if (needsYou > 0) "Inbox ($needsYou)" else "Inbox") })
                 Tab(selected = tab == 3, onClick = { tab = 3 }, text = { Text("Usage") })
             }
-            when (tab) {
-                0 -> SessionsTab(nav, hostId, session, snapshot)
-                1 -> BoardTab(nav, hostId, session, snapshot)
-                2 -> InboxTab(nav, hostId, session, snapshot)
-                else -> UsageTab(snapshot)
+            tabStates.SaveableStateProvider(tab) {
+                when (tab) {
+                    0 -> SessionsTab(nav, hostId, session, snapshot)
+                    1 -> BoardTab(nav, hostId, session, snapshot)
+                    2 -> InboxTab(nav, hostId, session, snapshot)
+                    else -> UsageTab(snapshot)
+                }
             }
         }
     }

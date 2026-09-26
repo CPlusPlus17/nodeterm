@@ -29,8 +29,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,7 +73,8 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
     val context = LocalContext.current
     val graph = NodetermApp.graph(context)
     val scope = rememberCoroutineScope()
-    var showArchive by remember { mutableStateOf(false) }
+    // Saveable, so an open archive stays open after a terminal opened from it (audit A43).
+    var showArchive by rememberSaveable { mutableStateOf(false) }
     val inbox = snapshot.status?.inbox
     val events = inbox?.events.orEmpty().sortedByDescending { it.ts }
     val actionable = events.filter { it.actionable }

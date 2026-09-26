@@ -34,6 +34,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,7 +84,8 @@ fun BoardTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val projects = snapshot.openProjects()
-    var projectId by remember { mutableStateOf<String?>(null) }
+    // Saveable, so the chosen project is still showing after a terminal opened from a card (audit A43).
+    var projectId by rememberSaveable { mutableStateOf<String?>(null) }
     val project = projects.firstOrNull { it.id == projectId } ?: projects.firstOrNull()
     var projectMenu by remember { mutableStateOf(false) }
     var moving by remember { mutableStateOf<NodeInfo?>(null) }

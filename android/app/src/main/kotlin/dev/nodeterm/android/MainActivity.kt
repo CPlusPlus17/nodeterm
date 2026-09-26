@@ -12,16 +12,12 @@ import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonPrimitive
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.core.content.ContextCompat
 import dev.nodeterm.android.ui.HostScreen
 import dev.nodeterm.android.ui.HostsScreen
@@ -29,6 +25,7 @@ import dev.nodeterm.android.ui.NodetermTheme
 import dev.nodeterm.android.ui.PairScreen
 import dev.nodeterm.android.ui.SettingsScreen
 import dev.nodeterm.android.ui.TerminalScreen
+import dev.nodeterm.protocol.model.BackStack
 
 /** The screens. A plain back stack: five destinations, one deep link (the pairing URL). */
 sealed interface Route {
@@ -39,62 +36,75 @@ sealed interface Route {
     data class Terminal(val hostId: String, val nodeId: String, val title: String) : Route
 }
 
-class Navigator(initial: List<Route>) {
-    constructor(initial: Route) : this(listOf(initial))
+/**
+ * The back stack. Each entry has its own key (audit A43): AppContent files the entry's saved UI state
+ * (the Host screen's tab, scroll positions, the Board's project, the Inbox's archive toggle) under it,
+ * so the screen below a terminal comes back as it was left. The rules live in [BackStack] (protocol,
+ * tested); this is its observable holder. Used from the main thread only.
+ */
+class Navigator(initial: BackStack<Route>) {
+    constructor(initial: Route) : this(BackStack.of(listOf(initial), Route.Hosts))
 
-    val stack = mutableStateListOf<Route>().apply { addAll(initial.ifEmpty { listOf(Route.Hosts) }) }
-    val current: Route get() = stack.last()
+    private var backStack by mutableStateOf(initial)
+
+    val size: Int get() = backStack.size
+
+    /** The showing entry: its route, and the key its saved UI state is filed under. */
+    val top: BackStack.Entry<Route> get() = backStack.entries.last()
 
     fun push(route: Route) {
-        stack.add(route)
+        backStack = backStack.push(route)
     }
 
     fun pop(): Boolean {
-        if (stack.size <= 1) return false
-        stack.removeAt(stack.lastIndex)
+        backStack = backStack.pop() ?: return false
         return true
     }
 
     fun replaceAll(route: Route) {
-        stack.clear()
-        stack.add(route)
+        backStack = backStack.replaceAll(route)
+    }
+
+    /** Keeps the entries [keep] accepts, each with its saved state; the computers list when none is left. */
+    fun retain(keep: (Route) -> Boolean) {
+        backStack = backStack.retain(Route.Hosts, keep = keep)
+    }
+
+    /** The keys of the entries that left the stack since the last call. Their saved state is to be dropped. */
+    fun takeRetired(): List<String> {
+        val keys = backStack.retired
+        if (keys.isNotEmpty()) backStack = backStack.withoutRetired()
+        return keys
     }
 
     companion object {
         /**
          * Saves the back stack across activity recreation (a density, font-scale or locale change,
          * or process death) — it used to reset to the computers list (audit A22). Each route is a
-         * JSON array of strings; an entry that no longer decodes is dropped, never guessed.
+         * list of strings, saved with its entry's key (audit A43); an entry that no longer decodes is
+         * dropped, never guessed.
          */
         val Saver: Saver<Navigator, String> = Saver(
-            save = { nav -> JsonArray(nav.stack.map { encode(it) }).toString() },
-            restore = { raw ->
-                val routes = runCatching { (Json.parseToJsonElement(raw) as JsonArray).mapNotNull { decode(it) } }.getOrNull()
-                Navigator(routes ?: listOf(Route.Hosts))
-            }
+            save = { nav -> nav.backStack.encode(::encode) },
+            restore = { raw -> Navigator(BackStack.decode(raw, Route.Hosts, route = ::decode)) }
         )
 
-        private fun encode(r: Route): JsonArray = JsonArray(
-            when (r) {
-                Route.Hosts -> listOf("hosts")
-                is Route.PairHost -> listOfNotNull("pair", r.code)
-                Route.Settings -> listOf("settings")
-                is Route.Host -> listOf("host", r.hostId, r.tab.toString())
-                is Route.Terminal -> listOf("terminal", r.hostId, r.nodeId, r.title)
-            }.map { JsonPrimitive(it) }
-        )
+        private fun encode(r: Route): List<String> = when (r) {
+            Route.Hosts -> listOf("hosts")
+            is Route.PairHost -> listOfNotNull("pair", r.code)
+            Route.Settings -> listOf("settings")
+            is Route.Host -> listOf("host", r.hostId, r.tab.toString())
+            is Route.Terminal -> listOf("terminal", r.hostId, r.nodeId, r.title)
+        }
 
-        private fun decode(e: JsonElement): Route? {
-            val parts = (e as? JsonArray)?.map { (it as? JsonPrimitive)?.content ?: return null } ?: return null
-            return when (parts.firstOrNull()) {
-                "hosts" -> Route.Hosts
-                // A pairing code is single-use: coming back to it would only fail. Drop it.
-                "pair" -> null
-                "settings" -> Route.Settings
-                "host" -> parts.getOrNull(1)?.let { Route.Host(it, parts.getOrNull(2)?.toIntOrNull() ?: 0) }
-                "terminal" -> if (parts.size == 4) Route.Terminal(parts[1], parts[2], parts[3]) else null
-                else -> null
-            }
+        private fun decode(parts: List<String>): Route? = when (parts.firstOrNull()) {
+            "hosts" -> Route.Hosts
+            // A pairing code is single-use: coming back to it would only fail. Drop it.
+            "pair" -> null
+            "settings" -> Route.Settings
+            "host" -> parts.getOrNull(1)?.let { Route.Host(it, parts.getOrNull(2)?.toIntOrNull() ?: 0) }
+            "terminal" -> if (parts.size == 4) Route.Terminal(parts[1], parts[2], parts[3]) else null
+            else -> null
         }
     }
 }
@@ -154,16 +164,12 @@ class MainActivity : ComponentActivity() {
                 }
                 // A restored stack may name a computer that was forgotten meanwhile.
                 LaunchedEffect(Unit) {
-                    val known = nav.stack.filter { r ->
+                    nav.retain { r ->
                         when (r) {
                             is Route.Host -> graph.hosts.get(r.hostId) != null
                             is Route.Terminal -> graph.hosts.get(r.hostId) != null
                             else -> true
                         }
-                    }
-                    if (known.size != nav.stack.size) {
-                        nav.stack.clear()
-                        nav.stack.addAll(known.ifEmpty { listOf(Route.Hosts) })
                     }
                 }
                 val hostTap = incomingHost
@@ -195,14 +201,24 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun AppContent(nav: Navigator) {
-    BackHandler(enabled = nav.stack.size > 1) { nav.pop() }
-    when (val r = nav.current) {
-        Route.Hosts -> HostsScreen(nav)
-        is Route.PairHost -> PairScreen(nav, r.code)
-        Route.Settings -> SettingsScreen(nav)
-        // Keyed on the route: a Host screen for another computer, or for the same one opened on a
-        // different tab (a notification → Inbox), must not inherit the showing screen's saved state.
-        is Route.Host -> key(r) { HostScreen(nav, r.hostId, r.tab) }
-        is Route.Terminal -> TerminalScreen(nav, r.hostId, r.nodeId, r.title)
+    // Only the top entry is composed, so without a holder a screen's saved state died the moment
+    // another was pushed on it: back from a terminal, the Host screen was on its first tab, scrolled
+    // to the top, on the Board's first project (audit A43). Each entry's state is filed under its own
+    // key, which the saved back stack keeps across recreation, like the holder keeps the state.
+    val saved = rememberSaveableStateHolder()
+    // An entry that left the stack never comes back (a new push gets a new key): drop its state.
+    SideEffect { nav.takeRetired().forEach { saved.removeState(it) } }
+    BackHandler(enabled = nav.size > 1) { nav.pop() }
+    val top = nav.top
+    // Keyed per ENTRY, not per route: a Host screen for another computer, or for the same one opened
+    // again (a notification → Inbox), starts from its own route, never from the showing screen's state.
+    saved.SaveableStateProvider(top.key) {
+        when (val r = top.value) {
+            Route.Hosts -> HostsScreen(nav)
+            is Route.PairHost -> PairScreen(nav, r.code)
+            Route.Settings -> SettingsScreen(nav)
+            is Route.Host -> HostScreen(nav, r.hostId, r.tab)
+            is Route.Terminal -> TerminalScreen(nav, r.hostId, r.nodeId, r.title)
+        }
     }
 }
