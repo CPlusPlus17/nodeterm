@@ -8,10 +8,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * A46: the key row's ⌨ chip must bring up the soft keyboard for the terminal. It used to run only
@@ -50,42 +48,16 @@ class TerminalKeyboardChipTest {
         assertEquals(Focus(listOf("focus"), focusedAfter = true), focusForKeyboard(textareaFocused = false))
     }
 
-    private val appSrc = File(InteropHarness.repoRoot, "android/app/src/main/kotlin/dev/nodeterm/android/ui")
-
-    /** The block that follows the first occurrence of [start] in [source], braces balanced. */
-    private fun blockAfter(source: String, start: String): String {
-        val at = source.indexOf(start)
-        assertTrue(at >= 0, "not found: $start")
-        val open = source.indexOf('{', at)
-        var depth = 0
-        for (i in open until source.length) {
-            when (source[i]) {
-                '{' -> depth++
-                '}' -> if (--depth == 0) return source.substring(open, i + 1)
-            }
-        }
-        error("unbalanced block after $start")
-    }
-
-    private fun assertInOrder(block: String, vararg parts: String) {
-        var from = 0
-        for (p in parts) {
-            val at = block.indexOf(p, from)
-            assertTrue(at >= 0, "expected `$p` after `${parts.takeWhile { it != p }.lastOrNull()}` in:\n$block")
-            from = at + p.length
-        }
-    }
-
     @Test
     fun `the chip releases Compose's focus before it asks for the keyboard`() {
-        val chip = blockAfter(File(appSrc, "TerminalScreen.kt").readText(), "KeyChip(\"⌨\")")
-        assertInOrder(chip, "focusManager.clearFocus()", "controller.showKeyboard()")
+        val chip = AppSourcePins.blockAfter(AppSourcePins.ui("TerminalScreen.kt"), "KeyChip(\"⌨\")")
+        AppSourcePins.assertInOrder(chip, "focusManager.clearFocus()", "controller.showKeyboard()")
     }
 
     @Test
     fun `the WebView takes focus, then the page, then the keyboard is asked for after the focus change`() {
-        val body = blockAfter(File(appSrc, "TerminalController.kt").readText(), "fun showKeyboard()")
-        assertInOrder(body, ".requestFocus()", "js(\"nt.focusForKeyboard()\")", ".post {", "showSoftInput(", "InputMethodManager.SHOW_IMPLICIT")
+        val body = AppSourcePins.blockAfter(AppSourcePins.ui("TerminalController.kt"), "fun showKeyboard()")
+        AppSourcePins.assertInOrder(body, ".requestFocus()", "js(\"nt.focusForKeyboard()\")", ".post {", "showSoftInput(", "InputMethodManager.SHOW_IMPLICIT")
         // Only the deferred call: a synchronous request right after requestFocus races the focus change.
         assertEquals(1, Regex("""showSoftInput\(""").findAll(body).count())
     }

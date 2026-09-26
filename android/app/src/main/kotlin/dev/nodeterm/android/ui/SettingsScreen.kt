@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -46,6 +48,8 @@ import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.data.RoutePreference
 import dev.nodeterm.android.notify.InboxNotifier
 import dev.nodeterm.protocol.crypto.B64
+import dev.nodeterm.protocol.relay.ApiBaseSetting
+import dev.nodeterm.protocol.relay.RelayApi
 import java.security.MessageDigest
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,16 +82,32 @@ fun SettingsScreen(nav: Navigator) {
     }
     var routes by remember { mutableStateOf(hosts.associate { it.id to graph.hosts.route(it.id) }) }
 
+    // The name and the relay address are stored when the screen is left, by the top-bar arrow AND
+    // by the system back (gesture or button), which used to pop without saving (audit A44). Not per
+    // keystroke: a half-typed address would be the one the relay calls used. An address that is not
+    // https is not stored, and the user is told so rather than finding the old one still in place.
+    fun leave() {
+        graph.hosts.deviceName = name
+        when (val edit = ApiBaseSetting.onLeave(apiBase, graph.hosts.apiBase)) {
+            is ApiBaseSetting.OnLeave.Save -> graph.hosts.apiBase = edit.value
+            ApiBaseSetting.OnLeave.Keep -> {}
+            ApiBaseSetting.OnLeave.Rejected -> Toast.makeText(
+                context,
+                "Relay API not saved: it must be a full https:// address.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        nav.pop()
+    }
+    // Registered after AppContent's, so it runs instead of that plain pop while Settings shows.
+    BackHandler(enabled = nav.size > 1) { leave() }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("Settings") },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        graph.hosts.deviceName = name
-                        if (apiBase.startsWith("https://")) graph.hosts.apiBase = apiBase
-                        nav.pop()
-                    }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    IconButton(onClick = { leave() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 }
             )
         }
@@ -184,14 +204,19 @@ fun SettingsScreen(nav: Navigator) {
 
             HorizontalDivider()
             Text("Advanced", style = MaterialTheme.typography.titleMedium)
+            val apiBaseRejected = ApiBaseSetting.onLeave(apiBase, graph.hosts.apiBase) == ApiBaseSetting.OnLeave.Rejected
             OutlinedTextField(
                 value = apiBase,
                 onValueChange = { apiBase = it.trim() },
                 label = { Text("Relay API (https)") },
+                isError = apiBaseRejected,
+                supportingText = if (apiBaseRejected) {
+                    { Text("Not a full https:// address: it will not be saved.") }
+                } else null,
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            TextButton(onClick = { apiBase = dev.nodeterm.protocol.relay.RelayApi.DEFAULT_API_BASE }) { Text("Reset to default") }
+            TextButton(onClick = { apiBase = RelayApi.DEFAULT_API_BASE }) { Text("Reset to default") }
 
             HorizontalDivider()
             Text("About", style = MaterialTheme.typography.titleMedium)

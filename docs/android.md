@@ -198,6 +198,14 @@ been processed first. The page half runs the real `terminal.js` in node against 
 follows Blink's rule. The Android half cannot run on a JVM, so the test pins its order in the source.
 Whether the keyboard comes up, and stays up, is a device check.
 
+`SettingsLeaveTest` covers leaving Settings (`A44`). The system back (gesture or button) used to pop
+the screen without storing the edited phone name or relay API address; only the top-bar arrow stored
+them. Both now run one `leave()`, which stores, then pops. Nothing is stored per keystroke. The relay
+address must be a full `https://` URL (`ApiBaseSetting`: a host, no query or fragment); one that is
+not is left unstored, the field says so while it is being typed, and leaving shows a message. The
+address rule is unit-tested; the wiring is pinned in the source, and whether the back gesture reaches
+it is a device check.
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
