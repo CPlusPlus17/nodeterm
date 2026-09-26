@@ -66,8 +66,9 @@ class SeenLog(
      * as announced in the same locked step (audit A73). What [onScreen] shows is recorded as seen and
      * never returned, so no later check (the next refresh, or the background one) announces what the
      * user already looked at; that happens even when [notify] is false (notifications off, or not
-     * allowed by the system), so turning them on later does not announce it either. The rest is
-     * [claimAnnounceable]'s answer when [notify], and left untouched otherwise.
+     * allowed by the system), so turning them on later does not announce it either. What waits on a
+     * terminal still connecting ([OnScreen.Split.waiting]) is left untouched, for a later listing to
+     * decide. The rest is [claimAnnounceable]'s answer when [notify], and left untouched otherwise.
      *
      * Only events that could still be announced are recorded, an entry already recorded is left as it
      * is, and nothing is written when nothing is new: the live check runs every 8 s. Leaving an

@@ -45,6 +45,7 @@ import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.InputBar
 import dev.nodeterm.protocol.model.Keys
+import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.Osc52
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -89,6 +90,19 @@ class TerminalController(
      * reached a null stream and was dropped silently.
      */
     val attached: Boolean get() = state == TermState.Attached
+
+    /**
+     * Whether the session's pane is in front of the user, for the live notifications (audit A73
+     * review): attached shows it; connecting is where every start begins, and ends in the pane or in
+     * an overlay; an overlay (ended, relay offer, approval code, lost view) covers it. Read by a
+     * refresh on a background thread: [state] is snapshot state, which any thread may read.
+     */
+    val pane: OnScreen.Pane
+        get() = when (state) {
+            TermState.Attached -> OnScreen.Pane.SHOWN
+            TermState.Connecting -> OnScreen.Pane.OPENING
+            else -> OnScreen.Pane.HIDDEN
+        }
 
     /**
      * Offered after an attach of an agent node: its resume line after a COLD attach (the desktop's

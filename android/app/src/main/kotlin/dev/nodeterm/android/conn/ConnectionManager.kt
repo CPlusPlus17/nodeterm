@@ -11,6 +11,7 @@ import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.RelayConnector
 import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.model.J
+import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.OnScreenTracker
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.ProjectsSnapshot
@@ -76,8 +77,9 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     val isWatched: Boolean get() = synchronized(this) { watchers > 0 }
 
     /**
-     * What of this computer is on screen: its Inbox tab, and the sessions open in a terminal. Each
-     * listing announces its new Inbox events except those (audit A73, see [refreshNow]).
+     * What of this computer is on screen: its Inbox tab, and the sessions open in a terminal, as far
+     * as each terminal shows its pane. Each listing announces its new Inbox events except those
+     * (audit A73, see [refreshNow]).
      */
     val onScreen = OnScreenTracker()
 
@@ -335,6 +337,18 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         // Outside the try: a notification the system refused is not a failed listing, and must not
         // drop a working connection. No network here — the listing just arrived.
         runCatching { graph.announce(hostId, listed, onScreen.now()) }
+    }
+
+    /**
+     * A terminal of this computer just attached, so the pane of [nodeId] is in front of the user (the
+     * A73 review). The listing that arrived while it was connecting left that session's events
+     * waiting ([OnScreen.opening]), and the next listing is up to 8 s away: record what the pane
+     * shows of the latest listing as seen now, so a user who looks and leaves before then is not told
+     * about it afterwards. Records only, announces nothing, and costs no network call.
+     */
+    fun notePaneShown(nodeId: String) {
+        val events = _snapshot.value.status?.inbox?.events ?: return
+        runCatching { graph.hosts.claimLive(events, OnScreen(nodes = setOf(nodeId)), notify = false) }
     }
 
     /** A refresh the USER asked for (Refresh, Try again). */

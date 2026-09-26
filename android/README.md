@@ -84,8 +84,12 @@ Other paired computers are not polled while you look at one, so their notificati
 the background check only. Real-time push on Android needs an FCM leg in the backend.
 
 The live check leaves out what you are looking at: nothing of a computer is announced while its
-Inbox tab is on screen, and nothing of a session open in a terminal. Those events count as seen, so
-no later check announces them either.
+Inbox tab is on screen, and nothing a session's terminal shows while it is attached. Those events
+count as seen, so no later check announces them either. An approval the computer is holding for an
+answer (a hook-reply approval) is still announced with its terminal open, because Claude paints that
+prompt only once the hold ends. A terminal that shows an error, a relay offer or an approval code
+instead of the session hides nothing, and one still connecting leaves the session's events for the
+next check.
 
 Each Inbox event raises at most one notification: only events younger than 6 hours are announced,
 and the phone remembers the ones it has announced, you have read or you had on screen for a day

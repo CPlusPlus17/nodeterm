@@ -268,8 +268,13 @@ in-app refresh only updated the listing. Now every listing that arrives (the 8 s
 computer on screen, a change the computer pushes, the background check) runs the one announce path,
 so notifications are live for the computer whose screen is open. What the user is looking at is left
 out and recorded as seen instead, so no later check announces it: every event while that computer's
-Inbox tab is on screen, and the events of a session open in a terminal. That is recorded even with
-notifications off, so turning them on later does not announce it either. Other computers are not
+Inbox tab is on screen, and what a session's terminal shows while it is attached. That is recorded
+even with notifications off, so turning them on later does not announce it either. Recording is
+permanent, so it must never claim more than the screen shows (the review of A73): a held hook-reply
+approval (it carries a `pendingId`) is announced with its terminal open, because Claude paints that
+prompt only once the hold ends; a terminal showing an overlay instead of its pane (ended, relay
+offer, approval code, lost view) hides nothing; and one still connecting leaves its session's events
+for a later listing, which the attach settles at once from the latest listing. Other computers are not
 polled while one is open, so theirs still come only from the background check, and the Settings
 text, the README and the notifier's comment now say exactly that. It costs no network call (the
 listing already arrived), and the check writes the phone's seen-log only when something is new. The

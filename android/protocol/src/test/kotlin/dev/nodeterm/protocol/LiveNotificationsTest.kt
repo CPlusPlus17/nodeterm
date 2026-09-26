@@ -17,8 +17,11 @@ import kotlin.test.assertTrue
  * 15-minute background check ever posted one; the in-app refresh only updated the listing. Now every
  * fresh listing of a computer runs the one announce path, so notifications are live for the computer
  * whose screen is open, minus what the user is looking at: every event while that computer's Inbox
- * tab is on screen, and the events of the session open in a terminal. Those are recorded as seen, so
- * no later check announces them. Other computers are not polled, and the copy now says so.
+ * tab is on screen, and what the pane of a session attached in a terminal shows. Those are recorded as
+ * seen, so no later check announces them. Other computers are not polled, and the copy now says so.
+ * The review of A73 narrowed "a terminal is open" to what its pane shows: not a held hook-reply
+ * approval (its prompt is not painted while held), nothing while an overlay covers the pane, and
+ * nothing decided yet while the terminal is still connecting.
  *
  * The decision ([OnScreen], [SeenLog.claimLive]) and the screen bookkeeping ([OnScreenTracker]) are
  * pure and tested here. The wiring (the listing announces, the screens register while started, the
@@ -50,11 +53,15 @@ class LiveNotificationsTest {
         nodeId: String = "n1",
         ts: Long = t0,
         kind: InboxKind = InboxKind.APPROVAL,
-        resolved: Boolean = false
+        resolved: Boolean = false,
+        pendingId: String? = null
     ) = InboxEvent(
         id = id, ts = ts, nodeId = nodeId, agentId = "claude", sessionId = null, kind = kind, title = "t",
-        detail = null, interrupted = false, resolved = resolved, options = emptyList(), multiSelect = false, pendingId = null
+        detail = null, interrupted = false, resolved = resolved, options = emptyList(), multiSelect = false, pendingId = pendingId
     )
+
+    /** A held hook-reply approval: it carries its ticket, and its prompt is not painted while held. */
+    private fun held(id: String, nodeId: String = "n1", ts: Long = t0) = ev(id, nodeId, ts, pendingId = "$nodeId-$ts-1")
 
     private fun ids(events: List<InboxEvent>) = events.map { it.id }
 
@@ -85,6 +92,75 @@ class LiveNotificationsTest {
         assertEquals(listOf("b", "d"), ids(split.offScreen))
         assertTrue(OnScreen(nodes = setOf("open")).shows(ev("x", "open")))
         assertFalse(OnScreen(nodes = setOf("open")).shows(ev("x", "other")))
+    }
+
+    @Test
+    fun `a held approval is not in its session's pane, so an open terminal does not hide it`() {
+        // docs/hook-reply-approvals.md: Claude applies the hook's decision before it paints the prompt,
+        // so while the hook holds the request the pane shows no prompt (a subagent's concurrent
+        // approval rides the parent node, whose pane shows the parent's question).
+        assertFalse(OnScreen.inPane(held("h")))
+        assertTrue(OnScreen.inPane(ev("keyed")), "an approval with no ticket is a prompt in the pane")
+        assertTrue(OnScreen.inPane(ev("q", kind = InboxKind.QUESTION)))
+        assertTrue(OnScreen.inPane(ev("d", kind = InboxKind.DONE)))
+        val onScreen = OnScreen(nodes = setOf("open"))
+        val feed = listOf(held("h", "open"), ev("keyed", "open"), ev("q", "open", kind = InboxKind.QUESTION), ev("d", "open", kind = InboxKind.DONE))
+        val split = onScreen.split(feed)
+        assertEquals(listOf("keyed", "q", "d"), ids(split.shown))
+        assertEquals(listOf("h"), ids(split.offScreen))
+        // The Inbox tab lists it as a card with its buttons: there it IS on screen.
+        assertTrue(OnScreen(inbox = true).shows(held("h", "open")))
+    }
+
+    @Test
+    fun `a held approval of the open session is announced, and not recorded as seen until it is`() {
+        val clock = Clock(t0)
+        val log = SeenLog(MemStorage(), clock)
+        val onScreen = OnScreen(nodes = setOf("open"))
+        val feed = listOf(held("h", "open"), ev("keyed", "open"))
+        // Notifications off: the prompt in the pane is recorded, the held approval is not spent.
+        assertEquals(emptyList(), log.claimLive(feed, onScreen, notify = false))
+        assertTrue(log.isSeen("keyed"))
+        assertFalse(log.isSeen("h"), "a held approval nobody could see was recorded as seen")
+        // Notifications on: announced once, whether the terminal is still open or the user left it.
+        clock.now += 8_000
+        assertEquals(listOf("h"), ids(log.claimLive(feed, onScreen, notify = true)))
+        clock.now += 8_000
+        assertEquals(emptyList(), log.claimLive(feed, onScreen, notify = true))
+        assertEquals(emptyList(), log.claimAnnounceable(feed))
+    }
+
+    @Test
+    fun `a terminal still connecting leaves its session's events for a later listing`() {
+        val clock = Clock(t0)
+        val storage = MemStorage()
+        val log = SeenLog(storage, clock)
+        val opening = OnScreen(opening = setOf("open"))
+        val feed = listOf(ev("q", "open", kind = InboxKind.QUESTION), held("h", "open"), ev("other", "n2"))
+        val split = opening.split(feed)
+        assertEquals(listOf("q"), ids(split.waiting))
+        assertEquals(listOf("h", "other"), ids(split.offScreen), "a held approval is not in the pane about to show")
+        assertEquals(emptyList(), split.shown)
+        assertEquals(listOf("h", "other"), ids(log.claimLive(feed, opening, notify = true)))
+        assertFalse(log.isSeen("q"), "a pane that never showed was recorded as seen")
+        // The attach failed and an overlay covers the pane: the next listing announces it.
+        clock.now += 8_000
+        assertEquals(listOf("q"), ids(log.claimLive(feed, OnScreen.NOTHING, notify = true)))
+    }
+
+    @Test
+    fun `once the terminal attaches, its pane is recorded from the latest listing, and leaving announces nothing`() {
+        val clock = Clock(t0)
+        val log = SeenLog(MemStorage(), clock)
+        val feed = listOf(ev("d", "open", kind = InboxKind.DONE), held("h", "open"))
+        assertEquals(listOf("h"), ids(log.claimLive(feed, OnScreen(opening = setOf("open")), notify = true)))
+        // HostSession.notePaneShown, on the attach: records what the pane shows, announces nothing.
+        assertEquals(emptyList(), log.claimLive(feed, OnScreen(nodes = setOf("open")), notify = false))
+        assertTrue(log.isSeen("d"))
+        // The user looked and left before the next refresh: nothing about it afterwards.
+        clock.now += 3_000
+        assertEquals(emptyList(), log.claimLive(feed, OnScreen.NOTHING, notify = true))
+        assertEquals(emptyList(), log.claimAnnounceable(feed))
     }
 
     // --- One check of a fresh listing -----------------------------------------------------------
@@ -210,6 +286,26 @@ class LiveNotificationsTest {
         assertEquals(setOf("n1"), seen.nodes)
     }
 
+    @Test
+    fun `a terminal counts only while its pane shows, and the tracker asks it at every listing`() {
+        val tracker = OnScreenTracker()
+        var pane = OnScreen.Pane.OPENING
+        val h = tracker.showNode("n1") { pane }
+        assertEquals(OnScreen(opening = setOf("n1")), tracker.now())
+        pane = OnScreen.Pane.SHOWN
+        assertEquals(OnScreen(nodes = setOf("n1")), tracker.now())
+        pane = OnScreen.Pane.HIDDEN // an overlay over the pane: the session ended, an offer, a lost view
+        assertSame(OnScreen.NOTHING, tracker.now())
+        // Two terminals of one session: the one that shows it wins over the one still connecting.
+        val other = tracker.showNode("n1") { OnScreen.Pane.SHOWN }
+        pane = OnScreen.Pane.OPENING
+        assertEquals(OnScreen(nodes = setOf("n1")), tracker.now())
+        other.close()
+        assertEquals(OnScreen(opening = setOf("n1")), tracker.now())
+        h.close()
+        assertSame(OnScreen.NOTHING, tracker.now())
+    }
+
     // --- The wiring, pinned in the app's source -----------------------------------------------------
 
     private val connections get() = AppSourcePins.app("conn/ConnectionManager.kt")
@@ -268,13 +364,33 @@ class LiveNotificationsTest {
             "onStopOrDispose { showing.close() }"
         )
         // Registered before the watch starts, so the first listing already knows; closed after it stops.
+        // The terminal says at every listing whether its pane shows (the A73 review).
+        val terminal = AppSourcePins.ui("TerminalScreen.kt")
         AppSourcePins.assertInOrder(
-            AppSourcePins.blockAfter(AppSourcePins.ui("TerminalScreen.kt"), "LifecycleStartEffect(controller)"),
-            "val showing = session.onScreen.showNode(nodeId)",
+            AppSourcePins.blockAfter(terminal, "LifecycleStartEffect(controller)"),
+            "val showing = session.onScreen.showNode(nodeId) { controller.pane }",
             "session.startWatching()",
             "onStopOrDispose {",
             "session.stopWatching()",
             "showing.close()"
+        )
+        // Attached shows the pane, connecting is about to, every overlay covers it.
+        val pane = AppSourcePins.blockAfter(AppSourcePins.ui("TerminalController.kt"), "val pane: OnScreen.Pane")
+        AppSourcePins.assertInOrder(
+            pane,
+            "TermState.Attached -> OnScreen.Pane.SHOWN",
+            "TermState.Connecting -> OnScreen.Pane.OPENING",
+            "else -> OnScreen.Pane.HIDDEN"
+        )
+        // On the attach, what the pane shows of the latest listing is recorded, and nothing announced.
+        AppSourcePins.assertInOrder(
+            AppSourcePins.blockAfter(terminal, "LaunchedEffect(controller, pane)"),
+            "if (pane == OnScreen.Pane.SHOWN) session.notePaneShown(nodeId)"
+        )
+        AppSourcePins.assertInOrder(
+            AppSourcePins.blockAfter(connections, "fun notePaneShown(nodeId: String)"),
+            "_snapshot.value.status?.inbox?.events",
+            "graph.hosts.claimLive(events, OnScreen(nodes = setOf(nodeId)), notify = false)"
         )
     }
 

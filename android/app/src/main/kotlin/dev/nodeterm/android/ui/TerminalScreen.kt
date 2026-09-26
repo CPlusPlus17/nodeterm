@@ -31,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -47,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.NodetermApp
+import dev.nodeterm.protocol.model.OnScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -59,11 +61,12 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
     // Attached and watching only while the screen is STARTED (audit A18): in the background the
     // relay stream kept the desktop treating the session as watched (Eco shield, and the phone's
     // size as a ceiling) and kept the radio busy. Stop detaches; start reattaches.
-    // While it shows, this session's Inbox events are in front of the user: the live refresh records
-    // them as seen instead of announcing them (A73). Registered before the watch starts, so its
-    // first listing already knows.
+    // While the pane shows, this session's Inbox events are in front of the user: the live refresh
+    // records them as seen instead of announcing them (A73). Only while it shows (the A73 review):
+    // the refresh asks controller.pane each time, so an overlay over the pane, or a terminal still
+    // connecting, records nothing. Registered before the watch starts, so its first listing knows.
     LifecycleStartEffect(controller) {
-        val showing = session.onScreen.showNode(nodeId)
+        val showing = session.onScreen.showNode(nodeId) { controller.pane }
         session.startWatching()
         controller.onStart()
         onStopOrDispose {
@@ -71,6 +74,12 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
             session.stopWatching()
             showing.close()
         }
+    }
+    // The pane just came on screen: what it shows of the latest listing is seen now. That listing
+    // arrived while the terminal was connecting and left this session's events waiting (A73 review).
+    val pane = controller.pane
+    LaunchedEffect(controller, pane) {
+        if (pane == OnScreen.Pane.SHOWN) session.notePaneShown(nodeId)
     }
     DisposableEffect(controller) {
         onDispose { controller.dispose() }
