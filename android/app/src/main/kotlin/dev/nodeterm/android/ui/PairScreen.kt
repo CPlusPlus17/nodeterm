@@ -46,6 +46,7 @@ import dev.nodeterm.android.Route
 import dev.nodeterm.android.data.SecureStore
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.pairing.PairingClient
+import dev.nodeterm.protocol.pairing.PairingException
 import dev.nodeterm.protocol.pairing.PairingPayload
 import kotlinx.coroutines.launch
 
@@ -172,8 +173,12 @@ fun PairScreen(nav: Navigator, initialCode: String? = null) {
                                 ).show()
                                 nav.replaceAll(Route.Hosts)
                                 nav.push(Route.Host(host.id))
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
                             } catch (e: Exception) {
-                                error = e.message ?: "Pairing failed."
+                                // Always a sentence: a bare exception message can be a lone token
+                                // (audit A54 saw "-1").
+                                error = PairingException.userMessage(e)
                             } finally {
                                 busy = false
                             }

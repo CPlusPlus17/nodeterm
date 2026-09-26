@@ -88,7 +88,12 @@ unchanged.
   dropped, replayed/reordered sequence numbers dropped, boxes under a foreign key dropped.
 - **Pairing** — against the desktop's real `createPairingService` with HOME in a temp dir: the
   E2EE-sealed exchange, the key landing in `authorized_keys` under `nodeterm-ios-<deviceId>`, the
-  relay leg and its `/v1/relay/device` body, a refused wrong token.
+  relay leg and its `/v1/relay/device` body, a refused wrong token, and the size of the desktop's
+  largest answer (606 bytes, counted through a proxy). Scripted local servers pin the client's
+  bounds on an answer from whatever `host:pairPort` a code names: a declared length is refused
+  above 64 KiB or below zero before anything is allocated, a body with no length stops at 64 KiB,
+  and the whole exchange ends at a 45 s deadline (or when the caller is cancelled) by closing the
+  socket, so a server that trickles bytes cannot hold the pairing screen.
 - **SSH** — against Apache MINA sshd running every command through `/bin/sh`, with real tmux on a
   private `TMUX_TMPDIR`: v3 index resolution, attach with keystrokes both ways, cold-start
   detection, literal `send-keys` (a leading `-` is text), answer files, read-acks, host-key pinning.

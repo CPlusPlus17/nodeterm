@@ -91,6 +91,6 @@ and the phone remembers the ones it has announced or you have read for a day aft
   replays), no re-key once ready, and the host key pinned from pairing.
 - The SSH host key is pinned on first connect; a changed key is refused, never routed around.
 - No cleartext HTTP anywhere; the LAN `/pair` POST runs over a raw socket and is sealed to the host
-  key from the QR.
+  key from the QR. Its answer is read as untrusted: at most 64 KiB, within 45 seconds.
 
 Design notes, the protocol mapping and known gaps: [`docs/android.md`](../docs/android.md).
