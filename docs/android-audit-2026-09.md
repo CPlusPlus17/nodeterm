@@ -26,7 +26,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A10](#a10) | medium | BLOCK | small | ci-docs/risk | ✅ fixed in `fcda932` · Debug APKs from CI change signature from run to run; README offers them as the install route, and updating means uninstalling, which wipes pairings |
 | [A11](#a11) | medium |  | small | build/bug | ✅ fixed in `de1eded` · Tapping an Inbox notification while the app is in the background does not open that computer |
 | [A12](#a12) | medium |  | medium | protocol/bug | ✅ fixed in `ab1335c` · Relay sendKeys (question answers, legacy approvals) writes into a pty that does not exist yet and then kills it immediately, so the keystroke can be lost while the UI reports success |
-| [A13](#a13) | medium |  | medium | protocol/bug | Registering a phone-started node while the phone is attached lets the desktop's own client attach with `-D`, which detaches the phone; Android then reports the session as ended |
+| [A13](#a13) | medium |  | medium | protocol/bug | ✅ phone side fixed in `68d0925` (desktop root cause open) · Registering a phone-started node while the phone is attached lets the desktop's own client attach with `-D`, which detaches the phone; Android then reports the session as ended |
 | [A14](#a14) | medium |  | small | protocol/bug | ✅ fixed in `c58ad65` · New sessions in cwd-less (inline) projects are never registered: the desktop refuses them, the refusal is ignored, and the session is orphaned |
 | [A15](#a15) | medium |  | small | protocol/bug | ✅ fixed in `c58ad65` · The cold-attach resume offer drops the node's managed Claude account (and on the relay, its cwd), so the resume fails with 'No conversation found' |
 | [A16](#a16) | medium |  | small | protocol/gap | ✅ fixed in `c58ad65` · The phone's launch ignores the project's own permission mode (and default account), so a project the user set to a stricter mode starts in the global mode |
@@ -34,8 +34,8 @@ the audit's proposal, the handover's progress log says how and why.
 | [A18](#a18) | medium |  | small | runtime/bug | ✅ fixed in `10de4b9` · No lifecycle handling: a backgrounded app keeps the 8 s poll and its relay terminal stream alive indefinitely |
 | [A19](#a19) | medium |  | small | runtime/bug | ✅ fixed in `de1eded` · Tapping an inbox notification while the activity is alive ignores the target computer |
 | [A20](#a20) | medium |  | small | runtime/bug | ✅ fixed in `d199f03` · Cancelling an in-flight connect leaks the SSH connection and records the cancellation as a connection failure |
-| [A21](#a21) | medium |  | small | runtime/bug | A denied POST_NOTIFICATIONS is never re-requested, and the Settings switch still reads On |
-| [A22](#a22) | medium |  | small | runtime/bug | The Navigator back stack is not saved across activity recreation, and the original launch intent is re-applied |
+| [A21](#a21) | medium |  | small | runtime/bug | ✅ fixed in `daf15d3` · A denied POST_NOTIFICATIONS is never re-requested, and the Settings switch still reads On |
+| [A22](#a22) | medium |  | small | runtime/bug | ✅ fixed in `ade7428` · The Navigator back stack is not saved across activity recreation, and the original launch intent is re-applied |
 | [A23](#a23) | medium |  | small | security/risk | ✅ fixed in `3d36d60` · Background inbox worker opens unapproved relay connections, raising desktop SAS approval dialogs the phone never shows |
 | [A24](#a24) | medium |  | small | security/bug | ✅ fixed in `8e304db` · SecureStore treats ANY decrypt error as 'absent', so getOrCreate32 permanently overwrites the phone's identity |
 | [A25](#a25) | medium |  | medium | parity/gap | No real push notifications: 15-minute background polling, no notification actions, no Live-Activity equivalent, and the desktop's phone-push switches are ignored |
@@ -46,7 +46,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A30](#a30) | medium |  | small | critic/bug | ✅ fixed in `3d36d60` · Pressing Deny on the desktop is not respected: the phone re-dials about 8 s later and the SAS approval dialog reappears |
 | [A31](#a31) | medium |  | small | critic/bug | ✅ fixed in `a622e71` · A silently dead SSH peer (laptop asleep, desktop IP or VPN change) wedges the host as 'On your network' for many minutes: no detection, no relay fallback, and the error is never shown |
 | [A32](#a32) | medium |  | medium | critic/gap | No way to open a URL or copy text from the phone terminal: no link detection, no touch selection, and the WebView cannot show xterm's link confirm |
-| [A33](#a33) | medium |  | medium | critic/bug | On a Windows computer, 'New session' starts the agent in the user's home folder instead of the project, and silently drops the chosen Claude account while still registering it |
+| [A33](#a33) | medium |  | medium | critic/bug | ✅ fixed in `0db0b6e` · On a Windows computer, 'New session' starts the agent in the user's home folder instead of the project, and silently drops the chosen Claude account while still registering it |
 | [A34](#a34) | medium |  | small | critic/bug | ✅ fixed in `2a273a7` · The Ctrl key-row chip does not apply to text sent from the input bar: arming Ctrl and sending 'z' submits a literal 'z' plus Enter |
 | [A35](#a35) | medium |  | small | critic/bug | ✅ fixed in `16706f4` · approvals.answer returns `answered:false` both for 'already handled' and for 'the write failed'; the phone always says 'Already handled.' |
 | [A36](#a36) | medium |  | small | critic/gap | ✅ fixed in `2a273a7` · After any connection drop the terminal stays on 'Disconnected. [Reattach]' even though the host connection reconnects by itself |

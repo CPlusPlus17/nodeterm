@@ -12,22 +12,54 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
   [36109984730](https://github.com/CPlusPlus17/nodeterm/actions/runs/36109984730), artifact
   `nodeterm-android-debug`, which expires 2026-12-24). The protocol tests pass in CI too.
 - **It has never been run on a phone.** A 170-agent audit found **9 distinct release blockers**.
-  WP1 and WP2 (all nine) are fixed on the branch; see the progress log below. Do not hand the APK
-  to anyone until the device pass (WP3) has run.
-- The next session should **fix the blockers**, then do a **device test pass** using the checklist
-  below, then work down the medium findings. No PR is open, and none should be opened unless the
-  user asks.
+  All nine (WP1 + WP2) and every WP4 medium bug are fixed on the branch (A13 on the phone side
+  only); see the progress log below. Everything is unit/interop-tested where the layer allows and
+  type-checked, and CI builds the APK — but **nothing has run on a device**. Do not hand the APK to
+  anyone until the device pass (WP3) has run.
+- The next session should run the **device test pass** (the checklist below), then the open items
+  in "What is still open", then WP5/WP6. No PR is open, and none should be opened unless the user
+  asks.
 
 ## Progress log
 
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
 
-### WP4 (medium bugs): in progress
+### WP4 (medium bugs): done on the branch, not device-verified
 
 | Finding | Commit | What changed | Checked by |
 |---|---|---|---|
 | A24 | `8e304db` | `SecretStoreCore` (protocol) replaces a stored secret only on positive evidence it is gone (nothing stored, malformed blob, `AEADBadTagException`); anything else is `SecretUnavailableException` and nothing is written. The identity's first write is durable. `SecureStore` generates the Keystore key only when the alias is absent. | `SecretStoreCoreTest` with real AES-GCM. |
+| A20 | `d199f03` | `connectLocked` rethrows cancellation on both legs (state back to Idle, no "offline"), and closes an SSH connection that finished dialing after its caller was cancelled. | Type-check + CI build only. |
+| A11 / A19 | `de1eded` | `onNewIntent` records the host id (and `setIntent`); a LaunchedEffect opens Hosts → that computer's Inbox. The Host destination is `key(route)`-ed so an already-showing Host screen does not keep its tab. | Type-check + CI build only. |
+| A34 / A36 | `2a273a7` | A34: an armed Ctrl applies to the input bar (`Keys.ctrl`, one control byte, no Enter). A36: a null exit (connection gone) reattaches automatically once the host connection is back — bounded (3 per flapping stretch), only while the screen is showing. | `KeysTest`; the controller is type-checked only. |
+| A14 / A15 / A16 | `c58ad65` | A16: the project's `defaultPermissionMode` wins over the global one (both re-validated); its `defaultAccountId` is preselected only while the host still has it. A15: the resume offer is built like the desktop's cold restore (`cd`, `CLAUDE_CONFIG_DIR`, mode; portable `./` cwds resolved). A14: cwd-less projects are no longer offered, and a refused registration shows a notice. | `ModelTest` (4 new cases). |
+| A12 | `ab1335c` | New additive desktop verb `node.sendKeys {nodeId, keys}` → `{sent}` via `PtyManager.backgroundWrite` (no throwaway client; short answers only; SSH-project nodes answer `sent:false`). The phone uses it; `sent:false` opens the session; an older desktop gets attach → wait for paint → write → 400 ms linger. | vitest `host-node-actions.test.ts`; relay interop incl. the older-desktop fallback. |
+| A31 | `a622e71` | sshj `KEEP_ALIVE` (want-reply, 15 s × 3 misses) instead of `HEARTBEAT`; `run()` has a real deadline that tears the transport down; a command that cannot run drops the connection. HostScreen shows a listing error while connected. | SSH transport test: a hung command returns within its deadline and fires `onClosed`. The keepalive-miss path itself is not exercised. |
+| A18 | `10de4b9` | `LifecycleStartEffect` in HostScreen and TerminalScreen: watching and the terminal stream stop on ON_STOP (WebView paused) and resume on ON_START. | Type-check (new stub) + CI build. |
+| A21 | `daf15d3` | The switch shows On only when the pref is on AND `areNotificationsEnabled()`; switching on asks for the permission or opens the app's notification settings; the worker does nothing when nothing can be shown; the launch-time ask happens on a fresh start only. | Type-check + CI build only. |
+| A22 | `ade7428` | The back stack is `rememberSaveable` (JSON Saver); pairing routes are not restored; routes naming a forgotten computer are dropped; the launch intent applies only on a fresh start. | Type-check + CI build only. |
+| A13 | `68d0925` | **Phone side only.** An exit 0 while the session is still listed as live (another client attached with `-D`) reattaches instead of reading "ended". The desktop root cause is open (see below). | Type-check + CI build only. |
+| A33 | `0db0b6e` | New optional `pty.attach` fields `projectId`/`accountId`/`agentId` (additive). The desktop resolves the project folder and a local, logged-in managed Claude account itself, applied only when the attach creates the session. The phone sends them for a session it starts. | vitest `remote-security.test.ts` (3 new cases); relay interop through the real handler. |
+
+### What is still open
+
+- **A13, desktop root cause.** When the renderer mounts a node whose session a relay-served client
+  holds, pty-manager attaches with `-A -D` (relay ptys are not indexed by persistKey), detaching the
+  phone. The phone now reattaches, but the right fix is on the desktop (attach without `-D` when a
+  detached relay session for that persistKey is live). It touches pty-manager's attach flags, so it
+  needs its own careful change and tests; iOS benefits too.
+- **A12 for SSH-project nodes.** `node.sendKeys` answers `sent:false` for them (background writes
+  do not reach a remote host), so the phone opens the session instead of answering in one tap.
+- **A33 on an older desktop.** An older desktop ignores the new attach fields, so a Windows host
+  still starts phone sessions in the home folder until it is updated.
+- **A07 edges.** Late relay adoption does not pin; revoking a device unpins but does not cut a relay
+  session open at that moment.
+- **A10 trade-off.** The debug key is public by the user's decision; a release key does not exist.
+- **Server-e2e and native-module vitest suites** could not run in this sandbox (`npm ci
+  --ignore-scripts` skips the native builds); the same failures occur on the pre-session commit.
+  Desktop CI does not run on branch pushes here, so the desktop changes are checked by targeted
+  vitest files + `npm run typecheck` only.
 
 ### WP2 (blockers with decisions): done on the branch, not device-verified
 
@@ -198,15 +230,14 @@ When the user asks: open a PR from this branch, following the repo's `pr-writing
 template. Mention @eneskirca for the mobile implications: the pairing-key pin from `A07`, and
 `approvals.answer` / `inbox.ack`, which the iOS app can adopt.
 
-## Decisions the user still has to make
+## Decisions made (2026-09-26)
 
-1. **A07**: pin the phone's relay key at pairing (desktop + protocol change, additive), or the
-   interim "one handshake right after pairing" flow? Recommended: pin at pairing.
-2. **A08**: refuse cold-create over direct SSH, or inject the hook env? Recommended: refuse and
-   route to the computer.
-3. **A09**: hide or relay-route SSH-project nodes over direct SSH? Recommended: relay-route.
-4. **Distribution**: a committed public debug key for sideloading (`A10`), and later a real release
-   signing key plus a store listing. Nothing exists yet for the latter.
+1. **A07**: pin the phone's relay key at pairing (desktop + protocol change, additive). Done.
+2. **A08**: refuse cold-create over direct SSH and route to the relay. Done.
+3. **A09**: relay-route SSH-project nodes; the desktop attaches them over the project's ControlMaster.
+   Done.
+4. **Distribution**: a committed public debug key for sideloading (`A10`). Done. A real release
+   signing key and a store listing are still to come.
 
 ## Device checklist (owed; nothing here has been run)
 
@@ -271,39 +302,25 @@ Run each on a real phone against a real desktop, and note OS versions.
 
 ## Follow-up prompt
 
-Paste this into the next session. Edit the "Decisions" line first if you want different choices
-than the recommendations.
+Paste this into the next session.
 
 ```text
 Continue the Android companion work on branch claude/android-ios-parity-75kfem of CPlusPlus17/nodeterm.
 
-Start by reading docs/android-handover.md (status, plan, environment notes, conventions) and
-docs/android-audit-2026-09.md (findings A01–A77 with evidence and fixes). Re-read the cited code
-before changing it; the audit is at commit 2f58918.
+Start by reading docs/android-handover.md (progress log, what is still open, environment notes,
+conventions) and docs/android-audit-2026-09.md (fixed findings are marked in the index). WP1, WP2
+and WP4 are fixed on the branch but nothing has run on a device.
 
-Do, in order, committing in small logical commits and pushing when each work package is green:
-1. WP1 blockers: A01/A04 (SSH I/O off the main thread, one serial executor in SshStream, close()
-   off main), A02 (desktop userData dir is node-terminal; fix the SSH prelude, its test fixture,
-   and docs/uninstall.md + scripts/uninstall.sh), A03 (UTF-8 locale for the SSH tmux client),
-   A06 + A35 (approvals.answer must not report success after the hold expired; reason in the reply;
-   phone maps "gone" to open-session), A10 (committed public debug keystore so CI APKs update in place).
-2. WP2 with these decisions: A05/A17/A23/A30 — background worker never makes a first relay
-   handshake (per-host relayApproved flag set by a successful foreground relay connect) and a denied
-   or pending approval backs off instead of re-dialing; A07 — send the phone's box public key in
-   the sealed /pair body and have the desktop pin it on successful pairing (additive; keep older
-   desktops working), and fix PairScreen's "reachable from anywhere" claim; A08 — never cold-create
-   a tmux session over direct SSH, offer to open it via the relay instead; A09/A28 — nodes of the
-   desktop's SSH projects are opened via the relay, never against the desktop's local tmux.
-3. Then WP4 (medium bugs), starting with A24 (SecureStore identity overwrite).
+1. If a phone is available: run the device checklist in the handover (WP3) with the latest CI APK,
+   record results in docs/android.md → "What is verified", and turn every failure into a finding.
+2. The desktop root cause of A13 (a renderer client attaching with -D over a live relay-served
+   client), with tests in pty-manager.
+3. WP5 parity gaps and WP6 low-severity items, starting with A37 (R8 rules), A52 (lock-screen
+   content), A53/A54 (size caps), A63/A68 (CI triggers and path filters).
 
-For every fix add a regression test where the layer allows (protocol tests are JVM + interop +
-MINA/tmux). Before each push run: the protocol tests (cd android/protocol && gradle test --offline,
-after npm ci --ignore-scripts at the repo root), the offline app type-check
-(cd android/tools/typecheck && gradle compileKotlin), and for desktop changes the affected vitest
-files plus npm run typecheck. After each push, check that the Android GitHub workflow is green.
-Google Maven is blocked in this sandbox — do not try to reach it; CI does the real AGP build.
-Keep docs/android.md, android/README.md, docs/android-handover.md and the audit index in sync
-(mark fixed findings). Follow CLAUDE.md, including the Android rule under Conventions. Do not open a
-PR unless I ask. At the end, report what was fixed, how it was verified, what is still unverified
-(nothing has run on a device yet), and the updated next steps.
+Before each push run the protocol tests (cd android/protocol && gradle test --offline, after npm ci
+--ignore-scripts at the repo root), the offline type-check (cd android/tools/typecheck && gradle
+compileKotlin), and for desktop changes the affected vitest files plus npm run typecheck; after each
+push confirm the Android workflow is green. Keep docs/android.md, android/README.md, the handover and
+the audit index in sync. Do not open a PR unless asked.
 ```
