@@ -37,10 +37,16 @@ must be a **no-op** when the env var is absent (user's own terminals, older node
 **Answerers** (all write the same one-line answer file, atomically `printf > tmp && mv`):
 - **Phone (SSH)** — `InboxApproval` writes it over the connection when the approval event
   carries `pendingId`; else falls back to send-keys. Digit `2`/"Always allow" keeps using
-  send-keys in v1 (hook `updatedPermissions` is out of scope). Caveat: option 2 is not fixed.
-  In the Claude Code 2.1.283 bundle (read, not measured live) the Bash prompt shows a "don't ask
-  again" row only when Claude offers one for that ask, so `2` can be `No` or "Yes, and switch to
-  auto mode". Android therefore has no "Always allow" (docs/android.md, Known gaps).
+  send-keys in v1 (hook `updatedPermissions` is out of scope). Caveat: option 2 is not fixed. In
+  the Claude Code 2.1.283 bundle (read, not measured live) the Bash prompt is `Yes`, then a
+  "don't ask again" row only when Claude offers one for that ask (and behind a feature gate),
+  then an optional "Yes, and switch to auto mode", then `No`. So `2` can answer `No` or switch
+  the whole session to auto mode. **The iOS "Always allow" above carries this hazard; it is not
+  only an Android concern**: an iOS follow-up for nodeterm-ios (@eneskirca), and this repo
+  cannot see whether the iOS code guards the digit (for example by reading the pane before
+  typing). Android has no "Always allow" for the same reason (docs/android.md, Known gaps). The
+  fix for both phones is the hook's own `updatedPermissions` (see Out of scope), which changes
+  this answer file and `approvals.answer`, so the desktop, iOS and Android change together.
 - **Desktop canvas** — the NEEDS-YOU badge gains Approve/Deny buttons (approval events with
   `pendingId` only), routed over IPC to a main-side writer: local project → local fs; SSH
   project → write via the project's ControlMaster. So desktop users are not left staring at
