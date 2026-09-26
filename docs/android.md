@@ -164,6 +164,17 @@ that control byte alone, and anything else goes as a paste followed by Enter. Th
 Send, the Resume offer and the sending key chips while nothing is attached; that part is only
 type-checked.
 
+`TerminalPageTest` pins what happens when the terminal WebView's renderer process goes away
+(`A45`). The app handles `onRenderProcessGone` instead of being killed with the renderer: it
+detaches the stream, destroys that WebView and builds a new one. Each page has a generation, so a
+callback the dead page posted just before the loss cannot mark the new page ready, and JavaScript
+queued for the dead page is dropped rather than replayed into the new one. A paint offered before
+the new page exists is kept for it. A renderer the system killed (the terminal's renderer priority
+is waived while the screen is not visible) is reattached automatically once the new page has
+reported its size. A crash is not, because the reattach would repaint the same screen: the screen
+offers "Reopen terminal" instead. More than two kills within a minute fall back to that offer too.
+The WebView handling itself is only type-checked.
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's

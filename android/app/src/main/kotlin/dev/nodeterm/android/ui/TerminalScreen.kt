@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -84,7 +85,10 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).imePadding()) {
             Box(Modifier.weight(1f).fillMaxWidth().background(NtColors.canvas)) {
-                AndroidView(factory = { ctx -> controller.createWebView(ctx) }, modifier = Modifier.fillMaxSize())
+                // A new key = a new WebView: the old one was destroyed with its renderer (audit A45).
+                key(controller.webViewKey) {
+                    AndroidView(factory = { ctx -> controller.createWebView(ctx) }, modifier = Modifier.fillMaxSize())
+                }
                 when (val st = controller.state) {
                     TermState.Connecting -> Row(
                         Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(12.dp),
@@ -109,6 +113,14 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                     ) {
                         Text(st.message)
                         Button(onClick = { controller.openThroughRelay() }) { Text("Open through the relay") }
+                    }
+                    is TermState.ViewLost -> Column(
+                        Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(st.message)
+                        Button(onClick = { controller.reopenTerminal() }) { Text("Reopen terminal") }
                     }
                     is TermState.AwaitingApproval -> Column(
                         Modifier.align(Alignment.Center).background(NtColors.panel, RoundedCornerShape(8.dp)).padding(16.dp),

@@ -14,7 +14,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.TransactionTooLargeException
 import android.util.Base64
+import android.view.ViewGroup
 import android.webkit.JavascriptInterface
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -27,10 +29,12 @@ import dev.nodeterm.android.conn.HostSession
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.RelayConnectStatus
+import dev.nodeterm.protocol.host.RendererRecovery
 import dev.nodeterm.protocol.host.NewNode
 import dev.nodeterm.protocol.host.NewSessionHint
 import dev.nodeterm.protocol.host.PhoneLaunch
 import dev.nodeterm.protocol.host.StreamLease
+import dev.nodeterm.protocol.host.TerminalPage
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.host.ViewerSlot
@@ -55,6 +59,11 @@ sealed interface TermState {
     data class RelayOffer(val message: String) : TermState
     /** Opening through the relay for the first time: the computer shows this code to approve. */
     data class AwaitingApproval(val sas: String) : TermState
+    /**
+     * The terminal view's renderer crashed, or kept being killed (audit A45). A new view has been
+     * built; "Reopen terminal" reattaches to it. Not automatic: see [RendererRecovery].
+     */
+    data class ViewLost(val message: String) : TermState
 }
 
 /**
@@ -88,10 +97,18 @@ class TerminalController(
     /** A one-line message over the terminal (dismissable), e.g. a session the desktop refused to add. */
     var notice by mutableStateOf<String?>(null)
 
+    /**
+     * Changes each time the WebView is lost with its renderer (audit A45). The screen keys its
+     * AndroidView on it, so a change builds a new WebView ([createWebView]) in place of the dead one.
+     */
+    var webViewKey by mutableStateOf(0)
+        private set
+
     private val main = Handler(Looper.getMainLooper())
     private var webView: WebView? = null
-    private var pageReady = false
-    private val pendingJs = ArrayList<String>()
+    /** The page in [webView], by generation, and the JavaScript waiting for it (A45). */
+    private val page = TerminalPage()
+    private val recovery = RendererRecovery()
     /**
      * The attach hand-off (audit A40): which attach may still install its stream, and the stream this
      * screen shows. Thread-safe; [stream] is also read on the WebView's bridge thread.
@@ -165,30 +182,40 @@ class TerminalController(
         }
     }
 
-    inner class Bridge {
+    /**
+     * The page's side of the bridge, one per page ([gen], from [TerminalPage.build]). A callback of a
+     * page whose renderer is gone does nothing (A45): not even one posted just before the loss can
+     * mark the replacement page ready, resize the pty from the dead page's size, or type into it.
+     */
+    inner class Bridge(private val gen: Int) {
         @JavascriptInterface
         fun onReady() {
             main.post {
-                pageReady = true
-                pendingJs.forEach { webView?.evaluateJavascript(it, null) }
-                pendingJs.clear()
+                val queued = page.ready(gen) ?: return@post
+                val wv = webView
+                queued.forEach { wv?.evaluateJavascript(it, null) }
+                // A replacement page after the renderer was lost (A45): reattach now that it is loaded,
+                // unless its first resize below already did. Nothing to do on the first page, whose
+                // attach started with the screen.
+                attachIfWaiting()
             }
         }
 
         @JavascriptInterface
         fun onResize(c: Int, r: Int) {
             main.post {
-                if (c <= 0 || r <= 0) return@post
+                if (c <= 0 || r <= 0 || !page.isCurrent(gen)) return@post
                 cols = c
                 rows = r
                 sizedElsewhere = null
                 val s = stream
-                if (s != null) s.resize(c, r) else if (!stopped && attachJob == null && state == TermState.Connecting) attach()
+                if (s != null) s.resize(c, r) else attachIfWaiting()
             }
         }
 
         @JavascriptInterface
         fun onInput(data: String) {
+            if (!page.isCurrent(gen)) return
             var out = data
             if (ctrlArmed && data.length == 1) {
                 Keys.ctrl(data)?.let { out = it }
@@ -199,6 +226,7 @@ class TerminalController(
 
         @JavascriptInterface
         fun onScroll(up: Boolean, notches: Int) {
+            if (!page.isCurrent(gen)) return
             val s = stream ?: return
             graph.scope.launch { runCatching { s.scroll(up, notches) } }
         }
@@ -210,12 +238,14 @@ class TerminalController(
         /** An OSC 52 terminal.js refused as over [copyLimit]; the payload itself never crossed. */
         @JavascriptInterface
         fun onCopyTooLarge() {
+            if (!page.isCurrent(gen)) return
             main.post { toast(COPY_TOO_LARGE, Toast.LENGTH_LONG) }
         }
 
         /** A whole OSC 52 sequence (`<selection>;<base64>`), parsed here on the bridge thread. */
         @JavascriptInterface
         fun onCopy(data: String) {
+            if (!page.isCurrent(gen)) return
             when (val r = Osc52.parse(data)) {
                 is Osc52.Result.Copy -> main.post { writeClipboard(r.text) }
                 Osc52.Result.TooLarge -> main.post { toast(COPY_TOO_LARGE, Toast.LENGTH_LONG) }
@@ -255,6 +285,7 @@ class TerminalController(
 
     @SuppressLint("SetJavaScriptEnabled")
     fun createWebView(context: Context): WebView = WebView(context).apply {
+        val gen = page.build()
         setBackgroundColor(Color.BLACK)
         settings.javaScriptEnabled = true
         settings.allowFileAccess = false // assets stay readable; nothing else on disk is
@@ -262,7 +293,10 @@ class TerminalController(
         settings.setSupportZoom(false)
         settings.builtInZoomControls = false
         settings.displayZoomControls = false
-        addJavascriptInterface(Bridge(), "NodetermBridge")
+        // While the screen is not visible (its stream is detached then anyway), Android may reclaim
+        // this renderer before the app; onRenderProcessGone below brings the terminal back (A45).
+        setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, true)
+        addJavascriptInterface(Bridge(gen), "NodetermBridge")
         webViewClient = object : WebViewClient() {
             // The page never navigates; a link the user taps opens in the browser, outside this bridge.
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
@@ -272,19 +306,98 @@ class TerminalController(
                 }
                 return true
             }
+
+            // The renderer was killed or crashed. The default (false) takes the whole app down with
+            // it; true keeps the app, which must then stop using this WebView (A45).
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                rendererGone(view, detail.didCrash())
+                return true
+            }
         }
         loadUrl("file:///android_asset/terminal/index.html")
+        // A replacement built while the screen is in the background (A45) is paused like the one it
+        // replaces was on ON_STOP; onStart resumes it.
+        if (stopped) onPause()
         webView = this
         js("nt.setFontSize(${graph.hosts.fontSize})")
     }
 
     private fun js(code: String) {
-        val wv = webView ?: return
-        if (!pageReady) {
-            pendingJs += code
-            return
+        if (disposed) return
+        // Queued until the page is ready, also while there is no page at all: after the renderer was
+        // lost, a reattach can paint before the replacement WebView is built (A45).
+        if (page.offer(code)) webView?.evaluateJavascript(code, null)
+    }
+
+    /**
+     * The renderer behind [view] is gone (audit A45): Android killed it to reclaim memory, or it
+     * crashed. That WebView can never be used again. The stream is detached (it would paint into
+     * nothing), the WebView leaves the view tree and is destroyed, and [webViewKey] changes so the
+     * screen builds a new one. Then, per [RendererRecovery], the screen reattaches by itself once the
+     * new page is ready (a kill), or offers "Reopen terminal" (a crash, or kills in a loop).
+     */
+    private fun rendererGone(view: WebView, didCrash: Boolean) {
+        // A view this screen already let go of (a repeated callback, or one after dispose).
+        if (view !== webView) return
+        webView = null
+        page.lost()
+        // Detached as on ON_STOP. A launch still holding the stream finishes first (A40), and the
+        // stream's exit is not reported: its ticket is retired.
+        attachJob?.cancel()
+        attachJob = null
+        slot.leave()
+        main.removeCallbacks(flush)
+        synchronized(outBuf) {
+            outBuf.reset()
+            flushScheduled = false
         }
-        wv.evaluateJavascript(code, null)
+        // The dead page's size. The new page reports its own before it reattaches.
+        cols = 0
+        rows = 0
+        sizedElsewhere = null
+        destroyWebView(view, rendererAlive = false)
+        webViewKey++
+        state = when (recovery.onGone(didCrash, System.currentTimeMillis())) {
+            // Reattached by attachIfWaiting once the new page reports in (or by onStart, when the
+            // screen is in the background now).
+            RendererRecovery.Action.REATTACH -> TermState.Connecting
+            RendererRecovery.Action.OFFER -> TermState.ViewLost(
+                (if (didCrash) "The terminal view crashed." else "Android keeps closing the terminal view to free memory.") +
+                    " The session is still running on the computer."
+            )
+        }
+    }
+
+    /**
+     * Take [view] out of the view tree, then destroy it: WebView.destroy() expects a view that is no
+     * longer attached. A view whose renderer is gone is not used for anything else.
+     */
+    private fun destroyWebView(view: WebView, rendererAlive: Boolean) {
+        (view.parent as? ViewGroup)?.removeView(view)
+        if (rendererAlive) view.removeJavascriptInterface("NodetermBridge")
+        view.destroy()
+    }
+
+    /**
+     * Attach if the screen is waiting to: started, nothing attached or attaching, and "Opening
+     * terminal…" showing. Run when the page reports its size or that it is ready, which is how a
+     * replacement page after a renderer loss gets its terminal back (A45).
+     */
+    private fun attachIfWaiting() {
+        if (!disposed && !stopped && stream == null && attachJob == null && state == TermState.Connecting) attach()
+    }
+
+    /**
+     * Attach now or, while a replacement page is still loading after a renderer loss (A45), once it
+     * has reported its size ([attachIfWaiting]): attaching before would claim the pty at 80×24.
+     */
+    private fun attachWhenPageReady() {
+        if (page.isReplacing) state = TermState.Connecting else attach()
+    }
+
+    /** "Reopen terminal", after the view was lost with its renderer (A45). */
+    fun reopenTerminal() {
+        if (state is TermState.ViewLost) attachWhenPageReady()
     }
 
     private var attachedAt = 0L
@@ -307,13 +420,16 @@ class TerminalController(
             // so the attach below does not get the stale one back.
             if (!useRelay || requireLive) session.refreshNow()
             if (requireLive && !session.snapshot.value.isLive(nodeId)) {
-                main.post { if (!disposed && stream == null) state = TermState.Ended("The session ended (exit 0).") }
+                main.post {
+                    if (!disposed && stream == null && state !is TermState.ViewLost) state = TermState.Ended("The session ended (exit 0).")
+                }
                 return@launch
             }
             val up = if (useRelay) true else withTimeoutOrNull(120_000) { session.state.first { it is ConnState.Connected } } != null
             main.post {
-                if (disposed || stream != null || attachJob != null) return@post
-                if (up) attach() else state = TermState.Ended("Disconnected.")
+                // The view was lost meanwhile and is waiting for the user's "Reopen terminal" (A45).
+                if (disposed || stream != null || attachJob != null || state is TermState.ViewLost) return@post
+                if (up) attachWhenPageReady() else state = TermState.Ended("Disconnected.")
             }
         }
         return true
@@ -507,7 +623,8 @@ class TerminalController(
         if (disposed || !stopped) return
         stopped = false
         webView?.onResume()
-        if (stream == null && attachJob == null) attach()
+        // As from every other state, coming back reattaches, including after a view loss (A45).
+        if (stream == null && attachJob == null) attachWhenPageReady()
     }
 
     fun dispose() {
@@ -517,10 +634,7 @@ class TerminalController(
         // let go of by the hand-off, and a session it created still gets its launch.
         slot.close()
         main.removeCallbacks(flush)
-        webView?.let {
-            it.removeJavascriptInterface("NodetermBridge")
-            it.destroy()
-        }
+        webView?.let { destroyWebView(it, rendererAlive = true) }
         webView = null
     }
 
