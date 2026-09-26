@@ -16,8 +16,8 @@ import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.pairing.PairingPayload
 import dev.nodeterm.protocol.pairing.RelayBlock
 import dev.nodeterm.protocol.relay.RelayApi
-import dev.nodeterm.protocol.ssh.HostKeyChangedException
 import dev.nodeterm.protocol.ssh.HostKeyPin
+import dev.nodeterm.protocol.ssh.SshFallback
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +54,15 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     val snapshot: StateFlow<ProjectsSnapshot> = _snapshot.asStateFlow()
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
+    private val _sshWarning = MutableStateFlow<String?>(null)
+
+    /**
+     * Why the current connection is NOT the direct-SSH one although the route would have preferred
+     * it: the server at the paired address presented a different host key, so the Auto route went on
+     * to the relay (audit A49/A74). Set per connect; shown while connected, so a changed key never
+     * disappears behind a relay that worked.
+     */
+    val sshWarning: StateFlow<String?> = _sshWarning.asStateFlow()
 
     private val mutex = Mutex()
     @Volatile private var conn: HostConnection? = null
@@ -74,6 +83,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         val host = graph.hosts.get(hostId) ?: throw HostException("This computer is no longer paired.")
         val route = graph.hosts.route(hostId)
         val errors = ArrayList<String>()
+        var sshWarning: String? = null
 
         if (route != RoutePreference.RELAY_ONLY && host.sshAvailable) {
             _state.value = ConnState.Connecting("Connecting on your network…")
@@ -88,6 +98,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                         connectTimeoutMs = if (route == RoutePreference.AUTO) 4_000 else 10_000
                     ).also { dialed = it }
                 }
+                _sshWarning.value = null
                 adopt(ssh)
                 scope.launch { runCatching { adoptRelayIfAdvertised(ssh, host) } }
                 return ssh
@@ -95,14 +106,22 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 dialed?.let { c -> scope.launch(Dispatchers.IO) { runCatching { c.close() } } }
                 _state.value = ConnState.Idle
                 throw e
-            } catch (e: HostKeyChangedException) {
-                // A changed host key is a security signal, not a network hiccup: say so, and do not
-                // quietly route around it.
-                val msg = e.message ?: "The computer's SSH host key changed."
-                _state.value = ConnState.Failed(msg)
-                throw HostException(msg)
             } catch (e: Exception) {
-                errors += "On your network: ${e.message ?: e.javaClass.simpleName}"
+                // A changed host key is refused for SSH and said out loud, but in Auto it does not
+                // stop the relay leg, which authenticates the computer on its own (audit A49/A74):
+                // most often another machine simply has the paired address now. "Only on my
+                // network" has nothing else to try, so there it stops.
+                when (val next = SshFallback.afterFailure(e, route != RoutePreference.SSH_ONLY, relayConfigured(host))) {
+                    is SshFallback.Next.Stop -> {
+                        _sshWarning.value = null
+                        _state.value = ConnState.Failed(next.message)
+                        throw HostException(next.message)
+                    }
+                    is SshFallback.Next.TryRelay -> {
+                        errors += next.error
+                        sshWarning = next.warning
+                    }
+                }
             }
         }
 
@@ -126,6 +145,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                     }
                     graph.relayGate.onConnected(hostId)
                     _snapshot.value = connected.first
+                    _sshWarning.value = sshWarning
                     adopt(connected.connection)
                     return connected.connection
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -143,9 +163,15 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         }
 
         val msg = errors.joinToString("\n").ifEmpty { "Couldn't connect." }
+        _sshWarning.value = null // the failure message already carries it
         _state.value = ConnState.Failed(msg)
         throw HostException(msg)
     }
+
+    /** The phone holds a relay leg for [host]: the same three facts the relay block needs to dial. */
+    private fun relayConfigured(host: PairedHost): Boolean =
+        host.relay != null && host.relayHostKeyB64 != null &&
+            graph.secure.getString(SecureStore.relayTokenKey(host.id)) != null
 
     private suspend fun dialRelay(
         relay: RelayBlock,

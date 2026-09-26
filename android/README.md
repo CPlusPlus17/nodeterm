@@ -89,7 +89,9 @@ and the phone remembers the ones it has announced or you have read for a day aft
 - Relay traffic is end-to-end encrypted (NaCl box under a per-session HKDF key) and checked exactly
   as the desktop checks it: role byte (no reflections), strictly increasing sequence numbers (no
   replays), no re-key once ready, and the host key pinned from pairing.
-- The SSH host key is pinned on first connect; a changed key is refused, never routed around.
+- The SSH host key is pinned on the first connect that authenticates (a server that refuses the
+  phone's key is never pinned). A changed key is never used over SSH; in Auto the phone goes on to
+  the relay, which verifies the computer separately, and shows a warning.
 - No cleartext HTTP anywhere; the LAN `/pair` POST runs over a raw socket and is sealed to the host
   key from the QR. Its answer is read as untrusted: at most 64 KiB, within 45 seconds.
 

@@ -50,15 +50,33 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import javax.net.SocketFactory
 
-/** Trust-on-first-use pin for the computer's SSH host key (`SHA256:<base64>`, OpenSSH's format). */
+/**
+ * Trust-on-first-use pin for the computer's SSH host key (`SHA256:<base64>`, OpenSSH's format).
+ *
+ * [pin] is called only once the server has ACCEPTED this phone's key (audit A49), never during the
+ * key exchange: a machine that merely answered at the paired address — another computer that now
+ * has that DHCP lease, or the same private range on another network — refuses our key, and it must
+ * not become the pin. A server that accepts our key is the one the pairing installed it on (or one
+ * that accepts any key; anchoring the pin in the pairing itself is still to come).
+ */
 interface HostKeyPin {
-    /** The pinned fingerprint, or null before the first successful connect. */
+    /** The pinned fingerprint, or null until a connect has authenticated with this phone's key. */
     fun pinned(): String?
     fun pin(fingerprint: String)
 }
 
+/**
+ * The server at the paired address presented a key other than the pinned one. The message states
+ * the fact and its likely causes; what the user can do about it depends on the route, and
+ * [SshFallback] adds it.
+ */
 class HostKeyChangedException(val expected: String, val actual: String) :
-    Exception("This computer's SSH host key changed (expected $expected, got $actual). If you reinstalled it, remove and re-pair it; otherwise someone may be intercepting the connection.")
+    Exception(
+        "This computer's SSH host key changed (expected $expected, got $actual), so the phone did not connect " +
+            "to it over your network. Another machine may now have its network address (a different Wi-Fi, or " +
+            "a reassigned address), or the computer was reinstalled; if neither, someone may be intercepting " +
+            "the connection."
+    )
 
 /**
  * [HostConnection] over direct SSH (the LAN leg a pairing installs a key for). Everything is POSIX
@@ -480,18 +498,26 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             val client = SSHClient(DefaultConfig().apply { keepAliveProvider = KeepAliveProvider.KEEP_ALIVE })
             if (socketFactory != null) client.socketFactory = socketFactory
             var mismatch: HostKeyChangedException? = null
+            // The key this connection's server presented, held until authentication proves it is
+            // the computer we paired with; only then does it become the pin (audit A49).
+            var presented: String? = null
             client.addHostKeyVerifier(object : HostKeyVerifier {
                 override fun verify(hostname: String, port: Int, key: PublicKey): Boolean {
                     val fp = fingerprint(key)
-                    val pinned = pin.pinned()
+                    // One server per connection: a re-key must present the same key as the first
+                    // exchange, pinned or not.
+                    val expected = pin.pinned() ?: presented
                     return when {
-                        pinned == null -> {
-                            pin.pin(fp)
+                        expected == null -> {
+                            presented = fp
                             true
                         }
-                        pinned == fp -> true
+                        expected == fp -> {
+                            presented = fp
+                            true
+                        }
                         else -> {
-                            mismatch = HostKeyChangedException(pinned, fp)
+                            mismatch = HostKeyChangedException(expected, fp)
                             false
                         }
                     }
@@ -509,6 +535,10 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                     override fun getPublic(): PublicKey = kp.public
                     override fun getType(): KeyType = KeyType.ED25519
                 })
+                // Authenticated: this server accepted the key the pairing installed, so its host key
+                // is the computer's. A server that refused us never got here and pinned nothing.
+                val seen = presented
+                if (seen != null && pin.pinned() == null) pin.pin(seen)
                 client.connection.keepAlive.keepAliveInterval = KEEPALIVE_INTERVAL_SEC
                 (client.connection.keepAlive as? KeepAliveRunner)?.maxAliveCount = KEEPALIVE_MAX_MISSED
             } catch (e: Exception) {

@@ -33,6 +33,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -472,6 +473,27 @@ class SshTransportTest {
         assertTrue(pin.value!!.startsWith("SHA256:"))
         connect(pin).close()
         assertFailsWith<HostKeyChangedException> { connect(MemoryPin("SHA256:not-this-host")) }
+    }
+
+    @Test
+    fun `a server that refuses our key never becomes the pin (A49)`() {
+        // What answers at the paired address after the DHCP lease moved, or on another network that
+        // uses the same private range: an sshd that completes the key exchange and then refuses the
+        // phone's key. Pinning its host key during the exchange made the real computer "changed" on
+        // the next connect.
+        val pin = MemoryPin()
+        assertFailsWith<HostException> {
+            SshHostConnection.connect("127.0.0.1", port, "dev", SshIdentity.generate(), pin).close()
+        }
+        assertNull(pin.value, "a key exchange whose authentication failed must not pin")
+        assertFailsWith<HostException> {
+            SshHostConnection.connect("127.0.0.1", port, "someone-else", identity, pin).close()
+        }
+        assertNull(pin.value, "a refused user must not pin either")
+        // The first connect that AUTHENTICATES pins exactly the server's host key.
+        connect(pin).close()
+        val serverKey = server.keyPairProvider.loadKeys(null).first().public
+        assertEquals(SshHostConnection.fingerprint(serverKey), pin.value)
     }
 
     @Test

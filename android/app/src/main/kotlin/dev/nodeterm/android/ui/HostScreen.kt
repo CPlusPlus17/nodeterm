@@ -108,6 +108,18 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             ConnectionBanner(state, session)
+            // Connected through the relay because the server at the paired address presented a
+            // different SSH host key (audit A49/A74): the relay proves the computer, but the change
+            // itself must stay visible.
+            val sshWarning by session.sshWarning.collectAsState()
+            val warn = sshWarning
+            if (state is ConnState.Connected && warn != null) {
+                Text(
+                    warn,
+                    Modifier.fillMaxWidth().background(NtColors.warning.copy(alpha = 0.12f)).padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             // A listing that failed on a connection that is still up (e.g. nodeterm's data not found
             // over SSH) used to be invisible: the screen just stayed empty (audit A31).
             val listError by session.lastError.collectAsState()

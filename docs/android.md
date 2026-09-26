@@ -22,8 +22,20 @@ A phone reaches a paired computer one of two ways, and the app tries them in the
    relay token (`POST /v1/relay/join`), runs the handshake, and — the first time only — waits while
    the desktop shows the SAS approval dialog (pin-once).
 
-`Auto` tries SSH with a 4 s budget and falls back to the relay; a changed SSH host key is a hard
-stop, never a fallback. Per-computer overrides live in Settings.
+`Auto` tries SSH with a 4 s budget and falls back to the relay. Per-computer overrides live in
+Settings ("How to reach each computer").
+
+**SSH host key.** Trust on first use, and the pin is saved only once the server has accepted the
+phone's key (audit `A49`): a machine that merely answers at the paired address and refuses us never
+becomes the pin. A key that differs from the pin is never used over SSH. In `Auto` the connect then
+goes on to the relay (`SshFallback`, audit `A74`), which authenticates the computer on its own (the
+relay host key from pairing, then the SAS approval), and the host screen keeps a warning up while
+connected that way; the relay dial still goes through `RelayApprovalGate`, so a background check
+never makes a first relay handshake because of it. "Only on my network" stops with the warning. The
+usual cause is benign: the LAN leg dials the DHCP address the computer had at pairing, and another
+SSH-running machine now has it (or the phone is on another network using the same range). The
+message points at "Only through the relay"; pairing again is the way to trust a reinstalled
+computer's new key.
 
 **Relay approval.** The standing host raises its SAS dialog as soon as an unpinned phone completes
 the handshake, so the phone decides *before dialing* (`RelayApprovalGate`): the background worker
@@ -129,6 +141,12 @@ cap does not respect. `TerminalJsOsc52Test` runs the app's real `terminal.js` in
 xterm/bridge objects and checks that it applies that cap before a copy crosses the WebView bridge.
 The app also catches a failing `setPrimaryClip` and says so in a toast; that part is not tested.
 
+An SSH test pins that a server which completes the key exchange and then refuses the phone's key
+(or user) leaves the host-key pin empty (`A49`). `SshFallbackTest` pins what follows a failed SSH
+leg (`A74`): a changed key goes on to the relay in Auto with a warning, stops on the SSH-only route,
+and its text names "Only through the relay" rather than only re-pairing. The app's use of it (the
+relay dial behind `RelayApprovalGate`, the warning on the host screen) is only type-checked.
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
@@ -159,4 +177,12 @@ The app also catches a failing `setPrimaryClip` and says so in a toast; that par
 - **Codex/Gemini/… launch flags.** A phone-started non-Claude agent launches bare (its own default
   approval mode): the per-agent approval table needs host facts (codex's vocabulary moved between
   releases, #785) the mirror only partly publishes.
+- **The SSH pin is not anchored in pairing, and the LAN address is frozen at pairing** (audit
+  `A49`/`A74`). Neither the QR nor the sealed `/pair` answer carries the computer's SSH host key, so
+  the first connect is trust on first use (on the pairing LAN, right after the QR, so normally the
+  real computer). A server that accepts any key could still become the pin. The fix is desktop-side
+  as well (return the host key fingerprints inside the sealed `/pair` answer and store them in
+  `PairedHost.from`; it would serve iOS too). Nothing refreshes `PairedHost.host` either: the desktop
+  could publish its current LAN address over the relay, letting the phone update it after a relay
+  connect.
 - **Instrumented UI tests** and a store listing do not exist yet.
