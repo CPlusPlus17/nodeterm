@@ -4,6 +4,7 @@ import { join } from 'path'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import {
   focusLossOutcome,
+  mdViewPressAcknowledges,
   outsidePressReleases,
   reclaimTarget,
   hoverTakesKeyboard,
@@ -66,6 +67,7 @@ describe('terminal focus mode (#757)', () => {
         activeElement: body,
         windowFocused: true,
         pressedInOwnNode: false,
+        lostIsCoveredXterm: false,
         ...over
       })
 
@@ -98,6 +100,13 @@ describe('terminal focus mode (#757)', () => {
       expect(ev({ activeElement: lost, windowFocused: false })).toBe('keep')
       expect(ev({ activeElement: lost, windowFocused: true })).toBe('keep')
       expect(ev({ activeElement: body, windowFocused: false })).toBe('keep')
+    })
+
+    it('keeps it when the xterm is blurred by opening the node\'s own ⌘M view', () => {
+      // useMdModeFocus blurs the xterm on entry and focuses nothing, so the focusout has no
+      // destination and no press — exactly the shape of a click on the empty canvas. It is an
+      // internal view change on the node the user is looking at, not leaving it.
+      expect(ev({ gained: null, activeElement: body, lostIsCoveredXterm: true })).toBe('keep')
     })
 
     it('answers keep without a node root (unmounted mid-event) rather than guessing', () => {
@@ -143,6 +152,25 @@ describe('terminal focus mode (#757)', () => {
     })
   })
 
+  describe('mdViewPressAcknowledges', () => {
+    // With focus-follows-pointer, a dwell over the ⌘M view acknowledges the node (setActive,
+    // clearUnread, presence) without focusing the covered xterm. Click to focus has no dwell and no
+    // guard over that view (the guard renders only when !mdMode), so a click is the replacement.
+    it('acknowledges a primary press on the covered view in click-to-focus mode', () => {
+      expect(mdViewPressAcknowledges({ focusFollowsPointer: false, mdMode: true, primary: true, inBody: true })).toBe(true)
+    })
+
+    it('does nothing where something else already owns it', () => {
+      // the dwell owns it
+      expect(mdViewPressAcknowledges({ focusFollowsPointer: true, mdMode: true, primary: true, inBody: true })).toBe(false)
+      // the guard / xterm own it
+      expect(mdViewPressAcknowledges({ focusFollowsPointer: false, mdMode: false, primary: true, inBody: true })).toBe(false)
+      // a right click opens the menu; the header is chrome, not the view
+      expect(mdViewPressAcknowledges({ focusFollowsPointer: false, mdMode: true, primary: false, inBody: true })).toBe(false)
+      expect(mdViewPressAcknowledges({ focusFollowsPointer: false, mdMode: true, primary: true, inBody: false })).toBe(false)
+    })
+  })
+
   // The decisions above are only worth something if the node and the settings page use them. A
   // source check, like `focusRestore.test.ts`: TerminalNode cannot be mounted without an xterm.
   describe('wiring', () => {
@@ -155,6 +183,8 @@ describe('terminal focus mode (#757)', () => {
       expect(src).toContain('pointerLeaveReleases(focusFollowsPointer)')
       expect(src).toContain('focusLossOutcome(')
       expect(src).toContain('outsidePressReleases(')
+      expect(src).toContain('mdViewPressAcknowledges(')
+      expect(src).toContain('lostIsCoveredXterm:')
     })
 
     it('Settings → Behavior offers the toggle, findable by search', () => {

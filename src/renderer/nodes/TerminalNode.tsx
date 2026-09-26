@@ -212,6 +212,7 @@ import { HoverGuard } from './HoverGuard'
 import {
   focusLossOutcome,
   hoverTakesKeyboard,
+  mdViewPressAcknowledges,
   outsidePressReleases,
   pointerLeaveReleases,
   reclaimTarget,
@@ -5310,7 +5311,20 @@ export function TerminalNode({
     let pressedInOwnNode = false
     let pressTimer: ReturnType<typeof setTimeout> | null = null
     let reclaimTimer: ReturnType<typeof setTimeout> | null = null
-    const onPointerDown = () => {
+    const onPointerDown = (e: PointerEvent) => {
+      // A click on the open ⌘M view is click-to-focus's stand-in for the dwell over it: it runs
+      // `enterNow`, which acknowledges the node and leaves the covered xterm unfocused
+      // (`focusXtermUnlessCovered`) — exactly what the dwell does there in the default mode.
+      if (
+        mdViewPressAcknowledges({
+          focusFollowsPointer: false,
+          mdMode: mdModeRef.current,
+          primary: e.button === 0,
+          inBody: e.target instanceof Element && !!e.target.closest('.term-node__body') && root.contains(e.target)
+        })
+      ) {
+        enterNow()
+      }
       pressedInOwnNode = true
       if (pressTimer) clearTimeout(pressTimer)
       pressTimer = setTimeout(() => {
@@ -5338,7 +5352,8 @@ export function TerminalNode({
         gained: e.relatedTarget,
         activeElement: document.activeElement,
         windowFocused: document.hasFocus(),
-        pressedInOwnNode
+        pressedInOwnNode,
+        lostIsCoveredXterm: mdModeRef.current && e.target === termRef.current?.textarea
       })
       if (outcome === 'keep') return
       if (outcome === 'release') {

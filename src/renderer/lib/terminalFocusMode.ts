@@ -63,6 +63,10 @@ export interface FocusLossEvent {
   /** A press landed on THIS node (its React Flow wrapper, header included) in the same task — the
    *  focus change is that press's default action, not a click somewhere else. */
   pressedInOwnNode: boolean
+  /** The element that lost focus is this node's xterm while its ⌘M view is open: the only way that
+   *  happens is `useMdModeFocus` blurring it as the view opens (every other "take the keyboard"
+   *  path goes through `focusXtermUnlessCovered`, which never focuses a covered xterm). */
+  lostIsCoveredXterm: boolean
 }
 
 /** What a `focusout` inside the node means in click-to-focus mode. */
@@ -85,6 +89,10 @@ export type FocusLossOutcome =
  * - **The window lost focus** (Cmd+Tab, a click on another app). Chromium fires `blur`/`focusout`
  *   on the focused element, but that element remains `document.activeElement` and is focused
  *   again on return — the terminal never stopped owning the keyboard → `keep`.
+ * - **The node's own ⌘M view opening** (`lostIsCoveredXterm`). `useMdModeFocus` blurs the xterm and
+ *   focuses nothing, so this focusout has no destination and no press — the same shape as a click
+ *   on the empty canvas — yet the user is still looking at this node → `keep`. If they then click
+ *   elsewhere, focus is already on `<body>` and `outsidePressReleases` ends it.
  * - **A press on this node's own chrome** (dragging it by the header, clicking its border). The
  *   browser moves focus to the React Flow wrapper (it is focusable) or to `<body>`, and either
  *   way the keystroke after it would land on the canvas — where a bare Backspace is
@@ -98,6 +106,7 @@ export type FocusLossOutcome =
 export function focusLossOutcome(e: FocusLossEvent): FocusLossOutcome {
   if (!e.nodeRoot) return 'keep'
   if (!e.windowFocused) return 'keep'
+  if (e.lostIsCoveredXterm) return 'keep'
   if (e.activeElement === e.lost) return 'keep'
   if (e.gained && e.nodeRoot.contains(e.gained)) return 'keep'
   if (e.pressedInOwnNode) return 'reclaim'
@@ -139,4 +148,24 @@ export function outsidePressReleases(p: OutsidePress): boolean {
  */
 export function reclaimTarget(p: { lostIsXterm: boolean; lostStillInNode: boolean }): 'lost' | 'xterm' {
   return !p.lostIsXterm && p.lostStillInNode ? 'lost' : 'xterm'
+}
+
+/**
+ * Click to focus: does this press acknowledge the node while its ⌘M (Markdown / chat) view is open?
+ *
+ * With focus-follows-pointer, the hover dwell over that view runs the whole "I am here" routine —
+ * active flag, `clearUnread` (the cross-surface finish ACK), presence, remember — while
+ * `focusXtermUnlessCovered` leaves the hidden xterm unfocused. Click to focus has no dwell, and the
+ * hover guard is not rendered over the view (`armed && !mdMode`), so without this a user could click
+ * into an unread conversation, read it, type in its composer, and it stayed unread. A primary press
+ * inside the node BODY (the view) is the click equivalent; the header is chrome and a right click
+ * opens the menu.
+ */
+export function mdViewPressAcknowledges(p: {
+  focusFollowsPointer: boolean
+  mdMode: boolean
+  primary: boolean
+  inBody: boolean
+}): boolean {
+  return !p.focusFollowsPointer && p.mdMode && p.primary && p.inBody
 }
