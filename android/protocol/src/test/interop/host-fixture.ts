@@ -103,7 +103,7 @@ async function runRelay(): Promise<void> {
     attachDetached(persistKey, s, options) {
       sinks = s
       const id = `sess-${++sessionCounter}`
-      emit({ event: 'attach', persistKey, cols: options?.cols, rows: options?.rows, adaptsToSize: s.adaptsToSize })
+      emit({ event: 'attach', persistKey, cols: options?.cols, rows: options?.rows, adaptsToSize: s.adaptsToSize, cwd: options?.cwd, accountId: options?.accountId })
       setTimeout(() => s.onData(`hello ${persistKey}\r\n`), 20)
       return id
     },
@@ -111,7 +111,7 @@ async function runRelay(): Promise<void> {
       return persistKey === 'term-big-1' ? bigSnapshot : `screen of ${persistKey}`
     },
     async sessionExists(persistKey) {
-      return persistKey !== 'term-new-1'
+      return !persistKey.startsWith('term-new-')
     },
     write(clientId, sessionId, data) {
       emit({ event: 'write', sessionId, data })
@@ -214,6 +214,10 @@ async function runRelay(): Promise<void> {
         emit({ event: 'answer', nodeId, pendingId, decision }), pendingId.endsWith('-expired') ? 'gone' : 'sent'
       ),
       ackRead: (nodeId) => emit({ event: 'ack', nodeId })
+    },
+    // A33: the host resolves where a phone-started session is created (fake registry: project p1).
+    newSessions: {
+      resolve: ({ projectId, accountId }) => (projectId === 'p1' ? { cwd: '/repo', ...(accountId ? { accountId } : {}) } : null)
     },
     onPeerReady: (s) => {
       emit({ event: 'peer-ready', sas: s.sas(), pub: s.peerPublicKeyB64() })

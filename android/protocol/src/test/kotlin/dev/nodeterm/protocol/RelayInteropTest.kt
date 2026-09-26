@@ -331,4 +331,20 @@ class RelayInteropTest {
             assertEquals("2", h.awaitEvent("write").str("data"))
         }
     }
+
+    @Test
+    fun `a session the phone starts is created in its project by the desktop`() = runBlocking<Unit> {
+        // A33, through the desktop's real pty.attach handler: the host applies the project folder
+        // and account (the fixture's session "does not exist", so this attach creates it).
+        val h = start()
+        connect(h).connection.use { conn ->
+            val s = conn.attach("term-new-9", 90, 30, RecordingSink(), dev.nodeterm.protocol.host.NewSessionHint("p1", "acct-1", "claude"))
+            val ev = h.awaitEvent("attach")
+            assertEquals("term-new-9", ev.str("persistKey"))
+            assertTrue(s.fresh)
+            assertEquals("/repo", ev.str("cwd"))
+            assertEquals("acct-1", ev.str("accountId"))
+            s.detach()
+        }
+    }
 }

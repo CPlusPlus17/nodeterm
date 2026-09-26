@@ -141,12 +141,17 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
         return ProjectsParser.parseBlob(body.s("output") ?: "")
     }
 
-    override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink): TerminalStream =
+    override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint?): TerminalStream =
         suspendCancellableCoroutine { cont ->
             val params = buildJsonObject {
                 put("nodeId", nodeId)
                 put("cols", cols)
                 put("rows", rows)
+                if (create != null) {
+                    put("projectId", create.projectId)
+                    create.accountId?.let { put("accountId", it) }
+                    create.agentId?.let { put("agentId", it) }
+                }
             }
             socket.request("pty.attach", params) { r ->
                 r.fold(

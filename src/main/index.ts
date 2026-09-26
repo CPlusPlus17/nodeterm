@@ -215,6 +215,7 @@ import { codexHome } from '../core/usage/codex-usage'
 import { isAsyncSubagentLaunch, grokRawFields, type NormalizedAgentEvent } from '../shared/agents/normalize'
 import { applyGrokHookSession } from '../core/grok-hook-session'
 import { agentAccountColor } from '../shared/agents/account-color'
+import { AGENT_CONFIG, type BuiltinAgentId } from '../shared/agents/config'
 import {
   setRemoteTranscriptReader,
   TITLE_TAIL_BYTES,
@@ -4045,6 +4046,23 @@ app.whenReady().then(async () => {
         const where = ssh?.server ? sshHostKey(ssh.server) : 'another computer'
         const sshRemote = sshProjectManager?.sshRemoteFor(projectId, ssh?.remoteCwd)
         return sshRemote ? { where, sshRemote } : { where }
+      }
+    },
+    // A session the phone starts is created in its project's folder, under the account it chose,
+    // resolved HERE from the host's own registry and settings (audit A33: the phone's `cd`/env launch
+    // prefix is POSIX-only, so on Windows it was dropped). Only a local folder project qualifies —
+    // the same set the registrar accepts — and only a local, logged-in managed Claude account.
+    newSessions: {
+      resolve: ({ projectId, accountId, agentId }: { projectId: string; accountId?: string; agentId?: string }) => {
+        const info = workspaceStore.projectTargetInfo(projectId)
+        if (!info || info.ssh || !info.cwd) return null
+        const account =
+          accountId && agentId === 'claude' &&
+          (settingsStore.get().claudeAccounts ?? []).some((a) => a.id === accountId && !a.pending && !a.host)
+            ? accountId
+            : undefined
+        const agent = agentId && Object.prototype.hasOwnProperty.call(AGENT_CONFIG, agentId) ? (agentId as BuiltinAgentId) : undefined
+        return { cwd: info.cwd, ...(account ? { accountId: account } : {}), ...(agent ? { agentId: agent } : {}) }
       }
     },
     // A relay phone's Inbox actions (`approvals.answer` / `inbox.ack`): the SAME answer writer the

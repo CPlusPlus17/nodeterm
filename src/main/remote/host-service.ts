@@ -238,6 +238,22 @@ export interface HostRemoteNodes {
   resolve(nodeId: string): { where: string; sshRemote?: NonNullable<PtyCreateOptions['sshRemote']> } | null
 }
 
+/**
+ * Where a session the PHONE starts is created (audit A33). `pty.attach` of a fresh node id creates
+ * its tmux session; the phone could only steer it through the launch line (`cd '<dir>' &&`,
+ * `CLAUDE_CONFIG_DIR=…`), which is POSIX shell — on a Windows host the session started in the home
+ * folder and silently dropped the account. The phone now names the project (and account/agent) on
+ * the attach, and the HOST resolves them from its own registry and settings, applied only when the
+ * attach creates the session. Everything is validated here; anything unknown is simply not applied.
+ */
+export interface HostNewSessions {
+  resolve(req: {
+    projectId: string
+    accountId?: string
+    agentId?: string
+  }): Pick<PtyCreateOptions, 'cwd' | 'accountId' | 'agentId'> | null
+}
+
 interface Stream {
   sessionId: string
   /** The node id (tmux persistKey) this stream attached to. The ONLY tmux target a client can
@@ -327,7 +343,9 @@ export function createHostHandlers(
   inbox?: HostInboxOps,
   // Which nodes belong to an SSH project, and how to reach their host (see HostRemoteNodes).
   // Absent ⇒ every node is attached locally, as before (the Server Edition has no SSH projects).
-  remoteNodes?: HostRemoteNodes
+  remoteNodes?: HostRemoteNodes,
+  // Where a phone-started session is created (see HostNewSessions). Absent ⇒ `{cols, rows}` only.
+  newSessions?: HostNewSessions
 ): HostHandlers {
   // streamId -> Stream. PTY callbacks close over their own `streamId` directly, so no
   // reverse (sessionId -> streamId) index is needed.
@@ -450,6 +468,23 @@ export function createHostHandlers(
       remote = owner.sshRemote
     }
 
+    // A phone starting a NEW session names its project (and account/agent): the host resolves the
+    // folder and account itself (A33). Resolved now, applied only if this attach creates the session.
+    let create: Pick<PtyCreateOptions, 'cwd' | 'accountId' | 'agentId'> | null = null
+    const projectId = str(p.projectId)
+    if (!remote && newSessions && projectId && projectId.length <= REF_MAX_LEN) {
+      try {
+        create = newSessions.resolve({
+          projectId,
+          accountId: str(p.accountId) ?? undefined,
+          agentId: str(p.agentId) ?? undefined
+        })
+      } catch {
+        create = null
+      }
+    }
+    let created = false
+
     const streamId = ++streamCounter
     const stream: Stream = { sessionId: '', persistKey: nodeId, seq: 0, paused: false }
     const sinks = makeSinks(streamId, stream, p.resizedFrames === true)
@@ -481,6 +516,7 @@ export function createHostHandlers(
         (remote ? pty.sessionExistsOver!(nodeId, remote) : pty.sessionExists(nodeId)).catch(() => true),
         new Promise<boolean>((r) => setTimeout(() => r(true), FRESH_PROBE_BUDGET_MS))
       ])
+      created = !existed
       socket.respond(req.id, true, { streamId, fresh: !existed })
       return (remote ? pty.captureSnapshotOver!(nodeId, remote) : pty.captureSnapshot(nodeId)).catch(() => '')
     })()
@@ -494,7 +530,7 @@ export function createHostHandlers(
           // through to a local session (PtyCreateOptions.requireRemote).
           stream.sessionId = remote
             ? pty.attachDetached(nodeId, sinks, { cols, rows, sshRemote: remote, requireRemote: true })
-            : pty.attachDetached(nodeId, sinks, { cols, rows })
+            : pty.attachDetached(nodeId, sinks, { cols, rows, ...(created && create ? create : {}) })
         } catch {
           // Attach failed (e.g. tmux unavailable) — surface as an exit so the client tears down.
           socket.sendFrame(
@@ -1253,6 +1289,8 @@ export interface HostSessionOptions {
   inbox?: HostInboxOps
   /** SSH-project nodes: attach over their master, never locally. Optional (see HostRemoteNodes). */
   remoteNodes?: HostRemoteNodes
+  /** Where a phone-started session is created (see HostNewSessions). Optional. */
+  newSessions?: HostNewSessions
   /** Extra fs/git jail roots beyond the shared canvas's node cwds — production passes the
    *  workspace's local project cwds: the phone browses EVERY project over `projects.list`, so a
    *  canvas-only jail denied whichever project the desktop didn't happen to have focused. */
@@ -1379,7 +1417,8 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
     opts.nodeActions,
     opts.kanban,
     opts.inbox,
-    opts.remoteNodes
+    opts.remoteNodes,
+    opts.newSessions
   )
   canvasSync = createHostCanvasSync(socket, opts.applyMutation)
   unsubCanvas = opts.subscribeCanvas(() => scheduleBroadcast())
@@ -1414,6 +1453,8 @@ export interface HostBridgeDeps {
   inbox?: HostInboxOps
   /** SSH-project nodes attach over their project's ControlMaster, or are refused (audit A09). */
   remoteNodes?: HostRemoteNodes
+  /** A phone-started session is created in its project's folder, under its account (audit A33). */
+  newSessions?: HostNewSessions
   /** Workspace-level jail roots (local project cwds) merged with the canvas node cwds. */
   workspaceRoots?: () => string[]
 }
@@ -1490,6 +1531,7 @@ export function initRemoteHost(
       kanban: bridge.kanban,
       inbox: bridge.inbox,
       remoteNodes: bridge.remoteNodes,
+      newSessions: bridge.newSessions,
       extraRoots: bridge.workspaceRoots,
       // Typing attribution: this session's input frames are this phone's keystrokes.
       getClientId: () => phone.id(),

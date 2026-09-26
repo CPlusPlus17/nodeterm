@@ -27,6 +27,7 @@ import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.NewNode
+import dev.nodeterm.protocol.host.NewSessionHint
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.model.Agent
@@ -274,7 +275,10 @@ class TerminalController(
                 }
                 val c = if (cols > 0) cols else 80
                 val r = if (rows > 0) rows else 24
-                val s = conn.attach(nodeId, c, r, sink)
+                // A session this phone is starting: let the host create it in its project, under
+                // the chosen account (audit A33).
+                val hint = PendingLaunches.peek(nodeId)?.let { NewSessionHint(it.projectId, it.accountId, it.agentId) }
+                val s = conn.attach(nodeId, c, r, sink, hint)
                 if (disposed || stopped) {
                     s.detach()
                     return@launch

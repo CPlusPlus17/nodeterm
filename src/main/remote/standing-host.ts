@@ -314,6 +314,7 @@ export function initStandingHost(
         kanban: bridge.kanban,
         inbox: bridge.inbox,
         remoteNodes: bridge.remoteNodes,
+        newSessions: bridge.newSessions,
         extraRoots: bridge.workspaceRoots,
         // Typing attribution: this pooled session's input frames are ITS phone's keystrokes.
         getClientId: () => pooled.presence.id(),

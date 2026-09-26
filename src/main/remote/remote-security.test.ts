@@ -5,7 +5,7 @@
 //   R4 — killing a stream forgets it in the SAME synchronous turn, so a late Input frame for that
 //        streamId can never be written into a session that is already released.
 import { describe, expect, it, vi } from 'vitest'
-import { createHostHandlers, type HostFsOps, type HostPtyManager, type HostRelaySocket, type HostRemoteNodes } from './host-service'
+import { createHostHandlers, type HostFsOps, type HostNewSessions, type HostPtyManager, type HostRelaySocket, type HostRemoteNodes } from './host-service'
 import { genKeyPair, deriveSharedKey, sasFromSharedKey, publicKeyToB64 } from './e2ee'
 import { connectRelay, type RelaySocket, type RelayTransport } from './relay-socket'
 import { OP, type Frame } from './framing'
@@ -699,5 +699,53 @@ describe('pty.attach of an SSH-project node never runs locally', () => {
     expect(responses[0].ok).toBe(true)
     expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({ cols: 80, rows: 24 })
     expect(pty.sessionExistsOver).not.toHaveBeenCalled()
+  })
+})
+
+// Audit A33: a session the PHONE starts is created where the desktop would create it — the host
+// resolves the project's folder and the account from its own registry — and only when this attach
+// is the one creating it. On Windows the phone's `cd`/env launch prefix cannot work at all.
+describe('pty.attach creates a phone-started session in its project', () => {
+  const newSessions = (resolve: HostNewSessions['resolve']): HostNewSessions => ({ resolve })
+  const handlersWith = (pty: HostPtyManager, socket: HostRelaySocket, fs: HostFsOps, ns: HostNewSessions) =>
+    createHostHandlers(
+      pty, socket, fs, () => ['/work'],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, ns
+    )
+
+  it('applies the host-resolved cwd/account/agent when the attach creates the session', async () => {
+    const { socket, fs, pty } = makeHostFakes()
+    ;(pty.sessionExists as ReturnType<typeof vi.fn>).mockResolvedValue(false)
+    const resolve = vi.fn(() => ({ cwd: 'C:\\repo', accountId: 'acct-1', agentId: 'claude' as const }))
+    const handlers = handlersWith(pty, socket, fs, newSessions(resolve))
+    handlers.onRpc({
+      id: 'n',
+      method: 'pty.attach',
+      params: { nodeId: 'term-new-1', cols: 80, rows: 24, projectId: 'p1', accountId: 'acct-1', agentId: 'claude' }
+    })
+    await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
+    expect(resolve).toHaveBeenCalledWith({ projectId: 'p1', accountId: 'acct-1', agentId: 'claude' })
+    expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({
+      cols: 80, rows: 24, cwd: 'C:\\repo', accountId: 'acct-1', agentId: 'claude'
+    })
+  })
+
+  it('applies nothing when the session already exists (a join, not a create)', async () => {
+    const { socket, fs, pty } = makeHostFakes()
+    ;(pty.sessionExists as ReturnType<typeof vi.fn>).mockResolvedValue(true)
+    const handlers = handlersWith(pty, socket, fs, newSessions(() => ({ cwd: '/repo' })))
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'term-a', cols: 80, rows: 24, projectId: 'p1' } })
+    await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
+    expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({ cols: 80, rows: 24 })
+  })
+
+  it('an unknown project (resolver says null) creates exactly as before', async () => {
+    const { socket, fs, pty } = makeHostFakes()
+    ;(pty.sessionExists as ReturnType<typeof vi.fn>).mockResolvedValue(false)
+    const handlers = handlersWith(pty, socket, fs, newSessions(() => null))
+    handlers.onRpc({ id: 'n', method: 'pty.attach', params: { nodeId: 'term-b', cols: 80, rows: 24, projectId: 'nope' } })
+    await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
+    expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({ cols: 80, rows: 24 })
   })
 })

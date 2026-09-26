@@ -9,6 +9,7 @@ import dev.nodeterm.protocol.host.HostException
 import dev.nodeterm.protocol.host.LabelEditResult
 import dev.nodeterm.protocol.host.NeedsRelayException
 import dev.nodeterm.protocol.host.NewNode
+import dev.nodeterm.protocol.host.NewSessionHint
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TerminalStream
 import dev.nodeterm.protocol.host.TransportKind
@@ -196,7 +197,7 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         }
     }
 
-    override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink): TerminalStream =
+    override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint?): TerminalStream =
         withContext(Dispatchers.IO) {
             refuseRemoteNode(nodeId)
             if (run(SshScripts.hasSession(nodeId)).second.trim() != "yes") throw notRunning(nodeId)

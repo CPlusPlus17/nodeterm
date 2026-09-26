@@ -74,7 +74,7 @@ interface HostConnection : Closeable {
     val capabilities: HostCapabilities
 
     suspend fun listProjects(): ProjectsSnapshot
-    suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink): TerminalStream
+    suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint? = null): TerminalStream
 
     suspend fun wake(nodeId: String)
     suspend fun refresh(nodeId: String)
@@ -121,3 +121,11 @@ open class HostException(message: String) : Exception(message)
  * app offers to open it through the relay, where the desktop attaches it properly.
  */
 class NeedsRelayException(val nodeId: String, message: String) : HostException(message)
+
+/**
+ * For an attach that STARTS a session the phone just created: which project it belongs to, and the
+ * account/agent chosen. A current desktop creates the session in that project's folder under that
+ * account itself (audit A33 — the phone's `cd`/env launch prefix is POSIX-only and cannot work on a
+ * Windows host); an older one ignores it. Direct SSH never creates sessions, so it ignores it too.
+ */
+data class NewSessionHint(val projectId: String, val accountId: String?, val agentId: String?)

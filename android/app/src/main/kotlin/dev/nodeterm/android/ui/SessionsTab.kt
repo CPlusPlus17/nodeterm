@@ -71,6 +71,9 @@ object PendingLaunches {
 
     @Synchronized
     fun take(nodeId: String): LaunchRequest? = byNode.remove(nodeId)
+
+    @Synchronized
+    fun peek(nodeId: String): LaunchRequest? = byNode[nodeId]
 }
 
 private val BUCKET_ORDER = listOf(SessionBucket.NEEDS_YOU, SessionBucket.RUNNING, SessionBucket.SLEEPING, SessionBucket.UNKNOWN)
