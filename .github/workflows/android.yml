@@ -24,6 +24,8 @@ name: Android
 #   .github/workflows/android.yml     this file
 #   .github/workflows/security.yml, .github/dependabot.yml   GradleCiCoverageTest (android/protocol)
 #                         reads them: the Kotlin CodeQL job and the Gradle Dependabot entry (audit A69)
+#   docs/android.md, docs/android-audit-2026-09.md   DeviceChecklistDocsTest reads them: the device
+#                         checklist and the audit ids its items name (audit A65)
 # To re-derive: `node android/protocol/src/test/interop/bundle-fixture.cjs <out.cjs>
 # android/protocol/src/test/interop/electron-stub.ts` from the repo root writes <out.cjs>.meta.json,
 # whose `inputs` are the bundled files. WorkflowPathFilterTest (android/protocol) fails when one is not
@@ -43,6 +45,8 @@ on:
       - '.github/workflows/android.yml'
       - '.github/workflows/security.yml'
       - '.github/dependabot.yml'
+      - 'docs/android.md'
+      - 'docs/android-audit-2026-09.md'
   pull_request:
     paths:
       - 'android/**'
@@ -56,6 +60,8 @@ on:
       - '.github/workflows/android.yml'
       - '.github/workflows/security.yml'
       - '.github/dependabot.yml'
+      - 'docs/android.md'
+      - 'docs/android-audit-2026-09.md'
   workflow_dispatch:
 
 concurrency:

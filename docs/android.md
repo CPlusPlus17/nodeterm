@@ -140,9 +140,11 @@ nothing, so a new reflection or name-dependent target (a new `Class.forName`, a 
 from a string) builds green without its keep. It needs its own keep and a line in
 `tools/check-r8-output.sh`. `R8RulesTest` re-derives the classes Android lacks from the jars the
 protocol module ships to the app, and requires a keep for every WorkManager worker in the app sources.
-The debug APK stays unminified and is the one distributed. The app has no instrumented tests and has **not been run on a device**, minified or not. An audit of the code found release blockers; the fixed ones are marked in its
-index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md). The plan, the device checklist and the
-decisions still open are in [`android-handover.md`](android-handover.md).
+The debug APK stays unminified and is the one distributed. The app has no instrumented tests and has
+**not been run on a device**, minified or not; the [device checklist](#device-checklist) below is what
+a first device pass has to run. An audit of the code found release blockers; the fixed ones are
+marked in its index, and the rest are open: [`android-audit-2026-09.md`](android-audit-2026-09.md).
+The plan and the decisions still open are in [`android-handover.md`](android-handover.md).
 
 A test caveat (audit `A64`): the relay leg's `projects.list` blob and mirror now come from the
 desktop's code, but the SSH leg still hand-copies desktop shapes — the v3 index and project files,
@@ -350,6 +352,201 @@ windows (read from Android 15's `PhoneWindow` classes, not measured). The test p
 nothing else asks for the keyboard's inset, and that every Scaffold body with a text field uses it;
 how the screens and the dialogs look with the keyboard up is a device check.
 
+## Device checklist
+
+Nothing in this section has been run. CI builds the APK, but no row of the README's feature table and
+no fix above has been checked on a phone: the tests stop at the JVM, and the app's screens are only
+type-checked. Run these on a real phone against a real desktop and record, for each item, pass or
+fail, the phone model, its Android and WebView versions, the desktop's OS and nodeterm version, and
+the route (network or relay). Write the results into "What is verified, and how" above, and turn each
+failure into a new finding. Every item names the audit finding it checks; `A65` marks the baseline
+checks that finding asked for, where the feature table is the only claim. An item that needs
+something a tester may not have (a Windows desktop, Android 15, a second phone, a release key) says
+so; skip it and record why. The list starts from the 23 items the handover drew up and adds what each
+later fix left to a device.
+
+### Install, update and what stays on the phone
+
+1. Install the CI debug APK (artifact `nodeterm-android-debug`) and pair a computer. Install the next
+   CI APK over it without uninstalling: it installs as an update and the pairing is still there.
+   *(A10)*
+2. Pairings survive a restart: force-stop the app, reboot the phone, reopen the app. The computer is
+   still listed and connects on both routes without pairing again, the desktop's Settings → Phone
+   still shows one entry for this phone, and no new relay approval is asked for. *(A24, A65)*
+3. Uninstall, then install again: the app starts with no computers (its Keystore key and data went
+   with it). Pairing the same computer again works, relay included, also on a desktop without Pro.
+   Revoke the stale entry on the desktop. *(A51, A65)*
+4. Android 12 or later, with a second phone: a device-to-device transfer ("copy apps and data" in the
+   new phone's setup) leaves the app there with no computers and no pins. Pair it too, then revoke
+   one of the two phones on an entitled (Pro) desktop: the other keeps working. A cloud backup
+   restored onto a fresh install brings back nothing of the app either. *(A51)*
+5. Once a release signing key exists: install the signed, minified release APK and run the pairing,
+   SSH, relay, OSC 52 copy and background-notification items on it, since that is where code R8 could
+   have broken runs (BouncyCastle's provider tables on the first connect, the WebView bridge, the
+   WorkManager worker). An error message names a real exception class, not an obfuscated one.
+   `adb shell run-as dev.nodeterm.android` is refused on it, while on the debug APK it opens a shell
+   in the app's data, which is what the README's debuggable warning says. *(A37, A50)*
+
+### Pairing
+
+6. Pair by QR from the Pair screen's scanner with a macOS desktop, then a Linux desktop, then a
+   Windows desktop. The Windows QR carries `"ssh":false`, so that pairing is relay-only, and a failed
+   relay mint pairs nothing. *(A65)*
+7. Pair by pasting the code's text, and by scanning the desktop's QR with the phone's own camera app,
+   which hands the `nodeterm://pair?code=…` link to the app: once with the app closed, once with it
+   open on another screen. Deny the camera permission: pasting still pairs. *(A65)*
+8. With remote access on, against a current desktop: the Pair screen says "Remote access is on", the
+   pairing ends with "Paired, and approved for remote access.", and the first relay connect later
+   raises no SAS dialog on the desktop. Revoke the phone there (Settings → Phone → Revoke): SSH is
+   refused, and a relay connect needs the SAS approval again. Against an older desktop the toast says
+   an approval is still owed, and the first relay connect shows the code. *(A07)*
+9. A pairing code whose computer does not answer (the desktop quit after showing the QR, or the phone
+   is on another network) ends within about 45 s with a sentence, not an exception name, and Back
+   during the wait works without a hang. An expired or already-used code shows the desktop's one-line
+   refusal. *(A54)*
+
+### Connecting
+
+10. On the LAN (route Automatic): the Sessions tab shows the desktop's projects and sessions, grouped
+    Needs you / Running / Sleeping, with activity and context %. *(A02, A65)*
+11. The first connect over the network pins the computer's SSH host key, and later connects use it
+    silently. Then present a different key at that address (another SSH-running machine takes the
+    desktop's LAN address, or the desktop's host keys are regenerated): on Automatic the phone refuses
+    SSH, connects through the relay and keeps a warning on the host screen that names "Only through
+    the relay"; on "Only on my network (SSH)" it stops with the warning. *(A49, A74)*
+12. On cellular, off the LAN: connect through the relay. The desktop shows the SAS dialog and the phone
+    shows the same code; approve. Reconnect later: no second prompt. On another pairing press Deny: the
+    phone says it was not approved and does not dial again until Try again. *(A65, A30)*
+13. Leave the phone in the background for 15 minutes or more with a paired computer that has never
+    approved it over the relay: no SAS dialog appears on the desktop. *(A05, A17, A23)*
+14. Put the desktop to sleep (or pull its network) while the phone is connected over SSH: within about
+    45 s the phone notices, and on Automatic it moves to the relay or says the computer is offline.
+    Waking the desktop reconnects. *(A31)*
+15. Open a computer and go Back before it has connected, several times in a row: no connection error
+    is recorded for it, and the next open connects normally. *(A20)*
+16. Change a computer's route in Settings → How to reach each computer and check that the next connect
+    follows it; forget a computer; pair two computers and move between them. *(A65)*
+17. Pair while the desktop's remote access is off, then turn it on and open the computer over the
+    network: the host list gains "From anywhere" without the app being restarted, and a relay connect
+    then works (after one approval, since this path does not pin). The host list stays smooth while a
+    connection is being made. *(A47, A65)*
+
+### Terminal
+
+18. Open a terminal over SSH and type with the soft keyboard. Rotate the phone. Use A−/A+ and every
+    key chip (Esc, Tab, ⇧Tab, the arrows, ⏎, ⇧⏎, ^C, ^D, ^R, ^L, Home, End, PgUp, PgDn): the
+    connection survives all of it. *(A01, A04)*
+19. Non-ASCII renders over SSH: Claude's rounded borders, accented letters, CJK, emoji. *(A03)*
+20. Swipe to scroll the tmux history. Select text in tmux: the copy reaches Android's clipboard (OSC 52)
+    with a "Copied N lines" toast. *(A65)*
+21. A large OSC 52 copy. In the pane, run
+    `printf '\033]52;c;%s\a' "$(head -c 150000 /dev/zero | tr '\0' x | base64 | tr -d '\n')"`
+    (the desktop's tmux passes an application's OSC 52 on): the phone says it is too large to copy and
+    nothing crashes. With 450000 in place of 150000 the page refuses it before it crosses the bridge,
+    with the same message. With 90000 it is copied, or, if the system refuses a clip that size, "Could
+    not copy: too large for the clipboard." shows; never a crash. *(A53)*
+22. Invalid OSC 52 is ignored silently: a payload that is not base64, one with no `;`, a `?` read
+    query, and a selection field longer than 16 characters copy nothing, show nothing and leave the
+    clipboard as it was. *(A53)*
+23. "Sized to another screen · Fit this screen" appears when the desktop's view of the session is
+    larger, and Fit works. *(A65)*
+24. The ⌨ chip raises the soft keyboard, and it stays up, in three states: right after the terminal
+    opens, before the page was ever touched; after tapping the terminal and then dismissing the
+    keyboard (the page's input already has focus); and while the input bar has focus. The keys then
+    go to the pane, not to the input bar. *(A46)*
+25. With a terminal open, turn on airplane mode: the input bar's draft stays (Send, the sending key
+    chips and Resume are disabled, and the keyboard's Send leaves the text in place). Turn it off: the
+    terminal reattaches by itself ("Disconnected. Reconnecting…" clears) and the draft then sends. Arm Ctrl and send "c" from the input bar: the
+    pane gets ^C, with no Enter after it. *(A41, A34, A36)*
+26. The terminal WebView's renderer goes away. A kill while the terminal is on screen: the app stays
+    open and the terminal is rebuilt and reattached by itself; a third kill within a minute offers
+    "Reopen terminal" instead. A crash offers "Reopen terminal", never an automatic reattach. A kill
+    while the app is in the background: the terminal is back when the app returns. A kill while the
+    screen shows "The session ended", "Open through the relay" or "Reopen terminal": that answer stays
+    and nothing attaches. One way to provoke them, not tried: on an emulator with `adb root`, `kill -9`
+    the WebView's renderer process for a kill; a crash needs the renderer itself to crash (for
+    example `chrome://crash` from DevTools). *(A45)*
+27. Send the app to the background with a terminal attached through the relay, for a few minutes: the
+    desktop's view of that session is no longer held to the phone's size, and the 8 s refresh stops.
+    Coming back reattaches. *(A18)*
+28. On the desktop, open the project of a session the phone is attached to, so the desktop mounts that
+    node: through the relay the phone stays attached; over direct SSH it may be detached, and then
+    reattaches by itself rather than saying the session ended. *(A13)*
+29. A Sleeping (Eco) session opened over direct SSH offers "Wake <agent>" while a shell owns its pane.
+    The tap wakes the conversation, and opening it again (the CLI now running) offers nothing. Through
+    the relay, opening it wakes it with no offer. *(A76)*
+30. Reboot the desktop, then open a session through the relay: the resume offer appears, and Resume
+    continues the right conversation, in the node's folder, under its Claude account and with the
+    project's permission mode. Drop the connection before tapping it: the offer comes back with the
+    reattach and can be tapped once the reattach has settled. Over direct SSH such a session is not
+    created: the phone offers "Open through the relay". *(A15, A16, A41, A08)*
+31. A session of one of the desktop's SSH projects: over direct SSH the phone offers the relay
+    instead, and through the relay it opens on that project's host. *(A09, A28)*
+
+### Sessions, the board and new sessions
+
+32. New session from the phone (Claude, then a shell), through the relay: the node appears on the
+    canvas, the agent runs in the project's folder, and its status badges update on both sides; a
+    Claude permission prompt reaches the phone's Inbox as an approval. Managed Claude accounts are
+    named by their label or email in the picker, the session row and the Usage card, never by an id.
+    Repeat against a Windows desktop: the session starts in the project's folder under the chosen
+    account there too. *(A72, A33, A14, A39, A75)*
+33. New session, then Back within a second of Start (before the launch line is typed), and once more
+    by sending the app to the background right after Start: both times the node still appears on the
+    canvas with its agent running, not a bare shell. *(A40)*
+34. With the New-session dialog open, close the selected project on the desktop (or remove the
+    selected account): within a refresh the dialog moves to a project it still offers, or disables
+    Start with a line saying why; nothing crashes. *(A42)*
+35. Wake, refresh, rename and end a session from the phone. *(A65)*
+36. Board: move a card, add and remove a label, create a new one; the desktop's board updates without a
+    reload. *(A65)*
+37. On the Board tab, pick a project and scroll; open a terminal and come back: the same tab, scroll
+    position and project. Switching tabs and back keeps them too. *(A43)*
+38. Kill the app's process in the background (Developer options → "Don't keep activities", or
+    `adb shell am kill dev.nodeterm.android`) and reopen it: the screen and the back stack are
+    sensible, and the tab is kept. *(A22, A43)*
+
+### Inbox, notifications and usage
+
+39. Approve and deny a held Claude permission from the Inbox within 45 s. Answer one after its hold
+    has expired: the phone must not report success. *(A06, A35)*
+40. A subagent's approval while its parent waits on a question: Approve from the Inbox answers it,
+    rather than saying "Already handled." *(A38)*
+41. Answer a single-select AskUserQuestion from the Inbox, through the relay and over the network: the
+    answer lands in the live session in one tap. A multi-select question lists its options read-only
+    beside "Open session". *(A12, A57, A65)*
+42. Open a finished session on the phone: the desktop's unread dot clears. *(A65)*
+43. A background notification arrives within about 15 minutes; tapping it opens that computer's Inbox,
+    also when the app is already open on another computer. *(A11, A19)*
+44. Notification permission on Android 13 or later: deny it at first launch; Settings → Notifications
+    then reads Off; switching it on asks again or opens the app's notification settings; nothing is
+    posted while it is denied. *(A21)*
+45. Live notifications for the computer on screen: with its Sessions tab open, a turn finishing on the
+    desktop raises a notification within about 8 s; with its Inbox tab open, none, and none later;
+    with a session's terminal attached, none for that session, except a held hook-reply approval.
+    Another paired computer's events arrive only from the background check. *(A73)*
+46. Each event notifies once: an event announced once is not announced again by later refreshes, by
+    the background check, or after the next APK is installed over this one. *(A48)*
+47. The lock screen: with "Show details in notifications" off (the default), a notification shows its
+    title ("Needs you — <session>" or "Completed — <session>"), the kind and the computer, but no
+    command, question or last message; turned on, the shade shows those too. With the lock screen set
+    to hide sensitive content, only the title and the computer's name show there, either way. *(A52)*
+48. The Usage tab shows a pace line ("5h usage pace faster", "slower" or "on pace") when a limit's reset
+    time is known, and none when it is not. Approval, question and done cards show the node's context
+    ring and "N% context", matching the desktop's meter. *(A58)*
+
+### Settings and system UI
+
+49. Settings: edit the phone's name and the relay API address, then leave with the system back gesture:
+    both are stored (reopen Settings to see). An address that is not a full `https://` URL shows the
+    field's error and a toast on leaving, and is not stored. "Reset to default" forgets a stored
+    address. Leaving without an edit stores nothing. *(A44)*
+50. Android 15 (edge-to-edge) with the soft keyboard up: the terminal sits right above the keyboard
+    with no extra gap the height of the navigation bar, and the Pair and Settings text fields scroll
+    into view above it; the label and rename dialogs look right. On Android 8 to 14 the same screens
+    are unchanged. *(A77)*
+51. Light and dark system theme; a tablet or a foldable if one is available. *(A65)*
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's
@@ -406,4 +603,12 @@ how the screens and the dialogs look with the keyboard up is a device check.
   `PairedHost.from`; it would serve iOS too). Nothing refreshes `PairedHost.host` either: the desktop
   could publish its current LAN address over the relay, letting the phone update it after a relay
   connect.
+- **No signed release build** (audit `A50`). The only APK there is to install is the debug build,
+  and AGP marks every debug build debuggable: anyone with adb access to the unlocked phone while USB
+  debugging is on can read the app's files (`run-as`) and attach a debugger to the running app, whose
+  code can use the Keystore key those files are sealed under. That is the phone's pairing
+  credentials: the SSH key its computers accept, the relay box secret and the relay device token.
+  android/README.md says so under Security. A signed, non-debuggable release needs a release
+  `signingConfig` fed from CI secrets, published artifacts, and the README and `ANDROID_APP_URL`
+  pointed at them.
 - **Instrumented UI tests** and a store listing do not exist yet.

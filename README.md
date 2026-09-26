@@ -227,7 +227,9 @@ detects your platform. Everything is also listed at
 - **Android** — build it from [`android/`](./android) (`./gradlew :app:assembleDebug`); CI also
   attaches a debug APK to every run of the Android workflow. Debug builds share a public signing
   key so a newer APK installs over an older one; install them only from this repository's CI or
-  your own build. Not in a store yet, and not yet tested on a device.
+  your own build. They are also debuggable, so anyone with adb access to the unlocked phone can pull
+  its pairing credentials ([`android/README.md`](./android/README.md#security)); there is no signed
+  release build yet. Not in a store yet, and not yet tested on a device.
 
 **Trying it out?** Removal is one script — it stops every process nodeterm started, reverts
 the status-hook/skill entries it merged into your agent CLIs' config (your own hooks and

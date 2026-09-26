@@ -8,12 +8,15 @@ it is talking to.
 
 > **Status (2026-09-26): not ready for users.** CI builds the debug APK, and the release blockers
 > and medium bugs an audit found are fixed on this branch and tested where the code allows — but the
-> app has **not yet been run on a phone**. The plan, the device checklist and what is still open are
-> in [`docs/android-handover.md`](../docs/android-handover.md); the findings are in
-> [`docs/android-audit-2026-09.md`](../docs/android-audit-2026-09.md). The table below describes what
-> the code is written to do, not what has been verified on a device.
+> app has **not yet been run on a phone**. The plan and what is still open are in
+> [`docs/android-handover.md`](../docs/android-handover.md); the findings are in
+> [`docs/android-audit-2026-09.md`](../docs/android-audit-2026-09.md).
 
 ## What it does
+
+The APK is built by CI, but **no row below has been checked on a device yet**: ✓ means the code is
+written for it and tested where the layer allows, and the numbered
+[device checklist](../docs/android.md#device-checklist) is what will check it.
 
 | | Android | Notes |
 |---|---|---|
@@ -71,7 +74,9 @@ the Gradle distribution itself is not pinned.
 debug APK over an older one without uninstalling — uninstalling wipes every pairing. The other side
 of "public": anyone can sign an APK that installs as an update over a debug build and inherits its
 data, including the keys your computers trust. **Install debug APKs only from this repository's CI
-or your own build.** Release builds will need their own private key; none exists yet.
+or your own build.** Release builds will need their own private key; none exists yet. Debug builds
+are also debuggable, which hands the phone's pairing credentials to anyone with adb access to it
+(see [Security](#security)).
 
 ## Layout
 
@@ -133,7 +138,17 @@ iOS app does receive the detail, in the push the desktop sends.
 
 - The phone's relay identity (a Curve25519 box key) and SSH identity (an Ed25519 seed) are
   generated on the device and stored encrypted under an Android Keystore AES-GCM key. Only their
-  public halves ever leave the phone.
+  public halves are ever sent anywhere; the next point is how the private halves can still be taken.
+- **The debug APK is debuggable, and it is the only build there is.** AGP marks every debug build
+  `android:debuggable`, so anyone with adb access to your unlocked phone while USB debugging is on
+  (from a computer the phone has authorized, or by accepting the prompt on it) can read the app's
+  files with `adb shell run-as dev.nodeterm.android` and attach a debugger to the running app. The
+  Keystore never hands out the key those files are sealed under, but it lets any code running as the
+  app use it, so that is enough to pull the phone's pairing credentials: the SSH private key your computers
+  accept, the relay box secret and the relay device token. A signed, non-debuggable release build does
+  not exist yet. Until it does, keep USB and wireless debugging off when you are not using them; if
+  someone else may have had adb access, revoke the phone on each computer (nodeterm → Settings →
+  Phone → Revoke) and pair it again.
 - Nothing of the app's goes into a backup or a phone-to-phone transfer. `allowBackup="false"` stops
   cloud backup, and the manifest's data extraction rules stop the Android 12+ device-to-device
   transfer, which ignores `allowBackup`. A new phone starts unpaired; pair it again.
