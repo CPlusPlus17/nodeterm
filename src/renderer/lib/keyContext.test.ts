@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
+import { isInputDOMNode } from '@xyflow/system'
 import {
   XTERM_INPUT_CLASS,
   hasEditContext,
@@ -103,5 +104,35 @@ describe('Monaco EditContext pin (#930)', () => {
       'utf8'
     )
     expect(/'editContext', true/.test(options)).toBe(true)
+  })
+})
+
+describe("React Flow's own key handling vs the Monaco editor (#930)", () => {
+  // React Flow runs key handlers of its own (the node wrapper's arrow-key move, its key-press
+  // hooks), and they stand down only for what `isInputDOMNode` recognises: an INPUT/SELECT/TEXTAREA,
+  // a `contenteditable` ATTRIBUTE, or anything inside `.nokey`. Monaco's EditContext div is none of
+  // the first three, so the Monaco mounts carry `nokey`.
+  const editContextDiv = (insideNokey: boolean) => ({
+    nodeType: 1,
+    nodeName: 'DIV',
+    editContext: {},
+    hasAttribute: () => false,
+    closest: (sel: string) => (insideNokey && sel === '.nokey' ? {} : null)
+  })
+  const keyEvent = (target: unknown) => ({ target }) as unknown as KeyboardEvent
+
+  it('an EditContext div is NOT an input to React Flow on its own', () => {
+    expect(isInputDOMNode(keyEvent(editContextDiv(false)))).toBe(false)
+  })
+
+  it('…and IS one inside `.nokey`', () => {
+    expect(isInputDOMNode(keyEvent(editContextDiv(true)))).toBe(true)
+  })
+
+  it('every Monaco mount carries `nokey`', () => {
+    for (const file of ['src/renderer/nodes/EditorNode.tsx', 'src/renderer/nodes/DiffNode.tsx']) {
+      const source = readFileSync(file, 'utf8')
+      expect(source, file).toMatch(/className="[^"]*\bnokey\b[^"]*"\s+ref=\{bodyRef\}/)
+    }
   })
 })

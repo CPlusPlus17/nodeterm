@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs'
 import { describe, expect, it } from 'vitest'
 import { isSpaceRelease, spacePanKeydown, typingTarget } from './spacePan'
 
@@ -74,5 +75,15 @@ describe('isSpaceRelease', () => {
 
   it('ignores other keys coming up', () => {
     expect(isSpaceRelease({ key: 'a' })).toBe(false)
+  })
+})
+
+describe("React Flow's built-in space-pan (#930)", () => {
+  it('is switched off, so this module is the only space-to-pan', () => {
+    // React Flow's default `panActivationKeyCode` is 'Space'. Its listener cannot see an EditContext
+    // target (so it swallowed spaces typed in the Monaco editor) and it forces panOnDrag on, past the
+    // canvas lock.
+    const source = readFileSync('src/renderer/canvas/Canvas.tsx', 'utf8')
+    expect(source).toContain('panActivationKeyCode={null}')
   })
 })
