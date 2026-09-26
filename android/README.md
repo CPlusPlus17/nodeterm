@@ -82,6 +82,13 @@ Each Inbox event raises at most one notification: only events younger than 6 hou
 and the phone remembers the ones it has announced or you have read for a day after it last saw them
 (longer when the computer's clock runs ahead), so nothing still eligible is forgotten.
 
+A notification names the session, the computer and the kind of event ("Needs you — build-bot",
+"Needs approval"), but not the event's own text: the command, file or question, or the agent's last
+message. Android shows a notification's full content on a secure lock screen unless you hide
+sensitive content there. **Settings → Show details in notifications** (off by default) adds that
+text. A lock screen set to hide sensitive content shows only "Needs you — <session>" and the
+computer's name either way. The iOS app does receive the detail, in the push the desktop sends.
+
 ## Security
 
 - The phone's relay identity (a Curve25519 box key) and SSH identity (an Ed25519 seed) are

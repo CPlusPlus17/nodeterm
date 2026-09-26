@@ -9,9 +9,13 @@ import kotlin.test.assertTrue
  * depends on, in the order it depends on them.
  */
 object AppSourcePins {
-    val appUi = File(InteropHarness.repoRoot, "android/app/src/main/kotlin/dev/nodeterm/android/ui")
+    val appSrc = File(InteropHarness.repoRoot, "android/app/src/main/kotlin/dev/nodeterm/android")
+    val appUi = File(appSrc, "ui")
 
     fun ui(file: String): String = File(appUi, file).readText()
+
+    /** A source file under the app's package root, e.g. `notify/InboxNotifier.kt`. */
+    fun app(path: String): String = File(appSrc, path).readText()
 
     /** The block that follows the first occurrence of [start] in [source], braces balanced. */
     fun blockAfter(source: String, start: String): String {

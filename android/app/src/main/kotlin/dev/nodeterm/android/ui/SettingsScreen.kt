@@ -61,6 +61,7 @@ fun SettingsScreen(nav: Navigator) {
     var name by remember { mutableStateOf(graph.hosts.deviceName) }
     var apiBase by remember { mutableStateOf(graph.hosts.apiBase) }
     var notify by remember { mutableStateOf(graph.hosts.notificationsEnabled) }
+    var notifyDetails by remember { mutableStateOf(graph.hosts.notificationDetails) }
     // Whether the phone will actually SHOW them, re-read whenever the screen starts (the user may
     // have come back from the system settings). The switch used to read On while nothing could
     // arrive (audit A21).
@@ -160,6 +161,23 @@ fun SettingsScreen(nav: Navigator) {
                     )
                     TextButton(onClick = { openNotificationSettings() }) { Text("Open settings") }
                 }
+            }
+            // Off by default: the event's own text reaches the lock screen under Android's default
+            // setting, and a public version does not change that (audit A52).
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Show details in notifications")
+                    Text(
+                        "Adds the command, file or question and the agent's last message. Android then shows them " +
+                            "on the lock screen too, unless you hide sensitive notification content there.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = notifyDetails, enabled = notify, onCheckedChange = {
+                    notifyDetails = it
+                    graph.hosts.notificationDetails = it
+                })
             }
 
             if (hosts.isNotEmpty()) {

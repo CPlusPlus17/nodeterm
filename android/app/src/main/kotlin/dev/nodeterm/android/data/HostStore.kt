@@ -99,6 +99,18 @@ class HostStore(context: Context) {
             prefs.edit().putBoolean("notify", value).apply()
         }
 
+    /**
+     * "Show details in notifications": put the event's own text (the command, file or question and
+     * the agent's last message) in its notification. OFF by default, because Android shows a
+     * notification's full content on a secure lock screen unless the user hides sensitive content
+     * (audit A52; the words are dev.nodeterm.protocol.model.InboxNotificationText's).
+     */
+    var notificationDetails: Boolean
+        get() = prefs.getBoolean("notifyDetails", false)
+        set(value) {
+            prefs.edit().putBoolean("notifyDetails", value).apply()
+        }
+
     var fontSize: Int
         get() = prefs.getInt("fontSize", 13)
         set(value) {

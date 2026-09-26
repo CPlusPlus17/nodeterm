@@ -210,6 +210,20 @@ not is left unstored, the field says so while it is being typed, and leaving sho
 address rule is unit-tested; the wiring is pinned in the source, and whether the back gesture reaches
 it is a device check.
 
+`InboxNotificationTextTest` pins what an Inbox notification says (`A52`). An approval's notification
+used to carry the desktop's tool summary (the command's first line, a file path, a fetched URL), and
+a finished turn's the agent's last message. Android shows a notification's full content on a secure
+lock screen under its default setting, and a public version changes that only for users who hide
+sensitive content, so the event's own text is now left out unless the user turns on **Settings →
+Show details in notifications** (off by default). The title keeps the session and whether it needs
+you or completed ("Needs you — build-bot"), and the text says the kind ("Needs approval", "Has a
+question", "Finished", "Interrupted"). A public version with only that title and the computer's name
+is always set. The iOS app does get the detail: the desktop sends the event's title and detail in
+the APNs push body (`src/core/push-notify.ts`), and what iOS shows on its lock screen is iOS's own
+preview setting. That is a difference in platform defaults, not an Android-only leak. The words are
+unit-tested; the notification's use of them and the setting's default are pinned in the source, and
+what a lock screen shows is a device check.
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's

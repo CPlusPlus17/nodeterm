@@ -24,6 +24,7 @@ import dev.nodeterm.android.R
 import dev.nodeterm.protocol.host.RelayApprovalGate
 import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.InboxKind
+import dev.nodeterm.protocol.model.InboxNotificationText
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import kotlinx.coroutines.withTimeoutOrNull
@@ -84,19 +85,30 @@ object InboxNotifier {
         val fresh = graph.hosts.claimAnnounceable(snapshot.status?.inbox?.events.orEmpty())
         if (fresh.isEmpty()) return 0
         val nm = NotificationManagerCompat.from(context)
+        val showDetails = graph.hosts.notificationDetails
         for (ev in fresh.takeLast(5)) {
-            nm.notify("${host.id}:${ev.id}".hashCode(), build(context, host, snapshot, ev))
+            nm.notify("${host.id}:${ev.id}".hashCode(), build(context, host, snapshot, ev, showDetails))
         }
         return fresh.size
     }
 
-    private fun build(context: Context, host: PairedHost, snapshot: ProjectsSnapshot, ev: InboxEvent): android.app.Notification {
+    /**
+     * The event's own text (the command, file or question, the agent's last message) is left out
+     * unless the user opted in: Android shows a notification's full content on a secure lock screen
+     * under its default setting, and a public version changes that only for users who hide sensitive
+     * content (audit A52). The words are [InboxNotificationText]'s; the public version is always set.
+     */
+    private fun build(
+        context: Context,
+        host: PairedHost,
+        snapshot: ProjectsSnapshot,
+        ev: InboxEvent,
+        showDetails: Boolean
+    ): android.app.Notification {
         val node = snapshot.findNode(ev.nodeId)?.second
-        val nodeTitle = snapshot.statusOf(ev.nodeId)?.name ?: node?.title ?: "Session"
-        val headline = when (ev.kind) {
-            InboxKind.APPROVAL, InboxKind.QUESTION -> "Needs you — $nodeTitle"
-            InboxKind.DONE -> "Completed — $nodeTitle"
-        }
+        val session = snapshot.statusOf(ev.nodeId)?.name?.takeIf { it.isNotBlank() } ?: node?.title
+        val words = InboxNotificationText.of(ev, session, host.name, showDetails)
+        val channel = if (ev.kind == InboxKind.DONE) CH_DONE else CH_ATTENTION
         val open = PendingIntent.getActivity(
             context,
             host.id.hashCode(),
@@ -105,16 +117,24 @@ object InboxNotifier {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return NotificationCompat.Builder(context, if (ev.kind == InboxKind.DONE) CH_DONE else CH_ATTENTION)
+        val publicVersion = NotificationCompat.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(headline)
-            .setContentText(ev.title + (ev.detail?.let { " — $it" } ?: ""))
-            .setStyle(NotificationCompat.BigTextStyle().bigText(listOfNotNull(ev.title, ev.detail).joinToString("\n")))
+            .setContentTitle(words.publicTitle)
+            .setContentText(words.publicText)
+            .setWhen(ev.ts)
+            .build()
+        val builder = NotificationCompat.Builder(context, channel)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(words.title)
+            .setContentText(words.text)
             .setSubText(host.name)
             .setWhen(ev.ts)
             .setAutoCancel(true)
             .setContentIntent(open)
-            .build()
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion)
+        words.bigText?.let { builder.setStyle(NotificationCompat.BigTextStyle().bigText(it)) }
+        return builder.build()
     }
 }
 
