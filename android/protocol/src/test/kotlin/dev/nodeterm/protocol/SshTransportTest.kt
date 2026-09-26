@@ -13,6 +13,10 @@ import dev.nodeterm.protocol.ssh.HostKeyChangedException
 import dev.nodeterm.protocol.ssh.HostKeyPin
 import dev.nodeterm.protocol.ssh.SshHostConnection
 import dev.nodeterm.protocol.ssh.SshScripts
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.apache.sshd.server.Environment
 import org.apache.sshd.server.ExitCallback
@@ -30,6 +34,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -75,12 +80,17 @@ class SshTransportTest {
         return p.waitFor() to out
     }
 
+    /** Called with each command the server is asked to run, before it runs (and before sshj hears back). */
+    @Volatile private var onCommand: ((String, ShCommand) -> Unit)? = null
+
     private inner class ShCommand(private val command: String) : Command {
         private lateinit var input: InputStream
         private lateinit var output: OutputStream
         private lateinit var error: OutputStream
         private lateinit var exit: ExitCallback
         private var process: Process? = null
+        /** Counted down once the command's process has exited (for a pty, `script` and what it ran). */
+        val exited = java.util.concurrent.CountDownLatch(1)
 
         override fun setInputStream(`in`: InputStream) { input = `in` }
         override fun setOutputStream(out: OutputStream) { output = out }
@@ -120,6 +130,7 @@ class SshTransportTest {
                 val code = p.waitFor()
                 outPump.join(2000)
                 errPump.join(2000)
+                exited.countDown()
                 exit.onExit(code)
             }.apply { isDaemon = true; start() }
         }
@@ -143,7 +154,9 @@ class SshTransportTest {
         server.publickeyAuthenticator = org.apache.sshd.server.auth.pubkey.PublickeyAuthenticator { user, key, _ ->
             user == "dev" && key.encoded.contentEquals(expected)
         }
-        server.commandFactory = org.apache.sshd.server.command.CommandFactory { _, command -> ShCommand(command) }
+        server.commandFactory = org.apache.sshd.server.command.CommandFactory { _, command ->
+            ShCommand(command).also { onCommand?.invoke(command, it) }
+        }
         server.start()
         port = server.port
         layOutDesktop()
@@ -300,6 +313,41 @@ class SshTransportTest {
             Thread.sleep(300)
             val (code, out) = tmux("has-session", "-t", "=nt-term-a-1")
             assertEquals(0, code, "detaching never ends the session: $out / ${tmux("ls").second}")
+        }
+    }
+
+    @Test
+    fun `an attach cancelled while it opens leaves no tmux client behind`() = runBlocking<Unit> {
+        // A40 review: the blocking open finishes even when its caller is cancelled meanwhile, and
+        // withContext then drops the stream. Nothing held it, so its tmux client stayed attached for
+        // the life of the connection. The cancel lands exactly while the server starts the attach.
+        connect().use { conn ->
+            conn.listProjects()
+            val attaching = AtomicReference<Job>()
+            val attachCommand = AtomicReference<ShCommand>()
+            onCommand = { command, cmd ->
+                if (command.contains("attach-session")) {
+                    attachCommand.set(cmd)
+                    attaching.get().cancel()
+                }
+            }
+            try {
+                val job = launch(Dispatchers.Default, start = CoroutineStart.LAZY) { conn.attach("term-a-1", 100, 30, Sink()) }
+                attaching.set(job)
+                job.start()
+                job.join()
+                assertTrue(job.isCancelled)
+                val cmd = assertNotNull(attachCommand.get(), "the attach reached the server")
+                assertTrue(cmd.exited.await(10, TimeUnit.SECONDS), "the stream nobody holds was closed")
+                val deadline = System.currentTimeMillis() + 5_000
+                while (tmux("list-clients", "-t", "=nt-term-a-1").second.isNotBlank()) {
+                    if (System.currentTimeMillis() > deadline) throw AssertionError("a tmux client is still attached: ${tmux("list-clients").second}")
+                    Thread.sleep(100)
+                }
+            } finally {
+                onCommand = null
+            }
+            assertEquals(0, tmux("has-session", "-t", "=nt-term-a-1").first, "letting go never ends the session")
         }
     }
 

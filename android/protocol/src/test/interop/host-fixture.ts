@@ -113,6 +113,12 @@ async function runRelay(): Promise<void> {
       return persistKey === 'term-big-1' ? bigSnapshot : `screen of ${persistKey}`
     },
     async sessionExists(persistKey) {
+      // `term-slow-*`: the host is still deciding when the phone gives up on the attach (A40). The
+      // request has arrived (and the host has reserved the stream) once `probe` is emitted.
+      if (persistKey.startsWith('term-slow-')) {
+        emit({ event: 'probe', persistKey })
+        await new Promise((r) => setTimeout(r, 300))
+      }
       return !persistKey.startsWith('term-new-')
     },
     write(clientId, sessionId, data) {
@@ -196,6 +202,12 @@ async function runRelay(): Promise<void> {
     subscribeCanvas: () => () => {},
     applyMutation: () => {},
     listProjects: async () => blob,
+    // A viewer on a node is an Eco shield and a size ceiling on the desktop (A18): the phone must
+    // never leave one behind.
+    remoteViewer: {
+      attached: (nodeId) => emit({ event: 'viewer-attached', nodeId }),
+      detached: (nodeId) => emit({ event: 'viewer-detached', nodeId })
+    },
     registerNode: async (projectId, node) => {
       emit({ event: 'registerNode', projectId, node })
       return true

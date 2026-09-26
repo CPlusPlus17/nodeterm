@@ -97,6 +97,16 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
             runCatching { call("pty.kill", buildJsonObject { put("streamId", id) }) }
         }
 
+        /**
+         * [detach] for a stream nobody was handed: its attach was cancelled while the request was on
+         * the wire (audit A40). Non-suspending and quick, since it runs as a continuation's
+         * cancellation handler; the host's answer is not waited for.
+         */
+        fun abandon() {
+            streams.remove(id)
+            socket.request("pty.kill", buildJsonObject { put("streamId", id) }) {}
+        }
+
         override suspend fun endSession() {
             try {
                 call("pty.destroy", buildJsonObject { put("streamId", id) })
@@ -165,7 +175,12 @@ class RelayHostConnection private constructor() : HostConnection, RelaySocketLis
                             // follow the response are processed.
                             val s = Stream(streamId, o.b("fresh") == true, sink)
                             streams[streamId] = s
-                            cont.resume(s)
+                            // A caller cancelled while the request was on the wire never gets this
+                            // stream, and the host has already reserved it (a viewer on the node: an
+                            // Eco shield and a size ceiling on the desktop). Let it go, or nothing
+                            // ever does (audit A40). Also covers a cancel that lands after this
+                            // resume but before the caller runs again.
+                            cont.resume(s) { _, stream, _ -> stream.abandon() }
                         }
                     },
                     onFailure = { cont.resumeWithException(HostException(it.message ?: "Attach failed.")) }

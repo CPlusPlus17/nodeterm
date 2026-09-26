@@ -47,8 +47,11 @@ import dev.nodeterm.protocol.model.InputBar
 import dev.nodeterm.protocol.model.Keys
 import dev.nodeterm.protocol.model.Osc52
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 
 sealed interface TermState {
@@ -459,7 +462,8 @@ class TerminalController(
             try {
                 val conn = if (useRelay) {
                     session.viaRelay { st ->
-                        if (st is RelayConnectStatus.AwaitingApproval) main.post { state = TermState.AwaitingApproval(st.sas) }
+                        // A superseded attach's dial must not put its code over the current screen.
+                        if (st is RelayConnectStatus.AwaitingApproval) main.post { if (slot.isCurrent(ticket)) state = TermState.AwaitingApproval(st.sas) }
                     }
                 } else {
                     session.ensureConnected()
@@ -469,21 +473,31 @@ class TerminalController(
                 // A session this phone is starting: let the host create it in its project, under
                 // the chosen account (audit A33).
                 val hint = PendingLaunches.peek(nodeId)?.let { NewSessionHint(it.projectId, it.accountId, it.agentId) }
-                val s = conn.attach(nodeId, c, r, sink, hint)
-                val lease = StreamLease(s) { st -> graph.scope.launch { runCatching { st.detach() } } }
-                // The host created this session for the launch just now, and the request is consumed
-                // here: the launch holds the stream until it is done, whatever this screen does next
-                // (audit A40). Started BEFORE the hand-off, so a screen that already left cannot
-                // detach the stream under it.
-                val launch = if (hint != null) PendingLaunches.take(nodeId) else null
-                if (launch != null) startLaunch(launch, lease, conn)
-                // The hand-off re-checks the screen: it may have left, or started a newer attach,
-                // since this one began. Then the stream is let go of instead of installed (A40).
-                main.post {
-                    if (!slot.accept(ticket, lease)) return@post
-                    attachedAt = System.currentTimeMillis()
-                    state = TermState.Attached
-                    if (cols > 0 && (cols != c || rows != r)) s.resize(cols, rows)
+                // ON_STOP cancels this job so nothing keeps connecting, or waiting for an approval,
+                // behind a screen nobody sees. That stops here: a screen that left before the attach
+                // went out sends nothing (a pending launch stays for its next attach). From the
+                // request on, nothing is cancelled: the host may already be creating the session and
+                // has reserved a viewer on it, and only a stream that arrives can be let go of (the
+                // hand-off below) and hand its launch on. A cancelled attach dropped both (audit A40).
+                ensureActive()
+                val (s, launch) = withContext(NonCancellable) {
+                    val s = conn.attach(nodeId, c, r, sink, hint)
+                    val lease = StreamLease(s) { st -> graph.scope.launch { runCatching { st.detach() } } }
+                    // The host created this session for the launch just now, and the request is
+                    // consumed here: the launch holds the stream until it is done, whatever this
+                    // screen does next (audit A40). Started BEFORE the hand-off, so a screen that
+                    // already left cannot detach the stream under it.
+                    val launch = if (hint != null) PendingLaunches.take(nodeId) else null
+                    if (launch != null) startLaunch(launch, lease, conn)
+                    // The hand-off re-checks the screen: it may have left, or started a newer attach,
+                    // since this one began. Then the stream is let go of instead of installed (A40).
+                    main.post {
+                        if (!slot.accept(ticket, lease)) return@post
+                        attachedAt = System.currentTimeMillis()
+                        state = TermState.Attached
+                        if (cols > 0 && (cols != c || rows != r)) s.resize(cols, rows)
+                    }
+                    s to launch
                 }
                 if (launch == null && slot.isCurrent(ticket)) afterAttach(s, conn, ticket)
             } catch (e: NeedsRelayException) {
@@ -494,7 +508,8 @@ class TerminalController(
                     else TermState.Ended("$msg Remote access isn't set up for this computer, so open it in nodeterm on the computer.")
                 }
             } catch (e: Exception) {
-                // Includes our own cancel on ON_STOP: the ticket is stale by then, so nothing is shown.
+                // Includes our own cancel on ON_STOP (while connecting, or in afterAttach): the ticket
+                // is stale by then, so nothing is shown.
                 main.post { if (slot.isCurrent(ticket)) state = TermState.Ended(e.message ?: "Couldn't open the terminal.") }
             } finally {
                 // Only this attach's own reference: a newer attach may have replaced it meanwhile.
@@ -644,6 +659,8 @@ class TerminalController(
     fun onStop() {
         if (disposed || stopped) return
         stopped = true
+        // Stops a connect or an approval wait; an attach already sent still lands, and is let go of
+        // by the hand-off (see attach(), A40). onStart begins its own.
         attachJob?.cancel()
         attachJob = null
         // Detaches the stream, unless a launch still holds it: then once that launch is done (A40).

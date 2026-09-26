@@ -74,6 +74,12 @@ interface HostConnection : Closeable {
     val capabilities: HostCapabilities
 
     suspend fun listProjects(): ProjectsSnapshot
+
+    /**
+     * Open a terminal stream on [nodeId]'s session. Cancelling the caller while this is in flight
+     * leaves nothing attached: a stream the transport opened anyway (the request was already on the
+     * wire, or the blocking open finished) is detached, never handed to anyone (audit A40).
+     */
     suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint? = null): TerminalStream
 
     suspend fun wake(nodeId: String)

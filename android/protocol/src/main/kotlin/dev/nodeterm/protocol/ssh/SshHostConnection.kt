@@ -24,8 +24,10 @@ import dev.nodeterm.protocol.model.ProjectInfo
 import dev.nodeterm.protocol.model.ProjectsParser
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.pairing.SshIdentity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
@@ -215,20 +217,33 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
         }
     }
 
-    override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint?): TerminalStream =
-        withContext(Dispatchers.IO) {
-            refuseRemoteNode(nodeId)
-            if (run(SshScripts.hasSession(nodeId)).second.trim() != "yes") throw notRunning(nodeId)
-            val session = client.startSession()
-            try {
-                session.allocatePTY("xterm-256color", cols, rows, 0, 0, emptyMap())
-                val cmd = session.exec("/bin/sh -c " + SshScripts.q(SshScripts.attach(nodeId)))
-                SshStream(session, cmd, fresh = false, sink = sink).also { it.start() }
-            } catch (e: Exception) {
-                runCatching { session.close() }
-                throw HostException("Couldn't open the terminal over SSH: ${e.message}")
+    override suspend fun attach(nodeId: String, cols: Int, rows: Int, sink: TerminalSink, create: NewSessionHint?): TerminalStream {
+        // The blocking open finishes even when the caller is cancelled meanwhile, and withContext
+        // then drops its result: a tmux client attached for the life of the connection, which
+        // nobody holds and nothing detaches (audit A40; the same shape as A20's dial).
+        var opened: SshStream? = null
+        try {
+            return withContext(Dispatchers.IO) {
+                refuseRemoteNode(nodeId)
+                if (run(SshScripts.hasSession(nodeId)).second.trim() != "yes") throw notRunning(nodeId)
+                val session = client.startSession()
+                try {
+                    session.allocatePTY("xterm-256color", cols, rows, 0, 0, emptyMap())
+                    val cmd = session.exec("/bin/sh -c " + SshScripts.q(SshScripts.attach(nodeId)))
+                    SshStream(session, cmd, fresh = false, sink = sink).also {
+                        opened = it
+                        it.start()
+                    }
+                } catch (e: Exception) {
+                    runCatching { session.close() }
+                    throw HostException("Couldn't open the terminal over SSH: ${e.message}")
+                }
             }
+        } catch (e: CancellationException) {
+            opened?.let { s -> withContext(NonCancellable) { s.detach() } }
+            throw e
         }
+    }
 
     /** Node ids of the desktop's SSH projects → `user@host`, from the latest listing. */
     @Volatile private var remoteNodes: Map<String, String> = emptyMap()

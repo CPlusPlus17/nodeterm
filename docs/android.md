@@ -163,8 +163,14 @@ after the screen left (back, or the app going to the background), or from an att
 replaced, is detached instead of shown. A session the phone starts keeps its stream until its launch
 line is typed and the node is registered, even when the user leaves during the settle delay: the
 request was consumed to get there, so a launch dropped half-way could not be retried, and would
-leave an unregistered shell no canvas shows. The terminal screen's use of these rules is only
-type-checked.
+leave an unregistered shell no canvas shows. Going to the background cancels a connect or an
+approval wait, but never an attach already sent: that one still arrives, so it can be let go of and
+hand its launch on. The terminal screen's use of these rules is only type-checked (its source is
+pinned). Both transports also keep the `HostConnection.attach` contract that a cancelled attach
+leaves nothing attached: the relay sends `pty.kill` for a stream whose caller gave up while the
+request was on the wire (`RelayInteropTest`, through the desktop's real host: its viewer on the node
+is released), and SSH detaches a stream whose blocking open finished after its caller was cancelled
+(`SshTransportTest`: no tmux client stays attached).
 
 `InputBarTest` pins the terminal input bar's Send (`A34`, `A41`). While no stream is attached
 (connecting, disconnected, ended), nothing is sent: the screen keeps the draft and an armed Ctrl

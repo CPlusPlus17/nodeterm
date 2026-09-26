@@ -16,6 +16,9 @@ import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.NodeKind
 import dev.nodeterm.protocol.model.SessionBucket
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -198,6 +201,24 @@ class RelayInteropTest {
             sink.awaitText("echo:ls -la")
             stream.write("ünïcødé ✓\r")
             sink.awaitText("echo:ünïcødé ✓")
+        }
+    }
+
+    @Test
+    fun `an attach cancelled while its request is on the wire leaves no viewer on the host`() = runBlocking<Unit> {
+        // A40 review: the host reserves the stream (a viewer on the node: an Eco shield and a size
+        // ceiling on the desktop) before it replies. A caller that gave up meanwhile never gets the
+        // stream, so the transport must let it go, or nothing ever does.
+        val h = start()
+        connect(h).connection.use { conn ->
+            val job = launch(Dispatchers.Default) { conn.attach("term-slow-1", 80, 24, RecordingSink()) }
+            assertEquals("term-slow-1", h.awaitEvent("probe").str("persistKey"), "the request reached the host")
+            assertEquals("term-slow-1", h.awaitEvent("viewer-attached").str("nodeId"))
+            job.cancelAndJoin()
+            assertTrue(job.isCancelled)
+            assertEquals("term-slow-1", h.awaitEvent("viewer-detached", 5_000).str("nodeId"), "the stream was let go of")
+            // The connection is still good for the next attach.
+            conn.attach("term-abc-1", 80, 24, RecordingSink()).detach()
         }
     }
 

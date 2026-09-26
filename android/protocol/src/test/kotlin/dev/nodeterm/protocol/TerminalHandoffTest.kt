@@ -250,4 +250,27 @@ class TerminalHandoffTest {
             runBlocking { PhoneLaunch.start(this, l, "claude", register = null, settle = {}) }
         }
     }
+
+    // ---- (c) going to the background never drops an attach that is on the wire ---------------
+
+    @Test
+    fun `the screen's attach is not cancelled once it is sent, so the hand-off and the launch always run`() {
+        // ON_STOP cancels the attach job. Cancelled inside conn.attach, the attach threw away a
+        // stream the host had already reserved (and was creating the session for) and never took the
+        // pending launch. What the screen does from the request to the hand-off must not be
+        // cancellable; only a device runs the controller, so its source is pinned.
+        val body = AppSourcePins.blockAfter(AppSourcePins.ui("TerminalController.kt"), "fun attach()")
+        AppSourcePins.assertInOrder(
+            body,
+            "ensureActive()",
+            "withContext(NonCancellable) {",
+            "conn.attach(nodeId, c, r, sink, hint)",
+            "PendingLaunches.take(nodeId)",
+            "startLaunch(launch, lease, conn)",
+            "slot.accept(ticket, lease)",
+            "s to launch"
+        )
+        // A superseded attach's dial must not put its approval code over the current screen.
+        AppSourcePins.assertInOrder(body, "RelayConnectStatus.AwaitingApproval", "slot.isCurrent(ticket)", "TermState.AwaitingApproval(")
+    }
 }
