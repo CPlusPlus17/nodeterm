@@ -37,7 +37,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A21](#a21) | medium |  | small | runtime/bug | A denied POST_NOTIFICATIONS is never re-requested, and the Settings switch still reads On |
 | [A22](#a22) | medium |  | small | runtime/bug | The Navigator back stack is not saved across activity recreation, and the original launch intent is re-applied |
 | [A23](#a23) | medium |  | small | security/risk | ✅ fixed in `3d36d60` · Background inbox worker opens unapproved relay connections, raising desktop SAS approval dialogs the phone never shows |
-| [A24](#a24) | medium |  | small | security/bug | SecureStore treats ANY decrypt error as 'absent', so getOrCreate32 permanently overwrites the phone's identity |
+| [A24](#a24) | medium |  | small | security/bug | ✅ fixed in `8e304db` · SecureStore treats ANY decrypt error as 'absent', so getOrCreate32 permanently overwrites the phone's identity |
 | [A25](#a25) | medium |  | medium | parity/gap | No real push notifications: 15-minute background polling, no notification actions, no Live-Activity equivalent, and the desktop's phone-push switches are ignored |
 | [A26](#a26) | medium |  | medium | parity/gap | New session and board edits are unavailable on the LAN (direct-SSH) connection that Auto picks first; iOS does both over SSH |
 | [A27](#a27) | medium |  | large | parity/gap | Cannot connect straight to a Linux dev host or a headless Server Edition (iOS's "phone SSHes into the host" setup) |

@@ -23,6 +23,12 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
 
+### WP4 (medium bugs): in progress
+
+| Finding | Commit | What changed | Checked by |
+|---|---|---|---|
+| A24 | `8e304db` | `SecretStoreCore` (protocol) replaces a stored secret only on positive evidence it is gone (nothing stored, malformed blob, `AEADBadTagException`); anything else is `SecretUnavailableException` and nothing is written. The identity's first write is durable. `SecureStore` generates the Keystore key only when the alias is absent. | `SecretStoreCoreTest` with real AES-GCM. |
+
 ### WP2 (blockers with decisions): done on the branch, not device-verified
 
 | Finding | Commit | What changed | Checked by |
