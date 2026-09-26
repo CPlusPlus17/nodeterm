@@ -4033,6 +4033,18 @@ app.whenReady().then(async () => {
     // canvas Approve/Deny button uses, and the SAME ack pair the `~/.nodeterm/acks` sweep runs for a
     // phone on direct SSH — `ackDone` (resolve the done event, dismiss other phones' activities)
     // plus the desktop unread clear, WITHOUT a re-ack (the external-clear channel).
+    // A phone opening a node of an SSH project reaches THAT host's tmux over the project's master,
+    // or is told why not — never a phantom local session (audit A09).
+    remoteNodes: {
+      resolve: (nodeId: string) => {
+        const projectId = workspaceStore.sshProjectIdForNode(nodeId)
+        if (!projectId) return null
+        const ssh = workspaceStore.projectTargetInfo(projectId)?.ssh
+        const where = ssh?.server ? sshHostKey(ssh.server) : 'another computer'
+        const sshRemote = sshProjectManager?.sshRemoteFor(projectId, ssh?.remoteCwd)
+        return sshRemote ? { where, sshRemote } : { where }
+      }
+    },
     inbox: {
       answerPermission,
       ackRead: (nodeId: string) => {

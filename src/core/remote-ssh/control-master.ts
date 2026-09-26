@@ -475,6 +475,11 @@ export function remoteCapturePaneArgs(conn: SshConnection, controlPath: string, 
     tmuxCmd(`tmux -L ${RMT_TMUX_SOCKET} capture-pane -p -e -t ${sessionId} -S ${full ? '-' : '-200'}`)
   )
 }
+/** The VISIBLE pane of a remote session, with colours — the relay attach snapshot (no history:
+ *  the client paints it as the current screen before live output). */
+export function remoteCaptureScreenArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {
+  return childArgs(conn, controlPath, tmuxCmd(`tmux -L ${RMT_TMUX_SOCKET} capture-pane -p -e -t ${sessionId}`))
+}
 /**
  * Ask the REMOTE tmux when a node's session was created, AND what the host's clock says now — in
  * one round trip, because the caller wants an AGE and the two clocks are not the same clock.

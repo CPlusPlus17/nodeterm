@@ -75,6 +75,10 @@ export interface HostPtyManager {
   /** Does a tmux session for this node id exist RIGHT NOW? Asked before `attachDetached`, which
    *  CREATES one when it doesn't — so the client can tell a warm join from a cold start. */
   sessionExists(persistKey: string): Promise<boolean>
+  /** `sessionExists` / `captureSnapshot` for a node on an SSH project's host (see HostRemoteNodes).
+   *  Optional: absent ⇒ remote nodes are refused rather than attached locally. */
+  sessionExistsOver?(persistKey: string, sshRemote: NonNullable<PtyCreateOptions['sshRemote']>): Promise<boolean>
+  captureSnapshotOver?(persistKey: string, sshRemote: NonNullable<PtyCreateOptions['sshRemote']>): Promise<string>
   /** `clientId` identifies WHO typed (the bridged phone's presence peer), so the keystroke can be
    *  attributed to it — null when this session has no peer, which just means it is not badged. */
   write(clientId: number | null, sessionId: string, data: string): void
@@ -205,6 +209,21 @@ export interface HostInboxOps {
   ackRead(nodeId: string): void
 }
 
+/**
+ * Nodes of the desktop's SSH projects live on ANOTHER machine: their tmux session is on that host,
+ * reached over the project's ControlMaster. A relay `pty.attach` used to attach them to the
+ * desktop's LOCAL tmux, which created an empty phantom `nt-<id>` here and had the phone offer to
+ * resume the agent on the wrong machine (audit A09) — against the rule that a remote node is never
+ * spawned locally. With this injected, such a node is attached over its master or refused.
+ */
+export interface HostRemoteNodes {
+  /**
+   * `null` = a local node. Otherwise the node's host (`user@host`, for the refusal text) and, when
+   * the project's ControlMaster is connected and its setup finished, the `sshRemote` to attach over.
+   */
+  resolve(nodeId: string): { where: string; sshRemote?: NonNullable<PtyCreateOptions['sshRemote']> } | null
+}
+
 interface Stream {
   sessionId: string
   /** The node id (tmux persistKey) this stream attached to. The ONLY tmux target a client can
@@ -291,7 +310,10 @@ export function createHostHandlers(
   // Absent ⇒ the verbs answer an honest "not served".
   kanban?: HostKanbanOps,
   // Inbox actions (`approvals.answer` / `inbox.ack`). Absent ⇒ the verbs answer "not served".
-  inbox?: HostInboxOps
+  inbox?: HostInboxOps,
+  // Which nodes belong to an SSH project, and how to reach their host (see HostRemoteNodes).
+  // Absent ⇒ every node is attached locally, as before (the Server Edition has no SSH projects).
+  remoteNodes?: HostRemoteNodes
 ): HostHandlers {
   // streamId -> Stream. PTY callbacks close over their own `streamId` directly, so no
   // reverse (sessionId -> streamId) index is needed.
@@ -393,6 +415,27 @@ export function createHostHandlers(
     const cols = Math.max(1, num(p.cols, 80))
     const rows = Math.max(1, num(p.rows, 24))
 
+    // A node of an SSH project: attach it over that project's ControlMaster, or refuse — never a
+    // local session (audit A09). Resolved before a stream is reserved, so a refusal leaves nothing.
+    let remote: NonNullable<PtyCreateOptions['sshRemote']> | undefined
+    let owner: ReturnType<HostRemoteNodes['resolve']> = null
+    try {
+      owner = remoteNodes?.resolve(nodeId) ?? null
+    } catch {
+      owner = null
+    }
+    if (owner) {
+      if (!owner.sshRemote || !pty.sessionExistsOver || !pty.captureSnapshotOver) {
+        socket.respond(req.id, false, {
+          message:
+            `This session runs on ${owner.where}, and your computer is not connected to it right now. ` +
+            'Open that project in nodeterm on the computer, then try again.'
+        })
+        return
+      }
+      remote = owner.sshRemote
+    }
+
     const streamId = ++streamCounter
     const stream: Stream = { sessionId: '', persistKey: nodeId, seq: 0, paused: false }
     const sinks = makeSinks(streamId, stream, p.resizedFrames === true)
@@ -421,11 +464,11 @@ export function createHostHandlers(
     // the 6 s probe timeout when tmux itself is wedged.
     void (async () => {
       const existed = await Promise.race([
-        pty.sessionExists(nodeId).catch(() => true),
+        (remote ? pty.sessionExistsOver!(nodeId, remote) : pty.sessionExists(nodeId)).catch(() => true),
         new Promise<boolean>((r) => setTimeout(() => r(true), FRESH_PROBE_BUDGET_MS))
       ])
       socket.respond(req.id, true, { streamId, fresh: !existed })
-      return pty.captureSnapshot(nodeId).catch(() => '')
+      return (remote ? pty.captureSnapshotOver!(nodeId, remote) : pty.captureSnapshot(nodeId)).catch(() => '')
     })()
       .then((snapshot) => {
         // The stream may have been killed/closed while the capture was in flight.
@@ -433,7 +476,11 @@ export function createHostHandlers(
         // Snapshot first (current screen) — then live output begins on attach.
         sendSnapshot(streamId, stream, snapshot)
         try {
-          stream.sessionId = pty.attachDetached(nodeId, sinks, { cols, rows })
+          // `requireRemote`: if the master died since `resolve`, spawn NOTHING rather than fall
+          // through to a local session (PtyCreateOptions.requireRemote).
+          stream.sessionId = remote
+            ? pty.attachDetached(nodeId, sinks, { cols, rows, sshRemote: remote, requireRemote: true })
+            : pty.attachDetached(nodeId, sinks, { cols, rows })
         } catch {
           // Attach failed (e.g. tmux unavailable) — surface as an exit so the client tears down.
           socket.sendFrame(
@@ -1157,6 +1204,8 @@ export interface HostSessionOptions {
   /** Inbox actions for a relay phone (`approvals.answer` / `inbox.ack`). Optional: absent ⇒ the
    *  verbs answer an honest "not served". */
   inbox?: HostInboxOps
+  /** SSH-project nodes: attach over their master, never locally. Optional (see HostRemoteNodes). */
+  remoteNodes?: HostRemoteNodes
   /** Extra fs/git jail roots beyond the shared canvas's node cwds — production passes the
    *  workspace's local project cwds: the phone browses EVERY project over `projects.list`, so a
    *  canvas-only jail denied whichever project the desktop didn't happen to have focused. */
@@ -1282,7 +1331,8 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
     opts.remoteViewer,
     opts.nodeActions,
     opts.kanban,
-    opts.inbox
+    opts.inbox,
+    opts.remoteNodes
   )
   canvasSync = createHostCanvasSync(socket, opts.applyMutation)
   unsubCanvas = opts.subscribeCanvas(() => scheduleBroadcast())
@@ -1315,6 +1365,8 @@ export interface HostBridgeDeps {
   kanban?: HostKanbanOps
   /** Inbox actions for a relay phone — the same answer writer / read-ack the desktop itself uses. */
   inbox?: HostInboxOps
+  /** SSH-project nodes attach over their project's ControlMaster, or are refused (audit A09). */
+  remoteNodes?: HostRemoteNodes
   /** Workspace-level jail roots (local project cwds) merged with the canvas node cwds. */
   workspaceRoots?: () => string[]
 }
@@ -1390,6 +1442,7 @@ export function initRemoteHost(
       nodeActions: bridge.nodeActions,
       kanban: bridge.kanban,
       inbox: bridge.inbox,
+      remoteNodes: bridge.remoteNodes,
       extraRoots: bridge.workspaceRoots,
       // Typing attribution: this session's input frames are this phone's keystrokes.
       getClientId: () => phone.id(),

@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'crypto'
 import { spawn, execFile, execFileSync } from 'child_process'
 import { app, ipcMain } from 'electron'
 import { IPC } from '../../shared/ipc'
+import type { PtyCreateOptions } from '../../shared/types'
 import { getMainWindow, sendToMain } from '../main-window'
 import {
   parseLsDirs,
@@ -1473,6 +1474,26 @@ export class SshProjectManager {
   ): { conn: SshConnection; controlPath: string; remoteCwd?: string } | undefined {
     const c = this.conns.get(projectId)
     return c ? { conn: c.conn, controlPath: c.controlPath, remoteCwd: c.remoteCwd } : undefined
+  }
+
+  /**
+   * The full `sshRemote` a pty needs to run a node of this project on its host — the same fields
+   * the renderer assembles from a `connected` status. `undefined` while no master exists or while
+   * the connect's setup chain is still running (a session created before the hook tunnel and the
+   * remote tmux.conf are in place would have neither — see `connectOnce`). Used by the relay host so
+   * a phone's attach of an SSH-project node runs on the host, never locally (audit A09).
+   */
+  sshRemoteFor(projectId: string, fallbackRemoteCwd?: string): NonNullable<PtyCreateOptions['sshRemote']> | undefined {
+    const c = this.conns.get(projectId)
+    if (!c || this.inFlight.has(projectId)) return undefined
+    return {
+      controlPath: c.controlPath,
+      conn: c.conn,
+      remoteCwd: c.remoteCwd ?? fallbackRemoteCwd ?? '~',
+      ...(c.hookEndpointPath ? { hookEndpointPath: c.hookEndpointPath } : {}),
+      ...(c.tmuxConfPath ? { tmuxConfPath: c.tmuxConfPath } : {}),
+      ...(c.remoteHome ? { remoteHome: c.remoteHome } : {})
+    }
   }
 
   /** Does this project already have a master, or an attempt in flight? The pre-warm's gate — it

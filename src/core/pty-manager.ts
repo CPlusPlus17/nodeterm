@@ -32,6 +32,7 @@ import {
   type RemoteSessionEnv,
   remotePasteDelivery,
   remoteCapturePaneArgs,
+  remoteCaptureScreenArgs,
   remotePaneCommandArgs,
   remoteSessionAgeArgs,
   parseSessionAge,
@@ -2480,6 +2481,37 @@ export class PtyManager {
         sshRemote.conn
       )) === 'present'
     )
+  }
+
+  /**
+   * `sessionExists` for a node on an SSH project's host — the relay host's `pty.attach` asks it
+   * before attaching over the master (audit A09). Same fold as `create()`: only tmux's own "no such
+   * session" is absence; an unreadable host answers "exists", so nothing cold-restores a live pane.
+   */
+  async sessionExistsOver(
+    persistKey: string,
+    sshRemote: NonNullable<PtyCreateOptions['sshRemote']>
+  ): Promise<boolean> {
+    return this.remoteSessionExists(sshRemote, sessionName(persistKey))
+  }
+
+  /** `captureSnapshot` for a node on an SSH project's host: its visible pane, with colours. */
+  async captureSnapshotOver(
+    persistKey: string,
+    sshRemote: NonNullable<PtyCreateOptions['sshRemote']>
+  ): Promise<string> {
+    const ssh = findSsh()
+    if (!ssh) return ''
+    try {
+      const { stdout } = await runAsync(
+        ssh,
+        remoteCaptureScreenArgs(sshRemote.conn, sshRemote.controlPath, sessionName(persistKey)),
+        { encoding: 'utf-8', maxBuffer: 50 * 1024 * 1024, timeout: PROBE_TIMEOUT_MS }
+      )
+      return stdout
+    } catch {
+      return ''
+    }
   }
 
   /** One coalesced remote `tmux list-sessions` per ControlMaster (see remote-session-index.ts).

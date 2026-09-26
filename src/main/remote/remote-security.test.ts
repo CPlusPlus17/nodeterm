@@ -5,7 +5,7 @@
 //   R4 — killing a stream forgets it in the SAME synchronous turn, so a late Input frame for that
 //        streamId can never be written into a session that is already released.
 import { describe, expect, it, vi } from 'vitest'
-import { createHostHandlers, type HostFsOps, type HostPtyManager, type HostRelaySocket } from './host-service'
+import { createHostHandlers, type HostFsOps, type HostPtyManager, type HostRelaySocket, type HostRemoteNodes } from './host-service'
 import { genKeyPair, deriveSharedKey, sasFromSharedKey, publicKeyToB64 } from './e2ee'
 import { connectRelay, type RelaySocket, type RelayTransport } from './relay-socket'
 import { OP, type Frame } from './framing'
@@ -620,5 +620,84 @@ describe('remoteViewer presence reporting', () => {
     expect(base.pty.write).toHaveBeenCalledWith(null, 'sess', 'echo ok\n')
     handlers.onRpc({ id: 'k', method: 'pty.kill', params: { streamId: 1 } })
     expect(base.responses.at(-1)).toMatchObject({ id: 'k', ok: true })
+  })
+})
+
+// Audit A09: a node of an SSH project lives on ANOTHER host. The relay used to attach it to the
+// desktop's LOCAL tmux — creating a phantom `nt-<id>` here and offering to resume the agent on the
+// wrong machine. It is now attached over the project's ControlMaster, or refused.
+describe('pty.attach of an SSH-project node never runs locally', () => {
+  const sshRemote = {
+    controlPath: '/tmp/cm.sock',
+    conn: { host: 'box', user: 'me' },
+    remoteCwd: '~/repo',
+    hookEndpointPath: '/home/me/.nodeterm/hook.env'
+  }
+  const handlersWith = (
+    pty: HostPtyManager,
+    socket: HostRelaySocket,
+    fs: HostFsOps,
+    resolve: HostRemoteNodes['resolve']
+  ): ReturnType<typeof createHostHandlers> =>
+    createHostHandlers(
+      pty, socket, fs, () => ['/work'],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      { resolve }
+    )
+  const addRemote = (pty: HostPtyManager): HostPtyManager =>
+    Object.assign(pty, {
+      sessionExistsOver: vi.fn(async () => false),
+      captureSnapshotOver: vi.fn(async () => 'REMOTE SCREEN')
+    })
+
+  it('attaches over the master, requireRemote, with the host freshness and snapshot', async () => {
+    const { socket, responses, fs, pty } = makeHostFakes()
+    addRemote(pty)
+    const handlers = handlersWith(pty, socket, fs, (id) => (id === 'node-r' ? { where: 'me@box', sshRemote } : null))
+    handlers.onRpc({ id: 'r', method: 'pty.attach', params: { nodeId: 'node-r', cols: 90, rows: 30 } })
+    await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
+    expect(responses[0]).toMatchObject({ ok: true, body: { fresh: true } })
+    expect(pty.sessionExists).not.toHaveBeenCalled()
+    expect(pty.captureSnapshot).not.toHaveBeenCalled()
+    expect(pty.sessionExistsOver).toHaveBeenCalledWith('node-r', sshRemote)
+    expect(pty.captureSnapshotOver).toHaveBeenCalledWith('node-r', sshRemote)
+    expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({
+      cols: 90,
+      rows: 30,
+      sshRemote,
+      requireRemote: true
+    })
+  })
+
+  it('refuses, naming the host, when the project is not connected — nothing is attached', async () => {
+    const { socket, responses, fs, pty } = makeHostFakes()
+    addRemote(pty)
+    const handlers = handlersWith(pty, socket, fs, () => ({ where: 'me@box' }))
+    handlers.onRpc({ id: 'r', method: 'pty.attach', params: { nodeId: 'node-r', cols: 80, rows: 24 } })
+    await vi.waitFor(() => expect(responses.length).toBe(1))
+    expect(responses[0]).toMatchObject({ ok: false, body: { message: expect.stringContaining('me@box') } })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(pty.attachDetached).not.toHaveBeenCalled()
+    expect(pty.sessionExists).not.toHaveBeenCalled()
+  })
+
+  it('refuses rather than falls back when the pty manager cannot reach remote hosts', async () => {
+    const { socket, responses, fs, pty } = makeHostFakes()
+    const handlers = handlersWith(pty, socket, fs, () => ({ where: 'me@box', sshRemote }))
+    handlers.onRpc({ id: 'r', method: 'pty.attach', params: { nodeId: 'node-r', cols: 80, rows: 24 } })
+    await vi.waitFor(() => expect(responses.length).toBe(1))
+    expect(responses[0].ok).toBe(false)
+    expect(pty.attachDetached).not.toHaveBeenCalled()
+  })
+
+  it('a local node is attached exactly as before', async () => {
+    const { socket, responses, fs, pty } = makeHostFakes()
+    addRemote(pty)
+    const handlers = handlersWith(pty, socket, fs, () => null)
+    handlers.onRpc({ id: 'l', method: 'pty.attach', params: { nodeId: 'node-l', cols: 80, rows: 24 } })
+    await vi.waitFor(() => expect(pty.attachDetached).toHaveBeenCalled())
+    expect(responses[0].ok).toBe(true)
+    expect((pty.attachDetached as ReturnType<typeof vi.fn>).mock.calls[0][2]).toEqual({ cols: 80, rows: 24 })
+    expect(pty.sessionExistsOver).not.toHaveBeenCalled()
   })
 })
