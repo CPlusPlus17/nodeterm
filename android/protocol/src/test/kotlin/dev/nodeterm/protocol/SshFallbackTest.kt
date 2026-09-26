@@ -64,7 +64,9 @@ class SshFallbackTest {
         }
         // The bare exception names the likely causes before the alarming one.
         val fact = changed.message!!
-        assertTrue(fact.indexOf("network address") < fact.indexOf("intercepting"), fact)
+        val causes = fact.indexOf("network address")
+        assertTrue(causes >= 0, fact) // indexOf answers -1 for a missing text, which is "earlier"
+        assertTrue(causes < fact.indexOf("intercepting"), fact)
     }
 
     @Test

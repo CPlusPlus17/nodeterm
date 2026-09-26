@@ -33,6 +33,13 @@ class Osc52Test {
     }
 
     @Test
+    fun `a selection field longer than any xterm uses is not a clipboard write`() {
+        val sel = "c".repeat(Osc52.MAX_SELECTION)
+        assertEquals(Result.Copy("x"), Osc52.parse(sel + ";" + b64("x")))
+        assertEquals(Result.Ignored, Osc52.parse(sel + "c;" + b64("x")))
+    }
+
+    @Test
     fun `a read query and an empty payload copy nothing`() {
         assertEquals(Result.Ignored, Osc52.parse("c;?"))
         assertEquals(Result.Ignored, Osc52.parse(";?"))

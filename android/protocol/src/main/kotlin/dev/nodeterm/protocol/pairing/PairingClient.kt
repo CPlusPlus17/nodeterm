@@ -36,6 +36,20 @@ class PairingException(message: String) : Exception(message) {
             val detail = if (own.isNotEmpty()) "${e.javaClass.simpleName}: ${own.take(200)}" else e.javaClass.simpleName
             return "Pairing failed unexpectedly ($detail). Scan the code again."
         }
+
+        /** The longest refusal text from the computer shown on the pairing screen. The desktop's
+         *  own refusals are one sentence (under 200 characters); the endpoint is whatever the
+         *  pairing payload names, so what it sends is untrusted and must not fill the screen. */
+        const val MAX_REFUSAL_CHARS = 300
+
+        /** A non-2xx body as the pairing screen may show it: control characters dropped (a line
+         *  break or an escape sequence has no business in a one-line error), whitespace collapsed,
+         *  and cut at [MAX_REFUSAL_CHARS]. Empty when nothing printable is left. */
+        fun refusalText(body: String): String {
+            val flat = body.map { if (it.isISOControl() || it == '\u2028' || it == '\u2029') ' ' else it }
+                .joinToString("").trim().replace(Regex("\\s+"), " ")
+            return if (flat.length <= MAX_REFUSAL_CHARS) flat else flat.take(MAX_REFUSAL_CHARS).trimEnd() + "…"
+        }
     }
 }
 
@@ -122,8 +136,9 @@ class PairingClient(
 
         val (status, text) = exchange(payload.host, payload.pairPort, "/pair", body)
         if (status !in 200..299) {
+            val said = PairingException.refusalText(text)
             throw PairingException(
-                if (text.isNotBlank()) "The computer rejected pairing: ${text.trim()}"
+                if (said.isNotEmpty()) "The computer rejected pairing: $said"
                 else "The computer rejected pairing (HTTP $status)."
             )
         }

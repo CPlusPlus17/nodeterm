@@ -233,6 +233,33 @@ class PairingClientBoundsTest {
     }
 
     @Test
+    fun `a refusal body is shown as one bounded line`() {
+        // The desktop's own refusals are one plain sentence and reach the screen unchanged.
+        val desktop = "remote access is off on the computer. On Windows the phone connects only through remote access."
+        val plain = ScriptedServer { sock -> sock.send("HTTP/1.1 409 Conflict\r\nContent-Length: ${desktop.length}\r\n\r\n$desktop") }
+        assertEquals("The computer rejected pairing: $desktop", assertFailsWith<PairingException> { pair(plain.port) }.message)
+
+        // Whatever else answers on the pairing port may send anything: line breaks, escape
+        // sequences, pages of text. The screen gets one line, cut at the cap.
+        val hostile = "line one\r\n\u001b[31mred\u001b[0m\tand " + "x".repeat(10_000)
+        val bytes = hostile.toByteArray(Charsets.UTF_8)
+        val noisy = ScriptedServer { sock ->
+            sock.send("HTTP/1.1 403 Forbidden\r\nContent-Length: ${bytes.size}\r\n\r\n")
+            sock.getOutputStream().write(bytes)
+            sock.getOutputStream().flush()
+        }
+        val msg = assertFailsWith<PairingException> { pair(noisy.port) }.message!!
+        assertTrue(msg.startsWith("The computer rejected pairing: line one [31mred [0m and xxx"), msg)
+        assertTrue(msg.none { it.isISOControl() }, "control characters reached the screen")
+        assertTrue(msg.endsWith("…"), msg)
+        assertEquals("The computer rejected pairing: ".length + PairingException.MAX_REFUSAL_CHARS + 1, msg.length)
+
+        // Nothing printable left: the status code, not an empty quote.
+        val blank = ScriptedServer { sock -> sock.send("HTTP/1.1 403 Forbidden\r\nContent-Length: 3\r\n\r\n\r\n\u0007") }
+        assertEquals("The computer rejected pairing (HTTP 403).", assertFailsWith<PairingException> { pair(blank.port) }.message)
+    }
+
+    @Test
     fun `anything that is not a PairingException is framed as a sentence`() {
         val framed = PairingException.userMessage(NegativeArraySizeException("-1"))
         assertEquals("Pairing failed unexpectedly (NegativeArraySizeException: -1). Scan the code again.", framed)

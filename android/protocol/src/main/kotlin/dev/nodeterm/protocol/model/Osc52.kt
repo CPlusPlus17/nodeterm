@@ -27,6 +27,13 @@ import java.nio.charset.CodingErrorAction
  */
 object Osc52 {
     /**
+     * The longest selection field (the part before the `;`) accepted: xterm's own are `c`, `p`,
+     * `q`, `s` and `0`-`7`, possibly several together. A longer field is not a clipboard write we
+     * understand, and terminal.js drops it before the bridge so it cannot carry megabytes across.
+     */
+    const val MAX_SELECTION = 16
+
+    /**
      * The most text the phone hands the clipboard, in UTF-16 code units (a Kotlin `String`'s
      * length). At two bytes a unit the parcel stays around 200 KB: a fifth of the shared binder
      * buffer, and far more than a screen of copy-mode selection.
@@ -61,7 +68,7 @@ object Osc52 {
 
     fun parse(data: String): Result {
         val i = data.indexOf(';')
-        if (i < 0) return Result.Ignored
+        if (i < 0 || i > MAX_SELECTION) return Result.Ignored
         // Length first: xterm.js accepts OSC payloads up to 10,000,000 characters, and there is no
         // reason to copy one out of `data` only to refuse it.
         if (data.length - i - 1 > MAX_BASE64) return Result.TooLarge

@@ -60,6 +60,9 @@
   term.parser.registerOscHandler(52, function (data) {
     var idx = data.indexOf(';')
     if (idx < 0) return true
+    // The selection field before the ';' is a few letters ('c', 'p', 's0'…); a long one is not a
+    // clipboard write we understand, and it must not carry megabytes across the bridge either.
+    if (idx > 16) return true // = Osc52.MAX_SELECTION
     if (data.length - idx - 1 > copyLimit) bridge.onCopyTooLarge()
     else bridge.onCopy(data)
     return true

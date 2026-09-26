@@ -92,6 +92,15 @@ class TerminalJsOsc52Test {
     }
 
     @Test
+    fun `a long selection field never crosses the bridge, whatever the payload`() {
+        val atMax = "c".repeat(Osc52.MAX_SELECTION) + ";SGVsbG8="
+        val tooLong = "c".repeat(2_000_000) + ";SGVsbG8="
+        val (_, results) = run(copyLimit = Osc52.MAX_BASE64, listOf(atMax, tooLong))
+        assertEquals(Outcome(true, listOf(copied(atMax))), results[0])
+        assertEquals(Outcome(true, emptyList()), results[1])
+    }
+
+    @Test
     fun `the payload tmux forwards under the desktop's cap never reaches onCopy`() {
         // 986,675 base64 characters: what the audit's verifier measured tmux 3.4 forwarding.
         val huge = "c;" + "A".repeat(986_675)
