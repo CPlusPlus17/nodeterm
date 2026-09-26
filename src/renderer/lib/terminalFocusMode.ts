@@ -13,7 +13,7 @@
  * - **ON — focus follows the pointer.** Unchanged: hover dwell takes the keyboard, leaving the
  *   node gives it back.
  * - **OFF — click to focus.** The pointer decides nothing. A click on the terminal (the guard's
- *   `onGuardUp` → `enterNow`, issue #87) or a "go to node" request takes the keyboard, and the
+ *   `onGuardClick` → `enterNow`, issue #87) or a "go to node" request takes the keyboard, and the
  *   terminal KEEPS it until focus really goes somewhere else: another node, the empty canvas
  *   (whose `onPaneClick` blurs the xterm textarea, issue #86), a text field. The node's active
  *   flag, presence focus and hover guard then follow that DOM focus instead of the pointer — see
@@ -102,4 +102,31 @@ export function focusLossOutcome(e: FocusLossEvent): FocusLossOutcome {
   if (e.gained && e.nodeRoot.contains(e.gained)) return 'keep'
   if (e.pressedInOwnNode) return 'reclaim'
   return 'release'
+}
+
+export interface OutsidePress {
+  /** This node is the agent-status `activeId` (the one whose finishes are "being watched"). */
+  isActive: boolean
+  /** The press landed on this node (its React Flow wrapper, header included). */
+  pressInsideNode: boolean
+  /** `document.activeElement` is inside this node's root at the time of the press. */
+  focusInsideNode: boolean
+}
+
+/**
+ * Click to focus: does a press ANYWHERE ELSE release a node that holds no DOM focus?
+ *
+ * `focusLossOutcome` can only answer for a node that had focus to lose. Activity is also claimed
+ * without it: a "go to node" while the ⌘M view covers the xterm (`enterNow` reports activity, but
+ * `focusXtermUnlessCovered` deliberately leaves the hidden terminal unfocused) and Canvas's own
+ * `setActive` on a sidebar or notification jump. With focus-follows-pointer, `mouseleave` cleaned
+ * that up; with click to focus nothing did, and a stale active flag makes Canvas treat the node as
+ * watched — its next finish never gets an unread dot — and leaves presence saying "working here".
+ *
+ * So a press outside such a node is the user clicking elsewhere, which is the release #757 names.
+ * A node that DOES hold focus is left to its own `focusout` (the press may not move focus at all —
+ * a pane drag, a scroll — and then it rightly keeps the keyboard).
+ */
+export function outsidePressReleases(p: OutsidePress): boolean {
+  return p.isActive && !p.pressInsideNode && !p.focusInsideNode
 }

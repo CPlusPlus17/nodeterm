@@ -4,6 +4,7 @@ import { join } from 'path'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import {
   focusLossOutcome,
+  outsidePressReleases,
   hoverTakesKeyboard,
   pointerLeaveReleases,
   resolveFocusFollowsPointer
@@ -103,6 +104,29 @@ describe('terminal focus mode (#757)', () => {
     })
   })
 
+  describe('outsidePressReleases', () => {
+    // Activity can be claimed without this node ever holding DOM focus: "go to node" while the ⌘M
+    // view covers the xterm (`focusXtermUnlessCovered` deliberately does not focus it), and Canvas's
+    // own `setActive` on a sidebar / notification jump. No `focusout` can come from a node that has
+    // no focus, and with click to focus `mouseleave` no longer releases either — so a stale active
+    // flag suppressed the unread dot for that node until something else became active.
+    it('releases a node that claims activity but holds no focus when the user presses elsewhere', () => {
+      expect(outsidePressReleases({ isActive: true, pressInsideNode: false, focusInsideNode: false })).toBe(true)
+    })
+
+    it('leaves a node alone whose focus will report its own loss (the focusout path owns that)', () => {
+      expect(outsidePressReleases({ isActive: true, pressInsideNode: false, focusInsideNode: true })).toBe(false)
+    })
+
+    it('never releases on a press inside the node itself', () => {
+      expect(outsidePressReleases({ isActive: true, pressInsideNode: true, focusInsideNode: false })).toBe(false)
+    })
+
+    it('has nothing to release when the node is not the active one', () => {
+      expect(outsidePressReleases({ isActive: false, pressInsideNode: false, focusInsideNode: false })).toBe(false)
+    })
+  })
+
   // The decisions above are only worth something if the node and the settings page use them. A
   // source check, like `focusRestore.test.ts`: TerminalNode cannot be mounted without an xterm.
   describe('wiring', () => {
@@ -114,6 +138,7 @@ describe('terminal focus mode (#757)', () => {
       expect(src).toContain('hoverTakesKeyboard(focusFollowsPointer)')
       expect(src).toContain('pointerLeaveReleases(focusFollowsPointer)')
       expect(src).toContain('focusLossOutcome(')
+      expect(src).toContain('outsidePressReleases(')
     })
 
     it('Settings → Behavior offers the toggle, findable by search', () => {

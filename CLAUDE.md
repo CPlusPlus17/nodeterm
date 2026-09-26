@@ -1263,13 +1263,19 @@ session.
   the dwell the guard is removed and xterm takes input. The header stays draggable.
 - **Click to focus** (`settings.terminalFocusFollowsPointer`, default ON = the dwell above; issue
   #757, Settings → Behavior). Off, the pointer decides nothing: no dwell, and `mouseleave` no
-  longer blurs, re-arms or releases. A click (`onGuardUp` → `enterNow`) or a "go to node" takes the
+  longer blurs, re-arms or releases. A click (`HoverGuard` pointer events → `onGuardClick` → `enterNow`) or a "go to node" takes the
   keyboard, and the node's active flag, presence focus AND guard then follow DOM focus through a
   `focusin`/`focusout` listener on the node root (`lib/terminalFocusMode.ts` `focusLossOutcome`):
   focus moving inside the node or the WINDOW blurring (Cmd+Tab) keeps it, a press on the node's own
   chrome (header drag — React Flow focuses its wrapper) hands it back to the xterm, anything else —
   another node, a field, the empty canvas (`onPaneClick` blurs the xterm textarea,
-  `shouldReleasePaneFocus`) — releases it and re-arms the guard. Only a literal `false` in
+  `shouldReleasePaneFocus`) — releases it and re-arms the guard. Activity claimed WITHOUT focus
+  (go-to-node under the ⌘M view, Canvas's own `setActive` on a jump) has no focusout, so a
+  document capture `pointerdown` outside the node releases it (`outsidePressReleases`) — else the
+  stale `activeId` suppresses that node's unread dot. The guard listens to POINTER events
+  (`nodes/HoverGuard.tsx`): React Flow's d3-drag swallows a left `mousedown`/`mouseup` on a
+  draggable node before React sees them, so the old mouse-event guard never received a left click
+  (#87's click-to-focus only ever worked through the dwell). Only a literal `false` in
   settings.json selects it (`resolveFocusFollowsPointer`). The ⌘/ shortcuts panel prints "Click" instead of
   the dwell. Renderer only: Desktop + Server Edition identical; kanban card modal N/A (it has no
   hover guard); Mobile N/A.
