@@ -106,6 +106,17 @@ fun HostScreen(nav: Navigator, hostId: String, initialTab: Int) {
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             ConnectionBanner(state, session)
+            // A listing that failed on a connection that is still up (e.g. nodeterm's data not found
+            // over SSH) used to be invisible: the screen just stayed empty (audit A31).
+            val listError by session.lastError.collectAsState()
+            val err = listError
+            if (state is ConnState.Connected && err != null) {
+                Text(
+                    err,
+                    Modifier.fillMaxWidth().background(NtColors.attention.copy(alpha = 0.12f)).padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             TabRow(selectedTabIndex = tab) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Sessions") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Board") })

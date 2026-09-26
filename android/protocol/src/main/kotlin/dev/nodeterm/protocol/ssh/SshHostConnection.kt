@@ -29,6 +29,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import net.schmizz.keepalive.KeepAliveProvider
+import net.schmizz.keepalive.KeepAliveRunner
 import net.schmizz.sshj.DefaultConfig
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.Buffer
@@ -89,18 +91,35 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
      * never as a raw sshj exception a caller would have to know about.
      */
     internal fun run(script: String, timeoutSec: Long = 20): Pair<Int?, String> {
+        // A REAL deadline (audit A31): the read below waits on the channel with no timeout of its
+        // own, so a peer that vanished mid-command (laptop asleep, IP or VPN change) blocked it for
+        // as long as TCP took to give up — ~15 minutes. When the deadline passes, the connection is
+        // treated as dead: the transport is torn down (which also wakes the blocked read) and the
+        // drop is reported, so Auto falls back to the relay instead of sitting on "On your network".
+        var timedOut = false
+        val deadline = WATCHDOG.schedule({
+            timedOut = true
+            disconnectQuietly()
+        }, timeoutSec, TimeUnit.SECONDS)
         try {
             client.startSession().use { session ->
                 val cmd = session.exec("/bin/sh -c " + SshScripts.q(script))
                 val out = cmd.inputStream.readBytes()
-                cmd.join(timeoutSec, TimeUnit.SECONDS)
+                cmd.join(5, TimeUnit.SECONDS)
+                if (timedOut) throw java.util.concurrent.TimeoutException("no answer within ${timeoutSec}s")
                 return cmd.exitStatus to String(out, Charsets.UTF_8)
             }
         } catch (e: HostException) {
             throw e
         } catch (e: Exception) {
-            if (!isConnected) fireClosed(e.message)
+            // A command that cannot even be run (the channel would not open, the transport timed out,
+            // the deadline passed) says the CONNECTION is unusable, whatever `isConnected` claims:
+            // drop it and report the drop, so the owner reconnects — or falls back to the relay.
+            disconnectQuietly()
+            fireClosed(e.message ?: e.javaClass.simpleName)
             throw HostException("The SSH connection failed: ${e.message ?: e.javaClass.simpleName}")
+        } finally {
+            deadline.cancel(false)
         }
     }
 
@@ -424,6 +443,15 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
     }
 
     companion object {
+        /** A dead peer is noticed within about interval × missed (≈45 s). */
+        const val KEEPALIVE_INTERVAL_SEC = 15
+        const val KEEPALIVE_MAX_MISSED = 3
+
+        /** One daemon timer for every [run] deadline. */
+        private val WATCHDOG = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "nodeterm-ssh-watchdog").apply { isDaemon = true }
+        }
+
         const val NO_USER_DATA = "nodeterm's data wasn't found on this computer over SSH (looked for " +
             "~/Library/Application Support/node-terminal and ~/.config/node-terminal). Open nodeterm on the computer " +
             "once, or connect through the relay."
@@ -444,7 +472,11 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
             connectTimeoutMs: Int = 8_000,
             socketFactory: SocketFactory? = null
         ): SshHostConnection {
-            val client = SSHClient(DefaultConfig())
+            // KEEP_ALIVE, not sshj's default HEARTBEAT: a heartbeat is an SSH_MSG_IGNORE that expects
+            // no reply, so it never notices a dead peer. keepalive@openssh.com wants a reply and
+            // kills the transport after [KEEPALIVE_MAX_MISSED] misses, which fires the disconnect
+            // listener below → onClosed → the owner reconnects or falls back (audit A31).
+            val client = SSHClient(DefaultConfig().apply { keepAliveProvider = KeepAliveProvider.KEEP_ALIVE })
             if (socketFactory != null) client.socketFactory = socketFactory
             var mismatch: HostKeyChangedException? = null
             client.addHostKeyVerifier(object : HostKeyVerifier {
@@ -476,7 +508,8 @@ class SshHostConnection private constructor(private val client: SSHClient) : Hos
                     override fun getPublic(): PublicKey = kp.public
                     override fun getType(): KeyType = KeyType.ED25519
                 })
-                client.connection.keepAlive.keepAliveInterval = 20
+                client.connection.keepAlive.keepAliveInterval = KEEPALIVE_INTERVAL_SEC
+                (client.connection.keepAlive as? KeepAliveRunner)?.maxAliveCount = KEEPALIVE_MAX_MISSED
             } catch (e: Exception) {
                 runCatching { client.disconnect() }
                 if (client.isConnected) runCatching { client.socket?.close() }

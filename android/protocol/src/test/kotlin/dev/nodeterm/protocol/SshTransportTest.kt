@@ -374,6 +374,20 @@ class SshTransportTest {
     }
 
     @Test
+    fun `a command that never answers drops the connection instead of hanging`() = runBlocking<Unit> {
+        // A31: the read had no deadline, so a peer that vanished mid-command blocked it for as long
+        // as TCP took to give up. A hung command stands in for the vanished peer here.
+        val conn = connect()
+        val closed = java.util.concurrent.CountDownLatch(1)
+        conn.setOnClosed { closed.countDown() }
+        val t0 = System.currentTimeMillis()
+        assertFailsWith<HostException> { conn.run("sleep 30", timeoutSec = 1) }
+        assertTrue(System.currentTimeMillis() - t0 < 10_000, "the deadline bounded the call")
+        assertTrue(closed.await(5, TimeUnit.SECONDS), "the drop was reported, so the owner can fall back")
+        conn.close()
+    }
+
+    @Test
     fun `a session that is not running is never created over SSH`() = runBlocking<Unit> {
         // A08: `new-session -A` over SSH created the desktop's session with no hook env. Now the
         // phone is told to use the relay, and nothing appears on the computer's tmux.
