@@ -13,11 +13,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -48,11 +50,13 @@ import dev.nodeterm.protocol.model.AccountNames
 import dev.nodeterm.protocol.model.Agent
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.AgentStatusFile
+import dev.nodeterm.protocol.model.ContextFill
 import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.model.UsageAccount
 import dev.nodeterm.protocol.model.UsageLimit
+import dev.nodeterm.protocol.model.UsagePace
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -120,7 +124,7 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(actionable, key = { "a-${it.id}" }) { ev ->
-            EventCard(ev, titleOf(ev.nodeId), snapshot, highlight = true, onOpen = { open(ev.nodeId) }) {
+            EventCard(ev, titleOf(ev.nodeId), snapshot, inbox?.nodes?.get(ev.nodeId)?.contextPercent, highlight = true, onOpen = { open(ev.nodeId) }) {
                 if (ev.kind == InboxKind.APPROVAL) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = {
@@ -157,7 +161,7 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
                 }
                 now?.prompt?.let { Text("You: $it", style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 now?.activity?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                now?.contextPercent?.let { Text("${it.toInt()}% context", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                ContextIndicator(now?.contextPercent)
             }
         }
         if (archived.isNotEmpty()) {
@@ -168,7 +172,7 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
             }
             if (showArchive) {
                 items(archived, key = { "r-${it.id}" }) { ev ->
-                    EventCard(ev, titleOf(ev.nodeId), snapshot, highlight = false, onOpen = { open(ev.nodeId) }) {}
+                    EventCard(ev, titleOf(ev.nodeId), snapshot, inbox?.nodes?.get(ev.nodeId)?.contextPercent, highlight = false, onOpen = { open(ev.nodeId) }) {}
                 }
             }
         }
@@ -180,6 +184,8 @@ private fun EventCard(
     ev: InboxEvent,
     title: String,
     snapshot: ProjectsSnapshot,
+    /** The node's context-window fill (`inbox.nodes[nodeId].contextPercent`), when known. */
+    contextPercent: Double?,
     highlight: Boolean,
     onOpen: () -> Unit,
     actions: @Composable () -> Unit
@@ -214,10 +220,41 @@ private fun EventCard(
         }
         Text(ev.title, fontWeight = FontWeight.SemiBold)
         ev.detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 4) }
-        Agent.of(ev.agentId ?: snapshot.statusOf(ev.nodeId)?.agentId)?.let {
-            Text(it.label, style = MaterialTheme.typography.labelSmall, color = parseHex(it.color))
+        val agent = Agent.of(ev.agentId ?: snapshot.statusOf(ev.nodeId)?.agentId)
+        if (agent != null || ContextFill.percent(contextPercent) != null) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                agent?.let { Text(it.label, style = MaterialTheme.typography.labelSmall, color = parseHex(it.color)) }
+                ContextIndicator(contextPercent)
+            }
         }
         actions()
+    }
+}
+
+/**
+ * A node's context-window fill as a small ring and "42% context" (docs/mobile-usage-inbox.md: cards
+ * show the node's `contextPercent` ring when known). Nothing at all when it is unknown. The ring's
+ * colour follows the desktop context meter's bands ([ContextFill.level]).
+ */
+@Composable
+private fun ContextIndicator(contextPercent: Double?) {
+    val raw = contextPercent ?: return
+    val pct = ContextFill.percent(raw) ?: return
+    val label = ContextFill.label(raw) ?: return
+    val color = when (ContextFill.level(raw)) {
+        ContextFill.Level.CRITICAL -> NtColors.attention
+        ContextFill.Level.HIGH -> NtColors.warning
+        ContextFill.Level.OK -> NtColors.success
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        CircularProgressIndicator(
+            progress = { pct / 100f },
+            modifier = Modifier.size(12.dp),
+            color = color,
+            strokeWidth = 2.dp,
+            trackColor = NtColors.panel2
+        )
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -262,7 +299,7 @@ private fun UsageCard(account: UsageAccount, status: AgentStatusFile?) {
 }
 
 @Composable
-private fun UsageBar(limit: UsageLimit) {
+private fun UsageBar(limit: UsageLimit, now: Long = System.currentTimeMillis()) {
     val pct = limit.usedPercent.coerceIn(0.0, 100.0)
     val color: Color = when (limit.severity) {
         "critical", "error", "red" -> NtColors.attention
@@ -279,7 +316,7 @@ private fun UsageBar(limit: UsageLimit) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Row {
             Text(name, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-            Text("${pct.toInt()}%" + (limit.resetsAt?.let { " · resets ${resetLabel(it)}" } ?: ""), style = MaterialTheme.typography.bodySmall)
+            Text("${pct.toInt()}%" + (limit.resetsAt?.let { " · resets ${resetLabel(it, now)}" } ?: ""), style = MaterialTheme.typography.bodySmall)
         }
         LinearProgressIndicator(
             progress = { (pct / 100.0).toFloat() },
@@ -287,6 +324,14 @@ private fun UsageBar(limit: UsageLimit) {
             trackColor = NtColors.panel2,
             modifier = Modifier.fillMaxWidth().height(6.dp)
         )
+        // Only when the window's end and length are known (UsagePace says why it would refuse).
+        UsagePace.of(limit, now)?.let { reading ->
+            Text(
+                reading.line,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (reading.pace == UsagePace.Pace.FASTER) NtColors.warning else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

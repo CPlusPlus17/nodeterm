@@ -114,7 +114,9 @@ cover an approval answered after the hook's hold ended (`A06`), and the desktop 
 generated SSH answer command under a real `/bin/sh`. `QuickActionsTest` pins which node state each
 Inbox quick answer needs (`A38`): a ticketed approval is judged by its card, so it is answered while
 the node still shows WAITING for a held question; keys are typed only for a ticketless approval on a
-BLOCKED node or a question on a WAITING one.
+BLOCKED node or a question on a WAITING one. `UsagePaceTest` pins the Usages pace line (`A58`): no line
+without a reset time, 300/10080-minute defaults for the session/weekly kinds (Claude reports no
+window length), none for an unknown kind, and an injected clock.
 
 ## Known gaps
 

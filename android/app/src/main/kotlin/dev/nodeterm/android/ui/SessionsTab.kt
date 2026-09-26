@@ -43,6 +43,7 @@ import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.model.AccountNames
 import dev.nodeterm.protocol.model.Agent
+import dev.nodeterm.protocol.model.ContextFill
 import dev.nodeterm.protocol.model.Launch
 import dev.nodeterm.protocol.model.NodeInfo
 import dev.nodeterm.protocol.model.ProjectInfo
@@ -273,7 +274,7 @@ private fun SessionRow(node: NodeInfo, snapshot: ProjectsSnapshot, onClick: () -
             val detail = buildList {
                 add(agent?.label ?: "Terminal")
                 now?.activity?.let { add(it) }
-                now?.contextPercent?.let { add("${it.toInt()}% context") }
+                ContextFill.label(now?.contextPercent)?.let { add(it) }
                 AccountNames.observed(status?.account, snapshot.status)?.let { add(it) }
                 if (!live) add("not running")
             }.joinToString(" · ")

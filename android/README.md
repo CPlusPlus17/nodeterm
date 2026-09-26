@@ -28,9 +28,9 @@ it is talking to.
 | New session (agent / shell) → registered on the canvas | relay | `projects.registerNode`, launched before registration so the desktop never double-launches |
 | Wake / refresh / rename / end session | relay (end: both) | `node.*` verbs; over SSH "end" stops the tmux session only |
 | Kanban board, move cards, labels | relay (read-only on SSH) | `projects.ensureBoard/setCardColumn/editCardLabels` |
-| Inbox: approvals, questions, finished turns | ✓ | Held hook approvals are answered deterministically (never with keystrokes) |
+| Inbox: approvals, questions, finished turns | ✓ | Held hook approvals are answered deterministically (never with keystrokes); each card shows its node's context % when known |
 | Read-ack (reading a finished session clears it on the computer) | ✓ | `inbox.ack` over the relay, `~/.nodeterm/acks` over SSH |
-| Usage (rate limits per account) | ✓ | From the agent-status mirror |
+| Usage (rate limits per account) | ✓ | From the agent-status mirror, with a pace line ("5h usage pace faster") when the reset time is known |
 | Notifications | local | See "Notifications" below |
 
 ## Build
