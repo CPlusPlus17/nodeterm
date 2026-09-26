@@ -107,8 +107,8 @@ applicable here":
    The **Android** companion is in this repo (`android/`, see docs/android.md). If you change what
    a phone sees — a `host-service.ts` relay verb, the `projects.list` blob, the pairing payload,
    the agent-status mirror, or the `~/.nodeterm/{pending,acks,relay.json}` files — update the
-   Android client in the same PR. `./gradlew -p protocol test` (from `android/`, after
-   `npm ci --ignore-scripts`) runs the relay leg against this repo's own host code: the handshake
+   Android client in the same PR. `./gradlew -p protocol test` (from `android/`, on JDK 17–24,
+   after your usual `npm install`) runs the relay leg against this repo's own host code: the handshake
    and host-service's verb routing (`connectHostSession`; the pty, board, inbox and node-action
    bridges behind the verbs are fakes), pairing (`createPairingService`), and the `projects.list`
    blob as the desktop builds it (`buildProjectsListBlob` in `src/core/projects-list-blob.ts` over
@@ -122,7 +122,10 @@ applicable here":
    `npm run typecheck`, so changing one of them fails the typecheck there until the fixture follows.
    The Android workflow runs on every file that fixture bundles (`src/core`, `src/shared`,
    `src/main/*.ts`, `src/main/remote`); an import that pulls a file from elsewhere into it fails
-   `WorkflowPathFilterTest` until the workflow's `paths` list it.
+   `WorkflowPathFilterTest` until the workflow's `paths` list it. Do not copy CI's
+   `npm ci --ignore-scripts` onto a desktop checkout; it is for a machine without the native
+   toolchain. `npm ci` deletes `node_modules` first and the flag skips the node-pty patch and build,
+   so node-pty stays unpatched (unbuilt on Linux) until `npm install` or `npm run rebuild` runs again.
 
 Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate

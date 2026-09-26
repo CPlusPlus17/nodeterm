@@ -11,8 +11,11 @@ plain Kotlin/JVM against:
 
 ```bash
 cd android/tools/typecheck
-gradle compileKotlin            # needs Gradle 8.x and a JDK 17+ on PATH; no wrapper here on purpose
+gradle compileKotlin            # needs Gradle 8.x on PATH; no wrapper here on purpose
 ```
+
+The JDK has to be at least 17 (the build targets 17) and one your Gradle can run on: JDK 17–24 for
+Gradle 8.14.x, the version the wrapper in `android/` pins. JDK 25 needs Gradle 9.1 or newer.
 
 What it catches: Kotlin compile errors, wrong imports, API misuse visible in signatures.
 

@@ -42,7 +42,11 @@ cd android
 ./gradlew -p protocol test            # the wire layer; see below
 ```
 
-Needs JDK 17+ and the Android SDK (Android Studio's, or `ANDROID_HOME`). `minSdk` 26, `targetSdk` 35.
+Needs JDK 17–24 and the Android SDK (Android Studio's, or `ANDROID_HOME`). `minSdk` 26, `targetSdk` 35.
+Android Studio's bundled JDK works, and CI uses 17. JDK 25 does not: the wrapper's Gradle 8.14.3 cannot
+run on it (its embedded Kotlin compiler rejects the version while compiling the build scripts, so
+`./gradlew` stops before configuring anything); that needs Gradle 9.1 or newer. Point `JAVA_HOME` at a
+17–24 JDK if your default is 25.
 CI builds the debug APK on every change under `android/` or to the desktop code the protocol tests
 run (`.github/workflows/android.yml`; its path filter says which) and attaches it to the run. The
 debug APK is not minified. Only the release build type runs R8 (`app/proguard-rules.pro`), and CI
@@ -78,8 +82,13 @@ or your own build.** Release builds will need their own private key; none exists
   `createPairingService` through a local relay broker (`src/test/interop/host-fixture.ts`, bundled
   with the repo's esbuild and type-checked by the repo's `npm run typecheck` against the desktop
   interfaces it implements), and the SSH transport against a real SSH server and a sandboxed tmux.
-  Run `npm ci --ignore-scripts` at the repo root first; without node the interop tests skip. The SSH
-  tests need tmux and `script(1)` (util-linux on Linux, BSD on macOS) and skip without them.
+  They need node and the repo's `node_modules` (esbuild, ws, tweetnacl) and skip without them; a
+  desktop checkout's existing `npm install` is enough. `npm ci --ignore-scripts`, which CI runs, is only
+  for a machine without the native toolchain: `npm ci` deletes `node_modules` first and the flag skips
+  the node-pty patch and build, so over a working desktop checkout it leaves node-pty unpatched (on
+  Linux, where node-pty ships no prebuild, not built at all) and `src/main/node-pty-patch.test.ts` red
+  until you run `npm install` or `npm run rebuild` again (`bootstrap-windows.bat` on Windows). The
+  SSH tests need tmux and `script(1)` (util-linux on Linux, BSD on macOS) and skip without them.
 - **`app/`** — the Compose UI on top: pairing, the computers list, a computer's Sessions / Board /
   Inbox / Usage tabs, the terminal screen, settings, background notifications.
 
