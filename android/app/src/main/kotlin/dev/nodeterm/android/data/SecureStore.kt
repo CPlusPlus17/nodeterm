@@ -3,7 +3,10 @@ package dev.nodeterm.android.data
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import android.util.Base64
+import dev.nodeterm.protocol.secure.SecretStorage
+import dev.nodeterm.protocol.secure.SecretStoreCore
+import dev.nodeterm.protocol.secure.SecretUnavailableException
+import dev.nodeterm.protocol.secure.Sealer
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -26,60 +29,85 @@ import javax.crypto.spec.GCMParameterSpec
 class SecureStore(context: Context) {
     private val prefs = context.getSharedPreferences("nodeterm.secure", Context.MODE_PRIVATE)
 
+    /**
+     * The Keystore key. Generated ONLY when the alias is absent: a keystore that briefly answers
+     * null for a key it holds must not make us generate a new one under the same alias, which would
+     * make every stored secret unreadable (audit A24, verifier note (b)).
+     */
     private val key: SecretKey by lazy {
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        (ks.getKey(ALIAS, null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
-            .apply {
-                init(
-                    KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                        .setKeySize(256)
-                        .build()
-                )
-            }
-            .generateKey()
-    }
-
-    @Synchronized
-    fun putBytes(name: String, value: ByteArray) {
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.ENCRYPT_MODE, key)
-        val sealed = cipher.iv + cipher.doFinal(value)
-        prefs.edit().putString(name, Base64.encodeToString(sealed, Base64.NO_WRAP)).apply()
-    }
-
-    @Synchronized
-    fun getBytes(name: String): ByteArray? {
-        val raw = prefs.getString(name, null) ?: return null
-        return try {
-            val sealed = Base64.decode(raw, Base64.NO_WRAP)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, sealed, 0, IV_BYTES))
-            cipher.doFinal(sealed, IV_BYTES, sealed.size - IV_BYTES)
-        } catch (_: Exception) {
-            // A value we cannot open (keystore wiped, restored onto another device) is not a crash:
-            // the caller regenerates / asks the user to re-pair.
-            null
+        if (ks.containsAlias(ALIAS)) {
+            ks.getKey(ALIAS, null) as? SecretKey
+                ?: throw java.security.KeyStoreException("The Keystore holds $ALIAS but did not return it.")
+        } else {
+            KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+                .apply {
+                    init(
+                        KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                            .setKeySize(256)
+                            .build()
+                    )
+                }
+                .generateKey()
         }
+    }
+
+    /**
+     * The rules (what counts as "gone", what is only "unreadable right now") live in the tested
+     * [SecretStoreCore]; this class is only the Keystore cipher and the preferences file.
+     */
+    private val core = SecretStoreCore(
+        storage = object : SecretStorage {
+            override fun get(name: String): String? = prefs.getString(name, null)
+            override fun put(name: String, value: String, durable: Boolean) {
+                val edit = prefs.edit().putString(name, value)
+                if (durable) edit.commit() else edit.apply()
+            }
+            override fun remove(name: String) {
+                prefs.edit().remove(name).apply()
+            }
+        },
+        sealer = object : Sealer {
+            override fun seal(plain: ByteArray): ByteArray {
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                cipher.init(Cipher.ENCRYPT_MODE, key)
+                return cipher.iv + cipher.doFinal(plain)
+            }
+            override fun open(sealed: ByteArray): ByteArray {
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, sealed, 0, IV_BYTES))
+                return cipher.doFinal(sealed, IV_BYTES, sealed.size - IV_BYTES)
+            }
+        }
+    )
+
+    fun putBytes(name: String, value: ByteArray) = core.putBytes(name, value)
+
+    /**
+     * The value, or null when absent or provably lost. A value that cannot be read RIGHT NOW (a
+     * keystore hiccup) also reads as null here — callers of this form only read (relay tokens) and
+     * overwrite nothing; the identity secrets go through [getOrCreate32], which never overwrites on
+     * such an error.
+     */
+    fun getBytes(name: String): ByteArray? = try {
+        core.getBytes(name)
+    } catch (_: SecretUnavailableException) {
+        null
     }
 
     fun putString(name: String, value: String) = putBytes(name, value.toByteArray(Charsets.UTF_8))
     fun getString(name: String): String? = getBytes(name)?.toString(Charsets.UTF_8)
 
-    @Synchronized
-    fun remove(name: String) {
-        prefs.edit().remove(name).apply()
-    }
+    fun remove(name: String) = core.remove(name)
 
-    /** Get-or-create 32 random bytes under [name] (the box secret, the SSH seed). */
-    @Synchronized
-    fun getOrCreate32(name: String): ByteArray {
-        getBytes(name)?.takeIf { it.size == 32 }?.let { return it }
-        val fresh = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
-        putBytes(name, fresh)
-        return fresh
-    }
+    /**
+     * Get-or-create 32 random bytes under [name] (the box secret, the SSH seed). Replaces a stored
+     * value only when it is provably gone; throws [SecretUnavailableException] when it merely cannot
+     * be read right now, so the phone's identity is never overwritten by a transient error.
+     */
+    fun getOrCreate32(name: String): ByteArray = core.getOrCreate32(name)
 
     companion object {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
