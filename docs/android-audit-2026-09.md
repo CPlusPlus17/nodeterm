@@ -31,7 +31,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A15](#a15) | medium |  | small | protocol/bug | ✅ fixed in `c58ad65` · The cold-attach resume offer drops the node's managed Claude account (and on the relay, its cwd), so the resume fails with 'No conversation found' |
 | [A16](#a16) | medium |  | small | protocol/gap | ✅ fixed in `c58ad65` · The phone's launch ignores the project's own permission mode (and default account), so a project the user set to a stricter mode starts in the global mode |
 | [A17](#a17) | medium |  | small | protocol/risk | ✅ fixed in `3d36d60` · The background inbox worker dials the relay for unapproved phones, putting the desktop's SAS approval dialog up every 15 minutes with no code on the phone to compare it against |
-| [A18](#a18) | medium |  | small | runtime/bug | No lifecycle handling: a backgrounded app keeps the 8 s poll and its relay terminal stream alive indefinitely |
+| [A18](#a18) | medium |  | small | runtime/bug | ✅ fixed in `10de4b9` · No lifecycle handling: a backgrounded app keeps the 8 s poll and its relay terminal stream alive indefinitely |
 | [A19](#a19) | medium |  | small | runtime/bug | ✅ fixed in `de1eded` · Tapping an inbox notification while the activity is alive ignores the target computer |
 | [A20](#a20) | medium |  | small | runtime/bug | ✅ fixed in `d199f03` · Cancelling an in-flight connect leaks the SSH connection and records the cancellation as a connection failure |
 | [A21](#a21) | medium |  | small | runtime/bug | A denied POST_NOTIFICATIONS is never re-requested, and the Settings switch still reads On |
@@ -44,7 +44,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A28](#a28) | medium |  | small | parity/gap | ✅ fixed in `726271a,1cdd2f0` · SSH-project sessions over direct SSH are attached, approved and resumed on the wrong machine |
 | [A29](#a29) | medium |  | medium | parity/gap | No source-control screen, although the protocol layer already implements the git verbs iOS uses |
 | [A30](#a30) | medium |  | small | critic/bug | ✅ fixed in `3d36d60` · Pressing Deny on the desktop is not respected: the phone re-dials about 8 s later and the SAS approval dialog reappears |
-| [A31](#a31) | medium |  | small | critic/bug | A silently dead SSH peer (laptop asleep, desktop IP or VPN change) wedges the host as 'On your network' for many minutes: no detection, no relay fallback, and the error is never shown |
+| [A31](#a31) | medium |  | small | critic/bug | ✅ fixed in `a622e71` · A silently dead SSH peer (laptop asleep, desktop IP or VPN change) wedges the host as 'On your network' for many minutes: no detection, no relay fallback, and the error is never shown |
 | [A32](#a32) | medium |  | medium | critic/gap | No way to open a URL or copy text from the phone terminal: no link detection, no touch selection, and the WebView cannot show xterm's link confirm |
 | [A33](#a33) | medium |  | medium | critic/bug | On a Windows computer, 'New session' starts the agent in the user's home folder instead of the project, and silently drops the chosen Claude account while still registering it |
 | [A34](#a34) | medium |  | small | critic/bug | ✅ fixed in `2a273a7` · The Ctrl key-row chip does not apply to text sent from the input bar: arming Ctrl and sending 'z' submits a literal 'z' plus Enter |
