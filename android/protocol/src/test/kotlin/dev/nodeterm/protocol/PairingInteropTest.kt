@@ -9,6 +9,7 @@ import dev.nodeterm.protocol.pairing.SshIdentity
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -31,9 +32,11 @@ import kotlin.test.assertTrue
 
 /**
  * The phone's `/pair` exchange against the DESKTOP's real `createPairingService`
- * (src/main/pairing-service.ts), with HOME pointed at a temp dir so the authorized_keys line it
- * writes can be inspected. Covers the E2EE-sealed exchange (the QR carries `hostKey`) with and
- * without a relay leg.
+ * (src/main/pairing-service.ts), with the home dir pointed at a temp dir so the authorized_keys line
+ * it writes can be inspected, and so no run pairs a test device into a real profile
+ * ([InteropHarness.scratchHomeEnv]: HOME and, for Windows, USERPROFILE). Covers the E2EE-sealed
+ * exchange (the QR carries `hostKey`) with and without a relay leg, on the direct-SSH path whatever OS
+ * runs it (the fixture pins a non-Windows platform; audit A70).
  */
 class PairingInteropTest {
     private val cleanup = ArrayList<AutoCloseable>()
@@ -41,15 +44,35 @@ class PairingInteropTest {
     @AfterTest
     fun tearDown() = cleanup.forEach { it.close() }
 
-    private fun start(withRelay: Boolean): Pair<InteropHarness, File> {
+    private fun start(withRelay: Boolean, env: Map<String, String> = emptyMap()): Pair<InteropHarness, File> {
         val home = Files.createTempDirectory("nt-pair-home").toFile()
         cleanup += AutoCloseable { home.deleteRecursively() }
         val h = InteropHarness.start(
             "pair",
-            mapOf("HOME" to home.path, "FIXTURE_USERDATA" to home.path, "FIXTURE_RELAY" to if (withRelay) "1" else "0")
+            InteropHarness.scratchHomeEnv(home) +
+                mapOf("FIXTURE_USERDATA" to home.path, "FIXTURE_RELAY" to if (withRelay) "1" else "0") + env
         )
         cleanup += h
         return h to home
+    }
+
+    @Test
+    fun `pair mode refuses to start unless the home dir is the scratch dir it was given`() {
+        // A70: os.homedir() reads HOME on POSIX and USERPROFILE on Windows. A caller that points the
+        // wrong variable at its temp dir must fail here, before the service writes agent.json (a live
+        // bearer token) and authorized_keys into whatever the real home is.
+        assumeTrue(InteropHarness.available(), "node + repo node_modules (npm ci) are needed for interop tests")
+        val home = Files.createTempDirectory("nt-pair-home").toFile()
+        val other = Files.createTempDirectory("nt-pair-other").toFile()
+        cleanup += AutoCloseable { home.deleteRecursively(); other.deleteRecursively() }
+        val err = assertFailsWith<AssertionError> {
+            InteropHarness.start(
+                "pair",
+                InteropHarness.scratchHomeEnv(home) + mapOf("FIXTURE_HOME" to other.path, "FIXTURE_USERDATA" to home.path)
+            )
+        }
+        assertTrue(err.message.orEmpty().contains("needs os.homedir() to be FIXTURE_HOME"), err.message)
+        assertTrue(home.listFiles().isNullOrEmpty() && other.listFiles().isNullOrEmpty(), "a refused start wrote files")
     }
 
     private fun payloadOf(h: InteropHarness): PairingPayload =
@@ -77,6 +100,24 @@ class PairingInteropTest {
         val agent = File(home, ".nodeterm/agent.json").readText()
         assertTrue(agent.contains("\"name\": \"Pixel Test\""), agent)
         assertTrue(agent.contains("\"relayDeviceId\": \"android-device-1\""), agent)
+    }
+
+    @Test
+    fun `on a Windows host the fixture still pairs over the direct-SSH path`() = runBlocking<Unit> {
+        // A70: on win32 the desktop pairs relay-only (no key, the QR says ssh:false; covered by
+        // src/main/pairing-service.windows.test.ts), so without the fixture pinning a non-Windows
+        // platform every test here that expects an SSH key would fail on Windows. The fixture and the
+        // service read process.platform at call time, which FIXTURE_PROCESS_PLATFORM stands in for.
+        val (h, home) = start(withRelay = false, env = mapOf("FIXTURE_PROCESS_PLATFORM" to "win32"))
+        val payload = payloadOf(h)
+        assertTrue(payload.sshAvailable, "the QR must offer SSH")
+        val identity = SshIdentity.generate()
+        val result = PairingClient().pair(payload, identity.authorizedKeysLine(), "Pixel", "android-device-6")
+        assertEquals("true", h.awaitEvent("done")["ok"]!!.jsonPrimitive.content)
+        assertTrue(
+            File(home, ".ssh/authorized_keys").readText().contains("nodeterm-ios-${result.deviceId}"),
+            "the key must land in the scratch home's authorized_keys"
+        )
     }
 
     @Test

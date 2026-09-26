@@ -17,6 +17,9 @@ import java.util.concurrent.TimeUnit
  * `require` downloads the Electron binary when it is missing, as it is after any fresh `npm ci` (the
  * package has no install script), and that download ran inside the 20 s ready wait.
  * [InteropHarnessTest] pins the alias and the kill of a process whose ready wait failed.
+ *
+ * Every process it starts is `node` itself, bundling included (audit A70): npm's `.bin` shims are sh
+ * scripts on Windows, which Java's ProcessBuilder (CreateProcess) cannot run.
  */
 class InteropHarness private constructor(private val process: Process) : AutoCloseable {
     private val lines = LinkedBlockingQueue<JsonObject>()
@@ -72,26 +75,38 @@ class InteropHarness private constructor(private val process: Process) : AutoClo
         /** Where the fixture's `electron` import resolves to instead of the npm package. */
         const val ELECTRON_STUB = "android/protocol/src/test/interop/electron-stub.ts"
 
+        /** Bundles host-fixture.ts through esbuild's JS API; see its header for why not the CLI (audit A70). */
+        const val BUNDLER = "android/protocol/src/test/interop/bundle-fixture.cjs"
+
+        /**
+         * The bundle step's argv. Its program is `node`, never a file under node_modules: npm's
+         * `.bin/esbuild` is a sh shim on Windows, which CreateProcess cannot run, so every interop test
+         * errored there instead of running (audit A70). `node` resolves to node.exe on PATH.
+         */
+        internal fun bundleCommand(out: File): List<String> = listOf("node", BUNDLER, out.path, ELECTRON_STUB)
+
         internal val bundle: File by lazy {
             val out = File(repoRoot, "android/protocol/build/interop/host-fixture.cjs")
-            val esbuild = File(repoRoot, "node_modules/.bin/esbuild")
-            val proc = ProcessBuilder(
-                esbuild.path,
-                "android/protocol/src/test/interop/host-fixture.ts",
-                "--bundle", "--platform=node", "--format=cjs",
-                "--outfile=${out.path}",
-                "--alias:electron=./$ELECTRON_STUB", "--external:ws",
-                "--alias:@shared=./src/shared", "--alias:@renderer=./src/renderer",
-                "--log-level=warning"
-            ).directory(repoRoot).redirectErrorStream(true).start()
+            val proc = ProcessBuilder(bundleCommand(out)).directory(repoRoot).redirectErrorStream(true).start()
             val log = proc.inputStream.bufferedReader().readText()
             check(proc.waitFor() == 0) { "esbuild failed: $log" }
             out
         }
 
+        /**
+         * Home-directory variables pointing a fixture at [home]. `os.homedir()` reads HOME on POSIX and
+         * USERPROFILE on Windows, and pair mode writes `.nodeterm/agent.json` (a device with a live bearer
+         * token) and `.ssh/authorized_keys` under it: with HOME alone, a Windows run would write into the
+         * contributor's real profile (audit A70). FIXTURE_HOME is what the fixture checks `os.homedir()`
+         * against before pair mode writes anything.
+         */
+        fun scratchHomeEnv(home: File): Map<String, String> =
+            mapOf("HOME" to home.path, "USERPROFILE" to home.path, "FIXTURE_HOME" to home.path)
+
         internal fun available(): Boolean {
             val node = runCatching { ProcessBuilder("node", "--version").start().waitFor() == 0 }.getOrDefault(false)
-            return node && File(repoRoot, "node_modules/.bin/esbuild").exists() &&
+            // The esbuild PACKAGE (its JS API), not the .bin shim the harness no longer runs.
+            return node && File(repoRoot, "node_modules/esbuild/package.json").exists() &&
                 File(repoRoot, "node_modules/ws").exists() && File(repoRoot, "node_modules/tweetnacl").exists()
         }
 

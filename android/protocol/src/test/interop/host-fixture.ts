@@ -5,8 +5,10 @@
 //                 frames preserving text/binary — all the real relay does) plus the desktop's
 //                 `connectHostSession` (src/main/remote/host-service.ts → relay-socket.ts host role)
 //                 serving a FAKE pty/kanban/inbox bridge that records what the phone asked for.
-//   mode "pair":  the desktop's real `createPairingService` (src/main/pairing-service.ts) with HOME
-//                 pointed at a temp dir by the caller, and a fake `/v1/relay/device` API.
+//   mode "pair":  the desktop's real `createPairingService` (src/main/pairing-service.ts) with the
+//                 home dir pointed at a temp dir by the caller (HOME, and USERPROFILE for Windows, see
+//                 InteropHarness.scratchHomeEnv; refused unless `os.homedir()` is FIXTURE_HOME), and a
+//                 fake `/v1/relay/device` API. It exercises the direct-SSH pairing path on every OS.
 //   mode "never-ready": prints nothing and stays alive, so InteropHarnessTest can check that a
 //                 harness whose ready wait fails still kills the process.
 //
@@ -15,6 +17,8 @@
 // resolves from the repo's node_modules, and `electron` is aliased to ./electron-stub.ts, so the
 // real package (whose first `require` downloads the Electron binary) is never loaded (audit A60).
 import http from 'http'
+import os from 'os'
+import path from 'path'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { initPlatform } from '../../../../../src/core/platform'
 import { genKeyPair, publicKeyToB64 } from '../../../../../src/main/remote/e2ee'
@@ -265,6 +269,19 @@ async function runRelay(): Promise<void> {
 // ---- mode "pair" -----------------------------------------------------------------------------------
 
 async function runPair(): Promise<void> {
+  // Test seam: the OS as the fixture and the pairing service see it. Both read `process.platform` at
+  // call time; node's own modules captured the real one at startup and are unaffected. Lets a Linux
+  // run check what a Windows run of this mode does (PairingInteropTest, audit A70).
+  const asPlatform = process.env.FIXTURE_PROCESS_PLATFORM
+  if (asPlatform) Object.defineProperty(process, 'platform', { value: asPlatform })
+  // The service writes `.nodeterm/agent.json` (a device entry carrying a live bearer token) and
+  // `.ssh/authorized_keys` under `os.homedir()`, which reads HOME on POSIX and USERPROFILE on Windows.
+  // Refuse to start unless the caller named that dir as its scratch home, so a caller that set the
+  // wrong variable fails here instead of pairing a test device into a real profile (audit A70).
+  const scratch = process.env.FIXTURE_HOME
+  if (!scratch || path.resolve(os.homedir()) !== path.resolve(scratch)) {
+    throw new Error(`pair mode needs os.homedir() to be FIXTURE_HOME; it is ${os.homedir()}, FIXTURE_HOME is ${scratch ?? 'unset'}`)
+  }
   const keys = genKeyPair()
   const api = http.createServer((req, res) => {
     let body = ''
@@ -293,7 +310,10 @@ async function runPair(): Promise<void> {
       pinRelayKey: async (pub) => emit({ event: 'pin', pub }),
       unpinRelayKey: async (pub) => emit({ event: 'unpin', pub })
     },
-    { timeoutMs: 60_000 }
+    // The direct-SSH path on every OS (audit A70): on win32 the service pairs relay-only (no key, the
+    // QR says `ssh:false`), which pairing-service.windows.test.ts covers. `platform` only separates
+    // win32 from the rest, so Linux and macOS run exactly what they always did.
+    { timeoutMs: 60_000, platform: process.platform === 'win32' ? 'linux' : process.platform }
   )
   const started = await service.start((done) => emit({ event: 'done', ...done }))
   emit({ ready: true, payload: started.payload, hostPublicKeyB64: publicKeyToB64(keys.publicKey), relayPlan: started.relayPlan })

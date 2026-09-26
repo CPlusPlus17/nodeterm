@@ -1,20 +1,42 @@
 package dev.nodeterm.protocol
 
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import java.io.File
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * The interop harness itself (audit A60). The fixture must not load the real `electron` package,
+ * The interop harness itself (audits A60, A70). The fixture must not load the real `electron` package,
  * whose first `require` downloads the Electron binary when it is missing (after any fresh `npm ci`),
- * inside the harness's ready wait. And a start whose ready wait fails must not leave the node process
- * behind: the caller never receives a handle to close.
+ * inside the harness's ready wait. A start whose ready wait fails must not leave the node process
+ * behind: the caller never receives a handle to close. And the harness must run on Windows too: it
+ * spawns only `node`, and a scratch home covers the home variable Windows reads.
  */
 class InteropHarnessTest {
     private val needs = "node + repo node_modules (npm ci) are needed for interop tests"
+
+    @Test
+    fun `the bundle step runs node, never an npm shim`() {
+        // A70: node_modules/.bin/esbuild is a sh script on Windows, which CreateProcess cannot run, so
+        // the bundle step threw and every interop test errored there instead of skipping or running.
+        val argv = InteropHarness.bundleCommand(File("out.cjs"))
+        assertEquals("node", argv.first(), "the bundle step must spawn node: $argv")
+        assertTrue(argv.none { it.contains("node_modules") }, "the bundle step names a node_modules file: $argv")
+        assertTrue(File(InteropHarness.repoRoot, argv[1]).isFile, "no bundler script at ${argv[1]}")
+    }
+
+    @Test
+    fun `a scratch home points the home variable of every OS at the dir`() {
+        // A70: os.homedir() reads HOME on POSIX and USERPROFILE on Windows; pair mode writes a live
+        // bearer token under it, so a run must never fall through to the contributor's real profile.
+        val home = File("scratch-home")
+        val env = InteropHarness.scratchHomeEnv(home)
+        for (name in listOf("HOME", "USERPROFILE", "FIXTURE_HOME")) assertEquals(home.path, env[name], name)
+    }
 
     @Test
     fun `the fixture bundle resolves electron to the stub and never requires the package`() {
