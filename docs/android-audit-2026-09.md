@@ -6,7 +6,8 @@ Severity is the impact judge's rating, not the auditor's claim. **BLOCK** means 
 
 Prioritised plan and handover: [`android-handover.md`](android-handover.md).
 
-**Status of fixes.** A fixed finding is marked `✅ fixed in <sha>` in the index; its section below
+**Status of fixes.** A fixed finding is marked `✅ fixed in <sha>` in the index, and a finding
+deliberately not built is marked `📝` with the reason; its section below
 keeps the original audit text (line numbers still refer to `2f58918`). Where the fix departs from
 the audit's proposal, the handover's progress log says how and why.
 
@@ -26,7 +27,7 @@ the audit's proposal, the handover's progress log says how and why.
 | [A10](#a10) | medium | BLOCK | small | ci-docs/risk | ✅ fixed in `fcda932` · Debug APKs from CI change signature from run to run; README offers them as the install route, and updating means uninstalling, which wipes pairings |
 | [A11](#a11) | medium |  | small | build/bug | ✅ fixed in `de1eded` · Tapping an Inbox notification while the app is in the background does not open that computer |
 | [A12](#a12) | medium |  | medium | protocol/bug | ✅ fixed in `ab1335c` · Relay sendKeys (question answers, legacy approvals) writes into a pty that does not exist yet and then kills it immediately, so the keystroke can be lost while the UI reports success |
-| [A13](#a13) | medium |  | medium | protocol/bug | ✅ phone side fixed in `68d0925` (desktop root cause open) · Registering a phone-started node while the phone is attached lets the desktop's own client attach with `-D`, which detaches the phone; Android then reports the session as ended |
+| [A13](#a13) | medium |  | medium | protocol/bug | ✅ fixed in `68d0925` (phone), `b718a04` (desktop, relay phones) · Registering a phone-started node while the phone is attached lets the desktop's own client attach with `-D`, which detaches the phone; Android then reports the session as ended |
 | [A14](#a14) | medium |  | small | protocol/bug | ✅ fixed in `c58ad65` · New sessions in cwd-less (inline) projects are never registered: the desktop refuses them, the refusal is ignored, and the session is orphaned |
 | [A15](#a15) | medium |  | small | protocol/bug | ✅ fixed in `c58ad65` · The cold-attach resume offer drops the node's managed Claude account (and on the relay, its cwd), so the resume fails with 'No conversation found' |
 | [A16](#a16) | medium |  | small | protocol/gap | ✅ fixed in `c58ad65` · The phone's launch ignores the project's own permission mode (and default account), so a project the user set to a stricter mode starts in the global mode |
@@ -51,8 +52,8 @@ the audit's proposal, the handover's progress log says how and why.
 | [A35](#a35) | medium |  | small | critic/bug | ✅ fixed in `16706f4` · approvals.answer returns `answered:false` both for 'already handled' and for 'the write failed'; the phone always says 'Already handled.' |
 | [A36](#a36) | medium |  | small | critic/gap | ✅ fixed in `2a273a7` · After any connection drop the terminal stays on 'Disconnected. [Reattach]' even though the host connection reconnects by itself |
 | [A37](#a37) | low |  | small | build/risk | proguard-rules.pro would not survive turning on minification (R8 missing-class errors) |
-| [A38](#a38) | low |  | small | protocol/bug | Quick approve requires the node to be exactly 'blocked', but the desktop publishes approval tickets while the node stays 'waiting' on a held question |
-| [A39](#a39) | low |  | small | protocol/bug | The account chip reads `account.label`, which the mirror never writes, so it falls back to the raw account UUID |
+| [A38](#a38) | low |  | small | protocol/bug | ✅ fixed in `5ff8f6c` · Quick approve requires the node to be exactly 'blocked', but the desktop publishes approval tickets while the node stays 'waiting' on a held question |
+| [A39](#a39) | low |  | small | protocol/bug | ✅ fixed in `437e359` · The account chip reads `account.label`, which the mirror never writes, so it falls back to the raw account UUID |
 | [A40](#a40) | low |  | small | runtime/bug | The pending-launch path and the attach hand-off never re-check `disposed`: a stream can stay attached forever, or a phone-started node gets registered with no agent launched |
 | [A41](#a41) | low |  | small | runtime/bug | The composed prompt is cleared even when no stream is attached, so the text is silently lost |
 | [A42](#a42) | low |  | small | runtime/bug | NewSessionDialog crashes if the selected project disappears while the dialog is open |
@@ -61,17 +62,17 @@ the audit's proposal, the handover's progress log says how and why.
 | [A45](#a45) | low |  | small | runtime/risk | No onRenderProcessGone handler on the terminal WebView |
 | [A46](#a46) | low |  | small | runtime/bug | The ⌨ key-row chip only focuses the DOM textarea, which cannot raise the soft keyboard |
 | [A47](#a47) | low |  | small | runtime/bug | The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
-| [A48](#a48) | low |  | small | runtime/bug | The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
-| [A49](#a49) | low |  | small | security/risk | SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
+| [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76` · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
+| [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b` · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
 | [A50](#a50) | low |  | medium | security/risk | The only distributable build is a debuggable APK, so Keystore-protected secrets can be pulled over adb/JDWP |
 | [A51](#a51) | low |  | small | security/gap | allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
 | [A52](#a52) | low |  | small | security/gap | Approval and finish notifications put command text and the agent's last message on the lock screen |
-| [A53](#a53) | low |  | small | security/bug | OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
-| [A54](#a54) | low |  | small | security/bug | PairingClient trusts an unbounded Content-Length / EOF body from the pairing endpoint |
+| [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
+| [A54](#a54) | low |  | small | security/bug | ✅ fixed in `32330df` · PairingClient trusts an unbounded Content-Length / EOF body from the pairing endpoint |
 | [A55](#a55) | low |  | medium | parity/gap | Inbox and Usage are per computer; iOS merges them across all paired computers |
-| [A56](#a56) | low |  | small | parity/gap | Approval cards lack iOS's "Always allow" answer |
+| [A56](#a56) | low |  | small | parity/gap | 📝 not built, by decision (`38fa6c4`): a blind `2` can answer No or switch to auto mode on current Claude Code · Approval cards lack iOS's "Always allow" answer |
 | [A57](#a57) | low |  | small | parity/gap | Multi-select AskUserQuestion cards fall back to "Open session" |
-| [A58](#a58) | low |  | small | parity/gap | Usage and feed cards omit iOS's pace line and the context indicator on event cards |
+| [A58](#a58) | low |  | small | parity/gap | ✅ fixed in `a44f16c` · Usage and feed cards omit iOS's pace line and the context indicator on event cards |
 | [A59](#a59) | low |  | small | parity/gap | No built-in dictation (iOS has on-device Whisper plus a Cloud engine) |
 | [A60](#a60) | low |  | small | ci-docs/bug | Interop fixture needs the Electron binary, which is downloaded at test time inside the 20 s ready window, despite the workflow saying 'not Electron' |
 | [A61](#a61) | low |  | small | ci-docs/bug | Following CONTRIBUTING / android/README (`npm ci --ignore-scripts`) wipes a desktop developer's patched node_modules |
@@ -85,10 +86,10 @@ the audit's proposal, the handover's progress log says how and why.
 | [A69](#a69) | low |  | small | ci-docs/gap | The Gradle/Kotlin code has no dependency-update, CodeQL or wrapper-validation coverage |
 | [A70](#a70) | low |  | small | ci-docs/bug | On Windows the interop tests fail with CreateProcess instead of skipping |
 | [A71](#a71) | low |  | small | ci-docs/gap | android/README says 'JDK 17+', but the pinned Gradle 8.14.3 cannot run on JDK 25 |
-| [A72](#a72) | low |  | medium | critic/gap | Phone-started sessions are created without the agent-specific env, so for their whole life they get no hook-reply approvals, no canvas control and no pane ownership |
+| [A72](#a72) | low |  | medium | critic/gap | ✅ fixed in `71290de` · Phone-started sessions are created without the agent-specific env, so for their whole life they get no hook-reply approvals, no canvas control and no pane ownership |
 | [A73](#a73) | low |  | small | critic/bug | Notifications are documented as 'live every 8 seconds while a computer is open', but the in-app poll never posts a notification |
-| [A74](#a74) | low |  | small | critic/bug | The LAN leg dials a DHCP IPv4 frozen at pairing time; when another SSH host answers at that address, the host-key 'hard stop' also blocks the relay fallback |
-| [A75](#a75) | low |  | small | critic/gap | The New session account picker lists managed Claude accounts by raw UUID |
+| [A74](#a74) | low |  | small | critic/bug | ✅ fixed in `a40d11b` · The LAN leg dials a DHCP IPv4 frozen at pairing time; when another SSH host answers at that address, the host-key 'hard stop' also blocks the relay fallback |
+| [A75](#a75) | low |  | small | critic/gap | ✅ fixed in `437e359` · The New session account picker lists managed Claude accounts by raw UUID |
 | [A76](#a76) | low |  | small | critic/gap | Over direct SSH, opening a Sleeping (Eco-hibernated) session lands on a bare shell with no wake or resume offer |
 | [A77](#a77) | low |  | small | critic/bug | IME insets are not handled for Android 15's enforced edge-to-edge (targetSdk 35): the terminal gets double bottom padding when the keyboard opens, and other screens have no IME padding at all |
 

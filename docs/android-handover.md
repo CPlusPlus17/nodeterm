@@ -25,6 +25,21 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
 
+### WP4 remainder, WP5/WP6 batch A (desktop root causes, protocol-testable items): done on the branch, not device-verified
+
+| Finding | Commit | What changed | Checked by |
+|---|---|---|---|
+| A13 (desktop) | `b718a04` | The app's own tmux client attaches with `-A` and no `-D` while a relay-served client of the same node is live in this process (found by walking the session table at spawn time: local tmux, sink attached, not over SSH, not the session host). With no phone attached the argv is unchanged. The remote (SSH-project) attach never used `-D`; now pinned by a test. | vitest `pty-relay-coattach.test.ts` (argv, both orders, remote) and `relay-coattach.realtmux.test.ts` (real tmux in the sandbox: `-A -D` kicks a control-mode client with exit 0, `-A` keeps both). Mutation-checked. |
+| A72 | `71290de` | A phone-started session (A33's `projectId`/`agentId` on `pty.attach`) now gets the agent-gated hook env (`NODETERM_AGENT_ID`, the approval wait, canvas control by `canControlCanvas`) and a proven pane owner, resolved on the host from the index entry the project id matched. Resolver moved to `host-new-sessions.ts`. | vitest `host-new-sessions.test.ts`, `pty-relay-create.test.ts`, `remote-security.test.ts`. |
+| A39 / A75 | `437e359`, `ea19490` | Additive `label`/`email` on the mirror's `settings.claudeAccounts`, written by one shared builder in both shells and the SSH slice. One protocol helper names accounts: settings label, usage label, email, then `Account <first 8>` — never the full UUID; an unlinked config dir shows its last path segment. Used by the picker, the sessions row and the usage card. | Protocol `AccountNamesTest`; vitest mirror test; the interop fixture's settings entry is built by the real desktop builder. |
+| A38 | `5ff8f6c` | A ticketed approval is answered while the node is WAITING on a held parent question (the desktop's "gone" still guards an expired hold). The keyed paths keep their exact-state gates. | Protocol QuickActions tests. |
+| A56 | `38fa6c4`, `45e21ec` | **Not built, by decision.** A static read of Claude Code 2.1.283 shows option 2 of the permission prompt is conditional: when there is no "don't ask again" row, `2` is "Yes, and switch to auto mode" or "No". A blind `2` can therefore deny or widen permissions. Documented in `docs/android.md` (Known gaps) and `docs/hook-reply-approvals.md`, including that **the iOS "Always allow" has the same hazard** (for @eneskirca). The safe route is a hook-level allow with `updatedPermissions`, which needs a cross-surface design. | Docs only. |
+| A58 | `a44f16c`, `144bd40` | Usage pace line ("5h usage pace slower/faster", "on pace" within ±5 points), computed at the usage snapshot's own time, refusing stale or unknown windows; a context ring on approval, question and done cards. | Protocol `UsagePaceTest` (15 cases). |
+| A48 | `d383e76` | The seen log is id → time, pruned by age past the 6 h announce window (+18 h margin), claimed and marked under one lock; the old string set migrates as "seen now". | Protocol `SeenLogTest`. |
+| A53 | `af587ac`, `ec203db` | OSC 52: the `;` is required, a 16-character selection field at most, 100,000 characters of text (400,000 base64) at most, strict base64 and UTF-8; terminal.js applies the cap before the bridge; a failed or too-large clipboard write shows a toast instead of crashing. | Protocol `Osc52Test`; `TerminalJsOsc52Test` runs the real terminal.js under node. |
+| A54 | `32330df`, `ec203db` | `/pair`: a negative, non-numeric or over-64 KiB Content-Length is refused, a length-less body stops at 64 KiB, a 45 s watchdog closes the socket (also on cancellation), and a refusal body is shown as one line of at most 300 characters. | Protocol `PairingClientBoundsTest`; an interop test measures the real answer (606 bytes with the fixture's short token). |
+| A49 / A74 | `a40d11b` | The SSH host-key pin is persisted only after public-key auth succeeds. In Auto, a changed host key refuses SSH, shows a warning, and falls through to the relay leg; SSH_ONLY keeps the hard stop. The message points at Settings → "Only through the relay". | SSH transport test (a failed auth does not pin); protocol `SshFallbackTest`. |
+
 ### WP4 (medium bugs): done on the branch, not device-verified
 
 | Finding | Commit | What changed | Checked by |
@@ -44,11 +59,19 @@ audit's proposal.
 
 ### What is still open
 
-- **A13, desktop root cause.** When the renderer mounts a node whose session a relay-served client
-  holds, pty-manager attaches with `-A -D` (relay ptys are not indexed by persistKey), detaching the
-  phone. The phone now reattaches, but the right fix is on the desktop (attach without `-D` when a
-  detached relay session for that persistKey is live). It touches pty-manager's attach flags, so it
-  needs its own careful change and tests; iOS benefits too.
+- **A13 for direct-SSH phones.** The desktop fix covers phones attached through the relay. A phone
+  attached over direct SSH (Android or iOS) is still detached by the app's `-D`, because its tmux
+  client is not spawned by this process; the Android exit-0 reattach (`68d0925`) covers it.
+- **A56 "Always allow".** Needs a layout-independent answer: the hook replies `allow` with
+  `updatedPermissions`, carried by the answer file and `approvals.answer`. That spans the desktop,
+  the `~/.nodeterm/pending` contract, iOS and Android, so it needs a design decision. The iOS app's
+  blind `2` should be re-checked by @eneskirca.
+- **A49 anchoring.** The SSH pin is still trust-on-first-use. Anchoring it needs the desktop to
+  return its SSH host key fingerprints in the sealed `/pair` answer (desktop + iOS + fixture), and
+  refreshing a stale LAN address needs the desktop to publish its current one.
+- **A72 project overrides.** A phone-started session gets the agent env and a proven owner, but not
+  the project's `.nodeterm/settings.json` env/shell overrides (that read is async and may raise a
+  trust dialog).
 - **A12 for SSH-project nodes.** `node.sendKeys` answers `sent:false` for them (background writes
   do not reach a remote host), so the phone opens the session instead of answering in one tap.
 - **A33 on an older desktop.** An older desktop ignores the new attach fields, so a Windows host
@@ -56,10 +79,12 @@ audit's proposal.
 - **A07 edges.** Late relay adoption does not pin; revoking a device unpins but does not cut a relay
   session open at that moment.
 - **A10 trade-off.** The debug key is public by the user's decision; a release key does not exist.
+- **Seen log per host.** The notification seen log is phone-global; two computers could in theory
+  mint the same event id in the same millisecond.
 - **Server-e2e and native-module vitest suites** could not run in this sandbox (`npm ci
-  --ignore-scripts` skips the native builds); the same failures occur on the pre-session commit.
-  Desktop CI does not run on branch pushes here, so the desktop changes are checked by targeted
-  vitest files + `npm run typecheck` only.
+  --ignore-scripts` skips the native builds, and there is no `ssh` client); the same 14 tests and 31
+  files fail identically on the pre-session commit. Desktop CI does not run on branch pushes here,
+  so the desktop changes are checked by targeted vitest files + `npm run typecheck` only.
 
 ### WP2 (blockers with decisions): done on the branch, not device-verified
 
