@@ -11,6 +11,7 @@ import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.RelayConnector
 import dev.nodeterm.protocol.host.TransportKind
 import dev.nodeterm.protocol.model.J
+import dev.nodeterm.protocol.model.OnScreenTracker
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.pairing.PairingPayload
@@ -73,6 +74,12 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
 
     /** A screen is showing this computer right now (so its connection is worth keeping open). */
     val isWatched: Boolean get() = synchronized(this) { watchers > 0 }
+
+    /**
+     * What of this computer is on screen: its Inbox tab, and the sessions open in a terminal. Each
+     * listing announces its new Inbox events except those (audit A73, see [refreshNow]).
+     */
+    val onScreen = OnScreenTracker()
 
     suspend fun ensureConnected(trigger: Trigger = Trigger.AUTO): HostConnection {
         conn?.let { return it }
@@ -302,12 +309,19 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * Re-list now. Connects first when needed; failures land in [state]/[lastError], never throw.
      * [trigger] says who asked: a [Trigger.USER] refresh releases a held relay approval, a
      * [Trigger.BACKGROUND] one never makes a first relay handshake (see [RelayApprovalGate]).
+     *
+     * A listing that arrives announces its new Inbox events, minus what [onScreen] shows (audit A73):
+     * the 8 s poll of the computer on screen, a change the computer pushed, and the background check
+     * all come through here, so notifications are live for the computer whose screen is open. Other
+     * computers are not re-listed, so theirs wait for the background check.
      */
     suspend fun refreshNow(trigger: Trigger = Trigger.AUTO) {
-        try {
+        val listed = try {
             val c = ensureConnected(trigger)
-            _snapshot.value = c.listProjects()
-            _lastError.value = null
+            c.listProjects().also {
+                _snapshot.value = it
+                _lastError.value = null
+            }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -316,7 +330,11 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
             // own drop). Anything else is an unexpected transport failure: drop the connection so the
             // next refresh dials a fresh one instead of reusing a dead socket.
             if (e !is HostException) disconnect()
+            return
         }
+        // Outside the try: a notification the system refused is not a failed listing, and must not
+        // drop a working connection. No network here — the listing just arrived.
+        runCatching { graph.announce(hostId, listed, onScreen.now()) }
     }
 
     /** A refresh the USER asked for (Refresh, Try again). */
@@ -324,7 +342,10 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         scope.launch { refreshNow(Trigger.USER) }
     }
 
-    /** While a screen shows this computer, re-list every 8 s (the iOS foreground cadence). */
+    /**
+     * While a screen shows this computer, re-list every 8 s (the iOS foreground cadence); each listing
+     * announces what is new and not on screen ([refreshNow]).
+     */
     @Synchronized
     fun startWatching() {
         watchers++

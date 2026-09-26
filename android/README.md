@@ -74,13 +74,19 @@ Try again or open that computer.
 
 
 The iOS app is woken by APNs pushes the nodeterm backend sends. That backend has no Android (FCM)
-leg, so this app checks each computer's Inbox periodically in the background (WorkManager's floor
-is ~15 minutes) and live every 8 seconds while a computer is open. Real-time push on Android needs
-an FCM leg in the backend.
+leg, so this app polls instead: checked about every 15 minutes in the background (WorkManager's
+floor), and live for the computer whose screen is open, which the app re-lists every 8 seconds.
+Other paired computers are not polled while you look at one, so their notifications still come from
+the background check only. Real-time push on Android needs an FCM leg in the backend.
+
+The live check leaves out what you are looking at: nothing of a computer is announced while its
+Inbox tab is on screen, and nothing of a session open in a terminal. Those events count as seen, so
+no later check announces them either.
 
 Each Inbox event raises at most one notification: only events younger than 6 hours are announced,
-and the phone remembers the ones it has announced or you have read for a day after it last saw them
-(longer when the computer's clock runs ahead), so nothing still eligible is forgotten.
+and the phone remembers the ones it has announced, you have read or you had on screen for a day
+after it last saw them (longer when the computer's clock runs ahead), so nothing still eligible is
+forgotten.
 
 A notification names the session, the computer and the kind of event ("Needs you — build-bot",
 "Needs approval"), but not the event's own text: the command, file or question, or the agent's last

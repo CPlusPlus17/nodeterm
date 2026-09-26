@@ -2,6 +2,7 @@ package dev.nodeterm.android.data
 
 import android.content.Context
 import dev.nodeterm.protocol.model.InboxEvent
+import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.SeenLog
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -118,9 +119,9 @@ class HostStore(context: Context) {
         }
 
     /**
-     * Inbox events this phone has announced or read (phone-local, like iOS), trimmed by age and
-     * locked across each update — see [SeenLog] (audit A48). The pre-A48 build kept a bare id set
-     * under `seenEvents`; [SeenLog] migrates it on first use and the same edit removes it.
+     * Inbox events this phone has announced, read or had on screen (phone-local, like iOS), trimmed
+     * by age and locked across each update — see [SeenLog] (audit A48). The pre-A48 build kept a bare
+     * id set under `seenEvents`; [SeenLog] migrates it on first use and the same edit removes it.
      */
     private val seenLog = SeenLog(object : SeenLog.Storage {
         override fun read(): String? = prefs.getString(SEEN_LOG_KEY, null)
@@ -134,8 +135,12 @@ class HostStore(context: Context) {
     /** The phone has seen [events]: the user read them here. */
     fun markSeen(events: Collection<InboxEvent>) = seenLog.markSeen(events)
 
-    /** The events of a feed to notify about now, recorded as announced in the same locked step. */
-    fun claimAnnounceable(events: List<InboxEvent>): List<InboxEvent> = seenLog.claimAnnounceable(events)
+    /**
+     * The events of a fresh listing to notify about now, recorded as announced in the same locked
+     * step; what [onScreen] shows is recorded as seen instead (audit A73) — see [SeenLog.claimLive].
+     */
+    fun claimLive(events: List<InboxEvent>, onScreen: OnScreen, notify: Boolean): List<InboxEvent> =
+        seenLog.claimLive(events, onScreen, notify)
 
     private companion object {
         const val SEEN_LOG_KEY = "seenEvents.v2"

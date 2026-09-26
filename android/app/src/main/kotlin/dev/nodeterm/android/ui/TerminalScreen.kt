@@ -60,12 +60,17 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
     // Attached and watching only while the screen is STARTED (audit A18): in the background the
     // relay stream kept the desktop treating the session as watched (Eco shield, and the phone's
     // size as a ceiling) and kept the radio busy. Stop detaches; start reattaches.
+    // While it shows, this session's Inbox events are in front of the user: the live refresh records
+    // them as seen instead of announcing them (A73). Registered before the watch starts, so its
+    // first listing already knows.
     LifecycleStartEffect(controller) {
+        val showing = session.onScreen.showNode(nodeId)
         session.startWatching()
         controller.onStart()
         onStopOrDispose {
             controller.onStop()
             session.stopWatching()
+            showing.close()
         }
     }
     DisposableEffect(controller) {

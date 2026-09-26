@@ -25,6 +25,7 @@ import dev.nodeterm.protocol.host.RelayApprovalGate
 import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.InboxNotificationText
+import dev.nodeterm.protocol.model.OnScreen
 import dev.nodeterm.protocol.model.PairedHost
 import dev.nodeterm.protocol.model.ProjectsSnapshot
 import kotlinx.coroutines.withTimeoutOrNull
@@ -35,9 +36,13 @@ import java.util.concurrent.TimeUnit
  *
  * The iOS app gets these as APNs pushes fanned out by the nodeterm backend (src/core/push-notify.ts).
  * That backend has no Android (FCM) leg, so this app cannot be woken the same way. What it does
- * instead, honestly: a periodic WorkManager check (Android's floor is 15 minutes) that reads each
- * paired computer's Inbox and raises a local notification for events it has not announced yet — plus
- * the in-app 8 s refresh while a computer's screen is open. A real push leg is backend work.
+ * instead, honestly: checked about every 15 minutes in the background, and live for the computer
+ * whose screen is open. Both are the same [announce], run on every fresh listing of a computer
+ * (HostSession.refreshNow): the periodic WorkManager check (Android's floor is 15 minutes) lists
+ * each paired computer, and the app re-lists the computer on screen every 8 s (audit A73). Other
+ * computers are not polled, so their notifications come from the background check only. What the
+ * user is looking at ([OnScreen]) is recorded as seen instead of announced. A real push leg is
+ * backend work.
  */
 object InboxNotifier {
     private const val CH_ATTENTION = "attention"
@@ -73,16 +78,22 @@ object InboxNotifier {
         wm.enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.KEEP, req)
     }
 
-    /** Announce events not announced before. Returns how many were posted. */
-    fun announce(context: Context, host: PairedHost, snapshot: ProjectsSnapshot): Int {
+    /**
+     * Announce the events of a fresh listing of [host] not announced before, except what [onScreen]
+     * says the user is looking at: those are recorded as seen (audit A73). Returns how many were
+     * posted.
+     */
+    fun announce(context: Context, host: PairedHost, snapshot: ProjectsSnapshot, onScreen: OnScreen): Int {
         val graph = NodetermApp.graph(context)
-        if (!graph.hosts.notificationsEnabled) return 0
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) return 0
-        // Decided and recorded in one locked step (SeenLog, audit A48): unresolved, younger than the
-        // announce window, and never announced or read on this phone.
-        val fresh = graph.hosts.claimAnnounceable(snapshot.status?.inbox?.events.orEmpty())
+        // The switch, and whether the system will show it (A21): with either off nothing is claimed,
+        // but what is on screen is still recorded as seen, so turning them on later does not
+        // announce what the user already looked at.
+        val permitted = Build.VERSION.SDK_INT < 33 ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+        val notify = graph.hosts.notificationsEnabled && canPost(context) && permitted
+        // Decided and recorded in one locked step (SeenLog, audits A48/A73): unresolved, younger than
+        // the announce window, not on screen, and never announced, read or shown on this phone.
+        val fresh = graph.hosts.claimLive(snapshot.status?.inbox?.events.orEmpty(), onScreen, notify)
         if (fresh.isEmpty()) return 0
         val nm = NotificationManagerCompat.from(context)
         val showDetails = graph.hosts.notificationDetails
@@ -147,9 +158,10 @@ class InboxWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             val session = graph.connections.session(host.id)
             val watched = session.isWatched
             // BACKGROUND: never a first relay handshake — that would raise the desktop's approval
-            // dialog with nobody at the phone to compare the code (audit A05).
+            // dialog with nobody at the phone to compare the code (audit A05). A listing that arrives
+            // announces its new events itself (HostSession.refreshNow → InboxNotifier.announce, the
+            // path the live refresh takes too, audit A73); a failed one has nothing new to announce.
             withTimeoutOrNull(45_000) { session.refreshNow(RelayApprovalGate.Trigger.BACKGROUND) }
-            InboxNotifier.announce(applicationContext, host, session.snapshot.value)
             // Don't hold a socket open in the background for a screen nobody is looking at.
             if (!watched && !session.isWatched) session.disconnect()
         }

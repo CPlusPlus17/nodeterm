@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleStartEffect
 import dev.nodeterm.android.Navigator
 import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.Route
@@ -84,6 +85,12 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
         .filter { (id, st) -> st.state == AgentState.WORKING && inbox?.nodes?.get(id)?.activity != null }
 
     LaunchedEffect(actionable.map { it.id }) { graph.hosts.markSeen(actionable) }
+    // While this tab is on screen, the live refresh announces none of this computer's events; it
+    // records them as seen, so the background check does not announce them later either (A73).
+    LifecycleStartEffect(hostId) {
+        val showing = session.onScreen.showInbox()
+        onStopOrDispose { showing.close() }
+    }
 
     fun titleOf(nodeId: String): String =
         snapshot.findNode(nodeId)?.second?.let { displayTitle(it, snapshot) } ?: snapshot.statusOf(nodeId)?.name ?: "Session"

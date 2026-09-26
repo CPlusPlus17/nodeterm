@@ -4,8 +4,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /**
- * Which Inbox events this phone has already announced or read (phone-local, like iOS), so the
- * background check notifies each event once (audit A48).
+ * Which Inbox events this phone has already announced, read or had on screen (phone-local, like
+ * iOS), so each event raises at most one notification (audit A48), whichever check sees it first.
  *
  * The first version kept a bare id set and trimmed it with `(set + ids).toList().takeLast(500)`.
  * The set came back from SharedPreferences as a `HashSet`, whose order is hash order, so past 500
@@ -27,7 +27,8 @@ import kotlinx.serialization.json.JsonPrimitive
  * now", so the upgrade announces nothing again and they age out one retention period later.
  *
  * Every entry point holds this object's lock across the whole read-modify-write, and
- * [claimAnnounceable] decides and records in one step, so two callers cannot both announce an event.
+ * [claimAnnounceable] and [claimLive] (the app's path since A73) decide and record in one step, so
+ * two callers cannot both announce an event.
  */
 class SeenLog(
     private val storage: Storage,
@@ -58,6 +59,44 @@ class SeenLog(
         val entries = load(now)
         for (ev in events) record(entries, ev, now)
         save(entries, now)
+    }
+
+    /**
+     * One check of a fresh listing ([events], a host's feed): the events to notify about now, recorded
+     * as announced in the same locked step (audit A73). What [onScreen] shows is recorded as seen and
+     * never returned, so no later check (the next refresh, or the background one) announces what the
+     * user already looked at; that happens even when [notify] is false (notifications off, or not
+     * allowed by the system), so turning them on later does not announce it either. The rest is
+     * [claimAnnounceable]'s answer when [notify], and left untouched otherwise.
+     *
+     * Only events that could still be announced are recorded, an entry already recorded is left as it
+     * is, and nothing is written when nothing is new: the live check runs every 8 s. Leaving an
+     * anchor alone is safe, since the first anchor is never earlier than the event's `ts`, so the
+     * entry outlives the announce window. With [OnScreen.NOTHING] and [notify] it returns what
+     * [claimAnnounceable] returns.
+     */
+    @Synchronized
+    fun claimLive(events: List<InboxEvent>, onScreen: OnScreen, notify: Boolean): List<InboxEvent> {
+        val now = clock()
+        val (shown, offScreen) = onScreen.split(events.filter { announceable(it, now) })
+        val claim = if (notify) offScreen else emptyList()
+        if (shown.isEmpty() && claim.isEmpty()) return emptyList()
+        val entries = load(now)
+        var changed = false
+        for (ev in shown) {
+            if (ev.id in entries) continue
+            record(entries, ev, now)
+            changed = true
+        }
+        val fresh = ArrayList<InboxEvent>()
+        for (ev in claim) {
+            if (ev.id in entries) continue
+            record(entries, ev, now)
+            fresh += ev
+            changed = true
+        }
+        if (changed) save(entries, now)
+        return fresh
     }
 
     /**

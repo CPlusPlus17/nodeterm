@@ -224,6 +224,20 @@ preview setting. That is a difference in platform defaults, not an Android-only 
 unit-tested; the notification's use of them and the setting's default are pinned in the source, and
 what a lock screen shows is a device check.
 
+`LiveNotificationsTest` covers when notifications are posted (`A73`). The app said they were live
+every 8 s while a computer was open, but only the 15-minute background check ever posted one; the
+in-app refresh only updated the listing. Now every listing that arrives (the 8 s refresh of the
+computer on screen, a change the computer pushes, the background check) runs the one announce path,
+so notifications are live for the computer whose screen is open. What the user is looking at is left
+out and recorded as seen instead, so no later check announces it: every event while that computer's
+Inbox tab is on screen, and the events of a session open in a terminal. That is recorded even with
+notifications off, so turning them on later does not announce it either. Other computers are not
+polled while one is open, so theirs still come only from the background check, and the Settings
+text, the README and the notifier's comment now say exactly that. It costs no network call (the
+listing already arrived), and the check writes the phone's seen-log only when something is new. The
+decision and the screen bookkeeping are unit-tested; the wiring into the refresh, the worker and the
+two screens is pinned in the source, and whether a notification appears on a phone is a device check.
+
 ## Known gaps
 
 - **Push.** No FCM leg exists in the backend; the app polls (see android/README.md). The backend's

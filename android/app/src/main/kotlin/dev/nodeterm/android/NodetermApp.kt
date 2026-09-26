@@ -8,6 +8,8 @@ import dev.nodeterm.android.data.SecureStore
 import dev.nodeterm.android.notify.InboxNotifier
 import dev.nodeterm.protocol.crypto.BoxKeyPair
 import dev.nodeterm.protocol.host.RelayApprovalGate
+import dev.nodeterm.protocol.model.OnScreen
+import dev.nodeterm.protocol.model.ProjectsSnapshot
 import dev.nodeterm.protocol.pairing.SshIdentity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +32,18 @@ class AppGraph(context: Context) {
 
     /** The phone's SSH identity (Ed25519); its public half is in each computer's authorized_keys. */
     val sshIdentity: SshIdentity by lazy { SshIdentity.fromSeed(secure.getOrCreate32(SecureStore.SSH_SEED)) }
+
+    private val appContext: Context = context.applicationContext
+
+    /**
+     * A fresh listing of [hostId] arrived (HostSession.refreshNow): notify about its new Inbox events,
+     * minus what [onScreen] shows (audit A73). One path for the 8 s refresh of the computer on screen
+     * and the background check alike.
+     */
+    fun announce(hostId: String, snapshot: ProjectsSnapshot, onScreen: OnScreen) {
+        val host = hosts.get(hostId) ?: return
+        InboxNotifier.announce(appContext, host, snapshot, onScreen)
+    }
 }
 
 class NodetermApp : Application() {
