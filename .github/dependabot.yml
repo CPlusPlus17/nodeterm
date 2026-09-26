@@ -39,3 +39,24 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+
+  # The Android companion's Gradle build (audit A69), weekly and grouped like npm: one PR carries the
+  # routine minor/patch bumps, a major (AGP, Kotlin, Gradle itself) comes on its own. /android covers
+  # the whole build: the app (include(":app")), the protocol module, which is an included build
+  # (includeBuild("protocol") in android/settings.gradle.kts; Dependabot follows includeBuild, so it
+  # needs no entry of its own, and a second entry for /android/protocol would open each of its bumps
+  # twice), and the Gradle wrapper in android/gradle/wrapper. Not android/tools/typecheck: that offline
+  # type-check is not run by CI, so a PR against it would be untested, and its pins mirror the app's
+  # (Kotlin, BouncyCastle) or stand in for them (Compose Multiplatform desktop for Jetpack Compose,
+  # robolectric's android-all for compileSdk 35), so they move by hand with the app's, never to
+  # whatever is newest. GradleCiCoverageTest (android/protocol) pins this.
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      android-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]

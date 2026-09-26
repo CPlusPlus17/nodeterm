@@ -22,6 +22,11 @@ API-level availability, and any difference between Compose Multiplatform desktop
 for Android. The real build is `./gradlew :app:assembleDebug` in `android/`, which CI runs
 (`.github/workflows/android.yml`).
 
+Its dependency pins mirror the app's (the Kotlin plugin, BouncyCastle) or stand in for them (Compose
+Multiplatform desktop for Jetpack Compose, robolectric's `android-all` for `compileSdk` 35), so they are
+moved by hand when the app's move. Dependabot deliberately does not watch this build
+(`.github/dependabot.yml` says why): its PRs would move them to whatever is newest instead.
+
 When the app starts using a new androidx/Google-Maven-only class, add a stub with the same
 package, name and the signatures the app calls. `stubs/java/dev/nodeterm/android/R.java` must list
 every `R.*` id the Kotlin references.

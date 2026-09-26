@@ -853,6 +853,8 @@ in CLAUDE.md § Idle energy.
 ## Pull requests
 
 - Branch from `main`. CI runs `quality`, `CodeQL` and `Dependency review`; all three are required.
+  `CodeQL (Kotlin)` (the Android companion's Kotlin, built under CodeQL) runs on every PR too, but is
+  not one of them.
 - Explain **why**, not just what. If a decision has a trade-off, name it and say what you rejected.
 - If you measured something, put the numbers in — they save the next person the same afternoon.
 - Say what you did **not** verify. That is more useful than a confident summary.

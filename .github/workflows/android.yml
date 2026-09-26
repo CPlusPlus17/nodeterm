@@ -22,6 +22,8 @@ name: Android
 #                         the fixture's type check runs in ci.yml, which has no path filter)
 #   package.json, package-lock.json   `npm ci` installs esbuild, ws and tweetnacl from them
 #   .github/workflows/android.yml     this file
+#   .github/workflows/security.yml, .github/dependabot.yml   GradleCiCoverageTest (android/protocol)
+#                         reads them: the Kotlin CodeQL job and the Gradle Dependabot entry (audit A69)
 # To re-derive: `node android/protocol/src/test/interop/bundle-fixture.cjs <out.cjs>
 # android/protocol/src/test/interop/electron-stub.ts` from the repo root writes <out.cjs>.meta.json,
 # whose `inputs` are the bundled files. WorkflowPathFilterTest (android/protocol) fails when one is not
@@ -39,6 +41,8 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/android.yml'
+      - '.github/workflows/security.yml'
+      - '.github/dependabot.yml'
   pull_request:
     paths:
       - 'android/**'
@@ -50,6 +54,8 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/android.yml'
+      - '.github/workflows/security.yml'
+      - '.github/dependabot.yml'
   workflow_dispatch:
 
 concurrency:
@@ -59,6 +65,20 @@ concurrency:
 permissions:
   contents: read
 
+# Every job runs gradle/actions/setup-gradle before ./gradlew (audit A69). It checks the committed
+# android/gradle/wrapper/gradle-wrapper.jar against Gradle's published wrapper checksums, so a jar that
+# is not a released Gradle wrapper fails the job instead of running, and it caches ~/.gradle (the wrapper's Gradle distribution, AGP
+# and the dependencies), which every run used to download again. The cache is the MIT-licensed `basic`
+# provider (a thin wrapper over actions/cache), not the action's default `enhanced` one: that is the
+# closed-source gradle-actions-caching library under the Gradle Technologies Terms of Use, and using it
+# accepts those terms for this repository, which is the owner's call (switching is this one input).
+# The basic provider uses ONE key for every job, setup-java-<os>-<arch>-gradle-<hash of **/*.gradle*
+# and gradle-wrapper.properties>, shared with security.yml's CodeQL (Kotlin) job, and the first job to
+# save a key keeps it. So exactly one job writes it: `app`, which resolves the most (AGP, the app's and
+# the protocol module's dependencies, the Gradle distribution), and only on the default branch (the
+# action's own default; a pull request never writes). The others read it with cache-read-only and
+# download what only they use. GradleCiCoverageTest (android/protocol) pins the validation step and the
+# single writer.
 jobs:
   protocol:
     name: Protocol (JVM + desktop interop)
@@ -88,6 +108,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          cache-read-only: true
+
       - name: Protocol tests
         working-directory: android
         run: ./gradlew -p protocol test --stacktrace
@@ -108,6 +133,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      # The one job that writes the shared Gradle cache (see the note above `jobs:`).
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       - name: Build debug APK
         working-directory: android
@@ -136,6 +166,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+          cache-read-only: true
 
       - name: Build release APK (R8)
         working-directory: android

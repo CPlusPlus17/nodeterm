@@ -46,8 +46,9 @@ tasks.test {
     systemProperty("nodeterm.repoRoot", rootDir.resolve("../..").canonicalPath)
     // Files some tests run or read that are not on the test classpath: the node drivers, the app's
     // terminal page (TerminalJs*Test), the app's sources (the source pins in TerminalKeyboardChipTest,
-    // SettingsLeaveTest and R8RulesTest), and the release build's R8 rules, its build type and the CI
-    // workflow that runs R8 (R8RulesTest).
+    // SettingsLeaveTest and R8RulesTest), the release build's R8 rules, its build type and the CI
+    // workflow that runs R8 (R8RulesTest), and the CI config GradleCiCoverageTest checks: the workflows
+    // that run Gradle, the Dependabot config and the root build's settings.
     // Declared so a change to one of them re-runs the tests instead of leaving them "up to date".
     inputs.dir("src/test/interop").withPathSensitivity(PathSensitivity.RELATIVE)
     // The desktop code the interop fixture bundles (the same dirs as android.yml's path filter). Without
@@ -62,6 +63,9 @@ tasks.test {
     inputs.file(rootDir.resolve("../app/proguard-rules.pro")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../app/build.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../../.github/workflows/android.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("../../.github/workflows/security.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("../../.github/dependabot.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("../settings.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
     // R8RulesTest reads the jars this module ships to the app (its runtime classpath, not the test one)
     // for the classes they reference that Android lacks (audit A37).
     val shippedJars: FileCollection = configurations.runtimeClasspath.get()
