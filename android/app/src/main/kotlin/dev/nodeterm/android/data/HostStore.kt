@@ -52,7 +52,18 @@ class HostStore(context: Context) {
     @Synchronized
     fun remove(id: String) {
         save(_hosts.value.filterNot { it.id == id })
-        prefs.edit().remove("route.$id").apply()
+        prefs.edit().remove("route.$id").remove("relayApproved.$id").apply()
+    }
+
+    /**
+     * This computer serves this phone over the relay without an approval dialog: a relay connect has
+     * succeeded (its standing host pinned our box key), or pairing pinned it. Gates the background
+     * worker's relay leg (dev.nodeterm.protocol.host.RelayApprovalGate, audit A05).
+     */
+    fun relayApproved(id: String): Boolean = prefs.getBoolean("relayApproved.$id", false)
+
+    fun setRelayApproved(id: String, approved: Boolean) {
+        prefs.edit().putBoolean("relayApproved.$id", approved).apply()
     }
 
     fun route(id: String): RoutePreference =

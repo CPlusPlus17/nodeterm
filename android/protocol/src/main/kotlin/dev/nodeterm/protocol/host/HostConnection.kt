@@ -112,4 +112,4 @@ enum class GitVerb(val wire: String) {
     COMMIT("git.commit"), PUSH("git.push"), PULL("git.pull"), HISTORY("git.history")
 }
 
-class HostException(message: String) : Exception(message)
+open class HostException(message: String) : Exception(message)

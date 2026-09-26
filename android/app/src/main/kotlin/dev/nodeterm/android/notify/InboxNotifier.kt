@@ -21,6 +21,7 @@ import androidx.work.WorkerParameters
 import dev.nodeterm.android.MainActivity
 import dev.nodeterm.android.NodetermApp
 import dev.nodeterm.android.R
+import dev.nodeterm.protocol.host.RelayApprovalGate
 import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.PairedHost
@@ -121,7 +122,9 @@ class InboxWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         for (host in graph.hosts.hosts.value) {
             val session = graph.connections.session(host.id)
             val watched = session.isWatched
-            withTimeoutOrNull(45_000) { session.refreshNow() }
+            // BACKGROUND: never a first relay handshake — that would raise the desktop's approval
+            // dialog with nobody at the phone to compare the code (audit A05).
+            withTimeoutOrNull(45_000) { session.refreshNow(RelayApprovalGate.Trigger.BACKGROUND) }
             InboxNotifier.announce(applicationContext, host, session.snapshot.value)
             // Don't hold a socket open in the background for a screen nobody is looking at.
             if (!watched && !session.isWatched) session.disconnect()

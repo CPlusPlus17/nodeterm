@@ -5,6 +5,8 @@ import dev.nodeterm.android.data.RoutePreference
 import dev.nodeterm.android.data.SecureStore
 import dev.nodeterm.protocol.host.HostConnection
 import dev.nodeterm.protocol.host.HostException
+import dev.nodeterm.protocol.host.RelayApprovalGate
+import dev.nodeterm.protocol.host.RelayApprovalGate.Trigger
 import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.RelayConnector
 import dev.nodeterm.protocol.host.TransportKind
@@ -63,12 +65,12 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
     /** A screen is showing this computer right now (so its connection is worth keeping open). */
     val isWatched: Boolean get() = synchronized(this) { watchers > 0 }
 
-    suspend fun ensureConnected(): HostConnection {
+    suspend fun ensureConnected(trigger: Trigger = Trigger.AUTO): HostConnection {
         conn?.let { return it }
-        return mutex.withLock { conn ?: connectLocked() }
+        return mutex.withLock { conn ?: connectLocked(trigger) }
     }
 
-    private suspend fun connectLocked(): HostConnection {
+    private suspend fun connectLocked(trigger: Trigger): HostConnection {
         val host = graph.hosts.get(hostId) ?: throw HostException("This computer is no longer paired.")
         val route = graph.hosts.route(hostId)
         val errors = ArrayList<String>()
@@ -100,7 +102,11 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
             val relay = host.relay
             val token = graph.secure.getString(SecureStore.relayTokenKey(host.id))
             val hostKey = host.relayHostKeyB64
-            if (relay != null && token != null && hostKey != null) {
+            val decision = if (relay != null && token != null && hostKey != null) graph.relayGate.decide(hostId, trigger) else null
+            if (decision is RelayApprovalGate.Decision.Skip) {
+                errors += "Through the relay: ${decision.reason}"
+            } else if (relay != null && token != null && hostKey != null) {
+                val requireApproved = (decision as? RelayApprovalGate.Decision.Dial)?.requireApproved == true
                 _state.value = ConnState.Connecting("Connecting through the relay…")
                 try {
                     val join = RelayApi(graph.hosts.apiBase).join(token, relay.hostId)
@@ -109,6 +115,7 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                         token = join.pairingToken,
                         deviceKeys = graph.boxKeys,
                         hostPublicKeyB64 = hostKey,
+                        requireApproved = requireApproved,
                         onStatus = { st ->
                             when (st) {
                                 is RelayConnectStatus.AwaitingApproval -> _state.value = ConnState.AwaitingApproval(st.sas)
@@ -117,10 +124,14 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                             }
                         }
                     )
+                    graph.relayGate.onConnected(hostId)
                     _snapshot.value = connected.first
                     adopt(connected.connection)
                     return connected.connection
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
                 } catch (e: Exception) {
+                    graph.relayGate.onFailed(hostId, e)
                     errors += "Through the relay: ${e.message ?: e.javaClass.simpleName}"
                 }
             } else if (route == RoutePreference.RELAY_ONLY || !host.sshAvailable) {
@@ -186,10 +197,14 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         }
     }
 
-    /** Re-list now. Connects first when needed; failures land in [state]/[lastError], never throw. */
-    suspend fun refreshNow() {
+    /**
+     * Re-list now. Connects first when needed; failures land in [state]/[lastError], never throw.
+     * [trigger] says who asked: a [Trigger.USER] refresh releases a held relay approval, a
+     * [Trigger.BACKGROUND] one never makes a first relay handshake (see [RelayApprovalGate]).
+     */
+    suspend fun refreshNow(trigger: Trigger = Trigger.AUTO) {
         try {
-            val c = ensureConnected()
+            val c = ensureConnected(trigger)
             _snapshot.value = c.listProjects()
             _lastError.value = null
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -203,8 +218,9 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         }
     }
 
+    /** A refresh the USER asked for (Refresh, Try again). */
     fun refresh() {
-        scope.launch { refreshNow() }
+        scope.launch { refreshNow(Trigger.USER) }
     }
 
     /** While a screen shows this computer, re-list every 8 s (the iOS foreground cadence). */
@@ -213,8 +229,11 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
         watchers++
         if (pollJob == null) {
             pollJob = scope.launch {
+                // Opening the computer is the user asking; the polls after it are the app's own.
+                var trigger = Trigger.USER
                 while (isActive) {
-                    refreshNow()
+                    refreshNow(trigger)
+                    trigger = Trigger.AUTO
                     delay(POLL_MS)
                 }
             }
@@ -255,6 +274,7 @@ class ConnectionManager(private val graph: AppGraph) {
 
     @Synchronized
     fun forget(hostId: String) {
+        graph.relayGate.forget(hostId)
         sessions.remove(hostId)?.disconnect()
     }
 

@@ -40,7 +40,10 @@ object RelayConnector {
         transport: RelayTransportFactory = OkHttpRelayTransport.factory(),
         handshakeTimeoutMs: Long = 20_000,
         approvalTimeoutMs: Long = 5 * 60_000,
-        approvalPollMs: Long = 1_500
+        approvalPollMs: Long = 1_500,
+        /** Give up with [RelayApprovalRequiredException] instead of waiting for an approval dialog
+         *  (a background check: nobody is there to compare the code). See [RelayApprovalGate]. */
+        requireApproved: Boolean = false
     ): Connected {
         onStatus(RelayConnectStatus.Handshaking)
         val ready = CompletableDeferred<String>()
@@ -67,19 +70,31 @@ object RelayConnector {
             val deadline = System.currentTimeMillis() + approvalTimeoutMs
             var announced = false
             while (true) {
-                if (closed.isCompleted) throw HostException("The connection closed while waiting for approval.")
+                // The standing host drops the handshake when the human presses Deny (or dismisses
+                // the dialog): once we have shown the code, a close IS the refusal.
+                if (closed.isCompleted) {
+                    if (announced) throw RelayApprovalRefusedException()
+                    throw HostException("The connection closed while waiting for approval.")
+                }
                 try {
                     val snapshot = conn.listProjects()
                     conn.setOnClosed(null)
                     return Connected(conn, sas, snapshot)
                 } catch (e: HostException) {
-                    if (e.message != AWAITING_APPROVAL_MESSAGE) throw e
+                    if (e.message != AWAITING_APPROVAL_MESSAGE) {
+                        // A request cut short by the close IS the refusal too (same reasoning).
+                        if (announced && withTimeoutOrNull(1_000) { closed.await() } != null || announced && closed.isCompleted) {
+                            throw RelayApprovalRefusedException()
+                        }
+                        throw e
+                    }
+                    if (requireApproved) throw RelayApprovalRequiredException()
                     if (!announced) {
                         announced = true
                         onStatus(RelayConnectStatus.AwaitingApproval(sas))
                     }
                     if (System.currentTimeMillis() > deadline) {
-                        throw HostException("Nobody approved this phone on your computer in time.")
+                        throw RelayApprovalTimeoutException()
                     }
                     delay(approvalPollMs)
                 }

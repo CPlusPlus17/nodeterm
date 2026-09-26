@@ -88,6 +88,8 @@ async function runRelay(): Promise<void> {
   const port = await startBroker()
   const keys = genKeyPair()
   const approveAfter = Number(process.env.FIXTURE_APPROVE_AFTER_MS ?? '0')
+  // "Deny" on the desktop: standing-host.ts removes the pooled session, which closes it.
+  const rejectAfter = Number(process.env.FIXTURE_REJECT_AFTER_MS ?? '-1')
   // A snapshot over the 256 KB chunk size, made of 3-byte code points so a chunk boundary splits
   // one: the reassembler must join BYTES before decoding.
   const bigSnapshot = 'SNAP-' + '€'.repeat(100_000) + '-END'
@@ -211,6 +213,7 @@ async function runRelay(): Promise<void> {
     onPeerReady: (s) => {
       emit({ event: 'peer-ready', sas: s.sas(), pub: s.peerPublicKeyB64() })
       if (approveAfter >= 0) setTimeout(approveNow, approveAfter)
+      if (rejectAfter >= 0) setTimeout(() => (emit({ event: 'rejected' }), session?.close()), rejectAfter)
     },
     onClose: () => emit({ event: 'host-close' })
   })

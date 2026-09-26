@@ -7,6 +7,9 @@ import dev.nodeterm.protocol.host.NewNode
 import dev.nodeterm.protocol.host.QuickActions
 import dev.nodeterm.protocol.host.RelayConnectStatus
 import dev.nodeterm.protocol.host.RelayConnector
+import dev.nodeterm.protocol.host.RelayApprovalRefusedException
+import dev.nodeterm.protocol.host.RelayApprovalRequiredException
+import dev.nodeterm.protocol.host.RelayApprovalTimeoutException
 import dev.nodeterm.protocol.host.TerminalSink
 import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxKind
@@ -39,15 +42,25 @@ class RelayInteropTest {
     @AfterTest
     fun tearDown() = harnesses.forEach { it.close() }
 
-    private fun start(approveAfterMs: Long = 0): InteropHarness =
-        InteropHarness.start("relay", mapOf("FIXTURE_APPROVE_AFTER_MS" to approveAfterMs.toString())).also { harnesses += it }
+    private fun start(approveAfterMs: Long = 0, rejectAfterMs: Long = -1): InteropHarness =
+        InteropHarness.start(
+            "relay",
+            mapOf("FIXTURE_APPROVE_AFTER_MS" to approveAfterMs.toString(), "FIXTURE_REJECT_AFTER_MS" to rejectAfterMs.toString())
+        ).also { harnesses += it }
 
     private fun InteropHarness.str(key: String) = ready[key]!!.jsonPrimitive.content
     private fun JsonObject.str(key: String) = this[key]!!.jsonPrimitive.content
 
-    private fun connect(h: InteropHarness, keys: BoxKeyPair = BoxKeyPair.generate(), statuses: MutableList<RelayConnectStatus>? = null, approvalTimeoutMs: Long = 20_000) =
+    private fun connect(
+        h: InteropHarness,
+        keys: BoxKeyPair = BoxKeyPair.generate(),
+        statuses: MutableList<RelayConnectStatus>? = null,
+        approvalTimeoutMs: Long = 20_000,
+        requireApproved: Boolean = false
+    ) =
         runBlocking {
             RelayConnector.connect(
+                requireApproved = requireApproved,
                 relayUrl = h.str("relayUrl"),
                 token = h.str("clientToken"),
                 deviceKeys = keys,
@@ -111,8 +124,30 @@ class RelayInteropTest {
     @Test
     fun `an unapproved phone is told so and never served`() {
         val h = start(approveAfterMs = -1)
-        val e = assertFailsWith<HostException> { connect(h, approvalTimeoutMs = 1_200) }
+        val e = assertFailsWith<RelayApprovalTimeoutException> { connect(h, approvalTimeoutMs = 1_200) }
         assertTrue(e.message!!.contains("approved"), e.message)
+    }
+
+    @Test
+    fun `pressing Deny on the desktop reads as a refusal, not a network error`() {
+        // A30: the refusal has to be recognisable, or the phone re-dials and the dialog comes back.
+        val h = start(approveAfterMs = -1, rejectAfterMs = 600)
+        val statuses = ArrayList<RelayConnectStatus>()
+        assertFailsWith<RelayApprovalRefusedException> { connect(h, statuses = statuses, approvalTimeoutMs = 10_000) }
+        assertTrue(statuses.any { it is RelayConnectStatus.AwaitingApproval })
+        h.awaitEvent("rejected")
+    }
+
+    @Test
+    fun `a background dial gives up instead of waiting on an approval dialog`() {
+        val h = start(approveAfterMs = -1)
+        val statuses = ArrayList<RelayConnectStatus>()
+        val t0 = System.currentTimeMillis()
+        assertFailsWith<RelayApprovalRequiredException> {
+            connect(h, statuses = statuses, approvalTimeoutMs = 20_000, requireApproved = true)
+        }
+        assertTrue(System.currentTimeMillis() - t0 < 10_000, "it did not wait out the approval window")
+        assertTrue(statuses.none { it is RelayConnectStatus.AwaitingApproval }, "no code shown for a dial nobody watches")
     }
 
     @Test
