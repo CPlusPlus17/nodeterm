@@ -64,10 +64,12 @@ a minified APK works on a phone; none has been run on one.
 Every CI job that runs `./gradlew` first checks `gradle/wrapper/gradle-wrapper.jar` against Gradle's
 published checksums (`gradle/actions/setup-gradle`, which also caches `~/.gradle`). Dependabot opens
 weekly Gradle update PRs for `android/`, the protocol build and the wrapper included (not for
-`tools/typecheck`, whose pins follow the app's by hand), and CodeQL analyses the app's and the protocol
-module's Kotlin on every pull request (`.github/workflows/security.yml`, job `CodeQL (Kotlin)`).
-`GradleCiCoverageTest` pins all three. The wrapper properties carry no `distributionSha256Sum` yet, so
-the Gradle distribution itself is not pinned.
+`tools/typecheck`, whose pins follow the app's by hand). The protocol's network and crypto libraries
+(okhttp, sshj, eddsa, BouncyCastle) come in a PR of their own, so an androidx bump the app cannot take
+yet (one that demands a higher `compileSdk`, say) does not hold them back. CodeQL analyses the app's
+and the protocol module's Kotlin on every pull request (`.github/workflows/security.yml`, job
+`CodeQL (Kotlin)`). `GradleCiCoverageTest` pins all of this. The wrapper properties carry no
+`distributionSha256Sum` yet, so the Gradle distribution itself is not pinned.
 
 **Debug builds are signed with a public key that is committed on purpose**
 (`app/debug.keystore`, password `android`). That is what lets you install a newer CI or local

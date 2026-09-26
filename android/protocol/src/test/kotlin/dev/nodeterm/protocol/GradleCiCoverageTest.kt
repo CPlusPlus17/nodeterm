@@ -20,6 +20,10 @@ import kotlin.test.assertTrue
  *  3. Dependabot watches every Gradle build under android/ exactly once: a build another build
  *     includes is covered by that build's entry (Dependabot follows `includeBuild`), and a second
  *     entry would open each of its bumps twice. Except the builds in [notWatched].
+ *  4. The protocol's network and crypto stack ([networkAndCrypto]) comes in a Dependabot PR that
+ *     carries nothing else. In one group with every androidx/Compose/AGP/Kotlin bump it could only land
+ *     when all of them build, and an androidx release that demands a higher compileSdk than the app's
+ *     keeps that PR red until someone fixes it by hand (review of A69).
  *
  * The YAML is read as text, in the block style this repo's workflows use, as [WorkflowPathFilterTest]
  * does; what these readers do not understand fails rather than being guessed.
@@ -37,6 +41,17 @@ class GradleCiCoverageTest {
     private val notWatched = mapOf(
         "android/tools/typecheck" to "the offline type-check is not run by CI, and its pins mirror or stand in " +
             "for the app's, so they move by hand with the app's (see .github/dependabot.yml)",
+    )
+
+    /**
+     * The libraries the phone's connections and keys rest on, as Dependabot names them, with what each
+     * is for. Their bumps must not wait on an unrelated one (item 4 above).
+     */
+    private val networkAndCrypto = mapOf(
+        "com.squareup.okhttp3:okhttp" to "the relay socket",
+        "com.hierynomus:sshj" to "the direct-SSH transport",
+        "net.i2p.crypto:eddsa" to "the phone's Ed25519 identity",
+        "org.bouncycastle:bcprov-jdk18on" to "the full BouncyCastle provider sshj needs on Android",
     )
 
     @Test
@@ -160,6 +175,59 @@ class GradleCiCoverageTest {
     }
 
     @Test
+    fun `the protocol's network and crypto stack comes in a Dependabot PR of its own`() {
+        val root = InteropHarness.repoRoot
+        val entries = gradleEntries(read(dependabot))
+        val scripts = gradleDirectories(read(dependabot)).flatMap { dir ->
+            coveredBuilds(File(root, dir.removePrefix("/"))).flatMap(::buildScripts)
+        }
+        assertTrue(scripts.size >= 3, "found only these build scripts in the watched builds: $scripts")
+        val declared = scripts.flatMap { declaredDependencies(read(it)) }.toSet()
+        for ((dependency, why) in networkAndCrypto) {
+            assertTrue(
+                dependency in declared,
+                "$dependency ($why) is no longer declared in a Gradle build Dependabot watches; update networkAndCrypto"
+            )
+        }
+        val others = declared - networkAndCrypto.keys
+        assertTrue(
+            others.any { it.startsWith("androidx.") } && others.any { it.startsWith("com.android.") },
+            "found no androidx library or Android Gradle plugin among $declared; has the reader stopped seeing them?"
+        )
+
+        for (entry in entries) {
+            val groups = dependabotGroups(entry)
+            for ((dependency, why) in networkAndCrypto) {
+                for (type in listOf("major", "minor", "patch")) {
+                    val taking = groups.filter { takes(it, dependency, type) }
+                    // No group takes it: it gets PRs of its own, which nothing else can hold back.
+                    val group = taking.firstOrNull() ?: continue
+                    // dependabot-core (DependencyGroupEngine, read from its source) gives a dependency several
+                    // groups take only to the strictly most specific one, and on a tie to all of them; a run
+                    // then skips what an earlier group, or a group whose PR is still open, already handled.
+                    // A first group that is also strictly the most specific gets it under both rules.
+                    val rivals = taking.drop(1).filter { specificity(it, dependency) >= specificity(group, dependency) }
+                    assertTrue(
+                        rivals.isEmpty(),
+                        "a $type bump of $dependency ($why) is taken first by Dependabot group `${group.name}`, but " +
+                            "${rivals.map { it.name }} name it at least as specifically, so which PR carries it depends " +
+                            "on the rule Dependabot applies; keep the stack's own group first and more specific than " +
+                            "any catch-all"
+                    )
+                    val shared = others.filter { takes(group, it, type) }
+                    assertTrue(
+                        shared.isEmpty(),
+                        "a $type bump of $dependency ($why) lands in Dependabot group `${group.name}` together with " +
+                            "$shared, so it only lands when every one of those builds (an androidx release that " +
+                            "demands a higher compileSdk than the app's keeps such a PR red); give the network and " +
+                            "crypto stack a group of its own, listed before the catch-all"
+                    )
+                }
+            }
+        }
+    }
+
+    @Test
     fun `the readers find what they are asked for and refuse what they do not understand`() {
         val workflow = """
             name: x
@@ -211,6 +279,75 @@ class GradleCiCoverageTest {
         assertEquals(
             listOf("protocol", "../x"),
             includedBuilds("// includeBuild(\"commented\")\nincludeBuild(\"protocol\")\n  includeBuild('../x')\ninclude(\":app\")\n")
+        )
+
+        val grouped = """
+            updates:
+              - package-ecosystem: gradle
+                directory: /android
+                schedule:
+                  interval: weekly
+                groups:
+                  # a comment
+                  net:
+                    patterns:
+                      - "com.squareup.okhttp3:*"
+                      - 'org.bouncycastle:*'
+                    update-types: [minor, patch]
+                  rest:
+                    patterns: ["*"]
+                    exclude-patterns: [androidx.*]
+                  majors:
+                    update-types: [major]
+              - package-ecosystem: npm
+                directory: /
+        """.trimIndent()
+        val entries = gradleEntries(grouped)
+        assertEquals(listOf("/android"), gradleDirectories(grouped))
+        val (net, rest, majors) = dependabotGroups(entries.single())
+        assertEquals(DependabotGroup("net", listOf("com.squareup.okhttp3:*", "org.bouncycastle:*"), emptyList(), listOf("minor", "patch")), net)
+        assertEquals(DependabotGroup("rest", listOf("*"), listOf("androidx.*"), null), rest)
+        assertEquals(DependabotGroup("majors", null, emptyList(), listOf("major")), majors)
+        assertTrue(takes(net, "com.squareup.okhttp3:okhttp", "minor"))
+        assertTrue(!takes(net, "com.squareup.okhttp3:okhttp", "major"))
+        assertTrue(!takes(rest, "androidx.core:core-ktx", "minor"), "an exclude pattern wins")
+        assertTrue(takes(majors, "androidx.core:core-ktx", "major"), "a group without patterns takes every dependency")
+        assertTrue(wildcardMatches("com.squareup.okhttp3:*", "Com.Squareup.OkHttp3:okhttp"), "matching ignores case")
+        assertTrue(!wildcardMatches("com.squareup.okhttp3:*", "com.squareup.okhttp3x:okhttp"))
+        assertTrue(!wildcardMatches("a.b", "aXb"), "only * is a wildcard")
+        assertEquals(1, specificity(rest, "com.squareup.okhttp3:okhttp"))
+        assertEquals(107, specificity(net, "com.squareup.okhttp3:okhttp"))
+        assertEquals(0, specificity(net, "androidx.core:core-ktx"))
+        assertEquals(500, specificity(majors, "androidx.core:core-ktx"))
+        assertEquals(1000, specificity(DependabotGroup("x", listOf("a:b"), emptyList(), null), "a:b"))
+        assertFailsWith<AssertionError> {
+            dependabotGroups(gradleEntries(grouped.replace("update-types: [major]", "dependency-type: production")).single())
+        }
+        assertFailsWith<AssertionError> {
+            dependabotGroups(gradleEntries(grouped.replace("patterns: [\"*\"]", "patterns: \"*\"")).single())
+        }
+
+        val script = """
+            plugins {
+                id("com.android.application") version "8.9.1" apply false
+                kotlin("jvm") version "2.2.0"
+                id("org.jetbrains.kotlin.plugin.compose")
+            }
+            dependencies {
+                // implementation("commented:out:1.0")
+                implementation(platform("androidx.compose:compose-bom:2025.06.00"))
+                implementation("androidx.compose.ui:ui")
+                api("com.squareup.okhttp3:okhttp:4.12.0")
+                systemProperty("x:y", "z")
+                inputs.file(rootDir.resolve("../app/build.gradle.kts"))
+            }
+        """.trimIndent()
+        assertEquals(
+            setOf(
+                "androidx.compose:compose-bom", "androidx.compose.ui:ui", "com.squareup.okhttp3:okhttp",
+                "com.android.application", "org.jetbrains.kotlin.jvm",
+            ),
+            declaredDependencies(script).toSet()
         )
     }
 
@@ -284,8 +421,11 @@ class GradleCiCoverageTest {
             return run >= 0 && step.drop(run).any { "gradlew" in it }
         }
 
-        /** The `directory:` of each `package-ecosystem: gradle` entry of a dependabot.yml. */
-        internal fun gradleDirectories(yaml: String): List<String> {
+        /**
+         * The `updates:` entries of a dependabot.yml, each as its non-comment lines: the first trimmed and
+         * without its `- `, the others with their indentation (the nesting of `groups:` needs it).
+         */
+        private fun updateEntries(yaml: String): List<List<String>> {
             val lines = yaml.lines().filterNot(::skip)
             val start = lines.indexOfFirst { it.trimEnd() == "updates:" }
             if (start < 0) throw AssertionError("no top-level `updates:`")
@@ -299,16 +439,148 @@ class GradleCiCoverageTest {
                 if (ind == itemIndent) {
                     if (!text.startsWith("- ")) throw AssertionError("unexpected line in updates: $line")
                     entries.add(arrayListOf(text.removePrefix("- ").trim()))
+                } else if (ind > itemIndent) {
+                    entries.last().add(line)
                 } else {
-                    entries.last().add(text)
+                    throw AssertionError("unexpected indentation in updates: $line")
                 }
             }
-            return entries.filter { value(it, "package-ecosystem") == "gradle" }.map { entry ->
-                if (entry.any { it.startsWith("directories:") }) {
+            return entries
+        }
+
+        /** The `package-ecosystem: gradle` entries of a dependabot.yml, as [updateEntries] gives them. */
+        internal fun gradleEntries(yaml: String): List<List<String>> =
+            updateEntries(yaml).filter { value(it.map(String::trim), "package-ecosystem") == "gradle" }.onEach { entry ->
+                if (entry.any { it.trim().startsWith("directories:") }) {
                     throw AssertionError("`directories:` is not understood by this reader; extend it")
                 }
-                value(entry, "directory") ?: throw AssertionError("a gradle entry without a directory: $entry")
             }
+
+        /** The `directory:` of each `package-ecosystem: gradle` entry of a dependabot.yml. */
+        internal fun gradleDirectories(yaml: String): List<String> = gradleEntries(yaml).map { entry ->
+            value(entry.map(String::trim), "directory") ?: throw AssertionError("a gradle entry without a directory: $entry")
+        }
+
+        /**
+         * One Dependabot group, as far as it decides what it takes: [patterns] null when the group has none
+         * (it takes every dependency), [updateTypes] null when it takes every update type.
+         */
+        internal data class DependabotGroup(
+            val name: String,
+            val patterns: List<String>?,
+            val excludePatterns: List<String>,
+            val updateTypes: List<String>?,
+        )
+
+        /** The `groups:` of one update entry (from [gradleEntries]), in file order. */
+        internal fun dependabotGroups(entry: List<String>): List<DependabotGroup> {
+            val at = entry.indexOfFirst { it.trim() == "groups:" }
+            if (at < 0) return emptyList()
+            if (at == 0) throw AssertionError("an update entry that starts with `groups:` is not understood by this reader")
+            val block = entry.drop(at + 1).takeWhile { indent(it) > indent(entry[at]) }
+            val groups = ArrayList<Pair<String, MutableList<String>>>()
+            var groupIndent = -1
+            for (line in block) {
+                val ind = indent(line)
+                if (groupIndent < 0) groupIndent = ind
+                if (ind == groupIndent) {
+                    val name = Regex("""([A-Za-z0-9_.-]+):""").matchEntire(line.trim())?.groupValues?.get(1)
+                        ?: throw AssertionError("unexpected line in groups: $line")
+                    groups.add(name to ArrayList())
+                } else if (ind > groupIndent) {
+                    groups.last().second.add(line)
+                } else {
+                    throw AssertionError("unexpected indentation in groups: $line")
+                }
+            }
+            return groups.map { (name, body) -> group(name, body) }
+        }
+
+        private fun group(name: String, body: List<String>): DependabotGroup {
+            val rules = HashMap<String, List<String>>()
+            var keyIndent = -1
+            var i = 0
+            while (i < body.size) {
+                val line = body[i++]
+                if (keyIndent < 0) keyIndent = indent(line)
+                if (indent(line) != keyIndent) throw AssertionError("unexpected indentation in group $name: $line")
+                val (key, rest) = Regex("""([a-z-]+):\s*(.*)""").matchEntire(line.trim())?.destructured
+                    ?: throw AssertionError("unexpected line in group $name: $line")
+                if (key !in setOf("patterns", "exclude-patterns", "update-types")) {
+                    // dependency-type, applies-to, group-by... change what a group takes; extend this reader.
+                    throw AssertionError("`$key` in Dependabot group $name is not understood by this reader; extend it")
+                }
+                val items = if (rest.isNotEmpty()) {
+                    if (!rest.startsWith("[") || !rest.endsWith("]")) throw AssertionError("group $name: `$key` is not a list: $rest")
+                    rest.removeSurrounding("[", "]").split(",").map(String::trim).filter(String::isNotEmpty)
+                } else {
+                    val block = ArrayList<String>()
+                    while (i < body.size && indent(body[i]) > keyIndent) {
+                        val item = body[i++].trim()
+                        if (!item.startsWith("- ")) throw AssertionError("unexpected line in group $name: $item")
+                        block.add(item.removePrefix("- ").trim())
+                    }
+                    block
+                }
+                rules[key] = items.map { item ->
+                    if ('#' in item) throw AssertionError("group $name: a comment inside `$key` is not understood: $item")
+                    item.removeSurrounding("'").removeSurrounding("\"")
+                }
+            }
+            return DependabotGroup(name, rules["patterns"], rules["exclude-patterns"].orEmpty(), rules["update-types"])
+        }
+
+        /** dependabot-core's WildcardMatcher: `*` matches any run of characters, the rest itself, ignoring case. */
+        internal fun wildcardMatches(pattern: String, name: String): Boolean =
+            Regex(pattern.lowercase().split("*").joinToString(".*") { Regex.escape(it) }).matches(name.lowercase())
+
+        /** Whether [group] takes an [updateType] update of [name] (dependabot-core's DependencyGroup#contains?). */
+        internal fun takes(group: DependabotGroup, name: String, updateType: String): Boolean =
+            (group.updateTypes == null || updateType in group.updateTypes) &&
+                group.excludePatterns.none { wildcardMatches(it, name) } &&
+                (group.patterns == null || group.patterns.any { wildcardMatches(it, name) })
+
+        /**
+         * How specifically [group] names [name], by dependabot-core's PatternSpecificityCalculator: an exact
+         * pattern 1000, one without `*` 500, no patterns 500, `*` alone 1, other wildcards
+         * 100 - 10 per `*` + one per character past five.
+         */
+        internal fun specificity(group: DependabotGroup, name: String): Int {
+            val patterns = group.patterns ?: return 500
+            return patterns.filter { wildcardMatches(it, name) }.maxOfOrNull { p ->
+                when {
+                    p == name -> 1000
+                    p == "*" -> 1
+                    '*' !in p -> 500
+                    else -> maxOf(100 - 10 * p.count { it == '*' } + maxOf(p.length - 5, 0), 1)
+                }
+            } ?: 0
+        }
+
+        /** The build scripts of one Gradle build: its own and its subprojects', not those of builds inside it. */
+        private fun buildScripts(build: File): List<File> = build.canonicalFile.let { dir ->
+            dir.walkTopDown()
+                .onEnter {
+                    it == dir || (it.name !in setOf("build", ".gradle", "node_modules") &&
+                        listOf("settings.gradle.kts", "settings.gradle").none { s -> File(it, s).isFile })
+                }
+                .filter { it.isFile && (it.name == "build.gradle.kts" || it.name == "build.gradle") }
+                .toList()
+        }
+
+        /**
+         * The dependencies a build script declares, named as Dependabot names them: `group:artifact` for a
+         * library (from any call with one "group:artifact[:version]" argument, `platform(...)` included)
+         * and the plugin id for a plugin with a version (`kotlin("jvm")` is org.jetbrains.kotlin.jvm).
+         */
+        internal fun declaredDependencies(script: String): List<String> {
+            val text = stripComments(script)
+            val libraries = Regex("""\b\w+\(\s*"([A-Za-z0-9_.-]+):([A-Za-z0-9_.-]+)(?::[A-Za-z0-9_.+-]*)?"\s*\)""")
+                .findAll(text).map { "${it.groupValues[1]}:${it.groupValues[2]}" }
+            val plugins = Regex("""\bid\(\s*"([^"]+)"\s*\)\s+version\s+"""").findAll(text).map { it.groupValues[1] }
+            val kotlinPlugins = Regex("""\bkotlin\(\s*"([^"]+)"\s*\)\s+version\s+"""").findAll(text)
+                .map { "org.jetbrains.kotlin.${it.groupValues[1]}" }
+            return (libraries + plugins + kotlinPlugins).toList()
         }
 
         private fun stripComments(kts: String) =

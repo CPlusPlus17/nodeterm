@@ -48,9 +48,10 @@ tasks.test {
     // terminal page (TerminalJs*Test), the app's sources (the source pins in TerminalKeyboardChipTest,
     // SettingsLeaveTest and R8RulesTest), the release build's R8 rules, its build type and the CI
     // workflow that runs R8 (R8RulesTest), the CI config GradleCiCoverageTest checks: the workflows
-    // that run Gradle, the Dependabot config and the root build's settings, and the contributor docs
-    // and the wrapper's Gradle version ContributorDocsTest checks against each other, and the audit
-    // whose finding ids DeviceChecklistDocsTest checks the device checklist against.
+    // that run Gradle, the Dependabot config, the root build's settings and the build scripts whose
+    // dependencies it matches against the Dependabot groups (the app's is named above), and the
+    // contributor docs and the wrapper's Gradle version ContributorDocsTest checks against each other,
+    // and the audit whose finding ids DeviceChecklistDocsTest checks the device checklist against.
     // Declared so a change to one of them re-runs the tests instead of leaving them "up to date".
     inputs.dir("src/test/interop").withPathSensitivity(PathSensitivity.RELATIVE)
     // The desktop code the interop fixture bundles (the same dirs as android.yml's path filter). Without
@@ -68,6 +69,8 @@ tasks.test {
     inputs.file(rootDir.resolve("../../.github/workflows/security.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../../.github/dependabot.yml")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../settings.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("../build.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootDir.resolve("build.gradle.kts")).withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootDir.resolve("../gradle/wrapper/gradle-wrapper.properties")).withPathSensitivity(PathSensitivity.RELATIVE)
     for (doc in listOf(
         "CONTRIBUTING.md", "docs/android.md", "android/README.md", "android/tools/typecheck/README.md",
