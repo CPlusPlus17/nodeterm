@@ -132,7 +132,11 @@ cover an approval answered after the hook's hold ended (`A06`), and the desktop 
 generated SSH answer command under a real `/bin/sh`. `QuickActionsTest` pins which node state each
 Inbox quick answer needs (`A38`): a ticketed approval is judged by its card, so it is answered while
 the node still shows WAITING for a held question; keys are typed only for a ticketless approval on a
-BLOCKED node or a question on a WAITING one. `UsagePaceTest` pins the Usages pace line (`A58`): no line
+BLOCKED node or a question on a WAITING one. `QuestionChoicesTest` pins what a question card shows
+(`A57`): a single-select question keeps its answer buttons, while a multi-select one lists its options
+numbered and read-only under "Choose several — answer in the session." beside "Open session", and
+`QuickActions` never types into it. The card's drawing is pinned in the source and only type-checked.
+`UsagePaceTest` pins the Usages pace line (`A58`): no line
 without a reset time, 300/10080-minute defaults for the session/weekly kinds (Claude reports no
 window length), none for an unknown kind, and injected clocks; the elapsed share is taken at the
 account's `updatedAt` (when the percentage was measured), so a stale snapshot never drifts toward
@@ -234,6 +238,12 @@ it is a device check.
   from the request's `permission_suggestions` (both fields exist in that CLI's hook schema). That
   changes the `~/.nodeterm/pending` answer file and `approvals.answer`, so it needs the desktop,
   iOS and Android together.
+- **Multi-select questions are answered in the session** (audit `A57`). The Inbox card lists the
+  options, numbered and read-only, but offers no answer: nothing in this repo measures how Claude
+  Code's multi-select picker toggles an option or submits the selection, and the phone cannot see the
+  picker, so a guessed key sequence could submit the wrong set. Answering from the Inbox needs those
+  keys measured on a live CLI, and would keep the still-waiting re-check the single-select digits
+  have. Whether iOS answers these cannot be seen from this repo.
 - **A Sleeping node the desktop has not mounted stays asleep through the relay** (`A76`). The relay
   attach's wake is the desktop's `wakeHibernatedNode` nudge, which does nothing for a node that is
   not on screen (a project other than the active one), and the phone offers no wake there because

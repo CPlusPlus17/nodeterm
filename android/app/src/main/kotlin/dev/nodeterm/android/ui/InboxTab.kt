@@ -54,6 +54,7 @@ import dev.nodeterm.protocol.model.ContextFill
 import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.ProjectsSnapshot
+import dev.nodeterm.protocol.model.QuestionChoices
 import dev.nodeterm.protocol.model.UsageAccount
 import dev.nodeterm.protocol.model.UsageLimit
 import dev.nodeterm.protocol.model.UsagePace
@@ -136,16 +137,38 @@ fun InboxTab(nav: Navigator, hostId: String, session: HostSession, snapshot: Pro
                         }) { Text("Deny") }
                         TextButton(onClick = { open(ev.nodeId) }) { Text("Open") }
                     }
-                } else if (ev.options.isNotEmpty() && !ev.multiSelect) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        ev.options.forEachIndexed { i, opt ->
-                            OutlinedButton(onClick = {
-                                run("Answered.", { c -> QuickActions.answerQuestion(c, ev, i) }, ev.nodeId)
-                            }, modifier = Modifier.fillMaxWidth()) { Text("${i + 1}. $opt", maxLines = 2) }
-                        }
-                    }
                 } else {
-                    TextButton(onClick = { open(ev.nodeId) }) { Text("Open session") }
+                    // One rule for what the card offers and what the answer path accepts (audit A57).
+                    when (val choices = QuestionChoices.of(ev)) {
+                        is QuestionChoices.Answer -> Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            choices.rows.forEachIndexed { i, row ->
+                                OutlinedButton(onClick = {
+                                    run("Answered.", { c -> QuickActions.answerQuestion(c, ev, i) }, ev.nodeId)
+                                }, modifier = Modifier.fillMaxWidth()) { Text(row, maxLines = 2) }
+                            }
+                        }
+                        // Multi-select: shown so the card says what is asked, but plain text, not
+                        // buttons. The picker's toggle/submit keys are unmeasured, so it is answered
+                        // in the session (QuestionChoices says why).
+                        is QuestionChoices.ReadOnly -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                QuestionChoices.SEVERAL_NOTE,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            choices.rows.forEach { row ->
+                                Text(
+                                    row,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(start = 8.dp)
+                                )
+                            }
+                            TextButton(onClick = { open(ev.nodeId) }) { Text("Open session") }
+                        }
+                        QuestionChoices.None -> TextButton(onClick = { open(ev.nodeId) }) { Text("Open session") }
+                    }
                 }
             }
         }

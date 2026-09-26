@@ -4,6 +4,7 @@ import dev.nodeterm.protocol.model.AgentState
 import dev.nodeterm.protocol.model.InboxEvent
 import dev.nodeterm.protocol.model.InboxKind
 import dev.nodeterm.protocol.model.ProjectsSnapshot
+import dev.nodeterm.protocol.model.QuestionChoices
 
 /**
  * The Inbox card actions (docs/mobile-usage-inbox.md "Quick approve", docs/hook-reply-approvals.md),
@@ -14,8 +15,9 @@ import dev.nodeterm.protocol.model.ProjectsSnapshot
  *  2. a held hook-reply approval (it carries a `pendingId`) is answered DETERMINISTICALLY — the
  *     relay verb or the answer file — never with keys: while the hook holds the request, the prompt
  *     is not on screen and a keystroke would land in the agent's composer;
- *  3. only a claude approval with NO ticket falls back to keys (`1` allow / Esc deny), because only
- *     claude's prompt layout is known; anything else is "open the session".
+ *  3. keys are typed only for a claude approval with NO ticket (`1` allow / Esc deny), because only
+ *     claude's prompt layout is known, and for a single-select question (its digit); anything else is
+ *     "open the session" (a multi-select question's options are shown, not answered: [QuestionChoices]).
  *
  * What "still open" means differs by path, on purpose (audit A38). KEYS need the node to show
  * exactly the prompt they answer: `1` on a node whose AskUserQuestion picker is on screen picks
@@ -52,10 +54,15 @@ object QuickActions {
         return typeOrOpen(conn, event, if (allow) "1" else "\u001b")
     }
 
-    /** AskUserQuestion: choices are digits on screen (a hook cannot inject an answer value). */
+    /**
+     * AskUserQuestion: choices are digits on screen (a hook cannot inject an answer value). Only a
+     * question [QuestionChoices] lists as [QuestionChoices.Answer] is typed, the rule the Inbox card
+     * draws its buttons by. A multi-select question is shown read-only and answered in the session
+     * (audit A57): how its picker toggles and submits has not been measured, so it gets no keys.
+     */
     suspend fun answerQuestion(conn: HostConnection, event: InboxEvent, optionIndex: Int): Result {
-        if (event.kind != InboxKind.QUESTION || event.multiSelect) return Result.OPEN_SESSION
-        if (optionIndex !in event.options.indices || optionIndex > 8) return Result.OPEN_SESSION
+        val choices = QuestionChoices.of(event) as? QuestionChoices.Answer ?: return Result.OPEN_SESSION
+        if (optionIndex !in choices.rows.indices || optionIndex > 8) return Result.OPEN_SESSION
         if (!stillWaiting(conn, event, AgentState.WAITING)) return Result.ALREADY_HANDLED
         return typeOrOpen(conn, event, (optionIndex + 1).toString())
     }

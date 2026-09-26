@@ -42,11 +42,12 @@ class QuickActionsTest {
         kind: InboxKind = InboxKind.APPROVAL,
         pendingId: String? = "term-1-1700000000000-42",
         resolved: Boolean = false,
-        options: List<String> = emptyList()
+        options: List<String> = emptyList(),
+        multiSelect: Boolean = false
     ) = InboxEvent(
         id = id, ts = 1, nodeId = node, agentId = "claude", sessionId = "s", kind = kind,
         title = "Approve Bash", detail = null, interrupted = false, resolved = resolved,
-        options = options, multiSelect = false, pendingId = pendingId
+        options = options, multiSelect = multiSelect, pendingId = pendingId
     )
 
     private fun snapshot(state: AgentState?, vararg events: InboxEvent) = ProjectsSnapshot(
@@ -195,5 +196,17 @@ class QuickActionsTest {
         val conn = FakeConn(snapshot(AgentState.WAITING, question))
         assertEquals(QuickActions.Result.SENT, QuickActions.answerQuestion(conn, question, 1))
         assertEquals(listOf("2"), conn.keys)
+    }
+
+    @Test
+    fun `a multi-select question is never typed, even on a WAITING node`() = runBlocking<Unit> {
+        // A57: its card shows the options read-only. The picker's toggle and submit keys are
+        // unmeasured, so a digit could submit a one-option answer (or toggle without submitting).
+        val question = card(kind = InboxKind.QUESTION, pendingId = null, options = listOf("a", "b", "c"), multiSelect = true)
+        val conn = FakeConn(snapshot(AgentState.WAITING, question))
+        for (i in question.options.indices) {
+            assertEquals(QuickActions.Result.OPEN_SESSION, QuickActions.answerQuestion(conn, question, i))
+        }
+        assertEquals(emptyList(), conn.keys)
     }
 }
