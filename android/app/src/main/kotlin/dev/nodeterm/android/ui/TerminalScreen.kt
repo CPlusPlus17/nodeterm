@@ -100,8 +100,11 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
         Column(Modifier.fillMaxSize().aboveKeyboard(padding)) {
             Box(Modifier.weight(1f).fillMaxWidth().background(NtColors.canvas)) {
                 // A new key = a new WebView: the old one was destroyed with its renderer (audit A45).
-                key(controller.webViewKey) {
-                    AndroidView(factory = { ctx -> controller.createWebView(ctx) }, modifier = Modifier.fillMaxSize())
+                // None at all after a loss until the next attach is asked for (the review of A45).
+                if (controller.hasWebView) {
+                    key(controller.webViewKey) {
+                        AndroidView(factory = { ctx -> controller.createWebView(ctx) }, modifier = Modifier.fillMaxSize())
+                    }
                 }
                 when (val st = controller.state) {
                     TermState.Connecting -> Row(

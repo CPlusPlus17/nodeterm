@@ -269,7 +269,12 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
                 }
             }
         }
-        c.setOnChanged { scope.launch { refreshNow() } }
+        // A change the computer pushes is re-listed, and so announced, only while a screen shows this
+        // computer, like the reconnect above (the review of A73). The connection outlives that screen
+        // (until it drops or the background check closes it), and its pushes used to go on announcing
+        // live for a computer the user had left, which the Settings text does not promise. What such a
+        // push carried is not recorded as seen, so the background check announces it.
+        c.setOnChanged { if (isWatched) scope.launch { refreshNow() } }
     }
 
     private fun pinFor(host: PairedHost) = object : HostKeyPin {
@@ -313,9 +318,10 @@ class HostSession(val hostId: String, private val graph: AppGraph) {
      * [Trigger.BACKGROUND] one never makes a first relay handshake (see [RelayApprovalGate]).
      *
      * A listing that arrives announces its new Inbox events, minus what [onScreen] shows (audit A73):
-     * the 8 s poll of the computer on screen, a change the computer pushed, and the background check
+     * the 8 s poll of the computer on screen, a change that computer pushed, and the background check
      * all come through here, so notifications are live for the computer whose screen is open. Other
-     * computers are not re-listed, so theirs wait for the background check.
+     * computers are not re-listed, not even on a push over a connection still open from a screen the
+     * user left ([adopt]), so theirs wait for the background check.
      */
     suspend fun refreshNow(trigger: Trigger = Trigger.AUTO) {
         val listed = try {

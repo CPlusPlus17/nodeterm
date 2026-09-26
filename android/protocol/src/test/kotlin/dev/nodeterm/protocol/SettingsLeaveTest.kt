@@ -15,9 +15,9 @@ import kotlin.test.assertTrue
  * dropped by that arrow without a word.
  *
  * The address rule and the leave decision are pure and tested here. The wiring (both backs run the
- * one `leave()`, which stores before it pops, and nothing stores per keystroke) cannot run on a JVM,
- * so it is pinned in the app's source ([AppSourcePins]); whether the gesture reaches it on a device
- * has not been checked.
+ * one `leave()`, which stores before it pops; a screen taken away without a back stores silently; and
+ * nothing stores per keystroke) cannot run on a JVM, so it is pinned in the app's source
+ * ([AppSourcePins]); whether the gesture reaches it on a device has not been checked.
  */
 class SettingsLeaveTest {
     @Test
@@ -94,6 +94,21 @@ class SettingsLeaveTest {
         assertEquals(OnLeave.Rejected, ApiBaseSetting.onLeave("http://relay.example.com", "https:"))
     }
 
+    @Test
+    fun `the field flags what it holds now, including an unusable address an older build stored`() {
+        val default = RelayApi.DEFAULT_API_BASE
+        assertNull(ApiBaseSetting.fieldError(default, default))
+        assertNull(ApiBaseSetting.fieldError("https://relay.example.com", default))
+        // Typed here: it will not be saved (leaving says so too).
+        assertEquals(ApiBaseSetting.NOT_SAVED, ApiBaseSetting.fieldError("http://relay.example.com", default))
+        assertEquals(ApiBaseSetting.NOT_SAVED, ApiBaseSetting.fieldError("http://relay.example.com", "https:"))
+        // Stored by an older build and not edited: leaving keeps it without a message, but the field
+        // flags it (the review of A44), since every relay call uses it. It used to show no error at all.
+        assertEquals(ApiBaseSetting.STORED_UNUSABLE, ApiBaseSetting.fieldError("https:", "https:"))
+        assertEquals(ApiBaseSetting.STORED_UNUSABLE, ApiBaseSetting.fieldError(" https:// ", "https:"))
+        assertEquals(OnLeave.Keep, ApiBaseSetting.onLeave("https:", "https:"))
+    }
+
     private val settings get() = AppSourcePins.ui("SettingsScreen.kt")
 
     @Test
@@ -109,19 +124,28 @@ class SettingsLeaveTest {
 
     @Test
     fun `leave stores the name and the address, tells about a refused one, then pops`() {
-        val leave = AppSourcePins.blockAfter(settings, "fun leave()")
+        val save = AppSourcePins.blockAfter(settings, "fun save(onRejected: () -> Unit)")
         AppSourcePins.assertInOrder(
-            leave,
+            save,
             // An unedited name is not stored: a phone that stores no name is named after its model.
             "if (name.trim() != graph.hosts.deviceName) graph.hosts.deviceName = name",
             "ApiBaseSetting.onLeave(apiBase, graph.hosts.apiBase)",
             "OnLeave.Save -> graph.hosts.apiBase = edit.value",
             "OnLeave.UseDefault -> graph.hosts.useDefaultApiBase()",
             "OnLeave.Keep -> {}",
-            "OnLeave.Rejected -> Toast.makeText(",
-            ".show()",
-            "nav.pop()"
+            "OnLeave.Rejected -> onRejected()"
         )
+        val leave = AppSourcePins.blockAfter(settings, "fun leave()")
+        AppSourcePins.assertInOrder(leave, "save(onRejected = {", "Toast.makeText(", ".show()", "nav.pop()")
+    }
+
+    @Test
+    fun `leaving the screen without a back stores the edits too, without a message`() {
+        // A notification tap (replaceAll) or a pairing link (push) takes Settings off the screen
+        // without running leave(), and the edits used to be lost silently (the review of A44).
+        val effect = AppSourcePins.blockAfter(settings, "DisposableEffect(Unit)")
+        assertEquals("{ save(onRejected = {}) }", AppSourcePins.blockAfter(effect, "onDispose"))
+        assertFalse(effect.contains("Toast"), "the dispose save shows a message nobody is there to read:\n$effect")
     }
 
     @Test
@@ -138,13 +162,16 @@ class SettingsLeaveTest {
     @Test
     fun `nothing else pops or stores the edits`() {
         val src = settings
-        // One pop (in leave), and the two stores only there: never per keystroke, never skipped.
+        // One pop (in leave), and the two stores only in save: never per keystroke, never skipped.
         assertEquals(1, Regex("""nav\.pop\(\)""").findAll(src).count())
         assertEquals(1, Regex("""graph\.hosts\.apiBase\s*=(?!=)""").findAll(src).count())
         assertEquals(1, Regex("""graph\.hosts\.deviceName\s*=(?!=)""").findAll(src).count())
         assertEquals(1, Regex("""graph\.hosts\.useDefaultApiBase\(\)""").findAll(src).count())
-        // The field warns with the same decision leaving acts on.
-        assertTrue(src.contains("val apiBaseRejected = ApiBaseSetting.onLeave(apiBase, graph.hosts.apiBase) == ApiBaseSetting.OnLeave.Rejected"))
-        assertTrue(src.contains("isError = apiBaseRejected"))
+        // save() runs from leave() and when the screen is disposed, nowhere else.
+        assertEquals(2, Regex("""\bsave\(onRejected = """).findAll(src).count())
+        // The field warns by what it holds now (ApiBaseSetting.fieldError), not only about an edit.
+        assertTrue(src.contains("val apiBaseError = ApiBaseSetting.fieldError(apiBase, graph.hosts.apiBase)"))
+        assertTrue(src.contains("isError = apiBaseError != null"))
+        assertTrue(src.contains("supportingText = apiBaseError?.let { error -> { Text(error) } }"))
     }
 }

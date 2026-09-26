@@ -57,7 +57,10 @@ data class InboxNotificationText(
             )
         }
 
-        /** The kind of event in words, as the Inbox card's chip says it. Never the event's own text. */
+        /**
+         * The kind of event in words, close to the Inbox card's chip but not always the same words
+         * (the chip says QUESTION). Never the event's own text.
+         */
         fun kindLabel(event: InboxEvent): String = when (event.kind) {
             InboxKind.APPROVAL -> "Needs approval"
             InboxKind.QUESTION -> "Has a question"

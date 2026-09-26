@@ -82,8 +82,11 @@ class TerminalPage {
 }
 
 /**
- * What the terminal screen does once its page's renderer is gone (audit A45). A new page is built
- * either way; the question is what the screen shows over it, and who reattaches the terminal.
+ * What the terminal screen does once its page's renderer is gone (audit A45). The page is replaced
+ * either way; the question is what the screen shows meanwhile, and who reattaches the terminal. The
+ * screen builds the replacement at once only for an automatic reattach of a visible screen, which
+ * the bound below limits; otherwise it waits for whatever asks for the next attach (a button, or the
+ * screen being started again), so a page that dies as it loads is not rebuilt with nobody asking.
  *
  * It depends first on what the screen was [Showing]:
  * - An ANSWER with its own button ([Showing.SETTLED]: the session ended or the connection dropped,
@@ -100,13 +103,17 @@ class TerminalPage {
  *     screen again, so reattaching unasked could crash it over and over. The screen offers "Reopen
  *     terminal" and the user decides;
  *   - a kill also falls back to the offer after [maxAutomatic] automatic reattaches within [windowMs]:
- *     a device that keeps killing a visible renderer should not have the app fight it in a loop.
+ *     a device that keeps killing a visible renderer should not have the app fight it in a loop. A
+ *     kill while the screen is not visible does not count (the review of A45): the renderer's priority
+ *     is waived then, so that kill is expected, and the screen reattaches only when it comes back.
  *
  * The offer says the session is still running only when a stream was attached ([Showing.ATTACHED]):
  * that is the only case in which the screen knew. While it was still opening the terminal, it knew
  * nothing about the session yet (it may not exist, or not on this host).
  *
- * Thread-safe; [now] is a millisecond clock supplied by the caller.
+ * Thread-safe. [onGone]'s `now` is a MONOTONIC millisecond clock supplied by the caller
+ * (`SystemClock.elapsedRealtime()` on the phone): with a wall clock, one set back would keep old
+ * kills in the window, and one set forward would clear them.
  */
 class RendererRecovery(private val windowMs: Long = 60_000L, private val maxAutomatic: Int = 2) {
     /** What the terminal screen was showing when its renderer went away. */
@@ -137,11 +144,19 @@ class RendererRecovery(private val windowMs: Long = 60_000L, private val maxAuto
 
     private val automatic = ArrayDeque<Long>()
 
+    /**
+     * The renderer went away: [didCrash] as Android reports it, [now] on a monotonic clock, what the
+     * screen was [showing], and whether the screen was [visible] (started, in front of the user).
+     */
     @Synchronized
-    fun onGone(didCrash: Boolean, now: Long, showing: Showing): Outcome {
+    fun onGone(didCrash: Boolean, now: Long, showing: Showing, visible: Boolean): Outcome {
         // Not counted against the automatic reattaches: none happens.
         if (showing == Showing.SETTLED) return Outcome.Keep
         if (!didCrash) {
+            // Expected while the screen is not visible, and not counted: the bound is for a device
+            // that keeps killing a renderer the user is looking at. The screen reattaches when it is
+            // started again, and a kill after that counts.
+            if (!visible) return Outcome.Reattach
             while (automatic.isNotEmpty() && now - automatic.first() >= windowMs) automatic.removeFirst()
             if (automatic.size < maxAutomatic) {
                 automatic.addLast(now)

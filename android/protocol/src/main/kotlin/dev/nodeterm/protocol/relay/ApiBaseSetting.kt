@@ -29,7 +29,8 @@ object ApiBaseSetting {
 
         /**
          * What is already stored: nothing to store. That is an unedited address, or one we would
-         * not accept that an older build saved, which a user who did not type it is not told about.
+         * not accept that an older build saved: a user who did not type it gets no message on
+         * leaving, though the field flags it ([fieldError]).
          */
         data object Keep : OnLeave
 
@@ -69,6 +70,23 @@ object ApiBaseSetting {
             else -> OnLeave.Save(accepted)
         }
     }
+
+    /**
+     * What the field says under [typed], or null when it is an address we accept. Decided by what the
+     * field holds NOW, not by what leaving would do (the review of A44): an address we would not accept
+     * that an older build stored is kept on leaving without a message, since the user did not type it
+     * here, but every relay call uses it, so the field still says so.
+     */
+    fun fieldError(typed: String, stored: String): String? {
+        if (accept(typed) != null) return null
+        return if (onLeave(typed, stored) == OnLeave.Rejected) NOT_SAVED else STORED_UNUSABLE
+    }
+
+    /** Under an address the user typed that we refuse. */
+    const val NOT_SAVED = "Not a full https:// address: it will not be saved."
+
+    /** Under a stored address we refuse (only an older build could have stored it). */
+    const val STORED_UNUSABLE = "Not a full https:// address: the relay can't be reached with it. Correct it or reset to default."
 
     /** The form the app stores an address in (HostStore's setter trims the same way). */
     private fun normalize(address: String): String = address.trim().trimEnd('/')

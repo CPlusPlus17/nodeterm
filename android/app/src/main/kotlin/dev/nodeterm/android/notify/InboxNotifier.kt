@@ -39,10 +39,11 @@ import java.util.concurrent.TimeUnit
  * instead, honestly: checked about every 15 minutes in the background, and live for the computer
  * whose screen is open. Both are the same [announce], run on every fresh listing of a computer
  * (HostSession.refreshNow): the periodic WorkManager check (Android's floor is 15 minutes) lists
- * each paired computer, and the app re-lists the computer on screen every 8 s (audit A73). Other
- * computers are not polled, so their notifications come from the background check only. What the
- * user is looking at ([OnScreen]) is recorded as seen instead of announced. A real push leg is
- * backend work.
+ * each paired computer, and the app re-lists the computer on screen every 8 s, and when it pushes a
+ * change (audit A73). Other computers are not polled, and a change one pushes over a connection still
+ * open from a screen the user left is not re-listed, so their notifications come from the background
+ * check only. What the user is looking at ([OnScreen]) is recorded as seen instead of announced. A
+ * real push leg is backend work.
  */
 object InboxNotifier {
     private const val CH_ATTENTION = "attention"

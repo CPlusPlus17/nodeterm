@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -89,22 +90,35 @@ fun SettingsScreen(nav: Navigator) {
     // https is not stored, and the user is told so rather than finding the old one still in place.
     // Leaving without an edit stores nothing. While nothing is stored, the name follows the phone's
     // model and the address the build's default relay; storing either would pin it.
-    fun leave() {
+    fun save(onRejected: () -> Unit) {
         if (name.trim() != graph.hosts.deviceName) graph.hosts.deviceName = name
         when (val edit = ApiBaseSetting.onLeave(apiBase, graph.hosts.apiBase)) {
             is ApiBaseSetting.OnLeave.Save -> graph.hosts.apiBase = edit.value
             ApiBaseSetting.OnLeave.UseDefault -> graph.hosts.useDefaultApiBase()
             ApiBaseSetting.OnLeave.Keep -> {}
-            ApiBaseSetting.OnLeave.Rejected -> Toast.makeText(
+            ApiBaseSetting.OnLeave.Rejected -> onRejected()
+        }
+    }
+    fun leave() {
+        save(onRejected = {
+            Toast.makeText(
                 context,
                 "Relay API not saved: it must be a full https:// address.",
                 Toast.LENGTH_LONG
             ).show()
-        }
+        })
         nav.pop()
     }
     // Registered after AppContent's, so it runs instead of that plain pop while Settings shows.
     BackHandler(enabled = nav.size > 1) { leave() }
+    // Settings also leaves the screen without a back (the review of A44): a notification tap replaces
+    // the whole stack, and a pairing link pushes its screen on top. The edits are stored then too, but
+    // silently: a refused address is not stored, and the user is not on this screen to be told. After
+    // leave() this finds nothing left to change, and no second message. A recreation of the
+    // activity (a rotation) stores what is typed by then as well; the new screen reads it back.
+    DisposableEffect(Unit) {
+        onDispose { save(onRejected = {}) }
+    }
 
     Scaffold(
         topBar = {
@@ -177,7 +191,8 @@ fun SettingsScreen(nav: Navigator) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(checked = notifyDetails, enabled = notify, onCheckedChange = {
+                // Enabled like the Notifications switch reads: on only while notifications can show.
+                Switch(checked = notifyDetails, enabled = notify && canPost, onCheckedChange = {
                     notifyDetails = it
                     graph.hosts.notificationDetails = it
                 })
@@ -225,15 +240,14 @@ fun SettingsScreen(nav: Navigator) {
 
             HorizontalDivider()
             Text("Advanced", style = MaterialTheme.typography.titleMedium)
-            val apiBaseRejected = ApiBaseSetting.onLeave(apiBase, graph.hosts.apiBase) == ApiBaseSetting.OnLeave.Rejected
+            // By what the field holds now, so an unusable address an older build stored is flagged too.
+            val apiBaseError = ApiBaseSetting.fieldError(apiBase, graph.hosts.apiBase)
             OutlinedTextField(
                 value = apiBase,
                 onValueChange = { apiBase = it.trim() },
                 label = { Text("Relay API (https)") },
-                isError = apiBaseRejected,
-                supportingText = if (apiBaseRejected) {
-                    { Text("Not a full https:// address: it will not be saved.") }
-                } else null,
+                isError = apiBaseError != null,
+                supportingText = apiBaseError?.let { error -> { Text(error) } },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )

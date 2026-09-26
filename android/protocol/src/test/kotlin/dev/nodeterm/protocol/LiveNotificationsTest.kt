@@ -335,6 +335,17 @@ class LiveNotificationsTest {
     }
 
     @Test
+    fun `a change pushed by a computer whose screen is closed is not re-listed live`() {
+        // The connection outlives the screen (the review of A73): a computer the user left kept
+        // announcing live through its pushes until the connection dropped or the worker ran, while the
+        // copy promises live notifications only for the computer on screen. Like the reconnect.
+        val adopt = AppSourcePins.blockAfter(connections, "private fun adopt(c: HostConnection)")
+        AppSourcePins.assertInOrder(adopt, "if (watchers > 0) scope.launch {", "refreshNow()")
+        assertTrue(adopt.contains("c.setOnChanged { if (isWatched) scope.launch { refreshNow() } }"), adopt)
+        assertEquals(1, Regex("""\.setOnChanged\b""").findAll(connections).count(), "another connection re-lists on its pushes")
+    }
+
+    @Test
     fun `announce decides with what is on screen, and gates only the claim on the switch and permission`() {
         val announce = AppSourcePins.blockAfter(notifier, "fun announce(")
         AppSourcePins.assertInOrder(

@@ -190,11 +190,15 @@ be tapped again once the reattach has settled it (see `ResumeOfferTest`).
 detaches the stream, destroys that WebView and builds a new one. Each page has a generation, so a
 callback the dead page posted just before the loss cannot mark the new page ready, and JavaScript
 queued for the dead page is dropped rather than replayed into the new one. A paint offered before
-the new page exists is kept for it. A renderer the system killed (the terminal's renderer priority
-is waived while the screen is not visible) is reattached automatically once the new page has
-reported its size. A crash is not, because the reattach would repaint the same screen: the screen
-offers "Reopen terminal" instead. More than two kills within a minute fall back to that offer too.
-A screen that was showing an answer with its own button (the session ended, the connection
+the new page exists is kept for it. A renderer the system killed is reattached automatically once
+the new page has reported its size. The renderer keeps WebView's default priority while the terminal
+is visible and has it waived while it is not, so a kill in the background is expected: it is not
+counted, and the terminal is reattached when the screen is started again. A crash is not reattached,
+because the reattach would repaint the same screen: the screen offers "Reopen terminal" instead. More
+than two kills of a visible terminal within a minute (on a monotonic clock) fall back to that offer
+too. Only that automatic reattach builds the new WebView at once; otherwise it is built for the next
+attach something asks for, so a page whose renderer dies as it loads is not rebuilt and lost in a
+loop. A screen that was showing an answer with its own button (the session ended, the connection
 dropped, "Open through the relay", or an earlier "Reopen terminal") keeps it, and nothing
 reattaches unasked: over the relay, an attach to a pane that has exited creates a new, empty
 session. The offer says the session is still running only when a stream was attached. The WebView
@@ -244,14 +248,16 @@ Whether the keyboard comes up, and stays up, is a device check.
 
 `SettingsLeaveTest` covers leaving Settings (`A44`). The system back (gesture or button) used to pop
 the screen without storing the edited phone name or relay API address; only the top-bar arrow stored
-them. Both now run one `leave()`, which stores, then pops. Nothing is stored per keystroke. The relay
-address must be a full `https://` URL (`ApiBaseSetting`: a host, no query or fragment); one that is
-not is left unstored, the field says so while it is being typed, and leaving shows a message.
-Leaving without an edit stores nothing, and the built-in relay address is never stored: "Reset to
-default" forgets the stored address instead. A phone that stores none follows the default of the build
-it runs, so storing the default would pin it to this build's for good. The address rule and the leave
-decision are unit-tested; the wiring is pinned in the source, and whether the back gesture reaches it
-is a device check.
+them. Both now run one `leave()`, which stores, then pops. A screen taken away without a back (a
+notification tap replaces the stack, a pairing link pushes its screen on top) stores the edits as it
+goes, silently. Nothing is stored per keystroke. The relay address must be a full `https://` URL
+(`ApiBaseSetting`: a host, no query or fragment); one that is not is left unstored, the field says
+so while it is being typed, and leaving shows a message. An unusable address an older build stored
+is kept without a message, but the field flags it too. Leaving without an edit stores nothing, and
+the built-in relay address is never stored: "Reset to default" forgets the stored address instead.
+A phone that stores none follows the default of the build it runs, so storing the default would pin
+it to this build's for good. The address rule and the leave decision are unit-tested; the wiring is
+pinned in the source, and whether the back gesture reaches it is a device check.
 
 `InboxNotificationTextTest` pins what an Inbox notification says (`A52`). An approval's notification
 used to carry the desktop's tool summary (the command's first line, a file path, a fetched URL), and
@@ -270,7 +276,7 @@ what a lock screen shows is a device check.
 `LiveNotificationsTest` covers when notifications are posted (`A73`). The app said they were live
 every 8 s while a computer was open, but only the 15-minute background check ever posted one; the
 in-app refresh only updated the listing. Now every listing that arrives (the 8 s refresh of the
-computer on screen, a change the computer pushes, the background check) runs the one announce path,
+computer on screen, a change that computer pushes, the background check) runs the one announce path,
 so notifications are live for the computer whose screen is open. What the user is looking at is left
 out and recorded as seen instead, so no later check announces it: every event while that computer's
 Inbox tab is on screen, and what a session's terminal shows while it is attached. That is recorded
@@ -281,10 +287,14 @@ prompt only once the hold ends; a terminal showing an overlay instead of its pan
 offer, approval code, lost view) hides nothing; and one still connecting leaves its session's events
 for a later listing, which the attach settles at once from the latest listing. Other computers are not
 polled while one is open, so theirs still come only from the background check, and the Settings
-text, the README and the notifier's comment now say exactly that. It costs no network call (the
-listing already arrived), and the check writes the phone's seen-log only when something is new. The
-decision and the screen bookkeeping are unit-tested; the wiring into the refresh, the worker and the
-two screens is pinned in the source, and whether a notification appears on a phone is a device check.
+text, the README and the notifier's comment now say exactly that. A computer the user just left is
+one of them: its connection can stay open until it drops or the background check closes it, and a
+change it pushes meanwhile is no longer re-listed (it used to be, and so announced live; the review
+of A73). What that push carried is not recorded as seen, so the background check announces it. The
+announce costs no network call (the listing already arrived), and the check writes the phone's
+seen-log only when something is new. The decision and the screen bookkeeping are unit-tested; the
+wiring into the refresh, the worker and the two screens is pinned in the source, and whether a
+notification appears on a phone is a device check.
 
 `PhoneIdentityTest` and `BackupRulesTest` cover what leaves the phone (`A51`). `allowBackup="false"`
 stops cloud backup, but an app that targets Android 12 or later is still copied by a
@@ -299,9 +309,11 @@ the stored deviceId is removed first, durably, and a deviceId is minted only onc
 phone whose key was lost therefore registers with the relay backend under a new id instead of
 re-registering the old one without its previous device token, which the free tier can refuse (per
 the desktop's note on `priorDeviceToken` in `pairing-service.ts`; the backend is not in this repo).
-It also no longer shares a device row with the phone it was copied from, so removing one pairing on
-an entitled desktop cannot revoke the other phone. The old row is left unused on the backend, as
-after an uninstall. An existing install keeps its id while its key still opens.
+From this build on, it also no longer shares a device row with the phone it was copied from, so
+removing one pairing on an entitled desktop cannot revoke the other phone. The old row is left unused
+on the backend, as after an uninstall. An existing install keeps its id while its key still opens,
+so a phone whose key an older build already replaced keeps the id it had (and any row it shares)
+until the app is reinstalled.
 
 `KeyboardInsetsTest` covers the soft keyboard on Android 15 (`A77`). The app targets API 35, so on
 Android 15 its window is edge-to-edge whether it asks or not: the keyboard no longer resizes the

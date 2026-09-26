@@ -84,7 +84,9 @@ The iOS app is woken by APNs pushes the nodeterm backend sends. That backend has
 leg, so this app polls instead: checked about every 15 minutes in the background (WorkManager's
 floor), and live for the computer whose screen is open, which the app re-lists every 8 seconds.
 Other paired computers are not polled while you look at one, so their notifications still come from
-the background check only. Real-time push on Android needs an FCM leg in the backend.
+the background check only. That includes a computer you just left: the app may still hold its
+connection for a while, but no longer re-lists it when it pushes a change. Real-time push on Android
+needs an FCM leg in the backend.
 
 The live check leaves out what you are looking at: nothing of a computer is announced while its
 Inbox tab is on screen, and nothing a session's terminal shows while it is attached. Those events
@@ -103,8 +105,9 @@ A notification names the session, the computer and the kind of event ("Needs you
 "Needs approval"), but not the event's own text: the command, file or question, or the agent's last
 message. Android shows a notification's full content on a secure lock screen unless you hide
 sensitive content there. **Settings → Show details in notifications** (off by default) adds that
-text. A lock screen set to hide sensitive content shows only "Needs you — <session>" and the
-computer's name either way. The iOS app does receive the detail, in the push the desktop sends.
+text. A lock screen set to hide sensitive content shows only the title ("Needs you — <session>", or
+"Completed — <session>" for a finished or interrupted turn) and the computer's name either way. The
+iOS app does receive the detail, in the push the desktop sends.
 
 ## Security
 
@@ -114,9 +117,10 @@ computer's name either way. The iOS app does receive the detail, in the push the
 - Nothing of the app's goes into a backup or a phone-to-phone transfer. `allowBackup="false"` stops
   cloud backup, and the manifest's data extraction rules stop the Android 12+ device-to-device
   transfer, which ignores `allowBackup`. A new phone starts unpaired; pair it again.
-- The relay device id goes with the relay key: if the key ever has to be created again (it was
-  lost), a new device id is minted with it, so the phone never presents an old device id with new
-  keys.
+- The relay device id goes with the relay key: from this build on, if the key ever has to be
+  created again (it was lost), a new device id is minted with it, so the phone does not present an
+  old device id with a new key. A phone whose key an older build already replaced keeps its device
+  id until the app is reinstalled.
 - Relay traffic is end-to-end encrypted (NaCl box under a per-session HKDF key) and checked exactly
   as the desktop checks it: role byte (no reflections), strictly increasing sequence numbers (no
   replays), no re-key once ready, and the host key pinned from pairing.

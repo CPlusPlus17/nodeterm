@@ -180,5 +180,9 @@ class InboxNotificationTextTest {
         )
         // Stored only from the switch.
         assertEquals(1, Regex("""graph\.hosts\.notificationDetails\s*=(?!=)""").findAll(settings).count())
+        // Enabled exactly when the Notifications switch reads On (the review of A52): with notifications
+        // turned off for the app in the system, the details switch is not offered either.
+        assertTrue(settings.contains("Switch(checked = notify && canPost, onCheckedChange = {"))
+        assertTrue(settings.contains("Switch(checked = notifyDetails, enabled = notify && canPost, onCheckedChange = {"))
     }
 }

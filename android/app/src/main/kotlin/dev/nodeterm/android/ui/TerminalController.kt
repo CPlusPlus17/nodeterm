@@ -12,6 +12,7 @@ import android.graphics.Color
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.TransactionTooLargeException
 import android.util.Base64
 import android.view.Choreographer
@@ -65,8 +66,8 @@ sealed interface TermState {
     /** Opening through the relay for the first time: the computer shows this code to approve. */
     data class AwaitingApproval(val sas: String) : TermState
     /**
-     * The terminal view's renderer crashed, or kept being killed (audit A45). A new view has been
-     * built; "Reopen terminal" reattaches to it. Not automatic: see [RendererRecovery].
+     * The terminal view's renderer crashed, or kept being killed (audit A45). "Reopen terminal" builds
+     * a new view and reattaches to it. Not automatic: see [RendererRecovery].
      */
     data class ViewLost(val message: String) : TermState
 }
@@ -141,6 +142,16 @@ class TerminalController(
      * AndroidView on it, so a change builds a new WebView ([createWebView]) in place of the dead one.
      */
     var webViewKey by mutableStateOf(0)
+        private set
+
+    /**
+     * The screen shows a WebView at all. False after a renderer loss (audit A45) until the next attach
+     * is asked for ([attachWhenPageReady]: a button, a pending auto-reattach, or [onStart]). Only an
+     * automatic reattach of a visible screen, which [RendererRecovery] bounds, builds the replacement at
+     * once: built unasked, a page whose renderer dies as it loads was rebuilt and lost over and over,
+     * since a kept answer or an offer is not counted (the review of A45).
+     */
+    var hasWebView by mutableStateOf(true)
         private set
 
     private val main = Handler(Looper.getMainLooper())
@@ -332,9 +343,13 @@ class TerminalController(
         settings.setSupportZoom(false)
         settings.builtInZoomControls = false
         settings.displayZoomControls = false
-        // While the screen is not visible (its stream is detached then anyway), Android may reclaim
-        // this renderer before the app; onRenderProcessGone below brings the terminal back (A45).
-        setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_BOUND, true)
+        // While the screen is not visible (its stream is detached then anyway), the renderer's priority
+        // is waived, so Android may reclaim it before the app; onRenderProcessGone below brings the
+        // terminal back (A45). While visible it keeps RENDERER_PRIORITY_IMPORTANT, WebView's default.
+        // RENDERER_PRIORITY_BOUND (the first A45 fix) waived it the same way, but also bound the
+        // VISIBLE renderer below that default, so memory pressure could take the terminal the user
+        // was looking at before it took the app (the review of A45).
+        setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true)
         addJavascriptInterface(Bridge(gen), "NodetermBridge")
         webViewClient = object : WebViewClient() {
             // The page never navigates; a link the user taps opens in the browser, outside this bridge.
@@ -372,7 +387,8 @@ class TerminalController(
      * The renderer behind [view] is gone (audit A45): Android killed it to reclaim memory, or it
      * crashed. That WebView can never be used again. The stream is detached (it would paint into
      * nothing), the WebView leaves the view tree and is destroyed, and [webViewKey] changes so the
-     * screen builds a new one. Then, per [RendererRecovery] and what the screen was showing: an answer
+     * screen builds a new one: at once for an automatic reattach, otherwise once the next attach is
+     * asked for ([hasWebView]). Then, per [RendererRecovery] and what the screen was showing: an answer
      * with its own button (ended, disconnected, relay offer, view lost) stays, and nothing reattaches
      * unasked; otherwise the screen reattaches by itself once the new page is ready (a kill), or offers
      * "Reopen terminal" (a crash, or kills in a loop).
@@ -400,7 +416,10 @@ class TerminalController(
         sizedElsewhere = null
         destroyWebView(view, rendererAlive = false)
         webViewKey++
-        when (val outcome = recovery.onGone(didCrash, System.currentTimeMillis(), showing)) {
+        // Monotonic: a wall clock changed meanwhile would stretch or clear the kill-loop window. A kill
+        // while stopped is expected (the priority is waived then) and not counted (the review of A45).
+        val outcome = recovery.onGone(didCrash, SystemClock.elapsedRealtime(), showing, visible = !stopped)
+        when (outcome) {
             // The screen keeps its answer, and its button reattaches once the new page is ready
             // (attachWhenPageReady). Moving it to Connecting would attach unasked: over the relay, to
             // a pane that exited, that creates a new, empty session.
@@ -410,6 +429,9 @@ class TerminalController(
             RendererRecovery.Outcome.Reattach -> state = TermState.Connecting
             is RendererRecovery.Outcome.Offer -> state = TermState.ViewLost(outcome.message)
         }
+        // The replacement is built now only for an automatic reattach of a visible screen, which the
+        // bound above limits. Otherwise the next attach asked for builds it (attachWhenPageReady).
+        hasWebView = outcome == RendererRecovery.Outcome.Reattach && !stopped
     }
 
     /**
@@ -445,10 +467,17 @@ class TerminalController(
 
     /**
      * Attach now or, while a replacement page is still loading after a renderer loss (A45), once it
-     * has reported its size ([attachIfWaiting]): attaching before would claim the pty at 80×24.
+     * has reported its size ([attachIfWaiting]): attaching before would claim the pty at 80×24. A
+     * replacement not built yet ([hasWebView]) is built now, this being the attach it waited for;
+     * not while stopped, where nothing attaches and [onStart] builds it.
      */
     private fun attachWhenPageReady() {
-        if (page.isReplacing) state = TermState.Connecting else attach()
+        if (page.isReplacing) {
+            if (!stopped) hasWebView = true
+            state = TermState.Connecting
+        } else {
+            attach()
+        }
     }
 
     /** "Reopen terminal", after the view was lost with its renderer (A45). */
