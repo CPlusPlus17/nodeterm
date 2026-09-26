@@ -330,3 +330,17 @@ describe('rebindNode', () => {
     expect(stored('p1', 'n1')?.accountId).toBe('a')
   })
 })
+
+describe('closeProject on a background project (issue #848: the offer outlives a tab switch)', () => {
+  it('closes only the named project and leaves the active one and its nodes alone', () => {
+    const a = useProjects.getState().addProject('a')
+    const b = useProjects.getState().addProject('b')
+    useProjects.getState().setActive(b.id)
+    const activeBefore = useProjects.getState().getProject(b.id)
+    useProjects.getState().closeProject(a.id)
+    const s = useProjects.getState()
+    expect(s.activeProjectId).toBe(b.id)
+    expect(s.getProject(a.id)?.closed).toBe(true)
+    expect(s.getProject(b.id)).toBe(activeBefore)
+  })
+})

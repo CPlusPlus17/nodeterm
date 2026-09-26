@@ -1697,7 +1697,7 @@ export function Canvas() {
   } | null>(null)
   // Issue #848 (opt-in): the project whose LAST session node the user just closed with ×, awaiting
   // "close the project too?". Declining only clears this; the session was already ended by ×.
-  const [lastSessionOffer, setLastSessionOffer] = useState<{ id: string; name: string } | null>(null)
+  const [lastSessionOffer, setLastSessionOfferState] = useState<{ id: string; name: string } | null>(null)
   const [mergePush, setMergePush] = useState(false)
   const settings = useSettings((s) => s.settings)
   const gatewayModels = useModelGateway((s) => s.models)
@@ -1762,29 +1762,6 @@ export function Canvas() {
   // onBrowserNewWindow effect can dedup repeat opens and rate-cap a flood of window.open calls.
   const browserPopupSpawnsRef = useRef<{ url: string; source: string; t: number }[]>([])
   const loadingRef = useRef(false)
-  // Issue #848: TerminalNode's × announces the user's own close (and nothing else does — not an
-  // exit, restart, hibernation, bulk delete, canvas-control close, project close or quit). Decided
-  // HERE against the live canvas while the closed node is still on it, and only for the project
-  // whose nodes `nodesRef` actually holds — see lib/lastSessionClose for what counts as a session.
-  useEffect(() => {
-    const onUserClosedSession = (e: Event): void => {
-      const nodeId = (e as CustomEvent<{ nodeId?: unknown }>).detail?.nodeId
-      if (typeof nodeId !== 'string') return
-      const store = useProjects.getState()
-      const projectId = nodesProjectIdRef.current
-      if (!projectId || projectId !== store.activeProjectId) return
-      const project = store.getProject(projectId)
-      const offer = shouldOfferProjectClose({
-        enabled: useSettings.getState().settings.offerCloseProjectOnLastSession,
-        closedNodeId: nodeId,
-        nodes: nodesRef.current,
-        project
-      })
-      if (offer && project) setLastSessionOffer({ id: project.id, name: project.name })
-    }
-    window.addEventListener(USER_CLOSED_SESSION_EVENT, onUserClosedSession)
-    return () => window.removeEventListener(USER_CLOSED_SESSION_EVENT, onUserClosedSession)
-  }, [])
   const flowWrapRef = useRef<HTMLDivElement>(null)
   // Glass terminals: while the camera moves, every glass node's backdrop changes each frame and
   // the 28px blur is re-rasterised for all of them. The class drops the blur (the tint stays, and
@@ -2012,7 +1989,8 @@ export function Canvas() {
     peer: false,
     closeProject: false,
     deleteProject: false,
-    issueWorktree: false
+    issueWorktree: false,
+    lastSessionOffer: false
   })
   // Every confirm setter flips its flag AT CALL TIME. Assigning the mirror during RENDER (what this
   // used to do) is a tick too late: two agent verbs arriving in separate IPC events before React
@@ -2112,9 +2090,44 @@ export function Canvas() {
       f.closeProject ||
       f.deleteProject ||
       f.issueWorktree ||
+      f.lastSessionOffer ||
       removePendingRef.current
     )
   }, [])
+  // Issue #848's offer is an actionable dialog like the rest, so it is in the same guard: an agent
+  // `write`/`close` or a worktree removal must not stack over it (flag flipped at call time).
+  const setLastSessionOffer = useCallback((v: { id: string; name: string } | null) => {
+    confirmFlags.current.lastSessionOffer = !!v
+    setLastSessionOfferState(v)
+  }, [])
+  // Issue #848: TerminalNode's × announces the user's own close (and nothing else does — not an
+  // exit, restart, hibernation, bulk delete, canvas-control close, project close or quit). Decided
+  // HERE against the live canvas while the closed node is still on it, and only for the project
+  // whose nodes `nodesRef` actually holds — see lib/lastSessionClose for what counts as a session.
+  useEffect(() => {
+    const onUserClosedSession = (e: Event): void => {
+      const nodeId = (e as CustomEvent<{ nodeId?: unknown }>).detail?.nodeId
+      if (typeof nodeId !== 'string') return
+      // One actionable dialog at a time: if any confirm is open — or being opened (the async gap
+      // in requestRemoveWorktree) — SKIP the offer rather than queue it. It is a convenience tied
+      // to this click; raised later it would no longer be about what the user just did (and the
+      // project may have sessions again). Closing the project by hand remains one menu away.
+      if (confirmBusy()) return
+      const store = useProjects.getState()
+      const projectId = nodesProjectIdRef.current
+      if (!projectId || projectId !== store.activeProjectId) return
+      const project = store.getProject(projectId)
+      const offer = shouldOfferProjectClose({
+        enabled: useSettings.getState().settings.offerCloseProjectOnLastSession,
+        closedNodeId: nodeId,
+        nodes: nodesRef.current,
+        project
+      })
+      if (offer && project) setLastSessionOffer({ id: project.id, name: project.name })
+    }
+    window.addEventListener(USER_CLOSED_SESSION_EVENT, onUserClosedSession)
+    return () => window.removeEventListener(USER_CLOSED_SESSION_EVENT, onUserClosedSession)
+  }, [confirmBusy, setLastSessionOffer])
 
   const nodeTypes = useMemo(
     () => ({
@@ -18430,9 +18443,13 @@ export function Canvas() {
               onConfirm={() => {
                 // The existing close path (issue #848: reuse, don't reimplement). With no session
                 // node left it closes silently; if an agent spawned one since, it gets the
-                // usual #442 confirm instead.
-                closeProject(lastSessionOffer.id)
+                // usual #442 confirm instead — so the offer leaves the guard FIRST, or that
+                // confirm would stack over it. Keyed by the id captured at raise time: after a
+                // tab switch this still closes the project the offer named, and closeProject
+                // commits the live canvas only when that project is the active one.
+                const offer = lastSessionOffer
                 setLastSessionOffer(null)
+                closeProject(offer.id)
               }}
               onCancel={() => setLastSessionOffer(null)}
             />
