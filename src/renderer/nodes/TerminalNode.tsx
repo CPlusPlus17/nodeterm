@@ -214,6 +214,7 @@ import {
   hoverTakesKeyboard,
   outsidePressReleases,
   pointerLeaveReleases,
+  reclaimTarget,
   resolveFocusFollowsPointer
 } from '../lib/terminalFocusMode'
 import { isHidden } from '../lib/ui-visibility'
@@ -5344,14 +5345,20 @@ export function TerminalNode({
         release()
         return
       }
-      // 'reclaim': after the press's own focus change has settled. If the xterm cannot take it (the
-      // ⌘M view covers it, or it is gone) the keyboard really did leave, so say so.
+      // 'reclaim': after the press's own focus change has settled, give the keyboard back to what
+      // lost it (the ⌘M composer) or to the xterm (`reclaimTarget`). If nothing inside the node
+      // could take it (the xterm is covered or gone) the keyboard really did leave, so say so.
+      const lost = e.target
       if (reclaimTimer) clearTimeout(reclaimTimer)
       reclaimTimer = setTimeout(() => {
         reclaimTimer = null
-        focusXtermUnlessCovered(termRef.current, mdModeRef.current)
-        const ta = termRef.current?.textarea
-        if (!ta || document.activeElement !== ta) release()
+        const target = reclaimTarget({
+          lostIsXterm: lost === termRef.current?.textarea,
+          lostStillInNode: lost instanceof HTMLElement && lost.isConnected && root.contains(lost)
+        })
+        if (target === 'lost') (lost as HTMLElement).focus()
+        else focusXtermUnlessCovered(termRef.current, mdModeRef.current)
+        if (!root.contains(document.activeElement)) release()
       }, 0)
     }
     // Activity claimed WITHOUT focus (a go-to-node under the ⌘M view, Canvas's own setActive on a

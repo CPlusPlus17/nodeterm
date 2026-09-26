@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS } from '@shared/types'
 import {
   focusLossOutcome,
   outsidePressReleases,
+  reclaimTarget,
   hoverTakesKeyboard,
   pointerLeaveReleases,
   resolveFocusFollowsPointer
@@ -124,6 +125,21 @@ describe('terminal focus mode (#757)', () => {
 
     it('has nothing to release when the node is not the active one', () => {
       expect(outsidePressReleases({ isActive: false, pressInsideNode: false, focusInsideNode: false })).toBe(false)
+    })
+  })
+
+  describe('reclaimTarget', () => {
+    // MEASURED in Electron 42 (Blink): a press on the node's own header moves focus from whatever
+    // held it to the React Flow wrapper (tabindex 0). When the ⌘M view is open, what held it was the
+    // composer, and the covered xterm cannot take focus back — so reclaiming only to the xterm left
+    // the keyboard on the wrapper, where Backspace is the canvas's delete-selection.
+    it('hands focus back to the element inside the node that lost it (the ⌘M composer)', () => {
+      expect(reclaimTarget({ lostIsXterm: false, lostStillInNode: true })).toBe('lost')
+    })
+
+    it('uses the xterm when the xterm lost it, or when the lost element is gone (rename field closed)', () => {
+      expect(reclaimTarget({ lostIsXterm: true, lostStillInNode: true })).toBe('xterm')
+      expect(reclaimTarget({ lostIsXterm: false, lostStillInNode: false })).toBe('xterm')
     })
   })
 

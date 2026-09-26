@@ -130,3 +130,13 @@ export interface OutsidePress {
 export function outsidePressReleases(p: OutsidePress): boolean {
   return p.isActive && !p.pressInsideNode && !p.focusInsideNode
 }
+
+/**
+ * Click to focus, `reclaim`: which element gets the keyboard back after a press on the node's own
+ * chrome? The one that lost it, when it is still inside the node and is not the xterm (the ⌘M
+ * composer — the covered xterm cannot take focus, so falling back to it strands the keyboard on the
+ * React Flow wrapper); otherwise the xterm, through `focusXtermUnlessCovered`.
+ */
+export function reclaimTarget(p: { lostIsXterm: boolean; lostStillInNode: boolean }): 'lost' | 'xterm' {
+  return !p.lostIsXterm && p.lostStillInNode ? 'lost' : 'xterm'
+}

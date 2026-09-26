@@ -1267,7 +1267,8 @@ session.
   keyboard, and the node's active flag, presence focus AND guard then follow DOM focus through a
   `focusin`/`focusout` listener on the node root (`lib/terminalFocusMode.ts` `focusLossOutcome`):
   focus moving inside the node or the WINDOW blurring (Cmd+Tab) keeps it, a press on the node's own
-  chrome (header drag — React Flow focuses its wrapper) hands it back to the xterm, anything else —
+  chrome (header drag — React Flow focuses its wrapper, MEASURED in Electron 42) hands it back to
+  the element that lost it (the ⌘M composer) or the xterm (`reclaimTarget`), anything else —
   another node, a field, the empty canvas (`onPaneClick` blurs the xterm textarea,
   `shouldReleasePaneFocus`) — releases it and re-arms the guard. Activity claimed WITHOUT focus
   (go-to-node under the ⌘M view, Canvas's own `setActive` on a jump) has no focusout, so a
