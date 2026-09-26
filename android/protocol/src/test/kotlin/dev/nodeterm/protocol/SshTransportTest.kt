@@ -54,7 +54,11 @@ class SshTransportTest {
     private fun tmuxAvailable() = runCatching { ProcessBuilder("tmux", "-V").start().waitFor() == 0 }.getOrDefault(false) &&
         File("/usr/bin/script").exists()
 
-    private fun childEnv(): Map<String, String> = System.getenv().filterKeys { it != "TMUX" && it != "TMUX_PANE" } +
+    // No locale at all, like an sshd exec channel on a stock macOS host (audit A03): passing the JVM's
+    // own LANG through is what hid that bug.
+    private fun childEnv(): Map<String, String> = System.getenv().filterKeys {
+        it != "TMUX" && it != "TMUX_PANE" && it != "LANG" && it != "LANGUAGE" && !it.startsWith("LC_")
+    } +
         mapOf("HOME" to home.path, "TMUX_TMPDIR" to tmuxDir.path, "XDG_CONFIG_HOME" to File(home, ".config").path)
 
     private fun tmux(vararg args: String): Pair<Int, String> {
@@ -348,6 +352,19 @@ class SshTransportTest {
         } finally {
             guard.poisonAll = false
             conn.close()
+        }
+    }
+
+    @Test
+    fun `non-ASCII survives the attach even when the host sets no locale`() = runBlocking<Unit> {
+        connect().use { conn ->
+            val sink = Sink()
+            val stream = conn.attach("term-a-1", 100, 30, sink)
+            Thread.sleep(400)
+            // ╭ (no ACS mapping) and é, built from octal escapes so the INPUT is pure ASCII.
+            stream.write("printf 'u8:\\342\\225\\255\\303\\251:end\\n'\r")
+            sink.waitFor("u8:╭é:end")
+            stream.detach()
         }
     }
 

@@ -45,6 +45,23 @@ object SshScripts {
     """.trimIndent()
 
     /**
+     * A UTF-8 locale for the tmux CLIENT (audit A03). An sshd exec channel on a stock macOS host
+     * carries no LANG, and tmux draws every character with no ACS mapping (╭, é, CJK, emoji) as `_`
+     * for a client it does not believe is UTF-8. The rule is the desktop's `resolveLocaleLang`
+     * (src/core/pty-manager.ts): keep an inherited LC_ALL/LC_CTYPE/LANG that already says UTF-8,
+     * otherwise export LANG — `en_US.UTF-8` on macOS (always present, and what the desktop uses),
+     * `C.UTF-8` elsewhere (a Linux host may not have en_US generated, and shells would print setlocale
+     * warnings). LANG also reaches the panes of a server this attach starts; `-u` on the client makes
+     * the rendering UTF-8 even when an explicit non-UTF-8 LC_ALL wins over LANG.
+     */
+    private val LOCALE = """
+        case "${'$'}{LC_ALL:-${'$'}{LC_CTYPE:-${'$'}{LANG:-}}}" in
+          *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) ;;
+          *) if [ "${'$'}(uname -s 2>/dev/null)" = Darwin ]; then LANG=en_US.UTF-8; else LANG=C.UTF-8; fi; export LANG ;;
+        esac
+    """.trimIndent()
+
+    /**
      * Browse: emits a meta block, then EXACTLY the `projects.list` blob shape (workspace.json ·
      * live `nt-*` sessions · agent-status.json), so the relay and SSH paths share one parser.
      */
@@ -94,7 +111,8 @@ object SshScripts {
             if [ -z "${'$'}NT_TMUX" ]; then echo 'nodeterm: tmux was not found on this computer.' >&2; exit 127; fi
             if [ -n "${'$'}NT_UD" ] && [ -f "${'$'}NT_UD/tmux.conf" ]; then set -- -f "${'$'}NT_UD/tmux.conf"; else set --; fi
             TERM=xterm-256color; export TERM
-            exec "${'$'}NT_TMUX" -L ${TmuxNames.SOCKET} "${'$'}@" new-session -A -s ${q(target)}$cd
+            $LOCALE
+            exec "${'$'}NT_TMUX" -u -L ${TmuxNames.SOCKET} "${'$'}@" new-session -A -s ${q(target)}$cd
         """.trimIndent()
     }
 
