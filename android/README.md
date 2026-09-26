@@ -44,6 +44,13 @@ Needs JDK 17+ and the Android SDK (Android Studio's, or `ANDROID_HOME`). `minSdk
 CI builds the debug APK on every change under `android/` (`.github/workflows/android.yml`) and
 attaches it to the run.
 
+**Debug builds are signed with a public key that is committed on purpose**
+(`app/debug.keystore`, password `android`). That is what lets you install a newer CI or local
+debug APK over an older one without uninstalling — uninstalling wipes every pairing. The other side
+of "public": anyone can sign an APK that installs as an update over a debug build and inherits its
+data, including the keys your computers trust. **Install debug APKs only from this repository's CI
+or your own build.** Release builds will need their own private key; none exists yet.
+
 ## Layout
 
 - **`protocol/`** — everything that goes on the wire, as a plain Kotlin/JVM library with no Android

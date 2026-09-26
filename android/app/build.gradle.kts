@@ -16,7 +16,27 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        // A PUBLIC debug key, committed on purpose (audit A10): without it every CI run signs with a
+        // fresh runner-generated key, so installing the next APK over the last one fails and the only
+        // way forward is uninstalling, which wipes every pairing. Its password is the Android default.
+        //
+        // Public means ANYONE can sign an APK that installs as an update over a debug build and so
+        // inherits its data and its Keystore-held secrets (the SSH key paired computers trust, the relay
+        // identity). Install debug APKs only from this repo's CI or your own build. A release build
+        // must never use this key; there is no release signing config yet.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             // sshj + BouncyCastle rely on reflection; shrinking needs keep rules nobody has written yet.
             isMinifyEnabled = false

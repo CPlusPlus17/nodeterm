@@ -225,7 +225,9 @@ detects your platform. Everything is also listed at
 - **iOS** — **nodeterm mobile** on the
   [App Store](https://apps.apple.com/app/nodeterm/id6790581233).
 - **Android** — build it from [`android/`](./android) (`./gradlew :app:assembleDebug`); CI also
-  attaches a debug APK to every run of the Android workflow. Not in a store yet.
+  attaches a debug APK to every run of the Android workflow. Debug builds share a public signing
+  key so a newer APK installs over an older one; install them only from this repository's CI or
+  your own build. Not in a store yet, and not yet tested on a device.
 
 **Trying it out?** Removal is one script — it stops every process nodeterm started, reverts
 the status-hook/skill entries it merged into your agent CLIs' config (your own hooks and
