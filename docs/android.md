@@ -111,7 +111,10 @@ Since the audit, the SSH tests also cover: resize/keystrokes/close from a thread
 network I/O (a JVM stand-in for Android's StrictMode, `A01`), a transport that breaks mid-write
 (`A01`), and non-ASCII through an attach whose host sets no locale (`A03`). The relay interop tests
 cover an approval answered after the hook's hold ended (`A06`), and the desktop tests run the
-generated SSH answer command under a real `/bin/sh`.
+generated SSH answer command under a real `/bin/sh`. `QuickActionsTest` pins which node state each
+Inbox quick answer needs (`A38`): a ticketed approval is judged by its card, so it is answered while
+the node still shows WAITING for a held question; keys are typed only for a ticketless approval on a
+BLOCKED node or a question on a WAITING one.
 
 ## Known gaps
 
