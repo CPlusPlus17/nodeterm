@@ -208,6 +208,12 @@ import { useTerminalSearch } from '../terminal/useTerminalSearch'
 import { useCopyFeedback } from '../terminal/useCopyFeedback'
 import { ContextMeter } from '../components/ContextMeter'
 import { isZoomModifierHeld } from '../lib/zoomModifier'
+import {
+  focusLossOutcome,
+  hoverTakesKeyboard,
+  pointerLeaveReleases,
+  resolveFocusFollowsPointer
+} from '../lib/terminalFocusMode'
 import { isHidden } from '../lib/ui-visibility'
 import { useTerminalGlass } from '../lib/useTerminalGlass'
 import { isLiquidGlass } from '../lib/appTheme'
@@ -1306,6 +1312,12 @@ export function TerminalNode({
   // Scoped selectors (not the whole settings object) so this node only re-renders when a
   // field it actually uses changes — not on every unrelated settings edit.
   const panHoverDelay = useSettings((s) => s.settings.panHoverDelay)
+  // Issue #757: does the keyboard follow the pointer (hover dwell in, mouseleave out — the default)
+  // or a click (Mac-style: the clicked terminal keeps it until focus really moves elsewhere)? Read
+  // live, so toggling it in Settings applies to every mounted node without a remount.
+  const focusFollowsPointer = resolveFocusFollowsPointer(
+    useSettings((s) => s.settings.terminalFocusFollowsPointer)
+  )
   // One shallow-compared subscription for the whole appearance slice — see useXtermVisualSettings.
   // Scoped to the OWNING project so its `terminal.theme` / `terminal.fontFamily` layer over the
   // global settings for this node, and for no other project's nodes.
@@ -5231,6 +5243,10 @@ export function TerminalNode({
   }, [focusReq])
   const onBodyEnter = () => {
     if (dwellRef.current) clearTimeout(dwellRef.current)
+    // Click to focus (#757): hovering never takes the keyboard. A click still does, at once, through
+    // the guard (`onGuardUp` → `enterNow`); a drag that started on the guard comes back here and,
+    // correctly, arms nothing.
+    if (!hoverTakesKeyboard(focusFollowsPointer)) return
     const enter = () => {
       // While Cmd/Ctrl is held the user is zooming the canvas — don't grab focus / enter the
       // terminal; just keep checking until the modifier is released.
@@ -5252,11 +5268,111 @@ export function TerminalNode({
   }
   const onBodyLeave = () => {
     if (dwellRef.current) clearTimeout(dwellRef.current)
+    // Click to focus (#757): the pointer wandering off — to another card, the sidebar, a second
+    // display — leaves the terminal exactly as it is. It keeps the keyboard, the guard stays down
+    // and the node stays active; all of that is released by the focus-loss listener below, which
+    // follows where the KEYBOARD goes rather than where the mouse goes.
+    if (!pointerLeaveReleases(focusFollowsPointer)) return
     setArmed(true)
     termRef.current?.blur()
     useAgentStatus.getState().setActive(id, false)
     presence.releaseFocus(id)
   }
+  /**
+   * Click to focus (#757): the node's "I hold the keyboard" state follows DOM focus, not the
+   * pointer.
+   *
+   * With focus-follows-pointer, `onBodyLeave` is where the terminal gives the keyboard back and
+   * where the agent-status active flag (unread decisions) and presence focus ("I am working here")
+   * are released. Click to focus removes that trigger on purpose, so without this listener a node
+   * would stay "active" forever after the user clicked into another one. The honest signal is where
+   * focus actually went: another node's xterm (its `enterNow` focuses it), a sticky or a settings
+   * field, or `<body>` because a click on the empty canvas blurred the xterm textarea
+   * (`Canvas.onPaneClick` → `shouldReleasePaneFocus`, issue #86 — the textarea is a TEXTAREA, so it
+   * is released there too). `focusLossOutcome` refuses the look-alikes: focus moving inside this
+   * node (the ⌘M composer, the rename field) and the window itself losing focus (Cmd+Tab — the
+   * terminal still owns the keyboard and gets it back on return). A press on this node's OWN chrome
+   * (dragging it by the header) moves focus to its React Flow wrapper or to `<body>`, which would
+   * hand the next keystroke to the canvas; the issue asks for the keyboard to stay until a
+   * DIFFERENT card is clicked, so that case hands it straight back to the xterm (`reclaim`). The
+   * press is recorded by a capture listener on the wrapper and forgotten at the end of the task,
+   * because the focus change it causes is that press's own default action.
+   *
+   * The guard follows the same fact in this mode: it is lowered whenever this xterm takes focus and
+   * re-armed when focus leaves the node, so the focused terminal owns the wheel and every other one
+   * stays a canvas surface (scroll = pan, drag = move) until it is clicked. In the pointer mode the
+   * guard is a dwell contract instead (see `enterNow`), which is why none of this runs there.
+   *
+   * Symmetrically, gaining focus anywhere inside the node marks it active: the xterm being focused
+   * by something other than `enterNow` (the ⌘M view handing focus back, Chromium restoring it on
+   * window activation) must not leave the node reading as idle.
+   */
+  useEffect(() => {
+    if (focusFollowsPointer) return
+    const root = rootRef.current
+    if (!root) return
+    // Our root sits inside React Flow's wrapper, which also holds the node's resize handles and is
+    // what a header press focuses. Fall back to the root if it is ever rendered outside one.
+    const wrapper: HTMLElement = root.closest<HTMLElement>('.react-flow__node') ?? root
+    let pressedInOwnNode = false
+    let pressTimer: ReturnType<typeof setTimeout> | null = null
+    let reclaimTimer: ReturnType<typeof setTimeout> | null = null
+    const onPointerDown = () => {
+      pressedInOwnNode = true
+      if (pressTimer) clearTimeout(pressTimer)
+      pressTimer = setTimeout(() => {
+        pressedInOwnNode = false
+        pressTimer = null
+      }, 0)
+    }
+    const release = () => {
+      setArmed(true)
+      useAgentStatus.getState().setActive(id, false)
+      presence.releaseFocus(id)
+    }
+    const onFocusIn = (e: FocusEvent) => {
+      if (e.target === termRef.current?.textarea) {
+        setArmed(false)
+        useTerminalFocus.getState().remember(id)
+      }
+      useAgentStatus.getState().setActive(id, true)
+      presence.reportFocus(id)
+    }
+    const onFocusOut = (e: FocusEvent) => {
+      const outcome = focusLossOutcome({
+        nodeRoot: root,
+        lost: e.target,
+        gained: e.relatedTarget,
+        activeElement: document.activeElement,
+        windowFocused: document.hasFocus(),
+        pressedInOwnNode
+      })
+      if (outcome === 'keep') return
+      if (outcome === 'release') {
+        release()
+        return
+      }
+      // 'reclaim': after the press's own focus change has settled. If the xterm cannot take it (the
+      // ⌘M view covers it, or it is gone) the keyboard really did leave, so say so.
+      if (reclaimTimer) clearTimeout(reclaimTimer)
+      reclaimTimer = setTimeout(() => {
+        reclaimTimer = null
+        focusXtermUnlessCovered(termRef.current, mdModeRef.current)
+        const ta = termRef.current?.textarea
+        if (!ta || document.activeElement !== ta) release()
+      }, 0)
+    }
+    wrapper.addEventListener('pointerdown', onPointerDown, true)
+    root.addEventListener('focusin', onFocusIn)
+    root.addEventListener('focusout', onFocusOut)
+    return () => {
+      if (pressTimer) clearTimeout(pressTimer)
+      if (reclaimTimer) clearTimeout(reclaimTimer)
+      wrapper.removeEventListener('pointerdown', onPointerDown, true)
+      root.removeEventListener('focusin', onFocusIn)
+      root.removeEventListener('focusout', onFocusOut)
+    }
+  }, [focusFollowsPointer, id, presence])
   // While armed, a mousedown might start a node drag — pause the dwell timer so the
   // terminal doesn't grab focus mid-drag; the release decides what happens next (`onGuardUp`).
   const onGuardDown = (e: React.MouseEvent) => {

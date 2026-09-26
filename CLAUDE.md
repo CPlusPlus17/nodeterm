@@ -1261,6 +1261,18 @@ session.
 - The xterm container is `nodrag nowheel`; a transparent **hover-guard** overlay sits on top
   until you dwell `settings.panHoverDelay` (so quick drag = move node, scroll = pan). After
   the dwell the guard is removed and xterm takes input. The header stays draggable.
+- **Click to focus** (`settings.terminalFocusFollowsPointer`, default ON = the dwell above; issue
+  #757, Settings → Behavior). Off, the pointer decides nothing: no dwell, and `mouseleave` no
+  longer blurs, re-arms or releases. A click (`onGuardUp` → `enterNow`) or a "go to node" takes the
+  keyboard, and the node's active flag, presence focus AND guard then follow DOM focus through a
+  `focusin`/`focusout` listener on the node root (`lib/terminalFocusMode.ts` `focusLossOutcome`):
+  focus moving inside the node or the WINDOW blurring (Cmd+Tab) keeps it, a press on the node's own
+  chrome (header drag — React Flow focuses its wrapper) hands it back to the xterm, anything else —
+  another node, a field, the empty canvas (`onPaneClick` blurs the xterm textarea,
+  `shouldReleasePaneFocus`) — releases it and re-arms the guard. Only a literal `false` in
+  settings.json selects it (`resolveFocusFollowsPointer`). The ⌘/ shortcuts panel prints "Click" instead of
+  the dwell. Renderer only: Desktop + Server Edition identical; kanban card modal N/A (it has no
+  hover guard); Mobile N/A.
 - **Where the wheel stops being the terminal's is decided by HIT TEST, per packet** — `Canvas.tsx`
   answers `overNativeScrollable` with `target?.closest('.nowheel')`, and React Flow's own
   `panOnScroll` walks the same class (`noWheelClassName`). Two consequences, and issue #767 reported
