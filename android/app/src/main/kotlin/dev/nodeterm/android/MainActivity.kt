@@ -86,7 +86,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val graph = NodetermApp.graph(this)
-        if (Build.VERSION.SDK_INT >= 33 && graph.hosts.notificationsEnabled &&
+        // Asked on a fresh start only — not on every rotation or recreation (audit A21). Later asks
+        // come from the Settings switch, which also offers the system settings once Android stops
+        // showing the dialog.
+        if (savedInstanceState == null && Build.VERSION.SDK_INT >= 33 && graph.hosts.notificationsEnabled &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)

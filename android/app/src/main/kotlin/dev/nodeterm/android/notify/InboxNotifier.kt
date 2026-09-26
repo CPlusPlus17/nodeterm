@@ -43,6 +43,10 @@ object InboxNotifier {
     private const val CH_DONE = "done"
     private const val WORK = "nodeterm.inbox"
 
+    /** This phone will actually SHOW our notifications: the app-level switch in system settings,
+     *  which on Android 13+ also reflects the runtime POST_NOTIFICATIONS permission (audit A21). */
+    fun canPost(context: Context): Boolean = NotificationManagerCompat.from(context).areNotificationsEnabled()
+
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
@@ -119,6 +123,8 @@ object InboxNotifier {
 class InboxWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val graph = NodetermApp.graph(applicationContext)
+        // Nothing could be shown: do not dial every computer every 15 minutes for it (audit A21).
+        if (!graph.hosts.notificationsEnabled || !InboxNotifier.canPost(applicationContext)) return Result.success()
         for (host in graph.hosts.hosts.value) {
             val session = graph.connections.session(host.id)
             val watched = session.isWatched

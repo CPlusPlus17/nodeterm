@@ -1,5 +1,13 @@
 package dev.nodeterm.android.ui
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,6 +57,25 @@ fun SettingsScreen(nav: Navigator) {
     var name by remember { mutableStateOf(graph.hosts.deviceName) }
     var apiBase by remember { mutableStateOf(graph.hosts.apiBase) }
     var notify by remember { mutableStateOf(graph.hosts.notificationsEnabled) }
+    // Whether the phone will actually SHOW them, re-read whenever the screen starts (the user may
+    // have come back from the system settings). The switch used to read On while nothing could
+    // arrive (audit A21).
+    var canPost by remember { mutableStateOf(InboxNotifier.canPost(context)) }
+    LifecycleStartEffect(Unit) {
+        canPost = InboxNotifier.canPost(context)
+        onStopOrDispose { }
+    }
+    val askPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        canPost = InboxNotifier.canPost(context)
+    }
+    fun openNotificationSettings() {
+        runCatching {
+            context.startActivity(
+                Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+            )
+        }
+    }
     var routes by remember { mutableStateOf(hosts.associate { it.id to graph.hosts.route(it.id) }) }
 
     Scaffold(
@@ -86,11 +113,33 @@ fun SettingsScreen(nav: Navigator) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(checked = notify, onCheckedChange = {
+                Switch(checked = notify && canPost, onCheckedChange = {
                     notify = it
                     graph.hosts.notificationsEnabled = it
                     InboxNotifier.schedule(context, it)
+                    if (it && !canPost) {
+                        // Ask once through the system dialog; once Android stops showing it (after
+                        // two denials) only the system settings can turn them back on.
+                        if (Build.VERSION.SDK_INT >= 33 &&
+                            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            askPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        } else {
+                            openNotificationSettings()
+                        }
+                    }
                 })
+            }
+            if (notify && !canPost) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Notifications are turned off for nodeterm on this phone.",
+                        Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    TextButton(onClick = { openNotificationSettings() }) { Text("Open settings") }
+                }
             }
 
             if (hosts.isNotEmpty()) {
