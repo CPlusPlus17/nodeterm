@@ -2282,9 +2282,11 @@ export class PtyManager {
     // gives that session the same agent-gated hook env a canvas spawn gets, and `attachDetached`
     // records the owner.
     const projectOverrides = await this.projectSpawnOverrides(options)
-    // Resolved HERE for the same synchronous-spawnSession reason as projectOverrides — and the
-    // relay host's detached callers pass no `sshRemote` at all, so this is the one path that needs
-    // it. Re-derive the login-agent pin for the endpoint (issue #427): same memoized `ssh -G`
+    // Resolved HERE for the same synchronous-spawnSession reason as projectOverrides. The relay
+    // host's detached SSH attach (audit A09) does not come through here, and does not need to: it
+    // takes its `sshRemote` from `SshProjectManager.sshRemoteFor`, whose `conn` the manager already
+    // annotated with this same probe when it connected (never from the wire), so this is the one
+    // path that still has to. Re-derive the login-agent pin for the endpoint (issue #427): same memoized `ssh -G`
     // probe the ControlMaster's connect uses, and it OVERWRITES any inbound value — `sshRemote` is
     // renderer-built and its conn can descend from a shareable project file, so only the local
     // probe may decide which agent socket the argv builders pin. The annotated conn is what the
