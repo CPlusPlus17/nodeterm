@@ -25,6 +25,30 @@ findings, with evidence and fixes for each, is [`android-audit-2026-09.md`](andr
 Newest first. Each entry says what landed, how it was checked, and where the fix differs from the
 audit's proposal.
 
+### WP6 batch B (app-only low-severity items): done on the branch, not device-verified
+
+Most of the logic moved into pure, JVM-tested classes in `android/protocol` (the Compose wiring is
+type-checked and source-pinned only). Every item had an adversarial review; the follow-up commits
+are listed with it.
+
+| Finding | Commits | What changed | Checked by |
+|---|---|---|---|
+| A40 | `a38d39d`, `5fb3aea` | `TerminalHandoff` (StreamLease, ViewerSlot, PhoneLaunch): a stream is installed only for the current attach ticket; a phone launch holds its own lease, so Back or backgrounding within the settle delay still writes the line and registers the node. Review follow-up: once a request is on the wire it is not cancelled, and both transports now detach a stream whose caller was cancelled (relay `pty.kill`, SSH client close). | `TerminalHandoffTest`; relay interop and SSH tests for the cancelled attach. |
+| A41 | `94a558a`, `0507555` | `InputBar.plan`: Send keeps the draft while detached; byte-sending chips are disabled. The resume offer survives a reattach of the same screen and is re-checked against a fresh listing before it can be tapped. | `InputBarTest`, `ResumeOfferTest`. |
+| A45 | `1901939`, `a371483`, `46b0897` | `onRenderProcessGone` handled: a kill reattaches automatically once a fresh WebView reports its size (bounded, visible screen only, monotonic clock); a crash offers "Reopen terminal", and the WebView is rebuilt only when something asks to attach. Renderer priority IMPORTANT, waived when not visible. | `TerminalPageTest`. |
+| A46 | `17ee526` | The ⌨ chip clears Compose focus, focuses the WebView, blur/refocuses xterm, and asks the IME after a frame. | Source pins; device check owed. |
+| A76 | `6966f25`, `4ef21f0` | "Wake <agent>" over direct SSH for a Sleeping node, only while a shell owns the pane (read before offering and again at the tap), with Ctrl-U first. **Desktop:** the mirror (and the renderer's self-heal report) now drops `hibernated` on a live state or session start, so a CLI resumed outside the desktop's own wake no longer stays Sleeping. | `ResumeOfferTest`; SSH transport test with a real tmux; vitest mirror + agentStatus tests. |
+| A43 | `2be5e87` | `BackStack`: per-entry keys for `SaveableStateHolder`, retired keys removed (persisted across process death); Board project and Inbox archive toggle saveable. | `BackStackTest`. |
+| A44 | `7988087`, `582bdae`, `46b0897` | `ApiBaseSetting`: system back saves like the arrow; an unedited address is not stored (the built-in default stays a default); leaving by a notification tap or a pairing link saves too; a refused or unusable stored address is flagged in the field. | `SettingsLeaveTest`. |
+| A42 | `7debe67` | `NewSessionChoice`: the selection is derived from the current listing; Start is disabled when nothing is offered. | `NewSessionChoiceTest`. |
+| A57 | `8dbeb48` | Multi-select questions list their options read-only with "answer in the session". | `QuestionChoicesTest`. |
+| A47 | `52df0a3` | The host list asks `SecretStoreCore.contains` (no decrypt, no lock) keyed on a revision flow. | `SecretStoreCoreTest`. |
+| A52 | `3780f5a`, `46b0897` | `InboxNotificationText`: no event text in notifications by default ("Show details in notifications" opts in); a public version for lock screens that hide sensitive content. | `InboxNotificationTextTest`. |
+| A73 | `e055f37`, `27ee194`, `46b0897` | Live notifications for the watched computer: every successful listing announces, skipping what is on screen (the Inbox tab; the open terminal's node, except a held hook-reply approval, which is not painted). A computer the user left is not announced from pushes. | `LiveNotificationsTest`. |
+| A51 | `9b4af70`, `46b0897` | `data_extraction_rules.xml` excludes everything from cloud backup and device transfer; a box key created anew drops the device id so a new one is minted with it. | `DeviceIdentityTest`; device check owed. |
+| A77 | `0a2a1aa` | `Modifier.aboveKeyboard`: Scaffold padding, consume, then IME padding, on the terminal, Pair and Settings screens; no `enableEdgeToEdge()`. | Source pins; device check owed. |
+| A37 | `ac0923a`, `e0a7883` | Real R8 rules (`-dontwarn` for what jdeps finds missing, keeps for the WebView bridge, name-loaded crypto classes, the worker); release is minified; CI builds `assembleRelease` and checks the named keeps matched. A missing `-dontwarn` fails CI, a missing keep for new reflection does not. | CI job "App release (R8, unsigned)" green on its first run; `R8RulesTest`. |
+
 ### WP4 remainder, WP5/WP6 batch A (desktop root causes, protocol-testable items): done on the branch, not device-verified
 
 | Finding | Commit | What changed | Checked by |
@@ -46,7 +70,7 @@ audit's proposal.
 |---|---|---|---|
 | A24 | `8e304db` | `SecretStoreCore` (protocol) replaces a stored secret only on positive evidence it is gone (nothing stored, malformed blob, `AEADBadTagException`); anything else is `SecretUnavailableException` and nothing is written. The identity's first write is durable. `SecureStore` generates the Keystore key only when the alias is absent. | `SecretStoreCoreTest` with real AES-GCM. |
 | A20 | `d199f03` | `connectLocked` rethrows cancellation on both legs (state back to Idle, no "offline"), and closes an SSH connection that finished dialing after its caller was cancelled. | Type-check + CI build only. |
-| A11 / A19 | `de1eded` | `onNewIntent` records the host id (and `setIntent`); a LaunchedEffect opens Hosts → that computer's Inbox. The Host destination is `key(route)`-ed so an already-showing Host screen does not keep its tab. | Type-check + CI build only. |
+| A11 / A19 | `de1eded` | `onNewIntent` records the host id (and `setIntent`); a LaunchedEffect opens Hosts → that computer's Inbox. A re-navigated Host screen starts on the Inbox tab (the per-entry state holders of A43 now do what a `key(route)` did here). | Type-check + CI build only. |
 | A34 / A36 | `2a273a7` | A34: an armed Ctrl applies to the input bar (`Keys.ctrl`, one control byte, no Enter). A36: a null exit (connection gone) reattaches automatically once the host connection is back — bounded (3 per flapping stretch), only while the screen is showing. | `KeysTest`; the controller is type-checked only. |
 | A14 / A15 / A16 | `c58ad65` | A16: the project's `defaultPermissionMode` wins over the global one (both re-validated); its `defaultAccountId` is preselected only while the host still has it. A15: the resume offer is built like the desktop's cold restore (`cd`, `CLAUDE_CONFIG_DIR`, mode; portable `./` cwds resolved). A14: cwd-less projects are no longer offered, and a refused registration shows a notice. | `ModelTest` (4 new cases). |
 | A12 | `ab1335c` | New additive desktop verb `node.sendKeys {nodeId, keys}` → `{sent}` via `PtyManager.backgroundWrite` (no throwaway client; short answers only; SSH-project nodes answer `sent:false`). The phone uses it; `sent:false` opens the session; an older desktop gets attach → wait for paint → write → 400 ms linger. | vitest `host-node-actions.test.ts`; relay interop incl. the older-desktop fallback. |
@@ -160,7 +184,7 @@ Verified:
 - The relay join request shape. The client sends `{deviceToken, hostId}` to `POST /v1/relay/join`
   and accepts `pairingToken | token | joinToken` in the reply, but it has not been checked against
   the live backend (the backend repo is not here).
-- Release/minified builds. R8 is off; see `A37`.
+- Release/minified builds on a device. R8 runs for release in CI (`A37`: `assembleRelease` plus `tools/check-r8-output.sh`), but no minified APK has been installed or run, and no release signing key exists.
 - **Caveat on the tests:** their fixtures hand-copy some desktop shapes: the mirror, the
   `projects.list` blob and the `~/.nodeterm` files (`A64`). That is how `A02` passed its test while
   being wrong on every real desktop.

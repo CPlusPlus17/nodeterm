@@ -51,27 +51,27 @@ the audit's proposal, the handover's progress log says how and why.
 | [A34](#a34) | medium |  | small | critic/bug | ✅ fixed in `2a273a7` · The Ctrl key-row chip does not apply to text sent from the input bar: arming Ctrl and sending 'z' submits a literal 'z' plus Enter |
 | [A35](#a35) | medium |  | small | critic/bug | ✅ fixed in `16706f4` · approvals.answer returns `answered:false` both for 'already handled' and for 'the write failed'; the phone always says 'Already handled.' |
 | [A36](#a36) | medium |  | small | critic/gap | ✅ fixed in `2a273a7` · After any connection drop the terminal stays on 'Disconnected. [Reattach]' even though the host connection reconnects by itself |
-| [A37](#a37) | low |  | small | build/risk | proguard-rules.pro would not survive turning on minification (R8 missing-class errors) |
+| [A37](#a37) | low |  | small | build/risk | ✅ fixed in `ac0923a` · proguard-rules.pro would not survive turning on minification (R8 missing-class errors) |
 | [A38](#a38) | low |  | small | protocol/bug | ✅ fixed in `5ff8f6c` · Quick approve requires the node to be exactly 'blocked', but the desktop publishes approval tickets while the node stays 'waiting' on a held question |
 | [A39](#a39) | low |  | small | protocol/bug | ✅ fixed in `437e359` · The account chip reads `account.label`, which the mirror never writes, so it falls back to the raw account UUID |
-| [A40](#a40) | low |  | small | runtime/bug | The pending-launch path and the attach hand-off never re-check `disposed`: a stream can stay attached forever, or a phone-started node gets registered with no agent launched |
-| [A41](#a41) | low |  | small | runtime/bug | The composed prompt is cleared even when no stream is attached, so the text is silently lost |
-| [A42](#a42) | low |  | small | runtime/bug | NewSessionDialog crashes if the selected project disappears while the dialog is open |
-| [A43](#a43) | low |  | small | runtime/bug | The HostScreen tab and scroll position reset after returning from a terminal |
-| [A44](#a44) | low |  | small | runtime/bug | System back discards Settings edits (device name, relay API base) |
-| [A45](#a45) | low |  | small | runtime/risk | No onRenderProcessGone handler on the terminal WebView |
-| [A46](#a46) | low |  | small | runtime/bug | The ⌨ key-row chip only focuses the DOM textarea, which cannot raise the soft keyboard |
-| [A47](#a47) | low |  | small | runtime/bug | The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
+| [A40](#a40) | low |  | small | runtime/bug | ✅ fixed in `a38d39d` · The pending-launch path and the attach hand-off never re-check `disposed`: a stream can stay attached forever, or a phone-started node gets registered with no agent launched |
+| [A41](#a41) | low |  | small | runtime/bug | ✅ fixed in `94a558a` · The composed prompt is cleared even when no stream is attached, so the text is silently lost |
+| [A42](#a42) | low |  | small | runtime/bug | ✅ fixed in `7debe67` · NewSessionDialog crashes if the selected project disappears while the dialog is open |
+| [A43](#a43) | low |  | small | runtime/bug | ✅ fixed in `2be5e87` · The HostScreen tab and scroll position reset after returning from a terminal |
+| [A44](#a44) | low |  | small | runtime/bug | ✅ fixed in `7988087` · System back discards Settings edits (device name, relay API base) |
+| [A45](#a45) | low |  | small | runtime/risk | ✅ fixed in `1901939` · No onRenderProcessGone handler on the terminal WebView |
+| [A46](#a46) | low |  | small | runtime/bug | ✅ fixed in `17ee526` · The ⌨ key-row chip only focuses the DOM textarea, which cannot raise the soft keyboard |
+| [A47](#a47) | low |  | small | runtime/bug | ✅ fixed in `52df0a3` · The Keystore decrypt runs on the main thread in the host list's composition, once per row per recomposition |
 | [A48](#a48) | low |  | small | runtime/bug | ✅ fixed in `d383e76` · The seen-events set is trimmed in hash order and updated without synchronization, which can produce duplicate notifications |
 | [A49](#a49) | low |  | small | security/risk | ✅ fixed in `a40d11b` · SSH host-key TOFU pin is saved during key exchange (before auth) and is not tied to the pairing |
 | [A50](#a50) | low |  | medium | security/risk | The only distributable build is a debuggable APK, so Keystore-protected secrets can be pulled over adb/JDWP |
-| [A51](#a51) | low |  | small | security/gap | allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
-| [A52](#a52) | low |  | small | security/gap | Approval and finish notifications put command text and the agent's last message on the lock screen |
+| [A51](#a51) | low |  | small | security/gap | ✅ fixed in `9b4af70` · allowBackup=false does not stop device-to-device migration at targetSdk 35: hosts, pins and deviceId are cloned |
+| [A52](#a52) | low |  | small | security/gap | ✅ fixed in `3780f5a` · Approval and finish notifications put command text and the agent's last message on the lock screen |
 | [A53](#a53) | low |  | small | security/bug | ✅ fixed in `af587ac` · OSC 52 handler has no size cap (the desktop caps at 1,000,000) and setPrimaryClip is unguarded |
 | [A54](#a54) | low |  | small | security/bug | ✅ fixed in `32330df` · PairingClient trusts an unbounded Content-Length / EOF body from the pairing endpoint |
 | [A55](#a55) | low |  | medium | parity/gap | Inbox and Usage are per computer; iOS merges them across all paired computers |
 | [A56](#a56) | low |  | small | parity/gap | 📝 not built, by decision (`38fa6c4`): a blind `2` can answer No or switch to auto mode on current Claude Code · Approval cards lack iOS's "Always allow" answer |
-| [A57](#a57) | low |  | small | parity/gap | Multi-select AskUserQuestion cards fall back to "Open session" |
+| [A57](#a57) | low |  | small | parity/gap | ✅ fixed in `8dbeb48` · Multi-select AskUserQuestion cards fall back to "Open session" |
 | [A58](#a58) | low |  | small | parity/gap | ✅ fixed in `a44f16c` · Usage and feed cards omit iOS's pace line and the context indicator on event cards |
 | [A59](#a59) | low |  | small | parity/gap | No built-in dictation (iOS has on-device Whisper plus a Cloud engine) |
 | [A60](#a60) | low |  | small | ci-docs/bug | Interop fixture needs the Electron binary, which is downloaded at test time inside the 20 s ready window, despite the workflow saying 'not Electron' |
@@ -87,11 +87,11 @@ the audit's proposal, the handover's progress log says how and why.
 | [A70](#a70) | low |  | small | ci-docs/bug | On Windows the interop tests fail with CreateProcess instead of skipping |
 | [A71](#a71) | low |  | small | ci-docs/gap | android/README says 'JDK 17+', but the pinned Gradle 8.14.3 cannot run on JDK 25 |
 | [A72](#a72) | low |  | medium | critic/gap | ✅ fixed in `71290de` · Phone-started sessions are created without the agent-specific env, so for their whole life they get no hook-reply approvals, no canvas control and no pane ownership |
-| [A73](#a73) | low |  | small | critic/bug | Notifications are documented as 'live every 8 seconds while a computer is open', but the in-app poll never posts a notification |
+| [A73](#a73) | low |  | small | critic/bug | ✅ fixed in `e055f37` · Notifications are documented as 'live every 8 seconds while a computer is open', but the in-app poll never posts a notification |
 | [A74](#a74) | low |  | small | critic/bug | ✅ fixed in `a40d11b` · The LAN leg dials a DHCP IPv4 frozen at pairing time; when another SSH host answers at that address, the host-key 'hard stop' also blocks the relay fallback |
 | [A75](#a75) | low |  | small | critic/gap | ✅ fixed in `437e359` · The New session account picker lists managed Claude accounts by raw UUID |
-| [A76](#a76) | low |  | small | critic/gap | Over direct SSH, opening a Sleeping (Eco-hibernated) session lands on a bare shell with no wake or resume offer |
-| [A77](#a77) | low |  | small | critic/bug | IME insets are not handled for Android 15's enforced edge-to-edge (targetSdk 35): the terminal gets double bottom padding when the keyboard opens, and other screens have no IME padding at all |
+| [A76](#a76) | low |  | small | critic/gap | ✅ fixed in `6966f25` · Over direct SSH, opening a Sleeping (Eco-hibernated) session lands on a bare shell with no wake or resume offer |
+| [A77](#a77) | low |  | small | critic/bug | ✅ fixed in `0a2a1aa` · IME insets are not handled for Android 15's enforced edge-to-edge (targetSdk 35): the terminal gets double bottom padding when the keyboard opens, and other screens have no IME padding at all |
 
 ## A01
 
