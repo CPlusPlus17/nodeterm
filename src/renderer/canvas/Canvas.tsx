@@ -257,11 +257,13 @@ import {
 import {
   TERMINAL_FONT_ZOOM_EVENT,
   fontZoomTargetNodeId,
+  forwardedResetMatches,
   nextTerminalFontSizeOverride,
   normalizeTerminalFontSize,
   requestTerminalFontZoom,
   type TerminalFontZoomRequest
 } from '../terminal/terminal-font-zoom'
+import { isMacPlatform } from '@shared/platform-utils'
 import {
   dispatchGlobalKeydown,
   type GlobalKeyEvent,
@@ -9584,10 +9586,13 @@ export function Canvas() {
   // resolved from focus, because the forwarded signal names no node (FONT_ZOOM_NODE_ATTR is on
   // both the canvas node's and the card modal's xterm host).
   useEffect(() => {
-    return window.nodeTerminal.onZoomActualSize(() => {
-      const target = useSettings.getState().settings.terminalFontZoomKeys
-        ? fontZoomTargetNodeId(typeof document === 'undefined' ? null : document.activeElement)
-        : null
+    return window.nodeTerminal.onZoomActualSize((mods) => {
+      // Only the platform's reset chord (⌘0 on mac, Ctrl+0 elsewhere — main forwards either, and
+      // both together): any other forwarded ⌘/Ctrl+0 keeps exactly its pre-#915 meaning.
+      const target =
+        useSettings.getState().settings.terminalFontZoomKeys && forwardedResetMatches(mods, isMacPlatform())
+          ? fontZoomTargetNodeId(typeof document === 'undefined' ? null : document.activeElement)
+          : null
       if (target) {
         requestTerminalFontZoom(target, 'reset')
         return

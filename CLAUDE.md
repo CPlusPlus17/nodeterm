@@ -6500,6 +6500,11 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   forwarded desktop ⌘0 (resolved from focus via `data-font-zoom-node` on the xterm host) dispatch
   `nodeterm:terminal-font-zoom`; Canvas applies it (`nextTerminalFontSizeOverride`, `markDirty`).
   The toolbar / dock +/− buttons stay CANVAS zoom (they have no focused terminal to act on).
+  Two review fixes: main forwards ⌘0 WITH `{meta, control}` and the renderer resets only on the
+  platform chord (`forwardedResetMatches` — a mac Ctrl+0 keeps its old meaning); and under
+  `terminalGpuRendering: 'shared'` a node whose size differs from the global one is held OFF the
+  shared glyph canvas (`leavesSharedGlyphAtlas` → `glyphOff`) and paints its own pixels, because the
+  shared atlas is rasterized for the global font and a grid's cell is fixed at `register`.
 - **"Go to node" (`goToNode` → `frameNode`)** — the one camera-travel path (notification click,
   sessions sidebar, ⌘K jump, presence travel, minimap double-click, double-click focus).
   **It computes the viewport itself and applies it with `setViewport`. It must never go through

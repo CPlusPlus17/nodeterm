@@ -112,6 +112,16 @@ describe('terminal font zoom — key wiring', () => {
     expect(reset).toBeGreaterThan(-1)
     expect(reset).toBeLessThan(body.indexOf('zoomTo100()'))
     expect(body).toContain('fontZoomTargetNodeId(')
+    // Review of #915: the reset asks the platform predicate over the FORWARDED modifiers, so a mac
+    // Ctrl+0 keeps its old meaning (canvas zoom when allowed) instead of clearing the override.
+    expect(body).toContain('forwardedResetMatches(mods,')
+  })
+
+  it('a node whose font leaves the shared glyph atlas paints its own pixels (glyphOff)', () => {
+    const line = TERMINAL_NODE.slice(TERMINAL_NODE.indexOf('const glyphOff ='))
+    const decl = line.slice(0, line.indexOf('\n'))
+    expect(decl).toContain('fontLeavesAtlas')
+    expect(TERMINAL_NODE).toMatch(/const fontLeavesAtlas = leavesSharedGlyphAtlas\(visual\.fontSize,/)
   })
 })
 

@@ -1703,6 +1703,14 @@ export interface SpeechSettings {
 export type TerminalCursorStyle = 'block' | 'bar' | 'underline'
 export type TerminalCursorInactiveStyle = TerminalCursorStyle | 'outline' | 'none'
 
+/** The primary modifiers of a forwarded desktop ⌘/Ctrl+0 (issue #915): the renderer applies the
+ *  per-platform terminal-font-reset predicate to them. Optional on the listener because the Server
+ *  Edition stub never fires and an absent value must read as "not a font reset". */
+export interface ZoomActualSizeModifiers {
+  meta: boolean
+  control: boolean
+}
+
 /** User-configurable application settings (settings.json). */
 export interface Settings {
   fontSize: number
@@ -4171,7 +4179,7 @@ export interface NodeTerminalApi {
   /** Fires when the user presses Cmd/Ctrl+0 (zoom the canvas back to 100%). Desktop only: the
    *  key is intercepted in main because Electron's default View menu owns the accelerator. In the
    *  Server Edition the renderer's own keydown handler sees the key and this is a no-op stub. */
-  onZoomActualSize(listener: () => void): () => void
+  onZoomActualSize(listener: (mods?: ZoomActualSizeModifiers) => void): () => void
   /** Native View menu → Snap to Grid toggle. Returns unsubscribe. */
   onToggleAutoAlign(listener: () => void): () => void
   /** Native View menu → Fit View. Returns unsubscribe. */

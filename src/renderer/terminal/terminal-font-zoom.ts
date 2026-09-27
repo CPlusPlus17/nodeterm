@@ -145,6 +145,34 @@ export function withTerminalFontSize<T extends { fontSize: number }>(visual: T, 
   return size === visual.fontSize ? visual : { ...visual, fontSize: size }
 }
 
+/**
+ * PURE. Is a FORWARDED desktop ⌘/Ctrl+0 the terminal-font reset chord? Main claims `Digit0` with
+ * `meta || control` (either, or both) for canvas zoom-to-100%, so it forwards the modifiers and this
+ * applies `terminalFontZoomChord`'s own primary rule to them — exactly ⌘ on macOS, exactly Ctrl
+ * elsewhere. Without it a mac Ctrl+0 cleared the override on the desktop while the browser path
+ * (`terminalFontZoomChord`) refused it. Absent modifiers are "not a reset": the caller falls back
+ * to the pre-#915 behaviour.
+ */
+export function forwardedResetMatches(
+  mods: { meta: boolean; control: boolean } | undefined,
+  isMac: boolean
+): boolean {
+  if (!mods) return false
+  return isMac ? mods.meta && !mods.control : mods.control && !mods.meta
+}
+
+/**
+ * PURE. Does this terminal's effective font size leave the SHARED glyph atlas? The shared renderer
+ * (`terminalGpuRendering: 'shared'`, canvas/SharedGlyphLayer.tsx) rasterizes ONE atlas for the
+ * GLOBAL font and fixes its cell geometry for the context's lifetime; a grid cannot change its cell
+ * after `register`. A node rendering at its own size therefore cannot draw there at all — it is
+ * held off the shared canvas and paints its own pixels (the same "must be opaque" path a stacked or
+ * dragged node takes), and rejoins once the override is cleared.
+ */
+export function leavesSharedGlyphAtlas(effectiveFontSize: number, globalFontSize: number): boolean {
+  return effectiveFontSize !== globalFontSize
+}
+
 /** Stamped on each terminal's xterm host (canvas node and card modal) with the node id. */
 export const FONT_ZOOM_NODE_ATTR = 'data-font-zoom-node'
 

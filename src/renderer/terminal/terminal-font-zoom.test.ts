@@ -7,6 +7,8 @@ import {
   TERMINAL_FONT_ZOOM_EVENT,
   effectiveTerminalFontSize,
   fontZoomTargetNodeId,
+  forwardedResetMatches,
+  leavesSharedGlyphAtlas,
   nextTerminalFontSizeOverride,
   normalizeTerminalFontSize,
   requestTerminalFontZoom,
@@ -196,5 +198,27 @@ describe('requestTerminalFontZoom', () => {
     requestTerminalFontZoom('n1', 'decrease')
     window.removeEventListener(TERMINAL_FONT_ZOOM_EVENT, onEvt)
     expect(seen).toHaveBeenCalledWith({ nodeId: 'n1', action: 'decrease' })
+  })
+})
+
+describe('forwardedResetMatches (review of #915: desktop ⌘0 arrives without an event)', () => {
+  it('accepts exactly the platform primary', () => {
+    expect(forwardedResetMatches({ meta: true, control: false }, true)).toBe(true)
+    expect(forwardedResetMatches({ meta: false, control: true }, false)).toBe(true)
+  })
+  it('refuses mac Ctrl+0, off-mac ⌘0, both held, and a signal with no modifiers', () => {
+    expect(forwardedResetMatches({ meta: false, control: true }, true)).toBe(false)
+    expect(forwardedResetMatches({ meta: true, control: false }, false)).toBe(false)
+    expect(forwardedResetMatches({ meta: true, control: true }, true)).toBe(false)
+    expect(forwardedResetMatches({ meta: true, control: true }, false)).toBe(false)
+    expect(forwardedResetMatches(undefined, true)).toBe(false)
+  })
+})
+
+describe('leavesSharedGlyphAtlas (review of #915: the shared atlas is one global font)', () => {
+  it('is true only while the effective size differs from the global one', () => {
+    expect(leavesSharedGlyphAtlas(13, 13)).toBe(false)
+    expect(leavesSharedGlyphAtlas(15, 13)).toBe(true)
+    expect(leavesSharedGlyphAtlas(12, 13)).toBe(true)
   })
 })

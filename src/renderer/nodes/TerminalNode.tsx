@@ -103,6 +103,7 @@ import {
 import { useXtermVisualSettings } from '../terminal/useXtermVisualSettings'
 import {
   FONT_ZOOM_NODE_ATTR,
+  leavesSharedGlyphAtlas,
   requestTerminalFontZoom,
   terminalFontZoomAction
 } from '../terminal/terminal-font-zoom'
@@ -1357,6 +1358,8 @@ export function TerminalNode({
   // `data.terminalFontSize` is this node's own ⌘+ / ⌘− size (issue #915), layered last by the hook
   // so the card modal (which passes the same value) re-options through the identical path.
   const visual = useXtermVisualSettings(owningProjectId(), data.terminalFontSize)
+  // The GLOBAL size the shared glyph atlas is rasterized for (see `fontLeavesAtlas`).
+  const globalFontSize = useSettings((s) => s.settings.fontSize)
   // Glass terminals (Settings → Appearance): xterm paints no background and the node supplies a
   // translucent tint of THIS node's effective theme (lib/useTerminalGlass.ts).
   const { glass, tint, vars: glassVars } = useTerminalGlass(visual.terminalTheme)
@@ -1700,7 +1703,13 @@ export function TerminalNode({
   // React Flow viewport, so the shared layer's glyphs — positioned from on-canvas geometry —
   // would paint somewhere the node no longer is. Routes through the same setup/teardown the
   // collapse/⌘M/stacking/drag reasons always used; v1 deliberately forces the DOM/WebGL path.
-  const glyphOff = collapsed || mdMode || glyphOpaque || dragging || focused
+  // `fontLeavesAtlas` is a MUST-BE-OPAQUE reason too (issue #915 review): the shared atlas is
+  // rasterized for the GLOBAL font with a cell fixed at `register`, so a node rendering at its own
+  // ⌘+/⌘− size would keep painting old-size glyphs over a pty that was resized to the new cell.
+  // Holding it off the shared canvas makes it paint its own pixels; clearing the override rejoins.
+  // `visual` is declared above, so this reads the same effective size xterm is re-optioned with.
+  const fontLeavesAtlas = leavesSharedGlyphAtlas(visual.fontSize, globalFontSize)
+  const glyphOff = collapsed || mdMode || glyphOpaque || dragging || focused || fontLeavesAtlas
   const glyphOffRef = useRef(glyphOff)
   glyphOffRef.current = glyphOff
   // The NOT-ON-SCREEN half on its own. `setupGlyph`'s gate needs to tell the two reasons apart:
