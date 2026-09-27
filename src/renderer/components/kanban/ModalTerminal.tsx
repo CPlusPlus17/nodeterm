@@ -159,6 +159,9 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
   // all — the per-project appearance would silently vanish for exactly those cards.
   // …and the NODE's own font size (issue #915), so this second view matches the canvas one.
   const visual = useXtermVisualSettings(owningProjectId(), spawn.terminalFontSize)
+  // MIRROR TerminalNode: the xterm is BUILT from the effective appearance, not the bare globals.
+  const visualRef = useRef(visual)
+  visualRef.current = visual
   // Liquid Glass: the same glass as the canvas node (a second view of one session must look like
   // it). The DOM renderer keeps app-painted cell backgrounds opaque (see CLAUDE.md).
   const { glass, vars: glassVars } = useTerminalGlass(visual.terminalTheme)
@@ -222,7 +225,7 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
     // Appearance comes from the SAME source as the canvas node's terminal — this modal is a second
     // view of one session, and a card that renders it in different colours reads as a different
     // terminal. (It used to hardcode its own background, which is exactly what happened.)
-    const term = new Terminal(xtermOptionsFromSettings(s, glassRef.current))
+    const term = new Terminal(xtermOptionsFromSettings(visualRef.current, glassRef.current))
     // The same read-only rule as the canvas node: a hosted team's Viewer/Commenter never types here.
     if (isHostedReadOnly(session.id)) term.options.disableStdin = true
     // Without a handler xterm answers an OSC 8 click with a window.confirm — the one surface

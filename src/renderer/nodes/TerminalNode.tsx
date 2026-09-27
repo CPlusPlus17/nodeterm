@@ -1358,6 +1358,12 @@ export function TerminalNode({
   // `data.terminalFontSize` is this node's own ⌘+ / ⌘− size (issue #915), layered last by the hook
   // so the card modal (which passes the same value) re-options through the identical path.
   const visual = useXtermVisualSettings(owningProjectId(), data.terminalFontSize)
+  // Mirrored for the lifecycle effect, which builds a NEW xterm on a refresh (`respawnNonce`) or an
+  // offscreen revive without remounting — the [visual, glass] live-options effect does not re-run
+  // then, so the instance must be born with the effective appearance (the node's font override, the
+  // project's theme/font), not the bare global settings (review round 2 of #915).
+  const visualRef = useRef(visual)
+  visualRef.current = visual
   // The GLOBAL size the shared glyph atlas is rasterized for (see `fontLeavesAtlas`).
   const globalFontSize = useSettings((s) => s.settings.fontSize)
   // Glass terminals (Settings → Appearance): xterm paints no background and the node supplies a
@@ -2406,7 +2412,8 @@ export function TerminalNode({
     const s = useSettings.getState().settings
     // Appearance comes from ONE place, shared with the kanban card modal's viewer of this same
     // session (`ModalTerminal`) — see `xtermOptionsFromSettings`.
-    const term = parked?.term ?? new Terminal(xtermOptionsFromSettings(s, isLiquidGlass(s.appTheme)))
+    const term =
+      parked?.term ?? new Terminal(xtermOptionsFromSettings(visualRef.current, isLiquidGlass(s.appTheme)))
     // A hosted team's Viewer/Commenter watches and never types: keystrokes and pastes are not taken
     // at all (the host refuses pty:write for them anyway). Set only for such a tab — every other
     // session never touches the option. The role is known before the session exists (relay-tab).

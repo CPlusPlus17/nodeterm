@@ -6505,6 +6505,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   `terminalGpuRendering: 'shared'` a node whose size differs from the global one is held OFF the
   shared glyph canvas (`leavesSharedGlyphAtlas` → `glyphOff`) and paints its own pixels, because the
   shared atlas is rasterized for the global font and a grid's cell is fixed at `register`.
+  Round 2: every xterm is BUILT from the effective visual (`visualRef`, both surfaces) — a refresh
+  or offscreen revive recreates it in the same mount, where the live-options effect does not re-run;
+  and keypad 0 resets only when it types `0` (Num Lock off it is Insert, and Ctrl+Insert copies).
 - **"Go to node" (`goToNode` → `frameNode`)** — the one camera-travel path (notification click,
   sessions sidebar, ⌘K jump, presence travel, minimap double-click, double-click focus).
   **It computes the viewport itself and applies it with `setViewport`. It must never go through

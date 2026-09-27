@@ -79,6 +79,22 @@ describe('terminal font zoom — one options path', () => {
   })
 })
 
+describe('terminal font zoom — every new xterm is built from the EFFECTIVE visual (review round 2)', () => {
+  // A refresh (respawnNonce) or an offscreen-release revive recreates the xterm inside the same
+  // mount, where the [visual, glass] live-options effect does NOT re-run — so the instance must be
+  // born with the node's override (and the project's theme/font), never the bare global settings.
+  for (const [name, src] of [
+    ['TerminalNode', TERMINAL_NODE],
+    ['ModalTerminal', MODAL]
+  ] as const) {
+    it(`${name}: new Terminal(...) reads visualRef.current, mirrored every render`, () => {
+      const ctor = src.slice(src.indexOf('new Terminal(xtermOptionsFromSettings('))
+      expect(ctor.slice(0, ctor.indexOf('\n'))).toContain('xtermOptionsFromSettings(visualRef.current,')
+      expect(src).toContain('visualRef.current = visual')
+    })
+  }
+})
+
 describe('terminal font zoom — key wiring', () => {
   for (const [name, src] of [
     ['TerminalNode', TERMINAL_NODE],

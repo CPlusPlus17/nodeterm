@@ -222,3 +222,16 @@ describe('leavesSharedGlyphAtlas (review of #915: the shared atlas is one global
     expect(leavesSharedGlyphAtlas(12, 13)).toBe(true)
   })
 })
+
+describe('keypad Insert stays a copy chord (review round 2 of #915)', () => {
+  it('Ctrl+keypad-0 with Num Lock OFF (key Insert) is not a reset', () => {
+    expect(terminalFontZoomChord(key({ ctrlKey: true, key: 'Insert', code: 'Numpad0' }), false)).toBeNull()
+    expect(terminalFontZoomChord(key({ metaKey: true, key: 'Insert', code: 'Numpad0' }), true)).toBeNull()
+  })
+  it('Ctrl+keypad-0 with Num Lock ON (key 0) still resets', () => {
+    expect(terminalFontZoomChord(key({ ctrlKey: true, key: '0', code: 'Numpad0' }), false)).toBe('reset')
+  })
+  it('the digit-row 0 resets on its physical key whatever key it reports (AZERTY)', () => {
+    expect(terminalFontZoomChord(key({ ctrlKey: true, key: 'à', code: 'Digit0' }), false)).toBe('reset')
+  })
+})

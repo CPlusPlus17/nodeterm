@@ -57,7 +57,8 @@ export interface TerminalFontZoomEvent {
  *   user presses for "bigger" is the one labelled +, which on a German layout is its own key
  *   (`BracketRight`) and on US is ⇧= — so Shift is not constrained for these two.
  * - **0 matches on the physical key** (`e.code`), like the canvas ⌘0 and main's intercept, so the
- *   two agree about which key is "0" on AZERTY; ⌘⇧0 is a different chord.
+ *   two agree about which key is "0" on AZERTY; ⌘⇧0 is a different chord. Keypad 0 counts only
+ *   when it types a zero (Num Lock on), because with Num Lock off it is Insert — a copy chord.
  * - Alt is refused (AltGr reports as ctrl+alt off-mac and must keep typing its character).
  * - Auto-repeat is ACCEPTED: nothing here animates, and holding ⌘+ to keep growing is expected.
  */
@@ -70,7 +71,10 @@ export function terminalFontZoomChord(
   if (!primary) return null
   if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') return 'increase'
   if (e.key === '-' || e.code === 'NumpadSubtract') return 'decrease'
-  if (!e.shiftKey && (e.code === 'Digit0' || e.code === 'Numpad0')) return 'reset'
+  // Keypad 0 only as a real zero: with Num Lock OFF it reports `key: 'Insert'`, and Ctrl+Insert is
+  // the Windows/Linux COPY chord (`isCopyShortcut`) — claiming it here cleared the font instead of
+  // copying (review round 2 of #915). The digit row stays positional, like the canvas ⌘0.
+  if (!e.shiftKey && (e.code === 'Digit0' || (e.code === 'Numpad0' && e.key === '0'))) return 'reset'
   return null
 }
 
