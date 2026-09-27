@@ -506,17 +506,60 @@ function bufferPosFromEvent(term: Terminal, ev: MouseEvent): { col: number; row:
   }
 }
 
-export interface LinkClickDeps {
+/** What sits under a buffer cell: a web URL (typed or OSC 8), or a path resolved to absolute.
+ *  A path is NOT yet known to exist — that is the async `lookup`'s answer, taken by the caller. */
+export type LinkHit = { kind: 'url'; url: string } | { kind: 'path'; abs: string }
+
+/** What `linkAtCell` needs to turn text into a path: the cwd and dialect the file providers use. */
+export interface LinkHitDeps {
   getCwd(): string | undefined
   /** See FileLinkDeps.windows. */
   windows?: boolean
   /** See FileLinkDeps.convention. */
   convention?: () => PathConventionOpts | null
+  /** False while no correctly-routed filesystem/dialect is available. */
+  fileEnabled(): boolean
+}
+
+/**
+ * The link at buffer cell (row, col), in the order the providers rank them: an OSC 8 hyperlink
+ * (its URL is invisible — the label is all the text shows), then a typed URL, then a path-shaped
+ * token. ONE hit-test for both mouse gestures — Cmd/Ctrl+click opens what this returns, a
+ * right-click offers a menu for it — so the two can never disagree about what is under the pointer.
+ */
+export function linkAtCell(
+  term: Terminal,
+  row: number,
+  col: number,
+  deps: LinkHitDeps
+): LinkHit | null {
+  const osc8 = osc8UrlAt(term, row, col)
+  if (osc8) return { kind: 'url', url: osc8 }
+  const logical = paragraphContaining(bufferView(term), row)
+  if (!logical) return null
+  const idx = (row - logical.startRow) * term.cols + col
+  const inRange = (startIndex: number, len: number): boolean =>
+    idx >= startIndex && idx < startIndex + len
+
+  for (const u of matchUrlTokens(logical.text)) {
+    if (inRange(u.startIndex, u.text.length)) return { kind: 'url', url: u.url }
+  }
+  if (!deps.fileEnabled()) return null
+  const convention = deps.convention ? deps.convention() : { windows: deps.windows }
+  if (!convention) return null
+  for (const t of matchFileTokens(logical.text, convention)) {
+    if (inRange(t.startIndex, t.text.length)) {
+      const abs = resolveFileToken(t.path, deps.getCwd(), convention)
+      return abs ? { kind: 'path', abs } : null
+    }
+  }
+  return null
+}
+
+export interface LinkClickDeps extends LinkHitDeps {
   lookup(abs: string): Promise<{ exists: boolean; dir: boolean }>
   activateFile(abs: string, dir: boolean): void
   openUrl(url: string): void
-  /** False while no correctly-routed filesystem/dialect is available. */
-  fileEnabled(): boolean
 }
 
 /**
@@ -543,50 +586,83 @@ export function installLinkClickFallback(
     if (term.modes.mouseTrackingMode === 'none') return
     const pos = bufferPosFromEvent(term, ev)
     if (!pos) return
-    const osc8 = osc8UrlAt(term, pos.row, pos.col)
-    if (osc8) {
-      ev.preventDefault()
-      ev.stopPropagation()
-      term.clearSelection()
-      deps.openUrl(osc8)
+    const hit = linkAtCell(term, pos.row, pos.col, deps)
+    if (!hit) return
+    // Swallow the click NOW so tmux never gets the mouse report. For a path, existence is async
+    // and a Cmd/Ctrl+click on a path-shaped token is a deliberate open regardless of the outcome.
+    ev.preventDefault()
+    ev.stopPropagation()
+    term.clearSelection()
+    if (hit.kind === 'url') {
+      deps.openUrl(hit.url)
       return
     }
-    const logical = paragraphContaining(bufferView(term), pos.row)
-    if (!logical) return
-    const idx = (pos.row - logical.startRow) * term.cols + pos.col
-    const inRange = (startIndex: number, len: number): boolean =>
-      idx >= startIndex && idx < startIndex + len
-
-    for (const u of matchUrlTokens(logical.text)) {
-      if (inRange(u.startIndex, u.text.length)) {
-        ev.preventDefault()
-        ev.stopPropagation()
-        term.clearSelection()
-        deps.openUrl(u.url)
-        return
-      }
-    }
-    if (!deps.fileEnabled()) return
-    const convention = deps.convention ? deps.convention() : { windows: deps.windows }
-    if (!convention) return
-    for (const t of matchFileTokens(logical.text, convention)) {
-      if (inRange(t.startIndex, t.text.length)) {
-        const abs = resolveFileToken(t.path, deps.getCwd(), convention)
-        if (!abs) return
-        // Swallow the click NOW so tmux never gets the mouse report; existence is async and a
-        // Cmd/Ctrl+click on a path-shaped token is a deliberate open regardless of the outcome.
-        ev.preventDefault()
-        ev.stopPropagation()
-        term.clearSelection()
-        void deps.lookup(abs).then((f) => {
-          if (f.exists) deps.activateFile(abs, f.dir)
-        })
-        return
-      }
-    }
+    void deps.lookup(hit.abs).then((f) => {
+      if (f.exists) deps.activateFile(hit.abs, f.dir)
+    })
   }
   host.addEventListener('mouseup', onMouseUp, { capture: true })
   return {
     dispose: () => host.removeEventListener('mouseup', onMouseUp, { capture: true })
+  }
+}
+
+export interface LinkContextMenuDeps extends LinkHitDeps {
+  /** A right-click landed on `hit` at viewport point (x, y) — the host shows its menu there. */
+  openMenu(hit: LinkHit, x: number, y: number): void
+}
+
+/**
+ * Right-click on a link → the host's link menu (open / reveal / download / copy — see
+ * link-menu.ts). A right-click anywhere else is left EXACTLY as it was: tmux's own pane menu in a
+ * plain shell (tmux 3.x binds MouseDown3Pane to `display-menu` unless the app took the mouse), the
+ * press forwarded to an agent TUI that did, and the node's context menu bubbling up to React Flow.
+ *
+ * The decision is made on the PRESS, because that is what reaches tmux: xterm reports a
+ * right-button press as a mouse escape, and once it is sent tmux has already opened its menu. So
+ * the capture-phase `mousedown` hit-tests, and on a link swallows the press, its release and the
+ * `contextmenu` that follows (that one is also what would open the node menu and xterm's own
+ * right-click handling). The menu opens on `contextmenu`, the event every platform fires for the
+ * gesture — after the press on macOS/Linux, after the release on Windows. A `contextmenu` with no
+ * right press on a link before it (Shift+F10, the Menu key) is not ours. Unlike the Cmd+click
+ * fallback this runs whatever the mouse-tracking mode: with reporting off there is no tmux to
+ * protect, but the node menu and xterm's own right-click still must not open over ours.
+ */
+export function installLinkContextMenu(
+  term: Terminal,
+  host: HTMLElement,
+  deps: LinkContextMenuDeps
+): { dispose(): void } {
+  let pending: LinkHit | null = null
+  const swallow = (ev: Event): void => {
+    ev.preventDefault()
+    ev.stopPropagation()
+  }
+  const onMouseDown = (ev: MouseEvent): void => {
+    pending = null
+    if (ev.button !== 2) return
+    const pos = bufferPosFromEvent(term, ev)
+    pending = pos ? linkAtCell(term, pos.row, pos.col, deps) : null
+    if (pending) swallow(ev)
+  }
+  const onMouseUp = (ev: MouseEvent): void => {
+    if (ev.button === 2 && pending) swallow(ev)
+  }
+  const onContextMenu = (ev: MouseEvent): void => {
+    const hit = pending
+    if (!hit) return
+    pending = null
+    swallow(ev)
+    deps.openMenu(hit, ev.clientX, ev.clientY)
+  }
+  host.addEventListener('mousedown', onMouseDown, { capture: true })
+  host.addEventListener('mouseup', onMouseUp, { capture: true })
+  host.addEventListener('contextmenu', onContextMenu, { capture: true })
+  return {
+    dispose: () => {
+      host.removeEventListener('mousedown', onMouseDown, { capture: true })
+      host.removeEventListener('mouseup', onMouseUp, { capture: true })
+      host.removeEventListener('contextmenu', onContextMenu, { capture: true })
+    }
   }
 }

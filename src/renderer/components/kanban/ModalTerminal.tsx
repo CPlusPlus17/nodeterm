@@ -28,8 +28,11 @@ import { guardMiddleClickPaste } from '../../terminal/middle-click'
 import {
   createOsc8LinkHandler,
   createUrlLinkProvider,
-  installLinkClickFallback
+  installLinkClickFallback,
+  installLinkContextMenu
 } from '../../terminal/file-links'
+import { urlLinkMenuItems } from '../../terminal/link-menu'
+import { ContextMenu } from '../ContextMenu'
 import { parseOsc52 } from '../../terminal/osc52'
 import { activateUnicode11 } from '../../terminal/unicode-width'
 import { useCopyFeedback } from '../../terminal/useCopyFeedback'
@@ -152,6 +155,9 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
     hasSelection: () => !!termRef.current?.hasSelection(),
     enabled: !reportsOwnCopy(spawn.agentId as AgentId | undefined)
   })
+  // Right-click on a URL → the canvas node's link menu, URL rows only (no file links here — see the
+  // link wiring in the lifecycle effect).
+  const [linkMenu, setLinkMenu] = useState<{ x: number; y: number; url: string } | null>(null)
 
   // Same search machinery as the canvas node: capture-indexed matches + xterm highlight.
   const readBuffer = useCallback((): string => {
@@ -244,6 +250,15 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
           activateFile: () => {},
           openUrl,
           fileEnabled: () => false
+        }).dispose
+      )
+      cleanups.push(
+        installLinkContextMenu(term, term.element, {
+          getCwd: () => undefined,
+          fileEnabled: () => false,
+          openMenu: (hit, x, y) => {
+            if (hit.kind === 'url') setLinkMenu({ x, y, url: hit.url })
+          }
         }).dispose
       )
     }
@@ -559,6 +574,20 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
         />
       )}
       <div ref={hostRef} className="kanban-modal__term" />
+      {linkMenu && (
+        <ContextMenu
+          x={linkMenu.x}
+          y={linkMenu.y}
+          zIndex={60}
+          // No "Open in canvas browser": the node would open on the canvas UNDER the board,
+          // out of sight of the click that asked for it.
+          items={urlLinkMenuItems(linkMenu.url, {
+            openUrl: (url) => window.nodeTerminal.shell.openExternal(url),
+            copy: (text) => window.nodeTerminal.clipboard.writeText(text)
+          })}
+          onClose={() => setLinkMenu(null)}
+        />
+      )}
     </div>
   )
 }

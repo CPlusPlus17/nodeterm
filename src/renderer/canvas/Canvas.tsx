@@ -99,6 +99,7 @@ import { withNodeBoundary } from '../components/NodeBoundary'
 import { Dock } from '../components/Dock'
 import { TabBar } from '../components/TabBar'
 import { ContextMenu, type MenuItem } from '../components/ContextMenu'
+import { tidySeparators } from '../lib/tidySeparators'
 import { CommandPalette, type Command } from '../components/CommandPalette'
 import { Tooltip } from '../components/Tooltip'
 import {
@@ -945,19 +946,6 @@ const restartAgentIdOf = (n: Node | undefined): AgentId | undefined =>
 
 /** Stable empty card list, so the closed board's memo never churns array identity. */
 const NO_KANBAN_SESSIONS: KanbanSession[] = []
-
-/** Drop the separators a hidden row leaves dangling: the menu's rules are written between blocks,
- *  so hiding every row of a block would otherwise emit two rules in a row (or one hanging at the
- *  top / bottom). Also drops a rule directly under a section label, which reads as a double line.
- *  Cheap and total, so the builders can stay plain array literals instead of tracking what is left. */
-const tidySeparators = (items: MenuItem[]): MenuItem[] =>
-  items
-    .filter((item, i, all) => {
-      if (item.type !== 'separator') return true
-      const prev = all[i - 1]
-      return !!prev && prev.type !== 'separator' && prev.type !== 'label'
-    })
-    .filter((item, i, all) => item.type !== 'separator' || i < all.length - 1)
 
 // The minimap subscribes to agent status HERE, in its own tiny component — not in Canvas.
 // Canvas must not subscribe to the whole status map (every working/waiting flip would re-render
@@ -9864,22 +9852,11 @@ export function Canvas() {
   // A browser guest's new-window (target=_blank / window.open) request → open another browser node
   // (never a real popup; main denies the real one) roped below/right of the source. Reads the
   // latest nodes via nodesRef so the deps stay []. Rope is display-only lineage (controlEdges, persisted as `ropes`).
+  // The same placement serves a terminal link's right-click "Open in canvas browser"
+  // (terminal/link-menu.ts): a node's output opening a page beside the node that printed it.
   useEffect(() => {
-    return window.nodeTerminal.browser.onBrowserNewWindow(({ url, sourceNodeId }) => {
-      const src = nodesRef.current.find((n) => n.id === sourceNodeId)
-      if (!src) return
-      // Guard against a hostile/careless page flooding the canvas with real Chromium nodes
-      // (ad loops, setInterval(window.open)). Prune old records, then dedup + rate-cap.
-      const now = Date.now()
-      const recent = browserPopupSpawnsRef.current.filter((r) => now - r.t < 10000)
-      const isDup = recent.some((r) => r.url === url && r.source === sourceNodeId && now - r.t < 2000)
-      if (isDup || recent.length >= 8) {
-        browserPopupSpawnsRef.current = recent
-        console.warn('[browser] popup spawn blocked (dedup/rate cap):', url)
-        return
-      }
-      recent.push({ url, source: sourceNodeId, t: now })
-      browserPopupSpawnsRef.current = recent
+    const spawnBelow = (src: Node, url: string): void => {
+      const sourceNodeId = src.id
       const srcW = src.measured?.width ?? (src.width as number) ?? 800
       const srcH = src.measured?.height ?? (src.height as number) ?? 560
       // src.position is group-relative when the opener sits in a group frame: place in absolute
@@ -9894,7 +9871,36 @@ export function Canvas() {
       setNodes((ns) => [...ns, placed])
       setControlEdges((es) => [...es, ropeEdge(`ctrl-${sourceNodeId}-${placed.id}`, sourceNodeId, placed.id)])
       markDirty()
+    }
+    // A user's own click, one node per gesture — the popup flood guard below is not for this.
+    const onOpenUrlNode = (e: Event): void => {
+      const d = (e as CustomEvent<{ url?: string; sourceNodeId?: string }>).detail
+      if (!d?.url || !/^https?:\/\//i.test(d.url)) return
+      const src = nodesRef.current.find((n) => n.id === d.sourceNodeId)
+      if (src) spawnBelow(src, d.url)
+    }
+    window.addEventListener('nodeterm:open-url-node', onOpenUrlNode)
+    const offNewWindow = window.nodeTerminal.browser.onBrowserNewWindow(({ url, sourceNodeId }) => {
+      const src = nodesRef.current.find((n) => n.id === sourceNodeId)
+      if (!src) return
+      // Guard against a hostile/careless page flooding the canvas with real Chromium nodes
+      // (ad loops, setInterval(window.open)). Prune old records, then dedup + rate-cap.
+      const now = Date.now()
+      const recent = browserPopupSpawnsRef.current.filter((r) => now - r.t < 10000)
+      const isDup = recent.some((r) => r.url === url && r.source === sourceNodeId && now - r.t < 2000)
+      if (isDup || recent.length >= 8) {
+        browserPopupSpawnsRef.current = recent
+        console.warn('[browser] popup spawn blocked (dedup/rate cap):', url)
+        return
+      }
+      recent.push({ url, source: sourceNodeId, t: now })
+      browserPopupSpawnsRef.current = recent
+      spawnBelow(src, url)
     })
+    return () => {
+      offNewWindow()
+      window.removeEventListener('nodeterm:open-url-node', onOpenUrlNode)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

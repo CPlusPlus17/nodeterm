@@ -1377,6 +1377,19 @@ session.
   have no remote fs API with which to verify a token; relay tabs do have a core-bound, jailed fs
   API and therefore support file links. Windows existence matching is case-insensitive and accepts
   both separators; UNC tokens are refused whole before they can be reinterpreted as cwd-relative.
+  **Right-click on a link** opens a link menu (pure `terminal/link-menu.ts`; the listener is
+  `installLinkContextMenu`, beside the Cmd+click fallback and sharing its `linkAtCell` hit-test):
+  Open / Reveal in Explorer / Download / Copy path for a file, Open in browser / canvas browser /
+  Copy link for a URL. The gates are the Explorer's, reused not restated — Download only where
+  `downloadRoute` ≠ `none` (SSH project → scp to this machine, Server Edition → HTTP), never on a
+  desktop LOCAL project; the OS reveal only under `canUseLocalShell`. **The decision is made on the
+  right PRESS, not on `contextmenu`:** tmux 3.x binds `MouseDown3Pane` to its own `display-menu`, so
+  the press is what must be swallowed; a right-click OFF a link stays byte-identical (tmux menu,
+  agent TUI, node menu). A path-shaped token that turns out not to exist still gets a menu ("Not
+  found" + Copy path) — its press was already swallowed, and a silent swallow reads as broken.
+  Downloads report in a `DownloadStrip` floated over the terminal, not in a drawer that may be
+  shut. The kanban card modal gets URL rows only (no file links there) and no "Open in canvas
+  browser" (the node would land under the board).
   **Home-relative `~/x` tokens** (Claude Code prints its plan file as `~/.claude/plans/<name>.md`)
   stay `~`-rooted all the way to the fs call and are expanded by the core that OWNS the filesystem
   — `expandHomePath` in `core/fs-handlers.ts` for desktop/Server Edition, the remote shell for
