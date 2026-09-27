@@ -141,6 +141,19 @@ export async function readTranscriptLines(filePath: string): Promise<TranscriptL
 interface ChatRecordsOut {
   messages: ChatMessage[]
   unmatched: Map<string, string>
+  /** PAGED only: the newest assistant record's `message.model` / `effort` (see `assistantMeta`). */
+  model?: string
+  effort?: string
+}
+
+/** Longest `model` / `effort` value a paged read reports; anything longer is not a model name. */
+const CHAT_META_MAX_CHARS = 100
+/** The model claude stamps on a line it wrote itself (an API error, an interrupt) — not a model. */
+const SYNTHETIC_MODEL = '<synthetic>'
+
+/** A string field worth reporting as chat metadata, else undefined. */
+function metaString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 && v.length <= CHAT_META_MAX_CHARS ? v : undefined
 }
 /** A transcript line's ISO `timestamp` as epoch ms; undefined when absent or not a date string. */
 function lineTime(v: unknown): number | undefined {
@@ -157,6 +170,12 @@ function parseChatRecords(
   const unmatched = new Map<string, string>()
   const toolById = new Map<string, Extract<ChatPart, { kind: 'tool' }>>()
   let at: number | undefined
+  // Each updated independently from every assistant record (paged only), so the newest record that
+  // states one wins. Measured: claude's `<synthetic>` error lines carry no `effort` and a fake
+  // model, and older CLIs wrote no `effort` at all — neither may blank a value an earlier record in
+  // the same window stated.
+  let model: string | undefined
+  let effort: string | undefined
   const push = (m: ChatMessage, offset: number): void => {
     // `at` rides BOTH paths (additive): the time the line was written, for the thread's relative
     // timestamp. Absent when the line states none — never a made-up time.
@@ -165,7 +184,7 @@ function parseChatRecords(
   }
   for (const { raw, offset } of records) {
     if (!raw.trim()) continue
-    let o: { type?: string; timestamp?: unknown; message?: { content?: unknown } }
+    let o: { type?: string; timestamp?: unknown; effort?: unknown; message?: { content?: unknown; model?: unknown } }
     try {
       o = JSON.parse(raw)
     } catch {
@@ -173,6 +192,12 @@ function parseChatRecords(
     }
     at = lineTime(o.timestamp)
     const content = o.message?.content
+    if (paged && o.type === 'assistant') {
+      const m = metaString(o.message?.model)
+      if (m && m !== SYNTHETIC_MODEL) model = m
+      const e = metaString(o.effort)
+      if (e) effort = e
+    }
     if (o.type === 'assistant' && Array.isArray(content)) {
       const parts: ChatPart[] = []
       for (const c of content as Array<{
@@ -227,7 +252,12 @@ function parseChatRecords(
       push({ role: 'user', parts: [{ kind: 'text', text: content }] }, offset)
     }
   }
-  return { messages, unmatched }
+  const out: ChatRecordsOut = { messages, unmatched }
+  // Keys only when stated: an absent key, never `model: undefined`, keeps the output deterministic
+  // (and JSON-identical) for the ports locked to it.
+  if (model !== undefined) out.model = model
+  if (effort !== undefined) out.effort = effort
+  return out
 }
 
 export function parseChatMessages(rawLines: string[]): ChatMessage[] {
@@ -242,6 +272,10 @@ export interface ChatWindowParse {
   messages: ChatMessage[]
   olderCursor: number | null
   unmatchedResults: ChatCarriedToolResult[]
+  /** The newest assistant record's model / effort among this window's complete lines. Absent (the
+   *  key, not just the value) when no such record states one. */
+  model?: string
+  effort?: string
   /**
    * The window (not starting at 0) held no complete line: one record is bigger than the whole
    * window. Explicit rather than inferred from "no messages", because a window of complete lines
@@ -293,11 +327,13 @@ export function parseChatWindow(buf: Buffer, bufStart: number): ChatWindowParse 
     if (to > from) records.push({ raw: buf.toString('utf8', from, to), offset: bufStart + from })
     from = to + 1
   }
-  const { messages, unmatched } = parseChatRecords(records, true)
+  const { messages, unmatched, model, effort } = parseChatRecords(records, true)
   return {
     messages,
     olderCursor,
     unmatchedResults: [...unmatched].map(([id, result]) => ({ id, result })),
+    ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
     noCompleteLine: false
   }
 }

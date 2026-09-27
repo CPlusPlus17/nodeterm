@@ -2879,6 +2879,13 @@ export interface ChatTranscriptResult {
    * the same `id` when an older page arrives. Always `[]` from a reader that does not page.
    */
   unmatchedResults?: ChatCarriedToolResult[]
+  /**
+   * PAGED claude reads only: the newest assistant record's `message.model` in the returned window
+   * (`<synthetic>` error lines skipped). Absent when the window has none, and on the legacy read.
+   */
+  model?: string
+  /** PAGED claude reads only: the newest assistant record's top-level `effort` in the window. */
+  effort?: string
 }
 
 /**

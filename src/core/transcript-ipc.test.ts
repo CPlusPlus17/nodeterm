@@ -8,7 +8,7 @@ import os from 'os'
 import path from 'path'
 import { fakePlatform } from './platform-fake'
 import { initPlatform, resetPlatformForTests } from './platform'
-import { registerTranscriptIpc } from './transcript-ipc'
+import { readChatTranscript, registerTranscriptIpc } from './transcript-ipc'
 import { rememberGrokSessionDir } from './grok-session'
 import { IPC } from '../shared/ipc'
 import type { ChatTranscriptResult, TranscriptLine } from '../shared/types'
@@ -293,6 +293,34 @@ describe('registerTranscriptIpc — paged chat reads', () => {
     for (let i = 0; i < n; i++) out.push(i % 2 ? assistantLine(`a${i} ${'x'.repeat(200)}`) : userLine(`u${i} ${'y'.repeat(200)}`))
     return lines(...out)
   }
+
+  it('readChatTranscript is what the IPC handler serves (same result for the same query)', async () => {
+    writeTranscript(
+      lines(
+        userLine('merhaba'),
+        { type: 'assistant', effort: 'xhigh', message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'selam' }] } }
+      )
+    )
+    registerTranscriptIpc()
+    const q = { sessionId: SID, cwd: CWD, accountId: undefined, nodeId: undefined, agentId: undefined }
+    for (const page of [undefined, { maxBytes: 65536 }]) {
+      const viaIpc = await paged(page)
+      const direct = await readChatTranscript(q, page, {})
+      expect(direct).toStrictEqual(viaIpc)
+    }
+    const pagedRes = await readChatTranscript(q, { maxBytes: 65536 }, {})
+    expect(pagedRes.model).toBe('claude-opus-5-5')
+    expect(pagedRes.effort).toBe('xhigh')
+  })
+
+  it('the legacy (unpaged) result gains no model/effort keys', async () => {
+    writeTranscript(
+      lines({ type: 'assistant', effort: 'high', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'x' }] } })
+    )
+    registerTranscriptIpc()
+    const res = await chat()
+    expect(Object.keys(res).sort()).toEqual(['found', 'messages'])
+  })
 
   it('legacy (no page) result carries none of the paging fields', async () => {
     writeTranscript(lines(userLine('merhaba')))

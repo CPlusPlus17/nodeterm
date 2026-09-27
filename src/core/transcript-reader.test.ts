@@ -127,6 +127,59 @@ const textOfMsg = (m: { parts: Array<{ kind: string; text?: string }> }): string
   m.parts.map((p) => p.text ?? '').join('')
 
 describe('parseChatWindow — pure window parsing', () => {
+  it('a paged window reports the newest assistant model and effort', () => {
+    const lines =
+      [
+        JSON.stringify({
+          type: 'assistant',
+          timestamp: '2026-09-25T19:37:29.097Z',
+          effort: 'medium',
+          message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'a' }] }
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          timestamp: '2026-09-25T19:37:30.078Z',
+          effort: 'xhigh',
+          message: { model: 'claude-fable-5-1', content: [{ type: 'text', text: 'b' }] }
+        })
+      ].join('\n') + '\n'
+    const r = parseChatWindow(Buffer.from(lines), 0)
+    expect(r.model).toBe('claude-fable-5-1')
+    expect(r.effort).toBe('xhigh')
+  })
+
+  it('a window with no assistant record reports neither (keys absent, not undefined-valued)', () => {
+    const r = parseChatWindow(Buffer.from(JSON.stringify({ type: 'user', message: { content: 'hi' } }) + '\n'), 0)
+    expect(r.model).toBeUndefined()
+    expect(r.effort).toBeUndefined()
+    expect('model' in r).toBe(false)
+    expect('effort' in r).toBe(false)
+  })
+
+  it('model/effort: non-strings, over-long values and the <synthetic> error record are ignored', () => {
+    const rec = (o: object): string => JSON.stringify({ type: 'assistant', ...o }) + '\n'
+    const buf = Buffer.from(
+      rec({ effort: 'high', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'a' }] } }) +
+        rec({ effort: 'x'.repeat(101), message: { model: 'm'.repeat(101), content: [] } }) +
+        rec({ effort: 7, message: { model: 42, content: [] } }) +
+        // Claude writes an API-error line as model `<synthetic>` with no effort — not a model.
+        rec({ message: { model: '<synthetic>', content: [{ type: 'text', text: 'API Error' }] } })
+    )
+    const r = parseChatWindow(buf, 0)
+    expect(r.model).toBe('claude-opus-5')
+    expect(r.effort).toBe('high')
+  })
+
+  it('model/effort come only from records INSIDE the window (a partial first line is not read)', () => {
+    const l1 = JSON.stringify({ type: 'assistant', effort: 'low', message: { model: 'old', content: [] } }) + '\n'
+    const l2 = JSON.stringify({ type: 'user', message: { content: 'hi' } }) + '\n'
+    const file = Buffer.from(l1 + l2)
+    const start = Buffer.byteLength(l1) - 5
+    const r = parseChatWindow(file.subarray(start), start)
+    expect(r.model).toBeUndefined()
+    expect(r.effort).toBeUndefined()
+  })
+
   it('a window starting at 0 parses every line and reports it reached the start', () => {
     const file = Buffer.from(said('user', 'a') + said('assistant', 'b'))
     const r = parseChatWindow(file, 0)
