@@ -46,7 +46,7 @@ describe('host-chat page', () => {
   it('resolves the node host-side, reads paged and stamps version 1 (local node: no cwd)', async () => {
     const d = deps()
     const page = await createHostChat(d).page('n1', { before: 10, maxBytes: 65536 })
-    expect(page).toEqual({ ...RESULT, version: 1 })
+    expect(page).toEqual({ ...RESULT, version: 1, sessionId: 'sid-1' })
     // A LOCAL node reads by session id only: with a cwd, a known-but-dead id would fall back to the
     // newest transcript in that cwd — another node's session.
     expect(d.readTranscript).toHaveBeenCalledWith(
@@ -95,8 +95,10 @@ describe('host-chat page', () => {
       lookupNode: () => ({ cwd: '/srv/app', agentId: 'claude', sessionId: 'stale-minted' }),
       renderer: { status: vi.fn(), send: vi.fn(), session: vi.fn(async () => ({ sessionId: 'hook-fed' })) }
     })
-    await createHostChat(d).page('n1', {})
+    const page = await createHostChat(d).page('n1', {})
     expect(d.readTranscript).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'hook-fed' }), {})
+    // The reply names the id it actually read, so the phone keys its merge on the right thread.
+    expect(page).toMatchObject({ sessionId: 'hook-fed' })
     expect(d.renderer.session).toHaveBeenCalledWith({ nodeId: 'n1' })
   })
   it('falls back to the host records when the renderer does not answer in time, or knows none', async () => {
@@ -105,8 +107,9 @@ describe('host-chat page', () => {
         lookupNode: () => ({ agentId: 'claude', sessionId: 'mirror-id' }),
         renderer: { status: vi.fn(), send: vi.fn(), session: session as never }
       })
-      await createHostChat(d).page('n1', {})
+      const page = await createHostChat(d).page('n1', {})
       expect(d.readTranscript).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'mirror-id' }), {})
+      expect(page).toMatchObject({ sessionId: 'mirror-id' })
     }
   })
   it('no known session id anywhere ⇒ no cwd either, so no cwd fallback onto a stranger\'s transcript', async () => {
@@ -114,11 +117,14 @@ describe('host-chat page', () => {
       lookupNode: () => ({ cwd: '/srv/app', agentId: 'claude', remote: true }),
       renderer: { status: vi.fn(), send: vi.fn(), session: vi.fn(async () => ({})) }
     })
-    await createHostChat(d).page('n1', {})
+    const page = await createHostChat(d).page('n1', {})
     expect(d.readTranscript).toHaveBeenCalledWith(
       { sessionId: undefined, cwd: undefined, accountId: undefined, nodeId: 'n1', agentId: 'claude', remoteOnly: true },
       {}
     )
+    // No id resolved ⇒ the field is ABSENT (not undefined-valued, not ''), so the phone falls back
+    // to its own identity source instead of keying on an empty string.
+    expect(page).not.toHaveProperty('sessionId')
   })
 })
 
