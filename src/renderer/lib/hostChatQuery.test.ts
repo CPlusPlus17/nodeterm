@@ -48,28 +48,30 @@ describe('hostChatSend', () => {
   it('sends in done / unknown and reports sent only for === true', async () => {
     for (const st of [{ state: 'done' }, undefined, {}]) {
       const { r, sendText } = await run(st)
-      expect(r).toBe('sent')
+      expect(r).toEqual({ result: 'sent' })
       expect(sendText).toHaveBeenCalledWith('n1', 'hi')
     }
   })
   it('refuses working / waiting / blocked, and a held request', async () => {
-    for (const st of [{ state: 'working' }, { state: 'waiting' }, { state: 'blocked' }, { state: 'done', held: HELD }]) {
+    const want = ['working', 'dialog', 'dialog', 'dialog']
+    for (const [i, st] of [{ state: 'working' }, { state: 'waiting' }, { state: 'blocked' }, { state: 'done', held: HELD }].entries()) {
       const { r, sendText } = await run(st)
-      expect(r).toBe('refused')
+      expect(r).toEqual({ result: 'refused', reason: want[i] })
       expect(sendText).not.toHaveBeenCalled()
     }
   })
   it('refuses when a shell owns the pane (hibernated, paused, dropped, exited)', async () => {
-    for (const st of [{ hibernated: true }, { paused: true }, { dropped: true }, { sessionEnded: true }]) {
+    const want = ['asleep', 'paused', 'dropped', 'exited']
+    for (const [i, st] of [{ hibernated: true }, { paused: true }, { dropped: true }, { sessionEnded: true }].entries()) {
       const { r, sendText } = await run({ state: 'done', ...st })
-      expect(r).toBe('refused')
+      expect(r).toEqual({ result: 'refused', reason: want[i] })
       expect(sendText).not.toHaveBeenCalled()
     }
   })
   it('refuses a node whose agent is unknown everywhere (no process can be proven in the pane)', async () => {
     const sendText = vi.fn(async () => true as const)
     const r = await hostChatSend({ ...base, agentId: undefined }, { getStatus: () => ({ state: 'done' }), sendText, now: () => 1000 })
-    expect(r).toBe('refused')
+    expect(r).toEqual({ result: 'refused', reason: 'exited' })
     expect(sendText).not.toHaveBeenCalled()
   })
   it('falls back to the store\'s agent id when main has none', async () => {
@@ -78,18 +80,18 @@ describe('hostChatSend', () => {
       { ...base, agentId: undefined },
       { getStatus: () => ({ state: 'done', agentId: 'claude' }), sendText, now: () => 1000 }
     )
-    expect(r).toBe('sent')
+    expect(r).toEqual({ result: 'sent' })
   })
   it('a query received after startBy is refused unsent', async () => {
     const { r, sendText } = await run({ state: 'done' }, vi.fn(async () => true as const), 2001)
-    expect(r).toBe('refused')
+    expect(r).toEqual({ result: 'refused', reason: 'late' })
     expect(sendText).not.toHaveBeenCalled()
   })
   it('passes a partial delivery through, and never reports sent for false / throw / truthy junk', async () => {
-    expect((await run({ state: 'done' }, vi.fn(async () => 'pasted-not-submitted' as const))).r).toBe('pasted-not-submitted')
-    expect((await run({ state: 'done' }, vi.fn(async () => false as const))).r).toBe('refused')
+    expect((await run({ state: 'done' }, vi.fn(async () => 'pasted-not-submitted' as const))).r).toEqual({ result: 'pasted-not-submitted' })
+    expect((await run({ state: 'done' }, vi.fn(async () => false as const))).r).toEqual({ result: 'refused', reason: 'failed' })
     // A sendText that REJECTED may have pasted already: unconfirmed, so the phone does not resend.
-    expect((await run({ state: 'done' }, vi.fn(async () => { throw new Error('x') }))).r).toBe('unconfirmed')
-    expect((await run({ state: 'done' }, vi.fn(async () => 'yes' as never))).r).toBe('refused')
+    expect((await run({ state: 'done' }, vi.fn(async () => { throw new Error('x') }))).r).toEqual({ result: 'unconfirmed' })
+    expect((await run({ state: 'done' }, vi.fn(async () => 'yes' as never))).r).toEqual({ result: 'refused', reason: 'failed' })
   })
 })

@@ -9965,7 +9965,7 @@ export function Canvas() {
         getStatus: (id) => useAgentStatus.getState().byId[id],
         sendText: (id, text) => api.pty.sendText(id, text),
         now: Date.now
-      }).then((result) => api.sendHostChatReply({ requestId: q.requestId, kind: 'send', result }))
+      }).then((out) => api.sendHostChatReply({ requestId: q.requestId, kind: 'send', ...out }))
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

@@ -8,14 +8,14 @@
 // composer is disabled while a plan / question / permission is held because the state is
 // `waiting`/`blocked`; the phone asks the same thing explicitly, so a held ticket that outlived its
 // state (a late hook) still refuses — text + Enter into a dialog ANSWERS it.
-import type { ChatSendResult, ChatStatus, HostChatQuery } from '@shared/mobile-chat'
+import type { ChatSendOutcome, HostChatQuery, RendererChatStatus } from '@shared/mobile-chat'
 import type { TextDeliveryResult } from '@shared/text-delivery'
 import type { AgentNodeStatus } from '../state/agentStatus'
 import { chatSendRefusal } from './chatSendGate'
 
 type StatusSlice = Pick<AgentNodeStatus, 'state' | 'held' | 'hibernated' | 'paused' | 'dropped' | 'sessionEnded' | 'agentId'>
 
-export function hostChatStatus(st: Partial<StatusSlice> | undefined): Omit<ChatStatus, 'structuredAnswers'> {
+export function hostChatStatus(st: Partial<StatusSlice> | undefined): RendererChatStatus {
   return {
     state: st?.state ?? null,
     held: st?.held ?? null,
@@ -35,24 +35,25 @@ export interface HostChatSendDeps {
 export async function hostChatSend(
   q: Extract<HostChatQuery, { kind: 'send' }>,
   deps: HostChatSendDeps
-): Promise<ChatSendResult> {
+): Promise<ChatSendOutcome> {
   // Main has already told the phone "refused" past this instant; typing now would contradict it.
-  if (deps.now() > q.startBy) return 'refused'
+  if (deps.now() > q.startBy) return { result: 'refused', reason: 'late' }
   const st = deps.getStatus(q.nodeId) ?? {}
   // The host's own record of the agent wins; the store's hook-reported id is the fallback. With
   // neither, `agentProcessInPane` cannot prove a CLI owns the pane and the gate refuses.
   const agentId = q.agentId ?? st.agentId ?? ''
-  if (st.held) return 'refused'
-  if (chatSendRefusal(agentId, st) !== null) return 'refused'
+  const refusal = chatSendRefusal(agentId, st)
+  if (refusal !== null) return { result: 'refused', reason: refusal }
+  if (st.held) return { result: 'refused', reason: 'dialog' }
   try {
     const r = await deps.sendText(q.nodeId, q.text)
-    if (r === true) return 'sent'
-    if (r === 'pasted-not-submitted') return 'pasted-not-submitted'
-    return 'refused'
+    if (r === true) return { result: 'sent' }
+    if (r === 'pasted-not-submitted') return { result: 'pasted-not-submitted' }
+    return { result: 'refused', reason: 'failed' }
   } catch {
     // The call STARTED: a rejection may come after the paste landed (a dropped IPC reply), so this
     // is not a refusal — 'refused' would invite the phone to resend and type the prompt twice.
-    return 'unconfirmed'
+    return { result: 'unconfirmed' }
   }
 }
 

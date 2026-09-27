@@ -22,6 +22,17 @@ describe('phone chat verbs are wired end to end', () => {
     expect(read('main/remote/standing-host.ts')).toMatch(/chat: bridge\.chat,/)
     expect(read('main/remote/host-service.ts')).toMatch(/opts\.kanban,\n\s*opts\.chat\n\s*\)/)
   })
+  it('the remote transcript leg resolves an UNMOUNTED SSH node by its project', () => {
+    const src = read('main/index.ts')
+    expect(src).toMatch(/remoteTranscriptRefFor\(sessionId, cwd, accountId, nodeId, nodeId \? sshTargetForNode\(nodeId\) : undefined\)/)
+    expect(src).toMatch(/refForProject: \(projectId\) => sshProjectManager\?\.refForProject\(projectId\)/)
+  })
+  it('the hostChat round-trip resolves the window at send time (a re-created macOS window keeps working)', () => {
+    const src = read('main/index.ts')
+    const block = src.slice(src.indexOf('chat: createHostChat({'), src.indexOf('workspaceRoots: () =>'))
+    expect(block).toMatch(/getMainWindow\(\)/)
+    expect(block).not.toMatch(/\bwin\.(webContents|isDestroyed)/)
+  })
   it('the renderer answers the round-trip', () => {
     const canvas = read('renderer/canvas/Canvas.tsx')
     expect(canvas).toMatch(/api\.onHostChatQuery\(/)

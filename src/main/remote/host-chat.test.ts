@@ -10,7 +10,8 @@
 //   - `answer` runs `answerHeldPermission` with the node's I/O, and reports the answered
 //     transition on success only.
 import { describe, expect, it, vi } from 'vitest'
-import { createHostChat, mirrorRefusesChatSend, type HostChatDeps } from './host-chat'
+import { createHostChat, mirrorChatSendRefusal, type HostChatDeps } from './host-chat'
+import { setCustomAgentBaseResolver } from '../../shared/agents/config'
 import type { ChatTranscriptResult } from '../../shared/types'
 import type { HeldPermissionIo } from '../../core/agents/permission-decision'
 
@@ -29,10 +30,10 @@ function deps(over: Partial<HostChatDeps> = {}): HostChatDeps {
     isStructuredTicket: vi.fn(() => false),
     renderer: {
       status: vi.fn(async () => RSTATUS),
-      send: vi.fn(async () => 'sent' as const),
+      send: vi.fn(async () => ({ result: 'sent' as const })),
       session: vi.fn(async () => ({ sessionId: 'sid-1' }))
     },
-    hostSendRefusal: vi.fn(() => false),
+    hostSendRefusal: vi.fn(() => null),
     knownTickets: vi.fn(() => ['p-1']),
     timeoutMs: 20,
     sendTimeoutMs: 40,
@@ -53,10 +54,31 @@ describe('host-chat page', () => {
       { before: 10, maxBytes: 65536 }
     )
   })
-  it('a REMOTE node keeps its cwd (the host-side locate is keyed on it)', async () => {
+  it('a REMOTE node keeps its cwd (the host-side locate is keyed on it) and is read REMOTE-ONLY', async () => {
     const d = deps({ lookupNode: () => ({ cwd: '/srv/app', agentId: 'claude', sessionId: 'sid-1', remote: true }) })
     await createHostChat(d).page('n1', {})
-    expect(d.readTranscript).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/srv/app', sessionId: 'sid-1' }), {})
+    expect(d.readTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/srv/app', sessionId: 'sid-1', remoteOnly: true }),
+      {}
+    )
+  })
+  it('an UNREADABLE read (a remote read that failed) rejects — the relay says "Could not read the transcript."', async () => {
+    const d = deps({ readTranscript: vi.fn(async () => ({ ...RESULT, found: false, unreadable: true as const })) })
+    await expect(createHostChat(d).page('n1', {})).rejects.toThrow()
+  })
+  it('serves only chat-capable agents (resolved through the base harness), and reads nothing otherwise', async () => {
+    for (const agentId of ['codex', 'gemini', undefined]) {
+      const d = deps({ lookupNode: () => ({ agentId, sessionId: 'sid-1' }) })
+      expect(await createHostChat(d).page('n1', {})).toBe('unsupported')
+      expect(d.readTranscript).not.toHaveBeenCalled()
+    }
+    setCustomAgentBaseResolver((id) => (id === 'custom:x' ? 'claude' : undefined))
+    try {
+      const d = deps({ lookupNode: () => ({ agentId: 'custom:x', sessionId: 'sid-1' }) })
+      expect(await createHostChat(d).page('n1', {})).toMatchObject({ version: 1 })
+    } finally {
+      setCustomAgentBaseResolver(null)
+    }
   })
   it('an absent page is the default paged tail, not the legacy read', async () => {
     const d = deps()
@@ -94,7 +116,7 @@ describe('host-chat page', () => {
     })
     await createHostChat(d).page('n1', {})
     expect(d.readTranscript).toHaveBeenCalledWith(
-      { sessionId: undefined, cwd: undefined, accountId: undefined, nodeId: 'n1', agentId: 'claude' },
+      { sessionId: undefined, cwd: undefined, accountId: undefined, nodeId: 'n1', agentId: 'claude', remoteOnly: true },
       {}
     )
   })
@@ -108,8 +130,15 @@ describe('host-chat status', () => {
       isStructuredTicket: vi.fn((id: string) => id === 'p-1')
     })
     const s = await createHostChat(d).status('n1')
-    expect(s).toEqual({ ...RSTATUS, state: 'waiting', held, structuredAnswers: true })
+    expect(s).toEqual({ ...RSTATUS, state: 'waiting', held, structuredAnswers: true, version: 1, hostRefuses: false })
     expect(d.renderer.status).toHaveBeenCalledWith({ nodeId: 'n1', agentId: 'claude' })
+  })
+  it('carries the HOST view: after a restart the renderer knows nothing while the mirror holds a dialog', async () => {
+    const d = deps({
+      renderer: { status: vi.fn(async () => ({ ...RSTATUS, state: null })), send: vi.fn(), session: vi.fn() },
+      hostSendRefusal: vi.fn(() => 'dialog' as const)
+    })
+    expect(await createHostChat(d).status('n1')).toMatchObject({ state: null, hostRefuses: true, refusal: 'dialog', version: 1 })
   })
   it('structuredAnswers is false with no held request', async () => {
     const d = deps({ isStructuredTicket: vi.fn(() => true) })
@@ -131,7 +160,7 @@ describe('host-chat status', () => {
 describe('host-chat send', () => {
   it('asks the renderer (which owns the send gate) and passes its answer through', async () => {
     const d = deps()
-    expect(await createHostChat(d).send('n1', 'hello')).toBe('sent')
+    expect(await createHostChat(d).send('n1', 'hello')).toEqual({ result: 'sent' })
     // startBy = now + timeoutMs: the renderer refuses a send it receives after that.
     expect(d.renderer.send).toHaveBeenCalledWith({ nodeId: 'n1', agentId: 'claude', text: 'hello', startBy: 1020 })
   })
@@ -140,19 +169,51 @@ describe('host-chat send', () => {
     expect(await createHostChat(d).send('nope', 'hi')).toBe('unknown-node')
     expect(d.renderer.send).not.toHaveBeenCalled()
   })
-  it('never started (no window / a throw) ⇒ refused', async () => {
+  it('never started (no window / a throw) ⇒ refused, reason unavailable', async () => {
     for (const send of [async () => null, async () => { throw new Error('x') }]) {
       const d = deps({ renderer: { status: vi.fn(), send: send as never, session: vi.fn() } })
-      expect(await createHostChat(d).send('n1', 'hi')).toBe('refused')
+      expect(await createHostChat(d).send('n1', 'hi')).toEqual({ result: 'refused', reason: 'unavailable' })
     }
+  })
+  it('passes the renderer\'s refusal reason through', async () => {
+    const d = deps({ renderer: { status: vi.fn(), send: vi.fn(async () => ({ result: 'refused' as const, reason: 'working' as const })), session: vi.fn() } })
+    expect(await createHostChat(d).send('n1', 'hi')).toEqual({ result: 'refused', reason: 'working' })
+  })
+  it('a second send to the same node while one is in flight is refused as busy; other nodes are not held', async () => {
+    let finish!: (v: { result: 'sent' }) => void
+    const send = vi.fn(() => new Promise<{ result: 'sent' }>((r) => (finish = r)))
+    const d = deps({
+      lookupNode: vi.fn((id: string) => ({ agentId: 'claude', sessionId: id })),
+      renderer: { status: vi.fn(), send: send as never, session: vi.fn() },
+      sendTimeoutMs: 1000
+    })
+    const hc = createHostChat(d)
+    const first = hc.send('n1', 'a')
+    expect(await hc.send('n1', 'b')).toEqual({ result: 'refused', reason: 'busy' })
+    expect(send).toHaveBeenCalledTimes(1)
+    finish({ result: 'sent' })
+    expect(await first).toEqual({ result: 'sent' })
+    send.mockImplementation(async () => ({ result: 'sent' as const }))
+    expect(await hc.send('n1', 'c')).toEqual({ result: 'sent' })
+  })
+  it('an UNCONFIRMED send keeps the node busy until the dispatched send settles', async () => {
+    let finish!: (v: { result: 'sent' }) => void
+    const send = vi.fn(() => new Promise<{ result: 'sent' }>((r) => (finish = r)))
+    const hc = createHostChat(deps({ renderer: { status: vi.fn(), send: send as never, session: vi.fn() } }))
+    expect(await hc.send('n1', 'a')).toEqual({ result: 'unconfirmed' })
+    expect(await hc.send('n1', 'b')).toEqual({ result: 'refused', reason: 'busy' })
+    finish({ result: 'sent' })
+    await new Promise((r) => setTimeout(r, 0))
+    send.mockImplementation(async () => ({ result: 'sent' as const }))
+    expect(await hc.send('n1', 'c')).toEqual({ result: 'sent' })
   })
   it('dispatched but no answer in time ⇒ UNCONFIRMED, never refused (the phone must not resend)', async () => {
     const d = deps({ renderer: { status: vi.fn(), send: () => new Promise<never>(() => {}), session: vi.fn() } })
-    expect(await createHostChat(d).send('n1', 'hi')).toBe('unconfirmed')
+    expect(await createHostChat(d).send('n1', 'hi')).toEqual({ result: 'unconfirmed' })
   })
   it('the host mirror says the agent is busy or asking ⇒ refused before the renderer is asked', async () => {
-    const d = deps({ hostSendRefusal: vi.fn(() => true) })
-    expect(await createHostChat(d).send('n1', 'hi')).toBe('refused')
+    const d = deps({ hostSendRefusal: vi.fn(() => 'working' as const) })
+    expect(await createHostChat(d).send('n1', 'hi')).toEqual({ result: 'refused', reason: 'working' })
     expect(d.hostSendRefusal).toHaveBeenCalledWith('n1')
     expect(d.renderer.send).not.toHaveBeenCalled()
   })
@@ -214,13 +275,14 @@ describe('host-chat answer', () => {
   })
 })
 
-describe('mirrorRefusesChatSend (the host half of the send gate)', () => {
-  it('refuses a busy / asking agent and any held question or approval; passes done and unknown', () => {
-    for (const state of ['working', 'waiting', 'blocked']) expect(mirrorRefusesChatSend({ state })).toBe(true)
-    expect(mirrorRefusesChatSend({ state: 'done', pendingQuestion: { sessionId: 's', toolUseId: 't' } })).toBe(true)
-    expect(mirrorRefusesChatSend({ state: 'done', concurrentApprovalIds: ['p'] })).toBe(true)
-    expect(mirrorRefusesChatSend({ state: 'done' })).toBe(false)
-    expect(mirrorRefusesChatSend({ state: 'done', concurrentApprovalIds: [] })).toBe(false)
-    expect(mirrorRefusesChatSend(undefined)).toBe(false)
+describe('mirrorChatSendRefusal (the host half of the send gate)', () => {
+  it('names why: working, or a dialog (waiting / blocked / held question or approval); passes done and unknown', () => {
+    expect(mirrorChatSendRefusal({ state: 'working' })).toBe('working')
+    for (const state of ['waiting', 'blocked']) expect(mirrorChatSendRefusal({ state })).toBe('dialog')
+    expect(mirrorChatSendRefusal({ state: 'done', pendingQuestion: { sessionId: 's', toolUseId: 't' } })).toBe('dialog')
+    expect(mirrorChatSendRefusal({ state: 'done', concurrentApprovalIds: ['p'] })).toBe('dialog')
+    expect(mirrorChatSendRefusal({ state: 'done' })).toBeNull()
+    expect(mirrorChatSendRefusal({ state: 'done', concurrentApprovalIds: [] })).toBeNull()
+    expect(mirrorChatSendRefusal(undefined)).toBeNull()
   })
 })

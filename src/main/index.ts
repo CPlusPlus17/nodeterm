@@ -230,10 +230,11 @@ import {
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
 import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
-import { createHostChat, mirrorRefusesChatSend } from './remote/host-chat'
-import type { ChatSendResult, ChatStatus, HostChatReply } from '../shared/mobile-chat'
+import { createHostChat, mirrorChatSendRefusal } from './remote/host-chat'
+import type { ChatSendOutcome, HostChatReply, RendererChatStatus } from '../shared/mobile-chat'
 import {
   createReadRemotePage,
+  remoteTargetForNode,
   forgetLocatedRef,
   rememberHookRef,
   type RemoteTranscriptRefCache
@@ -2672,6 +2673,15 @@ app.whenReady().then(async () => {
   // ONE thing this shell adds is the remote leg, which needs a ControlMaster. `null` means "not a
   // remote session", which is the signal for core to take its local path.
   // Named so the phone Chat verbs (hostBridge.chat) read through the SAME deps as the ⌘M panel.
+  // The master a remote transcript read goes over: the live pty's, else the node's SSH PROJECT's —
+  // an unmounted node (idle tab, after a restart) has no pty, and resolving it only through the pty
+  // read it as "not remote" and sent the read to THIS machine's disk.
+  const sshTargetForNode = (nodeId: string) =>
+    remoteTargetForNode(nodeId, {
+      live: (id) => ptyManager.sshRemoteForNode(id),
+      projectIdFor: (id) => workspaceStore.sshProjectIdForNode(id),
+      refForProject: (projectId) => sshProjectManager?.refForProject(projectId)
+    })
   const transcriptIpcDeps: TranscriptIpcDeps = {
     pathFor: (sessionId) => contextTail.pathFor(sessionId),
     readRemote: async ({ sessionId, cwd, accountId, nodeId }) => {
@@ -2685,7 +2695,7 @@ app.whenReady().then(async () => {
     readRemotePage: createReadRemotePage({
       cache: remoteTranscriptRefs,
       refFor: ({ sessionId, cwd, accountId, nodeId }) =>
-        remoteTranscriptRefFor(sessionId, cwd, accountId, nodeId),
+        remoteTranscriptRefFor(sessionId, cwd, accountId, nodeId, nodeId ? sshTargetForNode(nodeId) : undefined),
       readPage: (ref, before, maxBytes) => remoteFile.readTranscriptPage(ref, before, maxBytes)
     }),
     remoteExists: async ({ sessionId, accountId, nodeId }) =>
@@ -4062,7 +4072,7 @@ app.whenReady().then(async () => {
           remote: workspaceStore.sshProjectIdForNode(nodeId) !== undefined
         }
       },
-      hostSendRefusal: (nodeId) => mirrorRefusesChatSend(mirrorEntry(nodeId)),
+      hostSendRefusal: (nodeId) => mirrorChatSendRefusal(mirrorEntry(nodeId)),
       knownTickets: pendingTicketsFor,
       readTranscript: (q, rawPage) => readChatTranscript(q, rawPage, transcriptIpcDeps),
       answerIo: heldPermissionIoFor,
@@ -4075,7 +4085,10 @@ app.whenReady().then(async () => {
         const pending = new Map<string, (reply: HostChatReply) => void>()
         ipcMain.on(IPC.hostChatReply, (e, reply: HostChatReply) => {
           // Only the main window answers; a <webview> guest is a webContents in this process too.
-          if (win.isDestroyed() || e.sender !== win.webContents) return
+          // Resolved at receive time (getMainWindow), like the query below: a macOS window closed
+          // and re-created must keep answering. (Sibling nodeActions still use the captured `win`.)
+          const w = getMainWindow()
+          if (!w || w.isDestroyed() || e.sender !== w.webContents) return
           const resolve = reply && typeof reply.requestId === 'string' ? pending.get(reply.requestId) : undefined
           if (!resolve) return
           pending.delete(reply.requestId)
@@ -4084,23 +4097,24 @@ app.whenReady().then(async () => {
         const ask = (q: { kind: 'status'; nodeId: string; agentId?: string } | {
           kind: 'send'; nodeId: string; agentId?: string; text: string; startBy: number
         } | { kind: 'session'; nodeId: string }): Promise<HostChatReply | null> => {
-          if (win.isDestroyed()) return Promise.resolve(null)
+          const w = getMainWindow()
+          if (!w || w.isDestroyed()) return Promise.resolve(null)
           const requestId = randomUUID()
           // host-chat.ts races this against its own timeout; a reply that never comes leaves only
           // this entry, dropped here when the race is lost.
           const answered = new Promise<HostChatReply>((resolve) => pending.set(requestId, resolve))
-          win.webContents.send(IPC.hostChatQuery, { ...q, requestId })
+          w.webContents.send(IPC.hostChatQuery, { ...q, requestId })
           const drop = setTimeout(() => pending.delete(requestId), 30_000)
           return answered.finally(() => clearTimeout(drop))
         }
         return {
-          status: async (q: { nodeId: string; agentId?: string }): Promise<Omit<ChatStatus, 'structuredAnswers'> | null> => {
+          status: async (q: { nodeId: string; agentId?: string }): Promise<RendererChatStatus | null> => {
             const r = await ask({ kind: 'status', ...q })
             return r && r.kind === 'status' ? r.status : null
           },
-          send: async (q: { nodeId: string; agentId?: string; text: string; startBy: number }): Promise<ChatSendResult | null> => {
+          send: async (q: { nodeId: string; agentId?: string; text: string; startBy: number }): Promise<ChatSendOutcome | null> => {
             const r = await ask({ kind: 'send', ...q })
-            return r && r.kind === 'send' ? r.result : null
+            return r && r.kind === 'send' ? { result: r.result, ...(r.reason ? { reason: r.reason } : {}) } : null
           },
           session: async (q: { nodeId: string }): Promise<{ sessionId?: string } | null> => {
             const r = await ask({ kind: 'session', ...q })

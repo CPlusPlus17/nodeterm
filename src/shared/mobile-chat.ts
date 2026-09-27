@@ -10,9 +10,20 @@ import type { ChatTranscriptResult } from './types'
  *  newer shape honestly instead of misreading it. */
 export type ChatPage = ChatTranscriptResult & { version: 1 }
 
-/** What the phone needs to decide whether its composer and answer controls may act. */
+/** Why the HOST's own record refuses a send: the agent is mid-turn, or a dialog (a permission,
+ *  plan or question) holds the pane — whose Enter would ANSWER it. */
+export type ChatHostRefusal = 'working' | 'dialog'
+
+/** What the phone needs to decide whether its composer and answer controls may act.
+ *
+ *  The phone's composer is unlocked ONLY when `version` is one it knows, `hostRefuses` is false,
+ *  `held` is null and `state` is `done` or `null`. Any `state` value it does not recognize (a newer
+ *  desktop) ⇒ locked. The desktop re-checks every send regardless. */
 export interface ChatStatus {
-  /** The hook-reported state; `null` = no live hook state (unknown — the desktop's "Unknown"). */
+  /** Shape version; a phone that does not know it treats the composer as locked. */
+  version: 1
+  /** The hook-reported state from the desktop WINDOW; `null` = the window has no live hook state
+   *  (unknown — e.g. just after a desktop restart). */
   state: AgentState | null
   /** The request the node's hook is holding, if any (a plan, a question, a permission). */
   held: HeldPermission | null
@@ -24,13 +35,44 @@ export interface ChatStatus {
    *  (`isStructuredTicket`). False ⇒ the phone offers no answer controls, only "answer in the
    *  terminal". Always false with no `held`. */
   structuredAnswers: boolean
+  /** The host's own agent-status mirror refuses sends right now, whatever `state` says. It survives
+   *  a desktop restart that leaves `state` null, so a live dialog still locks the composer. */
+  hostRefuses: boolean
+  /** Why, when `hostRefuses`. */
+  refusal?: ChatHostRefusal
 }
+
+/** What the renderer contributes to `ChatStatus`; main adds the rest (ticket ledger, host mirror). */
+export type RendererChatStatus = Omit<ChatStatus, 'structuredAnswers' | 'version' | 'hostRefuses' | 'refusal'>
 
 /** `refused` = never started (nothing was typed: no window, the gate refused, or it arrived too
  *  late to start). `unconfirmed` = the send WAS dispatched to the desktop but no result came back in
  *  time — the text may or may not have landed, so the phone must NOT resend it (that would type the
  *  prompt twice); it should re-read the page instead. */
 export type ChatSendResult = 'sent' | 'refused' | 'pasted-not-submitted' | 'unconfirmed'
+
+/** Why a send was `refused` (only ever set with `refused`). The composer gate's own kinds
+ *  (`working`, `dialog`, `asleep`, `paused`, `dropped`, `exited`), plus: `busy` = another send to
+ *  this node is still in flight; `late` = the desktop received it after its start deadline;
+ *  `unavailable` = no desktop window to ask; `failed` = the paste itself was refused. Unknown
+ *  values from a newer desktop: show a generic "not sent". */
+export type ChatSendReason =
+  | 'working'
+  | 'dialog'
+  | 'asleep'
+  | 'paused'
+  | 'dropped'
+  | 'exited'
+  | 'busy'
+  | 'late'
+  | 'unavailable'
+  | 'failed'
+
+/** `chat.send`'s reply body. */
+export interface ChatSendOutcome {
+  result: ChatSendResult
+  reason?: ChatSendReason
+}
 
 /** Longest text `chat.send` accepts, in UTF-16 code units (JS `.length`, Swift `utf16.count`),
  *  checked on the RAW text before stripping. */
@@ -56,9 +98,10 @@ export type HostChatQuery =
   | { requestId: string; kind: 'send'; nodeId: string; agentId?: string; text: string; startBy: number }
   | { requestId: string; kind: 'session'; nodeId: string }
 
-/** Renderer → main. `status` omits `structuredAnswers`: main adds it (the ticket ledger is main's). */
+/** Renderer → main. `status` is the renderer's half (`RendererChatStatus`): main adds the ticket
+ *  ledger's `structuredAnswers` and the host mirror's view. */
 export type HostChatReply =
-  | { requestId: string; kind: 'status'; status: Omit<ChatStatus, 'structuredAnswers'> }
-  | { requestId: string; kind: 'send'; result: ChatSendResult }
+  | { requestId: string; kind: 'status'; status: RendererChatStatus }
+  | { requestId: string; kind: 'send'; result: ChatSendResult; reason?: ChatSendReason }
   /** The renderer's agent-status session id — the one the ⌘M view reads. Absent = it knows none. */
   | { requestId: string; kind: 'session'; sessionId?: string }

@@ -27,7 +27,9 @@ const STATUS: ChatStatus = {
   paused: false,
   dropped: false,
   sessionEnded: false,
-  structuredAnswers: false
+  structuredAnswers: false,
+  version: 1,
+  hostRefuses: false
 }
 
 function make(chat?: Partial<HostChatOps>, served = true) {
@@ -45,7 +47,7 @@ function make(chat?: Partial<HostChatOps>, served = true) {
   const ops: HostChatOps = {
     page: vi.fn(async () => PAGE),
     status: vi.fn(async () => STATUS),
-    send: vi.fn(async () => 'sent' as const),
+    send: vi.fn(async () => ({ result: 'sent' as const })),
     answer: vi.fn(async () => true),
     ...chat
   }
@@ -116,6 +118,14 @@ describe('chat.page', () => {
     const { call } = make({ page: vi.fn(async () => null) })
     expect(await call('chat.page', { nodeId: 'n1' })).toEqual({ id: 'r1', ok: false, body: { message: 'Unknown node.' } })
   })
+  it('a non-chat agent is refused by name, never an empty page', async () => {
+    const { call } = make({ page: vi.fn(async () => 'unsupported' as const) })
+    expect(await call('chat.page', { nodeId: 'n1' })).toEqual({
+      id: 'r1',
+      ok: false,
+      body: { message: 'Chat is not available for this agent.' }
+    })
+  })
   it('a failed read is an error, never an empty page', async () => {
     const { call } = make({ page: vi.fn(async () => { throw new Error('boom') }) })
     expect(await call('chat.page', { nodeId: 'n1' })).toEqual({
@@ -173,9 +183,15 @@ describe('chat.send', () => {
   })
   it('passes a refusal and a partial delivery through verbatim', async () => {
     for (const result of ['refused', 'pasted-not-submitted', 'unconfirmed'] as const) {
-      const { call } = make({ send: vi.fn(async () => result) })
+      const { call } = make({ send: vi.fn(async () => ({ result })) })
       expect(await call('chat.send', { nodeId: 'n1', text: 'hi' })).toEqual({ id: 'r1', ok: true, body: { result } })
     }
+    const { call } = make({ send: vi.fn(async () => ({ result: 'refused' as const, reason: 'busy' as const })) })
+    expect(await call('chat.send', { nodeId: 'n1', text: 'hi' })).toEqual({
+      id: 'r1',
+      ok: true,
+      body: { result: 'refused', reason: 'busy' }
+    })
   })
   it('unknown node ⇒ "Unknown node."', async () => {
     const { call } = make({ send: vi.fn(async () => 'unknown-node' as const) })
@@ -187,7 +203,11 @@ describe('chat.send', () => {
   })
   it('a throwing send is a refusal, never "sent"', async () => {
     const { call } = make({ send: vi.fn(async () => { throw new Error('x') }) })
-    expect(await call('chat.send', { nodeId: 'n1', text: 'hi' })).toEqual({ id: 'r1', ok: true, body: { result: 'refused' } })
+    expect(await call('chat.send', { nodeId: 'n1', text: 'hi' })).toEqual({
+      id: 'r1',
+      ok: true,
+      body: { result: 'refused', reason: 'unavailable' }
+    })
   })
 })
 

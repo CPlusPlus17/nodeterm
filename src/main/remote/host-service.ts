@@ -40,7 +40,7 @@ import {
   CHAT_SEND_TEXT_MAX,
   sanitizeChatText,
   type ChatPage,
-  type ChatSendResult,
+  type ChatSendOutcome,
   type ChatStatus
 } from '../../shared/mobile-chat'
 import { getStoredEntitlement, isPremium } from '../../core/license'
@@ -197,15 +197,16 @@ export interface HostKanbanOps {
  * answers an honest "not served" (a pre-feature host, and every pre-feature test fake).
  */
 export interface HostChatOps {
-  /** One page of the node's transcript. `null` ⇒ the host does not know this node. Rejects when
-   *  the read failed (never an empty page standing in for a failure). */
-  page(nodeId: string, rawPage: unknown): Promise<ChatPage | null>
+  /** One page of the node's transcript. `null` ⇒ the host does not know this node; `'unsupported'`
+   *  ⇒ its agent has no chat view. Rejects when the read failed (never an empty page standing in
+   *  for a failure). */
+  page(nodeId: string, rawPage: unknown): Promise<ChatPage | null | 'unsupported'>
   /** The node's agent state + held request. `null` ⇒ unknown node. Rejects when the desktop
    *  window did not answer — never a guessed state. */
   status(nodeId: string): Promise<ChatStatus | null>
   /** Type `text` (already stripped of control chars) into the node's pane through the desktop's
    *  own send gate. Only `'sent'` means Enter was confirmed. */
-  send(nodeId: string, text: string): Promise<ChatSendResult | 'unknown-node'>
+  send(nodeId: string, text: string): Promise<ChatSendOutcome | 'unknown-node'>
   /** Answer the node's held request (`answerHeldPermission`: validated against the pending
    *  request file, structured-ticket gated). `false` = nothing was written. */
   answer(nodeId: string, pendingId: string, answer: unknown): Promise<boolean>
@@ -849,7 +850,13 @@ export function createHostHandlers(
         }
         void chat
           .page(nodeId, rawPage)
-          .then((page) => (page ? socket.respond(req.id, true, { page }) : fail('Unknown node.')))
+          .then((page) =>
+            page === 'unsupported'
+              ? fail('Chat is not available for this agent.')
+              : page
+                ? socket.respond(req.id, true, { page })
+                : fail('Unknown node.')
+          )
           .catch(() => fail('Could not read the transcript.'))
         return
       }
@@ -874,11 +881,13 @@ export function createHostHandlers(
         }
         void chat
           .send(nodeId, text)
-          .then((result) =>
-            result === 'unknown-node' ? fail('Unknown node.') : socket.respond(req.id, true, { result })
+          .then((out) =>
+            out === 'unknown-node'
+              ? fail('Unknown node.')
+              : socket.respond(req.id, true, { result: out.result, ...(out.reason ? { reason: out.reason } : {}) })
           )
           // A send that threw is a refusal, never "sent": the phone keeps the draft.
-          .catch(() => socket.respond(req.id, true, { result: 'refused' }))
+          .catch(() => socket.respond(req.id, true, { result: 'refused', reason: 'unavailable' }))
         return
       }
       case 'agent.answer': {
