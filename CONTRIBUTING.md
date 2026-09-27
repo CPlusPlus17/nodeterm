@@ -749,6 +749,17 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
 
 Grok billing diagnostics must keep HTTP codes and safe failure categories per billing view. Never send raw error messages, URLs or response bodies to the UI; credentials remain read-only. A failed view is not proof that there is no quota, even when the other view responds.
 
+**Phone chat verbs (`chat.page` / `chat.status` / `chat.send` / `agent.answer`).** Full contract in
+`docs/mobile-chat-view.md` §3. Three rules get a PR sent back:
+- **The phone sends only a `nodeId`.** Cwd, account, agent, session id and remote routing come from
+  this machine's records. Never add a param that lets the phone name a path, a session or a host.
+- **The `chat` dependency is optional at every hop** (host-service handler, `HostSessionOptions`,
+  `HostBridgeDeps`), so dropping it anywhere still compiles and ships the verbs as "not served".
+  `host-chat-wiring.test.ts` pins the chain; extend it when you add a hop.
+- **`'unconfirmed'` is never a refusal.** It means the desktop could not confirm whether the text
+  was typed. Nothing may treat it as "safe to resend": the phone keeps the draft, re-reads, and lets
+  the user decide. Only `'refused'` means nothing was typed.
+
 ## User-owned agent settings
 
 Claude/Gemini settings must go through the guarded transactions in
