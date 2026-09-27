@@ -53,6 +53,25 @@ interface HostTokenResponse {
   pairingToken: string
   hostId: string
   exp: number
+  /** How long the token has left, measured on the SERVER's clock at mint time (see tokenTtlMs). */
+  ttlMs: number
+}
+
+/**
+ * How long a freshly minted token has left, in ms.
+ *
+ * `exp` is an absolute instant on the SERVER's clock. Subtracting the LOCAL `Date.now()` from it
+ * folds this machine's clock error into the answer: a clock 75 s fast leaves 120 − 75 = 45 s, minus
+ * the 30 s lead = the 15 s floor, so the host re-mints four times per TTL. Relay log, 2026-09-27: one
+ * host refreshing every 15 s, 238 mints/hour against a free limit of 240 — one stray mint from
+ * locking itself out for the rest of the hour. The response's own `Date` header is the server's
+ * clock at the same instant it computed `exp`, so the difference is clock-independent. It falls
+ * back to the local clock only when the header is missing or unparseable (a proxy that strips it).
+ */
+export function tokenTtlMs(exp: number, serverDate: string | null, localNowMs: number): number {
+  if (!(exp > 0)) return DEFAULT_TTL_MS
+  const serverNowMs = serverDate ? Date.parse(serverDate) : NaN
+  return exp * 1000 - (Number.isFinite(serverNowMs) ? serverNowMs : localNowMs)
 }
 
 /**
@@ -79,7 +98,13 @@ async function mintHostToken(
     if (!res.ok) return null
     const json = (await res.json().catch(() => ({}))) as Partial<HostTokenResponse>
     if (!json.pairingToken) return null
-    return { pairingToken: json.pairingToken, hostId: json.hostId ?? '', exp: json.exp ?? 0 }
+    const exp = json.exp ?? 0
+    return {
+      pairingToken: json.pairingToken,
+      hostId: json.hostId ?? '',
+      exp,
+      ttlMs: tokenTtlMs(exp, res.headers?.get?.('date') ?? null, Date.now())
+    }
   } catch {
     return null
   } finally {
@@ -208,18 +233,21 @@ export function initStandingHost(
     reconnectTimer.unref?.()
   }
 
-  function scheduleRefreshFor(p: Pooled, exp: number): void {
+  function scheduleRefreshFor(p: Pooled, ttlMs: number): void {
     if (p.refreshTimer) clearTimeout(p.refreshTimer)
-    const untilExpMs = exp > 0 ? exp * 1000 - Date.now() : DEFAULT_TTL_MS
-    const delay = Math.max(MIN_REFRESH_MS, untilExpMs - REFRESH_LEAD_MS)
+    const delay = Math.max(MIN_REFRESH_MS, ttlMs - REFRESH_LEAD_MS)
     p.refreshTimer = setTimeout(() => {
       p.refreshTimer = null
       if (!running || !pool.has(p)) return
+      // This listener held its relay registration for a whole token lifetime: the relay is
+      // reachable, so the reconnect backoff has done its job. This — not a successful mint — is
+      // what resets it (see connectOne).
+      reconnectAttempt = 0
       // A listener serving a client (bridged) is left alone — never cut an active session for a
       // token refresh; the relay drops it at TTL and onClose replaces it. Only an IDLE listener is
       // re-minted with a fresh token by dropping it and topping the pool back up.
       if (p.bridged) {
-        scheduleRefreshFor(p, 0)
+        scheduleRefreshFor(p, DEFAULT_TTL_MS)
         return
       }
       removeFromPool(p)
@@ -233,6 +261,7 @@ export function initStandingHost(
   async function onPeerReady(pooled: Pooled): Promise<void> {
     if (!pooled.bridged) {
       pooled.bridged = true
+      reconnectAttempt = 0 // a completed handshake proves the relay leg end to end
       // Team presence: a bridged relay client is a peer. It has no mouse, so it stays cursorless
       // and appears in the facepile only — see docs/team-presence.md ("Peers may have no cursor").
       pooled.presence.join()
@@ -293,7 +322,12 @@ export function initStandingHost(
         scheduleReconnect()
         return
       }
-      reconnectAttempt = 0
+      // NOT `reconnectAttempt = 0` here. A mint proves only that the API answered — the relay is a
+      // different host, and when it is unreachable from this machine (relay log, 2026-09-27: a host
+      // on the fixed build, API fine, relay WS failing for 2½ minutes) every mint succeeds, every
+      // socket dies at once, and a reset here made each death re-mint at round-trip speed until the
+      // API's per-IP limit answered 429. The backoff resets on proof the relay leg works instead:
+      // a listener surviving to its refresh, or a completed phone handshake.
       const pooled: Pooled = {
         session: null as unknown as HostSession,
         bridged: false,
@@ -329,12 +363,18 @@ export function initStandingHost(
             pooled.refreshTimer = null
           }
           pool.delete(pooled)
-          ensurePool() // a listener/session dropped → top the pool back up
+          // A session a phone was using ended: its replacement listener was already opened in
+          // onPeerReady, so topping up is normally a no-op. An IDLE listener dropping on its own is
+          // different — our refresh closes intentionally (no onClose), so this is the relay
+          // refusing or unreachable, and re-minting at once is the tight loop the backoff exists
+          // to prevent.
+          if (pooled.bridged) ensurePool()
+          else scheduleReconnect()
         }
       })
       pool.add(pooled)
       opened = true
-      scheduleRefreshFor(pooled, token.exp)
+      scheduleRefreshFor(pooled, token.ttlMs)
       // A listener is registered at the relay → advertise the identity for LATE ADOPTION
       // (~/.nodeterm/relay.json — see relay-advertise.ts): a phone whose pairing predates the
       // toggle reads it over its SSH bootstrap and gains a relay leg without re-pairing.
