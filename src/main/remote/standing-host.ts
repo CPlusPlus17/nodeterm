@@ -351,6 +351,7 @@ export function initStandingHost(
         remoteViewer: bridge.remoteViewer,
         nodeActions: bridge.nodeActions,
         kanban: bridge.kanban,
+        chat: bridge.chat,
         extraRoots: bridge.workspaceRoots,
         // Typing attribution: this pooled session's input frames are ITS phone's keystrokes.
         getClientId: () => pooled.presence.id(),

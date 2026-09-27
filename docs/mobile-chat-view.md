@@ -69,22 +69,47 @@ ChatStatus { state, held?: {pendingId, toolName, questions?}, hibernated, paused
 
 `version` lets the phone refuse a newer shape honestly.
 
-### 3.2 Relay producer (desktop, this repo)
+### 3.2 Relay producer (desktop, this repo) — implemented
 
-New verbs in `host-service.ts` `onRpc`, all behind the existing relay project-scope jail; the phone
-sends **only `nodeId`** (plus paging/answer payload) — cwd, account, agent, transcript path and remote
-routing are resolved host-side from the desktop's own registry (node ids are attacker-controllable;
-never trust phone-supplied paths).
+Four verbs in `host-service.ts` `onRpc` (`handleChat`), served to an **approved phone** only (the
+session's approval gate refuses every RPC before approval). They are NOT reachable from a Team-access
+relay guest: `relay-host.ts` serves no phone dialect at all (its `onRpc` is inert), so the
+project-scope jail in `relay-project-scope.ts` never sees them and they widen nothing. The phone
+sends **only `nodeId`** (plus paging / text / answer payload) — cwd, account, agent, session id,
+transcript path and remote routing are resolved host-side from the desktop's own registry
+(`WorkspaceStore.getNodeResolved` + the agent-status mirror; node ids are attacker-controllable, so
+a phone-supplied path is never trusted). Ops: `main/remote/host-chat.ts` (`createHostChat`, wired
+as `hostBridge.chat` in `main/index.ts`, forwarded by both phone hosts).
 
-| verb | params | does |
-|---|---|---|
-| `chat.page` | `{nodeId, before?, maxBytes?}` | `readChatPage` (paged, remote-aware, grok unpaged) + `model`/`effort` |
-| `chat.status` | `{nodeId}` | agent state + `held` + shell-owned-pane flags + whether structured answers are supported (revision gate) |
-| `chat.send` | `{nodeId, text}` | desktop send gate (`canSendFromChat` + `agentProcessInPane` + no held request) then `sendText` |
-| `agent.answer` | `{nodeId, pendingId, answer: PermissionAnswer}` | `answerHeldPermission` (pending file is the source of truth; revision gate; no `setMode auto`) |
+| verb | params | reply | does |
+|---|---|---|---|
+| `chat.page` | `{nodeId, before?, maxBytes?}` | `{page: ChatPage}` | `readChatTranscript` with the ⌘M panel's own deps (paged ALWAYS — an absent page is the default 256 KB tail; remote-aware; grok unpaged) + `model`/`effort`, `version: 1`. No known session id ⇒ no cwd fallback (it would pick the cwd's newest transcript, possibly another node's) ⇒ `found:false`. |
+| `chat.status` | `{nodeId}` | `{status: ChatStatus}` | the renderer's agent-status entry (`state` null = unknown, `held`, hibernated/paused/dropped/sessionEnded) + `structuredAnswers` = the held ticket is in main's structured-ticket ledger (script revision ≥ 5). |
+| `chat.send` | `{nodeId, text}` | `{result: 'sent' \| 'refused' \| 'pasted-not-submitted'}` | text capped at 64000 UTF-16 units RAW, then ESC + C0/C1 stripped (`\n`, `\t` kept; `sanitizeChatText`); the renderer runs the ⌘M composer's gate at send time (`chatSendRefusal` = `agentProcessInPane` + state ∈ {done, unknown}) plus "no held request", then `pty.sendText`. `'sent'` only for `sendText === true`. |
+| `agent.answer` | `{nodeId, pendingId, answer}` | `{ok: boolean}` | `answerHeldPermission` with the node's own I/O (local fs, or the SSH project's ControlMaster — the same `heldPermissionIoFor` the desktop answer path uses): validated against the pending request file, structured-ticket gated, no `setMode auto`. Success emits the same optimistic "answered" event. |
 
-Limits: page ≤ 5 MB (existing clamp), text ≤ 64K chars, answer ≤ 64K chars. Unknown verb on an older
-desktop → the phone shows "Update nodeterm on your computer".
+Refusals are `respond(id, false, {message})`, with these exact strings:
+
+| message | when |
+|---|---|
+| `<verb> is not served on this host.` | a desktop without the ops (pre-feature, or an unwired context) |
+| `Invalid node id.` | `nodeId` missing / not a string / over `REF_MAX_LEN` / contains a C0/C1 control char |
+| `Unknown node.` | the host has no such node (`chat.page`, `chat.status`, `chat.send`) |
+| `Invalid page.` | `before` / `maxBytes` rejected by `normalizeChatPage` (checked before any read) |
+| `Could not read the transcript.` | the page read failed (never an empty page standing in for it) |
+| `The desktop window is not available.` | `chat.status`: the renderer did not answer within 3 s (or there is no window) — never a guessed state |
+| `Text too long.` | `chat.send` raw text over 64000 UTF-16 units |
+| `chat.send requires non-empty text.` | nothing left after stripping control chars and whitespace |
+| `Invalid pending id.` | `agent.answer` `pendingId` fails `isValidPendingId` |
+
+Fail-closed rules: a `chat.send` whose renderer does not START within 3 s is refused unsent (the
+query carries `startBy`; a late renderer refuses rather than typing), a started send gets 15 s to
+report and is `'refused'` past it (the one residual race — the text may still land); a throwing send
+is `'refused'`, a throwing answer is `{ok:false}`. `agent.answer` for an unknown node is `{ok:false}`
+(no I/O touched). Limits: page ≤ 5 MB (existing clamp), chat text ≤ 64000, answer text ≤ 8000
+(`ANSWER_TEXT_MAX_CHARS`, applied by `buildPermissionDecision`). Unknown verb on an older desktop →
+`Unknown method: chat.page` → the phone shows "Update nodeterm on your computer". Server Edition:
+N/A (it serves no phone relay; its bridge subscription is inert).
 
 ### 3.3 SSH producer (phone, `nodeterm-ios`)
 

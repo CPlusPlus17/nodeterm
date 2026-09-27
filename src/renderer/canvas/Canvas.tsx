@@ -391,6 +391,7 @@ import {
 } from '../lib/explorerPinHint'
 import { useProjects } from '../state/projects'
 import { useAgentStatus } from '../state/agentStatus'
+import { hostChatSend, hostChatStatus } from '../lib/hostChatQuery'
 import { useLaunchDelivery } from '../state/launchDelivery'
 import { useBrowserLease, drivingNodeIds } from '../state/browserLease'
 import { useTerminalFocus } from '../state/terminalFocus'
@@ -9934,6 +9935,29 @@ export function Canvas() {
       // trace; the security decision main makes never reads it.
       const answer = answerBrowserResolve(owner as unknown as BrowserResolveProject | undefined, sourceNodeId, browserNodeId)
       api.sendBrowserControlResolveResult({ requestId, ...answer })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // The phone Chat verbs' renderer round-trip (main/remote/host-chat.ts). Main resolved the node
+  // host-side and asks the two things only this renderer owns: the node's agent status, and — for
+  // a send — the ⌘M composer's own gate, run against the store AT SEND TIME before `sendText`.
+  // Pure rules in lib/hostChatQuery.ts. Desktop only: the bridges' subscription is inert.
+  useEffect(() => {
+    return api.onHostChatQuery((q) => {
+      if (q.kind === 'status') {
+        api.sendHostChatReply({
+          requestId: q.requestId,
+          kind: 'status',
+          status: hostChatStatus(useAgentStatus.getState().byId[q.nodeId])
+        })
+        return
+      }
+      void hostChatSend(q, {
+        getStatus: (id) => useAgentStatus.getState().byId[id],
+        sendText: (id, text) => api.pty.sendText(id, text),
+        now: Date.now
+      }).then((result) => api.sendHostChatReply({ requestId: q.requestId, kind: 'send', result }))
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])

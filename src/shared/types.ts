@@ -8,6 +8,7 @@ import type { KeybindingOverrides, TerminalShortcutPolicy } from './keybindings'
 import type { NormalizedAgentEvent } from './agents/normalize'
 import type { PaneOwner } from './agents/pane-owner-predicate'
 import type { AnswerPermissionPayload, ChatQuestion } from './agents/permission-answer'
+import type { HostChatQuery, HostChatReply } from './mobile-chat'
 import type { AgentId, AgentPermissionMode, BuiltinAgentId, PromptInjectionMode } from './agents/config'
 import type { ControlConfirmWaivers } from './control-confirm'
 import type { AgentMessageDeliverRequest, AgentMessageReply } from './agents/agent-messaging'
@@ -3858,6 +3859,13 @@ export interface NodeTerminalApi {
     sourceTitle?: string
     browserTitle?: string
   }): void
+  /** The phone Chat verbs' round-trip (main/remote/host-chat.ts): main asks this renderer for a
+   *  node's chat status, or to send a phone message through the ⌘M composer's own gate. Desktop
+   *  only — the phone relay host lives in the Electron main process; the browser and relay bridges
+   *  subscribe to nothing. */
+  onHostChatQuery(listener: (q: HostChatQuery) => void): () => void
+  /** Answer a `onHostChatQuery` request. */
+  sendHostChatReply(reply: HostChatReply): void
   /** Agent messaging (the `send`/`reply` control verbs): run one delivery in main, where the
    *  scope check, the per-project switch, flow control and the pane probes all live. The reply is
    *  already rendered as a control reply — Canvas forwards it verbatim. */

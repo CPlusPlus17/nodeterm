@@ -34,6 +34,15 @@ import { PtyManager, type DetachedSinks } from '../../core/pty-manager'
 import * as fsOps from '../../core/fs-ops'
 import { TITLE_MAX, type RemoteNodeInput } from '../../core/project-node-append'
 import { parseCardLabelEdit, type CardLabelEdit } from '../../core/project-kanban-write'
+import { isValidPendingId } from '../../core/agents/pending-approvals'
+import { normalizeChatPage } from '../../shared/chat-page'
+import {
+  CHAT_SEND_TEXT_MAX,
+  sanitizeChatText,
+  type ChatPage,
+  type ChatSendResult,
+  type ChatStatus
+} from '../../shared/mobile-chat'
 import { getStoredEntitlement, isPremium } from '../../core/license'
 import { publicKeyToB64, type KeyPair } from './e2ee'
 import { loadOrCreateHostKeyPair, HostKeyLockedError } from './host-identity'
@@ -179,6 +188,29 @@ export interface HostKanbanOps {
   ): Promise<{ edited: boolean; labels: KanbanLabel[]; cardLabelIds: string[] } | null>
 }
 
+/**
+ * The phone's Chat screen (docs/mobile-chat-view.md §3.2): `chat.page` / `chat.status` /
+ * `chat.send` / `agent.answer`. The phone sends ONLY a node id (plus paging / text / answer);
+ * everything about the node — cwd, account, agent, session id, transcript path, SSH routing — is
+ * resolved host-side inside the ops from the desktop's own registry, because node ids are
+ * attacker-controllable and a phone-supplied path must never be trusted. Absent ⇒ every verb
+ * answers an honest "not served" (a pre-feature host, and every pre-feature test fake).
+ */
+export interface HostChatOps {
+  /** One page of the node's transcript. `null` ⇒ the host does not know this node. Rejects when
+   *  the read failed (never an empty page standing in for a failure). */
+  page(nodeId: string, rawPage: unknown): Promise<ChatPage | null>
+  /** The node's agent state + held request. `null` ⇒ unknown node. Rejects when the desktop
+   *  window did not answer — never a guessed state. */
+  status(nodeId: string): Promise<ChatStatus | null>
+  /** Type `text` (already stripped of control chars) into the node's pane through the desktop's
+   *  own send gate. Only `'sent'` means Enter was confirmed. */
+  send(nodeId: string, text: string): Promise<ChatSendResult | 'unknown-node'>
+  /** Answer the node's held request (`answerHeldPermission`: validated against the pending
+   *  request file, structured-ticket gated). `false` = nothing was written. */
+  answer(nodeId: string, pendingId: string, answer: unknown): Promise<boolean>
+}
+
 interface Stream {
   sessionId: string
   /** The node id (tmux persistKey) this stream attached to. The ONLY tmux target a client can
@@ -263,7 +295,10 @@ export function createHostHandlers(
   nodeActions?: HostNodeActions,
   // Kanban board writes on the phone's behalf (`projects.ensureBoard` / `projects.setCardColumn`).
   // Absent ⇒ the verbs answer an honest "not served".
-  kanban?: HostKanbanOps
+  kanban?: HostKanbanOps,
+  // The phone's Chat screen (`chat.page` / `chat.status` / `chat.send` / `agent.answer`).
+  // Absent ⇒ the verbs answer an honest "not served".
+  chat?: HostChatOps
 ): HostHandlers {
   // streamId -> Stream. PTY callbacks close over their own `streamId` directly, so no
   // reverse (sessionId -> streamId) index is needed.
@@ -782,6 +817,85 @@ export function createHostHandlers(
     socket.respond(req.id, true, {})
   }
 
+  /**
+   * The phone Chat verbs. Same node-id envelope as `handleNodeAction` (REF_MAX_LEN, no control
+   * chars) — the id is the ONLY thing about the node the phone supplies. Each op resolves the node
+   * itself and answers "unknown" for a node the host has not got, which is refused here rather than
+   * answered with an empty success.
+   */
+  function handleChat(req: RpcRequest): void {
+    const fail = (message: string): void => socket.respond(req.id, false, { message })
+    if (!chat) {
+      fail(`${req.method} is not served on this host.`)
+      return
+    }
+    const p = asRecord(req.params)
+    const nodeId = str(p.nodeId)
+    // eslint-disable-next-line no-control-regex -- refusing control chars is the point
+    if (!nodeId || nodeId.length > REF_MAX_LEN || /[\x00-\x1f\x7f-\x9f]/.test(nodeId)) {
+      fail('Invalid node id.')
+      return
+    }
+    switch (req.method) {
+      case 'chat.page': {
+        // Only the two paging fields cross; validated HERE (normalizeChatPage throws on a bad
+        // `before`, which reaches a remote shell line on the SSH leg) so a refusal never costs a read.
+        const rawPage = { ...(p.before !== undefined ? { before: p.before } : {}), ...(p.maxBytes !== undefined ? { maxBytes: p.maxBytes } : {}) }
+        try {
+          normalizeChatPage(rawPage)
+        } catch {
+          fail('Invalid page.')
+          return
+        }
+        void chat
+          .page(nodeId, rawPage)
+          .then((page) => (page ? socket.respond(req.id, true, { page }) : fail('Unknown node.')))
+          .catch(() => fail('Could not read the transcript.'))
+        return
+      }
+      case 'chat.status':
+        void chat
+          .status(nodeId)
+          .then((status) => (status ? socket.respond(req.id, true, { status }) : fail('Unknown node.')))
+          .catch(() => fail('The desktop window is not available.'))
+        return
+      case 'chat.send': {
+        const raw = str(p.text) ?? ''
+        // The cap is on the RAW text (what crossed the wire), in UTF-16 units like every text cap.
+        if (raw.length > CHAT_SEND_TEXT_MAX) {
+          fail('Text too long.')
+          return
+        }
+        // ESC + C0/C1 stripped (\n and \t kept): a payload must never become a control sequence.
+        const text = sanitizeChatText(raw)
+        if (!text.trim()) {
+          fail('chat.send requires non-empty text.')
+          return
+        }
+        void chat
+          .send(nodeId, text)
+          .then((result) =>
+            result === 'unknown-node' ? fail('Unknown node.') : socket.respond(req.id, true, { result })
+          )
+          // A send that threw is a refusal, never "sent": the phone keeps the draft.
+          .catch(() => socket.respond(req.id, true, { result: 'refused' }))
+        return
+      }
+      case 'agent.answer': {
+        const pendingId = str(p.pendingId)
+        if (!pendingId || !isValidPendingId(pendingId)) {
+          fail('Invalid pending id.')
+          return
+        }
+        void chat
+          .answer(nodeId, pendingId, p.answer)
+          .then((ok) => socket.respond(req.id, true, { ok: ok === true }))
+          .catch(() => socket.respond(req.id, true, { ok: false }))
+        return
+      }
+    }
+  }
+
   return {
     onRpc(req) {
       switch (req.method) {
@@ -826,6 +940,12 @@ export function createHostHandlers(
         case 'projects.setCardColumn':
         case 'projects.editCardLabels':
           handleKanban(req)
+          break
+        case 'chat.page':
+        case 'chat.status':
+        case 'chat.send':
+        case 'agent.answer':
+          handleChat(req)
           break
         case 'node.wake':
         case 'node.refresh':
@@ -1076,6 +1196,8 @@ export interface HostSessionOptions {
   /** Kanban board writes for the phone's Board sheet (`projects.ensureBoard` /
    *  `projects.setCardColumn`). Optional: absent ⇒ the verbs answer an honest "not served". */
   kanban?: HostKanbanOps
+  /** The phone's Chat screen verbs (`chat.*` / `agent.answer`). Optional: absent ⇒ "not served". */
+  chat?: HostChatOps
   /** Extra fs/git jail roots beyond the shared canvas's node cwds — production passes the
    *  workspace's local project cwds: the phone browses EVERY project over `projects.list`, so a
    *  canvas-only jail denied whichever project the desktop didn't happen to have focused. */
@@ -1200,7 +1322,8 @@ export function connectHostSession(opts: HostSessionOptions): HostSession {
     opts.destroyNode,
     opts.remoteViewer,
     opts.nodeActions,
-    opts.kanban
+    opts.kanban,
+    opts.chat
   )
   canvasSync = createHostCanvasSync(socket, opts.applyMutation)
   unsubCanvas = opts.subscribeCanvas(() => scheduleBroadcast())
@@ -1231,6 +1354,8 @@ export interface HostBridgeDeps {
   nodeActions?: HostNodeActions
   /** Kanban board writes for the phone's Board sheet — see main/index.ts's WorkspaceStore wiring. */
   kanban?: HostKanbanOps
+  /** The phone's Chat screen verbs — see main/remote/host-chat.ts and main/index.ts's wiring. */
+  chat?: HostChatOps
   /** Workspace-level jail roots (local project cwds) merged with the canvas node cwds. */
   workspaceRoots?: () => string[]
 }
@@ -1305,6 +1430,7 @@ export function initRemoteHost(
       remoteViewer: bridge.remoteViewer,
       nodeActions: bridge.nodeActions,
       kanban: bridge.kanban,
+      chat: bridge.chat,
       extraRoots: bridge.workspaceRoots,
       // Typing attribution: this session's input frames are this phone's keystrokes.
       getClientId: () => phone.id(),
