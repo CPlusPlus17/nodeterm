@@ -6484,6 +6484,22 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   `main/index.ts` intercepts it in `before-input-event` and forwards `app:zoom-actual-size`, which
   re-asks the same refusals. Server Edition needs no intercept (no menu; Chrome/Firefox hand ⌘0 to
   the page) and stubs the subscription.
+- **Per-terminal font size** (`renderer/terminal/terminal-font-zoom.ts`, issue #915). Opt-in
+  `settings.terminalFontZoomKeys` (Settings → Terminal, default OFF). On, with a terminal focused:
+  ⌘+ / ⌘− (Ctrl off-mac — exactly one primary, since Ctrl+− on mac is readline undo) step THAT
+  node's `data.terminalFontSize` by 1 within the global field's 8–28 range; ⌘0 clears it back to the
+  global `fontSize`. + and − match on `e.key` (German `+` key), 0 on `e.code` like the canvas chord.
+  Before #915 ⌘+ / ⌘− did NOTHING (no menu zoom roles, React Flow's key zoom is off; only
+  webview guests zoom on them) and ⌘0 in a terminal was claimed by main and then refused. Off, or
+  with no terminal focused, every key behaves as before. The override is persisted per node
+  (`normalizeTerminalFontSize` on both sides of `nodeStatesToFlow`/`flowToNodeStates`) and layered
+  by `useXtermVisualSettings(projectId, fontSizeOverride)` — the SAME path for the canvas node and
+  the card modal (`ModalSpawn.terminalFontSize`); the settings preview passes none. Font size is
+  cell geometry, so `applyLiveOptions` reports `metricsChanged` and both surfaces re-fit and report
+  the new grid exactly as for a global font change. **One writer:** both xterm key handlers and the
+  forwarded desktop ⌘0 (resolved from focus via `data-font-zoom-node` on the xterm host) dispatch
+  `nodeterm:terminal-font-zoom`; Canvas applies it (`nextTerminalFontSizeOverride`, `markDirty`).
+  The toolbar / dock +/− buttons stay CANVAS zoom (they have no focused terminal to act on).
 - **"Go to node" (`goToNode` → `frameNode`)** — the one camera-travel path (notification click,
   sessions sidebar, ⌘K jump, presence travel, minimap double-click, double-click focus).
   **It computes the viewport itself and applies it with `setViewport`. It must never go through

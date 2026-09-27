@@ -101,6 +101,11 @@ import {
   type SessionLife
 } from '../terminal/terminal-config'
 import { useXtermVisualSettings } from '../terminal/useXtermVisualSettings'
+import {
+  FONT_ZOOM_NODE_ATTR,
+  requestTerminalFontZoom,
+  terminalFontZoomAction
+} from '../terminal/terminal-font-zoom'
 import { ensureProjectLaunchInfo } from '../state/projectLaunchInfo'
 import { loseWebglContexts, registerWebglClient, type WebglClientHandle } from '../terminal/webgl-budget'
 import { quantizeCharSize } from '../terminal/char-size-quantize'
@@ -1349,7 +1354,9 @@ export function TerminalNode({
   // One shallow-compared subscription for the whole appearance slice — see useXtermVisualSettings.
   // Scoped to the OWNING project so its `terminal.theme` / `terminal.fontFamily` layer over the
   // global settings for this node, and for no other project's nodes.
-  const visual = useXtermVisualSettings(owningProjectId())
+  // `data.terminalFontSize` is this node's own ⌘+ / ⌘− size (issue #915), layered last by the hook
+  // so the card modal (which passes the same value) re-options through the identical path.
+  const visual = useXtermVisualSettings(owningProjectId(), data.terminalFontSize)
   // Glass terminals (Settings → Appearance): xterm paints no background and the node supplies a
   // translucent tint of THIS node's effective theme (lib/useTerminalGlass.ts).
   const { glass, tint, vars: glassVars } = useTerminalGlass(visual.terminalTheme)
@@ -3340,6 +3347,22 @@ export function TerminalNode({
     // dispatcher that honors the policy for every other chord, so it owes the check itself.
     // `liveProjectJumpTarget` is the same decision Canvas's handler makes.
     term.attachCustomKeyEventHandler((e) => {
+      // ⌘+ / ⌘− / ⌘0 → THIS terminal's font size (issue #915), only when the user opted in
+      // (`terminalFontZoomKeys`). First, and swallowed: off-mac xterm would otherwise write ^_ for
+      // Ctrl+− to the pty, and a prevented event keeps the window dispatcher's canvas ⌘0 out of it.
+      // Canvas applies the step (the one writer — see terminal-font-zoom.ts); the live re-option
+      // effect below then re-fits and reports the new grid like any font change. The desktop ⌘0
+      // never arrives here (main's before-input-event claims it); Canvas resolves that one from
+      // focus via FONT_ZOOM_NODE_ATTR on the xterm host.
+      const fontZoom = terminalFontZoomAction(e, {
+        enabled: useSettings.getState().settings.terminalFontZoomKeys,
+        isMac
+      })
+      if (fontZoom) {
+        e.preventDefault()
+        requestTerminalFontZoom(id, fontZoom)
+        return false
+      }
       const ownsProjectJump =
         terminalShortcutPolicy() !== 'terminal-first' && liveProjectJumpTarget(e) !== null
       const registryOwns = terminalChordBubbles(
@@ -6405,6 +6428,7 @@ export function TerminalNode({
         <div
           className={`term-node__xterm nodrag nowheel${co.letterbox ? ' letterboxed' : ''}`}
           ref={bodyRef}
+          {...{ [FONT_ZOOM_NODE_ATTR]: id }}
         />
         {uploadNote && (
           <div className={`term-node__upload${uploadNote.failed ? ' failed' : ''}`}>

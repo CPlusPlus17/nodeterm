@@ -499,6 +499,10 @@ export interface CanvasNodeState {
   /** Parent group node id, if this node belongs to a group frame. */
   parentId?: string
   // terminal-only
+  /** This terminal's own font size (issue #915), set with ⌘+ / ⌘− when
+   *  `settings.terminalFontZoomKeys` is on; absent = follow the global `fontSize`. Hand-editable,
+   *  so every reader goes through `normalizeTerminalFontSize` (renderer/terminal/terminal-font-zoom). */
+  terminalFontSize?: number
   shell?: string
   cwd?: string
   /** Which agent runs in this terminal node (claude/codex/gemini/custom). */
@@ -1874,6 +1878,13 @@ export interface Settings {
    * terminal. Logic: `renderer/terminal/copy-on-select.ts`.
    */
   copyOnSelect: boolean
+  /** ⌘+ / ⌘− / ⌘0 (Ctrl off-mac) change the FOCUSED terminal's own font size instead of doing
+   *  nothing / zooming the canvas (issue #915). The size is stored per node
+   *  (`CanvasNodeState.terminalFontSize`); ⌘0 clears it back to `fontSize`. OFF by default: off-mac
+   *  the chord is Ctrl+−, which a focused terminal passes to the shell today (readline undo). With
+   *  it off, and whenever no terminal has focus, the keys behave exactly as before. See
+   *  renderer/terminal/terminal-font-zoom.ts. */
+  terminalFontZoomKeys: boolean
   /** Plain mouse wheel zooms the canvas (no Cmd/Ctrl needed). On macOS a two-finger trackpad
    *  scroll keeps panning independently (see canvas/wheel-gesture.ts), so mouse and trackpad
    *  coexist; elsewhere this still trades away scroll-to-pan, so it stays opt-in. */
@@ -2245,6 +2256,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openMarkdownPreviewMigrated: true,
   terminalMiddleClickPaste: false,
   copyOnSelect: false,
+  terminalFontZoomKeys: false,
   wheelZoom: false,
   wheelZoomSpeed: 1,
   trackpadPan: true,

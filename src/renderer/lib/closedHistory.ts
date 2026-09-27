@@ -139,6 +139,7 @@ export function stateToReopenSnapshot(entry: ClosedSessionEntry): ReopenNodeSnap
       hideFanout: n.hideFanout,
       // Re-validated, not copied: this entry was read from hand-editable workspace.json.
       icon: normalizeNodeIcon(n.icon),
+      terminalFontSize: n.terminalFontSize,
       shell: n.shell,
       cwd: n.cwd,
       text: n.text,

@@ -36,6 +36,7 @@ import { normalizeNodeIcon } from '@shared/node-icon'
 import { normalizeIssueRef, type IssueRef } from '@shared/github-issue-ref'
 import { isSafeNodeId } from '@shared/safe-id'
 import { normalizePendingLaunch } from '@shared/pending-launch-shape'
+import { normalizeTerminalFontSize } from '../terminal/terminal-font-zoom'
 import { useSettings } from './settings'
 
 // Re-exported so Canvas (and anything else in the renderer) keeps importing it from here, while the
@@ -87,6 +88,8 @@ export interface NodeData {
   collapsed?: boolean
   /** Agent nodes only: when true, this node's subagent/loop fan-out cards are hidden. */
   hideFanout?: boolean
+  /** Terminal nodes: own font size (issue #915) — see CanvasNodeState.terminalFontSize. */
+  terminalFontSize?: number
   /** Expanded height to restore when un-collapsing (kept out of the persisted size). */
   expandedHeight?: number
   /**
@@ -1967,6 +1970,9 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         tags: n.tags,
         collapsed,
         hideFanout: n.hideFanout,
+        // Validated at the same seam as the icon below: project.json is hand-editable and shared,
+        // and xterm must never be handed a font size outside the Settings range (issue #915).
+        terminalFontSize: normalizeTerminalFontSize(n.terminalFontSize),
         // Validated HERE, at the seam where a git-shared, hand-editable project file becomes live
         // node data — so every surface that renders an icon gets a value this module vouched for
         // rather than each one re-deciding. An unrecognized icon becomes no icon.
@@ -2054,6 +2060,8 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         tags: n.data.tags,
         collapsed: n.data.collapsed,
         hideFanout: n.data.hideFanout,
+        // Re-validated on the way OUT, same reasoning as the icon below (issue #915).
+        terminalFontSize: normalizeTerminalFontSize(n.data.terminalFontSize),
         // React Flow's node `data` is `Record<string, unknown>`, so the icon comes back out
         // untyped. Re-validating on the way OUT (not just on the way in) also means a value a
         // peer canvas mutation or a future caller put on live node data cannot be written to the
