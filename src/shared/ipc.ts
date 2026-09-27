@@ -529,6 +529,11 @@ export const IPC = {
   // does the CDP work itself; the renderer never runs a CDP command.
   browserControlResolve: 'browser:control-resolve',
   browserControlResolveResult: 'browser:control-resolve-result',
+  // The phone Chat verbs' renderer round-trip (main/remote/host-chat.ts): main asks the renderer —
+  // which owns the agent-status store and the ⌘M send gate — for a node's chat status, or to send
+  // a phone message through that gate; the renderer answers on the reply channel.
+  hostChatQuery: 'host:chat-query',
+  hostChatReply: 'host:chat-reply',
   remoteHostStart: 'remote:host:start',
   remoteHostStop: 'remote:host:stop',
   // Connection approval gate: main → renderer when a client finishes the handshake (carries the

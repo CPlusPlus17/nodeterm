@@ -127,6 +127,91 @@ const textOfMsg = (m: { parts: Array<{ kind: string; text?: string }> }): string
   m.parts.map((p) => p.text ?? '').join('')
 
 describe('parseChatWindow — pure window parsing', () => {
+  it('a paged window reports the newest assistant model and effort', () => {
+    const lines =
+      [
+        JSON.stringify({
+          type: 'assistant',
+          timestamp: '2026-09-25T19:37:29.097Z',
+          effort: 'medium',
+          message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'a' }] }
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          timestamp: '2026-09-25T19:37:30.078Z',
+          effort: 'xhigh',
+          message: { model: 'claude-fable-5-1', content: [{ type: 'text', text: 'b' }] }
+        })
+      ].join('\n') + '\n'
+    const r = parseChatWindow(Buffer.from(lines), 0)
+    expect(r.model).toBe('claude-fable-5-1')
+    expect(r.effort).toBe('xhigh')
+  })
+
+  it('a window with no assistant record reports neither (keys absent, not undefined-valued)', () => {
+    const r = parseChatWindow(Buffer.from(JSON.stringify({ type: 'user', message: { content: 'hi' } }) + '\n'), 0)
+    expect(r.model).toBeUndefined()
+    expect(r.effort).toBeUndefined()
+    expect('model' in r).toBe(false)
+    expect('effort' in r).toBe(false)
+  })
+
+  // ONE record answers both fields — the newest non-synthetic assistant record — never carried
+  // forward from an older one (same rule as `parseLatestUsage` in context-tail.ts).
+  const rec = (o: object): string => JSON.stringify({ type: 'assistant', ...o }) + '\n'
+
+  it('model/effort: the newest record without an effort reports NO effort (never an older one)', () => {
+    const r = parseChatWindow(
+      Buffer.from(
+        rec({ effort: 'high', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'a' }] } }) +
+          rec({ message: { model: 'claude-fable-5', content: [{ type: 'text', text: 'b' }] } })
+      ),
+      0
+    )
+    expect(r.model).toBe('claude-fable-5')
+    expect('effort' in r).toBe(false)
+  })
+
+  it('model/effort: a <synthetic> record after a real one is skipped entirely', () => {
+    const r = parseChatWindow(
+      Buffer.from(
+        rec({ effort: 'high', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'a' }] } }) +
+          // Claude writes an API-error line as model `<synthetic>` with no effort — not a model.
+          rec({ message: { model: '<synthetic>', content: [{ type: 'text', text: 'API Error' }] } })
+      ),
+      0
+    )
+    expect(r.model).toBe('claude-opus-5')
+    expect(r.effort).toBe('high')
+  })
+
+  it('model/effort: over-long or non-string values on the newest record are absent, not an older value', () => {
+    for (const bad of [
+      { effort: 'x'.repeat(101), message: { model: 'm'.repeat(101), content: [] } },
+      { effort: 7, message: { model: 42, content: [] } }
+    ]) {
+      const r = parseChatWindow(
+        Buffer.from(
+          rec({ effort: 'high', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'a' }] } }) +
+            rec(bad)
+        ),
+        0
+      )
+      expect('model' in r).toBe(false)
+      expect('effort' in r).toBe(false)
+    }
+  })
+
+  it('model/effort come only from records INSIDE the window (a partial first line is not read)', () => {
+    const l1 = JSON.stringify({ type: 'assistant', effort: 'low', message: { model: 'old', content: [] } }) + '\n'
+    const l2 = JSON.stringify({ type: 'user', message: { content: 'hi' } }) + '\n'
+    const file = Buffer.from(l1 + l2)
+    const start = Buffer.byteLength(l1) - 5
+    const r = parseChatWindow(file.subarray(start), start)
+    expect(r.model).toBeUndefined()
+    expect(r.effort).toBeUndefined()
+  })
+
   it('a window starting at 0 parses every line and reports it reached the start', () => {
     const file = Buffer.from(said('user', 'a') + said('assistant', 'b'))
     const r = parseChatWindow(file, 0)
@@ -460,5 +545,37 @@ describe('readSessionName — unchanged transcripts are not re-read', () => {
     expect(await readSessionName(sid)).toBe('First')
     fs.appendFileSync(file, custom('Second') + '\n')
     expect(await readSessionName(sid)).toBe('Second')
+  })
+})
+
+describe('parseChatWindow — a null record or null content element is skipped, never fatal', () => {
+  // `JSON.parse('null')` succeeds, and so does `[null]` inside `content`: both used to throw on
+  // the property read that followed (outside the try), failing the WHOLE page — while the Swift
+  // port skips the line. A transcript is written by another program; one bad line must cost one line.
+  it('skips a top-level null / non-object record and keeps the rest', () => {
+    const lines = ['null', '42', '"str"', '[1,2]', JSON.stringify({ type: 'user', message: { content: 'kept' } })]
+    const r = parseChatWindow(Buffer.from(lines.join('\n') + '\n'), 0)
+    expect(r.messages.map(textOfMsg)).toEqual(['kept'])
+  })
+  it('skips null / non-object content elements and keeps the others', () => {
+    const a = JSON.stringify({
+      type: 'assistant',
+      message: { content: [null, 7, 'x', { type: 'text', text: 'hello' }, { type: 'tool_use', id: 't1', name: 'Bash', input: null }] }
+    })
+    const u = JSON.stringify({ type: 'user', message: { content: [null, { type: 'tool_result', tool_use_id: 't1', content: 'ok' }, { type: 'text', text: 'hi' }] } })
+    const r = parseChatWindow(Buffer.from(a + '\n' + u + '\n'), 0)
+    expect(r.messages.map((m) => m.role)).toEqual(['assistant', 'user'])
+    expect(r.messages[0].parts.map((p) => p.kind)).toEqual(['text', 'tool'])
+    expect(r.messages[1].parts).toEqual([{ kind: 'text', text: 'hi' }])
+  })
+  it('a null message is not fatal either (legacy read too)', () => {
+    expect(parseChatMessages(['{"type":"assistant","message":null}', 'null', '{"type":"user","message":{"content":"x"}}']).length).toBe(1)
+  })
+})
+
+describe('parseTranscriptLines — the find-bar index skips a null record / element too', () => {
+  it('indexes the good lines around a null', () => {
+    const text = ['null', JSON.stringify({ type: 'assistant', message: { content: [null, { type: 'text', text: 'found' }] } })].join('\n')
+    expect(parseTranscriptLines(text)).toEqual([{ role: 'assistant', text: 'found' }])
   })
 })

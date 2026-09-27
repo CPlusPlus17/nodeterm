@@ -834,6 +834,12 @@ const api: NodeTerminalApi = {
     return () => ipcRenderer.removeListener(IPC.browserControlResolve, handler)
   },
   sendBrowserControlResolveResult: (payload) => ipcRenderer.send(IPC.browserControlResolveResult, payload),
+  onHostChatQuery: (listener) => {
+    const handler = (_e: unknown, q: Parameters<typeof listener>[0]) => listener(q)
+    ipcRenderer.on(IPC.hostChatQuery, handler)
+    return () => ipcRenderer.removeListener(IPC.hostChatQuery, handler)
+  },
+  sendHostChatReply: (reply) => ipcRenderer.send(IPC.hostChatReply, reply),
   agentMessage: {
     deliver: (req) => ipcRenderer.invoke(IPC.agentMessageDeliver, req)
   }

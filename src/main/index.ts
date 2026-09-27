@@ -132,7 +132,7 @@ import {
   isValidPendingId,
   syntheticAnsweredEvent
 } from '../core/agents/pending-approvals'
-import { answerHeldPermission, type HeldPermissionIo } from '../core/agents/permission-decision'
+import { answerHeldPermission, isStructuredTicket, type HeldPermissionIo } from '../core/agents/permission-decision'
 import type { AnswerPermissionPayload } from '../shared/agents/permission-answer'
 import { setMainWindow, getMainWindow, sendToMain, closeAction, createCrashReloadPolicy } from './main-window'
 import {
@@ -185,7 +185,9 @@ import {
   sessionNameSweepEntries,
   nodeState,
   nodeSessionName,
-  workingNodes
+  workingNodes,
+  mirrorEntry,
+  pendingTicketsFor
 } from '../core/agent-status-mirror'
 import { paneOwnerProject } from '../core/agents/pane-ownership'
 import { createPushNotify, createLiveUpdatePush } from '../core/push-notify'
@@ -227,9 +229,12 @@ import {
   parseLocatedTranscript,
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
-import { registerTranscriptIpc, resolveTranscript } from '../core/transcript-ipc'
+import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
+import { createHostChat, mirrorChatSendRefusal } from './remote/host-chat'
+import type { ChatSendOutcome, HostChatReply, RendererChatStatus } from '../shared/mobile-chat'
 import {
   createReadRemotePage,
+  remoteTargetForNode,
   forgetLocatedRef,
   rememberHookRef,
   type RemoteTranscriptRefCache
@@ -2667,7 +2672,17 @@ app.whenReady().then(async () => {
   // Both read channels now live in core (the Server Edition serves the very same handlers); the
   // ONE thing this shell adds is the remote leg, which needs a ControlMaster. `null` means "not a
   // remote session", which is the signal for core to take its local path.
-  registerTranscriptIpc({
+  // Named so the phone Chat verbs (hostBridge.chat) read through the SAME deps as the ⌘M panel.
+  // The master a remote transcript read goes over: the live pty's, else the node's SSH PROJECT's —
+  // an unmounted node (idle tab, after a restart) has no pty, and resolving it only through the pty
+  // read it as "not remote" and sent the read to THIS machine's disk.
+  const sshTargetForNode = (nodeId: string) =>
+    remoteTargetForNode(nodeId, {
+      live: (id) => ptyManager.sshRemoteForNode(id),
+      projectIdFor: (id) => workspaceStore.sshProjectIdForNode(id),
+      refForProject: (projectId) => sshProjectManager?.refForProject(projectId)
+    })
+  const transcriptIpcDeps: TranscriptIpcDeps = {
     pathFor: (sessionId) => contextTail.pathFor(sessionId),
     readRemote: async ({ sessionId, cwd, accountId, nodeId }) => {
       const ref = await remoteTranscriptRefFor(sessionId, cwd, accountId, nodeId)
@@ -2680,12 +2695,13 @@ app.whenReady().then(async () => {
     readRemotePage: createReadRemotePage({
       cache: remoteTranscriptRefs,
       refFor: ({ sessionId, cwd, accountId, nodeId }) =>
-        remoteTranscriptRefFor(sessionId, cwd, accountId, nodeId),
+        remoteTranscriptRefFor(sessionId, cwd, accountId, nodeId, nodeId ? sshTargetForNode(nodeId) : undefined),
       readPage: (ref, before, maxBytes) => remoteFile.readTranscriptPage(ref, before, maxBytes)
     }),
     remoteExists: async ({ sessionId, accountId, nodeId }) =>
       sessionId ? await remoteTranscriptPresence(sessionId, accountId, nodeId) : null
-  })
+  }
+  registerTranscriptIpc(transcriptIpcDeps)
 
   initTranscriptIndex(() => settingsStore.get().claudeAccounts ?? [])
   corePlatform.handle(IPC.transcriptSearch, (query: string) => searchTranscripts(query))
@@ -2788,20 +2804,24 @@ app.whenReady().then(async () => {
   // project: an SSH project's hook runs on the REMOTE host (write over its ControlMaster), a local
   // project's on THIS machine (write under os.homedir() — the hook uses $HOME, which may differ from
   // the project cwd). pendingId is validated before it is interpolated into any path/command.
+  // The held request's I/O for a node — shared with the phone's `agent.answer` (hostBridge.chat) so
+  // both answer paths reach the SAME host the same way.
+  const heldPermissionIoFor = (nodeId: string, pendingId: string): HeldPermissionIo => {
+    const sshProjectId = workspaceStore.sshProjectIdForNode(nodeId)
+    return sshProjectId && sshProjectManager
+      ? {
+          readPending: () => sshProjectManager!.readPendingRequest(sshProjectId, pendingId),
+          write: (content) => sshProjectManager!.writePendingAnswer(sshProjectId, pendingId, content)
+        }
+      : localHeldPermissionIo(pendingId, homedir())
+  }
   corePlatform.handle(IPC.agentAnswerPermission, async (payload: AnswerPermissionPayload) => {
     const { nodeId, pendingId } = payload ?? ({} as AnswerPermissionPayload)
     if (typeof nodeId !== 'string' || !isValidPendingId(pendingId)) return false
-    const sshProjectId = workspaceStore.sshProjectIdForNode(nodeId)
     // The ONE answer body both shells share (core/agents/permission-decision.ts): read the held
     // request on the host the agent runs on, validate + build the decision there, write it back.
     // A structured answer is refused without a readable request; the legacy words are not.
-    const io: HeldPermissionIo =
-      sshProjectId && sshProjectManager
-        ? {
-            readPending: () => sshProjectManager!.readPendingRequest(sshProjectId, pendingId),
-            write: (content) => sshProjectManager!.writePendingAnswer(sshProjectId, pendingId, content)
-          }
-        : localHeldPermissionIo(pendingId, homedir())
+    const io = heldPermissionIoFor(nodeId, pendingId)
     const res = await answerHeldPermission(pendingId, { decision: payload.decision, answer: payload.answer }, io)
     // Optimistic flip: on a successful write, emit the same synthetic "answered" transition the
     // held hook's second POST will produce, so the NEEDS YOU badge clears instantly instead of
@@ -4030,6 +4050,79 @@ app.whenReady().then(async () => {
         rename: (nodeId: string, title: string) => deliver(IPC.agentRenameNode, { nodeId, title })
       }
     })(),
+    // The phone's Chat screen (`chat.page` / `chat.status` / `chat.send` / `agent.answer`,
+    // main/remote/host-chat.ts). Everything about the node comes from THIS machine's records: the
+    // workspace store (cwd resolved as the canvas sees it, account, agent) and the status mirror
+    // (the live session id; the node's minted `agentSessionId` covers a restart). The page reads
+    // through the ⌘M panel's own deps, the answer through the desktop answer path's own I/O, and
+    // status / send ask the renderer, which owns the agent-status store and the send gate.
+    chat: createHostChat({
+      lookupNode: (nodeId) => {
+        const node = workspaceStore.getNodeResolved(nodeId)
+        if (!node) return null
+        const m = mirrorEntry(nodeId)
+        return {
+          cwd: node.cwd,
+          // The effective account for READERS (CLAUDE.md "Observed account"): the node's own
+          // binding, else the account its session was observed on.
+          accountId: node.accountId ?? m?.account?.accountId ?? undefined,
+          agentId: node.agentId ?? m?.agentId,
+          // Fallback only: host-chat asks the RENDERER's store first (what ⌘M reads).
+          sessionId: m?.sessionId ?? node.agentSessionId,
+          remote: workspaceStore.sshProjectIdForNode(nodeId) !== undefined
+        }
+      },
+      hostSendRefusal: (nodeId) => mirrorChatSendRefusal(mirrorEntry(nodeId)),
+      knownTickets: pendingTicketsFor,
+      readTranscript: (q, rawPage) => readChatTranscript(q, rawPage, transcriptIpcDeps),
+      answerIo: heldPermissionIoFor,
+      isStructuredTicket,
+      onAnswered: (nodeId, pendingId, decision) => {
+        const ev = syntheticAnsweredEvent(nodeId, pendingId, decision)
+        if (ev) emitAgentStatus(ev)
+      },
+      renderer: (() => {
+        const pending = new Map<string, (reply: HostChatReply) => void>()
+        ipcMain.on(IPC.hostChatReply, (e, reply: HostChatReply) => {
+          // Only the main window answers; a <webview> guest is a webContents in this process too.
+          // Resolved at receive time (getMainWindow), like the query below: a macOS window closed
+          // and re-created must keep answering. (Sibling nodeActions still use the captured `win`.)
+          const w = getMainWindow()
+          if (!w || w.isDestroyed() || e.sender !== w.webContents) return
+          const resolve = reply && typeof reply.requestId === 'string' ? pending.get(reply.requestId) : undefined
+          if (!resolve) return
+          pending.delete(reply.requestId)
+          resolve(reply)
+        })
+        const ask = (q: { kind: 'status'; nodeId: string; agentId?: string } | {
+          kind: 'send'; nodeId: string; agentId?: string; text: string; startBy: number
+        } | { kind: 'session'; nodeId: string }): Promise<HostChatReply | null> => {
+          const w = getMainWindow()
+          if (!w || w.isDestroyed()) return Promise.resolve(null)
+          const requestId = randomUUID()
+          // host-chat.ts races this against its own timeout; a reply that never comes leaves only
+          // this entry, dropped here when the race is lost.
+          const answered = new Promise<HostChatReply>((resolve) => pending.set(requestId, resolve))
+          w.webContents.send(IPC.hostChatQuery, { ...q, requestId })
+          const drop = setTimeout(() => pending.delete(requestId), 30_000)
+          return answered.finally(() => clearTimeout(drop))
+        }
+        return {
+          status: async (q: { nodeId: string; agentId?: string }): Promise<RendererChatStatus | null> => {
+            const r = await ask({ kind: 'status', ...q })
+            return r && r.kind === 'status' ? r.status : null
+          },
+          send: async (q: { nodeId: string; agentId?: string; text: string; startBy: number }): Promise<ChatSendOutcome | null> => {
+            const r = await ask({ kind: 'send', ...q })
+            return r && r.kind === 'send' ? { result: r.result, ...(r.reason ? { reason: r.reason } : {}) } : null
+          },
+          session: async (q: { nodeId: string }): Promise<{ sessionId?: string } | null> => {
+            const r = await ask({ kind: 'session', ...q })
+            return r && r.kind === 'session' ? { sessionId: r.sessionId } : null
+          }
+        }
+      })()
+    }),
     // Jail roots beyond the active canvas: the phone browses EVERY project (projects.list), so
     // its fs/git access spans every local project root — not just the tab the desktop happens
     // to have focused (that gap read as "cwd is outside the shared project roots" on the phone).

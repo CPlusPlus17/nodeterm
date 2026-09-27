@@ -1466,6 +1466,23 @@ export class WorkspaceStore {
    * `getNodeTitle`, which now delegates here.
    */
   getNode(nodeId: string): CanvasNodeState | undefined {
+    return this.findNode(nodeId)?.node
+  }
+
+  /**
+   * `getNode`, with the node's cwd as the CANVAS sees it: a local ref's project.json stores node
+   * cwds portable (`./sub`), and this resolves them against the project root exactly as
+   * `fileToProject` / `persistedCanvases` do. For callers that hand the cwd to a resolver keyed on
+   * the absolute path (the phone Chat verbs' transcript read). `getNode` keeps the stored form so
+   * its existing callers are unchanged.
+   */
+  getNodeResolved(nodeId: string): CanvasNodeState | undefined {
+    const hit = this.findNode(nodeId)
+    if (!hit) return undefined
+    return hit.root ? resolveNodes([hit.node], hit.root)[0] : hit.node
+  }
+
+  private findNode(nodeId: string): { node: CanvasNodeState; root?: string } | undefined {
     for (const e of this.index?.entries ?? []) {
       let nodes: CanvasNodeState[] | undefined
       if (e.project) nodes = e.project.nodes
@@ -1481,7 +1498,8 @@ export class WorkspaceStore {
         }
       }
       const node = nodes?.find((n) => n.id === nodeId)
-      if (node) return node
+      // Only a local ref's nodes come off the shared file in portable form.
+      if (node) return { node, root: !e.project && !e.cache && e.cwd ? e.cwd : undefined }
     }
     return undefined
   }

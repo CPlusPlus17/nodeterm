@@ -555,6 +555,10 @@ export function buildStubApi(): Omit<
     // resolve round-trip is inert here — the verb is refused by name before it reaches a handler.
     onBrowserControlResolve: noopUnsub,
     sendBrowserControlResolveResult: noop,
+    // The phone Chat verbs are served by the phone relay host, which lives only in the desktop
+    // main process — the Server Edition serves no phone relay, so nothing asks this renderer.
+    onHostChatQuery: noopUnsub,
+    sendHostChatReply: noop,
     // Messaging never runs in the browser: `onAgentControl` above is inert here, so no dispatch
     // can ever reach this. It answers the honest terminal refusal all the same, so a stray call
     // can never look like it delivered.

@@ -5457,6 +5457,39 @@ to the class, and no bare `.react-flow__viewport` rule carries `will-change`).
   `POST /v1/relay/host-token` / `/v1/relay/device` must admit deviceId (no-entitlement) mints, and
   the relay server may rate-limit free hosts independently — a client-side gate must NOT be
   reintroduced to work around a backend refusal (fix the backend policy instead).
+- **The phone's Chat screen verbs** (`chat.page` / `chat.status` / `chat.send` / `agent.answer`,
+  `host-service.ts` `handleChat` → `main/remote/host-chat.ts`, spec + exact error strings in
+  `docs/mobile-chat-view.md` §3.2). Four rules a refactor must not undo: (1) **the phone sends only a
+  node id**; cwd/account/agent/session are resolved from THIS machine's records
+  (`WorkspaceStore.getNodeResolved` + the mirror). The session id is asked of the RENDERER's
+  agent-status store first (what ⌘M reads; after a restart a hook-fed id lives only there), the
+  mirror / minted id only as a fallback; the cwd rides only for a REMOTE node with a known id, so a
+  local known-but-dead id — or no id at all — reads NOTHING rather than claude's cwd-newest fallback
+  (a stranger's session). An SSH-project node is read REMOTE-ONLY (`remoteOnly`): over its live
+  pty's master, else its PROJECT's (`remoteTargetForNode` — an idle tab or any node after a restart
+  has no pty, and resolving through the pty alone sent it to THIS machine's disk), and a remote read
+  that cannot happen is `unreadable` ⇒ "Could not read the transcript.", never `found:false`. Only
+  chat-capable agents are served (`canChat(capabilityAgentId(agent))`); (2) **the send gate is the host mirror's, then the renderer's** — refused
+  first when the mirror says working/waiting/blocked or holds a question/approval ticket (renderer
+  state is transient after a reload), then an IPC round-trip (`host:chat-query` /
+  `host:chat-reply`, sender-checked to the main window) answered from the agent-status store and the
+  ⌘M composer's `chatSendRefusal` at send time plus "no held request". A renderer that does not
+  answer FAILS CLOSED: status is an error; `'refused'` (with a `reason`) means nothing was typed
+  (no window, a gate, past `startBy`, or `busy` — one send per node in flight until it SETTLES),
+  while a send whose outcome the desktop cannot confirm (no answer in time, or a `sendText` that
+  rejected after starting — it may or may not have been typed) is `'unconfirmed'`, never `'refused'`,
+  which would invite the phone to resend and type the prompt twice. `ChatStatus` carries the mirror's
+  view too (`hostRefuses`/`refusal`, `version: 1`): after a restart the window's `state` is null while
+  the mirror may still hold a live dialog, and the phone must see the lock the send applies; (3) **text is capped raw (64000) then stripped of ESC + C0/C1** (`\n`/`\t` kept) and
+  rides `pty.sendText` (stdin into tmux, never argv); `'sent'` only for `sendText === true`;
+  (4) **`agent.answer` is the desktop answer path** — `answerHeldPermission` over the SAME
+  `heldPermissionIoFor` (local fs or the SSH ControlMaster) and the in-process structured-ticket
+  gate, and the `pendingId` must be THIS node's (a mirror approval ticket for it, or the renderer's
+  `held.pendingId`), else `false` with no I/O and no answered event on the wrong node. The `chat`
+  dependency is OPTIONAL at every hop, so a dropped hop compiles and ships the verbs
+  inert ("not served"); `host-chat-wiring.test.ts` pins the chain at source level. Served only to an
+  approved phone; Team-access relay guests never reach them (`relay-host.ts` serves no phone
+  dialect). Server Edition: N/A (no phone relay; the bridge subscription is inert).
 - **A Windows desktop pairs relay-only — no SSH key, and do not "fix" that by writing one.** The
   phone's direct-SSH path is POSIX sh + tmux end to end (nodeterm-ios `HostCommands`, `TmuxBinary`,
   the typed `tmux new-session -A` attach, workspace paths with no `%APPDATA%` candidate). Windows

@@ -2284,3 +2284,28 @@ describe('localOnly save (the launch write-ahead barrier)', () => {
     expect(calls[0]).toBe('read:ps')
   })
 })
+
+// The phone Chat verbs resolve a node HOST-side (main/remote/host-chat.ts): the node's cwd must be
+// the ABSOLUTE path the canvas uses, not the portable "./sub" form a local ref's project.json stores
+// — the cwd is what the transcript resolver keys on.
+describe('getNodeResolved — a node with its cwd as the canvas sees it', () => {
+  const termAt = (id: string, cwd: string | undefined) => ({
+    id, kind: 'terminal' as const, position: { x: 0, y: 0 }, size: { width: 1, height: 1 },
+    title: id, color: '#fff', group: null, cwd, agentId: 'claude'
+  })
+  it('resolves a local ref\'s portable cwd against the project root', async () => {
+    const store = new WorkspaceStore()
+    await store.save(ws([project({ id: 'p-local', cwd: projRoot, nodes: [termAt('n-sub', path.join(projRoot, 'sub')), termAt('n-root', projRoot)] })]))
+    expect(store.getNodeResolved('n-sub')?.cwd).toBe(path.join(projRoot, 'sub'))
+    expect(store.getNodeResolved('n-root')?.cwd).toBe(projRoot)
+    expect(store.getNodeResolved('n-sub')?.agentId).toBe('claude')
+    // getNode keeps the stored (portable) form — its existing callers are unchanged.
+    expect(store.getNode('n-sub')?.cwd).toBe('./sub')
+  })
+  it('passes inline / absolute cwds through and answers undefined for an unknown node', async () => {
+    const store = new WorkspaceStore()
+    await store.save(ws([project({ id: 'p-inline', cwd: undefined, nodes: [termAt('n-abs', '/elsewhere')] })]))
+    expect(store.getNodeResolved('n-abs')?.cwd).toBe('/elsewhere')
+    expect(store.getNodeResolved('nope')).toBeUndefined()
+  })
+})
