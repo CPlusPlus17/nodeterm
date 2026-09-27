@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createCustomSfxPlayer, playAlert, type CustomSfxPlayer } from './customSfx'
+import { createCustomSfxPlayer, playAlert, TransientSfxError, type CustomSfxPlayer } from './customSfx'
 
 type Buf = { id: string }
 
@@ -83,6 +83,34 @@ describe('createCustomSfxPlayer', () => {
     expect(await p.play('done', 1, 0.5)).toBe(false)
     expect(await p.play('done', 1, 0.5)).toBe(false)
     expect(deps.read).toHaveBeenCalledTimes(1)
+  })
+
+  it('a missing/closed audio context is TRANSIENT: chime now, the next alert retries', async () => {
+    let ctx = false
+    const { deps, p } = player({
+      decode: vi.fn(async (b64: string): Promise<Buf> => {
+        if (!ctx) throw new TransientSfxError('no audio context')
+        return { id: b64 }
+      })
+    })
+    expect(await p.play('done', 1, 0.5)).toBe(false)
+    ctx = true
+    expect(await p.play('done', 1, 0.5)).toBe(true)
+    expect(deps.read).toHaveBeenCalledTimes(2)
+  })
+
+  it('a transient error from trim is not negative-cached either', async () => {
+    let fail = true
+    const { deps, p } = player({
+      trim: vi.fn((b: Buf) => {
+        if (fail) throw new TransientSfxError('no audio context')
+        return b
+      })
+    })
+    expect(await p.play('done', 1, 0.5)).toBe(false)
+    fail = false
+    expect(await p.play('done', 1, 0.5)).toBe(true)
+    expect(deps.read).toHaveBeenCalledTimes(2)
   })
 
   it('preload decodes without playing', async () => {

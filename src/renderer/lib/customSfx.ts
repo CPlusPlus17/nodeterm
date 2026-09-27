@@ -16,9 +16,16 @@
 //     A DECODE failure IS cached for that stamp: the bytes will not decode any better next time,
 //     and re-reading them per alert is a multi-MB transfer (a WS payload on the Server Edition)
 //     plus a full decode, every time. A new pick has a new stamp and is tried afresh.
+//     A missing or closed AudioContext is NOT a decode failure — the deps throw `TransientSfxError`
+//     for it, and it is retried like a read failure (else the first alert before a context exists
+//     would pin the chime until the user picks the file again).
 //   • Nothing here throws into the caller, synchronously or as an unhandled rejection.
 
 import { customAlertSoundFor, type AlertSoundKind } from '@shared/alert-sound'
+
+/** Thrown by `decode`/`trim` for a condition that says nothing about the FILE (no or a closed
+ *  audio context). Retried on the next alert, never negative-cached. */
+export class TransientSfxError extends Error {}
 
 export interface CustomSfxDeps<B> {
   /** The stored sound's bytes (base64), or null when there is none. May reject. */
@@ -60,8 +67,9 @@ export function createCustomSfxPlayer<B>(deps: CustomSfxDeps<B>): CustomSfxPlaye
       try {
         const decoded = await deps.decode(b64)
         return deps.trim ? deps.trim(decoded) : decoded
-      } catch {
-        return null // a decode failure: stays cached for this stamp
+      } catch (e) {
+        if (e instanceof TransientSfxError) transient = true
+        return null // otherwise a real decode failure: stays cached for this stamp
       }
     })()
     const entry = { stamp, buf }

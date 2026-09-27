@@ -15,7 +15,7 @@
 // either surface). The fallback rules live in lib/customSfx.ts: any failure plays the chime below.
 
 import type { AlertSoundKind } from '@shared/alert-sound'
-import { createCustomSfxPlayer, playAlert, type CustomSfxPlayer } from './customSfx'
+import { createCustomSfxPlayer, playAlert, TransientSfxError, type CustomSfxPlayer } from './customSfx'
 
 export type SfxKind = AlertSoundKind
 
@@ -71,6 +71,8 @@ let ctx: AudioContext | null = null
 let noiseBuf: AudioBuffer | null = null
 
 function audio(): AudioContext | null {
+  // A closed context can never play again; drop it and build a fresh one.
+  if (ctx && ctx.state === 'closed') ctx = null
   if (ctx) return ctx
   const Ctor: typeof AudioContext | undefined =
     typeof window === 'undefined'
@@ -175,8 +177,14 @@ function custom(): CustomSfxPlayer {
     },
     decode: async (b64) => {
       const c = audio()
-      if (!c) throw new Error('no audio context')
-      return c.decodeAudioData(base64ToArrayBuffer(b64))
+      if (!c) throw new TransientSfxError('no audio context')
+      try {
+        return await c.decodeAudioData(base64ToArrayBuffer(b64))
+      } catch (e) {
+        // A context closed mid-decode rejects too — that is not the file's fault.
+        if ((c.state as string) === 'closed') throw new TransientSfxError('audio context closed')
+        throw e
+      }
     },
     // Keep only what can be heard: the decoded clip is float32 PCM (a 5 MB MP3 can be ~200 MB and a
     // heavily compressed file far more), and playback stops at CUSTOM_MAX_SECONDS anyway. The full
@@ -185,7 +193,7 @@ function custom(): CustomSfxPlayer {
       const frames = Math.floor(buf.sampleRate * CUSTOM_MAX_SECONDS)
       if (buf.length <= frames) return buf
       const c = audio()
-      if (!c) throw new Error('no audio context')
+      if (!c) throw new TransientSfxError('no audio context')
       const head = c.createBuffer(buf.numberOfChannels, frames, buf.sampleRate)
       for (let ch = 0; ch < buf.numberOfChannels; ch++) {
         head.copyToChannel(buf.getChannelData(ch).subarray(0, frames), ch)
