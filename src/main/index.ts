@@ -186,7 +186,8 @@ import {
   nodeState,
   nodeSessionName,
   workingNodes,
-  mirrorEntry
+  mirrorEntry,
+  pendingTicketsFor
 } from '../core/agent-status-mirror'
 import { paneOwnerProject } from '../core/agents/pane-ownership'
 import { createPushNotify, createLiveUpdatePush } from '../core/push-notify'
@@ -229,7 +230,7 @@ import {
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
 import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
-import { createHostChat } from './remote/host-chat'
+import { createHostChat, mirrorRefusesChatSend } from './remote/host-chat'
 import type { ChatSendResult, ChatStatus, HostChatReply } from '../shared/mobile-chat'
 import {
   createReadRemotePage,
@@ -4056,9 +4057,13 @@ app.whenReady().then(async () => {
           // binding, else the account its session was observed on.
           accountId: node.accountId ?? m?.account?.accountId ?? undefined,
           agentId: node.agentId ?? m?.agentId,
-          sessionId: m?.sessionId ?? node.agentSessionId
+          // Fallback only: host-chat asks the RENDERER's store first (what ⌘M reads).
+          sessionId: m?.sessionId ?? node.agentSessionId,
+          remote: workspaceStore.sshProjectIdForNode(nodeId) !== undefined
         }
       },
+      hostSendRefusal: (nodeId) => mirrorRefusesChatSend(mirrorEntry(nodeId)),
+      knownTickets: pendingTicketsFor,
       readTranscript: (q, rawPage) => readChatTranscript(q, rawPage, transcriptIpcDeps),
       answerIo: heldPermissionIoFor,
       isStructuredTicket,
@@ -4078,7 +4083,7 @@ app.whenReady().then(async () => {
         })
         const ask = (q: { kind: 'status'; nodeId: string; agentId?: string } | {
           kind: 'send'; nodeId: string; agentId?: string; text: string; startBy: number
-        }): Promise<HostChatReply | null> => {
+        } | { kind: 'session'; nodeId: string }): Promise<HostChatReply | null> => {
           if (win.isDestroyed()) return Promise.resolve(null)
           const requestId = randomUUID()
           // host-chat.ts races this against its own timeout; a reply that never comes leaves only
@@ -4096,6 +4101,10 @@ app.whenReady().then(async () => {
           send: async (q: { nodeId: string; agentId?: string; text: string; startBy: number }): Promise<ChatSendResult | null> => {
             const r = await ask({ kind: 'send', ...q })
             return r && r.kind === 'send' ? r.result : null
+          },
+          session: async (q: { nodeId: string }): Promise<{ sessionId?: string } | null> => {
+            const r = await ask({ kind: 'session', ...q })
+            return r && r.kind === 'session' ? { sessionId: r.sessionId } : null
           }
         }
       })()

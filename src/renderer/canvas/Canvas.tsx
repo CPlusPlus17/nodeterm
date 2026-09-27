@@ -391,7 +391,7 @@ import {
 } from '../lib/explorerPinHint'
 import { useProjects } from '../state/projects'
 import { useAgentStatus } from '../state/agentStatus'
-import { hostChatSend, hostChatStatus } from '../lib/hostChatQuery'
+import { hostChatSend, hostChatSession, hostChatStatus } from '../lib/hostChatQuery'
 import { useLaunchDelivery } from '../state/launchDelivery'
 import { useBrowserLease, drivingNodeIds } from '../state/browserLease'
 import { useTerminalFocus } from '../state/terminalFocus'
@@ -9950,6 +9950,14 @@ export function Canvas() {
           requestId: q.requestId,
           kind: 'status',
           status: hostChatStatus(useAgentStatus.getState().byId[q.nodeId])
+        })
+        return
+      }
+      if (q.kind === 'session') {
+        api.sendHostChatReply({
+          requestId: q.requestId,
+          kind: 'session',
+          ...hostChatSession(useAgentStatus.getState().byId[q.nodeId])
         })
         return
       }

@@ -10,7 +10,7 @@
 //   - `answer` runs `answerHeldPermission` with the node's I/O, and reports the answered
 //     transition on success only.
 import { describe, expect, it, vi } from 'vitest'
-import { createHostChat, type HostChatDeps } from './host-chat'
+import { createHostChat, mirrorRefusesChatSend, type HostChatDeps } from './host-chat'
 import type { ChatTranscriptResult } from '../../shared/types'
 import type { HeldPermissionIo } from '../../core/agents/permission-decision'
 
@@ -29,8 +29,11 @@ function deps(over: Partial<HostChatDeps> = {}): HostChatDeps {
     isStructuredTicket: vi.fn(() => false),
     renderer: {
       status: vi.fn(async () => RSTATUS),
-      send: vi.fn(async () => 'sent' as const)
+      send: vi.fn(async () => 'sent' as const),
+      session: vi.fn(async () => ({ sessionId: 'sid-1' }))
     },
+    hostSendRefusal: vi.fn(() => false),
+    knownTickets: vi.fn(() => ['p-1']),
     timeoutMs: 20,
     sendTimeoutMs: 40,
     now: () => 1000,
@@ -39,14 +42,21 @@ function deps(over: Partial<HostChatDeps> = {}): HostChatDeps {
 }
 
 describe('host-chat page', () => {
-  it('resolves the node host-side, reads paged and stamps version 1', async () => {
+  it('resolves the node host-side, reads paged and stamps version 1 (local node: no cwd)', async () => {
     const d = deps()
     const page = await createHostChat(d).page('n1', { before: 10, maxBytes: 65536 })
     expect(page).toEqual({ ...RESULT, version: 1 })
+    // A LOCAL node reads by session id only: with a cwd, a known-but-dead id would fall back to the
+    // newest transcript in that cwd — another node's session.
     expect(d.readTranscript).toHaveBeenCalledWith(
-      { sessionId: 'sid-1', cwd: '/srv/app', accountId: 'acc', nodeId: 'n1', agentId: 'claude' },
+      { sessionId: 'sid-1', cwd: undefined, accountId: 'acc', nodeId: 'n1', agentId: 'claude' },
       { before: 10, maxBytes: 65536 }
     )
+  })
+  it('a REMOTE node keeps its cwd (the host-side locate is keyed on it)', async () => {
+    const d = deps({ lookupNode: () => ({ cwd: '/srv/app', agentId: 'claude', sessionId: 'sid-1', remote: true }) })
+    await createHostChat(d).page('n1', {})
+    expect(d.readTranscript).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/srv/app', sessionId: 'sid-1' }), {})
   })
   it('an absent page is the default paged tail, not the legacy read', async () => {
     const d = deps()
@@ -58,8 +68,30 @@ describe('host-chat page', () => {
     expect(await createHostChat(d).page('nope', {})).toBeNull()
     expect(d.readTranscript).not.toHaveBeenCalled()
   })
-  it('no known session id ⇒ no cwd either, so no cwd fallback onto a stranger\'s transcript', async () => {
-    const d = deps({ lookupNode: () => ({ cwd: '/srv/app', agentId: 'claude' }) })
+  it('the RENDERER\'s session id wins over the host records (what ⌘M shows)', async () => {
+    const d = deps({
+      lookupNode: () => ({ cwd: '/srv/app', agentId: 'claude', sessionId: 'stale-minted' }),
+      renderer: { status: vi.fn(), send: vi.fn(), session: vi.fn(async () => ({ sessionId: 'hook-fed' })) }
+    })
+    await createHostChat(d).page('n1', {})
+    expect(d.readTranscript).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'hook-fed' }), {})
+    expect(d.renderer.session).toHaveBeenCalledWith({ nodeId: 'n1' })
+  })
+  it('falls back to the host records when the renderer does not answer in time, or knows none', async () => {
+    for (const session of [() => new Promise<never>(() => {}), async () => null, async () => ({})]) {
+      const d = deps({
+        lookupNode: () => ({ agentId: 'claude', sessionId: 'mirror-id' }),
+        renderer: { status: vi.fn(), send: vi.fn(), session: session as never }
+      })
+      await createHostChat(d).page('n1', {})
+      expect(d.readTranscript).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'mirror-id' }), {})
+    }
+  })
+  it('no known session id anywhere ⇒ no cwd either, so no cwd fallback onto a stranger\'s transcript', async () => {
+    const d = deps({
+      lookupNode: () => ({ cwd: '/srv/app', agentId: 'claude', remote: true }),
+      renderer: { status: vi.fn(), send: vi.fn(), session: vi.fn(async () => ({})) }
+    })
     await createHostChat(d).page('n1', {})
     expect(d.readTranscript).toHaveBeenCalledWith(
       { sessionId: undefined, cwd: undefined, accountId: undefined, nodeId: 'n1', agentId: 'claude' },
@@ -72,7 +104,7 @@ describe('host-chat status', () => {
   it('asks the renderer with the host\'s agent id and adds structuredAnswers for a held ticket', async () => {
     const held = { pendingId: 'p-1', toolName: 'ExitPlanMode' }
     const d = deps({
-      renderer: { status: vi.fn(async () => ({ ...RSTATUS, state: 'waiting' as const, held })), send: vi.fn() },
+      renderer: { status: vi.fn(async () => ({ ...RSTATUS, state: 'waiting' as const, held })), send: vi.fn(), session: vi.fn() },
       isStructuredTicket: vi.fn((id: string) => id === 'p-1')
     })
     const s = await createHostChat(d).status('n1')
@@ -89,9 +121,9 @@ describe('host-chat status', () => {
     expect(d.renderer.status).not.toHaveBeenCalled()
   })
   it('a renderer that does not answer in time (or has no window) REJECTS — never a guessed state', async () => {
-    const hang = deps({ renderer: { status: () => new Promise(() => {}), send: vi.fn() } })
+    const hang = deps({ renderer: { status: () => new Promise(() => {}), send: vi.fn(), session: vi.fn() } })
     await expect(createHostChat(hang).status('n1')).rejects.toThrow()
-    const gone = deps({ renderer: { status: async () => null, send: vi.fn() } })
+    const gone = deps({ renderer: { status: async () => null, send: vi.fn(), session: vi.fn() } })
     await expect(createHostChat(gone).status('n1')).rejects.toThrow()
   })
 })
@@ -108,11 +140,21 @@ describe('host-chat send', () => {
     expect(await createHostChat(d).send('nope', 'hi')).toBe('unknown-node')
     expect(d.renderer.send).not.toHaveBeenCalled()
   })
-  it('timeout / no window / a throw ⇒ refused, never sent', async () => {
-    for (const send of [() => new Promise<never>(() => {}), async () => null, async () => { throw new Error('x') }]) {
-      const d = deps({ renderer: { status: vi.fn(), send: send as never } })
+  it('never started (no window / a throw) ⇒ refused', async () => {
+    for (const send of [async () => null, async () => { throw new Error('x') }]) {
+      const d = deps({ renderer: { status: vi.fn(), send: send as never, session: vi.fn() } })
       expect(await createHostChat(d).send('n1', 'hi')).toBe('refused')
     }
+  })
+  it('dispatched but no answer in time ⇒ UNCONFIRMED, never refused (the phone must not resend)', async () => {
+    const d = deps({ renderer: { status: vi.fn(), send: () => new Promise<never>(() => {}), session: vi.fn() } })
+    expect(await createHostChat(d).send('n1', 'hi')).toBe('unconfirmed')
+  })
+  it('the host mirror says the agent is busy or asking ⇒ refused before the renderer is asked', async () => {
+    const d = deps({ hostSendRefusal: vi.fn(() => true) })
+    expect(await createHostChat(d).send('n1', 'hi')).toBe('refused')
+    expect(d.hostSendRefusal).toHaveBeenCalledWith('n1')
+    expect(d.renderer.send).not.toHaveBeenCalled()
   })
 })
 
@@ -131,6 +173,29 @@ describe('host-chat answer', () => {
     expect(await createHostChat(d).answer('n1', 'p-1', { kind: 'deny' })).toBe(false)
     expect(d.onAnswered).not.toHaveBeenCalled()
   })
+  it('a pendingId that is not this node\'s ticket is refused: no I/O, no answered event', async () => {
+    const d = deps({
+      knownTickets: vi.fn(() => ['other-ticket']),
+      renderer: { status: vi.fn(async () => ({ ...RSTATUS, held: { pendingId: 'mine', toolName: 'ExitPlanMode' } })), send: vi.fn(), session: vi.fn() }
+    })
+    expect(await createHostChat(d).answer('n1', 'not-mine', { kind: 'deny' })).toBe(false)
+    expect(d.answerIo).not.toHaveBeenCalled()
+    expect(d.answerHeld).not.toHaveBeenCalled()
+    expect(d.onAnswered).not.toHaveBeenCalled()
+  })
+  it('binds through the renderer\'s held ticket OR the mirror\'s tickets for the node', async () => {
+    const viaHeld = deps({
+      knownTickets: vi.fn(() => []),
+      renderer: { status: vi.fn(async () => ({ ...RSTATUS, held: { pendingId: 'h-1', toolName: 'AskUserQuestion' } })), send: vi.fn(), session: vi.fn() }
+    })
+    expect(await createHostChat(viaHeld).answer('n1', 'h-1', { kind: 'deny' })).toBe(true)
+    const viaMirror = deps({
+      knownTickets: vi.fn(() => ['m-1']),
+      renderer: { status: () => new Promise<never>(() => {}), send: vi.fn(), session: vi.fn() }
+    })
+    expect(await createHostChat(viaMirror).answer('n1', 'm-1', { kind: 'deny' })).toBe(true)
+    expect(viaMirror.knownTickets).toHaveBeenCalledWith('n1')
+  })
   it('an unknown node is false and touches no I/O', async () => {
     const d = deps()
     expect(await createHostChat(d).answer('nope', 'p-1', { kind: 'deny' })).toBe(false)
@@ -139,8 +204,23 @@ describe('host-chat answer', () => {
   })
   it('the real answerHeldPermission refuses a structured answer on a non-capable ticket (no write)', async () => {
     const write = vi.fn(async () => true)
-    const d = deps({ answerHeld: undefined, answerIo: () => ({ readPending: async () => null, write }) })
+    const d = deps({
+      answerHeld: undefined,
+      knownTickets: () => ['never-seen-ticket'],
+      answerIo: () => ({ readPending: async () => null, write })
+    })
     expect(await createHostChat(d).answer('n1', 'never-seen-ticket', { kind: 'plan', mode: 'restore' })).toBe(false)
     expect(write).not.toHaveBeenCalled()
+  })
+})
+
+describe('mirrorRefusesChatSend (the host half of the send gate)', () => {
+  it('refuses a busy / asking agent and any held question or approval; passes done and unknown', () => {
+    for (const state of ['working', 'waiting', 'blocked']) expect(mirrorRefusesChatSend({ state })).toBe(true)
+    expect(mirrorRefusesChatSend({ state: 'done', pendingQuestion: { sessionId: 's', toolUseId: 't' } })).toBe(true)
+    expect(mirrorRefusesChatSend({ state: 'done', concurrentApprovalIds: ['p'] })).toBe(true)
+    expect(mirrorRefusesChatSend({ state: 'done' })).toBe(false)
+    expect(mirrorRefusesChatSend({ state: 'done', concurrentApprovalIds: [] })).toBe(false)
+    expect(mirrorRefusesChatSend(undefined)).toBe(false)
   })
 })

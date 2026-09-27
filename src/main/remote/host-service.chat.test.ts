@@ -172,7 +172,7 @@ describe('chat.send', () => {
     }
   })
   it('passes a refusal and a partial delivery through verbatim', async () => {
-    for (const result of ['refused', 'pasted-not-submitted'] as const) {
+    for (const result of ['refused', 'pasted-not-submitted', 'unconfirmed'] as const) {
       const { call } = make({ send: vi.fn(async () => result) })
       expect(await call('chat.send', { nodeId: 'n1', text: 'hi' })).toEqual({ id: 'r1', ok: true, body: { result } })
     }

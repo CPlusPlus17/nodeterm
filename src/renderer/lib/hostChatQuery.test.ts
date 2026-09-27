@@ -4,7 +4,7 @@
 //   - send runs `chatSendRefusal` AT SEND TIME and refuses a held request too, never types past
 //     the deadline main set, and reports `'sent'` only for a sendText that answered `=== true`.
 import { describe, expect, it, vi } from 'vitest'
-import { hostChatSend, hostChatStatus } from './hostChatQuery'
+import { hostChatSend, hostChatSession, hostChatStatus } from './hostChatQuery'
 
 const HELD = { pendingId: 'p-1', toolName: 'ExitPlanMode' }
 
@@ -23,6 +23,13 @@ describe('hostChatStatus', () => {
       dropped: false,
       sessionEnded: false
     })
+  })
+})
+
+describe('hostChatSession', () => {
+  it('answers the store\'s session id, or nothing', () => {
+    expect(hostChatSession({ sessionId: 'sid' })).toEqual({ sessionId: 'sid' })
+    expect(hostChatSession(undefined)).toEqual({})
   })
 })
 
@@ -81,7 +88,8 @@ describe('hostChatSend', () => {
   it('passes a partial delivery through, and never reports sent for false / throw / truthy junk', async () => {
     expect((await run({ state: 'done' }, vi.fn(async () => 'pasted-not-submitted' as const))).r).toBe('pasted-not-submitted')
     expect((await run({ state: 'done' }, vi.fn(async () => false as const))).r).toBe('refused')
-    expect((await run({ state: 'done' }, vi.fn(async () => { throw new Error('x') }))).r).toBe('refused')
+    // A sendText that REJECTED may have pasted already: unconfirmed, so the phone does not resend.
+    expect((await run({ state: 'done' }, vi.fn(async () => { throw new Error('x') }))).r).toBe('unconfirmed')
     expect((await run({ state: 'done' }, vi.fn(async () => 'yes' as never))).r).toBe('refused')
   })
 })

@@ -50,6 +50,14 @@ export async function hostChatSend(
     if (r === 'pasted-not-submitted') return 'pasted-not-submitted'
     return 'refused'
   } catch {
-    return 'refused'
+    // The call STARTED: a rejection may come after the paste landed (a dropped IPC reply), so this
+    // is not a refusal — 'refused' would invite the phone to resend and type the prompt twice.
+    return 'unconfirmed'
   }
+}
+
+/** The store's session id for a node — the id the ⌘M view reads. Main prefers it over its own
+ *  records (after a desktop restart a hook-fed id lives only here). */
+export function hostChatSession(st: { sessionId?: string } | undefined): { sessionId?: string } {
+  return typeof st?.sessionId === 'string' && st.sessionId ? { sessionId: st.sessionId } : {}
 }

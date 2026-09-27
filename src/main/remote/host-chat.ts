@@ -6,9 +6,11 @@
 //   - The node is resolved HERE, from the host's own registry — never from anything the phone
 //     sends. A node the host does not know is refused, not answered with an empty page.
 //   - The send gate is the RENDERER's (it owns the agent-status store and `chatSendRefusal`, the
-//     same one the ⌘M composer runs), asked at send time. A renderer that does not answer fails
-//     CLOSED: status is an error, send is a refusal. A guessed state would let a message be typed
-//     into a permission dialog, whose Enter answers it.
+//     same one the ⌘M composer runs), asked at send time, after the host mirror's own refusal. A
+//     renderer that does not answer fails CLOSED: status is an error; a send with no window is
+//     'refused', and one dispatched but unanswered is 'unconfirmed' (never 'refused', which invites
+//     a resend and a duplicate prompt). A guessed state would let a message be typed into a
+//     permission dialog, whose Enter answers it.
 //   - An answer goes through `answerHeldPermission` — the one body both shells share — so it is
 //     validated against the pending request file on the agent's host and gated on the structured
 //     ticket ledger, exactly like the desktop's own answer controls.
@@ -27,6 +29,8 @@ export interface HostChatNode {
   accountId?: string
   agentId?: string
   sessionId?: string
+  /** An SSH-project node: its transcript is located ON the host, keyed on cwd. */
+  remote?: boolean
 }
 
 export interface HostChatDeps {
@@ -47,7 +51,15 @@ export interface HostChatDeps {
   renderer: {
     status(q: { nodeId: string; agentId?: string }): Promise<Omit<ChatStatus, 'structuredAnswers'> | null>
     send(q: { nodeId: string; agentId?: string; text: string; startBy: number }): Promise<ChatSendResult | null>
+    /** The store's session id for the node (what ⌘M reads). `null` = no window. */
+    session(q: { nodeId: string }): Promise<{ sessionId?: string } | null>
   }
+  /** The HOST's own view of the node, asked before the renderer on a send: true when the mirror says
+   *  the agent is working / waiting / blocked or holds a question. Renderer state is transient (a
+   *  reload wipes it), the mirror is not — defense in depth, never the only gate. */
+  hostSendRefusal(nodeId: string): boolean
+  /** The approval tickets the host's mirror holds for this node (`pendingTicketsFor`). */
+  knownTickets(nodeId: string): string[]
   /** How long a status query may take, and how long a send has to START (the renderer refuses a
    *  send it receives after `startBy`), before failing closed. Default 3 s. */
   timeoutMs?: number
@@ -56,6 +68,17 @@ export interface HostChatDeps {
   sendTimeoutMs?: number
   /** Clock seam for `startBy`. */
   now?: () => number
+}
+
+/** The host mirror's half of the send gate (`hostSendRefusal`): refuse while the agent is working,
+ *  waiting or blocked, or holds a question / approval ticket. `done` and an unknown state pass on to
+ *  the renderer's own gate, which still has the final say. */
+export function mirrorRefusesChatSend(
+  entry: { state?: string | null; pendingQuestion?: unknown; concurrentApprovalIds?: readonly string[] } | undefined
+): boolean {
+  if (!entry) return false
+  if (entry.state === 'working' || entry.state === 'waiting' || entry.state === 'blocked') return true
+  return !!entry.pendingQuestion || (entry.concurrentApprovalIds?.length ?? 0) > 0
 }
 
 export const HOST_CHAT_RENDERER_TIMEOUT_MS = 3000
@@ -76,16 +99,39 @@ export function createHostChat(deps: HostChatDeps): HostChatOps {
   const sendTimeoutMs = deps.sendTimeoutMs ?? HOST_CHAT_SEND_TIMEOUT_MS
   const now = deps.now ?? Date.now
   const answerHeld = deps.answerHeld ?? answerHeldPermission
+  async function ticketBelongsTo(nodeId: string, agentId: string | undefined, pendingId: string): Promise<boolean> {
+    if (deps.knownTickets(nodeId).includes(pendingId)) return true
+    try {
+      const st = await withTimeout(deps.renderer.status({ nodeId, agentId }), timeoutMs)
+      return st !== TIMED_OUT && st !== null && st.held?.pendingId === pendingId
+    } catch {
+      return false
+    }
+  }
+
   return {
     async page(nodeId, rawPage) {
       const node = deps.lookupNode(nodeId)
       if (!node) return null
-      // No known session id ⇒ no cwd either: claude's resolver would otherwise fall back to the
-      // NEWEST transcript in the cwd, which may be another node's session. Not found is the honest
-      // answer (the ⌘M panel likewise shows the chat only once the session id is known).
+      // The renderer's agent-status id first: it is what ⌘M reads, and after a desktop restart a
+      // hook-fed id lives there while the mirror is empty and the node carries a stale minted id.
+      // The host records are the fallback only when the renderer does not answer in time.
+      let sessionId = node.sessionId
+      try {
+        const fromRenderer = await withTimeout(deps.renderer.session({ nodeId }), timeoutMs)
+        if (fromRenderer !== TIMED_OUT && fromRenderer && typeof fromRenderer.sessionId === 'string' && fromRenderer.sessionId) {
+          sessionId = fromRenderer.sessionId
+        }
+      } catch {
+        // fall back to the host records
+      }
+      // A cwd rides only for a REMOTE node with a known session id — the host-side locate is keyed
+      // on it. Locally the id alone resolves the file, and a cwd would let a known-but-dead id fall
+      // back to the NEWEST transcript in that cwd: another node's session. With no id at all, not
+      // found is the honest answer.
       const q: ChatReadQuery = {
-        sessionId: node.sessionId,
-        cwd: node.sessionId ? node.cwd : undefined,
+        sessionId,
+        cwd: sessionId && node.remote ? node.cwd : undefined,
         accountId: node.accountId,
         nodeId,
         agentId: node.agentId
@@ -109,24 +155,31 @@ export function createHostChat(deps: HostChatDeps): HostChatOps {
     async send(nodeId, text) {
       const node = deps.lookupNode(nodeId)
       if (!node) return 'unknown-node'
+      if (deps.hostSendRefusal(nodeId)) return 'refused'
       try {
         // `startBy`: a renderer that receives this late (a stalled window) refuses rather than
         // typing a message the phone has already been told was not sent. A send that STARTED in
-        // time gets the longer budget to finish; past it the answer is 'refused' although the text
-        // may still land — the one residual race, bounded by how long a paste can take.
+        // time gets the longer budget to finish; past it the answer is 'unconfirmed' — the text may
+        // still land, so the phone must not resend it (a duplicate prompt), only re-read.
         const startBy = now() + timeoutMs
         const result = await withTimeout(
           deps.renderer.send({ nodeId, agentId: node.agentId, text, startBy }),
           sendTimeoutMs
         )
-        return result === TIMED_OUT || result === null ? 'refused' : result
+        if (result === TIMED_OUT) return 'unconfirmed'
+        return result === null ? 'refused' : result
       } catch {
         return 'refused'
       }
     },
 
     async answer(nodeId, pendingId, answer) {
-      if (!deps.lookupNode(nodeId)) return false
+      const node = deps.lookupNode(nodeId)
+      if (!node) return false
+      // The ticket must be THIS node's: the mirror's approval tickets, or the renderer's held request
+      // (plans / questions — the mirror strips a question's id). A mismatched pair touches no I/O and
+      // emits no answered event onto the wrong node.
+      if (!(await ticketBelongsTo(nodeId, node.agentId, pendingId))) return false
       const res = await answerHeld(pendingId, { answer }, deps.answerIo(nodeId, pendingId))
       if (res.ok && res.decision) deps.onAnswered?.(nodeId, pendingId, res.decision)
       return res.ok

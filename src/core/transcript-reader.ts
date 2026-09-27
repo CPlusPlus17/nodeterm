@@ -59,10 +59,13 @@ function linesFrom(raw: string): TranscriptLine[] {
   } catch {
     return []
   }
+  // Same rule as the chat parser: a `null` / scalar line is one skipped line, never a failed read.
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return []
   const content = o.message?.content
   const out: TranscriptLine[] = []
   if (o.type === 'assistant' && Array.isArray(content)) {
     for (const c of content as Array<{ type?: string; text?: string; name?: string; input?: unknown }>) {
+      if (!c || typeof c !== 'object') continue
       if (c.type === 'text' && c.text) out.push({ role: 'assistant', text: c.text })
       else if (c.type === 'tool_use') {
         const arg = toolArg(c.input)
@@ -75,6 +78,7 @@ function linesFrom(raw: string): TranscriptLine[] {
     }
   } else if (o.type === 'user' && Array.isArray(content)) {
     for (const c of content as Array<{ type?: string; text?: string; content?: unknown }>) {
+      if (!c || typeof c !== 'object') continue
       if (c.type === 'text' && c.text) out.push({ role: 'user', text: c.text })
       else if (c.type === 'tool_result') {
         const s = summarizeResult(c.content)
@@ -192,6 +196,9 @@ function parseChatRecords(
     } catch {
       continue
     }
+    // `null` / a number / a string parse fine and would throw on the reads below, failing the whole
+    // page over one line another program wrote. One bad line costs one line (the Swift port agrees).
+    if (!o || typeof o !== 'object' || Array.isArray(o)) continue
     at = lineTime(o.timestamp)
     const content = o.message?.content
     if (paged && o.type === 'assistant' && o.message?.model !== SYNTHETIC_MODEL) {
@@ -207,6 +214,7 @@ function parseChatRecords(
         id?: string
         input?: unknown
       }>) {
+        if (!c || typeof c !== 'object') continue
         if (c.type === 'text' && c.text) parts.push({ kind: 'text', text: c.text })
         else if (c.type === 'tool_use') {
           const part: Extract<ChatPart, { kind: 'tool' }> = {
@@ -234,6 +242,7 @@ function parseChatRecords(
         tool_use_id?: string
         content?: unknown
       }>) {
+        if (!c || typeof c !== 'object') continue
         if (c.type === 'text' && c.text) parts.push({ kind: 'text', text: c.text })
         else if (c.type === 'tool_result') {
           const tool = c.tool_use_id ? toolById.get(c.tool_use_id) : undefined

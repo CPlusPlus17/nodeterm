@@ -1233,6 +1233,22 @@ function pushInboxEvent(e: Omit<InboxEvent, 'id'>): void {
  * event — never seen, or aged off the capped feed — is NOT relevant either (returns false), so a
  * held push whose event the mirror no longer tracks is dropped rather than sent late. Pure read.
  */
+/**
+ * The hook-reply tickets the mirror still considers open for ONE node: its unresolved approval
+ * cards' `pendingId`s plus the approvals held concurrently with a picker. The phone's
+ * `agent.answer` uses it to bind a ticket to the node it names (a pendingId from another node, or
+ * one already answered, is refused). Question/plan holds are not here — their pendingId is
+ * stripped from the inbox card — so those bind through the renderer's `held` instead. Pure read.
+ */
+export function pendingTicketsFor(nodeId: string): string[] {
+  const out = new Set<string>()
+  for (const e of inboxEvents) {
+    if (e.nodeId === nodeId && !e.resolved && e.kind === 'approval' && e.pendingId) out.add(e.pendingId)
+  }
+  for (const id of state.get(nodeId)?.concurrentApprovalIds ?? []) out.add(id)
+  return [...out]
+}
+
 export function isEventUnresolved(nodeId: string, eventId: string): boolean {
   for (const e of inboxEvents) {
     if (e.id === eventId && e.nodeId === nodeId) return !e.resolved

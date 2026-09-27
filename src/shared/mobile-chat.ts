@@ -26,7 +26,11 @@ export interface ChatStatus {
   structuredAnswers: boolean
 }
 
-export type ChatSendResult = 'sent' | 'refused' | 'pasted-not-submitted'
+/** `refused` = never started (nothing was typed: no window, the gate refused, or it arrived too
+ *  late to start). `unconfirmed` = the send WAS dispatched to the desktop but no result came back in
+ *  time — the text may or may not have landed, so the phone must NOT resend it (that would type the
+ *  prompt twice); it should re-read the page instead. */
+export type ChatSendResult = 'sent' | 'refused' | 'pasted-not-submitted' | 'unconfirmed'
 
 /** Longest text `chat.send` accepts, in UTF-16 code units (JS `.length`, Swift `utf16.count`),
  *  checked on the RAW text before stripping. */
@@ -50,8 +54,11 @@ export function sanitizeChatText(text: string): string {
 export type HostChatQuery =
   | { requestId: string; kind: 'status'; nodeId: string; agentId?: string }
   | { requestId: string; kind: 'send'; nodeId: string; agentId?: string; text: string; startBy: number }
+  | { requestId: string; kind: 'session'; nodeId: string }
 
 /** Renderer → main. `status` omits `structuredAnswers`: main adds it (the ticket ledger is main's). */
 export type HostChatReply =
   | { requestId: string; kind: 'status'; status: Omit<ChatStatus, 'structuredAnswers'> }
   | { requestId: string; kind: 'send'; result: ChatSendResult }
+  /** The renderer's agent-status session id — the one the ⌘M view reads. Absent = it knows none. */
+  | { requestId: string; kind: 'session'; sessionId?: string }

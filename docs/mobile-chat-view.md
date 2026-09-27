@@ -83,10 +83,10 @@ as `hostBridge.chat` in `main/index.ts`, forwarded by both phone hosts).
 
 | verb | params | reply | does |
 |---|---|---|---|
-| `chat.page` | `{nodeId, before?, maxBytes?}` | `{page: ChatPage}` | `readChatTranscript` with the ⌘M panel's own deps (paged ALWAYS — an absent page is the default 256 KB tail; remote-aware; grok unpaged) + `model`/`effort`, `version: 1`. No known session id ⇒ no cwd fallback (it would pick the cwd's newest transcript, possibly another node's) ⇒ `found:false`. |
+| `chat.page` | `{nodeId, before?, maxBytes?}` | `{page: ChatPage}` | `readChatTranscript` with the ⌘M panel's own deps (paged ALWAYS — an absent page is the default 256 KB tail; remote-aware; grok unpaged) + `model`/`effort`, `version: 1`. Session id: the RENDERER's agent-status id first (what ⌘M reads — after a desktop restart a hook-fed id lives only there), then the mirror's, then the node's minted id, the fallbacks only when the renderer does not answer within 3 s or knows none. The cwd rides ONLY for a remote (SSH) node with a known id (the host-side locate needs it): locally a known-but-dead id must not fall back to the cwd's newest transcript (another node's), and with no id at all ⇒ `found:false`. |
 | `chat.status` | `{nodeId}` | `{status: ChatStatus}` | the renderer's agent-status entry (`state` null = unknown, `held`, hibernated/paused/dropped/sessionEnded) + `structuredAnswers` = the held ticket is in main's structured-ticket ledger (script revision ≥ 5). |
-| `chat.send` | `{nodeId, text}` | `{result: 'sent' \| 'refused' \| 'pasted-not-submitted'}` | text capped at 64000 UTF-16 units RAW, then ESC + C0/C1 stripped (`\n`, `\t` kept; `sanitizeChatText`); the renderer runs the ⌘M composer's gate at send time (`chatSendRefusal` = `agentProcessInPane` + state ∈ {done, unknown}) plus "no held request", then `pty.sendText`. `'sent'` only for `sendText === true`. |
-| `agent.answer` | `{nodeId, pendingId, answer}` | `{ok: boolean}` | `answerHeldPermission` with the node's own I/O (local fs, or the SSH project's ControlMaster — the same `heldPermissionIoFor` the desktop answer path uses): validated against the pending request file, structured-ticket gated, no `setMode auto`. Success emits the same optimistic "answered" event. |
+| `chat.send` | `{nodeId, text}` | `{result: 'sent' \| 'refused' \| 'pasted-not-submitted' \| 'unconfirmed'}` | text capped at 64000 UTF-16 units RAW, then ESC + C0/C1 stripped (`\n`, `\t` kept; `sanitizeChatText`); refused FIRST when the host's mirror says the agent is working / waiting / blocked or holds a question or approval ticket (renderer state is transient after a reload); then the renderer runs the ⌘M composer's gate at send time (`chatSendRefusal` = `agentProcessInPane` + state ∈ {done, unknown}) plus "no held request", then `pty.sendText`. `'sent'` only for `sendText === true`. |
+| `agent.answer` | `{nodeId, pendingId, answer}` | `{ok: boolean}` | `answerHeldPermission` with the node's own I/O (local fs, or the SSH project's ControlMaster — the same `heldPermissionIoFor` the desktop answer path uses): validated against the pending request file, structured-ticket gated, no `setMode auto`. The `pendingId` must belong to THIS node — one of the mirror's approval tickets for it, or the renderer's `held.pendingId` (plans / questions) — else `{ok:false}` with no I/O and no answered event. Success emits the same optimistic "answered" event. |
 
 Refusals are `respond(id, false, {message})`, with these exact strings:
 
@@ -102,10 +102,14 @@ Refusals are `respond(id, false, {message})`, with these exact strings:
 | `chat.send requires non-empty text.` | nothing left after stripping control chars and whitespace |
 | `Invalid pending id.` | `agent.answer` `pendingId` fails `isValidPendingId` |
 
-Fail-closed rules: a `chat.send` whose renderer does not START within 3 s is refused unsent (the
-query carries `startBy`; a late renderer refuses rather than typing), a started send gets 15 s to
-report and is `'refused'` past it (the one residual race — the text may still land); a throwing send
-is `'refused'`, a throwing answer is `{ok:false}`. `agent.answer` for an unknown node is `{ok:false}`
+Fail-closed rules: `'refused'` means **nothing was typed** — no window, the mirror or renderer gate
+refused, or the renderer received the query after its `startBy` (3 s; a late renderer refuses rather
+than typing). `'unconfirmed'` means **the send was dispatched but no result came back**: a started
+send gets 15 s to report and is `'unconfirmed'` past it, and a `sendText` that REJECTED after starting
+is `'unconfirmed'` too — the text may have landed. **The phone must never auto-resend on
+`'unconfirmed'`** (that is a duplicate prompt): keep the draft visible as "may not have been sent",
+re-read the page, and let the user decide. A `chat.send` whose ops throw before dispatch is
+`'refused'`; a throwing answer is `{ok:false}`. `agent.answer` for an unknown node is `{ok:false}`
 (no I/O touched). Limits: page ≤ 5 MB (existing clamp), chat text ≤ 64000, answer text ≤ 8000
 (`ANSWER_TEXT_MAX_CHARS`, applied by `buildPermissionDecision`). Unknown verb on an older desktop →
 `Unknown method: chat.page` → the phone shows "Update nodeterm on your computer". Server Edition:
@@ -164,6 +168,10 @@ N/A (it serves no phone relay; its bridge subscription is inert).
 - Never type blindly into a pane: send and `/model` only when the state is `done` or unknown **and** no
   held request exists **and** an agent process owns the pane; the gate is re-asked at send time. Relay:
   the desktop decides. Text only via stdin; ESC stripped.
+- **iOS consumer of `chat.send`**: `'refused'` → keep the draft, say it was not sent, allow a resend;
+  `'unconfirmed'` → NEVER auto-resend (a duplicate prompt); keep the draft marked "may not have been
+  sent", reload the page, and leave the decision to the user. Unknown future values are treated as
+  `'unconfirmed'` (the safe side). Older desktops never return it.
 - Answers validated against the host's pending request file; Swift and TS builders locked by golden
   fixtures; `setMode auto` unrepresentable; expired ticket / old hook → "Couldn't send — answer in the
   terminal", never a false "sent".

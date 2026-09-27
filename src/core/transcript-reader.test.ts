@@ -547,3 +547,35 @@ describe('readSessionName — unchanged transcripts are not re-read', () => {
     expect(await readSessionName(sid)).toBe('Second')
   })
 })
+
+describe('parseChatWindow — a null record or null content element is skipped, never fatal', () => {
+  // `JSON.parse('null')` succeeds, and so does `[null]` inside `content`: both used to throw on
+  // the property read that followed (outside the try), failing the WHOLE page — while the Swift
+  // port skips the line. A transcript is written by another program; one bad line must cost one line.
+  it('skips a top-level null / non-object record and keeps the rest', () => {
+    const lines = ['null', '42', '"str"', '[1,2]', JSON.stringify({ type: 'user', message: { content: 'kept' } })]
+    const r = parseChatWindow(Buffer.from(lines.join('\n') + '\n'), 0)
+    expect(r.messages.map(textOfMsg)).toEqual(['kept'])
+  })
+  it('skips null / non-object content elements and keeps the others', () => {
+    const a = JSON.stringify({
+      type: 'assistant',
+      message: { content: [null, 7, 'x', { type: 'text', text: 'hello' }, { type: 'tool_use', id: 't1', name: 'Bash', input: null }] }
+    })
+    const u = JSON.stringify({ type: 'user', message: { content: [null, { type: 'tool_result', tool_use_id: 't1', content: 'ok' }, { type: 'text', text: 'hi' }] } })
+    const r = parseChatWindow(Buffer.from(a + '\n' + u + '\n'), 0)
+    expect(r.messages.map((m) => m.role)).toEqual(['assistant', 'user'])
+    expect(r.messages[0].parts.map((p) => p.kind)).toEqual(['text', 'tool'])
+    expect(r.messages[1].parts).toEqual([{ kind: 'text', text: 'hi' }])
+  })
+  it('a null message is not fatal either (legacy read too)', () => {
+    expect(parseChatMessages(['{"type":"assistant","message":null}', 'null', '{"type":"user","message":{"content":"x"}}']).length).toBe(1)
+  })
+})
+
+describe('parseTranscriptLines — the find-bar index skips a null record / element too', () => {
+  it('indexes the good lines around a null', () => {
+    const text = ['null', JSON.stringify({ type: 'assistant', message: { content: [null, { type: 'text', text: 'found' }] } })].join('\n')
+    expect(parseTranscriptLines(text)).toEqual([{ role: 'assistant', text: 'found' }])
+  })
+})
