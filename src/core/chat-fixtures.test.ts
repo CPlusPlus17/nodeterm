@@ -391,6 +391,17 @@ const DECISION_CASES: Array<{ name: string; pending: string; answer: unknown }> 
       answers: { [Q_SINGLE.question]: 'x'.repeat(ANSWER_TEXT_MAX_CHARS + 1) },
       freeText: [Q_SINGLE.question]
     }
+  },
+  // Exactly AT the cap (8000 UTF-16 units) is accepted — a port with a lower cap fails here.
+  { name: 'plan-revise-at-cap', pending: 'plan.json', answer: { kind: 'plan-revise', message: 'x'.repeat(ANSWER_TEXT_MAX_CHARS) } },
+  {
+    name: 'question-free-text-at-cap',
+    pending: 'question-single.json',
+    answer: {
+      kind: 'question',
+      answers: { [Q_SINGLE.question]: 'x'.repeat(ANSWER_TEXT_MAX_CHARS) },
+      freeText: [Q_SINGLE.question]
+    }
   }
 ]
 
@@ -443,6 +454,9 @@ describe('chat golden fixtures', () => {
   })
 
   it('no orphan files: every directory holds exactly the generated set', () => {
+    const CASE_FILES = ['answer-cases.json', 'decision-cases.json']
+    const topLevelCases = (): string[] =>
+      fs.readdirSync(DIR).filter((f) => f.endsWith('-cases.json')).sort()
     const listing = (dir: string): string[] =>
       fs.existsSync(fixture(dir)) ? fs.readdirSync(fixture(dir)).sort() : []
     const expected = [
@@ -455,8 +469,10 @@ describe('chat golden fixtures', () => {
       for (const f of listing('expected')) if (!expected.includes(f)) fs.rmSync(fixture(`expected/${f}`))
       for (const f of listing('inputs')) if (!(f in INPUTS)) fs.rmSync(fixture(`inputs/${f}`))
       for (const f of listing('pending')) if (!(f in PENDING)) fs.rmSync(fixture(`pending/${f}`))
+      for (const f of topLevelCases()) if (!CASE_FILES.includes(f)) fs.rmSync(fixture(f))
       return
     }
+    expect(topLevelCases()).toEqual(CASE_FILES)
     expect(listing('inputs')).toEqual(Object.keys(INPUTS).sort())
     expect(listing('pending')).toEqual(Object.keys(PENDING).sort())
     expect(listing('expected')).toEqual(expected)

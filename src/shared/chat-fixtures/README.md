@@ -31,7 +31,8 @@ moves one byte of output fails here. After regenerating, refresh the iOS copy in
 | `answer-cases.json` | `[{name, answer}]`: raw answers given to the shape check alone. |
 | `expected/<case>.answer.json` | `parsePermissionAnswer(answer)` verbatim. `null` means the shape check refuses the answer. |
 
-The test also requires `inputs/`, `pending/` and `expected/` to hold **exactly** the generated set.
+The test also requires `inputs/`, `pending/`, `expected/` and the top-level `*-cases.json` files to
+hold **exactly** the generated set.
 A regenerate removes files that no case produces any more, so a copy taken from this directory never
 carries a stale case. Regenerating is refused when `CI` is set.
 
@@ -102,7 +103,8 @@ first bytes to match exactly.
 `answer-*.answer.json` records the SHAPE check: a plan `mode:'auto'` and an unknown `kind` are
 refused there (`null`). An over-long text is NOT refused there: `answer-revise-too-long-parses`
 parses, and the cap is applied by `buildPermissionDecision` (`plan-revise-too-long-refused`,
-`question-free-text-too-long-refused`).
+`question-free-text-too-long-refused`). Text of exactly 8000 units is accepted (`plan-revise-at-cap`,
+`question-free-text-at-cap`), so a port with a lower cap fails too.
 
 ## Sizes
 
