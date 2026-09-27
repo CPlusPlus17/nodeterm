@@ -28,6 +28,12 @@ moves one byte of output fails here. After regenerating, refresh the iOS copy in
 | `pending/<name>.json` | A held `PermissionRequest` hook payload, in the same form as the pending file the hook writes. |
 | `decision-cases.json` | `[{name, pending, answer}]`: each answer that is tried against a pending file. |
 | `expected/<case>.decision.json` | The `buildPermissionDecision` result for that case, as it is returned: `{ok:true, content, decision}` or `{ok:false, reason}`. |
+| `answer-cases.json` | `[{name, answer}]`: raw answers given to the shape check alone. |
+| `expected/<case>.answer.json` | `parsePermissionAnswer(answer)` verbatim. `null` means the shape check refuses the answer. |
+
+The test also requires `inputs/`, `pending/` and `expected/` to hold **exactly** the generated set.
+A regenerate removes files that no case produces any more, so a copy taken from this directory never
+carries a stale case. Regenerating is refused when `CI` is set.
 
 Every expected file is `JSON.stringify(value, null, 2) + "\n"`. Keys appear in the order the TS
 code builds them. Optional keys (`model`, `effort`, `at`, `key`, a tool part's `id`/`body`/
@@ -81,6 +87,22 @@ question single / multi (labels joined with `, `) / free text (trimmed), and thr
 partial answer (two questions, one answered), an unknown label, and a tool mismatch (a plan answer
 against a held `Bash`). The pipeline is
 `parsePendingRequest(file text)` → `parsePermissionAnswer(answer)` → `buildPermissionDecision`.
+Two more refusals come from the length cap (`ANSWER_TEXT_MAX_CHARS`, 8000 UTF-16 units): a revise
+message and a free-text answer one unit over it.
+
+**A decision's `content` is itself a JSON string**: it is the exact text the hook prints to Claude.
+Its inner key order and escaping are those of `JSON.stringify`: `hookSpecificOutput` →
+`hookEventName` → `decision` → `behavior` → `updatedInput` / `updatedPermissions` / `message`, and
+within `updatedInput`, the pending file's own `tool_input` keys followed by `answers`. The port must
+reproduce it **byte for byte** (the hook script matches a fixed prefix, `PERMISSION_DECISION_PREFIX`),
+or at the very least compare it structurally after parsing. The prefix check alone requires the
+first bytes to match exactly.
+
+**Where each refusal happens matters, and the port must put it in the same layer.**
+`answer-*.answer.json` records the SHAPE check: a plan `mode:'auto'` and an unknown `kind` are
+refused there (`null`). An over-long text is NOT refused there: `answer-revise-too-long-parses`
+parses, and the cap is applied by `buildPermissionDecision` (`plan-revise-too-long-refused`,
+`question-free-text-too-long-refused`).
 
 ## Sizes
 

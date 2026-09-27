@@ -22,10 +22,13 @@ import {
   parsePendingRequest,
   parsePermissionAnswer
 } from './agents/permission-decision'
+import { ANSWER_TEXT_MAX_CHARS } from '../shared/agents/permission-answer'
 import { CHAT_PAGE_DEFAULT_BYTES, CHAT_PAGE_MAX_BYTES } from '../shared/chat-page'
 
 const DIR = path.join(__dirname, '..', 'shared', 'chat-fixtures')
 const UPDATE = process.env.UPDATE_CHAT_FIXTURES === '1'
+// Regenerating in CI would turn the drift test into a no-op that always passes.
+if (UPDATE && process.env.CI) throw new Error('UPDATE_CHAT_FIXTURES must not be set in CI')
 
 // ── The phone's pager ────────────────────────────────────────────────────────────────────────────
 // Mirrors what the phone does (and what core's `parseGrowingWindow` does per page): a 256 KB tail
@@ -77,9 +80,11 @@ const T0 = Date.parse('2026-09-25T19:00:00.000Z')
 
 type Rec = Record<string, unknown>
 const user = (content: unknown): Rec => ({ type: 'user', message: { role: 'user', content } })
-const assistant = (content: unknown[], model: string = 'claude-opus-5-5', effort: string | undefined = 'high'): Rec => ({
+const assistant = (content: unknown[], model: string = 'claude-opus-5-5', effort: string | null = 'high'): Rec => ({
   type: 'assistant',
-  ...(effort === undefined ? {} : { effort }),
+  // `null` = the record states no effort. NOT `undefined`: a default parameter fires on an explicit
+  // `undefined`, which once silently gave the no-carry fixture's newest record `effort: "high"`.
+  ...(effort === null ? {} : { effort }),
   message: { id: 'msg_synthetic', type: 'message', role: 'assistant', model, content, stop_reason: null }
 })
 const text = (t: string): Rec => ({ type: 'text', text: t })
@@ -279,13 +284,13 @@ function modelEffort(): string {
 
 /** D1 rule: ONE record answers both fields — the newest states no effort, so there is none. */
 const modelEffortNoCarry = (): string =>
-  jsonl([assistant([text('a')], 'claude-opus-5', 'high'), user('next'), assistant([text('b')], 'claude-fable-5', undefined)])
+  jsonl([assistant([text('a')], 'claude-opus-5', 'high'), user('next'), assistant([text('b')], 'claude-fable-5', null)])
 
 /** D1 rule: a `<synthetic>` record (API error / interrupt, no effort) is skipped entirely. */
 const modelEffortSynthetic = (): string =>
   jsonl([
     assistant([text('a')], 'claude-opus-5-5', 'xhigh'),
-    assistant([text('API Error: Request was aborted.')], '<synthetic>', undefined)
+    assistant([text('API Error: Request was aborted.')], '<synthetic>', null)
   ])
 
 /** D1 rule: the 100 cap counts UTF-16 code units (Swift `utf16.count`) — not bytes, not scalars. A
@@ -330,6 +335,18 @@ const PENDING: Record<string, string> = {
   'bash.json': pendingPayload('Bash', { command: 'rm -rf build', description: 'Clean the build dir' })
 }
 
+// Answers the shape check itself must refuse (or accept) before any pending file is consulted —
+// `expected/<name>.answer.json` records `parsePermissionAnswer`'s result verbatim (`null` = refused).
+const ANSWER_CASES: Array<{ name: string; answer: unknown }> = [
+  // No `auto` exists in the plan table on purpose (the hook-reply rule: never setMode auto).
+  { name: 'answer-plan-auto-refused', answer: { kind: 'plan', mode: 'auto' } },
+  { name: 'answer-unknown-kind-refused', answer: { kind: 'approve-all' } },
+  // The SHAPE check does not cap text: an over-long revise passes parsing and is refused by
+  // `buildPermissionDecision` (decision case `plan-revise-too-long-refused`). Recorded so the port
+  // puts the cap in the same layer.
+  { name: 'answer-revise-too-long-parses', answer: { kind: 'plan-revise', message: 'x'.repeat(ANSWER_TEXT_MAX_CHARS + 1) } }
+]
+
 const DECISION_CASES: Array<{ name: string; pending: string; answer: unknown }> = [
   { name: 'plan-restore', pending: 'plan.json', answer: { kind: 'plan', mode: 'restore' } },
   { name: 'plan-accept-edits', pending: 'plan.json', answer: { kind: 'plan', mode: 'acceptEdits' } },
@@ -360,7 +377,21 @@ const DECISION_CASES: Array<{ name: string; pending: string; answer: unknown }> 
     pending: 'question-single.json',
     answer: { kind: 'question', answers: { [Q_SINGLE.question]: 'Carrier pigeon' } }
   },
-  { name: 'tool-mismatch-refused', pending: 'bash.json', answer: { kind: 'plan', mode: 'restore' } }
+  { name: 'tool-mismatch-refused', pending: 'bash.json', answer: { kind: 'plan', mode: 'restore' } },
+  {
+    name: 'plan-revise-too-long-refused',
+    pending: 'plan.json',
+    answer: { kind: 'plan-revise', message: 'x'.repeat(ANSWER_TEXT_MAX_CHARS + 1) }
+  },
+  {
+    name: 'question-free-text-too-long-refused',
+    pending: 'question-single.json',
+    answer: {
+      kind: 'question',
+      answers: { [Q_SINGLE.question]: 'x'.repeat(ANSWER_TEXT_MAX_CHARS + 1) },
+      freeText: [Q_SINGLE.question]
+    }
+  }
 ]
 
 const edge = utf8Edge()
@@ -408,6 +439,27 @@ describe('chat golden fixtures', () => {
     for (const [name, body] of Object.entries(INPUTS)) golden(`inputs/${name}`, body)
     for (const [name, body] of Object.entries(PENDING)) golden(`pending/${name}`, body)
     golden('decision-cases.json', serialize(DECISION_CASES))
+    golden('answer-cases.json', serialize(ANSWER_CASES))
+  })
+
+  it('no orphan files: every directory holds exactly the generated set', () => {
+    const listing = (dir: string): string[] =>
+      fs.existsSync(fixture(dir)) ? fs.readdirSync(fixture(dir)).sort() : []
+    const expected = [
+      ...Object.keys(INPUTS).map((n) => n.replace(/\.jsonl$/, '.pages.json')),
+      ...DECISION_CASES.map((c) => `${c.name}.decision.json`),
+      ...ANSWER_CASES.map((c) => `${c.name}.answer.json`)
+    ].sort()
+    if (UPDATE) {
+      // A renamed or removed case must not leave its old expected file behind.
+      for (const f of listing('expected')) if (!expected.includes(f)) fs.rmSync(fixture(`expected/${f}`))
+      for (const f of listing('inputs')) if (!(f in INPUTS)) fs.rmSync(fixture(`inputs/${f}`))
+      for (const f of listing('pending')) if (!(f in PENDING)) fs.rmSync(fixture(`pending/${f}`))
+      return
+    }
+    expect(listing('inputs')).toEqual(Object.keys(INPUTS).sort())
+    expect(listing('pending')).toEqual(Object.keys(PENDING).sort())
+    expect(listing('expected')).toEqual(expected)
   })
 
   for (const name of Object.keys(INPUTS)) {
@@ -427,6 +479,12 @@ describe('chat golden fixtures', () => {
         expect(served).toStrictEqual({ found: true, ...rest })
       }
       golden(`expected/${base}.pages.json`, serialize(steps))
+    })
+  }
+
+  for (const c of ANSWER_CASES) {
+    it(`${c.name}: answer parse matches expected/${c.name}.answer.json`, () => {
+      golden(`expected/${c.name}.answer.json`, serialize(parsePermissionAnswer(c.answer)))
     })
   }
 
@@ -460,6 +518,22 @@ describe('chat golden fixtures', () => {
     expect(JSON.stringify(older.parse.messages[0])).toContain('ğüşçöı')
     expect(JSON.stringify(older.parse.messages.at(-1))).toContain('😀'.repeat(64))
     expect(JSON.stringify(tail.parse.messages)).not.toContain('�')
+  })
+
+  it('model-effort-no-carry: the newest record states no effort, so the key is ABSENT', async () => {
+    const buf = fs.readFileSync(fixture('inputs/model-effort-no-carry.jsonl'), 'utf8')
+    const last = JSON.parse(buf.trimEnd().split('\n').at(-1)!)
+    expect('effort' in last).toBe(false) // the input really omits it
+    const [tail] = await pageFile(fixture('inputs/model-effort-no-carry.jsonl'))
+    expect(tail.parse.model).toBe('claude-fable-5')
+    expect('effort' in tail.parse).toBe(false)
+  })
+
+  it('model-effort-synthetic: the <synthetic> record carries no effort (measured shape)', () => {
+    const buf = fs.readFileSync(fixture('inputs/model-effort-synthetic.jsonl'), 'utf8')
+    const last = JSON.parse(buf.trimEnd().split('\n').at(-1)!)
+    expect(last.message.model).toBe('<synthetic>')
+    expect('effort' in last).toBe(false)
   })
 
   it('huge-last-line: the tail grows past its first window and still shows the last message', async () => {

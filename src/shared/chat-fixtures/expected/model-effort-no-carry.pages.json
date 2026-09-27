@@ -43,7 +43,6 @@
       "olderCursor": null,
       "unmatchedResults": [],
       "model": "claude-fable-5",
-      "effort": "high",
       "noCompleteLine": false
     }
   }
