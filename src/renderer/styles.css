@@ -2611,6 +2611,22 @@ body,
   border-color: var(--border);
 }
 
+/* Downloads started from a terminal link's right-click menu (terminal/link-menu.ts): the shared
+   `.ex-dls` strip, floated over the terminal's bottom-right like the copy receipt above — one
+   notch higher so the two never cover each other — instead of docked under a file tree. */
+.ex-dls.term-node__dls {
+  position: absolute;
+  right: 10px;
+  bottom: 34px;
+  z-index: 6;
+  max-width: min(320px, 70%);
+  max-height: 40%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 35%);
+}
+
 @keyframes nt-copy-pill-in {
   from {
     opacity: 0;

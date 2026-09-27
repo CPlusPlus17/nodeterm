@@ -45,8 +45,14 @@ import {
   createOsc8LinkHandler,
   createUrlLinkProvider,
   installLinkClickFallback,
+  installLinkContextMenu,
   makeDirListingLookup
 } from '../terminal/file-links'
+import { linkMenuItems, resolveLinkTarget, type LinkMenuTarget } from '../terminal/link-menu'
+import { ContextMenu } from '../components/ContextMenu'
+import { DownloadStrip } from '../components/DownloadStrip'
+import { canUseLocalShell, downloadRoute } from '../lib/download'
+import { useDownloads } from '../lib/useDownloads'
 import { fileLinkDialect } from '../terminal/file-link-dialect'
 import { hostPlatformFor } from '../terminal/host-platform'
 import { sshFs } from '../terminal/ssh-fs'
@@ -1138,6 +1144,10 @@ export function wakeHibernatedNode(nodeId: string): void {
  */
 const copySubs = new Map<string, (text: string) => void>()
 
+/** The right-click link menu's sink, published for the same reason as `copySubs`: the listener
+ *  (`installLinkContextMenu`) is installed once per xterm instance and survives a park. */
+const linkMenuSubs = new Map<string, (target: LinkMenuTarget, x: number, y: number) => void>()
+
 function getCo(key: string): CoState {
   return coStates.get(key) ?? NO_CO
 }
@@ -1332,6 +1342,66 @@ export function TerminalNode({
       if (copySubs.get(termKey) === copy.notifyCopy) copySubs.delete(termKey)
     }
   }, [termKey, copy.notifyCopy])
+  // Right-click on a link in the output → open / reveal / download / copy (terminal/link-menu.ts).
+  // The listener lives in the lifecycle effect and reaches this state through `linkMenuSubs`.
+  const [linkMenu, setLinkMenu] = useState<{ x: number; y: number; target: LinkMenuTarget } | null>(
+    null
+  )
+  useEffect(() => {
+    const sink = (target: LinkMenuTarget, x: number, y: number): void => setLinkMenu({ x, y, target })
+    linkMenuSubs.set(termKey, sink)
+    return () => {
+      if (linkMenuSubs.get(termKey) === sink) linkMenuSubs.delete(termKey)
+    }
+  }, [termKey])
+  // The file links resolve against the ACTIVE project's filesystem (see `projectFs` in the
+  // lifecycle effect), so Download follows it too: an SSH project's file comes down over scp. Two
+  // primitive selectors, not the project object — that is rebuilt on every node serialization.
+  const activeProjectId = useProjects((s) => s.activeProjectId)
+  const activeIsSsh = useProjects((s) => !!s.projects.find((p) => p.id === s.activeProjectId)?.ssh)
+  const linkDlCtx = { browser: isBrowserRuntime(), ssh: activeIsSsh, source: session.source }
+  const linkDownloads = useDownloads({
+    route: downloadRoute(linkDlCtx),
+    projectId: activeProjectId || undefined,
+    files: api.files
+  })
+  /** The link menu's rows, read against the project as it is when the menu opens. Every action
+   *  reuses the channel Cmd+click, the Explorer or the file-manager node already goes through. */
+  const linkMenuRows = (target: LinkMenuTarget) => {
+    const project = useProjects.getState().getProject(activeProjectId ?? '')
+    // Literal event names on purpose: nodeterm-events.test.ts pairs every dispatch with its
+    // listener by reading `new CustomEvent('nodeterm:…'` out of the source.
+    const send = (ev: CustomEvent): void => void window.dispatchEvent(ev)
+    return linkMenuItems(
+      target,
+      {
+        route: downloadRoute(linkDlCtx),
+        localShell: canUseLocalShell(linkDlCtx),
+        // The Explorer drawer's own root (ExplorerPanel: `ssh ? ssh.remoteCwd : project.cwd`).
+        explorerRoot: project?.ssh ? project.ssh.remoteCwd : project?.cwd,
+        terminals: session.source !== 'relay',
+        downloading: (p) => linkDownloads.rowDl[p] === 'running'
+      },
+      {
+        openUrl: (url) => window.nodeTerminal.shell.openExternal(url),
+        // A browser node is an Electron `<webview>`; in a browser tab it would render nothing.
+        openUrlInNode: linkDlCtx.browser
+          ? undefined
+          : (url) =>
+              send(new CustomEvent('nodeterm:open-url-node', { detail: { url, sourceNodeId: id } })),
+        copy: (text) => window.nodeTerminal.clipboard.writeText(text),
+        openFile: (abs) =>
+          send(new CustomEvent('nodeterm:open-file', { detail: { path: abs, ssh: activeIsSsh } })),
+        revealInExplorer: (abs) =>
+          send(new CustomEvent('nodeterm:reveal-file', { detail: { path: abs } })),
+        revealInOs: (abs) => window.nodeTerminal.shell.reveal(abs),
+        openTerminal: (dir) =>
+          send(new CustomEvent('nodeterm:open-terminal', { detail: { cwd: dir } })),
+        download: (abs, dir, pickFolder) =>
+          void (pickFolder ? linkDownloads.downloadTo(abs, dir) : linkDownloads.download(abs, dir))
+      }
+    )
+  }
   const fitRef = useRef<FitAddon | null>(null)
   const searchAddonRef = useRef<SearchAddon | null>(null)
   // The live session's "measure my grid, render it, report it" routine (set by the lifecycle
@@ -2989,6 +3059,17 @@ export function TerminalNode({
           openUrl: (uri) => window.nodeTerminal.shell.openExternal(uri),
           fileEnabled: () => pathConvention() !== null,
           convention: pathConvention
+        })
+        // Right-click on the same links → a menu (open / reveal / download / copy). Same hit-test,
+        // same routed lookup; the menu itself is state on whichever instance is mounted now.
+        installLinkContextMenu(term, term.element, {
+          getCwd,
+          fileEnabled: () => pathConvention() !== null,
+          convention: pathConvention,
+          openMenu: (hit, x, y) =>
+            void resolveLinkTarget(hit, lookup).then((target) =>
+              linkMenuSubs.get(termKey)?.(target, x, y)
+            )
         })
       }
     }
@@ -5935,6 +6016,21 @@ export function TerminalNode({
           <div className={`term-copy-pill term-copy-pill--${copy.feedback.kind}`}>
             {copy.feedback.label}
           </div>
+        )}
+        {/* Downloads started from a link's right-click menu, reported on the terminal they were
+            clicked in (the same corner as the copy receipt) — not in a drawer that may be shut. */}
+        <DownloadStrip
+          downloads={linkDownloads.downloads}
+          onDismiss={linkDownloads.dismiss}
+          className="term-node__dls nodrag nowheel"
+        />
+        {linkMenu && (
+          <ContextMenu
+            x={linkMenu.x}
+            y={linkMenu.y}
+            items={linkMenuRows(linkMenu.target)}
+            onClose={() => setLinkMenu(null)}
+          />
         )}
         {/* Offscreen-disposed: the xterm and the PTY client are gone, the tmux session is not.
             Deliberately above the overlays below it in the DOM but the least insistent of them —
