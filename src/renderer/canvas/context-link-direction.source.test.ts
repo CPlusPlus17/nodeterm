@@ -45,4 +45,17 @@ describe('one-way context links — Canvas wiring (source pins)', () => {
     const body = src.slice(start, start + 2000)
     expect(body).toContain("'one-way' in args")
   })
+
+  it('CLI-created bridges become live edges only through appendBridgeEdges (review P1)', () => {
+    // Appending planBridges output raw puts `reader` top-level, where edgeToBridge never looks.
+    expect(src).not.toMatch(/setLinkEdges\(\(es\) => \[\.\.\.es,/)
+    expect(src).toContain('setLinkEdges((es) => appendBridgeEdges(es, plan.edges))')
+  })
+
+  it('right-clicking a rope resolves the context link it covers (review P2b)', () => {
+    const start = src.indexOf('const onEdgeContextMenu = useCallback(')
+    const body = src.slice(start, start + 1500)
+    expect(body).toContain('contextLinkForEdge(')
+    expect(body).toContain('controlEdgesRef.current')
+  })
 })

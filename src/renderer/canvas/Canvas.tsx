@@ -603,7 +603,7 @@ import { answerHostedRequest, type HostedAnswer } from '../lib/hostedOwner'
 import { headRequest, type QueuedRequest } from '../lib/hostedPendingQueue'
 import { useHostedPending } from '../state/hostedPending'
 import { hostedInfoFor, isHostedReadOnly, useHostedTeams } from '../state/hostedTeams'
-import { bridgeToEdge, buildContextLinkNote, buildNotePushMessage, classifyLink, edgeToBridge, gainedReaders, hiddenLinkIds, linkIdsCoveredByRopes, linkReadPairs, pairKey, planBridges, withLinkReader, type LinkEndpoint } from '../lib/noteLink'
+import { appendBridgeEdges, bridgeToEdge, buildContextLinkNote, contextLinkForEdge, buildNotePushMessage, classifyLink, edgeToBridge, gainedReaders, hiddenLinkIds, linkIdsCoveredByRopes, linkReadPairs, pairKey, planBridges, withLinkReader, type LinkEndpoint } from '../lib/noteLink'
 import {
   deliveriesToRetire,
   launchesToFire,
@@ -2818,7 +2818,11 @@ export function Canvas() {
       // A context link is two-way unless it names a one-way reader (issue #852).
       const readers = isNote ? [e.target] : linkReadPairs(edgeToBridge(e)).map((p) => p.reader)
       const oneWay = !isNote && readers.length < 2
-      const baseLabel = isNote ? '🗒 note' : oneWay ? '→ context (one-way)' : '⇄ context'
+      const baseLabel = isNote
+        ? '🗒 note'
+        : readers.length === 0
+          ? '⊘ context (invalid direction)'
+          : oneWay ? '→ context (one-way)' : '⇄ context'
       return {
         ...e,
         type: 'floating',
@@ -2835,8 +2839,17 @@ export function Canvas() {
         ...(readers.includes(e.source) ? { markerStart: arrow } : {})
       }
     })
-    const ropeCoversLink = new Set(
-      linkEdges.filter((e) => hiddenLinks.has(e.id)).map((e) => pairKey(e.source, e.target))
+    // The covered link's label, by pair, so a selected rope still says which way its hidden
+    // context link reads (issue #852) — the rope's own arrow shows lineage, not reading.
+    const ropeCoversLink = new Map(
+      linkEdges.filter((e) => hiddenLinks.has(e.id)).map((e) => {
+        const n = linkReadPairs(edgeToBridge(e)).length
+        const label =
+          n === 2
+            ? '⇄ context · ⌫ to remove'
+            : `${n === 1 ? '→ context (one-way)' : '⊘ context (invalid direction)'} · ⌫ to remove`
+        return [pairKey(e.source, e.target), label] as const
+      })
     )
     // Ropes: colour from the source's agent, dashed + ⏳ while the target still waits on the
     // source, white + a removal hint while selected, clay + flowing while the target is a driven
@@ -2860,7 +2873,7 @@ export function Canvas() {
         const label = v.waiting
           ? `${WAIT_LABEL} · ⌫ to stop waiting`
           : ropeCoversLink.has(pairKey(e.source, e.target))
-            ? '⇄ context · ⌫ to remove'
+            ? `${ropeCoversLink.get(pairKey(e.source, e.target))} · right-click for direction`
             : '⌫ to remove'
         return {
           ...base,
@@ -4695,8 +4708,12 @@ export function Canvas() {
   // Note links (sticky → terminal) are one-way by nature and get no menu.
   const onEdgeContextMenu = useCallback(
     (e: React.MouseEvent, edge: Edge) => {
-      const link = linkEdgesRef.current.find((b) => b.id === edge.id)
+      // A rope drawn over a context link (open-agent / spawn-team / --after) hides that link and
+      // keeps the pixels, so its right-click must reach the covered link by endpoint pair — the
+      // same rule the removal paths use. A rope with nothing under it gets no menu.
+      const link = contextLinkForEdge(edge.id, linkEdgesRef.current, controlEdgesRef.current)
       if (!link) return
+      const viaRope = link.id !== edge.id
       const nodeOf = (id: string) => nodesRef.current.find((n) => n.id === id)
       if (nodeOf(link.source)?.type === 'sticky' || nodeOf(link.target)?.type === 'sticky') return
       e.preventDefault()
@@ -4732,7 +4749,7 @@ export function Canvas() {
           option(`${b} reads ${a} only`, link.target),
           { type: 'separator' },
           {
-            label: 'Remove link',
+            label: viaRope ? 'Remove context link (keeps the rope)' : 'Remove link',
             danger: true,
             onClick: () => {
               setLinkEdges((es) => es.filter((x) => x.id !== link.id))
@@ -13862,7 +13879,7 @@ export function Canvas() {
             useProjects.getState().appendCanvasLinks(offCanvas.project.id, { bridges: plan.edges })
             void writeDisk()
           } else {
-            setLinkEdges((es) => [...es, ...plan.edges])
+            setLinkEdges((es) => appendBridgeEdges(es, plan.edges))
             markDirty()
           }
         }

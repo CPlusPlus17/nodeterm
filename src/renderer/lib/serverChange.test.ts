@@ -230,4 +230,15 @@ describe('planServerChange', () => {
       { id: 'bridge-new', source: caller.id, target: spawned.id, reader: spawned.id }
     ])
   })
+
+  it('keeps a present-but-invalid reader so it keeps granting nobody', () => {
+    const plan = planServerChange({
+      base: project([caller, first]),
+      incoming: project([caller, first]),
+      liveNodeIds: [caller.id, first.id],
+      liveRopes: [],
+      liveBridges: [{ id: 'bridge-x', source: caller.id, target: first.id, reader: null as never }]
+    })
+    expect(plan.bridges).toEqual([{ id: 'bridge-x', source: caller.id, target: first.id, reader: null }])
+  })
 })

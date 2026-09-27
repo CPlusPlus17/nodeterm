@@ -29,18 +29,52 @@ export {
  * Persisted bridge → React Flow edge. A one-way link's reader (issue #852) rides `edge.data`,
  * because React Flow owns the edge's top-level fields; a reader-less bridge gets no `data` at all,
  * so every pre-#852 link loads exactly as before.
+ *
+ * A PRESENT reader is carried whatever its value — `null`, a number, a string naming neither
+ * endpoint. `linkReadPairs` reads such a reader as "nobody may read", and that restriction must
+ * survive load and save: treating a malformed value as absent would turn it into an unrestricted
+ * two-way link on the next autosave. The rule is: absent (`undefined`) = both read; anything else
+ * is kept verbatim and judged only by `linkReadPairs`.
  */
 export function bridgeToEdge(b: BridgeLink): Edge {
   const e: Edge = { id: b.id, source: b.source, target: b.target }
-  return typeof b.reader === 'string' ? { ...e, data: { reader: b.reader } } : e
+  return hasReader(b) ? { ...e, data: { reader: b.reader } } : e
 }
 
 /** React Flow edge → persisted bridge: id, endpoints and the one-way reader only — selection and
  *  display-only data never reach project.json. The single inverse of `bridgeToEdge`. */
 export function edgeToBridge(e: Pick<Edge, 'id' | 'source' | 'target' | 'data'>): BridgeLink {
   const b: BridgeLink = { id: e.id, source: e.source, target: e.target }
-  const reader = (e.data as { reader?: unknown } | undefined)?.reader
-  return typeof reader === 'string' ? { ...b, reader } : b
+  const data = e.data as { reader?: unknown } | undefined
+  return data && hasReader(data) ? { ...b, reader: data.reader as string } : b
+}
+
+function hasReader(o: { reader?: unknown }): boolean {
+  return 'reader' in o && o.reader !== undefined
+}
+
+/** Append persisted-shape bridges (e.g. `planBridges` output) to the live edge array. The ONLY
+ *  way bridge objects may enter it: appended raw, a one-way `reader` sits top-level where
+ *  `edgeToBridge` never looks, and publication + autosave silently make the link two-way. */
+export function appendBridgeEdges(es: readonly Edge[], bridges: readonly BridgeLink[]): Edge[] {
+  return [...es, ...bridges.map(bridgeToEdge)]
+}
+
+/**
+ * The context link an edge stands for: itself when it IS a link, the link it covers when it is a
+ * control rope drawn over one (`hiddenLinkIds` hides that link and lets the rope keep the pixels —
+ * the same endpoint-pair rule `linkIdsCoveredByRopes` applies on removal), else null (a rope with
+ * no link under it, or an ephemeral card edge).
+ */
+export function contextLinkForEdge<T extends { id: string; source: string; target: string }>(
+  edgeId: string,
+  links: readonly T[],
+  ropes: readonly { id: string; source: string; target: string }[]
+): T | null {
+  const direct = links.find((l) => l.id === edgeId)
+  if (direct) return direct
+  const [covered] = linkIdsCoveredByRopes([edgeId], ropes, links)
+  return covered === undefined ? null : (links.find((l) => l.id === covered) ?? null)
 }
 
 /** Order-independent key for an edge's endpoints (a↔b and b↔a are the same connection). */

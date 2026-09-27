@@ -4898,10 +4898,14 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `project.json` files load unchanged. The rule is `linkReadPairs` (`shared/canvas-link.ts`), and
   `buildLinkMap` is where it BITES: the non-reading side gets no map entry, so main serves it no
   document and the resolver refuses it — enforcement is at the read, not in the discovery note. A
-  `reader` naming neither endpoint authorizes nobody (fail closed). Set it from the context-link
-  edge's right-click menu (both / A reads B / B reads A; arrowheads point at the reader) or with
+  `reader` naming neither endpoint, or any present non-string value, authorizes nobody (fail closed)
+and is carried VERBATIM through every conversion — dropping it as "absent" would widen it to two-way
+on the next save. Set it from the context-link
+  edge's right-click menu (both / A reads B / B reads A; arrowheads point at the reader — a rope
+drawn over a hidden link resolves it by endpoint pair via `contextLinkForEdge`) or with
   `link --one-way` (`--from` reads). On the canvas it rides `edge.data.reader`; every bridge↔edge
-  conversion goes through `bridgeToEdge`/`edgeToBridge` (renderer/lib/noteLink.ts) and the server
+  conversion goes through `bridgeToEdge`/`edgeToBridge` (renderer/lib/noteLink.ts; CLI-planned
+bridges enter live state only via `appendBridgeEdges`) and the server
   merge keeps it (`serverChange.edgeRef`) — a field-by-field `{id, source, target}` copy silently
   turns a one-way link two-way again. A flip that GRANTS read access sends the same one-shot
   discovery note a new link sends; losing access sends nothing, like removing a link. Note: the

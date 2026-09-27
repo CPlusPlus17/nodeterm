@@ -60,8 +60,9 @@ export interface ServerChangePlan {
 
 // A bridge's one-way `reader` (issue #852) is part of the link, not display state: dropping it
 // here would turn a one-way link back into a two-way one on any server-side change.
+// A present-but-malformed reader is kept too: it grants nobody, and dropping it would widen it.
 const edgeRef = (e: EdgeRef): EdgeRef =>
-  typeof e.reader === 'string'
+  e.reader !== undefined
     ? { id: e.id, source: e.source, target: e.target, reader: e.reader }
     : { id: e.id, source: e.source, target: e.target }
 

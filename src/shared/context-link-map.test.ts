@@ -28,6 +28,11 @@ describe('buildLinkMap direction', () => {
     expect(buildLinkMap([{ source: 'a', target: 'b', reader: 'x' }], info)).toEqual({})
   })
 
+  it('a malformed (non-string) persisted reader authorizes nobody', () => {
+    expect(buildLinkMap([{ source: 'a', target: 'b', reader: null as never }], info)).toEqual({})
+    expect(buildLinkMap([{ source: 'a', target: 'b', reader: 42 as never }], info)).toEqual({})
+  })
+
   it('note links keep their fixed direction (terminal reads the sticky)', () => {
     const map = buildLinkMap([{ source: 's1', target: 'a' }], info)
     expect(Object.keys(map)).toEqual(['a'])

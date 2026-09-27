@@ -9,8 +9,11 @@ import {
   linkIdsCoveredByRopes,
   pairKey,
   planBridges,
+  appendBridgeEdges,
   bridgeToEdge,
-  edgeToBridge
+  contextLinkForEdge,
+  edgeToBridge,
+  linkReadPairs
 } from './noteLink'
 import type { CanvasNodeState } from '@shared/types'
 
@@ -428,9 +431,60 @@ describe('bridge ⇄ React Flow edge (issue #852)', () => {
     expect(edgeToBridge(e)).toEqual(b)
   })
 
-  it('drops display-only edge fields and a non-string reader', () => {
+  it('drops display-only edge fields', () => {
     expect(
-      edgeToBridge({ id: 'x', source: 'a', target: 'b', selected: true, data: { reader: 7, anchor: 'h' } } as never)
+      edgeToBridge({ id: 'x', source: 'a', target: 'b', selected: true, data: { anchor: 'h' } } as never)
     ).toEqual({ id: 'x', source: 'a', target: 'b' })
   })
+
+  // A present-but-invalid reader is a restriction nobody can satisfy, and it must STAY one: if a
+  // conversion dropped it, the next save would write an unrestricted two-way link.
+  it.each([null, 42, '', 'z', { x: 1 }])('keeps an invalid reader %j through load and save', (reader) => {
+    const b = { id: 'bridge-a-b', source: 'a', target: 'b', reader } as never
+    const back = edgeToBridge(bridgeToEdge(b))
+    expect(back).toEqual(b)
+    expect(linkReadPairs(back)).toEqual([])
+  })
 })
+
+describe('appendBridgeEdges (issue #852 review P1)', () => {
+  it('a one-way bridge from planBridges keeps its reader once it is a live edge', () => {
+    const lookup = () => ({ kind: 'terminal', contextCapable: true })
+    const plan = planBridges('n1', ['n2'], lookup, [], { oneWay: true })
+    const live = appendBridgeEdges([], plan.edges)
+    expect(live).toEqual([{ id: 'bridge-n1-n2', source: 'n1', target: 'n2', data: { reader: 'n1' } }])
+    expect(live.map(edgeToBridge)).toEqual(plan.edges)
+  })
+
+  it('never mutates the existing edge array', () => {
+    const es = [{ id: 'e', source: 'a', target: 'b' }]
+    const out = appendBridgeEdges(es, [{ id: 'f', source: 'c', target: 'd' }])
+    expect(es).toHaveLength(1)
+    expect(out).toHaveLength(2)
+  })
+})
+
+describe('contextLinkForEdge (issue #852 review P2b)', () => {
+  const links = [{ id: 'bridge-a-b', source: 'a', target: 'b' }]
+  const ropes = [
+    { id: 'ctrl-b-a', source: 'b', target: 'a' },
+    { id: 'ctrl-a-c', source: 'a', target: 'c' }
+  ]
+
+  it('a context link resolves to itself', () => {
+    expect(contextLinkForEdge('bridge-a-b', links, ropes)?.id).toBe('bridge-a-b')
+  })
+
+  it('a rope resolves to the context link it covers (by endpoint pair, either direction)', () => {
+    expect(contextLinkForEdge('ctrl-b-a', links, ropes)?.id).toBe('bridge-a-b')
+  })
+
+  it('a rope with no underlying context link resolves to nothing', () => {
+    expect(contextLinkForEdge('ctrl-a-c', links, ropes)).toBeNull()
+  })
+
+  it('an unknown (ephemeral) edge resolves to nothing', () => {
+    expect(contextLinkForEdge('sub-x', links, ropes)).toBeNull()
+  })
+})
+
