@@ -124,7 +124,7 @@ describe('terminal font zoom — key wiring', () => {
   it('mirrors the step into the projects store so the Omni board (which reads it) updates live', () => {
     const start = CANVAS.indexOf('TERMINAL_FONT_ZOOM_EVENT, onFontZoom')
     const body = CANVAS.slice(CANVAS.lastIndexOf('useEffect(', start), start)
-    expect(body).toContain('patchStoredFontSize(')
+    expect(body).toContain('patchProjectFontSize(')
     // Same epoch guard commitActiveToStore uses: never patch another project's stored nodes.
     expect(body).toContain('canCommitCanvas(nodesProjectIdRef.current,')
   })

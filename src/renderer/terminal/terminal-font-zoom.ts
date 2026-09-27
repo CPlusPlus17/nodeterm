@@ -197,6 +197,25 @@ export function patchStoredFontSize<T extends { id: string; terminalFontSize?: n
   return out
 }
 
+/**
+ * PURE: `patchStoredFontSize` lifted to the projects list — only `projectId` is touched, and a
+ * no-op step (node missing, value unchanged, project unknown) returns the SAME array, so the
+ * store's `setState` sees no change and notifies nobody (review: a fresh `projects.map` on every
+ * clamped or repeated step re-rendered the Omni board for nothing).
+ */
+export function patchProjectFontSize<
+  N extends { id: string; terminalFontSize?: number },
+  P extends { id: string; nodes: N[] }
+>(projects: P[], projectId: string, nodeId: string, next: number | undefined): P[] {
+  const i = projects.findIndex((p) => p.id === projectId)
+  if (i < 0) return projects
+  const nodes = patchStoredFontSize(projects[i].nodes, nodeId, next)
+  if (nodes === projects[i].nodes) return projects
+  const out = projects.slice()
+  out[i] = { ...projects[i], nodes }
+  return out
+}
+
 /** Stamped on each terminal's xterm host (canvas node and card modal) with the node id. */
 export const FONT_ZOOM_NODE_ATTR = 'data-font-zoom-node'
 

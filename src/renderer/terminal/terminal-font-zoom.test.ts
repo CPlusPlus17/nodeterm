@@ -12,6 +12,7 @@ import {
   nextTerminalFontSizeOverride,
   normalizeTerminalFontSize,
   patchStoredFontSize,
+  patchProjectFontSize,
   requestTerminalFontZoom,
   terminalFontZoomAction,
   terminalFontZoomChord,
@@ -250,5 +251,23 @@ describe('patchStoredFontSize (review round 3: Omni Kanban reads the projects st
   it('returns the SAME array when nothing changes (no store churn)', () => {
     expect(patchStoredFontSize(nodes, 'a', 15)).toBe(nodes)
     expect(patchStoredFontSize(nodes, 'missing', 20)).toBe(nodes)
+  })
+})
+
+describe('patchProjectFontSize (the store-level patch the Omni mirror applies)', () => {
+  const projects = [
+    { id: 'p1', nodes: [{ id: 'a', terminalFontSize: 15 }] },
+    { id: 'p2', nodes: [{ id: 'a' }] }
+  ]
+  it('patches only the named project, reusing every other project object', () => {
+    const out = patchProjectFontSize(projects, 'p1', 'a', 16)
+    expect(out).not.toBe(projects)
+    expect(out[0].nodes).toEqual([{ id: 'a', terminalFontSize: 16 }])
+    expect(out[1]).toBe(projects[1])
+  })
+  it('returns the SAME projects array for a no-op step, so the store does not notify', () => {
+    expect(patchProjectFontSize(projects, 'p1', 'a', 15)).toBe(projects)
+    expect(patchProjectFontSize(projects, 'p1', 'missing', 20)).toBe(projects)
+    expect(patchProjectFontSize(projects, 'nope', 'a', 20)).toBe(projects)
   })
 })

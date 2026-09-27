@@ -260,7 +260,7 @@ import {
   forwardedResetMatches,
   nextTerminalFontSizeOverride,
   normalizeTerminalFontSize,
-  patchStoredFontSize,
+  patchProjectFontSize,
   requestTerminalFontZoom,
   type TerminalFontZoomRequest
 } from '../terminal/terminal-font-zoom'
@@ -9627,13 +9627,11 @@ export function Canvas() {
       // Same epoch guard as `commitActiveToStore`; the next commit writes the identical value.
       const activeId = useProjects.getState().activeProjectId
       if (activeId && canCommitCanvas(nodesProjectIdRef.current, activeId)) {
-        useProjects.setState((st) => ({
-          projects: st.projects.map((p) => {
-            if (p.id !== activeId) return p
-            const nodes = patchStoredFontSize(p.nodes, d.nodeId, next)
-            return nodes === p.nodes ? p : { ...p, nodes }
-          })
-        }))
+        useProjects.setState((st) => {
+          const projects = patchProjectFontSize(st.projects, activeId, d.nodeId, next)
+          // A no-op step returns the same array: hand back the same state so nothing re-renders.
+          return projects === st.projects ? st : { projects }
+        })
       }
       markDirty()
     }
