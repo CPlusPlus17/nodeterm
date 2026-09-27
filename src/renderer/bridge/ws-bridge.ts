@@ -1,6 +1,7 @@
 import type { NormalizedAgentEvent } from '../../shared/agents/normalize'
 import { subscribeAgentReplay } from '../../shared/agent-replay-subscription'
 import type { DesktopWallpaper, WallpaperStill } from '../../shared/wallpaper'
+import type { AlertSoundSaveResult } from '../../shared/alert-sound'
 // WebSocket bridge that reconstructs `window.nodeTerminal` in the browser (Server Edition).
 //
 // Under Electron the preload already defines `window.nodeTerminal`; this module only runs when
@@ -622,7 +623,14 @@ export function buildFilesApi(
     saveCanvasImage: (projectId, name, dataBase64) =>
       client.request(IPC.filesSaveCanvasImage, projectId, name, dataBase64) as Promise<
         string | null
-      >
+      >,
+    // Real: the browser holds the picked sound's bytes and the data dir is the server's, so the
+    // server stores it and serves it back by kind (issue #289). The browser's own path never leaves
+    // the browser — a host-local path would not exist on the server anyway.
+    saveAlertSound: (kind, name, dataBase64) =>
+      client.request(IPC.filesSaveAlertSound, kind, name, dataBase64) as Promise<AlertSoundSaveResult>,
+    readAlertSound: (kind) => client.request(IPC.filesReadAlertSound, kind) as Promise<string | null>,
+    clearAlertSound: (kind) => client.request(IPC.filesClearAlertSound, kind) as Promise<boolean>
   }
 
   const context: ContextApi = {

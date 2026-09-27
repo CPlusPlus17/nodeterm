@@ -2587,6 +2587,19 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   Settings (`notifyOnClaudeDone`). Selecting, focusing, dwelling into, or opening a session card
   clears `unread` and ACKs the finish across phone/notch surfaces — existing read-on-view behavior.
   This NEVER changes the workflow bucket: read state is independent from agent state.
+- **Sound alerts + custom sounds** (issue #289) — the `done` / `needsYou` alert (`SfxKind`) is a
+  synthesized WebAudio chime (`renderer/lib/sfx.ts`, fired from Canvas's `alert` closure, gated by
+  `soundEffects`, 5 s/node cooldown). Settings → Notifications lets the user replace either with their
+  own file. The picked file's BYTES (never its path) go to `files.saveAlertSound`, a core handler in
+  `registerFsHandlers` (both shells), which validates kind / extension allow-list / 5 MB cap / magic
+  bytes and writes a FIXED name `<userData>/sounds/<kind>.<ext>` (`core/alert-sounds.ts`); reads and
+  Reset take only the kind (no path from the renderer, symlinks refused). Settings keep only
+  `customAlertSounds[kind] = {name, stamp}`. Playback decodes the bytes with `decodeAudioData` — no
+  `<audio>`, so CSP `media-src` is untouched on both surfaces — and **any failure (missing file,
+  refused read, decode/playback error) falls back to the chime without throwing** (`lib/customSfx.ts`,
+  failures not cached). Every `playSfx` caller must pass `customAlertSounds` (source-pinned in
+  `customSfx.wiring.test.ts`). Server Edition: full — the browser's `<input type=file>` bytes are
+  stored in the SERVER's data dir. Mobile: N/A (own notification sounds).
 - **Status-grouped sessions** — three always-visible sections: **Waiting for your response** maps
   internal `done`, `waiting`, and `blocked` together (a completed turn, question, or approval all
   need the user); **Running** maps `working`; **Unknown** means no live hook state is available.

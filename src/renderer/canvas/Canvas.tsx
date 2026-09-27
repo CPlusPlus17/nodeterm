@@ -14035,7 +14035,7 @@ export function Canvas() {
           const t = Date.now()
           if (t - (sfxCooldownRef.current[e.nodeId] ?? 0) >= 5000) {
             sfxCooldownRef.current[e.nodeId] = t
-            playSfx(sound, snd.soundVolume)
+            playSfx(sound, snd.soundVolume, snd.customAlertSounds)
           }
         }
         // OS notification only when the whole window is in the background.

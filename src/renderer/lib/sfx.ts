@@ -8,8 +8,16 @@
 //
 // Three surfaces: this is pure renderer, so desktop AND the browser Server Edition get it for free.
 // The mobile companion is a separate app with its own notification sounds — not applicable here.
+//
+// A user may replace either chime with their own file (issue #289, Settings → Notifications). The
+// file lives in the core's data dir and is fetched by KIND over `files.readAlertSound`, then decoded
+// with WebAudio (`decodeAudioData` on the bytes — no <audio> element, so no CSP `media-src` change on
+// either surface). The fallback rules live in lib/customSfx.ts: any failure plays the chime below.
 
-export type SfxKind = 'done' | 'needsYou'
+import type { AlertSoundKind } from '@shared/alert-sound'
+import { createCustomSfxPlayer, playAlert, type CustomSfxPlayer } from './customSfx'
+
+export type SfxKind = AlertSoundKind
 
 /** One scheduled voice. `noise` is a filtered white-noise burst; everything else is an oscillator. */
 export interface SfxVoice {
@@ -98,10 +106,10 @@ function noise(c: AudioContext): AudioBuffer {
 }
 
 /**
- * Play an effect. Never throws and never blocks: an unavailable/blocked audio context is simply
- * silence — a sound effect must not be able to break the agent-status path that calls it.
+ * Play the built-in synthesized chime. `volume` is the user's 0..1 volume (already clamped by the
+ * caller). Never throws: an unavailable/blocked audio context is simply silence.
  */
-export function playSfx(kind: SfxKind, volume = 0.5): void {
+function playChime(kind: SfxKind, volume: number): void {
   const c = audio()
   if (!c) return
   if (c.state === 'suspended') void c.resume()
@@ -140,5 +148,73 @@ export function playSfx(kind: SfxKind, volume = 0.5): void {
     }
   } catch {
     // Nothing to do — losing a chirp is never worth surfacing.
+  }
+}
+
+/** Trim for a user's own sound. Lighter than MASTER: the chimes are raw full-scale square/saw waves,
+ *  while a picked file is (usually) already mastered — the volume slider still scales it. */
+const CUSTOM_MASTER = 0.5
+/** A notification, not a song: a long file is cut off here. */
+const CUSTOM_MAX_SECONDS = 10
+
+function base64ToArrayBuffer(b64: string): ArrayBuffer {
+  const bin = atob(b64)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out.buffer
+}
+
+let customPlayer: CustomSfxPlayer | null = null
+
+function custom(): CustomSfxPlayer {
+  if (customPlayer) return customPlayer
+  customPlayer = createCustomSfxPlayer<AudioBuffer>({
+    read: async (kind) => {
+      const files = typeof window === 'undefined' ? undefined : window.nodeTerminal?.files
+      return files?.readAlertSound ? files.readAlertSound(kind) : null
+    },
+    decode: async (b64) => {
+      const c = audio()
+      if (!c) throw new Error('no audio context')
+      return c.decodeAudioData(base64ToArrayBuffer(b64))
+    },
+    play: (buf, gain) => {
+      const c = audio()
+      if (!c) throw new Error('no audio context')
+      if (c.state === 'suspended') void c.resume()
+      const g = c.createGain()
+      g.gain.value = gain * CUSTOM_MASTER
+      g.connect(c.destination)
+      const src = c.createBufferSource()
+      src.buffer = buf
+      src.connect(g)
+      const t0 = c.currentTime + 0.01
+      src.start(t0)
+      src.stop(t0 + CUSTOM_MAX_SECONDS)
+    }
+  })
+  return customPlayer
+}
+
+/**
+ * Play an alert: the user's custom sound for `kind` when `customSounds` (settings.customAlertSounds)
+ * names one and it loads, else the built-in chime. Never throws and never blocks — a sound effect
+ * must not be able to break the agent-status path that calls it.
+ */
+export function playSfx(kind: SfxKind, volume = 0.5, customSounds?: unknown): void {
+  try {
+    playAlert(kind, volume, customSounds, { chime: playChime, custom: custom() })
+  } catch {
+    // Nothing to do — losing a chirp is never worth surfacing.
+  }
+}
+
+/** Decode the stored custom sound for `kind` without playing it — Settings' post-pick check.
+ *  True when it decodes; false (never a throw) when it will fall back to the chime. */
+export function checkCustomSfx(kind: SfxKind, stamp: number): Promise<boolean> {
+  try {
+    return custom().preload(kind, stamp).catch(() => false)
+  } catch {
+    return Promise.resolve(false)
   }
 }
