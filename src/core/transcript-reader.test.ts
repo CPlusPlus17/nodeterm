@@ -156,18 +156,50 @@ describe('parseChatWindow — pure window parsing', () => {
     expect('effort' in r).toBe(false)
   })
 
-  it('model/effort: non-strings, over-long values and the <synthetic> error record are ignored', () => {
-    const rec = (o: object): string => JSON.stringify({ type: 'assistant', ...o }) + '\n'
-    const buf = Buffer.from(
-      rec({ effort: 'high', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'a' }] } }) +
-        rec({ effort: 'x'.repeat(101), message: { model: 'm'.repeat(101), content: [] } }) +
-        rec({ effort: 7, message: { model: 42, content: [] } }) +
-        // Claude writes an API-error line as model `<synthetic>` with no effort — not a model.
-        rec({ message: { model: '<synthetic>', content: [{ type: 'text', text: 'API Error' }] } })
+  // ONE record answers both fields — the newest non-synthetic assistant record — never carried
+  // forward from an older one (same rule as `parseLatestUsage` in context-tail.ts).
+  const rec = (o: object): string => JSON.stringify({ type: 'assistant', ...o }) + '\n'
+
+  it('model/effort: the newest record without an effort reports NO effort (never an older one)', () => {
+    const r = parseChatWindow(
+      Buffer.from(
+        rec({ effort: 'high', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'a' }] } }) +
+          rec({ message: { model: 'claude-fable-5', content: [{ type: 'text', text: 'b' }] } })
+      ),
+      0
     )
-    const r = parseChatWindow(buf, 0)
+    expect(r.model).toBe('claude-fable-5')
+    expect('effort' in r).toBe(false)
+  })
+
+  it('model/effort: a <synthetic> record after a real one is skipped entirely', () => {
+    const r = parseChatWindow(
+      Buffer.from(
+        rec({ effort: 'high', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'a' }] } }) +
+          // Claude writes an API-error line as model `<synthetic>` with no effort — not a model.
+          rec({ message: { model: '<synthetic>', content: [{ type: 'text', text: 'API Error' }] } })
+      ),
+      0
+    )
     expect(r.model).toBe('claude-opus-5')
     expect(r.effort).toBe('high')
+  })
+
+  it('model/effort: over-long or non-string values on the newest record are absent, not an older value', () => {
+    for (const bad of [
+      { effort: 'x'.repeat(101), message: { model: 'm'.repeat(101), content: [] } },
+      { effort: 7, message: { model: 42, content: [] } }
+    ]) {
+      const r = parseChatWindow(
+        Buffer.from(
+          rec({ effort: 'high', message: { model: 'claude-opus-5', content: [{ type: 'text', text: 'a' }] } }) +
+            rec(bad)
+        ),
+        0
+      )
+      expect('model' in r).toBe(false)
+      expect('effort' in r).toBe(false)
+    }
   })
 
   it('model/effort come only from records INSIDE the window (a partial first line is not read)', () => {

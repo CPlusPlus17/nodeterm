@@ -141,12 +141,13 @@ export async function readTranscriptLines(filePath: string): Promise<TranscriptL
 interface ChatRecordsOut {
   messages: ChatMessage[]
   unmatched: Map<string, string>
-  /** PAGED only: the newest assistant record's `message.model` / `effort` (see `assistantMeta`). */
+  /** PAGED only: `message.model` / `effort` of the newest non-synthetic assistant record (one record). */
   model?: string
   effort?: string
 }
 
-/** Longest `model` / `effort` value a paged read reports; anything longer is not a model name. */
+/** Longest `model` / `effort` value a paged read reports, in UTF-16 code units (JS `.length`; Swift
+ *  `utf16.count`); anything longer is not a model name. */
 const CHAT_META_MAX_CHARS = 100
 /** The model claude stamps on a line it wrote itself (an API error, an interrupt) — not a model. */
 const SYNTHETIC_MODEL = '<synthetic>'
@@ -170,10 +171,11 @@ function parseChatRecords(
   const unmatched = new Map<string, string>()
   const toolById = new Map<string, Extract<ChatPart, { kind: 'tool' }>>()
   let at: number | undefined
-  // Each updated independently from every assistant record (paged only), so the newest record that
-  // states one wins. Measured: claude's `<synthetic>` error lines carry no `effort` and a fake
-  // model, and older CLIs wrote no `effort` at all — neither may blank a value an earlier record in
-  // the same window stated.
+  // A snapshot of ONE record (paged only): the newest non-synthetic assistant record answers BOTH
+  // fields, and a field it does not state (or states invalidly) is absent — never carried forward
+  // from an older record, which may describe a different model or CLI. Same rule as
+  // `parseLatestUsage` (context-tail.ts). `<synthetic>` lines (API errors, interrupts — measured
+  // with no `effort`) are claude's own, not a model turn, so they are skipped entirely.
   let model: string | undefined
   let effort: string | undefined
   const push = (m: ChatMessage, offset: number): void => {
@@ -192,11 +194,9 @@ function parseChatRecords(
     }
     at = lineTime(o.timestamp)
     const content = o.message?.content
-    if (paged && o.type === 'assistant') {
-      const m = metaString(o.message?.model)
-      if (m && m !== SYNTHETIC_MODEL) model = m
-      const e = metaString(o.effort)
-      if (e) effort = e
+    if (paged && o.type === 'assistant' && o.message?.model !== SYNTHETIC_MODEL) {
+      model = metaString(o.message?.model)
+      effort = metaString(o.effort)
     }
     if (o.type === 'assistant' && Array.isArray(content)) {
       const parts: ChatPart[] = []

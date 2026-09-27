@@ -302,7 +302,7 @@ describe('registerTranscriptIpc — paged chat reads', () => {
       )
     )
     registerTranscriptIpc()
-    const q = { sessionId: SID, cwd: CWD, accountId: undefined, nodeId: undefined, agentId: undefined }
+    const q = { sessionId: SID, cwd: CWD }
     for (const page of [undefined, { maxBytes: 65536 }]) {
       const viaIpc = await paged(page)
       const direct = await readChatTranscript(q, page, {})
