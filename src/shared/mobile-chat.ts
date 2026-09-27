@@ -8,7 +8,15 @@ import type { ChatTranscriptResult } from './types'
 
 /** One page of a node's transcript as the phone receives it. `version` lets the phone refuse a
  *  newer shape honestly instead of misreading it. */
-export type ChatPage = ChatTranscriptResult & { version: 1 }
+export type ChatPage = ChatTranscriptResult & {
+  version: 1
+  /** The session id the host resolved and READ this page with (the renderer's agent-status id, else
+   *  the mirror's, else the node's minted id). Absent when none was resolved. The phone keys its
+   *  merge on this rather than its mirror poll: after `/clear` or a resume the mirror lags by up to
+   *  one poll, and a new transcript's tail must not merge into the old thread. Additive — `version`
+   *  stays 1. */
+  sessionId?: string
+}
 
 /** Why the HOST's own record refuses a send: the agent is mid-turn, or a dialog (a permission,
  *  plan or question) holds the pane — whose Enter would ANSWER it. */

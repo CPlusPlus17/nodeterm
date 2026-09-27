@@ -157,7 +157,10 @@ export function createHostChat(deps: HostChatDeps): HostChatOps {
       const result = await deps.readTranscript(q, rawPage ?? {})
       // A read that FAILED (a remote host that did not answer) is an error, never "no transcript".
       if (result.unreadable) throw new Error('Could not read the transcript.')
-      return { ...result, version: 1 }
+      // The id this page was READ with rides the reply, so the phone keys its byte-offset merge on
+      // the thread it came from (after `/clear` or a resume a new transcript's tail must not merge
+      // into the old one). Absent when none was resolved — never an empty string.
+      return { ...result, version: 1, ...(sessionId ? { sessionId } : {}) }
     },
 
     async status(nodeId) {
