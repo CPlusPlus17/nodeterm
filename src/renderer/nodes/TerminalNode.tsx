@@ -250,7 +250,13 @@ import { assembleResumeCommand } from '@shared/agents/launch'
 import { agentEnvSnapshot } from '@renderer/lib/agentEnv'
 import { normalizedAgentModel } from '@shared/agents/model-gateway'
 import { ensureActivePermissionMode } from '../state/permissionMode'
-import { buildSshArgs, sshConnectionIdForProject, sshHostKey, type SshConnection } from '@shared/ssh'
+import {
+  buildSshArgs,
+  sshChipRepeatsProject,
+  sshConnectionIdForProject,
+  sshHostKey,
+  type SshConnection
+} from '@shared/ssh'
 import {
   chipFor,
   commandTooltip,
@@ -1706,6 +1712,17 @@ export function TerminalNode({
   // node (`isRemoteSessionNode` — an SSH-project terminal carries `data.ssh`/`data.sshRemoteTmux`).
   // The affordance is absent, not merely refused on click.
   const sshProject = useProjects((s) => !!s.projects.find((p) => p.id === s.activeProjectId)?.ssh)
+  // The project's SSH endpoint, as two primitives: the project object is rebuilt on every node
+  // serialization, so selecting `ssh.server` itself would re-render this node on each canvas edit.
+  const projectSshHost = useProjects((s) => s.getProject(s.activeProjectId)?.ssh?.server.host)
+  const projectSshUser = useProjects((s) => s.getProject(s.activeProjectId)?.ssh?.server.user)
+  const showSshChip =
+    !!data.ssh &&
+    !sshChipRepeatsProject(
+      data.ssh as SshConnection,
+      !!data.sshRemoteTmux,
+      projectSshHost !== undefined ? { host: projectSshHost, user: projectSshUser ?? '' } : undefined
+    )
   const remoteSession = sshProject || isRemoteSessionNode(data)
   // "Does this node's session live on another machine?" for the offscreen-dispose gate — asked in
   // TWO halves, because the two ways of being remote are independent facts:
@@ -5628,7 +5645,8 @@ export function TerminalNode({
           }
           warning={accountFallback}
         />
-        {data.ssh ? (
+        {/* Only where it says something the project tab does not — see `sshChipRepeatsProject`. */}
+        {showSshChip ? (
           <span
             className="term-ssh-chip"
             title={`ssh ${(data.ssh as SshConnection).user}@${(data.ssh as SshConnection).host}`}
