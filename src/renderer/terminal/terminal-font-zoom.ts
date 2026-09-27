@@ -177,6 +177,26 @@ export function leavesSharedGlyphAtlas(effectiveFontSize: number, globalFontSize
   return effectiveFontSize !== globalFontSize
 }
 
+/**
+ * PURE. `nodes` with one node's stored `terminalFontSize` replaced — the SAME array when the node is
+ * absent or already holds that value, so a no-op step costs no store update. Used to mirror a step
+ * into the projects store for the ACTIVE project: the Omni (all-projects) board derives its card
+ * modal's `spawn` from the store, which otherwise only catches up on the next autosave commit
+ * (~800 ms, or never while a workspace conflict suspends autosave). The mirror is idempotent with
+ * that commit, which serializes the same value from the live canvas.
+ */
+export function patchStoredFontSize<T extends { id: string; terminalFontSize?: number }>(
+  nodes: T[],
+  nodeId: string,
+  next: number | undefined
+): T[] {
+  const i = nodes.findIndex((n) => n.id === nodeId)
+  if (i < 0 || nodes[i].terminalFontSize === next) return nodes
+  const out = nodes.slice()
+  out[i] = { ...nodes[i], terminalFontSize: next }
+  return out
+}
+
 /** Stamped on each terminal's xterm host (canvas node and card modal) with the node id. */
 export const FONT_ZOOM_NODE_ATTR = 'data-font-zoom-node'
 

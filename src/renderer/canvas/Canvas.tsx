@@ -260,6 +260,7 @@ import {
   forwardedResetMatches,
   nextTerminalFontSizeOverride,
   normalizeTerminalFontSize,
+  patchStoredFontSize,
   requestTerminalFontZoom,
   type TerminalFontZoomRequest
 } from '../terminal/terminal-font-zoom'
@@ -9620,6 +9621,20 @@ export function Canvas() {
       setNodes((ns) =>
         ns.map((n) => (n.id === d.nodeId ? { ...n, data: { ...n.data, terminalFontSize: next } } : n))
       )
+      // Mirror into the projects store too (review round 3): the Omni board reads the ACTIVE
+      // project's card spawn from the store, not React Flow, so without this its focused terminal
+      // lagged until the next autosave commit — or never, while a conflict suspends autosave.
+      // Same epoch guard as `commitActiveToStore`; the next commit writes the identical value.
+      const activeId = useProjects.getState().activeProjectId
+      if (activeId && canCommitCanvas(nodesProjectIdRef.current, activeId)) {
+        useProjects.setState((st) => ({
+          projects: st.projects.map((p) => {
+            if (p.id !== activeId) return p
+            const nodes = patchStoredFontSize(p.nodes, d.nodeId, next)
+            return nodes === p.nodes ? p : { ...p, nodes }
+          })
+        }))
+      }
       markDirty()
     }
     window.addEventListener(TERMINAL_FONT_ZOOM_EVENT, onFontZoom)

@@ -11,6 +11,7 @@ import {
   leavesSharedGlyphAtlas,
   nextTerminalFontSizeOverride,
   normalizeTerminalFontSize,
+  patchStoredFontSize,
   requestTerminalFontZoom,
   terminalFontZoomAction,
   terminalFontZoomChord,
@@ -233,5 +234,21 @@ describe('keypad Insert stays a copy chord (review round 2 of #915)', () => {
   })
   it('the digit-row 0 resets on its physical key whatever key it reports (AZERTY)', () => {
     expect(terminalFontZoomChord(key({ ctrlKey: true, key: 'à', code: 'Digit0' }), false)).toBe('reset')
+  })
+})
+
+describe('patchStoredFontSize (review round 3: Omni Kanban reads the projects store)', () => {
+  const nodes = [
+    { id: 'a', terminalFontSize: 15 },
+    { id: 'b' }
+  ]
+  it('sets and clears one node, leaving the rest untouched', () => {
+    expect(patchStoredFontSize(nodes, 'b', 17)).toEqual([{ id: 'a', terminalFontSize: 15 }, { id: 'b', terminalFontSize: 17 }])
+    expect(patchStoredFontSize(nodes, 'a', undefined)).toEqual([{ id: 'a', terminalFontSize: undefined }, { id: 'b' }])
+    expect(nodes[1]).toEqual({ id: 'b' })
+  })
+  it('returns the SAME array when nothing changes (no store churn)', () => {
+    expect(patchStoredFontSize(nodes, 'a', 15)).toBe(nodes)
+    expect(patchStoredFontSize(nodes, 'missing', 20)).toBe(nodes)
   })
 })
