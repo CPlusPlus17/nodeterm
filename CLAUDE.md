@@ -1883,11 +1883,20 @@ else, and its context links must keep classifying across restarts).
   with base64, transferring less than 1.6 MiB including alignment/framing; idle replies contain
   only the size/range header. The encoded dd exit status must survive the shell pipeline:
   pipeline success alone can hide a failed read. Short/malformed replies and SSH failures throw,
-  retain the cursor, and back off from 2s to 60s with payload-free diagnostics. A SEPARATE idle
-  backoff (`idleDelayMs`) stretches the 1 s poll after three consecutive empty successful reads
+  retain the cursor, and back off from 2s to 60s with payload-free diagnostics — logged when a
+  streak starts, when it settles at 60 s and when it recovers, never per retry, and naming only the
+  observed status (`exit 255`, `malformed reply`), never a guessed cause: the runner reports a
+  timeout as status 1. **A transcript that does not exist is not a failure.** Claude creates it on
+  the first prompt while SessionStart already hands over the path (measured on 2.1.283), so every
+  unused remote Claude node used to walk the failure backoff and log a line a minute. The command
+  answers `NODETERM_ABSENT` with status 0 and the tail polls it on the idle cadence; a file that
+  appears after being seen missing is live from byte 0 when its bootstrap window covers all of it.
+  A SEPARATE idle backoff (`idleDelayMs`) stretches the 1 s poll after three consecutive empty successful reads
   (2/4/8 s, capped at 10 s) and is reset by any data-bearing read and by every same-ref `track()`
   — i.e. every hook POST for the session, which is what keeps a `<task-notification>` (it rides
-  a UserPromptSubmit hook) at ~1 s latency; never merge it with the failure backoff. Bootstrap and
+  a UserPromptSubmit hook) at ~1 s latency; never merge it with the failure backoff. That same
+  `track()` also skips the rest of a pending failure wait (the host just reached us) but keeps the
+  failure streak, so a read that fails again goes straight back to 60 s. Bootstrap and
   detected truncation restore usage without replaying historical task notifications/tool results,
   including a historical partial line completed later. A changed remote reference replaces its
   tracking generation so stale in-flight replies cannot publish. Server Edition uses the local

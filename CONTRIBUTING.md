@@ -444,7 +444,9 @@ empty line because `#` starts a comment.
 
 **Remote context polling must bound bytes before SSH transports them.** Bootstrap from the
 file's measured end, keep offsets in raw bytes, and distinguish an idle read from failure so
-the poller can back off. Bootstrap history restores usage only, never task/result events.
+the poller can back off. A transcript that does not exist yet is idle, not a failure: Claude only
+creates it on the first prompt, long after SessionStart handed over its path. Bootstrap history
+restores usage only, never task/result events.
 `core/remote-ssh/transcript-window.ts` and the real-shell remote-context tests pin this contract.
 
 **A shared agent daemon is live-session infrastructure.** Codex's app-server control socket is
