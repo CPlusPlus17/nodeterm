@@ -178,6 +178,20 @@ function custom(): CustomSfxPlayer {
       if (!c) throw new Error('no audio context')
       return c.decodeAudioData(base64ToArrayBuffer(b64))
     },
+    // Keep only what can be heard: the decoded clip is float32 PCM (a 5 MB MP3 can be ~200 MB and a
+    // heavily compressed file far more), and playback stops at CUSTOM_MAX_SECONDS anyway. The full
+    // buffer is dropped once this copy exists; the decode itself still peaks at full size.
+    trim: (buf) => {
+      const frames = Math.floor(buf.sampleRate * CUSTOM_MAX_SECONDS)
+      if (buf.length <= frames) return buf
+      const c = audio()
+      if (!c) throw new Error('no audio context')
+      const head = c.createBuffer(buf.numberOfChannels, frames, buf.sampleRate)
+      for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+        head.copyToChannel(buf.getChannelData(ch).subarray(0, frames), ch)
+      }
+      return head
+    },
     play: (buf, gain) => {
       const c = audio()
       if (!c) throw new Error('no audio context')

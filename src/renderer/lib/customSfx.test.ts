@@ -55,6 +55,36 @@ describe('createCustomSfxPlayer', () => {
     expect(deps.read).toHaveBeenCalledTimes(2)
   })
 
+  it('caches only the trimmed copy of a decoded buffer — the full decode is not what is kept', async () => {
+    const trim = vi.fn((b: Buf): Buf => ({ id: `${b.id}-first10s` }))
+    const { deps, p } = player({ trim })
+    await p.play('done', 1, 0.5)
+    await p.play('done', 1, 0.5)
+    expect(trim).toHaveBeenCalledTimes(1)
+    expect(trim).toHaveBeenCalledWith({ id: 'b64-done' })
+    expect(deps.play).toHaveBeenNthCalledWith(1, { id: 'b64-done-first10s' }, 0.5)
+    expect(deps.play).toHaveBeenNthCalledWith(2, { id: 'b64-done-first10s' }, 0.5)
+  })
+
+  it('negative-caches a DECODE failure per stamp: later alerts neither re-read nor re-decode', async () => {
+    const { deps, p } = player({ decode: vi.fn(async () => { throw new Error('EncodingError') }) })
+    expect(await p.play('done', 1, 0.5)).toBe(false)
+    expect(await p.play('done', 1, 0.5)).toBe(false)
+    expect(await p.preload('done', 1)).toBe(false)
+    expect(deps.read).toHaveBeenCalledTimes(1)
+    expect(deps.decode).toHaveBeenCalledTimes(1)
+    // A new pick (new stamp) is tried afresh.
+    await p.play('done', 2, 0.5)
+    expect(deps.read).toHaveBeenCalledTimes(2)
+  })
+
+  it('a trim that throws counts as a decode failure (negative-cached, never thrown)', async () => {
+    const { deps, p } = player({ trim: vi.fn(() => { throw new Error('NotSupportedError') }) })
+    expect(await p.play('done', 1, 0.5)).toBe(false)
+    expect(await p.play('done', 1, 0.5)).toBe(false)
+    expect(deps.read).toHaveBeenCalledTimes(1)
+  })
+
   it('preload decodes without playing', async () => {
     const { deps, p } = player()
     expect(await p.preload('needsYou', 3)).toBe(true)

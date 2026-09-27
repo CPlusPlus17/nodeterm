@@ -9,8 +9,13 @@
 //   • A custom sound is loaded by KIND from the core (never by path), decoded once per `stamp`,
 //     and played at the user's volume. Anything that goes wrong — missing file, a read the bridge
 //     refuses, a decode error, a playback error — answers `false`, and the caller plays the chime.
-//   • A failure is NOT cached: the next alert retries, so a transiently dropped Server Edition
-//     socket does not pin the chime for the rest of the run.
+//   • Only the playable head of a decoded sound is cached (`trim`): a 5 MB compressed file can
+//     decode to hundreds of MB of float32 PCM, and playback is cut at 10 s anyway.
+//   • A READ failure (no file, refused/dropped read) is NOT cached: the next alert retries, so a
+//     transiently dropped Server Edition socket does not pin the chime for the rest of the run.
+//     A DECODE failure IS cached for that stamp: the bytes will not decode any better next time,
+//     and re-reading them per alert is a multi-MB transfer (a WS payload on the Server Edition)
+//     plus a full decode, every time. A new pick has a new stamp and is tried afresh.
 //   • Nothing here throws into the caller, synchronously or as an unhandled rejection.
 
 import { customAlertSoundFor, type AlertSoundKind } from '@shared/alert-sound'
@@ -22,6 +27,9 @@ export interface CustomSfxDeps<B> {
   decode(dataBase64: string): Promise<B>
   /** Start playback at `gain` (0..1, the user's volume). May throw. */
   play(buf: B, gain: number): void
+  /** Reduce a decoded buffer to what is kept (the playable head). Absent = keep as decoded.
+   *  A throw counts as a decode failure. */
+  trim?(buf: B): B
 }
 
 export interface CustomSfxPlayer {
@@ -37,20 +45,30 @@ export function createCustomSfxPlayer<B>(deps: CustomSfxDeps<B>): CustomSfxPlaye
   const load = (kind: AlertSoundKind, stamp: number): Promise<B | null> => {
     const hit = cache.get(kind)
     if (hit && hit.stamp === stamp) return hit.buf
+    let transient = false
     const buf = (async (): Promise<B | null> => {
+      let b64: string | null
       try {
-        const b64 = await deps.read(kind)
-        if (!b64) return null
-        return await deps.decode(b64)
+        b64 = await deps.read(kind)
       } catch {
+        b64 = null
+      }
+      if (!b64) {
+        transient = true
         return null
+      }
+      try {
+        const decoded = await deps.decode(b64)
+        return deps.trim ? deps.trim(decoded) : decoded
+      } catch {
+        return null // a decode failure: stays cached for this stamp
       }
     })()
     const entry = { stamp, buf }
     cache.set(kind, entry)
-    // Only a success stays cached; a failure is forgotten so the next alert asks again.
-    void buf.then((b) => {
-      if (b === null && cache.get(kind) === entry) cache.delete(kind)
+    // A read failure is forgotten so the next alert asks again; success and decode failure stay.
+    void buf.then(() => {
+      if (transient && cache.get(kind) === entry) cache.delete(kind)
     })
     return buf
   }
