@@ -8,7 +8,9 @@ import {
   hiddenLinkIds,
   linkIdsCoveredByRopes,
   pairKey,
-  planBridges
+  planBridges,
+  bridgeToEdge,
+  edgeToBridge
 } from './noteLink'
 import type { CanvasNodeState } from '@shared/types'
 
@@ -408,5 +410,27 @@ describe('the note builders cannot be made to submit a second line', () => {
     )
     // The readable ⏎ collapse still owns the ordinary multi-line note.
     expect(buildNotePushMessage('T', 'one\ntwo')).toContain('one ⏎ two')
+  })
+})
+
+describe('bridge ⇄ React Flow edge (issue #852)', () => {
+  it('a reader-less bridge round-trips with no data field (old project.json unchanged)', () => {
+    const b = { id: 'bridge-a-b', source: 'a', target: 'b' }
+    const e = bridgeToEdge(b)
+    expect(e).toEqual(b)
+    expect(edgeToBridge(e)).toEqual(b)
+  })
+
+  it('a one-way bridge carries its reader in edge.data and back', () => {
+    const b = { id: 'bridge-a-b', source: 'a', target: 'b', reader: 'b' }
+    const e = bridgeToEdge(b)
+    expect(e).toEqual({ id: 'bridge-a-b', source: 'a', target: 'b', data: { reader: 'b' } })
+    expect(edgeToBridge(e)).toEqual(b)
+  })
+
+  it('drops display-only edge fields and a non-string reader', () => {
+    expect(
+      edgeToBridge({ id: 'x', source: 'a', target: 'b', selected: true, data: { reader: 7, anchor: 'h' } } as never)
+    ).toEqual({ id: 'x', source: 'a', target: 'b' })
   })
 })

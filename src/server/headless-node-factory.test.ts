@@ -585,6 +585,20 @@ describe('HeadlessNodeFactory', () => {
     expect(pty.sends).toEqual([])
   })
 
+  it('link --one-way persists a reader so only --from reads (issue #852)', async () => {
+    const workspace = await store.load({ sideline: false })
+    workspace.projects[0].nodes.push(terminal('term-third', 'Third', 'gemini', 900))
+    await store.save(workspace)
+    ownership.record('term-third', { sourceNodeId: 'term-source', projectId: 'project-1' })
+
+    await expect(
+      factory.link('term-source', { from: 'term-upstream', to: 'term-third', 'one-way': '' }, true)
+    ).resolves.toMatchObject({ ok: true, result: { from: 'term-upstream', linked: ['term-third'] } })
+    expect((await store.load({ sideline: false })).projects[0].bridges).toEqual([
+      expect.objectContaining({ source: 'term-upstream', target: 'term-third', reader: 'term-upstream' })
+    ])
+  })
+
   it('refuses unverified and cross-project link endpoints without a partial graph edit', async () => {
     await expect(factory.link('term-source', { to: 'term-upstream' }, false)).resolves.toMatchObject({
       ok: false,

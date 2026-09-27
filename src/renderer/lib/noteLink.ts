@@ -2,7 +2,9 @@
 // agent nodes vs. note link between a sticky and a terminal), build the one-shot push
 // message a note link injects into an agent session, and re-export the link-map builders.
 // Kept free of React/store imports so the connection matrix is unit-testable.
+import type { Edge } from '@xyflow/react'
 import { oneLine } from '@shared/one-line'
+import type { BridgeLink } from '@shared/types'
 import {
   classifyLink,
   planBridges,
@@ -13,12 +15,33 @@ import {
 // Server Edition consumes the same pure planner directly from shared.
 export {
   classifyLink,
+  gainedReaders,
+  linkReadPairs,
   planBridges,
+  withLinkReader,
   type BridgePlan,
   type LinkEndpoint,
   type LinkKind,
   type SkippedBridge
 } from '@shared/canvas-link'
+
+/**
+ * Persisted bridge → React Flow edge. A one-way link's reader (issue #852) rides `edge.data`,
+ * because React Flow owns the edge's top-level fields; a reader-less bridge gets no `data` at all,
+ * so every pre-#852 link loads exactly as before.
+ */
+export function bridgeToEdge(b: BridgeLink): Edge {
+  const e: Edge = { id: b.id, source: b.source, target: b.target }
+  return typeof b.reader === 'string' ? { ...e, data: { reader: b.reader } } : e
+}
+
+/** React Flow edge → persisted bridge: id, endpoints and the one-way reader only — selection and
+ *  display-only data never reach project.json. The single inverse of `bridgeToEdge`. */
+export function edgeToBridge(e: Pick<Edge, 'id' | 'source' | 'target' | 'data'>): BridgeLink {
+  const b: BridgeLink = { id: e.id, source: e.source, target: e.target }
+  const reader = (e.data as { reader?: unknown } | undefined)?.reader
+  return typeof reader === 'string' ? { ...b, reader } : b
+}
 
 /** Order-independent key for an edge's endpoints (a↔b and b↔a are the same connection). */
 export function pairKey(a: string, b: string): string {
