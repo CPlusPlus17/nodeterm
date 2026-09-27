@@ -2887,6 +2887,10 @@ export interface ChatTranscriptResult {
   model?: string
   /** PAGED claude reads only: the newest assistant record's top-level `effort` in the window. */
   effort?: string
+  /** PAGED reads only, with `found: false`: the transcript could not be READ (a remote host that did
+   *  not answer, a growth re-read that failed, a remote node with no reachable master) — as opposed
+   *  to "no transcript exists". Absent on every other result. */
+  unreadable?: true
 }
 
 /**

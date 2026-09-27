@@ -36,6 +36,9 @@ export interface TranscriptQuery {
   cwd: string | undefined
   accountId: string | undefined
   nodeId: string | undefined
+  /** The caller KNOWS this node is remote (from its own records, not from a live pty): the local
+   *  resolver must never run, even when the remote leg cannot resolve the node. */
+  remoteOnly?: boolean
 }
 
 export interface TranscriptIpcDeps {
@@ -104,7 +107,7 @@ async function parseGrowingWindow(
     if (!noCompleteLine || w.start === 0 || maxBytes >= CHAT_PAGE_MAX_BYTES) return { found: true, ...parsed }
     maxBytes = Math.min(CHAT_PAGE_MAX_BYTES, maxBytes * CHAT_PAGE_GROWTH)
     const next = await read({ before: page.before, maxBytes })
-    if (!next) return notFoundPage()
+    if (!next) return unreadablePage()
     w = next
   }
 }
@@ -115,6 +118,10 @@ const notFoundPage = (): ChatTranscriptResult => ({
   olderCursor: null,
   unmatchedResults: []
 })
+
+/** Not found BECAUSE it could not be read — the host did not answer, or a remote node has no
+ *  reachable master. Distinct from "no transcript exists" for a caller that must say so. */
+const unreadablePage = (): ChatTranscriptResult => ({ ...notFoundPage(), unreadable: true })
 
 /**
  * A paged chat read (`chat:read-transcript` with its trailing `page` argument). Kept apart from the
@@ -136,7 +143,7 @@ async function readChatPage(
   if (readRemotePage) {
     const remote = await readRemotePage(q, page)
     if (remote !== null) {
-      if (!remote.ok) return notFoundPage()
+      if (!remote.ok) return unreadablePage()
       // A growth re-read that suddenly says "not remote" (null) is a failed read too — never a
       // reason to go read THIS machine's disk halfway through a remote page.
       return parseGrowingWindow(page, remote, async (p) => {
@@ -145,6 +152,10 @@ async function readChatPage(
       })
     }
   }
+  // A node its caller KNOWS is remote (an SSH project's node, whether or not a pty is attached):
+  // "the remote leg could not resolve it" is a failed read, never "take THIS machine's disk" —
+  // that would answer from the wrong machine, or adopt a local transcript sharing its cwd.
+  if (q.remoteOnly) return unreadablePage()
   const p = await resolveTranscript(q, deps.pathFor)
   if (!p) return notFoundPage()
   const w = await readChatWindow(p, page)
@@ -178,6 +189,9 @@ export interface ChatReadQuery {
   accountId?: string
   nodeId?: string
   agentId?: string
+  /** See `TranscriptQuery.remoteOnly`. Honoured on the PAGED read (the only one the phone uses) and
+   *  by grok's local-only reader; the legacy unpaged read ignores it. */
+  remoteOnly?: boolean
 }
 
 /**
@@ -191,7 +205,7 @@ export async function readChatTranscript(
   rawPage: unknown,
   deps: TranscriptIpcDeps
 ): Promise<ChatTranscriptResult> {
-  const { sessionId, cwd, accountId, nodeId, agentId } = q
+  const { sessionId, cwd, accountId, nodeId, agentId, remoteOnly } = q
   // Validated FIRST: it arrived over IPC / the WS bridge, and `before` reaches a remote shell
   // line. `null` = no page asked for = the legacy read below, byte for byte.
   const page = normalizeChatPage(rawPage)
@@ -201,6 +215,8 @@ export async function readChatTranscript(
   // conversation. The remote leg is claude-only too (its reader tails claude's file), so a grok
   // node is served locally or not at all rather than being handed the wrong host's claude log.
   if (agentId === 'grok') {
+    // Grok is read locally only — a remote grok node's history is on the host.
+    if (remoteOnly) return page ? unreadablePage() : { messages: [], found: false }
     const gp = sessionId ? await locateGrok(sessionId) : undefined
     // Grok does NOT page: its history is small and its reader has no byte-offset keys, so a
     // paged request gets the whole (capped) read with `olderCursor: null` — "nothing older to
@@ -212,7 +228,7 @@ export async function readChatTranscript(
       ? { messages: [], found: false, ...paging }
       : { messages: chatMessagesFromGrok(buf), found: true, ...paging }
   }
-  if (page) return readChatPage({ sessionId, cwd, accountId, nodeId }, page, deps)
+  if (page) return readChatPage({ sessionId, cwd, accountId, nodeId, ...(remoteOnly ? { remoteOnly } : {}) }, page, deps)
   const remote = deps.readRemote ? await deps.readRemote({ sessionId, cwd, accountId, nodeId }) : null
   // A resolved-but-unreadable remote file is NOT "no conversation yet" — the read failed
   // (master down, transcript gone), and the panel must be able to say so.

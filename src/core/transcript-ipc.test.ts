@@ -446,7 +446,8 @@ describe('registerTranscriptIpc — paged chat reads', () => {
         messages: [],
         found: false,
         olderCursor: null,
-        unmatchedResults: []
+        unmatchedResults: [],
+        unreadable: true
       })
     })
 
@@ -483,7 +484,8 @@ describe('registerTranscriptIpc — paged chat reads', () => {
         messages: [],
         found: false,
         olderCursor: null,
-        unmatchedResults: []
+        unmatchedResults: [],
+        unreadable: true
       })
     })
 
@@ -494,5 +496,31 @@ describe('registerTranscriptIpc — paged chat reads', () => {
       expect(res.messages[0].parts[0]).toMatchObject({ text: 'local' })
       expect(res.olderCursor).toBeNull()
     })
+  })
+})
+
+describe('readChatTranscript — remoteOnly (a node the host KNOWS is remote)', () => {
+  it('never takes the local leg when the remote leg cannot resolve it (unmounted SSH node)', async () => {
+    writeTranscript(lines(assistantLine('the LOCAL machine')))
+    const pathFor = vi.fn(() => undefined)
+    for (const readRemotePage of [async () => null, undefined]) {
+      const res = await readChatTranscript(
+        { sessionId: SID, cwd: CWD, nodeId: 'nt-1', agentId: 'claude', remoteOnly: true },
+        {},
+        { pathFor, ...(readRemotePage ? { readRemotePage } : {}) }
+      )
+      expect(res).toEqual({ messages: [], found: false, olderCursor: null, unmatchedResults: [], unreadable: true })
+    }
+    expect(pathFor).not.toHaveBeenCalled()
+  })
+  it('a remote grok node is not read from this machine either', async () => {
+    const res = await readChatTranscript({ sessionId: SID, nodeId: 'nt-1', agentId: 'grok', remoteOnly: true }, {}, {})
+    expect(res).toMatchObject({ found: false, unreadable: true, messages: [] })
+  })
+  it('without remoteOnly a null remote leg still means "local session" (unchanged)', async () => {
+    writeTranscript(lines(assistantLine('local')))
+    const res = await readChatTranscript({ sessionId: SID, cwd: CWD, nodeId: 'nt-1' }, {}, { readRemotePage: async () => null })
+    expect(res.found).toBe(true)
+    expect(res.unreadable).toBeUndefined()
   })
 })

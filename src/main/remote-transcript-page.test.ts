@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createReadRemotePage, forgetLocatedRef, rememberHookRef, type RemoteTranscriptRefCache } from './remote-transcript-page'
+import { createReadRemotePage, forgetLocatedRef, rememberHookRef, remoteTargetForNode, type RemoteTranscriptRefCache } from './remote-transcript-page'
 import type { RemoteFileRef } from './remote-ssh/remote-file'
 
 const ref = (path: string): RemoteFileRef => ({
@@ -74,5 +74,22 @@ describe('createReadRemotePage — the desktop remote leg of a paged chat read',
     expect(await read(q, PAGE)).toEqual({ ok: false })
     expect(c.bySession.has('sid')).toBe(false)
     expect(c.located.has('sid')).toBe(false)
+  })
+})
+
+describe('remoteTargetForNode (which master a remote transcript read goes over)', () => {
+  const live = { conn: { host: 'live' } as RemoteFileRef['conn'], controlPath: '/live' }
+  const proj = { conn: { host: 'proj' } as RemoteFileRef['conn'], controlPath: '/proj' }
+  it('the live pty session wins when there is one', () => {
+    expect(remoteTargetForNode('n', { live: () => live, projectIdFor: () => 'p', refForProject: () => proj })).toBe(live)
+  })
+  it('an UNMOUNTED SSH node resolves through its PROJECT\'s master', () => {
+    const refForProject = vi.fn(() => proj)
+    expect(remoteTargetForNode('n', { live: () => undefined, projectIdFor: () => 'p', refForProject })).toEqual(proj)
+    expect(refForProject).toHaveBeenCalledWith('p')
+  })
+  it('a local node (no project) or a disconnected project resolves nothing', () => {
+    expect(remoteTargetForNode('n', { live: () => undefined, projectIdFor: () => undefined, refForProject: () => proj })).toBeUndefined()
+    expect(remoteTargetForNode('n', { live: () => undefined, projectIdFor: () => 'p', refForProject: () => undefined })).toBeUndefined()
   })
 })

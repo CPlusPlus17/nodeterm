@@ -47,3 +47,21 @@ export function createReadRemotePage(deps: {
     }
   }
 }
+
+/** Which ControlMaster a remote transcript read for `nodeId` goes over: the node's LIVE pty session
+ *  when there is one (the exact master it spawned over), else its SSH PROJECT's master — an idle
+ *  tab, or any node after a desktop restart, has no attached pty, and resolving only through the pty
+ *  made such a node read as "not remote". `undefined` = a local node, or a project with no master. */
+export function remoteTargetForNode<T extends { conn: unknown; controlPath: string }>(
+  nodeId: string,
+  deps: {
+    live(nodeId: string): T | undefined
+    projectIdFor(nodeId: string): string | undefined
+    refForProject(projectId: string): T | undefined
+  }
+): T | undefined {
+  const live = deps.live(nodeId)
+  if (live) return live
+  const projectId = deps.projectIdFor(nodeId)
+  return projectId ? deps.refForProject(projectId) : undefined
+}
