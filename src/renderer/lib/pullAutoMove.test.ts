@@ -5,6 +5,7 @@ import type { ProjectKanban } from '@shared/types'
 import type { GitHubPullBoard, GitHubPullStatus } from '@shared/github-pull-status'
 import { setNoAutoMove, unlinkPull } from '@shared/kanban-pull-links'
 import { applyPullAutoMove, autoMoveNote, decidePullAutoMove, planPullAutoMoves } from './pullAutoMove'
+import { columnForNode } from './kanban'
 
 const ARMED = 1_000
 
@@ -67,9 +68,10 @@ describe('decidePullAutoMove — the guard order', () => {
 })
 
 describe('applyPullAutoMove — compare-and-set', () => {
-  it('moves the card from the column the decision saw', () => {
-    expect(applyPullAutoMove(board(), 'card-1', 'doing', 'done')?.assignments)
-      .toEqual([{ nodeId: 'card-1', columnId: 'done' }])
+  it('moves the card from the column the decision saw — one assignment, in the target column', () => {
+    const next = applyPullAutoMove(board(), 'card-1', 'doing', 'done')!
+    expect(next.assignments.filter((a) => a.nodeId === 'card-1')).toHaveLength(1)
+    expect(columnForNode(next, 'card-1')?.id).toBe('done')
   })
 
   it('does nothing when the card moved since the decision', () => {
