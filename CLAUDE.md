@@ -5358,10 +5358,47 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     now takes `canvasCovered`; and a `Space` binding could never match because `e.key` is `' '`
     (`normalizeKey` maps it to `SPACE`). The Settings recorder captures a bare key only for a
     command that may have one (`board` scope or `allowBareKey`).
-  **Phone** (nodeterm-ios): must at least not break on `category` (an extra JSON key its board
-  decoder ignores); the relay-served move now lands at the top while the phone's direct-SSH writer
-  (`KanbanBoardWriter`) still appends, and `KanbanDefaults` should gain the three categories — both
-  are the iOS follow-up, not desktop work.
+  - **Rank strings** (`KanbanAssignment.rank?`, `@shared/kanban-rank` + `@shared/kanban-order`).
+    Order within a column = rank; an entry without a valid one (every pre-rank board, an older
+    build's move — its `assignNode` rebuilds the moved entry without the field — a hand edit) sits
+    right after the entry before it in the ARRAY, ties keep array order. Keys are base-62
+    fractional-index strings with an integer head, so the board's DEFAULT (top insert) is a
+    decrement: a thousand top inserts stay four characters (a digits-only midpoint scheme grows a
+    character every few). Strings never exhaust, so there is no rebalancing. **Every write goes
+    through `placeAssignment`** (renderer `assignNode` AND the relay's `setProjectCardColumn`), which
+    also keeps the array in rank order so a build that ignores `rank` shows the same column — the
+    brief's two goals ("a move is a one-line diff" and "keep writing the array in rank order") pull
+    against each other, and the resolution is to move as little as the second allows: a
+    cross-column move whose array slot already sits between its new neighbours changes ONE entry in
+    place (two lines: `columnId` + `rank`); otherwise its block moves next to its successor; a
+    reorder WITHIN a column always moves a block (the array must change for an old build to see
+    it). A destination column is repaired first when it must be — missing/invalid/colliding ranks
+    re-keyed in the order it was already showing (only those entries change; a board's first write
+    into an unranked column ranks it once), an array that disagrees re-slotted within the column's
+    own positions. MEASURED with `git merge-file` (`core/kanban-rank-merge.test.ts`): two
+    ADJACENT cards filed into Done concurrently conflict under array-only placement and merge
+    cleanly with ranks; two NON-adjacent ones merged cleanly either way, so do not claim more than
+    that. The file's own `rev`/`savedAt` header still conflicts on any concurrent save — untouched.
+  - **Saved views** (`kanban.views: [{id, name, query}]`, `@shared/kanban-views`) are SHARED
+    content: a query carries source, labels, members and columns (the member and column filters are
+    board filters of their own). `viewQuery` is the ONLY builder and reads only those four, so the
+    status chips can never enter a view. The ACTIVE view and "show closed" are per user
+    (`kanbanDisplay`), restored on entering the board; a view a teammate deleted is ignored.
+    Deleting a view confirms (it goes for everyone). `sanitizeViews` runs inside `sanitizeKanban`,
+    keeps query fields it does not know, and `KANBAN_VIEW_SOURCES` is pinned to the renderer's
+    source registry (the shared sanitizer cannot import it).
+  - **Handoff pings** (`lib/handoffPings.ts`): the `assign` verb notifies a card's ASSIGNEE (this
+    machine's presence name) when an agent files it into a `done` column or a `started` column past
+    the board's first — never on routine moves, and not for needs-you (the existing agent-status
+    alert already covers every agent node). Same consent, background-only rule and per-node
+    cooldown as the turn-end alert, and a handoff ping arms a one-shot FOLD so the Stop hook that
+    follows seconds later is not a second notification for the same moment. v1 is agent-driven
+    moves only: a teammate's move arriving by git, or the phone's relay move, pings nobody.
+  **Phone** (nodeterm-ios): must at least not break on `category`, `rank` or `views` (extra JSON
+  keys its board decoder ignores). The relay-served move now lands at the top with a rank, while
+  the phone's direct-SSH writer (`KanbanBoardWriter`) still appends without one — the next desktop
+  write into that column ranks it, and array order already shows it correctly. `KanbanDefaults`
+  should gain the three categories. All three are the iOS follow-up, not desktop work.
 - **Omni Kanban (global swimlanes)** (`components/kanban/GlobalKanbanView.tsx`; one swimlane per open project; `state/viewMode.ts` `globalKanban` (localStorage `nodeterm.globalKanban`, machine-local, like `viewByProject`) + `settings.omniKanbanEnabled` (feature gate, default OFF, `settings.json`) / `omniKanbanAsDefault` (when true, `view.kanbanToggle` — Cmd+Shift+B — opens Omni; otherwise per-project; `view.globalKanbanToggle` registry command — unbound, remappable — always opens Omni when enabled); `TabBar` and the menu IPC `onToggleKanban` share one `performKanbanToggle` decision, and `isGlobalKanbanOpen()` is the single gate (fail-closed, static import of `useSettings` — the earlier `require` failed open in the packaged renderer). The active project's lane is derived from serialized `p.nodes` via `toKanbanSessionState` — the persisted-state counterpart to `toKanbanSession` — and is committed (`commitActiveToStore`) before the overlay mounts so live React Flow edits are not stale; `pendingLaunch` never becomes `initialCommand` in the modal (the DAG launch must fire only when dependencies report done, and the canvas `TerminalNode` already delivers `initialCommand` via `writeWhenShellReady` after the `nodeterm:create-node` project switch). Active-project edits (rename / sticky / browser nav) route through Canvas live nodes (`setNodes` + `markDirty`), non-active through the store + `writeDisk`; delete uses `ConfirmDialog` (not `confirm`) and SSH-aware teardown (`transport.destroy` locally vs `sshProject.killSessions` with `everySocket` for a remote owner, plus `agentStatus` / `agentNodes` / `webviewKeepAlive` cleanup). The top bar's project pills and Cmd/Ctrl+1..9 (`nodeterm:swimlane-jump`) jump to the lane; header hint shows the correct mod (`Cmd` on Mac, `Ctrl` elsewhere). Server Edition works as-is, Mobile N/A.
 - **Settings** (`SettingsPage.tsx`, ⚙ / ⌘,): font/cursor (live to xterm + Monaco), default
   shell, grid + snap, **default node size** (`defaultNodeWidth`/`defaultNodeHeight` — new
