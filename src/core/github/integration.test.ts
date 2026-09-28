@@ -165,3 +165,47 @@ describe('registerGitHubIntegration rate budget', () => {
     expect(view.throttle).toEqual({ until: reset * 1_000, kind: 'low-budget' })
   })
 })
+
+describe('registerGitHubIntegration revoke', () => {
+  it('deletes the private issue cache from disk when this machine is revoked', async () => {
+    const issue = {
+      id: 1001, number: 1, title: 'Secret roadmap', body: 'private body', state: 'open',
+      state_reason: null, html_url: 'https://github.com/owner/repo/issues/1',
+      url: 'https://api.github.com/repos/owner/repo/issues/1', labels: [], assignees: [],
+      created_at: '2026-08-01T10:00:00Z', updated_at: '2026-08-09T10:00:00Z', locked: false
+    }
+    globalThis.fetch = (async (input: RequestInfo | URL) => String(input).endsWith('/user')
+      ? new Response(JSON.stringify({ id: 1, login: 'octocat' }), { status: 200 })
+      : new Response(JSON.stringify([issue]), { status: 200, headers: { etag: 'W/"top"' } })
+    ) as typeof globalThis.fetch
+    const secret: GitHubSecretStore = {
+      availability: 'encrypted',
+      readForHost: async () => 'stored-token',
+      save: async () => undefined,
+      clear: async () => undefined
+    }
+    const { controller, service } = registerGitHubIntegration({
+      platform: fakePlatform(),
+      userDataDir,
+      project: async (id) => id === project.id ? { project, localApprovalId: 'local-1' } : null,
+      detectRepository: async () => 'owner/repo',
+      secret,
+      run: async () => ({ ok: false, stdout: '', stderr: 'not logged in' })
+    })
+    const initial = await controller.status('project-1')
+    await controller.approve({
+      projectId: 'project-1', repository: 'owner/repo', expectedRevision: initial.control.revision
+    })
+    await service.refresh({ projectId: 'project-1', full: true })
+    const cacheDir = path.join(userDataDir, 'github-issues-cache')
+    const cached = await fs.readdir(cacheDir)
+    expect(cached).toHaveLength(1)
+    expect(await fs.readFile(path.join(cacheDir, cached[0]), 'utf-8')).toContain('private body')
+
+    const approved = await controller.status('project-1')
+    await controller.revoke({ projectId: 'project-1', expectedRevision: approved.control.revision })
+
+    expect(await fs.readdir(cacheDir)).toEqual([])
+    expect(await fs.readdir(path.join(userDataDir, 'github-issues-bindings'))).toEqual([])
+  })
+})

@@ -27,7 +27,7 @@ const project: Project = {
   }
 }
 
-function fixture() {
+function fixture(options: { onRevoked?: (projectId: string) => Promise<void> } = {}) {
   let current: Project = project
   let state: GitHubControlState = {
     version: 1,
@@ -121,6 +121,7 @@ function fixture() {
         ? { status: 'unknown', reason: 'unreachable' }
         : { status: 'unauthorized' }),
     client: vi.fn(() => client),
+    ...(options.onRevoked ? { onRevoked: options.onRevoked } : {}),
     rate: (userId: string) => userId === '1'
       ? {
           status: { resource: 'core', limit: 5_000, remaining: 7, resetAt: 9, observedAt: 1 },
@@ -203,6 +204,20 @@ describe('GitHubHostController', () => {
     const context = await controller.projectContextForCache('project-1')
     expect(context.mappingApproved).toBe(false)
     expect((await controller.status('project-1')).project).toMatchObject({ approved: true, mappingApproved: false })
+  })
+
+  it('revokes first and then clears the cache, and says so when the cache could not be cleared', async () => {
+    const order: string[] = []
+    const { controller, controls } = fixture({
+      onRevoked: async (projectId: string) => { order.push(`clear:${projectId}`); throw new Error('EBUSY') }
+    })
+    controls.revoke.mockImplementationOnce(async () => {
+      order.push('revoke')
+      return { version: 1, revision: 1, authProvider: 'auto', approvals: [] }
+    })
+    await expect(controller.revoke({ projectId: 'project-1', expectedRevision: 0 }))
+      .rejects.toMatchObject({ code: 'revoked-cache-kept' })
+    expect(order).toEqual(['revoke', 'clear:project-1'])
   })
 
   it('rejects approval for a repository other than the configured or detected repository', async () => {

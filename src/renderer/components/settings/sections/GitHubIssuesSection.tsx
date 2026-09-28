@@ -71,6 +71,9 @@ function messageFor(error: unknown): string {
   if (code.includes('github-unreachable')) {
     return 'GitHub could not be reached. Nothing was changed; try again in a moment.'
   }
+  if (code.includes('revoked-cache-kept')) {
+    return 'This machine is revoked, but its cached issues could not be deleted. Use “Clear cached data” to remove them.'
+  }
   if (code.includes('invalid-token')) return 'GitHub could not validate that token.'
   if (code.includes('not-authenticated')) return 'Sign in with GitHub CLI or save a valid token first.'
   if (code.includes('not-approved')) return 'Approve this repository on this machine first.'
@@ -621,7 +624,7 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
       )}
       {confirmation === 'revoke' && (
         <ConfirmDialog
-          message="Stop this computer from reading or changing issues for this project?"
+          message="Stop this computer from reading or changing issues for this project? Its cached copy of the issues is deleted too."
           confirmLabel="Revoke"
           onCancel={() => setConfirmation(null)}
           onConfirm={() => {

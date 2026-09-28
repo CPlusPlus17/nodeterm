@@ -58,7 +58,9 @@ export function registerGitHubIntegration(dependencies: Dependencies): {
     onCredentialBoundaryChange: () => {
       coordinator.cancelAll()
       resolver.invalidate()
-    }
+    },
+    // `service` is declared below; this only runs on a revoke, long after both exist.
+    onRevoked: (projectId) => service.clearCache({ projectId })
   })
   const service = new GitHubIssueService({
     cache: new GitHubIssueCache(dependencies.userDataDir),

@@ -25,7 +25,8 @@ export class GitHubHostError extends Error {
     | 'not-approved'
     | 'not-authenticated'
     | 'invalid-token'
-    | 'configuration-changed') {
+    | 'configuration-changed'
+    | 'revoked-cache-kept') {
     super(code)
   }
 }
@@ -79,6 +80,8 @@ type HostDependencies = {
   /** The request budget last seen for an identity, and why sync is held (if it is). */
   rate?(userId: string): { status?: GitHubRateStatus; throttle?: GitHubThrottle }
   onCredentialBoundaryChange?(): void
+  /** Runs after a revoke is recorded: deletes this project's private issue cache from disk. */
+  onRevoked?(projectId: string): Promise<void>
 }
 
 type ResolvedProject = ProjectRecord & {
@@ -175,6 +178,15 @@ export class GitHubHostController {
       localApprovalId: record.localApprovalId
     })
     this.dependencies.onCredentialBoundaryChange?.()
+    // "Stop this computer from reading issues" must not leave what it already read behind: the
+    // cache is plaintext JSON (issue bodies included) under userData. The revoke is recorded FIRST,
+    // so a failed delete never leaves the machine approved — it is reported instead, and "Clear
+    // cached data" (which needs no approval) remains the way to finish the job.
+    try {
+      await this.dependencies.onRevoked?.(input.projectId)
+    } catch {
+      throw new GitHubHostError('revoked-cache-kept')
+    }
     return this.status(input.projectId)
   }
 
