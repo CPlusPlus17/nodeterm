@@ -179,6 +179,22 @@ describe('GitHub issue renderer state', () => {
     disconnect()
   })
 
+  it('points a move refused for an unapproved mapping at the approval, not at a refresh', async () => {
+    const client = api()
+    vi.mocked(client.query).mockImplementation(async (request) => ({
+      ...page(request.columnId === 'todo' ? 2 : 3, request.columnId),
+      readOnly: true,
+      mappingNotApproved: true as const
+    }))
+    vi.mocked(client.moveIssue).mockResolvedValue({ status: 'read-only' })
+    const disconnect = await useGitHubIssues.getState().connect(client, 'p1', ['todo'])
+    await useGitHubIssues.getState().move(client, 'p1', 2, 'done', '2026-08-09T00:00:00Z')
+    const said = useGitHubIssues.getState().projects.p1.issueStatus[2]
+    expect(said).toContain('Approve them in Settings')
+    expect(said).not.toContain('refresh')
+    disconnect()
+  })
+
   it('catches a failed move so fire-and-forget UI calls do not reject', async () => {
     const client = api()
     const disconnect = await useGitHubIssues.getState().connect(client, 'p1', ['todo'])

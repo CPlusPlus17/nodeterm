@@ -34,7 +34,7 @@ import {
   githubMoveIntent,
   type GitHubMoveConfirmation
 } from '../../lib/githubIssueMove'
-import { githubThrottleSentence } from '../../lib/githubSyncStatus'
+import { GITHUB_MAPPING_NOT_APPROVED, githubThrottleSentence } from '../../lib/githubSyncStatus'
 
 /** One session node shown as a board card — derived LIVE from the canvas nodes; the board
  *  itself stores only column assignments. */
@@ -584,7 +584,7 @@ export const KanbanView = memo(function KanbanView({
         {board.github && githubReadOnly && (
           <span className="kanban-github-status kanban-github-status--error">
             {githubMappingNotApproved
-              ? 'The column labels changed. Approve them in Settings → GitHub Issues to move issues again.'
+              ? GITHUB_MAPPING_NOT_APPROVED
               : 'GitHub issues are read only until configuration and refresh are complete.'}
           </span>
         )}
