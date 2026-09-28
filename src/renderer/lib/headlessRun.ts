@@ -1,6 +1,7 @@
 // Canvas-control headless start (#925): `open-* --run-now` and `run --node`. Pure planners plus
 // one orchestrator with injected effects, so Canvas.tsx only wires. See the spec (§4) for the flow:
 // write-ahead claim → launch through main → patch the node wherever it lives NOW.
+// Headless starts are local-only: a remote (SSH) node is refused here, before any claim.
 import type { CanvasNodeState, PendingLaunch, Project, PtyCreateOptions } from '@shared/types'
 import type { HeadlessLaunchFailure, HeadlessLaunchResult } from '@shared/headless-launch'
 import { HEADLESS_COLS, HEADLESS_ROWS, localNodePtyOptions } from '@shared/node-pty-options'
@@ -40,7 +41,12 @@ export type HeadlessStartOutcome =
   | {
       id: string
       started: false
-      reason: HeadlessLaunchFailure | 'already-starting' | 'claim-not-saved' | 'nothing-queued'
+      reason:
+        | HeadlessLaunchFailure
+        | 'already-starting'
+        | 'claim-not-saved'
+        | 'nothing-queued'
+        | 'remote-unsupported'
     }
 
 export interface HeadlessStartDeps {
@@ -62,6 +68,9 @@ export async function startHeadless(
   const id = node.id
   const original = node.pendingLaunch
   if (!original?.command) return { id, started: false, reason: 'nothing-queued' }
+  // A remote node is NEVER spawned locally. The options below are LOCAL (no requireRemote), so
+  // refuse before touching anything: the untouched pending launch starts on view, over SSH.
+  if (node.ssh || node.sshRemoteTmux) return { id, started: false, reason: 'remote-unsupported' }
   if (deps.inFlight.has(id)) return { id, started: false, reason: 'already-starting' }
   deps.inFlight.add(id)
   try {

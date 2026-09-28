@@ -125,6 +125,36 @@ describe('startHeadless', () => {
     expect(d.inFlight.size).toBe(0)
   })
 
+  // A remote node is NEVER spawned locally: the headless path builds LOCAL pty options, so an SSH
+  // node is refused before any claim and keeps its queued launch for the ordinary on-view start.
+  it.each([
+    ['sshRemoteTmux', { sshRemoteTmux: true }],
+    ['ssh', { ssh: { host: 'example.com' } as unknown as CanvasNodeState['ssh'] }]
+  ] as const)('an SSH node (%s) is refused before any claim, save or launch', async (_label, over) => {
+    const { d, saved } = deps({ outcome: 'delivered', fresh: true })
+    expect(await startHeadless(d, { project, node: node(over) })).toEqual({
+      id: 'n1',
+      started: false,
+      reason: 'remote-unsupported'
+    })
+    expect(d.savePending).not.toHaveBeenCalled()
+    expect(d.launch).not.toHaveBeenCalled()
+    expect(d.markStarting).not.toHaveBeenCalled()
+    expect(d.markFailed).not.toHaveBeenCalled()
+    expect(d.clearDelivery).not.toHaveBeenCalled()
+    expect(saved).toHaveLength(0)
+    expect(d.inFlight.size).toBe(0)
+  })
+
+  it('an SSH node is refused even while the same id is in flight (no inFlight read or mutation)', async () => {
+    const { d } = deps({ outcome: 'delivered', fresh: true })
+    d.inFlight.add('n1')
+    expect(await startHeadless(d, { project, node: node({ sshRemoteTmux: true }) })).toMatchObject({
+      reason: 'remote-unsupported'
+    })
+    expect([...d.inFlight]).toEqual(['n1'])
+  })
+
   it('a node with nothing queued is not started', async () => {
     const { d } = deps({ outcome: 'delivered', fresh: true })
     expect(await startHeadless(d, { project, node: node({ pendingLaunch: undefined }) })).toEqual({
