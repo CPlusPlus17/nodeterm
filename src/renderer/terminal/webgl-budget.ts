@@ -169,15 +169,19 @@ let devicePixelRatio = Number.POSITIVE_INFINITY
 
 /**
  * Report the window's devicePixelRatio (it changes when the window moves between displays, and
- * with browser zoom in the Server Edition). Re-evaluates the current zoom against the ENTRY
- * threshold of the new display only: hysteresis guards a pinch hovering at one boundary, and a
- * display change is not that — at 170% on a 1x display the terminals are crisp, and 170% on a
- * retina display never crossed its 175% line, so they belong back on the GPU.
+ * with browser zoom in the Server Edition). When the change crosses the low-DPI line, the current
+ * zoom is re-evaluated against the ENTRY threshold of the new display only: hysteresis guards a
+ * pinch hovering at one boundary, and a display change is not that — at 170% on a 1x display the
+ * terminals are crisp, and 170% on a retina display never crossed its 175% line, so they belong
+ * back on the GPU.
  */
 export function setWebglDevicePixelRatio(dpr: number): void {
   if (!Number.isFinite(dpr) || dpr <= 0 || dpr === devicePixelRatio) return
+  // Only a change of threshold pair skips the band: 2 → 3 keeps 175/160, and a terminal held
+  // crisp inside that band must stay crisp.
+  const thresholdsChanged = dpr < LOW_DPI_BELOW !== devicePixelRatio < LOW_DPI_BELOW
   devicePixelRatio = dpr
-  applyZoomCrisp(lastZoom, true)
+  applyZoomCrisp(lastZoom, thresholdsChanged)
 }
 
 /**

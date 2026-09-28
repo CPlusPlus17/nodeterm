@@ -512,6 +512,20 @@ describe('webgl-budget coordinator', () => {
       expect(a.rec.held).toBe(true)
     })
 
+    it('a ratio change that keeps the same thresholds keeps the hysteresis band', () => {
+      // 2 → 3 (a move between two retina-class displays, or browser zoom) does not change the
+      // thresholds, so a terminal crisp at 170% (inside the 160–175% band) must stay crisp.
+      setWebglDevicePixelRatio(2)
+      const a = fakeClient('a')
+      grant(a)
+      zoomTo(1.8)
+      zoomTo(1.7)
+      expect(a.rec.held).toBe(false)
+      setWebglDevicePixelRatio(3)
+      vi.advanceTimersByTime(WEBGL_DRAIN_MS * 10)
+      expect(a.rec.held).toBe(false)
+    })
+
     it('ignores a non-finite or non-positive ratio', () => {
       const a = fakeClient('a')
       grant(a)
