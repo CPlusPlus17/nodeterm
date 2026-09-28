@@ -70,6 +70,7 @@ import {
   recordAgentEvent,
   ackDone,
   setMirrorSettingsProvider,
+  setMirrorLiveNodesProvider,
   setMirrorServerProvider,
   onInboxActionable,
   onNodeStateChange,
@@ -452,6 +453,9 @@ export async function startServer(
       void flushAgentStatusMirror()
     })
     .catch(() => {})
+  // Lets the mirror drop an identity-only entry (a session id kept past the 6 h state expiry)
+  // once its node is gone from every project. `undefined` = cannot know = keep, TTL-bounded.
+  setMirrorLiveNodesProvider(() => workspaceStore.knownNodeIds())
   setMirrorSettingsProvider((): MirrorSettings => {
     const s = settingsStore.get()
     return {
