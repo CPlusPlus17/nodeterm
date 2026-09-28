@@ -26,6 +26,8 @@ import { TMUX_SOCKET, sessionName } from './tmux-naming'
 interface FakePty {
   onDataCb?: (d: string) => void
   onExitCb?: (e: { exitCode: number }) => void
+  /** Everything written into the tmux client pty (the headless write tests read it). */
+  writes: string[]
   resizes: Array<{ cols: number; rows: number }>
   paused: boolean
   killed: boolean
@@ -54,7 +56,7 @@ vi.mock('node-pty', () => ({
     args: string[],
     opts: { cols: number; rows: number; cwd: string; env: Record<string, string> }
   ) => {
-    const p: FakePty = { resizes: [], paused: false, killed: false }
+    const p: FakePty = { writes: [], resizes: [], paused: false, killed: false }
     spawned.push(p)
     spawnArgs.push({ file, args, cols: opts.cols, rows: opts.rows, cwd: opts.cwd, env: opts.env })
     return {
@@ -64,7 +66,9 @@ vi.mock('node-pty', () => ({
       onExit: (cb: (e: { exitCode: number }) => void) => {
         p.onExitCb = cb
       },
-      write: () => {},
+      write: (d: string) => {
+        p.writes.push(d)
+      },
       resize: (cols: number, rows: number) => p.resizes.push({ cols, rows }),
       pause: () => {
         p.paused = true
@@ -121,6 +125,8 @@ vi.mock('child_process', () => {
 })
 
 const SOLO = 42
+/** The real timer, captured before any test installs fake timers (see `drainRealIo`). */
+const realSetTimeout = globalThis.setTimeout
 
 /**
  * Hermetic tmux resolution (issue #160). Without this, `init()` → `ensureTmux()` → `findTmux()`
@@ -214,6 +220,8 @@ describe('SINGLE-USER REGRESSION: co-attach must not change the solo path', () =
     fake.handlers[IPC.ptyCreate](SOLO, { cols, rows, persistKey, ...extra }) as Promise<{
       sessionId: string
       fresh: boolean
+      /** Set when the node was deleted (tombstoned) and this create is refused. */
+      closed?: { by: number | null }
     }>
   const resize = (sessionId: string, cols: number | null, rows: number | null) =>
     fake.senderListeners[IPC.ptyResize](SOLO, sessionId, cols, rows)
@@ -903,6 +911,86 @@ describe('SINGLE-USER REGRESSION: co-attach must not change the solo path', () =
       m.init(() => ({ ...DEFAULT_SETTINGS, tmuxEnabled: false }))
       m.registerIpc()
       expect(m.persistentSpawnAvailable()).toBe(false)
+    })
+  })
+
+  // ── Headless client 0 on a TMUX-backed session (#925) ──────────────────────────────────────
+  // The plain-shell suite (pty-headless-taps.test.ts) cannot tell "detach client 0" from "destroy
+  // the session": there, releasing the last client kills the shell either way. Here the tmux
+  // session is what must survive, and `tmuxCalls('kill-session')` is the instrument that proves it.
+  describe('headless client 0 on a tmux-backed session (#925)', () => {
+    /**
+     * Let REAL I/O settle before asserting that no kill-session went out. An end path
+     * (`destroySession` → `runEndSession`) awaits real fs work (`deleteScrollback`) before it runs
+     * kill-session, so neither a synchronous look nor advancing the fake clock would ever see it.
+     * `realSetTimeout` is captured at module load, before `vi.useFakeTimers()` replaces the global.
+     */
+    const drainRealIo = (): Promise<void> => new Promise((res) => realSetTimeout(res, 50))
+
+    it('write + output tap round-trip, then release detaches the tmux client and never kills the session', async () => {
+      const m = await tmuxManager()
+      const r = await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })
+      expect(r.sessionId).toBeTruthy()
+      expect(spawned).toHaveLength(1)
+      // It really is the tmux client for `nt-n1`, not a plain shell.
+      expect(spawnArgs[0].args).toContain('new-session')
+      expect(spawnArgs[0].args.slice(-2)).toEqual(['-s', sessionName('n1')])
+
+      const seen: string[] = []
+      const off = m.onOutput('n1', (c) => seen.push(c))
+      expect(m.writeHeadless('n1', 'echo hi\r')).toBe(true)
+      expect(spawned[0].writes).toEqual(['echo hi\r'])
+      spawned[0].onDataCb?.('hi')
+      vi.advanceTimersByTime(20) // past FLUSH_MS
+      expect(seen.join('')).toBe('hi')
+      off()
+
+      execCalls.length = 0
+      m.releaseHeadless('n1')
+      await drainRealIo()
+      expect(spawned[0].killed).toBe(true) // the tmux CLIENT pty is released
+      expect(tmuxCalls('kill-session')).toEqual([]) // the tmux session keeps running
+      expect(m.writeHeadless('n1', 'x')).toBe(false) // client 0 no longer holds anything
+      expect(spawned[0].writes).toEqual(['echo hi\r'])
+
+      // The node is detached, not deleted: when the user later opens its project, the renderer's
+      // create WARM-attaches to the still-running tmux session (a destroy would have tombstoned
+      // the node and refused this create with `closed`).
+      liveTmuxSessions.add(sessionName('n1'))
+      const again = await create(80, 24, 'n1')
+      expect(again.closed).toBeUndefined()
+      expect(again.fresh).toBe(false)
+      expect(spawned).toHaveLength(2) // a new tmux client for the same session
+    })
+
+    it('with a real client co-attached, release drops ONLY client 0: the viewer stays subscribed', async () => {
+      const m = await tmuxManager()
+      const headless = await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })
+      const viewer = await create(80, 24, 'n1') // the renderer's create joins via co-attach
+      expect(spawned).toHaveLength(1) // ONE tmux client, two subscribers
+      expect(viewer.sessionId).toBe(headless.sessionId)
+
+      execCalls.length = 0
+      m.releaseHeadless('n1')
+      await drainRealIo()
+      expect(spawned[0].killed).toBe(false) // the viewer still holds the tmux client
+      expect(tmuxCalls('kill-session')).toEqual([])
+      expect(m.writeHeadless('n1', 'x')).toBe(false) // client 0 is gone …
+      expect(spawned[0].writes).toEqual([])
+
+      // … while the viewer still gets the output,
+      fake.sent.length = 0
+      spawned[0].onDataCb?.('still here')
+      vi.advanceTimersByTime(20)
+      const data = fake.sent.filter((s) => s.channel === IPC.ptyData(viewer.sessionId))
+      expect(data.map((s) => s.to)).toEqual([SOLO])
+      expect(data.map((s) => s.args[0])).toEqual(['still here'])
+
+      // … and is the last subscriber: its own detach is what releases the client, still without
+      // touching the tmux session.
+      kill(viewer.sessionId)
+      expect(spawned[0].killed).toBe(true)
+      expect(tmuxCalls('kill-session')).toEqual([])
     })
   })
 })
