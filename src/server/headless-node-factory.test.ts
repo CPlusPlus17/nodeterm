@@ -34,6 +34,42 @@ class FakePty implements HeadlessPty {
   }> = []
   readonly live = new Set<string>()
   readonly alreadyDead = new Set<string>()
+  readonly released: string[] = []
+  private readonly taps = new Map<string, Set<(c: string) => void>>()
+  private readonly lines = new Map<string, string>()
+
+  persistentSpawnAvailable(): boolean {
+    return true
+  }
+
+  onOutput(key: string, cb: (c: string) => void): () => void {
+    let set = this.taps.get(key)
+    if (!set) this.taps.set(key, (set = new Set()))
+    set.add(cb)
+    return () => set!.delete(cb)
+  }
+
+  // An interactive shell: echoes what it is typed; Enter submits the line (recorded in `sends`,
+  // so every pre-existing `pty.sends` assertion keeps its meaning); Ctrl-U / Esc clear it.
+  writeHeadless(key: string, data: string): boolean {
+    if (!this.live.has(key)) return false
+    if (data === '\r') {
+      this.sends.push({ nodeId: key, text: this.lines.get(key) ?? '' })
+      this.lines.set(key, '')
+      return true
+    }
+    if (data === '\x15' || data === '\x1b') {
+      this.lines.set(key, '')
+      return true
+    }
+    this.lines.set(key, (this.lines.get(key) ?? '') + data)
+    for (const cb of [...(this.taps.get(key) ?? [])]) cb(data)
+    return true
+  }
+
+  releaseHeadless(key: string): void {
+    this.released.push(key)
+  }
 
   async createHeadless(options: PtyCreateOptions): Promise<PtyCreateResult> {
     this.creates.push(options)
@@ -170,6 +206,7 @@ describe('HeadlessNodeFactory', () => {
       codexSharedIdentity: async () => codexSharedIdentity,
       ownership,
       stateOf: (id) => states[id],
+      launchTiming: { quietMs: 0, capMs: 0 },
       publishNode: (_projectId, node) => published.push(node),
       publishRemoval: (_projectId, nodeId) => removed.push(nodeId),
       publishProject: (project) => publishedProjects.push(structuredClone(project))
@@ -1028,8 +1065,11 @@ describe('HeadlessNodeFactory', () => {
 
   it.each(['refused', 'throws', 'no-pty'])('retains the exact initial command after %s', async (failure) => {
     if (failure === 'no-pty') vi.spyOn(pty, 'createHeadless').mockRejectedValueOnce(new Error('unavailable'))
-    else if (failure === 'throws') vi.spyOn(pty, 'sendText').mockRejectedValueOnce(new Error('disconnected'))
-    else vi.spyOn(pty, 'sendText').mockResolvedValueOnce(false)
+    else if (failure === 'throws') {
+      vi.spyOn(pty, 'writeHeadless').mockImplementation(() => {
+        throw new Error('disconnected')
+      })
+    } else vi.spyOn(pty, 'writeHeadless').mockReturnValue(false)
     const reply = await factory.openAgent('term-source', { agent: 'claude', prompt: 'keep this brief' }, true)
     const id = (reply.result as { id: string }).id
     expect(reply).toMatchObject({ ok: false, result: { deliveredIds: [], failed: [id] } })
@@ -1051,16 +1091,21 @@ describe('HeadlessNodeFactory', () => {
 
   it('saves manual recovery intent before sending, including a successful send whose clearing save fails', async () => {
     const save = vi.spyOn(store, 'save')
-    vi.spyOn(pty, 'sendText').mockImplementationOnce(async (id) => {
-      const durable = await store.load({ sideline: false })
-      expect(durable.projects[0].nodes.find((n) => n.id === id)?.pendingLaunch)
-        .toMatchObject({ command: "claude 'brief'", manualOnly: true })
-      save.mockRejectedValueOnce(new Error('disk unavailable after delivery'))
-      pty.sends.push({ nodeId: id, text: 'brief' })
-      return true
+    const typeInto = pty.writeHeadless.bind(pty)
+    // The headless write is synchronous, so the durable read starts at the first typed byte and is
+    // awaited afterwards. Nothing reaches the disk in between: the next save is the one failed here.
+    let firstWrite: { id: string; durable: ReturnType<WorkspaceStore['load']> } | undefined
+    vi.spyOn(pty, 'writeHeadless').mockImplementation((id, data) => {
+      firstWrite ??= { id, durable: store.load({ sideline: false }) }
+      if (data === '\r') save.mockRejectedValueOnce(new Error('disk unavailable after delivery'))
+      return typeInto(id, data)
     })
     await expect(factory.openAgent('term-source', { agent: 'claude', prompt: 'brief' }, true))
       .rejects.toThrow('disk unavailable')
+    const durable = await firstWrite!.durable
+    expect(durable.projects[0].nodes.find((n) => n.id === firstWrite!.id)?.pendingLaunch)
+      .toMatchObject({ command: "claude 'brief'", manualOnly: true })
+    expect(pty.sends).toEqual([{ nodeId: firstWrite!.id, text: "claude 'brief'" }])
     await factory.refreshArmed({ nodeId: 'term-upstream', state: 'done' })
     expect(pty.sends).toHaveLength(1)
   })
@@ -1082,7 +1127,13 @@ describe('HeadlessNodeFactory', () => {
   })
 
   it('reports a partial batch and never retries the retained launch on unrelated hooks', async () => {
-    vi.spyOn(pty, 'sendText').mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    // The first node's writes land; every write into the second is refused.
+    const typeInto = pty.writeHeadless.bind(pty)
+    let firstId: string | undefined
+    vi.spyOn(pty, 'writeHeadless').mockImplementation((id, data) => {
+      firstId ??= id
+      return id === firstId ? typeInto(id, data) : false
+    })
     const reply = await factory.openAgent('term-source', { agent: 'codex', prompt: 'work', count: '2' }, true)
     const [delivered, failed] = (reply.result as { ids: string[] }).ids
     expect(reply).toMatchObject({ ok: false, result: { deliveredIds: [delivered], failed: [failed], queuedIds: [] } })
@@ -1238,5 +1289,26 @@ describe('HeadlessNodeFactory', () => {
     const reply = await factory.openAgent('term-source', { agent: 'grok' }, true)
     expect(reply).toMatchObject({ ok: false, error: expect.stringContaining('claude|codex|gemini') })
     expect(pty.creates).toEqual([])
+  })
+
+  it('immediate delivery is echo-verified and keeps the server client attached (#925)', async () => {
+    // `sends` records the blind paste and the typed-then-Enter line identically, so the path taken
+    // is only visible here: the immediate open must never fall back to `sendText`.
+    const paste = vi.spyOn(pty, 'sendText')
+    const reply = await factory.openTerminal('term-source', { cwd: projectDir, cmd: 'printf hello' }, true)
+    const id = (reply.result as { id: string }).id
+    expect(pty.sends).toEqual([{ nodeId: id, text: 'printf hello' }])
+    expect(paste).not.toHaveBeenCalled()
+    expect(pty.released).toEqual([]) // release:false — the server keeps client 0, as it always has
+  })
+
+  it('a refused headless write retains the launch for Run now (#925)', async () => {
+    vi.spyOn(pty, 'writeHeadless').mockReturnValue(false)
+    const reply = await factory.openTerminal('term-source', { cwd: projectDir, cmd: 'printf hello' }, true)
+    expect(reply.ok).toBe(false)
+    expect(reply.error).toMatch(/^launch-failed:/)
+    const id = (reply.result as { id: string }).id
+    const node = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
+    expect(node?.pendingLaunch).toMatchObject({ command: 'printf hello', manualOnly: true })
   })
 })

@@ -27,6 +27,57 @@ import { IPC } from '../shared/ipc'
 import { DEFAULT_SETTINGS, type Project, type Settings, type Workspace } from '../shared/types'
 import { initServerCanvasControl, type ServerCanvasControl } from './canvas-control'
 
+type HeadlessShell = Pick<
+  PtyManager,
+  'persistentSpawnAvailable' | 'writeHeadless' | 'onOutput' | 'releaseHeadless'
+> & { submitted: string[] }
+
+/**
+ * The headless taps of a fresh interactive shell, which an immediate open now types its launch
+ * into (#925): it prints its prompt once, echoes what it is typed, and records each line Enter
+ * submits. The prompt is what ends the launcher's settle after its quiet window; without it every
+ * open would wait out the full settle cap.
+ */
+function headlessShell(): HeadlessShell {
+  const taps = new Map<string, Set<(chunk: string) => void>>()
+  const lines = new Map<string, string>()
+  const prompted = new Set<string>()
+  const submitted: string[] = []
+  return {
+    submitted,
+    persistentSpawnAvailable: () => true,
+    onOutput: (key, cb) => {
+      let set = taps.get(key)
+      if (!set) taps.set(key, (set = new Set()))
+      set.add(cb)
+      if (!prompted.has(key)) {
+        prompted.add(key)
+        setTimeout(() => {
+          if (set!.has(cb)) cb('$ ')
+        }, 0)
+      }
+      return () => {
+        set!.delete(cb)
+      }
+    },
+    writeHeadless: (key, data) => {
+      if (data === '\r') {
+        submitted.push(lines.get(key) ?? '')
+        lines.set(key, '')
+        return true
+      }
+      if (data === '\x15' || data === '\x1b') {
+        lines.set(key, '')
+        return true
+      }
+      lines.set(key, (lines.get(key) ?? '') + data)
+      for (const cb of [...(taps.get(key) ?? [])]) cb(data)
+      return true
+    },
+    releaseHeadless: () => undefined
+  }
+}
+
 describe('initServerCanvasControl', () => {
   let dataDir = ''
   let runtime: ServerCanvasControl | null = null
@@ -99,7 +150,9 @@ describe('initServerCanvasControl', () => {
     const paneOwner = vi.fn(async () => null)
     const sendEnvelope = vi.fn(async () => true)
     const sendText = vi.fn(async (_nodeId: string, _text: string) => true)
+    const shell = headlessShell()
     const pty = {
+      ...shell,
       createHeadless: vi.fn(async () => ({ sessionId: 'unused', fresh: true })),
       paneCommand: vi.fn(async () => 'bash'),
       sendText,
@@ -146,9 +199,11 @@ describe('initServerCanvasControl', () => {
     })
     expect(opened).toMatchObject({ ok: true })
     const openedId = (opened.result as { id: string }).id
-    expect(sendText.mock.calls.at(-1)?.[1]).toBe(
+    // The launch is typed into the shell and submitted, never pasted blind (#925).
+    expect(shell.submitted).toEqual([
       "nodeterm-codex 'identity proof' --ask-for-approval on-request"
-    )
+    ])
+    expect(sendText).not.toHaveBeenCalled()
 
     const unowned = await runtime.handler({
       verb: 'send',
@@ -227,6 +282,7 @@ describe('initServerCanvasControl', () => {
     let pasted = ''
     const legacySendEnvelope = vi.fn(async () => true)
     const pty = {
+      ...headlessShell(),
       createHeadless: vi.fn(async () => ({ sessionId: 'unused', fresh: true })),
       paneCommand: vi.fn(async () => 'bash'),
       captureSession: vi.fn(async () =>
@@ -338,6 +394,7 @@ describe('initServerCanvasControl', () => {
       capabilityProjectFor: () => ({ agentMessaging: false, capabilityAck: {} })
     } as unknown as WorkspaceStore
     const pty = {
+      ...headlessShell(),
       createHeadless: vi.fn(async () => ({ sessionId: 'unused', fresh: true })),
       paneCommand: vi.fn(async () => 'bash'),
       sendText: vi.fn(async () => true),

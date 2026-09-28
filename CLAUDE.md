@@ -3095,6 +3095,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   graphs through project switches/park expiry. Attempted/legacy-unknown intent stays manual: its
   clearing autosave may have been lost after Enter. Explicit Run now rechecks the foreground shell and
   clears any incomplete line; a refused/throwing/cancelled launch stays held, `manualOnly`.
+  Headless starts (`core/headless-launch.ts`, #925) and the Server Edition's immediate open deliver
+  through the SAME echo-verified writer (`@shared/command-delivery`, moved out of the renderer for
+  this): a tmux paste is not immune to zsh's rc-time tty flush (#556) or the canonical-line cap
+  (#706).
   (5) UI `initialCommand` stays until submission; serialization converts unsubmitted UI intent
   into a never-attempted `pendingLaunch`, including a project switch during shell settle. A live
   initialCommand alias on remount cannot reset an attempted marker. Server saves
