@@ -778,9 +778,10 @@ coordinate nodeterm, not external editors, so do not claim a filesystem-wide com
 until delivery is acknowledged, and report `queued` while it is held. A successful terminal send
 proves delivery only; never describe it as a healthy/running agent without agent evidence.
 Every launch uses the echo-verified command writer (`@shared/command-delivery`), not `sendText`:
-desktop automatic and Run now, and the Server Edition's immediate open (through
-`core/headless-launch.ts`). The Server Edition's deferred `--after` release (`refreshArmed`) is the
-one remaining `sendText` launch, pending a move that must never create a session.
+desktop automatic and Run now, the desktop's headless start, and the Server Edition's immediate
+open and `run` (the last three through `core/headless-launch.ts`). The Server Edition's deferred
+`--after` release (`refreshArmed`) is the one remaining `sendText` launch, pending a move that must
+never create a session.
 Keep unsubmitted UI intent durable through shell settle/unmount. New intent carries `attempted:false`;
 Desktop and Server save `attempted:true` before input. Never-attempted warm `--after` launches may
 proceed after shell verification; attempted/legacy-unknown intent requires Run now. Only confirmed
@@ -795,6 +796,13 @@ while save replaces the entire host index. A pre-input parked-project deferral k
 never-attempted; it must not poison the writer or trigger a retry timer.
 Held Desktop launches retain their attached transport even offscreen with tmux (large fan-outs cost
 memory). Server deferred delivery is one-shot: a failed probe/send needs explicit recovery.
+A headless start (`--run-now` / `run`, #925) follows the same contract: the claim is saved before
+any spawn, and "started" means the echo-verified writer submitted the line (never that the agent is
+healthy). The desktop releases its headless client, so there a start without a persistent terminal
+backend is refused before any spawn and hands the node back unchanged (a cold open stays an
+ordinary queued node) rather than spawning a shell that the next mount would orphan. A remote (SSH)
+node is refused before the claim; the desktop request keeps `requireRemote`, so core can never
+start one as a local session.
 
 ## Testing
 

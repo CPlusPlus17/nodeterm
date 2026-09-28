@@ -2923,7 +2923,15 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   that landed while they were busy elsewhere, and once it fades nothing anywhere says it happened. Route **`reopen` (a CLOSED project) cold-writes
   too and does NOT reopen the tab** — closing is the user's explicit "park this, keep it running", so
   restoring the tab *and* activating it is the loudest form of the hijack; the reply names the closure
-  so a caller does not report a session as started. On the cold path `--group`/`--after` ARE resolved
+  so a caller does not report a session as started. **Exception (#925):** `--run-now` (and `run`)
+  restores a closed project's tab WITHOUT activating it (`unhideProject`) and starts the node
+  headless. A session that is running must be findable somewhere more durable than a notice, and
+  not activating it keeps the half of this rule that matters. Two cases keep the tab closed: an SSH
+  project, because its nodes are refused before any claim (`remote-unsupported`), so nothing starts;
+  and the welcome screen (no project active), because un-closing one there would render a canvas
+  with no active project. On the welcome screen the session still starts; the project just stays in
+  Recently closed.
+  On the cold path `--group`/`--after` ARE resolved
   (unlike with `--project`, where the ids would live in another project) against the serialized
   nodes, defaults come from the OWNING project (`projectPermissionMode(owner, …)`, its account,
   its `ssh`), and `--after`'s dep ropes are left to `missingDepRopes` at that project's next load.
@@ -3095,10 +3103,11 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   graphs through project switches/park expiry. Attempted/legacy-unknown intent stays manual: its
   clearing autosave may have been lost after Enter. Explicit Run now rechecks the foreground shell and
   clears any incomplete line; a refused/throwing/cancelled launch stays held, `manualOnly`.
-  The Server Edition's immediate open delivers through the SAME echo-verified writer
-  (`@shared/command-delivery`, moved out of the renderer for this), via the headless launcher
-  `core/headless-launch.ts` (#925): a tmux paste is not immune to zsh's rc-time tty flush (#556) or
-  the canonical-line cap (#706).
+  The Server Edition's immediate open and its `run`, and the desktop's headless start (`--run-now` /
+  `run`, below), deliver through the SAME echo-verified writer (`@shared/command-delivery`, moved
+  out of the renderer for this), via the headless launcher `core/headless-launch.ts` (#925): a tmux
+  paste is not immune to zsh's rc-time tty flush (#556) or the canonical-line cap (#706). The
+  Server Edition's deferred `--after` release (`refreshArmed`) still pastes with `sendText`.
   (5) UI `initialCommand` stays until submission; serialization converts unsubmitted UI intent
   into a never-attempted `pendingLaunch`, including a project switch during shell settle. A live
   initialCommand alias on remount cannot reset an attempted marker. Server saves
@@ -3193,6 +3202,62 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   so reporting it as "the error" would be a confident wrong fact. Reading the text, and the
   *failed-to-start* watchdog (a station that never emits ANY hook event — the opposite failure,
   which hangs dependents honestly rather than firing them wrongly), stay open.
+  **Headless start (`--run-now`, `run`, #925):** `open-*` with `--run-now` into a project that is
+  not on screen starts the node at once instead of "when next viewed", and `run --node <id>
+  [--project <id>]` is the CLI twin of the QUEUED badge's Run now (like ▶, a `run` that starts the
+  node overrides its `--after` wait). Into a project that IS on screen `--run-now` changes nothing:
+  the mount path already starts the node.
+  - **Flow.** The renderer builds the node as a cold open, then writes an
+    `executor:'core', attempted:true, manualOnly:true` claim to disk BEFORE any spawn (never
+    spawn on an unsaved claim: a failed save restores the original launch and starts nothing,
+    `claim-not-saved`). Desktop main's `pty.launchHeadless` runs core `launchHeadless` on
+    `desktopHeadlessRequest(req)`: `createHeadless` (client 0), then settle a fresh shell (200 ms
+    quiet / 1.5 s silence cap, under an absolute `SETTLE_MAX_MS` = 5 s ceiling that output never
+    extends — nothing cancels this wait, and a pane that keeps painting never goes quiet), then the
+    mounted writer's trust rule (`trustsFreshShell`, `@shared/launch-trust`: a fresh session-host
+    session is trusted without a probe; every other pane must pass `isLaunchShell`, and an unknown
+    answer is `no-shell`, nothing typed), then the echo-verified writer (`@shared/command-delivery`),
+    then `releaseHeadless`.
+  - **The IPC is desktop-only and host-only.** It is registered in `src/main`, not in core
+    `registerIpc`, so a Server Edition browser cannot reach it (ws-bridge declares it
+    `unsupported`), and `IPC.ptyLaunchHeadless` is in `HOST_ONLY_CHANNELS`, so a relay peer that
+    sends the raw request is refused host-side. `desktopHeadlessRequest` strips `sshRemote` but
+    KEEPS `requireRemote`: a remote node that got this far fails closed in `spawnNew` instead of
+    starting a LOCAL `nt-<id>`. The renderer refuses it earlier still: `startHeadless` answers
+    `remote-unsupported` for a node carrying `ssh` / `sshRemoteTmux` before any claim, and leaves
+    its launch exactly as it was.
+  - **Why release the client.** An invisible client would fight the viewer's window size and
+    keep the session "attached" for the reaper forever.
+  - **No persistent backend** (tmux or session-host): the start is refused before any spawn
+    (`not-persistent`) and the node is handed back exactly as it was, so a cold open degrades to
+    an ordinary queued node. Releasing a plain shell would kill it.
+  - **Outcome patch.** It lands wherever the node lives at that moment (`savePendingAnywhere`):
+    the live canvas if the user switched there mid-start, otherwise the store copy plus a disk
+    write. `delivered` clears the launch; any other failure keeps the claim and marks the node
+    failed (amber ⚠ QUEUED, recovered by Run now).
+  - **While starting.** `launchDelivery` holds `starting`: the badge reads STARTING, ▶ is disabled
+    (a click would splice a second copy into the pane), `launchesToFire` skips the node, and
+    `list` names it. Canvas's delivery sweep spares it (`deliveriesToRetire`): the node lives in
+    ANOTHER project by design, so "not armed on this canvas" does not mean "delivered".
+  - **Notice.** A batch that started at least one session raises ONE sticky "Go there" notice
+    (`headlessStartNoticeText`). A failure shows on the badge and in the reply instead.
+  - **`--run-now` with `--after` is refused on both editions**, before any node is built, with the
+    shared `RUN_NOW_AFTER_REFUSAL` (`@shared/control-verbs`): "start now" and "start when X is
+    done" contradict each other.
+  - **`run` gates.** `run` is verified-only (`requiresVerified`), reaches another project only
+    through `--project` + the existing grant gate (`PROJECT_TARGETABLE_VERBS`), and is
+    `stored-node` off screen. The renderer's `--project` belt is ONE pure resolver,
+    `resolveProjectTarget` (`lib/projectOpen.ts`), shared with the open verbs. A project ON screen
+    never starts headless (`planRunVerb`): `run` there uses the mounted writer (the ▶ path) when
+    the node has one. Without one, a plain queued launch replies `queued` / `starts-when-mounted`,
+    because the mount delivers it; a `manualOnly` or `--after`-armed launch is refused with
+    `run-not-mounted`, because the mount fires neither, and "starts when mounted" would be a
+    promise nobody keeps.
+  - **Server Edition.** It accepts `--run-now` as a no-op (its opens are already immediate) and
+    implements `run` under creator ownership, resolving the node through the ownership record,
+    never by first id match. It neither unhides a closed project nor raises a notice, the same as
+    its other immediate opens. Its immediate open delivers through the same launcher with
+    `release:false`: the attached client is what keeps even a plain shell reachable there.
   **Settings (`settings`, 2026-09):** `settings [--project <id>]` lists, `settings --get <key>`
   reads, `settings --set <key> --value <v> [--project <id>]` asks to change — flags only, because the
   shim drops a positional sub-action for an unlisted verb and an SSH host keeps the shim it got at
