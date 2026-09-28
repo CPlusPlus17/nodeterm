@@ -15033,6 +15033,12 @@ export function Canvas() {
           // node's is "frame this node", so d3's zoom-in would fight both.
           zoomOnDoubleClick={false}
           zoomActivationKeyCode={null}
+          // Off: space-to-pan is the canvas's OWN gesture (lib/spacePan.ts, issue #86), which drives
+          // `panOnDrag` above through the `spacePan` state. React Flow's built-in duplicate (default
+          // 'Space') was a second window listener with a narrower idea of a text surface: it cannot
+          // see Monaco's EditContext input, so it preventDefault-ed every space typed in an editor
+          // node (#930). It also forced panOnDrag/panOnScroll on while held, straight past the lock.
+          panActivationKeyCode={null}
           snapToGrid={settings.snapToGrid}
           snapGrid={[settings.gridSize, settings.gridSize]}
         >
