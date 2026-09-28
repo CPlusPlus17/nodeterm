@@ -1056,6 +1056,16 @@ export interface PtyApi {
    *  node persistKey. null when it is unknown — no session, no tmux, or the query failed — which
    *  callers must read as "not observed", never as evidence of a particular command. */
   paneCommand(persistKey: string): Promise<string | null>
+  /**
+   * Desktop only (#925). Spawn-or-attach a node's session with no viewer and deliver `command`
+   * through the echo-verified writer, then release the synthetic client (the tmux session keeps
+   * running). Refused as `not-persistent` without tmux or the session-host. The Server Edition
+   * starts nodes through its own factory, so the browser build rejects with E_UNSUPPORTED.
+   */
+  launchHeadless(req: {
+    ptyOptions: PtyCreateOptions
+    command: string
+  }): Promise<import('./headless-launch').HeadlessLaunchResult>
   /** Kernel truth about a node's pane — its root pid, tty, tmux pane id and the full argv of its
    *  foreground process group — so a caller can ask WHO owns the pane rather than what tmux calls
    *  it. `null` is "could not read", never evidence that the pane is free (see `isAgentPane`'s
