@@ -115,7 +115,8 @@ export interface GitHubIssue {
   title: string
   body: string
   state: 'open' | 'closed'
-  stateReason: 'completed' | 'not_planned' | 'reopened' | null
+  /** `null` also stands for a reason GitHub added after this build (see `stateReasonFrom`). */
+  stateReason: 'completed' | 'not_planned' | 'reopened' | 'duplicate' | null
   htmlUrl: string
   apiUrl: string
   labels: GitHubIssueLabel[]

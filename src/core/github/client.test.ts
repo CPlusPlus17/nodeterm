@@ -357,4 +357,27 @@ describe('GitHubIssuesClient', () => {
       expect(bodies).toEqual([])
     })
   })
+  describe('state_reason values GitHub adds later', () => {
+    const list = (reason: unknown) => new GitHubIssuesClient({
+      token: 'secret',
+      fetch: async () => response([issue(1), issue(2, { state: 'closed', state_reason: reason })])
+    }).listIssues('nodeterm/nodeterm', { state: 'all', page: 1, perPage: 50 })
+
+    it('decodes a duplicate instead of failing the whole page', async () => {
+      // Measured 2026-09-29: one of cli/cli's last 100 closed issues carries it. Rejecting it made
+      // the scan fail as malformed, and that repository never synced at all.
+      const page = await list('duplicate')
+      expect(page.items.map((item) => item.stateReason)).toEqual([null, 'duplicate'])
+    })
+
+    it('reads a reason it does not know yet as no reason, keeping the rest of the page', async () => {
+      const page = await list('some_future_reason')
+      expect(page.items.map((item) => item.number)).toEqual([1, 2])
+      expect(page.items[1].stateReason).toBeNull()
+    })
+
+    it('still rejects a state_reason that is not a string at all', async () => {
+      await expect(list(7)).rejects.toMatchObject({ code: 'malformed-response' })
+    })
+  })
 })
