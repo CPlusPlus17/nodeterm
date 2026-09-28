@@ -7514,6 +7514,93 @@ button.group-node__setup:disabled {
   box-shadow: 0 8px 28px rgba(0, 0, 0, calc(0.4 * var(--shadow-k)));
 }
 
+/* Minimize control (canvas/MinimapDock.tsx). The dock takes over the placement React Flow's Panel
+   gave the map — one --float-gap in from the bottom-right — and turns the map's own Panel into an
+   in-flow child, so the dock's box, and with it the hover area, is exactly the map: no dead band
+   of margin over the canvas. */
+.minimap-dock {
+  position: absolute;
+  right: var(--float-gap);
+  bottom: var(--float-gap);
+  z-index: 5;
+}
+.minimap-dock > .react-flow__minimap.minimap {
+  position: relative;
+  margin: 0 !important;
+}
+/* The "−" sits inside the map's top-left corner and shows only while the map is hovered or the
+   button has keyboard focus. A solid panel fill in every appearance: it lies over the map's node
+   rectangles, and a translucent one there would be a button over noise. */
+.minimap-dock > .tooltip-trigger {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 6;
+}
+.minimap-dock__minimize {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.minimap-dock__minimize svg {
+  width: 12px;
+  height: 12px;
+}
+.minimap-dock:hover .minimap-dock__minimize,
+.minimap-dock__minimize:focus-visible {
+  opacity: 1;
+}
+.minimap-dock__minimize:hover {
+  background: var(--panel-header);
+}
+/* No hover on a touch screen (the Server Edition on a tablet): keep the control visible there, or
+   the map could never be minimized. */
+@media (hover: none) {
+  .minimap-dock__minimize {
+    opacity: 1;
+  }
+}
+
+/* The minimized map: one button in the corner the map occupied, on the same plate as the other
+   floating controls. */
+.minimap-restore {
+  position: absolute;
+  right: var(--float-gap);
+  bottom: var(--float-gap);
+  z-index: 5;
+}
+.minimap-restore button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--menu-rgb), 0.92);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, calc(0.3 * var(--shadow-k)));
+}
+.minimap-restore button:hover {
+  background: var(--panel-header);
+}
+.minimap-restore button svg {
+  width: 18px;
+  height: 18px;
+}
+
 /* Minimap-scale status glow (amber working / red needs-you / clay unread in the default look; the
    state roles under Liquid Glass — see the --mm-* tokens). A static drop-shadow provides the halo; only
    stroke-opacity animates (cheap on tiny svg rects), cadence matching each canvas glow. */
@@ -14289,6 +14376,7 @@ body.focus-mode .dock:hover {
     .controls-cluster > button,
     .react-flow__controls,
     .react-flow__minimap.minimap,
+    .minimap-restore button,
     .sysres-pill,
     .usage-pill,
     .usage-refresh,

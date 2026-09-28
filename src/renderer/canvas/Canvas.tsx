@@ -1,6 +1,7 @@
 import { reportTextDelivery } from '../lib/textDelivery'
 import { TEXT_NOT_SUBMITTED } from '@shared/text-delivery'
 import { VisibleMiniMap } from './VisibleMiniMap'
+import { MinimapDock } from './MinimapDock'
 import { keepGlassBlurWhileMoving } from '../lib/glassContrast'
 import { LINK_ENDPOINT_NOT_FOUND } from '@shared/canvas-link'
 import { createControlOpenBatch } from '../lib/controlOpenBatch'
@@ -15103,7 +15104,9 @@ export function Canvas() {
           {/* Peer cursors live INSIDE <ReactFlow>: PresenceLayer uses ViewportPortal +
               useReactFlow, which throw outside the provider — and cursors are flow coordinates. */}
           <PresenceLayer />
-          <StatusAwareMiniMap onNodeDoubleClick={goToNode} />
+          <MinimapDock>
+            <StatusAwareMiniMap onNodeDoubleClick={goToNode} />
+          </MinimapDock>
         </ReactFlow>
         </SessionProvider>
 
