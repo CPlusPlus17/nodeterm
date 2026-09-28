@@ -132,6 +132,18 @@ discard them. `/repos/{repo}/pulls` looks like the obvious endpoint and is the e
 bytes. CLAUDE.md's kanban section has the measurements and the eviction rule that keeps the issue
 lane unaffected.
 
+Three rules for any new GitHub call (CLAUDE.md's kanban section, "Sync foundation", has the why):
+- **Never decide what a failure means yourself.** Pass it through `classifyGitHubFailure`
+  (`core/github/failure.ts`). Only `unauthorized` may ever read as "signed out"; a rate limit, an
+  outage or a dropped connection must say so instead, or the user re-authenticates an account that
+  is fine.
+- **Go through the request coordinator and a client built by the host.** That is what feeds every
+  response's rate budget to the coordinator, pauses background work below the floor and caps waits.
+  A request that bypasses it is invisible to the budget. Prefer a conditional request
+  (`If-None-Match`) for anything you poll: a 304 is free.
+- **A write whose meaning comes from the project file needs `context.mappingApproved`.** The column
+  mapping is git-shared; approval covers it, and reads do not need it.
+
 ## House rules
 
 - **Branch labels describe a checkout on one core.** Share existing status reads through
