@@ -3748,6 +3748,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
      `$HOME` + fake `curl`, the same discipline as the canvas-control shim.
   3. **A read that could not run is `error`, never `unavailable`** — a dead master says nothing
      about whether the account has a subscription, and 'unavailable' silently drops the row.
+  4. **A failed read keeps the last good numbers** (`holdLastGood`, local AND remote): the
+     endpoint answers **429** on a budget every Claude CLI using the same login also spends
+     (measured on a host running 54 `claude` processes: 429 for minutes on end), and replacing
+     the bars with "Could not read usage" made rows flicker for no change in the account. The
+     held snapshot is `status: 'error'` + the old limits + the OLD `updatedAt`, so the debounce
+     must key on the READ's time (`lastFetchAt`/`remoteCache.at`), never on `updatedAt` — keying
+     it on the numbers' age re-reads on every call and hammers the endpoint that said 429.
   Shape: `remoteUsageTargets` (pure) elects ONE connected project per host (several projects share
   a host's `$HOME`) and offers its system `~/.claude` plus every managed account pinned to that
   host. The service (`usage:remote`) caches per target under the usual debounce, evicts targets

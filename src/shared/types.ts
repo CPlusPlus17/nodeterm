@@ -2662,9 +2662,18 @@ export interface ClaudeUsage {
   updatedAt: number
   /**
    * 'unavailable' = no OAuth subscription token (API-key billing / logged out) → hide pill.
-   * 'fetching' = request in flight. 'ok' = windows present. 'error' = fetch failed.
+   * 'fetching' = request in flight. 'ok' = windows present. 'error' = fetch failed — and when
+   * `limits` is non-empty alongside it, those are the LAST GOOD numbers the service kept
+   * (`holdLastGood`), still stamped with their own `updatedAt`.
    */
   status: 'unavailable' | 'fetching' | 'ok' | 'error'
+  /**
+   * The latest read was refused with HTTP 429. The usage endpoint's request budget is also
+   * spent by every Claude CLI using the same login (the CLI reads this endpoint itself), so a
+   * host running dozens of sessions can exhaust it without us. Absent = not rate limited (or
+   * not known to be).
+   */
+  rateLimited?: boolean
 }
 
 /**
