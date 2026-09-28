@@ -314,9 +314,13 @@ describe('antigravity capabilities', () => {
     expect(readsClaudeShapedTranscript('antigravity')).toBe(false)
     expect(canTransferFrom('antigravity')).toBe(false)
     expect(canContextLink('antigravity')).toBe(false)
-    // `agy --conversation <id>` resumes (measured), but it is a later slice: joining now makes cold
-    // restore type an unvalidated resume line.
-    expect(canResume('antigravity')).toBe(false)
+    // `agy --conversation=<id>` resumes; the id is validated at the interpolation site
+    // (SAFE_SESSION_ID) and a dead one is ignored by agy itself (it starts fresh). Not minted.
+    expect(canResume('antigravity')).toBe(true)
+    expect(resumeCommand('antigravity', '5f0c2f8e-9a51-4c41-9d2e-2b6f0f3e7a11')).toBe(
+      'agy --conversation=5f0c2f8e-9a51-4c41-9d2e-2b6f0f3e7a11'
+    )
+    expect(resumeCommand('antigravity', "x'; rm -rf ~")).toBeNull()
     expect(mintsSessionId('antigravity')).toBe(false)
     // No subagent/recurring/branch events are wired (invoke_subagent exists in the enum, unmeasured).
     expect(canSubagent('antigravity')).toBe(false)

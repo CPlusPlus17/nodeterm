@@ -35,7 +35,8 @@ export interface AgentConfig {
    */
   promptFlag?: string
   /**
-   * A one-sentence caveat shown wherever the agent is OFFERED (menu tooltips, palette note) — not
+   * A one-sentence caveat shown as the tooltip where the agent is OFFERED (pane/sidebar menus, the
+   * Dock; not the ⌘K palette, whose right-aligned note does not wrap a sentence this long) — not
    * a capability, and never read to decide behaviour. Exists for gemini: Google stopped serving
    * Gemini CLI to personal accounts on 2026-06-18 (google-gemini/gemini-cli discussion #27274),
    * and a user who picks it with a personal account otherwise meets a sign-in loop with no
@@ -183,7 +184,22 @@ export const AGENT_HOOK_TARGETS = [
   'copilot',
   'antigravity'
 ] as const
-export const RESUMABLE_AGENTS = ['claude', 'codex', 'gemini', 'opencode', 'grok', 'copilot'] as const
+// antigravity: `agy --conversation=<id>` — the `=` spelling agy prints in its own exit hint
+// (`agy --conversation=%s`, 1.2.12 binary). The id is the hook payload's `conversationId`, recorded
+// as the node's session id. A dead id is the SAFE failure here: agy logs "Conversation %s not found,
+// ignoring --conversation flag" and starts a fresh conversation (1.2.12 binary) — so a wrong id costs
+// the history, never the launch. Without membership a cold restore (machine reboot) brought an agy
+// node back as a bare shell under an Antigravity badge (`canColdRestore` needs `canResume`).
+// UNVERIFIED on a device: that the hook's conversationId is the id `--conversation` accepts.
+export const RESUMABLE_AGENTS = [
+  'claude',
+  'codex',
+  'gemini',
+  'opencode',
+  'grok',
+  'copilot',
+  'antigravity'
+] as const
 // Agents whose session id we MINT at launch (`--session-id <uuid>`) instead of learning it only
 // from hook events. Each member must have a measured caller-chosen-id grammar below.
 //
@@ -459,6 +475,15 @@ const includes = (list: readonly string[], id: AgentId): boolean =>
   list.includes(capabilityAgentId(id))
 
 export const hasHooks = (id: AgentId): boolean => includes(AGENT_HOOK_TARGETS, id)
+/**
+ * Hook-reporting agents whose hooks nodeterm installs on THIS machine only — `RemoteHooks.setup()`
+ * has no installer for them on an SSH host yet. On an SSH project such a node never reports a
+ * state, so nothing may WAIT on it (`--after`): the dependant would sit QUEUED forever.
+ */
+export const LOCAL_ONLY_HOOK_AGENTS = ['antigravity'] as const
+/** Does this agent report status when its node runs on an SSH project's host? */
+export const hasHooksOverSsh = (id: AgentId): boolean =>
+  hasHooks(id) && !includes(LOCAL_ONLY_HOOK_AGENTS, id)
 export const canResume = (id: AgentId): boolean => includes(RESUMABLE_AGENTS, id)
 export const mintsSessionId = (id: AgentId): boolean => includes(SESSION_ID_CAPABLE, id)
 /** Is the caller-chosen session-id flag available for this effective base harness? */
@@ -651,6 +676,8 @@ export function resumeCommandWith(
       return `${launchCmd} --session ${sid}`
     case 'copilot':
       return `${launchCmd} --resume=${sid}`
+    case 'antigravity':
+      return `${launchCmd} --conversation=${sid}`
     case 'claude':
     case 'gemini':
     case 'grok':

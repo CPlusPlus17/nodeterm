@@ -439,6 +439,7 @@ import { activeSessionApi } from '../session/session'
 import {
   agentConfig,
   hasHooks,
+  hasHooksOverSsh,
   canBranch,
   canRename,
   canContextLink,
@@ -11152,6 +11153,15 @@ export function Canvas() {
             reply({
               ok: false,
               error: `${verb}: --after ${depId} is not an agent session that reports when it is done`
+            })
+            return null
+          }
+          // Same guardrail, one layer down: this agent reports status only on THIS machine (no
+          // hook installer on an SSH host yet), so on an SSH project it would never say "done".
+          if (ctlSsh && !hasHooksOverSsh(depAgent)) {
+            reply({
+              ok: false,
+              error: `${verb}: --after ${depId} runs an agent that reports no status in SSH projects yet`
             })
             return null
           }

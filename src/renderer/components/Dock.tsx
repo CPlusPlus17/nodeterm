@@ -276,7 +276,7 @@ export function Dock({
                   onMouseEnter={() => setOpenSub(aid)}
                   onMouseLeave={() => setOpenSub((cur) => (cur === aid ? null : cur))}
                 >
-                  <button onClick={pick(() => onAddAgent(aid))}>
+                  <button title={AGENT_CONFIG[aid].notice} onClick={pick(() => onAddAgent(aid))}>
                     <AgentIcon agentId={aid} size={18} />
                     <span>{AGENT_CONFIG[aid].label}</span>
                     <span className="dock-menu__chevron">▸</span>
