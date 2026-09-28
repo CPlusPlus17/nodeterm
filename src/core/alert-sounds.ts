@@ -117,14 +117,18 @@ export async function readAlertSound(userDataDir: string, kind: AlertSoundKind):
   if (!isAlertSoundKind(kind)) return null
   const file = alertSoundFile(userDataDir, kind)
   // ONE file descriptor for the check and the read (no stat-then-read on a path, which a swap in
-  // between could defeat). O_NOFOLLOW refuses a symlink planted at the name; where the platform has
-  // no such flag (Windows) it is 0 and the isFile() check on the opened handle still applies.
-  // O_NONBLOCK keeps a FIFO planted at the name from hanging the open; fstat then refuses it.
+  // between could defeat). O_NOFOLLOW refuses a symlink planted at the name; O_NONBLOCK keeps a
+  // FIFO there from hanging the open, and fstat then refuses it. Where the platform has no
+  // O_NOFOLLOW (Windows) the open follows a link, so the name is lstat'ed AFTER the open and must
+  // be a plain file that is the very file we hold (same dev + ino) — a link, or a swap between the
+  // open and that lstat, reads as null. It runs on every platform, so POSIX tests cover it too.
   let fh: fs.FileHandle | undefined
   try {
     fh = await fs.open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
-    const st = await fh.stat()
-    if (!st.isFile() || st.size === 0 || st.size > ALERT_SOUND_MAX_BYTES) return null
+    const st = await fh.stat({ bigint: true })
+    if (!st.isFile() || st.size === 0n || st.size > BigInt(ALERT_SOUND_MAX_BYTES)) return null
+    const named = await fs.lstat(file, { bigint: true })
+    if (!named.isFile() || named.dev !== st.dev || named.ino !== st.ino) return null
     // Read at most one byte past the cap from the SAME handle: a file that grew after the fstat is
     // still refused rather than slurped.
     const buf = Buffer.alloc(ALERT_SOUND_MAX_BYTES + 1)
