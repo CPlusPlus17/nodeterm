@@ -892,7 +892,11 @@ describe('hosted service — lifecycle', () => {
 
   it('every hosted channel lives under the one prefix the access hook refuses outside the interceptor', () => {
     const hosted = Object.entries(IPC).filter(([k]) => k.startsWith('relayHosted')).map(([, v]) => v)
-    expect(hosted).toHaveLength(7)
+    // Seven relay-tunnel verbs plus the desktop's two bookmark channels. Those two are raw ipcMain
+    // handlers that never ride the relay; living under the prefix means a relay peer that asks for
+    // one is refused by the access hook here, which is the right answer for them.
+    expect(hosted).toHaveLength(9)
+    expect(hosted).toEqual(expect.arrayContaining([IPC.relayHostedBookmarks, IPC.relayHostedBookmarkRemove]))
     for (const ch of hosted) expect(ch).toMatch(/^relay:hosted:/)
   })
 })

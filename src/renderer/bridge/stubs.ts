@@ -450,6 +450,12 @@ export function buildStubApi(): Omit<
       onClosed: noopUnsub,
       disconnect: noop
     },
+    // A browser cannot join a relay host (only the desktop's main process holds a relay client),
+    // so it has joined no hosted team: an empty list is the true answer, not a degrade.
+    relayHosted: {
+      bookmarks: async () => [],
+      removeBookmark: async () => {}
+    },
     handoff: {
       build: U('handoff.build')
     },

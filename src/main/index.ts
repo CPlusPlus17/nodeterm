@@ -324,6 +324,9 @@ import { loadApprovedDevices, saveApprovedDevices, updateApprovedDevices } from 
 import { publicKeyToB64 } from './remote/e2ee'
 import { connectRelayClient, type RelayClientSession } from './remote/relay-client'
 import { decodeOffer } from './remote/pairing'
+import { isJoinCode } from '../core/relay/join-code'
+import { connectHostedTeam } from './remote/hosted-join'
+import { BookmarkStore, publicBookmark } from './remote/relay-bookmarks'
 import { loadOrCreatePeerKeyPair } from './remote/peer-identity'
 import { initSshProject } from './remote-ssh/ssh-project'
 import { resyncProjectAgents, RESYNC_TRANSCRIPT_TAIL_BYTES } from './remote-ssh/agent-resync'
@@ -4118,6 +4121,9 @@ app.whenReady().then(async () => {
   // Inert until `relay:client:connect` — a solo user pays nothing.
   {
     const relayClients = new Map<string, RelayClientSession>()
+    // The hosted teams this desktop has joined by join code; each bookmark holds this device's relay
+    // token for that host and is the joiner-side pin (src/main/remote/hosted-join.ts).
+    const bookmarks = new BookmarkStore(join(app.getPath('userData'), 'relay-bookmarks.json'))
     const sendTo = (channel: string, ...args: unknown[]): void => {
       if (!win.isDestroyed()) win.webContents.send(channel, ...args)
     }
@@ -4126,6 +4132,23 @@ app.whenReady().then(async () => {
       // is the credential (the paywall is host-side). The dev/relay gate still applies.
       if (!relayAllowed()) {
         throw new Error('Remote access is unavailable in development builds (set NODETERM_RELAY_URL).')
+      }
+      // A hosted team's join code (a Server Edition hosting over the relay). It runs the CORE relay
+      // client with no pin store, so the host key never reaches approved-devices; the pairing-offer
+      // path below is unchanged.
+      if (isJoinCode(String(offerCode ?? ''))) {
+        return connectHostedTeam(
+          String(offerCode),
+          {
+            apiBase: RELAY_API_BASE,
+            deviceId: getDeviceId,
+            label: hostname().slice(0, 60),
+            bookmarks,
+            // A locked keyring rejects here (E_PEER_KEY_LOCKED) before any token is minted.
+            loadKeys: loadOrCreatePeerKeyPair
+          },
+          { newId: randomUUID, send: sendTo, sessions: relayClients }
+        )
       }
       const offer = decodeOffer(String(offerCode ?? ''))
       if (!offer) {
@@ -4178,6 +4201,9 @@ app.whenReady().then(async () => {
       relayClients.get(id)?.close()
       relayClients.delete(id)
     })
+    // Raw ipcMain handlers, deliberately not on the platform: a relay peer can never reach them.
+    ipcMain.handle(IPC.relayHostedBookmarks, async () => (await bookmarks.list()).map(publicBookmark))
+    ipcMain.handle(IPC.relayHostedBookmarkRemove, async (_e, hostId: string) => bookmarks.remove(String(hostId)))
   }
   sshProjectManager = initSshProject(
     (projectId) => {

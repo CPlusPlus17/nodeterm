@@ -3515,10 +3515,28 @@ export interface RelayClientApi {
   send(connectionId: string, frame: string): void
   /** Listen for an inbound rpc frame (a JSON string) from the host. Returns an unsubscribe. */
   onFrame(connectionId: string, listener: (frame: string) => void): () => void
-  /** Fires when the connection's relay socket drops (host/relay gone). Returns unsubscribe. */
-  onClosed(connectionId: string, listener: () => void): () => void
+  /** Fires when the connection's relay socket drops (host/relay gone). `reason` is set only when
+   *  the host refused this device over the tunnel first (a hosted team: an owner declined, removed
+   *  it, or nobody answered in time). Returns unsubscribe. */
+  onClosed(connectionId: string, listener: (reason?: RelayClosedReason) => void): () => void
   /** Close a connection: end the relay socket and drop access to the host. */
   disconnect(connectionId: string): void
+}
+
+/** Why a host refused a relay client before closing it (the core relay's `TrustDeniedReason`). */
+export type RelayClosedReason = 'denied' | 'removed' | 'expired'
+
+/**
+ * The hosted teams this desktop has joined by `nodeterm://join` code. A join code is passed to
+ * `relayClient.connect` like a pairing offer; these are the bookmarks that connect leaves behind.
+ * Desktop-only: a browser cannot join a relay host, so the Server Edition answers an empty list.
+ */
+export interface RelayHostedApi {
+  /** The bookmarks, never their device tokens. `approved` = both humans approved this device on
+   *  that host, so a reconnect needs no SAS comparison on this side. */
+  bookmarks(): Promise<Array<{ hostId: string; label: string; approved: boolean; code: string }>>
+  /** Forget a bookmark (its device token and its approval). */
+  removeBookmark(hostId: string): Promise<void>
 }
 
 /** A paired device as exposed to the renderer — the bearer token is never included. */
@@ -3717,6 +3735,7 @@ export interface NodeTerminalApi {
   remoteHost: RemoteHostApi
   relayHost: RelayHostApi
   relayClient: RelayClientApi
+  relayHosted: RelayHostedApi
   handoff: HandoffApi
   pairing: PairingApi
   presence: PresenceApi

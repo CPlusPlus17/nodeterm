@@ -608,6 +608,12 @@ export const IPC = {
   relayHostedDeny: 'relay:hosted:deny',
   relayHostedInviteCode: 'relay:hosted:invite-code',
   relayHostedSelf: 'relay:hosted:self',
+  // The hosted teams THIS desktop has joined (src/main/remote/relay-bookmarks.ts). Unlike the
+  // hosted verbs above, these two never ride the relay: they are raw `ipcMain` handlers in the
+  // desktop main process, invisible to any relay peer. `relayHostedBookmarks` () lists them without
+  // their device tokens; `relayHostedBookmarkRemove` (hostId) forgets one.
+  relayHostedBookmarks: 'relay:hosted:bookmarks',
+  relayHostedBookmarkRemove: 'relay:hosted:bookmark-remove',
   handoffBuild: 'handoff:build',
   // Phone pairing (nodeterm iOS "scan a QR" flow): renderer starts/stops the one-shot LAN
   // listener; main pushes the completion result back over `pairing:done`. The per-device
