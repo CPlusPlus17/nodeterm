@@ -200,6 +200,8 @@ import { containerOrigin, snapPointInRootSpace } from '../lib/gridSnap'
 import { zoomFromPct } from '../lib/zoomPresets'
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from './zoom-limits'
 import { isSpaceRelease, spacePanKeydown } from '../lib/spacePan'
+import { handoffsFor, noteHandoff, suppressDoneAfterHandoff } from '../lib/handoffPings'
+import { loadIdentity } from '../state/presence'
 import { runBoardKey } from '../lib/boardKeys'
 import { readCanvasLocked, writeCanvasLocked } from '../lib/canvasLock'
 import {
@@ -12778,6 +12780,25 @@ export function Canvas() {
             for (const { nodeId: nid, event } of boardLogEvents(prev, next, cardTitle)) {
               useBoardLog.getState().append(api, pid, { kind: 'event', nodeId: nid, event })
             }
+            // Handoff pings (lib/handoffPings): an agent filing a card ASSIGNED TO THIS USER into a
+            // handoff column (a done column, or a started one past the first) tells them — through the
+            // existing notification consent, background-only rule and per-node cooldown. Arming the
+            // fold lets the Stop hook that follows seconds later not notify the same moment twice.
+            const notifyPrefs = useSettings.getState().settings
+            if (!document.hasFocus() && notifyPrefs.notifyOnClaudeDone && notifyPrefs.notifyConsentAsked) {
+              const me = loadIdentity()?.name ?? 'you'
+              const now = Date.now()
+              for (const h of handoffsFor(prev, next, me)) {
+                if (now - (notifyCooldownRef.current[h.nodeId] ?? 0) < 5000) continue
+                notifyCooldownRef.current[h.nodeId] = now
+                noteHandoff(h.nodeId, now)
+                void window.nodeTerminal.notify({
+                  title: `${ctlProject?.name ?? 'Board'} — handed to you: ${cardTitle(h.nodeId) || 'a card'}`,
+                  body: `Moved to ${h.columnTitle}.`,
+                  nodeId: h.nodeId
+                })
+              }
+            }
             const where = columnId
               ? next.columns.find((c) => c.id === columnId)?.title ?? columnId
               : 'Ungrouped'
@@ -13491,6 +13512,9 @@ export function Canvas() {
         // Everything from here down is an INTERRUPT, and this is where a quiet alert stops. The
         // unread dot and its ack above are deliberately on the other side of this line.
         if (opts?.quiet) return
+        // An agent that just filed its card into a handoff column was already announced to the
+        // assignee (the `assign` verb's handoff ping); its turn end seconds later is the same moment.
+        if (sound === 'done' && suppressDoneAfterHandoff(e.nodeId, Date.now())) return
         // Sound first: it is the one alert that also fires while you're in the app but looking at
         // another node — the case OS notifications deliberately skip.
         const snd = useSettings.getState().settings
