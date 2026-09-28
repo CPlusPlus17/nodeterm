@@ -7,7 +7,7 @@ import { useBoardWallpaperStyle } from '../../state/wallpaper'
 import {
   addColumn, assignNode, assignedTo, boardLabels, cardMatchesLabelFilter, cardMeta, columnForNode,
   deleteColumn, labelsForCard, moveColumn,
-  nextColumnColor, pruneAssignments, recolorColumn, renameColumn, unassigned, defaultKanban
+  nextColumnColor, pruneAssignments, recolorColumn, renameColumn, unassigned, defaultKanban, AT_COLUMN_END
 } from '../../lib/kanban'
 import { KanbanColumn, type KanbanLane } from './KanbanColumn'
 import { SessionCard } from './SessionCard'
@@ -142,7 +142,7 @@ const Swimlane = memo(function Swimlane({
     if (drag.kind === 'column') {
       if (columnId !== null) commit(moveColumn(board, drag.id, columnId))
     } else {
-      commit(assignNode(board, drag.id, columnId, null))
+      commit(assignNode(board, drag.id, columnId, AT_COLUMN_END))
     }
   }, [board, commit])
 
@@ -153,10 +153,10 @@ const Swimlane = memo(function Swimlane({
       return
     }
     const ids = columnId === null ? unassigned(board, sessionIds) : assignedTo(board, columnId)
-    let beforeId: string | null = targetNodeId
+    let beforeId: string | typeof AT_COLUMN_END = targetNodeId
     if (side === 'after') {
       const i = ids.indexOf(targetNodeId)
-      beforeId = i >= 0 && i + 1 < ids.length ? ids[i+1] : null
+      beforeId = i >= 0 && i + 1 < ids.length ? ids[i+1] : AT_COLUMN_END
     }
     commit(assignNode(board, drag.id, columnId, beforeId))
   }, [board, commit, sessionIds])

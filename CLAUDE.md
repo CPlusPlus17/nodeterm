@@ -1873,6 +1873,19 @@ else, and its context links must keep classifying across restarts).
   cost before the backgrounding. Full picture,
   limits (permission prompt and ESC fire no hook) and the device checklist:
   **`docs/antigravity-agent.md`**.
+  **No conversation view, and that is deliberate** (not in `CHAT_CAPABLE`): ⌘M shows the rendered
+  terminal output, and the phone's Chat screen answers `unsupported`. The
+  LOCATION is measured: every hook payload names `transcriptPath`, which is
+  `~/.gemini/antigravity-cli/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`,
+  keyed by the id `normalizeAntigravity` already records as `sessionId`. The RECORD SHAPES were never
+  captured; the 1.2.12 binary only describes them in prose. Four facts a parser needs are unknown:
+  the `tool_calls` element keys, how a tool result links back to its call, the serialized enum
+  spelling, and whether a line is rewritten when its step's status changes, which decides between
+  claude's paged read and grok's single capped read. A parser built from that prose would be a rule-14
+  wrong guess, so none ships, not even unwired. The capture recipe is §7.1 and §8.1 of the doc, using
+  `scripts/agy-transcript-shape.mjs`, which dumps shapes and never text. When it lands: locate
+  strictly by id (`brain/` holds every conversation on the machine), and have a remote node answer
+  `remoteOnly` → unreadable like grok.
 - **Gemini + codex parity** (2026-08-09) — brought both up to grok's level in the lists above. Unlike
   grok, **both CLIs are installed** and gemini **ships its own hook reference**
   (`/usr/lib/node_modules/@google/gemini-cli/bundle/docs/hooks/reference.md`), so almost every fact is
@@ -1927,6 +1940,20 @@ else, and its context links must keep classifying across restarts).
   in its frame) + Google's migration guide. It types and relaunches NOTHING, which is why a phrase
   match is enough here where `resume-fallback.ts` needs three refusals. `AgentConfig.notice` carries
   the one-line caveat to the menus/Dock tooltips; it is never read to decide behaviour.
+- **Gemini ⌘M chat view** (2026-09, `core/gemini-chat.ts`) — gemini is in `CHAT_CAPABLE` with its own
+  reader, routed in `readChatTranscript` via `capabilityAgentId` BEFORE anything claude-shaped and
+  located only by the header session id (`locateGemini`, which now reads just the header and honours
+  `GEMINI_CLI_HOME`). Its session file is an UPSERT log, not a message list: one id is rewritten in
+  full as tool results/tokens land, `$rewindTo` truncates, and `$set.messages` replaces the MODEL's
+  context at start, compression and rollback. The thread is the message records upserted by id with
+  rewinds honoured and **`$set.messages` ignored** — honouring it erases the thread at every
+  compression and shows the `<state_snapshot>` as the human's words. Not paged (a record depends on
+  earlier ones): one read under the 5 MB cap, `olderCursor: null`, like grok. Shows typed prompts
+  (`displayContent` over `@file` expansion; `<session_context>`/`<hook_context>` dropped per part),
+  replies, tool calls with results, `[info]`/`[warning]`/`[error]` notes and (paged) the model;
+  thinking is dropped. NOT supported: remote (SSH) nodes (`CHAT_LOCAL_ONLY` → "not supported yet"),
+  plan/question answer cards, the composer's model/effort labels. The phone gets it over the relay
+  unchanged; fixtures and exact rules: `src/shared/chat-fixtures/gemini/`, `docs/gemini-agent.md` §3.
 - **Claude session context capacity (#818)** — the managed hook reports only
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` from the effective Claude process environment (including
   `--settings` env), never the GUI/server process environment. HookServer validates decimal safe
@@ -3757,6 +3784,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
      `$HOME` + fake `curl`, the same discipline as the canvas-control shim.
   3. **A read that could not run is `error`, never `unavailable`** — a dead master says nothing
      about whether the account has a subscription, and 'unavailable' silently drops the row.
+  4. **A failed read keeps the last good numbers** (`holdLastGood`, local AND remote): the
+     endpoint answers **429** on a budget every Claude CLI using the same login also spends
+     (measured on a host running 54 `claude` processes: 429 for minutes on end), and replacing
+     the bars with "Could not read usage" made rows flicker for no change in the account. The
+     held snapshot is `status: 'error'` + the old limits + the OLD `updatedAt`, so the debounce
+     must key on the READ's time (`lastFetchAt`/`remoteCache.at`), never on `updatedAt` — keying
+     it on the numbers' age re-reads on every call and hammers the endpoint that said 429.
   Shape: `remoteUsageTargets` (pure) elects ONE connected project per host (several projects share
   a host's `$HOME`) and offers its system `~/.claude` plus every managed account pinned to that
   host. The service (`usage:remote`) caches per target under the usual debounce, evicts targets
@@ -4583,6 +4617,11 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   every hovered node twice, and on the desktop it would duplicate main's forward. (`node.close`
   has no browser owner at all: the browser keeps ⌘W.)
 - **Invariants**
+  - **A bare letter or Space is only ever a `board`-scope binding.** `board` commands resolve only
+    while a board is up and carry neither `allowWhileTyping` nor `allowInTerminal` — that pair of
+    refusals is what makes a bare key a command rather than a character stolen from the user, so a
+    `board` row must never gain either flag, and no other scope may be given bare letters
+    (`normalizeBindingForCommand`). `board` shares the `global` conflict bucket with app/canvas.
   - **Never read `settings.speech.shortcut`.** The dictation chord is `dictationBinding()` (the
     first effective `speech.dictation` binding); the legacy field is a **downgrade mirror only**,
     written by `setKeybindingOverride` so an older build still finds the user's chord.
@@ -5326,6 +5365,73 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   ~15 KB under the 128 KB ceiling. **Both verbs announce their write on `workspaceExternalChange`
   and that is not optional**: the renderer holds its own board and the next whole-workspace save
   serializes THAT, so a change the renderer never heard about is one the next autosave reverts.
+  **Board model + UX (2026-09).** Three tiers, and a new board feature must pick one: a board
+  FACT is shared content in `project.kanban` (optional, sanitized, ignored harmlessly by an older
+  build); a DISPLAY preference is per-user localStorage (`state/kanbanDisplay.ts`,
+  `nodeterm.kanbanDisplay`, per project); a filter on LIVE agent state is component state only.
+  - **`sanitizeKanban` (`core/workspace-files.ts`) is the shape rule now**, applied on all three
+    seams — `fileToProject`, the store's inline-project branch (which bypasses it) and
+    `projectToFile` on the way OUT (the two-seam rule `sanitizeLayouts` follows). It is
+    `validKanban` plus per-entry repairs, never inventions: a column that is not an object with
+    string `id` + `title` is dropped (React cannot render an object title — a render throw
+    boot-loops the app, the view choice persists), a non-string `category` is dropped, a malformed
+    assignment is dropped, every other field round-trips, and a clean board comes back BY IDENTITY
+    so a well-formed file is never rewritten.
+  - **Lifecycle category** (`KanbanColumn.category?: unstarted|started|done|closed`,
+    `@shared/kanban-category`). Every reader goes through `columnCategory`: an unknown STRING reads
+    as absent but is KEPT in the file (dropping it would erase a newer build's value on an older
+    teammate's save); a non-string never reaches a comparison. The default board carries
+    unstarted/started/done on every seeding surface (`defaultBoardColumns`, shared by
+    `defaultKanban` and the relay's `ensureProjectBoard`/label seeding). It drives the header
+    progress (`boardProgress`: live cards in done+closed columns over EVERY live card, Ungrouped
+    included; null when no column is done/closed — a number over an undefined "complete" would be
+    invented), hides `closed` columns behind a per-user toggle (default hidden), and gives the GitHub
+    completion column its default (`defaultCompletionColumnId`: first done, else first closed, else
+    the last column — the pre-category default, so an uncategorized board is unchanged). **A
+    category change on a column that holds cards is never silent**: it is a claim about every card
+    in the column (they start counting as finished, or leave view when it becomes closed), so
+    `categoryChangeImpact` gates a `ConfirmDialog` naming the count and the consequence; an empty
+    column changes at once. Confirm rather than refuse: refusing would only make the user empty
+    the column first, which is friction, not safety. Set from the column's ⋯ menu / header
+    right-click on the per-project board; Omni shows no column menu.
+  - **An unanchored card move lands at the TOP** (`assignNode`): no `before`, or a `before` naming
+    a card outside the destination column. An agent's `assign` into a long Done column used to
+    append at the bottom and read as "disappeared". A POSITIONAL drop still says where it landed —
+    below the last card or on the column body passes `AT_COLUMN_END` explicitly (both board views).
+    The relay's `projects.setCardColumn` follows the same rule; the `assign` help in BOTH agent
+    bodies says so (`canvas-control-core.test.ts` pins it).
+  - **Status chips** (Running / Needs you / Unread, `lib/kanbanStatusChips.ts`) read the store
+    through a derived primitive signature (`statusChipSig`) — never `byId`, the `armedDepSig` rule —
+    and are NEVER persisted (component state, reset on project switch): a filter on
+    second-by-second state that survived a restart shows a wrong board. The card badge and the chips
+    share ONE rule, `cardBadge`, so a chip cannot select cards whose badge says something else. They
+    narrow session cards only (like local labels); they AND with the label filter and OR within
+    themselves.
+  - **Board-log folding is a VIEW** (`lib/boardLogCollapse.ts`, `BoardLogFeed`): consecutive events
+    by the same author (name AND colour) of the same type within two minutes of the run's NEWEST row
+    render as one "×N" row that expands in place; the jsonl is never rewritten. The window is
+    anchored, not chained, so a ×N never spans more than two minutes. Comments never fold, and
+    neither do `agent-message` / `agent-read-cookies` — audit rows (`NEVER_COLLAPSE`).
+  - **Keyboard**: registry scope `board` (group Board) — Space opens the focused/hovered card,
+    J/K + ArrowDown/Up walk board order (the session cards on screen, column by column, Ungrouped
+    first; GitHub cards excluded), ArrowLeft/Right jump to the same row of the neighbouring
+    non-empty column; in the card modal J/K step the modal. `board` resolves only while a board is
+    up and has no `allowWhileTyping`/`allowInTerminal`, which is the ONLY reason
+    `normalizeBindingForCommand` lets it bind a bare letter or Space (the card modal's terminal,
+    the comment box and the chat composer keep every key). Dispatch stays in Canvas's one
+    listener; the mounted per-project board answers through `lib/boardKeys.ts` and DECLINES (the
+    key falls through) when the focused control uses the key (`keyOwnedByControl`: Space on a
+    button/link/checkbox, anything in a `<select>` or ARIA composite), when any dialog other than
+    its own card modal is open, or when a card menu is up. Two pre-existing bugs this had to fix:
+    the canvas's CAPTURE-phase space-to-pan `preventDefault`ed every non-typing Space even while a
+    board covered the canvas (so no board button could be pressed with Space) — `spacePanKeydown`
+    now takes `canvasCovered`; and a `Space` binding could never match because `e.key` is `' '`
+    (`normalizeKey` maps it to `SPACE`). The Settings recorder captures a bare key only for a
+    command that may have one (`board` scope or `allowBareKey`).
+  **Phone** (nodeterm-ios): must at least not break on `category` (an extra JSON key its board
+  decoder ignores); the relay-served move now lands at the top while the phone's direct-SSH writer
+  (`KanbanBoardWriter`) still appends, and `KanbanDefaults` should gain the three categories — both
+  are the iOS follow-up, not desktop work.
 - **Omni Kanban (global swimlanes)** (`components/kanban/GlobalKanbanView.tsx`; one swimlane per open project; `state/viewMode.ts` `globalKanban` (localStorage `nodeterm.globalKanban`, machine-local, like `viewByProject`) + `settings.omniKanbanEnabled` (feature gate, default OFF, `settings.json`) / `omniKanbanAsDefault` (when true, `view.kanbanToggle` — Cmd+Shift+B — opens Omni; otherwise per-project; `view.globalKanbanToggle` registry command — unbound, remappable — always opens Omni when enabled); `TabBar` and the menu IPC `onToggleKanban` share one `performKanbanToggle` decision, and `isGlobalKanbanOpen()` is the single gate (fail-closed, static import of `useSettings` — the earlier `require` failed open in the packaged renderer). The active project's lane is derived from serialized `p.nodes` via `toKanbanSessionState` — the persisted-state counterpart to `toKanbanSession` — and is committed (`commitActiveToStore`) before the overlay mounts so live React Flow edits are not stale; `pendingLaunch` never becomes `initialCommand` in the modal (the DAG launch must fire only when dependencies report done, and the canvas `TerminalNode` already delivers `initialCommand` via `writeWhenShellReady` after the `nodeterm:create-node` project switch). Active-project edits (rename / sticky / browser nav) route through Canvas live nodes (`setNodes` + `markDirty`), non-active through the store + `writeDisk`; delete uses `ConfirmDialog` (not `confirm`) and SSH-aware teardown (`transport.destroy` locally vs `sshProject.killSessions` with `everySocket` for a remote owner, plus `agentStatus` / `agentNodes` / `webviewKeepAlive` cleanup). The top bar's project pills and Cmd/Ctrl+1..9 (`nodeterm:swimlane-jump`) jump to the lane; header hint shows the correct mod (`Cmd` on Mac, `Ctrl` elsewhere). Server Edition works as-is, Mobile N/A.
 - **Settings** (`SettingsPage.tsx`, ⚙ / ⌘,): font/cursor (live to xterm + Monaco), default
   shell, grid + snap, **default node size** (`defaultNodeWidth`/`defaultNodeHeight` — new

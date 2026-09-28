@@ -54,7 +54,8 @@ function bindEverything(isMac: boolean): (id: CommandId) => readonly string[] {
   const pool = [
     ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''),
     ...'0123456789'.split(''),
-    ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`)
+    ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`),
+    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown'
   ]
   expect(pool.length).toBeGreaterThanOrEqual(COMMAND_DEFINITIONS.length)
   const map = new Map<CommandId, string[]>()

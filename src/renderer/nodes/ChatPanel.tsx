@@ -22,6 +22,7 @@ import { E_UNSUPPORTED } from '@shared/rpc'
 import { Spinner } from '../components/Spinner'
 import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
 import { sentCommand } from '@shared/chat-command'
+import { chatReadsLocalOnly } from '@shared/agents/config'
 import { ChatLoadingStatus } from './ChatPanelFallback'
 import { answerCardState, answerRebindPending, rebindRetryDelay, type BoundAnswerCard } from '../lib/chatAnswer'
 import { AnswerControlsUpdating, PlanAnswerControls, QuestionAnswerControls } from './ChatAnswerControls'
@@ -87,14 +88,13 @@ interface ChatPanelProps {
 type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'error'
 
 /**
- * An `unreadable` read of a GROK node can only be the remote case: core's grok leg is local-only
- * and answers a remote grok node (`remoteOnly`) with `unreadable` before touching anything, while
- * its local reader never sets the flag. So the agent alone names it — no renderer-side remoteness
- * guess, and no new field on the wire (the phone contract keeps `unreadable`). `=== 'grok'`
- * exactly, mirroring core's routing (`readChatTranscript` routes only the builtin id to grok's
- * reader). Retry cannot heal it, so it must not read as a transient failure.
+ * An `unreadable` read of a LOCAL-ONLY reader's node (grok, gemini — `CHAT_LOCAL_ONLY`) can only be
+ * the remote case: core's leg for those agents answers a remote node (`remoteOnly`) with
+ * `unreadable` before touching anything, while their local readers never set the flag. So the agent
+ * alone names it — no renderer-side remoteness guess, and no new field on the wire (the phone
+ * contract keeps `unreadable`). Retry cannot heal it, so it must not read as a transient failure.
  */
-const remoteGrokUnreadable = (agentId: string | undefined): boolean => agentId === 'grok'
+const remoteReaderUnsupported = (agentId: string | undefined): boolean => !!agentId && chatReadsLocalOnly(agentId)
 
 const isUnsupported = (e: unknown): boolean =>
   !!e && typeof e === 'object' && (e as { code?: string }).code === E_UNSUPPORTED
@@ -115,7 +115,8 @@ const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
     title: "Transcripts can't be read on this surface.",
     detail: 'Open this session on the desktop app to read its conversation.'
   },
-  remoteUnsupported: { title: "Reading a remote Grok session's transcript isn't supported yet." },
+  // `{agent}` is the node's own agent label (`agentLabel` below) — the case spans several agents.
+  remoteUnsupported: { title: "Reading a remote {agent} session's transcript isn't supported yet." },
   error: {
     title: "Couldn't read the transcript.",
     detail: "The agent's host may not be reachable — Retry once it is."
@@ -338,7 +339,7 @@ export function ChatPanel({
           setThread(emptyThread(identity))
           // A read that FAILED (the host did not answer, a remote node with no reachable master)
           // is not "no transcript": it gets the error copy, and ↻ is the way out.
-          setLoadState(!res.unreadable ? 'missing' : remoteGrokUnreadable(agentId) ? 'remoteUnsupported' : 'error')
+          setLoadState(!res.unreadable ? 'missing' : remoteReaderUnsupported(agentId) ? 'remoteUnsupported' : 'error')
           setHeldRead({ identity, pendingId: heldAtStart })
           settleHeldReload(heldAtStart)
           return
@@ -764,7 +765,7 @@ export function ChatPanel({
         )}
         {showEmpty && (
           <div className="term-chat__empty">
-            <div>{EMPTY_TEXT[loadState].title}</div>
+            <div>{EMPTY_TEXT[loadState].title.replace('{agent}', agentLabel)}</div>
             {EMPTY_TEXT[loadState].detail && (
               <div className="term-chat__empty-detail">{EMPTY_TEXT[loadState].detail}</div>
             )}

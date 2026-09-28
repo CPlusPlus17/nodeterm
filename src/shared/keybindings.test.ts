@@ -159,6 +159,16 @@ describe('registry invariants', () => {
         darwin: ['Cmd+W'], other: ['Cmd+W'], allowInTerminal: true, allowWhileTyping: true },
       { id: 'node.toggleMarkdown', title: 'Toggle markdown view', group: 'Nodes', scope: 'app',
         darwin: ['Cmd+M'], other: ['Cmd+M'], allowInTerminal: true, allowWhileTyping: true },
+      { id: 'board.openCard', title: 'Open focused card', group: 'Board', scope: 'board',
+        darwin: ['Space'], other: ['Space'] },
+      { id: 'board.nextCard', title: 'Next card', group: 'Board', scope: 'board',
+        darwin: ['J', 'ArrowDown'], other: ['J', 'ArrowDown'] },
+      { id: 'board.prevCard', title: 'Previous card', group: 'Board', scope: 'board',
+        darwin: ['K', 'ArrowUp'], other: ['K', 'ArrowUp'] },
+      { id: 'board.columnLeft', title: 'Card in the column to the left', group: 'Board',
+        scope: 'board', darwin: ['ArrowLeft'], other: ['ArrowLeft'] },
+      { id: 'board.columnRight', title: 'Card in the column to the right', group: 'Board',
+        scope: 'board', darwin: ['ArrowRight'], other: ['ArrowRight'] },
       { id: 'terminal.find', title: 'Find in terminal', group: 'Terminal', scope: 'terminal',
         darwin: ['Cmd+F'], other: ['Cmd+F'] },
       { id: 'terminal.copySelection', title: 'Copy terminal selection', group: 'Terminal',
@@ -312,8 +322,10 @@ describe('conflictBucket', () => {
   it('maps every command to its scope bucket, dictation excepted', () => {
     for (const def of COMMAND_DEFINITIONS) {
       if (def.id === 'speech.dictation') continue
+      // 'board' joins the global keyspace for the same reason 'canvas' does: both dispatch from
+      // the window listener, each merely inert while the other view is up.
       expect(conflictBucket(def)).toBe(
-        def.scope === 'app' || def.scope === 'canvas' ? 'global' : def.scope
+        def.scope === 'app' || def.scope === 'canvas' || def.scope === 'board' ? 'global' : def.scope
       )
     }
     expect(conflictBucket(COMMANDS_BY_ID.get('speech.dictation')!)).toBe('dictation')
@@ -638,5 +650,57 @@ describe('dictation conflict bucket', () => {
   it('the shipped defaults stay conflict-free under full scrutiny (unchanged invariant)', () => {
     expect(findKeybindingConflicts({}, true, { includeDefaults: true })).toEqual([])
     expect(findKeybindingConflicts({}, false, { includeDefaults: true })).toEqual([])
+  })
+})
+
+
+// The kanban board's keyboard (Space / J / K / arrows). Bare keys are only safe because of WHERE
+// these fire: while a board is up, and never while typing or in a terminal — the refusals below
+// are what make a bare letter a command rather than a character stolen from the user.
+describe('board commands', () => {
+  it('permit bare keys, letters and Space included — for board scope only', () => {
+    expect(normalizeBindingForCommand(def('board.nextCard'), 'j', true)).toEqual({ ok: true, value: 'J' })
+    expect(normalizeBindingForCommand(def('board.openCard'), 'Space', false)).toEqual({ ok: true, value: 'Space' })
+    expect(normalizeBindingForCommand(def('board.prevCard'), 'Shift+K', true)).toEqual({ ok: true, value: 'Shift+K' })
+    // Everyone else keeps the rule: a bare letter would be stolen from whatever the user types.
+    expect(normalizeBindingForCommand(def('node.newTerminal'), 'J', true).ok).toBe(false)
+    expect(normalizeBindingForCommand(def('canvas.deleteSelection'), 'J', true).ok).toBe(false)
+  })
+
+  it('resolve only while a board is open', () => {
+    expect(resolveCommandForKeyEvent(ev({ key: 'j' }), ctx({ kanbanOpen: true }), {}, true)).toBe('board.nextCard')
+    expect(resolveCommandForKeyEvent(ev({ key: 'ArrowDown' }), ctx({ kanbanOpen: true }), {}, false)).toBe('board.nextCard')
+    expect(resolveCommandForKeyEvent(ev({ key: 'k' }), ctx({ kanbanOpen: true }), {}, true)).toBe('board.prevCard')
+    expect(resolveCommandForKeyEvent(ev({ key: ' ' }), ctx({ kanbanOpen: true }), {}, true)).toBe('board.openCard')
+    expect(resolveCommandForKeyEvent(ev({ key: 'ArrowLeft' }), ctx({ kanbanOpen: true }), {}, true)).toBe('board.columnLeft')
+    expect(resolveCommandForKeyEvent(ev({ key: 'j' }), ctx(), {}, true)).toBeNull()
+    expect(resolveCommandForKeyEvent(ev({ key: ' ' }), ctx(), {}, true)).toBeNull()
+  })
+
+  it('are refused inside a text surface (the comment box, a rename field, the chat composer)', () => {
+    for (const key of ['j', 'k', ' ', 'ArrowDown', 'ArrowRight']) {
+      expect(resolveCommandForKeyEvent(ev({ key }), ctx({ kanbanOpen: true, typing: true }), {}, true)).toBeNull()
+    }
+  })
+
+  it('are refused while a terminal has focus — the card modal\'s terminal owns its keys', () => {
+    for (const terminalFirst of [false, true]) {
+      for (const key of ['j', 'k', ' ', 'ArrowUp']) {
+        expect(
+          resolveCommandForKeyEvent(ev({ key }), ctx({ kanbanOpen: true, terminal: true, terminalFirst }), {}, true)
+        ).toBeNull()
+      }
+    }
+  })
+
+  it('a held modifier is a different chord (Cmd+J is not J)', () => {
+    expect(resolveCommandForKeyEvent(ev({ key: 'j', metaKey: true }), ctx({ kanbanOpen: true }), {}, true)).toBeNull()
+  })
+
+  it('follow a remap and a disable', () => {
+    const o = { 'board.nextCard': ['N'], 'board.openCard': [] as string[] }
+    expect(resolveCommandForKeyEvent(ev({ key: 'n' }), ctx({ kanbanOpen: true }), o, true)).toBe('board.nextCard')
+    expect(resolveCommandForKeyEvent(ev({ key: 'j' }), ctx({ kanbanOpen: true }), o, true)).toBeNull()
+    expect(resolveCommandForKeyEvent(ev({ key: ' ' }), ctx({ kanbanOpen: true }), o, true)).toBeNull()
   })
 })

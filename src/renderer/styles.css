@@ -8029,6 +8029,8 @@ button.group-node__setup:disabled {
 .usage-popover__title { display: block; font-size: 15px; font-weight: 600; }
 .usage-popover__ago { font-size: 12px; color: rgba(var(--tint-rgb), 0.5); }
 .usage-popover__empty { font-size: 13px; color: rgba(var(--tint-rgb), 0.5); }
+/* Under bars kept through a failed read (holdLastGood): why they are old, and how old. */
+.usage-popover__held { font-size: 12px; margin-top: 10px; color: rgba(var(--tint-rgb), 0.5); }
 .usage-row { margin-top: 14px; }
 .usage-row__title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
 /* Marks the limit the server says is currently gating the account. */
@@ -10347,7 +10349,8 @@ button.group-node__setup:disabled {
   gap: 10px;
   height: 46px;
   padding: 0 18px;
-  padding-right: 300px; /* keep a long project name from running under the cluster icons */
+  /* Keep the strip's content out from under the controls cluster (~320px incl. its margin). */
+  padding-right: 330px;
   border-bottom: 1px solid rgba(var(--tint-rgb), 0.08);
 }
 .kanban-header__dot {
@@ -10493,6 +10496,55 @@ button.group-node__setup:disabled {
 }
 .kanban-col__close:hover {
   color: var(--danger);
+}
+/* Lifecycle category marker (@shared/kanban-category): a quiet word beside the title, never a
+   second colour language — the column's own dot already carries its identity. */
+.kanban-col__category {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(var(--tint-rgb), 0.5);
+  border: 1px solid rgba(var(--tint-rgb), 0.14);
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.kanban-col__menu {
+  background: none;
+  border: none;
+  color: rgba(var(--tint-rgb), 0.35);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.kanban-col__menu:hover {
+  color: var(--text-strong);
+}
+/* Board progress (cards in done+closed columns over every card) in the title strip. */
+.kanban-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  font-size: 11px;
+  color: rgba(var(--tint-rgb), 0.55);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.kanban-progress__bar {
+  width: 56px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(var(--tint-rgb), 0.1);
+  overflow: hidden;
+}
+.kanban-progress__fill {
+  display: block;
+  height: 100%;
+  background: var(--state-success);
 }
 .kanban-col__swatches {
   display: flex;
@@ -10847,6 +10899,10 @@ button.group-node__setup:disabled {
 .issue-run-chip--failed .issue-run-chip__state,
 .issue-run-chip--dropped .issue-run-chip__state {
   color: var(--warn);
+}
+.issue-run-chip--paused .issue-run-chip__state,
+.issue-run-chip--sleeping .issue-run-chip__state {
+  color: var(--muted);
 }
 .github-issue-modal__runs {
   padding: 10px 22px 0;
@@ -11551,6 +11607,29 @@ button.group-node__setup:disabled {
   font-size: 10px;
   color: rgba(var(--tint-rgb), 0.35);
 }
+/* A run of like events folded at render time (lib/boardLogCollapse) — the ×N toggle. */
+.board-log__fold {
+  background: rgba(var(--tint-rgb), 0.07);
+  border: 1px solid rgba(var(--tint-rgb), 0.12);
+  border-radius: 999px;
+  color: rgba(var(--tint-rgb), 0.65);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.board-log__fold:hover,
+.board-log__fold[aria-expanded='true'] {
+  color: var(--text-strong);
+  border-color: rgba(var(--tint-rgb), 0.25);
+}
+.board-log__group--open {
+  display: flex;
+  flex-direction: column;
+  gap: inherit;
+  border-left: 2px solid rgba(var(--tint-rgb), 0.1);
+  padding-left: 6px;
+}
 .board-log__text {
   font-size: 12px;
   line-height: 1.45;
@@ -11996,6 +12075,89 @@ button.group-node__setup:disabled {
 .label-picker__check {
   margin-left: auto;
   color: var(--accent);
+}
+
+/* A card the board's keyboard is on (J/K/arrows move it, Space opens it). */
+.kanban-card:focus {
+  outline: none;
+}
+.kanban-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── Board status chips (header) — transient filters on live agent state ── */
+.kanban-status-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+.kanban-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid rgba(var(--tint-rgb), 0.12);
+  border-radius: 999px;
+  color: rgba(var(--tint-rgb), 0.65);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kanban-status-chip:hover {
+  color: var(--text-strong);
+  background: rgba(var(--tint-rgb), 0.06);
+}
+.kanban-status-chip__count {
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--tint-rgb), 0.45);
+}
+.kanban-status-chip--on {
+  border-color: var(--accent);
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.kanban-status-chip--running.kanban-status-chip--on {
+  border-color: var(--state-working);
+  background: color-mix(in srgb, var(--state-working) 14%, transparent);
+}
+.kanban-status-chip--needs.kanban-status-chip--on {
+  border-color: var(--state-attention);
+  background: color-mix(in srgb, var(--state-attention) 14%, transparent);
+}
+.kanban-status-chip--unread.kanban-status-chip--on {
+  border-color: var(--state-unread);
+  background: color-mix(in srgb, var(--state-unread) 14%, transparent);
+}
+
+/* The title strip carries progress, the closed toggle, three chips and Filter. None of them may
+   wrap (a wrapped button grows the fixed-height strip into the columns); the project name is what
+   gives way, and the progress BAR drops before its "n/m done" text. */
+.kanban-header .kanban-filter-btn,
+.kanban-status-chips,
+.kanban-progress,
+.kanban-header__filter {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.kanban-header__name {
+  min-width: 48px;
+  flex-shrink: 1;
+}
+@media (max-width: 1100px) {
+  .kanban-progress__bar {
+    display: none;
+  }
+}
+@media (max-width: 1000px) {
+  .kanban-header {
+    gap: 6px;
+  }
+  .kanban-status-chip {
+    padding: 2px 6px;
+  }
 }
 
 /* ── Board label filter (header) ── */

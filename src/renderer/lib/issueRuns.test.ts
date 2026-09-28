@@ -82,9 +82,26 @@ describe('issueRunChip — the chip follows the bound node state', () => {
     [{ state: 'done', unread: false }, 'idle'],
     [{ state: 'done', unread: true }, 'idle'],
     [{ state: 'done', unread: false, lastTurnError: { at: 1 } }, 'failed'],
-    [{ state: 'done', unread: false, dropped: true }, 'dropped']
+    [{ state: 'done', unread: false, dropped: true }, 'dropped'],
+    [{ unread: false, paused: true }, 'paused'],
+    [{ unread: false, hibernated: true }, 'sleeping'],
+    [{ state: 'done', unread: false, hibernated: true, lastTurnError: { at: 1 } }, 'failed'],
+    [{ state: 'working', unread: false, hibernated: true }, 'running']
   ] as const)('%j → %s', (status, kind) => {
     expect(issueRunChip(status as never).kind).toBe(kind)
+  })
+
+  it('agrees with the session card badge on every state they share (one precedence, not two)', async () => {
+    const { cardBadge } = await import('./kanbanStatusChips')
+    const states = [
+      { unread: false, state: 'working' }, { unread: false, state: 'waiting' }, { unread: false, state: 'blocked' },
+      { unread: false, state: 'done' }, { unread: false, dropped: true, state: 'done' },
+      { unread: false, paused: true }, { unread: false, hibernated: true }
+    ]
+    for (const st of states) {
+      const badge = cardBadge('terminal', st as never)
+      expect(issueRunChip(st as never).kind).toBe(badge ?? 'idle')
+    }
   })
 
   it('carries unread separately from the state', () => {

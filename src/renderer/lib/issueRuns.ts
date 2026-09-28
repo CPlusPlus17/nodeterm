@@ -20,10 +20,13 @@ import {
 } from '@shared/issue-runs'
 import type { AgentNodeStatus } from '../state/agentStatus'
 import type { BoardLogAppendInput } from '../state/boardLog'
+import { cardBadge } from './kanbanStatusChips'
 
 export { runEndState, type IssueRunNode }
 
-type StatusLike = Pick<AgentNodeStatus, 'state' | 'unread'> & IssueRunStatus
+type StatusLike = Pick<AgentNodeStatus, 'state' | 'unread'> &
+  Partial<Pick<AgentNodeStatus, 'paused' | 'hibernated'>> &
+  IssueRunStatus
 
 /** `run-started` as a board-log append (the shared event, filed under the issue card). */
 export function runStartedEntry(ref: unknown, node: IssueRunNode): BoardLogAppendInput | null {
@@ -41,18 +44,19 @@ export function runEndedEntry(
   return e ? { kind: 'event', ...e } : null
 }
 
-export type IssueRunChipKind = 'running' | 'needs' | 'failed' | 'dropped' | 'idle'
+export type IssueRunChipKind = 'running' | 'needs' | 'failed' | 'dropped' | 'paused' | 'sleeping' | 'idle'
 
-/** What a bound session's chip on the issue card says. Same precedence as the session card's own
- *  badge (DROPPED first, then RUNNING, then NEEDS YOU), plus the TURN FAILED verdict the node header
- *  shows. `done` is `idle`: a finished turn is not a finished issue. */
+/** What a bound session's chip on the issue card says. The precedence is the session card's own
+ *  (`cardBadge` — ONE definition, so the chip on the issue and the badge on the session's card can
+ *  never disagree), plus the TURN FAILED verdict the node header shows, ranked above the quiet
+ *  pause states. `done` is `idle`: a finished turn is not a finished issue. */
 export function issueRunChip(status: StatusLike | undefined): { kind: IssueRunChipKind; unread: boolean } {
   const unread = !!status?.unread
   if (!status) return { kind: 'idle', unread }
-  if (status.dropped) return { kind: 'dropped', unread }
-  if (status.state === 'working') return { kind: 'running', unread }
-  if (status.state === 'waiting' || status.state === 'blocked') return { kind: 'needs', unread }
+  const badge = cardBadge('terminal', status as AgentNodeStatus)
+  if (badge === 'dropped' || badge === 'running' || badge === 'needs') return { kind: badge, unread }
   if (status.lastTurnError) return { kind: 'failed', unread }
+  if (badge === 'paused' || badge === 'sleeping') return { kind: badge, unread }
   return { kind: 'idle', unread }
 }
 

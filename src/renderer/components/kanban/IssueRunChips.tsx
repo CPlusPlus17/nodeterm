@@ -7,6 +7,8 @@ const LABEL: Record<IssueRunChipKind, string | null> = {
   needs: 'NEEDS YOU',
   failed: 'TURN FAILED',
   dropped: 'DROPPED',
+  paused: 'PAUSED',
+  sleeping: 'SLEEPING',
   idle: null
 }
 

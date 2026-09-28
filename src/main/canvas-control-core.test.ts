@@ -251,6 +251,22 @@ describe('parseControlRequest', () => {
     expect(body.toLowerCase()).toContain('confirm')
   })
 
+  // `assign` with no `--before` used to append at the bottom of the column — a card an agent had
+  // just moved into a long Done column read as gone. It now lands at the TOP, and an agent reading
+  // either body must be told so (a doc that still says "end" is a stale contract).
+  it('both agent-facing texts say an unanchored assign lands at the TOP of the column', () => {
+    for (const body of [buildCanvasSkillBody('/x/shim.sh'), buildCanvasControlInstructions('/tmp/nodeterm.sh')]) {
+      // Anchored on the verb's own synopsis (`assign --node <id>`), not on the first mention of
+      // `assign --node`: the issue-bound contract, rendered earlier in both bodies, also tells a
+      // session to run `assign --node "$NODETERM_NODE_ID" …`.
+      const at = body.indexOf('assign --node <id>')
+      expect(at).toBeGreaterThan(-1)
+      const assign = body.slice(at, at + 900)
+      expect(assign).toMatch(/[Ww]ithout `--before`[^.]*\bTOP\b/)
+      expect(assign).not.toMatch(/\bat the end\b|\bappend/i)
+    }
+  })
+
   // The parser change in this commit's sibling is only half a fix: an agent that never learns the
   // `=` form simply cannot express a value beginning with `--`, and the failure stays silent for it.
   // So both agent-facing texts must carry the rule, not just one of them.

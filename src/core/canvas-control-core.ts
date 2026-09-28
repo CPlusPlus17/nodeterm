@@ -627,7 +627,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  plus the virtual Ungrouped column. Start here when you need a column id or want the board state.',
     '- `assign --node <id> [--column <id|title>] [--before <nodeId>]` — move a session card to a column',
     '  (match by column id or title). Omit `--column` (or pass `ungrouped`) to send it back to Ungrouped.',
-    '  `--before <nodeId>` drops it above that card within the column. This is board metadata only — it',
+    '  `--before <nodeId>` drops it above that card within the column; without `--before` it lands at the',
+    '  TOP of the column, where the next reader of the board looks first. This is board metadata only — it',
     '  never moves the node on the canvas or changes its group. Use it to reflect progress: move a card',
     '  to your "In Progress"/"Done" column as work advances.',
     ...settingsVerbDocLines(),
@@ -1152,7 +1153,9 @@ ${issueBindingDocLines().join('\n')}
 - \`assign --node <id> [--column <id|title>] [--before <nodeId>]\` — file a session card under a
   column, matching \`--column\` by id or (case-insensitive) title. Omit \`--column\`, or pass
   \`ungrouped\`, to send it back to Ungrouped; \`--before <nodeId>\` drops it just above that card
-  within the column. This is board metadata ONLY — it never moves the node on the canvas, changes
+  within the column, and without \`--before\` the card lands at the TOP of the column — so a card
+  you just moved to "Done" is the first one there, not buried at the bottom of a long column (a
+  \`--before\` naming a card that is not in that column counts as no anchor). This is board metadata ONLY — it never moves the node on the canvas, changes
   its group, or touches the running session. Use it to reflect progress: as a station finishes,
   move its card into your "In Progress" / "Done" column so the board tells the real story.
 ${settingsVerbDocLines().join('\n')}
