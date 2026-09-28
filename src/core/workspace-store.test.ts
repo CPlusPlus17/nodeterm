@@ -2309,3 +2309,30 @@ describe('getNodeResolved — a node with its cwd as the canvas sees it', () => 
     expect(store.getNodeResolved('nope')).toBeUndefined()
   })
 })
+
+// The agent-status mirror keeps an IDENTITY-ONLY entry past its 6 h state expiry and drops it once
+// its node no longer exists in any project. Dropping on a guess would cost the phone a session id,
+// so the store answers `undefined` whenever it cannot see every project's nodes.
+describe('knownNodeIds — every node id in every project, or undefined when it cannot know', () => {
+  it('is undefined before the index is loaded', () => {
+    expect(new WorkspaceStore().knownNodeIds()).toBeUndefined()
+  })
+  it('lists the nodes of local-ref and inline projects, closed ones included', async () => {
+    const store = new WorkspaceStore()
+    await store.save(ws([
+      project({ id: 'p-local', cwd: projRoot }),
+      project({ id: 'p-inline', cwd: undefined, closed: true, nodes: [
+        { id: 'term-2', kind: 'terminal', position: { x: 0, y: 0 }, size: { width: 1, height: 1 }, title: 't', color: '#fff', group: null }
+      ] })
+    ]))
+    expect([...(store.knownNodeIds() ?? [])].sort()).toEqual(['term-1', 'term-2'])
+  })
+  it('is undefined when a local ref has no readable content this run', async () => {
+    const store = new WorkspaceStore()
+    await store.save(ws([project({ id: 'p-local', cwd: projRoot })]))
+    await fs.rm(path.join(projRoot, '.nodeterm'), { recursive: true, force: true })
+    const fresh = new WorkspaceStore()
+    await fresh.load()
+    expect(fresh.knownNodeIds()).toBeUndefined()
+  })
+})

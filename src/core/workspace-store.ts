@@ -1505,6 +1505,38 @@ export class WorkspaceStore {
   }
 
   /**
+   * Every node id in every project the index holds — open, closed and SSH alike — or `undefined`
+   * when that set cannot be known: the index is not loaded, a local ref's project.json has not been
+   * read this run (unavailable folder, corrupt file), or an SSH entry has no offline cache.
+   *
+   * The agent-status mirror uses it to drop an IDENTITY-ONLY entry (a session id kept past the 6 h
+   * state expiry) whose node was deleted while this process was not watching. A wrong "gone" costs
+   * the phone that node's session id, so every doubt answers `undefined` — the mirror then bounds
+   * the entry by its identity TTL alone. Same three-entry-kind scan as `findNode`.
+   */
+  knownNodeIds(): Set<string> | undefined {
+    if (!this.index) return undefined
+    const ids = new Set<string>()
+    for (const e of this.index.entries) {
+      let nodes: CanvasNodeState[] | undefined
+      if (e.project) nodes = e.project.nodes
+      else if (e.cache) nodes = e.cache.nodes
+      else if (e.cwd) {
+        const raw = this.lastWritten.get(projectFilePath(e.cwd))
+        if (!raw) return undefined
+        try {
+          nodes = (JSON.parse(raw) as ProjectFileV1).nodes
+        } catch {
+          return undefined
+        }
+      }
+      if (!Array.isArray(nodes)) return undefined
+      for (const n of nodes) if (n && typeof n.id === 'string') ids.add(n.id)
+    }
+    return ids
+  }
+
+  /**
    * Every persisted canvas as {id, nodes, bridges} — the raw material the Server Edition derives
    * its context-link map from (src/server/context-link.ts). Same three-entry-kind scan as
    * `getNode`, but whole projects rather than one node, because a link edge only means anything
