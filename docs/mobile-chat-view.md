@@ -156,6 +156,36 @@ N/A (it serves no phone relay; its bridge subscription is inert).
 - **Answer**: Swift port of `buildPermissionDecision` (validates against the pending request file),
   written atomically (`umask 077`, tmp + mv) from stdin; `pendingId` regex-validated before any path.
 
+### 3.3a Custom agents (mirror `settings.customAgents`, desktop side implemented)
+
+A custom agent's node carries `agentId: "custom:<uuid>"`. On SSH the phone can neither know its base
+harness (the chat capability follows it) nor name its binary (the pane-owner check before a send) on
+its own, so the agent-status mirror's `settings` block advertises them:
+
+```json
+"settings": {
+  "customAgents": [
+    { "id": "custom:3f2a…", "label": "Proxy Claude", "baseAgent": "claude", "binaries": ["claude"] },
+    { "id": "custom:9b1c…", "label": "My agent", "binaries": ["my-agent"] },
+    { "id": "custom:77de…", "label": "Wrapped", "baseAgent": "codex", "binaries": [] }
+  ]
+}
+```
+
+- Present in every mirror the phone reads: the local `agent-status.json` (desktop and Server Edition;
+  the relay's `projects.list` serves this same file) and each SSH project's pushed slice
+  (`agent-status-<projectId>.json`, via `settingsFor`). Absent on older desktops ⇒ refuse every custom
+  node, as before.
+- `binaries` is the desktop predicate's `binariesFor(id, settings.customAgents)`, published only when
+  every name matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` — the BUILDER enforces this alphabet, because a
+  derived "name" can be a slice of a secret (`oauth2:ghp_…` from a git URL, a quoted env value, a
+  `${env:…}` template). **Empty = cannot be named honestly** (e.g. `bash -lc …`, or a name outside the
+  alphabet): refuse, never guess. The phone still validates each name (`isPlainBinaryName`) and refuses otherwise.
+- `baseAgent` is present only when it is a builtin id. Chat on SSH: only when it is `claude` (the only
+  harness the Swift parser reads); on relay the desktop decides (`canChat(capabilityAgentId(…))`).
+- Never contains the raw launch command, args or env — they routinely hold API keys and proxy URLs,
+  and the slice is a file on the SSH host. `label` is display text (≤200 chars).
+
 ### 3.4 Live updates & paging (both transports)
 
 - First open: 256 KB tail; scroll near top → 512 KB older pages; merge by `key`; carried tool results;

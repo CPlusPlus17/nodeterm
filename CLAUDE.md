@@ -2107,7 +2107,16 @@ else, and its context links must keep classifying across restarts).
   `settings` block (`claudePermissionMode`/`autoSupported`/`claudeAccounts`) so the phone can
   launch agents with the desktop's permission mode + managed accounts, and SSH slices get their
   **per-host** settings (remote CLI caps + host-matched accounts) injected via
-  `remote-status-push`'s `settingsFor` dep.
+  `remote-status-push`'s `settingsFor` dep. `settings.customAgents` (`[{id, label, baseAgent?,
+  binaries}]`) lets the phone chat with a custom agent: built ONLY by `core/mirror-custom-agents.ts`
+  (one definition for all three providers — local file, which relay `projects.list` also serves,
+  SSH slices, Server Edition), `binaries` = `binariesFor` from the pane-owner predicate, published
+  only when every name fits the plain alphabet `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (else `[]`) —
+  the builder enforces it because the tokenizer can "name" a slice of a secret (`oauth2:ghp_…` out
+  of a git URL, a quoted env value, a `${env:…}` template). **Never put a custom agent's raw
+  `launchCmd`/`args`/`env` in the mirror** — they carry API keys and the file lands on every SSH
+  host. `binariesFor` resolves a BLANK launch command with a *builtin* `baseAgent` to the base's
+  binaries (what `resolveAgentConfig` actually launches).
 - **Hook installers** — `src/core/agents/hooks/` holds per-agent hook services + an installer
   registry `MANAGED_HOOK_INSTALLERS`. `managed-script.ts` builds the POSIX hook script that
   POSTs to the server (env-gated: a no-op in the user's normal terminals, active only in
