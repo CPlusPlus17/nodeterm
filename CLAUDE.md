@@ -1901,6 +1901,15 @@ else, and its context links must keep classifying across restarts).
     because `/quit --delete` exits *and permanently deletes* the session history, i.e. exactly what the
     restart exists to resume (pinned by its own test).
   Full picture, measurements, gaps and a device checklist: **`docs/gemini-agent.md`**.
+- **Gemini CLI refuses personal Google accounts since 2026-06-18** (free / AI Pro / AI Ultra moved to
+  Antigravity CLI — the `antigravity` agent above; Code Assist Standard/Enterprise, Vertex AI and paid
+  API keys still work, so `gemini` stays a builtin). The refusal happens before any session, so no
+  hook reports it: a gemini-harness node reads its own pane for the CLI's sentence
+  (`renderer/terminal/gemini-retired.ts`, letters-and-digits match because the TUI wraps it in a
+  box) and raises a slim banner — "Open Antigravity" (`nodeterm:open-agent`, an agy node beside it,
+  in its frame) + Google's migration guide. It types and relaunches NOTHING, which is why a phrase
+  match is enough here where `resume-fallback.ts` needs three refusals. `AgentConfig.notice` carries
+  the one-line caveat to the menus/Dock tooltips; it is never read to decide behaviour.
 - **Claude session context capacity (#818)** — the managed hook reports only
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` from the effective Claude process environment (including
   `--settings` env), never the GUI/server process environment. HookServer validates decimal safe
