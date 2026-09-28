@@ -116,3 +116,27 @@ describe('Canvas wiring (source pins)', () => {
     expect(source()).toContain("if (sound === 'done' && suppressDoneAfterHandoff(e.nodeId, Date.now())) return")
   })
 })
+
+// The assign verb runs handoffsFor AFTER its board write; a throw there left the verb without a
+// reply. A card's assignees come from a hand-editable file.
+describe('handoffsFor — hostile meta.assignees', () => {
+  it('never throws, and pings nobody for a card whose assignees are not a list', () => {
+    for (const bad of [5, {}, true, 'enes']) {
+      const meta = [{ nodeId: 'n', assignees: bad }] as unknown as ProjectKanban['meta']
+      const before = board([{ nodeId: 'n', columnId: 'doing' }], meta)
+      const after = board([{ nodeId: 'n', columnId: 'done' }], meta)
+      expect(() => handoffsFor(before, after, 'enes')).not.toThrow()
+      expect(handoffsFor(before, after, 'enes')).toEqual([])
+    }
+  })
+
+  it('the assign handler cannot lose its reply to a failed ping (source pin)', () => {
+    const src = readFileSync('src/renderer/canvas/Canvas.tsx', 'utf8')
+    const assign = src.slice(src.indexOf("case 'assign': {"), src.indexOf("case 'assign': {") + 6000)
+    const ping = assign.indexOf('handoffsFor(prev, next, me)')
+    const guard = assign.lastIndexOf('try {', ping)
+    expect(guard).toBeGreaterThan(-1)
+    expect(assign.indexOf('} catch', ping)).toBeGreaterThan(ping)
+    expect(assign.indexOf('reply({', ping)).toBeGreaterThan(assign.indexOf('} catch', ping))
+  })
+})

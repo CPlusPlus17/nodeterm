@@ -9,6 +9,7 @@ import { LabelChips } from './LabelChips'
 import { PRIORITIES } from './CardMetaBar'
 import type { KanbanSession } from './KanbanView'
 import { cardBadge } from '../../lib/kanbanStatusChips'
+import { cardAssignees } from '@shared/kanban-labels'
 
 const PRIO_COLOR = Object.fromEntries(PRIORITIES.map((p) => [p.id, p.color])) as Record<KanbanPriority, string>
 
@@ -57,7 +58,7 @@ export const SessionCard = memo(function SessionCard({
   // can never select cards whose badge says something else. The ranking and its reasons live there.
   const badge = cardBadge(session.kind, status)
   const stickyPreview = session.kind === 'sticky' ? (session.text ?? '').trim() : ''
-  const assignees = meta?.assignees ?? []
+  const assignees = cardAssignees(meta)
   const due = meta?.dueAt
   const overdue = due !== undefined && due < Date.now()
   const priority = meta?.priority

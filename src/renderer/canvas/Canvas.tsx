@@ -12784,20 +12784,26 @@ export function Canvas() {
             // handoff column (a done column, or a started one past the first) tells them — through the
             // existing notification consent, background-only rule and per-node cooldown. Arming the
             // fold lets the Stop hook that follows seconds later not notify the same moment twice.
-            const notifyPrefs = useSettings.getState().settings
-            if (!document.hasFocus() && notifyPrefs.notifyOnClaudeDone && notifyPrefs.notifyConsentAsked) {
-              const me = loadIdentity()?.name ?? 'you'
-              const now = Date.now()
-              for (const h of handoffsFor(prev, next, me)) {
-                if (now - (notifyCooldownRef.current[h.nodeId] ?? 0) < 5000) continue
-                notifyCooldownRef.current[h.nodeId] = now
-                noteHandoff(h.nodeId, now)
-                void window.nodeTerminal.notify({
-                  title: `${ctlProject?.name ?? 'Board'} — handed to you: ${cardTitle(h.nodeId) || 'a card'}`,
-                  body: `Moved to ${h.columnTitle}.`,
-                  nodeId: h.nodeId
-                })
+            // A side effect of a move that has already been written: whatever goes wrong here must
+            // never cost the verb its reply (an agent waiting on `assign` would hang on it).
+            try {
+              const notifyPrefs = useSettings.getState().settings
+              if (!document.hasFocus() && notifyPrefs.notifyOnClaudeDone && notifyPrefs.notifyConsentAsked) {
+                const me = loadIdentity()?.name ?? 'you'
+                const now = Date.now()
+                for (const h of handoffsFor(prev, next, me)) {
+                  if (now - (notifyCooldownRef.current[h.nodeId] ?? 0) < 5000) continue
+                  notifyCooldownRef.current[h.nodeId] = now
+                  noteHandoff(h.nodeId, now)
+                  void window.nodeTerminal.notify({
+                    title: `${ctlProject?.name ?? 'Board'} — handed to you: ${cardTitle(h.nodeId) || 'a card'}`,
+                    body: `Moved to ${h.columnTitle}.`,
+                    nodeId: h.nodeId
+                  })
+                }
               }
+            } catch (err) {
+              console.warn('[kanban] handoff ping failed', err)
             }
             const where = columnId
               ? next.columns.find((c) => c.id === columnId)?.title ?? columnId

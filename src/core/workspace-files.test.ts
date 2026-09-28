@@ -622,22 +622,59 @@ describe('sanitizeKanban — the board is hostile, git-shared input', () => {
     expect(sanitizeKanban(k)?.assignments).toEqual([{ nodeId: 'n', columnId: 'kcol-a' }])
   })
 
-  it('keeps a valid rank and drops one that is not (the card then derives from array order)', () => {
+  // Same rule as `category`: a STRING the readers cannot use is kept (they already treat it as
+  // absent, and the next write into that column re-keys it), a non-string is dropped.
+  it('keeps any rank STRING (readers ignore an invalid one), drops a non-string rank', () => {
     const k = {
       ...clean(),
       assignments: [
         { nodeId: 'ok', columnId: 'kcol-a', rank: 'a0' },
         { nodeId: 'num', columnId: 'kcol-a', rank: 5 },
         { nodeId: 'junk', columnId: 'kcol-a', rank: 'not a rank!' },
-        { nodeId: 'huge', columnId: 'kcol-a', rank: 'a'.repeat(1000) }
+        { nodeId: 'obj', columnId: 'kcol-a', rank: { a: 1 } }
       ]
     }
     expect(sanitizeKanban(k)?.assignments).toEqual([
       { nodeId: 'ok', columnId: 'kcol-a', rank: 'a0' },
       { nodeId: 'num', columnId: 'kcol-a' },
-      { nodeId: 'junk', columnId: 'kcol-a' },
-      { nodeId: 'huge', columnId: 'kcol-a' }
+      { nodeId: 'junk', columnId: 'kcol-a', rank: 'not a rank!' },
+      { nodeId: 'obj', columnId: 'kcol-a' }
     ])
+  })
+
+  // A clean git merge of two machines' boards can leave one card assigned twice. The first entry is
+  // the one `columnForNode` has always answered with, so it is the one kept.
+  it('keeps only the FIRST assignment of a card assigned twice', () => {
+    const k = {
+      ...clean(),
+      assignments: [
+        { nodeId: 'x', columnId: 'kcol-a', rank: 'a0' },
+        { nodeId: 'y', columnId: 'kcol-b', rank: 'a0' },
+        { nodeId: 'x', columnId: 'kcol-b', rank: 'a1' }
+      ]
+    }
+    expect(sanitizeKanban(k)?.assignments).toEqual([
+      { nodeId: 'x', columnId: 'kcol-a', rank: 'a0' },
+      { nodeId: 'y', columnId: 'kcol-b', rank: 'a0' }
+    ])
+  })
+
+  it('normalizes a card\'s assignees: a non-list is dropped, bad entries filtered, the rest kept', () => {
+    const k = {
+      ...clean(),
+      meta: [
+        { nodeId: 'a', assignees: 5, priority: 'high' },
+        { nodeId: 'b', assignees: [{ name: 'enes', color: '#0a84ff' }, 3, { name: 1 }] },
+        { nodeId: 'c', assignees: [{ name: 'sam', color: '#ff453a' }] }
+      ]
+    }
+    expect(sanitizeKanban(k)?.meta).toEqual([
+      { nodeId: 'a', priority: 'high' },
+      { nodeId: 'b', assignees: [{ name: 'enes', color: '#0a84ff' }] },
+      { nodeId: 'c', assignees: [{ name: 'sam', color: '#ff453a' }] }
+    ])
+    const cleanMeta = { ...clean(), meta: [{ nodeId: 'c', assignees: [{ name: 'sam', color: '#ff453a' }] }] }
+    expect(sanitizeKanban(cleanMeta)).toBe(cleanMeta)
   })
 
   it('admits saved views through sanitizeViews (a garbage list is dropped, a clean one kept)', () => {

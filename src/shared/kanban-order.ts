@@ -19,6 +19,10 @@
  *    own array positions. A board's first write into an unranked column therefore ranks it once.
  * A reorder WITHIN a column always moves a block: the array must change for an old build to see it.
  *
+ * A move NEVER throws. Keys never run out between two distinct ones, but ~1.3k inserts into one
+ * gap grow a key past `RANK_MAX_LENGTH`, beyond which it is not a valid rank: at that point (and
+ * only then) the destination column is re-keyed evenly — `rebalanceColumn`.
+ *
  * Generic over the entry type and spread-preserving, so the host core can run it on the raw
  * project-file objects (the relay's move verb) and every unknown field round-trips.
  */
@@ -36,9 +40,14 @@ export type CardAnchor = 'top' | 'end' | { before: string }
 /** One column's entries in board order (see the module note). Never throws. */
 export function columnOrder<A extends RankedEntry>(list: readonly A[], columnId: string): A[] {
   const entries: Array<{ a: A; idx: number; key: string }> = []
+  const seen = new Set<string>()
   let prev = ''
   list.forEach((a, idx) => {
     if (!a || a.columnId !== columnId) return
+    // A card assigned twice (a clean git merge can do that) is listed once — the first copy, the
+    // one `columnForNode` answers with. Two copies would be duplicate React keys in the column.
+    if (seen.has(a.nodeId)) return
+    seen.add(a.nodeId)
     const key = isValidRank(a.rank) ? a.rank : prev
     entries.push({ a, idx, key })
     prev = key
@@ -87,17 +96,48 @@ export function placeAssignment<A extends RankedEntry>(
 ): A[] {
   const i0 = list.findIndex((e) => e?.nodeId === nodeId)
   const old = i0 === -1 ? undefined : list[i0]
-  const without = i0 === -1 ? [...list] : [...list.slice(0, i0), ...list.slice(i0 + 1)]
-  let col = columnOrder(without, columnId)
+  // EVERY copy of the moved card goes (the pre-rank assignNode filtered them all out too), and so
+  // does every later copy of any other card: a clean git merge can leave a card assigned twice, and
+  // the first copy is the one every reader answers with.
+  const seen = new Set<string>([nodeId])
+  const without = list.filter((e) => {
+    if (!e || seen.has(e.nodeId)) return false
+    seen.add(e.nodeId)
+    return true
+  })
+  const col = columnOrder(without, columnId)
   const anchorIdx = typeof anchor === 'object' ? col.findIndex((e) => e.nodeId === anchor.before) : -1
   const at = anchor === 'end' ? col.length : anchorIdx !== -1 ? anchorIdx : 0
-  if (old && old.columnId === columnId && columnOrder(list, columnId).indexOf(old) === at) {
+  const clean = without.length === list.length - 1
+  if (clean && old && old.columnId === columnId && columnOrder(list, columnId).indexOf(old) === at) {
     return list as A[]
   }
+  // `i0` indexes the ORIGINAL list; entries before it were all kept (it is the moved card's first
+  // copy and nothing earlier can be a duplicate of something later), so it is the same slot here.
+  try {
+    const placed = placeWithRanks(without, col, nodeId, columnId, at, old, i0)
+    if (placed) return placed
+  } catch {
+    // Fall through: a move never throws.
+  }
+  return rebalanceColumn(without, col, nodeId, columnId, at, old, i0)
+}
 
-  // Repair the destination column, then make its array slots agree with its order.
+/** The ordinary placement: repair the column if it must be, mint ONE rank, move as little as
+ *  possible. Null when a key it would write is not a valid rank (a gap exhausted past
+ *  `RANK_MAX_LENGTH` — about 1.3k inserts into one gap). */
+function placeWithRanks<A extends RankedEntry>(
+  without: A[],
+  col: A[],
+  nodeId: string,
+  columnId: string,
+  at: number,
+  old: A | undefined,
+  i0: number
+): A[] | null {
   let arr = without
   const fixes = repairRanks(col)
+  if ([...fixes.values()].some((k) => !isValidRank(k))) return null
   if (fixes.size) {
     arr = arr.map((e) => (fixes.has(e) ? { ...e, rank: fixes.get(e)! } : e))
     col = columnOrder(arr, columnId)
@@ -116,6 +156,7 @@ export function placeAssignment<A extends RankedEntry>(
   const prev = at > 0 ? col[at - 1] : undefined
   const next = at < col.length ? col[at] : undefined
   const rank = rankBetween(prev?.rank ?? null, next?.rank ?? null)
+  if (!isValidRank(rank)) return null
   const moved = (old ? { ...old, columnId, rank } : { nodeId, columnId, rank }) as A
 
   const pIdx = prev ? arr.indexOf(prev) : -1
@@ -123,4 +164,30 @@ export function placeAssignment<A extends RankedEntry>(
   const fits = i0 !== -1 && (pIdx === -1 || pIdx < i0) && (sIdx === -1 || i0 <= sIdx)
   const pos = fits ? i0 : sIdx !== -1 ? sIdx : pIdx !== -1 ? pIdx + 1 : i0 !== -1 ? i0 : arr.length
   return [...arr.slice(0, pos), moved, ...arr.slice(pos)]
+}
+
+/**
+ * The one rebalance this scheme ever does, and only when a gap is exhausted: the destination
+ * column gets evenly spaced fresh keys in its current order (the moved card at `at`), written as
+ * ONE contiguous block where the column's first entry sat — so the array stays in rank order for
+ * builds that ignore `rank`, and no other column is touched. A big diff, once, instead of a throw
+ * inside the move handler.
+ */
+function rebalanceColumn<A extends RankedEntry>(
+  without: A[],
+  col: A[],
+  nodeId: string,
+  columnId: string,
+  at: number,
+  old: A | undefined,
+  i0: number
+): A[] {
+  const base = (old ? { ...old, columnId } : { nodeId, columnId }) as A
+  const order = [...col.slice(0, at), base, ...col.slice(at)]
+  const keys = ranksBetween(null, null, order.length)
+  const block = order.map((e, i) => ({ ...e, rank: keys[i] }) as A)
+  const first = without.findIndex((e) => e.columnId === columnId)
+  const cut = first !== -1 ? first : i0 !== -1 ? i0 : without.length
+  const others = (part: A[]): A[] => part.filter((e) => e.columnId !== columnId)
+  return [...others(without.slice(0, cut)), ...block, ...others(without.slice(cut))]
 }

@@ -17,7 +17,7 @@ import { useProjects } from '../../state/projects'
 import { useSettings } from '../../state/settings'
 import { useBoardWallpaperStyle } from '../../state/wallpaper'
 import {
-  AT_COLUMN_END, addColumn, assignNode, assignedTo, boardLabels, cardMatchesLabelFilter, cardMeta, columnForNode,
+  AT_COLUMN_END, addColumn, assignNode, assignedTo, boardLabels, cardAssignees, cardMatchesLabelFilter, cardMeta, columnForNode,
   deleteColumn, labelsForCard, moveColumn,
   nextColumnColor, pruneAssignments, recolorColumn, renameColumn, setColumnCategory, unassigned
 } from '../../lib/kanban'
@@ -463,7 +463,7 @@ export const KanbanView = memo(function KanbanView({
   const columnCards = useMemo(() => {
     // Label filter AND member filter AND status chips (each an OR within itself).
     const hasMember = (id: string): boolean =>
-      (cardMeta(board, id)?.assignees ?? []).some((a) => assigneeFilter.includes(a?.name))
+      cardAssignees(cardMeta(board, id)).some((a) => assigneeFilter.includes(a.name))
     const vis = (ids: string[]): string[] =>
       activeLocalFilter.length || assigneeFilter.length || statusChips.length
         ? ids.filter(
@@ -510,7 +510,7 @@ export const KanbanView = memo(function KanbanView({
   const memberNames = useMemo(() => {
     const names = new Set<string>(assigneeFilter)
     for (const m of Array.isArray(board.meta) ? board.meta : []) {
-      for (const a of m?.assignees ?? []) if (typeof a?.name === 'string' && a.name) names.add(a.name)
+      for (const a of cardAssignees(m)) if (a.name) names.add(a.name)
     }
     return [...names].sort((a, b) => a.localeCompare(b))
   }, [board.meta, assigneeFilter])

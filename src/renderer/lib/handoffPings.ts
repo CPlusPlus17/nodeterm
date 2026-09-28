@@ -20,7 +20,7 @@
  */
 import type { KanbanColumnCategory, ProjectKanban } from '@shared/types'
 import { columnCategory } from '@shared/kanban-category'
-import { cardMeta } from './kanban'
+import { cardAssignees, cardMeta } from './kanban'
 
 export const HANDOFF_FOLD_MS = 2 * 60_000
 
@@ -42,8 +42,7 @@ export function handoffsFor(prev: ProjectKanban, next: ProjectKanban, me: string
     const category = columnCategory(column)
     const handoff = category === 'done' || (category === 'started' && a.columnId !== firstStarted)
     if (!column || !handoff) continue
-    const assignees = cardMeta(next, a.nodeId)?.assignees ?? []
-    if (!assignees.some((p) => p?.name === me)) continue
+    if (!cardAssignees(cardMeta(next, a.nodeId)).some((p) => p.name === me)) continue
     out.push({ nodeId: a.nodeId, columnId: a.columnId, columnTitle: column.title, category: category as Handoff['category'] })
   }
   return out

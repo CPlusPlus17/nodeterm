@@ -5305,8 +5305,12 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     `validKanban` plus per-entry repairs, never inventions: a column that is not an object with
     string `id` + `title` is dropped (React cannot render an object title — a render throw
     boot-loops the app, the view choice persists), a non-string `category` is dropped, a malformed
-    assignment is dropped, every other field round-trips, and a clean board comes back BY IDENTITY
-    so a well-formed file is never rewritten.
+    assignment is dropped, a card's `assignees` that is not a list is dropped (entries without a
+    string name + colour filtered), every other field round-trips, and a clean board comes back BY
+    IDENTITY so a well-formed file is never rewritten. **Readers do not trust the load path alone**:
+    `cardAssignees` (`@shared/kanban-labels`) is the one reader of `meta[].assignees` — the board,
+    the card, the member filter, the log diff and the handoff pings all go through it, because an
+    `assignees: 5` iterated raw threw during render (a boot loop) and inside the `assign` verb.
   - **Lifecycle category** (`KanbanColumn.category?: unstarted|started|done|closed`,
     `@shared/kanban-category`). Every reader goes through `columnCategory`: an unknown STRING reads
     as absent but is KEPT in the file (dropping it would erase a newer build's value on an older
@@ -5364,7 +5368,13 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     right after the entry before it in the ARRAY, ties keep array order. Keys are base-62
     fractional-index strings with an integer head, so the board's DEFAULT (top insert) is a
     decrement: a thousand top inserts stay four characters (a digits-only midpoint scheme grows a
-    character every few). Strings never exhaust, so there is no rebalancing. **Every write goes
+    character every few). **A move never throws**: ~1.3k inserts into ONE gap grow a key past
+    `RANK_MAX_LENGTH` (256), and only then is the destination column re-keyed evenly as one
+    contiguous block (`rebalanceColumn`) — the one rebalance this scheme does. A rank STRING readers
+    cannot use is kept in the file (like an unknown category) and re-keyed by the next write into
+    that column; a non-string is dropped. A card assigned twice (a clean git merge can do that)
+    keeps its FIRST assignment everywhere — `sanitizeKanban`, `columnOrder` and `placeAssignment`
+    (which removes every copy of the moved card, as the pre-rank `assignNode` did). **Every write goes
     through `placeAssignment`** (renderer `assignNode` AND the relay's `setProjectCardColumn`), which
     also keeps the array in rank order so a build that ignores `rank` shows the same column — the
     brief's two goals ("a move is a one-line diff" and "keep writing the array in rank order") pull

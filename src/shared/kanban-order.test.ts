@@ -162,3 +162,31 @@ describe('placeAssignment', () => {
     }
   })
 })
+
+// ~1.3k inserts into ONE gap grow a key past RANK_MAX_LENGTH; the placement used to hand that key
+// back to rankBetween on the next move and throw inside the move handler. A move must never throw:
+// past that point the column is re-keyed (the one rebalance this scheme ever does).
+describe('placeAssignment — never throws, even when one gap is exhausted', () => {
+  // 1700 crosses the point (~1525 inserts into one gap) where the next key would pass
+  // RANK_MAX_LENGTH; the moved card's neighbour is always the same top card.
+  it('1700 inserts just below the top card stay ordered, valid and in array order', { timeout: 30_000 }, () => {
+    let list: A[] = []
+    list = placeAssignment(list, 'first', 'c', 'top')
+    list = placeAssignment(list, 'second', 'c', 'end')
+    let second = 'second'
+    for (let i = 0; i < 1700; i++) {
+      list = placeAssignment(list, `x${i}`, 'c', { before: second })
+      second = `x${i}`
+      if (i % 200 === 0 || (i > 1500 && i < 1560)) {
+        const ranks = columnOrder(list, 'c').map((e) => e.rank)
+        expect(ranks.every(isValidRank), `step ${i}`).toBe(true)
+      }
+    }
+    const order = columnOrder(list, 'c').map((e) => e.nodeId)
+    expect(order[0]).toBe('first')
+    expect(order[1]).toBe('x1699')
+    expect(order.at(-1)).toBe('second')
+    expect(order).toHaveLength(1702)
+    expect(arrayOrder(list, 'c')).toEqual(order)
+  })
+})
