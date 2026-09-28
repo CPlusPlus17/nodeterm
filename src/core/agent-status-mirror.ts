@@ -2143,6 +2143,9 @@ export function sessionNameSweepEntries(): {
   agentId?: string
   name?: string
 }[] {
+  // NB: the Server Edition's context-link sweep also reads this list (src/server/context-link.ts,
+  // `agentSessions` default), so it too sees only nodes active within EXPIRE_MS — the same set it
+  // saw before identity-only entries existed; giving it their session ids is a separate change.
   return [...state].filter(([, e]) => !e.stateExpired).map(([nodeId, e]) => ({
     nodeId,
     sessionId: e.sessionId,
@@ -2265,7 +2268,17 @@ export async function flush(): Promise<void> {
   // identity (so no in-process reader — messaging, triggers, the resync — sees a 6 h-old state),
   // and an identity past its TTL or for a node that no longer exists is dropped, so the map itself
   // can't grow without bound.
-  const liveIds = safeLiveNodes()
+  // Ask for the live node set only when some entry is past EXPIRE_MS: only those can be pruned by
+  // existence, and the provider scans every project (it runs on every flush otherwise — each event
+  // burst plus the 60 s heartbeat).
+  let anyExpired = false
+  for (const e of state.values()) {
+    if (!e.hibernated && now - e.updatedAt > EXPIRE_MS) {
+      anyExpired = true
+      break
+    }
+  }
+  const liveIds = anyExpired ? safeLiveNodes() : undefined
   for (const [id, e] of state) {
     const aged = ageEntry(id, e, now, EXPIRE_MS, liveIds)
     if (!aged) state.delete(id)

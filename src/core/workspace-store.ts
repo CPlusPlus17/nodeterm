@@ -1513,6 +1513,9 @@ export class WorkspaceStore {
    * state expiry) whose node was deleted while this process was not watching. A wrong "gone" costs
    * the phone that node's session id, so every doubt answers `undefined` — the mirror then bounds
    * the entry by its identity TTL alone. Same three-entry-kind scan as `findNode`.
+   * Consequence: ONE permanently unavailable local ref or one never-cached SSH project turns
+   * existence pruning off for EVERY project, leaving only the 30-day identity TTL.
+   * Parses through `parsedLastWritten`, so a mirror flush re-parses no unchanged project.json.
    */
   knownNodeIds(): Set<string> | undefined {
     if (!this.index) return undefined
@@ -1522,10 +1525,8 @@ export class WorkspaceStore {
       if (e.project) nodes = e.project.nodes
       else if (e.cache) nodes = e.cache.nodes
       else if (e.cwd) {
-        const raw = this.lastWritten.get(projectFilePath(e.cwd))
-        if (!raw) return undefined
         try {
-          nodes = (JSON.parse(raw) as ProjectFileV1).nodes
+          nodes = this.parsedLastWritten(projectFilePath(e.cwd))?.nodes
         } catch {
           return undefined
         }

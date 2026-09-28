@@ -193,6 +193,18 @@ describe('live mirror — identity survives the state expiry', () => {
     expect(_snapshot().gone).toBeUndefined()
   })
 
+  it('does not ask the live-node provider when no entry is past EXPIRE_MS (it scans every project)', async () => {
+    recordAgentEvent(ev({ nodeId: 'fresh', state: 'done', sessionId: 'f' }))
+    const provider = vi.fn(() => new Set<string>())
+    setMirrorLiveNodesProvider(provider)
+    await flush()
+    expect(provider).not.toHaveBeenCalled()
+    expect(Object.keys(read().nodes)).toEqual(['fresh'])
+    nowSpy.mockReturnValue(1_000_000 + EXPIRE_MS + 1)
+    await flush()
+    expect(provider).toHaveBeenCalled()
+  })
+
   it('an UNKNOWABLE live set (provider answers undefined, or throws) prunes nothing by existence', async () => {
     recordAgentEvent(ev({ nodeId: 'a', state: 'done', sessionId: 'a' }))
     setMirrorLiveNodesProvider(() => undefined)
