@@ -60,7 +60,8 @@ export function registerGitHubIntegration(dependencies: Dependencies): {
       resolver.invalidate()
     },
     // `service` is declared below; this only runs on a revoke, long after both exist.
-    onRevoked: (projectId) => service.clearCache({ projectId })
+    onRevoked: (projectId) => service.clearCache({ projectId }),
+    onApprovalChanged: (projectId) => service.notifyProject(projectId)
   })
   const service = new GitHubIssueService({
     cache: new GitHubIssueCache(dependencies.userDataDir),

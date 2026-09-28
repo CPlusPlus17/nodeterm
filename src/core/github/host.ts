@@ -82,6 +82,9 @@ type HostDependencies = {
   onCredentialBoundaryChange?(): void
   /** Runs after a revoke is recorded: deletes this project's private issue cache from disk. */
   onRevoked?(projectId: string): Promise<void>
+  /** An approval was given or withdrawn: the project's open boards must re-read (read only, the
+   *  mapping approval) now, not at the next poll. */
+  onApprovalChanged?(projectId: string): void
 }
 
 type ResolvedProject = ProjectRecord & {
@@ -167,6 +170,7 @@ export class GitHubHostController {
       repository: project.repository,
       mappingDigest: githubMappingDigest(project.repository, project.config)
     })
+    this.dependencies.onApprovalChanged?.(input.projectId)
     return this.status(input.projectId)
   }
 
@@ -186,6 +190,8 @@ export class GitHubHostController {
       await this.dependencies.onRevoked?.(input.projectId)
     } catch {
       throw new GitHubHostError('revoked-cache-kept')
+    } finally {
+      this.dependencies.onApprovalChanged?.(input.projectId)
     }
     return this.status(input.projectId)
   }

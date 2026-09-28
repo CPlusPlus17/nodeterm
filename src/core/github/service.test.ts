@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -1009,11 +1009,33 @@ describe('GitHubIssueService heartbeat', () => {
       onDelta: (_uiId, _projectId, numbers) => deltas.push(numbers)
     })
 
-    await service.refresh({ projectId: 'project-1' })
+    // Opening the board refreshes in the background (a snapshot is cached, so it renders at once).
+    await service.subscribe(1, { projectId: 'project-1' })
+    await vi.waitFor(() => expect(client.heartbeats).toHaveLength(1))
+    await vi.waitFor(() => expect(deltas).toHaveLength(1))
 
     expect(client.heartbeats).toEqual([client.currentHeartbeatEtag()])
     expect(scans).toEqual([])
-    expect(deltas).toEqual([])
+    // Nothing changed on GitHub, but subscribers still re-read their pages (from the local cache,
+    // at no GitHub cost) — as every refresh always made them do. What a page says is not only
+    // issues: read only, the mapping approval and the completion column are derived by the host
+    // at query time, and a board that is never prompted keeps showing the old answer.
+    expect(deltas).toEqual([[]])
+  })
+
+  it('does not let a 304 freeze an incomplete repository: it keeps scanning', async () => {
+    const client = new FixtureClient([issue(1)])
+    const scans = counting(client)
+    const cache = await seeded([issue(1)], { heartbeat: client.currentHeartbeatEtag() })
+    await cache.saveIncompleteAttempt('user-1', 'o/r', { reason: 'issue-limit', observedAt: 5_000 })
+    const service = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client), now: () => 10_000
+    })
+
+    await service.refresh({ projectId: 'project-1' })
+
+    expect(scans).toHaveLength(1)
   })
 
   it('runs the incremental since scan when the heartbeat reports a change, and persists the new ETag', async () => {
@@ -1345,8 +1367,28 @@ describe('GitHubIssueService throttle lift', () => {
     expect(deltas.slice(held)).toEqual([[]])
     expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).throttle)
       .toBeUndefined()
-    // Said once, not on every later minute.
+    // And a hold that comes back later is announced again rather than taken for the old one.
+    coordinator.noteRateSample('user-1', { resource: 'core', limit: 5_000, remaining: 12, resetAt: 2_000_000 + 3_600_000 })
     await timers[0]()
-    expect(deltas.slice(held)).toEqual([[]])
+    expect(deltas.slice(held)).toEqual([[], []])
+  })
+})
+
+describe('GitHubIssueService notifyProject', () => {
+  it('prompts only that project\'s subscribers to re-read', async () => {
+    const client = new FixtureClient([issue(1)])
+    const deltas: Array<[number, string, number[]]> = []
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async (projectId) => context(client, { projectId }), now: () => 10_000,
+      onDelta: (uiId, projectId, numbers) => deltas.push([uiId, projectId, numbers])
+    })
+    await service.subscribe(7, { projectId: 'project-1' })
+    await service.subscribe(8, { projectId: 'project-2' })
+    deltas.length = 0
+
+    service.notifyProject('project-1')
+
+    expect(deltas).toEqual([[7, 'project-1', []]])
   })
 })
