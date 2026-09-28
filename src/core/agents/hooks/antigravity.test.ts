@@ -34,6 +34,7 @@ import {
   installAntigravityHooks,
   installAntigravityHooksWithProbe,
   isAntigravityManagedCommand,
+  pathWithAgyDir,
   removeAntigravityHooks
 } from './antigravity'
 import {
@@ -76,6 +77,37 @@ const HAS_AGY = (): string => 'C:/fake/agy.exe'
 const read = (f: string): Record<string, unknown> => JSON.parse(readFileSync(f, 'utf8'))
 const install = (hooksJson: string, platform = 'linux') =>
   installAntigravityHooks({ findAgy: HAS_AGY, hooksJson, platform, scriptPath: POSIX_SCRIPT, writeScript: false })
+
+describe('pathWithAgyDir (an Antigravity session\'s PATH)', () => {
+  it('APPENDS the directory — never ahead of the user\'s own entries', () => {
+    expect(pathWithAgyDir('/home/u/.nvm/bin:/usr/bin', '/usr/local/bin', 'linux')).toBe(
+      '/home/u/.nvm/bin:/usr/bin:/usr/local/bin'
+    )
+  })
+
+  it('leaves a PATH that already lists the directory byte-for-byte', () => {
+    expect(pathWithAgyDir('/usr/local/bin:/usr/bin', '/usr/local/bin', 'darwin')).toBe('/usr/local/bin:/usr/bin')
+    expect(pathWithAgyDir('/home/u/.local/bin/:/usr/bin', '/home/u/.local/bin', 'linux')).toBe(
+      '/home/u/.local/bin/:/usr/bin'
+    )
+  })
+
+  it('on win32 compares case-insensitively; the literal %LOCALAPPDATA% entry does NOT count', () => {
+    const dir = 'C:\\Users\\U\\AppData\\Local\\agy\\bin'
+    expect(pathWithAgyDir('c:\\users\\u\\appdata\\local\\agy\\bin\\;C:\\Windows', dir, 'win32')).toBe(
+      'c:\\users\\u\\appdata\\local\\agy\\bin\\;C:\\Windows'
+    )
+    // The measured 1.2.7 failure: the entry is the unexpanded expression, so agy is not on PATH.
+    expect(pathWithAgyDir('%LOCALAPPDATA%\\agy\\bin;C:\\Windows', dir, 'win32')).toBe(
+      `%LOCALAPPDATA%\\agy\\bin;C:\\Windows;${dir}`
+    )
+  })
+
+  it('an empty or missing PATH becomes just the directory', () => {
+    expect(pathWithAgyDir(undefined, '/opt/agy', 'linux')).toBe('/opt/agy')
+    expect(pathWithAgyDir('', '/opt/agy', 'linux')).toBe('/opt/agy')
+  })
+})
 
 describe('where it writes', () => {
   it('targets ~/.gemini/config/hooks.json — never settings.json or GEMINI.md', () => {

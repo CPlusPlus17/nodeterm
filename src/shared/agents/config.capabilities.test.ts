@@ -25,6 +25,8 @@ import {
   hasSharedIdentity,
   agentLaunchProgram,
   resumeCommand,
+  hasHooksOverSsh,
+  LOCAL_ONLY_HOOK_AGENTS,
   reportsSessionEnd
 } from './config'
 
@@ -281,6 +283,16 @@ describe('grok capabilities', () => {
  * exclusion below says which leaf is missing — measured facts (`agy` 1.2.3, Windows 11).
  */
 describe('antigravity capabilities', () => {
+  it('reports status on THIS machine only — an SSH host has no agy hook installer yet', () => {
+    // `--after` asks this before accepting a dependency in an SSH project: a node that can never
+    // report "done" there would hold its dependant QUEUED forever.
+    expect(hasHooksOverSsh('antigravity')).toBe(false)
+    expect(LOCAL_ONLY_HOOK_AGENTS as readonly string[]).toEqual(['antigravity'])
+    for (const id of BUILTIN_AGENT_IDS.filter((a) => a !== 'antigravity')) {
+      expect(hasHooksOverSsh(id), id).toBe(hasHooks(id))
+    }
+  })
+
   it('is a builtin that launches `agy`, prompt through --prompt-interactive', () => {
     expect(BUILTIN_AGENT_IDS).toContain('antigravity')
     expect(AGENT_CONFIG.antigravity.launchCmd).toBe('agy')

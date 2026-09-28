@@ -20,7 +20,7 @@ import {
 } from '../shared/types'
 import { bundledTmuxPath, findCommand, findFixedTmux, tmuxInstall } from './tmux-hint'
 import { hookServer, PERM_WAIT_SECS_DEFAULT } from './agents/hook-server'
-import { findAgy } from './agents/hooks/antigravity'
+import { findAgy, pathWithAgyDir } from './agents/hooks/antigravity'
 import {
   probeSaysAbsent,
   remoteHookEnvArgs,
@@ -2934,16 +2934,18 @@ export class PtyManager {
 
     // The agy installer writes `%LOCALAPPDATA%\agy\bin` into a REG_SZ user PATH on Windows.
     // Windows does not expand that nested variable during command lookup, so `agy` is absent even
-    // though our hook installer finds the executable through its vendor-location fallback. Put the
-    // directory that same lookup proved onto this agent session's PATH. Keep plain terminals and
-    // remote sessions untouched; on SSH the executable and PATH belong to the host.
+    // though our hook installer finds the executable through its vendor-location fallback. APPEND
+    // the directory that same lookup proved, and only when no entry already names it
+    // (`pathWithAgyDir`): prepending shadowed the user's own tools on macOS/Linux, where agy sits in
+    // a shared directory. Keep plain terminals and remote sessions untouched; on SSH the executable
+    // and PATH belong to the host.
     if (
       options.agentId &&
       capabilityAgentId(options.agentId as AgentId) === 'antigravity' &&
       !options.sshRemote
     ) {
       const agy = findAgy()
-      if (agy) env.PATH = `${path.dirname(agy)}${path.delimiter}${env.PATH ?? ''}`
+      if (agy) env.PATH = pathWithAgyDir(env.PATH, path.dirname(agy))
     }
 
     // Same GUI-launch gap for the locale: with no LANG/LC_* the shell's `locale` is "C" (non-UTF-8),

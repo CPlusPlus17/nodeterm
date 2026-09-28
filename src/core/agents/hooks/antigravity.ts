@@ -69,6 +69,36 @@ export function agyFallbackPaths(
 }
 
 /**
+ * `pathValue` with agy's directory APPENDED, unless an entry already names it — the one PATH
+ * change an Antigravity session gets (`PtyManager`, local sessions only).
+ *
+ * Why it exists: measured on Windows 11 with agy 1.2.7, the vendor installer writes
+ * `%LOCALAPPDATA%\agy\bin` into the user PATH as REG_SZ, so the percent expression stays literal
+ * and `agy` does not resolve while `findAgy`'s vendor-location fallback finds the executable.
+ * Why APPEND, not prepend: on macOS/Linux the directory is typically `/usr/local/bin`,
+ * `~/.local/bin` or `/snap/bin`, and moving it AHEAD of the user's own entries would shadow their
+ * nvm/pyenv/Homebrew tools for the life of the pane — every command agy runs included. Appending
+ * only fills the gap; a PATH that already resolves agy (or already lists the dir) is untouched.
+ * Entries compare case-insensitively on win32, ignoring a trailing separator.
+ */
+export function pathWithAgyDir(
+  pathValue: string | undefined,
+  dir: string,
+  platform: NodeJS.Platform | string = process.platform
+): string {
+  const win = platform === 'win32'
+  const delim = win ? ';' : ':'
+  const norm = (p: string): string => {
+    const t = p.replace(win ? /[\\/]+$/ : /\/+$/, '')
+    return win ? t.toLowerCase() : t
+  }
+  const current = pathValue ?? ''
+  const entries = current.split(delim).filter(Boolean)
+  if (entries.some((e) => norm(e) === norm(dir))) return current
+  return current ? `${current}${delim}${dir}` : dir
+}
+
+/**
  * Is `agy` installed on this machine? A file lookup only — PATH (with PATHEXT on Windows) through
  * the shared `findExecutableSync`, then the vendor's install locations. It NEVER runs `agy`: this is
  * asked at every launch, and a `--version` would cost a process start (and, for this CLI, can

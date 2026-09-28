@@ -132,7 +132,9 @@ describe('project settings at the spawn — LOCAL leg', () => {
     await create({ persistKey: 'antigravity-node', agentId: 'antigravity' })
     await create({ persistKey: 'plain-node' })
 
-    expect(spawns[0].env.PATH?.split(path.delimiter)[0]).toBe(path.dirname(fakeAgy))
+    // APPENDED, never ahead of the user's own entries (see pathWithAgyDir).
+    expect(spawns[0].env.PATH?.split(path.delimiter).at(-1)).toBe(path.dirname(fakeAgy))
+    expect(spawns[0].env.PATH?.split(path.delimiter)[0]).toBe('/usr/bin')
     expect(Object.keys(spawns[0].env).filter((key) => key.toUpperCase() === 'PATH')).toEqual(['PATH'])
     expect(spawns[1].env.PATH).toBe('/usr/bin:/bin')
   })
