@@ -137,7 +137,7 @@ describe('where the verbs sit in the routing tables', () => {
     }
   })
 
-  it('the verified-only set is exactly the messaging verbs plus sticky, open-project, settings and report-issue', () => {
+  it('the verified-only set is exactly the messaging verbs plus sticky, open-project, settings, report-issue and run', () => {
     // Pins that nothing ELSE ever drifts in: adding a SHIPPED verb here would strand its legacy
     // population with no hatch, which is the one thing this set must never be casually grown by.
     // `notify` (folded in from #98, Task 5.2) is a messaging verb like the other two — it writes
@@ -153,15 +153,25 @@ describe('where the verbs sit in the routing tables', () => {
     // this machine to a repository, with no dialog anywhere on the path — `legacy` means "we
     // cannot judge this caller", and an unjudgeable caller must never be the one that publishes.
     // New verb, so fail-closed from day one strands no legacy population either.
+    // `run` (#925) is here because it STARTS a process in a session the user is not watching —
+    // possibly in another project; new verb, so fail-closed from day one strands nobody.
     expect([...requiresVerified].sort()).toEqual([
       'notify',
       'open-project',
       'reply',
       'report-issue',
+      'run',
       'send',
       'settings',
       'sticky'
     ])
+  })
+
+  it('the run refusal is its own sentence, not the messaging one (#925)', () => {
+    expect(verifiedRefusalFor('run')).toBe(
+      'Run refused: starting a queued session the user is not watching needs verified node identity.'
+    )
+    expect(verifiedRefusalFor('run')).not.toBe(MESSAGING_CONTROL_REFUSAL)
   })
 
   it('the report-issue refusal is its own flat sentence, not the messaging one', () => {

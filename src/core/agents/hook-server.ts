@@ -240,7 +240,9 @@ export const requiresVerified: ReadonlySet<string> = new Set([
   'settings',
   // Publishes text from this machine to a repository. `legacy` means "we cannot judge this
   // caller", and an unjudgeable caller must never be the one that files.
-  'report-issue'
+  'report-issue',
+  // Starts a process the user is not watching (#925).
+  'run'
 ])
 
 /**
@@ -263,6 +265,8 @@ export const OPEN_PROJECT_CONTROL_REFUSAL = 'Project open refused.'
 export const SETTINGS_CONTROL_REFUSAL = 'Settings access refused.'
 /** One sentence, names what was refused, no diagnosis — house style for every refusal here. */
 export const REPORT_ISSUE_CONTROL_REFUSAL = 'Issue reporting refused.'
+const RUN_CONTROL_REFUSAL =
+  'Run refused: starting a queued session the user is not watching needs verified node identity.'
 
 /** The verified-only refusal, worded for the verb that was refused. */
 export function verifiedRefusalFor(verb: string): string {
@@ -271,6 +275,7 @@ export function verifiedRefusalFor(verb: string): string {
   if (verb === 'report-issue') return REPORT_ISSUE_CONTROL_REFUSAL
   if (verb === 'sticky') return STICKY_CONTROL_REFUSAL
   if (verb === 'open-project') return OPEN_PROJECT_CONTROL_REFUSAL
+  if (verb === 'run') return RUN_CONTROL_REFUSAL
   return MESSAGING_CONTROL_REFUSAL
 }
 

@@ -192,6 +192,7 @@ export type ControlVerb =
   | 'color'
   | 'write'
   | 'close'
+  | 'run'
   | 'board'
   | 'assign'
   | 'send'
@@ -232,6 +233,10 @@ const VERBS: ControlVerb[] = [
   'color',
   'write',
   'close',
+  // #925: start a QUEUED node now: the CLI twin of the node's Run now button. It works on a node in
+  // a project the user is not viewing (headless), and takes `--project` through the same grant gate
+  // as the open verbs.
+  'run',
   'board',
   'assign',
   'send',
@@ -307,6 +312,7 @@ export function parseControlRequest(
   if (!VERBS.includes(verb as ControlVerb)) return { error: `Unknown verb: ${verb}` }
   const v = verb as ControlVerb
   if (v === 'close' && !args.node) return { error: 'close requires --node <id>' }
+  if (v === 'run' && !args.node) return { error: 'run requires --node <id>' }
   if (v === 'write' && !args.node) return { error: 'write requires --node <id>' }
   if (v === 'write' && !args.text) return { error: 'write requires --text' }
   if ((v === 'show-image' || v === 'show-video') && !args.path) {
@@ -534,6 +540,11 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '- `rename --node <id> --title "New Name"` — rename any node (terminals, groups, stickies…).',
     '  Renaming to the title the node ALREADY has is a no-op: nothing is typed into its agent',
     '  session, and the reply says `already named`. Re-assert your own name as often as you like.',
+    '- `run --node <id> [--project <id>]` — start a QUEUED node now: the command-line twin of the',
+    '  node\'s Run now button. It delivers the node\'s held launch even while the user looks',
+    '  elsewhere, and it skips an `--after` wait (a deliberate override). A node in another project',
+    '  needs `--project <id>` (your own project, or an id `open-project` returned to you). The reply',
+    '  says `started: true`, or `queued: true` with a `reason`; a node with nothing queued is refused.',
     `- \`color --node <id,id> --color C\` — recolor nodes, frames, or stickies. C is a palette NAME`,
     `  or its hex: ${nodeColorChoices()}. The agent names paint a node its CLI's own brand color.`,
     '- `write --node <id> --text "..."` / `close --node <id,id>` — type into / close nodes.',
@@ -686,7 +697,7 @@ if [ "$nt_verb" = "help" ] || [ "$nt_verb" = "--help" ] || [ "$nt_verb" = "-h" ]
 fi
 
 # Translate \`--flag value\` pairs — plus the one bare positional the show-image/show-video and
-# write/close/rename/color/branch/send/reply/sticky forms accept — into curl --data-urlencode arguments. The positional
+# write/close/rename/color/branch/send/reply/sticky/run forms accept — into curl --data-urlencode arguments. The positional
 # list doubles as the accumulator: originals are consumed from the front, translated pairs
 # appended at the back, so "$@" holds exactly the curl args once the loop drains.
 nt_seen_pos=0
@@ -730,7 +741,7 @@ while [ "$nt_i" -lt "$nt_count" ]; do
         nt_seen_pos=1
         case "$nt_verb" in
           show-image|show-video) set -- "$@" --data-urlencode "arg.path=$nt_a" ;;
-          write|close|rename|color|branch|send|reply|sticky) set -- "$@" --data-urlencode "arg.node=$nt_a" ;;
+          write|close|rename|color|branch|send|reply|sticky|run) set -- "$@" --data-urlencode "arg.node=$nt_a" ;;
         esac
       fi
       ;;
@@ -1044,6 +1055,11 @@ Verbs:
 - \`rename --node <id> --title "New Name"\` — rename any node (terminals, groups, stickies…).
   Renaming to the title the node ALREADY has is a no-op: nothing is typed into its agent
   session, and the reply says \`already named\`. Re-assert your own name as often as you like.
+- \`run --node <id> [--project <id>]\` — start a QUEUED node now: the command-line twin of the
+  node's Run now button. It delivers the node's held launch even while the user looks elsewhere,
+  and it skips an \`--after\` wait (a deliberate override). A node in another project needs
+  \`--project <id>\` (your own project, or an id \`open-project\` returned to you). The reply says
+  \`started: true\`, or \`queued: true\` with a \`reason\`; a node with nothing queued is refused.
 - \`color --node <id,id> --color C\` — recolor nodes, frames, or stickies. C is a palette NAME or
   its hex (either is accepted, and the hex is case-insensitive): ${nodeColorChoices()}.
   The agent names are that CLI's own brand color — \`--color claude\` paints a node the color a

@@ -107,6 +107,16 @@ export function dryRunRequested(args: Record<string, string | undefined>): boole
   return !/^(false|no|0)$/i.test(v.trim())
 }
 
+/**
+ * Is `--run-now` on (#925)? Presence means yes, exactly like `--dry-run`: the shim encodes a
+ * valueless flag as an empty string, and only an explicit false|no|0 turns it off.
+ */
+export function runNowRequested(args: Record<string, string | undefined>): boolean {
+  const v = args['run-now']
+  if (v === undefined) return false
+  return !/^(false|no|0)$/i.test(v.trim())
+}
+
 /** The refusal for `--dry-run` on a verb outside DRY_RUN_VERBS — derived from the set so the
  *  sentence can never name a verb the gate does not honour. */
 export function dryRunRefusal(verb: string): string {

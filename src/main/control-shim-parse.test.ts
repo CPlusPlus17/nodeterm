@@ -91,6 +91,22 @@ describe('the control shim translates flags', () => {
     ])
   })
 
+  it('--run-now last on the line rides as an empty value; =1 carries it explicitly (#925)', () => {
+    expect(run(['open-agent', '--agent', 'claude', '--project', 'p2', '--run-now'])).toEqual([
+      'arg.agent=claude',
+      'arg.project=p2',
+      'arg.run-now='
+    ])
+    expect(run(['open-agent', '--run-now=1', '--agent', 'claude'])).toEqual([
+      'arg.run-now=1',
+      'arg.agent=claude'
+    ])
+  })
+
+  it('run takes its node positionally, like rename (#925)', () => {
+    expect(run(['run', 'n7'])).toEqual(['arg.node=n7'])
+  })
+
   // Hyphenated flag names ride through as-is — the loop strips only the leading `--`, so
   // `--prompt-file` lands as `arg.prompt-file` and the server reads args['prompt-file'].
   it('a hyphenated flag name (--prompt-file) keeps its hyphen in the arg key', () => {

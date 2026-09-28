@@ -77,6 +77,22 @@ describe('parseControlRequest', () => {
     })
   })
 
+  it('run requires --node (#925)', () => {
+    expect(parseControlRequest('run', {})).toEqual({ error: 'run requires --node <id>' })
+    expect(parseControlRequest('run', { node: 'n1' })).toEqual({ verb: 'run', args: { node: 'n1' } })
+  })
+
+  it('both bodies document the run verb with --project (#925)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      expect(body, name).toMatch(/- `run --node <id> \[--project <id>\]`/)
+      expect(body, name).toMatch(/twin of the\s+node'?s Run now button/)
+      expect(body, name).toMatch(/nothing queued is refused/)
+    }
+  })
+
   it('requires a source for show verbs', () => {
     expect(parseControlRequest('show-video', {})).toEqual({ error: 'show-video requires --path' })
     expect(parseControlRequest('show-web', {})).toEqual({
@@ -300,10 +316,11 @@ describe('parseControlRequest', () => {
     expect(parseControlRequest('reply', { node: 'n1' })).toEqual({ error: 'reply requires --text' })
   })
 
-  it('the shim maps a bare positional onto arg.node for color/send/reply/sticky too', () => {
-    // The positional list is a case pattern inside CONTROL_SHIM_SCRIPT; send/reply/sticky take the
-    // same "first bare word is the node" convenience write/close/rename/color/branch already have.
-    expect(CONTROL_SHIM_SCRIPT).toContain('write|close|rename|color|branch|send|reply|sticky)')
+  it('the shim maps a bare positional onto arg.node for color/send/reply/sticky/run too', () => {
+    // The positional list is a case pattern inside CONTROL_SHIM_SCRIPT; send/reply/sticky/run take
+    // the same "first bare word is the node" convenience write/close/rename/color/branch already
+    // have (run joined for #925; control-shim-parse.test.ts runs it through a real sh).
+    expect(CONTROL_SHIM_SCRIPT).toContain('write|close|rename|color|branch|send|reply|sticky|run)')
   })
 
   it('sticky requires --node plus exactly one of --text/--append, and is not destructive', () => {
