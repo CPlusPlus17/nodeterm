@@ -14186,10 +14186,17 @@ body.focus-mode .dock:hover {
 }
 
 .files-node__list {
+  /* The offsetParent of its rows — keyboard scrolling reads row.offsetTop against it. */
+  position: relative;
   flex: 1;
   overflow-y: auto;
   padding: 0 4px 6px;
   min-height: 0;
+}
+/* Focusable so it can take the keyboard (arrows, Enter, type-ahead). The selected row is the
+   focus indicator, as in a desktop file manager, so the box itself draws no ring. */
+.files-node__list:focus {
+  outline: none;
 }
 
 .files-node__row {
@@ -14204,6 +14211,14 @@ body.focus-mode .dock:hover {
 }
 .files-node__row:hover {
   background: rgba(var(--tint-rgb), 0.08);
+}
+/* Selection reads like the Explorer drawer's, and like an OS list: full strength while the list
+   has the keyboard, muted once focus is elsewhere — so it is clear where a typed letter will go. */
+.files-node__row.is-selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.files-node__list:focus .files-node__row.is-selected {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 /* Dimmed exactly like the Explorer drawer dims them — same fact (`DirEntry.ignored`), so it must
    read the same way in both places. */
