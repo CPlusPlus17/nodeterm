@@ -203,6 +203,18 @@ describe('binariesFor', () => {
     expect(binariesFor('custom:none', list)).toBeNull()
   })
 
+  it('never resolves a prototype key as a builtin, and skips null/non-object records', () => {
+    expect(binariesFor('constructor')).toEqual(['constructor'])
+    expect(binariesFor('__proto__')).toEqual(['__proto__'])
+    expect(binariesFor('toString')).toEqual(['toString'])
+    const list = [null, 7, 'x', { id: 'custom:ok', launchCmd: 'ok-agent' }] as unknown as {
+      id: string
+      launchCmd: string
+    }[]
+    expect(binariesFor('custom:ok', list)).toEqual(['ok-agent'])
+    expect(binariesFor('custom:missing', list)).toBeNull()
+  })
+
   it('never throws on a hand-edited non-string launch command — blank, same as the mirror builder', () => {
     const list = [
       { id: 'custom:num', launchCmd: 42, baseAgent: 'claude' },

@@ -180,9 +180,14 @@ export function binariesFor(
   agentId: string,
   customAgents?: readonly { id: string; launchCmd: string; baseAgent?: string }[]
 ): readonly string[] | null {
-  const builtin = AGENT_BINARIES[agentId]
+  // Own property only: `constructor` / `__proto__` / `toString` must not resolve to a prototype
+  // member — an agent id is hand-editable (project.json, settings.json).
+  const builtin = Object.prototype.hasOwnProperty.call(AGENT_BINARIES, agentId)
+    ? AGENT_BINARIES[agentId]
+    : undefined
   if (builtin) return builtin
-  const custom = customAgents?.find((c) => c.id === agentId)
+  // Settings are hand-editable JSON: a null / non-object entry is skipped, never dereferenced.
+  const custom = customAgents?.find((c) => !!c && typeof c === 'object' && c.id === agentId)
   if (custom) {
     // A BLANK command with a base harness runs the base's own command — `resolveAgentConfig`
     // (`shared/agents/custom-agent.ts`) resolves `launchCmd.trim() || base.launchCmd`, so the pane

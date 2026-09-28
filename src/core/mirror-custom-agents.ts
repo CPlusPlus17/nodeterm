@@ -26,6 +26,22 @@ import type { MirrorCustomAgent } from './agent-status-mirror'
  */
 const PLAIN_BINARY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
+/**
+ * Credential SHAPES that still fit the alphabet. `binaryFromLaunchCmd` cannot tell an option's
+ * VALUE from the program (`npx --registry-token ghp_… my-agent` names the token), so the builder
+ * also refuses anything that looks like a known token prefix, or a long high-entropy string. A
+ * heuristic, not a proof: its failure mode on a real binary is `[]` (the phone refuses), which is
+ * the safe direction.
+ */
+const TOKEN_PREFIXES = ['ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_', 'AIza', 'sk-', 'xai-', 'glpat-']
+
+function looksLikeCredential(name: string): boolean {
+  if (TOKEN_PREFIXES.some((p) => name.startsWith(p))) return true
+  if (name.length < 32) return false
+  const alnum = name.replace(/[^A-Za-z0-9]/g, '').length
+  return alnum / name.length >= 0.8 && /[A-Za-z]/.test(name) && /[0-9]/.test(name)
+}
+
 /** Longest label we republish — a label is display text, not a payload. */
 const LABEL_MAX = 200
 
@@ -51,7 +67,7 @@ export function mirrorCustomAgents(customAgents: readonly CustomAgent[] | null |
     const binaries = binariesFor(c.id, [{ id: c.id, launchCmd, ...(base ? { baseAgent: base } : {}) }])
     const label = typeof c.label === 'string' && c.label.trim() ? c.label.slice(0, LABEL_MAX) : c.id
     // All-or-nothing: one unpublishable name means the derivation is not trustworthy as a whole.
-    const plain = !!binaries && binaries.length > 0 && binaries.every((b) => PLAIN_BINARY.test(b))
+    const plain = !!binaries && binaries.length > 0 && binaries.every((b) => PLAIN_BINARY.test(b) && !looksLikeCredential(b))
     out.push({ id: c.id, label, ...(base ? { baseAgent: base } : {}), binaries: plain ? [...binaries] : [] })
   }
   return out

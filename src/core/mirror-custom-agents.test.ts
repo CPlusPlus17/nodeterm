@@ -75,6 +75,35 @@ describe('mirrorCustomAgents', () => {
       expect(json).not.toContain(leak)
   })
 
+  it('publishes [] for a name shaped like a credential, even inside the plain alphabet', () => {
+    // A runner option VALUE before the program can be taken as the program:
+    // `npx --registry-token ghp_… my-agent` names the token. The alphabet cannot catch that.
+    const tok36 = 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'
+    const shaped = [
+      `ghp_${tok36}`, `gho_${tok36}`, `ghu_${tok36}`, `ghs_${tok36}`, `ghr_${tok36}`,
+      'github_pat_11ABCDEF', 'AIzaSyD-short', 'sk-proj-abc', 'xai-abc123', 'glpat-abc123',
+      tok36 // no prefix, ≥32 chars, letters + digits: high-entropy
+    ]
+    const agents: CustomAgent[] = shaped.map((t, i) => ({
+      id: `custom:t${i}`, label: 'x', launchCmd: `npx --registry-token ${t} my-agent`
+    }))
+    const out = mirrorCustomAgents(agents)
+    expect(out.map((r) => r.binaries)).toEqual(shaped.map(() => []))
+    const json = JSON.stringify(buildFile({}, 1000, undefined, { customAgents: out }))
+    for (const t of shaped) expect(json).not.toContain(t)
+  })
+
+  it('keeps ordinary long names that do not look like a token', () => {
+    const agents: CustomAgent[] = [
+      { id: 'custom:a', label: 'a', launchCmd: 'my-very-long-descriptive-agent-cli-name' }, // no digits
+      { id: 'custom:b', label: 'b', launchCmd: 'agent2' }
+    ]
+    expect(mirrorCustomAgents(agents).map((r) => r.binaries)).toEqual([
+      ['my-very-long-descriptive-agent-cli-name'],
+      ['agent2']
+    ])
+  })
+
   it('drops malformed records and non-custom ids, and a baseAgent that is not a builtin', () => {
     const junk = [
       null,

@@ -180,7 +180,13 @@ its own, so the agent-status mirror's `settings` block advertises them:
   every name matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` — the BUILDER enforces this alphabet, because a
   derived "name" can be a slice of a secret (`oauth2:ghp_…` from a git URL, a quoted env value, a
   `${env:…}` template). **Empty = cannot be named honestly** (e.g. `bash -lc …`, or a name outside the
-  alphabet): refuse, never guess. The phone still validates each name (`isPlainBinaryName`) and refuses otherwise.
+  alphabet): refuse, never guess.
+- Residual the alphabet cannot catch: the launch-command tokenizer cannot tell a runner option's
+  VALUE from the program, so `npx --registry-token ghp_… my-agent` would "name" the token. The builder
+  therefore also publishes `[]` for a name with a known credential prefix (`ghp_`, `gho_`, `ghu_`,
+  `ghs_`, `ghr_`, `github_pat_`, `AIza`, `sk-`, `xai-`, `glpat-`) or a high-entropy shape (≥ 32 chars,
+  ≥ 80% alphanumeric, letters AND digits). A heuristic: an unprefixed short secret can still pass, and a
+  real binary it catches is simply refused (`[]`). The phone still validates each name (`isPlainBinaryName`) and refuses otherwise.
 - `baseAgent` is present only when it is a builtin id. Chat on SSH: only when it is `claude` (the only
   harness the Swift parser reads); on relay the desktop decides (`canChat(capabilityAgentId(…))`).
 - Never contains the raw launch command, args or env — they routinely hold API keys and proxy URLs,
