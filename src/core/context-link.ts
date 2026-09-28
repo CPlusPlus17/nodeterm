@@ -21,7 +21,8 @@ import { platform } from './platform'
 import { IPC } from '../shared/ipc'
 import type { ContextLinkInfo, ContextLinkMap } from '../shared/types'
 import { type PtyManager } from './pty-manager'
-import { directExecutableInvocation, findInLoginPath } from './exec-path'
+import { findInLoginPath } from './exec-path'
+import { isSafeOpencodeSessionId, runOpencodeExportAt } from './opencode-export'
 import { TMUX_SOCKET } from './tmux-naming'
 import {
   buildContextShimScript,
@@ -222,42 +223,16 @@ async function fetchTranscript(node: LinkDocEntry): Promise<string | null> {
   }
 }
 
-/** An export names ONE provider session. The id reaches us from a hook payload, so it is re-checked
- *  here, where it becomes an argv entry: `directExecutableInvocation` stops it being read as shell
- *  syntax, and nothing but this stops a leading `-` being read by opencode as an option. */
-const SAFE_OPENCODE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/
+// The id check and the export bounds live in `opencode-export.ts`, shared with the ⌘M chat view's
+// reader. Re-exported so this module's callers are unchanged.
+export { isSafeOpencodeSessionId } from './opencode-export'
 
-export function isSafeOpencodeSessionId(sessionId: string): boolean {
-  return SAFE_OPENCODE_SESSION_ID.test(sessionId)
-}
-
-// A whole conversation comes back on stdout. execFile's default 1 MiB buffer turns a long session
-// into an error, which reads here as "no transcript"; and with no timeout a wedged CLI holds the
-// linked agent's read open for good.
-const OPENCODE_EXPORT_MAX_BYTES = 32 * 1024 * 1024
+// With no timeout a wedged CLI holds the linked agent's read open for good.
 const OPENCODE_EXPORT_TIMEOUT_MS = 60_000
 
 export async function opencodeExportAt(bin: string, sessionId: string): Promise<string | null> {
-  const invocation = directExecutableInvocation(bin, ['export', sessionId])
-  if (!invocation) return null
-  try {
-    const { execFile } = await import('node:child_process')
-    return await new Promise<string | null>((resolve) => {
-      execFile(
-        invocation.executable,
-        invocation.args,
-        {
-          ...invocation.options,
-          encoding: 'utf-8',
-          maxBuffer: OPENCODE_EXPORT_MAX_BYTES,
-          timeout: OPENCODE_EXPORT_TIMEOUT_MS
-        },
-        (err, stdout) => resolve(err ? null : stdout)
-      )
-    })
-  } catch {
-    return null
-  }
+  const out = await runOpencodeExportAt(bin, sessionId, OPENCODE_EXPORT_TIMEOUT_MS)
+  return out.ok ? out.stdout : null
 }
 
 async function fetchOpencodeExport(node: LinkDocEntry): Promise<string | null> {

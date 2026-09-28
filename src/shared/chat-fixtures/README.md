@@ -166,6 +166,8 @@ by its own test; the pager and step format are the ones above.
 - `codex/` — codex rollouts (`src/core/codex-chat.ts`, `src/core/codex-chat-fixtures.test.ts`).
 - `gemini/` — gemini session files (`src/core/gemini-chat.ts`), one capped page; see its README.
 - `grok/` — grok `chat_history.jsonl` (`src/core/grok-chat.ts`), one capped page; see its README.
+- `opencode/` — synthetic `opencode export` documents (`src/core/opencode-chat.ts`), one page;
+  see `opencode/README.md` and the "opencode" section below.
 - `copilot/` — copilot session journals (`src/core/copilot-chat.ts`); its rules are the "Copilot"
   section below.
 
@@ -268,3 +270,11 @@ absolute byte offset, a tool part's `id` is the call id, both only on a paged re
 | `user-requested` | A user `!` bash command (`name:"!"`, trimmed arg) and a user-requested `view`, each with its result. |
 | `malformed` | Thirteen unreadable or ill-shaped lines, plus a good message holding two bad tool requests, between good ones: the good ones render, and a bad tool request costs only itself. |
 | `huge-last-line` | A tool result carrying an image for the model (~300 KB) is the last line: the tail grows past 256 KiB and the result still attaches. |
+
+## opencode
+
+`opencode/` holds the fixtures for the opencode reader (`src/core/opencode-chat.ts`): synthetic
+`opencode export` documents and the parse + page the desktop serves for each. opencode has no
+transcript file (SQLite since 1.18), so a read is ONE page (`olderCursor: null`). Its rules and
+layout are in `opencode/README.md`; regenerate with
+`UPDATE_CHAT_FIXTURES=1 npx vitest run src/core/opencode-chat.fixtures.test.ts`.

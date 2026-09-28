@@ -24,7 +24,7 @@ import { GROK_AMBIGUOUS_SESSION_MESSAGE, isGrokAmbiguousSessionError } from '@sh
 import { Spinner } from '../components/Spinner'
 import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
 import { sentCommand } from '@shared/chat-command'
-import { chatReadsLocalOnly } from '@shared/agents/config'
+import { capabilityAgentId, chatReadsLocalOnly } from '@shared/agents/config'
 import { ChatLoadingStatus } from './ChatPanelFallback'
 import { answerCardState, answerRebindPending, rebindRetryDelay, type BoundAnswerCard } from '../lib/chatAnswer'
 import { AnswerControlsUpdating, PlanAnswerControls, QuestionAnswerControls } from './ChatAnswerControls'
@@ -87,7 +87,7 @@ interface ChatPanelProps {
  * initial `[]` because nothing caught the rejection, and a failed resolution was indistinguishable
  * from a session nobody has spoken to. They need different words — and two of them are retryable.
  */
-type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'ambiguous' | 'error'
+type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'ambiguous' | 'exportError' | 'error'
 
 /**
  * An `unreadable` read of a LOCAL-ONLY reader's node (`CHAT_LOCAL_ONLY` — agents with no remote
@@ -99,6 +99,17 @@ type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupport
  * grok `unreadable` is a real, retryable failure.
  */
 const remoteReaderUnsupported = (agentId: string | undefined): boolean => !!agentId && chatReadsLocalOnly(agentId)
+
+/**
+ * An `unreadable` read of an OPENCODE node has two causes and nothing on the wire tells them apart:
+ * a local `opencode export` that failed (Retry heals it) and a remote node core refuses before
+ * running anything (it never heals). So its copy names both instead of guessing — and never blames
+ * an unreachable host for a local failure. Through the base harness, mirroring core's routing
+ * (`readChatTranscript` routes `capabilityAgentId(...) === 'opencode'` to `opencode-chat.ts`).
+ * That ambiguity is why opencode is NOT in `CHAT_LOCAL_ONLY` even though it has no remote leg.
+ */
+const opencodeUnreadable = (agentId: string | undefined): boolean =>
+  !!agentId && capabilityAgentId(agentId) === 'opencode'
 
 const isUnsupported = (e: unknown): boolean =>
   !!e && typeof e === 'object' && (e as { code?: string }).code === E_UNSUPPORTED
@@ -127,6 +138,10 @@ const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
   ambiguous: {
     title: GROK_AMBIGUOUS_SESSION_MESSAGE,
     detail: 'nodeterm will not guess which one belongs to this node.'
+  },
+  exportError: {
+    title: "Couldn't read this opencode session.",
+    detail: "opencode export failed on this machine — Retry once it works. A session on a remote host can't be read here yet."
   },
   error: {
     title: "Couldn't read the transcript.",
@@ -327,7 +342,10 @@ export function ChatPanel({
     // presenting itself as an empty conversation. Only the newest TAIL window is read — older
     // history pages in on scroll-up, and a reload merges by key instead of discarding it.
     void api.chat.readTranscript(sessionId, cwd, accountId, nodeId, agentId, {
-      maxBytes: CHAT_TAIL_PAGE_BYTES
+      maxBytes: CHAT_TAIL_PAGE_BYTES,
+      // A hook-driven refresh the user did not ask for: an expensive reader (opencode's export) may
+      // space these out. An open, ↻, Retry or a held-request rebind is never marked.
+      ...(live && !rebind ? { background: true } : {})
     }).then(
       (res) => {
         if (token !== reqRef.current) return
@@ -350,7 +368,15 @@ export function ChatPanel({
           setThread(emptyThread(identity))
           // A read that FAILED (the host did not answer, a remote node with no reachable master)
           // is not "no transcript": it gets the error copy, and ↻ is the way out.
-          setLoadState(!res.unreadable ? 'missing' : remoteReaderUnsupported(agentId) ? 'remoteUnsupported' : 'error')
+          setLoadState(
+            !res.unreadable
+              ? 'missing'
+              : remoteReaderUnsupported(agentId)
+                ? 'remoteUnsupported'
+                : opencodeUnreadable(agentId)
+                  ? 'exportError'
+                  : 'error'
+          )
           setHeldRead({ identity, pendingId: heldAtStart })
           settleHeldReload(heldAtStart)
           return

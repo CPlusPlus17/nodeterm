@@ -24,6 +24,7 @@ import type { RemoteGrokChat } from './remote-grok-chat'
 import { readGeminiChatTranscript } from './gemini-chat'
 import { chatMessagesFromCodex, locateCodexRollout, parseCodexChatWindow } from './codex-chat'
 import { chatMessagesFromCopilot, locateCopilotTranscript, parseCopilotChatWindow } from './copilot-chat'
+import { readOpencodeChat, type OpencodeExportRun } from './opencode-chat'
 import { locateGrok } from './handoff/locate'
 import { capabilityAgentId } from '../shared/agents/config'
 import {
@@ -111,6 +112,9 @@ export interface TranscriptIpcDeps {
    * Electron-only; the Server Edition runs on the host it reads.
    */
   readRemoteCodexPage?(q: TranscriptQuery, page: ChatTranscriptPage): Promise<RemoteTranscriptPage | null>
+  /** `opencode export <id>` for an opencode node's chat read. A test seam: absent = the real,
+   *  bounded and gated CLI call (`defaultOpencodeExport`) — both shells run it on their own host. */
+  opencodeExport?: OpencodeExportRun
 }
 
 export type RemoteTranscriptPage = { ok: true; data: Buffer; start: number } | { ok: false; absent?: true }
@@ -402,6 +406,14 @@ export async function readChatTranscript(
   // Copilot, by its base harness (a custom agent built on it reads the same journal). Before
   // anything claude-shaped, for the same reason as grok and codex. Local-only (`CHAT_LOCAL_ONLY`).
   if (agentId && capabilityAgentId(agentId) === 'copilot') return readCopilotChat(sessionId, remoteOnly, page)
+  // Opencode has no transcript file — its sessions live in a database read through
+  // `opencode export <id>` — so it must never reach claude's resolver below (whose cwd fallback
+  // would answer with a stranger's session). Routed through the base harness, so a custom agent
+  // built on opencode reads as opencode. Local only: a remote node is refused inside, before
+  // anything runs. See core/opencode-chat.ts.
+  if (agentId && capabilityAgentId(agentId) === 'opencode') {
+    return readOpencodeChat({ sessionId, remoteOnly }, page, deps.opencodeExport)
+  }
   if (page) return readChatPage({ sessionId, cwd, accountId, nodeId, ...(remoteOnly ? { remoteOnly } : {}) }, page, deps)
   const remote = deps.readRemote ? await deps.readRemote({ sessionId, cwd, accountId, nodeId }) : null
   // A resolved-but-unreadable remote file is NOT "no conversation yet" — the read failed

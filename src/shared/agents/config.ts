@@ -304,13 +304,17 @@ export const USAGE_CAPABLE = ['claude', 'codex', 'gemini', 'grok'] as const
 // copilot joined 2026-09 with its own leaf, `core/copilot-chat.ts`: `<COPILOT_HOME>/session-state/
 // <id>/events.jsonl`, located strictly by session id and routed there before anything claude-shaped
 // (`readChatTranscript`). Like the others it is NOT in CLAUDE_TRANSCRIPT_READABLE below.
-export const CHAT_CAPABLE = ['claude', 'grok', 'gemini', 'codex', 'copilot'] as const
+// opencode joined 2026-09-28: it has no transcript file at all (SQLite since 1.18), so its chat is
+// read through `opencode export <id>` (core/opencode-chat.ts) and it stays out of the list below.
+export const CHAT_CAPABLE = ['claude', 'grok', 'gemini', 'codex', 'copilot', 'opencode'] as const
 // CHAT_CAPABLE agents whose reader has NO remote leg: a remote (SSH) node's session lives on its
 // host, so core answers `unreadable` before touching anything — and the local reader never sets that
 // flag (copilot maps a failed local read to not-found for exactly this reason). So an unreadable read
 // of one of these can only mean "remote, unsupported", and the ⌘M panel names it from the agent
 // alone rather than offering a Retry that can never succeed. grok and codex are NOT here: their
 // remote nodes are read on the host (`core/remote-grok-chat.ts`, `main/remote-codex-chat-page.ts`).
+// opencode has no remote leg either but is NOT here: its `unreadable` also means a failed LOCAL
+// `opencode export`, which Retry heals — the panel gives it its own copy (`exportError`) instead.
 export const CHAT_LOCAL_ONLY = ['gemini', 'copilot'] as const
 // Agents whose transcript CLAUDE's own resolver can locate and parse — the gate for everything that
 // goes through `resolveTranscript` (the find bar's index, the meter's mount-time rehydration).
