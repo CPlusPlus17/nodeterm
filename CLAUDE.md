@@ -5115,6 +5115,60 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   session cards only (the `githubIssues:*` channels are served to relay TABS, never the phone
   dialect), so nothing there can read a throttle as signed out; surfacing GitHub cards on the phone
   would need this whole contract carried over the relay.
+  **Pull request CI, mergeability and links** (2026-09-29; core `graphql-pulls.ts` +
+  `pull-status-tracker.ts`, shared `github-pull-status.ts` + `kanban-pull-links.ts`, renderer
+  `lib/pullLinks.ts` / `lib/pullAutoMove.ts` / `lib/pullChase.ts`). The issues harvest cannot say a
+  PR's head, checks or mergeability, so ONE GraphQL read per repository adds them: every open PR's
+  `headRefName`/`headRefOid`/`isCrossRepository`/`isDraft`/`mergeable`/`mergeStateStatus`, the head
+  commit's `statusCheckRollup`, `closingIssuesReferences`, plus the 30 most recently merged/closed
+  PRs (so a branch link survives the merge). MEASURED on this repository (60 open PRs): **1 point**
+  of the separate `graphql` budget, ~18 KB; the per-PR checks read (modal open only) is also 1.
+  **When it runs:** after a heartbeat that reported a change, on a user refresh, on the first
+  heartbeat of an app run, when the last read failed or the budget skipped one (`owed`) — never on a
+  304 otherwise. A finished check run does NOT move the heartbeat, so an UNDECIDED PR (mergeable
+  UNKNOWN or rollup PENDING/EXPECTED — measured: 40 of 50 open PRs read UNKNOWN on a first read, all
+  settled 20 s later, because the first read is what starts GitHub's computation) is CHASED at
+  30 s / 1 min / 2 min / 5 min, at most 12 reads per episode, and only while a board is VISIBLE: the
+  renderer asks (`githubIssues.chasePulls`) every 15 s while `document.visibilityState` is visible,
+  and the host answers from a map — schedule, cap and the synchronous `claimChase` live in core, and
+  no context (credential chain) is resolved unless a read is due. A new undecided PR or a new head
+  starts a new episode; the same stuck PR does not restart the count. **Semantics, each a shipped
+  bug somewhere:** a null rollup is "no checks" and renders NOTHING (never a tick); only
+  `mergeStateStatus === 'CLEAN'` is "Ready to merge" (MERGEABLE+BLOCKED is real: 2 of 31 here);
+  a rollup counts only at the current `headRefOid`, and a CI result is never carried from an older
+  head; a failed read keeps the last snapshot marked stale (`pullStatusFreshness`, greyed after
+  15 min); a FORBIDDEN/INSUFFICIENT_SCOPES answer for the rollup or mergeability HIDES that region
+  (`access`), which is not the same as a null rollup. **Budget:** GitHub meters `graphql` apart from
+  `core`, and so does the coordinator now — `throttle(identity, at, resource)`, a primary limit is
+  tagged with its resource (`GitHubClientError.resource`, from `x-ratelimit-resource`, or GraphQL's
+  200-with-`RATE_LIMITED`) and holds only that resource; an untagged (secondary) limit still holds
+  the identity. A spent graphql budget (the user's own `gh pr list` spends it) must not stall REST
+  issue sync. **Links:** PR → issue = GitHub's own `closingIssuesReferences` (same repository only),
+  deliberately NOT unlinkable on the board — GitHub closes the issue at merge whatever the board
+  shows. PR → session card = the PR's head equals `data.worktree.branch` of the card's nearest bound
+  group (`worktreeBranchOf`, no git read; a stale binding still names the branch, which is exactly
+  when its PR merges); a FORK PR never links (36 of 50 open PRs here are forks). Unlinking writes a
+  git-shared tombstone in `ProjectKanban.pullLinks` — a BOARD-LEVEL field on purpose: every card-meta
+  setter rebuilds `meta[]` entries from a fixed field list, so a field added there is erased by the
+  next member/due/label edit. SSH projects show the worktree reason instead (no worktree groups
+  there). The open seam: joining PR → issue → node through the `issueRef` an agent started from an
+  issue card will carry (not on main yet) — `pullsForCard` is where that second link source plugs in.
+  **Merge-driven move — session cards only, OFF by default.** The switch and the target column are
+  MACHINE-LOCAL (`settings.kanbanPullAutoMove.projects[projectId]`): it makes this machine write the
+  shared board on its own, so a switch in the project file would make every clone move and commit
+  cards nobody on that machine asked for. Per-card opt-out is board content (`pullLinks.noAutoMove`).
+  Guards in order (`decidePullAutoMove`): opted out → never; any linked PR open/draft → wait; any
+  closed unmerged → blocked until the user unlinks it; already in target → nothing; all merged but
+  this machine never SAW one open (`seen`, same settings entry) → no move. The move is a
+  compare-and-set on the column the decision saw (`applyPullAutoMove`, run by Canvas against the
+  store's latest board) and writes ONE `card-moved` board-log line whose `title` names the PRs. It
+  runs only while the board is open (that is when pull status is fresh) and never on a stale
+  snapshot. **GitHub issue cards are never auto-moved** — GitHub already closes them when a
+  `Closes #N` PR merges, and a second writer would race it and could clobber `state_reason`.
+  Surfaces: Desktop + Server Edition identical (core + renderer; `githubIssues:pull-status`,
+  `:chase-pulls`, `:pull-checks` are registered by the shared core handlers and served to relay
+  tabs through the project-scope table). **Mobile: follow-up** — the phone board carries session
+  cards only; showing PR CI there means carrying `GitHubPullBoard` over the relay dialect.
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,
   2026-08-30 — the same membership-plus-one-leaf discipline `AGENT_CONFIG` uses): each entry declares
   its filter `label`, its `placement` (`assignment` = the board's own persisted assignments,

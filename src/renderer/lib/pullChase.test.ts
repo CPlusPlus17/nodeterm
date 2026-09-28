@@ -18,6 +18,8 @@ function fake(initiallyVisible: boolean) {
     deps,
     tick: (count = 1) => { for (let i = 0; i < count; i++) for (const fn of [...timers.values()]) fn() },
     setVisible: (value: boolean) => { visible = value; listener?.() },
+    /** The page hid but no visibilitychange arrived (it is not guaranteed on every platform). */
+    hideSilently: () => { visible = false },
     asks: () => asks,
     timers: () => timers.size,
     subscribed: () => listener !== undefined
@@ -46,6 +48,15 @@ describe('startPullChase', () => {
     expect(f.timers()).toBe(0)
     f.tick(10)
     expect(f.asks()).toBe(2)
+  })
+
+  it('re-checks visibility on every tick, so a missed hide event still stops the asking', () => {
+    const f = fake(true)
+    startPullChase(f.deps)
+    f.tick(1)
+    f.hideSilently()
+    f.tick(10)
+    expect(f.asks()).toBe(1)
   })
 
   it('stops for good when the board closes', () => {
