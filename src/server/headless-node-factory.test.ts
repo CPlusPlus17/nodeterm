@@ -1311,4 +1311,123 @@ describe('HeadlessNodeFactory', () => {
     const node = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
     expect(node?.pendingLaunch).toMatchObject({ command: 'printf hello', manualOnly: true })
   })
+
+  it('accepts --run-now on open verbs as a no-op: server opens are already immediate (#925)', async () => {
+    const reply = await factory.openTerminal('term-source', { cwd: projectDir, cmd: 'printf hi', 'run-now': '' }, true)
+    expect(reply.ok).toBe(true)
+    const id = (reply.result as { id: string }).id
+    expect(pty.sends).toEqual([{ nodeId: id, text: 'printf hi' }])
+  })
+
+  it('accepts --run-now on open-agent as the same no-op (#925)', async () => {
+    const reply = await factory.openAgent('term-source', { agent: 'claude', prompt: 'brief', 'run-now': '' }, true)
+    expect(reply.ok).toBe(true)
+    const id = (reply.result as { id: string }).id
+    expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'brief'" }])
+  })
+
+  it('run delivers a retained launch for the node owner (#925)', async () => {
+    const spy = vi.spyOn(pty, 'writeHeadless').mockReturnValue(false)
+    const opened = await factory.openTerminal('term-source', { cwd: projectDir, cmd: 'printf hi' }, true)
+    const id = (opened.result as { id: string }).id
+    spy.mockRestore()
+    pty.sends.length = 0
+    const reply = await factory.run('term-source', { node: id }, true)
+    expect(reply).toMatchObject({ ok: true, result: { started: true, startedIds: [id] } })
+    expect(pty.sends).toEqual([{ nodeId: id, text: 'printf hi' }])
+    const node = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
+    expect(node?.pendingLaunch).toBeUndefined()
+  })
+
+  it('run saves its claim before typing; a failed delivery stays queued and names the reason (#925)', async () => {
+    // An --after arm is the one held launch that has never been attempted, so the claim below is
+    // run's own write-ahead and not one left behind by the open.
+    states['term-upstream'] = 'working'
+    const opened = await factory.openTerminal(
+      'term-source',
+      { cwd: projectDir, cmd: 'printf hi', after: 'term-upstream' },
+      true
+    )
+    const id = (opened.result as { id: string }).id
+    expect((await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)?.pendingLaunch)
+      .toMatchObject({ attempted: false })
+    expect(pty.sends).toEqual([])
+    let durableAtFirstWrite: ReturnType<WorkspaceStore['load']> | undefined
+    const refuse = vi.spyOn(pty, 'writeHeadless').mockImplementation(() => {
+      durableAtFirstWrite ??= store.load({ sideline: false })
+      return false
+    })
+    const reply = await factory.run('term-source', { node: id }, true)
+    refuse.mockRestore()
+    expect(reply).toMatchObject({
+      ok: true,
+      result: { started: false, startedIds: [], queued: true, queuedIds: [id], reason: 'cancelled' }
+    })
+    const claimed = (await durableAtFirstWrite!).projects[0].nodes.find((n) => n.id === id)
+    expect(claimed?.pendingLaunch).toMatchObject({ command: 'printf hi', attempted: true, manualOnly: true })
+    expect(pty.sends).toEqual([])
+    const node = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
+    expect(node?.pendingLaunch).toMatchObject({ command: 'printf hi', attempted: true, manualOnly: true })
+    // manualOnly: the dependency finishing never replays it.
+    await factory.refreshArmed({ nodeId: 'term-upstream', state: 'done' })
+    expect(pty.sends).toEqual([])
+  })
+
+  it('run refuses a non-owner, an unknown node and a node with nothing queued (#925)', async () => {
+    const opened = await factory.openTerminal('term-source', { cwd: projectDir, cmd: 'printf hi' }, true)
+    const id = (opened.result as { id: string }).id
+    expect((await factory.run('someone-else', { node: id }, true)).error).toMatch(/^run-not-owner:/)
+    expect((await factory.run('term-source', { node: id }, true)).error).toMatch(/^run-nothing-queued:/)
+    expect((await factory.run('term-source', { node: id, cmd: 'x' }, true)).error).toMatch(/not supported/)
+    expect((await factory.run('term-source', { node: id }, false)).error).toMatch(/^run-identity-refused:/)
+    // Owned by this caller but gone from the canvas: the desktop's own wording.
+    ownership.record('term-vanished', { sourceNodeId: 'term-source', projectId: 'project-1' })
+    expect((await factory.run('term-source', { node: 'term-vanished' }, true)).error)
+      .toBe('run: no node with id term-vanished')
+  })
+
+  it('run marks an agent it freshly spawned as awaiting its first working turn, as open does (#925)', async () => {
+    // The open's spawn fails, so the node has no session and was never marked; run spawns it fresh.
+    const spawn = vi.spyOn(pty, 'createHeadless').mockResolvedValueOnce({ sessionId: '', fresh: true })
+    const opened = await factory.openAgent('term-source', { agent: 'claude', prompt: 'brief' }, true)
+    spawn.mockRestore()
+    expect(opened.ok).toBe(false)
+    const agentNode = (opened.result as { id: string }).id
+    expect(await factory.run('term-source', { node: agentNode }, true))
+      .toMatchObject({ ok: true, result: { started: true } })
+    // A dependent armed now must not be released by the fresh CLI's boot `done` blip.
+    const dependent = await factory.openTerminal(
+      'term-source',
+      { cwd: projectDir, cmd: 'printf after', after: agentNode },
+      true
+    )
+    const depId = (dependent.result as { id: string }).id
+    pty.sends.length = 0
+    await factory.refreshArmed({ nodeId: agentNode, state: 'done' })
+    expect(pty.sends).toEqual([])
+    await factory.refreshArmed({ nodeId: agentNode, state: 'working' })
+    await factory.refreshArmed({ nodeId: agentNode, state: 'done' })
+    expect(pty.sends).toEqual([{ nodeId: depId, text: 'printf after' }])
+  })
+
+  it('run refuses an SSH node before any claim (#925)', async () => {
+    const held = { after: [], command: 'printf hi', executor: 'server' as const, attempted: false }
+    const workspace = await store.load({ sideline: false })
+    workspace.projects[0].nodes.push({
+      ...terminal('term-remote', 'Remote'),
+      sshRemoteTmux: true,
+      pendingLaunch: held
+    })
+    await store.save(workspace)
+    ownership.record('term-remote', { sourceNodeId: 'term-source', projectId: 'project-1' })
+    const reply = await factory.run('term-source', { node: 'term-remote' }, true)
+    expect(reply).toEqual({
+      ok: false,
+      error: 'run-remote-unsupported: term-remote is an SSH node; the Server Edition cannot start it'
+    })
+    expect(pty.creates).toEqual([])
+    expect(pty.sends).toEqual([])
+    const node = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === 'term-remote')
+    expect(node?.pendingLaunch).toEqual(held)
+  })
 })

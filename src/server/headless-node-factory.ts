@@ -36,6 +36,7 @@ import {
 import { assembleLaunchCommand } from '../shared/agents/launch'
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { oneLine } from '../shared/one-line'
+import { isRemoteSessionNode } from '../shared/worktree'
 import { UNKNOWN_CODEX_CLI_CAPS } from '../shared/types'
 import type {
   BridgeLink,
@@ -1041,6 +1042,55 @@ export class HeadlessNodeFactory {
     })
   }
 
+  /** `run --node <id>` (#925): deliver a node's retained launch now. Server v1 ownership applies:
+   *  only nodes the caller spawned during this server run. */
+  run(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      if (!verified) {
+        return { ok: false, error: 'run-identity-refused: Server Edition canvas control requires verified node identity' }
+      }
+      const flagError = unsupportedFlags(args, new Set(['node', 'project']))
+      if (flagError) return { ok: false, error: `run: ${flagError}` }
+      const id = (args.node ?? '').trim()
+      if (!this.ownsSpawn(sourceNodeId, id)) return this.ownershipRefusal('run', sourceNodeId, id)
+      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const project = workspace.projects.find((p) => p.nodes.some((n) => n.id === id))
+      const node = project?.nodes.find((n) => n.id === id)
+      if (!project || !node) return { ok: false, error: `run: no node with id ${id}` }
+      const held = node.pendingLaunch
+      if (!held?.command) return { ok: false, error: `run-nothing-queued: ${id} has no queued launch` }
+      // A remote node is NEVER spawned locally, and this launcher only spawns locally. Refuse
+      // before the claim, leaving the held launch untouched (the desktop's startHeadless guard).
+      if (isRemoteSessionNode(node)) {
+        return {
+          ok: false,
+          error: `run-remote-unsupported: ${id} is an SSH node; the Server Edition cannot start it`
+        }
+      }
+      // Write-ahead, exactly as open() does before its own delivery.
+      node.pendingLaunch = { ...held, attempted: true, manualOnly: true }
+      await this.deps.workspaceStore.save(workspace)
+      const launched = await this.launch(project, node, held.command)
+      // As open() does: an agent this spawned fresh has not had its first real turn yet, so a
+      // later `--after` on it must not be released by the CLI's boot `done` blip.
+      if (node.agentId && launched.fresh) this.awaitingFirstWorking.add(id)
+      if (launched.outcome === 'delivered') node.pendingLaunch = undefined
+      await this.deps.workspaceStore.save(workspace)
+      this.publish(project, [node])
+      return launched.outcome === 'delivered'
+        ? {
+            ok: true,
+            message: `started ${id}; agent startup is not confirmed`,
+            result: { ids: [id], id, started: true, startedIds: [id], queued: false, queuedIds: [] }
+          }
+        : {
+            ok: true,
+            message: `${id} stays queued (${launched.reason}); launch retained for Run now`,
+            result: { ids: [id], id, started: false, startedIds: [], queued: true, queuedIds: [id], reason: launched.reason }
+          }
+    })
+  }
+
   color(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply> {
     return this.runExclusive(async () => {
       const flagError = unsupportedFlags(args, new Set(['node', 'color']))
@@ -1088,9 +1138,10 @@ export class HeadlessNodeFactory {
     return this.runExclusive(async () => {
       const flagError = unsupportedFlags(
         args,
+        // `run-now` (#925) is accepted and ignored: a server open already delivers immediately.
         verb === 'open-terminal'
-          ? new Set(['count', 'cwd', 'cmd', 'after', 'project'])
-          : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model'])
+          ? new Set(['count', 'cwd', 'cmd', 'after', 'project', 'run-now'])
+          : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model', 'run-now'])
       )
       if (flagError) return { ok: false, error: `${verb}: ${flagError}` }
       if (!verified) {
