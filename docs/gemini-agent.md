@@ -17,6 +17,22 @@ parsing output.
 > `~/.gemini/tmp/nodeterm/chats/session-2026-08-09T10-48-fd01438b.jsonl` on this host). The few
 > genuinely open items are marked *unverified* and collected in §7–§8.
 
+> **Personal Google accounts can no longer use Gemini CLI (since 2026-06-18).** Google moved the
+> terminal experience to **Antigravity CLI** (`agy`, closed source; nodeterm's `antigravity` agent —
+> `docs/antigravity-agent.md`) and Gemini CLI now refuses the free tier, Google AI Pro and Google AI
+> Ultra (announcement: google-gemini/gemini-cli discussion #27274). Gemini Code Assist
+> Standard/Enterprise licences, Vertex AI and paid Gemini API keys are unaffected, so the `gemini`
+> agent stays — existing nodes must still load, and those users still run it. What a refused user
+> sees is the browser saying "Authentication succeeded" and then the CLI's sign-in screen again,
+> with `This client is no longer supported for Gemini Code Assist for individuals. To continue using
+> Gemini, please migrate to the Antigravity suite of products` (captured from a user's screen,
+> 2026-09-28). Reinstalling or deleting `~/.gemini` does not help. nodeterm names it in two places:
+> `AgentConfig.notice` (the tooltip wherever gemini is offered) and a slim node banner raised when a
+> gemini-harness pane prints that sentence (`renderer/terminal/gemini-retired.ts`) — the one place
+> this agent reads its output, because the refusal comes before any session and so before any hook.
+> The banner types nothing; it offers an Antigravity node beside this one and Google's migration
+> guide.
+
 ---
 
 ## 1. What gemini is, capability by capability

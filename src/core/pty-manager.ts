@@ -20,6 +20,7 @@ import {
 } from '../shared/types'
 import { bundledTmuxPath, findCommand, findFixedTmux, tmuxInstall } from './tmux-hint'
 import { hookServer, PERM_WAIT_SECS_DEFAULT } from './agents/hook-server'
+import { findAgy, pathWithAgyDir } from './agents/hooks/antigravity'
 import {
   probeSaysAbsent,
   remoteHookEnvArgs,
@@ -109,7 +110,13 @@ import {
 } from './codex-identity-proxy'
 import { ensureNodeToken, ensureRemoteNodeToken, sweepNodeToken } from './agents/node-token-service'
 import { clearNode as clearNodeAgentStatus } from './agent-status-mirror'
-import { hasSharedIdentity, setCustomAgentBaseResolver, vanillaEnvStripPattern, type AgentId } from '../shared/agents/config'
+import {
+  capabilityAgentId,
+  hasSharedIdentity,
+  setCustomAgentBaseResolver,
+  vanillaEnvStripPattern,
+  type AgentId
+} from '../shared/agents/config'
 import { findCustomAgent } from '../shared/agents/custom-agent'
 import { applyCustomAgentEnv, customAgentEnvArgs } from './custom-agent-env'
 import {
@@ -2899,6 +2906,16 @@ export class PtyManager {
     // advertise it — without this, zsh themes and TUIs quietly clamp to the 256 palette and
     // the canvas terminals never match the user's real terminal colors (issue #78).
     const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<string, string>
+    if (process.platform === 'win32') {
+      // `process.env` commonly exposes this as `Path`. The copied object is case-sensitive, so a
+      // later `env.PATH = ...` would leave BOTH names in node-pty's environment block. ConPTY uses
+      // the first case-insensitive match, which is then the stale `Path` value. Canonicalise once
+      // before any PATH layer is applied so every downstream writer replaces the same entry.
+      const pathKeys = Object.keys(env).filter((key) => key.toUpperCase() === 'PATH')
+      const inheritedPath = env.PATH ?? (pathKeys.length ? env[pathKeys[0]] : undefined)
+      for (const key of pathKeys) delete env[key]
+      if (inheritedPath !== undefined) env.PATH = inheritedPath
+    }
     // The Server Edition may receive a first-boot password through its own environment. That
     // bootstrap credential belongs to the server process, never to the interactive shells and
     // agent CLIs it launches; inheriting it here would expose it to every terminal node.
@@ -2914,6 +2931,22 @@ export class PtyManager {
     // paths spawn late enough that the init()-time prewarm has long since settled.
     const shellPath = shellPathNow() ?? null
     if (shellPath) env.PATH = shellPath
+
+    // The agy installer writes `%LOCALAPPDATA%\agy\bin` into a REG_SZ user PATH on Windows.
+    // Windows does not expand that nested variable during command lookup, so `agy` is absent even
+    // though our hook installer finds the executable through its vendor-location fallback. APPEND
+    // the directory that same lookup proved, and only when no entry already names it
+    // (`pathWithAgyDir`): prepending shadowed the user's own tools on macOS/Linux, where agy sits in
+    // a shared directory. Keep plain terminals and remote sessions untouched; on SSH the executable
+    // and PATH belong to the host.
+    if (
+      options.agentId &&
+      capabilityAgentId(options.agentId as AgentId) === 'antigravity' &&
+      !options.sshRemote
+    ) {
+      const agy = findAgy()
+      if (agy) env.PATH = pathWithAgyDir(env.PATH, path.dirname(agy))
+    }
 
     // Same GUI-launch gap for the locale: with no LANG/LC_* the shell's `locale` is "C" (non-UTF-8),
     // so Claude Code and other TUIs fall back to ASCII box-drawing (rounded borders render as `_`/`|`).

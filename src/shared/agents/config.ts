@@ -4,7 +4,14 @@
 
 import { SAFE_SESSION_ID_UNBOUNDED } from '../session-id'
 
-export type BuiltinAgentId = 'claude' | 'codex' | 'gemini' | 'opencode' | 'grok' | 'copilot'
+export type BuiltinAgentId =
+  | 'claude'
+  | 'codex'
+  | 'gemini'
+  | 'opencode'
+  | 'grok'
+  | 'copilot'
+  | 'antigravity'
 // Open type — custom agents are any string ('custom:<uuid>'). Never restrict the set.
 export type AgentId = BuiltinAgentId | (string & {})
 
@@ -19,6 +26,25 @@ export interface AgentConfig {
   color: string // node color
   launchCmd: string // base launch command
   promptInjectionMode: PromptInjectionMode
+  /**
+   * The flag `flag-interactive` emits before the prompt. Absent = `--interactive`, which is
+   * copilot's spelling and stays byte-identical for it.
+   *
+   * antigravity (`agy`) is the case that needs it: its interactive-with-prompt flag is
+   * `--prompt-interactive` (`-i`), measured with `agy --help` on 1.2.3, and it has NO positional
+   * prompt at all — the usage lists subcommands instead — so neither `argv` nor
+   * `stdin-after-start` could deliver a prompt without producing a silently wrong command line.
+   */
+  promptFlag?: string
+  /**
+   * A one-sentence caveat shown as the tooltip where the agent is OFFERED (pane/sidebar menus, the
+   * Dock; not the ⌘K palette, whose right-aligned note does not wrap a sentence this long) — not
+   * a capability, and never read to decide behaviour. Exists for gemini: Google stopped serving
+   * Gemini CLI to personal accounts on 2026-06-18 (google-gemini/gemini-cli discussion #27274),
+   * and a user who picks it with a personal account otherwise meets a sign-in loop with no
+   * explanation. Absent = nothing to say.
+   */
+  notice?: string
   /**
    * Put this between the command and an `argv` prompt — in practice `'--'`, and only for a CLI
    * whose grammar has BOTH a positional prompt and subcommands.
@@ -53,9 +79,13 @@ export interface AgentConfig {
   vanillaEnvPattern?: string
 }
 
+// ORDER is display order everywhere agents are offered (menus, Dock, palette, Settings, the
+// canvas-control help). antigravity sits above gemini: since 2026-06-18 it is Google's agent for
+// personal accounts, and gemini remains for Code Assist / Vertex / API-key users.
 export const BUILTIN_AGENT_IDS: readonly BuiltinAgentId[] = [
   'claude',
   'codex',
+  'antigravity',
   'gemini',
   'opencode',
   'grok',
@@ -92,7 +122,9 @@ export const AGENT_CONFIG: Record<BuiltinAgentId, AgentConfig> = {
     color: '#4285f4',
     launchCmd: 'gemini',
     promptInjectionMode: 'stdin-after-start',
-    expectedProcess: 'gemini'
+    expectedProcess: 'gemini',
+    notice:
+      'Google stopped serving Gemini CLI to personal accounts (free, AI Pro, AI Ultra) on 2026-06-18 — use Antigravity instead. Code Assist Standard/Enterprise, Vertex AI and paid API keys still work.'
   },
   opencode: {
     label: 'opencode',
@@ -128,14 +160,51 @@ export const AGENT_CONFIG: Record<BuiltinAgentId, AgentConfig> = {
     // All `COPILOT_PROVIDER_*` gateway vars. Excludes `COPILOT_HOME` (config dir) and
     // `COPILOT_HOOK_*` (nodeterm constants).
     vanillaEnvPattern: '^COPILOT_PROVIDER_'
+  },
+  antigravity: {
+    // Google Antigravity CLI. Measured on `agy` 1.2.3 (Windows 11) — docs/antigravity-agent.md.
+    label: 'Antigravity',
+    color: '#00a3a3',
+    launchCmd: 'agy',
+    // `agy` has no positional prompt (its usage lists subcommands in that slot), and its
+    // interactive-with-prompt flag is `--prompt-interactive`, not copilot's `--interactive`.
+    promptInjectionMode: 'flag-interactive',
+    promptFlag: '--prompt-interactive',
+    expectedProcess: 'agy'
   }
 }
 
 // Capabilities = const builtin membership lists. A custom agent resolves through its declared
 // base harness (capabilityAgentId); one with no base automatically gets only spawn + terminal-title
 // + process status.
-export const AGENT_HOOK_TARGETS = ['claude', 'codex', 'gemini', 'opencode', 'grok', 'copilot'] as const
-export const RESUMABLE_AGENTS = ['claude', 'codex', 'gemini', 'opencode', 'grok', 'copilot'] as const
+// antigravity joined with ONLY this list: its normalizer (normalizeAntigravity) and its
+// installer are the leaves that exist. Every other list below is a separate leaf it does not have
+// yet — see the `antigravity capabilities` block in config.capabilities.test.ts for each reason.
+export const AGENT_HOOK_TARGETS = [
+  'claude',
+  'codex',
+  'gemini',
+  'opencode',
+  'grok',
+  'copilot',
+  'antigravity'
+] as const
+// antigravity: `agy --conversation=<id>` — the `=` spelling agy prints in its own exit hint
+// (`agy --conversation=%s`, 1.2.12 binary). The id is the hook payload's `conversationId`, recorded
+// as the node's session id. A dead id is the SAFE failure here: agy logs "Conversation %s not found,
+// ignoring --conversation flag" and starts a fresh conversation (1.2.12 binary) — so a wrong id costs
+// the history, never the launch. Without membership a cold restore (machine reboot) brought an agy
+// node back as a bare shell under an Antigravity badge (`canColdRestore` needs `canResume`).
+// UNVERIFIED on a device: that the hook's conversationId is the id `--conversation` accepts.
+export const RESUMABLE_AGENTS = [
+  'claude',
+  'codex',
+  'gemini',
+  'opencode',
+  'grok',
+  'copilot',
+  'antigravity'
+] as const
 // Agents whose session id we MINT at launch (`--session-id <uuid>`) instead of learning it only
 // from hook events. Each member must have a measured caller-chosen-id grammar below.
 //
@@ -411,6 +480,15 @@ const includes = (list: readonly string[], id: AgentId): boolean =>
   list.includes(capabilityAgentId(id))
 
 export const hasHooks = (id: AgentId): boolean => includes(AGENT_HOOK_TARGETS, id)
+/**
+ * Hook-reporting agents whose hooks nodeterm installs on THIS machine only — `RemoteHooks.setup()`
+ * has no installer for them on an SSH host yet. On an SSH project such a node never reports a
+ * state, so nothing may WAIT on it (`--after`): the dependant would sit QUEUED forever.
+ */
+export const LOCAL_ONLY_HOOK_AGENTS = ['antigravity'] as const
+/** Does this agent report status when its node runs on an SSH project's host? */
+export const hasHooksOverSsh = (id: AgentId): boolean =>
+  hasHooks(id) && !includes(LOCAL_ONLY_HOOK_AGENTS, id)
 export const canResume = (id: AgentId): boolean => includes(RESUMABLE_AGENTS, id)
 export const mintsSessionId = (id: AgentId): boolean => includes(SESSION_ID_CAPABLE, id)
 /** Is the caller-chosen session-id flag available for this effective base harness? */
@@ -605,6 +683,8 @@ export function resumeCommandWith(
       return `${launchCmd} --session ${sid}`
     case 'copilot':
       return `${launchCmd} --resume=${sid}`
+    case 'antigravity':
+      return `${launchCmd} --conversation=${sid}`
     case 'claude':
     case 'gemini':
     case 'grok':

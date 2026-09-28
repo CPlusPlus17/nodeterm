@@ -141,6 +141,12 @@ import {
   detectsResumeMiss,
   resumeSessionMissing
 } from '../terminal/resume-fallback'
+import {
+  GEMINI_MIGRATION_URL,
+  GEMINI_RETIRED_TAIL_CHARS,
+  geminiRetiredIn,
+  watchesGeminiRetirement
+} from '../terminal/gemini-retired'
 import { MAX_LAUNCH_LINE_BYTES, lineBytes } from '@shared/canonical-line'
 import { binariesFor, type PaneOwner } from '@shared/agents/pane-owner-predicate'
 import {
@@ -954,6 +960,14 @@ interface CoState {
    * top banner as `staleCwd`, and for the same reason.
    */
   launchTooLongBytes: number | null
+  /**
+   * A gemini node's pane printed Gemini CLI's own retirement refusal ("This client is no longer
+   * supported for Gemini Code Assist for individuals…", see `terminal/gemini-retired.ts`): the
+   * user's Google account is one Google stopped serving from Gemini CLI on 2026-06-18, and the
+   * sign-in screen will loop forever. A slim banner, like `lostSession`: the terminal is alive and
+   * nothing is typed or relaunched — it names the cause and offers an Antigravity node instead.
+   */
+  geminiRetired: boolean
 }
 const NO_CO: CoState = {
   letterbox: false,
@@ -963,7 +977,8 @@ const NO_CO: CoState = {
   spawnError: null,
   staleCwd: false,
   lostSession: false,
-  launchTooLongBytes: null
+  launchTooLongBytes: null,
+  geminiRetired: false
 }
 const coStates = new Map<string, CoState>()
 const coSubs = new Map<string, (s: CoState) => void>()
@@ -1177,7 +1192,8 @@ function setCo(key: string, patch: Partial<CoState>): void {
     next.spawnError === prev.spawnError &&
     next.staleCwd === prev.staleCwd &&
     next.lostSession === prev.lostSession &&
-    next.launchTooLongBytes === prev.launchTooLongBytes
+    next.launchTooLongBytes === prev.launchTooLongBytes &&
+    next.geminiRetired === prev.geminiRetired
   )
     return
   coStates.set(key, next)
@@ -2109,6 +2125,14 @@ export function TerminalNode({
   }
   const dismissStaleCwd = (): void => setCo(termKey, { staleCwd: false })
   const dismissLostSession = (): void => setCo(termKey, { lostSession: false })
+  const dismissGeminiRetired = (): void => setCo(termKey, { geminiRetired: false })
+  // Canvas owns node creation; a terminal node has no direct line to it (same pattern as the
+  // file-manager's `nodeterm:open-terminal`). The new node lands beside this one, in its frame.
+  const openAntigravityNode = (): void => {
+    window.dispatchEvent(
+      new CustomEvent('nodeterm:open-agent', { detail: { agentId: 'antigravity', nearNodeId: id } })
+    )
+  }
   const dismissLaunchTooLong = (): void => setCo(termKey, { launchTooLongBytes: null })
 
   // "Not connected" (CoState.offline): the host was unreachable, so this node has no session
@@ -3448,6 +3472,25 @@ export function TerminalNode({
           gate.push(chunk)
         })
         cleanups.push(offData)
+        // Gemini CLI refuses personal Google accounts since 2026-06-18, and the refusal comes
+        // BEFORE any session exists — no hook ever fires to report it, so the pane text is the only
+        // evidence. Watch a gemini-harness node's output for the CLI's own sentence and raise the
+        // banner once; it types nothing and relaunches nothing (see terminal/gemini-retired.ts).
+        // Stops at the first match; unsubscribed with the rest of the session on teardown.
+        if (agentId && watchesGeminiRetirement(capabilityAgentId(agentId))) {
+          let seen = ''
+          let offRetired: (() => void) | undefined = transport.onData(sid, (chunk) => {
+            seen = (seen + cleanEcho(chunk)).slice(-GEMINI_RETIRED_TAIL_CHARS)
+            if (!geminiRetiredIn(seen)) return
+            offRetired?.()
+            offRetired = undefined
+            setCo(termKey, { geminiRetired: true })
+          })
+          cleanups.push(() => {
+            offRetired?.()
+            offRetired = undefined
+          })
+        }
         // We fell so far behind that the server discarded our queued output and redrew us from
         // tmux. The capture IS the current screen, so reset the emulator and write it — writing it
         // on top of a stale buffer would splice two different points in time. An EMPTY payload is
@@ -6183,6 +6226,45 @@ export function TerminalNode({
               <button
                 className="term-node__stalecwd-dismiss"
                 onClick={dismissLostSession}
+                title="Dismiss"
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
+          )}
+        {/* Gemini CLI retired for personal accounts: the same slim banner as lostSession, and
+            yields to the same bigger problems. Two actions — an Antigravity node (Google's
+            replacement) beside this one, and Google's migration guide — plus dismiss. */}
+        {!co.closed &&
+          !co.ended &&
+          !co.spawnError &&
+          !co.offline &&
+          !co.staleCwd &&
+          co.geminiRetired &&
+          !offscreenDown && (
+            <div className="term-node__stalecwd nodrag">
+              <span className="term-node__stalecwd-text">
+                Google no longer serves Gemini CLI to personal accounts (free, AI Pro, AI Ultra);
+                Antigravity CLI replaces it. Code Assist licenses, Vertex AI and API keys still work.
+              </span>
+              <button
+                className="term-node__stalecwd-restart"
+                onClick={openAntigravityNode}
+                title="Open an Antigravity CLI (agy) node next to this one. Install agy first if it is not on this machine: curl -fsSL https://antigravity.google/cli/install.sh | bash"
+              >
+                Open Antigravity
+              </button>
+              <button
+                className="term-node__stalecwd-restart"
+                onClick={() => void window.nodeTerminal.shell.openExternal(GEMINI_MIGRATION_URL)}
+                title={GEMINI_MIGRATION_URL}
+              >
+                Migration guide
+              </button>
+              <button
+                className="term-node__stalecwd-dismiss"
+                onClick={dismissGeminiRetired}
                 title="Dismiss"
                 aria-label="Dismiss"
               >
