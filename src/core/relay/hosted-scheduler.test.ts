@@ -54,6 +54,13 @@ function harness(mints: Array<MintResult | (() => Promise<MintResult>)>, opts: {
   return { s, opened, advance, timers, delays, mintCalls: () => mintCalls }
 }
 const ok = (ttlMs = 120_000): MintResult => ({ ok: true, pairingToken: 'T', hostId: 'H', ttlMs })
+const okMany = (n: number): MintResult[] => Array.from({ length: n }, () => ok())
+const listener = (tok: string, ev: { onBridged(): void; onClose(): void }): Opened => {
+  const l: Opened = { bridged: false, closed: false, token: tok, ev, close() { l.closed = true } }
+  return l
+}
+const HOUR = 3_600_000
+const TIMER_MAX = 2_147_483_647
 
 describe('hosted scheduler', () => {
   it('keeps one idle listener and replaces it before the token expires', async () => {
@@ -113,7 +120,17 @@ describe('hosted scheduler', () => {
     h.s.start(); await flush()
     expect(h.delays).toHaveLength(1)
     expect(h.delays[0]).toBeGreaterThanOrEqual(60_000)
-    expect(h.delays[0]).toBeLessThanOrEqual(3_600_000)
+    expect(h.delays[0]).toBe(TIMER_MAX) // capped at setTimeout's own limit, not shortened below it
+  })
+
+  it('a 2 h Retry-After is honored in full (a 429 waits max(60 s, Retry-After), never less)', async () => {
+    const h = harness([{ ok: false, kind: 'rate-limited', status: 429, retryAfterMs: 2 * HOUR }, ok()])
+    h.s.start(); await flush()
+    await h.advance(2 * HOUR - 1)
+    expect(h.mintCalls()).toBe(1)
+    expect(h.opened).toHaveLength(0)
+    await h.advance(1)
+    expect(h.opened).toHaveLength(1)
   })
 
   it('a missing, NaN or absurd ttl never arms a refresh below 15 s or beyond the timer range', async () => {
@@ -123,7 +140,7 @@ describe('hosted scheduler', () => {
     h.opened[0].ev.onBridged(); await flush()
     expect(h.delays.at(-1)).toBe(15_000) // already expired → the 15 s floor
     h.opened[1].ev.onBridged(); await flush()
-    expect(h.delays.at(-1)).toBeLessThanOrEqual(3_600_000)
+    expect(h.delays.at(-1)).toBe(TIMER_MAX)
   })
 
   it('a bridged session ending does not advance the backoff (only a relay failure does)', async () => {
@@ -290,5 +307,103 @@ describe('hosted scheduler', () => {
     expect(h.s.status().mintsLastHour).toBe(41)
     await h.advance(1) // the mint at t=0 is now more than an hour old
     expect(h.s.status().mintsLastHour).toBe(40)
+  })
+  it('a listener that bridges AND closes synchronously inside open() does not leave the scheduler dead', async () => {
+    let first = true
+    const h = harness([ok(), ok()], {
+      open: (tok, ev) => {
+        const l = listener(tok, ev)
+        h.opened.push(l)
+        if (first) { first = false; ev.onBridged(); ev.onClose() }
+        return l
+      }
+    })
+    h.s.start(); await flush()
+    expect(h.opened).toHaveLength(2)
+    expect(h.s.status()).toMatchObject({ state: 'running', idle: 1, bridged: 0 })
+  })
+
+  it("only an IDLE listener's refresh proves the registration path: a bridged one neither resets the backoff nor holds a timer", async () => {
+    let drop = false
+    const h = harness(okMany(100), {
+      open: (tok, ev) => {
+        const l = listener(tok, ev)
+        h.opened.push(l)
+        if (drop) queueMicrotask(() => ev.onClose()) // the relay refuses every NEW registration
+        return l
+      }
+    })
+    h.s.start(); await flush()
+    drop = true
+    h.opened[0].ev.onBridged(); await flush() // a teammate stays connected throughout
+    expect(h.s.status()).toMatchObject({ idle: 0, bridged: 1 })
+    // Its refresh timer went with the bridge: the only timer is the backoff for the refused newcomer.
+    expect(h.timers.map((x) => x.ms)).toEqual([1000])
+    await h.advance(600_000) // several 90 s refresh periods of the bridged listener
+    const backoffs = h.delays.filter((d) => d <= 15_000)
+    const settled = backoffs.indexOf(15_000)
+    expect(settled).toBeGreaterThan(-1)
+    // Once the backoff has climbed to its ceiling, nothing may knock it back down to 1 s.
+    expect(backoffs.slice(settled).every((d) => d === 15_000)).toBe(true)
+    expect(h.s.status().lastError).toMatch(/relay/)
+    // The bridged listener holds no refresh timer at all (only the pending backoff is armed).
+    expect(h.timers).toHaveLength(1)
+  })
+
+  it('(a) a peer that connects and leaves every 10 s cannot push the mint rate past the hourly budget', async () => {
+    const seen = new Set<string | null>()
+    const h = harness(okMany(1000), { onStatus: (st) => seen.add(st.lastError) })
+    const left = new Set<Opened>()
+    h.s.start(); await flush()
+    for (let i = 0; i < 359; i++) {
+      await h.advance(10_000)
+      const idle = [...h.opened].reverse().find((l) => !l.bridged && !l.closed && !left.has(l))
+      if (!idle) continue // the budget is holding: no listener to join right now
+      idle.ev.onBridged(); await flush()
+      idle.ev.onClose(); left.add(idle); await flush()
+    }
+    expect(h.mintCalls()).toBeLessThanOrEqual(200) // every mint so far falls inside one hour
+    expect(seen.has('mint budget')).toBe(true)
+    await h.advance(HOUR) // the budget releases: hosting comes back on its own
+    expect(h.s.status()).toMatchObject({ state: 'running', idle: 1 })
+  })
+
+  it('(b) a relay that drops every NEW registration beside one long-lived bridged session stays within budget', async () => {
+    let drop = false
+    const h = harness(okMany(1000), {
+      open: (tok, ev) => {
+        const l = listener(tok, ev)
+        h.opened.push(l)
+        if (drop) queueMicrotask(() => ev.onClose())
+        return l
+      }
+    })
+    h.s.start(); await flush()
+    drop = true
+    h.opened[0].ev.onBridged(); await flush()
+    await h.advance(HOUR)
+    expect(h.mintCalls()).toBeLessThanOrEqual(200)
+  })
+
+  it('(c) six bridged sessions on staggered phases do not multiply the re-mint rate', async () => {
+    let drop = false
+    const h = harness(okMany(2000), {
+      open: (tok, ev) => {
+        const l = listener(tok, ev)
+        h.opened.push(l)
+        if (drop) queueMicrotask(() => ev.onClose())
+        return l
+      }
+    })
+    h.s.start(); await flush()
+    for (let k = 0; k < 6; k++) {
+      await h.advance(15_000)
+      h.opened[h.opened.length - 1].ev.onBridged(); await flush() // bridge whichever listener is idle
+    }
+    expect(h.s.status()).toMatchObject({ idle: 1, bridged: 6 })
+    drop = true
+    const before = h.mintCalls()
+    await h.advance(HOUR)
+    expect(h.mintCalls() - before).toBeLessThanOrEqual(200)
   })
 })
