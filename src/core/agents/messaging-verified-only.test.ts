@@ -16,7 +16,13 @@ import os from 'os'
 import path from 'path'
 import { initPlatform, resetPlatformForTests } from '../platform'
 import { fakePlatform } from '../platform-fake'
-import { hookServer, MESSAGING_CONTROL_REFUSAL, requiresVerified, verifiedRefusalFor } from './hook-server'
+import {
+  hookServer,
+  MESSAGING_CONTROL_REFUSAL,
+  RUN_CONTROL_REFUSAL,
+  requiresVerified,
+  verifiedRefusalFor
+} from './hook-server'
 import { nodeAuthToken } from './node-auth-token'
 import { TOLERANT_CONTROL_VERBS } from './node-identity-policy'
 import { DESTRUCTIVE_VERBS } from '../../shared/control-verbs'
@@ -96,13 +102,20 @@ describe('send/reply require `verified` — and controlPolicy is NOT the decider
 
   it('tells a text/plain caller the same refusal, without token or restart advice', async () => {
     hookServer.setIdentityStrictOverride(() => undefined)
-    const res = await post('send', 'n-src', undefined, 'text/plain')
-    expect(res.status).toBe(403)
-    const text = (await res.text()).trim()
-    expect(text).toBe(MESSAGING_CONTROL_REFUSAL)
-    // No diagnosis and no hint: advice here is advice to an attacker and a lie to nobody else.
-    for (const hint of ['token', 'Restart', 'restart', 'identity']) {
-      expect(text).not.toContain(hint)
+    // `run` (#925) is held to the same posture: its refusal names what was refused and nothing
+    // else, even though it has its own sentence.
+    for (const [verb, refusal] of [
+      ['send', MESSAGING_CONTROL_REFUSAL],
+      ['run', RUN_CONTROL_REFUSAL]
+    ] as const) {
+      const res = await post(verb, 'n-src', undefined, 'text/plain')
+      expect(res.status, verb).toBe(403)
+      const text = (await res.text()).trim()
+      expect(text, verb).toBe(refusal)
+      // No diagnosis and no hint: advice here is advice to an attacker and a lie to nobody else.
+      for (const hint of ['token', 'Restart', 'restart', 'identity']) {
+        expect(text, verb).not.toContain(hint)
+      }
     }
     expect(handled).toEqual([])
   })
@@ -167,10 +180,8 @@ describe('where the verbs sit in the routing tables', () => {
     ])
   })
 
-  it('the run refusal is its own sentence, not the messaging one (#925)', () => {
-    expect(verifiedRefusalFor('run')).toBe(
-      'Run refused: starting a queued session the user is not watching needs verified node identity.'
-    )
+  it('the run refusal is its own flat sentence, not the messaging one (#925)', () => {
+    expect(verifiedRefusalFor('run')).toBe(RUN_CONTROL_REFUSAL)
     expect(verifiedRefusalFor('run')).not.toBe(MESSAGING_CONTROL_REFUSAL)
   })
 

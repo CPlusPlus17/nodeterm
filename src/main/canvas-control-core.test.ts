@@ -345,6 +345,8 @@ describe('parseControlRequest', () => {
       args: { node: 'n1', text: '' }
     })
     expect(isDestructiveVerb('sticky')).toBe(false)
+    // #925: `run` starts a queued launch; it is verified-only, not confirm-gated.
+    expect(isDestructiveVerb('run')).toBe(false)
   })
 
   it('both agent-facing texts warn that --prompt is one line and must not start with a slash', () => {
