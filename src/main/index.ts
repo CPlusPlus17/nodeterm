@@ -102,6 +102,7 @@ import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
 import { makeSshSetupRunner } from './remote-ssh/ssh-setup-runner'
 import { registerGitHubIntegration } from '../core/github/integration'
+import { releaseOnRendererDeparture } from './renderer-client-release'
 import { runGitHubCliCommand } from '../core/github/credentials'
 import {
   ElectronGitHubSecretStore,
@@ -468,13 +469,15 @@ const speechService = new SpeechService({ models: whisperModels, isPremium })
 // viewer. Inert with zero peers: the registry holds no sink, so none of this ever runs.
 // Wired once here — do not double-wire (4b Task 4). A second wirePeerRegistry() call would silently
 // overwrite these deps (last write wins), so keep this the sole call site in src/main.
-let dropGitHubRelayClient: ((id: number) => void) | undefined
+// Releases a departed client's GitHub issue subscriptions (and the 60 s poll they keep alive).
+// Relay peers call it from onPeerGone; the app window from releaseOnRendererDeparture.
+let dropGitHubClient: ((id: number) => void) | undefined
 wirePeerRegistry({
   setFlow: (id, sid, resume, owner) => ptyManager.setFlow(id, sid, resume, owner),
   captureForResync: (sid) => ptyManager.captureForResync(sid),
   onPeerGone: (id) => {
     ptyManager.dropClient(id)
-    dropGitHubRelayClient?.(id)
+    dropGitHubClient?.(id)
   }
 })
 
@@ -1063,6 +1066,9 @@ function createWindow(): BrowserWindow {
   // its webContents are destroyed by then.)
   const presenceId = win.webContents.id
   presenceHub.join(presenceId, 'desktop')
+  // The GitHub board's subscriptions, released on every way this page can go: closed, crashed,
+  // or replaced by a reload (which reuses this webContents id with nothing subscribed).
+  releaseOnRendererDeparture(win, win.webContents, () => dropGitHubClient?.(presenceId))
   win.on('closed', () => {
     presenceHub.leave(presenceId)
     // This webContents is a pty SUBSCRIBER (co-attach: one pty, N subscribers, keyed by the
@@ -1743,7 +1749,7 @@ app.whenReady().then(async () => {
     secret: githubSecret,
     run: runGitHubCliCommand
   })
-  dropGitHubRelayClient = (id) => github.service.dropClient(id)
+  dropGitHubClient = (id) => github.service.dropClient(id)
   // Machine-local record of what has already been reported, per project — never git-shared, or a
   // cloned repo could hand this machine a pre-loaded "already reported" ledger.
   const reportLedger = new ReportLedgerStore(app.getPath('userData'))
