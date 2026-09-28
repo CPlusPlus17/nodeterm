@@ -1873,6 +1873,19 @@ else, and its context links must keep classifying across restarts).
   cost before the backgrounding. Full picture,
   limits (permission prompt and ESC fire no hook) and the device checklist:
   **`docs/antigravity-agent.md`**.
+  **No conversation view, and that is deliberate** (not in `CHAT_CAPABLE`): ⌘M shows the rendered
+  terminal output, and the phone's Chat screen answers `unsupported`. The
+  LOCATION is measured: every hook payload names `transcriptPath`, which is
+  `~/.gemini/antigravity-cli/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`,
+  keyed by the id `normalizeAntigravity` already records as `sessionId`. The RECORD SHAPES were never
+  captured; the 1.2.12 binary only describes them in prose. Four facts a parser needs are unknown:
+  the `tool_calls` element keys, how a tool result links back to its call, the serialized enum
+  spelling, and whether a line is rewritten when its step's status changes, which decides between
+  claude's paged read and grok's single capped read. A parser built from that prose would be a rule-14
+  wrong guess, so none ships, not even unwired. The capture recipe is §7.1 and §8.1 of the doc, using
+  `scripts/agy-transcript-shape.mjs`, which dumps shapes and never text. When it lands: locate
+  strictly by id (`brain/` holds every conversation on the machine), and have a remote node answer
+  `remoteOnly` → unreadable like grok.
 - **Gemini + codex parity** (2026-08-09) — brought both up to grok's level in the lists above. Unlike
   grok, **both CLIs are installed** and gemini **ships its own hook reference**
   (`/usr/lib/node_modules/@google/gemini-cli/bundle/docs/hooks/reference.md`), so almost every fact is
