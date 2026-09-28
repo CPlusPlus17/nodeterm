@@ -16,6 +16,7 @@ import { Button } from '@renderer/ui/Button'
 import { Input } from '@renderer/ui/Input'
 import { Select } from '@renderer/ui/Select'
 import { Switch } from '@renderer/ui/Switch'
+import { githubRateSentence, githubThrottleSentence } from '../../../lib/githubSyncStatus'
 
 const ROWS = {
   enable: {
@@ -547,6 +548,14 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                 <p className="text-[13px] text-warn" role="status">
                   Choose a mapped completion column before GitHub issue changes are enabled.
                 </p>
+              )}
+              {view?.throttle && (
+                <p className="text-[13px] text-warn" role="status">
+                  {githubThrottleSentence(view.throttle)}
+                </p>
+              )}
+              {view?.rate && (
+                <p className="text-[13px] text-muted">{githubRateSentence(view.rate)}</p>
               )}
               {notice && noticeRow === 'data' &&
                 <p role="status" className="text-[13px] text-muted">{notice}</p>}

@@ -158,7 +158,9 @@ describe('GitHubCredentialResolver', () => {
       ghAuthenticated: false,
       tokenPresent: true,
       storage: 'restricted-file',
-      login: 'login-pat-user'
+      login: 'login-pat-user',
+      // Not credential material: the host uses it to look up the rate budget and strips it.
+      userId: 'pat-user'
     })
     expect(JSON.stringify(status)).not.toContain('super-secret-token')
   })

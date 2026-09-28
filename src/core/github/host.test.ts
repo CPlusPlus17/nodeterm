@@ -107,7 +107,13 @@ function fixture() {
     validateToken: vi.fn(async (value: string) => value === 'valid-token'
       ? { userId: '1', login: 'octocat' }
       : null),
-    client: vi.fn(() => client)
+    client: vi.fn(() => client),
+    rate: (userId: string) => userId === '1'
+      ? {
+          status: { resource: 'core', limit: 5_000, remaining: 7, resetAt: 9, observedAt: 1 },
+          throttle: { until: 9, kind: 'low-budget' as const }
+        }
+      : {}
   })
   return { controller, controls, resolver, secret, client }
 }
@@ -122,6 +128,18 @@ describe('GitHubHostController', () => {
     })
     expect(JSON.stringify(view)).not.toMatch(/secret|local-private-id|approvals/i)
     expect(resolver.status).not.toHaveBeenCalled()
+  })
+
+  it('strips the resolver identity from the wire and attaches that identity rate budget', async () => {
+    const { controller, resolver } = fixture()
+    resolver.status.mockResolvedValueOnce({
+      selectedProvider: 'auto', activeProvider: 'token', ghAuthenticated: false,
+      tokenPresent: true, storage: 'encrypted', login: 'octocat', userId: '1'
+    } as never)
+    const view = await controller.status()
+    expect(view.auth).not.toHaveProperty('userId')
+    expect(view.rate).toEqual({ resource: 'core', limit: 5_000, remaining: 7, resetAt: 9, observedAt: 1 })
+    expect(view.throttle).toEqual({ until: 9, kind: 'low-budget' })
   })
 
   it('requires exact local approval before creating a service context', async () => {

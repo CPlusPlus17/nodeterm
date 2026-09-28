@@ -101,7 +101,7 @@ export class GitHubCredentialResolver {
     return (await this.fromGitHubCli()) ?? this.fromStoredToken()
   }
 
-  async status(provider: GitHubAuthProvider): Promise<GitHubAuthStatus> {
+  async status(provider: GitHubAuthProvider): Promise<GitHubAuthStatus & { userId?: string }> {
     const gh = await this.fromGitHubCli()
     const stored = await this.dependencies.secret.readForHost()
     const tokenIdentity = stored ? await this.dependencies.validate(stored) : null
@@ -118,7 +118,7 @@ export class GitHubCredentialResolver {
       ghAuthenticated: gh !== null,
       tokenPresent: stored !== null,
       storage: this.dependencies.secret.availability,
-      ...(active ? { login: active.login } : {})
+      ...(active ? { login: active.login, userId: active.userId } : {})
     }
   }
 

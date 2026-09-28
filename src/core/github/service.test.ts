@@ -1090,3 +1090,95 @@ describe('GitHubIssueService heartbeat', () => {
     expect(stored).not.toBe(client.currentHeartbeatEtag())
   })
 })
+
+describe('GitHubIssueService rate budget', () => {
+  const low = { resource: 'core', limit: 5_000, remaining: 12, resetAt: 9_000_000 }
+
+  it('pauses the background poll below the budget floor, but a refresh the user asks for still runs', async () => {
+    let clock = 1_000_000
+    const client = new FixtureClient([issue(1)])
+    const coordinator = new GitHubRequestCoordinator({ now: () => clock })
+    const timers: Array<() => Promise<void>> = []
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator,
+      contextForProject: async () => context(client),
+      now: () => clock,
+      setInterval: (fn) => { timers.push(fn as () => Promise<void>); return timers.length }
+    })
+    await service.subscribe(1, { projectId: 'project-1' })
+    expect(client.heartbeats).toHaveLength(1)
+
+    coordinator.noteRateSample('user-1', low)
+    await timers[0]()
+    expect(client.heartbeats).toHaveLength(1)
+
+    clock += REFRESH_MIN_INTERVAL_MS
+    await service.refresh({ projectId: 'project-1' })
+    expect(client.heartbeats).toHaveLength(2)
+  })
+
+  it('tells the board until when sync is held, instead of going quiet', async () => {
+    const clock = 1_000_000
+    const client = new FixtureClient([issue(1)])
+    const coordinator = new GitHubRequestCoordinator({ now: () => clock })
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator,
+      contextForProject: async () => context(client), now: () => clock
+    })
+    await service.refresh({ projectId: 'project-1' })
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).throttle)
+      .toBeUndefined()
+
+    coordinator.noteRateSample('user-1', low)
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).throttle)
+      .toEqual({ until: 9_000_000, kind: 'low-budget' })
+  })
+
+  it('prompts subscribers to re-read once when the poll pauses, not on every skipped minute', async () => {
+    const clock = 1_000_000
+    const client = new FixtureClient([issue(1)])
+    const coordinator = new GitHubRequestCoordinator({ now: () => clock })
+    const timers: Array<() => Promise<void>> = []
+    const deltas: number[][] = []
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator,
+      contextForProject: async () => context(client), now: () => clock,
+      setInterval: (fn) => { timers.push(fn as () => Promise<void>); return timers.length },
+      onDelta: (_uiId, _projectId, numbers) => deltas.push(numbers)
+    })
+    await service.subscribe(1, { projectId: 'project-1' })
+    const before = deltas.length
+    coordinator.noteRateSample('user-1', low)
+
+    await timers[0]()
+    await timers[0]()
+
+    expect(deltas.slice(before)).toEqual([[]])
+  })
+
+  it('prompts subscribers once when a poll is refused by a rate limit', async () => {
+    const clock = 1_000_000
+    const client = new FixtureClient([issue(1)])
+    const coordinator = new GitHubRequestCoordinator({ now: () => clock })
+    const timers: Array<() => Promise<void>> = []
+    const deltas: number[][] = []
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator,
+      contextForProject: async () => context(client), now: () => clock,
+      setInterval: (fn) => { timers.push(fn as () => Promise<void>); return timers.length },
+      onDelta: (_uiId, _projectId, numbers) => deltas.push(numbers)
+    })
+    await service.subscribe(1, { projectId: 'project-1' })
+    const before = deltas.length
+    client.issuesHeartbeat = async () => {
+      throw Object.assign(new Error('rate-limited'), { code: 'rate-limited', retryAt: 2_000_000 })
+    }
+
+    await timers[0]()
+    await timers[0]()
+
+    expect(deltas.slice(before)).toEqual([[]])
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).throttle)
+      .toEqual({ until: 2_000_000, kind: 'rate-limited' })
+  })
+})

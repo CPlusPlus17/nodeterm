@@ -7,6 +7,7 @@ import type {
   GitHubIssueQuery,
   GitHubMutationResult,
   GitHubRepositoryLabel,
+  GitHubThrottle,
   IssueHeartbeatResult,
   IssuePageResult,
   LabelPageResult,
@@ -97,6 +98,9 @@ type RepositoryState = {
   timer?: TimerId
   refresh?: Promise<void>
   cacheGeneration: number
+  /** The throttle deadline subscribers were last prompted about, so a held poll re-prompts them
+   *  once per deadline instead of once a minute. */
+  announcedThrottleUntil?: number
 }
 
 type RepositoryControl = {
@@ -119,6 +123,14 @@ function epoch(context: GitHubIssueServiceContext): string {
     context.credentialGeneration,
     context.userId
   ])
+}
+
+/** The deadline a rate-limit refusal carries, from the client or the coordinator alike. */
+function rateLimitedUntil(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const value = error as { code?: unknown; retryAt?: unknown }
+  return value.code === 'rate-limited' && typeof value.retryAt === 'number' &&
+    Number.isFinite(value.retryAt) ? value.retryAt : undefined
 }
 
 function foldLabel(value: string): string {
@@ -269,7 +281,8 @@ export class GitHubIssueService {
     try {
       // Reuse the clock read above as the refresh's own start stamp: one read per refresh keeps the
       // incremental watermark anchored to when the work actually began.
-      return await this.refreshWithinFloor(request, startedAt)
+      // A foreground refresh is never held by the budget, so there is no throttle to hand back.
+      await this.refreshWithinFloor(request, startedAt)
     } catch (error) {
       // A refresh that FAILED bought nothing, so it must not hold the floor — otherwise the first
       // network blip disables the board's own Retry button for the next 30 seconds.
@@ -281,12 +294,21 @@ export class GitHubIssueService {
     }
   }
 
+  /** Resolves to the throttle when a BACKGROUND refresh was held by the rate budget (nothing was
+   *  sent), otherwise to nothing. */
   private async refreshWithinFloor(
     request: { projectId: string; full?: boolean },
-    startedAt = this.now()
-  ): Promise<void> {
+    startedAt = this.now(),
+    background = false
+  ): Promise<GitHubThrottle | void> {
     const operationId = ++this.operationSequence
     const captured = await this.options.contextForProject(request.projectId)
+    if (background) {
+      // Checked after the context resolves because the budget belongs to an IDENTITY, and only the
+      // context knows which one. Nothing below this line has spent a request yet.
+      const throttle = this.options.coordinator.throttle(captured.userId)
+      if (throttle) return throttle
+    }
     const control = this.repositoryControl(captured.repository)
     if (control.deletion || operationId <= control.clearCutoff) return
     const repositoryGeneration = control.generation
@@ -312,7 +334,8 @@ export class GitHubIssueService {
       throw new Error('invalid-query')
     }
     const context = await this.cacheContext(request.projectId)
-    const { state } = await this.cachedState(context)
+    const { state, userId } = await this.cachedState(context)
+    const throttle = userId ? this.options.coordinator.throttle(userId) : undefined
     // One snapshot holds both kinds (they arrive on the same endpoint), so the kind filter is
     // what keeps the issue lane's items and counts exactly what they were before pull requests
     // were harvested. An absent kind means issues.
@@ -359,7 +382,8 @@ export class GitHubIssueService {
       ...(state.snapshot ? {
         lastSuccessfulRefreshAt: state.snapshot.lastSuccessfulRefreshAt,
         lastFullReconciliationAt: state.snapshot.lastFullReconciliationAt
-      } : {})
+      } : {}),
+      ...(throttle ? { throttle } : {})
     }
   }
 
@@ -694,6 +718,8 @@ export class GitHubIssueService {
   private async cachedState(context: GitHubIssueProjectContext): Promise<{
     key: string
     state: RepositoryState
+    /** The identity the project's cache is bound to; null before its first authenticated refresh. */
+    userId: string | null
   }> {
     await this.waitForRepositoryDeletion(context.repository)
     const repositoryGeneration = this.repositoryControl(context.repository).generation
@@ -714,7 +740,7 @@ export class GitHubIssueService {
       if (repositoryGeneration !== this.repositoryControl(context.repository).generation) {
         return this.cachedState(context)
       }
-      return { key, state }
+      return { key, state, userId: null }
     }
     const key = `${userId}\0${context.repository}`
     let state = this.repositories.get(key)
@@ -736,7 +762,7 @@ export class GitHubIssueService {
     if (repositoryGeneration !== this.repositoryControl(context.repository).generation) {
       return this.cachedState(context)
     }
-    return { key, state }
+    return { key, state, userId }
   }
 
   private async refreshRepository(
@@ -871,12 +897,24 @@ export class GitHubIssueService {
         // POLL_MS. Routing it through the floor would also break this loop's fallback — a
         // throttled call returns without throwing, which reads here as "this project worked" and
         // would stop us ever trying the next subscriber's context.
-        await this.refreshWithinFloor({ projectId })
+        // It IS a background refresh, though, so the rate budget may hold it.
+        const throttle = await this.refreshWithinFloor({ projectId }, undefined, true)
+        if (throttle) this.announceThrottle(state, throttle.until)
         return
-      } catch {
+      } catch (error) {
+        const until = rateLimitedUntil(error)
+        if (until !== undefined) this.announceThrottle(state, until)
         // Another approved project may still provide a valid context for the shared repository.
       }
     }
+  }
+
+  /** A held poll changes nothing the board can see except WHY it is quiet. Prompt its subscribers
+   *  to re-read (the page carries the throttle) — once per deadline, not once per skipped minute. */
+  private announceThrottle(state: RepositoryState, until: number): void {
+    if (state.announcedThrottleUntil === until) return
+    state.announcedThrottleUntil = until
+    this.emitDelta(state, [], true)
   }
 
   private migrateProjectState(projectId: string, key: string, target: RepositoryState): void {

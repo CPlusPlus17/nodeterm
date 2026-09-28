@@ -34,6 +34,7 @@ import {
   githubMoveIntent,
   type GitHubMoveConfirmation
 } from '../../lib/githubIssueMove'
+import { githubThrottleSentence } from '../../lib/githubSyncStatus'
 
 /** One session node shown as a board card — derived LIVE from the canvas nodes; the board
  *  itself stores only column assignments. */
@@ -171,6 +172,8 @@ export const KanbanView = memo(function KanbanView({
   const projectColor = useProjects((s) => s.projects.find((p) => p.id === s.activeProjectId)?.color)
   const github = useGitHubIssues((state) => state.projects[projectId])
   const githubReadOnly = Object.values(github?.pages ?? {}).some((page) => page.readOnly)
+  // Every page of one project carries the same identity's throttle; any one of them answers.
+  const githubThrottle = Object.values(github?.pages ?? {}).find((page) => page.throttle)?.throttle
   // Pull requests are evicted first when a repository outgrows the cache bounds, so the lane can
   // legitimately be a subset. Say so — a silently short list reads as "this repo has few PRs".
   const pullsTruncated = Object.values(github?.pullPages ?? {}).some((page) => page.partial)
@@ -577,6 +580,9 @@ export const KanbanView = memo(function KanbanView({
           <span className="kanban-github-status kanban-github-status--error">
             GitHub issues are read only until configuration and refresh are complete.
           </span>
+        )}
+        {board.github && githubThrottle && (
+          <span className="kanban-github-status">{githubThrottleSentence(githubThrottle)}</span>
         )}
         {board.github && pullsTruncated && (
           <span className="kanban-github-status">

@@ -3,7 +3,9 @@ import type {
   GitHubAuthProvider,
   GitHubAuthStatus,
   GitHubControlState,
-  GitHubControlView
+  GitHubControlView,
+  GitHubRateStatus,
+  GitHubThrottle
 } from '../../shared/github-issues'
 import { normaliseProjectKanbanGitHub, parseGitHubRepository } from './config'
 import type { GitHubSecretStore, ResolvedGitHubCredential } from './credentials'
@@ -51,7 +53,9 @@ type ControlStoreLike = {
 
 type CredentialResolverLike = {
   resolve(provider: GitHubAuthProvider): Promise<ResolvedGitHubCredential | null>
-  status(provider: GitHubAuthProvider): Promise<GitHubAuthStatus>
+  /** `userId` is the active credential's GitHub id — used here to find its rate budget, and
+   *  stripped before the status leaves the host. */
+  status(provider: GitHubAuthProvider): Promise<GitHubAuthStatus & { userId?: string }>
 }
 
 type HostDependencies = {
@@ -61,7 +65,11 @@ type HostDependencies = {
   resolver: CredentialResolverLike
   secret: GitHubSecretStore
   validateToken(token: string): Promise<{ userId: string; login: string } | null>
-  client(token: string): GitHubIssuesClientLike
+  /** Builds the API client for a resolved credential. The identity comes with the token so the
+   *  client can report every response's rate budget against the right account. */
+  client(credential: { token: string; userId: string }): GitHubIssuesClientLike
+  /** The request budget last seen for an identity, and why sync is held (if it is). */
+  rate?(userId: string): { status?: GitHubRateStatus; throttle?: GitHubThrottle }
   onCredentialBoundaryChange?(): void
 }
 
@@ -81,7 +89,7 @@ export class GitHubHostController {
     if (!projectId) {
       return {
         control: { revision: state.revision, authProvider: state.authProvider },
-        auth: await this.dependencies.resolver.status(state.authProvider)
+        ...this.authView(await this.dependencies.resolver.status(state.authProvider))
       }
     }
 
@@ -97,18 +105,20 @@ export class GitHubHostController {
       projectId,
       repository
     })
-    const auth = approved
-      ? await this.dependencies.resolver.status(state.authProvider)
+    const authed = approved
+      ? this.authView(await this.dependencies.resolver.status(state.authProvider))
       : {
-          selectedProvider: state.authProvider,
-          activeProvider: null,
-          ghAuthenticated: false,
-          tokenPresent: false,
-          storage: this.dependencies.secret.availability
+          auth: {
+            selectedProvider: state.authProvider,
+            activeProvider: null,
+            ghAuthenticated: false,
+            tokenPresent: false,
+            storage: this.dependencies.secret.availability
+          }
         }
     return {
       control: { revision: state.revision, authProvider: state.authProvider },
-      auth,
+      ...authed,
       project: {
         projectId,
         ...(repository ? { repository } : {}),
@@ -183,7 +193,21 @@ export class GitHubHostController {
       ...project,
       credentialGeneration: this.credentialGeneration,
       userId: credential.userId,
-      client: this.dependencies.client(credential.token)
+      client: this.dependencies.client({ token: credential.token, userId: credential.userId })
+    }
+  }
+
+  /** Splits the resolver's answer into the wire auth block (identity stripped) and the active
+   *  identity's rate budget. */
+  private authView(resolved: GitHubAuthStatus & { userId?: string }): Pick<
+    GitHubControlView, 'auth' | 'rate' | 'throttle'
+  > {
+    const { userId, ...auth } = resolved
+    const rate = userId ? this.dependencies.rate?.(userId) : undefined
+    return {
+      auth,
+      ...(rate?.status ? { rate: rate.status } : {}),
+      ...(rate?.throttle ? { throttle: rate.throttle } : {})
     }
   }
 

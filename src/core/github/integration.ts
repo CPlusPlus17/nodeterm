@@ -47,7 +47,14 @@ export function registerGitHubIntegration(dependencies: Dependencies): {
     resolver,
     secret: dependencies.secret,
     validateToken,
-    client: (token) => new GitHubIssuesClient({ token }),
+    client: ({ token, userId }) => new GitHubIssuesClient({
+      token,
+      onRateLimit: (sample) => coordinator.noteRateSample(userId, sample)
+    }),
+    rate: (userId) => ({
+      status: coordinator.rateStatus(userId),
+      throttle: coordinator.throttle(userId)
+    }),
     // Both halves of a credential boundary move: stop work that captured the old credential, and
     // drop the resolver's memo so the next resolve reflects the change immediately instead of
     // serving a revoked credential until its TTL happens to lapse.

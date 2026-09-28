@@ -34,6 +34,30 @@ type ClientOptions = {
   fetch?: typeof fetch
   maxResponseBytes?: number
   timeoutMs?: number
+  /** Called with the rate budget every response carries — 200, 304 and errors alike — so the
+   *  request coordinator can pace work BEFORE GitHub has to refuse it. */
+  onRateLimit?: (sample: GitHubRateSample) => void
+}
+
+/** One reading of `x-ratelimit-*`. `resetAt` is epoch milliseconds. */
+export interface GitHubRateSample {
+  resource: string
+  limit: number
+  remaining: number
+  resetAt: number
+}
+
+/** Parses the rate headers, or null when any is absent or implausible. A missing header must never
+ *  read as "zero left": that would pause sync on every response that simply does not carry one. */
+export function rateSampleFrom(headers: Headers): GitHubRateSample | null {
+  const limit = Number(headers.get('x-ratelimit-limit') ?? NaN)
+  const remaining = Number(headers.get('x-ratelimit-remaining') ?? NaN)
+  const reset = Number(headers.get('x-ratelimit-reset') ?? NaN)
+  const resource = headers.get('x-ratelimit-resource') ?? 'core'
+  if (!Number.isSafeInteger(limit) || limit <= 0 || !Number.isSafeInteger(remaining) ||
+      remaining < 0 || remaining > limit || !Number.isSafeInteger(reset) || reset <= 0 ||
+      !/^[a-z_]{1,32}$/.test(resource)) return null
+  return { resource, limit, remaining, resetAt: reset * 1_000 }
 }
 
 function safeRepository(repository: string): string {
@@ -441,6 +465,10 @@ export class GitHubIssuesClient {
       throw new GitHubClientError('request-failed')
     } finally {
       clearTimeout(timer)
+    }
+    const sample = rateSampleFrom(response.headers)
+    if (sample && this.options.onRateLimit) {
+      try { this.options.onRateLimit(sample) } catch { /* an observer never breaks a request */ }
     }
     if (response.status === 304) return response
     if (response.status === 403 || response.status === 429) {

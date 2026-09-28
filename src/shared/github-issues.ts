@@ -58,6 +58,24 @@ export interface GitHubAuthStatus {
   login?: string
 }
 
+/** The GitHub request budget last reported for the active identity (`x-ratelimit-*`), `core`
+ *  resource. `resetAt` / `observedAt` are epoch milliseconds. */
+export interface GitHubRateStatus {
+  resource: string
+  limit: number
+  remaining: number
+  resetAt: number
+  observedAt: number
+}
+
+/** Sync is held until `until` (epoch ms). `rate-limited`: GitHub refused, or the budget is spent —
+ *  every request waits. `low-budget`: nodeterm is leaving the rest of the window to the user —
+ *  only background polls wait; a refresh the user asks for still runs. */
+export interface GitHubThrottle {
+  until: number
+  kind: 'rate-limited' | 'low-budget'
+}
+
 export interface GitHubIssueLabel {
   id: number
   name: string
@@ -187,6 +205,8 @@ export interface GitHubIssuePage {
   readOnly: boolean
   lastSuccessfulRefreshAt?: number
   lastFullReconciliationAt?: number
+  /** Present while sync for this project's GitHub identity is held by the rate budget. */
+  throttle?: GitHubThrottle
 }
 
 export type GitHubMutationResult =
@@ -210,6 +230,10 @@ export interface GitHubControlView {
     authProvider: GitHubAuthProvider
   }
   auth: GitHubAuthStatus
+  /** The active identity's request budget, when a response has reported one this window. */
+  rate?: GitHubRateStatus
+  /** Present while sync for the active identity is held by the rate budget. */
+  throttle?: GitHubThrottle
   project?: {
     projectId: string
     repository?: string

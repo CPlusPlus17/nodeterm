@@ -234,4 +234,60 @@ describe('GitHubIssuesClient', () => {
       expect(headers?.has('if-none-match')).toBe(false)
     })
   })
+  describe('rate-limit observation', () => {
+    const rateHeaders = {
+      'x-ratelimit-limit': '5000',
+      'x-ratelimit-remaining': '4968',
+      'x-ratelimit-reset': '1790625711',
+      'x-ratelimit-resource': 'core'
+    }
+    const expected = { resource: 'core', limit: 5000, remaining: 4968, resetAt: 1_790_625_711_000 }
+
+    it.each([
+      ['a 200', () => response([], { headers: rateHeaders }), 4968],
+      ['a 304', () => new Response(null, { status: 304, headers: rateHeaders }), 4968],
+      ['a 500', () => new Response('{}', { status: 500, headers: rateHeaders }), 4968],
+      ['a rate-limited 403', () => new Response('{}', {
+        status: 403, headers: { ...rateHeaders, 'x-ratelimit-remaining': '0' }
+      }), 0]
+    ] as const)('reports the budget carried by %s', async (_name, make, remaining) => {
+      const samples: unknown[] = []
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async () => make(),
+        onRateLimit: (sample) => samples.push(sample)
+      })
+      await client.issuesHeartbeat('nodeterm/nodeterm', 'W/"x"').catch(() => undefined)
+      expect(samples).toEqual([{ ...expected, remaining }])
+    })
+
+    it('ignores absent or malformed rate headers instead of recording a zero budget', async () => {
+      const samples: unknown[] = []
+      for (const headers of [
+        {},
+        { ...rateHeaders, 'x-ratelimit-remaining': 'lots' },
+        { ...rateHeaders, 'x-ratelimit-remaining': '9000' },
+        { ...rateHeaders, 'x-ratelimit-resource': 'core; evil' }
+      ]) {
+        const client = new GitHubIssuesClient({
+          token: 'secret',
+          fetch: async () => response([], { headers }),
+          onRateLimit: (sample) => samples.push(sample)
+        })
+        await client.issuesHeartbeat('nodeterm/nodeterm')
+      }
+      expect(samples).toEqual([])
+    })
+
+    it('never lets a throwing observer break the request', async () => {
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async () => response([], { headers: { ...rateHeaders, etag: 'W/"a"' } }),
+        onRateLimit: () => { throw new Error('observer bug') }
+      })
+      await expect(client.issuesHeartbeat('nodeterm/nodeterm')).resolves.toEqual({
+        notModified: false, etag: 'W/"a"'
+      })
+    })
+  })
 })

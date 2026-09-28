@@ -118,3 +118,50 @@ describe('registerGitHubIntegration', () => {
     await expect(controller.contextForProject('project-1')).rejects.toThrow('not-authenticated')
   })
 })
+
+describe('registerGitHubIntegration rate budget', () => {
+  it('feeds each response budget to the coordinator under the credential identity, and shows it in status', async () => {
+    const reset = Math.floor(Date.now() / 1_000) + 3_600
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/user')) {
+        return new Response(JSON.stringify({ id: 1, login: 'octocat' }), { status: 200 })
+      }
+      return new Response('[]', {
+        status: 200,
+        headers: {
+          etag: 'W/"top"',
+          'x-ratelimit-limit': '5000',
+          'x-ratelimit-remaining': '12',
+          'x-ratelimit-reset': String(reset),
+          'x-ratelimit-resource': 'core'
+        }
+      })
+    }) as typeof globalThis.fetch
+    const secret: GitHubSecretStore = {
+      availability: 'encrypted',
+      readForHost: async () => 'stored-token',
+      save: async () => undefined,
+      clear: async () => undefined
+    }
+    const { controller } = registerGitHubIntegration({
+      platform: fakePlatform(),
+      userDataDir,
+      project: async (id) => id === project.id ? { project, localApprovalId: 'local-1' } : null,
+      detectRepository: async () => 'owner/repo',
+      secret,
+      run: async () => ({ ok: false, stdout: '', stderr: 'not logged in' })
+    })
+    const initial = await controller.status('project-1')
+    await controller.approve({
+      projectId: 'project-1', repository: 'owner/repo', expectedRevision: initial.control.revision
+    })
+
+    const context = await controller.contextForProject('project-1')
+    await context.client.issuesHeartbeat('owner/repo')
+
+    const view = await controller.status('project-1')
+    expect(view.rate).toMatchObject({ resource: 'core', limit: 5_000, remaining: 12, resetAt: reset * 1_000 })
+    expect(view.throttle).toEqual({ until: reset * 1_000, kind: 'low-budget' })
+  })
+})

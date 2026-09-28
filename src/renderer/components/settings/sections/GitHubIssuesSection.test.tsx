@@ -117,6 +117,17 @@ describe('GitHubIssuesSection', () => {
     unregisterDirty()
   })
 
+  it('says until when sync is held, and how much of the GitHub budget is left', async () => {
+    stub({
+      ...viewWith({}, true),
+      rate: { resource: 'core', limit: 5_000, remaining: 12, resetAt: Date.UTC(2026, 8, 28, 21, 0), observedAt: 1 },
+      throttle: { until: Date.UTC(2026, 8, 28, 21, 0), kind: 'low-budget' }
+    })
+    await mount()
+    expect(host.textContent).toContain('Background sync paused until')
+    expect(host.textContent).toContain('12 of 5,000 GitHub requests left')
+  })
+
   it('clears the write-only token field after Save and never renders the stored token', async () => {
     await mount()
     const input = host.querySelector<HTMLInputElement>('#github-personal-access-token')!
