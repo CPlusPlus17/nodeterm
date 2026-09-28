@@ -22,7 +22,7 @@ import { kanbanSource, sourceVisible } from '../../lib/kanbanSources'
 import type { ModalSpawn } from './ModalTerminal'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
 import { IconAgent, IconExternal, IconNote, IconSwitch, IconTerminal, IconTrash, IconWeb } from '../icons'
-import type { GitHubIssueCardView } from '@shared/github-issues'
+import type { GitHubCloseReason, GitHubIssueCardView } from '@shared/github-issues'
 import { useGitHubIssues } from '../../state/githubIssues'
 import { useAgentStatus } from '../../state/agentStatus'
 import { useSession } from '../../session/session'
@@ -163,9 +163,13 @@ export const KanbanView = memo(function KanbanView({
   >(null)
   const [githubRetry, setGitHubRetry] = useState(0)
   // A move that would close or reopen the issue on GitHub waits here for an explicit confirmation.
-  const [pendingGitHubMove, setPendingGitHubMove] = useState<
-    { issue: GitHubIssueCardView; columnId: string | null; confirmation: GitHubMoveConfirmation } | null
-  >(null)
+  const [pendingGitHubMove, setPendingGitHubMove] = useState<{
+    issue: GitHubIssueCardView
+    columnId: string | null
+    confirmation: GitHubMoveConfirmation
+    /** The reason picked in the dialog, for a close; starts at the confirmation's default. */
+    closeReason?: GitHubCloseReason
+  } | null>(null)
   // Primitive selectors (not one object) — an object selector would re-render on every store set.
   const projectId = useProjects((s) => s.activeProjectId)
   const projectName = useProjects((s) => s.projects.find((p) => p.id === s.activeProjectId)?.name)
@@ -332,7 +336,7 @@ export const KanbanView = memo(function KanbanView({
       if (intent.kind === 'noop') return
       const confirmation = githubMoveConfirmation(issue, columnId, completion)
       if (confirmation) {
-        setPendingGitHubMove({ issue, columnId, confirmation })
+        setPendingGitHubMove({ issue, columnId, confirmation, closeReason: confirmation.defaultCloseReason })
         return
       }
       void moveGitHubState(api.githubIssues, projectId, issue.number, columnId, issue.updatedAt)
@@ -717,12 +721,21 @@ export const KanbanView = memo(function KanbanView({
           message={pendingGitHubMove.confirmation.message}
           confirmLabel={pendingGitHubMove.confirmation.confirmLabel}
           danger={pendingGitHubMove.confirmation.danger}
+          choice={pendingGitHubMove.confirmation.closeReasons && pendingGitHubMove.closeReason
+            ? {
+                label: 'Close as',
+                options: pendingGitHubMove.confirmation.closeReasons,
+                value: pendingGitHubMove.closeReason,
+                onChange: (value) => setPendingGitHubMove((current) =>
+                  current ? { ...current, closeReason: value as GitHubCloseReason } : current)
+              }
+            : undefined}
           onCancel={() => setPendingGitHubMove(null)}
           onConfirm={() => {
-            const { issue, columnId } = pendingGitHubMove
+            const { issue, columnId, closeReason } = pendingGitHubMove
             setPendingGitHubMove(null)
             void moveGitHubState(
-              api.githubIssues, projectId, issue.number, columnId, issue.updatedAt
+              api.githubIssues, projectId, issue.number, columnId, issue.updatedAt, closeReason
             )
           }}
         />

@@ -162,6 +162,15 @@ function issueFrom(value: unknown): GitHubIssue | null {
   }
 }
 
+/** A reason only rides a state change, and only one that fits it: GitHub rewrites `state_reason` on
+ *  any write carrying `state`, so a reason sent without one — or the wrong kind — is a caller bug. */
+function validStateReason(input: UpdateIssueInput): boolean {
+  if (input.stateReason === undefined) return true
+  if (input.state === 'closed') return input.stateReason === 'completed' || input.stateReason === 'not_planned'
+  if (input.state === 'open') return input.stateReason === 'reopened'
+  return false
+}
+
 function nextPage(link: string | null): number | undefined {
   if (!link) return undefined
   for (const part of link.split(',')) {
@@ -339,12 +348,14 @@ export class GitHubIssuesClient {
     safeRepository(repository)
     if (!positiveInteger(issueNumber, Number.MAX_SAFE_INTEGER) ||
         (input.state !== undefined && input.state !== 'open' && input.state !== 'closed') ||
+        !validStateReason(input) ||
         (input.labels !== undefined && (!Array.isArray(input.labels) || input.labels.length > 100 ||
           input.labels.some((label) => !string(label, 50) || !label.trim())))) {
       throw new GitHubClientError('invalid-request')
     }
     const body = {
       ...(input.state ? { state: input.state } : {}),
+      ...(input.stateReason ? { state_reason: input.stateReason } : {}),
       ...(input.labels ? { labels: input.labels } : {})
     }
     const response = await this.request(`/repos/${repository}/issues/${issueNumber}`, {

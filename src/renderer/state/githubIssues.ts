@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type {
+  GitHubCloseReason,
   GitHubIssuePage,
   GitHubIssueQuery,
   GitHubIssuesApi,
@@ -36,7 +37,8 @@ interface GitHubIssuesState {
     projectId: string,
     issueNumber: number,
     toColumnId: string | null,
-    expectedUpdatedAt: string
+    expectedUpdatedAt: string,
+    closeReason?: GitHubCloseReason
   ): Promise<GitHubMutationResult>
 }
 
@@ -283,7 +285,7 @@ export const useGitHubIssues = create<GitHubIssuesState>((set, get) => ({
     })
   },
 
-  async move(api, projectId, issueNumber, toColumnId, expectedUpdatedAt) {
+  async move(api, projectId, issueNumber, toColumnId, expectedUpdatedAt, closeReason) {
     const generation = get().projects[projectId]?.generation
     set((state) => {
       const project = state.projects[projectId]
@@ -296,7 +298,9 @@ export const useGitHubIssues = create<GitHubIssuesState>((set, get) => ({
       }
     })
     try {
-      const result = await api.moveIssue({ projectId, issueNumber, toColumnId, expectedUpdatedAt })
+      const result = await api.moveIssue({
+        projectId, issueNumber, toColumnId, expectedUpdatedAt, ...(closeReason ? { closeReason } : {})
+      })
       const status = result.status === 'confirmed'
         ? 'Synced with GitHub.'
         : result.status === 'refresh-pending'

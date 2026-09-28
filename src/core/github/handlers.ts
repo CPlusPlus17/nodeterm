@@ -2,6 +2,7 @@ import type { CorePlatform } from '../platform'
 import { IPC } from '../../shared/ipc'
 import type {
   CreateMappedLabelsResult,
+  GitHubCloseReason,
   GitHubIssuePage,
   GitHubIssueQuery,
   GitHubMutationResult
@@ -17,6 +18,7 @@ export interface GitHubIssueHandlerService {
     issueNumber: number
     toColumnId: string | null
     expectedUpdatedAt: string
+    closeReason?: GitHubCloseReason
   }): Promise<GitHubMutationResult>
   createMissingLabels(request: { projectId: string }): Promise<CreateMappedLabelsResult>
   clearCache(request: { projectId: string }): Promise<void>

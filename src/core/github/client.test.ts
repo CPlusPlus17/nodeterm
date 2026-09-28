@@ -326,4 +326,35 @@ describe('GitHubIssuesClient', () => {
       })
     })
   })
+  describe('close reason', () => {
+    const capture = () => {
+      const bodies: unknown[] = []
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async (_url, init) => {
+          bodies.push(JSON.parse(String(init?.body)))
+          return response(issue(42, { state: 'closed', state_reason: 'not_planned' }))
+        }
+      })
+      return { client, bodies }
+    }
+
+    it('sends state_reason alongside the state change', async () => {
+      const { client, bodies } = capture()
+      await client.updateIssue('nodeterm/nodeterm', 42, { state: 'closed', stateReason: 'not_planned', labels: [] })
+      expect(bodies).toEqual([{ state: 'closed', state_reason: 'not_planned', labels: [] }])
+    })
+
+    it.each([
+      ['a reason without a state change', { stateReason: 'completed', labels: [] }],
+      ['a reason GitHub does not know', { state: 'closed', stateReason: 'wontfix', labels: [] }],
+      ['a close reason on a reopen', { state: 'open', stateReason: 'not_planned', labels: [] }],
+      ['reopened on a close', { state: 'closed', stateReason: 'reopened', labels: [] }]
+    ])('refuses %s without sending anything', async (_name, input) => {
+      const { client, bodies } = capture()
+      await expect(client.updateIssue('nodeterm/nodeterm', 42, input as never))
+        .rejects.toMatchObject({ code: 'invalid-request' })
+      expect(bodies).toEqual([])
+    })
+  })
 })

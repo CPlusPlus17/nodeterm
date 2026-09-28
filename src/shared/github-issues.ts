@@ -162,8 +162,14 @@ export interface IssueHeartbeatResult {
   etag?: string
 }
 
+/** Why an issue is closed, as GitHub records it. A board close used to send none, so GitHub filed
+ *  every one of them as `completed` — including the ones the user was dismissing. */
+export type GitHubCloseReason = 'completed' | 'not_planned'
+
 export interface UpdateIssueInput {
   state?: 'open' | 'closed'
+  /** Sent only WITH a state change: a close reason on a close, `reopened` on a reopen. */
+  stateReason?: GitHubCloseReason | 'reopened'
   labels?: string[]
 }
 
@@ -256,6 +262,8 @@ export interface GitHubIssuesApi {
     issueNumber: number
     toColumnId: string | null
     expectedUpdatedAt: string
+    /** Used only when the move closes the issue; absent = `completed`, GitHub's own default. */
+    closeReason?: GitHubCloseReason
   }): Promise<GitHubMutationResult>
   createMissingLabels(projectId: string): Promise<CreateMappedLabelsResult>
   clearCache(projectId: string): Promise<void>

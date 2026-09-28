@@ -17,7 +17,8 @@ import type {
   IssueHeartbeatResult,
   IssuePageResult,
   ListIssueOptions,
-  NormalisedProjectKanbanGitHub
+  NormalisedProjectKanbanGitHub,
+  UpdateIssueInput
 } from '../../shared/github-issues'
 
 let userDataDir: string
@@ -52,7 +53,9 @@ const issue = (number: number, over: Partial<GitHubIssue> = {}): GitHubIssue => 
 
 class FixtureClient implements GitHubIssuesClientLike {
   issues = new Map<number, GitHubIssue>()
-  updates: Array<{ number: number; input: { state?: 'open' | 'closed'; labels?: string[] } }> = []
+  updates: Array<{ number: number; input: UpdateIssueInput }> = []
+  /** What GitHub records as the reason when the write names none, or overrides the one asked for. */
+  recordedReason?: GitHubIssue['stateReason']
   repositoryLabels: Array<{ id: number; name: string; color: string; description: null }> = []
   createdLabels: Array<{ name: string; color: string }> = []
 
@@ -87,13 +90,18 @@ class FixtureClient implements GitHubIssuesClientLike {
   async updateIssue(
     _repository: string,
     number: number,
-    input: { state?: 'open' | 'closed'; labels?: string[] }
+    input: UpdateIssueInput
   ) {
     this.updates.push({ number, input: structuredClone(input) })
     const current = this.issues.get(number)!
     const updated = {
       ...current,
-      ...(input.state ? { state: input.state } : {}),
+      ...(input.state ? {
+        state: input.state,
+        stateReason: this.recordedReason !== undefined
+          ? this.recordedReason
+          : input.stateReason ?? (input.state === 'closed' ? 'completed' as const : 'reopened' as const)
+      } : {}),
       ...(input.labels ? {
         labels: input.labels.map((name, index) => ({ id: index + 1, name, color: '8b5cf6' }))
       } : {}),
@@ -633,7 +641,7 @@ describe('GitHubIssueService', () => {
     })
     expect(result.status).toBe('confirmed')
     expect(client.updates).toEqual([{ number: 42, input: {
-      state: 'open', labels: ['bug', 'status:todo']
+      state: 'open', stateReason: 'reopened', labels: ['bug', 'status:todo']
     } }])
   })
 
@@ -1180,5 +1188,86 @@ describe('GitHubIssueService rate budget', () => {
     expect(deltas.slice(before)).toEqual([[]])
     expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).throttle)
       .toEqual({ until: 2_000_000, kind: 'rate-limited' })
+  })
+})
+
+describe('GitHubIssueService close reason', () => {
+  async function ready(issues: GitHubIssue[]) {
+    const client = new FixtureClient(issues)
+    const cache = new GitHubIssueCache(userDataDir)
+    await cache.bind('local-1', 'project-1', 'o/r', 'user-1')
+    await cache.saveComplete('user-1', 'o/r', {
+      issues, etags: {}, lastSuccessfulRefreshAt: 1, lastFullReconciliationAt: 1
+    })
+    const service = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client), now: () => 10_000
+    })
+    return { client, service }
+  }
+  const todo = [{ id: 1, name: 'status:todo', color: '0a84ff' }]
+  const done = [{ id: 3, name: 'status:done', color: '30d158' }]
+
+  it('closes with the reason the user chose', async () => {
+    const shown = issue(1, { labels: todo })
+    const { client, service } = await ready([shown])
+    const result = await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'done',
+      expectedUpdatedAt: shown.updatedAt, closeReason: 'not_planned'
+    })
+    expect(result.status).toBe('confirmed')
+    expect(client.updates[0].input).toEqual({
+      state: 'closed', stateReason: 'not_planned', labels: ['status:done']
+    })
+  })
+
+  it('closes as completed when no reason was given, which is what GitHub does on its own', async () => {
+    const shown = issue(1, { labels: todo })
+    const { client, service } = await ready([shown])
+    await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'done', expectedUpdatedAt: shown.updatedAt
+    })
+    expect(client.updates[0].input.stateReason).toBe('completed')
+  })
+
+  it('reopens with state_reason reopened, whatever close reason the caller sent', async () => {
+    const shown = issue(1, { state: 'closed', stateReason: 'not_planned', labels: done })
+    const { client, service } = await ready([shown])
+    await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'todo',
+      expectedUpdatedAt: shown.updatedAt, closeReason: 'not_planned'
+    })
+    expect(client.updates[0].input).toEqual({ state: 'open', stateReason: 'reopened', labels: ['status:todo'] })
+  })
+
+  it('sends no reason for a move that does not change the state', async () => {
+    const shown = issue(1, { labels: todo })
+    const { client, service } = await ready([shown])
+    await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'doing',
+      expectedUpdatedAt: shown.updatedAt, closeReason: 'not_planned'
+    })
+    expect(client.updates[0].input).toEqual({ labels: ['status:doing'] })
+  })
+
+  it('refuses a reason it does not know without writing anything', async () => {
+    const shown = issue(1, { labels: todo })
+    const { client, service } = await ready([shown])
+    const result = await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'done',
+      expectedUpdatedAt: shown.updatedAt, closeReason: 'wontfix' as never
+    })
+    expect(result.status).toBe('invalid-target')
+    expect(client.updates).toEqual([])
+  })
+
+  it('does not report a close as confirmed when GitHub recorded a different reason', async () => {
+    const shown = issue(1, { labels: todo })
+    const { client, service } = await ready([shown])
+    client.recordedReason = 'completed'
+    await expect(service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'done',
+      expectedUpdatedAt: shown.updatedAt, closeReason: 'not_planned'
+    })).rejects.toThrow('mutation-not-confirmed')
   })
 })

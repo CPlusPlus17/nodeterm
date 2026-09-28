@@ -6,6 +6,7 @@ import type {
   GitHubIssuePage,
   GitHubIssueQuery,
   GitHubMutationResult,
+  GitHubCloseReason,
   GitHubRepositoryLabel,
   GitHubThrottle,
   IssueHeartbeatResult,
@@ -385,7 +386,14 @@ export class GitHubIssueService {
     issueNumber: number
     toColumnId: string | null
     expectedUpdatedAt: string
+    closeReason?: GitHubCloseReason
   }): Promise<GitHubMutationResult> {
+    // Reachable from the renderer and from a relay guest: an unknown reason is refused here, before
+    // anything is read or written, rather than forwarded for GitHub to reject after a round trip.
+    if (request.closeReason !== undefined &&
+        request.closeReason !== 'completed' && request.closeReason !== 'not_planned') {
+      return Promise.resolve({ status: 'invalid-target' })
+    }
     const operationId = ++this.operationSequence
     return mutationChain(this.issueChains, `${request.projectId}:${request.issueNumber}`, async () => {
       const captured = await this.options.contextForProject(request.projectId)
@@ -446,7 +454,12 @@ export class GitHubIssueService {
         // 'not_planned' (wontfix) into 'completed'. Closed issues all map into the completion
         // column, so a drag that lands one back where it already sits is a no-op the user never
         // meant as a state change — and it must not be one on GitHub either.
-        ...(latest.state === desiredState ? {} : { state: desiredState }),
+        // When it DOES change, the reason travels with it: the one the user picked for a close
+        // (GitHub's own default, `completed`, when none was given), and `reopened` for a reopen.
+        ...(latest.state === desiredState ? {} : {
+          state: desiredState,
+          stateReason: desiredState === 'closed' ? request.closeReason ?? 'completed' : 'reopened'
+        }),
         labels
       }
       if (capturedEpoch !== epoch(await this.options.contextForProject(request.projectId))) {
@@ -466,7 +479,9 @@ export class GitHubIssueService {
         label.name.normalize('NFKC').toLocaleLowerCase('en-US')))
       const expectedLabels = new Set(labels.map((label) =>
         label.normalize('NFKC').toLocaleLowerCase('en-US')))
-      if (updated.state !== desiredState || confirmedLabels.size !== expectedLabels.size ||
+      if (updated.state !== desiredState ||
+          (input.state === 'closed' && updated.stateReason !== input.stateReason) ||
+          confirmedLabels.size !== expectedLabels.size ||
           [...expectedLabels].some((label) => !confirmedLabels.has(label))) {
         throw new Error('mutation-not-confirmed')
       }

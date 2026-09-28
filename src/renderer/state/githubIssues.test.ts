@@ -168,6 +168,17 @@ describe('GitHub issue renderer state', () => {
     disconnect()
   })
 
+  it('passes the chosen close reason through to the host', async () => {
+    const client = api()
+    const disconnect = await useGitHubIssues.getState().connect(client, 'p1', ['todo'])
+    await useGitHubIssues.getState().move(client, 'p1', 2, 'done', '2026-08-09T00:00:00Z', 'not_planned')
+    expect(client.moveIssue).toHaveBeenCalledWith({
+      projectId: 'p1', issueNumber: 2, toColumnId: 'done',
+      expectedUpdatedAt: '2026-08-09T00:00:00Z', closeReason: 'not_planned'
+    })
+    disconnect()
+  })
+
   it('catches a failed move so fire-and-forget UI calls do not reject', async () => {
     const client = api()
     const disconnect = await useGitHubIssues.getState().connect(client, 'p1', ['todo'])
