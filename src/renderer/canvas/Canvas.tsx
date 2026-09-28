@@ -440,6 +440,7 @@ import { activeSessionApi } from '../session/session'
 import {
   agentConfig,
   hasHooks,
+  hasHooksOverSsh,
   canBranch,
   canRename,
   canContextLink,
@@ -4984,6 +4985,30 @@ export function Canvas() {
     ]
   )
 
+  // A terminal node asking for an agent node BESIDE it — today only the Gemini-retirement banner
+  // ("Open Antigravity", terminal/gemini-retired.ts). Same no-direct-line-to-the-canvas pattern as
+  // `nodeterm:open-terminal`. The new node joins the source's frame (so a bound worktree's cwd is
+  // inherited through `cwdForNewNodeIn`) and is centred one node-width to its right; a source that
+  // has left the canvas, or an id that is not a builtin agent, opens nothing.
+  useEffect(() => {
+    const onOpenAgent = (e: Event): void => {
+      const d = (e as CustomEvent<{ agentId?: string; nearNodeId?: string }>).detail
+      const agentId = BUILTIN_AGENT_IDS.find((a) => a === d?.agentId)
+      if (!agentId) return
+      const all = nodesRef.current
+      const source = all.find((n) => n.id === d?.nearNodeId)
+      const rect = source
+        ? nodeFitRect(source as FocusableNode, all as FocusableNode[])
+        : null
+      const center = rect
+        ? { x: rect.x + rect.width * 1.5 + 40, y: rect.y + rect.height / 2 }
+        : undefined
+      addAgentNode(agentId, center, source?.parentId)
+    }
+    window.addEventListener('nodeterm:open-agent', onOpenAgent)
+    return () => window.removeEventListener('nodeterm:open-agent', onOpenAgent)
+  }, [addAgentNode, nodesRef])
+
   // "Spawn a team…" (issue #78): the dialog collects the task; this opens ONE conductor node
   // pre-prompted with it. The conductor's own manage-nodeterm-canvas skill does the role split
   // and the fan-out — the app ships no model, so the entry point deliberately adds no plumbing.
@@ -8322,6 +8347,7 @@ export function Canvas() {
       'node.newAgent.opencode': () => { addAgentNode('opencode'); return true },
       'node.newAgent.grok': () => { addAgentNode('grok'); return true },
       'node.newAgent.copilot': () => { addAgentNode('copilot'); return true },
+      'node.newAgent.antigravity': () => { addAgentNode('antigravity'); return true },
       'node.newSticky': () => { addSticky(); return true },
       'node.newBrowser': () => { addBrowser(); return true },
       // Opening the URL prompt IS claiming the chord — a cancelled prompt creates nothing, but the
@@ -9109,6 +9135,7 @@ export function Canvas() {
         return {
           label: `New ${AGENT_CONFIG[aid].label}`,
           icon: <AgentIcon agentId={aid} />,
+          hint: AGENT_CONFIG[aid].notice,
           onClick: () => addAgentNode(aid, at, groupId)
         }
       }
@@ -11130,6 +11157,15 @@ export function Canvas() {
             reply({
               ok: false,
               error: `${verb}: --after ${depId} is not an agent session that reports when it is done`
+            })
+            return null
+          }
+          // Same guardrail, one layer down: this agent reports status only on THIS machine (no
+          // hook installer on an SSH host yet), so on an SSH project it would never say "done".
+          if (ctlSsh && !hasHooksOverSsh(depAgent)) {
+            reply({
+              ok: false,
+              error: `${verb}: --after ${depId} runs an agent that reports no status in SSH projects yet`
             })
             return null
           }

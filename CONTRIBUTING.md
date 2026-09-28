@@ -188,6 +188,29 @@ lane unaffected.
   white, take `SYSTEM_NODE_COLOR_SWATCHES` instead, with the contrast reason in a comment. Deep
   version, including the measured numbers: CLAUDE.md § Node colors.
 
+- **The Antigravity hook is a gate in front of every `agy` tool call on the machine — treat its
+  stdout as a decision.** `agy` reads hook stdout as JSON and our hook, in the global
+  `~/.gemini/config/hooks.json`, is subscribed to `PreToolUse`. Measured: silence runs the tool, but
+  `{}`, any stray non-JSON byte and a non-zero exit DENY it — in nodeterm and in the user's own
+  terminals. So: change answers only in `antigravity-decision.ts` (the one table); print nothing
+  after the answer; keep the Windows command free of quotes (agy escapes them as `\"`, which cmd.exe
+  cannot read) and test Windows dispatch WITHOUT `windowsVerbatimArguments`; keep the `AutoRun`
+  refusal. Deep version: `docs/antigravity-agent.md` and CLAUDE.md § Agent support.
+
+- **Finding `agy` for hook installation is not enough to launch it.** The measured Windows
+  installer wrote `%LOCALAPPDATA%\agy\bin` into a `REG_SZ` user PATH, so command lookup kept the
+  percent expression literal and `agy` was not found even though its executable existed. Local
+  Antigravity PTYs therefore APPEND the directory returned by the same vendor-location lookup the
+  hook installer uses, and only when no PATH entry already names it (`pathWithAgyDir`) — never
+  prepend: on macOS/Linux agy lives in a shared directory, and moving it ahead of the user's entries
+  shadows their own tools. Keep that correction scoped to Antigravity sessions and out of SSH
+  sessions. (The separate Windows `Path`→`PATH` key fix-up applies to every Windows spawn.)
+
+- **Our hooks.json bundle is the user's to switch off.** `"enabled": false` on `nodeterm-status` in
+  `~/.gemini/config/hooks.json` is agy's own switch and nodeterm's only opt-out; the installer
+  carries it across every rewrite. hooks.json is published through the shared settings transaction
+  (`updateSettingsFile`) — never a bare write, which replaced a symlinked file with a regular one.
+
 - **Every loosening of a security gate must be a SETTING the user can see and revoke.** A "don't
   ask again" that lives only in a dialog is a permission granted once and never findable again. The
   canvas-control destructive confirm is the pattern to copy (`@shared/control-confirm`): a CANCEL
