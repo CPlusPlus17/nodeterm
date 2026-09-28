@@ -6,7 +6,12 @@ import type { GitHubIssueCardView } from '@shared/github-issues'
 import { GitHubIssueSummaryModal } from './GitHubIssueSummaryModal'
 
 vi.mock('../../session/session', () => ({
-  useSession: () => ({ api: { shell: { openExternal: vi.fn(async () => {}) } } })
+  useSession: () => ({
+    api: {
+      shell: { openExternal: vi.fn(async () => {}) },
+      boardLog: { read: async () => ({ entries: [] }), onChanged: () => () => {}, append: async () => true }
+    }
+  })
 }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -41,5 +46,44 @@ describe('GitHubIssueSummaryModal', () => {
     expect(document.activeElement).toBe(opener)
     host.remove()
     opener.remove()
+  })
+
+  it('offers "Start with agent" with the canvas picker rows, and shows the read-only run history', () => {
+    vi.stubGlobal('ResizeObserver', class { observe(): void {} unobserve(): void {} disconnect(): void {} })
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const pick = vi.fn()
+    act(() => root.render(
+      <GitHubIssueSummaryModal issue={issue} columns={[]} moving={false} readOnly={false}
+        onMove={vi.fn()} onClose={vi.fn()} showRunHistory
+        startMenu={() => [{ label: 'Codex', onClick: pick }]} />
+    ))
+    expect(host.textContent).toContain('Agent runs')
+    // Read-only: a comment box under a GitHub issue would read as "post to GitHub".
+    expect(host.querySelector('.board-log__composer')).toBeNull()
+    expect(host.textContent).toContain('never posted to GitHub')
+    const start = [...host.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Start with agent'))!
+    act(() => start.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    const row = [...document.body.querySelectorAll<HTMLElement>('.ctx-item')].find((el) => el.textContent?.includes('Codex'))!
+    act(() => row.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(pick).toHaveBeenCalled()
+    act(() => root.unmount())
+    host.remove()
+    vi.unstubAllGlobals()
+  })
+
+  it('a pull request offers no "Start with agent" and no run history', () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    act(() => root.render(
+      <GitHubIssueSummaryModal issue={issue} kind="pull" columns={[]} moving={false} readOnly={false}
+        onMove={vi.fn()} onClose={vi.fn()} showRunHistory startMenu={() => []} />
+    ))
+    expect(host.textContent).not.toContain('Start with agent')
+    expect(host.textContent).not.toContain('Agent runs')
+    act(() => root.unmount())
+    host.remove()
   })
 })
