@@ -82,6 +82,9 @@ the production paging, not a second implementation of it.
 | `model-effort-synthetic` | A `<synthetic>` record (an API error or interrupt, with no effort) is skipped entirely, so both fields come from the real record before it. |
 | `model-effort-utf16` | The 100-character cap counts **UTF-16 code units** (Swift `utf16.count`), not bytes or scalars. A model of 50 × U+1F9EA (100 units) is kept, and an effort of 101 units is absent. |
 | `thinking` | Thinking blocks (`thinking`, `redacted_thinking`). The current TS reader **drops** them: a thinking-only record yields no message, and a mixed record keeps only its text. The port must match this until the desktop reader changes. |
+| `local-commands` | Slash-command records (see **Local commands** below). An `isMeta` caveat is skipped; `/model` plus its ANSI-coloured `<local-command-stdout>` become ONE assistant tool part `{name:"/model", arg:"", result}`; `/effort` with padded args (trimmed) answered on `<local-command-stderr>`; `/compact` with an arg longer than the 200-unit cap; `/exit` with an empty stdout (no `result`); a skill invocation (`<command-message>` before `<command-name>`) whose `isMeta` array body is skipped; a stdout with no command right before it (its own `command output` tool, capped to three lines); and a user message that only mentions `<command-name>` in prose (stays a user message). |
+| `bash-mode` | `!` bash-mode records: `<bash-input>` becomes a tool part named `!` with the command as `arg`; the ONE following record carrying `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>` sets its `result` (non-empty parts joined by `\n`, then the `summarizeResult` cap), including an empty stdout with a stderr. |
+| `meta-turns` | `isMeta` rule 1: a peer hand-back (`promptSource` + `origin.kind:"peer"` + `turnOrigin`), a scheduled wakeup (`turnOrigin:"scheduled"` + `scheduledTaskId`), an auto-continuation (`origin.kind:"auto-continuation"`) a `promptSource`-only, an `origin`-only and a `turnOrigin`-only record (the last two with no `promptSource`, so each field is pinned on its own) stay user messages; the caveat and a skill body (none of the three fields) are skipped. |
 
 Decision cases: plan `restore` / `acceptEdits` / `manual` / `revise` (the revise text is trimmed),
 question single / multi (labels joined with `, `) / free text (trimmed), and three refusals: a
@@ -105,6 +108,48 @@ refused there (`null`). An over-long text is NOT refused there: `answer-revise-t
 parses, and the cap is applied by `buildPermissionDecision` (`plan-revise-too-long-refused`,
 `question-free-text-too-long-refused`). Text of exactly 8000 units is accepted (`plan-revise-at-cap`,
 `question-free-text-at-cap`), so a port with a lower cap fails too.
+
+## Local commands (the Swift port must replicate this exactly)
+
+`parseChatRecords` (`src/core/transcript-reader.ts`, `classifyLocalCommand`) applies these rules,
+on the paged and unpaged paths alike:
+
+1. A `type:"user"` record with `isMeta === true` is skipped entirely (no message, no `at` effect)
+   **only when it carries none of `promptSource`, `origin`, `turnOrigin`** (each counts when the key
+   is present with a non-`null` value). That skips the local-command caveat, skill bodies and
+   injected reminders. An `isMeta` record carrying any of the three starts a turn (a peer / subagent
+   hand-back, a scheduled or loop wakeup, an auto-continuation) and is parsed like any other user
+   record (a user text message).
+2. Only a user record whose `message.content` is a **string** is examined. It must consist ONLY of
+   whole tags `<t>…</t>` (`t` matches `[a-z-]+`; content non-greedy up to the matching close tag), separated by whitespace (JS `\s`), each
+   tag name at most once. Anything else in it (prose, an unknown tag, a repeated tag) makes it an
+   ordinary user text message.
+3. Tags only from {`command-name`, `command-message`, `command-args`}, any order, with a non-blank
+   trimmed `command-name` → **command**: an assistant message with one part
+   `{kind:"tool", name:<command-name trimmed>, arg:<command-args trimmed, "" when absent>}`.
+   Slash tags with a blank or missing `command-name` are ordinary user text.
+   Tags only from {`bash-input`} → command with `name:"!"`, `arg:<bash-input trimmed>`.
+   `arg` is capped like a tool call's arg (`toolArg`): trimmed FIRST, then its first 200 UTF-16
+   units (`CHAT_TOOL_ARG_MAX`, `String.prototype.slice(0, 200)`).
+4. Tags only from {`local-command-stdout`, `local-command-stderr`} (slash family) or only from
+   {`bash-stdout`, `bash-stderr`} (bash family) → **output**. Its text is each tag's content, in
+   record order, with ANSI escapes removed (`\x1b[` CSI `[0-?]*[ -/]*[@-~]`, then OSC
+   `\x1b][^\x07\x1b]*(\x07|\x1b\\)`, then two-byte `\x1b[@-_]`), trimmed, empty parts dropped,
+   joined by `\n`, then capped like a tool result (first three lines joined by a space, first 500
+   UTF-16 units). An empty text produces nothing.
+5. A non-empty output sets `result` on the command's tool part when the **last pushed message** is
+   a command of the **same family** that has no result yet. Otherwise it is pushed as its own
+   assistant message `{kind:"tool", name:"command output", arg:"", result}`. Any pushed message
+   ends the wait, and so does an attached output (a second output does not overwrite). A record
+   that pushes nothing does NOT end it: a skipped `isMeta` record, an empty output, a metadata-only
+   record, a thinking-only assistant record or a tool_result-only user record.
+6. "Trimmed" everywhere in these rules means JS `String.prototype.trim`, which strips JS `\s`:
+   ASCII whitespace plus U+00A0, U+FEFF, U+1680, U+2000–U+200A, U+2028, U+2029, U+202F, U+205F and
+   U+3000. Swift's `.whitespacesAndNewlines` is a different set (it lacks U+FEFF and adds U+0085, for
+   example), so the port needs its own predicate. The same set is the "whitespace between tags" of
+   rule 2.
+7. A command message carries `key` / `at` like any other message; an attached output changes
+   neither. No new role, part kind or field: a v1 decoder reads these as ordinary tool parts.
 
 ## Sizes
 

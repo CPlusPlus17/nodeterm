@@ -334,3 +334,130 @@ describe('ChatPanel live progress', () => {
     }
   })
 })
+
+// A local command (`/model`, `!ls`) fires NO hook: the state never changes, so nothing would retire
+// the optimistic working row but its 15 s timeout, and no live read runs (the agent is not working).
+// A command send therefore schedules ONE tail read, and a read that confirms the send retires the row.
+describe('ChatPanel — a sent local command', () => {
+  const cmd = (key: number, name: string, arg = ''): ChatMessage => ({
+    role: 'assistant',
+    key,
+    parts: [{ kind: 'tool', name, arg }]
+  })
+  async function type(text: string): Promise<void> {
+    const ta = host.querySelector('textarea') as HTMLTextAreaElement
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(ta, text)
+      ta.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+  }
+
+  it('/model: one tail read after the throttle interval confirms it and retires the working row', async () => {
+    await hook('done')
+    await render()
+    await settle(0, { messages: [say(0, 'hello')], olderCursor: 0 })
+    await type('/model')
+    expect(activity()).not.toBeNull()
+    await advance(CHAT_LIVE_RELOAD_MIN_MS - 1)
+    expect(pending.length).toBe(1)
+    await advance(1)
+    expect(pending.length).toBe(2)
+    expect(pending[1].page).toEqual({ maxBytes: CHAT_TAIL_PAGE_BYTES })
+    await settle(1, { messages: [say(0, 'hello'), cmd(100, '/model')], olderCursor: 0 })
+    expect(activity()).toBeNull()
+    // Exactly one read: nothing else is scheduled.
+    await advance(CHAT_OPTIMISTIC_WORKING_MS)
+    expect(pending.length).toBe(2)
+  })
+
+  it('`!ls` is a command send too', async () => {
+    await hook('done')
+    await render()
+    await settle(0, { messages: [say(0, 'hello')], olderCursor: 0 })
+    await type('!ls')
+    await advance(CHAT_LIVE_RELOAD_MIN_MS)
+    expect(pending.length).toBe(2)
+    await settle(1, { messages: [say(0, 'hello'), cmd(100, '!', 'ls')], olderCursor: 0 })
+    expect(activity()).toBeNull()
+  })
+
+  it('a read that does NOT confirm the command leaves the row to its timeout', async () => {
+    await hook('done')
+    await render()
+    await settle(0, { messages: [say(0, 'hello')], olderCursor: 0 })
+    await type('/model')
+    await advance(CHAT_LIVE_RELOAD_MIN_MS)
+    await settle(1, { messages: [say(0, 'hello')], olderCursor: 0 })
+    expect(activity()).not.toBeNull()
+    // A LIVE read: the unconfirmed send stays on screen (a non-live read would drop it).
+    expect(bubbles().some((b) => b.includes('/model'))).toBe(true)
+  })
+
+  it('a command that starts a real turn (/compact) keeps the working row through its working state', async () => {
+    await hook('done')
+    await render()
+    await settle(0, { messages: [say(0, 'hello')], olderCursor: 0 })
+    await type('/compact keep notes')
+    await hook('working', true)
+    // Settle every read (the hook's live read and the command read), each confirming the command.
+    for (let i = 0; i < 4; i++) {
+      await advance(CHAT_LIVE_RELOAD_MIN_MS)
+      for (let j = 1; j < pending.length; j++)
+        await settle(j, { messages: [say(0, 'hello'), cmd(100, '/compact', 'keep notes')], olderCursor: 0 })
+    }
+    expect(pending.length).toBeGreaterThan(1)
+    expect(activity()?.textContent).toBe('Claude Code is working…')
+    // The composer still refuses while the turn runs.
+    expect((host.querySelector('textarea') as HTMLTextAreaElement).disabled).toBe(true)
+  })
+
+  it('a tail read already in flight defers the command read instead of cancelling it', async () => {
+    await hook('done')
+    await render()
+    await settle(0, { messages: [say(0, 'hello')], olderCursor: 0 })
+    await type('/model')
+    await act(async () => (host.querySelector('.term-chat__bar .term-chat__refresh') as HTMLButtonElement).click())
+    expect(pending.length).toBe(2) // ↻, in flight
+    await advance(CHAT_LIVE_RELOAD_MIN_MS)
+    expect(pending.length).toBe(2) // deferred, not started over it
+    await settle(1, { messages: [say(0, 'hello')], olderCursor: 0 })
+    await advance(CHAT_LIVE_RELOAD_MIN_MS)
+    expect(pending.length).toBe(3)
+  })
+
+  it('a plain text send schedules no read', async () => {
+    await hook('done')
+    await render()
+    await settle(0, { messages: [say(0, 'hello')], olderCursor: 0 })
+    await type('just a question')
+    await advance(CHAT_LIVE_RELOAD_MIN_MS * 3)
+    expect(pending.length).toBe(1)
+  })
+
+  it('the scheduled read is cancelled on unmount', async () => {
+    await hook('done')
+    await render()
+    await settle(0, { messages: [say(0, 'hello')], olderCursor: 0 })
+    await type('/model')
+    await act(async () => root.unmount())
+    await advance(CHAT_LIVE_RELOAD_MIN_MS * 3)
+    expect(pending.length).toBe(1)
+    root = createRoot(host) // afterEach unmounts again
+  })
+
+  it('the scheduled read is cancelled when the transcript identity changes', async () => {
+    await hook('done')
+    await render()
+    await settle(0, { messages: [say(0, 'hello')], olderCursor: 0 })
+    await type('/model')
+    await act(async () => {
+      root.render(<ChatPanel nodeId={NODE} sessionId="s2" agentId="claude" />)
+    })
+    const after = pending.length // the new session's own initial read
+    await advance(CHAT_LIVE_RELOAD_MIN_MS * 3)
+    expect(pending.length).toBe(after)
+  })
+})
