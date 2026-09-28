@@ -4,6 +4,7 @@ import {
   anchoredScrollTop,
   applyOlder,
   applyTail,
+  tailConfirmsSends,
   attachCarried,
   emptyThread,
   shouldFetchOlder,
@@ -196,6 +197,19 @@ describe('applyTail — unconfirmed optimistic sends (live reads)', () => {
   it('a long argument is compared after the same 200-character cap the reader applies', () => {
     const arg = 'x'.repeat(250)
     expect(sentTexts(live(`/compact ${arg}`, [cmd(100, '/compact', arg.slice(0, 200))]))).toEqual([])
+  })
+
+  it('tailConfirmsSends: true only when the read confirms every trailing optimistic send', () => {
+    const t = base([say(0, 'q'), say(undefined, '/model', 'user')], 0)
+    expect(tailConfirmsSends(t, ID, page([say(0, 'q'), cmd(100, '/model')], 0))).toBe(true)
+    expect(tailConfirmsSends(t, ID, page([say(0, 'q')], 0))).toBe(false)
+    // Nothing was waiting: nothing to confirm.
+    expect(tailConfirmsSends(base([say(0, 'q')], 0), ID, page([say(0, 'q'), cmd(100, '/model')], 0))).toBe(false)
+    // Another transcript never confirms this one's sends.
+    expect(tailConfirmsSends(t, 'other', page([cmd(100, '/model')], 0))).toBe(false)
+    // Two sends, one confirmed: still waiting.
+    const two = base([say(0, 'q'), say(undefined, '/model', 'user'), say(undefined, '/model', 'user')], 0)
+    expect(tailConfirmsSends(two, ID, page([say(0, 'q'), cmd(100, '/model')], 0))).toBe(false)
   })
 
   it('a NON-live reload (turn end, ↻) retires any unconfirmed carry', () => {

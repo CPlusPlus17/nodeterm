@@ -13,13 +13,15 @@ import {
   anchoredScrollTop,
   applyOlder,
   applyTail,
+  tailConfirmsSends,
   emptyThread,
   shouldFetchOlder,
   type ChatThread
 } from '../lib/chatPaging'
 import { E_UNSUPPORTED } from '@shared/rpc'
 import { Spinner } from '../components/Spinner'
-import { CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
+import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
+import { sentCommand } from '@shared/chat-command'
 import { ChatLoadingStatus } from './ChatPanelFallback'
 import { answerCardState, answerRebindPending, rebindRetryDelay, type BoundAnswerCard } from '../lib/chatAnswer'
 import { AnswerControlsUpdating, PlanAnswerControls, QuestionAnswerControls } from './ChatAnswerControls'
@@ -267,6 +269,9 @@ export function ChatPanel({
   // (single-flight, like the live reads) — never dropped, since the read in flight started under the
   // PREVIOUS request and cannot bind the new one. Any read that STARTS later satisfies it.
   const heldReloadQueuedRef = useRef(false)
+  // The ONE tail read a sent local command schedules (see `send`): `/model` or `!ls` fires no hook,
+  // so neither a state change nor a live read would ever confirm it.
+  const commandReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const loadRef = useRef<(live?: boolean, rebind?: boolean) => void>(() => {})
   const requestHeldReloadRef = useRef<() => void>(() => {})
 
@@ -338,6 +343,10 @@ export function ChatPanel({
           settleHeldReload(heldAtStart)
           return
         }
+        // A read that confirms every optimistic send retires the working row: for a local
+        // command it is the ONLY signal (no hook fires). A command that starts a real turn is
+        // still covered — its `working` state keeps the row (and the send refusal) on its own.
+        if (tailConfirmsSends(threadRef.current, identity, res)) setOptimistic(false)
         setThread((t) => applyTail(t, identity, res, { carryUnconfirmed: live || rebind }))
         setLoadState('ok')
         setHeldRead({ identity, pendingId: heldAtStart })
@@ -639,7 +648,31 @@ export function ChatPanel({
     setThread((t) => ({ ...t, messages: [...t.messages, { role: 'user', parts: [{ kind: 'text', text }] }] }))
     setOptimistic(true)
     setInput('')
+    // A local command (`/model`, `!ls`) fires no hook: schedule ONE live tail read, one throttle
+    // interval out (claude writes the command record once the command ran), so its confirmation
+    // retires the working row instead of the 15 s timeout. A read already in flight defers it.
+    if (sentCommand(text)) {
+      if (commandReadTimerRef.current !== null) clearTimeout(commandReadTimerRef.current)
+      const fire = () => {
+        if (tailInFlightRef.current || olderInFlightRef.current) {
+          commandReadTimerRef.current = setTimeout(fire, CHAT_LIVE_RELOAD_MIN_MS)
+          return
+        }
+        commandReadTimerRef.current = null
+        loadRef.current(true)
+      }
+      commandReadTimerRef.current = setTimeout(fire, CHAT_LIVE_RELOAD_MIN_MS)
+    }
   }, [api, input, nodeId, agentId])
+
+  // The scheduled command read belongs to THIS transcript and this mount.
+  useEffect(
+    () => () => {
+      if (commandReadTimerRef.current !== null) clearTimeout(commandReadTimerRef.current)
+      commandReadTimerRef.current = null
+    },
+    [identity]
+  )
 
   const onWriteRefused = useCallback(() => setReadonly(true), [])
 

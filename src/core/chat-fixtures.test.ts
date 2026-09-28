@@ -393,6 +393,12 @@ function metaTurns(): string {
     // `promptSource` alone is enough to keep it.
     { ...isMeta(user('System prompt source only.')), promptSource: 'system' },
     assistant([text('Seen.')]),
+    // `origin` alone (no promptSource): kept — a port checking only promptSource fails here.
+    { ...isMeta(user('Hand-back with origin only.')), origin: { kind: 'peer', from: 'demo-peer' } },
+    assistant([text('Seen too.')]),
+    // `turnOrigin` alone (no promptSource): kept.
+    { ...isMeta(user('Wakeup with turnOrigin only.')), turnOrigin: 'scheduled' },
+    assistant([text('Awake.')]),
     // A skill body (isMeta, none of the three fields): still skipped.
     isMeta(user([text('Base directory for this skill: /srv/demo/skills/demo-skill')]))
   ])

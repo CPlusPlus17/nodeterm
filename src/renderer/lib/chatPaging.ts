@@ -128,6 +128,27 @@ const userText = (m: ChatMessage): string =>
     .join('')
     .trim()
 
+/** The thread's TRAILING unkeyed user messages — the optimistic sends a live read may still carry. */
+function trailingSends(t: ChatThread): ChatMessage[] {
+  const trailing: ChatMessage[] = []
+  for (let i = t.messages.length - 1; i >= 0; i--) {
+    const m = t.messages[i]
+    if (m.key !== undefined || m.role !== 'user') break
+    trailing.unshift(m)
+  }
+  return trailing
+}
+
+/**
+ * Would a LIVE read (`applyTail` with `carryUnconfirmed`) confirm every optimistic send the thread
+ * is waiting on? False when nothing was waiting, or for another transcript. The panel uses it to
+ * retire its optimistic working row when no hook will: a local command (`/model`, `!ls`) is
+ * confirmed only by its command record, and fires no state change.
+ */
+export function tailConfirmsSends(t: ChatThread, identity: string, res: ChatTranscriptResult): boolean {
+  return t.identity === identity && trailingSends(t).length > 0 && unconfirmedSends(t, res).length === 0
+}
+
 /** A command message's tool part (`/model`, `!`), as the reader renders a command record. */
 function commandPart(m: ChatMessage): { name: string; arg: string } | null {
   if (m.role !== 'assistant' || m.parts.length !== 1) return null
@@ -154,15 +175,14 @@ function commandPart(m: ChatMessage): { name: string; arg: string } | null {
  * send whose transcript line never matches (a CLI that rewrites the prompt) must not stay duplicated.
  */
 function unconfirmedSends(t: ChatThread, res: ChatTranscriptResult): ChatMessage[] {
-  const trailing: ChatMessage[] = []
-  for (let i = t.messages.length - 1; i >= 0; i--) {
-    const m = t.messages[i]
-    if (m.key !== undefined || m.role !== 'user') break
-    trailing.unshift(m)
-  }
+  const trailing = trailingSends(t)
   if (trailing.length === 0) return []
   let newest = -Infinity
   for (const m of t.messages) if (m.key !== undefined && m.key > newest) newest = m.key
+  // Known limitation: "newer than anything keyed" is all this can know. A line written after the
+  // last read by someone ELSE — the same command (or, on the exact-text path, the same text) typed
+  // in the TERMINAL — is indistinguishable from the composer's own send and confirms it early. The
+  // transcript records no sender to tell them apart.
   const fresh = res.messages.filter((m) => m.key === undefined || m.key > newest)
   const available = fresh.filter((m) => m.role === 'user').map(userText)
   // A slash command / `!` line is recorded as a command, which the reader renders as an assistant
