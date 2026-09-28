@@ -4,7 +4,10 @@ import type { ChatQuestion } from '@shared/agents/permission-answer'
 import {
   PLAN_CHOICES,
   activeAnswerCard,
+  answerCardState,
+  answerRebindPending,
   emptySelection,
+  latestUnansweredCard,
   CHAT_ANSWER_TEXT_MAX,
   answerTooLong,
   planReviseAnswer,
@@ -168,3 +171,53 @@ describe('planReviseAnswer', () => {
   })
 })
 
+
+describe('latestUnansweredCard', () => {
+  it('is the newest card of that tool when it has no result', () => {
+    expect(latestUnansweredCard([plan(0), plan(1)], 'ExitPlanMode')).toEqual({ message: 1, part: 0 })
+  })
+  it('is null when the newest card of that tool is answered (older unanswered ones are history)', () => {
+    expect(latestUnansweredCard([plan(0), plan(1, 'User approved')], 'ExitPlanMode')).toBeNull()
+  })
+  it('ignores other tools and needs no matching questions', () => {
+    expect(latestUnansweredCard([ask(0, undefined), plan(1, 'done')], 'AskUserQuestion')).toEqual({ message: 0, part: 1 })
+    expect(latestUnansweredCard([], 'ExitPlanMode')).toBeNull()
+  })
+})
+
+describe('answerCardState (the card binds the request the thread was READ for)', () => {
+  const A = { pendingId: 'p-A', toolName: 'ExitPlanMode' }
+  const B = { pendingId: 'p-B', toolName: 'ExitPlanMode' }
+
+  it('active, bound to the held id, when the thread was read for the request held now', () => {
+    expect(answerCardState([plan(0)], A, 'p-A')).toEqual({ kind: 'active', card: { message: 0, part: 0 }, pendingId: 'p-A' })
+  })
+  it('updating (no controls) while the thread was read for ANOTHER request: plan A card must not answer B', () => {
+    expect(answerCardState([plan(0)], B, 'p-A')).toEqual({ kind: 'updating', card: { message: 0, part: 0 } })
+  })
+  it('updating while the thread was read with nothing held (nil → held), or never read', () => {
+    expect(answerCardState([plan(0)], B, null)).toEqual({ kind: 'updating', card: { message: 0, part: 0 } })
+    expect(answerCardState([plan(0)], B, undefined)).toEqual({ kind: 'updating', card: { message: 0, part: 0 } })
+  })
+  it('updating shows on no card when the latest card of the held tool is answered', () => {
+    expect(answerCardState([plan(0, 'User rejected')], B, 'p-A')).toEqual({ kind: 'updating', card: null })
+  })
+  it('nothing held (held → nil), or a held tool with no card at all: null', () => {
+    expect(answerCardState([plan(0)], undefined, 'p-A')).toBeNull()
+    expect(answerCardState([plan(0)], { pendingId: 'p-A', toolName: 'Bash' }, null)).toBeNull()
+  })
+  it('bound but the card does not match (question texts): null, like activeAnswerCard', () => {
+    const q = { pendingId: 'p-Q', toolName: 'AskUserQuestion', questions: ['Other?'] }
+    expect(answerCardState([ask(0, [SINGLE])], q, 'p-Q')).toBeNull()
+  })
+})
+
+describe('answerRebindPending', () => {
+  it('only for a held plan / question the thread was not read for', () => {
+    expect(answerRebindPending({ pendingId: 'p-B', toolName: 'ExitPlanMode' }, 'p-A')).toBe(true)
+    expect(answerRebindPending({ pendingId: 'p-B', toolName: 'AskUserQuestion' }, null)).toBe(true)
+    expect(answerRebindPending({ pendingId: 'p-B', toolName: 'ExitPlanMode' }, 'p-B')).toBe(false)
+    expect(answerRebindPending({ pendingId: 'p-B', toolName: 'Bash' }, 'p-A')).toBe(false)
+    expect(answerRebindPending(undefined, 'p-A')).toBe(false)
+  })
+})

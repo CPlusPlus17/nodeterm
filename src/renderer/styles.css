@@ -3468,6 +3468,11 @@ body,
 .term-chat__answer-status--error {
   color: var(--danger);
 }
+/* "Updating…" in place of the controls while the thread is re-read for a newly held request. */
+.term-chat__answer-updating {
+  font-size: 11px;
+  color: var(--muted);
+}
 /* Shared loading spinner (`components/Spinner.tsx`). CSS-only: a ring with one transparent
    quarter, rotated. It inherits `currentColor` and scales with the surrounding font size, so the
    same element sits beside 11px bar text and 12px placeholder text without per-site sizing.

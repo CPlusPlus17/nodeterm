@@ -268,3 +268,17 @@ export function QuestionAnswerControls({ questions, onSubmit, agentLabel, chip }
     </form>
   )
 }
+
+/**
+ * In place of the controls while the thread is re-read for a request it was not read for
+ * (`answerCardState` → `updating`): a new plan / question is held, and the card on screen may still
+ * be the previous one. Nothing here can answer anything; the terminal path still works, so the line
+ * names it — the same fallback the error line gives.
+ */
+export function AnswerControlsUpdating({ chip }: { chip: string }) {
+  return (
+    <div className="term-chat__answer term-chat__answer-updating" role="status" aria-live="polite">
+      {chip ? `Updating… — or answer in the terminal (${chip})` : 'Updating… — or answer in the terminal'}
+    </div>
+  )
+}

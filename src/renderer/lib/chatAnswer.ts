@@ -58,6 +58,67 @@ export function activeAnswerCard(messages: readonly ChatMessage[], held: HeldPer
   return null
 }
 
+/** A plan or a question: the two held tools whose card in the thread can carry answer controls. */
+const isAnswerCardTool = (name: string): boolean => name === EXIT_PLAN_MODE_TOOL || name === ASK_USER_QUESTION_TOOL
+
+/**
+ * The newest card of `toolName`, when it is still unanswered — the one card that says "Updating…"
+ * while the thread is re-read. Unlike `activeAnswerCard` it needs no matching question texts: it
+ * marks where the controls WILL be, it never answers anything.
+ */
+export function latestUnansweredCard(messages: readonly ChatMessage[], toolName: string): AnswerCardRef | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const parts = messages[i].parts
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const p = parts[j]
+      if (p.kind !== 'tool' || p.name !== toolName) continue
+      return p.result === undefined ? { message: i, part: j } : null
+    }
+  }
+  return null
+}
+
+/**
+ * How long a card waits on "Updating…" before its reload is tried again. The held-request reload can
+ * fail (a downed ControlMaster, an unreadable transcript) and nothing else reads the tail while the
+ * agent is `blocked`, so without a retry the card would stay on "Updating…" for the whole hold.
+ */
+export const CHAT_ANSWER_REBIND_RETRY_MS = 2000
+
+/** A plan / question is held that the thread on screen was not read for: the tail must be re-read
+ *  (and the card waits on "Updating…") before any card may answer it. */
+export function answerRebindPending(held: HeldPermission | undefined, threadHeldFor: string | null | undefined): boolean {
+  return !!held && isAnswerCardTool(held.toolName) && threadHeldFor !== held.pendingId
+}
+
+/** What the held plan / question card shows: controls bound to one request, or "Updating…". */
+export type AnswerCardState =
+  | { kind: 'active'; card: AnswerCardRef; pendingId: string }
+  | { kind: 'updating'; card: AnswerCardRef | null }
+  | null
+
+/**
+ * The answer card for the request held NOW, given the request the thread on screen was READ for
+ * (`threadHeldFor`: the held ticket at the START of the last applied tail read; `null` = read with
+ * nothing held, `undefined` = not read for this transcript yet).
+ *
+ * The card may only answer the request the thread was read for. While the hook moves held A → held
+ * B (plan A revised into plan B) the thread can still show plan A's card with no result, and a card
+ * matched by tool name alone would approve B from A's card. So a request the thread was not read
+ * for gets NO controls — only "Updating…" on the latest unanswered card of its tool, until a tail
+ * read that started under it lands. Active controls bind `threadHeldFor`, which is then the held id.
+ */
+export function answerCardState(
+  messages: readonly ChatMessage[],
+  held: HeldPermission | undefined,
+  threadHeldFor: string | null | undefined
+): AnswerCardState {
+  if (!held || !isAnswerCardTool(held.toolName)) return null
+  if (answerRebindPending(held, threadHeldFor)) return { kind: 'updating', card: latestUnansweredCard(messages, held.toolName) }
+  const card = activeAnswerCard(messages, held)
+  return card ? { kind: 'active', card, pendingId: held.pendingId } : null
+}
+
 /** What the user has picked for one question. `labels` are option labels; `other` + `otherText`
  *  is the free-text "Other" (the only input on a question with no options). */
 export interface QuestionSelection {

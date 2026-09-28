@@ -21,8 +21,8 @@ import { E_UNSUPPORTED } from '@shared/rpc'
 import { Spinner } from '../components/Spinner'
 import { CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
 import { ChatLoadingStatus } from './ChatPanelFallback'
-import { activeAnswerCard } from '../lib/chatAnswer'
-import { PlanAnswerControls, QuestionAnswerControls } from './ChatAnswerControls'
+import { CHAT_ANSWER_REBIND_RETRY_MS, answerCardState, answerRebindPending } from '../lib/chatAnswer'
+import { AnswerControlsUpdating, PlanAnswerControls, QuestionAnswerControls } from './ChatAnswerControls'
 import type { PermissionAnswer } from '@shared/agents/permission-answer'
 import { ChatComposer } from './ChatComposer'
 import { ChatTurnActions } from './ChatTurnActions'
@@ -176,10 +176,24 @@ export function ChatPanel({
   // holds a TUI dialog (`dialog` — the CLI is in the pane and waiting) and only on the card the held
   // ticket belongs to. A host whose hook script predates structured answers never sends `held`, so
   // its cards stay read-only — the terminal path is then the only one, exactly as before.
-  const answerCard = useMemo(
-    () => (!readOnly && refusal === 'dialog' ? activeAnswerCard(messages, held) : null),
-    [readOnly, refusal, messages, held]
+  //
+  // …and only when the thread on screen was READ for that ticket (`threadHeldFor`, lib/chatAnswer.ts
+  // `answerCardState`): while the hook moves held A → held B the thread can still show plan A's card
+  // with no result, and matching by tool name alone would approve B from A's card. Until a tail read
+  // that started under B lands, the latest card says "Updating…" instead. Keyed by the transcript
+  // identity, so a session change never carries the previous thread's binding over.
+  const [heldRead, setHeldRead] = useState<{ identity: string; pendingId: string | null } | null>(null)
+  const threadHeldFor = heldRead && heldRead.identity === identity ? heldRead.pendingId : undefined
+  const threadHeldForRef = useRef(threadHeldFor)
+  threadHeldForRef.current = threadHeldFor
+  const cardState = useMemo(
+    () => (!readOnly && refusal === 'dialog' ? answerCardState(messages, held, threadHeldFor) : null),
+    [readOnly, refusal, messages, held, threadHeldFor]
   )
+  const answerCard = cardState?.kind === 'active' ? cardState : null
+  const updatingCard = cardState?.kind === 'updating' ? cardState.card : null
+  // The request a rebind reload is owed for (null = none): drives the forced reload and its retry.
+  const rebindFor = cardState?.kind === 'updating' ? (held?.pendingId ?? null) : null
   const msgsRef = useRef<HTMLDivElement>(null)
   const prevState = useRef(state)
   // Request token: only the NEWEST readTranscript may land. An older read resolving late (the
@@ -218,6 +232,11 @@ export function ChatPanel({
   const livePendingRef = useRef(false)
   const liveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const attemptLiveRef = useRef<() => void>(() => {})
+  // A held-request reload asked for while a tail read was in flight: run when that read settles
+  // (single-flight, like the live reads) — never dropped, since the read in flight started under the
+  // PREVIOUS request and cannot bind the new one. Any read that STARTS later satisfies it.
+  const heldReloadQueuedRef = useRef(false)
+  const loadRef = useRef<(live?: boolean) => void>(() => {})
 
   // `live` = a read driven by a hook event while the agent works (see `attemptLive`), as opposed to
   // the first open, the turn-end reload and ↻. A live read is background refresh: it keeps
@@ -227,6 +246,18 @@ export function ChatPanel({
   const load = useCallback((live = false) => {
     const token = ++reqRef.current
     olderReqRef.current++
+    // The held request this read starts under: once it is applied, the thread is known to show the
+    // transcript as of (at least) that request. Read from the store, not the render: a hold that
+    // landed since the last render is exactly what this must see.
+    const heldAtStart = useAgentStatus.getState().byId[nodeId]?.held?.pendingId ?? null
+    heldReloadQueuedRef.current = false
+    // After this read settles: a queued held-request reload runs if the thread is still not read
+    // for the request held NOW (`bound` = what the thread is read for after this read).
+    const settleHeldReload = (bound: string | null | undefined) => {
+      if (!heldReloadQueuedRef.current) return
+      heldReloadQueuedRef.current = false
+      if (answerRebindPending(useAgentStatus.getState().byId[nodeId]?.held, bound)) loadRef.current()
+    }
     olderInFlightRef.current = false
     if (!live) {
       // Cancelling an older fetch (or clearing its error) removes a row ABOVE the viewport: anchor
@@ -259,14 +290,20 @@ export function ChatPanel({
             // The thread on screen is still this transcript's: back to `ok`, or the `loading` this
             // reload set would stick and silently disable older paging (it waits for `ok`).
             setLoadState('ok')
+            // Nothing was applied: the thread is still read for what it was read for before.
+            settleHeldReload(threadHeldForRef.current)
             return
           }
           setThread(emptyThread(identity))
           setLoadState('missing')
+          setHeldRead({ identity, pendingId: heldAtStart })
+          settleHeldReload(heldAtStart)
           return
         }
         setThread((t) => applyTail(t, identity, res, { carryUnconfirmed: live }))
         setLoadState('ok')
+        setHeldRead({ identity, pendingId: heldAtStart })
+        settleHeldReload(heldAtStart)
       },
       (e: unknown) => {
         if (token !== reqRef.current) return
@@ -277,15 +314,18 @@ export function ChatPanel({
         const t = threadRef.current
         if (t.identity === identity && t.messages.length > 0) {
           setLoadState('ok')
+          settleHeldReload(threadHeldForRef.current)
           return
         }
         // …and, as there, a thread of ANOTHER transcript (the session changed under the panel) is
         // cleared: the error message must not sit under the previous session's conversation.
         if (t.identity !== identity) setThread(emptyThread(identity))
         setLoadState(isUnsupported(e) ? 'unsupported' : 'error')
+        settleHeldReload(threadHeldForRef.current)
       }
     )
   }, [api, sessionId, cwd, accountId, nodeId, agentId, identity])
+  loadRef.current = load
 
   // Fetch the next OLDER page and prepend it. One in flight at a time; a result that arrives
   // after a newer tail load (or unmount) is dropped by its token. A `found:false` here is a failed
@@ -330,6 +370,26 @@ export function ChatPanel({
   useEffect(() => {
     load()
   }, [load])
+
+  // A newly held plan / question the thread was not read for: re-read the tail now (declared after
+  // the initial load, so on mount this QUEUES behind that read rather than superseding it) — or, with a
+  // read in flight (it started under the previous request), queue it for that read's settle. Not
+  // for a surface that cannot read transcripts at all (every read would be refused).
+  const requestHeldReload = useCallback(() => {
+    if (loadStateRef.current === 'unsupported') return
+    if (tailInFlightRef.current) heldReloadQueuedRef.current = true
+    else loadRef.current()
+  }, [])
+  useEffect(() => {
+    if (rebindFor !== null) requestHeldReload()
+  }, [rebindFor, requestHeldReload])
+  // …and while the card stays on "Updating…" with no read in flight (the reload failed, or found
+  // nothing new), try again: nothing else reads the tail while the agent is blocked.
+  useEffect(() => {
+    if (rebindFor === null || tailLoading) return
+    const t = setTimeout(requestHeldReload, CHAT_ANSWER_REBIND_RETRY_MS)
+    return () => clearTimeout(t)
+  }, [rebindFor, tailLoading, requestHeldReload])
 
   // Invalidate any in-flight read when the panel goes away.
   useEffect(
@@ -523,13 +583,15 @@ export function ChatPanel({
   const onWriteRefused = useCallback(() => setReadonly(true), [])
 
   // Answer the held request through core, which validates the answer against the pending request
-  // file and builds what the hook prints. The ticket is re-checked against the store at SEND time:
+  // file and builds what the hook prints. `pendingId` is the request the CARD was bound to
+  // (`answerCardState`), re-checked at SEND time against both the store and the thread's binding:
   // a hold that ended (answered in the TUI, timed out, replaced) while the user was choosing must
   // not receive an answer meant for it — that reads as a refusal, and the card says to use the
   // terminal. `false` from core is the same (see ChatAnswerControls).
   const answerHeld = useCallback(
     async (pendingId: string, answer: PermissionAnswer): Promise<boolean> => {
       if (useAgentStatus.getState().byId[nodeId]?.held?.pendingId !== pendingId) return false
+      if (threadHeldForRef.current !== pendingId) return false
       return api.answerPermission({ nodeId, pendingId, answer })
     },
     [api, nodeId]
@@ -643,24 +705,28 @@ export function ChatPanel({
                   <div className="term-chat__tool-card-title">{toolCardTitle(p.name)}</div>
                   <MarkdownText text={p.body} />
                   {p.result && <pre className="term-chat__tool-result">{p.result}</pre>}
-                  {answerCard && held && answerCard.message === i && answerCard.part === j && (
-                    // Keyed by the ticket: a new hold on the same card starts from a clean state.
+                  {answerCard && answerCard.card.message === i && answerCard.card.part === j && (
+                    // Keyed by the BOUND ticket: a new hold on the same card starts from a clean
+                    // state, and every answer names the request this card was drawn for.
                     p.name === 'AskUserQuestion' && p.questions ? (
                       <QuestionAnswerControls
-                        key={held.pendingId}
+                        key={answerCard.pendingId}
                         questions={p.questions}
                         agentLabel={agentLabel}
                         chip={mdChip}
-                        onSubmit={(a) => answerHeld(held.pendingId, a)}
+                        onSubmit={(a) => answerHeld(answerCard.pendingId, a)}
                       />
                     ) : (
                       <PlanAnswerControls
-                        key={held.pendingId}
+                        key={answerCard.pendingId}
                         agentLabel={agentLabel}
                         chip={mdChip}
-                        onSubmit={(a) => answerHeld(held.pendingId, a)}
+                        onSubmit={(a) => answerHeld(answerCard.pendingId, a)}
                       />
                     )
+                  )}
+                  {updatingCard && updatingCard.message === i && updatingCard.part === j && (
+                    <AnswerControlsUpdating chip={mdChip} />
                   )}
                 </div>
               ) : (
