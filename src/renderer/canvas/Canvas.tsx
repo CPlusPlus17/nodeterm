@@ -5,7 +5,7 @@ import { keepGlassBlurWhileMoving } from '../lib/glassContrast'
 import { LINK_ENDPOINT_NOT_FOUND } from '@shared/canvas-link'
 import { createControlOpenBatch } from '../lib/controlOpenBatch'
 import { commitOwnedLaunchAttempt, registerLaunchCommit } from '../terminal/launch-attempt'
-import { launchCommand } from '../terminal/launch-command'
+import { hasLaunchWriter, launchCommand } from '../terminal/launch-command'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useContextLinkSync } from './useContextLinkSync'
 import { useMirrorIdentitySeed } from './useMirrorIdentitySeed'
@@ -541,6 +541,7 @@ import type {
   PendingLaunch,
   Project,
   ProjectKanban,
+  PtyCreateOptions,
   SshPassphraseRequest,
   SshProjectStatus,
   TranscriptHit
@@ -572,7 +573,16 @@ import { chordHeld, isHoldChord, isModifierEventKey, matchesShortcut } from '@sh
 // The dispatch below is the CONSUMER of the confirm-gated set. Before this import the set named
 // write/close as "the confirm-gated pair" from inside `src/main` — which this project cannot see —
 // while the gating lived in two hand-written blocks here, so the set decided nothing.
-import { isDestructiveVerb, dryRunRequested } from '@shared/control-verbs'
+import { isDestructiveVerb, dryRunRequested, runNowRequested } from '@shared/control-verbs'
+import {
+  headlessStartNoticeText,
+  mergeRunNow,
+  planRunVerb,
+  RUN_NOW_AFTER_REFUSAL,
+  savePendingAnywhere,
+  startHeadless,
+  type HeadlessStartOutcome
+} from '../lib/headlessRun'
 import {
   SETTINGS_VERB_KEY_LIST,
   parseSettingsRequest,
@@ -701,6 +711,9 @@ const NOTICE_MAX_MS = 15000
 function noticeDwellMs(text: string): number {
   return Math.min(NOTICE_MAX_MS, NOTICE_MS + text.length * 25)
 }
+
+/** What the agent-control handler's `reply` accepts, for helpers that build one outside it. */
+type ControlReply = { ok: boolean; message?: string; result?: unknown; error?: string }
 
 /** The confirm dialogs, named so their setters can be wrapped in a synchronous open-guard (see
  *  `confirmFlags`): ONE confirm at a time, decided at call time rather than at the next render. */
@@ -6211,6 +6224,16 @@ export function Canvas() {
   /** Latest `travelToNode`, for the agent-control handler's off-canvas notice. Travel to a NODE is
    *  the user's own click on the notice's "Go there" button, not something a verb does. */
   const travelToNodeRef = useRef<(nodeId: string) => void>(() => {})
+  // #925 headless start: one in-flight set for the whole canvas (one start per node at a time),
+  // shared by `open-* --run-now` and `run`. The two below are published beside travelToNodeRef's
+  // assignment, for the same reason: the agent-control effect mounts ONCE.
+  const headlessInFlightRef = useRef(new Set<string>())
+  const startNodesHeadlessRef = useRef<
+    (project: Project, nodes: CanvasNodeState[]) => Promise<HeadlessStartOutcome[]>
+  >(async () => [])
+  const runQueuedNodeRef = useRef<(project: Project, nodeId: string) => Promise<ControlReply>>(
+    async () => ({ ok: false, error: 'run: canvas not ready' })
+  )
 
   // Latest worktree callbacks for the agent-control handler. That effect mounts ONCE (empty
   // deps) and these callbacks' identities change with the active project (activeProjectId /
@@ -10302,6 +10325,17 @@ export function Canvas() {
         return
       }
 
+      // #925: "start now" and "start when X is done" contradict each other. Refused uniformly,
+      // before any node is built, on every open verb and every route (dry run included).
+      if (
+        (verb === 'open-terminal' || verb === 'open-claude' || verb === 'open-agent') &&
+        runNowRequested(args) &&
+        args.after
+      ) {
+        reply({ ok: false, error: RUN_NOW_AFTER_REFUSAL })
+        return
+      }
+
       // ── `--project` targeted opens (issue #338 Task 2.3) — the three open verbs, early ──────
       // Main's gateProjectTarget already enforced own-or-granted BEFORE forwarding (spec §3):
       // the renderer never sees an unauthorized target — the checks below are belt, not the
@@ -10446,8 +10480,8 @@ export function Canvas() {
             })
           }
           void writeDisk()
-          reply({
-            ok: true,
+          const tgReply = {
+            ok: true as const,
             // ONE sentence for "queued into a project you are not looking at", shared with the
             // own-project cold open below (lib/coldOpen) so an orchestrator never meets two
             // phrasings for one outcome.
@@ -10461,12 +10495,66 @@ export function Canvas() {
               projectId: target.id,
               queued: true,
               queuedIds: tgIds
-            }
-          })
+            } as Record<string, unknown>
+          }
+          // #925 `--run-now`: start the held launches now, headless. The nodes were upserted
+          // above in this same tick, so the claim reads them from the store copy. A batch with
+          // nothing held (a bare `open-terminal`) has nothing to start: the plain reply stands.
+          const tgHeld = runNowRequested(args)
+            ? tgIds
+                .map((id) => useProjects.getState().getProject(target.id)?.nodes.find((n) => n.id === id))
+                .filter((n): n is CanvasNodeState => !!n?.pendingLaunch)
+            : []
+          if (tgHeld.length) {
+            reply(mergeRunNow(tgReply, await startNodesHeadlessRef.current(target, tgHeld)))
+            return
+          }
+          reply(tgReply)
           return
         }
         // targetId === the caller's own project: fall through to the legacy path unchanged
         // (B3a — behaves exactly as if --project were omitted).
+      }
+
+      // #925: `run --node <id> --project <other>`. Main has already gated the id (own or granted,
+      // PROJECT_TARGETABLE_VERBS); this resolves it, in that project only. The caller's own
+      // project falls through to the normal routing and the `case 'run'` below.
+      if (verb === 'run' && args.project !== undefined) {
+        const runStore = useProjects.getState()
+        const runLiveSrc = nodesRef.current.find((n) => n.id === sourceNodeId)
+        const runStoredSrc = runStore.projects
+          .flatMap((p) => p.nodes.map((n) => ({ node: n, projectId: p.id })))
+          .find((x) => x.node.id === sourceNodeId)
+        const runCallerProjectId = runLiveSrc ? runStore.activeProjectId : runStoredSrc?.projectId
+        if (args.project !== runCallerProjectId) {
+          if (!runLiveSrc && !runStoredSrc) {
+            reply({ ok: false, error: 'source node is not in any open project' })
+            return
+          }
+          if (!sourceIsControlCapable(runLiveSrc?.data.agentId ?? runStoredSrc?.node.agentId)) {
+            reply({ ok: false, error: 'source node is not a control-capable agent' })
+            return
+          }
+          // Belt only, worded like the `--project` open block's: main refused every stranger id.
+          const runTarget = runStore.getProject(args.project)
+          if (!runTarget) {
+            reply({
+              ok: false,
+              error: 'project-target-refused: the target project is not available here — try again'
+            })
+            return
+          }
+          if (runTarget.ssh || runTarget.remote) {
+            reply({
+              ok: false,
+              error:
+                'project-target-ssh-unsupported: starting sessions in an SSH project is not supported — do not retry'
+            })
+            return
+          }
+          reply(await runQueuedNodeRef.current(runTarget, args.node ?? ''))
+          return
+        }
       }
       // ── end of the early-handled (store-answered) verbs ─────────────────────────────────────
 
@@ -10693,7 +10781,11 @@ export function Canvas() {
                     (coldGroup.groupId ? ` in group ${coldGroup.groupId}` : '') +
                     (coldCwd ? `, cwd ${coldCwd}` : ''),
                   ...(coldAfterIds.length ? [`armed to wait for: ${coldAfterIds.join(', ')}`] : []),
-                  'That project is not on screen, so the session(s) would be queued and start when it is next viewed.'
+                  // #925: `--run-now` starts it headless instead — except on an SSH project, whose
+                  // nodes a headless start refuses (they start on view, over SSH).
+                  runNowRequested(args) && !owner.ssh
+                    ? 'That project is not on screen, so the session(s) would start now, headless.'
+                    : 'That project is not on screen, so the session(s) would be queued and start when it is next viewed.'
                 ].join('\n'),
                 result: {
                   dryRun: true,
@@ -10831,8 +10923,8 @@ export function Canvas() {
             void writeDisk()
             const coldWhat = coldTerminal ? 'terminal' : coldAgentId
             const coldDepLinked = coldDepPlans.flatMap((p) => p.linked)
-            reply({
-              ok: true,
+            const coldReply = {
+              ok: true as const,
               message:
                 coldOpenMessage(coldCount, coldWhat, owner.name, coldIds, {
                   closed: route.kind === 'reopen'
@@ -10854,8 +10946,22 @@ export function Canvas() {
                 after: coldAfterIds,
                 queued: true,
                 queuedIds: coldIds
-              }
-            })
+              } as Record<string, unknown>
+            }
+            // #925 `--run-now`: start the held launches now, headless (`--after` never reaches here
+            // with it — refused before any node was built). The nodes were upserted above in this
+            // same tick; a CLOSED owner (`reopen`) gets its tab back, not the focus. A batch with
+            // nothing held (a bare `open-terminal`) has nothing to start: the plain reply stands.
+            const held = runNowRequested(args)
+              ? coldIds
+                  .map((id) => useProjects.getState().getProject(owner.id)?.nodes.find((n) => n.id === id))
+                  .filter((n): n is CanvasNodeState => !!n?.pendingLaunch)
+              : []
+            if (held.length) {
+              reply(mergeRunNow(coldReply, await startNodesHeadlessRef.current(owner, held)))
+              return
+            }
+            reply(coldReply)
             return
           }
           // ── OFF CANVAS ──────────────────────────────────────────────────────────────────
@@ -12472,6 +12578,20 @@ export function Canvas() {
               },
               onCancel: () => reply({ ok: false, error: 'denied by user' })
             })
+            return
+          }
+          case 'run': {
+            // #925, the CLI twin of a QUEUED node's Run now. `--node` resolves ONLY in the
+            // caller's own project: live when it is on screen, else its off-canvas serialized copy
+            // (the `stored-node` disposition, @shared/control-off-screen). Another project takes
+            // `--project`, answered by the early block above.
+            const runSt = useProjects.getState()
+            const runProject = offCanvas ? offCanvas.project : runSt.getProject(runSt.activeProjectId)
+            if (!runProject) {
+              reply({ ok: false, error: "run: the caller's project is not available" })
+              return
+            }
+            reply(await runQueuedNodeRef.current(runProject, args.node ?? ''))
             return
           }
           case 'close': {
@@ -14218,6 +14338,124 @@ export function Canvas() {
   // const that is only initialized later in the body. That works today and breaks on a reorder.
   useEffect(() => {
     travelToNodeRef.current = travelToNode
+  })
+
+  // #925: start held launches headless in a project that is not on screen (`open-* --run-now`),
+  // and `run --node` (the CLI twin of a QUEUED node's Run now). Wiring only: the flow and every
+  // refusal live in lib/headlessRun. Published every render for the same reason as above.
+  useEffect(() => {
+    startNodesHeadlessRef.current = async (project, nodes) => {
+      const env = {
+        activeProjectId: () => useProjects.getState().activeProjectId,
+        patchLive: (nodeId: string, pending: PendingLaunch | undefined) => {
+          if (!nodesRef.current.some((n) => n.id === nodeId)) return false
+          setNodes((ns) =>
+            ns.map((n) => (n.id === nodeId ? { ...n, data: { ...n.data, pendingLaunch: pending } } : n))
+          )
+          return true
+        },
+        patchStored: (projectId: string, nodeId: string, pending: PendingLaunch | undefined) => {
+          const st = useProjects.getState()
+          const stored = st.getProject(projectId)?.nodes.find((n) => n.id === nodeId)
+          if (!stored) return false
+          return st.applyNodeMutation(projectId, { op: 'upsert', node: { ...stored, pendingLaunch: pending } })
+        },
+        writeDisk,
+        markDirty
+      }
+      const deps = {
+        launch: (req: { ptyOptions: PtyCreateOptions; command: string }) => api.pty.launchHeadless(req),
+        savePending: (nodeId: string, pending: PendingLaunch | undefined) =>
+          savePendingAnywhere(env, project.id, nodeId, pending),
+        markStarting: (id: string) => useLaunchDelivery.getState().markStarting(id),
+        markFailed: (id: string) => useLaunchDelivery.getState().markFailed(id, 1),
+        clearDelivery: (id: string) => useLaunchDelivery.getState().clear(id),
+        inFlight: headlessInFlightRef.current
+      }
+      // A closed project gets its tab back, never the focus (#925 spec §2.5): unhide BEFORE the
+      // claim's disk write, so the same write persists it. Not while no project is active (the
+      // welcome screen): un-closing one there would flip `hasProjects` and render a canvas with no
+      // active project. The session still starts; the project stays in Recently closed.
+      const projectsNow = useProjects.getState()
+      if (projectsNow.getProject(project.id)?.closed && projectsNow.activeProjectId !== '') {
+        projectsNow.unhideProject(project.id)
+      }
+      const outcomes = await Promise.all(nodes.map((node) => startHeadless(deps, { project, node })))
+      const started = outcomes.filter((o) => o.started).map((o) => o.id)
+      if (started.length) {
+        setNotice({
+          kind: 'info',
+          sticky: true,
+          text: headlessStartNoticeText(project.name, started.length),
+          action: { label: 'Go there', run: () => travelToNodeRef.current(started[0]) }
+        })
+      }
+      return outcomes
+    }
+
+    runQueuedNodeRef.current = async (project, nodeId) => {
+      const st = useProjects.getState()
+      const active = st.activeProjectId === project.id
+      const live = active ? nodesRef.current.find((n) => n.id === nodeId) : undefined
+      const stored = active ? undefined : st.getProject(project.id)?.nodes.find((n) => n.id === nodeId)
+      if (!live && !stored) return { ok: false, error: `run: no node with id ${nodeId}` }
+      const pending = (live ? live.data.pendingLaunch : stored?.pendingLaunch) as PendingLaunch | undefined
+      const one = (started: boolean, reason?: string): ControlReply => ({
+        ok: true,
+        message: started
+          ? `started ${nodeId}; agent startup is not confirmed`
+          : `${nodeId} stays queued (${reason})`,
+        result: {
+          ids: [nodeId],
+          id: nodeId,
+          started,
+          startedIds: started ? [nodeId] : [],
+          queued: !started,
+          queuedIds: started ? [] : [nodeId],
+          ...(reason ? { reason } : {})
+        }
+      })
+      switch (
+        planRunVerb({
+          pending,
+          inFlight: headlessInFlightRef.current.has(nodeId),
+          projectActive: active,
+          hasWriter: hasLaunchWriter(nodeId, api)
+        })
+      ) {
+        case 'nothing-queued':
+          return { ok: false, error: `run-nothing-queued: ${nodeId} has no queued launch` }
+        case 'already-starting':
+          return { ok: false, error: `run-already-starting: ${nodeId} is already starting` }
+        case 'wait-for-mount':
+          return one(false, 'starts-when-mounted')
+        case 'mounted': {
+          // The ▶ path verbatim (TerminalNode's QUEUED button): disarm only on a landed delivery.
+          const outcome = await launchCommand(nodeId, pending!.command, true, api)
+          if (outcome === 'submitted') {
+            useLaunchDelivery.getState().clear(nodeId)
+            setNodes((ns) =>
+              ns.map((n) =>
+                n.id === nodeId
+                  ? { ...n, data: { ...n.data, initialCommand: undefined, pendingLaunch: undefined } }
+                  : n
+              )
+            )
+            markDirty()
+            return one(true)
+          }
+          useLaunchDelivery.getState().markFailed(nodeId, 1)
+          return one(false, outcome)
+        }
+        case 'headless': {
+          // No await between the plan above and this call: the claim lands in the same tick, while
+          // the project is still off screen, which is what makes savePendingAnywhere's store+disk
+          // branch (not its non-durable live one) the one that records it.
+          const [o] = await startNodesHeadlessRef.current(project, [stored!])
+          return o.started ? one(true) : one(false, o.reason)
+        }
+      }
+    }
   })
 
   // OS-notification click → focus the originating node (see the note beside focusNodeById:
