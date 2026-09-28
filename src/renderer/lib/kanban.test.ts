@@ -7,7 +7,7 @@ import {
   boardLabels, cardMatchesLabelFilter, createLabel, deleteLabel, labelColor, labelsForCard,
   recolorLabel, renameLabel, reorderLabels, toggleCardLabel,
   autoLabelColor, migrateProjectTags, migrateTagsToLabels, setCardLabels, resolveColumnRef,
-  setColumnCategory
+  setColumnCategory, AT_COLUMN_END
 } from './kanban'
 import type { Project } from '@shared/types'
 
@@ -122,9 +122,21 @@ describe('assignments', () => {
     expect(unassigned(k, ['n1', 'n2'])).toEqual(['n1', 'n2'])
     expect(assignedTo(k, 'a')).toEqual([])
   })
-  it('assignNode into a column at the end (null) and before a target', () => {
-    const atEnd = assignNode(board(), 'n9', 'b', null)
+  // An UNANCHORED move lands at the TOP of its column: a card an agent just moved into a long
+  // "Done" column used to append at the bottom and read as "it disappeared".
+  it('assignNode with no anchor (null) lands at the TOP of the destination', () => {
+    const atTop = assignNode(board(), 'n9', 'b', null)
+    expect(assignedTo(atTop, 'b')).toEqual(['n9', 'n2'])
+    const moved = assignNode(board(), 'n3', 'a', null)
+    expect(assignedTo(moved, 'a')).toEqual(['n3', 'n1'])
+  })
+  it('assignNode at the column END only when asked for it explicitly (a drop below the last card)', () => {
+    const atEnd = assignNode(board(), 'n9', 'b', AT_COLUMN_END)
     expect(assignedTo(atEnd, 'b')).toEqual(['n2', 'n9'])
+    const moved = assignNode(board(), 'n1', 'a', AT_COLUMN_END)
+    expect(assignedTo(moved, 'a')).toEqual(['n3', 'n1'])
+  })
+  it('assignNode before a target card in the column', () => {
     const before = assignNode(board(), 'n2', 'a', 'n3')
     expect(assignedTo(before, 'a')).toEqual(['n1', 'n2', 'n3'])
     expect(assignedTo(before, 'b')).toEqual([])
@@ -133,9 +145,9 @@ describe('assignments', () => {
     const k = assignNode(board(), 'n1', null, null)
     expect(k.assignments.map((a) => a.nodeId)).toEqual(['n2', 'n3'])
   })
-  it('assignNode: beforeNode in a different column ⇒ end; unknown column ⇒ no-op; self-before ⇒ no-op', () => {
+  it('assignNode: beforeNode in a different column is no anchor ⇒ top; unknown column ⇒ no-op; self-before ⇒ no-op', () => {
     const k = assignNode(board(), 'n1', 'b', 'n3')
-    expect(assignedTo(k, 'b')).toEqual(['n2', 'n1'])
+    expect(assignedTo(k, 'b')).toEqual(['n1', 'n2'])
     expect(assignNode(board(), 'n1', 'nope', null)).toEqual(board())
     expect(assignNode(board(), 'n1', 'a', 'n1')).toEqual(board())
   })

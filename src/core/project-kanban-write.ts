@@ -80,7 +80,9 @@ export function ensureProjectBoard(raw: string, now: Date, mintId = makeColumnId
 }
 
 /**
- * Move one card to `columnId`, or to the virtual Ungrouped column (`columnId === null`).
+ * Move one card to `columnId`, or to the virtual Ungrouped column (`columnId === null`). The move
+ * names no position, so — like every unanchored move on the desktop — the card lands at the TOP of
+ * the destination column.
  *
  * Only `kanban.assignments` is touched: `meta` (assignees / due / priority / labels) is independent
  * of placement on the desktop too, and a move must not disturb it.
@@ -119,7 +121,16 @@ export function setProjectCardColumn(
   if ((current ?? null) === columnId) return null
 
   const kept = before.filter((a) => a?.nodeId !== nodeId)
-  board.assignments = columnId === null ? kept : [...kept, { nodeId, columnId }]
+  if (columnId === null) {
+    board.assignments = kept
+  } else {
+    // Unanchored ⇒ the TOP of the destination, the desktop's rule (`assignNode`): array order is
+    // column order, so that is just before the column's first assignment; an empty column's first
+    // card joins the end of the array.
+    const first = kept.findIndex((a) => a?.columnId === columnId)
+    const at = first === -1 ? kept.length : first
+    board.assignments = [...kept.slice(0, at), { nodeId, columnId }, ...kept.slice(at)]
+  }
   if (!Array.isArray(board.columns)) board.columns = columns
   root.kanban = board
   return bumped(root, now)

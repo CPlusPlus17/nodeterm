@@ -128,6 +128,28 @@ describe('setProjectCardColumn', () => {
     expect(out.kanban.meta).toEqual([{ nodeId: 'term-a-1', priority: 'high' }])
   })
 
+  // The phone's move names no anchor, so it follows the desktop's unanchored rule: the TOP of the
+  // destination, where the person who just filed it will look for it.
+  it('an unanchored move lands at the TOP of a column that already has cards', () => {
+    const out = parse(
+      setProjectCardColumn(
+        board([
+          { nodeId: 'term-z-9', columnId: 'kcol-b' },
+          { nodeId: 'term-y-8', columnId: 'kcol-b' },
+          { nodeId: 'term-a-1', columnId: 'kcol-a' }
+        ]),
+        'term-a-1',
+        'kcol-b',
+        NOW
+      )
+    )
+    expect(out.kanban.assignments.map((a: { nodeId: string }) => a.nodeId)).toEqual([
+      'term-a-1',
+      'term-z-9',
+      'term-y-8'
+    ])
+  })
+
   it('refuses a column this board does not have', () => {
     expect(setProjectCardColumn(board(), 'term-a-1', 'kcol-gone', NOW)).toBeNull()
   })

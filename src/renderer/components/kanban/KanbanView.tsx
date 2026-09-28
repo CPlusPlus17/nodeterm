@@ -11,7 +11,7 @@ import { useProjects } from '../../state/projects'
 import { useSettings } from '../../state/settings'
 import { useBoardWallpaperStyle } from '../../state/wallpaper'
 import {
-  addColumn, assignNode, assignedTo, boardLabels, cardMatchesLabelFilter, cardMeta, columnForNode,
+  AT_COLUMN_END, addColumn, assignNode, assignedTo, boardLabels, cardMatchesLabelFilter, cardMeta, columnForNode,
   deleteColumn, labelsForCard, moveColumn,
   nextColumnColor, pruneAssignments, recolorColumn, renameColumn, setColumnCategory, unassigned
 } from '../../lib/kanban'
@@ -357,7 +357,7 @@ export const KanbanView = memo(function KanbanView({
         if (columnId !== null) commit(moveColumn(board, drag.id, columnId))
         // a column dropped on Ungrouped is a no-op — Ungrouped is always first
       } else if (isProviderDrag(drag)) requestGitHubMove(drag.issue, columnId)
-      else commit(assignNode(board, drag.id, columnId, null))
+      else commit(assignNode(board, drag.id, columnId, AT_COLUMN_END))
     },
     [board, commit, requestGitHubMove]
   )
@@ -374,12 +374,12 @@ export const KanbanView = memo(function KanbanView({
         requestGitHubMove(drag.issue, columnId)
         return
       }
-      // "after this card" = "before the NEXT card in the column" (null = end of column).
+      // "after this card" = "before the NEXT card in the column" (after the last = the bottom).
       const ids = columnId === null ? unassigned(board, sessionIds) : assignedTo(board, columnId)
-      let beforeId: string | null = targetNodeId
+      let beforeId: string | typeof AT_COLUMN_END = targetNodeId
       if (side === 'after') {
         const i = ids.indexOf(targetNodeId)
-        beforeId = i >= 0 && i + 1 < ids.length ? ids[i + 1] : null
+        beforeId = i >= 0 && i + 1 < ids.length ? ids[i + 1] : AT_COLUMN_END
       }
       commit(assignNode(board, drag.id, columnId, beforeId))
     },

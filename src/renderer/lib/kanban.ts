@@ -149,15 +149,27 @@ export function unassigned(k: ProjectKanban, sessionIds: string[]): string[] {
   return sessionIds.filter((id) => !assigned.has(id))
 }
 
+/** The explicit "bottom of the column" anchor for `assignNode` — a drop BELOW the last card, or on
+ *  the column's empty space under its cards. Everything else that names no card lands at the top. */
+export const AT_COLUMN_END: unique symbol = Symbol('kanban.atColumnEnd')
+
 /** Assigns/moves a session card. `columnId` null = back to Ungrouped (assignment removed;
- *  Ungrouped order is canvas order, so `beforeNodeId` is ignored there). Inserts before
- *  `beforeNodeId`'s assignment when that assignment is in the target column, else at the
- *  end. Unknown target column is a no-op. */
+ *  Ungrouped order is canvas order, so the anchor is ignored there).
+ *
+ *  Placement in the destination column:
+ *  - `beforeNodeId` names a card IN that column → just above it;
+ *  - `AT_COLUMN_END` → at the bottom (only a positional drop asks for this);
+ *  - anything else — `null`, or a card that is not in that column — is UNANCHORED and lands at
+ *    the TOP. An unanchored move is "file this here" (the card menu, the agent `assign` verb, a
+ *    card created from a column): appended at the bottom of a long "Done" column, the card an
+ *    agent just finished read as having disappeared.
+ *
+ *  Unknown target column is a no-op. */
 export function assignNode(
   k: ProjectKanban,
   nodeId: string,
   columnId: string | null,
-  beforeNodeId: string | null
+  beforeNodeId: string | null | typeof AT_COLUMN_END
 ): ProjectKanban {
   if (nodeId === beforeNodeId) return k
   if (columnId === null) {
@@ -167,10 +179,16 @@ export function assignNode(
   if (!k.columns.some((c) => c.id === columnId)) return k
   const moved: KanbanAssignment = { nodeId, columnId }
   const without = k.assignments.filter((a) => a.nodeId !== nodeId)
-  const before = beforeNodeId
-    ? without.find((a) => a.nodeId === beforeNodeId && a.columnId === columnId)
-    : undefined
-  const idx = before ? without.indexOf(before) : -1
+  const anchor =
+    typeof beforeNodeId === 'string'
+      ? without.find((a) => a.nodeId === beforeNodeId && a.columnId === columnId)
+      : undefined
+  // Array order is the column order, so "top" = before the column's first assignment, and an empty
+  // column's first card simply joins the end of the array.
+  const target =
+    anchor ??
+    (beforeNodeId === AT_COLUMN_END ? undefined : without.find((a) => a.columnId === columnId))
+  const idx = target ? without.indexOf(target) : -1
   const at = idx === -1 ? without.length : idx
   return { ...k, assignments: [...without.slice(0, at), moved, ...without.slice(at)] }
 }
