@@ -122,13 +122,18 @@ export async function readAlertSound(userDataDir: string, kind: AlertSoundKind):
   // O_NOFOLLOW (Windows) the open follows a link, so the name is lstat'ed AFTER the open and must
   // be a plain file that is the very file we hold (same dev + ino) — a link, or a swap between the
   // open and that lstat, reads as null. It runs on every platform, so POSIX tests cover it too.
+  // A zero ino means the filesystem has no file id (FAT/exFAT, some SMB shares on Windows), so it
+  // proves nothing and reads as null too: the custom sound falls back to the chime there.
+  // Known, accepted limits on Windows, both needing write access to the data dir (which could
+  // simply replace the sound): a hard link swapped in between open and lstat matches by
+  // construction, and a link to a busy named pipe can block the open itself.
   let fh: fs.FileHandle | undefined
   try {
     fh = await fs.open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
     const st = await fh.stat({ bigint: true })
     if (!st.isFile() || st.size === 0n || st.size > BigInt(ALERT_SOUND_MAX_BYTES)) return null
     const named = await fs.lstat(file, { bigint: true })
-    if (!named.isFile() || named.dev !== st.dev || named.ino !== st.ino) return null
+    if (!named.isFile() || st.ino === 0n || named.dev !== st.dev || named.ino !== st.ino) return null
     // Read at most one byte past the cap from the SAME handle: a file that grew after the fstat is
     // still refused rather than slurped.
     const buf = Buffer.alloc(ALERT_SOUND_MAX_BYTES + 1)
