@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { GitHubRequestCoordinator } from './request-coordinator'
+import { backgroundFloor, GitHubRequestCoordinator, MAX_RATE_WAIT_MS } from './request-coordinator'
 
 describe('GitHubRequestCoordinator', () => {
   it('allows at most four reads for one identity across repositories', async () => {
@@ -106,5 +106,98 @@ describe('GitHubRequestCoordinator', () => {
     await Promise.all([activeA, activeB])
     await expect(queuedA).rejects.toMatchObject({ code: 'configuration-changed' })
     await expect(queuedB).rejects.toMatchObject({ code: 'configuration-changed' })
+  })
+})
+
+describe('GitHubRequestCoordinator rate budget', () => {
+  const sample = (remaining: number, resetAt = 3_600_000, limit = 5_000) =>
+    ({ resource: 'core', limit, remaining, resetAt })
+
+  it('records the budget each response reports, per identity', () => {
+    const coordinator = new GitHubRequestCoordinator({ now: () => 1_000 })
+    coordinator.noteRateSample('user-1', sample(4_968))
+    expect(coordinator.rateStatus('user-1')).toEqual({
+      resource: 'core', limit: 5_000, remaining: 4_968, resetAt: 3_600_000, observedAt: 1_000
+    })
+    expect(coordinator.rateStatus('user-2')).toBeUndefined()
+  })
+
+  it('keeps the lowest reading of a window and adopts a newer window', () => {
+    const coordinator = new GitHubRequestCoordinator({ now: () => 1_000 })
+    coordinator.noteRateSample('user-1', sample(4_000))
+    // A response that left GitHub earlier can arrive later; it must not raise the budget back.
+    coordinator.noteRateSample('user-1', sample(4_500))
+    expect(coordinator.rateStatus('user-1')?.remaining).toBe(4_000)
+    coordinator.noteRateSample('user-1', sample(4_999, 7_200_000))
+    expect(coordinator.rateStatus('user-1')?.remaining).toBe(4_999)
+  })
+
+  it('blocks new requests the moment a response says the budget is spent, before any refusal', () => {
+    const coordinator = new GitHubRequestCoordinator({ now: () => 1_000 })
+    coordinator.noteRateSample('user-1', sample(0, 90_000))
+    expect(coordinator.canStart('user-1', 89_999)).toBe(false)
+    expect(coordinator.canStart('user-1', 90_000)).toBe(true)
+    expect(coordinator.throttle('user-1')).toEqual({ until: 90_000, kind: 'rate-limited' })
+  })
+
+  it('pauses background work below the floor and resumes it when the window resets', () => {
+    let now = 1_000
+    const coordinator = new GitHubRequestCoordinator({ now: () => now })
+    coordinator.noteRateSample('user-1', sample(backgroundFloor(5_000), 90_000))
+    expect(coordinator.throttle('user-1')).toBeUndefined()
+    coordinator.noteRateSample('user-1', sample(backgroundFloor(5_000) - 1, 90_000))
+    expect(coordinator.throttle('user-1')).toEqual({ until: 90_000, kind: 'low-budget' })
+    // Low budget pauses only BACKGROUND work: a request the user asked for may still start.
+    expect(coordinator.canStart('user-1')).toBe(true)
+    now = 90_000
+    expect(coordinator.throttle('user-1')).toBeUndefined()
+  })
+
+  it('reports an error-learned backoff as the throttle too', () => {
+    const coordinator = new GitHubRequestCoordinator({ now: () => 1_000 })
+    coordinator.noteRateLimit('user-1', { kind: 'secondary', retryAt: 61_000 })
+    expect(coordinator.throttle('user-1')).toEqual({ until: 61_000, kind: 'rate-limited' })
+  })
+
+  it('refuses a read at once instead of sleeping past the cap', async () => {
+    const sleeps: number[] = []
+    const coordinator = new GitHubRequestCoordinator({
+      now: () => 1_000,
+      sleep: async (milliseconds) => { sleeps.push(milliseconds) }
+    })
+    coordinator.noteRateSample('user-1', sample(0, 1_000 + 60 * 60_000))
+    let ran = false
+    await expect(coordinator.runRead('user-1', async () => { ran = true }))
+      .rejects.toMatchObject({ code: 'rate-limited', retryAt: 1_000 + 60 * 60_000 })
+    expect(ran).toBe(false)
+    expect(sleeps).toEqual([])
+  })
+
+  it('refuses a mutation at once instead of sleeping past the cap', async () => {
+    const sleeps: number[] = []
+    const coordinator = new GitHubRequestCoordinator({
+      now: () => 1_000,
+      sleep: async (milliseconds) => { sleeps.push(milliseconds) }
+    })
+    coordinator.noteRateLimit('user-1', { kind: 'primary', retryAt: 1_000 + MAX_RATE_WAIT_MS + 1 })
+    await expect(coordinator.runMutation('user-1', async () => 'written'))
+      .rejects.toMatchObject({ code: 'rate-limited' })
+    expect(sleeps).toEqual([])
+  })
+
+  it('bounds the TOTAL wait when the deadline keeps moving during the sleep', async () => {
+    let now = 1_000
+    const sleeps: number[] = []
+    const coordinator = new GitHubRequestCoordinator({
+      now: () => now,
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds)
+        now += milliseconds
+        coordinator.noteRateLimit('user-1', { kind: 'secondary', retryAt: now + MAX_RATE_WAIT_MS - 1 })
+      }
+    })
+    coordinator.noteRateLimit('user-1', { kind: 'secondary', retryAt: 1_000 + MAX_RATE_WAIT_MS - 1 })
+    await expect(coordinator.runRead('user-1', async () => 'ok')).rejects.toMatchObject({ code: 'rate-limited' })
+    expect(sleeps.reduce((total, value) => total + value, 0)).toBeLessThanOrEqual(MAX_RATE_WAIT_MS)
   })
 })

@@ -5219,7 +5219,7 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   **PULL REQUEST cards are harvested from the issue poll, not fetched** (2026-09-01, read-only):
   `/repos/{repo}/issues` returns pull requests too — `client.listIssues` used to `continue` past
   them — so keeping them costs ZERO extra requests and inherits the incremental `since` watermark,
-  the ETags, the 60 s poll and the cache snapshot the issue lane already has. The alternative was
+  the heartbeat ETag (below), the 60 s poll and the cache snapshot the issue lane already has. The alternative was
   measured and rejected: **`/repos/{repo}/pulls` IGNORES `since`** (a day-old `since` returned the
   same 100 items as none), each item is ~25 KB against ~7 KB, and it would be a second
   ETag/paging/cache lineage — for `head`/`base` and nothing else (mergeable, reviews and checks are
@@ -5240,6 +5240,82 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   dropped, so only a full reconciliation may clear it. **(3)** the `pulls` source is `readOnly` in
   the registry: no drag, no move control, and its page reports `readOnly: true` on the wire rather
   than trusting every consumer to remember.
+  **Sync foundation: what a poll costs, what a failure means, what a write needs** (2026-09-28,
+  `core/github/*`; Desktop and Server Edition identical — all of it is core). Seven rules:
+  **(1) A poll that finds nothing spends nothing.** Before each pass, `client.issuesHeartbeat` asks
+  for the single most recently updated item (`state=all&sort=updated&direction=desc&per_page=1`)
+  with `If-None-Match`; a 304 skips the scan. MEASURED against this repo (read-only `gh api`):
+  twenty 304s moved `x-ratelimit-used` by **0**, the next 200 by 1; five plain 200s by 5. The `since`
+  scan could never do this itself — `since` moves every pass, so its URL (and any ETag) never
+  repeats, and the snapshot's `etags` map was declared and always written empty. The validator is
+  the one read BEFORE the scan (a change landing mid-scan stays "new"), it is persisted in
+  `snapshot.etags.heartbeat` (a restart does not pay a full read), and a 304 NEVER skips a full
+  reconciliation (a deletion or transfer does not move the top item) or an incomplete repository.
+  It covers pull requests by construction: same endpoint, same `updated_at` the scan filters on.
+  **A 304 still prompts the board to re-read** (an empty delta, served from the local cache, no
+  GitHub cost) exactly as every successful refresh always did: a page is not only issues — read
+  only, the mapping approval and the completion column are derived by the host at query time, and
+  the first version, which emitted nothing on a 304, left a board read only after its user
+  approved the mapping (review of #1001). Approve and revoke also notify the project's open boards
+  at once (`service.notifyProject`). **Unknown `state_reason` values decode as no reason**: GitHub
+  added `duplicate` (one of cli/cli's last 100 closed issues, measured 2026-09-29), and the strict
+  decoder failed that repository's whole scan as malformed — it never synced.
+  **The credential check is conditional too** (`createTokenValidator`): every poll re-resolves the
+  credential (30 s memo, 60 s poll), and each resolve was an unconditional `GET /user` — one real
+  request per poll even after the heartbeat. With `If-None-Match` an unchanged identity is a free
+  304 (MEASURED: ten conditional reads, +0), and a bogus token presenting a valid validator still
+  gets 401. Idle polling now costs zero quota. **(2) The budget is read from every response and
+  acted on before GitHub refuses.** `client.onRateLimit` reports `x-ratelimit-*` from 200, 304 and
+  errors alike to `GitHubRequestCoordinator.noteRateSample`, keyed by the credential's identity
+  (the host builds the client from token + userId); within one window the LOWEST reading wins. A
+  spent `core` budget blocks new requests at once. Below `backgroundFloor(limit)` = max(100, 10%)
+  the BACKGROUND poll stops until the window resets — the budget is the whole account's (`gh`, the
+  browser, other tools) — while a refresh the user asks for still runs within its own floors.
+  **Every wait is capped** (`MAX_RATE_WAIT_MS`, 10 s in TOTAL): past it the request is refused at
+  once with its retry time, instead of holding one of four read slots and an IPC call for up to an
+  hour. The page and the Settings status carry the `throttle`; both say "held until HH:MM"
+  (`lib/githubSyncStatus.ts`), and subscribers are prompted once per deadline, not per skipped
+  minute. Do NOT add a `/rate_limit` probe: measured for the same token in the same second it
+  answered 5000 left / used 0 with a different reset time than the response headers (4968 / 32) —
+  the headers are the truth. **(3) Throttled is not signed out.** `classifyGitHubFailure`
+  (`core/github/failure.ts`) is the ONE classifier: only a 401 or a non-rate-limit 403 is
+  `unauthorized`; network, timeout, 5xx and malformed bodies are `unreachable`; limits are
+  `rate-limited`. Token validation is tri-state (`TokenValidation`); the resolver keeps the last
+  credential GitHub vouched for — SAME token only — through an unknown answer, and with none throws
+  a `GitHubReachabilityError` rather than returning the null that every caller reads as "sign in".
+  Auto does not fall through to the saved token when the CLI's token merely could not be checked
+  (that would switch identities for the length of an outage). **`gh auth status` is never run**:
+  measured on gh 2.45 with GitHub unreachable it printed "The token in hosts.yml is invalid";
+  `gh auth token` only reads the local store and our own classified `/user` check decides.
+  Settings says "GitHub could not be reached to check the sign-in" and keeps the last confirmed
+  sign-in on screen; `saveToken` refuses an unchecked token without calling it invalid.
+  **(4) A close carries its reason.** `UpdateIssueInput.stateReason`: the close confirm offers
+  Completed / Not planned (Completed preselected — GitHub's default), a reopen sends `reopened`.
+  It rides ONLY with a state change (the "send `state` only when it changes" rule stands), the
+  client refuses a reason of the wrong kind, and a close GitHub recorded with a different reason is
+  not reported as confirmed. **(5) Writes need an approval that covers the column mapping.** The
+  mapping (which label a column applies, which column closes) is in the git-shared project.json,
+  so a pulled commit could re-aim writes under an approval given for something else. An approval
+  records `githubMappingDigest(repository, completionColumnId, columnMappings)` — column ORDER and
+  titles excluded (they change nothing GitHub sees; `config.revision` includes order and would make
+  every column drag revoke writes). Moves and "Create missing labels" require the digest to match
+  (`context.mappingApproved`); READS stay on the repository approval, since the mapping only decides
+  what a write does. A mismatch makes the board read only and says why (`page.mappingNotApproved`);
+  Settings offers "Approve column labels". **Upgrade:** an approval from before this change has no
+  digest — it keeps reading and must be approved once more before the board writes. Pinning the
+  on-disk mapping at first load was rejected: it would silently trust whatever a `git pull`
+  delivered between the upgrade and that load. **(6) Revoke deletes the cache.** The plaintext
+  issue cache (bodies included) is removed by the same bounded path as "Clear cached data", AFTER
+  the revoke is recorded — a failed delete is reported (`revoked-cache-kept`), never left approved.
+  The cache file is per (identity, repository), so another project on this machine bound to the
+  same repository re-fetches too. **(7) Every client that leaves releases its subscription.** The
+  service polls every 60 s per subscribed repository; the desktop window now releases on `closed`,
+  `render-process-gone` and `did-navigate` (`main/renderer-client-release.ts` — not
+  `did-start-navigation`, which also fires for a navigation the guard blocks), beside the relay
+  peers and Server Edition sockets that already did. **Mobile: N/A** — the phone's board carries
+  session cards only (the `githubIssues:*` channels are served to relay TABS, never the phone
+  dialect), so nothing there can read a throttle as signed out; surfacing GitHub cards on the phone
+  would need this whole contract carried over the relay.
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,
   2026-08-30 — the same membership-plus-one-leaf discipline `AGENT_CONFIG` uses): each entry declares
   its filter `label`, its `placement` (`assignment` = the board's own persisted assignments,
