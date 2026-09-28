@@ -2466,6 +2466,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `locatedTranscriptSessions` so a dead one can be dropped on an empty read (the panel's Retry
   would otherwise replay it forever) — a HOOK-fed ref is never dropped that way, since an empty
   read there is usually a transient master hiccup and forgetting it sends the next read local.
+  It is generated shell, so `remote-transcript-locate.test.ts` runs it for real under `/bin/sh`
+  against a fake host tree — keep it that way.
   **A remote node never falls through to this machine** (2026-09-28): the handler decides
   remoteness from the SHELL's records (`isRemoteNode` dep — live remote pty or
   `workspaceStore.sshProjectIdForNode`, never a renderer flag) and applies `remoteOnly` to the
@@ -2473,9 +2475,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   The host locate is tri-state (`locateRemoteTranscriptRef`): a CLEAN MISS is `found:false`, a
   failure to ask is `unreadable` ("Couldn't read the transcript.") — the phone's `chat.page` shares
   the same deps and the same distinction. Before this, a mounted SSH node whose locate missed (or
-  whose master was down) read THIS machine's resolver, cwd-newest fallback included.
-  It is generated shell, so `remote-transcript-locate.test.ts` runs it for real under `/bin/sh`
-  against a fake host tree — keep it that way. (2) **The cwd fallback keeps `accountId`** in BOTH
+  whose master was down) read THIS machine's resolver, cwd-newest fallback included. `transcriptExists` shares the same locate
+  (`remotePresenceFromLocate`: ref/absent/unreadable → present/absent/unknown, a malformed id
+  `unknown`), so it also works for a node with no live pty. A remote grok node (no remote reader)
+  shows "not supported yet", not the retryable error. (2) **The cwd fallback keeps `accountId`** in BOTH
   `resolveTranscript` and `contextEnsure`; without it a managed-account node fell back to the
   system root and could adopt an unrelated session's newest transcript. (3) **Relay tabs** stay
   local-only (a transcript read over the relay would read the GUEST's disk) and reject with

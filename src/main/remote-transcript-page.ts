@@ -8,6 +8,8 @@ import type { ChatTranscriptPage } from '../shared/chat-page'
 import type { TranscriptPage } from '../core/remote-ssh/transcript-window'
 import type { RemoteFileRef } from './remote-ssh/remote-file'
 import { parseLocatedTranscript } from '../core/remote-transcript-locate'
+import { SESSION_ID_RE } from '../core/transcript-reader'
+import type { TranscriptPresence } from '../shared/types'
 
 /** Remote transcript refs by sessionId, and which of them we located ourselves (vs hook-fed). */
 export interface RemoteTranscriptRefCache {
@@ -90,6 +92,27 @@ export async function locateRemoteTranscriptRef<T extends { conn: RemoteFileRef[
   deps.cache.bySession.set(q.sessionId, ref)
   deps.cache.located.add(q.sessionId)
   return ref
+}
+
+/**
+ * Does a remote node's transcript still exist ON THE HOST — from the same tri-state locate the
+ * readers use, so it works for a node with no live pty too (its SSH project's master). `null` =
+ * not a remote session (take the local path).
+ *
+ * Every lookup that cannot decide is `unknown`, never `absent`: the one caller drops a
+ * `--resume <id>` on `absent`, and a dead master must not look like a deleted conversation. A
+ * malformed id is `unknown` as well — the locate calls it a clean miss (no file can carry it), but
+ * the local probe answers `unknown` for one, and the two legs must not disagree on what drops a
+ * resume.
+ */
+export async function remotePresenceFromLocate(
+  sessionId: string,
+  locate: () => Promise<RemoteRefLookup>
+): Promise<TranscriptPresence | null> {
+  const r = await locate()
+  if (r === undefined) return null
+  if (typeof r === 'object') return 'present'
+  return r === 'absent' && SESSION_ID_RE.test(sessionId) ? 'absent' : 'unknown'
 }
 
 export function createReadRemotePage(deps: {

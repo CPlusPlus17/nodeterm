@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createReadRemotePage, forgetLocatedRef, locateRemoteTranscriptRef, rememberHookRef, remoteTargetForNode, type RemoteTranscriptRefCache } from './remote-transcript-page'
+import { createReadRemotePage, forgetLocatedRef, locateRemoteTranscriptRef, remotePresenceFromLocate, rememberHookRef, remoteTargetForNode, type RemoteTranscriptRefCache } from './remote-transcript-page'
 import type { RemoteFileRef } from './remote-ssh/remote-file'
 
 const ref = (path: string): RemoteFileRef => ({
@@ -154,5 +154,40 @@ describe('locateRemoteTranscriptRef (the host-side locate, tri-state)', () => {
       await locateRemoteTranscriptRef(q, base({ run: vi.fn(async () => { throw new Error('ssh') }) }))
     ).toBe('unreadable')
     expect(await locateRemoteTranscriptRef(q, base({ isSafePath: () => false }))).toBe('unreadable')
+  })
+})
+
+describe('remotePresenceFromLocate (transcriptExists on a remote node)', () => {
+  const SID = '46b36ce2-dd77-4f5e-a89e-4a0e831e83df'
+  it('ref → present, clean miss → absent, could not ask → unknown, not remote → null', async () => {
+    expect(await remotePresenceFromLocate(SID, async () => ref('/t.jsonl'))).toBe('present')
+    expect(await remotePresenceFromLocate(SID, async () => 'absent')).toBe('absent')
+    expect(await remotePresenceFromLocate(SID, async () => 'unreadable')).toBe('unknown')
+    expect(await remotePresenceFromLocate(SID, async () => undefined)).toBeNull()
+  })
+  it('a malformed id is unknown, never absent (absent drops a --resume)', async () => {
+    expect(await remotePresenceFromLocate('not-an-id', async () => 'absent')).toBe('unknown')
+  })
+  it('works without a live pty: an SSH-project node resolves over its project master', async () => {
+    const run = vi.fn(async () => ({ code: 0, stdout: '' }))
+    const project = { conn: { host: 'proj' } as RemoteFileRef['conn'], controlPath: '/proj' }
+    const target = (id: string) =>
+      remoteTargetForNode(id, { live: () => undefined, projectIdFor: () => 'p', refForProject: () => project })
+    const r = await remotePresenceFromLocate(SID, () =>
+      locateRemoteTranscriptRef(
+        { sessionId: SID, cwd: undefined, accountId: undefined, nodeId: 'nt-idle' },
+        {
+          cache: cache(),
+          isRemote: () => true,
+          target,
+          remoteHome: () => '/home/u',
+          command: () => 'locate',
+          run,
+          isSafePath: () => true
+        }
+      )
+    )
+    expect(r).toBe('absent')
+    expect(run).toHaveBeenCalledWith(project, 'locate')
   })
 })

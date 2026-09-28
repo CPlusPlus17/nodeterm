@@ -235,7 +235,19 @@ describe('ChatPanel empty states', () => {
       pending[0].resolve({ messages: [], found: false, olderCursor: null, unmatchedResults: [], unreadable: true })
     })
     expect(msgs().textContent).toContain("Couldn't read the transcript.")
+    expect(msgs().textContent).toContain("The agent's host may not be reachable")
     expect(msgs().textContent).not.toContain('No transcript found')
+    expect(host.querySelector('.term-chat__retry')).not.toBeNull()
+  })
+
+  it('an unreadable REMOTE grok read says it is unsupported, with no Retry (Retry can never fix it)', async () => {
+    await render({ agentId: 'grok' })
+    await act(async () => {
+      pending[0].resolve({ messages: [], found: false, olderCursor: null, unmatchedResults: [], unreadable: true })
+    })
+    expect(msgs().textContent).toContain("Reading a remote Grok session's transcript isn't supported yet.")
+    expect(msgs().textContent).not.toContain("Couldn't read")
+    expect(host.querySelector('.term-chat__retry')).toBeNull()
   })
 
   it('a clean miss still says no transcript was found', async () => {
@@ -244,6 +256,7 @@ describe('ChatPanel empty states', () => {
       pending[0].resolve({ messages: [], found: false, olderCursor: null, unmatchedResults: [] })
     })
     expect(msgs().textContent).toContain('No transcript found for this session.')
+    expect(msgs().textContent).toContain("hasn't written one yet")
   })
 })
 
