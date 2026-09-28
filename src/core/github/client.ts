@@ -5,6 +5,7 @@ import type {
   GitHubIssueUser,
   GitHubPullMeta,
   GitHubRepositoryLabel,
+  IssueHeartbeatResult,
   IssuePageResult,
   LabelPageResult,
   ListIssueOptions,
@@ -33,6 +34,30 @@ type ClientOptions = {
   fetch?: typeof fetch
   maxResponseBytes?: number
   timeoutMs?: number
+  /** Called with the rate budget every response carries — 200, 304 and errors alike — so the
+   *  request coordinator can pace work BEFORE GitHub has to refuse it. */
+  onRateLimit?: (sample: GitHubRateSample) => void
+}
+
+/** One reading of `x-ratelimit-*`. `resetAt` is epoch milliseconds. */
+export interface GitHubRateSample {
+  resource: string
+  limit: number
+  remaining: number
+  resetAt: number
+}
+
+/** Parses the rate headers, or null when any is absent or implausible. A missing header must never
+ *  read as "zero left": that would pause sync on every response that simply does not carry one. */
+export function rateSampleFrom(headers: Headers): GitHubRateSample | null {
+  const limit = Number(headers.get('x-ratelimit-limit') ?? NaN)
+  const remaining = Number(headers.get('x-ratelimit-remaining') ?? NaN)
+  const reset = Number(headers.get('x-ratelimit-reset') ?? NaN)
+  const resource = headers.get('x-ratelimit-resource') ?? 'core'
+  if (!Number.isSafeInteger(limit) || limit <= 0 || !Number.isSafeInteger(remaining) ||
+      remaining < 0 || remaining > limit || !Number.isSafeInteger(reset) || reset <= 0 ||
+      !/^[a-z_]{1,32}$/.test(resource)) return null
+  return { resource, limit, remaining, resetAt: reset * 1_000 }
 }
 
 function safeRepository(repository: string): string {
@@ -90,15 +115,24 @@ function pullFrom(item: Record<string, unknown>): GitHubPullMeta | null | undefi
   return { draft: item.draft === true, mergedAt: (mergedAt ?? null) as string | null }
 }
 
+const KNOWN_STATE_REASONS: ReadonlySet<string> = new Set(['completed', 'not_planned', 'reopened', 'duplicate'])
+
+/** GitHub grows this enum (`duplicate` arrived after the decoder was written, and one such issue
+ *  failed the WHOLE scan as malformed, so that repository never synced). A value we do not know
+ *  yet is read as "no reason" — the issue itself is perfectly valid. */
+function stateReasonFrom(value: unknown): GitHubIssue['stateReason'] {
+  return typeof value === 'string' && KNOWN_STATE_REASONS.has(value)
+    ? value as GitHubIssue['stateReason']
+    : null
+}
+
 function issueFrom(value: unknown): GitHubIssue | null {
   const item = object(value)
   if (!item || !positiveInteger(Number(item.id), Number.MAX_SAFE_INTEGER) ||
       !positiveInteger(Number(item.number), Number.MAX_SAFE_INTEGER) ||
       !string(item.title, 1_024) || !(item.body === null || string(item.body, 1_000_000)) ||
       (item.state !== 'open' && item.state !== 'closed') ||
-      !(item.state_reason === null || item.state_reason === undefined ||
-        item.state_reason === 'completed' || item.state_reason === 'not_planned' ||
-        item.state_reason === 'reopened') ||
+      !(item.state_reason === null || item.state_reason === undefined || string(item.state_reason, 64)) ||
       !string(item.html_url, 2_048) || !string(item.url, 2_048) ||
       !Array.isArray(item.labels) || item.labels.length > 100 ||
       !Array.isArray(item.assignees) || item.assignees.length > 100 ||
@@ -125,7 +159,7 @@ function issueFrom(value: unknown): GitHubIssue | null {
     title: item.title,
     body: item.body ?? '',
     state: item.state,
-    stateReason: (item.state_reason ?? null) as GitHubIssue['stateReason'],
+    stateReason: stateReasonFrom(item.state_reason),
     htmlUrl: html.toString(),
     apiUrl: api.toString(),
     labels: labels as GitHubIssueLabel[],
@@ -135,6 +169,15 @@ function issueFrom(value: unknown): GitHubIssue | null {
     locked: item.locked,
     ...(pull ? { pull } : {})
   }
+}
+
+/** A reason only rides a state change, and only one that fits it: GitHub rewrites `state_reason` on
+ *  any write carrying `state`, so a reason sent without one — or the wrong kind — is a caller bug. */
+function validStateReason(input: UpdateIssueInput): boolean {
+  if (input.stateReason === undefined) return true
+  if (input.state === 'closed') return input.stateReason === 'completed' || input.stateReason === 'not_planned'
+  if (input.state === 'open') return input.stateReason === 'reopened'
+  return false
 }
 
 function nextPage(link: string | null): number | undefined {
@@ -199,8 +242,24 @@ export class GitHubIssuesClient {
     this.timeoutMs = options.timeoutMs ?? 15_000
   }
 
-  async getAuthenticatedUser(): Promise<{ userId: string; login: string }> {
-    const value = object(await this.json(await this.request('/user', { method: 'GET' })))
+  /** `GET /user`, conditional on `etag`. A 304 means the identity behind this token is unchanged —
+   *  and it is free; a token GitHub no longer accepts is still refused (401) whatever the condition. */
+  async checkAuthenticatedUser(etag?: string): Promise<
+    | { notModified: true }
+    | { notModified: false; identity: { userId: string; login: string }; etag?: string }
+  > {
+    if (etag !== undefined && !string(etag, 512)) throw new GitHubClientError('invalid-request')
+    const response = await this.request('/user', {
+      method: 'GET', ...(etag ? { headers: { 'if-none-match': etag } } : {})
+    })
+    if (response.status === 304) return { notModified: true }
+    const identity = await this.userFrom(response)
+    const fresh = response.headers.get('etag')
+    return { notModified: false, identity, ...(fresh && string(fresh, 512) ? { etag: fresh } : {}) }
+  }
+
+  private async userFrom(response: Response): Promise<{ userId: string; login: string }> {
+    const value = object(await this.json(response))
     if (!value || !positiveInteger(Number(value.id), Number.MAX_SAFE_INTEGER) ||
         !string(value.login, 128) || !value.login) {
       throw new GitHubClientError('malformed-response')
@@ -254,6 +313,32 @@ export class GitHubIssuesClient {
     }
   }
 
+  /**
+   * One conditional request that answers "did anything in this repository change since `etag`?".
+   *
+   * It asks for the single most recently updated item with `If-None-Match`. GitHub answers an
+   * unchanged repository with 304, and a 304 does not count against the rate limit (measured
+   * 2026-09-28: twenty 304s moved `x-ratelimit-used` by zero, one 200 moved it by one). The
+   * incremental scan cannot do this on its own: its `since` moves every pass, so its URL — and
+   * therefore any ETag it could present — never repeats.
+   *
+   * `state=all` + `sort=updated` is the same endpoint and the same `updated_at` the `since` scan
+   * filters on, pull requests included, so any change the scan would pick up moves the top item
+   * and with it this ETag. The body is drained but not decoded: only the validator matters.
+   */
+  async issuesHeartbeat(repository: string, etag?: string): Promise<IssueHeartbeatResult> {
+    safeRepository(repository)
+    if (etag !== undefined && !string(etag, 512)) throw new GitHubClientError('invalid-request')
+    const response = await this.request(
+      `/repos/${repository}/issues?state=all&sort=updated&direction=desc&per_page=1`,
+      { method: 'GET', ...(etag ? { headers: { 'if-none-match': etag } } : {}) }
+    )
+    if (response.status === 304) return { notModified: true, ...(etag ? { etag } : {}) }
+    await this.json(response)
+    const fresh = response.headers.get('etag')
+    return { notModified: false, ...(fresh && string(fresh, 512) ? { etag: fresh } : {}) }
+  }
+
   async getIssue(repository: string, issueNumber: number): Promise<GitHubIssue> {
     safeRepository(repository)
     if (!positiveInteger(issueNumber, Number.MAX_SAFE_INTEGER)) throw new GitHubClientError('invalid-request')
@@ -272,12 +357,14 @@ export class GitHubIssuesClient {
     safeRepository(repository)
     if (!positiveInteger(issueNumber, Number.MAX_SAFE_INTEGER) ||
         (input.state !== undefined && input.state !== 'open' && input.state !== 'closed') ||
+        !validStateReason(input) ||
         (input.labels !== undefined && (!Array.isArray(input.labels) || input.labels.length > 100 ||
           input.labels.some((label) => !string(label, 50) || !label.trim())))) {
       throw new GitHubClientError('invalid-request')
     }
     const body = {
       ...(input.state ? { state: input.state } : {}),
+      ...(input.stateReason ? { state_reason: input.stateReason } : {}),
       ...(input.labels ? { labels: input.labels } : {})
     }
     const response = await this.request(`/repos/${repository}/issues/${issueNumber}`, {
@@ -414,6 +501,10 @@ export class GitHubIssuesClient {
       throw new GitHubClientError('request-failed')
     } finally {
       clearTimeout(timer)
+    }
+    const sample = rateSampleFrom(response.headers)
+    if (sample && this.options.onRateLimit) {
+      try { this.options.onRateLimit(sample) } catch { /* an observer never breaks a request */ }
     }
     if (response.status === 304) return response
     if (response.status === 403 || response.status === 429) {

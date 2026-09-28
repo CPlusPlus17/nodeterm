@@ -24,4 +24,17 @@ describe('eventBody — the activity sentence', () => {
   it('an unknown future type falls back neutrally', () => {
     expect(eventBody({ type: 'something-new' as BoardLogEvent['type'] })).toBe('updated this card')
   })
+
+  it('renders a run on an issue card, naming the session and how it ended', () => {
+    expect(eventBody({ type: 'run-started', title: 'Claude', run: { nodeId: 'term-1', agentId: 'claude' } })).toBe(
+      'started Claude (term-1) on this issue'
+    )
+    expect(eventBody({ type: 'run-ended', title: 'Claude', run: { nodeId: 'term-1', end: 'done' } })).toBe(
+      'closed Claude (term-1) (last state: done)'
+    )
+  })
+
+  it('a run line survives a malformed run record from a hand-edited log', () => {
+    expect(eventBody({ type: 'run-ended', run: { nodeId: 42 } as never })).toBe('closed a session')
+  })
 })

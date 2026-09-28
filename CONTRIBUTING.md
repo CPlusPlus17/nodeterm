@@ -145,6 +145,18 @@ discard them. `/repos/{repo}/pulls` looks like the obvious endpoint and is the e
 bytes. CLAUDE.md's kanban section has the measurements and the eviction rule that keeps the issue
 lane unaffected.
 
+Three rules for any new GitHub call (CLAUDE.md's kanban section, "Sync foundation", has the why):
+- **Never decide what a failure means yourself.** Pass it through `classifyGitHubFailure`
+  (`core/github/failure.ts`). Only `unauthorized` may ever read as "signed out"; a rate limit, an
+  outage or a dropped connection must say so instead, or the user re-authenticates an account that
+  is fine.
+- **Go through the request coordinator and a client built by the host.** That is what feeds every
+  response's rate budget to the coordinator, pauses background work below the floor and caps waits.
+  A request that bypasses it is invisible to the budget. Prefer a conditional request
+  (`If-None-Match`) for anything you poll: a 304 is free.
+- **A write whose meaning comes from the project file needs `context.mappingApproved`.** The column
+  mapping is git-shared; approval covers it, and reads do not need it.
+
 ## House rules
 
 - **Branch labels describe a checkout on one core.** Share existing status reads through
@@ -153,6 +165,14 @@ lane unaffected.
   keyed by API identity, exact cwd and (for SSH) project identity. Never probe an SSH cwd locally
   from a background header: only the active SSH project is git-routable. SSH headers observe
   Source refreshes instead.
+
+- **A GitHub issue reaches a pane only as a validated reference.** Issue titles and bodies are
+  written by strangers on public repositories, and a launch line is typed into a shell. Anything
+  that starts or instructs an agent about an issue goes through `@shared/github-issue-ref`:
+  `issueLaunchPrompt` (the only composer, which re-validates `owner/repo#N` itself) for text, and
+  `normalizeIssueRef` wherever a stored `issueRef` is read — it comes from a git-shared file. Never
+  interpolate `issue.title`/`issue.body` into a prompt, and never add a path that posts an agent's
+  output to GitHub on its own: posting is public, and only the user asks for it.
 
 - **Hook decision JSON is built in core, never in the renderer or the script.** To answer a held
   Claude permission request with more than `allow`/`deny` (a plan's follow-on mode, a question's

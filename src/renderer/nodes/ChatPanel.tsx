@@ -5,6 +5,7 @@ import { useAgentStatus } from '../state/agentStatus'
 import { useSession } from '../session/session'
 import { chipFor } from '../lib/keybindingOverrides'
 import { chatComposerPlaceholder, chatSendRefusal } from '../lib/chatSendGate'
+import { chatPaneRefusal, chatPaneRefusalToast } from '../lib/chatPaneGate'
 import { chatAgentLabel, isNearBottom, shouldFollowOnLoad, toolCardTitle } from '../lib/chatPanel'
 import { useSettings } from '../state/settings'
 import {
@@ -19,10 +20,11 @@ import {
   type ChatThread
 } from '../lib/chatPaging'
 import { E_UNSUPPORTED } from '@shared/rpc'
+import { GROK_AMBIGUOUS_SESSION_MESSAGE, isGrokAmbiguousSessionError } from '@shared/chat-page'
 import { Spinner } from '../components/Spinner'
 import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
 import { sentCommand } from '@shared/chat-command'
-import { chatReadsLocalOnly } from '@shared/agents/config'
+import { capabilityAgentId, chatReadsLocalOnly } from '@shared/agents/config'
 import { ChatLoadingStatus } from './ChatPanelFallback'
 import { answerCardState, answerRebindPending, rebindRetryDelay, type BoundAnswerCard } from '../lib/chatAnswer'
 import { AnswerControlsUpdating, PlanAnswerControls, QuestionAnswerControls } from './ChatAnswerControls'
@@ -85,16 +87,29 @@ interface ChatPanelProps {
  * initial `[]` because nothing caught the rejection, and a failed resolution was indistinguishable
  * from a session nobody has spoken to. They need different words — and two of them are retryable.
  */
-type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'error'
+type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'ambiguous' | 'exportError' | 'error'
 
 /**
- * An `unreadable` read of a LOCAL-ONLY reader's node (grok, gemini — `CHAT_LOCAL_ONLY`) can only be
- * the remote case: core's leg for those agents answers a remote node (`remoteOnly`) with
- * `unreadable` before touching anything, while their local readers never set the flag. So the agent
- * alone names it — no renderer-side remoteness guess, and no new field on the wire (the phone
+ * An `unreadable` read of a LOCAL-ONLY reader's node (`CHAT_LOCAL_ONLY` — agents with no remote
+ * leg) can only be the remote case: core's leg for those agents answers a remote node (`remoteOnly`)
+ * with `unreadable` before touching anything, while their local readers never set the flag. So the
+ * agent alone names it — no renderer-side remoteness guess, and no new field on the wire (the phone
  * contract keeps `unreadable`). Retry cannot heal it, so it must not read as a transient failure.
+ * Grok is NOT in that list: its remote node is read on the host (`core/remote-grok-chat.ts`), so a
+ * grok `unreadable` is a real, retryable failure.
  */
 const remoteReaderUnsupported = (agentId: string | undefined): boolean => !!agentId && chatReadsLocalOnly(agentId)
+
+/**
+ * An `unreadable` read of an OPENCODE node has two causes and nothing on the wire tells them apart:
+ * a local `opencode export` that failed (Retry heals it) and a remote node core refuses before
+ * running anything (it never heals). So its copy names both instead of guessing — and never blames
+ * an unreachable host for a local failure. Through the base harness, mirroring core's routing
+ * (`readChatTranscript` routes `capabilityAgentId(...) === 'opencode'` to `opencode-chat.ts`).
+ * That ambiguity is why opencode is NOT in `CHAT_LOCAL_ONLY` even though it has no remote leg.
+ */
+const opencodeUnreadable = (agentId: string | undefined): boolean =>
+  !!agentId && capabilityAgentId(agentId) === 'opencode'
 
 const isUnsupported = (e: unknown): boolean =>
   !!e && typeof e === 'object' && (e as { code?: string }).code === E_UNSUPPORTED
@@ -103,7 +118,8 @@ const isUnsupported = (e: unknown): boolean =>
  *  `missing` is a CLEAN miss — the (local or remote) host looked and there is no file: a transcript
  *  Claude has cleaned up (30 days by default), or a session that has not written one yet (the
  *  second heals the moment it speaks). A host that could not be ASKED is `error`, which Retry can
- *  fix; `remoteUnsupported` is a remote node whose agent has no remote reader, which it never can. */
+ *  fix — a remote grok node included, whose host is read by `core/remote-grok-chat.ts`;
+ *  `remoteUnsupported` is a remote node whose agent has no remote reader, which it never can. */
 const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
   loading: { title: 'Loading conversation…' },
   ok: { title: 'No conversation yet.' },
@@ -117,6 +133,16 @@ const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
   },
   // `{agent}` is the node's own agent label (`agentLabel` below) — the case spans several agents.
   remoteUnsupported: { title: "Reading a remote {agent} session's transcript isn't supported yet." },
+  // A remote grok id that names two sessions on the host: a fixed fact, like `unsupported` — so,
+  // like it, no Retry (waiting cannot change which file is this node's).
+  ambiguous: {
+    title: GROK_AMBIGUOUS_SESSION_MESSAGE,
+    detail: 'nodeterm will not guess which one belongs to this node.'
+  },
+  exportError: {
+    title: "Couldn't read this opencode session.",
+    detail: "opencode export failed on this machine — Retry once it works. A session on a remote host can't be read here yet."
+  },
   error: {
     title: "Couldn't read the transcript.",
     detail: "The agent's host may not be reachable — Retry once it is."
@@ -316,7 +342,10 @@ export function ChatPanel({
     // presenting itself as an empty conversation. Only the newest TAIL window is read — older
     // history pages in on scroll-up, and a reload merges by key instead of discarding it.
     void api.chat.readTranscript(sessionId, cwd, accountId, nodeId, agentId, {
-      maxBytes: CHAT_TAIL_PAGE_BYTES
+      maxBytes: CHAT_TAIL_PAGE_BYTES,
+      // A hook-driven refresh the user did not ask for: an expensive reader (opencode's export) may
+      // space these out. An open, ↻, Retry or a held-request rebind is never marked.
+      ...(live && !rebind ? { background: true } : {})
     }).then(
       (res) => {
         if (token !== reqRef.current) return
@@ -339,7 +368,15 @@ export function ChatPanel({
           setThread(emptyThread(identity))
           // A read that FAILED (the host did not answer, a remote node with no reachable master)
           // is not "no transcript": it gets the error copy, and ↻ is the way out.
-          setLoadState(!res.unreadable ? 'missing' : remoteReaderUnsupported(agentId) ? 'remoteUnsupported' : 'error')
+          setLoadState(
+            !res.unreadable
+              ? 'missing'
+              : remoteReaderUnsupported(agentId)
+                ? 'remoteUnsupported'
+                : opencodeUnreadable(agentId)
+                  ? 'exportError'
+                  : 'error'
+          )
           setHeldRead({ identity, pendingId: heldAtStart })
           settleHeldReload(heldAtStart)
           return
@@ -368,7 +405,7 @@ export function ChatPanel({
         // …and, as there, a thread of ANOTHER transcript (the session changed under the panel) is
         // cleared: the error message must not sit under the previous session's conversation.
         if (t.identity !== identity) setThread(emptyThread(identity))
-        setLoadState(isUnsupported(e) ? 'unsupported' : 'error')
+        setLoadState(isUnsupported(e) ? 'unsupported' : isGrokAmbiguousSessionError(e) ? 'ambiguous' : 'error')
         settleHeldReload(threadHeldForRef.current)
       }
     )
@@ -633,6 +670,17 @@ export function ChatPanel({
     // Read the store at SEND time, not the render-time values: a PermissionRequest (or an Eco
     // hibernation) that landed between the last render and this keypress must still block.
     if (!text || chatSendRefusal(agentId, useAgentStatus.getState().byId[nodeId] ?? {}) !== null) return
+    // The kernel's say (chatPaneGate.ts): an agent that announces no quit (codex) may have left a
+    // SHELL in the pane while the store still reads `done` — typed there, the message would run.
+    const pane = await chatPaneRefusal(agentId, nodeId, {
+      paneOwner: (n) => api.pty.paneOwner(n),
+      customAgents: useSettings.getState().settings.customAgents
+    })
+    if (pane) {
+      const message = chatPaneRefusalToast(pane, chatAgentLabel(agentId, useSettings.getState().settings.customAgents))
+      window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message } }))
+      return
+    }
     const ok = await api.pty.sendText(nodeId, text)
     if (ok === 'pasted-not-submitted') {
       window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message: TEXT_NOT_SUBMITTED } }))
@@ -769,7 +817,7 @@ export function ChatPanel({
             {EMPTY_TEXT[loadState].detail && (
               <div className="term-chat__empty-detail">{EMPTY_TEXT[loadState].detail}</div>
             )}
-            {loadState !== 'unsupported' && loadState !== 'remoteUnsupported' && loadState !== 'ok' && (
+            {loadState !== 'unsupported' && loadState !== 'remoteUnsupported' && loadState !== 'ambiguous' && loadState !== 'ok' && (
               <button className="term-chat__retry" onClick={() => load()}>
                 Retry
               </button>

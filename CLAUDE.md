@@ -1738,8 +1738,10 @@ else, and its context links must keep classifying across restarts).
   `PERMISSION_MODE_CAPABLE`, `MODEL_SWITCH_CAPABLE`, with helpers (`hasHooks`,
   `canBranch`, `canContextLink`, `canChat`, `canRename`, `canReadTitle`, `hasPermissionMode`, …).
   Branch stays **Claude-only** purely by being in only `BRANCH_CAPABLE`. The ⌘M **ChatPanel**
-  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok** since 2026-09: grok's
-  `chat_history.jsonl` gets its own reader, and `chat:read-transcript` routes by agent. That list had
+  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok + gemini + codex + copilot +
+  opencode** since 2026-09: grok's `chat_history.jsonl`, gemini's session file, codex's rollout,
+  copilot's `events.jsonl` and opencode's `opencode export` document each get their own reader, and
+  `chat:read-transcript` routes by agent. That list had
   to be SPLIT to do it — `CHAT_CAPABLE` carried two facts that coincided while claude was its only
   member ("we can render this" and "claude's resolver can locate and parse this file"), and the
   second now lives in `CLAUDE_TRANSCRIPT_READABLE` (claude only). Merging them back is a
@@ -1815,6 +1817,39 @@ else, and its context links must keep classifying across restarts).
   harmful. The `auto` permission-mode **version gate is claude's alone** (it is fed by a `claude
   --version` probe), and grok's mode flag must go **BEFORE** its `--` separator, which is
   end-of-options. Full picture, dialect traps and the device checklist: **`docs/grok-agent.md`**.
+- **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads
+  `chat_history.jsonl` into claude's `ChatMessage`/`ChatPart` shapes (no new wire field): typed
+  prompts, assistant text, tool calls (`arg` = the salient argument — `command`, `target_file`, …, in
+  claude's `toolArg` order — else the raw JSON, 200 units) with results summarised like claude's,
+  `web_search` backend calls, harness-injected `synthetic_reason` lines as assistant-side `[reason]`
+  notes, and `model_id`/`reasoning_effort` of the NEWEST assistant record (never carried forward).
+  `reasoning` is hidden. It does NOT page: measured on 1.0.13, the file is rewritten via
+  `.sync.tmp` + rename and `/compact`/`/rewind`/history repair replace lines, so it is one capped
+  whole-file read with no keys and no `at`. Routing is by `capabilityAgentId`, so a custom agent built
+  on grok reaches grok's reader, never claude's cwd fallback. **A remote (SSH) grok node is read on its
+  host** (`core/remote-grok-chat.ts`, one `sh -c` round trip: `$GROK_HOME` if absolute else
+  `$HOME/.grok`, the session found by id across `sessions/*/<id>/`, two matches refused, the
+  paged-transcript window at 5 MiB) — its failures are terminal, never this machine's disk (the
+  hook-derived local map names a wrong-machine path for these nodes). The phone gets it for free:
+  `chat.page` reads through the same deps. Golden fixtures + exact rules for the Swift port:
+  `src/shared/chat-fixtures/grok/`. Not supported: the composer's model/effort labels (grok's `/model`
+  and `/effort` pickers are unmeasured — the TUI needed a login here), plan/question answer cards
+  (claude-only), pre-compaction history, and a local session whose map entry `SessionEnd` retired.
+- **Copilot ⌘M chat view** (`core/copilot-chat.ts`, 2026-09; copilot 1.0.88 measured in BYOK mode
+  against a local fake model, plus the CLI's own `schemas/session-events.schema.json`). Reads
+  `<COPILOT_HOME>/session-state/<id>/events.jsonl` (then the snap package's
+  `~/snap/copilot-cli/common/.copilot`), located STRICTLY by the node's session id and routed by
+  `capabilityAgentId` before anything claude-shaped, so a missing journal is "not found", never
+  claude's cwd-newest or another session. The journal is append-only JSONL (compaction appends), so it
+  PAGES like claude's — `parseChatWindow`/`parseGrowingWindow` take copilot's record parser — and the
+  phone gets the same pages over the relay (`page()` gates only on `canChat`). Shown: typed prompts
+  (`content`, never `transformedContent`; the sources copilot's own timeline hides stay hidden),
+  assistant text, tool calls with results (`Error: …` on failure), a user's `!` shell command as the
+  `!` part, `Error:`/`Warning:`/`Info:` notices, and `model`. Never shown: the system prompt,
+  reasoning, sub-agent events (envelope `agentId` / `data.agentId` / `data.parentToolCallId`). Not
+  supported: remote (SSH) nodes (`unreadable`, "not supported yet" — never this machine's disk),
+  `effort` (not recorded), plan/question answer cards (claude-only), composer model labels (claude's
+  picker commands only). Golden fixtures: `src/shared/chat-fixtures/copilot/` (README "Copilot").
 - **Antigravity** (`agy` 1.2.3 measured on Windows; the 1.2.12 Linux binary read; builtin since
   2026-09 — Google's replacement for Gemini CLI on personal accounts) — in `AGENT_HOOK_TARGETS`
   (badge, NEEDS YOU from `ask_question`, a closed set of one, `--after` and triggers) and
@@ -1885,7 +1920,58 @@ else, and its context links must keep classifying across restarts).
   wrong guess, so none ships, not even unwired. The capture recipe is §7.1 and §8.1 of the doc, using
   `scripts/agy-transcript-shape.mjs`, which dumps shapes and never text. When it lands: locate
   strictly by id (`brain/` holds every conversation on the machine), and have a remote node answer
-  `remoteOnly` → unreadable like grok.
+  `remoteOnly` → unreadable like gemini.
+- **Codex in the ⌘M chat view** (2026-09-28; the desktop panel, the kanban card modal, the phone's
+  `chat.page`). `core/codex-chat.ts` reads the rollout with codex's own rules, never claude's
+  resolver. It takes USER text from the UI stream only: `event_msg/user_message` (legacy, ≤ 0.146) or
+  an `item_completed` `UserMessage` (paginated, ≥ 0.151). Model-side `role:user` messages also carry
+  injected context (AGENTS.md, `<environment_context>`, image wrappers), so they are never read.
+  Assistant text and tools come from `response_item`, correlated by `call_id`. The UI copies
+  (`agent_message`, `AgentMessage`) and reasoning are skipped. Failed and interrupted turns become
+  `[error] …` / `[turn aborted…]` notes. A tool result drops codex's `… Output:` preamble. The rollout
+  is append-only, so it pages by byte offset like claude. The locator matches a WHOLE-uuid thread id
+  (`CODEX_THREAD_ID_RE`), because a uuid's last group passes `SESSION_ID_RE` and suffix-matches
+  another thread's file. It searches only the node's own account home, and uses the codex tail's hook
+  path only as a checked hint. An SSH node is read on its host (`main/remote-codex-chat-page.ts`,
+  through the same resolvers as its remote meter) or not at all. Because codex announces no session
+  end, a chat send first asks the kernel (`renderer/lib/chatPaneGate.ts`, `isAgentPane`). After a
+  `/quit` the store still reads `done`, and the message would otherwise run in the shell. **Not
+  supported:** images in prompts, reasoning summaries, the composer's model/effort labels (the
+  `/model` picker is measured for claude only), plan/question answer cards (codex never sets
+  `held`), and a closed REMOTE session's transcript. Record rules and fixtures:
+  `src/shared/chat-fixtures/codex/`.
+- **opencode in the ⌘M chat view** (2026-09-28, opencode 1.18.25 measured) — opencode has NO
+  transcript file (SQLite since 1.18; that database also holds its account tokens and is never
+  opened), so `readChatTranscript` routes `capabilityAgentId(agentId) === 'opencode'` to
+  `core/opencode-chat.ts`, which runs `opencode export <sessionId>` (argv only, no flag an older
+  yargs-strict CLI might refuse) and parses the one JSON document into claude's `ChatMessage` shape:
+  user/assistant text, tool chips (arg by an opencode key order, result = 3 lines / 500 units,
+  `Error: …` on a failed call), `[name] message` for an errored turn, compaction/subtask chips,
+  `at` from `time.created`, `model`/`effort` from the newest assistant's `modelID`/`variant`.
+  Reasoning, `synthetic`/`ignored` text, file/agent parts and step bookkeeping are dropped;
+  unmappable shapes are skipped and counted. **One page, always** (`olderCursor: null`): there are
+  no byte offsets to page by. The page honours the caller's `maxBytes` (the phone asks 256 KB),
+  grows ×4 up to 5 MB like claude's reader when it holds no whole message, and shows a newest
+  message larger than 5 MB TRUNCATED (with a note) rather than as an empty conversation. Refusals: no/unsafe session id runs
+  nothing (a bare `opencode export` opens a picker over the NEWEST sessions — someone else's); an
+  export whose `info.id` is another session is `unreadable`; only `Session not found: <id>` with
+  exit 1 and empty stdout is a clean miss. **Remote (SSH) nodes are refused** (`unreadable`, no
+  export runs) — their sessions are in the host's database and there is no remote leg yet; the
+  panel's copy names both causes an opencode `unreadable` can have. One export costs 1.0–1.7 s and
+  ~320 MB, so `createOpencodeExportGate` runs at most one per session (a caller arriving mid-run
+  gets a FRESH export) and two in total; the panel's hook-driven refreshes are marked
+  `page.background` and spaced ≥ 5 s per session, while an open / ↻ / Retry is immediate (and wakes
+  a sleeping background one). A **change gate** in front of it `stat`s (never opens) opencode's
+  `opencode*.db` + `-wal` in `$XDG_DATA_HOME/opencode` (else `~/.local/share/opencode`, opencode's
+  own xdg-basedir rule) BEFORE exporting, and an unchanged fingerprint answers from a 4-session LRU
+  of parsed exports; no db file found, or `OPENCODE_DB` set, means no caching. The export runs with
+  `cwd: os.tmpdir()` (from a repo cwd opencode writes `<repo>/.git/opencode`; sessions resolve by
+  global id). **It inherits the APP's `process.env`, not the node's shell env**: a user who
+  relocates opencode's data via `XDG_DATA_HOME` / `OPENCODE_*` only in their shell rc gets
+  "Session not found" — an honest miss, not a bug in the reader. Plan/question answer
+  cards stay claude-only (no `body`/`questions` on opencode's `question` tool). Desktop and Server
+  Edition both serve it (core handler); the phone gets it over the relay `chat.page` for free.
+  Fixtures + the exact rules for the iOS port: `src/shared/chat-fixtures/opencode/README.md`.
 - **Gemini + codex parity** (2026-08-09) — brought both up to grok's level in the lists above. Unlike
   grok, **both CLIs are installed** and gemini **ships its own hook reference**
   (`/usr/lib/node_modules/@google/gemini-cli/bundle/docs/hooks/reference.md`), so almost every fact is
@@ -2580,8 +2666,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the same deps and the same distinction. Before this, a mounted SSH node whose locate missed (or
   whose master was down) read THIS machine's resolver, cwd-newest fallback included. `transcriptExists` shares the same locate
   (`remotePresenceFromLocate`: ref/absent/unreadable → present/absent/unknown, a malformed id
-  `unknown`), so it also works for a node with no live pty. A remote grok node (no remote reader)
-  shows "not supported yet", not the retryable error. (2) **The cwd fallback keeps `accountId`** in BOTH
+  `unknown`), so it also works for a node with no live pty. A remote grok node is read on its host
+  by its own leg (`readRemoteGrok`, see the grok chat bullet), with the same absent/unreadable split. (2) **The cwd fallback keeps `accountId`** in BOTH
   `resolveTranscript` and `contextEnsure`; without it a managed-account node fell back to the
   system root and could adopt an unrelated session's newest transcript. (3) **Relay tabs** stay
   local-only (a transcript read over the relay would read the GUEST's disk) and reject with
@@ -2620,7 +2706,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   trip, dd status inside the base64 like the context-tail's window command) instead of pulling the
   5 MB tail on every open and every turn-end reload; its `{ok:false}` is terminal (never the local
   disk), and it is tested under a real `/bin/sh` (`transcript-page.realsh.test.ts`). **Grok does not
-  page**: a paged request gets its whole capped read with `olderCursor: null` and no keys.
+  page** (its file is rewritten in place, so offsets are no identity): a paged request gets its whole
+  capped read with `olderCursor: null`, no keys, and the newest record's `model`/`effort`.
   Server Edition passes `page` through ws-bridge to the same core handler; relay still refuses.
   **ChatPanel consumes it progressively** (pure state in `renderer/lib/chatPaging.ts`): the first
   read is a 256 KB tail (`CHAT_TAIL_PAGE_BYTES`, with a "Loading conversation…" row), older 512 KB
@@ -3153,6 +3240,28 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   unsupported cross-project boundary, without probing other projects or exposing their metadata.
   Callers that create and link nodes **in the same tick** must pass their own `lookup` — `setNodes`
   is async, so resolving fresh nodes off `nodesRef` would skip every one as "no such node".
+  **Issue-bound opens (`--issue`, 2026-09-28):** `open-agent`/`open-claude --issue <owner/repo#N |
+  #N>` binds the new session to a GitHub issue exactly like the board's **Start with agent**. The
+  SHAPE is refused by ONE gate, `issueFlagRefusal` (`canvas-control-core.ts`), which desktop MAIN
+  runs in its control handler (desktop main does not run `parseControlRequest` at all — do not move
+  the gate there alone) and the Server Edition runs inside `parseControlRequest`; any other verb
+  carrying `--issue` is refused, not ignored. `#N` is resolved by each shell against the project the
+  node OPENS IN (the `--project` target, the cold-open owner, or `ctlProject`) — the repository its
+  kanban board syncs with, i.e. the GitHub host controller's answer (configured, else detected) —
+  and a project with no GitHub board refuses `#N` and names the full form (`lib/issueFlag.ts`,
+  `HeadlessNodeFactoryDeps.issueRepository`). **On the desktop it is resolved ONCE, at the top of
+  the control handler (`issuePre`), before any open path snapshots the projects store**: the lookup
+  is a host round trip (`git remote`, `gh auth`), and an await inside a path let a tab switch in that
+  window write the node into the wrong project. A full `owner/repo#N` asks nobody. The same
+  placement puts resolution before every path's dry-run branch.
+  `--prompt` replaces the default task after the reference line; `--prompt-file` stays the whole brief. Both
+  generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
+  is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on
+  start, In Review on delivery), never close the issue, never Done, `Closes #N` in a PR, and **post
+  to GitHub only when the user asked in that session — otherwise end with a proposed comment**.
+  nodeterm has no automatic post-to-issue path and must not grow one. `list` marks a bound row
+  `issue owner/repo#N`. Server Edition: `open-agent --issue` works under its verified-only,
+  creator-owned rules and writes the run history; `assign` is unsupported there (the skill says so).
   **Dependency edges (`--after`, 2026-07):** `open-terminal`/`open-claude`/`open-agent` accept
   `--after <id,id>`, which opens the node **armed** — `data.pendingLaunch` ({after, command},
   `PendingLaunch` in shared/types) holds the launch the factory built, and Canvas fires it once
@@ -5132,7 +5241,7 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   **PULL REQUEST cards are harvested from the issue poll, not fetched** (2026-09-01, read-only):
   `/repos/{repo}/issues` returns pull requests too — `client.listIssues` used to `continue` past
   them — so keeping them costs ZERO extra requests and inherits the incremental `since` watermark,
-  the ETags, the 60 s poll and the cache snapshot the issue lane already has. The alternative was
+  the heartbeat ETag (below), the 60 s poll and the cache snapshot the issue lane already has. The alternative was
   measured and rejected: **`/repos/{repo}/pulls` IGNORES `since`** (a day-old `since` returned the
   same 100 items as none), each item is ~25 KB against ~7 KB, and it would be a second
   ETag/paging/cache lineage — for `head`/`base` and nothing else (mergeable, reviews and checks are
@@ -5153,6 +5262,130 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   dropped, so only a full reconciliation may clear it. **(3)** the `pulls` source is `readOnly` in
   the registry: no drag, no move control, and its page reports `readOnly: true` on the wire rather
   than trusting every consumer to remember.
+  **Sync foundation: what a poll costs, what a failure means, what a write needs** (2026-09-28,
+  `core/github/*`; Desktop and Server Edition identical — all of it is core). Seven rules:
+  **(1) A poll that finds nothing spends nothing.** Before each pass, `client.issuesHeartbeat` asks
+  for the single most recently updated item (`state=all&sort=updated&direction=desc&per_page=1`)
+  with `If-None-Match`; a 304 skips the scan. MEASURED against this repo (read-only `gh api`):
+  twenty 304s moved `x-ratelimit-used` by **0**, the next 200 by 1; five plain 200s by 5. The `since`
+  scan could never do this itself — `since` moves every pass, so its URL (and any ETag) never
+  repeats, and the snapshot's `etags` map was declared and always written empty. The validator is
+  the one read BEFORE the scan (a change landing mid-scan stays "new"), it is persisted in
+  `snapshot.etags.heartbeat` (a restart does not pay a full read), and a 304 NEVER skips a full
+  reconciliation (a deletion or transfer does not move the top item) or an incomplete repository.
+  It covers pull requests by construction: same endpoint, same `updated_at` the scan filters on.
+  **A 304 still prompts the board to re-read** (an empty delta, served from the local cache, no
+  GitHub cost) exactly as every successful refresh always did: a page is not only issues — read
+  only, the mapping approval and the completion column are derived by the host at query time, and
+  the first version, which emitted nothing on a 304, left a board read only after its user
+  approved the mapping (review of #1001). Approve and revoke also notify the project's open boards
+  at once (`service.notifyProject`). **Unknown `state_reason` values decode as no reason**: GitHub
+  added `duplicate` (one of cli/cli's last 100 closed issues, measured 2026-09-29), and the strict
+  decoder failed that repository's whole scan as malformed — it never synced.
+  **The credential check is conditional too** (`createTokenValidator`): every poll re-resolves the
+  credential (30 s memo, 60 s poll), and each resolve was an unconditional `GET /user` — one real
+  request per poll even after the heartbeat. With `If-None-Match` an unchanged identity is a free
+  304 (MEASURED: ten conditional reads, +0), and a bogus token presenting a valid validator still
+  gets 401. Idle polling now costs zero quota. **(2) The budget is read from every response and
+  acted on before GitHub refuses.** `client.onRateLimit` reports `x-ratelimit-*` from 200, 304 and
+  errors alike to `GitHubRequestCoordinator.noteRateSample`, keyed by the credential's identity
+  (the host builds the client from token + userId); within one window the LOWEST reading wins. A
+  spent `core` budget blocks new requests at once. Below `backgroundFloor(limit)` = max(100, 10%)
+  the BACKGROUND poll stops until the window resets — the budget is the whole account's (`gh`, the
+  browser, other tools) — while a refresh the user asks for still runs within its own floors.
+  **Every wait is capped** (`MAX_RATE_WAIT_MS`, 10 s in TOTAL): past it the request is refused at
+  once with its retry time, instead of holding one of four read slots and an IPC call for up to an
+  hour. The page and the Settings status carry the `throttle`; both say "held until HH:MM"
+  (`lib/githubSyncStatus.ts`), and subscribers are prompted once per deadline, not per skipped
+  minute. Do NOT add a `/rate_limit` probe: measured for the same token in the same second it
+  answered 5000 left / used 0 with a different reset time than the response headers (4968 / 32) —
+  the headers are the truth. **(3) Throttled is not signed out.** `classifyGitHubFailure`
+  (`core/github/failure.ts`) is the ONE classifier: only a 401 or a non-rate-limit 403 is
+  `unauthorized`; network, timeout, 5xx and malformed bodies are `unreachable`; limits are
+  `rate-limited`. Token validation is tri-state (`TokenValidation`); the resolver keeps the last
+  credential GitHub vouched for — SAME token only — through an unknown answer, and with none throws
+  a `GitHubReachabilityError` rather than returning the null that every caller reads as "sign in".
+  Auto does not fall through to the saved token when the CLI's token merely could not be checked
+  (that would switch identities for the length of an outage). **`gh auth status` is never run**:
+  measured on gh 2.45 with GitHub unreachable it printed "The token in hosts.yml is invalid";
+  `gh auth token` only reads the local store and our own classified `/user` check decides.
+  Settings says "GitHub could not be reached to check the sign-in" and keeps the last confirmed
+  sign-in on screen; `saveToken` refuses an unchecked token without calling it invalid.
+  **(4) A close carries its reason.** `UpdateIssueInput.stateReason`: the close confirm offers
+  Completed / Not planned (Completed preselected — GitHub's default), a reopen sends `reopened`.
+  It rides ONLY with a state change (the "send `state` only when it changes" rule stands), the
+  client refuses a reason of the wrong kind, and a close GitHub recorded with a different reason is
+  not reported as confirmed. **(5) Writes need an approval that covers the column mapping.** The
+  mapping (which label a column applies, which column closes) is in the git-shared project.json,
+  so a pulled commit could re-aim writes under an approval given for something else. An approval
+  records `githubMappingDigest(repository, completionColumnId, columnMappings)` — column ORDER and
+  titles excluded (they change nothing GitHub sees; `config.revision` includes order and would make
+  every column drag revoke writes). Moves and "Create missing labels" require the digest to match
+  (`context.mappingApproved`); READS stay on the repository approval, since the mapping only decides
+  what a write does. A mismatch makes the board read only and says why (`page.mappingNotApproved`);
+  Settings offers "Approve column labels". **Upgrade:** an approval from before this change has no
+  digest — it keeps reading and must be approved once more before the board writes. Pinning the
+  on-disk mapping at first load was rejected: it would silently trust whatever a `git pull`
+  delivered between the upgrade and that load. **(6) Revoke deletes the cache.** The plaintext
+  issue cache (bodies included) is removed by the same bounded path as "Clear cached data", AFTER
+  the revoke is recorded — a failed delete is reported (`revoked-cache-kept`), never left approved.
+  The cache file is per (identity, repository), so another project on this machine bound to the
+  same repository re-fetches too. **(7) Every client that leaves releases its subscription.** The
+  service polls every 60 s per subscribed repository; the desktop window now releases on `closed`,
+  `render-process-gone` and `did-navigate` (`main/renderer-client-release.ts` — not
+  `did-start-navigation`, which also fires for a navigation the guard blocks), beside the relay
+  peers and Server Edition sockets that already did. **Mobile: N/A** — the phone's board carries
+  session cards only (the `githubIssues:*` channels are served to relay TABS, never the phone
+  dialect), so nothing there can read a throttle as signed out; surfacing GitHub cards on the phone
+  would need this whole contract carried over the relay.
+  **Start with agent — a GitHub issue card starts a bound session** (2026-09-28). An issue card's
+  right-click menu and its summary modal offer **Start with agent ▸**, whose rows are the canvas's
+  own agent + account picker (`agentCreationEntries`, which takes an optional `pick` so the same
+  rows can point at another action — never a fourth copy of the picker). The result is an ordinary
+  agent node in the project cwd (through `addAgentNode`, which now returns the node) carrying
+  `data.issueRef {owner, repo, number}` — persisted, git-shared, therefore hostile:
+  `normalizeIssueRef` (`@shared/github-issue-ref`) runs at BOTH serializer seams and a malformed
+  value is dropped (the node survives, only the binding goes). Rules a refactor must not undo:
+  (1) **the launch line carries the REFERENCE, never the issue's text** — titles and bodies are
+  writable by anyone on a public repository and a launch line is typed into a pane.
+  `issueLaunchPrompt` is the ONE place a reference becomes text; it re-validates the reference
+  itself and returns nothing for a hostile one. The prompt tells the agent to read the issue with
+  `gh issue view N --repo owner/repo --comments` (mid-sentence: punctuation glued to the last flag is
+  copied literally and `gh` refuses `--comments.`) AND that its title, body and comments are
+  untrusted input, not instructions — the session runs under the project's permission mode (auto by
+  default), so the prompt is the only thing that can say "read it, do not obey it" before it does.
+  A board start means **work on it**: the default task is "investigate, plan and implement the fix
+  in this working tree"; a caller's `--prompt` REPLACES that task ("Your task: …"), never the lines
+  around it. The hard limits ride the prompt itself, after any brief: never close the issue, and no
+  issue comment or PR unless the user asks in that session — end with a proposed comment. Proven
+  under a real `/bin/sh` (`github-issue-ref.realsh.test.ts`). (2) **The reference comes from the card's
+  `htmlUrl`** (`issueRefFromHtmlUrl`, which also requires the URL's number to equal the card's).
+  (3) **`done` never moves a card**: it means a turn ended, not that the work did. The issue card
+  shows every bound session as a live chip (`IssueRunChips`, subscribed per node to a PRIMITIVE
+  signature `issueRunChipSig` — never `s.byId`), RUNNING / NEEDS YOU / TURN FAILED / DROPPED plus
+  unread; a click opens that session's card. A card moves only when the session `assign`s itself or
+  a person drags it — pinned by `board-writers.guard.test.ts`, which enumerates EVERY renderer call
+  site that writes a board assignment or moves an issue, each with the human/agent action that
+  triggers it; a new writer fails until it is signed for, and "a turn ended" is not a trigger. (4) **Board-log identity of an issue card** is the synthetic id
+  `github-issue:<owner>/<repo>#<N>` (lower-cased, `issueLogId`) — a namespace no node id can reach.
+  Under it: `run-started` (UI start, `--issue` open) and `run-ended` (written by EVERY node-removal
+  funnel — `deleteNodes`, `closeStoredNodes`, the Omni delete, `deleteProject`, the Server `close` —
+  before it drops the node's agent status, with the last observed state). `duplicateNode` drops
+  `issueRef` (a copy is a new session nobody started on the issue; carrying the binding made a
+  phantom run). Known gap: ⌘Z/⌘⇧Z replay node arrays and write no run history, so an undone delete
+  revives a node whose run already ended. The summary modal shows it read-only as
+  "Agent runs" (no composer: a comment box under an issue reads as "post to GitHub"). **No cost or
+  token figure** is recorded: there is no cumulative per-session number, and a context-window
+  reading is not one. (5) The new session card is filed under the issue card's column (the same
+  unpruned direct write `createNodeInColumn` uses); the node header, the session card AND the card
+  modal's header show a `#N` chip (`IssueRefChip`; the modal's closes itself and makes the same
+  request) that opens the issue on the board (`openIssueOnBoard` →
+  `viewMode.requestedIssue`) ONLY when that board has GitHub sync — otherwise straight to GitHub,
+  rather than flipping the project's persisted view to a board that cannot show it — and the board
+  itself falls back to GitHub when the issue is not on a fetched page. Never a dead click. No "start in a new worktree" UI yet: compose `open-worktree` + `open-agent --group --issue`
+  (the skill says how). Surfaces: Desktop + Server Edition (renderer + core); Omni board shows no
+  issue lanes; **Mobile does not render the binding** — `issueRef` reaches the phone inside the
+  project file, and nodeterm-ios ignores the unknown field (follow-up there).
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,
   2026-08-30 — the same membership-plus-one-leaf discipline `AGENT_CONFIG` uses): each entry declares
   its filter `label`, its `placement` (`assignment` = the board's own persisted assignments,
