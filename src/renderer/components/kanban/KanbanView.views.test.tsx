@@ -190,6 +190,12 @@ describe('KanbanView — saved views', () => {
     expect(next.views?.[0].query.assignees?.sort()).toEqual(['enes', 'sam'])
   })
 
+  it('a view naming a column or label that no longer exists is not "modified" just for that', () => {
+    useKanbanDisplay.getState().setActiveViewId('p-views', 'v1')
+    mount(board({ views: [{ id: 'v1', name: 'Mine', query: { assignees: ['enes'], columns: ['gone'], labels: ['local:gone'] } }] }))
+    expect(document.querySelector('.kanban-views-btn')?.textContent).toBe('View: Mine')
+  })
+
   it('deleting a view asks first — views are shared with everyone on the board', () => {
     const { onChange } = mount(board({ views: [{ id: 'v1', name: 'Mine', query: {} }] }))
     openViews()

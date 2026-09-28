@@ -522,7 +522,19 @@ export const KanbanView = memo(function KanbanView({
     () => viewQuery({ source, labels: activeFilter, assignees: assigneeFilter, columns: liveColumnFilter }),
     [source, activeFilter, assigneeFilter, liveColumnFilter]
   )
-  const viewDirty = !!activeView && !sameViewQuery(currentQuery, activeView.query)
+  // Compared as the board can SHOW it: a stored query naming a label or column that no longer
+  // exists (or GitHub on a board without it) would otherwise read as "modified" forever.
+  const viewDirty = useMemo(() => {
+    if (!activeView) return false
+    const q = activeView.query
+    const shown = viewQuery({
+      source: board.github ? q.source ?? 'all' : 'all',
+      labels: (q.labels ?? []).filter((k) => localFilterKeys.has(k) || k.startsWith('github:')),
+      assignees: q.assignees ?? [],
+      columns: (q.columns ?? []).filter((id) => id === 'ungrouped' || board.columns.some((c) => c.id === id))
+    })
+    return !sameViewQuery(currentQuery, shown)
+  }, [activeView, board.github, board.columns, localFilterKeys, currentQuery])
   const saveCurrentView = async (): Promise<void> => {
     const name = await promptDialog({
       message: 'Name this view. Views are saved with the board, so everyone who opens it gets them.',
