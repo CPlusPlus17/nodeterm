@@ -35,6 +35,14 @@ export interface AgentConfig {
    */
   promptFlag?: string
   /**
+   * A one-sentence caveat shown wherever the agent is OFFERED (menu tooltips, palette note) — not
+   * a capability, and never read to decide behaviour. Exists for gemini: Google stopped serving
+   * Gemini CLI to personal accounts on 2026-06-18 (google-gemini/gemini-cli discussion #27274),
+   * and a user who picks it with a personal account otherwise meets a sign-in loop with no
+   * explanation. Absent = nothing to say.
+   */
+  notice?: string
+  /**
    * Put this between the command and an `argv` prompt — in practice `'--'`, and only for a CLI
    * whose grammar has BOTH a positional prompt and subcommands.
    *
@@ -108,7 +116,9 @@ export const AGENT_CONFIG: Record<BuiltinAgentId, AgentConfig> = {
     color: '#4285f4',
     launchCmd: 'gemini',
     promptInjectionMode: 'stdin-after-start',
-    expectedProcess: 'gemini'
+    expectedProcess: 'gemini',
+    notice:
+      'Google stopped serving Gemini CLI to personal accounts (free, AI Pro, AI Ultra) on 2026-06-18 — use Antigravity instead. Code Assist Standard/Enterprise, Vertex AI and paid API keys still work.'
   },
   opencode: {
     label: 'opencode',
