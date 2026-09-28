@@ -8,7 +8,7 @@
 // here with the one shared grammar even though main already refused a malformed shape — the
 // renderer never trusts that the gate in front of it ran.
 
-import { resolveIssueArg, type IssueRef } from '@shared/github-issue-ref'
+import { parseIssueArg, resolveIssueArg, type IssueRef } from '@shared/github-issue-ref'
 
 export interface IssueFlagProject {
   id: string
@@ -24,6 +24,11 @@ export async function resolveIssueFlagFor(
   boardRepository: (projectId: string) => Promise<string | null>
 ): Promise<IssueFlagResult> {
   if (raw === undefined) return { ok: true }
+  // A full `owner/repo#N` needs no repository lookup — and asking anyway would put a host round trip
+  // (git remote, `gh auth`) in front of every such open for nothing. Only `#N` asks.
+  const parsed = parseIssueArg(raw)
+  if (!parsed.ok) return { ok: false, error: `${verb}: ${parsed.error}` }
+  if (parsed.kind === 'full') return { ok: true, ref: parsed.ref }
   let repository: string | null = null
   if (project?.kanban?.github) {
     // A session api without a GitHub controller (a relay tab's) may throw synchronously rather

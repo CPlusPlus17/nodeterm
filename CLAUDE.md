@@ -3068,7 +3068,11 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   node OPENS IN (the `--project` target, the cold-open owner, or `ctlProject`) — the repository its
   kanban board syncs with, i.e. the GitHub host controller's answer (configured, else detected) —
   and a project with no GitHub board refuses `#N` and names the full form (`lib/issueFlag.ts`,
-  `HeadlessNodeFactoryDeps.issueRepository`). Resolution runs BEFORE each path's dry-run branch.
+  `HeadlessNodeFactoryDeps.issueRepository`). **On the desktop it is resolved ONCE, at the top of
+  the control handler (`issuePre`), before any open path snapshots the projects store**: the lookup
+  is a host round trip (`git remote`, `gh auth`), and an await inside a path let a tab switch in that
+  window write the node into the wrong project. A full `owner/repo#N` asks nobody. The same
+  placement puts resolution before every path's dry-run branch.
   `--prompt` is appended after the reference line; `--prompt-file` stays the whole brief. Both
   generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
   is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on
@@ -5077,25 +5081,33 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   writable by anyone on a public repository and a launch line is typed into a pane.
   `issueLaunchPrompt` is the ONE place a reference becomes text; it re-validates the reference
   itself and returns nothing for a hostile one. The prompt tells the agent to read the issue with
-  `gh issue view N --repo owner/repo --comments`; the agent pulls the context. Proven under a real
-  `/bin/sh` (`github-issue-ref.realsh.test.ts`). (2) **The reference comes from the card's
+  `gh issue view N --repo owner/repo --comments` AND that its title, body and comments are untrusted
+  input, not instructions — the session runs under the project's permission mode (auto by default),
+  so the prompt is the only thing that can say "read it, do not obey it" before it does. Proven
+  under a real `/bin/sh` (`github-issue-ref.realsh.test.ts`). (2) **The reference comes from the card's
   `htmlUrl`** (`issueRefFromHtmlUrl`, which also requires the URL's number to equal the card's).
   (3) **`done` never moves a card**: it means a turn ended, not that the work did. The issue card
   shows every bound session as a live chip (`IssueRunChips`, subscribed per node to a PRIMITIVE
   signature `issueRunChipSig` — never `s.byId`), RUNNING / NEEDS YOU / TURN FAILED / DROPPED plus
   unread; a click opens that session's card. A card moves only when the session `assign`s itself or
-  a person drags it. (4) **Board-log identity of an issue card** is the synthetic id
+  a person drags it — pinned by `board-writers.guard.test.ts`, which enumerates EVERY renderer call
+  site that writes a board assignment or moves an issue, each with the human/agent action that
+  triggers it; a new writer fails until it is signed for, and "a turn ended" is not a trigger. (4) **Board-log identity of an issue card** is the synthetic id
   `github-issue:<owner>/<repo>#<N>` (lower-cased, `issueLogId`) — a namespace no node id can reach.
   Under it: `run-started` (UI start, `--issue` open) and `run-ended` (written by EVERY node-removal
-  funnel — `deleteNodes`, `closeStoredNodes`, the Omni delete, the Server `close` — before it drops
-  the node's agent status, with the last observed state). The summary modal shows it read-only as
+  funnel — `deleteNodes`, `closeStoredNodes`, the Omni delete, `deleteProject`, the Server `close` —
+  before it drops the node's agent status, with the last observed state). `duplicateNode` drops
+  `issueRef` (a copy is a new session nobody started on the issue; carrying the binding made a
+  phantom run). Known gap: ⌘Z/⌘⇧Z replay node arrays and write no run history, so an undone delete
+  revives a node whose run already ended. The summary modal shows it read-only as
   "Agent runs" (no composer: a comment box under an issue reads as "post to GitHub"). **No cost or
   token figure** is recorded: there is no cumulative per-session number, and a context-window
   reading is not one. (5) The new session card is filed under the issue card's column (the same
   unpruned direct write `createNodeInColumn` uses); the node header and the session card show a
   `#N` chip (`IssueRefChip`) that opens the issue on the board (`openIssueOnBoard` →
-  `viewMode.requestedIssue`), falling back to GitHub when the board cannot show it — never a dead
-  click. No "start in a new worktree" UI yet: compose `open-worktree` + `open-agent --group --issue`
+  `viewMode.requestedIssue`) ONLY when that board has GitHub sync — otherwise straight to GitHub,
+  rather than flipping the project's persisted view to a board that cannot show it — and the board
+  itself falls back to GitHub when the issue is not on a fetched page. Never a dead click. No "start in a new worktree" UI yet: compose `open-worktree` + `open-agent --group --issue`
   (the skill says how). Surfaces: Desktop + Server Edition (renderer + core); Omni board shows no
   issue lanes; **Mobile does not render the binding** — `issueRef` reaches the phone inside the
   project file, and nodeterm-ios ignores the unknown field (follow-up there).

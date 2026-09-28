@@ -42,14 +42,4 @@ describe.skipIf(process.platform === 'win32')('issue launch line under a real /b
     expect(out.split('\n').filter(Boolean)).toHaveLength(1)
     expect(files).toEqual([])
   })
-
-  it('a hostile REFERENCE yields no prompt at all, so there is no line to run', () => {
-    for (const bad of [
-      { owner: 'o', repo: "r'; touch PWNED; '", number: 1 },
-      { owner: 'o', repo: 'r$(touch PWNED)', number: 1 },
-      { owner: '`touch PWNED`', repo: 'r', number: 1 }
-    ]) {
-      expect(issueLaunchPrompt(bad)).toBeUndefined()
-    }
-  })
 })

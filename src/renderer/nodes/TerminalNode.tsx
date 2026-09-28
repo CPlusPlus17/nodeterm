@@ -5625,7 +5625,15 @@ export function TerminalNode({
             lives there), the same thing the session's board card does with its own `#N`. */}
         <IssueRefChip
           issueRef={data.issueRef}
-          onOpen={(ref) => openIssueOnBoard(useProjects.getState().activeProjectId, ref)}
+          onOpen={(ref) => {
+            const store = useProjects.getState()
+            openIssueOnBoard(
+              store.activeProjectId,
+              ref,
+              !!store.getProject(store.activeProjectId)?.kanban?.github,
+              (url) => void api.shell.openExternal(url)
+            )
+          }}
         />
         {/* The fallback, made visible. A Codex node that could not get a managed shared identity
             runs a perfectly good plain `codex` — but the user has to be able to SEE that it did,

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { readLocal, writeLocal } from '../lib/localStore'
 import { useSettings } from './settings'
-import type { IssueRef } from '@shared/github-issue-ref'
+import { issueUrl, type IssueRef } from '@shared/github-issue-ref'
 
 // Which view each project shows (canvas or kanban) — PERSONAL, per machine: persisted in
 // localStorage, deliberately never in the git-shared .nodeterm/project.json (spec rule).
@@ -158,11 +158,24 @@ export function isGlobalKanbanOpen(): boolean {
 }
 
 /**
- * Show a GitHub issue from a node's `#N` chip: bring up the project's board (the issue lane lives
- * there) and ask it to open the issue. Toggle FIRST — leaving or entering the board drops any
- * unconsumed request, so the request must be made after the view change, not before.
+ * Show a GitHub issue from a node's `#N` chip. Only a board with GitHub sync can show it, so only
+ * then is the board brought up (the issue lane lives there) and asked to open it — toggling FIRST,
+ * because leaving or entering the board drops any unconsumed request. A project whose board has no
+ * GitHub sync does not get its saved view flipped to a board that cannot show the issue: the issue
+ * opens on GitHub instead (`openExternal`, the caller's session shell). An invalid reference opens
+ * nothing.
  */
-export function openIssueOnBoard(projectId: string, ref: IssueRef): void {
+export function openIssueOnBoard(
+  projectId: string,
+  ref: IssueRef,
+  boardShowsIssues: boolean,
+  openExternal: (url: string) => void
+): void {
+  if (!boardShowsIssues) {
+    const url = issueUrl(ref)
+    if (url) openExternal(url)
+    return
+  }
   const vm = useViewMode.getState()
   if (projectId && !isKanbanOpen(projectId)) vm.toggle(projectId)
   useViewMode.getState().requestIssue(ref)

@@ -37,12 +37,25 @@ describe('--issue in the desktop control dispatch', () => {
     expect(gate).toBeLessThan(handler.indexOf("'window unavailable'"))
   })
 
-  it('the live open path resolves the issue BEFORE its dry-run branch and before building nodes', () => {
+  it('resolves --issue ONCE, before any open path snapshots the projects store', () => {
+    // `#N` may cost a host round trip. An await inside a path (after it captured the store) let a
+    // tab switch in that window write the node into the wrong project — the #443 class.
+    const body = code(src)
+    const calls = body.match(/resolveIssueFlag\(/g) ?? []
+    expect(calls, 'called exactly once').toHaveLength(1)
+    const pre = body.indexOf('const issuePre: IssueFlagResult = issueOpen')
+    expect(pre).toBeGreaterThan(-1)
+    expect(pre).toBeLessThan(body.indexOf("args.project !== undefined\n      ) {"))
+    expect(pre).toBeLessThan(body.indexOf('if (canColdOpen(verb)) {'))
+    expect(pre).toBeLessThan(body.indexOf("case 'open-agent': {"))
+    // …which also puts it before every path's `--dry-run` branch: a dry run refuses a bad `#N`.
+    expect(pre).toBeLessThan(body.indexOf('if (dryRun) {'))
+  })
+
+  it('the live open path uses the pre-resolved reference and composes through issueLaunchPrompt', () => {
     const body = code(between("case 'open-agent': {", "case 'show-image': {"))
-    const resolve = body.indexOf('await resolveIssueFlag(ctlProject?.id)')
-    expect(resolve).toBeGreaterThan(-1)
-    // A dry run runs the SAME validation as a real call (#532): a bad `#N` must be refused there too.
-    expect(resolve).toBeLessThan(body.indexOf('if (dryRun) {'))
+    expect(body).not.toContain('resolveIssueFlag(')
+    expect(body).toContain('const issueRef = issueRefPre')
     expect(body).toContain('bound to GitHub issue ${formatIssueRef(issueRef)}')
     // The launch prompt is composed by the one function allowed to turn a reference into text.
     expect(body).toMatch(/issueRef \? issueLaunchPrompt\(issueRef, args\.prompt\) : args\.prompt/)
@@ -50,21 +63,23 @@ describe('--issue in the desktop control dispatch', () => {
     expect(body).toContain('logRunsStarted(ctlProject?.id, issueNodes, issueRef)')
   })
 
-  it('the cold-open path resolves against the OWNING project, before its dry run', () => {
+  it('the cold-open path uses the pre-resolved reference (resolved against the OWNING project)', () => {
     const body = code(between('if (canColdOpen(verb)) {', '// ── OFF CANVAS'))
-    const resolve = body.indexOf('await resolveIssueFlag(coldTerminal ? undefined : owner.id)')
-    expect(resolve).toBeGreaterThan(-1)
-    expect(resolve).toBeLessThan(body.indexOf('if (dryRun) {'))
+    expect(body).not.toContain('resolveIssueFlag(')
+    expect(body).toContain('const coldIssueRef = coldTerminal ? undefined : issueRefPre')
     expect(body).toContain('bound to GitHub issue ${formatIssueRef(coldIssueRef)}')
     expect(body).toMatch(/coldIssueRef \? issueLaunchPrompt\(coldIssueRef, args\.prompt\) : args\.prompt/)
     expect(body).toContain('logRunsStarted(owner.id, coldMade, coldIssueRef)')
   })
 
-  it('the --project path resolves against the TARGET project', () => {
+  it('the --project path uses the pre-resolved reference (resolved against the TARGET project)', () => {
     const body = code(between("args.project !== undefined\n      ) {", '// ── end of the early-handled'))
-    expect(body).toContain('await resolveIssueFlag(target.id)')
-    expect(body).toMatch(/tgIssue\.ref \? issueLaunchPrompt\(tgIssue\.ref, args\.prompt\) : args\.prompt/)
-    expect(body).toContain('logRunsStarted(target.id, tgMade, tgIssue.ref)')
+    expect(body).not.toContain('resolveIssueFlag(')
+    expect(body).toContain('const tgIssueRef = tgIsTerminal ? undefined : issueRefPre')
+    expect(body).toMatch(/tgIssueRef \? issueLaunchPrompt\(tgIssueRef, args\.prompt\) : args\.prompt/)
+    expect(body).toContain('logRunsStarted(target.id, tgMade, tgIssueRef)')
+    // The pre-resolution names the `--project` target first.
+    expect(code(src)).toMatch(/await resolveIssueFlag\(\s*args\.project \?\?/)
   })
 
   it('no path splices the raw --issue value into a prompt or a launch line', () => {

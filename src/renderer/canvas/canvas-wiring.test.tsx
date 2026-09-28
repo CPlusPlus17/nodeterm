@@ -397,10 +397,9 @@ describe('node creation resolves its project LIVE and only onto a matching canva
   it('reads the active project from the store at call time in every creation funnel', () => {
     const liveReads =
       CANVAS_SRC.match(/const targetProjectId = useProjects\.getState\(\)\.activeProjectId/g) ?? []
-    // addAgentNode, addTerminal, createNodeInColumn, explainCommit — plus startIssueAgent (GitHub
-    // issue → agent), which creates THROUGH addAgentNode (and so its guard) and re-reads the live
-    // project only afterwards, to file the new card on that same project's board.
-    expect(liveReads.length).toBe(5)
+    // addAgentNode, addTerminal, createNodeInColumn, explainCommit. (startIssueAgent creates THROUGH
+    // addAgentNode and uses the project id it returns — it never reads the store a second time.)
+    expect(liveReads.length).toBe(4)
   })
 
   it('guards every creation funnel with canCreateOnCanvas against the canvas epoch tag', () => {
@@ -429,8 +428,7 @@ describe('node creation resolves its project LIVE and only onto a matching canva
     // with the whole suite green.
     const liveRecordReads =
       CANVAS_SRC.match(/const project = useProjects\.getState\(\)\.getProject\(targetProjectId\)/g) ?? []
-    // The four guarded funnels + startIssueAgent's post-create board read (see above).
-    expect(liveRecordReads.length).toBe(5)
+    expect(liveRecordReads.length).toBe(4)
   })
 })
 

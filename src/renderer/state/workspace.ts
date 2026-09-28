@@ -1688,7 +1688,10 @@ export function duplicateNode(node: CanvasNode, offset = 28): CanvasNode {
     selected: true,
     parentId: undefined,
     extent: undefined,
-    data: { ...node.data, initialCommand: undefined }
+    // `issueRef` is not copied: a duplicate is a NEW session nobody started on the issue — carrying
+    // the binding would put a phantom run on the issue card (a chip and `#N` with no run-started,
+    // then a run-ended when it closes).
+    data: { ...node.data, initialCommand: undefined, issueRef: undefined }
   }
 }
 

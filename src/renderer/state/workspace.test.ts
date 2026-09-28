@@ -8,6 +8,7 @@ import {
   createCodexAccountLoginNode,
   createAgentNode,
   createDinoNode,
+  duplicateNode,
   createSystemLoginNode,
   isAccountLoginNode,
   fitGroupToChildren,
@@ -748,6 +749,12 @@ describe('issueRef serialization (GitHub issue binding)', () => {
 
   it('drops a malformed binding on the way OUT', () => {
     expect(flowToNodeStates([withIssue({ owner: 'o', repo: 'r;x', number: 1 })])[0].issueRef).toBeUndefined()
+  })
+
+  it('a duplicate does not inherit the binding (it is a new session nobody started on the issue)', () => {
+    const copy = duplicateNode(withIssue(ref))
+    expect(copy.id).not.toBe('t1')
+    expect(copy.data.issueRef).toBeUndefined()
   })
 
   it('strips unknown keys a hostile file smuggles in beside a valid binding', () => {

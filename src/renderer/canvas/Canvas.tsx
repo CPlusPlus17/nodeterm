@@ -4902,7 +4902,7 @@ export function Canvas() {
       // factory: it drives chips and run history only — the launch prompt was already composed
       // from it by `issueLaunchPrompt`, the one place a reference may become text in a pane.
       extra?: { issueRef?: IssueRef }
-    ): CanvasNode | undefined => {
+    ): { node: CanvasNode; projectId: string } | undefined => {
       // Resolve the target project LIVE, at click time — never from this callback's render
       // closure. Menu onClick closures outlive the render that built them (`setMenu` freezes
       // them into state), and the sessions-sidebar "+" deliberately switches projects before
@@ -4989,7 +4989,9 @@ export function Canvas() {
       const node = issueRef ? { ...created, data: { ...created.data, issueRef } } : created
       setNodes((ns) => [...ns, groupId ? parentInto(node, groupId) : node])
       markDirty()
-      return node
+      // The project this node was charged to — the caller files anything else about the node (a
+      // board card, its run history) against THIS id, never a second live read of the store.
+      return { node, projectId: targetProjectId }
     },
     [
       setNodes,
@@ -9777,12 +9779,12 @@ export function Canvas() {
         })
         return
       }
-      const node = addAgentNode(agentId, undefined, undefined, accountId, prompt, { issueRef: ref })
-      if (!node) return // addAgentNode already said why
+      const created = addAgentNode(agentId, undefined, undefined, accountId, prompt, { issueRef: ref })
+      if (!created) return // addAgentNode already said why
+      const { node, projectId: targetProjectId } = created
       const nodeId = node.id
-      const targetProjectId = useProjects.getState().activeProjectId
-      const project = useProjects.getState().getProject(targetProjectId)
-      const board = project?.kanban ?? seedBoard
+      // The project addAgentNode charged the node to (its guarded, live read) — not a second read.
+      const board = useProjects.getState().getProject(targetProjectId)?.kanban ?? seedBoard
       const column = issue.columnId ? board.columns.find((c) => c.id === issue.columnId) : undefined
       if (column) {
         useProjects.getState().setProjectKanban(targetProjectId, assignNode(board, nodeId, column.id, null))
@@ -10180,6 +10182,29 @@ export function Canvas() {
           if (entry) useBoardLog.getState().append(api, projectId, entry)
         }
       }
+      // Resolved ONCE, HERE — before any open path below snapshots the projects store. A `#N` may
+      // cost a host round trip (the GitHub host controller runs `git remote` and `gh auth`), and
+      // every path reads the store synchronously after this point: an await inside a path let a tab
+      // switch in that window write the new node into the project that had just become active (the
+      // #443 class) or report a node as queued that the next commit dropped. The project `#N` is
+      // resolved against is the one the node opens in: the `--project` target, else the source's own
+      // project (the live canvas's when the source is on it, else the stored project owning it).
+      const issueOpen = verb === 'open-agent' || verb === 'open-claude'
+      const issuePre: IssueFlagResult = issueOpen
+        ? await resolveIssueFlag(
+            args.project ??
+              (nodesRef.current.some((n) => n.id === sourceNodeId)
+                ? useProjects.getState().activeProjectId
+                : useProjects
+                    .getState()
+                    .projects.find((p) => p.nodes.some((n) => n.id === sourceNodeId))?.id)
+          )
+        : { ok: true }
+      if (!issuePre.ok) {
+        reply({ ok: false, error: issuePre.error })
+        return
+      }
+      const issueRefPre = issuePre.ref
 
       // ── Agent messaging (`send`/`reply`) — handled BEFORE the source-routing machinery ──────
       // These are STORE_ANSWERED_VERBS (lib/controlRouting): routing by source must never travel
@@ -10529,13 +10554,9 @@ export function Canvas() {
           }
           const tgAgentId = (verb === 'open-agent' ? args.agent : 'claude') as AgentId
           const tgIsTerminal = verb === 'open-terminal'
-          // `#N` means the TARGET project's repository here — the node opens there.
-          const tgIssue = await resolveIssueFlag(target.id)
-          if (!tgIssue.ok) {
-            reply({ ok: false, error: tgIssue.error })
-            return
-          }
-          const tgPrompt = tgIssue.ref ? issueLaunchPrompt(tgIssue.ref, args.prompt) : args.prompt
+          // `#N` was resolved against the TARGET project above (`issuePre`) — the node opens there.
+          const tgIssueRef = tgIsTerminal ? undefined : issueRefPre
+          const tgPrompt = tgIssueRef ? issueLaunchPrompt(tgIssueRef, args.prompt) : args.prompt
           const tgCount = Math.max(
             1,
             Math.min(tgIsTerminal ? 8 : 5, parseInt(args.count || '1', 10) || 1)
@@ -10574,7 +10595,7 @@ export function Canvas() {
                     // what runs in it, not the caller's.
                     target.id
                   ),
-                  tgIssue.ref
+                  tgIssueRef
                 )
             const w = (node.width as number) ?? 640
             const h = (node.height as number) ?? 440
@@ -10584,7 +10605,7 @@ export function Canvas() {
           }
           const tgIds = tgMade.map((n) => n.id)
           const tgWhat = tgIsTerminal ? 'terminal' : tgAgentId
-          logRunsStarted(target.id, tgMade, tgIssue.ref)
+          logRunsStarted(target.id, tgMade, tgIssueRef)
           // No ropes and no context-links in either branch: both are per-project arrays, and an
           // edge to a node in another project has no representation (v1 — #284's linking half).
           // The skill text names the workaround (open a reader agent inside the target project).
@@ -10841,13 +10862,8 @@ export function Canvas() {
                 return
               }
             }
-            // `#N` = the OWNING project's repository: the node is saved there.
-            const coldIssue = await resolveIssueFlag(coldTerminal ? undefined : owner.id)
-            if (!coldIssue.ok) {
-              reply({ ok: false, error: coldIssue.error })
-              return
-            }
-            const coldIssueRef = coldTerminal ? undefined : coldIssue.ref
+            // `#N` was resolved against the OWNING project above (`issuePre`): the node is saved there.
+            const coldIssueRef = coldTerminal ? undefined : issueRefPre
             const coldPrompt = coldIssueRef ? issueLaunchPrompt(coldIssueRef, args.prompt) : args.prompt
             if (dryRun) {
               if (!coldTerminal) {
@@ -11515,13 +11531,8 @@ export function Canvas() {
               }
             }
             const agentCwd = args.cwd || groupCwd || srcCwd
-            // `#N` = the repository of the project this call acts on (the node opens there).
-            const issueFlag = await resolveIssueFlag(ctlProject?.id)
-            if (!issueFlag.ok) {
-              reply({ ok: false, error: issueFlag.error })
-              return
-            }
-            const issueRef = issueFlag.ref
+            // `#N` was resolved above (`issuePre`), before anything here read the store.
+            const issueRef = issueRefPre
             if (dryRun) {
               // The dry run is deliberately STRICTER than the real open here: an unknown agent id
               // today opens a node whose launch command is the typo, failing only inside its pane
@@ -14464,6 +14475,10 @@ export function Canvas() {
           disposeTerminalOnUnmount(sessionForProject(id).id, n.id) // may be parked from a recent switch away
           transport.destroy(n.id)
         }
+        // A session started on a GitHub issue ends here too. Best effort: the project's board log
+        // outlives the project entry (it is a file in the project's folder), so the run does not
+        // stay open in the issue's history forever.
+        if (n.issueRef) logIssueRunEnded(id, n)
         useAgentStatus.getState().remove(n.id)
         useAgentNodes.getState().clearForParent(n.id)
       })
@@ -14502,7 +14517,7 @@ export function Canvas() {
       store.deleteProject(id)
       void writeDisk()
     },
-    [commitActiveToStore, writeDisk, disposeRelayTabForProject]
+    [commitActiveToStore, writeDisk, disposeRelayTabForProject, logIssueRunEnded]
   )
 
   // The "Recently closed" × goes through a confirm now (issue #442): it is the one permanently

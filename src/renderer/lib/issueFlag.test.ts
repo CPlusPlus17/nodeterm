@@ -13,12 +13,15 @@ describe('resolveIssueFlagFor (open-agent --issue on the desktop)', () => {
     expect(ask).not.toHaveBeenCalled()
   })
 
-  it('takes a full owner/repo#N as given, board or no board', async () => {
+  it('takes a full owner/repo#N as given, board or no board — and asks nobody', async () => {
     const ask = vi.fn(async () => 'x/y')
     expect(await resolveIssueFlagFor('a/b#3', 'open-agent', undefined, ask)).toEqual({
       ok: true,
       ref: { owner: 'a', repo: 'b', number: 3 }
     })
+    expect(await resolveIssueFlagFor('a/b#3', 'open-agent', withBoard(), ask)).toMatchObject({ ok: true })
+    // A full reference must not cost a host round trip (git remote, gh auth) before the open.
+    expect(ask).not.toHaveBeenCalled()
   })
 
   it('resolves #N against the repository the board syncs with (the host controller answer)', async () => {
