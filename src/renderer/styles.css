@@ -11527,6 +11527,29 @@ button.group-node__setup:disabled {
   font-size: 10px;
   color: rgba(var(--tint-rgb), 0.35);
 }
+/* A run of like events folded at render time (lib/boardLogCollapse) — the ×N toggle. */
+.board-log__fold {
+  background: rgba(var(--tint-rgb), 0.07);
+  border: 1px solid rgba(var(--tint-rgb), 0.12);
+  border-radius: 999px;
+  color: rgba(var(--tint-rgb), 0.65);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.board-log__fold:hover,
+.board-log__fold[aria-expanded='true'] {
+  color: var(--text-strong);
+  border-color: rgba(var(--tint-rgb), 0.25);
+}
+.board-log__group--open {
+  display: flex;
+  flex-direction: column;
+  gap: inherit;
+  border-left: 2px solid rgba(var(--tint-rgb), 0.1);
+  padding-left: 6px;
+}
 .board-log__text {
   font-size: 12px;
   line-height: 1.45;
