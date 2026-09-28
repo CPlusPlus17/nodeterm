@@ -162,33 +162,35 @@ describe('the managed script for antigravity', () => {
   })
 
   it('leaves the other six scripts byte-identical to the pre-antigravity build', () => {
-    // sha256 of each agent's script at the commit this integration branched from (f2449a8f),
-    // computed from that commit's managed-script.ts. If the SHARED script legitimately changes,
-    // recompute these deliberately — a silent diff here is exactly the regression to catch.
+    // sha256 of each agent's script as built by origin/main at 06afa9d7 (the merge this branch
+    // was brought up to), computed from THAT commit's managed-script.ts — i.e. without any
+    // antigravity code — and compared equal to this branch's output before being pinned here.
+    // If the SHARED script legitimately changes, recompute these deliberately from the base
+    // commit's builder — a silent diff here is exactly the regression to catch.
     const expected: Record<string, [string, string]> = {
       claude: [
-        '991a3232392304f670e3aa11a05ce1e5bb0ea366432b69524d57a74fbdf4926e',
-        'b7f9a979e57c58b61acb5582a007c45b63bdfab2e830d7b483ddcc40155a1eb1'
+        '26e5dd697ee602a053c6a8ec054128dfb1fad0255b63d65efefed82106660ecc',
+        '6d7202781175407bc84d6831b1e1d5aba44574212ceb1c2e506aef5e9d9dac3d'
       ],
       codex: [
-        '1766f60fb5e769433a0661ebc10e539e9e805c77debb9243b959bc985662458d',
-        '7ff83cffda070d45fd71ed3916d8db852859591a8402d7537f322dba066a6cd9'
+        '9b47a045193b8e434139215d8c6992bda1926e86eaa7078d666eb2fac254d660',
+        '736e0076437ff236673664d1d3c44807e9a0f54fe8cc49676f1a8a5978c787e1'
       ],
       gemini: [
-        '92a71a09bcd2e82be4bb554414455ba9bb520374245064408b48bec15d138182',
-        '73db0f4dd7af188b8356ecf8014bffb7353e14b3c12117244cf738dc151c2cc5'
+        '06d6c8ef62ae425c6aa253afc1536cb0913dc5ef4a173b1ce66c8a163849ec73',
+        'bc1a805b3ceb015f61bdf2bc66fa5c9b8f6b0c236f4cfd761cba20db4dd0bafc'
       ],
       opencode: [
-        '66d338220e6830fdf573ae5c2b5ff7bf84853e854c7274f69c30d3312a56482c',
-        'a031e5507eb43f6a9410171756ebe072ef7794da7a53cb340330a46c98962aa7'
+        'ee9c4a9a35e0456d1f5853a0737efe6d1064ad47942ab40cb79d3305fb232161',
+        'b2935b048eb450759c9652eb1fb8b5047fc5816e28150f446eb2aeccc8941e51'
       ],
       grok: [
-        '12bdc358a872d8adb0182b3214363116200c61598a44dd150d5a5ab0f2d6eeb1',
-        'bd11826628532617f418ce3dc0060f82ec9ff3962cb87612da2c31647573733e'
+        '000363fb622b1fbe65579763557596ff4d0cab972cb61fb6c184e340ba1263ef',
+        '42c5f271ba8656a161dd1e06b05309b020fd4b92c95064c1ed70a6b9dab72672'
       ],
       copilot: [
-        'e9c3b8153f2fd0723f993dade6d248cb5bca532ee41d5746afbdd137c10bbea5',
-        '7d8709ff9a479822ba49e97c0e0f4e4c98e11bd5531d3985136c43489c81e109'
+        '3e21c72e394caa5c703cf1f06c017e82b3aedb6502f15c9ca7324e3e956c9678',
+        '766e961c8138cb1d2ade63be3fa420eeb1af7f53dbcfa658def6e09bd189b390'
       ]
     }
     const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
