@@ -71,6 +71,10 @@ export const SessionCard = memo(function SessionCard({
         dropSide ? ` kanban-card--drop-${dropSide}` : ''
       }`}
       draggable
+      // Focusable, and named for the board's keyboard (J/K/arrows walk these, Space opens one —
+      // KanbanView's board-key handler finds the current card through this attribute).
+      tabIndex={0}
+      data-kanban-card={session.id}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move'
         setDragging(true)

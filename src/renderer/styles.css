@@ -11997,6 +11997,15 @@ button.group-node__setup:disabled {
   color: var(--accent);
 }
 
+/* A card the board's keyboard is on (J/K/arrows move it, Space opens it). */
+.kanban-card:focus {
+  outline: none;
+}
+.kanban-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ── Board status chips (header) — transient filters on live agent state ── */
 .kanban-status-chips {
   display: inline-flex;

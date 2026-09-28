@@ -20,6 +20,9 @@ import {
   nextColumnColor, pruneAssignments, recolorColumn, renameColumn, setColumnCategory, unassigned
 } from '../../lib/kanban'
 import { markCanvasCovered } from '../../lib/canvasCovered'
+import { registerBoardKeys, type BoardKeyAction } from '../../lib/boardKeys'
+import { columnStep, keyOwnedByControl, stepCard } from '../../lib/boardKeyNav'
+import { openDialogCount } from '../dialog-stack'
 import { labelSwatch } from '../../lib/kanbanLabelColors'
 import { CardModal } from './CardModal'
 import { KanbanColumn, type KanbanLane } from './KanbanColumn'
@@ -132,6 +135,25 @@ const isProviderDrag = (drag: CardDrag): drag is Extract<CardDrag, { sourceId: '
 /** Shared empty results — stable identities so memoized cards/columns see "no change". */
 const NO_LABELS: KanbanLabel[] = []
 const NO_CARDS: KanbanSession[] = []
+
+/** The card the board's keys act FROM: the focused card, else the one under the pointer. */
+function currentBoardCard(active: Element | null): string | null {
+  const focused = active?.closest?.('[data-kanban-card]')?.getAttribute('data-kanban-card')
+  if (focused) return focused
+  const hovered = [...document.querySelectorAll('[data-kanban-card]')].filter((el) => el.matches(':hover'))
+  return hovered.at(-1)?.getAttribute('data-kanban-card') ?? null
+}
+
+/** Focus a card and bring it into view. Compared by attribute, never interpolated into a selector:
+ *  node ids come from a git-shared file. */
+function focusBoardCard(id: string): void {
+  const el = [...document.querySelectorAll<HTMLElement>('[data-kanban-card]')].find(
+    (c) => c.getAttribute('data-kanban-card') === id
+  )
+  if (!el) return
+  el.focus({ preventScroll: true })
+  el.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+}
 
 /** Full-page session board OVER the canvas. The canvas stays mounted underneath (its
  *  agent-status listeners must keep running, and display:none would 0×0-resize every
@@ -437,6 +459,60 @@ export const KanbanView = memo(function KanbanView({
     () => (showClosed ? board.columns : board.columns.filter((c) => columnCategory(c) !== 'closed')),
     [board.columns, showClosed]
   )
+
+  // ── Keyboard (board.* registry commands, dispatched by Canvas through lib/boardKeys) ──────────
+  // Board order = the session cards on screen, column by column (Ungrouped first), top to bottom —
+  // exactly what the columns render, filters and hidden closed columns included. GitHub cards are
+  // not in it: they open a different summary and are the provider's, not the board's.
+  const navColumns = useMemo<string[][]>(() => {
+    if (!sourceVisible(source, 'sessions')) return []
+    return [
+      columnCards.ungrouped.map((c) => c.id),
+      ...shownColumns.map((col) => (columnCards.byColumn.get(col.id) ?? NO_CARDS).map((c) => c.id))
+    ]
+  }, [columnCards, shownColumns, source])
+  const boardKeyRef = useRef<(action: BoardKeyAction) => boolean>(() => false)
+  boardKeyRef.current = (action) => {
+    const active = document.activeElement
+    if (keyOwnedByControl(active, action)) return false
+    if (cardMenu) return false
+    const order = navColumns.flat()
+    if (modalNodeId) {
+      // Only while the card modal is the ONE dialog: anything stacked on it owns the keyboard.
+      if (openDialogCount() !== 1) return false
+      if (action !== 'next' && action !== 'prev') return false
+      const target = stepCard(order, modalNodeId, action === 'next' ? 1 : -1)
+      if (!target) return false
+      setModalNodeId(target)
+      return true
+    }
+    if (openDialogCount() > 0) return false
+    const current = currentBoardCard(active)
+    if (action === 'open') {
+      if (!current) return false
+      setModalNodeId(current)
+      return true
+    }
+    const target =
+      action === 'next' || action === 'prev'
+        ? current
+          ? stepCard(order, current, action === 'next' ? 1 : -1)
+          : (action === 'next' ? order[0] : order.at(-1)) ?? null
+        : current
+          ? columnStep(navColumns, current, action === 'right' ? 1 : -1)
+          : null
+    if (!target) return false
+    focusBoardCard(target)
+    return true
+  }
+  useEffect(() => registerBoardKeys((action) => boardKeyRef.current(action)), [])
+  // Closing the modal hands focus back to the card it last showed, so J/K carry on from there.
+  const lastModalRef = useRef<string | null>(null)
+  useEffect(() => {
+    const was = lastModalRef.current
+    lastModalRef.current = modalNodeId
+    if (was && !modalNodeId) focusBoardCard(was)
+  }, [modalNodeId])
 
   // Stable column/card plumbing — every handler the memoized columns receive is identity-stable
   // across renders (the column binds its own id; cards bind theirs).
