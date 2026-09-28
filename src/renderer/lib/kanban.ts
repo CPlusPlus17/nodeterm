@@ -1,6 +1,9 @@
-import type { CanvasNodeState, KanbanAssignment, KanbanColumn, Project, ProjectKanban } from '@shared/types'
+import type {
+  CanvasNodeState, KanbanAssignment, KanbanColumn, KanbanColumnCategory, Project, ProjectKanban
+} from '@shared/types'
+import { columnCategory } from '@shared/kanban-category'
 import { SYSTEM_NODE_COLORS } from '../state/workspace'
-import { DEFAULT_BOARD_COLUMNS, makeColumnId } from '@shared/kanban-default-board'
+import { defaultBoardColumns } from '@shared/kanban-default-board'
 import { autoLabelColor, boardLabels, cardMeta, createLabel, metaList, setCardLabels } from '@shared/kanban-labels'
 
 // The card-meta + label transforms live in `@shared/kanban-labels` (the host core applies the
@@ -21,7 +24,7 @@ const kid = (prefix: string): string => `${prefix}-${Math.random().toString(36).
  *  shared definition so a board born on either surface is the same board. */
 export function defaultKanban(): ProjectKanban {
   return {
-    columns: DEFAULT_BOARD_COLUMNS.map((c) => ({ id: makeColumnId(), title: c.title, color: c.color })),
+    columns: defaultBoardColumns(),
     assignments: []
   }
 }
@@ -59,6 +62,26 @@ export function renameColumn(k: ProjectKanban, columnId: string, title: string):
 
 export function recolorColumn(k: ProjectKanban, columnId: string, color: string): ProjectKanban {
   return { ...k, columns: k.columns.map((c) => (c.id === columnId ? { ...c, color } : c)) }
+}
+
+/** Sets (or, with `undefined`, clears) a column's lifecycle category. Returns the SAME board when
+ *  nothing changes (unknown column, or the value it already reads as), so a caller can skip a
+ *  no-op persist. The UI confirms first when the column holds cards (`categoryChangeImpact`). */
+export function setColumnCategory(
+  k: ProjectKanban,
+  columnId: string,
+  category: KanbanColumnCategory | undefined
+): ProjectKanban {
+  const target = k.columns.find((c) => c.id === columnId)
+  if (!target || columnCategory(target) === columnCategory({ category })) return k
+  return {
+    ...k,
+    columns: k.columns.map((c) => {
+      if (c.id !== columnId) return c
+      const { category: _old, ...rest } = c
+      return category ? { ...rest, category } : rest
+    })
+  }
 }
 
 /** Moves a column before `beforeId` (null = to the end). */
@@ -126,15 +149,27 @@ export function unassigned(k: ProjectKanban, sessionIds: string[]): string[] {
   return sessionIds.filter((id) => !assigned.has(id))
 }
 
+/** The explicit "bottom of the column" anchor for `assignNode` — a drop BELOW the last card, or on
+ *  the column's empty space under its cards. Everything else that names no card lands at the top. */
+export const AT_COLUMN_END: unique symbol = Symbol('kanban.atColumnEnd')
+
 /** Assigns/moves a session card. `columnId` null = back to Ungrouped (assignment removed;
- *  Ungrouped order is canvas order, so `beforeNodeId` is ignored there). Inserts before
- *  `beforeNodeId`'s assignment when that assignment is in the target column, else at the
- *  end. Unknown target column is a no-op. */
+ *  Ungrouped order is canvas order, so the anchor is ignored there).
+ *
+ *  Placement in the destination column:
+ *  - `beforeNodeId` names a card IN that column → just above it;
+ *  - `AT_COLUMN_END` → at the bottom (only a positional drop asks for this);
+ *  - anything else — `null`, or a card that is not in that column — is UNANCHORED and lands at
+ *    the TOP. An unanchored move is "file this here" (the card menu, the agent `assign` verb, a
+ *    card created from a column): appended at the bottom of a long "Done" column, the card an
+ *    agent just finished read as having disappeared.
+ *
+ *  Unknown target column is a no-op. */
 export function assignNode(
   k: ProjectKanban,
   nodeId: string,
   columnId: string | null,
-  beforeNodeId: string | null
+  beforeNodeId: string | null | typeof AT_COLUMN_END
 ): ProjectKanban {
   if (nodeId === beforeNodeId) return k
   if (columnId === null) {
@@ -144,10 +179,16 @@ export function assignNode(
   if (!k.columns.some((c) => c.id === columnId)) return k
   const moved: KanbanAssignment = { nodeId, columnId }
   const without = k.assignments.filter((a) => a.nodeId !== nodeId)
-  const before = beforeNodeId
-    ? without.find((a) => a.nodeId === beforeNodeId && a.columnId === columnId)
-    : undefined
-  const idx = before ? without.indexOf(before) : -1
+  const anchor =
+    typeof beforeNodeId === 'string'
+      ? without.find((a) => a.nodeId === beforeNodeId && a.columnId === columnId)
+      : undefined
+  // Array order is the column order, so "top" = before the column's first assignment, and an empty
+  // column's first card simply joins the end of the array.
+  const target =
+    anchor ??
+    (beforeNodeId === AT_COLUMN_END ? undefined : without.find((a) => a.columnId === columnId))
+  const idx = target ? without.indexOf(target) : -1
   const at = idx === -1 ? without.length : idx
   return { ...k, assignments: [...without.slice(0, at), moved, ...without.slice(at)] }
 }

@@ -362,6 +362,8 @@ export function projectToFile(
   // as IN. Validating one direction only passes every round-trip test while leaving the other one
   // open. See @shared/canvas-layout.
   const layouts = sanitizeLayouts(p.layouts)
+  // Same two-seam rule for the board (see `sanitizeKanban`).
+  const kanban = p.kanban ? sanitizeKanban(p.kanban) : undefined
   return {
     version: 1,
     rev,
@@ -380,7 +382,7 @@ export function projectToFile(
     // the acknowledgment is machine-local (IndexEntryV3.capabilityAck) and must never travel.
     ...projectCapabilityFields(p),
     ...(p.dinoHighScore ? { dinoHighScore: p.dinoHighScore } : {}),
-    ...(p.kanban ? { kanban: p.kanban } : {}),
+    ...(kanban ? { kanban } : {}),
     // `layoutViewports` is deliberately absent: a field of that name in the shared file is a
     // forgery (a repo carrying one person's camera), and `fileToProject` never reads one.
     ...(layouts ? { layouts } : {})
@@ -397,6 +399,52 @@ export function validKanban(k: unknown): k is ProjectKanban {
     Array.isArray((k as ProjectKanban).columns) &&
     Array.isArray((k as ProjectKanban).assignments)
   )
+}
+
+const isRecord = (x: unknown): x is Record<string, unknown> =>
+  !!x && typeof x === 'object' && !Array.isArray(x)
+
+/**
+ * The board as it may be ADMITTED: `validKanban`'s shape rule plus the per-entry repairs a
+ * hand-edited, git-shared file needs before a renderer touches it — a render throw on a bad board
+ * boot-loops the app (the board view choice persists in localStorage).
+ *
+ * Repairs, never inventions:
+ *  - a column that is not an object with a string `id` and `title` is dropped (React cannot render
+ *    an object title, and `resolveColumnRef` lower-cases it);
+ *  - a column's `category` that is not a STRING is dropped. An unknown string is KEPT: it may be a
+ *    category a newer build added, and dropping it here would erase that build's data from the
+ *    shared file on our next save. Readers treat it as absent (`columnCategory`);
+ *  - an assignment that is not an object with string `nodeId` and `columnId` is dropped.
+ * Every other field — known or not — round-trips untouched.
+ *
+ * Returns the SAME object when nothing needed repair, so a clean file is never rewritten, and
+ * `undefined` for anything `validKanban` refuses. Used on every seam: `fileToProject` (in),
+ * `projectToFile` (out), and the inline-project branch of the store, which bypasses both.
+ */
+export function sanitizeKanban(k: unknown): ProjectKanban | undefined {
+  if (!validKanban(k)) return undefined
+  let changed = false
+  const columns: ProjectKanban['columns'] = []
+  for (const c of k.columns as unknown[]) {
+    if (!isRecord(c) || typeof c.id !== 'string' || typeof c.title !== 'string') {
+      changed = true
+      continue
+    }
+    if ('category' in c && typeof c.category !== 'string') {
+      const { category: _drop, ...rest } = c
+      columns.push(rest as unknown as ProjectKanban['columns'][number])
+      changed = true
+      continue
+    }
+    columns.push(c as unknown as ProjectKanban['columns'][number])
+  }
+  const assignments = (k.assignments as unknown[]).filter(
+    (a): a is ProjectKanban['assignments'][number] =>
+      isRecord(a) && typeof a.nodeId === 'string' && typeof a.columnId === 'string'
+  )
+  if (assignments.length !== k.assignments.length) changed = true
+  return changed ? { ...k, columns, assignments } : k
 }
 
 /** A `{x, y}` point, checked at the boundary because the file is hostile input. */
@@ -511,6 +559,7 @@ export function fileToProject(
   // (they are shared content, the cameras are not), or a hand edit dropped it. Pruning on the way
   // in as well as out is what stops workspace.json accumulating orphans forever.
   const layoutViewports = pruneLayoutViewports(base.layoutViewports, layouts)
+  const kanban = sanitizeKanban(f.kanban)
   return {
     id: base.id,
     // A project whose stored name IS its own path is one this machine (or a teammate's) created
@@ -542,7 +591,7 @@ export function fileToProject(
     // (readProjectCapabilities). `"true"`, 1, {} et al. vanish here, at the boundary.
     ...readProjectCapabilities(f),
     ...(f.dinoHighScore ? { dinoHighScore: f.dinoHighScore } : {}),
-    ...(validKanban(f.kanban) ? { kanban: f.kanban } : {}),
+    ...(kanban ? { kanban } : {}),
     ...(base.cwd ? { cwd: base.cwd } : {}),
     ...(base.ssh ? { ssh: base.ssh } : {}),
     ...(base.closed ? { closed: true } : {}),

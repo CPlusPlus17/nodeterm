@@ -169,6 +169,30 @@ describe('GitHubIssuesSection', () => {
 
 
 
+  // Before lifecycle categories the default was simply the LAST column; a board with an archive
+  // column after Done would then close issues into the archive.
+  it('defaults the completion column to the board\'s Done-category column, not merely the last one', async () => {
+    useProjects.setState({
+      activeProjectId: 'p1',
+      projects: [{
+        id: 'p1', name: 'Project', color: '#8b5cf6', viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [], cwd: '/repo',
+        kanban: {
+          columns: [
+            { id: 'todo', title: 'Todo', color: '#2563eb', category: 'unstarted' },
+            { id: 'shipped', title: 'Shipped', color: '#16a34a', category: 'done' },
+            { id: 'archive', title: 'Archive', color: '#8e8e93', category: 'closed' }
+          ],
+          assignments: []
+        }
+      }]
+    })
+    await mount()
+    const toggle = host.querySelector<HTMLElement>('[aria-label="Include GitHub issues"]')!
+    await act(async () => { toggle.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(useProjects.getState().getProject('p1')?.kanban?.github?.completionColumnId).toBe('shipped')
+  })
+
   it('reports an Approve failure beside the Approve button, not three rows below it', async () => {
     ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubControl.approve =
       vi.fn(async () => { throw Object.assign(new Error('invalid-configuration'), { code: 'invalid-configuration' }) })

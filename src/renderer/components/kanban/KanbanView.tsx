@@ -1,5 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { KanbanLabel, ProjectKanban } from '@shared/types'
+import type { KanbanColumnCategory, KanbanLabel, ProjectKanban } from '@shared/types'
+import {
+  boardProgress, categoryChangeImpact, categoryChangeMessage, columnCategory
+} from '@shared/kanban-category'
+import { useKanbanDisplay } from '../../state/kanbanDisplay'
+import {
+  STATUS_CHIPS, chipCounts, matchesStatusChips, parseStatusChipSig, statusChipSig,
+  type StatusChip, type StatusChipCard
+} from '../../lib/kanbanStatusChips'
 import type { NodeIcon } from '@shared/node-icon'
 import { AGENT_CONFIG, BUILTIN_AGENT_IDS, type AgentId } from '@shared/agents/config'
 import { useViewMode } from '../../state/viewMode'
@@ -7,11 +15,14 @@ import { useProjects } from '../../state/projects'
 import { useSettings } from '../../state/settings'
 import { useBoardWallpaperStyle } from '../../state/wallpaper'
 import {
-  addColumn, assignNode, assignedTo, boardLabels, cardMatchesLabelFilter, cardMeta, columnForNode,
+  AT_COLUMN_END, addColumn, assignNode, assignedTo, boardLabels, cardMatchesLabelFilter, cardMeta, columnForNode,
   deleteColumn, labelsForCard, moveColumn,
-  nextColumnColor, pruneAssignments, recolorColumn, renameColumn, unassigned
+  nextColumnColor, pruneAssignments, recolorColumn, renameColumn, setColumnCategory, unassigned
 } from '../../lib/kanban'
 import { markCanvasCovered } from '../../lib/canvasCovered'
+import { registerBoardKeys, type BoardKeyAction } from '../../lib/boardKeys'
+import { columnStep, keyOwnedByControl, stepCard } from '../../lib/boardKeyNav'
+import { openDialogCount } from '../dialog-stack'
 import { labelSwatch } from '../../lib/kanbanLabelColors'
 import { CardModal } from './CardModal'
 import { KanbanColumn, type KanbanLane } from './KanbanColumn'
@@ -125,6 +136,25 @@ const isProviderDrag = (drag: CardDrag): drag is Extract<CardDrag, { sourceId: '
 const NO_LABELS: KanbanLabel[] = []
 const NO_CARDS: KanbanSession[] = []
 
+/** The card the board's keys act FROM: the focused card, else the one under the pointer. */
+function currentBoardCard(active: Element | null): string | null {
+  const focused = active?.closest?.('[data-kanban-card]')?.getAttribute('data-kanban-card')
+  if (focused) return focused
+  const hovered = [...document.querySelectorAll('[data-kanban-card]')].filter((el) => el.matches(':hover'))
+  return hovered.at(-1)?.getAttribute('data-kanban-card') ?? null
+}
+
+/** Focus a card and bring it into view. Compared by attribute, never interpolated into a selector:
+ *  node ids come from a git-shared file. */
+function focusBoardCard(id: string): void {
+  const el = [...document.querySelectorAll<HTMLElement>('[data-kanban-card]')].find(
+    (c) => c.getAttribute('data-kanban-card') === id
+  )
+  if (!el) return
+  el.focus({ preventScroll: true })
+  el.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+}
+
 /** Full-page session board OVER the canvas. The canvas stays mounted underneath (its
  *  agent-status listeners must keep running, and display:none would 0×0-resize every
  *  terminal into a tmux SIGWINCH) — this is an opaque overlay, nothing more.
@@ -155,6 +185,9 @@ export const KanbanView = memo(function KanbanView({
   // show everything; otherwise a card must carry at least one selected label (cardMatchesLabelFilter).
   const [labelFilter, setLabelFilter] = useState<string[]>([])
   const [filterOpen, setFilterOpen] = useState(false)
+  // Status chips (Running / Needs you / Unread) — TRANSIENT component state, never persisted and
+  // never part of a saved view: they filter on second-by-second agent state (lib/kanbanStatusChips).
+  const [statusChips, setStatusChips] = useState<StatusChip[]>([])
   const [source, setSource] = useState<KanbanSource>('all')
   // One GitHub summary modal for both kinds; the kind decides whether it offers a move.
   const [modalIssue, setModalIssue] = useState<
@@ -169,6 +202,13 @@ export const KanbanView = memo(function KanbanView({
   const projectId = useProjects((s) => s.activeProjectId)
   const projectName = useProjects((s) => s.projects.find((p) => p.id === s.activeProjectId)?.name)
   const projectColor = useProjects((s) => s.projects.find((p) => p.id === s.activeProjectId)?.color)
+  // Per-user display: whether `closed` columns are on screen (localStorage, never the board).
+  const showClosed = useKanbanDisplay((s) => s.byProject[projectId]?.showClosed === true)
+  const setShowClosed = useKanbanDisplay((s) => s.setShowClosed)
+  // A category change that would re-mean cards waits here for an explicit confirmation.
+  const [pendingCategory, setPendingCategory] = useState<
+    { columnId: string; category: KanbanColumnCategory | undefined; message: string } | null
+  >(null)
   const github = useGitHubIssues((state) => state.projects[projectId])
   const githubReadOnly = Object.values(github?.pages ?? {}).some((page) => page.readOnly)
   // Pull requests are evicted first when a repository outgrows the cache bounds, so the lane can
@@ -247,6 +287,7 @@ export const KanbanView = memo(function KanbanView({
   useEffect(() => {
     setSource('all')
     setModalIssue(null)
+    setStatusChips([])
   }, [projectId])
   useEffect(() => {
     if (!modalIssue || !github) return
@@ -287,6 +328,15 @@ export const KanbanView = memo(function KanbanView({
   )
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions])
   const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions])
+  // The chips' facts through a DERIVED SIGNATURE (a primitive that changes only when a card's
+  // running / needs-you / unread fact does) — never `byId`, which changes on every hook event of
+  // every node and would re-render the whole board each time.
+  const chipCards = useMemo<StatusChipCard[]>(() => sessions.map((s) => ({ id: s.id, kind: s.kind })), [sessions])
+  const statusSig = useAgentStatus((st) => statusChipSig(st.byId, chipCards))
+  const statusFacts = useMemo(() => parseStatusChipSig(statusSig), [statusSig])
+  const statusCounts = useMemo(() => chipCounts(statusFacts), [statusFacts])
+  const toggleStatusChip = (chip: StatusChip): void =>
+    setStatusChips((cur) => (cur.includes(chip) ? cur.filter((c) => c !== chip) : [...cur, chip]))
 
   // Stable per-card label arrays: labelsForCard allocates a fresh array per call, and that
   // identity churn alone would defeat SessionCard's memo. Recomputed only on a board change.
@@ -346,7 +396,7 @@ export const KanbanView = memo(function KanbanView({
         if (columnId !== null) commit(moveColumn(board, drag.id, columnId))
         // a column dropped on Ungrouped is a no-op — Ungrouped is always first
       } else if (isProviderDrag(drag)) requestGitHubMove(drag.issue, columnId)
-      else commit(assignNode(board, drag.id, columnId, null))
+      else commit(assignNode(board, drag.id, columnId, AT_COLUMN_END))
     },
     [board, commit, requestGitHubMove]
   )
@@ -363,12 +413,12 @@ export const KanbanView = memo(function KanbanView({
         requestGitHubMove(drag.issue, columnId)
         return
       }
-      // "after this card" = "before the NEXT card in the column" (null = end of column).
+      // "after this card" = "before the NEXT card in the column" (after the last = the bottom).
       const ids = columnId === null ? unassigned(board, sessionIds) : assignedTo(board, columnId)
-      let beforeId: string | null = targetNodeId
+      let beforeId: string | typeof AT_COLUMN_END = targetNodeId
       if (side === 'after') {
         const i = ids.indexOf(targetNodeId)
-        beforeId = i >= 0 && i + 1 < ids.length ? ids[i + 1] : null
+        beforeId = i >= 0 && i + 1 < ids.length ? ids[i + 1] : AT_COLUMN_END
       }
       commit(assignNode(board, drag.id, columnId, beforeId))
     },
@@ -379,8 +429,15 @@ export const KanbanView = memo(function KanbanView({
   // them per column — and their identities hold across renders that change neither the board,
   // the sessions, nor the filter, which is what lets the memoized columns skip.
   const columnCards = useMemo(() => {
+    // Label filter AND status chips (each an OR within itself).
     const vis = (ids: string[]): string[] =>
-      activeLocalFilter.length ? ids.filter((id) => cardMatchesLabelFilter(board, id, activeLocalFilter)) : ids
+      activeLocalFilter.length || statusChips.length
+        ? ids.filter(
+          (id) =>
+            (!activeLocalFilter.length || cardMatchesLabelFilter(board, id, activeLocalFilter)) &&
+            matchesStatusChips(statusFacts, id, statusChips)
+        )
+        : ids
     const toCards = (ids: string[]): KanbanSession[] => {
       const cards = ids.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []))
       return cards.length ? cards : NO_CARDS
@@ -389,7 +446,73 @@ export const KanbanView = memo(function KanbanView({
       ungrouped: toCards(vis(unassigned(board, sessionIds))),
       byColumn: new Map(board.columns.map((c) => [c.id, toCards(vis(assignedTo(board, c.id)))]))
     }
-  }, [board, byId, sessionIds, activeLocalFilter])
+  }, [board, byId, sessionIds, activeLocalFilter, statusChips, statusFacts])
+
+  // Lifecycle: the board's progress (null when no column says what "complete" means) and the
+  // columns this user sees — `closed` ones only when they asked for them.
+  const progress = useMemo(() => boardProgress(board, sessionIds), [board, sessionIds])
+  const closedCount = useMemo(
+    () => board.columns.filter((c) => columnCategory(c) === 'closed').length,
+    [board.columns]
+  )
+  const shownColumns = useMemo(
+    () => (showClosed ? board.columns : board.columns.filter((c) => columnCategory(c) !== 'closed')),
+    [board.columns, showClosed]
+  )
+
+  // ── Keyboard (board.* registry commands, dispatched by Canvas through lib/boardKeys) ──────────
+  // Board order = the session cards on screen, column by column (Ungrouped first), top to bottom —
+  // exactly what the columns render, filters and hidden closed columns included. GitHub cards are
+  // not in it: they open a different summary and are the provider's, not the board's.
+  const navColumns = useMemo<string[][]>(() => {
+    if (!sourceVisible(source, 'sessions')) return []
+    return [
+      columnCards.ungrouped.map((c) => c.id),
+      ...shownColumns.map((col) => (columnCards.byColumn.get(col.id) ?? NO_CARDS).map((c) => c.id))
+    ]
+  }, [columnCards, shownColumns, source])
+  const boardKeyRef = useRef<(action: BoardKeyAction) => boolean>(() => false)
+  boardKeyRef.current = (action) => {
+    const active = document.activeElement
+    if (keyOwnedByControl(active, action)) return false
+    if (cardMenu) return false
+    const order = navColumns.flat()
+    if (modalNodeId) {
+      // Only while the card modal is the ONE dialog: anything stacked on it owns the keyboard.
+      if (openDialogCount() !== 1) return false
+      if (action !== 'next' && action !== 'prev') return false
+      const target = stepCard(order, modalNodeId, action === 'next' ? 1 : -1)
+      if (!target) return false
+      setModalNodeId(target)
+      return true
+    }
+    if (openDialogCount() > 0) return false
+    const current = currentBoardCard(active)
+    if (action === 'open') {
+      if (!current) return false
+      setModalNodeId(current)
+      return true
+    }
+    const target =
+      action === 'next' || action === 'prev'
+        ? current
+          ? stepCard(order, current, action === 'next' ? 1 : -1)
+          : (action === 'next' ? order[0] : order.at(-1)) ?? null
+        : current
+          ? columnStep(navColumns, current, action === 'right' ? 1 : -1)
+          : null
+    if (!target) return false
+    focusBoardCard(target)
+    return true
+  }
+  useEffect(() => registerBoardKeys((action) => boardKeyRef.current(action)), [])
+  // Closing the modal hands focus back to the card it last showed, so J/K carry on from there.
+  const lastModalRef = useRef<string | null>(null)
+  useEffect(() => {
+    const was = lastModalRef.current
+    lastModalRef.current = modalNodeId
+    if (was && !modalNodeId) focusBoardCard(was)
+  }, [modalNodeId])
 
   // Stable column/card plumbing — every handler the memoized columns receive is identity-stable
   // across renders (the column binds its own id; cards bind theirs).
@@ -420,6 +543,21 @@ export const KanbanView = memo(function KanbanView({
   const handleDeleteColumn = useCallback(
     (columnId: string) => commit(deleteColumn(board, columnId)),
     [board, commit]
+  )
+  // A category is a claim about every card in the column, so a change that would re-mean cards is
+  // never applied silently: an empty column changes at once, a populated one asks first.
+  const handleSetCategory = useCallback(
+    (columnId: string, category: KanbanColumnCategory | undefined) => {
+      const impact = categoryChangeImpact(board, columnId, category, sessionIds)
+      if (!impact) {
+        const next = setColumnCategory(board, columnId, category)
+        if (next !== board) commit(next)
+        return
+      }
+      const title = board.columns.find((c) => c.id === columnId)?.title ?? 'this column'
+      setPendingCategory({ columnId, category, message: categoryChangeMessage(title, impact, !showClosed) })
+    },
+    [board, commit, sessionIds, showClosed]
   )
   const handleMoveGitHub = requestGitHubMove
   const githubPage = useCallback((columnId: string | null) =>
@@ -563,6 +701,30 @@ export const KanbanView = memo(function KanbanView({
       <div className="kanban-header">
         <span className="kanban-header__dot" style={{ background: projectColor }} />
         <span className="kanban-header__name">{projectName}</span>
+        {progress && (
+          <span
+            className="kanban-progress"
+            title="Cards in Done and Closed columns, out of every card on the board"
+          >
+            <span className="kanban-progress__bar">
+              <span
+                className="kanban-progress__fill"
+                style={{ width: `${Math.round((progress.complete / progress.total) * 100)}%` }}
+              />
+            </span>
+            {progress.complete}/{progress.total} done
+          </span>
+        )}
+        {closedCount > 0 && (
+          <button
+            className={`kanban-filter-btn kanban-closed-toggle${showClosed ? ' kanban-filter-btn--on' : ''}`}
+            title={showClosed ? 'Hide closed columns' : 'Show closed columns'}
+            aria-pressed={showClosed}
+            onClick={() => setShowClosed(projectId, !showClosed)}
+          >
+            {showClosed ? 'Hide closed' : `Show closed · ${closedCount}`}
+          </button>
+        )}
         {board.github && <KanbanSourceFilter value={source} onChange={setSource} />}
         {board.github && github?.loading && <span className="kanban-github-status">Loading GitHub issues…</span>}
         {board.github && github?.error && (
@@ -583,6 +745,23 @@ export const KanbanView = memo(function KanbanView({
             Showing the most recently updated pull requests only.
           </span>
         )}
+        <div className="kanban-status-chips" role="group" aria-label="Filter by agent status">
+          {STATUS_CHIPS.map(({ id, label }) => {
+            const on = statusChips.includes(id)
+            return (
+              <button
+                key={id}
+                className={`kanban-status-chip kanban-status-chip--${id}${on ? ' kanban-status-chip--on' : ''}`}
+                aria-pressed={on}
+                title={`Show only ${label.toLowerCase()} sessions (not saved — this follows live agent state)`}
+                onClick={() => toggleStatusChip(id)}
+              >
+                {label}
+                <span className="kanban-status-chip__count">{statusCounts[id]}</span>
+              </button>
+            )
+          })}
+        </div>
         {(paletteLabels.length > 0 || githubLabels.length > 0 || activeFilter.length > 0) && (
           <div className="kanban-header__filter">
             <button
@@ -645,7 +824,7 @@ export const KanbanView = memo(function KanbanView({
             onDragEnd={handleDragEnd}
             onDropOnColumn={dropOnColumn}
           />
-          {board.columns.map((col) => (
+          {shownColumns.map((col) => (
             <KanbanColumn
               key={col.id}
               column={col}
@@ -653,6 +832,7 @@ export const KanbanView = memo(function KanbanView({
               onRename={handleRenameColumn}
               onRecolor={handleRecolorColumn}
               onDelete={handleDeleteColumn}
+              onSetCategory={handleSetCategory}
               createOptions={createOptions}
               onCreate={onCreateNode}
               onColumnDragStart={handleColumnDragStart}
@@ -704,6 +884,19 @@ export const KanbanView = memo(function KanbanView({
           status={github?.issueStatus[modalIssue.item.number]}
           onMove={(columnId) => handleMoveGitHub(modalIssue.item, columnId)}
           onClose={() => setModalIssue(null)}
+        />
+      )}
+      {pendingCategory && (
+        <ConfirmDialog
+          message={pendingCategory.message}
+          confirmLabel="Change category"
+          onCancel={() => setPendingCategory(null)}
+          onConfirm={() => {
+            const { columnId, category } = pendingCategory
+            setPendingCategory(null)
+            const next = setColumnCategory(board, columnId, category)
+            if (next !== board) commit(next)
+          }}
         />
       )}
       {pendingGitHubMove && (

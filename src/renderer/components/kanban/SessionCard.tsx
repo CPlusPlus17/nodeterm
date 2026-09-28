@@ -8,6 +8,7 @@ import { NodeIconView } from '../NodeIcon'
 import { LabelChips } from './LabelChips'
 import { PRIORITIES } from './CardMetaBar'
 import type { KanbanSession } from './KanbanView'
+import { cardBadge } from '../../lib/kanbanStatusChips'
 
 const PRIO_COLOR = Object.fromEntries(PRIORITIES.map((p) => [p.id, p.color])) as Record<KanbanPriority, string>
 
@@ -50,26 +51,11 @@ export const SessionCard = memo(function SessionCard({
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     return e.clientY < r.top + r.height / 2 ? 'before' : 'after'
   }
-  // The board is the canvas's other view of the same sessions, and it reads the same store — so
-  // SLEEPING (Eco: the agent CLI was exited to reclaim its RAM) is one more branch here, not a
-  // follow-up. Ranked last: a hibernated node is idle by definition, so `working`/`waiting` can
-  // only mean the wake already landed and the hooks are ahead of the flag.
-  // DROPPED (the CLI died unannounced — see terminal/agent-liveness.ts) is ranked FIRST: it is the
-  // strongest claim on the card, and it cannot actually collide with the others, since the verdict
-  // is only ever raised on a `done` node that is neither paused nor hibernated. Ordering it here is
-  // about which sentence a reader of this chain meets first, not about resolving a conflict.
-  const badge =
-    session.kind !== 'sticky' && status?.dropped
-      ? 'dropped'
-      : session.kind !== 'sticky' && status?.state === 'working'
-        ? 'running'
-        : session.kind !== 'sticky' && (status?.state === 'waiting' || status?.state === 'blocked')
-          ? 'needs'
-          : session.kind !== 'sticky' && status?.paused
-            ? 'paused'
-            : session.kind !== 'sticky' && status?.hibernated
-              ? 'sleeping'
-              : null
+  // The board is the canvas's other view of the same sessions and reads the same store, so the
+  // node's pause/liveness chips (DROPPED, PAUSED, SLEEPING) are badges here too.
+  // The ONE badge rule, shared with the board's status chips (lib/kanbanStatusChips), so a chip
+  // can never select cards whose badge says something else. The ranking and its reasons live there.
+  const badge = cardBadge(session.kind, status)
   const stickyPreview = session.kind === 'sticky' ? (session.text ?? '').trim() : ''
   const assignees = meta?.assignees ?? []
   const due = meta?.dueAt
@@ -85,6 +71,10 @@ export const SessionCard = memo(function SessionCard({
         dropSide ? ` kanban-card--drop-${dropSide}` : ''
       }`}
       draggable
+      // Focusable, and named for the board's keyboard (J/K/arrows walk these, Space opens one —
+      // KanbanView's board-key handler finds the current card through this attribute).
+      tabIndex={0}
+      data-kanban-card={session.id}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move'
         setDragging(true)

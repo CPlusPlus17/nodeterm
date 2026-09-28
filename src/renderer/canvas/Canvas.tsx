@@ -200,6 +200,7 @@ import { containerOrigin, snapPointInRootSpace } from '../lib/gridSnap'
 import { zoomFromPct } from '../lib/zoomPresets'
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from './zoom-limits'
 import { isSpaceRelease, spacePanKeydown } from '../lib/spacePan'
+import { runBoardKey } from '../lib/boardKeys'
 import { readCanvasLocked, writeCanvasLocked } from '../lib/canvasLock'
 import {
   FLOW_NODE_CLASS,
@@ -1157,7 +1158,8 @@ export function Canvas() {
    */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (spacePanKeydown(e, document.activeElement) !== 'engage') return
+      const covered = isGlobalKanbanOpen() || isKanbanOpen(useProjects.getState().activeProjectId)
+      if (spacePanKeydown(e, document.activeElement, covered) !== 'engage') return
       e.preventDefault()
       setSpacePan(true)
     }
@@ -8333,6 +8335,13 @@ export function Canvas() {
       'canvas.goForward': () => { goForward(); return true },
       'canvas.fitAll': () => { fitAll(); return true },
       'canvas.tidy': () => { arrangeAllNodes(); return true },
+      // The kanban board's keys — the mounted board decides (and declines when the focused control
+      // owns the key, or when no per-project board is up: Omni registers none). lib/boardKeys.
+      'board.openCard': () => runBoardKey('open'),
+      'board.nextCard': () => runBoardKey('next'),
+      'board.prevCard': () => runBoardKey('prev'),
+      'board.columnLeft': () => runBoardKey('left'),
+      'board.columnRight': () => runBoardKey('right'),
       'canvas.deleteSelection': deleteSelectionCommand,
       'node.newTerminal': () => { addTerminal(); return true },
       'node.newAgent': () => {
