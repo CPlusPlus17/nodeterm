@@ -7,7 +7,7 @@
 // Corrupt ⇒ CLOSED: the file is set aside and the store starts with no peers, so nobody
 // auto-reconnects. The owner recovers with `team add-owner` over SSH, which is also the
 // root of trust.
-import { promises as fs, existsSync, mkdirSync } from 'node:fs'
+import { promises as fs, existsSync, mkdirSync, chmodSync } from 'node:fs'
 import path from 'node:path'
 import { writeFileAtomic, renameAtomic } from '../fs-atomic'
 
@@ -28,12 +28,17 @@ export function parseTeam(raw: unknown): TeamDoc | null {
   const o = raw as Record<string, unknown>
   if (o.v !== 1 || !Array.isArray(o.peers) || !Array.isArray(o.sharedProjects)) return null
   const peers: TeamPeer[] = []
+  // A repeated key is corrupt, not deduped: `peerFor` takes the first entry, so keeping both would
+  // let file ORDER decide whether a key is a viewer or an owner.
+  const seen = new Set<string>()
   for (const p of o.peers) {
     if (!p || typeof p !== 'object') return null
     const q = p as Record<string, unknown>
     if (!isStr(q.pubkeyB64, 64) || typeof q.label !== 'string' || q.label.length > LABEL_MAX) return null
     if (!(TEAM_ROLES as readonly unknown[]).includes(q.role)) return null
     if (!isStr(q.addedAt, 40) || !isStr(q.addedBy, 64)) return null
+    if (seen.has(q.pubkeyB64)) return null
+    seen.add(q.pubkeyB64)
     peers.push({ pubkeyB64: q.pubkeyB64, label: q.label, role: q.role as TeamRole, addedAt: q.addedAt, addedBy: q.addedBy })
   }
   if (!o.sharedProjects.every((s) => isStr(s, 128))) return null
@@ -52,9 +57,9 @@ export function upsertPeer(doc: TeamDoc, p: TeamPeer): TeamDoc {
 export function removePeer(doc: TeamDoc, pubkeyB64: string, force: boolean): TeamDoc | 'last-owner' {
   if (!peerFor(doc, pubkeyB64)) return doc
   const rest = doc.peers.filter((p) => p.pubkeyB64 !== pubkeyB64)
-  // "Would an owner remain?", not "is this the only owner ENTRY?": a hand-edited file can list one
-  // key twice, and counting entries would let this removal (which drops every entry for the key)
-  // leave a team that had an owner with none.
+  // "Would an owner remain?", not "is this the only owner ENTRY?". `parseTeam` refuses a repeated
+  // key, so this only guards an in-memory doc that lists one: counting entries would let this
+  // removal (which drops every entry for the key) leave a team that had an owner with none.
   const hadOwner = doc.peers.some((p) => p.role === 'owner')
   if (hadOwner && !rest.some((p) => p.role === 'owner') && !force) return 'last-owner'
   return { ...doc, peers: rest }
@@ -89,7 +94,15 @@ export class TeamStore {
       if (!this.loaded) await this.read()
       const next = fn(this.doc)
       if (next === 'last-owner') return next
+      // Never publish what our own reader rejects: the write would land, and the NEXT load would set
+      // the whole team aside as corrupt. Throwing here leaves both the file and `this.doc` as they were.
+      if (!parseTeam(next)) throw new Error('team.json: refusing to write a team doc that fails validation')
       mkdirSync(this.dir, { recursive: true, mode: 0o700 })
+      // mkdir's mode applies only when it CREATES the directory; tighten one that already existed.
+      // Best-effort, and POSIX only: the bits mean nothing on Windows.
+      if (process.platform !== 'win32') {
+        try { chmodSync(this.dir, 0o700) } catch { /* not ours to fix: the 0600 file is the guard */ }
+      }
       await writeFileAtomic(this.file(), JSON.stringify(next, null, 2) + '\n', { mode: 0o600 })
       this.doc = next
       return next
