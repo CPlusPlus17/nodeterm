@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'fs'
 import os from 'os'
+import { execFileSync } from 'child_process'
 import path from 'path'
 import {
   alertSoundsDir,
@@ -149,6 +150,12 @@ describe('readAlertSound', () => {
     await fs.symlink(secret, path.join(alertSoundsDir(dir), 'done.sound'))
     expect(await readAlertSound(dir, 'done')).toBeNull()
   })
+
+  it.skipIf(process.platform === 'win32')('refuses a FIFO planted at the fixed name without hanging', async () => {
+    await fs.mkdir(alertSoundsDir(dir), { recursive: true })
+    execFileSync('mkfifo', [path.join(alertSoundsDir(dir), 'done.sound')])
+    expect(await readAlertSound(dir, 'done')).toBeNull()
+  }, 5000)
 
   it('refuses a stored file over the size cap (hand-placed into the data dir)', async () => {
     await fs.mkdir(alertSoundsDir(dir), { recursive: true })

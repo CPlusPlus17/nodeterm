@@ -18,11 +18,11 @@
 // resolve last-writer-wins. The format needs no record: the renderer's `decodeAudioData` sniffs it.
 //
 // Reading back takes only a `kind`, so no caller can aim it at another file, and a symlink planted
-// at the fixed name is refused (lstat) rather than followed. Every function resolves — none
+// at the fixed name is refused (O_NOFOLLOW, where the platform has it) rather than followed. Every function resolves — none
 // throws — because a broken custom sound must degrade to the built-in chime, never to an error in
 // the agent-status path that plays it.
 
-import { promises as fs } from 'fs'
+import { constants as fsConstants, promises as fs } from 'fs'
 import { basename, join } from 'path'
 import { renameAtomic, tempNameFor } from './fs-atomic'
 import {
@@ -116,12 +116,30 @@ export async function saveAlertSound(
 export async function readAlertSound(userDataDir: string, kind: AlertSoundKind): Promise<string | null> {
   if (!isAlertSoundKind(kind)) return null
   const file = alertSoundFile(userDataDir, kind)
+  // ONE file descriptor for the check and the read (no stat-then-read on a path, which a swap in
+  // between could defeat). O_NOFOLLOW refuses a symlink planted at the name; where the platform has
+  // no such flag (Windows) it is 0 and the isFile() check on the opened handle still applies.
+  // O_NONBLOCK keeps a FIFO planted at the name from hanging the open; fstat then refuses it.
+  let fh: fs.FileHandle | undefined
   try {
-    const st = await fs.lstat(file)
+    fh = await fs.open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0))
+    const st = await fh.stat()
     if (!st.isFile() || st.size === 0 || st.size > ALERT_SOUND_MAX_BYTES) return null
-    return (await fs.readFile(file)).toString('base64')
+    // Read at most one byte past the cap from the SAME handle: a file that grew after the fstat is
+    // still refused rather than slurped.
+    const buf = Buffer.alloc(ALERT_SOUND_MAX_BYTES + 1)
+    let total = 0
+    while (total < buf.length) {
+      const { bytesRead } = await fh.read(buf, total, buf.length - total, total)
+      if (bytesRead === 0) break
+      total += bytesRead
+    }
+    if (total === 0 || total > ALERT_SOUND_MAX_BYTES) return null
+    return buf.subarray(0, total).toString('base64')
   } catch {
     return null
+  } finally {
+    await fh?.close().catch(() => {})
   }
 }
 
