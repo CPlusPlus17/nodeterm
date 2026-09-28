@@ -43,6 +43,24 @@ describe('planRunVerb', () => {
     expect(planRunVerb({ ...base, projectActive: true })).toBe('wait-for-mount')
     expect(planRunVerb(base)).toBe('headless')
   })
+
+  it('refuses an on-screen, unmounted node whose launch the mount will not fire', () => {
+    const onScreen = { inFlight: false, projectActive: true, hasWriter: false }
+    // Amber (manualOnly): only an explicit Run now delivers it.
+    expect(planRunVerb({ ...onScreen, pending: { ...pending, attempted: true, manualOnly: true } })).toBe(
+      'refuse-not-mounted'
+    )
+    // Armed with --after: the canvas fires it when its deps report done, not on mount.
+    expect(planRunVerb({ ...onScreen, pending: { ...pending, after: ['dep-1'] } })).toBe('refuse-not-mounted')
+    // The plain, never-attempted, dependency-free launch does start on mount.
+    expect(planRunVerb({ ...onScreen, pending })).toBe('wait-for-mount')
+  })
+
+  it('a mounted writer or an off-screen project is unaffected by manualOnly / --after', () => {
+    const held = { ...pending, attempted: true, manualOnly: true, after: ['dep-1'] }
+    expect(planRunVerb({ pending: held, inFlight: false, projectActive: true, hasWriter: true })).toBe('mounted')
+    expect(planRunVerb({ pending: held, inFlight: false, projectActive: false, hasWriter: false })).toBe('headless')
+  })
 })
 
 describe('claimForHeadless', () => {

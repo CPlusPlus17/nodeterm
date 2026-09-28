@@ -314,6 +314,7 @@ import {
   nextFreePosition,
   armForColdOpen,
   projectTargetFlagRefusal,
+  resolveProjectTarget,
   clearAttachConsent,
   folderName
 } from '../lib/projectOpen'
@@ -10366,42 +10367,23 @@ export function Canvas() {
           return
         }
         const tgStore = useProjects.getState()
-        const tgLiveSrc = nodesRef.current.find((n) => n.id === sourceNodeId)
-        const tgStoredSrc = tgStore.projects
-          .flatMap((p) => p.nodes.map((n) => ({ node: n, projectId: p.id })))
-          .find((x) => x.node.id === sourceNodeId)
-        const callerProjectId = tgLiveSrc ? tgStore.activeProjectId : tgStoredSrc?.projectId
-        if (targetId !== callerProjectId) {
-          if (!tgLiveSrc && !tgStoredSrc) {
-            reply({ ok: false, error: 'source node is not in any open project' })
-            return
-          }
-          if (!sourceIsControlCapable(tgLiveSrc?.data.agentId ?? tgStoredSrc?.node.agentId)) {
-            reply({ ok: false, error: 'source node is not a control-capable agent' })
-            return
-          }
-          // Belt only — main already refused every stranger id with one byte-identical sentence
-          // (no existence oracle). This fires for a target main authorized that this renderer's
-          // store cannot see yet (mid-hydration), so it is worded transient.
-          const target = tgStore.getProject(targetId)
-          if (!target) {
-            reply({
-              ok: false,
-              error: 'project-target-refused: the target project is not available here — try again'
-            })
-            return
-          }
-          // Belt for the SSH invariant: a granted SSH id cannot exist (grants are minted only by
-          // local open-project) and main refuses ungranted ones — but if that ever breaks, the
-          // target is refused, not opened. A relay tab is another machine's project entirely.
-          if (target.ssh || target.remote) {
-            reply({
-              ok: false,
-              error:
-                'project-target-ssh-unsupported: opening sessions into an SSH project is not supported — do not retry'
-            })
-            return
-          }
+        // The source and target belt is ONE definition, shared with `run --project`
+        // (resolveProjectTarget, lib/projectOpen — the order and every sentence are pinned there).
+        // `own` falls through to the legacy path below.
+        const tgResolved = resolveProjectTarget({
+          targetId,
+          sourceNodeId,
+          liveNodes: nodesRef.current,
+          projects: tgStore.projects,
+          activeProjectId: tgStore.activeProjectId,
+          sshVerbWord: 'opening'
+        })
+        if (tgResolved.kind === 'refused') {
+          reply({ ok: false, error: tgResolved.error })
+          return
+        }
+        if (tgResolved.kind === 'target') {
+          const target = tgResolved.project
           const tgAgentId = (verb === 'open-agent' ? args.agent : 'claude') as AgentId
           const tgIsTerminal = verb === 'open-terminal'
           const tgCount = Math.max(
@@ -10521,38 +10503,21 @@ export function Canvas() {
       // project falls through to the normal routing and the `case 'run'` below.
       if (verb === 'run' && args.project !== undefined) {
         const runStore = useProjects.getState()
-        const runLiveSrc = nodesRef.current.find((n) => n.id === sourceNodeId)
-        const runStoredSrc = runStore.projects
-          .flatMap((p) => p.nodes.map((n) => ({ node: n, projectId: p.id })))
-          .find((x) => x.node.id === sourceNodeId)
-        const runCallerProjectId = runLiveSrc ? runStore.activeProjectId : runStoredSrc?.projectId
-        if (args.project !== runCallerProjectId) {
-          if (!runLiveSrc && !runStoredSrc) {
-            reply({ ok: false, error: 'source node is not in any open project' })
-            return
-          }
-          if (!sourceIsControlCapable(runLiveSrc?.data.agentId ?? runStoredSrc?.node.agentId)) {
-            reply({ ok: false, error: 'source node is not a control-capable agent' })
-            return
-          }
-          // Belt only, worded like the `--project` open block's: main refused every stranger id.
-          const runTarget = runStore.getProject(args.project)
-          if (!runTarget) {
-            reply({
-              ok: false,
-              error: 'project-target-refused: the target project is not available here — try again'
-            })
-            return
-          }
-          if (runTarget.ssh || runTarget.remote) {
-            reply({
-              ok: false,
-              error:
-                'project-target-ssh-unsupported: starting sessions in an SSH project is not supported — do not retry'
-            })
-            return
-          }
-          reply(await runQueuedNodeRef.current(runTarget, args.node ?? ''))
+        // The SAME belt the `--project` open block runs (resolveProjectTarget), in `run`'s words.
+        const runResolved = resolveProjectTarget({
+          targetId: args.project,
+          sourceNodeId,
+          liveNodes: nodesRef.current,
+          projects: runStore.projects,
+          activeProjectId: runStore.activeProjectId,
+          sshVerbWord: 'starting'
+        })
+        if (runResolved.kind === 'refused') {
+          reply({ ok: false, error: runResolved.error })
+          return
+        }
+        if (runResolved.kind === 'target') {
+          reply(await runQueuedNodeRef.current(runResolved.project, args.node ?? ''))
           return
         }
       }
@@ -14375,9 +14340,15 @@ export function Canvas() {
       // A closed project gets its tab back, never the focus (#925 spec §2.5): unhide BEFORE the
       // claim's disk write, so the same write persists it. Not while no project is active (the
       // welcome screen): un-closing one there would flip `hasProjects` and render a canvas with no
-      // active project. The session still starts; the project stays in Recently closed.
+      // active project. The session still starts; the project stays in Recently closed. Nor for
+      // an SSH project: `startHeadless` refuses every one of its nodes (`remote-unsupported`)
+      // before any claim, so nothing would start and no claim write would persist the tab.
       const projectsNow = useProjects.getState()
-      if (projectsNow.getProject(project.id)?.closed && projectsNow.activeProjectId !== '') {
+      if (
+        projectsNow.getProject(project.id)?.closed &&
+        !project.ssh &&
+        projectsNow.activeProjectId !== ''
+      ) {
         projectsNow.unhideProject(project.id)
       }
       const outcomes = await Promise.all(nodes.map((node) => startHeadless(deps, { project, node })))
@@ -14429,6 +14400,13 @@ export function Canvas() {
           return { ok: false, error: `run-already-starting: ${nodeId} is already starting` }
         case 'wait-for-mount':
           return one(false, 'starts-when-mounted')
+        case 'refuse-not-mounted':
+          // The mount will not fire a manualOnly or `--after` launch, so "starts when mounted"
+          // would be a promise nobody keeps. Starting it NOW takes ▶ on the mounted node.
+          return {
+            ok: false,
+            error: `run-not-mounted: ${nodeId} is on screen but its terminal is not mounted — bring it into view and use Run now`
+          }
         case 'mounted': {
           // The ▶ path verbatim (TerminalNode's QUEUED button): disarm only on a landed delivery.
           const outcome = await launchCommand(nodeId, pending!.command, true, api)

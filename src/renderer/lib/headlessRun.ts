@@ -9,10 +9,20 @@ import { HEADLESS_COLS, HEADLESS_ROWS, localNodePtyOptions } from '@shared/node-
 export const RUN_NOW_AFTER_REFUSAL =
   'run-now-after-unsupported: --run-now cannot be combined with --after'
 
-export type RunVerbPlan = 'nothing-queued' | 'already-starting' | 'mounted' | 'wait-for-mount' | 'headless'
+export type RunVerbPlan =
+  | 'nothing-queued'
+  | 'already-starting'
+  | 'mounted'
+  | 'wait-for-mount'
+  | 'refuse-not-mounted'
+  | 'headless'
 
 /** What `run --node` does. A project on screen never starts headless: its node either has a
- *  mounted writer (the ▶ path) or starts through the ordinary path when its terminal next mounts. */
+ *  mounted writer (the ▶ path) or starts through the ordinary path when its terminal next mounts.
+ *  That ordinary path only fires a plain, never-attempted launch with no dependencies: a
+ *  `manualOnly` launch waits for an explicit Run now and an `--after` launch waits for its deps.
+ *  Telling the caller either one "starts when mounted" would promise a start that never comes, so
+ *  those are refused instead (`refuse-not-mounted`). */
 export function planRunVerb(input: {
   pending?: PendingLaunch
   inFlight: boolean
@@ -21,7 +31,12 @@ export function planRunVerb(input: {
 }): RunVerbPlan {
   if (!input.pending?.command) return 'nothing-queued'
   if (input.inFlight) return 'already-starting'
-  if (input.projectActive) return input.hasWriter ? 'mounted' : 'wait-for-mount'
+  if (input.projectActive) {
+    if (input.hasWriter) return 'mounted'
+    // `after` is required by the type, but the launch comes out of hand-editable project JSON.
+    const waitsOnDeps = (input.pending.after?.length ?? 0) > 0
+    return input.pending.manualOnly || waitsOnDeps ? 'refuse-not-mounted' : 'wait-for-mount'
+  }
   return 'headless'
 }
 
