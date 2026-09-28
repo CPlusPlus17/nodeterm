@@ -63,14 +63,24 @@ export interface TranscriptIpcDeps {
    * ONE page of a REMOTE node's transcript — a ranged read on the host, so a paged ⌘M open moves
    * a window over ssh instead of the legacy 5 MB tail. `null` = not a remote session (same
    * convention as `readRemote`); `{ok:false}` = it IS remote and the host could not be read, which
-   * must end as not-found rather than fall through to THIS machine's disk. `data` is the file's
+   * must end as not-found rather than fall through to THIS machine's disk; `{ok:false, absent:true}`
+   * = it IS remote and the host LOOKED and has no such transcript (or there is no session id to look
+   * for) — a clean miss, which is `found:false` WITHOUT `unreadable`. `data` is the file's
    * bytes from absolute offset `start` (one lookbehind byte included — see `parseChatWindow`).
    * Electron-only.
    */
   readRemotePage?(q: TranscriptQuery, page: ChatTranscriptPage): Promise<RemoteTranscriptPage | null>
+  /**
+   * Is this node an SSH-project node — from the SHELL's own records (its workspace store, its live
+   * pty), never from anything the renderer sends. Every channel below then applies `remoteOnly`:
+   * a remote node whose remote leg cannot answer is a miss or a failure, never a read of THIS
+   * machine's disk (claude's cwd-newest fallback there adopts a stranger's local session). Absent
+   * (the Server Edition — it runs ON the host) = no node is remote, which is correct there.
+   */
+  isRemoteNode?(nodeId: string): boolean
 }
 
-export type RemoteTranscriptPage = { ok: true; data: Buffer; start: number } | { ok: false }
+export type RemoteTranscriptPage = { ok: true; data: Buffer; start: number } | { ok: false; absent?: true }
 
 /** How much a window with no complete line grows per re-read. ×4 reaches the 5 MB cap from the
  *  default 256 KB tail in three extra reads, and from the 64 KB minimum in four. */
@@ -143,7 +153,7 @@ async function readChatPage(
   if (readRemotePage) {
     const remote = await readRemotePage(q, page)
     if (remote !== null) {
-      if (!remote.ok) return unreadablePage()
+      if (!remote.ok) return remote.absent ? notFoundPage() : unreadablePage()
       // A growth re-read that suddenly says "not remote" (null) is a failed read too — never a
       // reason to go read THIS machine's disk halfway through a remote page.
       return parseGrowingWindow(page, remote, async (p) => {
@@ -189,8 +199,8 @@ export interface ChatReadQuery {
   accountId?: string
   nodeId?: string
   agentId?: string
-  /** See `TranscriptQuery.remoteOnly`. Honoured on the PAGED read (the only one the phone uses) and
-   *  by grok's local-only reader; the legacy unpaged read ignores it. */
+  /** See `TranscriptQuery.remoteOnly`. Honoured by every read: paged, legacy unpaged, and grok's
+   *  local-only reader. */
   remoteOnly?: boolean
 }
 
@@ -233,6 +243,8 @@ export async function readChatTranscript(
   // A resolved-but-unreadable remote file is NOT "no conversation yet" — the read failed
   // (master down, transcript gone), and the panel must be able to say so.
   if (remote !== null) return { messages: parseChatMessages(remote.split('\n')), found: !!remote }
+  // A known-remote node the remote leg could not resolve: not found — never THIS machine's disk.
+  if (remoteOnly) return { messages: [], found: false }
   const p = await resolveTranscript({ sessionId, cwd, accountId }, deps.pathFor)
   return p
     ? { messages: await readChatMessages(p), found: true }
@@ -242,6 +254,9 @@ export async function readChatTranscript(
 export function registerTranscriptIpc(deps: TranscriptIpcDeps = {}): void {
   const remoteText = (q: TranscriptQuery): Promise<string | null> =>
     deps.readRemote ? deps.readRemote(q) : Promise.resolve(null)
+  // Decided HERE from the shell's records, for every channel — the renderer's arguments carry no
+  // remoteness, and must not: a renderer flag would be one more thing a forged call could lie about.
+  const isRemote = (nodeId: string | undefined): boolean => !!nodeId && !!deps.isRemoteNode?.(nodeId)
 
   platform().handle(
     IPC.claudeReadTranscript,
@@ -253,6 +268,8 @@ export function registerTranscriptIpc(deps: TranscriptIpcDeps = {}): void {
     ): Promise<TranscriptLine[]> => {
       const remote = await remoteText({ sessionId, cwd, accountId, nodeId })
       if (remote !== null) return parseTranscriptLines(remote)
+      // The find bar must not index THIS machine's transcript for a remote node.
+      if (isRemote(nodeId)) return []
       const p = await resolveTranscript({ sessionId, cwd, accountId }, deps.pathFor)
       return p ? readTranscriptLines(p) : []
     }
@@ -271,6 +288,9 @@ export function registerTranscriptIpc(deps: TranscriptIpcDeps = {}): void {
       // only ever existed on the other one, and answer `absent` about it.
       const remote = deps.remoteExists ? await deps.remoteExists({ sessionId, cwd: undefined, accountId, nodeId }) : null
       if (remote !== null) return remote
+      // Remote by the shell's records but the remote leg could not ask (no live pty yet): `unknown`,
+      // never a local scan whose `absent` would drop a resume.
+      if (isRemote(nodeId)) return 'unknown'
       // A live context tail's own path is the authoritative hint — but it is a HINT, so it is
       // verified rather than trusted: the file it names can have been deleted since.
       const hinted = deps.pathFor?.(sessionId)
@@ -296,6 +316,10 @@ export function registerTranscriptIpc(deps: TranscriptIpcDeps = {}): void {
       agentId: string | undefined,
       rawPage?: unknown
     ): Promise<ChatTranscriptResult> =>
-      readChatTranscript({ sessionId, cwd, accountId, nodeId, agentId }, rawPage, deps)
+      readChatTranscript(
+        { sessionId, cwd, accountId, nodeId, agentId, ...(isRemote(nodeId) ? { remoteOnly: true } : {}) },
+        rawPage,
+        deps
+      )
   )
 }

@@ -2107,7 +2107,16 @@ else, and its context links must keep classifying across restarts).
   `settings` block (`claudePermissionMode`/`autoSupported`/`claudeAccounts`) so the phone can
   launch agents with the desktop's permission mode + managed accounts, and SSH slices get their
   **per-host** settings (remote CLI caps + host-matched accounts) injected via
-  `remote-status-push`'s `settingsFor` dep.
+  `remote-status-push`'s `settingsFor` dep. `settings.customAgents` (`[{id, label, baseAgent?,
+  binaries}]`) lets the phone chat with a custom agent: built ONLY by `core/mirror-custom-agents.ts`
+  (one definition for all three providers — local file, which relay `projects.list` also serves,
+  SSH slices, Server Edition), `binaries` = `binariesFor` from the pane-owner predicate, published
+  only when every name fits the plain alphabet `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (else `[]`) —
+  the builder enforces it because the tokenizer can "name" a slice of a secret (`oauth2:ghp_…` out
+  of a git URL, a quoted env value, a `${env:…}` template). **Never put a custom agent's raw
+  `launchCmd`/`args`/`env` in the mirror** — they carry API keys and the file lands on every SSH
+  host. `binariesFor` resolves a BLANK launch command with a *builtin* `baseAgent` to the base's
+  binaries (what `resolveAgentConfig` actually launches).
 - **Hook installers** — `src/core/agents/hooks/` holds per-agent hook services + an installer
   registry `MANAGED_HOOK_INSTALLERS`. `managed-script.ts` builds the POSIX hook script that
   POSTs to the server (env-gated: a no-op in the user's normal terminals, active only in
@@ -2467,7 +2476,18 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   would otherwise replay it forever) — a HOOK-fed ref is never dropped that way, since an empty
   read there is usually a transient master hiccup and forgetting it sends the next read local.
   It is generated shell, so `remote-transcript-locate.test.ts` runs it for real under `/bin/sh`
-  against a fake host tree — keep it that way. (2) **The cwd fallback keeps `accountId`** in BOTH
+  against a fake host tree — keep it that way.
+  **A remote node never falls through to this machine** (2026-09-28): the handler decides
+  remoteness from the SHELL's records (`isRemoteNode` dep — live remote pty or
+  `workspaceStore.sshProjectIdForNode`, never a renderer flag) and applies `remoteOnly` to the
+  paged ⌘M read, the legacy read, the find-bar index (`[]`) and `transcriptExists` (`unknown`).
+  The host locate is tri-state (`locateRemoteTranscriptRef`): a CLEAN MISS is `found:false`, a
+  failure to ask is `unreadable` ("Couldn't read the transcript.") — the phone's `chat.page` shares
+  the same deps and the same distinction. Before this, a mounted SSH node whose locate missed (or
+  whose master was down) read THIS machine's resolver, cwd-newest fallback included. `transcriptExists` shares the same locate
+  (`remotePresenceFromLocate`: ref/absent/unreadable → present/absent/unknown, a malformed id
+  `unknown`), so it also works for a node with no live pty. A remote grok node (no remote reader)
+  shows "not supported yet", not the retryable error. (2) **The cwd fallback keeps `accountId`** in BOTH
   `resolveTranscript` and `contextEnsure`; without it a managed-account node fell back to the
   system root and could adopt an unrelated session's newest transcript. (3) **Relay tabs** stay
   local-only (a transcript read over the relay would read the GUEST's disk) and reject with

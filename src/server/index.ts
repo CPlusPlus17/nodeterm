@@ -81,6 +81,7 @@ import {
   sessionNameSweepEntries,
   nodeSessionName
 } from '../core/agent-status-mirror'
+import { mirrorCustomAgents } from '../core/mirror-custom-agents'
 import { createPushNotify, createLiveUpdatePush } from '../core/push-notify'
 import { createGrantsAccessor } from '../core/push-grants'
 import { createAckSweeper } from '../core/ack-sweep'
@@ -461,7 +462,9 @@ export async function startServer(
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
-        .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) }))
+        .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) })),
+      // Derived binary names only — never the launch command/env (see core/mirror-custom-agents.ts).
+      customAgents: mirrorCustomAgents(s.customAgents)
     }
   })
   // Advertise this install's version/commit/installedAt to the phone (spec: server-update). The

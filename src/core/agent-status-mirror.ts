@@ -194,6 +194,32 @@ export interface MirrorSettings {
    * *this* host and generalizes to neither another agent nor another machine.
    */
   codexApprovalValues?: string[]
+  /**
+   * The user's custom agents (Settings → Agents), reduced to what a phone needs to chat with one:
+   * which builtin harness it inherits (the chat capability follows `baseAgent`) and which binary
+   * names its pane runs as (the pane-owner check before a send). Built ONLY by
+   * `mirrorCustomAgents` (`core/mirror-custom-agents.ts`) — never the raw `launchCmd`/`args`/`env`,
+   * which routinely carry API keys and proxy URLs. Absent on old files ⇒ a reader refuses every
+   * custom node, exactly as before this field existed.
+   */
+  customAgents?: MirrorCustomAgent[]
+}
+
+/** One custom agent as the mirror advertises it (see MirrorSettings.customAgents). */
+export interface MirrorCustomAgent {
+  /** `custom:<uuid>` — the node's `agentId`. */
+  id: string
+  label: string
+  /** The builtin harness it inherits capabilities from; absent for a baseless custom agent. */
+  baseAgent?: string
+  /**
+   * Plain binary basenames the pane-owner predicate would accept — `binariesFor(id, customAgents)`,
+   * published only when every name matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (enforced by the
+   * builder). EMPTY when the launch command cannot be named honestly (e.g. `bash -lc …`) or the
+   * derived name is outside that alphabet (a URL, credential, quoted value or `${env:…}` template);
+   * a reader must then refuse, never fall back to a guess.
+   */
+  binaries: string[]
 }
 
 export interface MirrorFile {

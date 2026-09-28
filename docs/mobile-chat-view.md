@@ -103,7 +103,7 @@ as `hostBridge.chat` in `main/index.ts`, forwarded by both phone hosts).
 
 | verb | params | reply | does |
 |---|---|---|---|
-| `chat.page` | `{nodeId, before?, maxBytes?}` | `{page: ChatPage}` | Only for agents with a chat view — `canChat(capabilityAgentId(agent))` (claude, grok, and custom agents whose base harness is one of them); anything else is refused before any read. `readChatTranscript` with the ⌘M panel's own deps (paged ALWAYS — an absent page is the default 256 KB tail; grok unpaged) + `model`/`effort`, `version: 1`. Session id: the RENDERER's agent-status id first (what ⌘M reads — after a desktop restart a hook-fed id lives only there), then the mirror's, then the node's minted id; the fallbacks apply only when the renderer does not answer within 3 s or knows none. **Remote (SSH-project) nodes are read REMOTE-ONLY** (`remoteOnly`): over the live pty's ControlMaster, else the node's PROJECT's master (an idle tab / any node after a restart has no pty), and never from this machine's disk — a remote node with no reachable master, or a host that did not answer, is `Could not read the transcript.`, not an empty page. The cwd rides ONLY for a remote node with a known id (the host-side locate needs it); locally a known-but-dead id must not fall back to the cwd's newest transcript (another node's), and with no id at all ⇒ `found:false`. `found:false` therefore always means "looked, and there is no transcript". The reply's `page.sessionId` is exactly the id that read used (absent when none was resolved); the phone should PREFER it over the mirror's `sessionId` as the page's thread identity — the mirror lags — every 4 s on SSH, up to ~30 s on relay (`projects.list` off-LAN) — so right after `/clear` or a resume it still names the old session while the page already comes from the new transcript, and merging by byte `key` across the two would splice threads. `sessionId` is present on a `found:false` page too (an id was resolved, its transcript is missing — e.g. a fresh session that has not written yet): a new id on such a page alone is NOT a confirmed thread switch, so the phone must not clear the thread on it. Additive field: `version` stays 1, and an older desktop simply omits it (fall back to the mirror). |
+| `chat.page` | `{nodeId, before?, maxBytes?}` | `{page: ChatPage}` | Only for agents with a chat view — `canChat(capabilityAgentId(agent))` (claude, grok, and custom agents whose base harness is one of them); anything else is refused before any read. `readChatTranscript` with the ⌘M panel's own deps (paged ALWAYS — an absent page is the default 256 KB tail; grok unpaged) + `model`/`effort`, `version: 1`. Session id: the RENDERER's agent-status id first (what ⌘M reads — after a desktop restart a hook-fed id lives only there), then the mirror's, then the node's minted id; the fallbacks apply only when the renderer does not answer within 3 s or knows none. **Remote (SSH-project) nodes are read REMOTE-ONLY** (`remoteOnly`): over the live pty's ControlMaster, else the node's PROJECT's master (an idle tab / any node after a restart has no pty), and never from this machine's disk — a remote node with no reachable master, or a host that did not answer, is `Could not read the transcript.`, not an empty page. The host-side locate is TRI-STATE (`locateRemoteTranscriptRef`, `src/main/remote-transcript-page.ts`): a CLEAN MISS (the host looked and has no such file, or there is no session id to look for) is `found:false`, and only a failure to ask (no master, no resolved home, a failed ssh, a path outside the jail, a failed ranged read) is the error. For REMOTE nodes the desktop ⌘M panel follows the same remote-only rule and the same absent-vs-unreadable split (same deps): its IPC handler decides remoteness from the shell's own records (`isRemoteNode` — live remote pty or `workspaceStore.sshProjectIdForNode`, never a renderer flag) and applies `remoteOnly` to the paged read, the legacy unpaged read, the find-bar index and the presence probe (`unknown`); it shows `unreadable` as "Couldn't read the transcript." (a remote grok node, which has no remote reader, as "not supported yet"). LOCAL nodes on ⌘M are unchanged — the renderer still sends the cwd, so claude's cwd fallback still applies there; the cwd-only-when-remote rule below is the phone path's. The cwd rides ONLY for a remote node with a known id (the host-side locate needs it); locally a known-but-dead id must not fall back to the cwd's newest transcript (another node's), and with no id at all ⇒ `found:false`. `found:false` therefore always means "looked, and there is no transcript". The reply's `page.sessionId` is exactly the id that read used (absent when none was resolved); the phone should PREFER it over the mirror's `sessionId` as the page's thread identity — the mirror lags — every 4 s on SSH, up to ~30 s on relay (`projects.list` off-LAN) — so right after `/clear` or a resume it still names the old session while the page already comes from the new transcript, and merging by byte `key` across the two would splice threads. `sessionId` is present on a `found:false` page too (an id was resolved, its transcript is missing — e.g. a fresh session that has not written yet): a new id on such a page alone is NOT a confirmed thread switch, so the phone must not clear the thread on it. Additive field: `version` stays 1, and an older desktop simply omits it (fall back to the mirror). |
 | `chat.status` | `{nodeId}` | `{status: ChatStatus}` | the renderer's agent-status entry (`state` null = unknown, `held`, hibernated/paused/dropped/sessionEnded) + `structuredAnswers` = the held ticket is in main's structured-ticket ledger (script revision ≥ 5) + the host mirror's `hostRefuses`/`refusal` + `version: 1`. |
 | `chat.send` | `{nodeId, text}` | `ChatSendOutcome` = `{result, reason?}` | text capped at 64000 UTF-16 units RAW, then ESC + C0/C1 stripped (`\n`, `\t` kept; `sanitizeChatText`); refused FIRST (`reason` `working`/`dialog`) when the host's mirror says the agent is working / waiting / blocked or holds a question or approval ticket (renderer state is transient after a reload); refused `busy` while another send to the same node is still in flight (held until that send SETTLES, capped at 30 s); then the renderer runs the ⌘M composer's gate at send time (`chatSendRefusal` = `agentProcessInPane` + state ∈ {done, unknown} → its own kind as `reason`) plus "no held request" (`dialog`), then `pty.sendText`. `'sent'` only for `sendText === true`; a paste the pane refused is `refused`/`failed`. |
 | `agent.answer` | `{nodeId, pendingId, answer}` | `{ok: boolean}` | `answerHeldPermission` with the node's own I/O (local fs, or the SSH project's ControlMaster — the same `heldPermissionIoFor` the desktop answer path uses): validated against the pending request file, structured-ticket gated, no `setMode auto`. The `pendingId` must belong to THIS node — one of the mirror's approval tickets for it, or the renderer's `held.pendingId` (plans / questions) — else `{ok:false}` with no I/O and no answered event. Success emits the same optimistic "answered" event. |
@@ -155,6 +155,42 @@ N/A (it serves no phone relay; its bridge subscription is inert).
   session lives on. ESC bytes stripped.
 - **Answer**: Swift port of `buildPermissionDecision` (validates against the pending request file),
   written atomically (`umask 077`, tmp + mv) from stdin; `pendingId` regex-validated before any path.
+
+### 3.3a Custom agents (mirror `settings.customAgents`, desktop side implemented)
+
+A custom agent's node carries `agentId: "custom:<uuid>"`. On SSH the phone can neither know its base
+harness (the chat capability follows it) nor name its binary (the pane-owner check before a send) on
+its own, so the agent-status mirror's `settings` block advertises them:
+
+```json
+"settings": {
+  "customAgents": [
+    { "id": "custom:3f2a…", "label": "Proxy Claude", "baseAgent": "claude", "binaries": ["claude"] },
+    { "id": "custom:9b1c…", "label": "My agent", "binaries": ["my-agent"] },
+    { "id": "custom:77de…", "label": "Wrapped", "baseAgent": "codex", "binaries": [] }
+  ]
+}
+```
+
+- Present in every mirror the phone reads: the local `agent-status.json` (desktop and Server Edition;
+  the relay's `projects.list` serves this same file) and each SSH project's pushed slice
+  (`agent-status-<projectId>.json`, via `settingsFor`). Absent on older desktops ⇒ refuse every custom
+  node, as before.
+- `binaries` is the desktop predicate's `binariesFor(id, settings.customAgents)`, published only when
+  every name matches `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` — the BUILDER enforces this alphabet, because a
+  derived "name" can be a slice of a secret (`oauth2:ghp_…` from a git URL, a quoted env value, a
+  `${env:…}` template). **Empty = cannot be named honestly** (e.g. `bash -lc …`, or a name outside the
+  alphabet): refuse, never guess.
+- Residual the alphabet cannot catch: the launch-command tokenizer cannot tell a runner option's
+  VALUE from the program, so `npx --registry-token ghp_… my-agent` would "name" the token. The builder
+  therefore also publishes `[]` for a name with a known credential prefix (`ghp_`, `gho_`, `ghu_`,
+  `ghs_`, `ghr_`, `github_pat_`, `AIza`, `sk-`, `xai-`, `glpat-`) or a high-entropy shape (≥ 32 chars,
+  ≥ 80% alphanumeric, letters AND digits). A heuristic: an unprefixed short secret can still pass, and a
+  real binary it catches is simply refused (`[]`). The phone still validates each name (`isPlainBinaryName`) and refuses otherwise.
+- `baseAgent` is present only when it is a builtin id. Chat on SSH: only when it is `claude` (the only
+  harness the Swift parser reads); on relay the desktop decides (`canChat(capabilityAgentId(…))`).
+- Never contains the raw launch command, args or env — they routinely hold API keys and proxy URLs,
+  and the slice is a file on the SSH host. `label` is display text (≤200 chars).
 
 ### 3.4 Live updates & paging (both transports)
 
