@@ -125,6 +125,15 @@ the list path feeding it). Columns take lanes and name no source; the drag path 
 `placement`. If you find yourself writing `=== 'github'` outside the registry, the registry is
 missing a field.
 
+A board feature has to say which of three tiers it lives in: a **board fact** is shared content
+in `project.kanban` (`.nodeterm/project.json`) — optional, sanitized in `sanitizeKanban`
+(`core/workspace-files.ts`, which every load and save seam runs) and harmless to an older build;
+a **display preference** is per-user localStorage (`state/kanbanDisplay.ts`); a filter on **live
+agent state** is component state and is never persisted. An unanchored card move lands at the TOP
+of its column; only a positional drop asks for the bottom (`AT_COLUMN_END`). Board keys are
+registry commands in the `board` scope — the only scope allowed a bare letter, because it never
+fires while typing or in a terminal.
+
 Before adding a GitHub read, check what the existing poll already fetches. Pull request cards
 needed no new request at all: `/repos/{repo}/issues` returns pull requests, and the client used to
 discard them. `/repos/{repo}/pulls` looks like the obvious endpoint and is the expensive one — it

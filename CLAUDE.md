@@ -4561,6 +4561,11 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   every hovered node twice, and on the desktop it would duplicate main's forward. (`node.close`
   has no browser owner at all: the browser keeps ⌘W.)
 - **Invariants**
+  - **A bare letter or Space is only ever a `board`-scope binding.** `board` commands resolve only
+    while a board is up and carry neither `allowWhileTyping` nor `allowInTerminal` — that pair of
+    refusals is what makes a bare key a command rather than a character stolen from the user, so a
+    `board` row must never gain either flag, and no other scope may be given bare letters
+    (`normalizeBindingForCommand`). `board` shares the `global` conflict bucket with app/canvas.
   - **Never read `settings.speech.shortcut`.** The dictation chord is `dictationBinding()` (the
     first effective `speech.dictation` binding); the legacy field is a **downgrade mirror only**,
     written by `setKeybindingOverride` so an older build still finds the user's chord.
@@ -5256,6 +5261,73 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   ~15 KB under the 128 KB ceiling. **Both verbs announce their write on `workspaceExternalChange`
   and that is not optional**: the renderer holds its own board and the next whole-workspace save
   serializes THAT, so a change the renderer never heard about is one the next autosave reverts.
+  **Board model + UX (2026-09).** Three tiers, and a new board feature must pick one: a board
+  FACT is shared content in `project.kanban` (optional, sanitized, ignored harmlessly by an older
+  build); a DISPLAY preference is per-user localStorage (`state/kanbanDisplay.ts`,
+  `nodeterm.kanbanDisplay`, per project); a filter on LIVE agent state is component state only.
+  - **`sanitizeKanban` (`core/workspace-files.ts`) is the shape rule now**, applied on all three
+    seams — `fileToProject`, the store's inline-project branch (which bypasses it) and
+    `projectToFile` on the way OUT (the two-seam rule `sanitizeLayouts` follows). It is
+    `validKanban` plus per-entry repairs, never inventions: a column that is not an object with
+    string `id` + `title` is dropped (React cannot render an object title — a render throw
+    boot-loops the app, the view choice persists), a non-string `category` is dropped, a malformed
+    assignment is dropped, every other field round-trips, and a clean board comes back BY IDENTITY
+    so a well-formed file is never rewritten.
+  - **Lifecycle category** (`KanbanColumn.category?: unstarted|started|done|closed`,
+    `@shared/kanban-category`). Every reader goes through `columnCategory`: an unknown STRING reads
+    as absent but is KEPT in the file (dropping it would erase a newer build's value on an older
+    teammate's save); a non-string never reaches a comparison. The default board carries
+    unstarted/started/done on every seeding surface (`defaultBoardColumns`, shared by
+    `defaultKanban` and the relay's `ensureProjectBoard`/label seeding). It drives the header
+    progress (`boardProgress`: live cards in done+closed columns over EVERY live card, Ungrouped
+    included; null when no column is done/closed — a number over an undefined "complete" would be
+    invented), hides `closed` columns behind a per-user toggle (default hidden), and gives the GitHub
+    completion column its default (`defaultCompletionColumnId`: first done, else first closed, else
+    the last column — the pre-category default, so an uncategorized board is unchanged). **A
+    category change on a column that holds cards is never silent**: it is a claim about every card
+    in the column (they start counting as finished, or leave view when it becomes closed), so
+    `categoryChangeImpact` gates a `ConfirmDialog` naming the count and the consequence; an empty
+    column changes at once. Confirm rather than refuse: refusing would only make the user empty
+    the column first, which is friction, not safety. Set from the column's ⋯ menu / header
+    right-click on the per-project board; Omni shows no column menu.
+  - **An unanchored card move lands at the TOP** (`assignNode`): no `before`, or a `before` naming
+    a card outside the destination column. An agent's `assign` into a long Done column used to
+    append at the bottom and read as "disappeared". A POSITIONAL drop still says where it landed —
+    below the last card or on the column body passes `AT_COLUMN_END` explicitly (both board views).
+    The relay's `projects.setCardColumn` follows the same rule; the `assign` help in BOTH agent
+    bodies says so (`canvas-control-core.test.ts` pins it).
+  - **Status chips** (Running / Needs you / Unread, `lib/kanbanStatusChips.ts`) read the store
+    through a derived primitive signature (`statusChipSig`) — never `byId`, the `armedDepSig` rule —
+    and are NEVER persisted (component state, reset on project switch): a filter on
+    second-by-second state that survived a restart shows a wrong board. The card badge and the chips
+    share ONE rule, `cardBadge`, so a chip cannot select cards whose badge says something else. They
+    narrow session cards only (like local labels); they AND with the label filter and OR within
+    themselves.
+  - **Board-log folding is a VIEW** (`lib/boardLogCollapse.ts`, `BoardLogFeed`): consecutive events
+    by the same author (name AND colour) of the same type within two minutes of the run's NEWEST row
+    render as one "×N" row that expands in place; the jsonl is never rewritten. The window is
+    anchored, not chained, so a ×N never spans more than two minutes. Comments never fold, and
+    neither do `agent-message` / `agent-read-cookies` — audit rows (`NEVER_COLLAPSE`).
+  - **Keyboard**: registry scope `board` (group Board) — Space opens the focused/hovered card,
+    J/K + ArrowDown/Up walk board order (the session cards on screen, column by column, Ungrouped
+    first; GitHub cards excluded), ArrowLeft/Right jump to the same row of the neighbouring
+    non-empty column; in the card modal J/K step the modal. `board` resolves only while a board is
+    up and has no `allowWhileTyping`/`allowInTerminal`, which is the ONLY reason
+    `normalizeBindingForCommand` lets it bind a bare letter or Space (the card modal's terminal,
+    the comment box and the chat composer keep every key). Dispatch stays in Canvas's one
+    listener; the mounted per-project board answers through `lib/boardKeys.ts` and DECLINES (the
+    key falls through) when the focused control uses the key (`keyOwnedByControl`: Space on a
+    button/link/checkbox, anything in a `<select>` or ARIA composite), when any dialog other than
+    its own card modal is open, or when a card menu is up. Two pre-existing bugs this had to fix:
+    the canvas's CAPTURE-phase space-to-pan `preventDefault`ed every non-typing Space even while a
+    board covered the canvas (so no board button could be pressed with Space) — `spacePanKeydown`
+    now takes `canvasCovered`; and a `Space` binding could never match because `e.key` is `' '`
+    (`normalizeKey` maps it to `SPACE`). The Settings recorder captures a bare key only for a
+    command that may have one (`board` scope or `allowBareKey`).
+  **Phone** (nodeterm-ios): must at least not break on `category` (an extra JSON key its board
+  decoder ignores); the relay-served move now lands at the top while the phone's direct-SSH writer
+  (`KanbanBoardWriter`) still appends, and `KanbanDefaults` should gain the three categories — both
+  are the iOS follow-up, not desktop work.
 - **Omni Kanban (global swimlanes)** (`components/kanban/GlobalKanbanView.tsx`; one swimlane per open project; `state/viewMode.ts` `globalKanban` (localStorage `nodeterm.globalKanban`, machine-local, like `viewByProject`) + `settings.omniKanbanEnabled` (feature gate, default OFF, `settings.json`) / `omniKanbanAsDefault` (when true, `view.kanbanToggle` — Cmd+Shift+B — opens Omni; otherwise per-project; `view.globalKanbanToggle` registry command — unbound, remappable — always opens Omni when enabled); `TabBar` and the menu IPC `onToggleKanban` share one `performKanbanToggle` decision, and `isGlobalKanbanOpen()` is the single gate (fail-closed, static import of `useSettings` — the earlier `require` failed open in the packaged renderer). The active project's lane is derived from serialized `p.nodes` via `toKanbanSessionState` — the persisted-state counterpart to `toKanbanSession` — and is committed (`commitActiveToStore`) before the overlay mounts so live React Flow edits are not stale; `pendingLaunch` never becomes `initialCommand` in the modal (the DAG launch must fire only when dependencies report done, and the canvas `TerminalNode` already delivers `initialCommand` via `writeWhenShellReady` after the `nodeterm:create-node` project switch). Active-project edits (rename / sticky / browser nav) route through Canvas live nodes (`setNodes` + `markDirty`), non-active through the store + `writeDisk`; delete uses `ConfirmDialog` (not `confirm`) and SSH-aware teardown (`transport.destroy` locally vs `sshProject.killSessions` with `everySocket` for a remote owner, plus `agentStatus` / `agentNodes` / `webviewKeepAlive` cleanup). The top bar's project pills and Cmd/Ctrl+1..9 (`nodeterm:swimlane-jump`) jump to the lane; header hint shows the correct mod (`Cmd` on Mac, `Ctrl` elsewhere). Server Edition works as-is, Mobile N/A.
 - **Settings** (`SettingsPage.tsx`, ⚙ / ⌘,): font/cursor (live to xterm + Monaco), default
   shell, grid + snap, **default node size** (`defaultNodeWidth`/`defaultNodeHeight` — new
