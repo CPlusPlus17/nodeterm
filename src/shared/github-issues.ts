@@ -40,6 +40,10 @@ export interface GitHubProjectApproval {
   repository: string
   enabled: true
   approvedAt: number
+  /** Digest of the column mapping this approval covers (repository + completion column + column
+   *  labels — see `githubMappingDigest`). Board WRITES require it to match the mapping on disk;
+   *  absent on an approval given before mappings were bound, which therefore allows reads only. */
+  mappingDigest?: string
 }
 
 export interface GitHubControlState {
@@ -56,6 +60,28 @@ export interface GitHubAuthStatus {
   tokenPresent: boolean
   storage: GitHubSecretAvailability
   login?: string
+  /** Present when the sign-in could not be CHECKED — a network failure, a GitHub outage or a rate
+   *  limit. It is not "signed out": the fields above keep the last answer GitHub gave for this
+   *  token (or none, if it never gave one). `retryAt` is epoch ms, for a rate limit. */
+  unreachable?: { reason: 'rate-limited' | 'unreachable'; retryAt?: number }
+}
+
+/** The GitHub request budget last reported for the active identity (`x-ratelimit-*`), `core`
+ *  resource. `resetAt` / `observedAt` are epoch milliseconds. */
+export interface GitHubRateStatus {
+  resource: string
+  limit: number
+  remaining: number
+  resetAt: number
+  observedAt: number
+}
+
+/** Sync is held until `until` (epoch ms). `rate-limited`: GitHub refused, or the budget is spent —
+ *  every request waits. `low-budget`: nodeterm is leaving the rest of the window to the user —
+ *  only background polls wait; a refresh the user asks for still runs. */
+export interface GitHubThrottle {
+  until: number
+  kind: 'rate-limited' | 'low-budget'
 }
 
 export interface GitHubIssueLabel {
@@ -89,7 +115,8 @@ export interface GitHubIssue {
   title: string
   body: string
   state: 'open' | 'closed'
-  stateReason: 'completed' | 'not_planned' | 'reopened' | null
+  /** `null` also stands for a reason GitHub added after this build (see `stateReasonFrom`). */
+  stateReason: 'completed' | 'not_planned' | 'reopened' | 'duplicate' | null
   htmlUrl: string
   apiUrl: string
   labels: GitHubIssueLabel[]
@@ -133,8 +160,21 @@ export interface IssuePageResult {
   notModified?: boolean
 }
 
+/** `notModified` = GitHub answered 304 to the stored validator: nothing in the repository changed.
+ *  `etag` is the validator to store for the next heartbeat (the one sent, on a 304). */
+export interface IssueHeartbeatResult {
+  notModified: boolean
+  etag?: string
+}
+
+/** Why an issue is closed, as GitHub records it. A board close used to send none, so GitHub filed
+ *  every one of them as `completed` — including the ones the user was dismissing. */
+export type GitHubCloseReason = 'completed' | 'not_planned'
+
 export interface UpdateIssueInput {
   state?: 'open' | 'closed'
+  /** Sent only WITH a state change: a close reason on a close, `reopened` on a reopen. */
+  stateReason?: GitHubCloseReason | 'reopened'
   labels?: string[]
 }
 
@@ -180,6 +220,11 @@ export interface GitHubIssuePage {
   readOnly: boolean
   lastSuccessfulRefreshAt?: number
   lastFullReconciliationAt?: number
+  /** The board is read only because this machine has not approved the column mapping now in the
+   *  project file (it changed, or the approval predates mapping approval). */
+  mappingNotApproved?: true
+  /** Present while sync for this project's GitHub identity is held by the rate budget. */
+  throttle?: GitHubThrottle
 }
 
 export type GitHubMutationResult =
@@ -203,11 +248,18 @@ export interface GitHubControlView {
     authProvider: GitHubAuthProvider
   }
   auth: GitHubAuthStatus
+  /** The active identity's request budget, when a response has reported one this window. */
+  rate?: GitHubRateStatus
+  /** Present while sync for the active identity is held by the rate budget. */
+  throttle?: GitHubThrottle
   project?: {
     projectId: string
     repository?: string
     detectedRepository?: string
     approved: boolean
+    /** The approval also covers the column mapping now in the project file, so the board may
+     *  write. False while approved means the mapping changed (or predates mapping approval). */
+    mappingApproved?: boolean
   }
 }
 
@@ -221,6 +273,8 @@ export interface GitHubIssuesApi {
     issueNumber: number
     toColumnId: string | null
     expectedUpdatedAt: string
+    /** Used only when the move closes the issue; absent = `completed`, GitHub's own default. */
+    closeReason?: GitHubCloseReason
   }): Promise<GitHubMutationResult>
   createMissingLabels(projectId: string): Promise<CreateMappedLabelsResult>
   clearCache(projectId: string): Promise<void>

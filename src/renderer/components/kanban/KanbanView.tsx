@@ -33,7 +33,7 @@ import { kanbanSource, sourceVisible } from '../../lib/kanbanSources'
 import type { ModalSpawn } from './ModalTerminal'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
 import { IconAgent, IconExternal, IconNote, IconSwitch, IconTerminal, IconTrash, IconWeb } from '../icons'
-import type { GitHubIssueCardView } from '@shared/github-issues'
+import type { GitHubCloseReason, GitHubIssueCardView } from '@shared/github-issues'
 import { issueKey, issueRefFromHtmlUrl, issueUrl, type IssueRef } from '@shared/github-issue-ref'
 import { NO_ISSUE_RUNS, boundRunsByIssue, type IssueRun } from '../../lib/issueRuns'
 import { useGitHubIssues } from '../../state/githubIssues'
@@ -47,6 +47,7 @@ import {
   githubMoveIntent,
   type GitHubMoveConfirmation
 } from '../../lib/githubIssueMove'
+import { GITHUB_MAPPING_NOT_APPROVED, githubThrottleSentence } from '../../lib/githubSyncStatus'
 
 /** One session node shown as a board card — derived LIVE from the canvas nodes; the board
  *  itself stores only column assignments. */
@@ -209,9 +210,13 @@ export const KanbanView = memo(function KanbanView({
   // Right-click menu on a GitHub issue card ("Start with agent ▸", Open on GitHub).
   const [issueMenu, setIssueMenu] = useState<{ issue: GitHubIssueCardView; x: number; y: number } | null>(null)
   // A move that would close or reopen the issue on GitHub waits here for an explicit confirmation.
-  const [pendingGitHubMove, setPendingGitHubMove] = useState<
-    { issue: GitHubIssueCardView; columnId: string | null; confirmation: GitHubMoveConfirmation } | null
-  >(null)
+  const [pendingGitHubMove, setPendingGitHubMove] = useState<{
+    issue: GitHubIssueCardView
+    columnId: string | null
+    confirmation: GitHubMoveConfirmation
+    /** The reason picked in the dialog, for a close; starts at the confirmation's default. */
+    closeReason?: GitHubCloseReason
+  } | null>(null)
   // Primitive selectors (not one object) — an object selector would re-render on every store set.
   const projectId = useProjects((s) => s.activeProjectId)
   const projectName = useProjects((s) => s.projects.find((p) => p.id === s.activeProjectId)?.name)
@@ -225,6 +230,9 @@ export const KanbanView = memo(function KanbanView({
   >(null)
   const github = useGitHubIssues((state) => state.projects[projectId])
   const githubReadOnly = Object.values(github?.pages ?? {}).some((page) => page.readOnly)
+  const githubMappingNotApproved = Object.values(github?.pages ?? {}).some((page) => page.mappingNotApproved)
+  // Every page of one project carries the same identity's throttle; any one of them answers.
+  const githubThrottle = Object.values(github?.pages ?? {}).find((page) => page.throttle)?.throttle
   // Pull requests are evicted first when a repository outgrows the cache bounds, so the lane can
   // legitimately be a subset. Say so — a silently short list reads as "this repo has few PRs".
   const pullsTruncated = Object.values(github?.pullPages ?? {}).some((page) => page.partial)
@@ -436,7 +444,7 @@ export const KanbanView = memo(function KanbanView({
       if (intent.kind === 'noop') return
       const confirmation = githubMoveConfirmation(issue, columnId, completion)
       if (confirmation) {
-        setPendingGitHubMove({ issue, columnId, confirmation })
+        setPendingGitHubMove({ issue, columnId, confirmation, closeReason: confirmation.defaultCloseReason })
         return
       }
       void moveGitHubState(api.githubIssues, projectId, issue.number, columnId, issue.updatedAt)
@@ -798,8 +806,13 @@ export const KanbanView = memo(function KanbanView({
         )}
         {board.github && githubReadOnly && (
           <span className="kanban-github-status kanban-github-status--error">
-            GitHub issues are read only until configuration and refresh are complete.
+            {githubMappingNotApproved
+              ? GITHUB_MAPPING_NOT_APPROVED
+              : 'GitHub issues are read only until configuration and refresh are complete.'}
           </span>
+        )}
+        {board.github && githubThrottle && (
+          <span className="kanban-github-status">{githubThrottleSentence(githubThrottle)}</span>
         )}
         {board.github && pullsTruncated && (
           <span className="kanban-github-status">
@@ -1008,12 +1021,21 @@ export const KanbanView = memo(function KanbanView({
           message={pendingGitHubMove.confirmation.message}
           confirmLabel={pendingGitHubMove.confirmation.confirmLabel}
           danger={pendingGitHubMove.confirmation.danger}
+          choice={pendingGitHubMove.confirmation.closeReasons && pendingGitHubMove.closeReason
+            ? {
+                label: 'Close as',
+                options: pendingGitHubMove.confirmation.closeReasons,
+                value: pendingGitHubMove.closeReason,
+                onChange: (value) => setPendingGitHubMove((current) =>
+                  current ? { ...current, closeReason: value as GitHubCloseReason } : current)
+              }
+            : undefined}
           onCancel={() => setPendingGitHubMove(null)}
           onConfirm={() => {
-            const { issue, columnId } = pendingGitHubMove
+            const { issue, columnId, closeReason } = pendingGitHubMove
             setPendingGitHubMove(null)
             void moveGitHubState(
-              api.githubIssues, projectId, issue.number, columnId, issue.updatedAt
+              api.githubIssues, projectId, issue.number, columnId, issue.updatedAt, closeReason
             )
           }}
         />

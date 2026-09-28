@@ -2924,11 +2924,13 @@ export interface ChatTranscriptResult {
    */
   unmatchedResults?: ChatCarriedToolResult[]
   /**
-   * PAGED claude reads only: the newest assistant record's `message.model` in the returned window
-   * (`<synthetic>` error lines skipped). Absent when the window has none, and on the legacy read.
+   * PAGED reads only: the newest assistant record's model in the returned window — claude's
+   * `message.model` (`<synthetic>` error lines skipped), grok's `model_id`. Absent when the window
+   * has none, and on the legacy read.
    */
   model?: string
-  /** PAGED claude reads only: the newest assistant record's top-level `effort` in the window. */
+  /** PAGED reads only: that same record's effort — claude's top-level `effort`, grok's
+   *  `reasoning_effort`. Never carried forward from an older record. */
   effort?: string
   /** PAGED reads only, with `found: false`: the transcript could not be READ (a remote host that did
    *  not answer, a growth re-read that failed, a remote node with no reachable master) — as opposed

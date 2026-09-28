@@ -1,7 +1,26 @@
+import type { GitHubRateStatus, GitHubThrottle } from '../../shared/github-issues'
+import type { GitHubRateSample } from './client'
+
 export class GitHubCoordinatorError extends Error {
-  constructor(readonly code: 'configuration-changed') {
+  constructor(
+    readonly code: 'configuration-changed' | 'rate-limited',
+    readonly retryAt?: number
+  ) {
     super(code)
   }
+}
+
+/** The longest any queued request waits out a rate limit. A primary limit resets up to an hour
+ *  away; sleeping that long held a read slot (four per identity) and left the caller's IPC call
+ *  hanging for the hour. Past this, the request is refused at once with the time it may retry. */
+export const MAX_RATE_WAIT_MS = 10_000
+
+/** Below this many requests left in the window, BACKGROUND polls stop until the window resets.
+ *  The budget belongs to the whole GitHub account — the user's `gh`, their browser session and
+ *  every other tool spend it too — so a board that polls must hand the last tenth back rather
+ *  than race everything else to zero. A user-initiated refresh still runs (within its own floors). */
+export function backgroundFloor(limit: number): number {
+  return Math.max(100, Math.ceil(limit * 0.1))
 }
 
 type RateLimit = { kind: 'primary' | 'secondary'; retryAt: number }
@@ -18,6 +37,8 @@ type IdentityState = {
   lastMutationAt: number
   generation: number
   retryAt: number
+  /** Latest budget per resource (`core`, `search`, …), from response headers. */
+  budget: Map<string, GitHubRateStatus>
 }
 
 type CoordinatorOptions = {
@@ -85,6 +106,40 @@ export class GitHubRequestCoordinator {
     if (Number.isFinite(limit.retryAt)) state.retryAt = Math.max(state.retryAt, limit.retryAt)
   }
 
+  /** Records the budget a response carried. Responses can land out of order, so within one window
+   *  the LOWEST reading wins; a later window replaces an earlier one. A spent `core` budget blocks
+   *  new requests right away, instead of waiting for GitHub to refuse one. */
+  noteRateSample(identity: string, sample: GitHubRateSample): void {
+    const state = this.state(identity)
+    const previous = state.budget.get(sample.resource)
+    if (previous && sample.resetAt < previous.resetAt) return
+    if (previous && sample.resetAt === previous.resetAt && sample.remaining >= previous.remaining) return
+    state.budget.set(sample.resource, { ...sample, observedAt: this.now() })
+    if (sample.resource === 'core' && sample.remaining === 0) {
+      state.retryAt = Math.max(state.retryAt, sample.resetAt)
+    }
+  }
+
+  /** The `core` budget last seen for this identity, while its window is still current. */
+  rateStatus(identity: string, at = this.now()): GitHubRateStatus | undefined {
+    const status = this.states.get(identity)?.budget.get('core')
+    return status && status.resetAt > at ? { ...status } : undefined
+  }
+
+  /** Why background work for this identity must wait, and until when — or undefined when it may
+   *  run. `rate-limited` also holds user-initiated requests (they wait up to MAX_RATE_WAIT_MS, then
+   *  are refused); `low-budget` holds only background polls. */
+  throttle(identity: string, at = this.now()): GitHubThrottle | undefined {
+    const state = this.states.get(identity)
+    if (!state) return undefined
+    if (state.retryAt > at) return { until: state.retryAt, kind: 'rate-limited' }
+    const status = this.rateStatus(identity, at)
+    if (status && status.remaining < backgroundFloor(status.limit)) {
+      return { until: status.resetAt, kind: 'low-budget' }
+    }
+    return undefined
+  }
+
   canStart(identity: string, at = this.now()): boolean {
     return at >= this.state(identity).retryAt
   }
@@ -109,7 +164,8 @@ export class GitHubRequestCoordinator {
         mutationTail: Promise.resolve(),
         lastMutationAt: Number.NEGATIVE_INFINITY,
         generation: 0,
-        retryAt: 0
+        retryAt: 0,
+        budget: new Map()
       }
       this.states.set(identity, state)
     }
@@ -138,9 +194,13 @@ export class GitHubRequestCoordinator {
   }
 
   private async waitForRate(state: IdentityState): Promise<void> {
+    // The cap bounds the TOTAL wait, not each sleep: a deadline that keeps moving while we sleep
+    // (a secondary limit re-armed by a concurrent request) must not chain waits without end.
+    const deadline = this.now() + MAX_RATE_WAIT_MS
     while (true) {
       const wait = state.retryAt - this.now()
       if (wait <= 0) return
+      if (state.retryAt > deadline) throw new GitHubCoordinatorError('rate-limited', state.retryAt)
       await this.sleep(wait)
     }
   }

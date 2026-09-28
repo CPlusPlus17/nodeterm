@@ -489,7 +489,11 @@ export async function startServer(
   // of the handlers because the hook-fed path authority is the tail created just above. No remote
   // leg: the Server Edition runs ON the host whose transcripts it reads, so local resolution is
   // the complete answer (an SSH-project node is a desktop-only concept here).
-  registerTranscriptIpc({ pathFor: (sessionId) => contextTail.pathFor(sessionId) })
+  registerTranscriptIpc({
+    pathFor: (sessionId) => contextTail.pathFor(sessionId),
+    // Codex's ⌘M reader takes ITS tail's hook path (claude's `pathFor` must never answer a codex id).
+    codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId)
+  })
   // The context meter's mount-time rehydration, registered beside the read channels and for the
   // same reason: the tails it feeds are the ones created just above. Until this landed the Server
   // Edition had NO handler for `context:ensure` at all — the browser cast it and nothing received

@@ -41,7 +41,7 @@ function textOf(content: unknown): string {
   return ''
 }
 
-function summarizeResult(content: unknown): string {
+export function summarizeResult(content: unknown): string {
   return textOf(content).split('\n').slice(0, 3).join(' ').slice(0, 500)
 }
 
@@ -196,23 +196,27 @@ function linesFrom(raw: string): TranscriptLine[] {
   return out
 }
 
-// Read the last ~READ_CAP_BYTES of the file as UTF-8 (dropping the partial leading line on a
-// capped read), or the whole file when it's small. Returns undefined if it can't be read.
-export async function readCappedTail(filePath: string): Promise<string | undefined> {
+// Read the last `cap` bytes (default and ceiling READ_CAP_BYTES) of the file as UTF-8 (dropping the
+// partial leading line on a capped read), or the whole file when it's small. Returns undefined if
+// it can't be read.
+export async function readCappedTail(filePath: string, cap: number = READ_CAP_BYTES): Promise<string | undefined> {
+  const limit = Math.min(READ_CAP_BYTES, Math.max(1, Math.floor(cap)))
   try {
     const stat = await fs.promises.stat(filePath)
-    if (stat.size > READ_CAP_BYTES) {
+    if (stat.size > limit) {
       const fd = await fs.promises.open(filePath, 'r')
       try {
-        const start = stat.size - READ_CAP_BYTES
-        const { buffer } = await fd.read({
+        // One LOOKBEHIND byte before the window: when it is a `\n`, the window's first line is
+        // whole and survives the drop below (the remote page reader's rule).
+        const start = stat.size - limit - 1
+        const { buffer, bytesRead } = await fd.read({
           position: start,
-          length: READ_CAP_BYTES,
-          buffer: Buffer.alloc(READ_CAP_BYTES)
+          length: limit + 1,
+          buffer: Buffer.alloc(limit + 1)
         })
-        const s = buffer.toString('utf8')
-        const nl = s.indexOf('\n') // drop the first (partial) line
-        return nl >= 0 ? s.slice(nl + 1) : s
+        const data = buffer.subarray(0, bytesRead)
+        const nl = data.indexOf(0x0a) // drop the first (partial) line
+        return nl >= 0 ? data.subarray(nl + 1).toString('utf8') : ''
       } finally {
         await fd.close()
       }
@@ -247,7 +251,7 @@ export async function readTranscriptLines(filePath: string): Promise<TranscriptL
 // `paged` switches on the three things only a paged read needs (the legacy result grows only by
 // the optional `at` both paths carry): a `key` per message (its line's absolute byte offset), the `tool_use` id on
 // each tool part, and the list of results whose tool was not among these lines.
-interface ChatRecordsOut {
+export interface ChatRecordsOut {
   messages: ChatMessage[]
   unmatched: Map<string, string>
   /** PAGED only: `message.model` / `effort` of the newest non-synthetic assistant record (one record). */
@@ -257,16 +261,16 @@ interface ChatRecordsOut {
 
 /** Longest `model` / `effort` value a paged read reports, in UTF-16 code units (JS `.length`; Swift
  *  `utf16.count`); anything longer is not a model name. */
-const CHAT_META_MAX_CHARS = 100
+export const CHAT_META_MAX_CHARS = 100
 /** The model claude stamps on a line it wrote itself (an API error, an interrupt) — not a model. */
 const SYNTHETIC_MODEL = '<synthetic>'
 
 /** A string field worth reporting as chat metadata, else undefined. */
-function metaString(v: unknown): string | undefined {
+export function metaString(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 && v.length <= CHAT_META_MAX_CHARS ? v : undefined
 }
 /** A transcript line's ISO `timestamp` as epoch ms; undefined when absent or not a date string. */
-function lineTime(v: unknown): number | undefined {
+export function lineTime(v: unknown): number | undefined {
   if (typeof v !== 'string' || !v) return undefined
   const t = Date.parse(v)
   return Number.isFinite(t) ? t : undefined
@@ -449,7 +453,14 @@ export interface ChatWindowParse {
  * (`readChatPage`, only once the window is already at the 5 MB cap) keeps paging and skips that one
  * record. Answering the window end instead would ask for the identical window forever.
  */
-export function parseChatWindow(buf: Buffer, bufStart: number): ChatWindowParse {
+export function parseChatWindow(
+  buf: Buffer,
+  bufStart: number,
+  // The record parser for the window's complete lines. Claude's by default; another agent whose
+  // transcript is also append-only JSONL (copilot's `events.jsonl`) passes its own, so the byte
+  // window, the lookbehind and the cursor rules exist exactly once.
+  parseRecords: (records: Iterable<{ raw: string; offset: number }>, paged: true) => ChatRecordsOut = parseChatRecords
+): ChatWindowParse {
   const end = bufStart + buf.length
   let from = 0
   let olderCursor: number | null = null
@@ -468,7 +479,7 @@ export function parseChatWindow(buf: Buffer, bufStart: number): ChatWindowParse 
     if (to > from) records.push({ raw: buf.toString('utf8', from, to), offset: bufStart + from })
     from = to + 1
   }
-  const { messages, unmatched, model, effort } = parseChatRecords(records, true)
+  const { messages, unmatched, model, effort } = parseRecords(records, true)
   return {
     messages,
     olderCursor,

@@ -1,10 +1,12 @@
 import { create } from 'zustand'
 import type {
+  GitHubCloseReason,
   GitHubIssuePage,
   GitHubIssueQuery,
   GitHubIssuesApi,
   GitHubMutationResult
 } from '@shared/github-issues'
+import { GITHUB_MAPPING_NOT_APPROVED } from '../lib/githubSyncStatus'
 
 export interface GitHubProjectPages {
   pages: Record<string, GitHubIssuePage>
@@ -36,11 +38,17 @@ interface GitHubIssuesState {
     projectId: string,
     issueNumber: number,
     toColumnId: string | null,
-    expectedUpdatedAt: string
+    expectedUpdatedAt: string,
+    closeReason?: GitHubCloseReason
   ): Promise<GitHubMutationResult>
 }
 
 const keyFor = (columnId: string | null): string => columnId ?? 'ungrouped'
+
+/** The pages say the board is read only because the column mapping is not approved here. */
+function mappingNotApproved(project: GitHubProjectPages | undefined): boolean {
+  return Object.values(project?.pages ?? {}).some((page) => page.mappingNotApproved)
+}
 
 /** Pages every column for one kind. Both kinds are served from the one cached snapshot in core,
  *  so the second pass is a read of data already fetched, not a second refresh. */
@@ -283,7 +291,7 @@ export const useGitHubIssues = create<GitHubIssuesState>((set, get) => ({
     })
   },
 
-  async move(api, projectId, issueNumber, toColumnId, expectedUpdatedAt) {
+  async move(api, projectId, issueNumber, toColumnId, expectedUpdatedAt, closeReason) {
     const generation = get().projects[projectId]?.generation
     set((state) => {
       const project = state.projects[projectId]
@@ -296,7 +304,9 @@ export const useGitHubIssues = create<GitHubIssuesState>((set, get) => ({
       }
     })
     try {
-      const result = await api.moveIssue({ projectId, issueNumber, toColumnId, expectedUpdatedAt })
+      const result = await api.moveIssue({
+        projectId, issueNumber, toColumnId, expectedUpdatedAt, ...(closeReason ? { closeReason } : {})
+      })
       const status = result.status === 'confirmed'
         ? 'Synced with GitHub.'
         : result.status === 'refresh-pending'
@@ -304,7 +314,9 @@ export const useGitHubIssues = create<GitHubIssuesState>((set, get) => ({
           : result.status === 'stale'
             ? 'Changed on GitHub. Review the latest issue and retry.'
             : result.status === 'read-only'
-              ? 'This repository is read only until a complete refresh succeeds.'
+              ? mappingNotApproved(get().projects[projectId])
+                ? GITHUB_MAPPING_NOT_APPROVED
+                : 'This repository is read only until a complete refresh succeeds.'
               : result.status === 'invalid-target'
                 ? 'This issue or destination is no longer available.'
                 : result.status === 'configuration-changed'

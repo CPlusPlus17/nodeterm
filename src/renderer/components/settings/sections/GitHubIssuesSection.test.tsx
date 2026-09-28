@@ -6,7 +6,8 @@ import type { GitHubAuthStatus, GitHubControlView } from '@shared/github-issues'
 import { useProjects } from '../../../state/projects'
 import { registerWorkspaceDirty } from '../../../state/workspaceDirty'
 import { SettingsSearchContext } from '../context'
-import { GitHubIssuesSection } from './GitHubIssuesSection'
+import { GitHubIssuesSection, STATUS_AFTER_EDIT_MS } from './GitHubIssuesSection'
+import { SAVE_DEBOUNCE_MS } from '../../../lib/savePersistence'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -115,6 +116,89 @@ describe('GitHubIssuesSection', () => {
     act(() => root.unmount())
     host.remove()
     unregisterDirty()
+  })
+
+  it('says until when sync is held, and how much of the GitHub budget is left', async () => {
+    stub({
+      ...viewWith({}, true),
+      rate: { resource: 'core', limit: 5_000, remaining: 12, resetAt: Date.UTC(2026, 8, 28, 21, 0), observedAt: 1 },
+      throttle: { until: Date.UTC(2026, 8, 28, 21, 0), kind: 'low-budget' }
+    })
+    await mount()
+    expect(host.textContent).toContain('Background sync paused until')
+    expect(host.textContent).toContain('12 of 5,000 GitHub requests left')
+  })
+
+  it('says GitHub could not be reached — never "not signed in" — when the sign-in could not be checked', async () => {
+    stub(viewWith({
+      activeProvider: null, ghAuthenticated: false, tokenPresent: false, login: undefined,
+      unreachable: { reason: 'unreachable' }
+    }, true))
+    await mount()
+    expect(host.textContent).toContain('GitHub could not be reached to check the sign-in.')
+    expect(host.textContent).not.toContain('not signed in')
+    expect(host.textContent).not.toContain('Authentication is still needed')
+  })
+
+  it('keeps the last confirmed sign-in on screen through a rate limit, and says it is the last one', async () => {
+    stub(viewWith({
+      activeProvider: 'gh', ghAuthenticated: true, login: 'octocat',
+      unreachable: { reason: 'rate-limited' }
+    }, true))
+    await mount()
+    expect(host.textContent).toContain('✓ Signed in via GitHub CLI as @octocat')
+    expect(host.textContent).toContain('GitHub’s rate limit was reached, so the sign-in could not be checked')
+    expect(host.textContent).toContain('the last one GitHub confirmed')
+  })
+
+  it('names a rate limit or an outage instead of a generic failure', async () => {
+    stub(viewWith({}, true))
+    ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubIssues.refresh =
+      vi.fn(async () => { throw new Error("Error invoking remote method 'github-issues:refresh': Error: rate-limited") })
+    await mount()
+    const refresh = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh now')!
+    await act(async () => { refresh.click() })
+    expect(host.textContent).toContain('GitHub’s rate limit was reached. Try again later.')
+
+    ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubIssues.refresh =
+      vi.fn(async () => { throw new Error("Error invoking remote method 'github-issues:refresh': Error: github-unreachable") })
+    await act(async () => { refresh.click() })
+    expect(host.textContent).toContain('GitHub could not be reached. Nothing was changed')
+  })
+
+  it('asks to approve a changed column mapping before the board may change issues again', async () => {
+    const approve = vi.fn(async () => viewWith({}, true))
+    ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubControl.approve = approve
+    const view = viewWith({}, true)
+    stub({ ...view, project: { ...view.project!, mappingApproved: false } })
+    await mount()
+    expect(host.textContent).toContain('The column labels changed since this machine approved them')
+    expect(host.textContent).not.toContain('Ready as')
+    const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Approve column labels')!
+    await act(async () => { button.click() })
+    expect(approve).toHaveBeenCalledWith({ projectId: 'p1', repository: 'owner/repo', expectedRevision: 0 })
+  })
+
+  it('re-reads the status once a label edit has had time to save, instead of keeping "Ready as"', async () => {
+    stub(viewWith({}, true))
+    await mount()
+    const before = status.mock.calls.length
+    vi.useFakeTimers()
+    try {
+      const input = host.querySelector<HTMLInputElement>('#github-label-todo')!
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+        setter.call(input, 'workflow:ready')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      // Not before the edit can have reached the project file the host reads.
+      await act(async () => { vi.advanceTimersByTime(SAVE_DEBOUNCE_MS) })
+      expect(status.mock.calls.length).toBe(before)
+      await act(async () => { vi.advanceTimersByTime(STATUS_AFTER_EDIT_MS - SAVE_DEBOUNCE_MS) })
+      expect(status.mock.calls.length).toBeGreaterThan(before)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('clears the write-only token field after Save and never renders the stored token', async () => {
