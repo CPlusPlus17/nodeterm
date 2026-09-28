@@ -59,7 +59,11 @@ export class SubagentReplay {
   private key(e: NormalizedAgentEvent): string { return JSON.stringify([e.nodeId, e.toolUseId]) }
   private prune(now: number): void {
     for (const [key, e] of this.starts) {
-      const lastSeen = Math.max(e.subagentStartedAt!, this.lastActivity.get(key) ?? 0)
+      // An activity time ahead of `now` (the clock stepped back after it was stamped) would keep
+      // the start alive until wall time caught up; clamp it, so the silence window restarts once.
+      const last = this.lastActivity.get(key)
+      if (last !== undefined && last > now) this.lastActivity.set(key, now)
+      const lastSeen = Math.max(e.subagentStartedAt!, Math.min(last ?? 0, now))
       if (now - lastSeen >= WORKING_STALE_MS || now < e.subagentStartedAt!) this.forget(key)
     }
   }

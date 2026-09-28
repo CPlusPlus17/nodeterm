@@ -355,12 +355,18 @@ export const useAgentNodes = create<AgentNodesState>((set) => ({
 
   sweepStaleWorking: (now = Date.now(), staleMs = WORKING_STALE_MS) =>
     set((s) => {
+      // An activity time ahead of `now` (the clock stepped back after it was stamped) would keep
+      // the card working until wall time caught up; clamp it, so the silence window restarts once.
+      const future = Object.keys(s.lastActivityAt).filter((id) => s.lastActivityAt[id] > now)
+      const lastActivityAt = future.length
+        ? { ...s.lastActivityAt, ...Object.fromEntries(future.map((id) => [id, now])) }
+        : s.lastActivityAt
       const stale = Object.keys(s.byId).filter(
         (id) =>
           s.byId[id].state === 'working' &&
-          now - Math.max(s.byId[id].startedAt, s.lastActivityAt[id] ?? 0) > staleMs
+          now - Math.max(s.byId[id].startedAt, lastActivityAt[id] ?? 0) > staleMs
       )
-      if (!stale.length) return s
+      if (!stale.length) return future.length ? { lastActivityAt } : s
       const byId = { ...s.byId }
       for (const id of stale) {
         const prev = byId[id]
@@ -368,7 +374,7 @@ export const useAgentNodes = create<AgentNodesState>((set) => ({
         // still true, and it is `finish()`'s own fallback for the async case.
         byId[id] = { ...prev, state: 'done', durationMs: prev.durationMs ?? now - prev.startedAt }
       }
-      return { byId }
+      return future.length ? { byId, lastActivityAt } : { byId }
     }),
 
   tidyFanout: (parentNodeId) =>

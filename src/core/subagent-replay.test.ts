@@ -46,6 +46,13 @@ describe('subagent reload memory', () => {
     ])
     expect(replay.snapshot(100 + WORKING_STALE_MS * 3 + 1)).toEqual([])
   })
+  it('an activity time left in the future by a clock step back is clamped, so the start still expires', () => {
+    const replay = new SubagentReplay()
+    replay.record(start, 100)
+    replay.touch('child', 10_000_000) // stamped before the clock stepped back
+    expect(replay.snapshot(200)).toHaveLength(1) // clamped to now, the window restarts once
+    expect(replay.snapshot(200 + WORKING_STALE_MS)).toEqual([])
+  })
   it('touch ignores unknown ids and never resurrects an ended start', () => {
     const replay = new SubagentReplay()
     replay.touch('child', 100)

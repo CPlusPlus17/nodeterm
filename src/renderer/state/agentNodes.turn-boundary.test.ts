@@ -197,6 +197,16 @@ describe('sweepStaleWorking counts from the LAST activity, not from the start', 
     expect(useAgentNodes.getState().byId['tu1'].state).toBe('working')
   })
 
+  it('an activity time left in the future by a clock step back is clamped, so the card still decays', () => {
+    const s = useAgentNodes.getState()
+    s.start('tu1', { parentNodeId: 'n1', startedAt: 1_000_000, lastActivityAt: 50_000_000 })
+    s.sweepStaleWorking(2_000_000)
+    expect(useAgentNodes.getState().byId['tu1'].state).toBe('working')
+    expect(useAgentNodes.getState().lastActivityAt['tu1']).toBe(2_000_000)
+    s.sweepStaleWorking(2_000_000 + WORKING_STALE_MS + 1)
+    expect(useAgentNodes.getState().byId['tu1'].state).toBe('done')
+  })
+
   it('forgets the activity time when the card is dropped', () => {
     const s = useAgentNodes.getState()
     s.start('tu1', { parentNodeId: 'n1' })
