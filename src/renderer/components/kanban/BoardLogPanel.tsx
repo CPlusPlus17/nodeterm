@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { BoardLogEntry, BoardLogEvent } from '@shared/types'
 import { formatTimeAgo } from '../../lib/usageFormat'
 import { useSession } from '../../session/session'
 import { useProjects } from '../../state/projects'
 import { useBoardLog } from '../../state/boardLog'
+import { collapseFeed } from '../../lib/boardLogCollapse'
 import type { KanbanSession } from './KanbanView'
 
 interface BoardLogPanelProps {
@@ -119,16 +120,55 @@ export function BoardLogPanel({ card }: BoardLogPanelProps) {
       {!unsupported && error && (
         <div className="board-log__error">Some board history couldn’t be saved.</div>
       )}
-      <div className="board-log__feed">
-        {feed.map((entry) => (
-          <FeedRow key={entry.id} entry={entry} />
-        ))}
-      </div>
+      <BoardLogFeed feed={feed} />
     </div>
   )
 }
 
-function FeedRow({ entry }: { entry: BoardLogEntry }) {
+/** The feed itself, newest first. Runs of like events render folded as one "×N" row that expands
+ *  in place (lib/boardLogCollapse — a VIEW; the log is never rewritten). Comments and the audit
+ *  types are always one row each. Which groups are open is component state keyed by the group's
+ *  newest entry id, so a new entry landing on top does not collapse a row the user just opened. */
+export function BoardLogFeed({ feed }: { feed: readonly BoardLogEntry[] }) {
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
+  const items = useMemo(() => collapseFeed(feed), [feed])
+  const toggle = (key: string): void =>
+    setOpen((cur) => {
+      const next = new Set(cur)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  return (
+    <div className="board-log__feed">
+      {items.map((item) => {
+        if (item.kind === 'single') return <FeedRow key={item.entry.id} entry={item.entry} />
+        const expanded = open.has(item.key)
+        const fold = (
+          <button
+            className="board-log__fold"
+            aria-expanded={expanded}
+            title={expanded ? 'Collapse' : `Show all ${item.entries.length}`}
+            onClick={() => toggle(item.key)}
+          >
+            ×{item.entries.length}
+          </button>
+        )
+        return expanded ? (
+          <div key={item.key} className="board-log__group board-log__group--open">
+            {item.entries.map((entry, i) => (
+              <FeedRow key={entry.id} entry={entry} fold={i === 0 ? fold : undefined} />
+            ))}
+          </div>
+        ) : (
+          <FeedRow key={item.key} entry={item.entries[0]} fold={fold} />
+        )
+      })}
+    </div>
+  )
+}
+
+function FeedRow({ entry, fold }: { entry: BoardLogEntry; fold?: React.ReactNode }) {
   const when = formatStamp(entry.ts)
   const whenAgo = formatTimeAgo(entry.ts)
   if (entry.kind === 'event' && entry.event) {
@@ -139,6 +179,7 @@ function FeedRow({ entry }: { entry: BoardLogEntry }) {
           {entry.author.name}
         </span>{' '}
         <span className="board-log__event-body">{eventBody(entry.event)}</span>
+        {fold}
         <span className="board-log__time">{when}</span>
       </div>
     )

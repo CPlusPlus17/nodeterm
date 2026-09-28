@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import type { CanvasNodeState, Project, Workspace } from '../shared/types'
+import type { CanvasNodeState, Project, ProjectKanban, Workspace } from '../shared/types'
 import {
   toPortableNodes, resolveNodes, projectToFile, fileToProject, framingViewport,
-  sameProjectContent, splitWorkspace, serializeProjectFile
+  sameProjectContent, splitWorkspace, serializeProjectFile, sanitizeKanban
 } from './workspace-files'
 import { legacyFileId } from '../shared/project-id'
 import { CANVAS_LAYOUTS_CAP, type CanvasLayout } from '../shared/canvas-layout'
@@ -575,6 +575,72 @@ describe('kanban board persistence', () => {
     expect('kanban' in fileToProject(evil1, { id: 'p1' })).toBe(false)
     expect('kanban' in fileToProject(evil2, { id: 'p1' })).toBe(false)
     expect('kanban' in fileToProject(v1shape, { id: 'p1' })).toBe(false)
+  })
+})
+
+describe('sanitizeKanban — the board is hostile, git-shared input', () => {
+  const clean = (): ProjectKanban => ({
+    columns: [
+      { id: 'kcol-a', title: 'To Do', color: '#0a84ff', category: 'unstarted' },
+      { id: 'kcol-b', title: 'Done', color: '#32d74b', category: 'done' }
+    ],
+    assignments: [{ nodeId: 'term-abc', columnId: 'kcol-b' }]
+  })
+
+  it('returns a clean board BY IDENTITY (no churn on a well-formed file)', () => {
+    const k = clean()
+    expect(sanitizeKanban(k)).toBe(k)
+  })
+
+  it('rejects what validKanban rejects', () => {
+    expect(sanitizeKanban(undefined)).toBeUndefined()
+    expect(sanitizeKanban({ columns: [], cards: [] })).toBeUndefined()
+    expect(sanitizeKanban('nope')).toBeUndefined()
+  })
+
+  it('keeps an UNKNOWN category string (a newer build\'s value must survive our save)', () => {
+    const k = { ...clean(), columns: [{ id: 'kcol-a', title: 'To Do', color: '#fff', category: 'blocked' }] }
+    expect(sanitizeKanban(k)?.columns[0]).toEqual({ id: 'kcol-a', title: 'To Do', color: '#fff', category: 'blocked' })
+  })
+
+  it('drops a NON-string category without throwing, keeping the column', () => {
+    const k = { ...clean(), columns: [{ id: 'kcol-a', title: 'To Do', color: '#fff', category: { evil: 1 } }] }
+    expect(sanitizeKanban(k)?.columns).toEqual([{ id: 'kcol-a', title: 'To Do', color: '#fff' }])
+  })
+
+  it('drops column entries a renderer would crash on (non-object, missing id/title)', () => {
+    const k = {
+      columns: [null, 42, { id: 'x' }, { title: 'no id' }, { id: 'ok', title: { oops: 1 } }, clean().columns[0]],
+      assignments: []
+    }
+    expect(sanitizeKanban(k)?.columns).toEqual([clean().columns[0]])
+  })
+
+  it('drops malformed assignments and keeps the rest', () => {
+    const k = { ...clean(), assignments: [null, { nodeId: 1, columnId: 'kcol-a' }, { nodeId: 'n' }, { nodeId: 'n', columnId: 'kcol-a' }] }
+    expect(sanitizeKanban(k)?.assignments).toEqual([{ nodeId: 'n', columnId: 'kcol-a' }])
+  })
+
+  it('keeps fields it does not know (a newer build\'s board data round-trips)', () => {
+    const k = { ...clean(), futureThing: [1, 2], columns: [{ ...clean().columns[0], wip: 3 }] }
+    const out = sanitizeKanban(k) as unknown as Record<string, unknown>
+    expect(out.futureThing).toEqual([1, 2])
+    expect((out.columns as Array<Record<string, unknown>>)[0].wip).toBe(3)
+  })
+
+  it('runs on the READ seam (fileToProject)', () => {
+    const f = projectToFile(project(), 1, '2026-07-18T00:00:00.000Z')
+    const evil = { ...f, kanban: { columns: [null, { id: 'a', title: 'A', color: '#fff', category: 7 }], assignments: [] } }
+    expect(fileToProject(evil as unknown as ProjectFileV1, { id: 'p1' }).kanban).toEqual({
+      columns: [{ id: 'a', title: 'A', color: '#fff' }],
+      assignments: []
+    })
+  })
+
+  it('runs on the WRITE seam (projectToFile) — live data reached by a peer is not trusted either', () => {
+    const live = { columns: [{ id: 'a', title: 'A', color: '#fff', category: [] }], assignments: [7] }
+    const f = projectToFile(project({ kanban: live as unknown as ProjectKanban }), 1, 'now')
+    expect(f.kanban).toEqual({ columns: [{ id: 'a', title: 'A', color: '#fff' }], assignments: [] })
   })
 })
 

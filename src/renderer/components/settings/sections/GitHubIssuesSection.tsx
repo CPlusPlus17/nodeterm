@@ -5,6 +5,8 @@ import type {
   GitHubControlView,
   ProjectKanbanGitHub
 } from '@shared/github-issues'
+import type { KanbanColumn } from '@shared/types'
+import { defaultCompletionColumnId } from '@shared/kanban-category'
 import { useProjects } from '../../../state/projects'
 import { useSettings } from '../../../state/settings'
 import { prunePullAutoMove, sanitizeKanbanPullAutoMove } from '@shared/kanban-pull-links'
@@ -64,13 +66,16 @@ export const STATUS_AFTER_EDIT_MS = SAVE_DEBOUNCE_MS + 700
 type Confirmation = 'labels' | 'cache' | 'revoke' | null
 type NoticeRow = 'repository' | 'authentication' | 'data'
 
-function defaultGitHub(columns: Array<{ id: string; title: string }>): ProjectKanbanGitHub {
+function defaultGitHub(columns: Array<Pick<KanbanColumn, 'id' | 'title' | 'category'>>): ProjectKanbanGitHub {
+  // The board's own Done column when its categories say which one that is; the last column only
+  // for an uncategorized board (the pre-category default). See @shared/kanban-category.
+  const completionColumnId = defaultCompletionColumnId(columns)
   return {
     columnMappings: columns.map((column) => ({
       columnId: column.id,
       label: `status:${column.title.trim().toLocaleLowerCase('en-US').replace(/\s+/g, '-')}`
     })),
-    ...(columns.length ? { completionColumnId: columns[columns.length - 1].id } : {})
+    ...(completionColumnId ? { completionColumnId } : {})
   }
 }
 

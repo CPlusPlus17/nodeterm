@@ -125,6 +125,15 @@ the list path feeding it). Columns take lanes and name no source; the drag path 
 `placement`. If you find yourself writing `=== 'github'` outside the registry, the registry is
 missing a field.
 
+A board feature has to say which of three tiers it lives in: a **board fact** is shared content
+in `project.kanban` (`.nodeterm/project.json`) — optional, sanitized in `sanitizeKanban`
+(`core/workspace-files.ts`, which every load and save seam runs) and harmless to an older build;
+a **display preference** is per-user localStorage (`state/kanbanDisplay.ts`); a filter on **live
+agent state** is component state and is never persisted. An unanchored card move lands at the TOP
+of its column; only a positional drop asks for the bottom (`AT_COLUMN_END`). Board keys are
+registry commands in the `board` scope — the only scope allowed a bare letter, because it never
+fires while typing or in a terminal.
+
 Before adding a GitHub read, check what the existing poll already fetches. Pull request cards
 needed no new request at all: `/repos/{repo}/issues` returns pull requests, and the client used to
 discard them. `/repos/{repo}/pulls` looks like the obvious endpoint and is the expensive one — it
@@ -208,6 +217,29 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   hand-rolled swatch row) — and if the value will be drawn as TEXT or as an opaque fill under
   white, take `SYSTEM_NODE_COLOR_SWATCHES` instead, with the contrast reason in a comment. Deep
   version, including the measured numbers: CLAUDE.md § Node colors.
+
+- **The Antigravity hook is a gate in front of every `agy` tool call on the machine — treat its
+  stdout as a decision.** `agy` reads hook stdout as JSON and our hook, in the global
+  `~/.gemini/config/hooks.json`, is subscribed to `PreToolUse`. Measured: silence runs the tool, but
+  `{}`, any stray non-JSON byte and a non-zero exit DENY it — in nodeterm and in the user's own
+  terminals. So: change answers only in `antigravity-decision.ts` (the one table); print nothing
+  after the answer; keep the Windows command free of quotes (agy escapes them as `\"`, which cmd.exe
+  cannot read) and test Windows dispatch WITHOUT `windowsVerbatimArguments`; keep the `AutoRun`
+  refusal. Deep version: `docs/antigravity-agent.md` and CLAUDE.md § Agent support.
+
+- **Finding `agy` for hook installation is not enough to launch it.** The measured Windows
+  installer wrote `%LOCALAPPDATA%\agy\bin` into a `REG_SZ` user PATH, so command lookup kept the
+  percent expression literal and `agy` was not found even though its executable existed. Local
+  Antigravity PTYs therefore APPEND the directory returned by the same vendor-location lookup the
+  hook installer uses, and only when no PATH entry already names it (`pathWithAgyDir`) — never
+  prepend: on macOS/Linux agy lives in a shared directory, and moving it ahead of the user's entries
+  shadows their own tools. Keep that correction scoped to Antigravity sessions and out of SSH
+  sessions. (The separate Windows `Path`→`PATH` key fix-up applies to every Windows spawn.)
+
+- **Our hooks.json bundle is the user's to switch off.** `"enabled": false` on `nodeterm-status` in
+  `~/.gemini/config/hooks.json` is agy's own switch and nodeterm's only opt-out; the installer
+  carries it across every rewrite. hooks.json is published through the shared settings transaction
+  (`updateSettingsFile`) — never a bare write, which replaced a symlinked file with a regular one.
 
 - **Every loosening of a security gate must be a SETTING the user can see and revoke.** A "don't
   ask again" that lives only in a dialog is a permission granted once and never findable again. The

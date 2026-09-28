@@ -1,6 +1,7 @@
 import { reportTextDelivery } from '../lib/textDelivery'
 import { TEXT_NOT_SUBMITTED } from '@shared/text-delivery'
 import { VisibleMiniMap } from './VisibleMiniMap'
+import { MinimapDock } from './MinimapDock'
 import { keepGlassBlurWhileMoving } from '../lib/glassContrast'
 import { LINK_ENDPOINT_NOT_FOUND } from '@shared/canvas-link'
 import { createControlOpenBatch } from '../lib/controlOpenBatch'
@@ -199,6 +200,7 @@ import { containerOrigin, snapPointInRootSpace } from '../lib/gridSnap'
 import { zoomFromPct } from '../lib/zoomPresets'
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from './zoom-limits'
 import { isSpaceRelease, spacePanKeydown } from '../lib/spacePan'
+import { runBoardKey } from '../lib/boardKeys'
 import { readCanvasLocked, writeCanvasLocked } from '../lib/canvasLock'
 import {
   FLOW_NODE_CLASS,
@@ -294,7 +296,6 @@ import {
   coldGroupCwd,
   coldGroupChildCount,
   coldOpenMessage,
-  coldPlaceBelow,
   offCanvasNoticeText,
   offCanvasReplyClause,
   coldResolveAfter,
@@ -393,6 +394,7 @@ import {
 import { useProjects } from '../state/projects'
 import { useAgentStatus } from '../state/agentStatus'
 import { hostChatSend, hostChatSession, hostChatStatus } from '../lib/hostChatQuery'
+import { chatPaneRefusal } from '../lib/chatPaneGate'
 import { useLaunchDelivery } from '../state/launchDelivery'
 import { useBrowserLease, drivingNodeIds } from '../state/browserLease'
 import { useTerminalFocus } from '../state/terminalFocus'
@@ -440,6 +442,7 @@ import { activeSessionApi } from '../session/session'
 import {
   agentConfig,
   hasHooks,
+  hasHooksOverSsh,
   canBranch,
   canRename,
   canContextLink,
@@ -490,7 +493,14 @@ import {
 } from '../lib/pendingLaunch'
 import { WAIT_LABEL, dropAfterDep, edgeHidden, hiddenEdgeNodeIds, missingDepRopes, ropeInfoOf, ropeVisual } from '../lib/edgeModel'
 import { triggerEdges } from '../lib/triggerCard'
-import { freeSpot } from '../lib/placement'
+import {
+  freeSpot,
+  placeBelowSource,
+  pendingClaimBoxes,
+  pruneClaims,
+  type PlaceableNode,
+  type PlacementClaim
+} from '../lib/placement'
 import { pushSessionRename, sessionNameUnchanged } from '../lib/sessionRename'
 import { useReopenHistory, type ReopenEntry } from '../state/reopenHistory'
 import { snapshotNode, recreateNodeFromSnapshot } from '../lib/reopenNode'
@@ -1150,7 +1160,8 @@ export function Canvas() {
    */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (spacePanKeydown(e, document.activeElement) !== 'engage') return
+      const covered = isGlobalKanbanOpen() || isKanbanOpen(useProjects.getState().activeProjectId)
+      if (spacePanKeydown(e, document.activeElement, covered) !== 'engage') return
       e.preventDefault()
       setSpacePan(true)
     }
@@ -1923,6 +1934,9 @@ export function Canvas() {
   // succeeded — clearing `pendingLaunch` is a state update that can lag a re-render, and this
   // action is irreversible, so the set (not the node data) is what guarantees exactly-once.
   const launchInFlight = useRef<Set<string>>(new Set())
+  // Cells canvas-control opens have taken but the node array may not show yet (see
+  // `PlacementClaim`): two `open-claude` calls racing each other must not pick the same cell.
+  const controlPlaceClaims = useRef<PlacementClaim[]>([])
   const launchAttempts = useRef<Map<string, number>>(new Map())
   // Per-node "the gate is open but nothing has come up to deliver into" timers — the source of the
   // visible `stalled` warning. One per armed node, armed once and cleared the moment the node
@@ -5009,6 +5023,30 @@ export function Canvas() {
       connectedProjectIdForHost
     ]
   )
+
+  // A terminal node asking for an agent node BESIDE it — today only the Gemini-retirement banner
+  // ("Open Antigravity", terminal/gemini-retired.ts). Same no-direct-line-to-the-canvas pattern as
+  // `nodeterm:open-terminal`. The new node joins the source's frame (so a bound worktree's cwd is
+  // inherited through `cwdForNewNodeIn`) and is centred one node-width to its right; a source that
+  // has left the canvas, or an id that is not a builtin agent, opens nothing.
+  useEffect(() => {
+    const onOpenAgent = (e: Event): void => {
+      const d = (e as CustomEvent<{ agentId?: string; nearNodeId?: string }>).detail
+      const agentId = BUILTIN_AGENT_IDS.find((a) => a === d?.agentId)
+      if (!agentId) return
+      const all = nodesRef.current
+      const source = all.find((n) => n.id === d?.nearNodeId)
+      const rect = source
+        ? nodeFitRect(source as FocusableNode, all as FocusableNode[])
+        : null
+      const center = rect
+        ? { x: rect.x + rect.width * 1.5 + 40, y: rect.y + rect.height / 2 }
+        : undefined
+      addAgentNode(agentId, center, source?.parentId)
+    }
+    window.addEventListener('nodeterm:open-agent', onOpenAgent)
+    return () => window.removeEventListener('nodeterm:open-agent', onOpenAgent)
+  }, [addAgentNode, nodesRef])
 
   // "Spawn a team…" (issue #78): the dialog collects the task; this opens ONE conductor node
   // pre-prompted with it. The conductor's own manage-nodeterm-canvas skill does the role split
@@ -8324,6 +8362,13 @@ export function Canvas() {
       'canvas.goForward': () => { goForward(); return true },
       'canvas.fitAll': () => { fitAll(); return true },
       'canvas.tidy': () => { arrangeAllNodes(); return true },
+      // The kanban board's keys — the mounted board decides (and declines when the focused control
+      // owns the key, or when no per-project board is up: Omni registers none). lib/boardKeys.
+      'board.openCard': () => runBoardKey('open'),
+      'board.nextCard': () => runBoardKey('next'),
+      'board.prevCard': () => runBoardKey('prev'),
+      'board.columnLeft': () => runBoardKey('left'),
+      'board.columnRight': () => runBoardKey('right'),
       'canvas.deleteSelection': deleteSelectionCommand,
       'node.newTerminal': () => { addTerminal(); return true },
       'node.newAgent': () => {
@@ -8348,6 +8393,7 @@ export function Canvas() {
       'node.newAgent.opencode': () => { addAgentNode('opencode'); return true },
       'node.newAgent.grok': () => { addAgentNode('grok'); return true },
       'node.newAgent.copilot': () => { addAgentNode('copilot'); return true },
+      'node.newAgent.antigravity': () => { addAgentNode('antigravity'); return true },
       'node.newSticky': () => { addSticky(); return true },
       'node.newBrowser': () => { addBrowser(); return true },
       // Opening the URL prompt IS claiming the chord — a cancelled prompt creates nothing, but the
@@ -9135,6 +9181,7 @@ export function Canvas() {
         return {
           label: `New ${AGENT_CONFIG[aid].label}`,
           icon: <AgentIcon agentId={aid} />,
+          hint: AGENT_CONFIG[aid].notice,
           onClick: () => addAgentNode(aid, at, groupId)
         }
       }
@@ -9999,7 +10046,13 @@ export function Canvas() {
       void hostChatSend(q, {
         getStatus: (id) => useAgentStatus.getState().byId[id],
         sendText: (id, text) => api.pty.sendText(id, text),
-        now: Date.now
+        now: Date.now,
+        // The kernel's say on whether the agent is still in the pane (codex announces no quit).
+        paneRefusal: (id, agentId) =>
+          chatPaneRefusal(agentId, id, {
+            paneOwner: (n) => api.pty.paneOwner(n),
+            customAgents: useSettings.getState().settings.customAgents
+          })
       }).then((out) => api.sendHostChatReply({ requestId: q.requestId, kind: 'send', ...out }))
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -10021,6 +10074,36 @@ export function Canvas() {
       let offCanvas:
         | { project: Project; closed: boolean; created: string[]; nodes: CanvasNode[] }
         | undefined
+      // The ONE place an agent-opened node's cell is chosen (`slotBelowSource`): the live, the
+      // off-canvas and the cold path all land here, so the three cannot drift into three layouts.
+      // `nodes` is the array of the project the node goes into; the claim makes the cell visible
+      // to the next node of this batch and to a racing call before either shows up in `nodes`.
+      // Returns the node with its ROOT-space top-left set (callers still parent it afterwards), or
+      // unchanged when the source is not in `nodes`.
+      const settleBelowSource = <
+        T extends { id: string; position: { x: number; y: number }; width?: number | null; height?: number | null }
+      >(
+        nodes: readonly PlaceableNode[],
+        projectId: string,
+        node: T
+      ): T => {
+        const w = (node.width as number | undefined) ?? 600
+        const h = (node.height as number | undefined) ?? 400
+        const now = Date.now()
+        controlPlaceClaims.current = pruneClaims(controlPlaceClaims.current, now)
+        const at = placeBelowSource(nodes, sourceNodeId, { w, h }, {
+          extra: pendingClaimBoxes(
+            controlPlaceClaims.current,
+            projectId,
+            new Set(nodes.map((n) => n.id)),
+            now
+          ),
+          snapGrid: snapGridNow()
+        })
+        if (!at) return node
+        controlPlaceClaims.current.push({ projectId, id: node.id, box: { ...at, w, h }, at: now })
+        return { ...node, position: at }
+      }
       const reply = (r: { ok: boolean; message?: string; result?: unknown; error?: string }) => {
         // Say WHERE it went, once, in both voices. The verb bodies already say WHAT they made, so
         // none of them has to know about routing: the clause is appended here and the human strip
@@ -10648,7 +10731,6 @@ export function Canvas() {
               return
             }
             const coldNodes = owner.nodes as unknown as ColdNode[]
-            const coldSrcNode = coldSrc as unknown as ColdNode
             const coldTerminal = verb === 'open-terminal'
             const coldAgentId = (verb === 'open-agent' ? args.agent : 'claude') as AgentId
             const coldCount = Math.max(
@@ -10754,18 +10836,12 @@ export function Canvas() {
             const coldMade: CanvasNode[] = []
             for (let i = 0; i < coldCount; i++) {
               const built = coldTerminal
-                ? createTerminalNode(
-                    coldNodes.length + i,
-                    coldCwd,
-                    coldPlaceBelow(coldNodes, coldSrcNode, i),
-                    args.cmd,
-                    coldSsh
-                  )
+                ? createTerminalNode(coldNodes.length + i, coldCwd, undefined, args.cmd, coldSsh)
                 : createAgentNode(
                     coldAgentId,
                     coldNodes.length + i,
                     coldCwd,
-                    coldPlaceBelow(coldNodes, coldSrcNode, i),
+                    undefined,
                     args.prompt,
                     coldSsh,
                     coldAccount,
@@ -10792,8 +10868,12 @@ export function Canvas() {
                 node.position = groupSlot(coldExistingInGroup + i, w, h)
                 node.parentId = coldGroup.groupId
                 node.extent = 'parent'
+                coldMade.push(node)
+              } else {
+                // The live path's cell rule, off the serialized nodes (the factory's position was
+                // only a seed). The claim is what lets the 2nd node of this batch see the 1st.
+                coldMade.push(settleBelowSource(coldNodes as PlaceableNode[], owner.id, node))
               }
-              coldMade.push(node)
             }
             // Grow the frame BEFORE the children land, exactly as `addGrouped` does — `extent:
             // 'parent'` clamps a child that falls outside it.
@@ -11017,8 +11097,9 @@ export function Canvas() {
       }
       // Place opened nodes BELOW the source and rope them to it (source flow-out → target
       // flow-in), mirroring how subagent/loop nodes attach — so they read as "hanging off" the
-      // conversation instead of landing on top of unrelated nodes. `placeBelow` returns a node
-      // centerpoint; `i` fans multiple nodes out horizontally so they don't stack.
+      // conversation. `placeBelow` is only a SEED centerpoint now: `addAndConnect` re-places every
+      // unparented node into the first free cell of the grid under the source
+      // (`settleBelowSource`), and the team/verify/worktree frames are settled the same way.
       const srcW = src.measured?.width ?? (src.width as number) ?? 600
       const srcH = src.measured?.height ?? (src.height as number) ?? 400
       // src.position is group-relative when the agent sits inside a group frame — resolve the
@@ -11094,7 +11175,17 @@ export function Canvas() {
         // A node that arrives ALREADY parented (open-agent --group placed it into a frame with
         // relative coords) must pass through untouched — re-running parentInto would read its
         // relative position as absolute and land it off-frame.
-        const placed = node.parentId ? node : src.parentId ? parentInto(node, src.parentId) : node
+        // An unparented node gets its cell HERE, whatever seed position its factory was handed:
+        // every open/show verb funnels through this line, and `placeBelow` alone never looked at
+        // the canvas — four one-node opens from one agent landed on one spot.
+        const settled = node.parentId
+          ? node
+          : settleBelowSource(ctlNodes() as PlaceableNode[], ctlProject?.id ?? '', node)
+        const placed = settled.parentId
+          ? settled
+          : src.parentId
+            ? parentInto(settled, src.parentId)
+            : settled
         if (offCanvas) {
           // The staged twin of the three lines below, and the whole of the off-canvas write. The
           // live setters all address the ACTIVE canvas, which is some other project's here — they
@@ -11161,6 +11252,15 @@ export function Canvas() {
             reply({
               ok: false,
               error: `${verb}: --after ${depId} is not an agent session that reports when it is done`
+            })
+            return null
+          }
+          // Same guardrail, one layer down: this agent reports status only on THIS machine (no
+          // hook installer on an SSH host yet), so on an SSH project it would never say "done".
+          if (ctlSsh && !hasHooksOverSsh(depAgent)) {
+            reply({
+              ok: false,
+              error: `${verb}: --after ${depId} runs an agent that reports no status in SSH projects yet`
             })
             return null
           }
@@ -11863,9 +11963,17 @@ export function Canvas() {
             const vGroup = next.find(
               (node) => node.type === 'group' && !existingGroupIds.has(node.id)
             )!
+            // The panel was laid out at the fixed seed under the caller; move the whole FRAME into
+            // the first free cell (its members are frame-relative and ride along), or a second
+            // `verify` lands its panel exactly on the first.
+            const vAt = settleBelowSource(live as PlaceableNode[], ctlProject?.id ?? '', vGroup).position
             next = next.map((nd) =>
               nd.id === vGroup.id
-                ? { ...nd, data: { ...nd.data, title: args.label || `Verify: ${targetTitle}` } }
+                ? {
+                    ...nd,
+                    position: vAt,
+                    data: { ...nd.data, title: args.label || `Verify: ${targetTitle}` }
+                  }
                 : nd
             )
             setNodes(next)
@@ -12004,8 +12112,12 @@ export function Canvas() {
             const teamGroup = next.find(
               (node) => node.type === 'group' && !existingGroupIds.has(node.id)
             )!
+            // Same as `verify`: settle the whole frame, members ride along.
+            const teamAt = settleBelowSource(live as PlaceableNode[], ctlProject?.id ?? '', teamGroup).position
             next = next.map((nd) =>
-              nd.id === teamGroup.id ? { ...nd, data: { ...nd.data, title: args.label || 'Team' } } : nd
+              nd.id === teamGroup.id
+                ? { ...nd, position: teamAt, data: { ...nd.data, title: args.label || 'Team' } }
+                : nd
             )
             setNodes(next)
             memberIds.forEach((mid) => connect(mid))
@@ -12145,15 +12257,17 @@ export function Canvas() {
               reply({ ok: false, error: `open-worktree: ${res.message}` })
               return
             }
-            // Fan successive frames out horizontally (frame width + gap) so several
-            // open-worktree calls in one orchestration land side by side, not stacked.
-            const groupFan = nodesRef.current.filter(
-              (nd) => nd.type === 'group' && !nd.parentId
-            ).length
-            const frameAt = {
-              x: placeBelow(0).x + groupFan * (WORKTREE_GROUP_SIZE.width + 60),
-              y: placeBelow(0).y
-            }
+            // A fresh frame takes the first free cell under the caller, like every other open.
+            // (This used to fan by the number of top-level frames on the canvas, which landed a
+            // frame on whatever terminal happened to sit at that offset.) The claim is keyed by a
+            // placeholder id — `attachWorktree` mints the real one — so it simply ages out.
+            const frameAt = bindGroupId
+              ? undefined
+              : settleBelowSource(nodesRef.current as PlaceableNode[], ctlProject?.id ?? '', {
+                  id: `pending-worktree-${requestId}`,
+                  position: { x: 0, y: 0 },
+                  ...WORKTREE_GROUP_SIZE
+                }).position
             const groupId = worktreeControlRef.current.attachWorktree(
               { groupId: bindGroupId, at: frameAt },
               worktreeFromCreate({ repoPath: repoRoot, mode: 'new', branch, baseRef, path: wtPath })
@@ -15135,7 +15249,9 @@ export function Canvas() {
           {/* Peer cursors live INSIDE <ReactFlow>: PresenceLayer uses ViewportPortal +
               useReactFlow, which throw outside the provider — and cursors are flow coordinates. */}
           <PresenceLayer />
-          <StatusAwareMiniMap onNodeDoubleClick={goToNode} />
+          <MinimapDock>
+            <StatusAwareMiniMap onNodeDoubleClick={goToNode} />
+          </MinimapDock>
         </ReactFlow>
         </SessionProvider>
 

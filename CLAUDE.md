@@ -1707,7 +1707,7 @@ the wire never see any of it):
   both directions. Server Edition: inert (no `<webview>` in a plain browser — ghosts are empty
   husks, nothing to preserve). Mobile: N/A (no canvas).
 
-## Agent support (Claude / Codex / Gemini / Copilot / opencode / Grok / custom)
+## Agent support (Claude / Codex / Antigravity / Gemini / Copilot / opencode / Grok / custom)
 
 **Message scope publication:** desktop `send`/`reply`/`notify` wait for pending active-canvas edits
 to be saved when either endpoint is on that canvas (`renderer/lib/messageScopeSync.ts`). `list`
@@ -1738,8 +1738,10 @@ else, and its context links must keep classifying across restarts).
   `PERMISSION_MODE_CAPABLE`, `MODEL_SWITCH_CAPABLE`, with helpers (`hasHooks`,
   `canBranch`, `canContextLink`, `canChat`, `canRename`, `canReadTitle`, `hasPermissionMode`, …).
   Branch stays **Claude-only** purely by being in only `BRANCH_CAPABLE`. The ⌘M **ChatPanel**
-  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok** since 2026-09: grok's
-  `chat_history.jsonl` gets its own reader, and `chat:read-transcript` routes by agent. That list had
+  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok + gemini + codex + copilot +
+  opencode** since 2026-09: grok's `chat_history.jsonl`, gemini's session file, codex's rollout,
+  copilot's `events.jsonl` and opencode's `opencode export` document each get their own reader, and
+  `chat:read-transcript` routes by agent. That list had
   to be SPLIT to do it — `CHAT_CAPABLE` carried two facts that coincided while claude was its only
   member ("we can render this" and "claude's resolver can locate and parse this file"), and the
   second now lives in `CLAUDE_TRANSCRIPT_READABLE` (claude only). Merging them back is a
@@ -1758,7 +1760,7 @@ else, and its context links must keep classifying across restarts).
   on these helpers — no hardcoded `=== 'claude'`. **Custom agents** (user-defined in Settings,
   `customAgents`) inherit the declared `baseAgent` harness through `capabilityAgentId`; a custom
   agent with no base remains spawn + terminal-title + process status only. Per-agent write-ups:
-  **`docs/grok-agent.md`**, **`docs/gemini-agent.md`**, **`docs/copilot-agent.md`** (there is none for codex — its approval mapping
+  **`docs/grok-agent.md`**, **`docs/gemini-agent.md`**, **`docs/copilot-agent.md`**, **`docs/antigravity-agent.md`** (there is none for codex — its approval mapping
   and every value's reasoning live in `src/shared/agents/approval-mode.ts`);
   the distilled rules are **Adding a new agent** at the end of this section.
 - **Model gateway / switcher** — `settings.modelGateway` stores one gateway root + a NON-SECRET
@@ -1815,6 +1817,161 @@ else, and its context links must keep classifying across restarts).
   harmful. The `auto` permission-mode **version gate is claude's alone** (it is fed by a `claude
   --version` probe), and grok's mode flag must go **BEFORE** its `--` separator, which is
   end-of-options. Full picture, dialect traps and the device checklist: **`docs/grok-agent.md`**.
+- **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads
+  `chat_history.jsonl` into claude's `ChatMessage`/`ChatPart` shapes (no new wire field): typed
+  prompts, assistant text, tool calls (`arg` = the salient argument — `command`, `target_file`, …, in
+  claude's `toolArg` order — else the raw JSON, 200 units) with results summarised like claude's,
+  `web_search` backend calls, harness-injected `synthetic_reason` lines as assistant-side `[reason]`
+  notes, and `model_id`/`reasoning_effort` of the NEWEST assistant record (never carried forward).
+  `reasoning` is hidden. It does NOT page: measured on 1.0.13, the file is rewritten via
+  `.sync.tmp` + rename and `/compact`/`/rewind`/history repair replace lines, so it is one capped
+  whole-file read with no keys and no `at`. Routing is by `capabilityAgentId`, so a custom agent built
+  on grok reaches grok's reader, never claude's cwd fallback. **A remote (SSH) grok node is read on its
+  host** (`core/remote-grok-chat.ts`, one `sh -c` round trip: `$GROK_HOME` if absolute else
+  `$HOME/.grok`, the session found by id across `sessions/*/<id>/`, two matches refused, the
+  paged-transcript window at 5 MiB) — its failures are terminal, never this machine's disk (the
+  hook-derived local map names a wrong-machine path for these nodes). The phone gets it for free:
+  `chat.page` reads through the same deps. Golden fixtures + exact rules for the Swift port:
+  `src/shared/chat-fixtures/grok/`. Not supported: the composer's model/effort labels (grok's `/model`
+  and `/effort` pickers are unmeasured — the TUI needed a login here), plan/question answer cards
+  (claude-only), pre-compaction history, and a local session whose map entry `SessionEnd` retired.
+- **Copilot ⌘M chat view** (`core/copilot-chat.ts`, 2026-09; copilot 1.0.88 measured in BYOK mode
+  against a local fake model, plus the CLI's own `schemas/session-events.schema.json`). Reads
+  `<COPILOT_HOME>/session-state/<id>/events.jsonl` (then the snap package's
+  `~/snap/copilot-cli/common/.copilot`), located STRICTLY by the node's session id and routed by
+  `capabilityAgentId` before anything claude-shaped, so a missing journal is "not found", never
+  claude's cwd-newest or another session. The journal is append-only JSONL (compaction appends), so it
+  PAGES like claude's — `parseChatWindow`/`parseGrowingWindow` take copilot's record parser — and the
+  phone gets the same pages over the relay (`page()` gates only on `canChat`). Shown: typed prompts
+  (`content`, never `transformedContent`; the sources copilot's own timeline hides stay hidden),
+  assistant text, tool calls with results (`Error: …` on failure), a user's `!` shell command as the
+  `!` part, `Error:`/`Warning:`/`Info:` notices, and `model`. Never shown: the system prompt,
+  reasoning, sub-agent events (envelope `agentId` / `data.agentId` / `data.parentToolCallId`). Not
+  supported: remote (SSH) nodes (`unreadable`, "not supported yet" — never this machine's disk),
+  `effort` (not recorded), plan/question answer cards (claude-only), composer model labels (claude's
+  picker commands only). Golden fixtures: `src/shared/chat-fixtures/copilot/` (README "Copilot").
+- **Antigravity** (`agy` 1.2.3 measured on Windows; the 1.2.12 Linux binary read; builtin since
+  2026-09 — Google's replacement for Gemini CLI on personal accounts) — in `AGENT_HOOK_TARGETS`
+  (badge, NEEDS YOU from `ask_question`, a closed set of one, `--after` and triggers) and
+  `RESUMABLE_AGENTS` (`agy --conversation=<id>`, the spelling agy's own exit hint uses; a dead id
+  is ignored by agy, which starts fresh — without it a reboot left a bare shell). Launch is
+  `agy --prompt-interactive '<p>'` via the new optional `AgentConfig.promptFlag` (agy has no
+  positional prompt). Its hooks live in the GLOBAL `~/.gemini/config/hooks.json` under our own
+  `nodeterm-status` bundle, and **each one is a synchronous gate whose stdout agy reads as a
+  decision** — we subscribe `PreToolUse`, so a wrong byte denies tools in every `agy` on the
+  machine, inside nodeterm and outside it. Three rules for whoever touches it:
+  - **The stdout table is written ONCE** (`core/agents/hooks/antigravity-decision.ts`): `PreToolUse`
+    → `{"decision":"ask"}`, `Stop` → `{"decision":""}`, the rest → `{}`, an unknown/empty event →
+    NOTHING. Measured on 1.2.3: silence runs the tool, while `{}`, `{"decision":""}`, any non-JSON
+    byte and exit ≠ 0 DENY it. Never `allow`, never `force_ask`, never `"continue"` on `Stop`. The
+    script answers first and then sends stdout/stderr to `/dev/null`, because hook stdout is also
+    model input (`injectSteps`).
+  - **No quotes in the Windows command.** agy passes it to `cmd /c` with inner `"` escaped as `\"`,
+    which cmd.exe does not understand — the codex form (`cmd.exe /d /c call "…"`) exits 1 = DENY.
+    The command is relative to the hooks.json directory (agy's hook cwd) and guarded:
+    `if exist ..\..\.nodeterm\agent-hooks\antigravity-hook.cmd (call … <Event>) & exit 0`. Test
+    Windows dispatch WITHOUT `windowsVerbatimArguments` — Node's default escaping is agy's.
+  - **AutoRun blocks the install.** agy's `cmd /c` has no `/d`, so a registry `AutoRun` runs first
+    and its output would deny tools; the installer reads the three `Command Processor\AutoRun`
+    values (`reg query`, absence decided by listing the parent key — reg's errors are localized)
+    and installs NOTHING — and withdraws a bundle an earlier launch wrote — if one is set or the
+    registry cannot be read.
+  **The vendor-location fallback also owns launch reachability.** Measured on Windows 11 with agy
+  1.2.7: the vendor installer wrote `%LOCALAPPDATA%\agy\bin` into the user PATH as `REG_SZ`, so the
+  process inherited the percent expression literally and both `where agy` and `cmd /c agy` failed
+  while `%LOCALAPPDATA%\agy\bin\agy.exe` existed and ran. `PtyManager` therefore APPENDS the
+  directory returned by `findAgy()` to the PATH of a LOCAL Antigravity session, and only when no
+  entry already names it (`pathWithAgyDir`) — prepending shadowed the user's own tools on
+  macOS/Linux, where agy sits in a shared directory. The gate uses
+  `capabilityAgentId`, so an Antigravity-based custom agent inherits it; plain terminals and SSH
+  sessions do not. Detecting the binary only for hook installation recreates the original split:
+  a configured badge for an agent the pane cannot launch.
+  **Installed only where `agy` exists** (a file lookup — PATH, then the vendor's install dirs —
+  never a spawn), in two passes per launch: the boot pass may only see the inherited PATH, so a miss
+  there does NOTHING; after the login-shell PATH probe settles, a final pass repeats the lookup and
+  only then withdraws a bundle of ours when agy is not found. An `agy` installed later gets the
+  hook the next time nodeterm opens. **The opt-out is agy's own switch**: `"enabled": false` on our
+  bundle is carried across every rewrite. hooks.json goes through the shared settings transaction
+  (`updateSettingsFile`: a symlinked file keeps its link and mode, writers serialize, a file changed
+  mid-update is not overwritten), and only entries under `.nodeterm/agent-hooks/` are swept as
+  ours. The POSIX command forces exit 0 (`sh <script> || :`) — the answer is printed first, and a
+  later failure (a broken endpoint file) must not turn into a non-zero status next to it. **No SSH
+  hook installer yet** (`LOCAL_ONLY_HOOK_AGENTS` / `hasHooksOverSsh`): on an SSH project an agy node
+  never reports, so `--after` refuses it as a dependency. The event name is not in agy's payloads:
+  the command exports `NODETERM_AGY_EVENT`, the script POSTs `nodeterm_hook_event`, and the hook
+  server merges it after `JSON.parse` — for antigravity ONLY, an empty field deleting a planted
+  value. `newTurn` rides only the
+  `PreInvocation` with `invocationNum === 0` (without it `lastTurnError` is never retired). Cost:
+  on POSIX the POST already runs in the background and the part agy waits for measured 2–40 ms
+  (pinned by a stalled-endpoint test, since a foreground POST plus the failover walk measured ~6 s
+  against the 5 s handler timeout); the ~520 ms per event measured on Windows is Git Bash's fork
+  cost before the backgrounding. Full picture,
+  limits (permission prompt and ESC fire no hook) and the device checklist:
+  **`docs/antigravity-agent.md`**.
+  **No conversation view, and that is deliberate** (not in `CHAT_CAPABLE`): ⌘M shows the rendered
+  terminal output, and the phone's Chat screen answers `unsupported`. The
+  LOCATION is measured: every hook payload names `transcriptPath`, which is
+  `~/.gemini/antigravity-cli/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`,
+  keyed by the id `normalizeAntigravity` already records as `sessionId`. The RECORD SHAPES were never
+  captured; the 1.2.12 binary only describes them in prose. Four facts a parser needs are unknown:
+  the `tool_calls` element keys, how a tool result links back to its call, the serialized enum
+  spelling, and whether a line is rewritten when its step's status changes, which decides between
+  claude's paged read and grok's single capped read. A parser built from that prose would be a rule-14
+  wrong guess, so none ships, not even unwired. The capture recipe is §7.1 and §8.1 of the doc, using
+  `scripts/agy-transcript-shape.mjs`, which dumps shapes and never text. When it lands: locate
+  strictly by id (`brain/` holds every conversation on the machine), and have a remote node answer
+  `remoteOnly` → unreadable like gemini.
+- **Codex in the ⌘M chat view** (2026-09-28; the desktop panel, the kanban card modal, the phone's
+  `chat.page`). `core/codex-chat.ts` reads the rollout with codex's own rules, never claude's
+  resolver. It takes USER text from the UI stream only: `event_msg/user_message` (legacy, ≤ 0.146) or
+  an `item_completed` `UserMessage` (paginated, ≥ 0.151). Model-side `role:user` messages also carry
+  injected context (AGENTS.md, `<environment_context>`, image wrappers), so they are never read.
+  Assistant text and tools come from `response_item`, correlated by `call_id`. The UI copies
+  (`agent_message`, `AgentMessage`) and reasoning are skipped. Failed and interrupted turns become
+  `[error] …` / `[turn aborted…]` notes. A tool result drops codex's `… Output:` preamble. The rollout
+  is append-only, so it pages by byte offset like claude. The locator matches a WHOLE-uuid thread id
+  (`CODEX_THREAD_ID_RE`), because a uuid's last group passes `SESSION_ID_RE` and suffix-matches
+  another thread's file. It searches only the node's own account home, and uses the codex tail's hook
+  path only as a checked hint. An SSH node is read on its host (`main/remote-codex-chat-page.ts`,
+  through the same resolvers as its remote meter) or not at all. Because codex announces no session
+  end, a chat send first asks the kernel (`renderer/lib/chatPaneGate.ts`, `isAgentPane`). After a
+  `/quit` the store still reads `done`, and the message would otherwise run in the shell. **Not
+  supported:** images in prompts, reasoning summaries, the composer's model/effort labels (the
+  `/model` picker is measured for claude only), plan/question answer cards (codex never sets
+  `held`), and a closed REMOTE session's transcript. Record rules and fixtures:
+  `src/shared/chat-fixtures/codex/`.
+- **opencode in the ⌘M chat view** (2026-09-28, opencode 1.18.25 measured) — opencode has NO
+  transcript file (SQLite since 1.18; that database also holds its account tokens and is never
+  opened), so `readChatTranscript` routes `capabilityAgentId(agentId) === 'opencode'` to
+  `core/opencode-chat.ts`, which runs `opencode export <sessionId>` (argv only, no flag an older
+  yargs-strict CLI might refuse) and parses the one JSON document into claude's `ChatMessage` shape:
+  user/assistant text, tool chips (arg by an opencode key order, result = 3 lines / 500 units,
+  `Error: …` on a failed call), `[name] message` for an errored turn, compaction/subtask chips,
+  `at` from `time.created`, `model`/`effort` from the newest assistant's `modelID`/`variant`.
+  Reasoning, `synthetic`/`ignored` text, file/agent parts and step bookkeeping are dropped;
+  unmappable shapes are skipped and counted. **One page, always** (`olderCursor: null`): there are
+  no byte offsets to page by. The page honours the caller's `maxBytes` (the phone asks 256 KB),
+  grows ×4 up to 5 MB like claude's reader when it holds no whole message, and shows a newest
+  message larger than 5 MB TRUNCATED (with a note) rather than as an empty conversation. Refusals: no/unsafe session id runs
+  nothing (a bare `opencode export` opens a picker over the NEWEST sessions — someone else's); an
+  export whose `info.id` is another session is `unreadable`; only `Session not found: <id>` with
+  exit 1 and empty stdout is a clean miss. **Remote (SSH) nodes are refused** (`unreadable`, no
+  export runs) — their sessions are in the host's database and there is no remote leg yet; the
+  panel's copy names both causes an opencode `unreadable` can have. One export costs 1.0–1.7 s and
+  ~320 MB, so `createOpencodeExportGate` runs at most one per session (a caller arriving mid-run
+  gets a FRESH export) and two in total; the panel's hook-driven refreshes are marked
+  `page.background` and spaced ≥ 5 s per session, while an open / ↻ / Retry is immediate (and wakes
+  a sleeping background one). A **change gate** in front of it `stat`s (never opens) opencode's
+  `opencode*.db` + `-wal` in `$XDG_DATA_HOME/opencode` (else `~/.local/share/opencode`, opencode's
+  own xdg-basedir rule) BEFORE exporting, and an unchanged fingerprint answers from a 4-session LRU
+  of parsed exports; no db file found, or `OPENCODE_DB` set, means no caching. The export runs with
+  `cwd: os.tmpdir()` (from a repo cwd opencode writes `<repo>/.git/opencode`; sessions resolve by
+  global id). **It inherits the APP's `process.env`, not the node's shell env**: a user who
+  relocates opencode's data via `XDG_DATA_HOME` / `OPENCODE_*` only in their shell rc gets
+  "Session not found" — an honest miss, not a bug in the reader. Plan/question answer
+  cards stay claude-only (no `body`/`questions` on opencode's `question` tool). Desktop and Server
+  Edition both serve it (core handler); the phone gets it over the relay `chat.page` for free.
+  Fixtures + the exact rules for the iOS port: `src/shared/chat-fixtures/opencode/README.md`.
 - **Gemini + codex parity** (2026-08-09) — brought both up to grok's level in the lists above. Unlike
   grok, **both CLIs are installed** and gemini **ships its own hook reference**
   (`/usr/lib/node_modules/@google/gemini-cli/bundle/docs/hooks/reference.md`), so almost every fact is
@@ -1860,6 +2017,29 @@ else, and its context links must keep classifying across restarts).
     because `/quit --delete` exits *and permanently deletes* the session history, i.e. exactly what the
     restart exists to resume (pinned by its own test).
   Full picture, measurements, gaps and a device checklist: **`docs/gemini-agent.md`**.
+- **Gemini CLI refuses personal Google accounts since 2026-06-18** (free / AI Pro / AI Ultra moved to
+  Antigravity CLI — the `antigravity` agent above; Code Assist Standard/Enterprise, Vertex AI and paid
+  API keys still work, so `gemini` stays a builtin). The refusal happens before any session, so no
+  hook reports it: a gemini-harness node reads its own pane for the CLI's sentence
+  (`renderer/terminal/gemini-retired.ts`, letters-and-digits match because the TUI wraps it in a
+  box) and raises a slim banner — "Open Antigravity" (`nodeterm:open-agent`, an agy node beside it,
+  in its frame) + Google's migration guide. It types and relaunches NOTHING, which is why a phrase
+  match is enough here where `resume-fallback.ts` needs three refusals. `AgentConfig.notice` carries
+  the one-line caveat to the menus/Dock tooltips; it is never read to decide behaviour.
+- **Gemini ⌘M chat view** (2026-09, `core/gemini-chat.ts`) — gemini is in `CHAT_CAPABLE` with its own
+  reader, routed in `readChatTranscript` via `capabilityAgentId` BEFORE anything claude-shaped and
+  located only by the header session id (`locateGemini`, which now reads just the header and honours
+  `GEMINI_CLI_HOME`). Its session file is an UPSERT log, not a message list: one id is rewritten in
+  full as tool results/tokens land, `$rewindTo` truncates, and `$set.messages` replaces the MODEL's
+  context at start, compression and rollback. The thread is the message records upserted by id with
+  rewinds honoured and **`$set.messages` ignored** — honouring it erases the thread at every
+  compression and shows the `<state_snapshot>` as the human's words. Not paged (a record depends on
+  earlier ones): one read under the 5 MB cap, `olderCursor: null`, like grok. Shows typed prompts
+  (`displayContent` over `@file` expansion; `<session_context>`/`<hook_context>` dropped per part),
+  replies, tool calls with results, `[info]`/`[warning]`/`[error]` notes and (paged) the model;
+  thinking is dropped. NOT supported: remote (SSH) nodes (`CHAT_LOCAL_ONLY` → "not supported yet"),
+  plan/question answer cards, the composer's model/effort labels. The phone gets it over the relay
+  unchanged; fixtures and exact rules: `src/shared/chat-fixtures/gemini/`, `docs/gemini-agent.md` §3.
 - **Claude session context capacity (#818)** — the managed hook reports only
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` from the effective Claude process environment (including
   `--settings` env), never the GUI/server process environment. HookServer validates decimal safe
@@ -2053,7 +2233,7 @@ else, and its context links must keep classifying across restarts).
   own gate adds one beside claude's.
 - **State via each agent's hooks → shared 4-state model** — detection uses the agent's own
   hooks, **not** output parsing. `src/shared/agents/normalize.ts` has per-agent normalizers
-  (`normalizeClaude`/`normalizeCodex`/`normalizeGemini`/`normalizeCopilot`/`normalizeOpencode`/`normalizeGrok`) that map each agent's native hook
+  (`normalizeClaude`/`normalizeCodex`/`normalizeGemini`/`normalizeCopilot`/`normalizeOpencode`/`normalizeGrok`/`normalizeAntigravity`) that map each agent's native hook
   events to a `NormalizedAgentEvent` over the shared `AgentState` (`working | waiting | blocked
   | done`) plus subagent/recurring/session kinds. Canvas's listener consumes
   `NormalizedAgentEvent` from `agent:status`, drives the `agentStatus` store, fires throttled
@@ -2486,8 +2666,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the same deps and the same distinction. Before this, a mounted SSH node whose locate missed (or
   whose master was down) read THIS machine's resolver, cwd-newest fallback included. `transcriptExists` shares the same locate
   (`remotePresenceFromLocate`: ref/absent/unreadable → present/absent/unknown, a malformed id
-  `unknown`), so it also works for a node with no live pty. A remote grok node (no remote reader)
-  shows "not supported yet", not the retryable error. (2) **The cwd fallback keeps `accountId`** in BOTH
+  `unknown`), so it also works for a node with no live pty. A remote grok node is read on its host
+  by its own leg (`readRemoteGrok`, see the grok chat bullet), with the same absent/unreadable split. (2) **The cwd fallback keeps `accountId`** in BOTH
   `resolveTranscript` and `contextEnsure`; without it a managed-account node fell back to the
   system root and could adopt an unrelated session's newest transcript. (3) **Relay tabs** stay
   local-only (a transcript read over the relay would read the GUEST's disk) and reject with
@@ -2526,7 +2706,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   trip, dd status inside the base64 like the context-tail's window command) instead of pulling the
   5 MB tail on every open and every turn-end reload; its `{ok:false}` is terminal (never the local
   disk), and it is tested under a real `/bin/sh` (`transcript-page.realsh.test.ts`). **Grok does not
-  page**: a paged request gets its whole capped read with `olderCursor: null` and no keys.
+  page** (its file is rewritten in place, so offsets are no identity): a paged request gets its whole
+  capped read with `olderCursor: null`, no keys, and the newest record's `model`/`effort`.
   Server Edition passes `page` through ws-bridge to the same core handler; relay still refuses.
   **ChatPanel consumes it progressively** (pure state in `renderer/lib/chatPaging.ts`): the first
   read is a 256 KB tail (`CHAT_TAIL_PAGE_BYTES`, with a "Loading conversation…" row), older 512 KB
@@ -3668,6 +3849,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
      `$HOME` + fake `curl`, the same discipline as the canvas-control shim.
   3. **A read that could not run is `error`, never `unavailable`** — a dead master says nothing
      about whether the account has a subscription, and 'unavailable' silently drops the row.
+  4. **A failed read keeps the last good numbers** (`holdLastGood`, local AND remote): the
+     endpoint answers **429** on a budget every Claude CLI using the same login also spends
+     (measured on a host running 54 `claude` processes: 429 for minutes on end), and replacing
+     the bars with "Could not read usage" made rows flicker for no change in the account. The
+     held snapshot is `status: 'error'` + the old limits + the OLD `updatedAt`, so the debounce
+     must key on the READ's time (`lastFetchAt`/`remoteCache.at`), never on `updatedAt` — keying
+     it on the numbers' age re-reads on every call and hammers the endpoint that said 429.
   Shape: `remoteUsageTargets` (pure) elects ONE connected project per host (several projects share
   a host's `$HOME`) and offers its system `~/.claude` plus every managed account pinned to that
   host. The service (`usage:remote`) caches per target under the usual debounce, evicts targets
@@ -4494,6 +4682,11 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   every hovered node twice, and on the desktop it would duplicate main's forward. (`node.close`
   has no browser owner at all: the browser keeps ⌘W.)
 - **Invariants**
+  - **A bare letter or Space is only ever a `board`-scope binding.** `board` commands resolve only
+    while a board is up and carry neither `allowWhileTyping` nor `allowInTerminal` — that pair of
+    refusals is what makes a bare key a command rather than a character stolen from the user, so a
+    `board` row must never gain either flag, and no other scope may be given bare letters
+    (`normalizeBindingForCommand`). `board` shares the `global` conflict bucket with app/canvas.
   - **Never read `settings.speech.shortcut`.** The dictation chord is `dictationBinding()` (the
     first effective `speech.dictation` binding); the legacy field is a **downgrade mirror only**,
     written by `setKeybindingOverride` so an older build still finds the user's chord.
@@ -5319,6 +5512,73 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   ~15 KB under the 128 KB ceiling. **Both verbs announce their write on `workspaceExternalChange`
   and that is not optional**: the renderer holds its own board and the next whole-workspace save
   serializes THAT, so a change the renderer never heard about is one the next autosave reverts.
+  **Board model + UX (2026-09).** Three tiers, and a new board feature must pick one: a board
+  FACT is shared content in `project.kanban` (optional, sanitized, ignored harmlessly by an older
+  build); a DISPLAY preference is per-user localStorage (`state/kanbanDisplay.ts`,
+  `nodeterm.kanbanDisplay`, per project); a filter on LIVE agent state is component state only.
+  - **`sanitizeKanban` (`core/workspace-files.ts`) is the shape rule now**, applied on all three
+    seams — `fileToProject`, the store's inline-project branch (which bypasses it) and
+    `projectToFile` on the way OUT (the two-seam rule `sanitizeLayouts` follows). It is
+    `validKanban` plus per-entry repairs, never inventions: a column that is not an object with
+    string `id` + `title` is dropped (React cannot render an object title — a render throw
+    boot-loops the app, the view choice persists), a non-string `category` is dropped, a malformed
+    assignment is dropped, every other field round-trips, and a clean board comes back BY IDENTITY
+    so a well-formed file is never rewritten.
+  - **Lifecycle category** (`KanbanColumn.category?: unstarted|started|done|closed`,
+    `@shared/kanban-category`). Every reader goes through `columnCategory`: an unknown STRING reads
+    as absent but is KEPT in the file (dropping it would erase a newer build's value on an older
+    teammate's save); a non-string never reaches a comparison. The default board carries
+    unstarted/started/done on every seeding surface (`defaultBoardColumns`, shared by
+    `defaultKanban` and the relay's `ensureProjectBoard`/label seeding). It drives the header
+    progress (`boardProgress`: live cards in done+closed columns over EVERY live card, Ungrouped
+    included; null when no column is done/closed — a number over an undefined "complete" would be
+    invented), hides `closed` columns behind a per-user toggle (default hidden), and gives the GitHub
+    completion column its default (`defaultCompletionColumnId`: first done, else first closed, else
+    the last column — the pre-category default, so an uncategorized board is unchanged). **A
+    category change on a column that holds cards is never silent**: it is a claim about every card
+    in the column (they start counting as finished, or leave view when it becomes closed), so
+    `categoryChangeImpact` gates a `ConfirmDialog` naming the count and the consequence; an empty
+    column changes at once. Confirm rather than refuse: refusing would only make the user empty
+    the column first, which is friction, not safety. Set from the column's ⋯ menu / header
+    right-click on the per-project board; Omni shows no column menu.
+  - **An unanchored card move lands at the TOP** (`assignNode`): no `before`, or a `before` naming
+    a card outside the destination column. An agent's `assign` into a long Done column used to
+    append at the bottom and read as "disappeared". A POSITIONAL drop still says where it landed —
+    below the last card or on the column body passes `AT_COLUMN_END` explicitly (both board views).
+    The relay's `projects.setCardColumn` follows the same rule; the `assign` help in BOTH agent
+    bodies says so (`canvas-control-core.test.ts` pins it).
+  - **Status chips** (Running / Needs you / Unread, `lib/kanbanStatusChips.ts`) read the store
+    through a derived primitive signature (`statusChipSig`) — never `byId`, the `armedDepSig` rule —
+    and are NEVER persisted (component state, reset on project switch): a filter on
+    second-by-second state that survived a restart shows a wrong board. The card badge and the chips
+    share ONE rule, `cardBadge`, so a chip cannot select cards whose badge says something else. They
+    narrow session cards only (like local labels); they AND with the label filter and OR within
+    themselves.
+  - **Board-log folding is a VIEW** (`lib/boardLogCollapse.ts`, `BoardLogFeed`): consecutive events
+    by the same author (name AND colour) of the same type within two minutes of the run's NEWEST row
+    render as one "×N" row that expands in place; the jsonl is never rewritten. The window is
+    anchored, not chained, so a ×N never spans more than two minutes. Comments never fold, and
+    neither do `agent-message` / `agent-read-cookies` — audit rows (`NEVER_COLLAPSE`).
+  - **Keyboard**: registry scope `board` (group Board) — Space opens the focused/hovered card,
+    J/K + ArrowDown/Up walk board order (the session cards on screen, column by column, Ungrouped
+    first; GitHub cards excluded), ArrowLeft/Right jump to the same row of the neighbouring
+    non-empty column; in the card modal J/K step the modal. `board` resolves only while a board is
+    up and has no `allowWhileTyping`/`allowInTerminal`, which is the ONLY reason
+    `normalizeBindingForCommand` lets it bind a bare letter or Space (the card modal's terminal,
+    the comment box and the chat composer keep every key). Dispatch stays in Canvas's one
+    listener; the mounted per-project board answers through `lib/boardKeys.ts` and DECLINES (the
+    key falls through) when the focused control uses the key (`keyOwnedByControl`: Space on a
+    button/link/checkbox, anything in a `<select>` or ARIA composite), when any dialog other than
+    its own card modal is open, or when a card menu is up. Two pre-existing bugs this had to fix:
+    the canvas's CAPTURE-phase space-to-pan `preventDefault`ed every non-typing Space even while a
+    board covered the canvas (so no board button could be pressed with Space) — `spacePanKeydown`
+    now takes `canvasCovered`; and a `Space` binding could never match because `e.key` is `' '`
+    (`normalizeKey` maps it to `SPACE`). The Settings recorder captures a bare key only for a
+    command that may have one (`board` scope or `allowBareKey`).
+  **Phone** (nodeterm-ios): must at least not break on `category` (an extra JSON key its board
+  decoder ignores); the relay-served move now lands at the top while the phone's direct-SSH writer
+  (`KanbanBoardWriter`) still appends, and `KanbanDefaults` should gain the three categories — both
+  are the iOS follow-up, not desktop work.
 - **Omni Kanban (global swimlanes)** (`components/kanban/GlobalKanbanView.tsx`; one swimlane per open project; `state/viewMode.ts` `globalKanban` (localStorage `nodeterm.globalKanban`, machine-local, like `viewByProject`) + `settings.omniKanbanEnabled` (feature gate, default OFF, `settings.json`) / `omniKanbanAsDefault` (when true, `view.kanbanToggle` — Cmd+Shift+B — opens Omni; otherwise per-project; `view.globalKanbanToggle` registry command — unbound, remappable — always opens Omni when enabled); `TabBar` and the menu IPC `onToggleKanban` share one `performKanbanToggle` decision, and `isGlobalKanbanOpen()` is the single gate (fail-closed, static import of `useSettings` — the earlier `require` failed open in the packaged renderer). The active project's lane is derived from serialized `p.nodes` via `toKanbanSessionState` — the persisted-state counterpart to `toKanbanSession` — and is committed (`commitActiveToStore`) before the overlay mounts so live React Flow edits are not stale; `pendingLaunch` never becomes `initialCommand` in the modal (the DAG launch must fire only when dependencies report done, and the canvas `TerminalNode` already delivers `initialCommand` via `writeWhenShellReady` after the `nodeterm:create-node` project switch). Active-project edits (rename / sticky / browser nav) route through Canvas live nodes (`setNodes` + `markDirty`), non-active through the store + `writeDisk`; delete uses `ConfirmDialog` (not `confirm`) and SSH-aware teardown (`transport.destroy` locally vs `sshProject.killSessions` with `everySocket` for a remote owner, plus `agentStatus` / `agentNodes` / `webviewKeepAlive` cleanup). The top bar's project pills and Cmd/Ctrl+1..9 (`nodeterm:swimlane-jump`) jump to the lane; header hint shows the correct mod (`Cmd` on Mac, `Ctrl` elsewhere). Server Edition works as-is, Mobile N/A.
 - **Settings** (`SettingsPage.tsx`, ⚙ / ⌘,): font/cursor (live to xterm + Monaco), default
   shell, grid + snap, **default node size** (`defaultNodeWidth`/`defaultNodeHeight` — new

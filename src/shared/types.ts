@@ -617,11 +617,19 @@ export interface BridgeLink {
   target: string
 }
 
+/** Where a column sits in a card's lifecycle (see @shared/kanban-category). A closed set; an
+ *  unknown value read from a hand-edited or newer file reads as ABSENT (`columnCategory`), and is
+ *  left in the file untouched so a newer build's value survives an older build's save. */
+export type KanbanColumnCategory = 'unstarted' | 'started' | 'done' | 'closed'
+
 /** One kanban board column. Column order = array order in ProjectKanban.columns. */
 export interface KanbanColumn {
   id: string
   title: string
   color: string
+  /** Optional lifecycle category. Absent = uncategorized (the pre-category board, and any column
+   *  the user never categorized). Read it through `columnCategory`, never directly. */
+  category?: KanbanColumnCategory
 }
 
 /** Assignment of one session node to a board column. A session with no assignment sits
@@ -2672,9 +2680,18 @@ export interface ClaudeUsage {
   updatedAt: number
   /**
    * 'unavailable' = no OAuth subscription token (API-key billing / logged out) → hide pill.
-   * 'fetching' = request in flight. 'ok' = windows present. 'error' = fetch failed.
+   * 'fetching' = request in flight. 'ok' = windows present. 'error' = fetch failed — and when
+   * `limits` is non-empty alongside it, those are the LAST GOOD numbers the service kept
+   * (`holdLastGood`), still stamped with their own `updatedAt`.
    */
   status: 'unavailable' | 'fetching' | 'ok' | 'error'
+  /**
+   * The latest read was refused with HTTP 429. The usage endpoint's request budget is also
+   * spent by every Claude CLI using the same login (the CLI reads this endpoint itself), so a
+   * host running dozens of sessions can exhaust it without us. Absent = not rate limited (or
+   * not known to be).
+   */
+  rateLimited?: boolean
 }
 
 /**
@@ -2892,11 +2909,13 @@ export interface ChatTranscriptResult {
    */
   unmatchedResults?: ChatCarriedToolResult[]
   /**
-   * PAGED claude reads only: the newest assistant record's `message.model` in the returned window
-   * (`<synthetic>` error lines skipped). Absent when the window has none, and on the legacy read.
+   * PAGED reads only: the newest assistant record's model in the returned window — claude's
+   * `message.model` (`<synthetic>` error lines skipped), grok's `model_id`. Absent when the window
+   * has none, and on the legacy read.
    */
   model?: string
-  /** PAGED claude reads only: the newest assistant record's top-level `effort` in the window. */
+  /** PAGED reads only: that same record's effort — claude's top-level `effort`, grok's
+   *  `reasoning_effort`. Never carried forward from an older record. */
   effort?: string
   /** PAGED reads only, with `found: false`: the transcript could not be READ (a remote host that did
    *  not answer, a growth re-read that failed, a remote node with no reachable master) — as opposed

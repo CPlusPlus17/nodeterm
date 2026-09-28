@@ -32,6 +32,15 @@ describe('ensureProjectBoard', () => {
     expect(out.savedAt).toBe(NOW.toISOString())
   })
 
+  it('seeds the lifecycle category the desktop default carries (a phone-born board is the same board)', () => {
+    const out = parse(ensureProjectBoard(file(), NOW, () => 'kcol-fixed'))
+    expect(out.kanban.columns.map((c: { category?: string }) => c.category)).toEqual([
+      'unstarted',
+      'started',
+      'done'
+    ])
+  })
+
   it('mints a distinct id per column, in the desktop shape', () => {
     const out = parse(ensureProjectBoard(file(), NOW))
     const ids: string[] = out.kanban.columns.map((c: { id: string }) => c.id)
@@ -117,6 +126,28 @@ describe('setProjectCardColumn', () => {
       { nodeId: 'term-a-1', columnId: 'kcol-a' }
     ])
     expect(out.kanban.meta).toEqual([{ nodeId: 'term-a-1', priority: 'high' }])
+  })
+
+  // The phone's move names no anchor, so it follows the desktop's unanchored rule: the TOP of the
+  // destination, where the person who just filed it will look for it.
+  it('an unanchored move lands at the TOP of a column that already has cards', () => {
+    const out = parse(
+      setProjectCardColumn(
+        board([
+          { nodeId: 'term-z-9', columnId: 'kcol-b' },
+          { nodeId: 'term-y-8', columnId: 'kcol-b' },
+          { nodeId: 'term-a-1', columnId: 'kcol-a' }
+        ]),
+        'term-a-1',
+        'kcol-b',
+        NOW
+      )
+    )
+    expect(out.kanban.assignments.map((a: { nodeId: string }) => a.nodeId)).toEqual([
+      'term-a-1',
+      'term-z-9',
+      'term-y-8'
+    ])
   })
 
   it('refuses a column this board does not have', () => {
