@@ -189,6 +189,7 @@ import {
   mirrorEntry,
   pendingTicketsFor
 } from '../core/agent-status-mirror'
+import { mirrorCustomAgents } from '../core/mirror-custom-agents'
 import { paneOwnerProject } from '../core/agents/pane-ownership'
 import { createPushNotify, createLiveUpdatePush } from '../core/push-notify'
 import { createGrantsAccessor, type PushGrant } from '../core/push-grants'
@@ -2120,7 +2121,9 @@ app.whenReady().then(async () => {
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
-        .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) }))
+        .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) })),
+      // Derived binary names only — never the launch command/env (see core/mirror-custom-agents.ts).
+      customAgents: mirrorCustomAgents(s.customAgents)
     }
   })
   // Desktop → paired-phone APNs push (spec: apns-push). Feeds off the SAME actionable-event seam
@@ -2328,7 +2331,10 @@ app.whenReady().then(async () => {
                 .filter((a) => a.host === hostKey && !a.pending)
                 .map((a) => ({ id: a.id, dir: remoteAccountConfigDirAbs(home, a.id) }))
             }
-          : {}) // unresolved home ⇒ no accounts advertised (fail-open), autoSupported still ships
+          : {}), // unresolved home ⇒ no accounts advertised (fail-open), autoSupported still ships
+        // Settings-global, and the pane on the host runs the same launch command — so the same
+        // derived binaries apply. The slice is a file ON the host: raw commands/env never go there.
+        customAgents: mirrorCustomAgents(s.customAgents)
       }
     }
   })
