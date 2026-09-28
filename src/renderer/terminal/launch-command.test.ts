@@ -2,7 +2,7 @@ import { commitLaunchAttempt } from './launch-attempt'
 import type { PendingLaunch } from '@shared/types'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createLaunchWriter, deliverInitialLaunch, launchCommand, registerLaunchWriter, trustsFreshShell } from './launch-command'
-import { KILL_LINE, WINDOWS_KILL_LINE, VERIFY_TIMEOUT_MS, DELIVERY_ATTEMPTS } from './command-delivery'
+import { KILL_LINE, WINDOWS_KILL_LINE, VERIFY_TIMEOUT_MS, DELIVERY_ATTEMPTS } from '@shared/command-delivery'
 
 function fixture(attempted = false, killLine = KILL_LINE) {
   const cleanups: Array<() => void> = []

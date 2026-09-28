@@ -1070,7 +1070,7 @@ describe('performRestartResume — the delivery await is bounded', () => {
   })
   afterEach(() => {
     vi.useRealTimers()
-    vi.doUnmock('./command-delivery')
+    vi.doUnmock('@shared/command-delivery')
     vi.resetModules()
   })
 
@@ -1080,7 +1080,7 @@ describe('performRestartResume — the delivery await is bounded', () => {
     // locked out by guardConcurrentRestart for the app's life and the bulk loop hung with no
     // summary. The transport is fixed in command-delivery.ts; this is the belt to that braces —
     // NOTHING may wait forever, whatever the delivery does.
-    vi.doMock('./command-delivery', () => ({
+    vi.doMock('@shared/command-delivery', () => ({
       VERIFY_TIMEOUT_MS: 2000,
       DELIVERY_ATTEMPTS: 3,
       KILL_LINE: '\x15',

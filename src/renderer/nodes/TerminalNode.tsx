@@ -134,7 +134,7 @@ import {
   cleanEcho,
   deliverCommand,
   type DeliveryIo
-} from '../terminal/command-delivery'
+} from '@shared/command-delivery'
 import { terminalKillLine } from '../terminal/terminal-kill-line'
 import {
   RESUME_MISS_WINDOW_MS,

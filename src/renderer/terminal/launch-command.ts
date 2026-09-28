@@ -1,6 +1,6 @@
 import type { LaunchClaim } from './launch-attempt'
 import type { PendingLaunch } from '@shared/types'
-import { deliverCommand, type DeliveryIo, type DeliveryOutcome } from './command-delivery'
+import { deliverCommand, type DeliveryIo, type DeliveryOutcome } from '@shared/command-delivery'
 
 // A writer belongs to the PTY lifetime (including a parked view), not a Canvas render.
 // A durable write-ahead claim distinguishes a never-attempted warm launch from an uncertain

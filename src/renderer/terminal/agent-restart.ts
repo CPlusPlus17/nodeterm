@@ -18,7 +18,7 @@ import {
   VERIFY_TIMEOUT_MS,
   deliverCommand,
   type DeliveryIo
-} from './command-delivery'
+} from '@shared/command-delivery'
 
 /** In-band exit command per agent CLI. Only agents listed here can be restarted in place —
  *  an unknown CLI has no safe way to be asked to quit. One entry turns on both surfaces at once:
