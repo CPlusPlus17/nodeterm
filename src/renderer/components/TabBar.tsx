@@ -20,6 +20,7 @@ import {
   type AgentPermissionMode
 } from '@shared/agents/config'
 import { bypassSandboxCaveat, permissionModeAgentsLabel } from '@shared/agents/approval-mode'
+import { codexApprovalCaps } from '@renderer/state/codexCli'
 
 interface TabBarProps {
   onSwitch: (id: string) => void
@@ -162,8 +163,13 @@ export function TabBar({
 
   const openMenu = (id: string, anchor: HTMLElement) => {
     const r = anchor.getBoundingClientRect()
+    // Under Liquid Glass the bar is a visible glass slab and the caret sits inside it, so the menu
+    // hangs from the BAR's bottom edge rather than 3px inside it (visual QA N11). Still a plain
+    // position, so useMenuFlip keeps flipping/clamping a tall menu.
+    const glass = document.documentElement.dataset.ntGlass === 'on'
+    const bottom = glass ? Math.max(r.bottom, anchor.closest('.tabbar')?.getBoundingClientRect().bottom ?? 0) : r.bottom
     setMenuId(id)
-    setMenuPos({ top: r.bottom + 4, left: r.left, flipBase: r.top - 4 })
+    setMenuPos({ top: bottom + 4, left: r.left, flipBase: r.top - 4 })
   }
 
   // Viewport-edge flip for the caret menu, same behavior as the right-click ContextMenu. The
@@ -580,7 +586,7 @@ export function TabBar({
                           // for codex the mode skips APPROVALS only: `--ask-for-approval never` does
                           // not touch `--sandbox`, which we deliberately leave alone, so "no
                           // permission checks" must not be read as "no sandbox either".
-                          `Skips every permission prompt. This override is saved in the project file (.nodeterm/project.json), so if you commit it, everyone who clones the repo runs their ${permissionModeAgentsLabel({ mode: 'bypassPermissions' })} sessions without permission checks too. ${bypassSandboxCaveat()}`.trim()
+                          `Skips every permission prompt. This override is saved in the project file (.nodeterm/project.json), so if you commit it, everyone who clones the repo runs their ${permissionModeAgentsLabel({ mode: 'bypassPermissions', caps: codexApprovalCaps() })} sessions without permission checks too. ${bypassSandboxCaveat(codexApprovalCaps())}`.trim()
                         : m === 'auto'
                           ? (menuAutoHint ?? undefined)
                           : undefined

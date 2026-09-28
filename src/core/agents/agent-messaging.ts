@@ -50,7 +50,10 @@ import {
   projectCapabilityGrantedFor,
   type CapabilityAckMap
 } from '../project-capability-consent'
-import type { ProjectCapability } from '../../shared/project-capabilities'
+import type {
+  CapabilityMachineDefaults,
+  ProjectCapability
+} from '../../shared/project-capabilities'
 
 /** The little the service needs to know about a stored node. */
 export interface MessagingStoredNode {
@@ -65,8 +68,16 @@ export interface MessagingStoredNode {
  */
 export interface AgentMessagingDeps {
   paneOwner(nodeId: string): Promise<PaneOwner | null>
-  sendEnvelope(nodeId: string, envelope: string): Promise<boolean>
-  hasLiveSession(nodeId: string): boolean
+  sendEnvelope(nodeId: string, envelope: string, expected?: PaneOwner): Promise<boolean>
+  envelopePasteReady?(nodeId: string): Promise<boolean>
+  /**
+   * Does a session exist for this node at all — attached in this process OR held by a backend
+   * after its client was released (`PtyManager.sessionExists`)? The delivery's `targetLive` fact.
+   * A probe that could not answer must answer true: only confirmed absence is `targetGone`, which
+   * is terminal and never queued. Asking only for an ATTACHED client told orchestrators that a
+   * parked or offscreen-released agent was gone while its session kept running.
+   */
+  hasLiveSession(nodeId: string): boolean | Promise<boolean>
   mirrorEntry?(nodeId: string): MirrorEntry | undefined
   /** The main-process projects store (`workspaceStore.persistedCanvases()` on the desktop). */
   projects(): readonly { id: string; nodes: readonly MessagingStoredNode[] }[]
@@ -137,9 +148,15 @@ export function messagingEnabledVia(
     projectId: string
   ) =>
     | (Partial<Record<ProjectCapability, unknown>> & { capabilityAck?: CapabilityAckMap })
-    | undefined
+    | undefined,
+  /** This machine's settings, read per call like the project — so a change to the machine default
+   *  (settings.json, `agentMessagingDefault`) takes effect on the next delivery, exactly as an
+   *  off-toggle does. Required: a shell that forgot it would read every unconfigured project as off
+   *  while the Settings page reads it as on. */
+  getDefaults: () => CapabilityMachineDefaults
 ): (projectId: string) => boolean {
-  return (projectId) => projectCapabilityGrantedFor(getProject(projectId), 'agentMessaging')
+  return (projectId) =>
+    projectCapabilityGrantedFor(getProject(projectId), 'agentMessaging', getDefaults())
 }
 
 // ── The receipt bus ───────────────────────────────────────────────────────────────────────────
@@ -306,10 +323,24 @@ const NOT_PERMITTED_TEXT: Record<NotPermittedReason, string> = {
     'that node id exists in more than one project, so the target pane cannot be attributed to a ' +
     'single project\'s messaging grant. De-duplicate the id (re-add the cloned folder to mint ' +
     'fresh ids) before messaging it.',
+  // The remedy sentence here USED TO SAY "Re-open the target node so its owner is recorded, then
+  // try again", and that was false in the commonest case it fires in. Ownership is recorded only
+  // on a GENUINE FRESH SPAWN (`shouldRecordOwnership`, `fresh === true`); after an app restart the
+  // tmux server has survived, so re-opening the node ATTACHES to the session that is already
+  // running and records NOTHING. A caller that followed the advice got the identical refusal, and
+  // the one thing that does fix it — respawning the session — was the one thing the text did not
+  // say. It also told a LANGUAGE MODEL to do something only a human can do.
+  //
+  // `pane-ownership.ts` explains why attaching deliberately does not record (there is no
+  // cross-restart signal a hostile pane's own shell could not also write), so this is a permanent
+  // property to describe honestly, not a gap to promise around. No retry advice is spelled out
+  // here: `renderMessageOutcome` appends it from `RETRYABLE`, where `notPermitted` is false.
   'unproven-target-owner':
     'the target pane\'s owning project cannot be proven at runtime (it was not freshly spawned in ' +
     'this session, or its ownership is disputed), so a per-project messaging grant cannot be ' +
-    'applied to it. Re-open the target node so its owner is recorded, then try again.'
+    'applied to it. Attaching to the running session cannot prove this — only a fresh spawn ' +
+    'records the owner — so the USER has to end that session and start it again (an app restart ' +
+    'leaves it unproven; a machine restart clears it). Ask them, or reach that agent another way.'
 }
 
 /**
@@ -531,8 +562,8 @@ export async function runDelivery(
     // TODO(pr7): a supported agent CLI idling WITHOUT bracketed paste on is asserted by no test —
     // if one exists, its deliveries splice line-by-line and only the receipt/trace make it
     // visible. Measure per CLI before relying on this any further.
-    bracketPasteRequested: async () => true,
-    sendEnvelope: (id, envelope) => deps.sendEnvelope(id, envelope),
+    bracketPasteRequested: (id) => deps.envelopePasteReady?.(id) ?? Promise.resolve(true),
+    sendEnvelope: (id, envelope, expected) => deps.sendEnvelope(id, envelope, expected),
     mirrorEntry: (id) => (deps.mirrorEntry ?? coreMirrorEntry)(id),
     tokenFilePresent: (id) => nodeTokenFilePresent(id),
     lock: (id, fn) => withNodeLock(id, fn),
@@ -563,7 +594,7 @@ export async function runDelivery(
         targetIsRemote: deps.isRemoteNode(req.targetNodeId),
         notPermitted,
         retryAfterMs,
-        targetLive: deps.hasLiveSession(req.targetNodeId)
+        targetLive: await deps.hasLiveSession(req.targetNodeId)
       },
       delivery
     )

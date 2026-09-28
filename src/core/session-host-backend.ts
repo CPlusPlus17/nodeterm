@@ -1,3 +1,4 @@
+import type { TextDeliveryResult } from '../shared/text-delivery'
 // The thin facade `pty-manager.ts` talks to — owns the ONE process-wide `SessionHostClient` (one
 // long-lived connection per app process, matching how `PtyManager` itself keeps one `tmuxPath`
 // for the whole process) and exposes exactly the operations pty-manager's existing tmux/ssh call
@@ -12,6 +13,21 @@ import {
 import { SessionHostPty } from './session-host-pty'
 import type { ExecuteLaunchResult, SessionHostSpawnOptions } from '../session-host/protocol'
 import type { PreparedAgentLaunch } from './agent-launch'
+import type { PaneOwner } from '../shared/agents/pane-owner-predicate'
+
+export async function sessionHostMessageOwner(name: string): Promise<PaneOwner | null> {
+  return getClient().messageOwner(name)
+}
+
+export async function sessionHostMessagePasteReady(name: string): Promise<boolean> {
+  return getClient().messagePasteReady(name)
+}
+
+export async function sessionHostMessageEnvelope(
+  name: string, envelope: string, expected: PaneOwner
+): Promise<boolean> {
+  return getClient().messageEnvelope(name, envelope, expected)
+}
 
 let client: SessionHostClient | null = null
 
@@ -20,6 +36,10 @@ function getClient(): SessionHostClient {
     client = new SessionHostClient({
       userDataDir: platform().userDataDir,
       resourcesPath: platform().resourcesPath,
+      // The one that actually answers in a packaged build: `app.getAppPath()` is the asar, where
+      // `build.files` already carries `out/session-host/host.cjs`. In dev it is the repo root, so
+      // the same candidate covers both.
+      appPath: platform().appPath,
       // Dev-mode fallback, mirroring `findTmux`'s own `process.cwd()` use: under `electron-vite
       // dev` the cwd is the repo root, which is where `npm run host:build` writes its bundle.
       repoRoot: process.cwd()
@@ -30,7 +50,7 @@ function getClient(): SessionHostClient {
 
 /**
  * Is the session-host bundle actually present on this machine? False only in a dev checkout that
- * never ran `npm run host:build` (or `npm run build`, which now runs it too) — unlike tmux, this
+ * never ran `npm run host:build` (or `npm run build`, which runs it too) — unlike tmux, this
  * backend has no external binary to be "missing"; the only way it can be unavailable is an
  * incomplete build. `pty-manager.ts` combines this with "no local tmux was found" and the
  * `tmuxEnabled` setting to decide whether to actually select this backend for a given session.
@@ -64,7 +84,7 @@ export function attachExistingSessionHostPty(name: string): SessionHostPty {
 
 /** Background write — works whether or not this process currently has a live client for `name`,
  *  exactly like `sendText`'s tmux `send-keys -t <name>` needs no attached client. */
-export async function sessionHostSendKeys(name: string, text: string, enter: boolean): Promise<boolean> {
+export async function sessionHostSendKeys(name: string, text: string, enter: boolean): Promise<TextDeliveryResult> {
   return getClient().sendKeys(name, text, enter)
 }
 

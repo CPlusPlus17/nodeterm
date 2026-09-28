@@ -141,7 +141,11 @@ export function buildAntigravityBundle(
       command: commandFor(eventName(e)),
       timeout: ANTIGRAVITY_HOOK_TIMEOUT
     }
-    bundle[eventName(e)] = typeof e === 'string' ? [handler] : [{ matcher: e.matcher, hooks: [handler] }]
+    // A matcher-less object form (main's ManagedHookEvent made `matcher` optional) is written as a
+    // plain handler list, exactly like the string form: an explicit `matcher: undefined` has no
+    // meaning to agy and would not round-trip through JSON anyway.
+    bundle[eventName(e)] =
+      typeof e === 'string' || e.matcher === undefined ? [handler] : [{ matcher: e.matcher, hooks: [handler] }]
   }
   return bundle
 }

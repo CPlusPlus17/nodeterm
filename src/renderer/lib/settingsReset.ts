@@ -35,10 +35,15 @@ export const TERMINAL_RESET_KEYS = [
 export const APPEARANCE_RESET_KEYS = [
   'appTheme',
   'uiScale',
+  'tabBarHeight',
   'accent',
+  'desktopWallpaper',
   'hiddenNodeMenuItems',
   'hiddenHeaderButtons',
   'showResumeCard',
+  'canvasDots',
+  'glassTint',
+  'glassBlurWhileMoving',
   'windowTitleActiveSession'
 ] as const satisfies readonly (keyof Settings)[]
 
