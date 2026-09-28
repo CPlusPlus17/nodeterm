@@ -226,7 +226,6 @@ import {
 } from '../core/transcript-reader'
 import {
   locateRemoteTranscriptCommand,
-  parseLocatedTranscript,
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
 import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
@@ -234,9 +233,12 @@ import { createHostChat, mirrorChatSendRefusal } from './remote/host-chat'
 import type { ChatSendOutcome, HostChatReply, RendererChatStatus } from '../shared/mobile-chat'
 import {
   createReadRemotePage,
+  locateRemoteTranscriptRef,
+  remotePresenceFromLocate,
   remoteTargetForNode,
   forgetLocatedRef,
   rememberHookRef,
+  type RemoteRefLookup,
   type RemoteTranscriptRefCache
 } from './remote-transcript-page'
 import { createRemoteContextTail } from './remote-context-tail'
@@ -2523,6 +2525,39 @@ app.whenReady().then(async () => {
   // the returned shape is byte-identical to the local reader.
   const REMOTE_TRANSCRIPT_CAP = 5 * 1024 * 1024
 
+  // Is this node remote by the shell's OWN records: a live remote pty, or an SSH-project node (an
+  // idle tab, or any node after a restart, has no pty). Never a renderer-supplied flag.
+  const isRemoteTranscriptNode = (nodeId: string): boolean =>
+    !!ptyManager.sshRemoteForNode(nodeId) || workspaceStore.sshProjectIdForNode(nodeId) !== undefined
+  // The tri-state host locate (ref / clean miss / could not ask) — see `locateRemoteTranscriptRef`.
+  const locateRemoteRef = (
+    q: { sessionId: string | undefined; cwd: string | undefined; accountId: string | undefined; nodeId: string | undefined },
+    target: (nodeId: string) => { conn: import('../shared/ssh').SshConnection; controlPath: string } | undefined
+  ): Promise<RemoteRefLookup> =>
+    locateRemoteTranscriptRef(q, {
+      cache: remoteTranscriptRefs,
+      isRemote: isRemoteTranscriptNode,
+      target,
+      remoteHome: (controlPath) => sshProjectManager?.remoteHomeForControlPath(controlPath) ?? undefined,
+      command: (remoteHome, { sessionId, cwd, accountId }) => {
+        let accountDir: string | undefined
+        if (accountId) {
+          // A hand-edited project.json can carry any string; the helper validates and throws.
+          try {
+            accountDir = remoteAccountConfigDirAbs(remoteHome, accountId)
+          } catch {
+            accountDir = undefined
+          }
+        }
+        return locateRemoteTranscriptCommand(remoteTranscriptRoots(remoteHome, accountDir), cwd, sessionId)
+      },
+      run: (rt, cmd) =>
+        sshProjectManager
+          ? sshProjectManager.sshRun(childArgs(rt.conn, rt.controlPath, cmd))
+          : Promise.resolve({ code: 1, stdout: '' }),
+      isSafePath: (p, remoteHome) => isSafeRemoteTranscriptPath(p, remoteHome)
+    })
+
   /**
    * The remote ref for a session, resolving it on the HOST when no hook event has registered one.
    *
@@ -2531,8 +2566,8 @@ app.whenReady().then(async () => {
    * would search this machine's disk for a session that exists only on the host (finding nothing,
    * or another local session that happens to share the cwd). Asking the host directly is what the
    * node id buys us; a hit is cached under the sessionId so the title poll and the next read get
-   * it for free. Fail-open at every step: no node id / not an SSH session / no resolved home /
-   * a failed ssh call all mean "not remote", which is the pre-existing local path.
+   * it for free. Every "no ref" (a clean miss or a failure) collapses to `undefined` here, which is
+   * what these fall-back callers want; a caller that must tell them apart uses `locateRemoteRef`.
    *
    * `remote` overrides the live-pty lookup for callers that already know which host the node runs
    * on. `PtyManager.kill()` forgets a session on detach, so a backgrounded project's nodes are
@@ -2546,106 +2581,24 @@ app.whenReady().then(async () => {
     nodeId: string | undefined,
     remote?: { conn: import('../shared/ssh').SshConnection; controlPath: string }
   ): Promise<RemoteFileRef | undefined> => {
-    if (!sessionId) return undefined
-    const cached = remoteTranscriptBySession.get(sessionId)
-    if (cached) return cached
-    if (!nodeId) return undefined
-    const rt = remote ?? ptyManager.sshRemoteForNode(nodeId)
-    if (!rt || !sshProjectManager) return undefined
-    const remoteHome = sshProjectManager.remoteHomeForControlPath(rt.controlPath)
-    if (!remoteHome) return undefined
-    let accountDir: string | undefined
-    if (accountId) {
-      // A hand-edited project.json can carry any string; the helper validates and throws.
-      try {
-        accountDir = remoteAccountConfigDirAbs(remoteHome, accountId)
-      } catch {
-        accountDir = undefined
-      }
-    }
-    const cmd = locateRemoteTranscriptCommand(
-      remoteTranscriptRoots(remoteHome, accountDir),
-      cwd,
-      sessionId
+    const r = await locateRemoteRef(
+      { sessionId, cwd, accountId, nodeId },
+      (id) => remote ?? ptyManager.sshRemoteForNode(id)
     )
-    if (!cmd) return undefined
-    let located: string | undefined
-    try {
-      const { code, stdout } = await sshProjectManager.sshRun(
-        childArgs(rt.conn, rt.controlPath, cmd)
-      )
-      located = code === 0 ? parseLocatedTranscript(stdout) : undefined
-    } catch {
-      return undefined
-    }
-    // Jailed exactly like a hook-supplied path: the command only ever emits paths under our own
-    // roots, but the answer still crosses a machine boundary before we read it.
-    if (!located || !isSafeRemoteTranscriptPath(located, remoteHome)) return undefined
-    const ref: RemoteFileRef = { conn: rt.conn, controlPath: rt.controlPath, path: located }
-    remoteTranscriptBySession.set(sessionId, ref)
-    locatedTranscriptSessions.add(sessionId)
-    return ref
+    return typeof r === 'object' ? r : undefined
   }
 
-  /**
-   * Does a remote node's transcript still exist ON THE HOST — `present` / `absent` / `unknown` —
-   * or `null` when this is not a remote session at all (take the local path).
-   *
-   * `remoteTranscriptRefFor` above cannot answer this: it collapses "not a remote session", "no
-   * resolved home", "the ssh call failed" and "the host looked and there is nothing" into one
-   * `undefined`, which is correct for a READER (they all fall back) and wrong for the caller that
-   * acts on absence. `locateRemoteTranscriptCommand` was already written for exactly this
-   * distinction — it exits 0 on a clean miss, "so no transcript is an ANSWER, not a failed ssh"
-   * — and that is the property this reads.
-   *
-   * Every step that cannot decide answers `unknown`, never `absent`. The one caller drops a
-   * `--resume <id>` on `absent`, and a momentarily dead ControlMaster must not be able to look
-   * like a deleted conversation.
-   */
-  const remoteTranscriptPresence = async (
+  // Presence over the SAME tri-state locate (see `remotePresenceFromLocate`): a node with no live
+  // pty resolves through its SSH project's master instead of reading as "not remote". sessionId
+  // only (no cwd): presence is about THIS id, never the cwd's newest transcript.
+  const remoteTranscriptPresence = (
     sessionId: string,
     accountId: string | undefined,
     nodeId: string | undefined
-  ): Promise<TranscriptPresence | null> => {
-    if (!nodeId) return null
-    const rt = ptyManager.sshRemoteForNode(nodeId)
-    // Not a remote session — the caller takes the LOCAL path, which is the right disk to read.
-    if (!rt) return null
-    // From here on the session IS remote, so every failure is `unknown`: falling back to the
-    // local resolver would search this machine for a file that only lives on the host.
-    if (remoteTranscriptBySession.has(sessionId)) return 'present'
-    if (!sshProjectManager) return 'unknown'
-    const remoteHome = sshProjectManager.remoteHomeForControlPath(rt.controlPath)
-    if (!remoteHome) return 'unknown'
-    let accountDir: string | undefined
-    if (accountId) {
-      // A hand-edited project.json can carry any string; the helper validates and throws.
-      try {
-        accountDir = remoteAccountConfigDirAbs(remoteHome, accountId)
-      } catch {
-        accountDir = undefined
-      }
-    }
-    const cmd = locateRemoteTranscriptCommand(
-      remoteTranscriptRoots(remoteHome, accountDir),
-      undefined,
-      sessionId
+  ): Promise<TranscriptPresence | null> =>
+    remotePresenceFromLocate(sessionId, () =>
+      locateRemoteRef({ sessionId, cwd: undefined, accountId, nodeId }, sshTargetForNode)
     )
-    if (!cmd) return 'unknown'
-    try {
-      const { code, stdout } = await sshProjectManager.sshRun(
-        childArgs(rt.conn, rt.controlPath, cmd)
-      )
-      if (code !== 0) return 'unknown'
-      const located = parseLocatedTranscript(stdout)
-      // Jailed exactly like a hook-supplied path: a located path we would refuse to READ must not
-      // be reported as a transcript that exists either.
-      if (located && isSafeRemoteTranscriptPath(located, remoteHome)) return 'present'
-      return located ? 'unknown' : 'absent'
-    } catch {
-      return 'unknown'
-    }
-  }
 
   /**
    * Read a remote transcript through a ref, forgetting refs WE located once they stop reading.
@@ -2685,7 +2638,7 @@ app.whenReady().then(async () => {
   const transcriptIpcDeps: TranscriptIpcDeps = {
     pathFor: (sessionId) => contextTail.pathFor(sessionId),
     readRemote: async ({ sessionId, cwd, accountId, nodeId }) => {
-      const ref = await remoteTranscriptRefFor(sessionId, cwd, accountId, nodeId)
+      const ref = await remoteTranscriptRefFor(sessionId, cwd, accountId, nodeId, nodeId ? sshTargetForNode(nodeId) : undefined)
       return ref ? await readRemoteTranscript(sessionId!, ref) : null
     },
     // The paged ⌘M read: a RANGED read on the host (window + file size in one ssh round trip)
@@ -2694,12 +2647,16 @@ app.whenReady().then(async () => {
     // `readRemoteTranscript`; the path it reads is already jailed by `isSafeRemoteTranscriptPath`.
     readRemotePage: createReadRemotePage({
       cache: remoteTranscriptRefs,
-      refFor: ({ sessionId, cwd, accountId, nodeId }) =>
-        remoteTranscriptRefFor(sessionId, cwd, accountId, nodeId, nodeId ? sshTargetForNode(nodeId) : undefined),
+      // Tri-state: a clean miss on the host ('absent') and a failure to ask ('unreadable') end
+      // differently — "no transcript" vs "couldn't read" — on the ⌘M panel and the phone alike.
+      refFor: (q) => locateRemoteRef(q, sshTargetForNode),
       readPage: (ref, before, maxBytes) => remoteFile.readTranscriptPage(ref, before, maxBytes)
     }),
     remoteExists: async ({ sessionId, accountId, nodeId }) =>
-      sessionId ? await remoteTranscriptPresence(sessionId, accountId, nodeId) : null
+      sessionId ? await remoteTranscriptPresence(sessionId, accountId, nodeId) : null,
+    // Remoteness from THIS shell's records (live pty or SSH project), so every read channel refuses
+    // to answer a remote node from this machine's disk — ⌘M, the find-bar index, presence.
+    isRemoteNode: isRemoteTranscriptNode
   }
   registerTranscriptIpc(transcriptIpcDeps)
 

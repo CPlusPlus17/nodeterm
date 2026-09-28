@@ -82,27 +82,42 @@ interface ChatPanelProps {
  * initial `[]` because nothing caught the rejection, and a failed resolution was indistinguishable
  * from a session nobody has spoken to. They need different words — and two of them are retryable.
  */
-type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'error'
+type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'error'
+
+/**
+ * An `unreadable` read of a GROK node can only be the remote case: core's grok leg is local-only
+ * and answers a remote grok node (`remoteOnly`) with `unreadable` before touching anything, while
+ * its local reader never sets the flag. So the agent alone names it — no renderer-side remoteness
+ * guess, and no new field on the wire (the phone contract keeps `unreadable`). `=== 'grok'`
+ * exactly, mirroring core's routing (`readChatTranscript` routes only the builtin id to grok's
+ * reader). Retry cannot heal it, so it must not read as a transient failure.
+ */
+const remoteGrokUnreadable = (agentId: string | undefined): boolean => agentId === 'grok'
 
 const isUnsupported = (e: unknown): boolean =>
   !!e && typeof e === 'object' && (e as { code?: string }).code === E_UNSUPPORTED
 
 /** One line each, in the user's terms: what is on screen and whether waiting will fix it.
- *  `missing` names the two causes that actually produce it — a transcript Claude has cleaned up
- *  (30 days by default), and a remote session whose host hasn't been reached yet — because the
- *  second one heals by itself the moment the session speaks, and the first one never will. */
+ *  `missing` is a CLEAN miss — the (local or remote) host looked and there is no file: a transcript
+ *  Claude has cleaned up (30 days by default), or a session that has not written one yet (the
+ *  second heals the moment it speaks). A host that could not be ASKED is `error`, which Retry can
+ *  fix; `remoteUnsupported` is a remote node whose agent has no remote reader, which it never can. */
 const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
   loading: { title: 'Loading conversation…' },
   ok: { title: 'No conversation yet.' },
   missing: {
     title: 'No transcript found for this session.',
-    detail: "It may have been cleaned up, or the agent's host isn't reachable yet."
+    detail: "It may have been cleaned up, or the session hasn't written one yet."
   },
   unsupported: {
     title: "Transcripts can't be read on this surface.",
     detail: 'Open this session on the desktop app to read its conversation.'
   },
-  error: { title: "Couldn't read the transcript." }
+  remoteUnsupported: { title: "Reading a remote Grok session's transcript isn't supported yet." },
+  error: {
+    title: "Couldn't read the transcript.",
+    detail: "The agent's host may not be reachable — Retry once it is."
+  }
 }
 
 /**
@@ -262,7 +277,9 @@ export function ChatPanel({
             return
           }
           setThread(emptyThread(identity))
-          setLoadState('missing')
+          // A read that FAILED (the host did not answer, a remote node with no reachable master)
+          // is not "no transcript": it gets the error copy, and ↻ is the way out.
+          setLoadState(!res.unreadable ? 'missing' : remoteGrokUnreadable(agentId) ? 'remoteUnsupported' : 'error')
           return
         }
         setThread((t) => applyTail(t, identity, res, { carryUnconfirmed: live }))
@@ -350,7 +367,7 @@ export function ChatPanel({
   attemptLiveRef.current = () => {
     if (!livePendingRef.current) return
     // This surface cannot read transcripts at all (relay tab): every live read would be refused.
-    if (loadStateRef.current === 'unsupported') {
+    if (loadStateRef.current === 'unsupported' || loadStateRef.current === 'remoteUnsupported') {
       livePendingRef.current = false
       return
     }
@@ -612,7 +629,7 @@ export function ChatPanel({
             {EMPTY_TEXT[loadState].detail && (
               <div className="term-chat__empty-detail">{EMPTY_TEXT[loadState].detail}</div>
             )}
-            {loadState !== 'unsupported' && loadState !== 'ok' && (
+            {loadState !== 'unsupported' && loadState !== 'remoteUnsupported' && loadState !== 'ok' && (
               <button className="term-chat__retry" onClick={() => load()}>
                 Retry
               </button>
