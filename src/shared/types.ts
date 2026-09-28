@@ -632,11 +632,15 @@ export interface KanbanColumn {
 }
 
 /** Assignment of one session node to a board column. A session with no assignment sits
- *  in the virtual Ungrouped column (never persisted). Order within a column = relative
- *  order in ProjectKanban.assignments. */
+ *  in the virtual Ungrouped column (never persisted). Order within a column = `rank` (a
+ *  fractional-index string, @shared/kanban-rank), and for an entry without a valid one, its
+ *  position in ProjectKanban.assignments (@shared/kanban-order `columnOrder`). Every write keeps
+ *  the ARRAY in rank order too, so a build that ignores `rank` shows the same column. */
 export interface KanbanAssignment {
   nodeId: string
   columnId: string
+  /** Optional position key within the column. Absent / invalid ⇒ derived from array order. */
+  rank?: string
 }
 
 /** Per-project kanban board (docs/superpowers/specs/2026-07-18-kanban-view-design.md).

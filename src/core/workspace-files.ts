@@ -8,6 +8,7 @@ import {
   stripSharedNodeExec,
   type LocalNodeExecMap
 } from '../shared/node-exec'
+import { isValidRank } from '../shared/kanban-rank'
 import { CLOSED_SESSIONS_CAP } from '../shared/types'
 import type { BridgeLink, CanvasNodeState, ClosedSessionEntry, NavStop, Project, ProjectKanban, Viewport, Workspace } from '../shared/types'
 import { projectCapabilityFields, readProjectCapabilities } from '../shared/project-capabilities'
@@ -415,7 +416,9 @@ const isRecord = (x: unknown): x is Record<string, unknown> =>
  *  - a column's `category` that is not a STRING is dropped. An unknown string is KEPT: it may be a
  *    category a newer build added, and dropping it here would erase that build's data from the
  *    shared file on our next save. Readers treat it as absent (`columnCategory`);
- *  - an assignment that is not an object with string `nodeId` and `columnId` is dropped.
+ *  - an assignment that is not an object with string `nodeId` and `columnId` is dropped, and a
+ *    `rank` that `isValidRank` refuses is dropped from it (the card then derives its position from
+ *    array order — see @shared/kanban-order).
  * Every other field — known or not — round-trips untouched.
  *
  * Returns the SAME object when nothing needed repair, so a clean file is never rewritten, and
@@ -439,11 +442,22 @@ export function sanitizeKanban(k: unknown): ProjectKanban | undefined {
     }
     columns.push(c as unknown as ProjectKanban['columns'][number])
   }
-  const assignments = (k.assignments as unknown[]).filter(
-    (a): a is ProjectKanban['assignments'][number] =>
-      isRecord(a) && typeof a.nodeId === 'string' && typeof a.columnId === 'string'
-  )
-  if (assignments.length !== k.assignments.length) changed = true
+  const assignments: ProjectKanban['assignments'] = []
+  for (const a of k.assignments as unknown[]) {
+    if (!isRecord(a) || typeof a.nodeId !== 'string' || typeof a.columnId !== 'string') {
+      changed = true
+      continue
+    }
+    // A rank we could not have minted is not a position: drop it and the card derives its place
+    // from array order, which every write keeps in rank order anyway (@shared/kanban-order).
+    if ('rank' in a && !isValidRank(a.rank)) {
+      const { rank: _drop, ...rest } = a
+      assignments.push(rest as unknown as ProjectKanban['assignments'][number])
+      changed = true
+      continue
+    }
+    assignments.push(a as unknown as ProjectKanban['assignments'][number])
+  }
   return changed ? { ...k, columns, assignments } : k
 }
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ensureProjectBoard, setProjectCardColumn } from './project-kanban-write'
 import { DEFAULT_BOARD_COLUMNS } from '../shared/kanban-default-board'
+import { isValidRank } from '../shared/kanban-rank'
 
 const NOW = new Date('2026-09-10T12:00:00.000Z')
 
@@ -99,7 +100,8 @@ describe('setProjectCardColumn', () => {
 
   it('assigns an unassigned card and bumps rev', () => {
     const out = parse(setProjectCardColumn(board(), 'term-a-1', 'kcol-a', NOW))
-    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-a-1', columnId: 'kcol-a' }])
+    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-a-1', columnId: 'kcol-a', rank: expect.any(String) }])
+    expect(isValidRank(out.kanban.assignments[0].rank)).toBe(true)
     expect(out.rev).toBe(8)
   })
 
@@ -107,7 +109,7 @@ describe('setProjectCardColumn', () => {
     const out = parse(
       setProjectCardColumn(board([{ nodeId: 'term-a-1', columnId: 'kcol-a' }]), 'term-a-1', 'kcol-b', NOW)
     )
-    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-a-1', columnId: 'kcol-b' }])
+    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-a-1', columnId: 'kcol-b', rank: expect.any(String) }])
   })
 
   it('columnId null drops the assignment (the virtual Ungrouped column)', () => {
@@ -123,7 +125,7 @@ describe('setProjectCardColumn', () => {
     )
     expect(out.kanban.assignments).toEqual([
       { nodeId: 'term-z-9', columnId: 'kcol-b' },
-      { nodeId: 'term-a-1', columnId: 'kcol-a' }
+      { nodeId: 'term-a-1', columnId: 'kcol-a', rank: expect.any(String) }
     ])
     expect(out.kanban.meta).toEqual([{ nodeId: 'term-a-1', priority: 'high' }])
   })
@@ -163,7 +165,7 @@ describe('setProjectCardColumn', () => {
 
   it('accepts a node id the canvas does not list yet (it may have just been registered)', () => {
     const out = parse(setProjectCardColumn(board(), 'term-new-1', 'kcol-a', NOW))
-    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-new-1', columnId: 'kcol-a' }])
+    expect(out.kanban.assignments).toEqual([{ nodeId: 'term-new-1', columnId: 'kcol-a', rank: expect.any(String) }])
   })
 
   it('refuses a project with no board at all — the caller seeds one first', () => {

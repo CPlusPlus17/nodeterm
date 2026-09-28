@@ -128,9 +128,9 @@ describe('setRemoteCardColumn (the phone moving a card)', () => {
     fake.sent.length = 0
 
     expect(await store.setRemoteCardColumn('p1', 'term-1', 'kcol-b')).toBe(true)
-    expect((await readFile()).kanban.assignments).toEqual([{ nodeId: 'term-1', columnId: 'kcol-b' }])
+    expect((await readFile()).kanban.assignments).toEqual([{ nodeId: 'term-1', columnId: 'kcol-b', rank: expect.any(String) }])
     expect(externalChanges()).toHaveLength(1)
-    expect(externalChanges()[0].kanban.assignments).toEqual([{ nodeId: 'term-1', columnId: 'kcol-b' }])
+    expect(externalChanges()[0].kanban.assignments).toEqual([{ nodeId: 'term-1', columnId: 'kcol-b', rank: expect.any(String) }])
   })
 
   it('null moves the card to Ungrouped', async () => {
@@ -174,7 +174,7 @@ describe('setRemoteCardColumn (the phone moving a card)', () => {
     expect(await moving).toBe(true)
     await saving
     const file = await readFile()
-    expect(file.kanban.assignments).toEqual([{ nodeId: 'term-1', columnId: 'kcol-a' }])
+    expect(file.kanban.assignments).toEqual([{ nodeId: 'term-1', columnId: 'kcol-a', rank: expect.any(String) }])
     expect(file.name).toBe('renamed')
   })
 })
@@ -212,10 +212,10 @@ describe('an SSH project (the case the phone can never write itself)', () => {
     })]))
 
     expect(await store.setRemoteCardColumn('ssh1', 'term-1', 'kcol-a')).toBe(true)
-    expect(JSON.parse(io.content!).kanban.assignments).toEqual([{ nodeId: 'term-1', columnId: 'kcol-a' }])
+    expect(JSON.parse(io.content!).kanban.assignments).toEqual([{ nodeId: 'term-1', columnId: 'kcol-a', rank: expect.any(String) }])
     const reloaded = await new WorkspaceStore(io).load()
     expect(reloaded.projects.find((p) => p.id === 'ssh1')?.kanban?.assignments)
-      .toEqual([{ nodeId: 'term-1', columnId: 'kcol-a' }])
+      .toEqual([{ nodeId: 'term-1', columnId: 'kcol-a', rank: expect.any(String) }])
   })
 
   // Every refusal reason stays a refusal on this path too — a cache write that cannot be described

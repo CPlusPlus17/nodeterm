@@ -621,6 +621,24 @@ describe('sanitizeKanban — the board is hostile, git-shared input', () => {
     expect(sanitizeKanban(k)?.assignments).toEqual([{ nodeId: 'n', columnId: 'kcol-a' }])
   })
 
+  it('keeps a valid rank and drops one that is not (the card then derives from array order)', () => {
+    const k = {
+      ...clean(),
+      assignments: [
+        { nodeId: 'ok', columnId: 'kcol-a', rank: 'a0' },
+        { nodeId: 'num', columnId: 'kcol-a', rank: 5 },
+        { nodeId: 'junk', columnId: 'kcol-a', rank: 'not a rank!' },
+        { nodeId: 'huge', columnId: 'kcol-a', rank: 'a'.repeat(1000) }
+      ]
+    }
+    expect(sanitizeKanban(k)?.assignments).toEqual([
+      { nodeId: 'ok', columnId: 'kcol-a', rank: 'a0' },
+      { nodeId: 'num', columnId: 'kcol-a' },
+      { nodeId: 'junk', columnId: 'kcol-a' },
+      { nodeId: 'huge', columnId: 'kcol-a' }
+    ])
+  })
+
   it('keeps fields it does not know (a newer build\'s board data round-trips)', () => {
     const k = { ...clean(), futureThing: [1, 2], columns: [{ ...clean().columns[0], wip: 3 }] }
     const out = sanitizeKanban(k) as unknown as Record<string, unknown>
