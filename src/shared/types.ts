@@ -393,9 +393,10 @@ export interface PendingLaunch {
   /**
    * Which core process owns delivery. Absent is the historical renderer-owned path. Server
    * Edition headless opens stamp `server`, so a connected browser can render the armed state and
-   * dependency edges without racing the server to type the command into the same pane.
+   * dependency edges without racing the server to type the command into the same pane. The
+   * desktop's headless start (#925) stamps `core` on its manualOnly write-ahead claim.
    */
-  executor?: 'server'
+  executor?: 'server' | 'core'
   /**
    * Server-owned dependencies whose first real turn has not been observed yet. A freshly spawned
    * agent can briefly report `done` while its argv prompt is still booting; that idle blip must not
