@@ -18,6 +18,7 @@ import {
   type NodeColor
 } from '../shared/node-colors'
 import { applyStickyWrite, parseStickyArgs, resolveStickyRef } from '../shared/sticky-write'
+import { localNodePtyOptions } from '../shared/node-pty-options'
 import type { WorkspaceStore } from '../core/workspace-store'
 import {
   AGENT_CONFIG,
@@ -481,16 +482,7 @@ function ungroupPersistedNodes(
 }
 
 function ptyOptions(project: Project, node: CanvasNodeState): PtyCreateOptions {
-  return {
-    cwd: node.cwd || project.cwd,
-    cols: TERMINAL_COLS,
-    rows: TERMINAL_ROWS,
-    persistKey: node.id,
-    ownerProjectId: project.id,
-    ...(node.agentId ? { agentId: node.agentId } : {}),
-    ...(node.agentModel ? { agentModel: node.agentModel } : {}),
-    ...(node.accountId ? { accountId: node.accountId } : {})
-  }
+  return localNodePtyOptions(project, node, { cols: TERMINAL_COLS, rows: TERMINAL_ROWS })
 }
 
 /**
