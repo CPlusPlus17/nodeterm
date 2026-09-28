@@ -3304,6 +3304,13 @@ export function TerminalNode({
         // the near-side guard above produces, retry included.
         if (unavailable) {
           const refusal = ptyRefusal(unavailable)
+          // A hosted-relay VIEWER opened a terminal nobody has running. Nothing failed and nothing
+          // is offline, so neither overlay applies — "Try again" would only respawn into the same
+          // refusal. Say why the pane is empty and stop; "Refresh terminal" re-asks on demand.
+          if (unavailable === 'join-only') {
+            if (!disposed) term.write(`\r\n\x1b[90m[${refusal.message}]\x1b[0m\r\n`)
+            return
+          }
           setCo(
             termKey,
             refusal.connectionLost

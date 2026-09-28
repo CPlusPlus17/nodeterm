@@ -2147,7 +2147,10 @@ export class PtyManager {
     // tell it otherwise. applySize() then either shrinks the pty to it (it is the new smallest) or
     // sends it the authoritative size to render + letterbox.
     const size = normalizeSize(options.cols, options.rows)
-    existing.sizes.set(sub, size)
+    // A non-voting view (`sizeVote: false`, a hosted-relay viewer) stays out of the min, exactly
+    // like a parked subscriber: it still gets output, and `shown` makes applySize tell it the
+    // authoritative size to render.
+    if (options.sizeVote !== false) existing.sizes.set(sub, size)
     existing.shown.set(sub, size)
     const before = existing.appliedSize
     this.applySize(existingId, existing)
@@ -2283,6 +2286,12 @@ export class PtyManager {
         : tmuxBacked
         ? !(await this.tmuxSessionExists(options.persistKey as string))
         : true
+    // A join-only create (hosted-relay viewer) must never start a session: only a reattach to one
+    // that already exists is allowed. `fresh` here is "nothing to reattach to" — and for a node
+    // that would land on the session-host backend it is a placeholder `true` (that backend's
+    // attach-or-create IS its probe, see above), so a join-only create is refused there too rather
+    // than sent a round trip that could create. Fails closed: a viewer never starts anything.
+    if (options.joinOnly && fresh) return { sessionId: '', fresh: false, unavailable: 'join-only' }
     // Ensure the login-shell PATH is resolved (prewarmed in init(); usually already settled)
     // so the session env below picks it up — awaiting keeps the event loop free either way.
     await resolveShellPath()
@@ -3452,8 +3461,12 @@ export class PtyManager {
         ? new NativeWindowsPane(proc, { ...options, scrollback: settings.tmuxScrollback })
         : undefined,
       subscribers: spawnSub === null ? new Set<SubKey>() : new Set<SubKey>([spawnSub]),
+      // A non-voting view (`sizeVote: false`) that got here — a hosted-relay viewer's warm tmux
+      // reattach — spawns the client at its own grid (the pty needs SOME size) but seeds no vote,
+      // the same rule `join` applies: otherwise the owner co-attaching later would stay pinned at
+      // min(owner, viewer), i.e. the viewer's small window would still shrink everyone's terminal.
       sizes:
-        spawnSub === null
+        spawnSub === null || options.sizeVote === false
           ? new Map<SubKey | null, PtySize>()
           : new Map<SubKey | null, PtySize>([[spawnSub, spawnSize]]),
       shown:

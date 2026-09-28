@@ -170,6 +170,17 @@ export interface PtyCreateOptions {
    * "not connected" overlay and re-spawns when the master is back.
    */
   requireRemote?: boolean
+  /**
+   * Hosted-relay VIEWERS may watch a terminal but never start one: refuse a create that would spawn
+   * a NEW session (`unavailable: 'join-only'`), while a co-attach join or a warm tmux reattach still
+   * proceeds. Set only by the relay access policy (src/core/relay/access-policy.ts).
+   */
+  joinOnly?: boolean
+  /**
+   * `false`: this view never constrains the shared pty's size (a viewer's small window must not
+   * shrink everyone's terminal). It is still a subscriber and is told the authoritative size.
+   */
+  sizeVote?: false
 }
 
 /** A tmux pane's cursor, as tmux reports it: 0-based column/row within the pane, plus whether the
@@ -348,8 +359,11 @@ export interface PtyCreateResult {
    * managed account whose home is missing refuses rather than spawning against the system login
    * (§5 property 4). Remote managed Codex accounts refuse unknown/unsafe ids or unresolved/unsafe homes.
    * System SSH Codex may attach before remote home discovery. Nothing spawned on refusal.
+   *
+   * `'join-only'`: `PtyCreateOptions.joinOnly` was set (a hosted-relay viewer) and there was no
+   * running session to join or reattach to, so nothing was started. Not a lost connection.
    */
-  unavailable?: 'ssh' | 'codex-account'
+  unavailable?: 'ssh' | 'codex-account' | 'join-only'
 }
 
 /** Payload of `pty:recycled` — see IPC.ptyRecycled and `recycleAction` in the renderer. */

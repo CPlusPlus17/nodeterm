@@ -9,4 +9,12 @@ describe('PTY refusal presentation', () => {
   it('retains reconnect behavior for an SSH refusal', () => {
     expect(ptyRefusal('ssh')).toEqual({ connectionLost: true, message: 'not connected — nothing was started locally' })
   })
+  // A hosted-relay viewer asked to watch a terminal nobody has open. Nothing is disconnected: read
+  // as `connectionLost`, the card modal would report an SSH drop and kick the reconnector for it.
+  it('a join-only refusal is not a lost connection, and says why nothing is shown', () => {
+    expect(ptyRefusal('join-only')).toEqual({
+      connectionLost: false,
+      message: 'this terminal is not running — a viewer can only watch terminals that are already open'
+    })
+  })
 })
