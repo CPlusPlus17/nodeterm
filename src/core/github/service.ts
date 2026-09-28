@@ -7,6 +7,7 @@ import type {
   GitHubIssueQuery,
   GitHubMutationResult,
   GitHubRepositoryLabel,
+  IssueHeartbeatResult,
   IssuePageResult,
   LabelPageResult,
   ListIssueOptions,
@@ -25,6 +26,9 @@ const MAX_ISSUES = 10_000
 const MAX_CACHE_BYTES = 64 * 1024 * 1024
 const FULL_REFRESH_AGE = 24 * 60 * 60_000
 const POLL_MS = 60_000
+/** Where the heartbeat's validator lives inside the snapshot's (long-existing, previously always
+ *  empty) `etags` map, so it is persisted with the issues it vouches for and survives a restart. */
+export const HEARTBEAT_ETAG_KEY = 'heartbeat'
 
 /** Floor between two caller-driven refreshes of one project, and the longer floor for a FULL
  *  reconciliation. `refresh` is reachable from the renderer AND — for a shared project — from a
@@ -38,6 +42,7 @@ export const FULL_REFRESH_MIN_INTERVAL_MS = 120_000
 
 export interface GitHubIssuesClientLike {
   listIssues(repository: string, options: ListIssueOptions): Promise<IssuePageResult>
+  issuesHeartbeat(repository: string, etag?: string): Promise<IssueHeartbeatResult>
   getIssue(repository: string, issueNumber: number): Promise<GitHubIssue>
   updateIssue(repository: string, issueNumber: number, input: UpdateIssueInput): Promise<GitHubIssue>
   listRepositoryLabels(
@@ -751,8 +756,21 @@ export class GitHubIssueService {
     // never re-fetches what was dropped — so the claim survives until a full reconciliation
     // re-reads the repository and can honestly clear it.
     let pullsTruncated = !full && !!previous?.pullsTruncated
+    // The heartbeat runs BEFORE the scan, and it is its validator — not one read afterwards — that
+    // gets stored: a change landing while the scan pages is then still "new" to the next heartbeat.
+    // A 304 skips the scan outright. It never skips a full reconciliation (deletions and transfers
+    // do not move the top item, so that pass is the only thing that can see them), and never an
+    // incomplete repository, which a 304 would otherwise freeze read only.
+    const storedEtag = previous?.etags[HEARTBEAT_ETAG_KEY]
+    const beat = await this.readWithEpoch(captured, () =>
+      captured.client.issuesHeartbeat(captured.repository, storedEtag))
+      .catch((error: unknown) =>
+        error instanceof ConfigurationChangedError ? null : Promise.reject(error))
+    if (!beat) return
+    if (beat.notModified && !full && previous && !state.incomplete) return
+    const heartbeatEtag = beat.etag
+    const etags: Record<string, string> = heartbeatEtag ? { [HEARTBEAT_ETAG_KEY]: heartbeatEtag } : {}
     let page = 1
-    const etags: Record<string, string> = {}
     while (true) {
       if (!this.repositoryWriteAllowed(captured.repository, operationId, repositoryGeneration) ||
           cacheGeneration !== state.cacheGeneration ||

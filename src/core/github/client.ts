@@ -5,6 +5,7 @@ import type {
   GitHubIssueUser,
   GitHubPullMeta,
   GitHubRepositoryLabel,
+  IssueHeartbeatResult,
   IssuePageResult,
   LabelPageResult,
   ListIssueOptions,
@@ -252,6 +253,32 @@ export class GitHubIssuesClient {
       ...(nextPage(response.headers.get('link')) ? { nextPage: nextPage(response.headers.get('link')) } : {}),
       ...(response.headers.get('etag') ? { etag: response.headers.get('etag')! } : {})
     }
+  }
+
+  /**
+   * One conditional request that answers "did anything in this repository change since `etag`?".
+   *
+   * It asks for the single most recently updated item with `If-None-Match`. GitHub answers an
+   * unchanged repository with 304, and a 304 does not count against the rate limit (measured
+   * 2026-09-28: twenty 304s moved `x-ratelimit-used` by zero, one 200 moved it by one). The
+   * incremental scan cannot do this on its own: its `since` moves every pass, so its URL — and
+   * therefore any ETag it could present — never repeats.
+   *
+   * `state=all` + `sort=updated` is the same endpoint and the same `updated_at` the `since` scan
+   * filters on, pull requests included, so any change the scan would pick up moves the top item
+   * and with it this ETag. The body is drained but not decoded: only the validator matters.
+   */
+  async issuesHeartbeat(repository: string, etag?: string): Promise<IssueHeartbeatResult> {
+    safeRepository(repository)
+    if (etag !== undefined && !string(etag, 512)) throw new GitHubClientError('invalid-request')
+    const response = await this.request(
+      `/repos/${repository}/issues?state=all&sort=updated&direction=desc&per_page=1`,
+      { method: 'GET', ...(etag ? { headers: { 'if-none-match': etag } } : {}) }
+    )
+    if (response.status === 304) return { notModified: true, ...(etag ? { etag } : {}) }
+    await this.json(response)
+    const fresh = response.headers.get('etag')
+    return { notModified: false, ...(fresh && string(fresh, 512) ? { etag: fresh } : {}) }
   }
 
   async getIssue(repository: string, issueNumber: number): Promise<GitHubIssue> {

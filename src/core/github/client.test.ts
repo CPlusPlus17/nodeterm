@@ -191,4 +191,47 @@ describe('GitHubIssuesClient', () => {
     expect(JSON.parse(String((request as unknown as { init: RequestInit }).init.body)))
       .toEqual({ state: 'closed', labels: ['bug', 'status:done'] })
   })
+  describe('issuesHeartbeat', () => {
+    it('asks for the single most recently updated item, conditionally on the stored ETag', async () => {
+      const calls: Array<{ url: string; headers: Headers }> = []
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async (url, init) => {
+          calls.push({ url: String(url), headers: new Headers(init?.headers) })
+          return new Response(null, { status: 304, headers: { etag: '"strong"' } })
+        }
+      })
+      expect(await client.issuesHeartbeat('nodeterm/nodeterm', 'W/"stored"'))
+        .toEqual({ notModified: true, etag: 'W/"stored"' })
+      // state=all + sort=updated covers issues AND pull requests: the same endpoint and the same
+      // `updated_at` the incremental `since` scan filters on, so the heartbeat can never miss a
+      // change that scan would have picked up.
+      expect(calls[0].url).toBe(
+        'https://api.github.com/repos/nodeterm/nodeterm/issues?state=all&sort=updated&direction=desc&per_page=1'
+      )
+      expect(calls[0].headers.get('if-none-match')).toBe('W/"stored"')
+    })
+
+    it('returns the fresh ETag of a changed repository without decoding the item', async () => {
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async () => response([{ anything: 'the body is not the point' }], {
+          headers: { etag: 'W/"fresh"' }
+        })
+      })
+      expect(await client.issuesHeartbeat('nodeterm/nodeterm')).toEqual({
+        notModified: false, etag: 'W/"fresh"'
+      })
+    })
+
+    it('sends no condition when there is no stored ETag', async () => {
+      let headers: Headers | undefined
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async (_url, init) => { headers = new Headers(init?.headers); return response([]) }
+      })
+      await client.issuesHeartbeat('nodeterm/nodeterm')
+      expect(headers?.has('if-none-match')).toBe(false)
+    })
+  })
 })

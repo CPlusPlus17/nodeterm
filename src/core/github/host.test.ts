@@ -88,6 +88,7 @@ function fixture() {
   }
   const client = {
     listIssues: vi.fn(),
+    issuesHeartbeat: vi.fn(),
     getIssue: vi.fn(),
     updateIssue: vi.fn(),
     listRepositoryLabels: vi.fn(),

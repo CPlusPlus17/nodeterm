@@ -133,6 +133,13 @@ export interface IssuePageResult {
   notModified?: boolean
 }
 
+/** `notModified` = GitHub answered 304 to the stored validator: nothing in the repository changed.
+ *  `etag` is the validator to store for the next heartbeat (the one sent, on a 304). */
+export interface IssueHeartbeatResult {
+  notModified: boolean
+  etag?: string
+}
+
 export interface UpdateIssueInput {
   state?: 'open' | 'closed'
   labels?: string[]
