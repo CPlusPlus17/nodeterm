@@ -79,7 +79,6 @@ describe('copilot capabilities', () => {
       canRecur,
       canBranch,
       hasUsage,
-      canChat,
       canTransferFrom,
       canRename,
       canReadTitle,
@@ -87,6 +86,15 @@ describe('copilot capabilities', () => {
     ]) {
       expect(can('copilot')).toBe(false)
     }
+  })
+
+  it('shows its conversation in the chat panel from its OWN journal, never through claude\'s resolver', () => {
+    // The ⌘M leaf is `core/copilot-chat.ts` (`<COPILOT_HOME>/session-state/<id>/events.jsonl`, keyed
+    // strictly by session id). Joining CHAT_CAPABLE must not join CLAUDE_TRANSCRIPT_READABLE: that
+    // list gates the find bar's index and the meter's rehydration, both of which resolve through
+    // claude's cwd fallback and would hand a copilot node someone else's claude session.
+    expect(canChat('copilot')).toBe(true)
+    expect(readsClaudeShapedTranscript('copilot')).toBe(false)
   })
 })
 

@@ -87,14 +87,14 @@ interface ChatPanelProps {
 type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'error'
 
 /**
- * An `unreadable` read of a GROK node can only be the remote case: core's grok leg is local-only
- * and answers a remote grok node (`remoteOnly`) with `unreadable` before touching anything, while
- * its local reader never sets the flag. So the agent alone names it — no renderer-side remoteness
- * guess, and no new field on the wire (the phone contract keeps `unreadable`). `=== 'grok'`
- * exactly, mirroring core's routing (`readChatTranscript` routes only the builtin id to grok's
- * reader). Retry cannot heal it, so it must not read as a transient failure.
+ * An `unreadable` read of a GROK or COPILOT node can only be the remote case: both core legs are
+ * local-only and answer a remote node (`remoteOnly`) with `unreadable` before touching anything,
+ * while their local readers never set the flag. So the agent alone names it — no renderer-side
+ * remoteness guess, and no new field on the wire (the phone contract keeps `unreadable`). The
+ * builtin ids exactly: the panel only opens for a builtin (`canChat` on the created id). Retry
+ * cannot heal it, so it must not read as a transient failure.
  */
-const remoteGrokUnreadable = (agentId: string | undefined): boolean => agentId === 'grok'
+const remoteGrokUnreadable = (agentId: string | undefined): boolean => agentId === 'grok' || agentId === 'copilot'
 
 const isUnsupported = (e: unknown): boolean =>
   !!e && typeof e === 'object' && (e as { code?: string }).code === E_UNSUPPORTED
@@ -115,7 +115,8 @@ const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
     title: "Transcripts can't be read on this surface.",
     detail: 'Open this session on the desktop app to read its conversation.'
   },
-  remoteUnsupported: { title: "Reading a remote Grok session's transcript isn't supported yet." },
+  // `{agent}` is the node's own agent label (`chatAgentLabel`), filled at render.
+  remoteUnsupported: { title: "Reading a remote {agent} session's transcript isn't supported yet." },
   error: {
     title: "Couldn't read the transcript.",
     detail: "The agent's host may not be reachable — Retry once it is."
@@ -764,7 +765,7 @@ export function ChatPanel({
         )}
         {showEmpty && (
           <div className="term-chat__empty">
-            <div>{EMPTY_TEXT[loadState].title}</div>
+            <div>{EMPTY_TEXT[loadState].title.replace('{agent}', agentLabel)}</div>
             {EMPTY_TEXT[loadState].detail && (
               <div className="term-chat__empty-detail">{EMPTY_TEXT[loadState].detail}</div>
             )}

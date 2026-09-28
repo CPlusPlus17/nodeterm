@@ -250,6 +250,18 @@ describe('ChatPanel empty states', () => {
     expect(host.querySelector('.term-chat__retry')).toBeNull()
   })
 
+  it('an unreadable REMOTE copilot read says so in copilot\'s own name, with no Retry', async () => {
+    // Core's copilot leg is local-only too (core/copilot-chat.ts): its `unreadable` can only be the
+    // remote refusal, which no retry heals.
+    await render({ agentId: 'copilot' })
+    await act(async () => {
+      pending[0].resolve({ messages: [], found: false, olderCursor: null, unmatchedResults: [], unreadable: true })
+    })
+    expect(msgs().textContent).toContain("Reading a remote GitHub Copilot session's transcript isn't supported yet.")
+    expect(msgs().textContent).not.toContain('Grok')
+    expect(host.querySelector('.term-chat__retry')).toBeNull()
+  })
+
   it('a clean miss still says no transcript was found', async () => {
     await render()
     await act(async () => {

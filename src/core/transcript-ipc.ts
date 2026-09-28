@@ -15,11 +15,14 @@ import type { ChatTranscriptResult, TranscriptLine, TranscriptPresence } from '.
 import { CHAT_PAGE_MAX_BYTES, normalizeChatPage, type ChatTranscriptPage } from '../shared/chat-page'
 import { platform } from './platform'
 import { chatMessagesFromGrok } from './grok-chat'
+import { chatMessagesFromCopilot, locateCopilotTranscript, parseCopilotChatWindow } from './copilot-chat'
+import { capabilityAgentId } from '../shared/agents/config'
 import { locateGrok } from './handoff/locate'
 import {
   parseChatMessages,
   parseChatWindow,
   parseTranscriptLines,
+  type ChatWindowParse,
   readChatWindow,
   readCappedTail,
   readChatMessages,
@@ -108,12 +111,14 @@ type WindowRead = (page: ChatTranscriptPage) => Promise<{ data: Buffer; start: n
 async function parseGrowingWindow(
   page: ChatTranscriptPage,
   first: { data: Buffer; start: number },
-  read: WindowRead
+  read: WindowRead,
+  // The window parser: claude's, or another append-only JSONL reader's (copilot's).
+  parseWindow: (buf: Buffer, bufStart: number) => ChatWindowParse = parseChatWindow
 ): Promise<ChatTranscriptResult> {
   let w = first
   let maxBytes = page.maxBytes
   for (;;) {
-    const { noCompleteLine, ...parsed } = parseChatWindow(w.data, w.start)
+    const { noCompleteLine, ...parsed } = parseWindow(w.data, w.start)
     if (!noCompleteLine || w.start === 0 || maxBytes >= CHAT_PAGE_MAX_BYTES) return { found: true, ...parsed }
     maxBytes = Math.min(CHAT_PAGE_MAX_BYTES, maxBytes * CHAT_PAGE_GROWTH)
     const next = await read({ before: page.before, maxBytes })
@@ -175,6 +180,35 @@ async function readChatPage(
 }
 
 /**
+ * A copilot node's read. Its journal (`<COPILOT_HOME>/session-state/<id>/events.jsonl`) is
+ * append-only JSONL, so it pages exactly like claude's — same window, growth and cursor rules
+ * (`parseGrowingWindow`), copilot's record parser.
+ *
+ * Located STRICTLY by the node's session id: no cwd fallback, no claude resolver, no hook-fed claude
+ * path, no remote claude reader — each of those answers a copilot id with some other session. A
+ * remote (SSH) node's journal is on the host and no remote copilot reader exists yet, so it is
+ * `unreadable` (paged) / not found (legacy) BEFORE anything is read — never this machine's disk.
+ * A local read that fails is a plain not-found, like grok's, so `unreadable` on a copilot result
+ * can only mean "remote", which is what the panel says.
+ */
+async function readCopilotChat(
+  sessionId: string | undefined,
+  remoteOnly: boolean | undefined,
+  page: ChatTranscriptPage | null
+): Promise<ChatTranscriptResult> {
+  if (remoteOnly) return page ? unreadablePage() : { messages: [], found: false }
+  const p = await locateCopilotTranscript(sessionId)
+  if (!page) {
+    const buf = p ? await readCappedTail(p) : undefined
+    return buf === undefined ? { messages: [], found: false } : { messages: chatMessagesFromCopilot(buf), found: true }
+  }
+  if (!p) return notFoundPage()
+  const w = await readChatWindow(p, page)
+  if (!w) return notFoundPage()
+  return parseGrowingWindow(page, w, async (pg) => (await readChatWindow(p, pg)) ?? null, parseCopilotChatWindow)
+}
+
+/**
  * Resolve a session's transcript path: the exact session file when a (valid) sessionId is known,
  * else the node's cwd — durable, and needing no live hook event. `accountId` scopes BOTH legs to
  * the same root: dropping it on the fallback sent a managed-account node to the system root, where
@@ -224,6 +258,9 @@ export async function readChatTranscript(
   // misses — so reaching that fallback with a grok node would answer with a stranger's
   // conversation. The remote leg is claude-only too (its reader tails claude's file), so a grok
   // node is served locally or not at all rather than being handed the wrong host's claude log.
+  // Copilot, by its base harness (a custom agent built on it reads the same journal). Before
+  // anything claude-shaped, for the reason grok's branch below states.
+  if (agentId && capabilityAgentId(agentId) === 'copilot') return readCopilotChat(sessionId, remoteOnly, page)
   if (agentId === 'grok') {
     // Grok is read locally only — a remote grok node's history is on the host.
     if (remoteOnly) return page ? unreadablePage() : { messages: [], found: false }
