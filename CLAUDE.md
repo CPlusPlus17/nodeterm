@@ -5578,7 +5578,8 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     by the same author (name AND colour) of the same type within two minutes of the run's NEWEST row
     render as one "×N" row that expands in place; the jsonl is never rewritten. The window is
     anchored, not chained, so a ×N never spans more than two minutes. Comments never fold, and
-    neither do `agent-message` / `agent-read-cookies` — audit rows (`NEVER_COLLAPSE`).
+    neither do `agent-message` / `agent-read-cookies` (audit rows) or an issue's `run-started` /
+    `run-ended` history (each row names a different session) — `NEVER_COLLAPSE`.
   - **Keyboard**: registry scope `board` (group Board) — Space opens the focused/hovered card,
     J/K + ArrowDown/Up walk board order (the session cards on screen, column by column, Ungrouped
     first; GitHub cards excluded), ArrowLeft/Right jump to the same row of the neighbouring
