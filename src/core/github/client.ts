@@ -12,6 +12,17 @@ import type {
   UpdateIssueInput
 } from '../../shared/github-issues'
 import { parseGitHubRepository } from './config'
+import type { GitHubPullChecksResult } from '../../shared/github-pull-status'
+import {
+  GraphQLShapeError,
+  PULL_CHECKS_QUERY,
+  PULL_STATUS_QUERY,
+  graphQLErrors,
+  parsePullChecksResponse,
+  parsePullStatusResponse,
+  rateLimitFrom,
+  type PullStatusRead
+} from './graphql-pulls'
 
 const API_ORIGIN = 'https://api.github.com'
 const API_VERSION = '2022-11-28'
@@ -23,7 +34,11 @@ export class GitHubClientError extends Error {
     readonly code: 'invalid-request' | 'malformed-response' | 'response-too-large' |
       'request-failed' | 'rate-limited' | 'insufficient-permission',
     readonly status?: number,
-    readonly retryAt?: number
+    readonly retryAt?: number,
+    /** Which rate budget a PRIMARY limit belongs to (`x-ratelimit-resource`). `graphql` and `core`
+     *  are separate budgets, so a spent `graphql` budget must not hold REST issue sync. Absent for a
+     *  secondary limit, which GitHub applies to the whole account. */
+    readonly resource?: string
   ) {
     super(code)
   }
@@ -419,6 +434,65 @@ export class GitHubIssuesClient {
     return { id: Number(value.id) }
   }
 
+  /**
+   * Every open pull request's head, CI rollup, mergeability and closing issues, plus the recently
+   * merged/closed ones — one GraphQL read (see graphql-pulls.ts for the measured cost). A field the
+   * token may not read comes back as `access: false`, not as an empty value.
+   */
+  async pullRequestStatuses(repository: string): Promise<PullStatusRead> {
+    const [owner, name] = safeRepository(repository).split('/')
+    const body = await this.graphql(PULL_STATUS_QUERY, { owner, name })
+    try {
+      return parsePullStatusResponse(body, repository)
+    } catch (error) {
+      if (error instanceof GraphQLShapeError) throw new GitHubClientError('malformed-response')
+      throw error
+    }
+  }
+
+  /** Per-check detail for one PR — read only when someone opens that PR. */
+  async pullRequestChecks(repository: string, pullNumber: number): Promise<GitHubPullChecksResult> {
+    const [owner, name] = safeRepository(repository).split('/')
+    if (!positiveInteger(pullNumber, 2_147_483_647)) throw new GitHubClientError('invalid-request')
+    const body = await this.graphql(PULL_CHECKS_QUERY, { owner, name, number: pullNumber })
+    try {
+      return parsePullChecksResponse(body)
+    } catch (error) {
+      if (error instanceof GraphQLShapeError) throw new GitHubClientError('malformed-response')
+      throw error
+    }
+  }
+
+  /**
+   * One GraphQL request. It goes through the same `request()` as every REST call, so its
+   * `x-ratelimit-*` headers (resource `graphql`) reach the coordinator's budget.
+   *
+   * GraphQL reports an exhausted budget as a 200 whose `errors[].type` is `RATE_LIMITED` — a body
+   * that is otherwise shaped like an answer. It is turned into the same `rate-limited` error a REST
+   * refusal produces, tagged with the `graphql` resource.
+   */
+  private async graphql(query: string, variables: Record<string, string | number>): Promise<unknown> {
+    const response = await this.request('/graphql', {
+      method: 'POST',
+      body: JSON.stringify({ query, variables })
+    })
+    const body = await this.json(response)
+    let errors: ReturnType<typeof graphQLErrors>
+    try {
+      errors = graphQLErrors(body)
+    } catch {
+      throw new GitHubClientError('malformed-response')
+    }
+    if (errors.some((error) => error.type === 'RATE_LIMITED')) {
+      const header = Number(response.headers.get('x-ratelimit-reset')) * 1_000
+      const retryAt = Number.isFinite(header) && header > 0
+        ? header
+        : rateLimitFrom(body)?.resetAt ?? Date.now() + 60_000
+      throw new GitHubClientError('rate-limited', response.status, retryAt, 'graphql')
+    }
+    return body
+  }
+
   async listRepositoryLabels(
     repository: string,
     options: { page: number; perPage: number; etag?: string }
@@ -520,7 +594,9 @@ export class GitHubIssuesClient {
       if (secondary && !(Number.isFinite(retryAfter) && retryAfter > 0)) {
         this.secondaryBackoffMs = Math.min(this.secondaryBackoffMs * 2, 60_000)
       }
-      throw new GitHubClientError('rate-limited', response.status, retryAt)
+      const resource = primary ? response.headers.get('x-ratelimit-resource') ?? undefined : undefined
+      throw new GitHubClientError('rate-limited', response.status, retryAt,
+        resource && /^[a-z_]{1,32}$/.test(resource) ? resource : undefined)
     }
     if (!response.ok) throw new GitHubClientError('request-failed', response.status)
     return response

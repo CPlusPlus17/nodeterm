@@ -18,7 +18,15 @@ describe('registerGitHubIssueHandlers', () => {
       createMissingLabels: async (...args: unknown[]) => {
         calls.push(['labels', ...args]); return { status: 'confirmed' as const, created: [], remaining: [] }
       },
-      clearCache: async (...args: unknown[]) => { calls.push(['clear', ...args]) }
+      clearCache: async (...args: unknown[]) => { calls.push(['clear', ...args]) },
+      pullStatus: async (...args: unknown[]) => {
+        calls.push(['pullStatus', ...args])
+        return { pulls: [], stale: false, access: { ci: true, merge: true }, undecided: false, truncated: false }
+      },
+      chasePulls: async (...args: unknown[]) => { calls.push(['chase', ...args]); return false },
+      pullChecks: async (...args: unknown[]) => {
+        calls.push(['checks', ...args]); return { status: 'no-checks' as const }
+      }
     }
     const platform = fakePlatform()
     registerGitHubIssueHandlers(platform, service)
@@ -26,10 +34,16 @@ describe('registerGitHubIssueHandlers', () => {
     await platform.handlers[IPC.githubIssuesSubscribe](7, { projectId: 'p1' })
     platform.senderListeners[IPC.githubIssuesUnsubscribe](7, 'p1')
     await platform.handlers[IPC.githubIssuesQuery]({ projectId: 'p1', columnId: null, pageSize: 50 })
+    await platform.handlers[IPC.githubIssuesPullStatus]('p1')
+    await platform.handlers[IPC.githubIssuesChasePulls]('p1')
+    await platform.handlers[IPC.githubIssuesPullChecks]('p1', 12)
     expect(calls).toEqual([
       ['subscribe', 7, { projectId: 'p1' }],
       ['unsubscribe', 7, 'p1'],
-      ['query', { projectId: 'p1', columnId: null, pageSize: 50 }]
+      ['query', { projectId: 'p1', columnId: null, pageSize: 50 }],
+      ['pullStatus', { projectId: 'p1' }],
+      ['chase', { projectId: 'p1' }],
+      ['checks', { projectId: 'p1', pullNumber: 12 }]
     ])
     expect(Object.keys(platform.handlers).some((channel) => channel.startsWith('githubControl:'))).toBe(false)
   })

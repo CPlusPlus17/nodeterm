@@ -32,6 +32,11 @@ function api(): GitHubIssuesApi {
     moveIssue: vi.fn(async () => ({ status: 'configuration-changed' as const })),
     createMissingLabels: vi.fn(async () => ({ status: 'confirmed' as const, created: [], remaining: [] })),
     clearCache: vi.fn(async () => {}),
+    pullStatus: vi.fn(async () => ({
+      pulls: [], stale: false, access: { ci: true, merge: true }, undecided: false, truncated: false
+    })),
+    chasePulls: vi.fn(async () => false),
+    pullChecks: vi.fn(async () => ({ status: 'no-checks' as const })),
     projectAvatar: vi.fn(async () => null),
     onChanged: vi.fn(() => () => {})
   }

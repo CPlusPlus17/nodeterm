@@ -24,6 +24,9 @@ import {
 } from './cache'
 import { classifyGitHubFailure } from './failure'
 import type { GitHubRequestCoordinator } from './request-coordinator'
+import type { PullStatusRead } from './graphql-pulls'
+import { GitHubPullStatusTracker } from './pull-status-tracker'
+import type { GitHubPullBoard, GitHubPullChecksResult } from '../../shared/github-pull-status'
 
 const MAX_ISSUES = 10_000
 const MAX_CACHE_BYTES = 64 * 1024 * 1024
@@ -61,6 +64,11 @@ export interface GitHubIssuesClientLike {
    *  report path must never build a second authenticated client of its own. */
   createIssue(repository: string, input: CreateIssueInput): Promise<GitHubIssue>
   createIssueComment(repository: string, issueNumber: number, body: string): Promise<{ id: number }>
+  /** Pull request CI + mergeability (one GraphQL read). Optional so a client that cannot make
+   *  GraphQL reads — and every test fake written before them — simply has no pull status: the board
+   *  then shows none, which is the honest answer. */
+  pullRequestStatuses?(repository: string): Promise<PullStatusRead>
+  pullRequestChecks?(repository: string, pullNumber: number): Promise<GitHubPullChecksResult>
 }
 
 export interface GitHubIssueProjectContext {
@@ -203,6 +211,8 @@ export class GitHubIssueService {
   private readonly repositoryControls = new Map<string, RepositoryControl>()
   private readonly statePreparations = new Map<string, Set<Promise<RepositoryState>>>()
   private readonly refreshFloors = new Map<string, { any: number; full: number }>()
+  /** Pull request CI/mergeability per repository key — see pull-status-tracker.ts. */
+  private readonly pulls: GitHubPullStatusTracker
   private operationSequence = 0
   private readonly now: () => number
   private readonly schedule: NonNullable<ServiceOptions['setInterval']>
@@ -212,6 +222,14 @@ export class GitHubIssueService {
     this.now = options.now ?? Date.now
     this.schedule = options.setInterval ?? ((fn, milliseconds) => setInterval(fn, milliseconds))
     this.unschedule = options.clearInterval ?? ((timer) => clearInterval(timer as ReturnType<typeof setInterval>))
+    this.pulls = new GitHubPullStatusTracker({
+      coordinator: options.coordinator,
+      now: this.now,
+      onChanged: (key, changed) => {
+        const state = this.repositories.get(key)
+        if (state) this.emitDelta(state, changed, true)
+      }
+    })
   }
 
   async subscribe(uiId: number, request: { projectId: string }): Promise<GitHubIssuePage> {
@@ -321,7 +339,7 @@ export class GitHubIssueService {
     const cacheGeneration = state.cacheGeneration
     const work = this.refreshRepository(
       captured, state, request.full === true, cacheGeneration, operationId, repositoryGeneration,
-      startedAt
+      startedAt, background
     )
     state.refresh = work
     try { await work } finally { if (state.refresh === work) delete state.refresh }
@@ -646,6 +664,7 @@ export class GitHubIssueService {
         ...mutations
       ])
       await this.options.cache.clearBound(context.localApprovalId, context.projectId, context.repository)
+      this.pulls.forgetRepository(context.repository)
       for (const state of this.repositoryStates(context.localApprovalId, context.repository)) {
         state.cacheGeneration += 1
         state.snapshot = undefined
@@ -657,6 +676,75 @@ export class GitHubIssueService {
       if (control.deletion === deletion) delete control.deletion
       finishDeletion()
     }
+  }
+
+  /** What the board knows about this project's pull requests beyond the issues harvest. Read from
+   *  memory only — it never sends a request. */
+  async pullStatus(request: { projectId: string }): Promise<GitHubPullBoard> {
+    const context = await this.cacheContext(request.projectId)
+    const { key } = await this.cachedState(context)
+    return this.pulls.board(key)
+  }
+
+  /**
+   * A VISIBLE board asks this while some PR is undecided. It answers false at the cost of a map
+   * lookup unless a chase read is due, so a board may ask as often as it likes: the schedule and the
+   * cap of 12 live here, and only a due read resolves a context (which runs the credential chain).
+   */
+  async chasePulls(request: { projectId: string }): Promise<boolean> {
+    const key = this.projectKeys.get(request.projectId)
+    if (!key || !this.pulls.claimChase(key)) return false
+    let captured: GitHubIssueServiceContext
+    try {
+      captured = await this.options.contextForProject(request.projectId)
+    } catch {
+      return false
+    }
+    if (repositoryKey(captured) !== key || !captured.client.pullRequestStatuses) return false
+    await this.pulls.read(key, captured.userId, 'chase', () =>
+      this.readWithEpoch(captured, () => captured.client.pullRequestStatuses!(captured.repository)))
+    return true
+  }
+
+  /** Per-check detail for one PR, read when its modal opens. Never throws: every failure is one of
+   *  the result's own statuses, so a modal can always say what it knows. */
+  async pullChecks(request: { projectId: string; pullNumber: number }): Promise<GitHubPullChecksResult> {
+    if (!Number.isSafeInteger(request.pullNumber) || request.pullNumber < 1) {
+      return { status: 'unavailable' }
+    }
+    let captured: GitHubIssueServiceContext
+    try {
+      captured = await this.options.contextForProject(request.projectId)
+    } catch {
+      return { status: 'unavailable' }
+    }
+    if (!captured.client.pullRequestChecks) return { status: 'unavailable' }
+    // A token already known to be unable to read checks is not asked again.
+    if (!this.pulls.board(repositoryKey(captured)).access.ci) return { status: 'hidden' }
+    const throttle = this.options.coordinator.throttle(captured.userId, this.now(), 'graphql')
+    if (throttle?.kind === 'rate-limited') return { status: 'unavailable' }
+    try {
+      return await this.readWithEpoch(captured, () =>
+        captured.client.pullRequestChecks!(captured.repository, request.pullNumber))
+    } catch (error) {
+      // A 403 that is not a rate limit: this token may not read the checks. Say nothing about them.
+      return (error as { code?: unknown } | null)?.code === 'insufficient-permission'
+        ? { status: 'hidden' }
+        : { status: 'unavailable' }
+    }
+  }
+
+  private readPullStatusAfterHeartbeat(
+    captured: GitHubIssueServiceContext,
+    changed: boolean,
+    foreground: boolean
+  ): void {
+    const key = repositoryKey(captured)
+    if (!captured.client.pullRequestStatuses) return
+    if (!this.pulls.wantsReadAfterHeartbeat(key, { changed, foreground })) return
+    void this.pulls.read(key, captured.userId, foreground ? 'foreground' : 'heartbeat', () =>
+      this.readWithEpoch(captured, () => captured.client.pullRequestStatuses!(captured.repository)))
+      .catch(() => undefined)
   }
 
   private state(
@@ -787,7 +875,8 @@ export class GitHubIssueService {
     cacheGeneration: number,
     operationId: number,
     repositoryGeneration: number,
-    refreshStartedAt: number
+    refreshStartedAt: number,
+    background = false
   ): Promise<void> {
     const full = forceFull || !state.snapshot ||
       this.now() - state.snapshot.lastFullReconciliationAt >= FULL_REFRESH_AGE
@@ -808,6 +897,9 @@ export class GitHubIssueService {
       .catch((error: unknown) =>
         error instanceof ConfigurationChangedError ? null : Promise.reject(error))
     if (!beat) return
+    // The heartbeat is also what decides whether pull request CI/mergeability is worth a GraphQL
+    // read. It runs beside the issue scan, not after it: the board's issues never wait on it.
+    this.readPullStatusAfterHeartbeat(captured, !beat.notModified, !background)
     if (beat.notModified && !full && previous && !state.incomplete) return
     const heartbeatEtag = beat.etag
     const etags: Record<string, string> = heartbeatEtag ? { [HEARTBEAT_ETAG_KEY]: heartbeatEtag } : {}

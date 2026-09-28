@@ -7,6 +7,7 @@ import type {
   GitHubIssueQuery,
   GitHubMutationResult
 } from '../../shared/github-issues'
+import type { GitHubPullBoard, GitHubPullChecksResult } from '../../shared/github-pull-status'
 
 export interface GitHubIssueHandlerService {
   subscribe(uiId: number, request: { projectId: string }): Promise<GitHubIssuePage>
@@ -22,6 +23,9 @@ export interface GitHubIssueHandlerService {
   }): Promise<GitHubMutationResult>
   createMissingLabels(request: { projectId: string }): Promise<CreateMappedLabelsResult>
   clearCache(request: { projectId: string }): Promise<void>
+  pullStatus(request: { projectId: string }): Promise<GitHubPullBoard>
+  chasePulls(request: { projectId: string }): Promise<boolean>
+  pullChecks(request: { projectId: string; pullNumber: number }): Promise<GitHubPullChecksResult>
 }
 
 export function registerGitHubIssueHandlers(
@@ -40,4 +44,10 @@ export function registerGitHubIssueHandlers(
     service.createMissingLabels({ projectId }))
   platform.handle(IPC.githubIssuesClearCache, (projectId: string) =>
     service.clearCache({ projectId }))
+  platform.handle(IPC.githubIssuesPullStatus, (projectId: string) =>
+    service.pullStatus({ projectId }))
+  platform.handle(IPC.githubIssuesChasePulls, (projectId: string) =>
+    service.chasePulls({ projectId }))
+  platform.handle(IPC.githubIssuesPullChecks, (projectId: string, pullNumber: number) =>
+    service.pullChecks({ projectId, pullNumber }))
 }
