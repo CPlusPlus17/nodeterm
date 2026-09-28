@@ -19,6 +19,10 @@ import type { PtyCreateOptions, PtyCreateResult } from '../shared/types'
  *  1500 ms of total silence = write anyway. */
 export const SETTLE_QUIET_MS = 200
 export const SETTLE_CAP_MS = 1500
+/** Absolute ceiling on the whole settle, which output never extends. A pane that paints more often
+ *  than every SETTLE_QUIET_MS (a spinner, a chatty rc file) never goes quiet, and nothing else would
+ *  end the wait. */
+export const SETTLE_MAX_MS = 5000
 
 export interface HeadlessLaunchDeps {
   persistentSpawnAvailable(): boolean
@@ -27,8 +31,8 @@ export interface HeadlessLaunchDeps {
   writeHeadless(persistKey: string, data: string): boolean
   onOutput(persistKey: string, cb: (chunk: string) => void): () => void
   releaseHeadless(persistKey: string): void
-  /** Test seam; production uses SETTLE_QUIET_MS / SETTLE_CAP_MS. */
-  timing?: { quietMs: number; capMs: number }
+  /** Test seam; production uses SETTLE_QUIET_MS / SETTLE_CAP_MS / SETTLE_MAX_MS. */
+  timing?: { quietMs: number; capMs: number; maxMs?: number }
 }
 
 export async function launchHeadless(
@@ -87,9 +91,19 @@ export async function launchHeadless(
   }
 }
 
+/**
+ * Wait for a fresh shell's prompt. This mirrors TerminalNode's `whenShellSettled` (SETTLE_QUIET_MS
+ * of quiet after output, SETTLE_CAP_MS when there is no output at all), plus an absolute ceiling
+ * (SETTLE_MAX_MS) that output never extends. The mounted version can do without one, because an
+ * unmount cancels it. Nothing cancels this one, and the Server Edition awaits it inside its global
+ * control lock, so a pane that paints more often than the quiet window would wedge every control
+ * verb. Reaching the ceiling proceeds exactly as a settle does. The echo-verified writer is the
+ * safety net for a line typed mid-print.
+ */
 function settle(deps: HeadlessLaunchDeps, key: string): Promise<void> {
   const quietMs = deps.timing?.quietMs ?? SETTLE_QUIET_MS
   const capMs = deps.timing?.capMs ?? SETTLE_CAP_MS
+  const maxMs = deps.timing?.maxMs ?? SETTLE_MAX_MS
   return new Promise((resolve) => {
     let done = false
     let unsub: (() => void) | undefined
@@ -97,15 +111,24 @@ function settle(deps: HeadlessLaunchDeps, key: string): Promise<void> {
       if (done) return
       done = true
       clearTimeout(timer)
+      clearTimeout(ceiling)
       unsub?.()
       resolve()
     }
+    // Armed once, never re-armed by output.
+    const ceiling = setTimeout(finish, maxMs)
     let timer = setTimeout(finish, capMs)
-    unsub = deps.onOutput(key, () => {
-      if (done) return
-      clearTimeout(timer)
-      timer = setTimeout(finish, quietMs)
-    })
+    try {
+      unsub = deps.onOutput(key, () => {
+        if (done) return
+        clearTimeout(timer)
+        timer = setTimeout(finish, quietMs)
+      })
+    } catch {
+      // No tap to watch. Clear the timers and move on: the delivery opens its own tap, and its
+      // failure ends the launch as `cancelled`.
+      finish()
+    }
   })
 }
 

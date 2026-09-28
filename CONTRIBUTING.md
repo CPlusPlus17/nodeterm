@@ -778,9 +778,9 @@ coordinate nodeterm, not external editors, so do not claim a filesystem-wide com
 until delivery is acknowledged, and report `queued` while it is held. A successful terminal send
 proves delivery only; never describe it as a healthy/running agent without agent evidence.
 Every launch uses the echo-verified command writer (`@shared/command-delivery`), not `sendText`:
-desktop automatic and Run now, the desktop headless start (`core/headless-launch.ts`), and the
-Server Edition's immediate open. The Server Edition's deferred `--after` release (`refreshArmed`)
-is the one remaining `sendText` launch, pending a move that must never create a session.
+desktop automatic and Run now, and the Server Edition's immediate open (through
+`core/headless-launch.ts`). The Server Edition's deferred `--after` release (`refreshArmed`) is the
+one remaining `sendText` launch, pending a move that must never create a session.
 Keep unsubmitted UI intent durable through shell settle/unmount. New intent carries `attempted:false`;
 Desktop and Server save `attempted:true` before input. Never-attempted warm `--after` launches may
 proceed after shell verification; attempted/legacy-unknown intent requires Run now. Only confirmed

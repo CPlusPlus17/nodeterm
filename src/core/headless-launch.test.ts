@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DELIVERY_ATTEMPTS, KILL_LINE, VERIFY_TIMEOUT_MS } from '@shared/command-delivery'
 import type { HeadlessLaunchRequest } from '@shared/headless-launch'
-import { launchHeadless, SETTLE_CAP_MS, SETTLE_QUIET_MS, type HeadlessLaunchDeps } from './headless-launch'
+import {
+  launchHeadless,
+  SETTLE_CAP_MS,
+  SETTLE_MAX_MS,
+  SETTLE_QUIET_MS,
+  type HeadlessLaunchDeps
+} from './headless-launch'
 import type { PtyManager } from './pty-manager'
 
 const CMD = "claude 'fix the flaky test in the worker pool'"
@@ -144,6 +150,78 @@ describe('launchHeadless (#925)', () => {
     expect(deps.paneCommand).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1)
     expect(await p).toMatchObject({ outcome: 'delivered' })
+  })
+
+  // Review finding: the silence cap is cleared by the first chunk, so a pane that paints more often
+  // than the quiet window never settled — and the Server Edition awaits this inside its global
+  // control lock, so one such pane wedged every control verb behind it.
+  it('a pane that never stops painting still reaches the probe at SETTLE_MAX_MS, and not before', async () => {
+    const { deps, writes, emit, listeners } = harness()
+    let tapsAtProbe = -1
+    ;(deps.paneCommand as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      tapsAtProbe = listeners.size
+      return 'zsh'
+    })
+    const p = launchHeadless(deps, req())
+    const painter = setInterval(() => emit('\x1b[2K\r⠋ loading'), 100)
+    await vi.advanceTimersByTimeAsync(SETTLE_MAX_MS - 1)
+    expect(deps.paneCommand).not.toHaveBeenCalled()
+    expect(writes).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(deps.paneCommand).toHaveBeenCalledWith('n1')
+    // The ceiling exit unsubscribed the settle's tap before anything else ran.
+    expect(tapsAtProbe).toBe(0)
+    clearInterval(painter)
+    expect(await p).toEqual({ outcome: 'delivered', fresh: true })
+    expect(writes).toEqual([CMD, '\r'])
+    expect(listeners.size).toBe(0)
+    // No settle timer (quiet window or ceiling) outlives the launch.
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a pane that goes quiet settles on the quiet window, not the ceiling, and leaves no timer', async () => {
+    const { deps, emit } = harness()
+    const p = launchHeadless(deps, req())
+    const painter = setInterval(() => emit('rc output\r\n'), 100)
+    await vi.advanceTimersByTimeAsync(1000)
+    clearInterval(painter)
+    await vi.advanceTimersByTimeAsync(SETTLE_QUIET_MS - 1)
+    expect(deps.paneCommand).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(deps.paneCommand).toHaveBeenCalledWith('n1')
+    expect(await p).toEqual({ outcome: 'delivered', fresh: true })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('the silence cap exit disarms the ceiling too', async () => {
+    const { deps } = harness()
+    const p = launchHeadless(deps, req())
+    await vi.advanceTimersByTimeAsync(SETTLE_CAP_MS)
+    expect(await p).toEqual({ outcome: 'delivered', fresh: true })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('honours a ceiling passed through the timing seam', async () => {
+    const { deps, emit } = harness()
+    deps.timing = { quietMs: SETTLE_QUIET_MS, capMs: SETTLE_CAP_MS, maxMs: 700 }
+    const p = launchHeadless(deps, req())
+    const painter = setInterval(() => emit('.'), 100)
+    await vi.advanceTimersByTimeAsync(699)
+    expect(deps.paneCommand).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(deps.paneCommand).toHaveBeenCalledWith('n1')
+    clearInterval(painter)
+    expect(await p).toEqual({ outcome: 'delivered', fresh: true })
+  })
+
+  it('an output tap that cannot be opened ends the launch without leaving a timer armed', async () => {
+    const { deps, writes } = harness()
+    ;(deps.onOutput as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('session gone')
+    })
+    expect(await launchHeadless(deps, req())).toEqual({ outcome: 'failed', reason: 'cancelled', fresh: true })
+    expect(writes).toEqual([])
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('an existing session skips the settle and clears any pending input first', async () => {
