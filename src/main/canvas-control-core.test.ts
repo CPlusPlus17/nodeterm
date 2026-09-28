@@ -121,13 +121,26 @@ describe('parseControlRequest', () => {
       // terminal is not mounted, armed or failed, is refused — the mount will not fire it.
       expect(body, name).toContain('`run-not-mounted`')
       expect(body, name).not.toMatch(/and it skips an `--after` wait/)
-      // An SSH project's node cannot start headless: it stays queued with that reason.
+      // An SSH project's node cannot start headless: it stays queued with that reason, and only
+      // while its project is off screen. `startHeadless` refuses before any claim, so the launch
+      // is untouched — a plain one starts on view, an armed or failed one still waits (review
+      // fix 1: "which starts when the user views it" over-promised for those two).
       expect(body, name).toContain('`remote-unsupported`')
+      expect(body, name).toMatch(/while that project is not on\s+screen/)
+      expect(body, name).toMatch(/left exactly as it\s+was/)
+      expect(body, name).toMatch(/armed or failed one still\s+needs its wait or Run now/)
+      expect(body, name).not.toMatch(/which starts when the user views it/)
+      // The closed-tab restore has two exceptions in the code (Canvas.tsx startNodesHeadlessRef): an SSH
+      // project, and no project open (the welcome screen). The claim must not read as universal.
+      expect(body, name).toMatch(/tab restored\s+\(not\s+switched\s+to\), except for an SSH\s+project or when\s+no\s+project is open/)
       // `list` prints STARTING while a headless start is in flight, and says not to run it again.
       expect(body, name).toMatch(/`list` names QUEUED, STARTING,/)
       expect(body, name).toMatch(/STARTING means a background start is in flight/)
-      // The Server Edition: --run-now is a no-op there, and `run` is creator-owned.
-      expect(body, name).toMatch(/On the Server\s+Edition `--run-now` changes\s+nothing \(opens start at once\)/)
+      // The Server Edition: --run-now changes nothing ELSE there (the --after refusal still
+      // applies — review ruling 3), and `run` is creator-owned.
+      expect(body, name).toMatch(
+        /On the Server\s+Edition `--run-now` changes\s+nothing else \(opens start at once; the\s+`--after`\s+refusal still\s+applies\)/
+      )
       expect(body, name).toMatch(/`run` reaches only\s+nodes you opened during this server run/)
     }
   })

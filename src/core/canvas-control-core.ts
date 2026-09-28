@@ -427,8 +427,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     'a caller may mutate or message only nodes it opened during the current server run.',
     'Restarting the server clears that creator proof; persisted nodes and queued launches are never',
     'auto-adopted, relaunched, or controlled at boot. An unowned target receives a named refusal.',
-    'On the Server Edition `--run-now` changes nothing (opens start at once) and `run` reaches only',
-    'nodes you opened during this server run.',
+    'On the Server Edition `--run-now` changes nothing else (opens start at once; the `--after`',
+    'refusal still applies) and `run` reaches only nodes you opened during this server run.',
     '',
     'Verbs:',
     '- `list` — current nodes (id, kind, title). Start here when you need a node id.',
@@ -455,8 +455,9 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  Add `--run-now` (put it LAST on the line, or write `--run-now=1`) to start a cold-opened',
     '  session immediately instead: it starts headless while the user stays where they are, the',
     '  reply reports `started: true` with `startedIds`, and a closed project gets its tab restored',
-    '  (not switched to). `--run-now` cannot be combined with `--after`. A start that could not be',
-    '  delivered still reports `queued` with a `reason`, and the node keeps its Run now button.',
+    '  (not switched to), except for an SSH project or when no project is open.',
+    '  `--run-now` cannot be combined with `--after`. A start that could not be delivered still',
+    '  reports `queued` with a `reason`, and the node keeps its Run now button.',
     '  `--project <id>` opens the node(s) in another',
     '  project instead of yours. It accepts exactly two things — any other id is refused: your OWN',
     '  project id, which behaves exactly as if the flag were omitted; or an id `open-project`',
@@ -557,8 +558,10 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  failed to launch is refused with `run-not-mounted`: the user must bring it into view and press',
     '  Run now. A node in another project needs `--project <id>` (your own project, or an id',
     '  `open-project` returned to you). The reply says `started: true`, or `queued: true` with a',
-    '  `reason` — `remote-unsupported` for an SSH project\'s node, which starts when the user views',
-    '  it. A node with nothing queued is refused.',
+    '  `reason`. `remote-unsupported` is an SSH project\'s node while that project is not on screen:',
+    '  its launch is left exactly as it was, so a plain queued launch starts when the user views the',
+    '  project, and an armed or failed one still needs its wait or Run now.',
+    '  A node with nothing queued is refused.',
     `- \`color --node <id,id> --color C\` — recolor nodes, frames, or stickies. C is a palette NAME`,
     `  or its hex: ${nodeColorChoices()}. The agent names paint a node its CLI's own brand color.`,
     '- `write --node <id> --text "..."` / `close --node <id,id>` — type into / close nodes.',
@@ -900,8 +903,8 @@ Server Edition ownership is fail-closed: every request requires verified node id
 caller may mutate or message only nodes it opened during the current server run. Restarting
 the server clears that creator proof; persisted nodes and queued launches are never auto-adopted,
 relaunched, or controlled at boot. An unowned target receives a named refusal. On the Server
-Edition \`--run-now\` changes nothing (opens start at once) and \`run\` reaches only
-nodes you opened during this server run.
+Edition \`--run-now\` changes nothing else (opens start at once; the \`--after\` refusal still
+applies) and \`run\` reaches only nodes you opened during this server run.
 
 Verbs:
 - \`list\` — list current nodes (id, kind, title). Start here when you need a node id.
@@ -947,8 +950,9 @@ Verbs:
   Add \`--run-now\` (put it LAST on the line, or write \`--run-now=1\`) to start a cold-opened
   session immediately instead: it starts headless while the user stays where they are, the reply
   reports \`started: true\` with \`startedIds\`, and a closed project gets its tab restored (not
-  switched to). \`--run-now\` cannot be combined with \`--after\`. A start that could not be
-  delivered still reports \`queued\` with a \`reason\`, and the node keeps its Run now button.
+  switched to), except for an SSH project or when no project is open. \`--run-now\` cannot be
+  combined with \`--after\`. A start that could not be delivered still reports \`queued\` with a
+  \`reason\`, and the node keeps its Run now button.
   **The reply reports launch delivery, not agent health.** \`queued\` is true — and
   \`queuedIds\` names which of the returned ids — while launch delivery is pending: waiting for its PTY, or on
   \`--after\`, on a worktree's setup script, or on a project the user has not viewed yet (a
@@ -1085,9 +1089,10 @@ Verbs:
   is not mounted (released while out of view) and that waits on \`--after\` or already failed to
   launch is refused with \`run-not-mounted\`: the user must bring it into view and press Run now.
   A node in another project needs \`--project <id>\` (your own project, or an id \`open-project\`
-  returned to you). The reply says \`started: true\`, or \`queued: true\` with a \`reason\` —
-  \`remote-unsupported\` for an SSH project's node, which starts when the user views it. A node
-  with nothing queued is refused.
+  returned to you). The reply says \`started: true\`, or \`queued: true\` with a \`reason\`.
+  \`remote-unsupported\` is an SSH project's node while that project is not on screen: its launch
+  is left exactly as it was, so a plain queued launch starts when the user views the project, and
+  an armed or failed one still needs its wait or Run now. A node with nothing queued is refused.
 - \`color --node <id,id> --color C\` — recolor nodes, frames, or stickies. C is a palette NAME or
   its hex (either is accepted, and the hex is case-insensitive): ${nodeColorChoices()}.
   The agent names are that CLI's own brand color — \`--color claude\` paints a node the color a
