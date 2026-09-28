@@ -62,6 +62,8 @@ export interface PeerAttach {
   attach(sink: UiSink): number
   /** The ONE teardown (presence leave → dropClient → registry prune). */
   detach(id: number): void
+  /** Answer the peer's request. May REJECT (or throw): the host answers that request `E_HANDLER`
+   *  and the session keeps serving — a failed dispatch never goes unanswered or unhandled. */
   dispatch(id: number, req: RpcRequest): Promise<RpcOk | RpcErr>
   cast(id: number, method: string, args: unknown[]): void
 }
@@ -69,7 +71,15 @@ export interface PeerAttach {
 /** A per-request verdict. `args` (when present) replaces the peer's args for everything downstream. */
 export type AccessDecision = { allow: true; args?: unknown[] } | { allow: false; message: string }
 
-/** Optional per-session policy. Absent (the desktop) = the unhooked path, byte for byte. */
+/**
+ * Optional per-session policy. Absent (the desktop) = the unhooked path, byte for byte.
+ *
+ * A hook that THROWS never reaches the socket (a throw there escapes into the WebSocket's own
+ * synchronous message emit, which then delivers nothing more and never closes: the peer hangs and
+ * stays attached). Instead: `interceptReq` / `access` on a req → the request is answered
+ * `E_HANDLER`; `access` on a cast → the cast is dropped; `narrowResponse` → `E_HANDLER`, never the
+ * un-narrowed result; `wrapSink` → the session FAILS CLOSED (see `open`).
+ */
 export interface RelayHostHooks {
   /** Answer a request here instead of dispatching it. `null` = not intercepted. */
   interceptReq?(s: RelayHostSession, method: string, args: unknown[]): Promise<unknown> | null
@@ -128,6 +138,8 @@ export interface ConnectRelayHostOptions {
   /** The relay socket dropped (the peer is already torn down when this fires). */
   onClose(): void
 }
+
+const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /** Live bridged peers, for revocation: unpinning a key refuses the NEXT handshake, but the OPEN
  *  socket keeps full shell access until it is cut (see revocation.ts). */
@@ -234,7 +246,22 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
       sendBinary: (buf) => { if (!socket.sendTunnelBinary(buf)) throw new Error('relay socket is not connected') },
       bufferedAmount: () => socket.bufferedAmount()
     }
-    const id = opts.attach.attach(opts.hooks?.wrapSink ? opts.hooks.wrapSink(session, base) : base)
+    let sink: UiSink = base
+    if (opts.hooks?.wrapSink) {
+      try {
+        sink = opts.hooks.wrapSink(session, base)
+      } catch (err) {
+        // FAIL CLOSED. A wrapSink is a FILTER (a viewer's view of the host); falling back to the bare
+        // base sink would hand the peer everything the filter exists to withhold. Attach nothing and
+        // end the session. A self-initiated close() never reaches the socket's onClose, so tell the
+        // shell here — it did not ask for this, and its bookkeeping (a seat, a dialog) must hear it.
+        console.warn(`[relay-host] wrapSink threw; closing the session: ${errorMessage(err)}`)
+        session.close()
+        opts.onClose()
+        return
+      }
+    }
+    const id = opts.attach.attach(sink)
     clientId = id
     opts.onOpen(session)
   }
@@ -251,9 +278,25 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
 
   /** The hook's narrowing, for a SUCCESSFUL response only. No hook → the response untouched. */
   const narrowResponse = (method: string, res: RpcOk | RpcErr): RpcOk | RpcErr => {
-    const narrow = opts.hooks?.narrowResponse
-    if (!narrow || res.ok !== true) return res
-    return { ...res, result: narrow(session, method, res.result) }
+    if (!opts.hooks?.narrowResponse || res.ok !== true) return res
+    return { ...res, result: opts.hooks.narrowResponse(session, method, res.result) }
+  }
+
+  /** The answer to a request whose handler (a hook, or the shell's dispatch) threw or rejected. */
+  const handlerError = (id: number, err: unknown): string =>
+    JSON.stringify({ t: 'res', id, ok: false, error: { code: 'E_HANDLER', message: errorMessage(err) } })
+
+  /** Send the response `build` produces. If building or serialising it throws (a narrowResponse hook,
+   *  an unserialisable result), answer `E_HANDLER` instead. Never throws: it runs inside a `.then`,
+   *  where a throw would be an unhandled rejection and a request nobody ever answers. */
+  const respond = (id: number, build: () => RpcOk | RpcErr): void => {
+    let json: string
+    try {
+      json = JSON.stringify(build())
+    } catch (err) {
+      json = handlerError(id, err)
+    }
+    socket.sendTunnelText(json)
   }
 
   /** SCOPE jail for the board log (beyond the host registry's own projectId jail): a session bound to
@@ -303,8 +346,14 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
       if (!peerKey || gate) return
       // Bind the session to THIS peer key. Every later approval/dispatch step re-asserts it.
       sessionPeerKey = peerKey
-      // Asked with the HANDSHAKE key, before the gate exists: a pinned peer skips the dialog.
-      const auto = opts.autoApprove?.(peerKey) === true
+      // Asked with the HANDSHAKE key, before the gate exists: a pinned peer skips the dialog. A
+      // pin-store lookup that throws reads as "not pinned" — the human is asked instead.
+      let auto = false
+      try {
+        auto = opts.autoApprove?.(peerKey) === true
+      } catch (err) {
+        console.warn(`[relay-host] autoApprove threw; asking the human instead: ${errorMessage(err)}`)
+      }
       gate = createTrustGate({
         peerKeyB64: peerKey,
         sessionId: `${peerKey}:${Date.now()}`, // obligation (b): ONE state per pairing attempt
@@ -362,16 +411,29 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
       }
       if (m.t === 'req') {
         // A hook may answer the request itself — it then never reaches a scope check or the core.
-        const intercepted = opts.hooks?.interceptReq?.(session, m.method, m.args) ?? null
+        // Every hook call below is guarded: a throw is ANSWERED (E_HANDLER), never let into the
+        // socket's message emit (see RelayHostHooks).
+        let intercepted: Promise<unknown> | null
+        try {
+          intercepted = opts.hooks?.interceptReq?.(session, m.method, m.args) ?? null
+        } catch (err) {
+          socket.sendTunnelText(handlerError(m.id, err))
+          return
+        }
         if (intercepted) {
           void intercepted.then(
-            (result) => socket.sendTunnelText(JSON.stringify({ t: 'res', id: m.id, ok: true, result: result ?? null })),
-            (err) => socket.sendTunnelText(JSON.stringify({ t: 'res', id: m.id, ok: false,
-              error: { code: 'E_HANDLER', message: err instanceof Error ? err.message : String(err) } }))
+            (result) => respond(m.id, () => ({ t: 'res', id: m.id, ok: true, result: result ?? null })),
+            (err) => socket.sendTunnelText(handlerError(m.id, err))
           )
           return
         }
-        const decision = opts.hooks?.access?.(session, 'req', m.method, m.args) ?? { allow: true as const }
+        let decision: AccessDecision
+        try {
+          decision = opts.hooks?.access?.(session, 'req', m.method, m.args) ?? { allow: true as const }
+        } catch (err) {
+          socket.sendTunnelText(handlerError(m.id, err))
+          return
+        }
         if (!decision.allow) {
           socket.sendTunnelText(JSON.stringify({ t: 'res', id: m.id, ok: false, error: { code: 'E_ROLE', message: decision.message } }))
           return
@@ -392,13 +454,24 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
           return
         }
         const id = clientId
-        void opts.attach
-          .dispatch(id, { ...m, args })
-          .then((res) =>
-            socket.sendTunnelText(JSON.stringify(narrowResponse(m.method, scopeResponse(m.method, res))))
-          )
+        let pending: Promise<RpcOk | RpcErr>
+        try {
+          pending = opts.attach.dispatch(id, { ...m, args })
+        } catch (err) {
+          socket.sendTunnelText(handlerError(m.id, err))
+          return
+        }
+        void pending.then(
+          (res) => respond(m.id, () => narrowResponse(m.method, scopeResponse(m.method, res))),
+          (err) => socket.sendTunnelText(handlerError(m.id, err))
+        )
       } else if (m.t === 'cast') {
-        const d = opts.hooks?.access?.(session, 'cast', m.method, m.args) ?? { allow: true as const }
+        let d: AccessDecision
+        try {
+          d = opts.hooks?.access?.(session, 'cast', m.method, m.args) ?? { allow: true as const }
+        } catch {
+          return // a cast has no reply channel: a policy that cannot decide drops it
+        }
         if (!d.allow) return
         const args = d.args ?? m.args
         if (projectOutOfScope(m.method, args)) return

@@ -293,3 +293,140 @@ describe('core relay host — hooks and refusals', () => {
     expect(events).toEqual(['denied:expired', 'close'])
   })
 })
+
+// Ruling R11: a hook (or the shell's dispatch) that throws must never escape into the socket's
+// message handler — over a real ws that emit is synchronous, so the throw kills the stream: no later
+// frame, no `close`, no teardown, the request never answered. Every guard below answers or drops
+// instead, and the session keeps serving.
+describe('core relay host — a throwing hook or dispatch never wedges the session', () => {
+  const errorOf = (frames: string[], id: number) =>
+    frames.map((f) => JSON.parse(f)).find((m) => m.t === 'res' && m.id === id)
+
+  it('a throwing access hook answers E_HANDLER, and a later frame on the same session still dispatches', async () => {
+    const t = open({
+      autoApprove: () => true,
+      hooks: {
+        access: (_s, _k, method) => {
+          if (method === 'boom') throw new Error('access exploded')
+          return { allow: true }
+        }
+      }
+    }, true)
+    await vi.waitFor(() => expect(t.opened.length).toBe(2))
+    t.client.send(JSON.stringify({ t: 'req', id: 1, method: 'boom', args: [] }))
+    await vi.waitFor(() => expect(errorOf(t.frames, 1)).toMatchObject({
+      ok: false, error: { code: 'E_HANDLER', message: 'access exploded' }
+    }))
+    t.client.send(JSON.stringify({ t: 'req', id: 2, method: 'fine', args: [] }))
+    await vi.waitFor(() => expect(errorOf(t.frames, 2)).toMatchObject({ ok: true, result: 'ok' }))
+    expect(t.fa.dispatched.map((r) => r.method)).toEqual(['fine'])
+  })
+
+  it('a throwing access hook on a cast drops that cast, and a later cast still arrives', async () => {
+    const t = open({
+      autoApprove: () => true,
+      hooks: {
+        access: (_s, kind, method) => {
+          if (kind === 'cast' && method === 'boom') throw new Error('nope')
+          return { allow: true }
+        }
+      }
+    }, true)
+    await vi.waitFor(() => expect(t.opened.length).toBe(2))
+    t.client.send(JSON.stringify({ t: 'cast', method: 'boom', args: [] }))
+    t.client.send(JSON.stringify({ t: 'cast', method: 'pty:write', args: ['s1', 'x'] }))
+    await vi.waitFor(() => expect(t.fa.casts.length).toBe(1))
+    expect(t.fa.casts).toEqual([{ method: 'pty:write', args: ['s1', 'x'] }])
+  })
+
+  it('a throwing interceptReq answers E_HANDLER and never dispatches', async () => {
+    const t = open({
+      autoApprove: () => true,
+      hooks: {
+        interceptReq: (_s, m) => {
+          if (m === 'relay:hosted:self') throw new Error('intercept exploded')
+          return null
+        }
+      }
+    }, true)
+    await vi.waitFor(() => expect(t.opened.length).toBe(2))
+    t.client.send(JSON.stringify({ t: 'req', id: 3, method: 'relay:hosted:self', args: [] }))
+    await vi.waitFor(() => expect(errorOf(t.frames, 3)).toMatchObject({
+      ok: false, error: { code: 'E_HANDLER', message: 'intercept exploded' }
+    }))
+    expect(t.fa.dispatched).toEqual([])
+  })
+
+  it('a rejecting attach.dispatch answers E_HANDLER', async () => {
+    const fa = fakeAttach()
+    const t = open({
+      autoApprove: () => true,
+      attach: { ...fa.attach, dispatch: async () => { throw new Error('dispatch exploded') } }
+    }, true)
+    await vi.waitFor(() => expect(t.opened.length).toBe(2))
+    t.client.send(JSON.stringify({ t: 'req', id: 4, method: 'fs:list', args: [] }))
+    await vi.waitFor(() => expect(errorOf(t.frames, 4)).toMatchObject({
+      ok: false, error: { code: 'E_HANDLER', message: 'dispatch exploded' }
+    }))
+  })
+
+  it('a dispatch that throws synchronously answers E_HANDLER', async () => {
+    const fa = fakeAttach()
+    const t = open({
+      autoApprove: () => true,
+      attach: { ...fa.attach, dispatch: () => { throw new Error('sync dispatch') } }
+    }, true)
+    await vi.waitFor(() => expect(t.opened.length).toBe(2))
+    t.client.send(JSON.stringify({ t: 'req', id: 5, method: 'fs:list', args: [] }))
+    await vi.waitFor(() => expect(errorOf(t.frames, 5)).toMatchObject({
+      ok: false, error: { code: 'E_HANDLER', message: 'sync dispatch' }
+    }))
+  })
+
+  it('a throwing narrowResponse answers E_HANDLER, never the unnarrowed result', async () => {
+    const t = open({
+      autoApprove: () => true,
+      hooks: { narrowResponse: () => { throw new Error('narrow exploded') } }
+    }, true)
+    await vi.waitFor(() => expect(t.opened.length).toBe(2))
+    t.client.send(JSON.stringify({ t: 'req', id: 6, method: 'fs:list', args: [] }))
+    await vi.waitFor(() => expect(errorOf(t.frames, 6)).toMatchObject({
+      ok: false, error: { code: 'E_HANDLER', message: 'narrow exploded' }
+    }))
+    expect(t.frames.some((f) => f.includes('"result":"ok"'))).toBe(false)
+  })
+
+  it('a throwing autoApprove reads as false: the human is asked instead', async () => {
+    let pending = 0
+    const t = open({
+      autoApprove: () => { throw new Error('pin store exploded') },
+      onPeerPending: () => pending++
+    }, true)
+    expect(pending).toBe(1)
+    t.hostSession.confirm() // the human
+    await vi.waitFor(() => expect(t.opened.sort()).toEqual(['host', 'peer']))
+  })
+
+  it('a throwing wrapSink FAILS CLOSED: nothing is attached, the session closes, the shell hears it', async () => {
+    let hostClosed = 0
+    let clientClosed = 0
+    const hostKeys = genKeyPair()
+    const { hostT, peerT } = transportPair()
+    const fa = fakeAttach()
+    const s = connectRelayHost({
+      url: 'ws://127.0.0.1/x', token: 't', ourKeys: hostKeys, attach: fa.attach, transport: hostT,
+      autoApprove: () => true,
+      hooks: { wrapSink: () => { throw new Error('filter exploded') } },
+      onPeerPending: () => {}, onOpen: () => { throw new Error('must not open') }, onClose: () => hostClosed++
+    })
+    connectRelayClient({
+      url: 'ws://127.0.0.1/x', token: 't', hostKeyB64: publicKeyToB64(hostKeys.publicKey), ourKeys: genKeyPair(),
+      transport: peerT, autoApprove: true, onSas: () => {}, onApproved: () => {}, onFrame: () => {},
+      onPtyData: () => {}, onClose: () => clientClosed++
+    })
+    await vi.waitFor(() => expect(hostClosed).toBe(1))
+    expect(clientClosed).toBe(1)
+    expect(fa.sinks.size).toBe(0) // an unfiltered sink was never handed to the core
+    expect(s.clientId()).toBeNull()
+  })
+})
