@@ -78,6 +78,8 @@ export async function locateGrok(sessionId: string): Promise<string | undefined>
 const GEMINI_HEAD_BYTES = 64 * 1024
 
 async function geminiHeaderLine(p: string): Promise<string> {
+  // One handle for both reads: the fallback reads the SAME file the head came from, never the path
+  // again (which could name a different file by then).
   const fh = await fs.promises.open(p, 'r')
   try {
     const buf = Buffer.alloc(GEMINI_HEAD_BYTES)
@@ -85,10 +87,11 @@ async function geminiHeaderLine(p: string): Promise<string> {
     const nl = buf.subarray(0, bytesRead).indexOf(0x0a)
     if (nl >= 0) return buf.toString('utf8', 0, nl)
     if (bytesRead < buf.length) return buf.toString('utf8', 0, bytesRead)
+    // A positional read does not move the file position, so this reads the whole file from 0.
+    return (await fh.readFile('utf8')).split('\n', 1)[0]
   } finally {
     await fh.close()
   }
-  return (await fs.promises.readFile(p, 'utf8')).split('\n', 1)[0]
 }
 
 export async function locateGemini(sessionId: string): Promise<string | undefined> {
