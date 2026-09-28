@@ -1707,7 +1707,7 @@ the wire never see any of it):
   both directions. Server Edition: inert (no `<webview>` in a plain browser — ghosts are empty
   husks, nothing to preserve). Mobile: N/A (no canvas).
 
-## Agent support (Claude / Codex / Gemini / Copilot / opencode / Grok / custom)
+## Agent support (Claude / Codex / Antigravity / Gemini / Copilot / opencode / Grok / custom)
 
 **Message scope publication:** desktop `send`/`reply`/`notify` wait for pending active-canvas edits
 to be saved when either endpoint is on that canvas (`renderer/lib/messageScopeSync.ts`). `list`
@@ -1815,8 +1815,11 @@ else, and its context links must keep classifying across restarts).
   harmful. The `auto` permission-mode **version gate is claude's alone** (it is fed by a `claude
   --version` probe), and grok's mode flag must go **BEFORE** its `--` separator, which is
   end-of-options. Full picture, dialect traps and the device checklist: **`docs/grok-agent.md`**.
-- **Antigravity** (`agy` 1.2.3, builtin since 2026-09) — in `AGENT_HOOK_TARGETS` ONLY:
-  badge, NEEDS YOU (`ask_question`, a closed set of one), `--after` and triggers. Launch is
+- **Antigravity** (`agy` 1.2.3 measured on Windows; the 1.2.12 Linux binary read; builtin since
+  2026-09 — Google's replacement for Gemini CLI on personal accounts) — in `AGENT_HOOK_TARGETS`
+  (badge, NEEDS YOU from `ask_question`, a closed set of one, `--after` and triggers) and
+  `RESUMABLE_AGENTS` (`agy --conversation=<id>`, the spelling agy's own exit hint uses; a dead id
+  is ignored by agy, which starts fresh — without it a reboot left a bare shell). Launch is
   `agy --prompt-interactive '<p>'` via the new optional `AgentConfig.promptFlag` (agy has no
   positional prompt). Its hooks live in the GLOBAL `~/.gemini/config/hooks.json` under our own
   `nodeterm-status` bundle, and **each one is a synchronous gate whose stdout agy reads as a
@@ -1841,8 +1844,10 @@ else, and its context links must keep classifying across restarts).
   **The vendor-location fallback also owns launch reachability.** Measured on Windows 11 with agy
   1.2.7: the vendor installer wrote `%LOCALAPPDATA%\agy\bin` into the user PATH as `REG_SZ`, so the
   process inherited the percent expression literally and both `where agy` and `cmd /c agy` failed
-  while `%LOCALAPPDATA%\agy\bin\agy.exe` existed and ran. `PtyManager` therefore prepends the
-  directory returned by `findAgy()` to the PATH of a LOCAL Antigravity session. The gate uses
+  while `%LOCALAPPDATA%\agy\bin\agy.exe` existed and ran. `PtyManager` therefore APPENDS the
+  directory returned by `findAgy()` to the PATH of a LOCAL Antigravity session, and only when no
+  entry already names it (`pathWithAgyDir`) — prepending shadowed the user's own tools on
+  macOS/Linux, where agy sits in a shared directory. The gate uses
   `capabilityAgentId`, so an Antigravity-based custom agent inherits it; plain terminals and SSH
   sessions do not. Detecting the binary only for hook installation recreates the original split:
   a configured badge for an agent the pane cannot launch.
@@ -1850,10 +1855,22 @@ else, and its context links must keep classifying across restarts).
   never a spawn), in two passes per launch: the boot pass may only see the inherited PATH, so a miss
   there does NOTHING; after the login-shell PATH probe settles, a final pass repeats the lookup and
   only then withdraws a bundle of ours when agy is not found. An `agy` installed later gets the
-  hook the next time nodeterm opens; there is no opt-out yet. The event name is not in agy's payloads: the command exports `NODETERM_AGY_EVENT`, the script
-  POSTs `nodeterm_hook_event`, the hook server merges it after `JSON.parse`. `newTurn` rides only the
-  `PreInvocation` with `invocationNum === 0` (without it `lastTurnError` is never retired). Measured
-  cost ~520 ms per event inside nodeterm (a follow-up tracks backgrounding the POST). Full picture,
+  hook the next time nodeterm opens. **The opt-out is agy's own switch**: `"enabled": false` on our
+  bundle is carried across every rewrite. hooks.json goes through the shared settings transaction
+  (`updateSettingsFile`: a symlinked file keeps its link and mode, writers serialize, a file changed
+  mid-update is not overwritten), and only entries under `.nodeterm/agent-hooks/` are swept as
+  ours. The POSIX command forces exit 0 (`sh <script> || :`) — the answer is printed first, and a
+  later failure (a broken endpoint file) must not turn into a non-zero status next to it. **No SSH
+  hook installer yet** (`LOCAL_ONLY_HOOK_AGENTS` / `hasHooksOverSsh`): on an SSH project an agy node
+  never reports, so `--after` refuses it as a dependency. The event name is not in agy's payloads:
+  the command exports `NODETERM_AGY_EVENT`, the script POSTs `nodeterm_hook_event`, and the hook
+  server merges it after `JSON.parse` — for antigravity ONLY, an empty field deleting a planted
+  value. `newTurn` rides only the
+  `PreInvocation` with `invocationNum === 0` (without it `lastTurnError` is never retired). Cost:
+  on POSIX the POST already runs in the background and the part agy waits for measured 2–40 ms
+  (pinned by a stalled-endpoint test, since a foreground POST plus the failover walk measured ~6 s
+  against the 5 s handler timeout); the ~520 ms per event measured on Windows is Git Bash's fork
+  cost before the backgrounding. Full picture,
   limits (permission prompt and ESC fire no hook) and the device checklist:
   **`docs/antigravity-agent.md`**.
 - **Gemini + codex parity** (2026-08-09) — brought both up to grok's level in the lists above. Unlike
@@ -2103,7 +2120,7 @@ else, and its context links must keep classifying across restarts).
   own gate adds one beside claude's.
 - **State via each agent's hooks → shared 4-state model** — detection uses the agent's own
   hooks, **not** output parsing. `src/shared/agents/normalize.ts` has per-agent normalizers
-  (`normalizeClaude`/`normalizeCodex`/`normalizeGemini`/`normalizeCopilot`/`normalizeOpencode`/`normalizeGrok`) that map each agent's native hook
+  (`normalizeClaude`/`normalizeCodex`/`normalizeGemini`/`normalizeCopilot`/`normalizeOpencode`/`normalizeGrok`/`normalizeAntigravity`) that map each agent's native hook
   events to a `NormalizedAgentEvent` over the shared `AgentState` (`working | waiting | blocked
   | done`) plus subagent/recurring/session kinds. Canvas's listener consumes
   `NormalizedAgentEvent` from `agent:status`, drives the `agentStatus` store, fires throttled

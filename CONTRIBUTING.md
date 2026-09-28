@@ -200,9 +200,16 @@ lane unaffected.
 - **Finding `agy` for hook installation is not enough to launch it.** The measured Windows
   installer wrote `%LOCALAPPDATA%\agy\bin` into a `REG_SZ` user PATH, so command lookup kept the
   percent expression literal and `agy` was not found even though its executable existed. Local
-  Antigravity PTYs therefore prepend the directory returned by the same vendor-location lookup the
-  hook installer uses. Keep that correction scoped to Antigravity sessions; do not change plain
-  terminals or inject a local path into SSH sessions.
+  Antigravity PTYs therefore APPEND the directory returned by the same vendor-location lookup the
+  hook installer uses, and only when no PATH entry already names it (`pathWithAgyDir`) — never
+  prepend: on macOS/Linux agy lives in a shared directory, and moving it ahead of the user's entries
+  shadows their own tools. Keep that correction scoped to Antigravity sessions and out of SSH
+  sessions. (The separate Windows `Path`→`PATH` key fix-up applies to every Windows spawn.)
+
+- **Our hooks.json bundle is the user's to switch off.** `"enabled": false` on `nodeterm-status` in
+  `~/.gemini/config/hooks.json` is agy's own switch and nodeterm's only opt-out; the installer
+  carries it across every rewrite. hooks.json is published through the shared settings transaction
+  (`updateSettingsFile`) — never a bare write, which replaced a symlinked file with a regular one.
 
 - **Every loosening of a security gate must be a SETTING the user can see and revoke.** A "don't
   ask again" that lives only in a dialog is a permission granted once and never findable again. The

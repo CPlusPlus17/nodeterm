@@ -1,26 +1,37 @@
 # Antigravity (`agy`) as a nodeterm agent
 
-Google's Antigravity CLI (`agy`, measured on **1.2.3**, Windows 11) is a builtin agent id:
+Google's Antigravity CLI (`agy`, measured on **1.2.3**, Windows 11; the **1.2.12** Linux binary and
+the hook reference embedded in it were read on 2026-09-28) is a builtin agent id — and, since Google
+stopped serving Gemini CLI to personal accounts on 2026-06-18, the replacement for the `gemini` agent
+for most users (`docs/gemini-agent.md`):
 `AGENT_CONFIG.antigravity` in `src/shared/agents/config.ts` — label `Antigravity`, colour `#00a3a3`
 (provisional), `launchCmd: 'agy'`, `expectedProcess: 'agy'`, `promptInjectionMode:
 'flag-interactive'` with **`promptFlag: '--prompt-interactive'`**. It is a member of exactly ONE
-capability list, `AGENT_HOOK_TARGETS`: the RUNNING / NEEDS YOU badge, the unread dot, completion
-notifications, `--after` dependencies and trigger targets come from that. Everything else is a leaf
-that does not exist yet (§7).
+capability lists, `AGENT_HOOK_TARGETS` — the RUNNING / NEEDS YOU badge, the unread dot, completion
+notifications, `--after` dependencies and trigger targets — and `RESUMABLE_AGENTS`: a cold restore
+relaunches `agy --conversation=<id>` (the spelling agy prints in its own exit hint), where the id is
+the hook payload's `conversationId`. A dead id is the safe failure: agy logs "Conversation %s not
+found, ignoring --conversation flag" and starts fresh (1.2.12 binary). Everything else is a leaf that
+does not exist yet (§7).
 
-On Windows, launch reachability uses the same vendor-location lookup as hook installation. The
-measured agy 1.2.7 installer wrote `%LOCALAPPDATA%\agy\bin` into the user PATH as `REG_SZ`; Windows
-kept the percent expression literal, so `where agy` failed while the executable at that location
-ran normally. A local Antigravity PTY prepends the detected executable's directory to its own PATH.
-Plain terminals and SSH sessions remain untouched.
+Launch reachability uses the same vendor-location lookup as hook installation. The measured agy
+1.2.7 installer on Windows wrote `%LOCALAPPDATA%\agy\bin` into the user PATH as `REG_SZ`; Windows
+kept the percent expression literal, so `where agy` failed while the executable at that location ran
+normally. A local Antigravity PTY therefore APPENDS the detected executable's directory to its own
+PATH, and only when no entry already names it (`pathWithAgyDir`) — it used to prepend, which on
+macOS/Linux moved a shared directory (`/usr/local/bin`, `~/.local/bin`) ahead of the user's own
+tools. Plain terminals and SSH sessions remain untouched.
 
 > Sibling documents: `docs/grok-agent.md`, `docs/gemini-agent.md`, `docs/copilot-agent.md`. The
 > distilled rules are **Adding a new agent** in `CLAUDE.md`.
 
 > **Where the facts come from.** Everything marked *measured* was run against the real `agy` 1.2.3
 > on Windows 11, in a temporary HOME, or measured on that machine with the code in this change.
-> Everything else is in §8, the device checklist. POSIX (mac/Linux) has NOT been run against a real
-> `agy` at all.
+> Everything else is in §8, the device checklist. POSIX (mac/Linux) has NOT been run against a real,
+> logged-in `agy`: the generated command and script were run the way agy documents it (`sh -c`, cwd =
+> the hooks.json directory, fixture payloads on stdin) under dash and bash-posix, and the 1.2.12
+> Linux binary was seen to LOAD our hooks.json (`hooks_manager.go: loaded 1 named hooks`), but no
+> hook fired — that needs a signed-in account.
 
 ---
 
@@ -146,6 +157,15 @@ Why each one:
   PATH (with PATHEXT on Windows, through the shared `findExecutableSync`), then the vendor's own
   install locations — `~/.local/bin/agy` on macOS/Linux and `%LOCALAPPDATA%\agy\bin\agy.exe` on
   Windows (antigravity.google/docs/cli/install). It is a file lookup, never a spawn.
+- **The snap is NOT the vendor's, and it cannot see our hook.** On Ubuntu, typing `agy` without it
+  installed answers `snap install antigravity-cli` (measured 2026-09-28). That snap is a community
+  wrapper (`snap info antigravity-cli`: "This is not an official Google product") and strictly
+  confined, so its `$HOME` is `~/snap/antigravity-cli/current` and the hooks.json it reads is not
+  the `~/.gemini/config/hooks.json` we write — the codex snap trap again. The failure is the SAFE
+  one (the hook cannot gate anything it is never shown, so no tool is denied), but every badge on
+  such a node stays dark. Recommend the vendor installer
+  (`curl -fsSL https://antigravity.google/cli/install.sh | bash`, which verifies a sha512 from the
+  vendor manifest and writes `~/.local/bin/agy`).
 - **Two passes per launch** (`installAntigravityHooksWithProbe`, desktop and Server Edition). At
   boot the lookup may only see the PATH the process inherited — a GUI app on macOS/Linux starts with
   a minimal one — so the **boot pass** installs if it finds `agy` and otherwise does nothing at all.
@@ -155,10 +175,18 @@ Why each one:
   strength of the boot pass alone. On Windows the probe answers at once and the inherited PATH is
   already the user's, so the final pass just repeats the same lookup. Both passes write to the paths
   resolved before the first one. An `agy` installed later gets the hook the next time nodeterm
-  opens. There is no setting to turn it off yet.
+  opens.
+- **The opt-out is agy's own switch.** `"enabled": false` on the `nodeterm-status` bundle turns the
+  whole gate off, and the installer carries it across every rewrite (the handlers are still
+  refreshed, so switching it back on gets the current commands). Only a literal `false` counts.
+- **Published through the shared settings transaction** (`updateSettingsFile`, #851): a symlinked
+  hooks.json (dotfiles) keeps its link and the target is updated, the file's mode is kept, our writers
+  serialize behind a lock, and a file that changed while the update was computed (agy's own `/hooks`
+  editor writes it too) is not overwritten.
 - **One bundle, `nodeterm-status`**, rewritten whole on every install (collapses duplicates, #558).
   Every other top-level key is kept as is; an entry of ours found in another bundle is swept out
-  (matched through `normalizeHookCommand`, both leaves on every platform).
+  (matched through `normalizeHookCommand`, both leaves on every platform, and ANCHORED on
+  `.nodeterm/agent-hooks/` — a user's own gate at `~/work/agent-hooks/antigravity.sh` is not ours).
 - **Two shapes**: `PreToolUse`/`PostToolUse` are grouped (`[{ "matcher": "*", "hooks": [...] }]`),
   `PreInvocation`/`Stop` are flat handler lists. `"*"` is the matcher the measurement ran with.
   `PostInvocation` is not subscribed.
@@ -173,11 +201,17 @@ Why each one:
 ### 4.1 POSIX command
 
 ```
-NODETERM_AGY_EVENT='Stop'; export NODETERM_AGY_EVENT; if [ -r '<script>' ]; then sh '<script>'; else printf '%s\n' '{"decision":""}'; cat >/dev/null 2>&1 || :; fi
+NODETERM_AGY_EVENT='Stop'; export NODETERM_AGY_EVENT; if [ -r '<script>' ]; then sh '<script>' || :; else printf '%s\n' '{"decision":""}'; cat >/dev/null 2>&1 || :; fi
 ```
 
-The missing-script branch answers from the same table and drains stdin. `agy` documents `sh -c` on
-Unix; not run on a device.
+The missing-script branch answers from the same table and drains stdin. `|| :` forces exit 0 like
+the Windows wrapper's `exit /b 0`: the script answers FIRST and sources the endpoint file after, so a
+syntax error there used to leak out as status 2 beside a valid answer — a pair agy was never
+measured on (silence + exit 1 is a measured DENY). `agy` documents `sh -c` on Unix, cwd = the
+directory holding hooks.json, `~` expanded (1.2.12's embedded hooks.md). Run that way under dash and
+bash-posix against a fake/unreachable/blackholed endpoint, a missing or unreadable script, empty or
+200 KB stdin, no curl, an unwritable TMPDIR and a HOME with a space: every PreToolUse printed exactly
+`{"decision":"ask"}` and exited 0. Not yet run under a logged-in agy.
 
 ### 4.2 Windows command — no quotes, relative, guarded
 
@@ -251,10 +285,15 @@ Measured on Windows 11 (20 runs, dispatched as `agy` does):
 | inside a nodeterm node | ~100 ms | **~520 ms** |
 | plain terminal (no `NODETERM_NODE_ID`) | ~95 ms | **~155 ms** |
 
-A tool step fires three of the four subscribed events, so ~1.6 s of hook per step inside nodeterm.
-The time goes to Git Bash forks (~55 ms each) for the token read, the temp file and the path
-conversion before the POST is backgrounded. Accepted for now; backgrounding everything after the
-stdin read is a tracked follow-up.
+A tool step fires three of the four subscribed events, so ~1.6 s of hook per step inside nodeterm
+on Windows. The time goes to Git Bash forks (~55 ms each) for the token read, the temp file and the
+path conversion before the POST is backgrounded. Accepted for now; trimming those forks is a
+Windows follow-up.
+
+On POSIX the POST already runs in the background: the part agy waits for measured **2–40 ms** (dash
+and bash-posix). It matters that it stays that way — a foreground POST against an endpoint that
+accepts and never answers, plus the bounded failover walk, measured **~6 s**, past our 5 s handler
+timeout, on every tool call. `antigravity-script.test.ts` pins it with a curl that stalls for 6 s.
 
 ---
 
@@ -276,15 +315,14 @@ stdin read is a tracked follow-up.
 
 | not here | why |
 |---|---|
-| Resume (`agy --conversation <id>`) | the grammar is measured and works, but joining `RESUMABLE_AGENTS` before a validated resume path makes cold restore type an unchecked line |
-| In-place restart | the exit command is not measured (`/quit` worked in a raw ConPTY, not wired) |
+| In-place restart / Eco | `/exit` and `/quit` are documented (1.2.12), but `ask_question` maps to `waiting`, which the restart's busy gate does not refuse — an `/exit` would be typed into an open question. Map it to `blocked` (or treat `waiting` as busy for agy) and check on a device that the pane returns to a shell (agy runs sidecar processes) before adding `EXIT_SEQUENCES.antigravity` |
 | Permission modes | flags exist (`--mode accept-edits\|plan`, `--dangerously-skip-permissions`) but there is no row in `approval-mode.ts`. Until there is, nodes run under `agy`'s default policy — so its permission prompt (which fires no hook, §3.1) is what a node shows as RUNNING |
 | Context meter | no token count or window in hooks or transcript (the TUI's "1.1k tokens" is per thought block) |
 | Chat panel, context link, transfer | no parser/locator yet. When there is one: read **`transcript_full.jsonl`** (what the payload announces), not `transcript.jsonl`, which lacks `thinking` and `tool_calls` |
-| Canvas control | needs a shim and a discovery file. `agy` reads `~/.gemini/GEMINI.md` (measured), where the Gemini CLI's nodeterm blocks already are |
+| Canvas control | the shim and the discovery file already exist — `agy` reads `~/.gemini/GEMINI.md` (measured), where the Gemini CLI's nodeterm blocks are — but antigravity is not in `CANVAS_CONTROL_CAPABLE`, so the session gets no `NODETERM_CANVAS_CONTROL` and the shim answers "not a nodeterm agent node". Joining is the follow-up; check what else that list gates first |
 | Subagent cards | `invoke_subagent` exists in the step enum; never provoked |
 | Session name, rename | title lives in SQLite (not measured); no rename command |
-| SSH projects | the remote installer would have to write the POSIX form |
+| SSH projects | no remote installer yet (it would write the POSIX form over the ControlMaster). `LOCAL_ONLY_HOOK_AGENTS` / `hasHooksOverSsh` make `--after` refuse an agy dependency there; a trigger aimed at one queues until its (never-coming) `done`, visibly on the trigger card |
 | Brand icon | cosmetic; the badge falls back to a pulsing dot |
 
 Also worth knowing: `agy` asks "Do you trust the contents of this project?" the first time it opens a
@@ -296,7 +334,9 @@ folder, before any turn.
 
 1. **`terminationReason: 'ERROR'`** never produced (bad model name exits before any hook; a timeout
    emits no `Stop`; a failing tool is not a turn error). Whether `Stop.error` carries text is unknown.
-2. **POSIX** (mac/Linux): nothing run against a real `agy`; the script only ran under Git Bash.
+2. **POSIX** (mac/Linux) under a real, signed-in `agy`: the command and script ran under dash and
+   bash-posix the way agy documents dispatch, and 1.2.12 loaded our hooks.json, but no hook has fired
+   (macOS `/bin/sh` is bash 3.2, approximated with bash 5.2 in posix mode).
 3. **`--mode accept-edits` with an edit tool** and our `ask` answer.
 4. **`force_ask`** never emitted; its behaviour is the vendor's description.
 5. **`invocationNum`** restarting at 0 inside one turn in other scenarios (`force_continue`,
@@ -313,3 +353,12 @@ folder, before any turn.
     32-bit Windows (an error there also falls to "unreadable" = no install).
 13. **The `agy` lookup on macOS/Linux** (a GUI app's PATH, `~/.local/bin`) — only unit-tested with a
     fake home; on Windows the vendor path and the PATH both exist on the machine it was written on.
+14. **Resume**: that the hook's `conversationId` is the id `agy --conversation=<id>` accepts, and that
+    `invoke_subagent` children do not fire hooks under their OWN `conversationId` (if they do, the
+    recorded id — and the node's `done` — would flip to the child).
+15. **`Stop` → `{"decision":""}` on 1.2.12.** `StopResult.decision` is a proto enum there and the
+    binary carries `unknown StopResult decision: %v`. Turns completed under it on 1.2.3; silence was
+    measured safe for every event. Re-check on the current version.
+16. **Whether agy waits on the hook's process GROUP or only the direct child and its pipes** — the
+    backgrounded POST is safe only in the second case (a runner that waits on the child returned in
+    12–16 ms while a 6 s walk was still running).
