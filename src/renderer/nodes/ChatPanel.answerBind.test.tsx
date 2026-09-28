@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatMessage, ChatTranscriptResult } from '@shared/types'
 import type { AnswerPermissionPayload, HeldPermission } from '@shared/agents/permission-answer'
 import { useAgentStatus } from '../state/agentStatus'
-import { CHAT_ANSWER_REBIND_RETRY_MS } from '../lib/chatAnswer'
+import { CHAT_ANSWER_REBIND_RETRY_MAX_MS, CHAT_ANSWER_REBIND_RETRY_MS } from '../lib/chatAnswer'
 
 /**
  * The ⌘M answer card binds the request the DISPLAYED thread was read for (`threadHeldFor` — the held
@@ -60,9 +60,9 @@ async function render(sessionId = 's1'): Promise<void> {
     root.render(<ChatPanel nodeId={NODE} sessionId={sessionId} agentId="claude" />)
   })
 }
-async function settle(i: number, messages: ChatMessage[]): Promise<void> {
+async function settle(i: number, messages: ChatMessage[], olderCursor: number | null = null): Promise<void> {
   await act(async () => {
-    pending[i].resolve({ messages, found: true, olderCursor: null, unmatchedResults: [] })
+    pending[i].resolve({ messages, found: true, olderCursor, unmatchedResults: [] })
   })
 }
 async function fail(i: number): Promise<void> {
@@ -178,9 +178,9 @@ describe('answer card binding', () => {
     await hold(A)
     expect(controlsOn()).toEqual([])
     expect(updatingOn()).toEqual([0])
-    // Re-read (working → blocked also takes the turn-end reload; every read here started under A).
-    expect(pending.length).toBeGreaterThan(1)
-    await settle(pending.length - 1, THREAD_A)
+    // working → blocked with a new held id: ONE reload (the turn-end reload owns it), not two.
+    expect(pending).toHaveLength(2)
+    await settle(1, THREAD_A)
     expect(controlsOn()).toEqual([0])
     await act(async () => approve(cards()[0]).click())
     expect(sent().pendingId).toBe('n-p-A')
@@ -202,5 +202,75 @@ describe('answer card binding', () => {
     useAgentStatus.getState().byId[NODE]!.held = B
     await act(async () => btn.click())
     expect(answerPermission).not.toHaveBeenCalled()
+  })
+
+  it('a read under B that still shows the card A was bound to does not bind B (transcript lag)', async () => {
+    await boundToA()
+    await hold(B)
+    // The reload started under B, but the transcript has not written plan B yet: same card as A's.
+    await settle(1, THREAD_A)
+    expect(controlsOn()).toEqual([])
+    expect(updatingOn()).toEqual([0])
+    // Kept retrying; once plan B's card is there, B binds to it.
+    await advance(CHAT_ANSWER_REBIND_RETRY_MS)
+    expect(pending).toHaveLength(3)
+    await settle(2, THREAD_B)
+    expect(controlsOn()).toEqual([1])
+    await act(async () => approve(cards()[1]).click())
+    expect(sent().pendingId).toBe('n-p-B')
+  })
+
+  it('retries back off (2 s, 4 s, …) and reset when the held request changes', async () => {
+    await boundToA()
+    await hold(B)
+    await fail(1)
+    await advance(CHAT_ANSWER_REBIND_RETRY_MS)
+    expect(pending).toHaveLength(3)
+    await fail(2)
+    await advance(CHAT_ANSWER_REBIND_RETRY_MS)
+    expect(pending).toHaveLength(3) // the second retry waits 4 s
+    await advance(CHAT_ANSWER_REBIND_RETRY_MS)
+    expect(pending).toHaveLength(4)
+    await fail(3)
+    // Capped: never more often than… and never later than the max.
+    await advance(CHAT_ANSWER_REBIND_RETRY_MAX_MS)
+    expect(pending).toHaveLength(5)
+    // A new held request starts over: its reload is immediate, then 2 s again.
+    await hold({ pendingId: 'n-p-C', toolName: 'ExitPlanMode' })
+    await fail(4)
+    await fail(5)
+    await advance(CHAT_ANSWER_REBIND_RETRY_MS)
+    expect(pending).toHaveLength(7)
+  })
+
+  it('no retry when there is no card to update (nothing on screen would change)', async () => {
+    await hold(A)
+    await render()
+    await settle(0, [planMsg(0, 'Plan A', 'User rejected')])
+    await hold(B)
+    expect(pending).toHaveLength(2) // the one forced reload on the change
+    await fail(1)
+    await advance(CHAT_ANSWER_REBIND_RETRY_MAX_MS * 2)
+    expect(pending).toHaveLength(2)
+  })
+
+  it('the rebind reload never cancels an older-page fetch: it waits for it, and the page lands', async () => {
+    await hold(A)
+    await render()
+    const el = host.querySelector('.term-chat__msgs') as HTMLDivElement
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 400 })
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 100 })
+    // A thread with history behind it, shorter than the viewport: the older page is fetched at once.
+    await settle(0, [planMsg(100, 'Plan A')], 100)
+    expect(pending).toHaveLength(2)
+    await hold(B)
+    expect(pending).toHaveLength(2) // queued behind the older page, not started over it
+    await settle(1, [{ role: 'assistant', key: 0, parts: [{ kind: 'text', text: 'earlier' }] }])
+    expect(host.textContent).toContain('earlier') // the page was not cancelled
+    expect(pending).toHaveLength(3)
+    // A quiet reload: the thread stays on screen, no "Loading conversation…".
+    expect(host.textContent).not.toContain('Loading conversation')
+    await settle(2, [{ role: 'assistant', key: 0, parts: [{ kind: 'text', text: 'earlier' }] }, planMsg(100, 'Plan A', 'User rejected'), planMsg(200, 'Plan B')])
+    expect(controlsOn()).toEqual([1])
   })
 })

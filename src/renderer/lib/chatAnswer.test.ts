@@ -6,6 +6,10 @@ import {
   activeAnswerCard,
   answerCardState,
   answerRebindPending,
+  answerCardKey,
+  rebindRetryDelay,
+  CHAT_ANSWER_REBIND_RETRY_MS,
+  CHAT_ANSWER_REBIND_RETRY_MAX_MS,
   emptySelection,
   latestUnansweredCard,
   CHAT_ANSWER_TEXT_MAX,
@@ -190,7 +194,12 @@ describe('answerCardState (the card binds the request the thread was READ for)',
   const B = { pendingId: 'p-B', toolName: 'ExitPlanMode' }
 
   it('active, bound to the held id, when the thread was read for the request held now', () => {
-    expect(answerCardState([plan(0)], A, 'p-A')).toEqual({ kind: 'active', card: { message: 0, part: 0 }, pendingId: 'p-A' })
+    expect(answerCardState([plan(0)], A, 'p-A')).toEqual({
+      kind: 'active',
+      card: { message: 0, part: 0 },
+      cardKey: 'k0:0',
+      pendingId: 'p-A'
+    })
   })
   it('updating (no controls) while the thread was read for ANOTHER request: plan A card must not answer B', () => {
     expect(answerCardState([plan(0)], B, 'p-A')).toEqual({ kind: 'updating', card: { message: 0, part: 0 } })
@@ -219,5 +228,46 @@ describe('answerRebindPending', () => {
     expect(answerRebindPending({ pendingId: 'p-B', toolName: 'ExitPlanMode' }, 'p-B')).toBe(false)
     expect(answerRebindPending({ pendingId: 'p-B', toolName: 'Bash' }, 'p-A')).toBe(false)
     expect(answerRebindPending(undefined, 'p-A')).toBe(false)
+  })
+})
+
+describe('answerCardKey', () => {
+  it('prefers the tool_use id, else the line offset + part, else the position', () => {
+    const withId: ChatMessage = { role: 'assistant', key: 5, parts: [{ kind: 'tool', name: 'ExitPlanMode', arg: '', body: 'p', id: 'toolu_1' }] }
+    expect(answerCardKey([withId], { message: 0, part: 0 })).toBe('toolu_1')
+    expect(answerCardKey([plan(7)], { message: 0, part: 0 })).toBe('k7:0')
+    const unkeyed: ChatMessage = { role: 'assistant', parts: [{ kind: 'tool', name: 'ExitPlanMode', arg: '', body: 'p' }] }
+    expect(answerCardKey([unkeyed], { message: 0, part: 0 })).toBe('i0:0')
+  })
+})
+
+describe('answerCardState: a new request must surface on a card the thread shows as NEW', () => {
+  const B = { pendingId: 'p-B', toolName: 'ExitPlanMode' }
+  it('the card that was bound to the previous request stays "Updating…" even after a read under B', () => {
+    expect(answerCardState([plan(0)], B, 'p-B', { pendingId: 'p-A', cardKey: 'k0:0' })).toEqual({
+      kind: 'updating',
+      card: { message: 0, part: 0 }
+    })
+  })
+  it('a different card binds B; the same request re-reading its own card stays bound', () => {
+    expect(answerCardState([plan(0, 'rejected'), plan(10)], B, 'p-B', { pendingId: 'p-A', cardKey: 'k0:0' })).toMatchObject({
+      kind: 'active',
+      pendingId: 'p-B',
+      cardKey: 'k10:0'
+    })
+    expect(answerCardState([plan(0)], B, 'p-B', { pendingId: 'p-B', cardKey: 'k0:0' })).toMatchObject({ kind: 'active' })
+  })
+})
+
+describe('rebindRetryDelay', () => {
+  it('doubles from the base and caps', () => {
+    expect([0, 1, 2, 3, 4, 10].map(rebindRetryDelay)).toEqual([
+      CHAT_ANSWER_REBIND_RETRY_MS,
+      2 * CHAT_ANSWER_REBIND_RETRY_MS,
+      4 * CHAT_ANSWER_REBIND_RETRY_MS,
+      8 * CHAT_ANSWER_REBIND_RETRY_MS,
+      CHAT_ANSWER_REBIND_RETRY_MAX_MS,
+      CHAT_ANSWER_REBIND_RETRY_MAX_MS
+    ])
   })
 })

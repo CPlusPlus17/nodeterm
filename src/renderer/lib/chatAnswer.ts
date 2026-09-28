@@ -84,6 +84,30 @@ export function latestUnansweredCard(messages: readonly ChatMessage[], toolName:
  * agent is `blocked`, so without a retry the card would stay on "Updating…" for the whole hold.
  */
 export const CHAT_ANSWER_REBIND_RETRY_MS = 2000
+/** The retry backs off (doubling) up to this, so a card that never updates costs one read per 30 s. */
+export const CHAT_ANSWER_REBIND_RETRY_MAX_MS = 30_000
+
+/** The delay before retry number `attempt` (0-based): 2 s, 4, 8, 16, then 30 s. */
+export function rebindRetryDelay(attempt: number): number {
+  return Math.min(CHAT_ANSWER_REBIND_RETRY_MS * 2 ** Math.max(0, attempt), CHAT_ANSWER_REBIND_RETRY_MAX_MS)
+}
+
+/**
+ * A stable name for a card across reads: the tool_use id when the paged reader gives one, else the
+ * source line's byte offset + part, else (an unkeyed thread) its position.
+ */
+export function answerCardKey(messages: readonly ChatMessage[], ref: AnswerCardRef): string {
+  const m = messages[ref.message]
+  const p = m?.parts[ref.part]
+  if (p && p.kind === 'tool' && p.id) return p.id
+  return m?.key !== undefined ? `k${m.key}:${ref.part}` : `i${ref.message}:${ref.part}`
+}
+
+/** The card a request was last bound to, so a NEW request cannot bind that same card. */
+export interface BoundAnswerCard {
+  pendingId: string
+  cardKey: string
+}
 
 /** A plan / question is held that the thread on screen was not read for: the tail must be re-read
  *  (and the card waits on "Updating…") before any card may answer it. */
@@ -93,7 +117,7 @@ export function answerRebindPending(held: HeldPermission | undefined, threadHeld
 
 /** What the held plan / question card shows: controls bound to one request, or "Updating…". */
 export type AnswerCardState =
-  | { kind: 'active'; card: AnswerCardRef; pendingId: string }
+  | { kind: 'active'; card: AnswerCardRef; cardKey: string; pendingId: string }
   | { kind: 'updating'; card: AnswerCardRef | null }
   | null
 
@@ -106,17 +130,24 @@ export type AnswerCardState =
  * B (plan A revised into plan B) the thread can still show plan A's card with no result, and a card
  * matched by tool name alone would approve B from A's card. So a request the thread was not read
  * for gets NO controls — only "Updating…" on the latest unanswered card of its tool, until a tail
- * read that started under it lands. Active controls bind `threadHeldFor`, which is then the held id.
+ * read that started under it lands — and, given `previous` (the card the last request was bound to),
+ * until the thread shows a card OTHER than that one. Active controls bind `threadHeldFor`, which is then the held id.
  */
 export function answerCardState(
   messages: readonly ChatMessage[],
   held: HeldPermission | undefined,
-  threadHeldFor: string | null | undefined
+  threadHeldFor: string | null | undefined,
+  previous?: BoundAnswerCard | null
 ): AnswerCardState {
   if (!held || !isAnswerCardTool(held.toolName)) return null
   if (answerRebindPending(held, threadHeldFor)) return { kind: 'updating', card: latestUnansweredCard(messages, held.toolName) }
   const card = activeAnswerCard(messages, held)
-  return card ? { kind: 'active', card, pendingId: held.pendingId } : null
+  if (!card) return null
+  const cardKey = answerCardKey(messages, card)
+  // A read under B that still shows the very card A was bound to has not caught up with B (the
+  // transcript may lag the hook): B must surface on a card the thread shows as NEW.
+  if (previous && previous.pendingId !== held.pendingId && previous.cardKey === cardKey) return { kind: 'updating', card }
+  return { kind: 'active', card, cardKey, pendingId: held.pendingId }
 }
 
 /** What the user has picked for one question. `labels` are option labels; `other` + `otherText`

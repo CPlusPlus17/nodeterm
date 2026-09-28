@@ -2578,8 +2578,12 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   unanswered, and a tool-name match would approve B from it — so until a read started under B lands,
   the latest unanswered card of that tool says "Updating… — or answer in the terminal" and nothing
   is answerable. A held change forces a tail reload (queued behind a read in flight, which started
-  under A and cannot bind B), retried every `CHAT_ANSWER_REBIND_RETRY_MS` while "Updating…"; the
-  answer payload carries the BOUND id, re-checked against store and binding at send time.
+  under A and cannot bind B, and behind an older-page fetch, which it never cancels). It is a QUIET
+  read (no "Loading…"), and one path owns it: on working → blocked the turn-end reload does. While a
+  card says "Updating…" it retries with backoff (`rebindRetryDelay`: 2 s doubling to 30 s, reset per
+  request). A read under B that still shows the card A was bound to (same tool id / line offset —
+  the transcript can lag the hook) stays "Updating…": B must surface on a card the thread shows as
+  new. The answer payload carries the BOUND id, re-checked against store and binding at send time.
   **The thread look (2026-09-26, claude.ai-style)**: the user's message is a neutral rounded bubble
   on the right (`term-chat__bubble`, a tint lift — never the blue accent), the assistant's is plain
   full-width text with no bubble. One quiet action row per assistant TURN (`lib/chatThread.ts`

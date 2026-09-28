@@ -21,7 +21,7 @@ import { E_UNSUPPORTED } from '@shared/rpc'
 import { Spinner } from '../components/Spinner'
 import { CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
 import { ChatLoadingStatus } from './ChatPanelFallback'
-import { CHAT_ANSWER_REBIND_RETRY_MS, answerCardState, answerRebindPending } from '../lib/chatAnswer'
+import { answerCardState, answerRebindPending, rebindRetryDelay, type BoundAnswerCard } from '../lib/chatAnswer'
 import { AnswerControlsUpdating, PlanAnswerControls, QuestionAnswerControls } from './ChatAnswerControls'
 import type { PermissionAnswer } from '@shared/agents/permission-answer'
 import { ChatComposer } from './ChatComposer'
@@ -186,14 +186,30 @@ export function ChatPanel({
   const threadHeldFor = heldRead && heldRead.identity === identity ? heldRead.pendingId : undefined
   const threadHeldForRef = useRef(threadHeldFor)
   threadHeldForRef.current = threadHeldFor
+  // The card the last request was bound to (per transcript identity): a NEW request must surface on
+  // a card the thread shows as new, never on that one — see `answerCardState`'s `previous`.
+  const [boundCard, setBoundCard] = useState<(BoundAnswerCard & { identity: string }) | null>(null)
+  const previousBound = boundCard && boundCard.identity === identity ? boundCard : null
   const cardState = useMemo(
-    () => (!readOnly && refusal === 'dialog' ? answerCardState(messages, held, threadHeldFor) : null),
-    [readOnly, refusal, messages, held, threadHeldFor]
+    () => (!readOnly && refusal === 'dialog' ? answerCardState(messages, held, threadHeldFor, previousBound) : null),
+    [readOnly, refusal, messages, held, threadHeldFor, previousBound]
   )
   const answerCard = cardState?.kind === 'active' ? cardState : null
   const updatingCard = cardState?.kind === 'updating' ? cardState.card : null
   // The request a rebind reload is owed for (null = none): drives the forced reload and its retry.
   const rebindFor = cardState?.kind === 'updating' ? (held?.pendingId ?? null) : null
+  const rebindForRef = useRef(rebindFor)
+  rebindForRef.current = rebindFor
+  const activePendingId = cardState?.kind === 'active' ? cardState.pendingId : null
+  const activeCardKey = cardState?.kind === 'active' ? cardState.cardKey : null
+  useEffect(() => {
+    if (activePendingId === null || activeCardKey === null) return
+    setBoundCard((b) =>
+      b && b.identity === identity && b.pendingId === activePendingId && b.cardKey === activeCardKey
+        ? b
+        : { identity, pendingId: activePendingId, cardKey: activeCardKey }
+    )
+  }, [identity, activePendingId, activeCardKey])
   const msgsRef = useRef<HTMLDivElement>(null)
   const prevState = useRef(state)
   // Request token: only the NEWEST readTranscript may land. An older read resolving late (the
@@ -236,16 +252,20 @@ export function ChatPanel({
   // (single-flight, like the live reads) — never dropped, since the read in flight started under the
   // PREVIOUS request and cannot bind the new one. Any read that STARTS later satisfies it.
   const heldReloadQueuedRef = useRef(false)
-  const loadRef = useRef<(live?: boolean) => void>(() => {})
+  const loadRef = useRef<(live?: boolean, rebind?: boolean) => void>(() => {})
 
   // `live` = a read driven by a hook event while the agent works (see `attemptLive`), as opposed to
   // the first open, the turn-end reload and ↻. A live read is background refresh: it keeps
   // unconfirmed sends on screen (`carryUnconfirmed`), leaves a failed older page's retry row alone
   // (clearing it would re-arm a failing fetch every interval) and never flips the empty state to
   // "Loading…" (which would strobe on every hook event).
-  const load = useCallback((live = false) => {
+  //
+  // `rebind` = the held-request reload (see `requestHeldReload`): QUIET like a live read (no
+  // "Loading…", the older-page row left alone, unconfirmed sends kept), and it never cancels an
+  // older-page fetch — it is only ever started with none in flight.
+  const load = useCallback((live = false, rebind = false) => {
     const token = ++reqRef.current
-    olderReqRef.current++
+    if (!rebind) olderReqRef.current++
     // The held request this read starts under: once it is applied, the thread is known to show the
     // transcript as of (at least) that request. Read from the store, not the render: a hold that
     // landed since the last render is exactly what this must see.
@@ -256,10 +276,10 @@ export function ChatPanel({
     const settleHeldReload = (bound: string | null | undefined) => {
       if (!heldReloadQueuedRef.current) return
       heldReloadQueuedRef.current = false
-      if (answerRebindPending(useAgentStatus.getState().byId[nodeId]?.held, bound)) loadRef.current()
+      if (answerRebindPending(useAgentStatus.getState().byId[nodeId]?.held, bound)) loadRef.current(false, true)
     }
-    olderInFlightRef.current = false
-    if (!live) {
+    if (!rebind) olderInFlightRef.current = false
+    if (!live && !rebind) {
       // Cancelling an older fetch (or clearing its error) removes a row ABOVE the viewport: anchor
       // it like any other change up there, or the view jumps by the row's height.
       if (olderStateRef.current !== 'idle') captureAnchor()
@@ -268,7 +288,7 @@ export function ChatPanel({
     setTailLoading(true)
     tailInFlightRef.current = true
     lastTailStartRef.current = Date.now()
-    if (!live) setLoadState((s) => (s === 'ok' ? s : 'loading')) // a reload never blanks a rendered thread
+    if (!live && !rebind) setLoadState((s) => (s === 'ok' ? s : 'loading')) // a reload never blanks a rendered thread
     // `nodeId` is what lets an SSH-project node resolve on its host; the rejection branch is what
     // keeps a surface that cannot read transcripts (Server Edition, relay tab) from silently
     // presenting itself as an empty conversation. Only the newest TAIL window is read — older
@@ -300,7 +320,7 @@ export function ChatPanel({
           settleHeldReload(heldAtStart)
           return
         }
-        setThread((t) => applyTail(t, identity, res, { carryUnconfirmed: live }))
+        setThread((t) => applyTail(t, identity, res, { carryUnconfirmed: live || rebind }))
         setLoadState('ok')
         setHeldRead({ identity, pendingId: heldAtStart })
         settleHeldReload(heldAtStart)
@@ -341,6 +361,14 @@ export function ChatPanel({
       olderInFlightRef.current = false
       // A hook event held behind this page gets its (trailing) tail read now.
       queueMicrotask(() => attemptLiveRef.current())
+      // …and so does a held-request reload queued behind it (`requestHeldReload`), once the page
+      // has landed (microtask: after its setThread below).
+      if (heldReloadQueuedRef.current) {
+        heldReloadQueuedRef.current = false
+        queueMicrotask(() => {
+          if (rebindForRef.current !== null) loadRef.current(false, true)
+        })
+      }
     }
     void api.chat.readTranscript(sessionId, cwd, accountId, nodeId, agentId, {
       before,
@@ -375,21 +403,33 @@ export function ChatPanel({
   // the initial load, so on mount this QUEUES behind that read rather than superseding it) — or, with a
   // read in flight (it started under the previous request), queue it for that read's settle. Not
   // for a surface that cannot read transcripts at all (every read would be refused).
+  // An older-page fetch in flight is waited for too, never cancelled: the user's scroll-up paging
+  // must not restart because a plan was revised.
   const requestHeldReload = useCallback(() => {
     if (loadStateRef.current === 'unsupported') return
-    if (tailInFlightRef.current) heldReloadQueuedRef.current = true
-    else loadRef.current()
+    if (tailInFlightRef.current || olderInFlightRef.current) heldReloadQueuedRef.current = true
+    else loadRef.current(false, true)
   }, [])
+  // Retries back off (`rebindRetryDelay`), counted per held request: a new one starts over.
+  const rebindAttemptRef = useRef(0)
   useEffect(() => {
-    if (rebindFor !== null) requestHeldReload()
-  }, [rebindFor, requestHeldReload])
-  // …and while the card stays on "Updating…" with no read in flight (the reload failed, or found
-  // nothing new), try again: nothing else reads the tail while the agent is blocked.
+    rebindAttemptRef.current = 0
+    // working → blocked with a new held id in the same render: the turn-end reload below (a full
+    // read that starts NOW, under the new request) owns it — one read, not two.
+    if (rebindFor !== null && !(prevState.current === 'working' && state !== 'working')) requestHeldReload()
+  }, [rebindFor, requestHeldReload]) // eslint-disable-line react-hooks/exhaustive-deps -- `state` is read, not a trigger
+  // …and while a card stays on "Updating…" with no read in flight (the reload failed, or the
+  // transcript has not caught up), try again: nothing else reads the tail while the agent is
+  // blocked. Only while there IS a card saying so — with none, a reload changes nothing on screen.
+  const hasUpdatingCard = updatingCard !== null
   useEffect(() => {
-    if (rebindFor === null || tailLoading) return
-    const t = setTimeout(requestHeldReload, CHAT_ANSWER_REBIND_RETRY_MS)
+    if (rebindFor === null || tailLoading || !hasUpdatingCard) return
+    const t = setTimeout(() => {
+      rebindAttemptRef.current++
+      requestHeldReload()
+    }, rebindRetryDelay(rebindAttemptRef.current))
     return () => clearTimeout(t)
-  }, [rebindFor, tailLoading, requestHeldReload])
+  }, [rebindFor, tailLoading, hasUpdatingCard, requestHeldReload])
 
   // Invalidate any in-flight read when the panel goes away.
   useEffect(
