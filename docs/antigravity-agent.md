@@ -22,6 +22,11 @@ PATH, and only when no entry already names it (`pathWithAgyDir`) — it used to 
 macOS/Linux moved a shared directory (`/usr/local/bin`, `~/.local/bin`) ahead of the user's own
 tools. Plain terminals and SSH sessions remain untouched.
 
+The brand mark is `src/renderer/assets/antigravity-color.svg` (Google's multi-colour arch, from
+`@lobehub/icons-static-svg` 1.95.1, MIT) in `AGENT_LOGO` (`lib/brandPulse.ts`): `AgentIcon` draws it
+in every menu, header and card, and `brandPulsePlan` makes it the pulsing RUNNING indicator on the
+canvas and in the notch HUD.
+
 > Sibling documents: `docs/grok-agent.md`, `docs/gemini-agent.md`, `docs/copilot-agent.md`. The
 > distilled rules are **Adding a new agent** in `CLAUDE.md`.
 
@@ -323,7 +328,6 @@ timeout, on every tool call. `antigravity-script.test.ts` pins it with a curl th
 | Subagent cards | `invoke_subagent` exists in the step enum; never provoked |
 | Session name, rename | title lives in SQLite (not measured); no rename command |
 | SSH projects | no remote installer yet (it would write the POSIX form over the ControlMaster). `LOCAL_ONLY_HOOK_AGENTS` / `hasHooksOverSsh` make `--after` refuse an agy dependency there; a trigger aimed at one queues until its (never-coming) `done`, visibly on the trigger card |
-| Brand icon | cosmetic; the badge falls back to a pulsing dot |
 
 Also worth knowing: `agy` asks "Do you trust the contents of this project?" the first time it opens a
 folder, before any turn.
