@@ -79,14 +79,17 @@ export interface AgentConfig {
   vanillaEnvPattern?: string
 }
 
+// ORDER is display order everywhere agents are offered (menus, Dock, palette, Settings, the
+// canvas-control help). antigravity sits above gemini: since 2026-06-18 it is Google's agent for
+// personal accounts, and gemini remains for Code Assist / Vertex / API-key users.
 export const BUILTIN_AGENT_IDS: readonly BuiltinAgentId[] = [
   'claude',
   'codex',
+  'antigravity',
   'gemini',
   'opencode',
   'grok',
-  'copilot',
-  'antigravity'
+  'copilot'
 ]
 
 export const AGENT_CONFIG: Record<BuiltinAgentId, AgentConfig> = {
