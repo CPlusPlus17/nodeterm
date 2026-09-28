@@ -915,6 +915,7 @@ export class GitHubIssueService {
         // It IS a background refresh, though, so the rate budget may hold it.
         const throttle = await this.refreshWithinFloor({ projectId }, undefined, true)
         if (throttle) this.announceThrottle(state, throttle.until)
+        else this.announceThrottleLifted(state)
         return
       } catch (error) {
         const failure = classifyGitHubFailure(error)
@@ -931,6 +932,14 @@ export class GitHubIssueService {
   private announceThrottle(state: RepositoryState, until: number): void {
     if (state.announcedThrottleUntil === until) return
     state.announcedThrottleUntil = until
+    this.emitDelta(state, [], true)
+  }
+
+  /** The poll ran again. A 304 heartbeat emits nothing, so without this the board would keep
+   *  saying "paused until HH:MM" long after that time — prompt a re-read once when the hold ends. */
+  private announceThrottleLifted(state: RepositoryState): void {
+    if (state.announcedThrottleUntil === undefined) return
+    delete state.announcedThrottleUntil
     this.emitDelta(state, [], true)
   }
 

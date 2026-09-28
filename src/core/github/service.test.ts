@@ -1318,3 +1318,35 @@ describe('GitHubIssueService mapping approval', () => {
     expect(client.updates).toHaveLength(1)
   })
 })
+
+describe('GitHubIssueService throttle lift', () => {
+  it('prompts subscribers again when the hold lifts, so the board stops saying it is paused', async () => {
+    let clock = 1_000_000
+    const client = new FixtureClient([issue(1)])
+    const coordinator = new GitHubRequestCoordinator({ now: () => clock })
+    const timers: Array<() => Promise<void>> = []
+    const deltas: number[][] = []
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir), coordinator,
+      contextForProject: async () => context(client), now: () => clock,
+      setInterval: (fn) => { timers.push(fn as () => Promise<void>); return timers.length },
+      onDelta: (_uiId, _projectId, numbers) => deltas.push(numbers)
+    })
+    await service.subscribe(1, { projectId: 'project-1' })
+    coordinator.noteRateSample('user-1', { resource: 'core', limit: 5_000, remaining: 12, resetAt: 2_000_000 })
+    await timers[0]()
+    const held = deltas.length
+
+    // The window resets. Nothing changed upstream, so the heartbeat answers 304 and the scan is
+    // skipped — the only thing that changed is that sync is no longer held.
+    clock = 2_000_000
+    await timers[0]()
+
+    expect(deltas.slice(held)).toEqual([[]])
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).throttle)
+      .toBeUndefined()
+    // Said once, not on every later minute.
+    await timers[0]()
+    expect(deltas.slice(held)).toEqual([[]])
+  })
+})
