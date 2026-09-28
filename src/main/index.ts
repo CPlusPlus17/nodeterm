@@ -183,6 +183,7 @@ import {
   type MirrorSettings,
   setNodeSessionName,
   setNodeHibernated,
+  seedNodeIdentities,
   sessionNameSweepEntries,
   nodeState,
   nodeSessionName,
@@ -4102,6 +4103,13 @@ app.whenReady().then(async () => {
   ipcMain.on(IPC.agentHibernated, (_e, msg: { nodeId?: unknown; on?: unknown } = {}) => {
     if (typeof msg?.nodeId !== 'string' || !msg.nodeId) return
     setNodeHibernated(msg.nodeId, msg.on === true)
+  })
+  // Identity seed: the renderer's persisted agentStatus store reports the session ids it holds for
+  // nodes the mirror has none for (an idle, terminal-made conversation after a restart), so the
+  // phone's chat view can locate the transcript before the next hook fires. Add-only and
+  // validated in core; SSH projects get it through the ordinary per-project slice push.
+  ipcMain.on(IPC.agentSeedIdentity, (_e, entries: unknown) => {
+    seedNodeIdentities(entries)
   })
   initRemoteHost(win, ptyManager, listProjectsOutput, hostBridge)
   // NEW interactive relay host (Stage 4): a connecting peer desktop becomes a first-class

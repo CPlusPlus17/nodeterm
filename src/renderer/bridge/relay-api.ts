@@ -164,7 +164,12 @@ export function buildRelayApi(connectionId: string, transport?: FrameTransport):
     sendHostChatReply: stub.sendHostChatReply,
     // Messaging rides the same decision: the browser client is never a sender (constraint 5 of
     // the messaging plan — the phone drives canvas control over relay→IPC, not /control/*).
-    agentMessage: stub.agentMessage
+    agentMessage: stub.agentMessage,
+    // The mirror identity seed is a deliberate no-op here: a relay tab's nodes belong to the HOST's
+    // core, whose mirror is seeded by the host's own renderer from its own localStorage. This
+    // machine's localStorage holds no identity for them, and `...local` would plant this machine's
+    // ids into this machine's mirror under the peer's node ids.
+    seedAgentIdentity: () => undefined
   } satisfies NodeTerminalApi
 
   return {
