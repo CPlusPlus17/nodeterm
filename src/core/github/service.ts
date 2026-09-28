@@ -21,6 +21,7 @@ import {
   type GitHubCompleteSnapshot,
   type GitHubIssueCache
 } from './cache'
+import { classifyGitHubFailure } from './failure'
 import type { GitHubRequestCoordinator } from './request-coordinator'
 
 const MAX_ISSUES = 10_000
@@ -123,14 +124,6 @@ function epoch(context: GitHubIssueServiceContext): string {
     context.credentialGeneration,
     context.userId
   ])
-}
-
-/** The deadline a rate-limit refusal carries, from the client or the coordinator alike. */
-function rateLimitedUntil(error: unknown): number | undefined {
-  if (!error || typeof error !== 'object') return undefined
-  const value = error as { code?: unknown; retryAt?: unknown }
-  return value.code === 'rate-limited' && typeof value.retryAt === 'number' &&
-    Number.isFinite(value.retryAt) ? value.retryAt : undefined
 }
 
 function foldLabel(value: string): string {
@@ -902,8 +895,10 @@ export class GitHubIssueService {
         if (throttle) this.announceThrottle(state, throttle.until)
         return
       } catch (error) {
-        const until = rateLimitedUntil(error)
-        if (until !== undefined) this.announceThrottle(state, until)
+        const failure = classifyGitHubFailure(error)
+        if (failure.kind === 'rate-limited' && failure.retryAt !== undefined) {
+          this.announceThrottle(state, failure.retryAt)
+        }
         // Another approved project may still provide a valid context for the shared repository.
       }
     }

@@ -224,8 +224,24 @@ export class GitHubIssuesClient {
     this.timeoutMs = options.timeoutMs ?? 15_000
   }
 
-  async getAuthenticatedUser(): Promise<{ userId: string; login: string }> {
-    const value = object(await this.json(await this.request('/user', { method: 'GET' })))
+  /** `GET /user`, conditional on `etag`. A 304 means the identity behind this token is unchanged —
+   *  and it is free; a token GitHub no longer accepts is still refused (401) whatever the condition. */
+  async checkAuthenticatedUser(etag?: string): Promise<
+    | { notModified: true }
+    | { notModified: false; identity: { userId: string; login: string }; etag?: string }
+  > {
+    if (etag !== undefined && !string(etag, 512)) throw new GitHubClientError('invalid-request')
+    const response = await this.request('/user', {
+      method: 'GET', ...(etag ? { headers: { 'if-none-match': etag } } : {})
+    })
+    if (response.status === 304) return { notModified: true }
+    const identity = await this.userFrom(response)
+    const fresh = response.headers.get('etag')
+    return { notModified: false, identity, ...(fresh && string(fresh, 512) ? { etag: fresh } : {}) }
+  }
+
+  private async userFrom(response: Response): Promise<{ userId: string; login: string }> {
+    const value = object(await this.json(response))
     if (!value || !positiveInteger(Number(value.id), Number.MAX_SAFE_INTEGER) ||
         !string(value.login, 128) || !value.login) {
       throw new GitHubClientError('malformed-response')

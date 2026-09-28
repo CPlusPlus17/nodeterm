@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { githubRateSentence, githubThrottleSentence } from './githubSyncStatus'
+import { githubRateSentence, githubThrottleSentence, githubUnreachableSentence } from './githubSyncStatus'
 
 const clock = (ms: number): string => `T+${ms}`
 
@@ -24,5 +24,17 @@ describe('githubRateSentence', () => {
     expect(githubRateSentence({
       resource: 'core', limit: 5_000, remaining: 4_968, resetAt: 90, observedAt: 1
     }, clock)).toBe('4,968 of 5,000 GitHub requests left until T+90.')
+  })
+})
+
+describe('githubUnreachableSentence', () => {
+  it('names a rate limit and when the check can run again', () => {
+    expect(githubUnreachableSentence({ reason: 'rate-limited', retryAt: 90 }, clock))
+      .toBe('GitHub’s rate limit was reached, so the sign-in could not be checked until T+90.')
+  })
+
+  it('names an unreachable GitHub without claiming a cause it did not see', () => {
+    expect(githubUnreachableSentence({ reason: 'unreachable' }, clock))
+      .toBe('GitHub could not be reached to check the sign-in.')
   })
 })

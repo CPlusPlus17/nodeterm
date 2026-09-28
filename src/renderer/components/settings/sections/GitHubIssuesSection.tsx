@@ -16,7 +16,11 @@ import { Button } from '@renderer/ui/Button'
 import { Input } from '@renderer/ui/Input'
 import { Select } from '@renderer/ui/Select'
 import { Switch } from '@renderer/ui/Switch'
-import { githubRateSentence, githubThrottleSentence } from '../../../lib/githubSyncStatus'
+import {
+  githubRateSentence,
+  githubThrottleSentence,
+  githubUnreachableSentence
+} from '../../../lib/githubSyncStatus'
 
 const ROWS = {
   enable: {
@@ -61,6 +65,12 @@ function messageFor(error: unknown): string {
     ? String((error as { code: unknown }).code)
     : error instanceof Error ? error.message : ''
   if (code.includes('revision-conflict')) return 'Settings changed elsewhere. The latest state has been loaded.'
+  // Checked before anything that could read as an auth problem: a limit or an outage is not the
+  // user's credential, and naming it as one sends them to re-authenticate an account that is fine.
+  if (code.includes('rate-limited')) return 'GitHub’s rate limit was reached. Try again later.'
+  if (code.includes('github-unreachable')) {
+    return 'GitHub could not be reached. Nothing was changed; try again in a moment.'
+  }
   if (code.includes('invalid-token')) return 'GitHub could not validate that token.'
   if (code.includes('not-authenticated')) return 'Sign in with GitHub CLI or save a valid token first.'
   if (code.includes('not-approved')) return 'Approve this repository on this machine first.'
@@ -360,7 +370,9 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                   {ready
                     ? `Ready as ${view?.auth.login ?? 'GitHub user'}`
                     : view?.project?.approved
-                      ? 'Repository approved. Authentication is still needed.'
+                      ? view.auth.unreachable && !authenticated
+                        ? 'Repository approved. GitHub could not be reached to check the sign-in.'
+                        : 'Repository approved. Authentication is still needed.'
                       : 'Approval is required before nodeterm reads the repository.'}
                 </span>
                 {!view?.project?.approved && repository && (
@@ -393,6 +405,10 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                   <p className="text-[13px] text-muted">
                     GitHub authentication has not been checked yet.
                   </p>
+                ) : auth.unreachable && !activeProvider ? (
+                  // GitHub never answered for this credential. Not signed out — every branch below
+                  // would say it was.
+                  <p className="text-[13px] text-muted">{githubUnreachableSentence(auth.unreachable)}</p>
                 ) : ghActive ? (
                   // Happy path: the CLI already authenticates every request — no token, no dropdown.
                   <p className="text-[13px] text-text">
@@ -429,6 +445,12 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                   Check again
                 </Button>
               </div>
+
+              {auth?.unreachable && activeProvider && (
+                <p className="text-[13px] text-muted">
+                  {githubUnreachableSentence(auth.unreachable)} The sign-in above is the last one GitHub confirmed.
+                </p>
+              )}
 
               {/* A pinned provider decides which credential is even consulted, and the dropdown that
                   changes it now lives inside Advanced — so the pinning has to be said out loud. */}

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Project } from '../../shared/types'
 import type { GitHubControlState } from '../../shared/github-issues'
 import { GitHubHostController, GitHubHostError } from './host'
+import type { TokenValidation } from './credentials'
 
 const project: Project = {
   id: 'project-1',
@@ -104,9 +105,11 @@ function fixture() {
     controls,
     resolver,
     secret,
-    validateToken: vi.fn(async (value: string) => value === 'valid-token'
-      ? { userId: '1', login: 'octocat' }
-      : null),
+    validateToken: vi.fn(async (value: string): Promise<TokenValidation> => value === 'valid-token'
+      ? { status: 'ok', identity: { userId: '1', login: 'octocat' } }
+      : value === 'unchecked-token'
+        ? { status: 'unknown', reason: 'unreachable' }
+        : { status: 'unauthorized' }),
     client: vi.fn(() => client),
     rate: (userId: string) => userId === '1'
       ? {
@@ -169,5 +172,11 @@ describe('GitHubHostController', () => {
     const view = await controller.saveToken('valid-token')
     expect(secret.save).toHaveBeenCalledWith('valid-token')
     expect(JSON.stringify(view)).not.toContain('valid-token')
+  })
+
+  it('does not call a token invalid when GitHub could not be asked, and saves nothing', async () => {
+    const { controller, secret } = fixture()
+    await expect(controller.saveToken('unchecked-token')).rejects.toMatchObject({ code: 'github-unreachable' })
+    expect(secret.save).not.toHaveBeenCalled()
   })
 })

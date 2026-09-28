@@ -128,6 +128,43 @@ describe('GitHubIssuesSection', () => {
     expect(host.textContent).toContain('12 of 5,000 GitHub requests left')
   })
 
+  it('says GitHub could not be reached — never "not signed in" — when the sign-in could not be checked', async () => {
+    stub(viewWith({
+      activeProvider: null, ghAuthenticated: false, tokenPresent: false, login: undefined,
+      unreachable: { reason: 'unreachable' }
+    }, true))
+    await mount()
+    expect(host.textContent).toContain('GitHub could not be reached to check the sign-in.')
+    expect(host.textContent).not.toContain('not signed in')
+    expect(host.textContent).not.toContain('Authentication is still needed')
+  })
+
+  it('keeps the last confirmed sign-in on screen through a rate limit, and says it is the last one', async () => {
+    stub(viewWith({
+      activeProvider: 'gh', ghAuthenticated: true, login: 'octocat',
+      unreachable: { reason: 'rate-limited' }
+    }, true))
+    await mount()
+    expect(host.textContent).toContain('✓ Signed in via GitHub CLI as @octocat')
+    expect(host.textContent).toContain('GitHub’s rate limit was reached, so the sign-in could not be checked')
+    expect(host.textContent).toContain('the last one GitHub confirmed')
+  })
+
+  it('names a rate limit or an outage instead of a generic failure', async () => {
+    stub(viewWith({}, true))
+    ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubIssues.refresh =
+      vi.fn(async () => { throw new Error("Error invoking remote method 'github-issues:refresh': Error: rate-limited") })
+    await mount()
+    const refresh = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Refresh now')!
+    await act(async () => { refresh.click() })
+    expect(host.textContent).toContain('GitHub’s rate limit was reached. Try again later.')
+
+    ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubIssues.refresh =
+      vi.fn(async () => { throw new Error("Error invoking remote method 'github-issues:refresh': Error: github-unreachable") })
+    await act(async () => { refresh.click() })
+    expect(host.textContent).toContain('GitHub could not be reached. Nothing was changed')
+  })
+
   it('clears the write-only token field after Save and never renders the stored token', async () => {
     await mount()
     const input = host.querySelector<HTMLInputElement>('#github-personal-access-token')!

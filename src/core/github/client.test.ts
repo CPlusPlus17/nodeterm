@@ -32,7 +32,9 @@ describe('GitHubIssuesClient', () => {
       token: 'secret',
       fetch: async () => response({ id: 123, login: 'octocat' })
     })
-    expect(await client.getAuthenticatedUser()).toEqual({ userId: '123', login: 'octocat' })
+    expect(await client.checkAuthenticatedUser()).toEqual({
+      notModified: false, identity: { userId: '123', login: 'octocat' }
+    })
   })
 
   it('uses the fixed API host and required version headers', async () => {
@@ -287,6 +289,40 @@ describe('GitHubIssuesClient', () => {
       })
       await expect(client.issuesHeartbeat('nodeterm/nodeterm')).resolves.toEqual({
         notModified: false, etag: 'W/"a"'
+      })
+    })
+  })
+  describe('checkAuthenticatedUser', () => {
+    it('answers 304 for an unchanged identity when given its validator', async () => {
+      let sent: string | null = null
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async (_url, init) => {
+          sent = new Headers(init?.headers).get('if-none-match')
+          return new Response(null, { status: 304 })
+        }
+      })
+      expect(await client.checkAuthenticatedUser('W/"me"')).toEqual({ notModified: true })
+      expect(sent).toBe('W/"me"')
+    })
+
+    it('returns the identity with its validator on a 200', async () => {
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async () => response({ id: 7, login: 'octocat' }, { headers: { etag: 'W/"me"' } })
+      })
+      expect(await client.checkAuthenticatedUser()).toEqual({
+        notModified: false, identity: { userId: '7', login: 'octocat' }, etag: 'W/"me"'
+      })
+    })
+
+    it('still surfaces a 401 as a refusal', async () => {
+      const client = new GitHubIssuesClient({
+        token: 'secret',
+        fetch: async () => new Response('{}', { status: 401 })
+      })
+      await expect(client.checkAuthenticatedUser('W/"me"')).rejects.toMatchObject({
+        code: 'request-failed', status: 401
       })
     })
   })

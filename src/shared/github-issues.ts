@@ -56,6 +56,10 @@ export interface GitHubAuthStatus {
   tokenPresent: boolean
   storage: GitHubSecretAvailability
   login?: string
+  /** Present when the sign-in could not be CHECKED — a network failure, a GitHub outage or a rate
+   *  limit. It is not "signed out": the fields above keep the last answer GitHub gave for this
+   *  token (or none, if it never gave one). `retryAt` is epoch ms, for a rate limit. */
+  unreachable?: { reason: 'rate-limited' | 'unreachable'; retryAt?: number }
 }
 
 /** The GitHub request budget last reported for the active identity (`x-ratelimit-*`), `core`

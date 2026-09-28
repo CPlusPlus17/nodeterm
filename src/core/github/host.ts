@@ -8,7 +8,8 @@ import type {
   GitHubThrottle
 } from '../../shared/github-issues'
 import { normaliseProjectKanbanGitHub, parseGitHubRepository } from './config'
-import type { GitHubSecretStore, ResolvedGitHubCredential } from './credentials'
+import type { GitHubSecretStore, ResolvedGitHubCredential, TokenValidation } from './credentials'
+import { GitHubReachabilityError } from './failure'
 import type {
   GitHubIssueProjectContext,
   GitHubIssueServiceContext,
@@ -64,7 +65,7 @@ type HostDependencies = {
   controls: ControlStoreLike
   resolver: CredentialResolverLike
   secret: GitHubSecretStore
-  validateToken(token: string): Promise<{ userId: string; login: string } | null>
+  validateToken(token: string): Promise<TokenValidation>
   /** Builds the API client for a resolved credential. The identity comes with the token so the
    *  client can report every response's rate budget against the right account. */
   client(credential: { token: string; userId: string }): GitHubIssuesClientLike
@@ -166,8 +167,17 @@ export class GitHubHostController {
   }
 
   async saveToken(token: string): Promise<GitHubControlView> {
-    const identity = await this.dependencies.validateToken(token)
-    if (!identity) throw new GitHubHostError('invalid-token')
+    const validation = await this.dependencies.validateToken(token)
+    // Only GitHub refusing the token makes it invalid. When GitHub could not be asked, nothing is
+    // saved either — an unchecked token is not stored — but the user is told why, not that the
+    // token they pasted is wrong.
+    if (validation.status === 'unauthorized') throw new GitHubHostError('invalid-token')
+    if (validation.status === 'unknown') {
+      throw new GitHubReachabilityError(
+        validation.reason === 'rate-limited' ? 'rate-limited' : 'github-unreachable',
+        validation.retryAt
+      )
+    }
     await this.dependencies.secret.save(token)
     this.credentialGeneration += 1
     this.dependencies.onCredentialBoundaryChange?.()
