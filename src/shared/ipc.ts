@@ -177,6 +177,12 @@ export const IPC = {
    *  phone can render SLEEPING, and gives main the `isHibernated` signal the delivery queue's
    *  hibernated leg was recorded as missing (agent-messaging.ts). */
   agentHibernated: 'agent:hibernated',
+  /** Renderer → main/server: seed the agent-status mirror with the node identities (agentId +
+   *  sessionId [+ observed account]) this renderer's persisted agentStatus store holds, for nodes
+   *  the mirror has no session for. Arg: `IdentitySeedEntry[]` (`@shared/agent-identity-seed`,
+   *  validated and capped there). Fire-and-forget; add-only — never overrides a hook-fed id. Feeds
+   *  the phone's chat view, which finds a transcript only by the mirror's session id. */
+  agentSeedIdentity: 'agent:seed-identity',
   /** main → renderer: ask the renderer to wake a hibernated node NOW (a phone viewer attached to
    *  its session over the relay). A nudge, never an assertion: the renderer re-reads the flag and
    *  no-ops for a non-hibernated or unmounted node — same contract as `wakeHibernatedNode`. Arg:
