@@ -205,7 +205,10 @@ async function readCopilotChat(
   if (!p) return notFoundPage()
   const w = await readChatWindow(p, page)
   if (!w) return notFoundPage()
-  return parseGrowingWindow(page, w, async (pg) => (await readChatWindow(p, pg)) ?? null, parseCopilotChatWindow)
+  const out = await parseGrowingWindow(page, w, async (pg) => (await readChatWindow(p, pg)) ?? null, parseCopilotChatWindow)
+  // A LOCAL growth re-read that failed (the journal vanished mid-read) comes back `unreadable`, but
+  // on a copilot result the panel reads `unreadable` as "remote, unsupported" — keep that claim true.
+  return out.unreadable ? notFoundPage() : out
 }
 
 /**
