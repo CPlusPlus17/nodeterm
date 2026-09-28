@@ -53,3 +53,18 @@ export function normalizeChatPage(page: unknown): ChatTranscriptPage | null {
   }
   return { before: b, maxBytes: m }
 }
+
+/**
+ * What a grok chat read says when its session id names MORE than one session on an SSH host
+ * (`core/remote-grok-chat.ts` refuses to pick one). It travels as a REJECTION's message — the
+ * result shape is a locked wire format, and over Electron IPC a rejection keeps only its message
+ * (wrapped in Electron's own prefix, the `code` dropped) — so it is matched by substring. Retry can
+ * never fix it, which is why it is not `unreadable`.
+ */
+export const GROK_AMBIGUOUS_SESSION_MESSAGE = 'This session id matches more than one grok session on the host.'
+
+/** Is `e` the rejection carrying `GROK_AMBIGUOUS_SESSION_MESSAGE` (Electron-wrapped or not)? */
+export function isGrokAmbiguousSessionError(e: unknown): boolean {
+  const m = e && typeof e === 'object' ? (e as { message?: unknown }).message : undefined
+  return typeof m === 'string' && m.includes(GROK_AMBIGUOUS_SESSION_MESSAGE)
+}

@@ -19,6 +19,7 @@ import {
   type ChatThread
 } from '../lib/chatPaging'
 import { E_UNSUPPORTED } from '@shared/rpc'
+import { GROK_AMBIGUOUS_SESSION_MESSAGE, isGrokAmbiguousSessionError } from '@shared/chat-page'
 import { Spinner } from '../components/Spinner'
 import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
 import { sentCommand } from '@shared/chat-command'
@@ -85,14 +86,16 @@ interface ChatPanelProps {
  * initial `[]` because nothing caught the rejection, and a failed resolution was indistinguishable
  * from a session nobody has spoken to. They need different words — and two of them are retryable.
  */
-type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'error'
+type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'ambiguous' | 'error'
 
 /**
- * An `unreadable` read of a LOCAL-ONLY reader's node (grok, gemini — `CHAT_LOCAL_ONLY`) can only be
- * the remote case: core's leg for those agents answers a remote node (`remoteOnly`) with
- * `unreadable` before touching anything, while their local readers never set the flag. So the agent
- * alone names it — no renderer-side remoteness guess, and no new field on the wire (the phone
+ * An `unreadable` read of a LOCAL-ONLY reader's node (`CHAT_LOCAL_ONLY` — agents with no remote
+ * leg) can only be the remote case: core's leg for those agents answers a remote node (`remoteOnly`)
+ * with `unreadable` before touching anything, while their local readers never set the flag. So the
+ * agent alone names it — no renderer-side remoteness guess, and no new field on the wire (the phone
  * contract keeps `unreadable`). Retry cannot heal it, so it must not read as a transient failure.
+ * Grok is NOT in that list: its remote node is read on the host (`core/remote-grok-chat.ts`), so a
+ * grok `unreadable` is a real, retryable failure.
  */
 const remoteReaderUnsupported = (agentId: string | undefined): boolean => !!agentId && chatReadsLocalOnly(agentId)
 
@@ -103,7 +106,8 @@ const isUnsupported = (e: unknown): boolean =>
  *  `missing` is a CLEAN miss — the (local or remote) host looked and there is no file: a transcript
  *  Claude has cleaned up (30 days by default), or a session that has not written one yet (the
  *  second heals the moment it speaks). A host that could not be ASKED is `error`, which Retry can
- *  fix; `remoteUnsupported` is a remote node whose agent has no remote reader, which it never can. */
+ *  fix — a remote grok node included, whose host is read by `core/remote-grok-chat.ts`;
+ *  `remoteUnsupported` is a remote node whose agent has no remote reader, which it never can. */
 const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
   loading: { title: 'Loading conversation…' },
   ok: { title: 'No conversation yet.' },
@@ -117,6 +121,12 @@ const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
   },
   // `{agent}` is the node's own agent label (`agentLabel` below) — the case spans several agents.
   remoteUnsupported: { title: "Reading a remote {agent} session's transcript isn't supported yet." },
+  // A remote grok id that names two sessions on the host: a fixed fact, like `unsupported` — so,
+  // like it, no Retry (waiting cannot change which file is this node's).
+  ambiguous: {
+    title: GROK_AMBIGUOUS_SESSION_MESSAGE,
+    detail: 'nodeterm will not guess which one belongs to this node.'
+  },
   error: {
     title: "Couldn't read the transcript.",
     detail: "The agent's host may not be reachable — Retry once it is."
@@ -368,7 +378,7 @@ export function ChatPanel({
         // …and, as there, a thread of ANOTHER transcript (the session changed under the panel) is
         // cleared: the error message must not sit under the previous session's conversation.
         if (t.identity !== identity) setThread(emptyThread(identity))
-        setLoadState(isUnsupported(e) ? 'unsupported' : 'error')
+        setLoadState(isUnsupported(e) ? 'unsupported' : isGrokAmbiguousSessionError(e) ? 'ambiguous' : 'error')
         settleHeldReload(threadHeldForRef.current)
       }
     )
@@ -769,7 +779,7 @@ export function ChatPanel({
             {EMPTY_TEXT[loadState].detail && (
               <div className="term-chat__empty-detail">{EMPTY_TEXT[loadState].detail}</div>
             )}
-            {loadState !== 'unsupported' && loadState !== 'remoteUnsupported' && loadState !== 'ok' && (
+            {loadState !== 'unsupported' && loadState !== 'remoteUnsupported' && loadState !== 'ambiguous' && loadState !== 'ok' && (
               <button className="term-chat__retry" onClick={() => load()}>
                 Retry
               </button>

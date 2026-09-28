@@ -232,6 +232,7 @@ import {
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
 import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
+import { createReadRemoteGrokChat } from '../core/remote-grok-chat'
 import { createHostChat, mirrorChatSendRefusal } from './remote/host-chat'
 import type { ChatSendOutcome, HostChatReply, RendererChatStatus } from '../shared/mobile-chat'
 import {
@@ -2667,7 +2668,19 @@ app.whenReady().then(async () => {
       sessionId ? await remoteTranscriptPresence(sessionId, accountId, nodeId) : null,
     // Remoteness from THIS shell's records (live pty or SSH project), so every read channel refuses
     // to answer a remote node from this machine's disk — ⌘M, the find-bar index, presence.
-    isRemoteNode: isRemoteTranscriptNode
+    isRemoteNode: isRemoteTranscriptNode,
+    // A remote GROK node's conversation, read on its host by session id (grok's file lives under the
+    // host's $GROK_HOME, and the hook-derived local map names a path on the wrong machine). Same
+    // remoteness and same master resolution as the claude legs above; the phone's `chat.page` reads
+    // through this object too.
+    readRemoteGrok: createReadRemoteGrokChat({
+      isRemote: isRemoteTranscriptNode,
+      target: sshTargetForNode,
+      run: (rt, cmd) =>
+        sshProjectManager
+          ? sshProjectManager.sshRun(childArgs(rt.conn, rt.controlPath, cmd))
+          : Promise.resolve({ code: 1, stdout: '' })
+    })
   }
   registerTranscriptIpc(transcriptIpcDeps)
 

@@ -303,8 +303,9 @@ export const CHAT_CAPABLE = ['claude', 'grok', 'gemini'] as const
 // CHAT_CAPABLE agents whose reader has NO remote leg: a remote (SSH) node's session lives on its
 // host, so core answers `unreadable` before touching anything — and the local reader never sets that
 // flag. So an unreadable read of one of these can only mean "remote, unsupported", and the ⌘M panel
-// names it from the agent alone rather than offering a Retry that can never succeed.
-export const CHAT_LOCAL_ONLY = ['grok', 'gemini'] as const
+// names it from the agent alone rather than offering a Retry that can never succeed. grok is NOT
+// here: its remote node is read on the host (`core/remote-grok-chat.ts`).
+export const CHAT_LOCAL_ONLY = ['gemini'] as const
 // Agents whose transcript CLAUDE's own resolver can locate and parse — the gate for everything that
 // goes through `resolveTranscript` (the find bar's index, the meter's mount-time rehydration).
 //

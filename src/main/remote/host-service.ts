@@ -35,7 +35,7 @@ import * as fsOps from '../../core/fs-ops'
 import { TITLE_MAX, type RemoteNodeInput } from '../../core/project-node-append'
 import { parseCardLabelEdit, type CardLabelEdit } from '../../core/project-kanban-write'
 import { isValidPendingId } from '../../core/agents/pending-approvals'
-import { normalizeChatPage } from '../../shared/chat-page'
+import { GROK_AMBIGUOUS_SESSION_MESSAGE, isGrokAmbiguousSessionError, normalizeChatPage } from '../../shared/chat-page'
 import {
   CHAT_SEND_TEXT_MAX,
   sanitizeChatText,
@@ -857,7 +857,11 @@ export function createHostHandlers(
                 ? socket.respond(req.id, true, { page })
                 : fail('Unknown node.')
           )
-          .catch(() => fail('Could not read the transcript.'))
+          // An id naming two host grok sessions is its own sentence: "could not read" would
+          // promise a retry that can never help. Every other failure stays generic.
+          .catch((e: unknown) =>
+            fail(isGrokAmbiguousSessionError(e) ? GROK_AMBIGUOUS_SESSION_MESSAGE : 'Could not read the transcript.')
+          )
         return
       }
       case 'chat.status':
