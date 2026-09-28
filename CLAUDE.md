@@ -3165,8 +3165,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `queued:false` is NOT proof of a running CLI: Server's `deliveredIds` acknowledges terminal
   delivery only. Its initial commands are persisted before attach/send and retained on failure;
   only acknowledged sends clear them. Boot ownership remains fail-closed. Desktop `list` (live
-  and stored projects) names QUEUED / LAUNCH FAILED / DROPPED / AGENT STATUS UNCONFIRMED rather
-  than treating absence of a hook as success. Server v1 still explicitly refuses `list`.
+  and stored projects) names QUEUED / STARTING / LAUNCH FAILED / DROPPED / AGENT STATUS UNCONFIRMED
+  rather than treating absence of a hook as success. Server v1 still explicitly refuses `list`.
   **(8) An armed node must not cold-start its own agent** (found while fixing (7)). The mount-time
   cold-restore relaunch (`fresh && agentId && canResume(...)`) carries a second, independent
   refusal beside the `paused` one (`shouldColdResume`): `!data.pendingLaunch`. A first open is
@@ -3203,11 +3203,14 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   *failed-to-start* watchdog (a station that never emits ANY hook event — the opposite failure,
   which hangs dependents honestly rather than firing them wrongly), stay open.
   **Headless start (`--run-now`, `run`, #925):** `open-*` with `--run-now` into a project that is
-  not on screen starts the node at once instead of "when next viewed", and `run --node <id>
-  [--project <id>]` is the CLI twin of the QUEUED badge's Run now (like ▶, a `run` that starts the
-  node overrides its `--after` wait). Into a project that IS on screen `--run-now` changes nothing:
-  the mount path already starts the node.
-  - **Flow.** The renderer builds the node as a cold open, then writes an
+  not on screen starts the new node's held launch at once instead of "when next viewed". A node
+  with nothing held (an `open-terminal` without `--cmd`) has nothing to start, and gets the plain
+  cold-open reply. `run --node <id> [--project <id>]` builds nothing: it claims and starts the held
+  launch of a node that already exists, the CLI twin of the QUEUED badge's Run now (like ▶, a `run`
+  that starts the node overrides its `--after` wait). Into a project that IS on screen `--run-now`
+  changes nothing: the mount path already starts the node.
+  - **Flow.** For `--run-now` the renderer first builds the node as a cold open; `run` starts from
+    the node as stored. Either way it then writes an
     `executor:'core', attempted:true, manualOnly:true` claim to disk BEFORE any spawn (never
     spawn on an unsaved claim: a failed save restores the original launch and starts nothing,
     `claim-not-saved`). Desktop main's `pty.launchHeadless` runs core `launchHeadless` on
@@ -3221,26 +3224,35 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   - **The IPC is desktop-only and host-only.** It is registered in `src/main`, not in core
     `registerIpc`, so a Server Edition browser cannot reach it (ws-bridge declares it
     `unsupported`), and `IPC.ptyLaunchHeadless` is in `HOST_ONLY_CHANNELS`, so a relay peer that
-    sends the raw request is refused host-side. `desktopHeadlessRequest` strips `sshRemote` but
-    KEEPS `requireRemote`: a remote node that got this far fails closed in `spawnNew` instead of
-    starting a LOCAL `nt-<id>`. The renderer refuses it earlier still: `startHeadless` answers
-    `remote-unsupported` for a node carrying `ssh` / `sshRemoteTmux` before any claim, and leaves
-    its launch exactly as it was.
+    sends the raw request is refused host-side.
+  - **Remote nodes are fenced twice.** The primary fence is the renderer's: `startHeadless`
+    answers `remote-unsupported` for a node carrying `ssh` / `sshRemoteTmux` before any claim, and
+    leaves its launch exactly as it was. Behind it is core's belt: `headlessPtyOptions` sets
+    `requireRemote` for an SSH-project (`sshRemoteTmux`) node, and `desktopHeadlessRequest` keeps
+    it while stripping `sshRemote`. So if such a node ever got past the fence, core's `spawnNew`
+    would refuse it (`spawn-failed`) instead of starting a LOCAL `nt-<id>` wearing its identity.
   - **Why release the client.** An invisible client would fight the viewer's window size and
     keep the session "attached" for the reaper forever.
-  - **No persistent backend** (tmux or session-host): the start is refused before any spawn
-    (`not-persistent`) and the node is handed back exactly as it was, so a cold open degrades to
-    an ordinary queued node. Releasing a plain shell would kill it.
+  - **No persistent backend** (tmux or session-host): releasing a plain shell would kill it, so the
+    start fails `not-persistent`. In the normal case that happens before any spawn
+    (`persistentSpawnAvailable`). In the race where the backend goes away between that probe and
+    the spawn (tmux switched off in between), the spawn yields a plain shell; the launcher refuses
+    it the same way, before typing anything, and its release kills that shell. Either way the node
+    is handed back exactly as it was, so a cold open degrades to an ordinary queued node.
   - **Outcome patch.** It lands wherever the node lives at that moment (`savePendingAnywhere`):
     the live canvas if the user switched there mid-start, otherwise the store copy plus a disk
-    write. `delivered` clears the launch; any other failure keeps the claim and marks the node
-    failed (amber ⚠ QUEUED, recovered by Run now).
+    write. `delivered` clears the launch; `not-persistent` restores the original (above); every
+    other launch failure keeps the claim and marks the node failed (amber ⚠ QUEUED, recovered by
+    Run now).
   - **While starting.** `launchDelivery` holds `starting`: the badge reads STARTING, ▶ is disabled
     (a click would splice a second copy into the pane), `launchesToFire` skips the node, and
     `list` names it. Canvas's delivery sweep spares it (`deliveriesToRetire`): the node lives in
     ANOTHER project by design, so "not armed on this canvas" does not mean "delivered".
   - **Notice.** A batch that started at least one session raises ONE sticky "Go there" notice
-    (`headlessStartNoticeText`). A failure shows on the badge and in the reply instead.
+    (`headlessStartNoticeText`). A launch failure after the claim (`spawn-failed`, `no-shell`,
+    `line-too-long`, `cancelled`) shows on the badge (amber ⚠ QUEUED) and in the reply.
+    `not-persistent`, `claim-not-saved` and `remote-unsupported` show only in the reply: the node
+    reads as it did before the attempt.
   - **`--run-now` with `--after` is refused on both editions**, before any node is built, with the
     shared `RUN_NOW_AFTER_REFUSAL` (`@shared/control-verbs`): "start now" and "start when X is
     done" contradict each other.

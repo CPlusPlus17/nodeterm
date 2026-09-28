@@ -4,6 +4,7 @@ import type { HeadlessLaunchResult } from '@shared/headless-launch'
 import { coldOpenMessage } from './coldOpen'
 import {
   claimForHeadless,
+  headlessPtyOptions,
   headlessStartNoticeText,
   mergeRunNow,
   planRunVerb,
@@ -66,6 +67,29 @@ describe('planRunVerb', () => {
 describe('claimForHeadless', () => {
   it('marks the launch attempted, manual-only and core-executed', () => {
     expect(claimForHeadless(pending)).toEqual({ ...pending, attempted: true, manualOnly: true, executor: 'core' })
+  })
+})
+
+describe('headlessPtyOptions', () => {
+  // The belt behind startHeadless's `remote-unsupported` refusal, which returns first — so the
+  // belt is only reachable, and only testable, through the builder itself.
+  it('an SSH-project node carries requireRemote, so core refuses to spawn it locally', () => {
+    const opts = headlessPtyOptions(project, node({ sshRemoteTmux: true }))
+    expect(opts.requireRemote).toBe(true)
+    expect(opts).toMatchObject({ persistKey: 'n1', cwd: '/repo', ownerProjectId: 'p2', cols: 120, rows: 36 })
+    expect(opts.sshRemote).toBeUndefined()
+  })
+
+  it('a plain local node gets no requireRemote key at all', () => {
+    const opts = headlessPtyOptions(project, node())
+    expect('requireRemote' in opts).toBe(false)
+    expect(opts).toMatchObject({ persistKey: 'n1', cwd: '/repo', ownerProjectId: 'p2', agentId: 'claude' })
+  })
+
+  it('is what startHeadless sends', async () => {
+    const { d } = deps({ outcome: 'delivered', fresh: true })
+    await startHeadless(d, { project, node: node() })
+    expect(d.launch).toHaveBeenCalledWith({ ptyOptions: headlessPtyOptions(project, node()), command: "claude 'go'" })
   })
 })
 

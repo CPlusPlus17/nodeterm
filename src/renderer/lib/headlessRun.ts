@@ -1,7 +1,9 @@
 // Canvas-control headless start (#925): `open-* --run-now` and `run --node`. Pure planners plus
 // one orchestrator with injected effects, so Canvas.tsx only wires. See the spec (§4) for the flow:
 // write-ahead claim → launch through main → patch the node wherever it lives NOW.
-// Headless starts are local-only: a remote (SSH) node is refused here, before any claim.
+// Headless starts are local-only: a remote (SSH) node is refused here, before any claim
+// (`remote-unsupported`, the primary fence), and `headlessPtyOptions` sets `requireRemote` for an
+// SSH-project node as core's belt behind it.
 import type { CanvasNodeState, PendingLaunch, Project, PtyCreateOptions } from '@shared/types'
 import type { HeadlessLaunchFailure, HeadlessLaunchResult } from '@shared/headless-launch'
 import { HEADLESS_COLS, HEADLESS_ROWS, localNodePtyOptions } from '@shared/node-pty-options'
@@ -48,6 +50,25 @@ export function headlessStartNoticeText(projectName: string, count: number): str
   return `An agent started ${what} in "${projectName}". That project is not on screen.`
 }
 
+/**
+ * The PtyCreateOptions of a headless start: the shared local builder at the headless size, plus
+ * `requireRemote` for an SSH-project node. `startHeadless` refuses such a node before any claim
+ * (`remote-unsupported`) — that is the primary fence. This is core's belt behind it: if a remote
+ * node ever reached the launcher, core's `spawnNew` refuses it (`unavailable:'ssh'`) instead of
+ * starting a LOCAL `nt-<id>` wearing the remote node's identity. `desktopHeadlessRequest` keeps
+ * the flag. Set here and not in `localNodePtyOptions`, whose key set is pinned and which the
+ * Server Edition shares.
+ */
+export function headlessPtyOptions(
+  project: Pick<Project, 'id' | 'cwd'>,
+  node: CanvasNodeState
+): PtyCreateOptions {
+  return {
+    ...localNodePtyOptions(project, node, { cols: HEADLESS_COLS, rows: HEADLESS_ROWS }),
+    ...(node.sshRemoteTmux ? { requireRemote: true } : {})
+  }
+}
+
 export type HeadlessStartOutcome =
   | { id: string; started: true }
   | {
@@ -80,8 +101,9 @@ export async function startHeadless(
   const id = node.id
   const original = node.pendingLaunch
   if (!original?.command) return { id, started: false, reason: 'nothing-queued' }
-  // A remote node is NEVER spawned locally. The options below are LOCAL (no requireRemote), so
-  // refuse before touching anything: the untouched pending launch starts on view, over SSH.
+  // A remote node is NEVER spawned locally. The launcher only spawns locally, so refuse before
+  // touching anything (the primary fence): the untouched pending launch starts on view, over SSH.
+  // `headlessPtyOptions` also sets `requireRemote` for an SSH-project node, core's belt behind this.
   if (node.ssh || node.sshRemoteTmux) return { id, started: false, reason: 'remote-unsupported' }
   if (deps.inFlight.has(id)) return { id, started: false, reason: 'already-starting' }
   deps.inFlight.add(id)
@@ -95,7 +117,7 @@ export async function startHeadless(
     let result: HeadlessLaunchResult
     try {
       result = await deps.launch({
-        ptyOptions: localNodePtyOptions(project, node, { cols: HEADLESS_COLS, rows: HEADLESS_ROWS }),
+        ptyOptions: headlessPtyOptions(project, node),
         command: original.command
       })
     } catch {
@@ -107,8 +129,10 @@ export async function startHeadless(
       return { id, started: true }
     }
     if (result.reason === 'not-persistent') {
-      // Nothing was spawned. Hand the node back exactly as it was, so a cold open starts on view
-      // and an already-attempted node keeps its manual Run now.
+      // Nothing was typed and no session survives. Normally nothing was spawned at all (refused
+      // before the spawn); in the race where the backend went away between core's probe and the
+      // spawn, the plain shell it got was released, which kills it. Hand the node back exactly as
+      // it was, so a cold open starts on view and an already-attempted node keeps its manual Run now.
       deps.clearDelivery(id)
       await deps.savePending(id, original)
     } else {

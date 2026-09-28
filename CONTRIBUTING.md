@@ -799,10 +799,13 @@ memory). Server deferred delivery is one-shot: a failed probe/send needs explici
 A headless start (`--run-now` / `run`, #925) follows the same contract: the claim is saved before
 any spawn, and "started" means the echo-verified writer submitted the line (never that the agent is
 healthy). The desktop releases its headless client, so there a start without a persistent terminal
-backend is refused before any spawn and hands the node back unchanged (a cold open stays an
-ordinary queued node) rather than spawning a shell that the next mount would orphan. A remote (SSH)
-node is refused before the claim; the desktop request keeps `requireRemote`, so core can never
-start one as a local session.
+backend fails `not-persistent` and hands the node back unchanged (a cold open stays an ordinary
+queued node) rather than leaving a shell that the next mount would orphan. Normally that refusal
+comes before any spawn; if the backend vanishes between the probe and the spawn, the plain shell it
+got is refused before anything is typed, and releasing it kills it. A remote (SSH) node is refused
+in the renderer before the claim (`remote-unsupported`), which is the primary fence. As a belt
+behind it, an SSH-project node's request carries `requireRemote`, which `desktopHeadlessRequest`
+keeps, so core's `spawnNew` refuses rather than spawning it locally. Keep both fences.
 
 ## Testing
 

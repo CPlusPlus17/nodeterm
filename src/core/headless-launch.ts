@@ -41,10 +41,12 @@ export interface HeadlessLaunchDeps {
  * requires a persistent backend. Whatever else the wire carries is overwritten here.
  *
  * `sshRemote` is stripped: this path never spawns over a ControlMaster. `requireRemote` is KEPT as
- * sent. It is core's own refusal to spawn a remote node locally (`spawnNew` → `unavailable:'ssh'`
- * → `spawn-failed`), and clearing it with `sshRemote` would start a LOCAL `nt-<id>` wearing the
- * remote node's identity and type its launch there (CLAUDE.md, "A remote node is NEVER spawned
- * locally").
+ * sent. The primary fence is the renderer's: `startHeadless` refuses an SSH node before any claim
+ * (`remote-unsupported`), so none should arrive here. `requireRemote` — which the renderer's
+ * `headlessPtyOptions` sets for an SSH-project node — is core's belt behind that fence: it makes
+ * `spawnNew` refuse (`unavailable:'ssh'` → `spawn-failed`), where clearing it with `sshRemote`
+ * would start a LOCAL `nt-<id>` wearing the remote node's identity and type its launch there
+ * (CLAUDE.md, "A remote node is NEVER spawned locally").
  */
 export function desktopHeadlessRequest(req: {
   ptyOptions: PtyCreateOptions
