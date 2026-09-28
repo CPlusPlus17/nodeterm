@@ -1,7 +1,8 @@
 import type {
-  CanvasNodeState, KanbanAssignment, KanbanColumn, KanbanColumnCategory, Project, ProjectKanban
+  CanvasNodeState, KanbanColumn, KanbanColumnCategory, Project, ProjectKanban
 } from '@shared/types'
 import { columnCategory } from '@shared/kanban-category'
+import { columnOrder, placeAssignment, type CardAnchor } from '@shared/kanban-order'
 import { SYSTEM_NODE_COLORS } from '../state/workspace'
 import { defaultBoardColumns } from '@shared/kanban-default-board'
 import { autoLabelColor, boardLabels, cardMeta, createLabel, metaList, setCardLabels } from '@shared/kanban-labels'
@@ -118,9 +119,10 @@ export function deleteColumn(k: ProjectKanban, columnId: string): ProjectKanban 
   }
 }
 
-/** Node ids assigned to `columnId`, in board order. */
+/** Node ids assigned to `columnId`, in board order — rank first, array order for entries without
+ *  one (@shared/kanban-order). Every board reader goes through this. */
 export function assignedTo(k: ProjectKanban, columnId: string): string[] {
-  return k.assignments.filter((a) => a.columnId === columnId).map((a) => a.nodeId)
+  return columnOrder(k.assignments, columnId).map((a) => a.nodeId)
 }
 
 /**
@@ -165,7 +167,9 @@ export const AT_COLUMN_END: unique symbol = Symbol('kanban.atColumnEnd')
  *    card created from a column): appended at the bottom of a long "Done" column, the card an
  *    agent just finished read as having disappeared.
  *
- *  Unknown target column is a no-op. */
+ *  The move writes one `rank` and keeps the array in rank order (`placeAssignment`, which the
+ *  relay's move verb shares). Unknown target column, or a card already exactly there, returns the
+ *  SAME board. */
 export function assignNode(
   k: ProjectKanban,
   nodeId: string,
@@ -178,20 +182,10 @@ export function assignNode(
     return { ...k, assignments: k.assignments.filter((a) => a.nodeId !== nodeId) }
   }
   if (!k.columns.some((c) => c.id === columnId)) return k
-  const moved: KanbanAssignment = { nodeId, columnId }
-  const without = k.assignments.filter((a) => a.nodeId !== nodeId)
-  const anchor =
-    typeof beforeNodeId === 'string'
-      ? without.find((a) => a.nodeId === beforeNodeId && a.columnId === columnId)
-      : undefined
-  // Array order is the column order, so "top" = before the column's first assignment, and an empty
-  // column's first card simply joins the end of the array.
-  const target =
-    anchor ??
-    (beforeNodeId === AT_COLUMN_END ? undefined : without.find((a) => a.columnId === columnId))
-  const idx = target ? without.indexOf(target) : -1
-  const at = idx === -1 ? without.length : idx
-  return { ...k, assignments: [...without.slice(0, at), moved, ...without.slice(at)] }
+  const anchor: CardAnchor =
+    beforeNodeId === AT_COLUMN_END ? 'end' : typeof beforeNodeId === 'string' ? { before: beforeNodeId } : 'top'
+  const assignments = placeAssignment(k.assignments, nodeId, columnId, anchor)
+  return assignments === k.assignments ? k : { ...k, assignments }
 }
 
 /** Drops assignments of nodes that no longer exist. Returns the SAME object when nothing

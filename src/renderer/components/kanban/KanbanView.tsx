@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { KanbanColumnCategory, KanbanLabel, ProjectKanban } from '@shared/types'
+import type { KanbanColumnCategory, KanbanLabel, KanbanSavedView, KanbanViewQuery, ProjectKanban } from '@shared/types'
+import { deleteView, renameView, sameViewQuery, saveView, updateView, viewQuery } from '@shared/kanban-views'
+import { promptDialog } from '../promptDialog'
 import {
   boardProgress, categoryChangeImpact, categoryChangeMessage, columnCategory
 } from '@shared/kanban-category'
@@ -15,7 +17,7 @@ import { useProjects } from '../../state/projects'
 import { useSettings } from '../../state/settings'
 import { useBoardWallpaperStyle } from '../../state/wallpaper'
 import {
-  AT_COLUMN_END, addColumn, assignNode, assignedTo, boardLabels, cardMatchesLabelFilter, cardMeta, columnForNode,
+  AT_COLUMN_END, addColumn, assignNode, assignedTo, boardLabels, cardAssignees, cardMatchesLabelFilter, cardMeta, columnForNode,
   deleteColumn, labelsForCard, moveColumn,
   nextColumnColor, pruneAssignments, recolorColumn, renameColumn, setColumnCategory, unassigned
 } from '../../lib/kanban'
@@ -221,7 +223,13 @@ export const KanbanView = memo(function KanbanView({
   // Board label filter — transient (per board session; resets when you leave the board). Empty =
   // show everything; otherwise a card must carry at least one selected label (cardMatchesLabelFilter).
   const [labelFilter, setLabelFilter] = useState<string[]>([])
+  // Member + column filters (names; column ids to SHOW, `ungrouped` included). With the source and
+  // label filters they are what a saved view carries (@shared/kanban-views).
+  const [assigneeFilter, setAssigneeFilter] = useState<string[]>([])
+  const [columnFilter, setColumnFilter] = useState<string[]>([])
   const [filterOpen, setFilterOpen] = useState(false)
+  const [viewsMenu, setViewsMenu] = useState<{ x: number; y: number } | null>(null)
+  const [pendingViewDelete, setPendingViewDelete] = useState<KanbanSavedView | null>(null)
   // Status chips (Running / Needs you / Unread) — TRANSIENT component state, never persisted and
   // never part of a saved view: they filter on second-by-second agent state (lib/kanbanStatusChips).
   const [statusChips, setStatusChips] = useState<StatusChip[]>([])
@@ -248,6 +256,13 @@ export const KanbanView = memo(function KanbanView({
   // Per-user display: whether `closed` columns are on screen (localStorage, never the board).
   const showClosed = useKanbanDisplay((s) => s.byProject[projectId]?.showClosed === true)
   const setShowClosed = useKanbanDisplay((s) => s.setShowClosed)
+  // Saved views are SHARED (board.views); which one this user last applied is theirs.
+  const activeViewId = useKanbanDisplay((s) => s.byProject[projectId]?.viewId)
+  const setActiveViewId = useKanbanDisplay((s) => s.setActiveViewId)
+  const views = useMemo(() => (Array.isArray(board.views) ? board.views : []), [board.views])
+  const activeView = views.find((v) => v.id === activeViewId)
+  const boardRef = useRef(board)
+  boardRef.current = board
   // A category change that would re-mean cards waits here for an explicit confirmation.
   const [pendingCategory, setPendingCategory] = useState<
     { columnId: string; category: KanbanColumnCategory | undefined; message: string } | null
@@ -342,11 +357,28 @@ export const KanbanView = memo(function KanbanView({
     // The serialised config is the epoch visible to the renderer. Reconnect when mappings change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, projectId, githubConfigKey, columnIdsKey, githubFilterKey, connectGitHub, githubRetry])
+  // A view's filters, applied. The chips are deliberately not touched — a view never carries them.
+  // A source the board cannot show (no GitHub on this board) falls back to every source.
+  const applyQuery = useCallback(
+    (q: KanbanViewQuery, k: ProjectKanban) => {
+      setSource(k.github ? q.source ?? 'all' : 'all')
+      setLabelFilter(q.labels ?? [])
+      setAssigneeFilter(q.assignees ?? [])
+      setColumnFilter(q.columns ?? [])
+    },
+    []
+  )
   useEffect(() => {
-    setSource('all')
     setModalIssue(null)
     setIssueMenu(null)
     setStatusChips([])
+    // Entering a board (or switching projects under it) restores the view this user last applied
+    // there; a view a teammate has since deleted is simply not found.
+    const k = boardRef.current
+    const remembered = useKanbanDisplay.getState().activeViewId(projectId)
+    const view = Array.isArray(k.views) ? k.views.find((v) => v.id === remembered) : undefined
+    applyQuery(view?.query ?? {}, k)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
   // A node's `#N` chip asked for its issue (openIssueOnBoard). Open the issue's summary once the
   // issue lane has loaded; when the board cannot show it — no GitHub sync on this board, another
@@ -557,12 +589,15 @@ export const KanbanView = memo(function KanbanView({
   // them per column — and their identities hold across renders that change neither the board,
   // the sessions, nor the filter, which is what lets the memoized columns skip.
   const columnCards = useMemo(() => {
-    // Label filter AND status chips (each an OR within itself).
+    // Label filter AND member filter AND status chips (each an OR within itself).
+    const hasMember = (id: string): boolean =>
+      cardAssignees(cardMeta(board, id)).some((a) => assigneeFilter.includes(a.name))
     const vis = (ids: string[]): string[] =>
-      activeLocalFilter.length || statusChips.length
+      activeLocalFilter.length || assigneeFilter.length || statusChips.length
         ? ids.filter(
           (id) =>
             (!activeLocalFilter.length || cardMatchesLabelFilter(board, id, activeLocalFilter)) &&
+            (!assigneeFilter.length || hasMember(id)) &&
             matchesStatusChips(statusFacts, id, statusChips)
         )
         : ids
@@ -574,7 +609,7 @@ export const KanbanView = memo(function KanbanView({
       ungrouped: toCards(vis(unassigned(board, sessionIds))),
       byColumn: new Map(board.columns.map((c) => [c.id, toCards(vis(assignedTo(board, c.id)))]))
     }
-  }, [board, byId, sessionIds, activeLocalFilter, statusChips, statusFacts])
+  }, [board, byId, sessionIds, activeLocalFilter, assigneeFilter, statusChips, statusFacts])
 
   // Lifecycle: the board's progress (null when no column says what "complete" means) and the
   // columns this user sees — `closed` ones only when they asked for them.
@@ -583,10 +618,102 @@ export const KanbanView = memo(function KanbanView({
     () => board.columns.filter((c) => columnCategory(c) === 'closed').length,
     [board.columns]
   )
-  const shownColumns = useMemo(
-    () => (showClosed ? board.columns : board.columns.filter((c) => columnCategory(c) !== 'closed')),
-    [board.columns, showClosed]
+  // The column filter names columns to SHOW; ids that no longer exist are ignored, and a filter
+  // left with none that do means "every column" rather than an empty board.
+  const liveColumnFilter = useMemo(
+    () => columnFilter.filter((id) => id === 'ungrouped' || board.columns.some((c) => c.id === id)),
+    [columnFilter, board.columns]
   )
+  const shownColumns = useMemo(
+    () =>
+      board.columns.filter(
+        (c) =>
+          (showClosed || columnCategory(c) !== 'closed') &&
+          (!liveColumnFilter.length || liveColumnFilter.includes(c.id))
+      ),
+    [board.columns, showClosed, liveColumnFilter]
+  )
+  const ungroupedShown = !liveColumnFilter.length || liveColumnFilter.includes('ungrouped')
+  // Every name assigned on this board (plus any still selected), for the member filter.
+  const memberNames = useMemo(() => {
+    const names = new Set<string>(assigneeFilter)
+    for (const m of Array.isArray(board.meta) ? board.meta : []) {
+      for (const a of cardAssignees(m)) if (a.name) names.add(a.name)
+    }
+    return [...names].sort((a, b) => a.localeCompare(b))
+  }, [board.meta, assigneeFilter])
+  const toggleIn = (set: (f: (cur: string[]) => string[]) => void, value: string): void =>
+    set((cur) => (cur.includes(value) ? cur.filter((x) => x !== value) : [...cur, value]))
+  const filterCount = activeFilter.length + assigneeFilter.length + liveColumnFilter.length
+  // Views: what the board shows now, and whether the active view still describes it.
+  const currentQuery = useMemo(
+    () => viewQuery({ source, labels: activeFilter, assignees: assigneeFilter, columns: liveColumnFilter }),
+    [source, activeFilter, assigneeFilter, liveColumnFilter]
+  )
+  // Compared as the board can SHOW it: a stored query naming a label or column that no longer
+  // exists (or GitHub on a board without it) would otherwise read as "modified" forever.
+  const viewDirty = useMemo(() => {
+    if (!activeView) return false
+    const q = activeView.query
+    const shown = viewQuery({
+      source: board.github ? q.source ?? 'all' : 'all',
+      labels: (q.labels ?? []).filter((k) => localFilterKeys.has(k) || k.startsWith('github:')),
+      assignees: q.assignees ?? [],
+      columns: (q.columns ?? []).filter((id) => id === 'ungrouped' || board.columns.some((c) => c.id === id))
+    })
+    return !sameViewQuery(currentQuery, shown)
+  }, [activeView, board.github, board.columns, localFilterKeys, currentQuery])
+  const saveCurrentView = async (): Promise<void> => {
+    const name = await promptDialog({
+      message: 'Name this view. Views are saved with the board, so everyone who opens it gets them.',
+      placeholder: 'e.g. Mine, Review queue',
+      confirmLabel: 'Save view'
+    })
+    if (!name) return
+    const saved = saveView(boardRef.current, name, currentQuery)
+    if (!saved.id) return
+    commit(saved.k)
+    setActiveViewId(projectId, saved.id)
+  }
+  const renameActiveView = async (view: KanbanSavedView): Promise<void> => {
+    const name = await promptDialog({ message: 'Rename this view', initialValue: view.name, confirmLabel: 'Rename' })
+    if (!name) return
+    const next = renameView(boardRef.current, view.id, name)
+    if (next !== boardRef.current) commit(next)
+  }
+  const viewsMenuItems = (): MenuItem[] => [
+    { type: 'label', label: views.length ? 'Saved views' : 'No saved views yet' },
+    ...views.map((v): MenuItem => ({
+      label: v.name,
+      icon: v.id === activeView?.id ? <span aria-label="current">✓</span> : undefined,
+      onClick: () => {
+        applyQuery(v.query, board)
+        setActiveViewId(projectId, v.id)
+      }
+    })),
+    { type: 'separator' },
+    { label: 'Save current filters as a view…', onClick: () => void saveCurrentView() },
+    ...(activeView
+      ? ([
+        ...(viewDirty
+          ? [{
+            label: `Update “${activeView.name}” to the current filters`,
+            onClick: () => commit(updateView(board, activeView.id, currentQuery))
+          }]
+          : []),
+        { label: `Rename “${activeView.name}”…`, onClick: () => void renameActiveView(activeView) },
+        { label: `Delete “${activeView.name}”…`, danger: true, onClick: () => setPendingViewDelete(activeView) },
+        { type: 'separator' },
+        {
+          label: 'Leave the view (show every card)',
+          onClick: () => {
+            applyQuery({}, board)
+            setActiveViewId(projectId, undefined)
+          }
+        }
+      ] as MenuItem[])
+      : [])
+  ]
 
   // ── Keyboard (board.* registry commands, dispatched by Canvas through lib/boardKeys) ──────────
   // Board order = the session cards on screen, column by column (Ungrouped first), top to bottom —
@@ -595,10 +722,10 @@ export const KanbanView = memo(function KanbanView({
   const navColumns = useMemo<string[][]>(() => {
     if (!sourceVisible(source, 'sessions')) return []
     return [
-      columnCards.ungrouped.map((c) => c.id),
+      ungroupedShown ? columnCards.ungrouped.map((c) => c.id) : [],
       ...shownColumns.map((col) => (columnCards.byColumn.get(col.id) ?? NO_CARDS).map((c) => c.id))
     ]
-  }, [columnCards, shownColumns, source])
+  }, [columnCards, shownColumns, ungroupedShown, source])
   const boardKeyRef = useRef<(action: BoardKeyAction) => boolean>(() => false)
   boardKeyRef.current = (action) => {
     const active = document.activeElement
@@ -910,68 +1037,99 @@ export const KanbanView = memo(function KanbanView({
             )
           })}
         </div>
-        {(paletteLabels.length > 0 || githubLabels.length > 0 || activeFilter.length > 0) && (
-          <div className="kanban-header__filter">
-            <button
-              className={`kanban-filter-btn${activeFilter.length ? ' kanban-filter-btn--on' : ''}`}
-              title="Filter by label"
-              onClick={() => setFilterOpen((v) => !v)}
-            >
-              Filter{activeFilter.length ? ` · ${activeFilter.length}` : ''}
-            </button>
-            {filterOpen && (
-              <>
-                <div className="label-picker__scrim" onMouseDown={() => setFilterOpen(false)} />
-                <div className="kanban-filter-menu">
-                  {paletteLabels.length > 0 && <div className="kanban-filter-group">Sessions</div>}
-                  {paletteLabels.map((l) => {
-                    const s = labelSwatch(l.color)
-                    const key = `local:${l.id}`
-                    const on = activeFilter.includes(key)
-                    return (
-                      <button key={key} className="kanban-filter-row" onClick={() => toggleFilter(key)}>
-                        <span className="kanban-label-chip" style={{ background: s.bg, color: s.fg }}>
-                          {l.name || 'Label'}
-                        </span>
-                        {on && <span className="label-picker__rowcheck">✓</span>}
-                      </button>
-                    )
-                  })}
-                  {githubLabels.length > 0 && <div className="kanban-filter-group">GitHub</div>}
-                  {githubLabels.map((label) => {
-                    const key = `github:${label.name.normalize('NFKC').toLocaleLowerCase('en-US')}`
-                    const on = activeFilter.includes(key)
-                    return (
-                      <button key={key} className="kanban-filter-row" onClick={() => toggleFilter(key)}>
-                        <span className="github-issue-label" style={{
-                          borderColor: `#${label.color}`,
-                          color: `#${label.color}`
-                        }}>{label.name}</span>
-                        {on && <span className="label-picker__rowcheck">✓</span>}
-                      </button>
-                    )
-                  })}
-                  {activeFilter.length > 0 && (
-                    <button className="kanban-filter-clear" onClick={() => setLabelFilter([])}>
-                      Clear filter
+        <div className="kanban-header__filter">
+          <button
+            className={`kanban-filter-btn${filterCount ? ' kanban-filter-btn--on' : ''}`}
+            title="Filter by label, member or column"
+            onClick={() => setFilterOpen((v) => !v)}
+          >
+            Filter{filterCount ? ` · ${filterCount}` : ''}
+          </button>
+          {filterOpen && (
+            <>
+              <div className="label-picker__scrim" onMouseDown={() => setFilterOpen(false)} />
+              <div className="kanban-filter-menu">
+                {paletteLabels.length > 0 && <div className="kanban-filter-group">Sessions</div>}
+                {paletteLabels.map((l) => {
+                  const s = labelSwatch(l.color)
+                  const key = `local:${l.id}`
+                  const on = activeFilter.includes(key)
+                  return (
+                    <button key={key} className="kanban-filter-row" onClick={() => toggleFilter(key)}>
+                      <span className="kanban-label-chip" style={{ background: s.bg, color: s.fg }}>
+                        {l.name || 'Label'}
+                      </span>
+                      {on && <span className="label-picker__rowcheck">✓</span>}
                     </button>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-        )}
+                  )
+                })}
+                {githubLabels.length > 0 && <div className="kanban-filter-group">GitHub</div>}
+                {githubLabels.map((label) => {
+                  const key = `github:${label.name.normalize('NFKC').toLocaleLowerCase('en-US')}`
+                  const on = activeFilter.includes(key)
+                  return (
+                    <button key={key} className="kanban-filter-row" onClick={() => toggleFilter(key)}>
+                      <span className="github-issue-label" style={{
+                        borderColor: `#${label.color}`,
+                        color: `#${label.color}`
+                      }}>{label.name}</span>
+                      {on && <span className="label-picker__rowcheck">✓</span>}
+                    </button>
+                  )
+                })}
+                {memberNames.length > 0 && <div className="kanban-filter-group">Members</div>}
+                {memberNames.map((name) => (
+                  <button key={`member:${name}`} className="kanban-filter-row" onClick={() => toggleIn(setAssigneeFilter, name)}>
+                    <span className="kanban-filter-member">{name}</span>
+                    {assigneeFilter.includes(name) && <span className="label-picker__rowcheck">✓</span>}
+                  </button>
+                ))}
+                <div className="kanban-filter-group">Columns</div>
+                {[{ id: 'ungrouped', title: 'Ungrouped' }, ...board.columns].map((c) => (
+                  <button key={`column:${c.id}`} className="kanban-filter-row" onClick={() => toggleIn(setColumnFilter, c.id)}>
+                    <span className="kanban-filter-member">{c.title}</span>
+                    {liveColumnFilter.includes(c.id) && <span className="label-picker__rowcheck">✓</span>}
+                  </button>
+                ))}
+                {filterCount > 0 && (
+                  <button
+                    className="kanban-filter-clear"
+                    onClick={() => {
+                      setLabelFilter([])
+                      setAssigneeFilter([])
+                      setColumnFilter([])
+                    }}
+                  >
+                    Clear filter
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+        <button
+          className={`kanban-filter-btn kanban-views-btn${activeView ? ' kanban-filter-btn--on' : ''}`}
+          title={activeView ? `Saved view: ${activeView.name}${viewDirty ? ' (filters changed since it was saved)' : ''}` : 'Saved views'}
+          onClick={(e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+            setViewsMenu({ x: r.left, y: r.bottom + 4 })
+          }}
+        >
+          {activeView ? `View: ${activeView.name}${viewDirty ? ' •' : ''}` : 'Views'}
+        </button>
       </div>
       <div className="kanban-board">
         <div className="kanban-board__columns">
-          <KanbanColumn
-            column={null}
-            lanes={lanesFor(null)}
-            createOptions={createOptions}
-            onCreate={onCreateNode}
-            onDragEnd={handleDragEnd}
-            onDropOnColumn={dropOnColumn}
-          />
+          {ungroupedShown && (
+            <KanbanColumn
+              column={null}
+              lanes={lanesFor(null)}
+              createOptions={createOptions}
+              onCreate={onCreateNode}
+              onDragEnd={handleDragEnd}
+              onDropOnColumn={dropOnColumn}
+            />
+          )}
           {shownColumns.map((col) => (
             <KanbanColumn
               key={col.id}
@@ -1080,6 +1238,31 @@ export const KanbanView = memo(function KanbanView({
             setModalNodeId(nodeId)
           }}
           showRunHistory={modalIssue.kind === 'issue'}
+        />
+      )}
+      {viewsMenu && (
+        <ContextMenu
+          x={viewsMenu.x}
+          y={viewsMenu.y}
+          zIndex={60}
+          items={viewsMenuItems()}
+          onClose={() => setViewsMenu(null)}
+        />
+      )}
+      {pendingViewDelete && (
+        <ConfirmDialog
+          message={`Delete the view "${pendingViewDelete.name}"? Views are saved with the board, so it goes for everyone who opens it.`}
+          confirmLabel="Delete view"
+          danger
+          onCancel={() => setPendingViewDelete(null)}
+          onConfirm={() => {
+            const gone = pendingViewDelete
+            setPendingViewDelete(null)
+            // Re-resolved at confirm time: the board can have changed while the dialog was up.
+            const next = deleteView(boardRef.current, gone.id)
+            if (next !== boardRef.current) commit(next)
+            if (useKanbanDisplay.getState().activeViewId(projectId) === gone.id) setActiveViewId(projectId, undefined)
+          }}
         />
       )}
       {pendingCategory && (

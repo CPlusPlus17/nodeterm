@@ -44,11 +44,14 @@ const SPACE_ACTIVATED = new Set(['BUTTON', 'A', 'SUMMARY', 'INPUT'])
  *  - a `<select>` owns everything: arrows change its value, letters type-ahead;
  *  - an ARIA composite widget owns everything, for the same reasons;
  *  - a button, link, summary or checkbox owns Space — the key that presses it.
- * A card itself owns nothing: it is what the board's keys are for.
+ * A card itself owns nothing: it is what the board's keys are for — but a button inside a card is a
+ * button.
  */
 export function keyOwnedByControl(el: Element | null, action: BoardKeyAction): boolean {
   if (!el) return false
-  if (el.closest?.('[data-kanban-card]')) return false
+  // Only the CARD itself owns nothing. A control INSIDE a card (the context meter, a chip) is still
+  // that control: Space presses it rather than opening the card behind it.
+  if (el.getAttribute?.('data-kanban-card') != null) return false
   if (el.tagName === 'SELECT') return true
   const role = el.getAttribute?.('role')
   if (role && COMPOSITE_ROLES.has(role)) return true

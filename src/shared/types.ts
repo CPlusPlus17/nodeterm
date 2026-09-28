@@ -642,11 +642,15 @@ export interface KanbanColumn {
 }
 
 /** Assignment of one session node to a board column. A session with no assignment sits
- *  in the virtual Ungrouped column (never persisted). Order within a column = relative
- *  order in ProjectKanban.assignments. */
+ *  in the virtual Ungrouped column (never persisted). Order within a column = `rank` (a
+ *  fractional-index string, @shared/kanban-rank), and for an entry without a valid one, its
+ *  position in ProjectKanban.assignments (@shared/kanban-order `columnOrder`). Every write keeps
+ *  the ARRAY in rank order too, so a build that ignores `rank` shows the same column. */
 export interface KanbanAssignment {
   nodeId: string
   columnId: string
+  /** Optional position key within the column. Absent / invalid ⇒ derived from array order. */
+  rank?: string
 }
 
 /** Per-project kanban board (docs/superpowers/specs/2026-07-18-kanban-view-design.md).
@@ -692,9 +696,32 @@ export interface KanbanLabel {
   color: KanbanLabelColor
 }
 
+/** A saved board view's filters (@shared/kanban-views). SHARED content: a view is how a team
+ *  looks at its board. Deliberately NOT here: the live-state status chips (never persisted
+ *  anywhere) and display preferences like showing closed columns (per user, localStorage). */
+export interface KanbanViewQuery {
+  /** The source filter; absent = all. */
+  source?: 'all' | 'github' | 'pulls' | 'sessions'
+  /** Label filter keys (`local:<labelId>` | `github:<folded name>`); OR within the list. */
+  labels?: string[]
+  /** Assignee names (the presence identity's name); a card needs one of them. */
+  assignees?: string[]
+  /** Column ids to SHOW (`ungrouped` names the virtual column); absent/empty = every column. */
+  columns?: string[]
+}
+
+export interface KanbanSavedView {
+  id: string
+  name: string
+  query: KanbanViewQuery
+}
+
 export interface ProjectKanban {
   columns: KanbanColumn[]
   assignments: KanbanAssignment[]
+  /** Saved views — named filter sets shared with everyone on the board. Tolerated as absent or
+   *  malformed (sanitizeViews); the ACTIVE view is per user (localStorage), never here. */
+  views?: KanbanSavedView[]
   /** Optional card metadata; tolerated as absent/malformed by every reader (lib normalizes). */
   meta?: KanbanCardMeta[]
   /** Board-level label palette (Notion-style). Cards reference these by id in `meta[].labels`;

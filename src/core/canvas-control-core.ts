@@ -1155,8 +1155,9 @@ ${issueBindingDocLines().join('\n')}
   \`ungrouped\`, to send it back to Ungrouped; \`--before <nodeId>\` drops it just above that card
   within the column, and without \`--before\` the card lands at the TOP of the column — so a card
   you just moved to "Done" is the first one there, not buried at the bottom of a long column (a
-  \`--before\` naming a card that is not in that column counts as no anchor). This is board metadata ONLY — it never moves the node on the canvas, changes
-  its group, or touches the running session. Use it to reflect progress: as a station finishes,
+  \`--before\` naming a card that is not in that column counts as no anchor). This is board
+  metadata ONLY — it never moves the node on the canvas, changes its group, or touches the running
+  session. Use it to reflect progress: as a station finishes,
   move its card into your "In Progress" / "Done" column so the board tells the real story.
 ${settingsVerbDocLines().join('\n')}
 ${reportIssueDocLines().join('\n')}

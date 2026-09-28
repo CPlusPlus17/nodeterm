@@ -15,6 +15,9 @@ export const KANBAN_DISPLAY_KEY = 'nodeterm.kanbanDisplay'
 export interface ProjectBoardDisplay {
   /** Show columns whose category is `closed`. Absent = hidden (the point of `closed`). */
   showClosed?: boolean
+  /** The saved view (`kanban.views[].id`) this user last applied. The views are shared; which one
+   *  a person is looking at is theirs. A stale id (the view was deleted) is simply ignored. */
+  viewId?: string
 }
 
 export type KanbanDisplayMap = Record<string, ProjectBoardDisplay>
@@ -38,6 +41,7 @@ export function parseKanbanDisplay(raw: string | null): KanbanDisplayMap {
     if (!isRecord(v)) continue
     const entry: ProjectBoardDisplay = {}
     if (typeof v.showClosed === 'boolean') entry.showClosed = v.showClosed
+    if (typeof v.viewId === 'string' && v.viewId) entry.viewId = v.viewId
     out[pid] = entry
   }
   return out
@@ -55,6 +59,8 @@ interface KanbanDisplayState {
   byProject: KanbanDisplayMap
   showClosed(projectId: string): boolean
   setShowClosed(projectId: string, show: boolean): void
+  activeViewId(projectId: string): string | undefined
+  setActiveViewId(projectId: string, viewId: string | undefined): void
 }
 
 export const useKanbanDisplay = create<KanbanDisplayState>((set, get) => ({
@@ -62,6 +68,13 @@ export const useKanbanDisplay = create<KanbanDisplayState>((set, get) => ({
   showClosed: (projectId) => get().byProject[projectId]?.showClosed === true,
   setShowClosed: (projectId, show) => {
     const byProject = { ...get().byProject, [projectId]: { ...get().byProject[projectId], showClosed: show } }
+    save(byProject)
+    set({ byProject })
+  },
+  activeViewId: (projectId) => get().byProject[projectId]?.viewId,
+  setActiveViewId: (projectId, viewId) => {
+    const { viewId: _old, ...rest } = get().byProject[projectId] ?? {}
+    const byProject = { ...get().byProject, [projectId]: viewId ? { ...rest, viewId } : rest }
     save(byProject)
     set({ byProject })
   }

@@ -16,6 +16,13 @@ describe('parseKanbanDisplay', () => {
     expect(parseKanbanDisplay('"str"')).toEqual({})
   })
 
+  it('reads the active view id as a string only', () => {
+    expect(parseKanbanDisplay('{"p1":{"viewId":"kview-1"},"p2":{"viewId":7}}')).toEqual({
+      p1: { viewId: 'kview-1' },
+      p2: {}
+    })
+  })
+
   it('keeps only literal booleans — a hand-edited value never flips a default', () => {
     expect(parseKanbanDisplay('{"p1":{"showClosed":"yes"},"p2":7,"p3":{"showClosed":true,"x":1}}')).toEqual({
       p1: {},
@@ -31,5 +38,17 @@ describe('useKanbanDisplay', () => {
     s.setShowClosed('p-a', true)
     expect(useKanbanDisplay.getState().showClosed('p-a')).toBe(true)
     expect(useKanbanDisplay.getState().showClosed('p-b')).toBe(false)
+  })
+})
+
+describe('useKanbanDisplay — the active view is this user\'s', () => {
+  it('remembers and clears the active view per project', () => {
+    const s = useKanbanDisplay.getState()
+    expect(s.activeViewId('p-v')).toBeUndefined()
+    s.setActiveViewId('p-v', 'kview-1')
+    expect(useKanbanDisplay.getState().activeViewId('p-v')).toBe('kview-1')
+    expect(useKanbanDisplay.getState().activeViewId('p-other')).toBeUndefined()
+    useKanbanDisplay.getState().setActiveViewId('p-v', undefined)
+    expect(useKanbanDisplay.getState().activeViewId('p-v')).toBeUndefined()
   })
 })

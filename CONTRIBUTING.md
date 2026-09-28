@@ -130,7 +130,11 @@ in `project.kanban` (`.nodeterm/project.json`) — optional, sanitized in `sanit
 (`core/workspace-files.ts`, which every load and save seam runs) and harmless to an older build;
 a **display preference** is per-user localStorage (`state/kanbanDisplay.ts`); a filter on **live
 agent state** is component state and is never persisted. An unanchored card move lands at the TOP
-of its column; only a positional drop asks for the bottom (`AT_COLUMN_END`). Board keys are
+of its column; only a positional drop asks for the bottom (`AT_COLUMN_END`). Card order is a
+`rank` string, and every write — renderer or core — goes through `placeAssignment`
+(`@shared/kanban-order`), which also keeps the assignments ARRAY in rank order for builds that
+ignore `rank`; never splice the array by hand. A saved view's query is built only by `viewQuery`,
+so the live-state chips can never be saved into one. Board keys are
 registry commands in the `board` scope — the only scope allowed a bare letter, because it never
 fires while typing or in a terminal.
 
