@@ -318,7 +318,7 @@ timeout, on every tool call. `antigravity-script.test.ts` pins it with a curl th
 | In-place restart / Eco | `/exit` and `/quit` are documented (1.2.12), but `ask_question` maps to `waiting`, which the restart's busy gate does not refuse — an `/exit` would be typed into an open question. Map it to `blocked` (or treat `waiting` as busy for agy) and check on a device that the pane returns to a shell (agy runs sidecar processes) before adding `EXIT_SEQUENCES.antigravity` |
 | Permission modes | flags exist (`--mode accept-edits\|plan`, `--dangerously-skip-permissions`) but there is no row in `approval-mode.ts`. Until there is, nodes run under `agy`'s default policy — so its permission prompt (which fires no hook, §3.1) is what a node shows as RUNNING |
 | Context meter | no token count or window in hooks or transcript (the TUI's "1.1k tokens" is per thought block) |
-| Chat panel, context link, transfer | no parser/locator yet. When there is one: read **`transcript_full.jsonl`** (what the payload announces), not `transcript.jsonl`, which lacks `thinking` and `tool_calls` |
+| Chat panel (⌘M, and the phone's Chat screen), context link, transfer | the transcript's LOCATION is measured, its record shapes are not. See §7.1 |
 | Canvas control | the shim and the discovery file already exist — `agy` reads `~/.gemini/GEMINI.md` (measured), where the Gemini CLI's nodeterm blocks are — but antigravity is not in `CANVAS_CONTROL_CAPABLE`, so the session gets no `NODETERM_CANVAS_CONTROL` and the shim answers "not a nodeterm agent node". Joining is the follow-up; check what else that list gates first |
 | Subagent cards | `invoke_subagent` exists in the step enum; never provoked |
 | Session name, rename | title lives in SQLite (not measured); no rename command |
@@ -327,6 +327,72 @@ timeout, on every tool call. `antigravity-script.test.ts` pins it with a curl th
 
 Also worth knowing: `agy` asks "Do you trust the contents of this project?" the first time it opens a
 folder, before any turn.
+
+### 7.1 The chat view: what is known, and why nothing ships yet
+
+`antigravity` is deliberately NOT in `CHAT_CAPABLE` (pinned in `config.capabilities.test.ts`). On
+an agy node, ⌘M therefore opens the rendered terminal OUTPUT (`TerminalMarkdownView`), never the
+conversation view, and the phone's Chat screen answers `unsupported` (its relay `page()` is gated on
+`canChat`). That is the honest answer until the record shapes below are captured. A parser written from the vendor's prose would map the user's and the
+model's text and then have to guess everything else, which is rule 14 of "Adding a new agent" in
+`CLAUDE.md`: a guess must degrade to nothing, never to something wrong. An unwired skeleton is not
+shipped either, because a module whose only reader is its own test is a plan, not a feature.
+
+**Measured** (1.2.3, Windows; the hook payloads in
+`src/shared/agents/__fixtures__/antigravity/hook-payloads.json`):
+- **Location.** Every payload names `transcriptPath` =
+  `<agy home>/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`, next to
+  `artifactDirectoryPath` = `<agy home>/brain/<conversationId>`, with `<agy home>` =
+  `~/.gemini/antigravity-cli`. On Linux, the 1.2.12 binary created `~/.gemini/antigravity-cli/brain/`
+  under a fresh HOME (2026-09-28). The directory stayed empty, because no turn runs without a
+  sign-in.
+- **Session id.** `normalizeAntigravity` already maps `conversationId` to the event's `sessionId`
+  (the same id `agy --conversation=<id>` resumes), so a node's own id reaches `agentStatus`. The
+  locator must key on that id and nothing else: `brain/` holds every conversation on the machine,
+  so a "newest file" fallback would show a stranger's session.
+
+**Vendor-described, never captured.** The 1.2.12 binary embeds instructions that tell its own model
+how to read these files. They say:
+- JSONL, one "step" (action) per line.
+- `step_index` is the step's index in the trajectory.
+- `source` is e.g. `USER_EXPLICIT`, `MODEL` or `SYSTEM`.
+- `type`: `USER_INPUT` is the user's prompt, and `PLANNER_RESPONSE` is the agent's response and its
+  tool calls.
+- `status` is e.g. `DONE` or `ERROR`. `created_at` is an ISO 8601 timestamp.
+- `content` is the text: the user's request, the model's response, or tool responses.
+- `thinking` holds the reasoning (on `PLANNER_RESPONSE`), and `tool_calls` is "an array of tool calls
+  … including their arguments".
+- `media` is `[{mime_type, uri}]`; the bytes are not in the file.
+- `truncated_fields` appears only in the compact `transcript.jsonl`, which truncates large
+  `content`/`thinking`/`tool_calls`. It never appears in `transcript_full.jsonl`.
+
+That settles which file to read (`transcript_full.jsonl`) and nothing more.
+
+**Unknown, and each one is a guess that would render wrong:**
+1. **The element shape of `tool_calls`**: the keys for the name, the arguments and any id, and
+   whether the arguments are an object or a JSON string.
+2. **How a tool's RESULT is recorded, and how it links to its call.** `content` "or tool responses"
+   suggests a step of its own. The step-type enum in the binary has ~120 values (`RUN_COMMAND`,
+   `VIEW_FILE`, `GREP_SEARCH`, `ASK_QUESTION`, `INVOKE_SUBAGENT`, `ERROR_MESSAGE`, `CHECKPOINT`, …),
+   and nothing says which field points back at the call (`step_index`? an id?).
+3. **The serialized spelling of the enums.** The vendor text writes `USER_INPUT`, the proto name is
+   `CORTEX_STEP_TYPE_USER_INPUT`, and a parser matching the wrong one renders an empty thread.
+4. **Whether a `USER_INPUT` `content` is exactly what the person typed**, or is wrapped in injected
+   tags or metadata. Tooling text must never appear in the shape of something the human said.
+5. **Whether the file is append-only.** The status enum also has `RUNNING`, `GENERATING`,
+   `WAITING`, `PENDING` and `QUEUED`. If a step's line is rewritten when its status changes, byte
+   offsets are not stable keys. The paged read (claude's) would then be wrong, and the single capped
+   whole-file read (grok's) is the only safe shape. **This one decides the paging design.**
+6. **The model name.** It is not a documented step field. The hook payload's `modelName` exists, but
+   the chat reader reads the file.
+7. **What an ESC-cancelled turn, an errored tool, a compaction/summary and an `invoke_subagent` child
+   write**, and whether a child's steps land in the parent's file.
+
+**Remote nodes.** There is no SSH hook installer for agy (§7, SSH projects). A remote agy node never
+reports a `conversationId`, so there is nothing to locate on the host. When this lands, a remote node
+must answer `remoteOnly` → unreadable, like grok, and never read this machine's `brain/`.
+
+The capture that unblocks all of it is §8.1 (items 17–24), with `scripts/agy-transcript-shape.mjs`.
 
 ---
 
@@ -362,3 +428,45 @@ folder, before any turn.
 16. **Whether agy waits on the hook's process GROUP or only the direct child and its pipes** — the
     backgrounded POST is safe only in the second case (a runner that waits on the child returned in
     12–16 ms while a 6 s walk was still running).
+
+### 8.1 The chat-view capture (§7.1), items 17–24
+
+One session answers all of them. Run it on a machine with the vendor-installed, signed-in `agy` (not
+the snap, §4), in a throwaway workspace with a synthetic prompt, so the file holds no one's work.
+The raw transcript stays on that machine. What leaves it is the output of
+`scripts/agy-transcript-shape.mjs`, which prints keys, nesting, enum values and lengths, never the
+text (review it before sharing: a key can itself be data). Commit only SYNTHETIC fixtures built
+from that dump, never a slice of a real file.
+
+```sh
+mkdir -p /tmp/agy-cap && cd /tmp/agy-cap && git init -q && printf 'hello\n' > a.txt
+agy --prompt-interactive 'Read a.txt, then run `echo hi`, then run `sleep 30` in the background, then ask me which of JSON or YAML I prefer, then answer in two paragraphs with a markdown list.'
+# Answer the question. Before the background sleep finishes, in a second shell:
+ID=$(ls -t ~/.gemini/antigravity-cli/brain | head -1)
+L=~/.gemini/antigravity-cli/brain/$ID/.system_generated/logs
+node scripts/agy-transcript-shape.mjs "$L/transcript_full.jsonl" --snapshot /tmp/agy-cap/snap.json
+# After the final Stop (the sleep's PostToolUse, then Stop fullyIdle:true):
+node scripts/agy-transcript-shape.mjs "$L/transcript_full.jsonl" --compare /tmp/agy-cap/snap.json
+node scripts/agy-transcript-shape.mjs "$L/transcript_full.jsonl" > /tmp/agy-cap/full.shape
+node scripts/agy-transcript-shape.mjs "$L/transcript.jsonl" > /tmp/agy-cap/compact.shape
+```
+
+On Windows, run the same from Git Bash, where `~` is `%USERPROFILE%`.
+
+17. **Every record's shape** (`full.shape`): the key set per `type`, and which lines a turn writes.
+18. **`tool_calls` elements** (the summary's `toolCallKeys`): the name/arguments/id keys, and
+    whether the arguments are an object or a string.
+19. **The tool result**: which line follows a `PLANNER_RESPONSE` with `tool_calls`, what its `type`
+    and `source` are, and which field names the call it answers.
+20. **Enum spelling** (the summary's `enums`): `USER_INPUT` or `CORTEX_STEP_TYPE_USER_INPUT`.
+21. **`USER_INPUT` `content`**: compare its `<text:N>` length with the prompt you typed. A longer
+    value means injected wrapping; read that one line locally to see the wrapper's shape.
+22. **Append-only**: `--compare` must print `append-only` across the background tool's status change.
+    `rewritten` means byte offsets are not stable keys, and the reader must be grok's single capped
+    read (`olderCursor: null`), not claude's paged window.
+23. **The model name**: which key, if any, carries it (`gemini-3.8-flash-high` in the hook payload).
+24. **The failure paths**, one short extra session each, dumped the same way: ESC mid-turn, a
+    command that fails, a pasted image (`media`), `/compact` or a long session, and an
+    `invoke_subagent` child (does its step list land in the parent's file?). Also confirm that
+    `compact.shape` carries `truncated_fields` and `full.shape` never does, and whether any
+    environment variable relocates `~/.gemini/antigravity-cli` on macOS/Linux.

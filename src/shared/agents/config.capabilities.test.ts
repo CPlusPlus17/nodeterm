@@ -321,7 +321,10 @@ describe('antigravity capabilities', () => {
     // thought block, not context use) — rule 6: no trustworthy denominator, no meter. Joining would
     // also switch on context.ensure and the find-bar index.
     expect(hasUsage('antigravity')).toBe(false)
-    // No transcript parser or locator yet (transcript_full.jsonl, not transcript.jsonl).
+    // No transcript parser or locator yet. The location is measured (the payload's transcriptPath,
+    // `brain/<conversationId>/…/transcript_full.jsonl`); the record shapes are only vendor prose,
+    // never captured. Joining CHAT_CAPABLE before that capture would render a guess on ⌘M and on
+    // the phone's Chat screen: docs/antigravity-agent.md §7.1 and §8.1.
     expect(canChat('antigravity')).toBe(false)
     expect(readsClaudeShapedTranscript('antigravity')).toBe(false)
     expect(canTransferFrom('antigravity')).toBe(false)
