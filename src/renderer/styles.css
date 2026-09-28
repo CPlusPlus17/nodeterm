@@ -10347,7 +10347,8 @@ button.group-node__setup:disabled {
   gap: 10px;
   height: 46px;
   padding: 0 18px;
-  padding-right: 300px; /* keep a long project name from running under the cluster icons */
+  /* Keep the strip's content out from under the controls cluster (~320px incl. its margin). */
+  padding-right: 330px;
   border-bottom: 1px solid rgba(var(--tint-rgb), 0.08);
 }
 .kanban-header__dot {
@@ -12050,6 +12051,34 @@ button.group-node__setup:disabled {
 .kanban-status-chip--unread.kanban-status-chip--on {
   border-color: var(--state-unread);
   background: color-mix(in srgb, var(--state-unread) 14%, transparent);
+}
+
+/* The title strip carries progress, the closed toggle, three chips and Filter. None of them may
+   wrap (a wrapped button grows the fixed-height strip into the columns); the project name is what
+   gives way, and the progress BAR drops before its "n/m done" text. */
+.kanban-header .kanban-filter-btn,
+.kanban-status-chips,
+.kanban-progress,
+.kanban-header__filter {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.kanban-header__name {
+  min-width: 48px;
+  flex-shrink: 1;
+}
+@media (max-width: 1100px) {
+  .kanban-progress__bar {
+    display: none;
+  }
+}
+@media (max-width: 1000px) {
+  .kanban-header {
+    gap: 6px;
+  }
+  .kanban-status-chip {
+    padding: 2px 6px;
+  }
 }
 
 /* ── Board label filter (header) ── */

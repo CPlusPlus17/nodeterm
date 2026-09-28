@@ -177,6 +177,14 @@ describe('KanbanView — changing a category', () => {
     expect(ungrouped?.querySelector('.kanban-col__menu')).toBeNull()
   })
 
+  it('a column already titled as its category ("Done" / done) shows no redundant marker', () => {
+    render(board())
+    const done = [...document.querySelectorAll('.kanban-col')].find(
+      (c) => c.querySelector('.kanban-col__title')?.textContent === 'Done'
+    )
+    expect(done?.querySelector('.kanban-col__category')).toBeNull()
+  })
+
   it('a categorized column shows its category in the header', () => {
     render(board())
     const review = [...document.querySelectorAll('.kanban-col')].find(

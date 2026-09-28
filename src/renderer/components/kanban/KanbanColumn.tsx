@@ -189,7 +189,7 @@ export const KanbanColumn = memo(function KanbanColumn({
             {column ? column.title : 'Ungrouped'}
           </span>
         )}
-        {category && (
+        {category && column && column.title.trim().toLowerCase() !== CATEGORY_LABELS[category].toLowerCase() && (
           <span
             className={`kanban-col__category kanban-col__category--${category}`}
             title={`Lifecycle category: ${CATEGORY_LABELS[category]}`}
