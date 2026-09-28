@@ -12132,10 +12132,24 @@ button.group-node__setup:disabled {
   background: color-mix(in srgb, var(--state-unread) 14%, transparent);
 }
 
-/* The title strip carries progress, the closed toggle, three chips and Filter. None of them may
-   wrap (a wrapped button grows the fixed-height strip into the columns); the project name is what
-   gives way, and the progress BAR drops before its "n/m done" text. */
-.kanban-header .kanban-filter-btn,
+/* ── Saved views (header) — the views are shared, the active one is this user's ── */
+.kanban-views-btn {
+  margin-left: 6px;
+  max-width: 220px;
+  min-width: 64px;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kanban-filter-member {
+  font-size: 12px;
+  color: rgba(var(--tint-rgb), 0.85);
+}
+/* The title strip carries progress, the closed toggle, three chips, Filter and Views. None of them
+   may wrap (a wrapped button grows the fixed-height strip into the columns); the project name and
+   the Views label are what give way, and the progress BAR drops before its "n/m done" text. */
+.kanban-header .kanban-filter-btn:not(.kanban-views-btn),
 .kanban-status-chips,
 .kanban-progress,
 .kanban-header__filter {

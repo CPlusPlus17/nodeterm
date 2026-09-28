@@ -22,6 +22,7 @@ import {
   setCardLabels
 } from '../shared/kanban-labels'
 import type { KanbanLabelColor, ProjectKanban } from '../shared/types'
+import { placeAssignment, type RankedEntry } from '../shared/kanban-order'
 
 /** Parse `raw` as the `{version:1, rev, nodes}` project file, or null. */
 function parseProjectFile(raw: string): Record<string, unknown> | null {
@@ -120,16 +121,13 @@ export function setProjectCardColumn(
   // Already there — including "already Ungrouped", which is what an ABSENT assignment means.
   if ((current ?? null) === columnId) return null
 
-  const kept = before.filter((a) => a?.nodeId !== nodeId)
   if (columnId === null) {
-    board.assignments = kept
+    board.assignments = before.filter((a) => a?.nodeId !== nodeId)
   } else {
-    // Unanchored ⇒ the TOP of the destination, the desktop's rule (`assignNode`): array order is
-    // column order, so that is just before the column's first assignment; an empty column's first
-    // card joins the end of the array.
-    const first = kept.findIndex((a) => a?.columnId === columnId)
-    const at = first === -1 ? kept.length : first
-    board.assignments = [...kept.slice(0, at), { nodeId, columnId }, ...kept.slice(at)]
+    // Unanchored ⇒ the TOP of the destination, through the SAME placement the desktop's
+    // `assignNode` uses: one new rank, the array kept in rank order for builds that ignore it,
+    // every other entry (and every field this surface does not know) untouched.
+    board.assignments = placeAssignment(before as unknown as RankedEntry[], nodeId, columnId, 'top')
   }
   if (!Array.isArray(board.columns)) board.columns = columns
   root.kanban = board

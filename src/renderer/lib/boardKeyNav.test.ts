@@ -61,6 +61,16 @@ describe('keyOwnedByControl — the board never takes a key the focused control 
     expect(keyOwnedByControl(el('DIV', { role: 'slider' }), 'left')).toBe(true)
   })
 
+  it('a BUTTON inside a card still owns Space — pressing it must not open the card', () => {
+    const insideCard = {
+      tagName: 'BUTTON',
+      getAttribute: () => null,
+      closest: (sel: string) => (sel === '[data-kanban-card]' ? el('DIV', { 'data-kanban-card': 'a1' }) : null)
+    } as unknown as Element
+    expect(keyOwnedByControl(insideCard, 'open')).toBe(true)
+    expect(keyOwnedByControl(insideCard, 'next')).toBe(false)
+  })
+
   it('a card, the body, or nothing owns no key', () => {
     expect(keyOwnedByControl(el('DIV', { 'data-kanban-card': 'a1' }), 'open')).toBe(false)
     expect(keyOwnedByControl(el('BODY'), 'open')).toBe(false)

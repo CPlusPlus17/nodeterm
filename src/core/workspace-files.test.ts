@@ -579,6 +579,7 @@ describe('kanban board persistence', () => {
 })
 
 describe('sanitizeKanban — the board is hostile, git-shared input', () => {
+  const clean_ = (): ProjectKanban => clean()
   const clean = (): ProjectKanban => ({
     columns: [
       { id: 'kcol-a', title: 'To Do', color: '#0a84ff', category: 'unstarted' },
@@ -619,6 +620,71 @@ describe('sanitizeKanban — the board is hostile, git-shared input', () => {
   it('drops malformed assignments and keeps the rest', () => {
     const k = { ...clean(), assignments: [null, { nodeId: 1, columnId: 'kcol-a' }, { nodeId: 'n' }, { nodeId: 'n', columnId: 'kcol-a' }] }
     expect(sanitizeKanban(k)?.assignments).toEqual([{ nodeId: 'n', columnId: 'kcol-a' }])
+  })
+
+  // Same rule as `category`: a STRING the readers cannot use is kept (they already treat it as
+  // absent, and the next write into that column re-keys it), a non-string is dropped.
+  it('keeps any rank STRING (readers ignore an invalid one), drops a non-string rank', () => {
+    const k = {
+      ...clean(),
+      assignments: [
+        { nodeId: 'ok', columnId: 'kcol-a', rank: 'a0' },
+        { nodeId: 'num', columnId: 'kcol-a', rank: 5 },
+        { nodeId: 'junk', columnId: 'kcol-a', rank: 'not a rank!' },
+        { nodeId: 'obj', columnId: 'kcol-a', rank: { a: 1 } }
+      ]
+    }
+    expect(sanitizeKanban(k)?.assignments).toEqual([
+      { nodeId: 'ok', columnId: 'kcol-a', rank: 'a0' },
+      { nodeId: 'num', columnId: 'kcol-a' },
+      { nodeId: 'junk', columnId: 'kcol-a', rank: 'not a rank!' },
+      { nodeId: 'obj', columnId: 'kcol-a' }
+    ])
+  })
+
+  // A clean git merge of two machines' boards can leave one card assigned twice. The first entry is
+  // the one `columnForNode` has always answered with, so it is the one kept.
+  it('keeps only the FIRST assignment of a card assigned twice', () => {
+    const k = {
+      ...clean(),
+      assignments: [
+        { nodeId: 'x', columnId: 'kcol-a', rank: 'a0' },
+        { nodeId: 'y', columnId: 'kcol-b', rank: 'a0' },
+        { nodeId: 'x', columnId: 'kcol-b', rank: 'a1' }
+      ]
+    }
+    expect(sanitizeKanban(k)?.assignments).toEqual([
+      { nodeId: 'x', columnId: 'kcol-a', rank: 'a0' },
+      { nodeId: 'y', columnId: 'kcol-b', rank: 'a0' }
+    ])
+  })
+
+  it('normalizes a card\'s assignees: a non-list is dropped, bad entries filtered, the rest kept', () => {
+    const k = {
+      ...clean(),
+      meta: [
+        { nodeId: 'a', assignees: 5, priority: 'high' },
+        { nodeId: 'b', assignees: [{ name: 'enes', color: '#0a84ff' }, 3, { name: 1 }] },
+        { nodeId: 'c', assignees: [{ name: 'sam', color: '#ff453a' }] }
+      ]
+    }
+    expect(sanitizeKanban(k)?.meta).toEqual([
+      { nodeId: 'a', priority: 'high' },
+      { nodeId: 'b', assignees: [{ name: 'enes', color: '#0a84ff' }] },
+      { nodeId: 'c', assignees: [{ name: 'sam', color: '#ff453a' }] }
+    ])
+    const cleanMeta = { ...clean(), meta: [{ nodeId: 'c', assignees: [{ name: 'sam', color: '#ff453a' }] }] }
+    expect(sanitizeKanban(cleanMeta)).toBe(cleanMeta)
+  })
+
+  it('admits saved views through sanitizeViews (a garbage list is dropped, a clean one kept)', () => {
+    const views = [{ id: 'kview-1', name: 'Mine', query: { assignees: ['enes'] } }]
+    const clean = { ...clean_(), views }
+    expect(sanitizeKanban(clean)).toBe(clean)
+    const bad = { ...clean_(), views: [{ id: 3 }, 'x', { id: 'v', name: 'Bugs', query: { source: 'nope', labels: ['local:l'] } }] }
+    expect(sanitizeKanban(bad)?.views).toEqual([{ id: 'v', name: 'Bugs', query: { labels: ['local:l'] } }])
+    const junk = { ...clean_(), views: 'nope' }
+    expect('views' in (sanitizeKanban(junk) as object)).toBe(false)
   })
 
   it('keeps fields it does not know (a newer build\'s board data round-trips)', () => {

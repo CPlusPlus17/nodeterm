@@ -9,7 +9,8 @@
  * Rules:
  *  - comments never fold (each one is something a person wrote);
  *  - `NEVER_COLLAPSE` types never fold — `agent-message` and `agent-read-cookies` are AUDIT rows:
- *    a trace whose rows can be folded away is a trace a reader can miss one row of;
+ *    a trace whose rows can be folded away is a trace a reader can miss one row of — and neither do
+ *    an issue's `run-started` / `run-ended` rows, which each name a different session;
  *  - the window is anchored at the group's NEWEST row, so a "×N" never spans more than two
  *    minutes. A chained window (each row within 2 min of the previous one) would let a card dragged
  *    back and forth every 90 seconds for an hour collapse into a single row claiming one moment;
@@ -19,10 +20,13 @@ import type { BoardLogEntry, BoardLogEvent } from '@shared/types'
 
 export const BOARD_LOG_COLLAPSE_WINDOW_MS = 2 * 60_000
 
-/** Audit event types: always one row each. */
+/** Always one row each: the audit types, and an issue's run history (each run row names a
+ *  different session — a "×N" would hide exactly which sessions ran). */
 export const NEVER_COLLAPSE: ReadonlySet<BoardLogEvent['type']> = new Set<BoardLogEvent['type']>([
   'agent-message',
-  'agent-read-cookies'
+  'agent-read-cookies',
+  'run-started',
+  'run-ended'
 ])
 
 export type FeedItem =

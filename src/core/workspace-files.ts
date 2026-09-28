@@ -8,6 +8,7 @@ import {
   stripSharedNodeExec,
   type LocalNodeExecMap
 } from '../shared/node-exec'
+import { sanitizeViews } from '../shared/kanban-views'
 import { CLOSED_SESSIONS_CAP } from '../shared/types'
 import type { BridgeLink, CanvasNodeState, ClosedSessionEntry, NavStop, Project, ProjectKanban, Viewport, Workspace } from '../shared/types'
 import { projectCapabilityFields, readProjectCapabilities } from '../shared/project-capabilities'
@@ -415,7 +416,12 @@ const isRecord = (x: unknown): x is Record<string, unknown> =>
  *  - a column's `category` that is not a STRING is dropped. An unknown string is KEPT: it may be a
  *    category a newer build added, and dropping it here would erase that build's data from the
  *    shared file on our next save. Readers treat it as absent (`columnCategory`);
- *  - an assignment that is not an object with string `nodeId` and `columnId` is dropped.
+ *  - an assignment that is not an object with string `nodeId` and `columnId` is dropped, so is a
+ *    card's SECOND assignment (a clean git merge can leave two; the first is what readers use), and
+ *    a non-string `rank` (a rank string readers cannot use is kept, like an unknown category);
+ *  - a card's `assignees` that is not a list is dropped, and entries without a string name and
+ *    colour are filtered out of one that is (`cardAssignees` is the matching reader);
+ *  - `views` go through `sanitizeViews` (a non-list is dropped, bad entries repaired or dropped).
  * Every other field — known or not — round-trips untouched.
  *
  * Returns the SAME object when nothing needed repair, so a clean file is never rewritten, and
@@ -439,12 +445,67 @@ export function sanitizeKanban(k: unknown): ProjectKanban | undefined {
     }
     columns.push(c as unknown as ProjectKanban['columns'][number])
   }
-  const assignments = (k.assignments as unknown[]).filter(
-    (a): a is ProjectKanban['assignments'][number] =>
-      isRecord(a) && typeof a.nodeId === 'string' && typeof a.columnId === 'string'
-  )
-  if (assignments.length !== k.assignments.length) changed = true
-  return changed ? { ...k, columns, assignments } : k
+  const assignments: ProjectKanban['assignments'] = []
+  const assigned = new Set<string>()
+  for (const a of k.assignments as unknown[]) {
+    if (!isRecord(a) || typeof a.nodeId !== 'string' || typeof a.columnId !== 'string') {
+      changed = true
+      continue
+    }
+    // A clean git merge can leave one card assigned twice; the first copy is the one every reader
+    // (`columnForNode`) has always answered with, so it is the one kept.
+    if (assigned.has(a.nodeId)) {
+      changed = true
+      continue
+    }
+    assigned.add(a.nodeId)
+    // Same rule as `category`: a rank STRING the readers cannot use is kept (they treat it as
+    // absent, and the next write into that column re-keys it — @shared/kanban-order); a non-string
+    // is dropped.
+    if ('rank' in a && typeof a.rank !== 'string') {
+      const { rank: _drop, ...rest } = a
+      assignments.push(rest as unknown as ProjectKanban['assignments'][number])
+      changed = true
+      continue
+    }
+    assignments.push(a as unknown as ProjectKanban['assignments'][number])
+  }
+  // Card assignees: iterated by the board, the card and the log diff. A non-list is dropped and an
+  // entry without a string name + colour filtered (`cardAssignees` is the matching reader).
+  let meta: unknown = k.meta
+  if (Array.isArray(k.meta)) {
+    let metaChanged = false
+    const out = (k.meta as unknown[]).map((m) => {
+      if (!isRecord(m) || !('assignees' in m)) return m
+      const list = m.assignees
+      if (!Array.isArray(list)) {
+        metaChanged = true
+        const { assignees: _drop, ...rest } = m
+        return rest
+      }
+      const valid = list.filter(
+        (x) => isRecord(x) && typeof x.name === 'string' && typeof x.color === 'string'
+      )
+      if (valid.length === list.length) return m
+      metaChanged = true
+      return { ...m, assignees: valid }
+    })
+    if (metaChanged) {
+      meta = out
+      changed = true
+    }
+  }
+  // Saved views: their own tolerant reader (@shared/kanban-views), same identity discipline.
+  let views: ProjectKanban['views'] | undefined = k.views
+  if ('views' in k) {
+    views = sanitizeViews(k.views)
+    if (views !== k.views) changed = true
+  }
+  if (!changed) return k
+  const next: ProjectKanban = { ...k, columns, assignments, ...(meta !== undefined ? { meta: meta as ProjectKanban['meta'] } : {}) }
+  if (views) next.views = views
+  else delete next.views
+  return next
 }
 
 /** A `{x, y}` point, checked at the boundary because the file is hostile input. */
