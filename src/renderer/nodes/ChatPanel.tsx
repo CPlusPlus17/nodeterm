@@ -262,7 +262,9 @@ export function ChatPanel({
             return
           }
           setThread(emptyThread(identity))
-          setLoadState('missing')
+          // A read that FAILED (the host did not answer, a remote node with no reachable master)
+          // is not "no transcript": it gets the error copy, and ↻ is the way out.
+          setLoadState(res.unreadable ? 'error' : 'missing')
           return
         }
         setThread((t) => applyTail(t, identity, res, { carryUnconfirmed: live }))

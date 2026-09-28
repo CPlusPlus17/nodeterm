@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createReadRemotePage, forgetLocatedRef, rememberHookRef, remoteTargetForNode, type RemoteTranscriptRefCache } from './remote-transcript-page'
+import { createReadRemotePage, forgetLocatedRef, locateRemoteTranscriptRef, rememberHookRef, remoteTargetForNode, type RemoteTranscriptRefCache } from './remote-transcript-page'
 import type { RemoteFileRef } from './remote-ssh/remote-file'
 
 const ref = (path: string): RemoteFileRef => ({
@@ -91,5 +91,68 @@ describe('remoteTargetForNode (which master a remote transcript read goes over)'
   it('a local node (no project) or a disconnected project resolves nothing', () => {
     expect(remoteTargetForNode('n', { live: () => undefined, projectIdFor: () => undefined, refForProject: () => proj })).toBeUndefined()
     expect(remoteTargetForNode('n', { live: () => undefined, projectIdFor: () => 'p', refForProject: () => undefined })).toBeUndefined()
+  })
+})
+
+describe('createReadRemotePage — a clean miss vs a failure', () => {
+  it("the host looked and found nothing ('absent') is a clean miss, not a failed read", async () => {
+    const readPage = vi.fn()
+    const read = createReadRemotePage({ cache: cache(), refFor: async () => 'absent', readPage })
+    expect(await read(q, PAGE)).toEqual({ ok: false, absent: true })
+    expect(readPage).not.toHaveBeenCalled()
+  })
+  it("a remote session that could not be located ('unreadable') is a failed read", async () => {
+    const read = createReadRemotePage({ cache: cache(), refFor: async () => 'unreadable', readPage: vi.fn() })
+    expect(await read(q, PAGE)).toEqual({ ok: false })
+  })
+})
+
+describe('locateRemoteTranscriptRef (the host-side locate, tri-state)', () => {
+  const target = { conn: { host: 'h', user: 'u' } as RemoteFileRef['conn'], controlPath: '/cm' }
+  const base = (over: Partial<Parameters<typeof locateRemoteTranscriptRef>[1]> = {}) => ({
+    cache: cache(),
+    isRemote: () => true,
+    target: () => target,
+    remoteHome: () => '/home/u',
+    command: () => 'locate-cmd',
+    run: vi.fn(async () => ({ code: 0, stdout: '/home/u/.claude/projects/-w/sid.jsonl\n' })),
+    isSafePath: () => true,
+    ...over
+  })
+
+  it('a located, jailed path is a ref — cached and marked as located by us', async () => {
+    const d = base()
+    const r = await locateRemoteTranscriptRef(q, d)
+    expect(r).toEqual({ ...target, path: '/home/u/.claude/projects/-w/sid.jsonl' })
+    expect(d.cache.bySession.get('sid')).toEqual(r)
+    expect(d.cache.located.has('sid')).toBe(true)
+  })
+  it('a cached ref wins without asking the host', async () => {
+    const d = base()
+    d.cache.bySession.set('sid', ref('/cached'))
+    expect(await locateRemoteTranscriptRef(q, d)).toEqual(ref('/cached'))
+    expect(d.run).not.toHaveBeenCalled()
+  })
+  it("the host answered with no file (exit 0, empty) → 'absent'", async () => {
+    expect(await locateRemoteTranscriptRef(q, base({ run: vi.fn(async () => ({ code: 0, stdout: '' })) }))).toBe('absent')
+  })
+  it("a remote node with no session id → 'absent' (nothing to look for), a local one → undefined", async () => {
+    expect(await locateRemoteTranscriptRef({ ...q, sessionId: undefined }, base())).toBe('absent')
+    expect(await locateRemoteTranscriptRef({ ...q, sessionId: undefined }, base({ isRemote: () => false }))).toBeUndefined()
+  })
+  it("an id no locate command accepts → 'absent'", async () => {
+    expect(await locateRemoteTranscriptRef(q, base({ command: () => null }))).toBe('absent')
+  })
+  it("master down: a remote node with no reachable master → 'unreadable'; a local node → undefined", async () => {
+    expect(await locateRemoteTranscriptRef(q, base({ target: () => undefined }))).toBe('unreadable')
+    expect(await locateRemoteTranscriptRef(q, base({ target: () => undefined, isRemote: () => false }))).toBeUndefined()
+  })
+  it("no resolved home, a failed ssh (non-zero / throw), or a path outside the jail → 'unreadable'", async () => {
+    expect(await locateRemoteTranscriptRef(q, base({ remoteHome: () => undefined }))).toBe('unreadable')
+    expect(await locateRemoteTranscriptRef(q, base({ run: vi.fn(async () => ({ code: 255, stdout: '' })) }))).toBe('unreadable')
+    expect(
+      await locateRemoteTranscriptRef(q, base({ run: vi.fn(async () => { throw new Error('ssh') }) }))
+    ).toBe('unreadable')
+    expect(await locateRemoteTranscriptRef(q, base({ isSafePath: () => false }))).toBe('unreadable')
   })
 })
