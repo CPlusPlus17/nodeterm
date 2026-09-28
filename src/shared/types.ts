@@ -686,9 +686,32 @@ export interface KanbanLabel {
   color: KanbanLabelColor
 }
 
+/** A saved board view's filters (@shared/kanban-views). SHARED content: a view is how a team
+ *  looks at its board. Deliberately NOT here: the live-state status chips (never persisted
+ *  anywhere) and display preferences like showing closed columns (per user, localStorage). */
+export interface KanbanViewQuery {
+  /** The source filter; absent = all. */
+  source?: 'all' | 'github' | 'pulls' | 'sessions'
+  /** Label filter keys (`local:<labelId>` | `github:<folded name>`); OR within the list. */
+  labels?: string[]
+  /** Assignee names (the presence identity's name); a card needs one of them. */
+  assignees?: string[]
+  /** Column ids to SHOW (`ungrouped` names the virtual column); absent/empty = every column. */
+  columns?: string[]
+}
+
+export interface KanbanSavedView {
+  id: string
+  name: string
+  query: KanbanViewQuery
+}
+
 export interface ProjectKanban {
   columns: KanbanColumn[]
   assignments: KanbanAssignment[]
+  /** Saved views — named filter sets shared with everyone on the board. Tolerated as absent or
+   *  malformed (sanitizeViews); the ACTIVE view is per user (localStorage), never here. */
+  views?: KanbanSavedView[]
   /** Optional card metadata; tolerated as absent/malformed by every reader (lib normalizes). */
   meta?: KanbanCardMeta[]
   /** Board-level label palette (Notion-style). Cards reference these by id in `meta[].labels`;

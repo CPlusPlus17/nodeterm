@@ -579,6 +579,7 @@ describe('kanban board persistence', () => {
 })
 
 describe('sanitizeKanban — the board is hostile, git-shared input', () => {
+  const clean_ = (): ProjectKanban => clean()
   const clean = (): ProjectKanban => ({
     columns: [
       { id: 'kcol-a', title: 'To Do', color: '#0a84ff', category: 'unstarted' },
@@ -637,6 +638,16 @@ describe('sanitizeKanban — the board is hostile, git-shared input', () => {
       { nodeId: 'junk', columnId: 'kcol-a' },
       { nodeId: 'huge', columnId: 'kcol-a' }
     ])
+  })
+
+  it('admits saved views through sanitizeViews (a garbage list is dropped, a clean one kept)', () => {
+    const views = [{ id: 'kview-1', name: 'Mine', query: { assignees: ['enes'] } }]
+    const clean = { ...clean_(), views }
+    expect(sanitizeKanban(clean)).toBe(clean)
+    const bad = { ...clean_(), views: [{ id: 3 }, 'x', { id: 'v', name: 'Bugs', query: { source: 'nope', labels: ['local:l'] } }] }
+    expect(sanitizeKanban(bad)?.views).toEqual([{ id: 'v', name: 'Bugs', query: { labels: ['local:l'] } }])
+    const junk = { ...clean_(), views: 'nope' }
+    expect('views' in (sanitizeKanban(junk) as object)).toBe(false)
   })
 
   it('keeps fields it does not know (a newer build\'s board data round-trips)', () => {

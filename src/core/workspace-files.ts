@@ -9,6 +9,7 @@ import {
   type LocalNodeExecMap
 } from '../shared/node-exec'
 import { isValidRank } from '../shared/kanban-rank'
+import { sanitizeViews } from '../shared/kanban-views'
 import { CLOSED_SESSIONS_CAP } from '../shared/types'
 import type { BridgeLink, CanvasNodeState, ClosedSessionEntry, NavStop, Project, ProjectKanban, Viewport, Workspace } from '../shared/types'
 import { projectCapabilityFields, readProjectCapabilities } from '../shared/project-capabilities'
@@ -419,6 +420,7 @@ const isRecord = (x: unknown): x is Record<string, unknown> =>
  *  - an assignment that is not an object with string `nodeId` and `columnId` is dropped, and a
  *    `rank` that `isValidRank` refuses is dropped from it (the card then derives its position from
  *    array order — see @shared/kanban-order).
+ *  - `views` go through `sanitizeViews` (a non-list is dropped, bad entries repaired or dropped).
  * Every other field — known or not — round-trips untouched.
  *
  * Returns the SAME object when nothing needed repair, so a clean file is never rewritten, and
@@ -458,7 +460,17 @@ export function sanitizeKanban(k: unknown): ProjectKanban | undefined {
     }
     assignments.push(a as unknown as ProjectKanban['assignments'][number])
   }
-  return changed ? { ...k, columns, assignments } : k
+  // Saved views: their own tolerant reader (@shared/kanban-views), same identity discipline.
+  let views: ProjectKanban['views'] | undefined = k.views
+  if ('views' in k) {
+    views = sanitizeViews(k.views)
+    if (views !== k.views) changed = true
+  }
+  if (!changed) return k
+  const next: ProjectKanban = { ...k, columns, assignments }
+  if (views) next.views = views
+  else delete next.views
+  return next
 }
 
 /** A `{x, y}` point, checked at the boundary because the file is hostile input. */
