@@ -196,23 +196,27 @@ function linesFrom(raw: string): TranscriptLine[] {
   return out
 }
 
-// Read the last ~READ_CAP_BYTES of the file as UTF-8 (dropping the partial leading line on a
-// capped read), or the whole file when it's small. Returns undefined if it can't be read.
-export async function readCappedTail(filePath: string): Promise<string | undefined> {
+// Read the last `cap` bytes (default and ceiling READ_CAP_BYTES) of the file as UTF-8 (dropping the
+// partial leading line on a capped read), or the whole file when it's small. Returns undefined if
+// it can't be read.
+export async function readCappedTail(filePath: string, cap: number = READ_CAP_BYTES): Promise<string | undefined> {
+  const limit = Math.min(READ_CAP_BYTES, Math.max(1, Math.floor(cap)))
   try {
     const stat = await fs.promises.stat(filePath)
-    if (stat.size > READ_CAP_BYTES) {
+    if (stat.size > limit) {
       const fd = await fs.promises.open(filePath, 'r')
       try {
-        const start = stat.size - READ_CAP_BYTES
-        const { buffer } = await fd.read({
+        // One LOOKBEHIND byte before the window: when it is a `\n`, the window's first line is
+        // whole and survives the drop below (the remote page reader's rule).
+        const start = stat.size - limit - 1
+        const { buffer, bytesRead } = await fd.read({
           position: start,
-          length: READ_CAP_BYTES,
-          buffer: Buffer.alloc(READ_CAP_BYTES)
+          length: limit + 1,
+          buffer: Buffer.alloc(limit + 1)
         })
-        const s = buffer.toString('utf8')
-        const nl = s.indexOf('\n') // drop the first (partial) line
-        return nl >= 0 ? s.slice(nl + 1) : s
+        const data = buffer.subarray(0, bytesRead)
+        const nl = data.indexOf(0x0a) // drop the first (partial) line
+        return nl >= 0 ? data.subarray(nl + 1).toString('utf8') : ''
       } finally {
         await fd.close()
       }

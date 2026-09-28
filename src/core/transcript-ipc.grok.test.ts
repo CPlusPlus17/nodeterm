@@ -12,6 +12,7 @@ import { initPlatform, resetPlatformForTests } from './platform'
 import { readChatTranscript, type TranscriptIpcDeps } from './transcript-ipc'
 import { _resetGrokSessionDirsForTests, rememberGrokSessionDir } from './grok-session'
 import { setCustomAgentBaseResolver } from '../shared/agents/config'
+import { GROK_AMBIGUOUS_SESSION_MESSAGE } from '../shared/chat-page'
 
 const GROK_SID = '01a06126-b981-73f1-8b68-4547e4d7da84'
 const CWD = '/srv/app'
@@ -84,6 +85,26 @@ describe('readChatTranscript — grok, local', () => {
     expect(res).toEqual({ messages: [], found: false, olderCursor: null, unmatchedResults: [] })
   })
 
+  it('a paged local read is the newest page.maxBytes too — the same TAIL window the remote leg serves', async () => {
+    const rows = Array.from({ length: 2000 }, (_, i) => ({ type: 'user', content: `row ${i} ${'z'.repeat(60)}` }))
+    writeLocalGrok(jl(...rows))
+    const res = await readChatTranscript(
+      { sessionId: GROK_SID, cwd: CWD, nodeId: 'n1', agentId: 'grok' },
+      { maxBytes: 65536 },
+      {}
+    )
+    expect(res.found).toBe(true)
+    expect(res.olderCursor).toBeNull()
+    expect(res.messages.length).toBeGreaterThan(0)
+    expect(res.messages.length).toBeLessThan(rows.length)
+    expect(JSON.stringify(res.messages.at(-1))).toContain('row 1999 ')
+    // The partial first line was dropped, not parsed as a mangled message.
+    for (const m of res.messages) expect(JSON.stringify(m)).toMatch(/row \d+ z{60}/)
+    // …and the legacy unpaged read keeps the whole (5 MiB-capped) file.
+    const legacy = await readChatTranscript({ sessionId: GROK_SID, cwd: CWD, nodeId: 'n1', agentId: 'grok' }, undefined, {})
+    expect(legacy.messages.length).toBe(rows.length)
+  })
+
   it('a local node (remote leg says null) still reads locally', async () => {
     writeLocalGrok(jl({ type: 'user', content: 'local grok' }))
     const readRemoteGrok = vi.fn(async () => null)
@@ -146,6 +167,22 @@ describe('readChatTranscript — grok, remote (SSH project)', () => {
     expect(ok.found).toBe(true)
     const bad = await readChatTranscript(remoteQ, undefined, { readRemoteGrok: async () => ({ ok: false }) })
     expect(bad).toEqual({ messages: [], found: false })
+  })
+
+  it('an id matching two host sessions REJECTS with its own sentence — never unreadable, never not-found', async () => {
+    const readRemoteGrok = async () => ({ ok: false as const, ambiguous: true as const })
+    await expect(readChatTranscript(remoteQ, { maxBytes: 65536 }, { readRemoteGrok })).rejects.toThrow(
+      GROK_AMBIGUOUS_SESSION_MESSAGE
+    )
+    await expect(readChatTranscript(remoteQ, undefined, { readRemoteGrok })).rejects.toThrow(GROK_AMBIGUOUS_SESSION_MESSAGE)
+  })
+
+  it('hands the page\'s maxBytes to the remote leg (the legacy read asks for no window)', async () => {
+    const readRemoteGrok = vi.fn(async (_q: unknown, _o?: { maxBytes?: number }) => ({ ok: true as const, text: jl({ type: 'user', content: 'h' }) }))
+    await readChatTranscript(remoteQ, { maxBytes: 262144 }, { readRemoteGrok })
+    expect(readRemoteGrok.mock.calls[0][1]).toEqual({ maxBytes: 262144 })
+    await readChatTranscript(remoteQ, undefined, { readRemoteGrok })
+    expect(readRemoteGrok.mock.calls[1][1]).toBeUndefined()
   })
 
   it('never asks the claude remote legs for a grok node', async () => {

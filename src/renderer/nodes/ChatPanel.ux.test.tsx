@@ -16,6 +16,7 @@ import { useAgentStatus } from '../state/agentStatus'
 interface Pending {
   sessionId: string | undefined
   resolve: (r: ChatTranscriptResult) => void
+  reject: (e: unknown) => void
 }
 
 // ONE stable api object: `load` depends on `api`, so a fresh object per `useSession()` call would
@@ -25,7 +26,7 @@ const { sendText, readTranscript, pending, session } = vi.hoisted(() => {
   const sendText = vi.fn(async (_id: string, _text: string) => true as const)
   const readTranscript = vi.fn(
     (sessionId: string | undefined) =>
-      new Promise<ChatTranscriptResult>((resolve) => pending.push({ sessionId, resolve }))
+      new Promise<ChatTranscriptResult>((resolve, reject) => pending.push({ sessionId, resolve, reject }))
   )
   const session = { api: { chat: { readTranscript }, pty: { sendText } } }
   return { sendText, readTranscript, pending, session }
@@ -33,6 +34,7 @@ const { sendText, readTranscript, pending, session } = vi.hoisted(() => {
 vi.mock('../session/session', () => ({ useSession: () => session }))
 
 import { ChatPanel } from './ChatPanel'
+import { GROK_AMBIGUOUS_SESSION_MESSAGE } from '@shared/chat-page'
 
 const NODE = 'n-chat-ux'
 let host: HTMLDivElement
@@ -250,6 +252,21 @@ describe('ChatPanel empty states', () => {
     expect(msgs().textContent).toContain("Couldn't read the transcript.")
     expect(msgs().textContent).not.toContain("isn't supported yet")
     expect(host.querySelector('.term-chat__retry')).not.toBeNull()
+  })
+
+  it('a grok session id that matches two host sessions says so, with NO Retry (a retry cannot fix it)', async () => {
+    await render({ agentId: 'grok' })
+    // Over Electron IPC only the message survives a rejection (the `code` is dropped), wrapped in
+    // Electron's own prefix — the panel must recognise it from the message alone.
+    await act(async () => {
+      pending[0].reject(
+        new Error(`Error invoking remote method 'chat:read-transcript': Error: ${GROK_AMBIGUOUS_SESSION_MESSAGE}`)
+      )
+    })
+    expect(msgs().textContent).toContain(GROK_AMBIGUOUS_SESSION_MESSAGE)
+    expect(msgs().textContent).not.toContain('may not be reachable')
+    expect(msgs().textContent).not.toContain("can't be read on this surface")
+    expect(host.querySelector('.term-chat__retry')).toBeNull()
   })
 
   it('a clean miss still says no transcript was found', async () => {

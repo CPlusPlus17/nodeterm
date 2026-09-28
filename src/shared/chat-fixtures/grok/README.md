@@ -40,8 +40,10 @@ host's text through `readRemoteGrok`) serve the identical page, and that `page.m
 (duplicate and dangling tool results) rewrite the history in place. A byte offset is therefore not a
 stable identity for a line, so:
 
-- The desktop reads the **whole file**, capped at its last 5 MiB (`CHAT_PAGE_MAX_BYTES`); when capped,
-  the partial first line is dropped.
+- The desktop reads the file's **tail window**: the newest `page.maxBytes` of it (the phone asks for
+  262144), never more than 5 MiB (`CHAT_PAGE_MAX_BYTES`); the legacy unpaged read takes the full
+  5 MiB. Local and remote (SSH host) legs read the same window. When capped, the partial first line is
+  dropped (a line starting exactly on the window edge is kept).
 - A paged request is answered with ONE page: `olderCursor: null`, `unmatchedResults: []`, and **no
   `key` and no `at`** on any message (grok records carry no timestamp).
 - The phone must treat a grok page as the **whole thread**: replace, never merge by key, and never ask
@@ -51,6 +53,10 @@ stable identity for a line, so:
   `{messages, found}`.
 
 ## Record rules (the Swift port must replicate these exactly)
+
+**Changed in `feat/chat-view-grok`:** a tool part's `arg` is now the SALIENT argument (rule 8) and its
+`result` the first three lines of the output (rule 6) — earlier builds showed the raw `arguments` /
+full result. The iOS port must follow these goldens, not the old formatting.
 
 Lines are split on `\n`. A line that is blank after JS `trim` is ignored. Each remaining line is
 `JSON.parse`d (after trim):

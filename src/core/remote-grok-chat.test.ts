@@ -14,6 +14,8 @@ import {
   parseRemoteGrokChat,
   remoteGrokChatCommand
 } from './remote-grok-chat'
+import { REMOTE_GROK_HOME_PROBE, resolveReportedGrokHome } from './agents/grok-paths'
+import { CHAT_PAGE_MAX_BYTES } from '../shared/chat-page'
 
 const SID = '01a06126-b981-73f1-8b68-4547e4d7da84'
 const OTHER = '01a06126-b981-73f1-8b68-000000000000'
@@ -57,15 +59,16 @@ describe('remoteGrokChatCommand under a real /bin/sh', () => {
     expect(got).toEqual({ text: jl({ type: 'user', content: 'mine' }) })
   })
 
-  it('honours an absolute $GROK_HOME, and ignores a relative one (the installer\'s rule)', () => {
+  it('reads under the grok home it is GIVEN, and never consults $GROK_HOME itself', () => {
     const home = freshHome('b')
     const custom = path.join(host, 'b-grokhome')
     writeSession(custom, 'g', SID, jl({ type: 'user', content: 'from GROK_HOME' }))
     writeSession(path.join(home, '.grok'), 'g', SID, jl({ type: 'user', content: 'from ~/.grok' }))
-    const abs = parseRemoteGrokChat(runOn(remoteGrokChatCommand(SID)!, { HOME: home, GROK_HOME: custom }).stdout)
-    expect(abs).toEqual({ text: jl({ type: 'user', content: 'from GROK_HOME' }) })
-    const rel = parseRemoteGrokChat(runOn(remoteGrokChatCommand(SID)!, { HOME: home, GROK_HOME: 'relative/dir' }).stdout)
-    expect(rel).toEqual({ text: jl({ type: 'user', content: 'from ~/.grok' }) })
+    const given = parseRemoteGrokChat(runOn(remoteGrokChatCommand(SID, undefined, custom)!, { HOME: home }).stdout)
+    expect(given).toEqual({ text: jl({ type: 'user', content: 'from GROK_HOME' }) })
+    // No validated home = $HOME/.grok, whatever the env says: the root was decided in TypeScript.
+    const fallback = parseRemoteGrokChat(runOn(remoteGrokChatCommand(SID)!, { HOME: home, GROK_HOME: custom }).stdout)
+    expect(fallback).toEqual({ text: jl({ type: 'user', content: 'from ~/.grok' }) })
   })
 
   it('answers a clean miss with status 0 — "no transcript" is an ANSWER, not a failed ssh', () => {
@@ -141,7 +144,7 @@ describe('remoteGrokChatCommand under a real /bin/sh', () => {
     const home = freshHome('i')
     const odd = path.join(host, 'i-[star]*')
     writeSession(odd, 'g', SID, jl({ type: 'user', content: 'odd home' }))
-    const r = runOn(remoteGrokChatCommand(SID)!, { HOME: home, GROK_HOME: odd })
+    const r = runOn(remoteGrokChatCommand(SID, undefined, odd)!, { HOME: home })
     expect(parseRemoteGrokChat(r.stdout)).toEqual({ text: jl({ type: 'user', content: 'odd home' }) })
   })
 })
@@ -161,7 +164,11 @@ describe('createReadRemoteGrokChat — the tri-state', () => {
     t?: typeof target | undefined
     run?: (t: typeof target, cmd: string) => Promise<{ code: number; stdout: string }>
   }) => {
-    const run = vi.fn(o.run ?? (async () => ({ code: 0, stdout: 'NODETERM_ABSENT\n' })))
+    const run = vi.fn(
+      o.run ??
+        (async (_t: typeof target, cmd: string) =>
+          cmd === REMOTE_GROK_HOME_PROBE ? { code: 0, stdout: '' } : { code: 0, stdout: 'NODETERM_ABSENT\n' })
+    )
     const read = createReadRemoteGrokChat({
       isRemote: () => o.remote ?? false,
       target: () => o.t,
@@ -182,7 +189,7 @@ describe('createReadRemoteGrokChat — the tri-state', () => {
       run: async () => ({ code: 0, stdout: 'NODETERM_ABSENT\n' })
     })
     expect(await read({ sessionId: SID, nodeId: 'n' })).toEqual({ ok: false, absent: true })
-    expect(run).toHaveBeenCalledOnce()
+    expect(run).toHaveBeenCalled()
   })
 
   it('remote with no master = could not ask (unreadable), and nothing ran', async () => {
@@ -205,8 +212,10 @@ describe('createReadRemoteGrokChat — the tri-state', () => {
         throw new Error('master down')
       },
       async () => ({ code: 255, stdout: '' }),
-      async () => ({ code: 3, stdout: '' }),
-      async () => ({ code: 0, stdout: 'half a reply' })
+      async () => ({ code: 0, stdout: 'half a reply' }),
+      // The $GROK_HOME probe itself failed: the root is unknown, so nothing is read.
+      async (_t: typeof target, cmd: string) =>
+        cmd === REMOTE_GROK_HOME_PROBE ? { code: 255, stdout: '' } : { code: 0, stdout: 'NODETERM_ABSENT\n' }
     ]) {
       expect(await make({ remote: true, t: target, run }).read({ sessionId: SID, nodeId: 'n' })).toEqual({ ok: false })
     }
@@ -222,7 +231,54 @@ describe('createReadRemoteGrokChat — the tri-state', () => {
     })
     expect(await read({ sessionId: SID, nodeId: 'n' })).toEqual({ ok: true, text: jl({ type: 'user', content: 'over ssh' }) })
     expect(run.mock.calls[0][0]).toBe(target)
-    expect(run.mock.calls[0][1]).toContain(SID)
+    expect(run.mock.calls.at(-1)![1]).toContain(SID)
+  })
+
+  it('two sessions with the id is its own answer — AMBIGUOUS, not unreadable (a retry cannot fix it)', async () => {
+    const home = freshHome('amb')
+    writeSession(path.join(home, '.grok'), 'g1', SID, jl({ type: 'user', content: 'one' }))
+    writeSession(path.join(home, '.grok'), 'g2', SID, jl({ type: 'user', content: 'two' }))
+    const { read } = make({ remote: true, t: target, run: async (_t, cmd) => runOn(cmd, { HOME: home }) })
+    expect(await read({ sessionId: SID, nodeId: 'n' })).toEqual({ ok: false, ambiguous: true })
+  })
+
+  it('resolves the root with the INSTALLER\'s rule: an unsafe $GROK_HOME falls back to $HOME/.grok', async () => {
+    const home = freshHome('root')
+    writeSession(path.join(home, '.grok'), 'g', SID, jl({ type: 'user', content: 'from ~/.grok' }))
+    const good = path.join(host, 'root-good')
+    writeSession(good, 'g', SID, jl({ type: 'user', content: 'from GROK_HOME' }))
+    // Absolute, but carries `$` — isSafeRemoteGrokHome refuses it, so the hook installer writes
+    // under ~/.grok and the reader must look there too.
+    const unsafe = path.join(host, 'root-$bad')
+    writeSession(unsafe, 'g', SID, jl({ type: 'user', content: 'UNSAFE ROOT' }))
+    const readWith = async (env: Record<string, string>) =>
+      make({ remote: true, t: target, run: async (_t, cmd) => runOn(cmd, { HOME: home, ...env }) }).read({
+        sessionId: SID,
+        nodeId: 'n'
+      })
+    expect(await readWith({ GROK_HOME: good })).toEqual({ ok: true, text: jl({ type: 'user', content: 'from GROK_HOME' }) })
+    expect(await readWith({ GROK_HOME: `${good}/` })).toEqual({ ok: true, text: jl({ type: 'user', content: 'from GROK_HOME' }) })
+    expect(await readWith({ GROK_HOME: unsafe })).toEqual({ ok: true, text: jl({ type: 'user', content: 'from ~/.grok' }) })
+    expect(await readWith({ GROK_HOME: 'relative/dir' })).toEqual({ ok: true, text: jl({ type: 'user', content: 'from ~/.grok' }) })
+    expect(resolveReportedGrokHome(unsafe)).toBeNull()
+  })
+
+  it('honours a smaller per-call maxBytes: a TAIL window, newest messages kept, partial line dropped', async () => {
+    const home = freshHome('win')
+    const rows = Array.from({ length: 300 }, (_, i) => ({ type: 'user', content: `row ${i} ${'y'.repeat(40)}` }))
+    const body = jl(...rows)
+    writeSession(path.join(home, '.grok'), 'g', SID, body)
+    const { read, run } = make({ remote: true, t: target, run: async (_t, cmd) => runOn(cmd, { HOME: home }) })
+    const got = await read({ sessionId: SID, nodeId: 'n' }, { maxBytes: 4096 })
+    if (!got || !got.ok) throw new Error('expected text')
+    expect(Buffer.byteLength(got.text)).toBeLessThanOrEqual(4096)
+    const kept = got.text.trimEnd().split('\n')
+    expect(kept.at(-1)).toBe(JSON.stringify(rows.at(-1)))
+    for (const l of kept) expect(() => JSON.parse(l)).not.toThrow()
+    expect(kept.length).toBeLessThan(rows.length)
+    // …and never MORE than the cap, whatever the caller asks.
+    await read({ sessionId: SID, nodeId: 'n' }, { maxBytes: 64 * 1024 * 1024 })
+    expect(run.mock.calls.at(-1)![1]).toBe(remoteGrokChatCommand(SID, CHAT_PAGE_MAX_BYTES, null))
   })
 })
 

@@ -19,6 +19,7 @@ import {
   type ChatThread
 } from '../lib/chatPaging'
 import { E_UNSUPPORTED } from '@shared/rpc'
+import { GROK_AMBIGUOUS_SESSION_MESSAGE, isGrokAmbiguousSessionError } from '@shared/chat-page'
 import { Spinner } from '../components/Spinner'
 import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
 import { sentCommand } from '@shared/chat-command'
@@ -84,7 +85,7 @@ interface ChatPanelProps {
  * initial `[]` because nothing caught the rejection, and a failed resolution was indistinguishable
  * from a session nobody has spoken to. They need different words — and two of them are retryable.
  */
-type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'error'
+type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'ambiguous' | 'error'
 
 const isUnsupported = (e: unknown): boolean =>
   !!e && typeof e === 'object' && (e as { code?: string }).code === E_UNSUPPORTED
@@ -104,6 +105,12 @@ const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
   unsupported: {
     title: "Transcripts can't be read on this surface.",
     detail: 'Open this session on the desktop app to read its conversation.'
+  },
+  // A remote grok id that names two sessions on the host: a fixed fact, like `unsupported` — so,
+  // like it, no Retry (waiting cannot change which file is this node's).
+  ambiguous: {
+    title: GROK_AMBIGUOUS_SESSION_MESSAGE,
+    detail: 'nodeterm will not guess which one belongs to this node.'
   },
   error: {
     title: "Couldn't read the transcript.",
@@ -356,7 +363,7 @@ export function ChatPanel({
         // …and, as there, a thread of ANOTHER transcript (the session changed under the panel) is
         // cleared: the error message must not sit under the previous session's conversation.
         if (t.identity !== identity) setThread(emptyThread(identity))
-        setLoadState(isUnsupported(e) ? 'unsupported' : 'error')
+        setLoadState(isUnsupported(e) ? 'unsupported' : isGrokAmbiguousSessionError(e) ? 'ambiguous' : 'error')
         settleHeldReload(threadHeldForRef.current)
       }
     )
@@ -757,7 +764,7 @@ export function ChatPanel({
             {EMPTY_TEXT[loadState].detail && (
               <div className="term-chat__empty-detail">{EMPTY_TEXT[loadState].detail}</div>
             )}
-            {loadState !== 'unsupported' && loadState !== 'ok' && (
+            {loadState !== 'unsupported' && loadState !== 'ambiguous' && loadState !== 'ok' && (
               <button className="term-chat__retry" onClick={() => load()}>
                 Retry
               </button>

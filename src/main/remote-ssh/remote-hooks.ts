@@ -11,7 +11,7 @@ import { legacyEndpointMigration } from './legacy-hook-endpoint'
 import { childArgs, hookForwardArgs, hookForwardCancelArgs, remoteEndpointFileContents } from '../../core/remote-ssh/control-master'
 import { CLAUDE_HOOK_EVENTS, GEMINI_HOOK_EVENTS, type ManagedHookEvent } from '@shared/agents/hook-events'
 import { GROK_EVENTS } from '../../core/agents/hooks/grok'
-import { GROK_HOOK_FILE, isSafeRemoteGrokHome } from '../../core/agents/grok-paths'
+import { GROK_HOOK_FILE, REMOTE_GROK_HOME_PROBE, resolveReportedGrokHome } from '../../core/agents/grok-paths'
 import { isSafeNodeId, isSafeRemoteHome } from '../../core/remote-safety'
 import { hookServer } from '../../core/agents/hook-server'
 import { updateRemoteSettingsFile } from '../../core/agents/hooks/remote-settings-file'
@@ -557,15 +557,11 @@ export class RemoteHooks {
   ): Promise<void> {
     try {
       const { stdout: rawHome } = await this.r.run(
-        childArgs(conn, controlPath, 'printf %s "${GROK_HOME:-}"')
+        childArgs(conn, controlPath, REMOTE_GROK_HOME_PROBE)
       )
-      // Trim at the READ site: isSafeRemoteGrokHome judges the exact string we would go on to
-      // interpolate into a remote command line, so it (correctly) refuses an untrimmed value.
-      const reported = rawHome.trim()
-      // `|| '/'`: a host that genuinely reports `/` means `/`, and letting the strip leave `''`
-      // would make `grokHome` a value no host ever said.
-      const stripped = reported.replace(/\/+$/, '') || '/'
-      const grokHome = isSafeRemoteGrokHome(reported) ? stripped : `${home}/.grok`
+      // The ONE rule (trim at the read site, isSafeRemoteGrokHome, strip trailing slashes) the
+      // remote chat reader applies too, so the hook and the reader agree on grok's root.
+      const grokHome = resolveReportedGrokHome(rawHome) ?? `${home}/.grok`
       // Joined so the separator is never doubled (`//hooks` is implementation-defined in POSIX).
       const config = `${grokHome.replace(/\/$/, '')}/hooks/${GROK_HOOK_FILE}`
       const script = `${remoteDir}/agent-hooks/grok.sh`

@@ -12,7 +12,12 @@
 import fsp from 'node:fs/promises'
 import { IPC } from '../shared/ipc'
 import type { ChatTranscriptResult, TranscriptLine, TranscriptPresence } from '../shared/types'
-import { CHAT_PAGE_MAX_BYTES, normalizeChatPage, type ChatTranscriptPage } from '../shared/chat-page'
+import {
+  CHAT_PAGE_MAX_BYTES,
+  GROK_AMBIGUOUS_SESSION_MESSAGE,
+  normalizeChatPage,
+  type ChatTranscriptPage
+} from '../shared/chat-page'
 import { platform } from './platform'
 import { parseGrokChat } from './grok-chat'
 import type { RemoteGrokChat } from './remote-grok-chat'
@@ -87,7 +92,7 @@ export interface TranscriptIpcDeps {
    * claude's `readRemotePage` tails a claude file and must never answer for a grok node.
    * Electron-only, like the other remote legs.
    */
-  readRemoteGrok?(q: TranscriptQuery): Promise<RemoteGrokChat | null>
+  readRemoteGrok?(q: TranscriptQuery, opts?: { maxBytes?: number }): Promise<RemoteGrokChat | null>
 }
 
 export type RemoteTranscriptPage = { ok: true; data: Buffer; start: number } | { ok: false; absent?: true }
@@ -233,8 +238,13 @@ async function readGrokChat(
     }
   }
   if (deps.readRemoteGrok) {
-    const remote = await deps.readRemoteGrok(q)
+    // A paged read asks for the newest `page.maxBytes` only (the phone asks for 256 KB): still one
+    // whole capped read, just a smaller tail window. The legacy read keeps the full cap.
+    const remote = await deps.readRemoteGrok(q, page ? { maxBytes: page.maxBytes } : undefined)
     if (remote !== null) {
+      // Two host sessions carry this id: its own sentence, as a rejection (the result shape is a
+      // locked wire format) — never `unreadable`, whose copy promises a retry that cannot help.
+      if (!remote.ok && remote.ambiguous) throw new Error(GROK_AMBIGUOUS_SESSION_MESSAGE)
       if (!remote.ok) return remote.absent ? notFound() : unreadable()
       return served(remote.text)
     }
@@ -244,7 +254,8 @@ async function readGrokChat(
   if (q.remoteOnly) return unreadable()
   const gp = q.sessionId ? await locateGrok(q.sessionId) : undefined
   if (!gp) return notFound()
-  const buf = await readCappedTail(gp)
+  // Same window as the remote leg: a paged read's newest `page.maxBytes`, the legacy read the cap.
+  const buf = await readCappedTail(gp, page ? page.maxBytes : undefined)
   return buf === undefined ? notFound() : served(buf)
 }
 
