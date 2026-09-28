@@ -705,6 +705,10 @@ export async function startServer(
         ptyManager,
         settings: () => settingsStore.get(),
         boardLog,
+        // `open-agent --issue #N` means the repository this project's board syncs with — the same
+        // answer the issue lane gets from the GitHub host controller.
+        issueRepository: (projectId) =>
+          github.controller.status(projectId).then((view) => view.project?.repository ?? null),
         installAgentIntegrations: config.installHooks !== false
       })
       hookServer.setControlHandler(canvasControl.handler)

@@ -10713,6 +10713,79 @@ button.group-node__setup:disabled {
   font-size: 13px;
   line-height: 1.6;
 }
+/* GitHub issue ↔ agent session binding. The issue card lists every session started on it as a
+   live chip (state from the agent-status store — static, no animation: a card can carry several,
+   and the RUNNING pulse already lives on the session's own card). */
+.issue-run-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.issue-run-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 1px 6px;
+  border: 1px solid rgba(var(--tint-rgb), 0.14);
+  border-radius: 999px;
+  background: rgba(var(--tint-rgb), 0.05);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.issue-run-chip:hover {
+  background: rgba(var(--tint-rgb), 0.1);
+}
+.issue-run-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.issue-run-chip__state {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.issue-run-chip--running .issue-run-chip__state {
+  color: var(--success);
+}
+.issue-run-chip--needs .issue-run-chip__state {
+  color: var(--attention-text);
+}
+.issue-run-chip--failed .issue-run-chip__state,
+.issue-run-chip--dropped .issue-run-chip__state {
+  color: var(--warn);
+}
+.github-issue-modal__runs {
+  padding: 10px 22px 0;
+}
+.github-issue-modal__history {
+  border-top: 1px solid rgba(var(--tint-rgb), 0.08);
+  padding: 12px 22px 18px;
+}
+/* `#N` on a session started on a GitHub issue — canvas node header and its board card alike. */
+.issue-ref-chip {
+  margin-left: 6px;
+  padding: 0 6px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(var(--tint-rgb), 0.16);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.issue-ref-chip:hover {
+  color: var(--text);
+  background: rgba(var(--tint-rgb), 0.08);
+}
 @media (max-width: 520px) {
   .kanban-header {
     gap: 6px;

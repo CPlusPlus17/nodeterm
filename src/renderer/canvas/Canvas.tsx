@@ -466,6 +466,16 @@ import { AgentIcon } from '../lib/agentIcons'
 import { nodeIconDialog } from '../components/NodeIconPicker'
 import { applyIconChoice } from '../lib/nodeIconChoice'
 import type { NodeIcon } from '@shared/node-icon'
+import {
+  formatIssueRef,
+  issueLaunchPrompt,
+  issueRefFromHtmlUrl,
+  normalizeIssueRef,
+  type IssueRef
+} from '@shared/github-issue-ref'
+import { runEndedEntry, runStartedEntry } from '../lib/issueRuns'
+import { resolveIssueFlagFor, type IssueFlagResult } from '../lib/issueFlag'
+import type { GitHubIssueCardView } from '@shared/github-issues'
 import { branchClaudeSession } from '../lib/claudeBranch'
 import {
   useSession,
@@ -4887,8 +4897,12 @@ export function Canvas() {
       // `null` = the user EXPLICITLY picked the System account row: resolveNewNodeAccount then
       // skips the project default instead of treating the pick as "no pick" (#419).
       accountId?: string | null,
-      initialPrompt?: string
-    ) => {
+      initialPrompt?: string,
+      // A GitHub issue binding (Start with agent on an issue card). Stamped on the node AFTER the
+      // factory: it drives chips and run history only — the launch prompt was already composed
+      // from it by `issueLaunchPrompt`, the one place a reference may become text in a pane.
+      extra?: { issueRef?: IssueRef }
+    ): CanvasNode | undefined => {
       // Resolve the target project LIVE, at click time — never from this callback's render
       // closure. Menu onClick closures outlive the render that built them (`setMenu` freezes
       // them into state), and the sessions-sidebar "+" deliberately switches projects before
@@ -4944,35 +4958,38 @@ export function Canvas() {
       console.info(
         `[nodeterm] node-create agent=${agentId} project=${targetProjectId} group=${groupId ?? '-'} cwd=${cwd ?? '-'}`
       )
-      setNodes((ns) => {
-        // The default gateway model applies ONLY when the launch mode asks for it
-        // (`agentLaunchMode === 'gateway-model'`). 'gateway' launches with the CLI's own default
-        // model, and 'subscription' strips the gateway entirely so its model is moot. Gated on
-        // `canSwitchModel` (base-resolved) so a non-capable agent is left model-less.
-        const settings = useSettings.getState().settings
-        const model =
-          settings.agentLaunchMode === 'gateway-model' &&
-          settings.modelGatewayDefaultModel &&
-          canSwitchModel(agentId)
-            ? settings.modelGatewayDefaultModel
-            : undefined
-        const node = createAgentNode(
-          agentId,
-          ns.length,
-          cwd,
-          center ?? emptyNodePos(),
-          initialPrompt,
-          project?.ssh,
-          account,
-          activePermissionMode(agentId),
-          // Same funnel as the account above: the active project owns the node, so its own
-          // `.nodeterm/settings.json` launch command layers over the global one.
-          targetProjectId,
-          model
-        )
-        return [...ns, groupId ? parentInto(node, groupId) : node]
-      })
+      // The default gateway model applies ONLY when the launch mode asks for it
+      // (`agentLaunchMode === 'gateway-model'`). 'gateway' launches with the CLI's own default
+      // model, and 'subscription' strips the gateway entirely so its model is moot. Gated on
+      // `canSwitchModel` (base-resolved) so a non-capable agent is left model-less.
+      const settings = useSettings.getState().settings
+      const model =
+        settings.agentLaunchMode === 'gateway-model' &&
+        settings.modelGatewayDefaultModel &&
+        canSwitchModel(agentId)
+          ? settings.modelGatewayDefaultModel
+          : undefined
+      // Built OUTSIDE the setNodes updater so the caller gets the node back (the board assigns the
+      // new card to a column and files its run history under it); `createNodeInColumn` does the same.
+      const created = createAgentNode(
+        agentId,
+        nodesRef.current.length,
+        cwd,
+        center ?? emptyNodePos(),
+        initialPrompt,
+        project?.ssh,
+        account,
+        activePermissionMode(agentId),
+        // Same funnel as the account above: the active project owns the node, so its own
+        // `.nodeterm/settings.json` launch command layers over the global one.
+        targetProjectId,
+        model
+      )
+      const issueRef = normalizeIssueRef(extra?.issueRef)
+      const node = issueRef ? { ...created, data: { ...created.data, issueRef } } : created
+      setNodes((ns) => [...ns, groupId ? parentInto(node, groupId) : node])
       markDirty()
+      return node
     },
     [
       setNodes,
@@ -5410,6 +5427,21 @@ export function Canvas() {
   )
 
   // ---- multi-node actions (context menu) ----
+  /** File `run-ended` under a closed node's issue card, with the last state it was seen in. Every
+   *  node-removal funnel calls this BEFORE it drops the node's agent status (the last instant the
+   *  live session id and state exist). A node with no valid binding logs nothing. */
+  const logIssueRunEnded = useCallback(
+    (
+      projectId: string,
+      node: { id: string; title?: string; agentId?: string; agentSessionId?: string; issueRef?: unknown }
+    ) => {
+      if (!node.issueRef) return
+      const entry = runEndedEntry(node.issueRef, node, useAgentStatus.getState().byId[node.id])
+      if (entry) useBoardLog.getState().append(api, projectId, entry)
+    },
+    [api]
+  )
+
   const deleteNodes = useCallback(
     (ids: string[], opts?: { record?: boolean }) => {
       const set = new Set(ids)
@@ -5466,6 +5498,17 @@ export function Canvas() {
       }
       nodesRef.current.forEach((n) => {
         if (!set.has(n.id)) return
+        // A session started on a GitHub issue: its run ends HERE (a turn ending never does). Read
+        // before `useAgentStatus.remove` below — the last observed state goes with it.
+        if (n.data.issueRef) {
+          logIssueRunEnded(useProjects.getState().activeProjectId ?? '', {
+            id: n.id,
+            title: n.data.title as string | undefined,
+            agentId: n.data.agentId as string | undefined,
+            agentSessionId: n.data.agentSessionId as string | undefined,
+            issueRef: n.data.issueRef
+          })
+        }
         // Permanent delete: the upcoming unmount must dispose the xterm, not park it (the
         // session is being destroyed right here). Also drops an already-parked entry.
         if (n.type === 'terminal')
@@ -5527,7 +5570,7 @@ export function Canvas() {
         )
       }
     },
-    [setNodes, markDirty, refreshWorktreeStore, releaseWorktreeBinding]
+    [setNodes, markDirty, refreshWorktreeStore, releaseWorktreeBinding, logIssueRunEnded]
   )
 
   /** `canvas.deleteSelection` (Delete / Backspace): confirm-then-delete the selected nodes, or —
@@ -8997,7 +9040,23 @@ export function Canvas() {
    *  a decision `isPinnedAgentEntry` makes from the id and the row's own shape, never from a
    *  hardcoded agent name here. */
   const agentCreationEntries = useCallback(
-    (at?: { x: number; y: number }, groupId?: string): AgentAddEntry[] => {
+    (
+      at?: { x: number; y: number },
+      groupId?: string,
+      // The same picker, pointed at another action: "Start with agent ▸" on a GitHub issue card
+      // reuses these rows (accounts, the ✓ default, the fail-closed Codex gate) instead of growing
+      // a fourth copy. Absent = the historical "New <agent>" rows that create a node at `at`.
+      pick?: {
+        onPick: (agentId: AgentId, accountId?: string | null) => void
+        label?: (agentLabel: string) => string
+      }
+    ): AgentAddEntry[] => {
+      const create = (aid: AgentId, acct?: string | null): void => {
+        if (pick) pick.onPick(aid, acct)
+        else addAgentNode(aid, at, groupId, acct)
+      }
+      const rowLabel = (agentLabel: string): string =>
+        pick?.label ? pick.label(agentLabel) : `New ${agentLabel}`
       const disabled = useSettings.getState().settings.disabledAgents
       // Read the active project LIVE from the store (not the closure value) so a menu built right
       // after a `switchProject` — e.g. the sessions-sidebar "+" opening this menu on a non-active
@@ -9042,19 +9101,19 @@ export function Canvas() {
         if (aid === 'claude' && (accounts.length > 0 || accountsHint)) {
           return {
             type: 'submenu',
-            label: `New ${AGENT_CONFIG[aid].label}`,
+            label: rowLabel(AGENT_CONFIG[aid].label),
             icon: <AgentIcon agentId={aid} />,
             children: [
               {
                 label: withDefaultMark(systemLabel),
                 icon: <AgentIcon agentId="claude" />,
-                onClick: () => addAgentNode('claude', at, groupId, null)
+                onClick: () => create('claude', null)
               },
               ...accounts.map(
                 (a): MenuItem => ({
                   label: withDefaultMark(a.label, a.id),
                   icon: <AgentIcon agentId="claude" />,
-                  onClick: () => addAgentNode('claude', at, groupId, a.id)
+                  onClick: () => create('claude', a.id)
                 })
               ),
               ...(accountsHint
@@ -9077,13 +9136,13 @@ export function Canvas() {
         if (aid === 'codex' && codexAccountsHere.length > 0) {
           return {
             type: 'submenu',
-            label: `New ${AGENT_CONFIG[aid].label}`,
+            label: rowLabel(AGENT_CONFIG[aid].label),
             icon: <AgentIcon agentId={aid} />,
             children: [
               {
                 label: codexSystemLabel,
                 icon: <AgentIcon agentId="codex" />,
-                onClick: () => addAgentNode('codex', at, groupId)
+                onClick: () => create('codex')
               },
               ...codexAccountsHere.map((a): MenuItem => {
                 const sel = codexAccountSelectable(
@@ -9100,16 +9159,16 @@ export function Canvas() {
                     : sel.reason === 'no-connection'
                       ? 'This account lives on a host that is not connected — connect its SSH project first.'
                       : 'This account is no longer available.',
-                  onClick: () => addAgentNode('codex', at, groupId, a.id)
+                  onClick: () => create('codex', a.id)
                 }
               })
             ]
           }
         }
         return {
-          label: `New ${AGENT_CONFIG[aid].label}`,
+          label: rowLabel(AGENT_CONFIG[aid].label),
           icon: <AgentIcon agentId={aid} />,
-          onClick: () => addAgentNode(aid, at, groupId)
+          onClick: () => create(aid)
         }
       }
       return [
@@ -9123,9 +9182,9 @@ export function Canvas() {
             (c): AgentAddEntry => ({
               agentId: c.id,
               item: {
-                label: `New ${c.label}`,
+                label: rowLabel(c.label),
                 icon: <AgentIcon agentId={c.id} />,
-                onClick: () => addAgentNode(c.id, at, groupId)
+                onClick: () => create(c.id)
               }
             })
           )
@@ -9695,6 +9754,75 @@ export function Canvas() {
     [emptyNodePos, setNodes, markDirty, seedBoard, api]
   )
 
+  // ---- GitHub issue → agent session ("Start with agent ▸") ----
+  /**
+   * Start an agent on a GitHub issue card: a normal agent node in the project cwd, bound to the
+   * issue (`data.issueRef`), launched with a prompt that carries only the REFERENCE — the issue's
+   * title and body are attacker-writable on a public repository and never reach the pane; the
+   * agent reads them itself with `gh`. The reference comes from the card's GitHub URL and is
+   * validated before anything is created; a card whose URL does not parse starts nothing.
+   *
+   * The new session card is filed under the issue card's column (board metadata only — the same
+   * unpruned direct write `createNodeInColumn` uses, for the same reason: the fresh node is not in
+   * the derived session list yet). The issue card's run history gets `run-started`.
+   */
+  const startIssueAgent = useCallback(
+    (issue: GitHubIssueCardView, agentId: AgentId, accountId?: string | null) => {
+      const ref = issueRefFromHtmlUrl(issue.htmlUrl, issue.number)
+      const prompt = ref ? issueLaunchPrompt(ref) : undefined
+      if (!ref || !prompt) {
+        setNotice({
+          kind: 'error',
+          text: `Could not start an agent on #${issue.number}: its GitHub address could not be read. Nothing was started.`
+        })
+        return
+      }
+      const node = addAgentNode(agentId, undefined, undefined, accountId, prompt, { issueRef: ref })
+      if (!node) return // addAgentNode already said why
+      const nodeId = node.id
+      const targetProjectId = useProjects.getState().activeProjectId
+      const project = useProjects.getState().getProject(targetProjectId)
+      const board = project?.kanban ?? seedBoard
+      const column = issue.columnId ? board.columns.find((c) => c.id === issue.columnId) : undefined
+      if (column) {
+        useProjects.getState().setProjectKanban(targetProjectId, assignNode(board, nodeId, column.id, null))
+        markDirty()
+      }
+      const title =
+        (node.data.title as string | undefined) ||
+        agentConfig(agentId)?.label ||
+        useSettings.getState().settings.customAgents.find((a) => a.id === agentId)?.label ||
+        agentId
+      // The session card's own feed says where it came from, exactly like a "+ New" card…
+      useBoardLog.getState().append(api, targetProjectId, {
+        kind: 'event',
+        nodeId,
+        event: { type: 'card-created', to: column?.title ?? 'Ungrouped', title }
+      })
+      // …and the issue card's history records the run (with the session id nodeterm minted, when
+      // the agent's CLI takes one — otherwise none, never a guess).
+      const started = runStartedEntry(ref, {
+        id: nodeId,
+        title,
+        agentId,
+        agentSessionId: node.data.agentSessionId as string | undefined
+      })
+      if (started) useBoardLog.getState().append(api, targetProjectId, started)
+    },
+    [addAgentNode, seedBoard, markDirty, api]
+  )
+
+  /** The "Start with agent ▸" rows for one issue card: the canvas's own agent + account picker
+   *  (`agentCreationEntries`), relabelled and pointed at `startIssueAgent`. */
+  const issueAgentMenu = useCallback(
+    (issue: GitHubIssueCardView): MenuItem[] =>
+      agentCreationEntries(undefined, undefined, {
+        onPick: (aid, acct) => startIssueAgent(issue, aid, acct),
+        label: (agentLabel) => agentLabel
+      }).map((entry) => entry.item),
+    [agentCreationEntries, startIssueAgent]
+  )
+
     // Global kanban swimlane "New session" path — creates a node in the target project's
   // swimlane even when that project is not the active canvas. The per-column create
   // menu in GlobalKanbanView dispatches this, and we switch to the target project
@@ -10021,6 +10149,37 @@ export function Canvas() {
       // each runs the SAME validation as a real call and stops just before the mutation.
       const dryRun = dryRunRequested(args)
       const DRY_RUN_PREFIX = 'DRY RUN — nothing was opened or changed.'
+
+      // `--issue` (open-agent / open-claude): the GitHub issue the new session is started on. Its
+      // SHAPE was refused in main (`issueFlagRefusal`); what `#N` means is this renderer's question,
+      // answered against the project the new node OPENS IN — the repository its kanban board syncs
+      // with (configured, else detected from its git remote: the answer the issue lane itself uses,
+      // asked of the core that owns the project). No board repository = `#N` is refused and told
+      // the full form; nothing is guessed. The issue's own text is never fetched here: the launch
+      // prompt carries only the reference (`issueLaunchPrompt`).
+      const resolveIssueFlag = (projectId: string | undefined): Promise<IssueFlagResult> =>
+        resolveIssueFlagFor(
+          args.issue,
+          verb,
+          projectId ? useProjects.getState().getProject(projectId) : undefined,
+          (id) => api.githubControl.status(id).then((view) => view.project?.repository ?? null)
+        )
+      /** The node, bound to the issue (display + run history only — its launch line is already built). */
+      const bindIssue = (node: CanvasNode, ref: IssueRef | undefined): CanvasNode =>
+        ref ? { ...node, data: { ...node.data, issueRef: ref } } : node
+      /** `run-started` on the issue card's history for each node just opened on it. */
+      const logRunsStarted = (projectId: string | undefined, nodes: readonly CanvasNode[], ref: IssueRef | undefined) => {
+        if (!ref || !projectId) return
+        for (const n of nodes) {
+          const entry = runStartedEntry(ref, {
+            id: n.id,
+            title: n.data.title as string | undefined,
+            agentId: n.data.agentId as string | undefined,
+            agentSessionId: n.data.agentSessionId as string | undefined
+          })
+          if (entry) useBoardLog.getState().append(api, projectId, entry)
+        }
+      }
 
       // ── Agent messaging (`send`/`reply`) — handled BEFORE the source-routing machinery ──────
       // These are STORE_ANSWERED_VERBS (lib/controlRouting): routing by source must never travel
@@ -10370,6 +10529,13 @@ export function Canvas() {
           }
           const tgAgentId = (verb === 'open-agent' ? args.agent : 'claude') as AgentId
           const tgIsTerminal = verb === 'open-terminal'
+          // `#N` means the TARGET project's repository here — the node opens there.
+          const tgIssue = await resolveIssueFlag(target.id)
+          if (!tgIssue.ok) {
+            reply({ ok: false, error: tgIssue.error })
+            return
+          }
+          const tgPrompt = tgIssue.ref ? issueLaunchPrompt(tgIssue.ref, args.prompt) : args.prompt
           const tgCount = Math.max(
             1,
             Math.min(tgIsTerminal ? 8 : 5, parseInt(args.count || '1', 10) || 1)
@@ -10394,18 +10560,21 @@ export function Canvas() {
           for (let i = 0; i < tgCount; i++) {
             const node = tgIsTerminal
               ? createTerminalNode(tgIndexBase + i, tgCwd, { x: 0, y: 0 }, args.cmd)
-              : createAgentNode(
-                  tgAgentId,
-                  tgIndexBase + i,
-                  tgCwd,
-                  { x: 0, y: 0 },
-                  args.prompt,
-                  undefined,
-                  tgAccount,
-                  tgMode,
-                  // The TARGET project: its `.nodeterm/settings.json` launch override applies to
-                  // what runs in it, not the caller's.
-                  target.id
+              : bindIssue(
+                  createAgentNode(
+                    tgAgentId,
+                    tgIndexBase + i,
+                    tgCwd,
+                    { x: 0, y: 0 },
+                    tgPrompt,
+                    undefined,
+                    tgAccount,
+                    tgMode,
+                    // The TARGET project: its `.nodeterm/settings.json` launch override applies to
+                    // what runs in it, not the caller's.
+                    target.id
+                  ),
+                  tgIssue.ref
                 )
             const w = (node.width as number) ?? 640
             const h = (node.height as number) ?? 440
@@ -10415,6 +10584,7 @@ export function Canvas() {
           }
           const tgIds = tgMade.map((n) => n.id)
           const tgWhat = tgIsTerminal ? 'terminal' : tgAgentId
+          logRunsStarted(target.id, tgMade, tgIssue.ref)
           // No ropes and no context-links in either branch: both are per-project arrays, and an
           // edge to a node in another project has no representation (v1 — #284's linking half).
           // The skill text names the workaround (open a reader agent inside the target project).
@@ -10671,6 +10841,14 @@ export function Canvas() {
                 return
               }
             }
+            // `#N` = the OWNING project's repository: the node is saved there.
+            const coldIssue = await resolveIssueFlag(coldTerminal ? undefined : owner.id)
+            if (!coldIssue.ok) {
+              reply({ ok: false, error: coldIssue.error })
+              return
+            }
+            const coldIssueRef = coldTerminal ? undefined : coldIssue.ref
+            const coldPrompt = coldIssueRef ? issueLaunchPrompt(coldIssueRef, args.prompt) : args.prompt
             if (dryRun) {
               if (!coldTerminal) {
                 const dryKnownAgent =
@@ -10692,6 +10870,7 @@ export function Canvas() {
                     ` in "${owner.name}"` +
                     (coldGroup.groupId ? ` in group ${coldGroup.groupId}` : '') +
                     (coldCwd ? `, cwd ${coldCwd}` : ''),
+                  ...(coldIssueRef ? [`bound to GitHub issue ${formatIssueRef(coldIssueRef)}`] : []),
                   ...(coldAfterIds.length ? [`armed to wait for: ${coldAfterIds.join(', ')}`] : []),
                   'That project is not on screen, so the session(s) would be queued and start when it is next viewed.'
                 ].join('\n'),
@@ -10701,7 +10880,8 @@ export function Canvas() {
                   group: coldGroup.groupId ?? null,
                   cwd: coldCwd ?? null,
                   after: coldAfterIds,
-                  projectId: owner.id
+                  projectId: owner.id,
+                  ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {})
                 }
               })
               return
@@ -10730,18 +10910,21 @@ export function Canvas() {
                     args.cmd,
                     coldSsh
                   )
-                : createAgentNode(
-                    coldAgentId,
-                    coldNodes.length + i,
-                    coldCwd,
-                    coldPlaceBelow(coldNodes, coldSrcNode, i),
-                    args.prompt,
-                    coldSsh,
-                    coldAccount,
-                    coldMode,
-                    owner.id,
-                    args.model,
-                    coldPromptFile
+                : bindIssue(
+                    createAgentNode(
+                      coldAgentId,
+                      coldNodes.length + i,
+                      coldCwd,
+                      coldPlaceBelow(coldNodes, coldSrcNode, i),
+                      coldPrompt,
+                      coldSsh,
+                      coldAccount,
+                      coldMode,
+                      owner.id,
+                      args.model,
+                      coldPromptFile
+                    ),
+                    coldIssueRef
                   )
               // Arm it: the project is not mounted, so nothing would deliver an `initialCommand`
               // and serialization drops it. `--after` rides the same held launch — an empty `after`
@@ -10829,6 +11012,7 @@ export function Canvas() {
             const coldBridges = [...coldPlan.edges, ...coldDepPlans.flatMap((p) => p.edges)]
             coldStore.appendCanvasLinks(owner.id, { bridges: coldBridges, ropes: coldRopes })
             void writeDisk()
+            logRunsStarted(owner.id, coldMade, coldIssueRef)
             const coldWhat = coldTerminal ? 'terminal' : coldAgentId
             const coldDepLinked = coldDepPlans.flatMap((p) => p.linked)
             reply({
@@ -10843,7 +11027,8 @@ export function Canvas() {
                 (coldAfterIds.length
                   ? `\nwaiting for ${coldAfterIds.join(', ')} before running` +
                     (coldDepLinked.length ? ' (and linked to read them)' : '')
-                  : ''),
+                  : '') +
+                (coldIssueRef ? `\nbound to GitHub issue ${formatIssueRef(coldIssueRef)}` : ''),
               // Every node on this branch has no process behind it until that project is viewed,
               // whether or not it holds a command — the same rule the `--project` branch states.
               result: {
@@ -10852,6 +11037,7 @@ export function Canvas() {
                 projectId: owner.id,
                 linked: coldPlan.linked,
                 after: coldAfterIds,
+                ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {}),
                 queued: true,
                 queuedIds: coldIds
               }
@@ -11209,7 +11395,8 @@ export function Canvas() {
             const st = useAgentStatus.getState().byId
             const list = storedNodeListing(nodesRef.current.map((n) => ({
               id: n.id, kind: n.type, title: n.data.title as string,
-              pendingLaunch: n.data.pendingLaunch, agentId: n.data.agentId as string | undefined
+              pendingLaunch: n.data.pendingLaunch, agentId: n.data.agentId as string | undefined,
+              issueRef: n.data.issueRef
             })), st, useLaunchDelivery.getState().byId)
             reply({ ok: true, result: list, message: controlListingText(list) })
             return
@@ -11328,6 +11515,13 @@ export function Canvas() {
               }
             }
             const agentCwd = args.cwd || groupCwd || srcCwd
+            // `#N` = the repository of the project this call acts on (the node opens there).
+            const issueFlag = await resolveIssueFlag(ctlProject?.id)
+            if (!issueFlag.ok) {
+              reply({ ok: false, error: issueFlag.error })
+              return
+            }
+            const issueRef = issueFlag.ref
             if (dryRun) {
               // The dry run is deliberately STRICTER than the real open here: an unknown agent id
               // today opens a node whose launch command is the typo, failing only inside its pane
@@ -11355,6 +11549,7 @@ export function Canvas() {
                       : args.prompt
                         ? `, prompt: "${args.prompt.slice(0, 80)}${args.prompt.length > 80 ? '…' : ''}"`
                         : ''),
+                  ...(issueRef ? [`bound to GitHub issue ${formatIssueRef(issueRef)}`] : []),
                   ...(after?.length ? [`armed to wait for: ${after.join(', ')}`] : []),
                   'Each session would be connected + context-linked to you.'
                 ].join('\n'),
@@ -11364,7 +11559,8 @@ export function Canvas() {
                   count,
                   group: intoGroupId ?? null,
                   cwd: agentCwd ?? null,
-                  after: after ?? []
+                  after: after ?? [],
+                  ...(issueRef ? { issue: formatIssueRef(issueRef) } : {})
                 }
               })
               return
@@ -11375,7 +11571,13 @@ export function Canvas() {
             // A `--prompt` over the typed-line budget is spilled to a file and delivered through
             // the same `"$(cat …)"` substitution `--prompt-file` uses (#706). An explicit
             // `--prompt-file` already took that route and is passed through untouched.
-            const promptLaunch = await spillLongPrompt(promptFile ? undefined : args.prompt)
+            // An issue-bound session's prompt is the REFERENCE line (`issueLaunchPrompt`), with the
+            // caller's own `--prompt` after it. `--prompt-file` is left untouched: the file is the
+            // whole brief (the skill tells the caller to name the issue in it).
+            const promptLaunch = await spillLongPrompt(
+              promptFile ? undefined : issueRef ? issueLaunchPrompt(issueRef, args.prompt) : args.prompt
+            )
+            const issueNodes: CanvasNode[] = []
             const make = (i: number): CanvasNode => {
               const node = armAfter(
                 createAgentNode(
@@ -11399,12 +11601,15 @@ export function Canvas() {
                 after ?? [],
                 intoGroupId
               )
-              return openBatch.add(node)
+              const bound = bindIssue(node, issueRef)
+              if (issueRef) issueNodes.push(bound)
+              return openBatch.add(bound)
             }
             const ids = intoGroupId
               ? addGrouped(intoGroupId, count, make)
               : Array.from({ length: count }, (_, i) => addAndConnect(make(i)))
             ropeDeps(ids, after)
+            logRunsStarted(ctlProject?.id, issueNodes, issueRef)
             const openResult = openBatch.result(after ?? [])
             const { queuedIds } = openResult
             // Context-link the new session(s) back to the opener (same rationale as spawn-team:
@@ -11431,13 +11636,15 @@ export function Canvas() {
                 `opened ${count} ${agentId} session(s): ${ids.join(', ')}` +
                 (queuedIds.length ? '\nqueued; awaiting launch delivery' : '') +
                 (bridged.length ? `\ncontext-linked to you: ${bridged.join(', ')}` : '') +
+                (issueRef ? `\nbound to GitHub issue ${formatIssueRef(issueRef)}` : '') +
                 (after?.length
                   ? `\nwaiting for ${after.join(', ')} before running` +
                     (depLinked.length ? ` (and linked to read them)` : '')
                   : ''),
               result: {
                 ...openResult,
-                linked: bridged
+                linked: bridged,
+                ...(issueRef ? { issue: formatIssueRef(issueRef) } : {})
               }
             })
             return
@@ -12723,6 +12930,8 @@ export function Canvas() {
         }
         disposeTerminalOnUnmount(sessionForProject(projectId).id, id) // may be parked from a project switch
         transport.destroy(id)
+        const stored = nodes.find((n) => n.id === id)
+        if (stored?.issueRef) logIssueRunEnded(projectId, stored)
         useAgentStatus.getState().remove(id)
         // Unmount no longer clears the fan-out (issue #402), so a permanent removal must — the
         // node unmounted at the project switch with its cards kept in the store.
@@ -12736,7 +12945,7 @@ export function Canvas() {
       }
       void writeDisk()
     },
-    [writeDisk]
+    [writeDisk, logIssueRunEnded]
   )
 
   // Close (end) a session. tmux sessions are keyed by node id, so destroy works for an
@@ -13021,6 +13230,8 @@ export function Canvas() {
       setConfirm({
         message: `Delete ${label}? Its terminal session will end.`,
         onConfirm: async () => {
+          const doomed = proj?.nodes.find((n) => n.id === nodeId)
+          if (doomed?.issueRef) logIssueRunEnded(projectId, doomed)
           useProjects.setState((s) => ({
             projects: s.projects.map((p) =>
               p.id === projectId ? { ...p, nodes: p.nodes.filter((n) => n.id !== nodeId) } : p
@@ -13071,7 +13282,7 @@ export function Canvas() {
       window.removeEventListener('nodeterm:global-delete' as never, onGlobalDelete as never)
       window.removeEventListener('nodeterm:global-set-icon' as never, onGlobalSetIcon as never)
     }
-  }, [renameSession, setNodes, markDirty, writeDisk, deleteNodeFromKanban])
+  }, [renameSession, setNodes, markDirty, writeDisk, deleteNodeFromKanban, logIssueRunEnded])
 
   // Sidebar "Name with AI": generate a title from the session's captured terminal output
   // (same BYO-agent path as the terminal node's ✦), then apply it via renameSession.
@@ -14864,6 +15075,7 @@ export function Canvas() {
           onBrowserNav={browserNavFromKanban}
           onSetIcon={setNodeIcon}
           accountMenuItems={accountSwitchRows}
+          issueAgentMenu={issueAgentMenu}
         />
       )}
       <UpdateCard />

@@ -3059,6 +3059,24 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   unsupported cross-project boundary, without probing other projects or exposing their metadata.
   Callers that create and link nodes **in the same tick** must pass their own `lookup` — `setNodes`
   is async, so resolving fresh nodes off `nodesRef` would skip every one as "no such node".
+  **Issue-bound opens (`--issue`, 2026-09-28):** `open-agent`/`open-claude --issue <owner/repo#N |
+  #N>` binds the new session to a GitHub issue exactly like the board's **Start with agent**. The
+  SHAPE is refused by ONE gate, `issueFlagRefusal` (`canvas-control-core.ts`), which desktop MAIN
+  runs in its control handler (desktop main does not run `parseControlRequest` at all — do not move
+  the gate there alone) and the Server Edition runs inside `parseControlRequest`; any other verb
+  carrying `--issue` is refused, not ignored. `#N` is resolved by each shell against the project the
+  node OPENS IN (the `--project` target, the cold-open owner, or `ctlProject`) — the repository its
+  kanban board syncs with, i.e. the GitHub host controller's answer (configured, else detected) —
+  and a project with no GitHub board refuses `#N` and names the full form (`lib/issueFlag.ts`,
+  `HeadlessNodeFactoryDeps.issueRepository`). Resolution runs BEFORE each path's dry-run branch.
+  `--prompt` is appended after the reference line; `--prompt-file` stays the whole brief. Both
+  generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
+  is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on
+  start, In Review on delivery), never close the issue, never Done, `Closes #N` in a PR, and **post
+  to GitHub only when the user asked in that session — otherwise end with a proposed comment**.
+  nodeterm has no automatic post-to-issue path and must not grow one. `list` marks a bound row
+  `issue owner/repo#N`. Server Edition: `open-agent --issue` works under its verified-only,
+  creator-owned rules and writes the run history; `assign` is unsupported there (the skill says so).
   **Dependency edges (`--after`, 2026-07):** `open-terminal`/`open-claude`/`open-agent` accept
   `--after <id,id>`, which opens the node **armed** — `data.pendingLaunch` ({after, command},
   `PendingLaunch` in shared/types) holds the launch the factory built, and Canvas fires it once
@@ -5047,6 +5065,40 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   dropped, so only a full reconciliation may clear it. **(3)** the `pulls` source is `readOnly` in
   the registry: no drag, no move control, and its page reports `readOnly: true` on the wire rather
   than trusting every consumer to remember.
+  **Start with agent — a GitHub issue card starts a bound session** (2026-09-28). An issue card's
+  right-click menu and its summary modal offer **Start with agent ▸**, whose rows are the canvas's
+  own agent + account picker (`agentCreationEntries`, which takes an optional `pick` so the same
+  rows can point at another action — never a fourth copy of the picker). The result is an ordinary
+  agent node in the project cwd (through `addAgentNode`, which now returns the node) carrying
+  `data.issueRef {owner, repo, number}` — persisted, git-shared, therefore hostile:
+  `normalizeIssueRef` (`@shared/github-issue-ref`) runs at BOTH serializer seams and a malformed
+  value is dropped (the node survives, only the binding goes). Rules a refactor must not undo:
+  (1) **the launch line carries the REFERENCE, never the issue's text** — titles and bodies are
+  writable by anyone on a public repository and a launch line is typed into a pane.
+  `issueLaunchPrompt` is the ONE place a reference becomes text; it re-validates the reference
+  itself and returns nothing for a hostile one. The prompt tells the agent to read the issue with
+  `gh issue view N --repo owner/repo --comments`; the agent pulls the context. Proven under a real
+  `/bin/sh` (`github-issue-ref.realsh.test.ts`). (2) **The reference comes from the card's
+  `htmlUrl`** (`issueRefFromHtmlUrl`, which also requires the URL's number to equal the card's).
+  (3) **`done` never moves a card**: it means a turn ended, not that the work did. The issue card
+  shows every bound session as a live chip (`IssueRunChips`, subscribed per node to a PRIMITIVE
+  signature `issueRunChipSig` — never `s.byId`), RUNNING / NEEDS YOU / TURN FAILED / DROPPED plus
+  unread; a click opens that session's card. A card moves only when the session `assign`s itself or
+  a person drags it. (4) **Board-log identity of an issue card** is the synthetic id
+  `github-issue:<owner>/<repo>#<N>` (lower-cased, `issueLogId`) — a namespace no node id can reach.
+  Under it: `run-started` (UI start, `--issue` open) and `run-ended` (written by EVERY node-removal
+  funnel — `deleteNodes`, `closeStoredNodes`, the Omni delete, the Server `close` — before it drops
+  the node's agent status, with the last observed state). The summary modal shows it read-only as
+  "Agent runs" (no composer: a comment box under an issue reads as "post to GitHub"). **No cost or
+  token figure** is recorded: there is no cumulative per-session number, and a context-window
+  reading is not one. (5) The new session card is filed under the issue card's column (the same
+  unpruned direct write `createNodeInColumn` uses); the node header and the session card show a
+  `#N` chip (`IssueRefChip`) that opens the issue on the board (`openIssueOnBoard` →
+  `viewMode.requestedIssue`), falling back to GitHub when the board cannot show it — never a dead
+  click. No "start in a new worktree" UI yet: compose `open-worktree` + `open-agent --group --issue`
+  (the skill says how). Surfaces: Desktop + Server Edition (renderer + core); Omni board shows no
+  issue lanes; **Mobile does not render the binding** — `issueRef` reaches the phone inside the
+  project file, and nodeterm-ios ignores the unknown field (follow-up there).
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,
   2026-08-30 — the same membership-plus-one-leaf discipline `AGENT_CONFIG` uses): each entry declares
   its filter `label`, its `placement` (`assignment` = the board's own persisted assignments,

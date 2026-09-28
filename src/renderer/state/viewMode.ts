@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { readLocal, writeLocal } from '../lib/localStore'
 import { useSettings } from './settings'
+import type { IssueRef } from '@shared/github-issue-ref'
 
 // Which view each project shows (canvas or kanban) — PERSONAL, per machine: persisted in
 // localStorage, deliberately never in the git-shared .nodeterm/project.json (spec rule).
@@ -59,6 +60,15 @@ interface ViewModeState {
   requestedCardNodeId: string | null
   requestCard(nodeId: string): void
   clearCardRequest(): void
+  /**
+   * A GitHub issue whose summary should open on the board — set by a node's `#N` chip (canvas
+   * header or session card). One-shot like `requestedCardNodeId`: KanbanView opens the issue's
+   * summary once the issue lane has loaded, or the issue on GitHub when the board does not show it
+   * (no GitHub sync, another repository, a page not fetched), and clears it either way.
+   */
+  requestedIssue: IssueRef | null
+  requestIssue(ref: IssueRef): void
+  clearIssueRequest(): void
 }
 
 /** The resolved view for a project: its explicit entry, or the default. */
@@ -97,6 +107,9 @@ export const useViewMode = create<ViewModeState>((set) => ({
   requestedCardNodeId: null,
   requestCard: (nodeId) => set({ requestedCardNodeId: nodeId }),
   clearCardRequest: () => set({ requestedCardNodeId: null }),
+  requestedIssue: null,
+  requestIssue: (ref) => set({ requestedIssue: ref }),
+  clearIssueRequest: () => set({ requestedIssue: null }),
   toggle: (projectId) =>
     set((s) => {
       // Flip the RESOLVED view and store it EXPLICITLY, so this choice now overrides the default.
@@ -108,13 +121,13 @@ export const useViewMode = create<ViewModeState>((set) => ({
       save(next)
       // Leaving the board (or entering it) drops any unconsumed request — it belonged to the view
       // the user just left, and firing it later would pop a card out of nowhere.
-      return { viewByProject: next, requestedCardNodeId: null }
+      return { viewByProject: next, requestedCardNodeId: null, requestedIssue: null }
     }),
   toggleGlobalKanban: () =>
     set((s) => {
       const next = !s.globalKanban
       saveGlobalKanban(next)
-      return { globalKanban: next, requestedCardNodeId: null, highlightedSwimlaneId: null }
+      return { globalKanban: next, requestedCardNodeId: null, requestedIssue: null, highlightedSwimlaneId: null }
     })
 }))
 
@@ -142,4 +155,15 @@ export function isGlobalKanbanOpen(): boolean {
     return false
   }
   return useViewMode.getState().globalKanban
+}
+
+/**
+ * Show a GitHub issue from a node's `#N` chip: bring up the project's board (the issue lane lives
+ * there) and ask it to open the issue. Toggle FIRST — leaving or entering the board drops any
+ * unconsumed request, so the request must be made after the view change, not before.
+ */
+export function openIssueOnBoard(projectId: string, ref: IssueRef): void {
+  const vm = useViewMode.getState()
+  if (projectId && !isKanbanOpen(projectId)) vm.toggle(projectId)
+  useViewMode.getState().requestIssue(ref)
 }

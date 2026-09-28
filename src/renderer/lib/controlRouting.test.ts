@@ -341,6 +341,16 @@ describe('storedNodeListing', () => {
       { id: 'term-b-3', kind: 'terminal', title: '' }
     ])
   })
+
+  it('marks a session started on a GitHub issue on its own row, and only a valid reference', () => {
+    const rows = storedNodeListing([
+      { id: 'term-1', kind: 'terminal', title: 'Claude', issueRef: { owner: 'o', repo: 'r', number: 7 } },
+      { id: 'term-2', kind: 'terminal', title: 'Hostile', issueRef: { owner: 'o', repo: 'r;rm -rf ~', number: 7 } }
+    ])
+    expect(rows[0]).toMatchObject({ issue: 'o/r#7' })
+    expect(rows[1]).not.toHaveProperty('issue')
+    expect(controlListingText(rows)).toBe('term-1 [terminal] Claude — issue o/r#7\nterm-2 [terminal] Hostile')
+  })
 })
 
 describe('the off-screen disposition table (the verbs that used to travel)', () => {

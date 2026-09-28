@@ -2,6 +2,8 @@ import { memo, useState } from 'react'
 import type { GitHubIssueCardView } from '@shared/github-issues'
 import type { KanbanColumn } from '@shared/types'
 import { updatedRelative } from '../../lib/relativeTime'
+import { NO_ISSUE_RUNS, type IssueRun } from '../../lib/issueRuns'
+import { IssueRunChips } from './IssueRunChips'
 
 export const GitHubIssueCard = memo(function GitHubIssueCard({
   issue,
@@ -12,7 +14,10 @@ export const GitHubIssueCard = memo(function GitHubIssueCard({
   onOpen,
   onMove,
   onDragStart,
-  onDragEnd
+  onDragEnd,
+  runs = NO_ISSUE_RUNS,
+  onOpenRun,
+  onContext
 }: {
   issue: GitHubIssueCardView
   columns: KanbanColumn[]
@@ -23,6 +28,12 @@ export const GitHubIssueCard = memo(function GitHubIssueCard({
   onMove: (issue: GitHubIssueCardView, columnId: string | null) => void
   onDragStart: (issue: GitHubIssueCardView) => void
   onDragEnd: () => void
+  /** Agent sessions bound to this issue (started on it). Shown as live chips; empty = none. */
+  runs?: readonly IssueRun[]
+  /** Open a bound session's card (a chip click). */
+  onOpenRun?: (nodeId: string) => void
+  /** Right-click: the issue card's menu ("Start with agent ▸", Open on GitHub). */
+  onContext?: (issue: GitHubIssueCardView, x: number, y: number) => void
 }): React.JSX.Element {
   const [dragging, setDragging] = useState(false)
   return (
@@ -42,6 +53,11 @@ export const GitHubIssueCard = memo(function GitHubIssueCard({
         onDragEnd()
       }}
       onClick={() => onOpen(issue)}
+      onContextMenu={onContext ? (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        onContext(issue, event.clientX, event.clientY)
+      } : undefined}
       onKeyDown={(event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return
         if ((event.target as HTMLElement).closest('select')) return
@@ -69,6 +85,7 @@ export const GitHubIssueCard = memo(function GitHubIssueCard({
           {issue.labels.length > 5 && <span className="github-issue-label">+{issue.labels.length - 5}</span>}
         </div>
       )}
+      {onOpenRun && <IssueRunChips runs={runs} onOpen={onOpenRun} />}
       <div className="github-issue-card__footer">
         <span>{moving ? 'Syncing…' : updatedRelative(issue.updatedAt)}</span>
         {issue.conflict && <span className="github-issue-conflict">Needs a column</span>}

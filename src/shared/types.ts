@@ -453,6 +453,15 @@ export interface CanvasNodeState {
   /** Model selected for this agent node through the shared model gateway. */
   agentModel?: string
   /**
+   * Agent nodes started on a GitHub issue ("Start with agent" on an issue card, or
+   * `open-agent --issue`): WHICH issue this session works on. It drives the binding chips (the
+   * issue card's run chips, the node header's `#N`) and the issue card's run history — never a
+   * launch line: the launch prompt was composed once, at creation, from a validated reference.
+   * Git-shared, so hostile input: `normalizeIssueRef` runs at both serializer seams. See
+   * @shared/github-issue-ref.
+   */
+  issueRef?: import('./github-issue-ref').IssueRef
+  /**
    * One-shot "Restart on subscription" flag: when set, the next `transport.create` strips gateway +
    * inherited provider env (per `vanillaEnvStripPattern`) so the agent resumes against its own
    * default provider. Set by the clear-env recycle action, cleared after the spawn resolves so an
@@ -717,10 +726,26 @@ export interface BoardLogEvent {
      *  agent node so it files under that agent's card. Written BEFORE the read (fail-closed): a cookie
      *  read that happened but was not recorded is the one outcome this trace exists to prevent. */
     | 'agent-read-cookies'
+    /** An agent session was started on a GitHub issue. Filed under the issue CARD's board-log
+     *  identity (`issueLogId`), not the node's, so the issue keeps its run history after the
+     *  session's node is gone. `run` names the session; `title` is the node title at the time. */
+    | 'run-started'
+    /** That session's node was closed. `run.end` is the last agent state observed at that
+     *  moment — a turn ending (`done`) is NOT a run ending, which is why this is written only when
+     *  the node goes. */
+    | 'run-ended'
   from?: string
   to?: string
   /** Column title for column-added/deleted; card title for card-created; outcome for agent-message. */
   title?: string
+  /** run-started / run-ended only. No cost or token figure: nodeterm has no cumulative number for
+   *  a session, and a context-window reading is not one. */
+  run?: {
+    nodeId: string
+    agentId?: string
+    sessionId?: string
+    end?: 'done' | 'working' | 'waiting' | 'blocked' | 'errored' | 'dropped' | 'unknown'
+  }
 }
 
 /** One line of the append-only board history (`.nodeterm/board-log.jsonl`). A `comment`

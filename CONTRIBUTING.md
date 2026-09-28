@@ -141,6 +141,14 @@ lane unaffected.
   from a background header: only the active SSH project is git-routable. SSH headers observe
   Source refreshes instead.
 
+- **A GitHub issue reaches a pane only as a validated reference.** Issue titles and bodies are
+  written by strangers on public repositories, and a launch line is typed into a shell. Anything
+  that starts or instructs an agent about an issue goes through `@shared/github-issue-ref`:
+  `issueLaunchPrompt` (the only composer, which re-validates `owner/repo#N` itself) for text, and
+  `normalizeIssueRef` wherever a stored `issueRef` is read — it comes from a git-shared file. Never
+  interpolate `issue.title`/`issue.body` into a prompt, and never add a path that posts an agent's
+  output to GitHub on its own: posting is public, and only the user asks for it.
+
 - **Hook decision JSON is built in core, never in the renderer or the script.** To answer a held
   Claude permission request with more than `allow`/`deny` (a plan's follow-on mode, a question's
   answers), send a `PermissionAnswer` through `answerPermission`; `core/agents/permission-decision.ts`
