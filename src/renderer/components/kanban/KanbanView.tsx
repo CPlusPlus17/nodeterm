@@ -781,6 +781,12 @@ export const KanbanView = memo(function KanbanView({
           onEditSticky={(t) => onEditSticky(modalNodeId, t)}
           onBrowserNav={(patch) => onBrowserNav(modalNodeId, patch)}
           onSetIcon={(icon) => onSetIcon(modalNodeId, icon)}
+          onOpenIssue={(ref) => {
+            // The issue summary is its own modal: close the card, then ask for the issue (the same
+            // request the session card's `#N` makes — summary if the lane has it, else GitHub).
+            setModalNodeId(null)
+            handleOpenIssueRef(ref)
+          }}
         />
       )}
       {modalIssue && (

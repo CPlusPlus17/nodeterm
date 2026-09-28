@@ -1055,6 +1055,13 @@ describe('--issue: GitHub issue-bound sessions', () => {
     expect(body).toContain('You are working on GitHub issue owner/repo#123.')
     expect(body).toContain('gh issue view 123 --repo owner/repo --comments')
     expect(body).toMatch(/with no repository configured it is\s+refused/)
+    // A board start (and a bare `--issue` open) means WORK ON IT; a `--prompt` replaces the task.
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('Then work on it: investigate, plan and implement the fix in this working tree.')
+    expect(flat).toContain('`--prompt` REPLACES that task')
+    expect(flat).toContain('the issue IS your task: read it, then investigate, plan and implement the fix')
+    // The rendered example is the real prompt, limits included.
+    expect(flat).toContain('Never close the issue. Do not post issue comments or open pull requests unless the user asks')
   })
 
   it.each(bodies)('%s pins the status + write-back contract', (_name, body) => {

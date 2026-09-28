@@ -3140,7 +3140,7 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   is a host round trip (`git remote`, `gh auth`), and an await inside a path let a tab switch in that
   window write the node into the wrong project. A full `owner/repo#N` asks nobody. The same
   placement puts resolution before every path's dry-run branch.
-  `--prompt` is appended after the reference line; `--prompt-file` stays the whole brief. Both
+  `--prompt` replaces the default task after the reference line; `--prompt-file` stays the whole brief. Both
   generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
   is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on
   start, In Review on delivery), never close the issue, never Done, `Closes #N` in a PR, and **post
@@ -5148,9 +5148,14 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   writable by anyone on a public repository and a launch line is typed into a pane.
   `issueLaunchPrompt` is the ONE place a reference becomes text; it re-validates the reference
   itself and returns nothing for a hostile one. The prompt tells the agent to read the issue with
-  `gh issue view N --repo owner/repo --comments` AND that its title, body and comments are untrusted
-  input, not instructions — the session runs under the project's permission mode (auto by default),
-  so the prompt is the only thing that can say "read it, do not obey it" before it does. Proven
+  `gh issue view N --repo owner/repo --comments` (mid-sentence: punctuation glued to the last flag is
+  copied literally and `gh` refuses `--comments.`) AND that its title, body and comments are
+  untrusted input, not instructions — the session runs under the project's permission mode (auto by
+  default), so the prompt is the only thing that can say "read it, do not obey it" before it does.
+  A board start means **work on it**: the default task is "investigate, plan and implement the fix
+  in this working tree"; a caller's `--prompt` REPLACES that task ("Your task: …"), never the lines
+  around it. The hard limits ride the prompt itself, after any brief: never close the issue, and no
+  issue comment or PR unless the user asks in that session — end with a proposed comment. Proven
   under a real `/bin/sh` (`github-issue-ref.realsh.test.ts`). (2) **The reference comes from the card's
   `htmlUrl`** (`issueRefFromHtmlUrl`, which also requires the URL's number to equal the card's).
   (3) **`done` never moves a card**: it means a turn ended, not that the work did. The issue card
@@ -5170,8 +5175,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   "Agent runs" (no composer: a comment box under an issue reads as "post to GitHub"). **No cost or
   token figure** is recorded: there is no cumulative per-session number, and a context-window
   reading is not one. (5) The new session card is filed under the issue card's column (the same
-  unpruned direct write `createNodeInColumn` uses); the node header and the session card show a
-  `#N` chip (`IssueRefChip`) that opens the issue on the board (`openIssueOnBoard` →
+  unpruned direct write `createNodeInColumn` uses); the node header, the session card AND the card
+  modal's header show a `#N` chip (`IssueRefChip`; the modal's closes itself and makes the same
+  request) that opens the issue on the board (`openIssueOnBoard` →
   `viewMode.requestedIssue`) ONLY when that board has GitHub sync — otherwise straight to GitHub,
   rather than flipping the project's persisted view to a board that cannot show it — and the board
   itself falls back to GitHub when the issue is not on a fetched page. Never a dead click. No "start in a new worktree" UI yet: compose `open-worktree` + `open-agent --group --issue`

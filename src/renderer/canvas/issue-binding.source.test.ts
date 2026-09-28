@@ -129,3 +129,17 @@ describe('Start with agent (issue card)', () => {
     expect(body).toContain('startIssueAgent(issue, aid, acct)')
   })
 })
+
+describe('the #N chip on all three surfaces of one node', () => {
+  it('the board wires it into the card modal, as it does into the session card', () => {
+    // Rendering the real card modal needs a live terminal; its chip is behaviour-tested in
+    // CardModal.test.tsx. What this pins is the WIRING: a modal handed no `onOpenIssue` draws no
+    // chip — which is exactly how the canvas and the board drifted apart the first time.
+    const kv = readFileSync(new URL('../components/kanban/KanbanView.tsx', import.meta.url), 'utf8')
+    const at = kv.indexOf('<CardModal')
+    const modal = kv.slice(at, kv.indexOf('/>', at))
+    expect(modal).toContain('onOpenIssue={(ref) => {')
+    expect(modal).toContain('handleOpenIssueRef(ref)')
+    expect(kv).toContain('onOpenIssue={handleOpenIssueRef}')
+  })
+})
