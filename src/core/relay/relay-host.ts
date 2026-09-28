@@ -65,6 +65,9 @@ export interface PeerAttach {
   /** Answer the peer's request. May REJECT (or throw): the host answers that request `E_HANDLER`
    *  and the session keeps serving — a failed dispatch never goes unanswered or unhandled. */
   dispatch(id: number, req: RpcRequest): Promise<RpcOk | RpcErr>
+  /** Deliver the peer's cast. Must NOT throw: the tunnel cast path and the teardown's board-log
+   *  unsubscribe replay call it unguarded (a cast has no reply channel — isolate and log inside,
+   *  as both platforms' `cast` already do). */
   cast(id: number, method: string, args: unknown[]): void
 }
 
@@ -77,8 +80,12 @@ export type AccessDecision = { allow: true; args?: unknown[] } | { allow: false;
  * A hook that THROWS never reaches the socket (a throw there escapes into the WebSocket's own
  * synchronous message emit, which then delivers nothing more and never closes: the peer hangs and
  * stays attached). Instead: `interceptReq` / `access` on a req → the request is answered
- * `E_HANDLER`; `access` on a cast → the cast is dropped; `narrowResponse` → `E_HANDLER`, never the
- * un-narrowed result; `wrapSink` → the session FAILS CLOSED (see `open`).
+ * `E_HANDLER`; `access` on a cast → the cast is dropped and logged; `narrowResponse` → `E_HANDLER`,
+ * never the un-narrowed result; `wrapSink` → the session FAILS CLOSED (see `open`).
+ *
+ * `access` FAILS CLOSED on a malformed answer too: anything but a well-formed `AccessDecision`
+ * (`undefined`, `null`, `{}`, non-array `args`, a refusal without a `message`) DENIES — `E_ROLE`
+ * for a req, dropped and logged for a cast. Only an ABSENT `access` hook means allow-all.
  */
 export interface RelayHostHooks {
   /** Answer a request here instead of dispatching it. `null` = not intercepted. */
@@ -135,11 +142,33 @@ export interface ConnectRelayHostOptions {
   onPeerPending(session: RelayHostSession): void
   /** Mutually approved: the peer is a CorePlatform client of this core now. */
   onOpen(session: RelayHostSession): void
-  /** The relay socket dropped (the peer is already torn down when this fires). */
+  /**
+   * The session ended without this shell asking: fires AT MOST ONCE, when the relay socket drops or
+   * when a throwing `wrapSink` fails the session closed. The peer is already torn down when it fires.
+   * `close()`, `deny()` and `killRelayHostsByPeerKey` NEVER fire it — their caller already knows.
+   */
   onClose(): void
 }
 
 const errorMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/** A well-formed `AccessDecision` — anything else from an `access` hook is a DENIAL (R12). */
+function isAccessDecision(d: unknown): d is AccessDecision {
+  if (typeof d !== 'object' || d === null) return false
+  const o = d as { allow?: unknown; args?: unknown; message?: unknown }
+  if (o.allow === true) return o.args === undefined || Array.isArray(o.args)
+  if (o.allow === false) return typeof o.message === 'string'
+  return false
+}
+
+/** The access hook's verdict: decided, threw, or answered something that is not a decision. */
+type AccessVerdict =
+  | { kind: 'decided'; decision: AccessDecision }
+  | { kind: 'threw'; err: unknown }
+  | { kind: 'malformed' }
+
+/** The refusal a req gets when the access hook's answer is not a decision (never its raw value). */
+const ACCESS_CHECK_FAILED = 'Access check failed.'
 
 /** Live bridged peers, for revocation: unpinning a key refuses the NEXT handshake, but the OPEN
  *  socket keeps full shell access until it is cut (see revocation.ts). */
@@ -286,6 +315,19 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
   const handlerError = (id: number, err: unknown): string =>
     JSON.stringify({ t: 'res', id, ok: false, error: { code: 'E_HANDLER', message: errorMessage(err) } })
 
+  /** Ask the access hook, and never let it throw or mis-answer its way into the socket: a throw is
+   *  `threw`, a malformed answer is `malformed` (both deny). Only an ABSENT hook allows all. */
+  const checkAccess = (kind: 'req' | 'cast', method: string, args: unknown[]): AccessVerdict => {
+    if (!opts.hooks?.access) return { kind: 'decided', decision: { allow: true } }
+    let answer: unknown
+    try {
+      answer = opts.hooks.access(session, kind, method, args)
+    } catch (err) {
+      return { kind: 'threw', err }
+    }
+    return isAccessDecision(answer) ? { kind: 'decided', decision: answer } : { kind: 'malformed' }
+  }
+
   /** Send the response `build` produces. If building or serialising it throws (a narrowResponse hook,
    *  an unserialisable result), answer `E_HANDLER` instead. Never throws: it runs inside a `.then`,
    *  where a throw would be an unhandled rejection and a request nobody ever answers. */
@@ -427,13 +469,17 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
           )
           return
         }
-        let decision: AccessDecision
-        try {
-          decision = opts.hooks?.access?.(session, 'req', m.method, m.args) ?? { allow: true as const }
-        } catch (err) {
-          socket.sendTunnelText(handlerError(m.id, err))
+        const verdict = checkAccess('req', m.method, m.args)
+        if (verdict.kind === 'threw') {
+          socket.sendTunnelText(handlerError(m.id, verdict.err))
           return
         }
+        if (verdict.kind === 'malformed') {
+          console.warn(`[relay-host] access returned a malformed decision on req ${m.method}; refused`)
+          socket.sendTunnelText(JSON.stringify({ t: 'res', id: m.id, ok: false, error: { code: 'E_ROLE', message: ACCESS_CHECK_FAILED } }))
+          return
+        }
+        const decision = verdict.decision
         if (!decision.allow) {
           socket.sendTunnelText(JSON.stringify({ t: 'res', id: m.id, ok: false, error: { code: 'E_ROLE', message: decision.message } }))
           return
@@ -466,12 +512,19 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
           (err) => socket.sendTunnelText(handlerError(m.id, err))
         )
       } else if (m.t === 'cast') {
-        let d: AccessDecision
-        try {
-          d = opts.hooks?.access?.(session, 'cast', m.method, m.args) ?? { allow: true as const }
-        } catch {
-          return // a cast has no reply channel: a policy that cannot decide drops it
+        // A cast has no reply channel: a policy that throws or cannot decide DROPS it — and says so,
+        // because a silently dropped pty:write swallows keystrokes with nothing in any log (the same
+        // reason both platforms log a throwing cast listener).
+        const verdict = checkAccess('cast', m.method, m.args)
+        if (verdict.kind === 'threw') {
+          console.warn(`[relay-host] access threw on cast ${m.method}:`, errorMessage(verdict.err))
+          return
         }
+        if (verdict.kind === 'malformed') {
+          console.warn(`[relay-host] access returned a malformed decision on cast ${m.method}; dropped`)
+          return
+        }
+        const d = verdict.decision
         if (!d.allow) return
         const args = d.args ?? m.args
         if (projectOutOfScope(m.method, args)) return
@@ -494,7 +547,11 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
       // res/ev from a peer are ignored (mirrors src/server/ws.ts).
     },
     onClose: () => {
-      // The peer is GONE — the same state a closed browser tab leaves the core in.
+      // The peer is GONE — the same state a closed browser tab leaves the core in. Mark the session
+      // closed FIRST: a gate whose pin write is still in flight will call open() later, and open()
+      // must then bail — never attach the peer to this dead socket, and never reach the wrapSink
+      // fail-closed path that would fire onClose a second time (R13).
+      closed = true
       live.delete(session)
       detach()
       opts.onClose()

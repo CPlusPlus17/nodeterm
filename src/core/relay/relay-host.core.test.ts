@@ -430,3 +430,105 @@ describe('core relay host — a throwing hook or dispatch never wedges the sessi
     expect(s.clientId()).toBeNull()
   })
 })
+
+describe('core relay host — review round 2 (cast logging, R12 malformed decisions, R13 late open)', () => {
+  it('a throwing access hook on a cast is LOGGED, never swallowed silently', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const t = open({
+        autoApprove: () => true,
+        hooks: { access: (_s, kind) => { if (kind === 'cast') throw new Error('nope'); return { allow: true } } }
+      }, true)
+      await vi.waitFor(() => expect(t.opened.length).toBe(2))
+      t.client.send(JSON.stringify({ t: 'cast', method: 'pty:write', args: ['s1', 'x'] }))
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith('[relay-host] access threw on cast pty:write:', 'nope'))
+      expect(t.fa.casts).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('R12: a malformed access decision DENIES — E_ROLE for a req, dropped for a cast; only an absent hook allows all', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const returns: Record<string, unknown> = {
+        undef: undefined, nul: null, empty: {}, badArgs: { allow: true, args: 'x' }, noMsg: { allow: false }
+      }
+      const t = open({
+        autoApprove: () => true,
+        hooks: {
+          access: (_s, _k, method) =>
+            (method in returns ? returns[method] : { allow: true }) as ReturnType<NonNullable<import('./relay-host').RelayHostHooks['access']>>
+        }
+      }, true)
+      await vi.waitFor(() => expect(t.opened.length).toBe(2))
+      const names = Object.keys(returns)
+      names.forEach((m, i) => t.client.send(JSON.stringify({ t: 'req', id: 100 + i, method: m, args: [] })))
+      for (const m of names) t.client.send(JSON.stringify({ t: 'cast', method: m, args: [] }))
+      // Positive controls, sent AFTER: once they arrive, every malformed frame had its turn.
+      t.client.send(JSON.stringify({ t: 'cast', method: 'fine', args: [] }))
+      t.client.send(JSON.stringify({ t: 'req', id: 200, method: 'fine', args: [] }))
+      await vi.waitFor(() => expect(t.frames.some((f) => JSON.parse(f).id === 200)).toBe(true))
+      const res = t.frames.map((f) => JSON.parse(f))
+      for (let i = 0; i < names.length; i++) {
+        expect(res.find((r) => r.id === 100 + i)).toMatchObject({
+          ok: false, error: { code: 'E_ROLE', message: 'Access check failed.' }
+        })
+      }
+      expect(t.fa.dispatched.map((r) => r.method)).toEqual(['fine'])
+      expect(t.fa.casts).toEqual([{ method: 'fine', args: [] }])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  /** A host whose pin write the test finishes by hand, so the peer can drop while it is in flight. */
+  function openWithDeferredPin(hooks?: Parameters<typeof connectRelayHost>[0]['hooks']) {
+    const hostKeys = genKeyPair()
+    const { hostT, peerT } = transportPair()
+    const fa = fakeAttach()
+    const counts = { hostOpened: 0, hostClosed: 0, records: 0 }
+    let finishPin!: () => void
+    const host = connectRelayHost({
+      url: 'ws://127.0.0.1/x', token: 't', ourKeys: hostKeys, attach: fa.attach, transport: hostT,
+      autoApprove: () => true, hooks,
+      pins: { record: () => { counts.records++; return new Promise<void>((r) => { finishPin = r }) } },
+      onPeerPending: () => {}, onOpen: () => counts.hostOpened++, onClose: () => counts.hostClosed++
+    })
+    const client = connectRelayClient({
+      url: 'ws://127.0.0.1/x', token: 't', hostKeyB64: publicKeyToB64(hostKeys.publicKey), ourKeys: genKeyPair(),
+      transport: peerT, autoApprove: true, onSas: () => {}, onApproved: () => {}, onFrame: () => {},
+      onPtyData: () => {}, onClose: () => {}
+    })
+    return { host, client, fa, counts, finishPin: () => finishPin() }
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 20))
+
+  it('R13(a): a peer that drops during the pin write fires onClose ONCE, even when wrapSink then throws', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const t = openWithDeferredPin({ wrapSink: () => { throw new Error('filter exploded') } })
+      await vi.waitFor(() => expect(t.counts.records).toBe(1)) // both confirmed; the pin write is in flight
+      t.client.close() // the peer drops
+      expect(t.counts.hostClosed).toBe(1)
+      t.finishPin() // the pin write lands AFTER the drop
+      await settle()
+      expect(t.counts.hostClosed).toBe(1) // no late second fire from the wrapSink fail-closed path
+      expect(t.counts.hostOpened).toBe(0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('R13(b): a peer that drops during the pin write is never attached to the dead socket', async () => {
+    const t = openWithDeferredPin()
+    await vi.waitFor(() => expect(t.counts.records).toBe(1))
+    t.client.close()
+    t.finishPin()
+    await settle()
+    expect(t.fa.sinks.size).toBe(0) // nothing attached (and so nothing leaks: detach already ran)
+    expect(t.counts.hostOpened).toBe(0)
+    expect(t.host.clientId()).toBeNull()
+    expect(t.counts.hostClosed).toBe(1)
+  })
+})
