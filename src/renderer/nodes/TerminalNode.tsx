@@ -1992,6 +1992,9 @@ export function TerminalNode({
   const observedLaunchDelivery = useLaunchDelivery((s) => s.byId[id])
   const launchDelivery = observedLaunchDelivery ?? (pendingLaunch?.manualOnly
     ? { kind: 'failed' as const, attempts: 1, at: 0 } : undefined)
+  // A headless start (#925) is typing this node's launch from core: the badge says so, without the
+  // warning, and ▶ stands aside — a click would splice a second copy into the pane.
+  const startingNow = launchDelivery?.kind === 'starting'
   // A node's own first-open launch is in flight: the live `initialCommand` alias is still set
   // (it is cleared on every outcome) and nothing holds it. Its `pendingLaunch` is only the durable
   // write-ahead record — and it carries `manualOnly` from the claim until Enter lands — so showing
@@ -5745,16 +5748,16 @@ export function TerminalNode({
         {pendingLaunch && !firstOpenInFlight && (
           <span
             className={`term-node__status term-node__status--queued nodrag${
-              launchDelivery ? ' term-node__status--queued-warn' : ''
+              launchDelivery && !startingNow ? ' term-node__status--queued-warn' : ''
             }`}
             title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay')}
           >
             <span className="term-node__status-dot" />
-            {launchDelivery ? '⚠ ' : ''}QUEUED
+            {startingNow ? 'STARTING' : `${launchDelivery ? '⚠ ' : ''}QUEUED`}
             <button
               className="term-node__queued-run"
-              disabled={session.source === 'relay'}
-              title={session.source === 'relay' ? "Open the host to run this command" : pendingLaunch.manualOnly ? "Retry launch at a shell prompt" : "Run now without waiting"}
+              disabled={session.source === 'relay' || startingNow}
+              title={session.source === 'relay' ? "Open the host to run this command" : startingNow ? "Starting in the background" : pendingLaunch.manualOnly ? "Retry launch at a shell prompt" : "Run now without waiting"}
               onClick={(e) => {
                 e.stopPropagation()
                 // Disarm only on a delivery that actually landed. Dropping `pendingLaunch`

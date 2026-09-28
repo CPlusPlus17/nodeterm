@@ -449,3 +449,13 @@ it('lists held, failed and unconfirmed launches without claiming an agent is hea
   expect(text).toContain('errored [terminal]  — LAST TURN ERRORED')
   expect(text).not.toContain('RUNNING')
 })
+
+it('lists a background start as STARTING, not as the failed launch its manualOnly claim would read as (#925)', () => {
+  const rows = storedNodeListing(
+    [{ id: 'bg', pendingLaunch: { command: 'claude', attempted: true, manualOnly: true } }],
+    {},
+    { bg: { kind: 'starting', since: 1 } }
+  )
+  expect(rows[0].launchState).toBe('starting')
+  expect(controlListingText(rows)).toBe('bg [terminal]  — STARTING')
+})

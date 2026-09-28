@@ -483,6 +483,7 @@ import {
 } from '../session/relay-tab'
 import { buildContextLinkNote, buildNotePushMessage, classifyLink, hiddenLinkIds, linkIdsCoveredByRopes, pairKey, planBridges, type LinkEndpoint } from '../lib/noteLink'
 import {
+  deliveriesToRetire,
   launchesToFire,
   queueControlLaunch,
   LAUNCH_STALL_MS,
@@ -1967,13 +1968,12 @@ export function Canvas() {
     ).filter((f) => !launchInFlight.current.has(f.id))
     // Anything we were reporting on that is no longer an armed node — delivered, run by hand with
     // ▶, or deleted — stops being reported. Timers go with it: a stall warning for a node that has
-    // already started is a lie with a countdown on it.
+    // already started is a lie with a countdown on it. A headless start in flight is spared: its
+    // node lives in ANOTHER project by design, and its orchestrator settles it (#925).
     const delivery = useLaunchDelivery.getState()
-    for (const id of Object.keys(delivery.byId)) {
-      if (!nodes.some((n) => n.id === id && n.data.pendingLaunch)) {
-        delivery.clear(id)
-        clearStallTimer(id)
-      }
+    for (const id of deliveriesToRetire(delivery.byId, (id) => nodes.some((n) => n.id === id && n.data.pendingLaunch))) {
+      delivery.clear(id)
+      clearStallTimer(id)
     }
     for (const f of ready) {
       // THE gate this whole loop turns on. Every dependency is satisfied, but that says nothing
