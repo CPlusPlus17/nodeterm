@@ -1738,8 +1738,10 @@ else, and its context links must keep classifying across restarts).
   `PERMISSION_MODE_CAPABLE`, `MODEL_SWITCH_CAPABLE`, with helpers (`hasHooks`,
   `canBranch`, `canContextLink`, `canChat`, `canRename`, `canReadTitle`, `hasPermissionMode`, …).
   Branch stays **Claude-only** purely by being in only `BRANCH_CAPABLE`. The ⌘M **ChatPanel**
-  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok** since 2026-09: grok's
-  `chat_history.jsonl` gets its own reader, and `chat:read-transcript` routes by agent. That list had
+  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok + gemini + codex + copilot +
+  opencode** since 2026-09: grok's `chat_history.jsonl`, gemini's session file, codex's rollout,
+  copilot's `events.jsonl` and opencode's `opencode export` document each get their own reader, and
+  `chat:read-transcript` routes by agent. That list had
   to be SPLIT to do it — `CHAT_CAPABLE` carried two facts that coincided while claude was its only
   member ("we can render this" and "claude's resolver can locate and parse this file"), and the
   second now lives in `CLAUDE_TRANSCRIPT_READABLE` (claude only). Merging them back is a
@@ -1815,6 +1817,39 @@ else, and its context links must keep classifying across restarts).
   harmful. The `auto` permission-mode **version gate is claude's alone** (it is fed by a `claude
   --version` probe), and grok's mode flag must go **BEFORE** its `--` separator, which is
   end-of-options. Full picture, dialect traps and the device checklist: **`docs/grok-agent.md`**.
+- **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads
+  `chat_history.jsonl` into claude's `ChatMessage`/`ChatPart` shapes (no new wire field): typed
+  prompts, assistant text, tool calls (`arg` = the salient argument — `command`, `target_file`, …, in
+  claude's `toolArg` order — else the raw JSON, 200 units) with results summarised like claude's,
+  `web_search` backend calls, harness-injected `synthetic_reason` lines as assistant-side `[reason]`
+  notes, and `model_id`/`reasoning_effort` of the NEWEST assistant record (never carried forward).
+  `reasoning` is hidden. It does NOT page: measured on 1.0.13, the file is rewritten via
+  `.sync.tmp` + rename and `/compact`/`/rewind`/history repair replace lines, so it is one capped
+  whole-file read with no keys and no `at`. Routing is by `capabilityAgentId`, so a custom agent built
+  on grok reaches grok's reader, never claude's cwd fallback. **A remote (SSH) grok node is read on its
+  host** (`core/remote-grok-chat.ts`, one `sh -c` round trip: `$GROK_HOME` if absolute else
+  `$HOME/.grok`, the session found by id across `sessions/*/<id>/`, two matches refused, the
+  paged-transcript window at 5 MiB) — its failures are terminal, never this machine's disk (the
+  hook-derived local map names a wrong-machine path for these nodes). The phone gets it for free:
+  `chat.page` reads through the same deps. Golden fixtures + exact rules for the Swift port:
+  `src/shared/chat-fixtures/grok/`. Not supported: the composer's model/effort labels (grok's `/model`
+  and `/effort` pickers are unmeasured — the TUI needed a login here), plan/question answer cards
+  (claude-only), pre-compaction history, and a local session whose map entry `SessionEnd` retired.
+- **Copilot ⌘M chat view** (`core/copilot-chat.ts`, 2026-09; copilot 1.0.88 measured in BYOK mode
+  against a local fake model, plus the CLI's own `schemas/session-events.schema.json`). Reads
+  `<COPILOT_HOME>/session-state/<id>/events.jsonl` (then the snap package's
+  `~/snap/copilot-cli/common/.copilot`), located STRICTLY by the node's session id and routed by
+  `capabilityAgentId` before anything claude-shaped, so a missing journal is "not found", never
+  claude's cwd-newest or another session. The journal is append-only JSONL (compaction appends), so it
+  PAGES like claude's — `parseChatWindow`/`parseGrowingWindow` take copilot's record parser — and the
+  phone gets the same pages over the relay (`page()` gates only on `canChat`). Shown: typed prompts
+  (`content`, never `transformedContent`; the sources copilot's own timeline hides stay hidden),
+  assistant text, tool calls with results (`Error: …` on failure), a user's `!` shell command as the
+  `!` part, `Error:`/`Warning:`/`Info:` notices, and `model`. Never shown: the system prompt,
+  reasoning, sub-agent events (envelope `agentId` / `data.agentId` / `data.parentToolCallId`). Not
+  supported: remote (SSH) nodes (`unreadable`, "not supported yet" — never this machine's disk),
+  `effort` (not recorded), plan/question answer cards (claude-only), composer model labels (claude's
+  picker commands only). Golden fixtures: `src/shared/chat-fixtures/copilot/` (README "Copilot").
 - **Antigravity** (`agy` 1.2.3 measured on Windows; the 1.2.12 Linux binary read; builtin since
   2026-09 — Google's replacement for Gemini CLI on personal accounts) — in `AGENT_HOOK_TARGETS`
   (badge, NEEDS YOU from `ask_question`, a closed set of one, `--after` and triggers) and
@@ -1885,7 +1920,58 @@ else, and its context links must keep classifying across restarts).
   wrong guess, so none ships, not even unwired. The capture recipe is §7.1 and §8.1 of the doc, using
   `scripts/agy-transcript-shape.mjs`, which dumps shapes and never text. When it lands: locate
   strictly by id (`brain/` holds every conversation on the machine), and have a remote node answer
-  `remoteOnly` → unreadable like grok.
+  `remoteOnly` → unreadable like gemini.
+- **Codex in the ⌘M chat view** (2026-09-28; the desktop panel, the kanban card modal, the phone's
+  `chat.page`). `core/codex-chat.ts` reads the rollout with codex's own rules, never claude's
+  resolver. It takes USER text from the UI stream only: `event_msg/user_message` (legacy, ≤ 0.146) or
+  an `item_completed` `UserMessage` (paginated, ≥ 0.151). Model-side `role:user` messages also carry
+  injected context (AGENTS.md, `<environment_context>`, image wrappers), so they are never read.
+  Assistant text and tools come from `response_item`, correlated by `call_id`. The UI copies
+  (`agent_message`, `AgentMessage`) and reasoning are skipped. Failed and interrupted turns become
+  `[error] …` / `[turn aborted…]` notes. A tool result drops codex's `… Output:` preamble. The rollout
+  is append-only, so it pages by byte offset like claude. The locator matches a WHOLE-uuid thread id
+  (`CODEX_THREAD_ID_RE`), because a uuid's last group passes `SESSION_ID_RE` and suffix-matches
+  another thread's file. It searches only the node's own account home, and uses the codex tail's hook
+  path only as a checked hint. An SSH node is read on its host (`main/remote-codex-chat-page.ts`,
+  through the same resolvers as its remote meter) or not at all. Because codex announces no session
+  end, a chat send first asks the kernel (`renderer/lib/chatPaneGate.ts`, `isAgentPane`). After a
+  `/quit` the store still reads `done`, and the message would otherwise run in the shell. **Not
+  supported:** images in prompts, reasoning summaries, the composer's model/effort labels (the
+  `/model` picker is measured for claude only), plan/question answer cards (codex never sets
+  `held`), and a closed REMOTE session's transcript. Record rules and fixtures:
+  `src/shared/chat-fixtures/codex/`.
+- **opencode in the ⌘M chat view** (2026-09-28, opencode 1.18.25 measured) — opencode has NO
+  transcript file (SQLite since 1.18; that database also holds its account tokens and is never
+  opened), so `readChatTranscript` routes `capabilityAgentId(agentId) === 'opencode'` to
+  `core/opencode-chat.ts`, which runs `opencode export <sessionId>` (argv only, no flag an older
+  yargs-strict CLI might refuse) and parses the one JSON document into claude's `ChatMessage` shape:
+  user/assistant text, tool chips (arg by an opencode key order, result = 3 lines / 500 units,
+  `Error: …` on a failed call), `[name] message` for an errored turn, compaction/subtask chips,
+  `at` from `time.created`, `model`/`effort` from the newest assistant's `modelID`/`variant`.
+  Reasoning, `synthetic`/`ignored` text, file/agent parts and step bookkeeping are dropped;
+  unmappable shapes are skipped and counted. **One page, always** (`olderCursor: null`): there are
+  no byte offsets to page by. The page honours the caller's `maxBytes` (the phone asks 256 KB),
+  grows ×4 up to 5 MB like claude's reader when it holds no whole message, and shows a newest
+  message larger than 5 MB TRUNCATED (with a note) rather than as an empty conversation. Refusals: no/unsafe session id runs
+  nothing (a bare `opencode export` opens a picker over the NEWEST sessions — someone else's); an
+  export whose `info.id` is another session is `unreadable`; only `Session not found: <id>` with
+  exit 1 and empty stdout is a clean miss. **Remote (SSH) nodes are refused** (`unreadable`, no
+  export runs) — their sessions are in the host's database and there is no remote leg yet; the
+  panel's copy names both causes an opencode `unreadable` can have. One export costs 1.0–1.7 s and
+  ~320 MB, so `createOpencodeExportGate` runs at most one per session (a caller arriving mid-run
+  gets a FRESH export) and two in total; the panel's hook-driven refreshes are marked
+  `page.background` and spaced ≥ 5 s per session, while an open / ↻ / Retry is immediate (and wakes
+  a sleeping background one). A **change gate** in front of it `stat`s (never opens) opencode's
+  `opencode*.db` + `-wal` in `$XDG_DATA_HOME/opencode` (else `~/.local/share/opencode`, opencode's
+  own xdg-basedir rule) BEFORE exporting, and an unchanged fingerprint answers from a 4-session LRU
+  of parsed exports; no db file found, or `OPENCODE_DB` set, means no caching. The export runs with
+  `cwd: os.tmpdir()` (from a repo cwd opencode writes `<repo>/.git/opencode`; sessions resolve by
+  global id). **It inherits the APP's `process.env`, not the node's shell env**: a user who
+  relocates opencode's data via `XDG_DATA_HOME` / `OPENCODE_*` only in their shell rc gets
+  "Session not found" — an honest miss, not a bug in the reader. Plan/question answer
+  cards stay claude-only (no `body`/`questions` on opencode's `question` tool). Desktop and Server
+  Edition both serve it (core handler); the phone gets it over the relay `chat.page` for free.
+  Fixtures + the exact rules for the iOS port: `src/shared/chat-fixtures/opencode/README.md`.
 - **Gemini + codex parity** (2026-08-09) — brought both up to grok's level in the lists above. Unlike
   grok, **both CLIs are installed** and gemini **ships its own hook reference**
   (`/usr/lib/node_modules/@google/gemini-cli/bundle/docs/hooks/reference.md`), so almost every fact is
@@ -2580,8 +2666,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the same deps and the same distinction. Before this, a mounted SSH node whose locate missed (or
   whose master was down) read THIS machine's resolver, cwd-newest fallback included. `transcriptExists` shares the same locate
   (`remotePresenceFromLocate`: ref/absent/unreadable → present/absent/unknown, a malformed id
-  `unknown`), so it also works for a node with no live pty. A remote grok node (no remote reader)
-  shows "not supported yet", not the retryable error. (2) **The cwd fallback keeps `accountId`** in BOTH
+  `unknown`), so it also works for a node with no live pty. A remote grok node is read on its host
+  by its own leg (`readRemoteGrok`, see the grok chat bullet), with the same absent/unreadable split. (2) **The cwd fallback keeps `accountId`** in BOTH
   `resolveTranscript` and `contextEnsure`; without it a managed-account node fell back to the
   system root and could adopt an unrelated session's newest transcript. (3) **Relay tabs** stay
   local-only (a transcript read over the relay would read the GUEST's disk) and reject with
@@ -2620,7 +2706,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   trip, dd status inside the base64 like the context-tail's window command) instead of pulling the
   5 MB tail on every open and every turn-end reload; its `{ok:false}` is terminal (never the local
   disk), and it is tested under a real `/bin/sh` (`transcript-page.realsh.test.ts`). **Grok does not
-  page**: a paged request gets its whole capped read with `olderCursor: null` and no keys.
+  page** (its file is rewritten in place, so offsets are no identity): a paged request gets its whole
+  capped read with `olderCursor: null`, no keys, and the newest record's `model`/`effort`.
   Server Edition passes `page` through ws-bridge to the same core handler; relay still refuses.
   **ChatPanel consumes it progressively** (pure state in `renderer/lib/chatPaging.ts`): the first
   read is a 256 KB tail (`CHAT_TAIL_PAGE_BYTES`, with a "Loading conversation…" row), older 512 KB

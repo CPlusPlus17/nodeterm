@@ -1,6 +1,6 @@
 import { createRemoteContextEnsure } from '../core/remote-context-ensure'
 import { isKnownRemoteCodexAccount } from '../core/remote-ssh/codex-home'
-import { createRemoteCodexContext } from '../core/remote-ssh/codex-context'
+import { createRemoteCodexContext, type RemoteCodexContextTarget } from '../core/remote-ssh/codex-context'
 import { subagentReplay } from '../core/subagent-replay'
 import { grokHomeDir, grokSessionDir, grokSessionsDir } from '../core/agents/grok-paths'
 import { join, resolve, posix } from 'path'
@@ -232,6 +232,7 @@ import {
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
 import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
+import { createReadRemoteGrokChat } from '../core/remote-grok-chat'
 import { createHostChat, mirrorChatSendRefusal } from './remote/host-chat'
 import type { ChatSendOutcome, HostChatReply, RendererChatStatus } from '../shared/mobile-chat'
 import {
@@ -244,6 +245,7 @@ import {
   type RemoteRefLookup,
   type RemoteTranscriptRefCache
 } from './remote-transcript-page'
+import { createReadRemoteCodexPage } from './remote-codex-chat-page'
 import { createRemoteContextTail } from './remote-context-tail'
 import { createRemoteSubagentTail } from './remote-subagent-tail'
 import { RemoteFile, type RemoteFileRef } from './remote-ssh/remote-file'
@@ -2444,23 +2446,30 @@ app.whenReady().then(async () => {
     if (scoped) pushContextUpdate(scoped)
   }, remoteFile, { parse: codexContextParse, parseModel: codexContextModel })
   // Persisted SSH ownership remains remote while the master is down or before PTY co-attach.
-  const remoteCodexContext = createRemoteCodexContext({
-    targetFor: (nodeId) => {
-      const projectId = workspaceStore.sshProjectIdForNode(nodeId)
-      const live = ptyManager.sshRemoteForNode(nodeId)
-      if (!projectId && !live) return undefined
-      const rt = live ?? (projectId ? sshProjectManager?.refForProject(projectId) : undefined)
-      const node = workspaceStore.getNode(nodeId)
-      if (!rt || !node) return null
-      return { conn: rt.conn, controlPath: rt.controlPath,
-        remoteHome: sshProjectManager?.remoteHomeForControlPath(rt.controlPath), accountId: node.accountId,
-        connectionKey: sshProjectManager?.connectionKeyForControlPath(rt.controlPath) }
-    },
-    knownAccount: (id, target) => isKnownRemoteCodexAccount(
-      settingsStore.get().codexAccounts ?? [], id, sshHostKey(target.conn)),
-    run: (target, command) => sshProjectManager
+  // Named (not inline) because the codex ⌘M reader (`readRemoteCodexPage` below) resolves a node's
+  // host, account and master through the SAME three functions: the meter and the chat can never
+  // disagree about where a codex node's rollout lives.
+  const remoteCodexTargetFor = (nodeId: string): RemoteCodexContextTarget | null | undefined => {
+    const projectId = workspaceStore.sshProjectIdForNode(nodeId)
+    const live = ptyManager.sshRemoteForNode(nodeId)
+    if (!projectId && !live) return undefined
+    const rt = live ?? (projectId ? sshProjectManager?.refForProject(projectId) : undefined)
+    const node = workspaceStore.getNode(nodeId)
+    if (!rt || !node) return null
+    return { conn: rt.conn, controlPath: rt.controlPath,
+      remoteHome: sshProjectManager?.remoteHomeForControlPath(rt.controlPath), accountId: node.accountId,
+      connectionKey: sshProjectManager?.connectionKeyForControlPath(rt.controlPath) }
+  }
+  const knownRemoteCodexAccount = (id: string, target: RemoteCodexContextTarget): boolean =>
+    isKnownRemoteCodexAccount(settingsStore.get().codexAccounts ?? [], id, sshHostKey(target.conn))
+  const runRemoteCodex = (target: RemoteCodexContextTarget, command: string): Promise<{ code: number; stdout: string }> =>
+    sshProjectManager
       ? sshProjectManager.sshRun(childArgs(target.conn, target.controlPath, command))
-      : Promise.resolve({ code: 1, stdout: '' }),
+      : Promise.resolve({ code: 1, stdout: '' })
+  const remoteCodexContext = createRemoteCodexContext({
+    targetFor: remoteCodexTargetFor,
+    knownAccount: knownRemoteCodexAccount,
+    run: runRemoteCodex,
     tail: remoteCodexContextTail,
     onTrack: (nodeId, sessionId) => { nodeContextSession.set(nodeId, sessionId) },
     onClear: (nodeId, sessionId) => {
@@ -2663,11 +2672,33 @@ app.whenReady().then(async () => {
       refFor: (q) => locateRemoteRef(q, sshTargetForNode),
       readPage: (ref, before, maxBytes) => remoteFile.readTranscriptPage(ref, before, maxBytes)
     }),
+    // CODEX's own two legs (`readChatTranscript` routes a codex node here, never through claude's
+    // `pathFor` / `readRemotePage` above): the hint its context tail learned from a hook, and the
+    // remote page — located on the host through the same resolvers as its remote context meter.
+    codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId),
+    readRemoteCodexPage: createReadRemoteCodexPage({
+      targetFor: remoteCodexTargetFor,
+      knownAccount: knownRemoteCodexAccount,
+      run: runRemoteCodex,
+      readPage: (ref, before, maxBytes) => remoteFile.readTranscriptPage(ref, before, maxBytes)
+    }),
     remoteExists: async ({ sessionId, accountId, nodeId }) =>
       sessionId ? await remoteTranscriptPresence(sessionId, accountId, nodeId) : null,
     // Remoteness from THIS shell's records (live pty or SSH project), so every read channel refuses
     // to answer a remote node from this machine's disk — ⌘M, the find-bar index, presence.
-    isRemoteNode: isRemoteTranscriptNode
+    isRemoteNode: isRemoteTranscriptNode,
+    // A remote GROK node's conversation, read on its host by session id (grok's file lives under the
+    // host's $GROK_HOME, and the hook-derived local map names a path on the wrong machine). Same
+    // remoteness and same master resolution as the claude legs above; the phone's `chat.page` reads
+    // through this object too.
+    readRemoteGrok: createReadRemoteGrokChat({
+      isRemote: isRemoteTranscriptNode,
+      target: sshTargetForNode,
+      run: (rt, cmd) =>
+        sshProjectManager
+          ? sshProjectManager.sshRun(childArgs(rt.conn, rt.controlPath, cmd))
+          : Promise.resolve({ code: 1, stdout: '' })
+    })
   }
   registerTranscriptIpc(transcriptIpcDeps)
 

@@ -551,7 +551,8 @@ describe('capabilities', () => {
 
   it('gemini\'s reader is local-only, so an unreadable read of it can only mean "remote"', () => {
     expect(chatReadsLocalOnly('gemini')).toBe(true)
-    expect(chatReadsLocalOnly('grok')).toBe(true)
+    // grok reads a remote node on the host (core/remote-grok-chat.ts), so it is NOT local-only.
+    expect(chatReadsLocalOnly('grok')).toBe(false)
     expect(chatReadsLocalOnly('claude')).toBe(false)
   })
 })
