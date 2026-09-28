@@ -10494,6 +10494,55 @@ button.group-node__setup:disabled {
 .kanban-col__close:hover {
   color: var(--danger);
 }
+/* Lifecycle category marker (@shared/kanban-category): a quiet word beside the title, never a
+   second colour language — the column's own dot already carries its identity. */
+.kanban-col__category {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(var(--tint-rgb), 0.5);
+  border: 1px solid rgba(var(--tint-rgb), 0.14);
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.kanban-col__menu {
+  background: none;
+  border: none;
+  color: rgba(var(--tint-rgb), 0.35);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.kanban-col__menu:hover {
+  color: var(--text-strong);
+}
+/* Board progress (cards in done+closed columns over every card) in the title strip. */
+.kanban-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  font-size: 11px;
+  color: rgba(var(--tint-rgb), 0.55);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.kanban-progress__bar {
+  width: 56px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(var(--tint-rgb), 0.1);
+  overflow: hidden;
+}
+.kanban-progress__fill {
+  display: block;
+  height: 100%;
+  background: var(--state-success);
+}
 .kanban-col__swatches {
   display: flex;
   gap: 6px;

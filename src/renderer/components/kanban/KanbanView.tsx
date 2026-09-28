@@ -1,5 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { KanbanLabel, ProjectKanban } from '@shared/types'
+import type { KanbanColumnCategory, KanbanLabel, ProjectKanban } from '@shared/types'
+import {
+  boardProgress, categoryChangeImpact, categoryChangeMessage, columnCategory
+} from '@shared/kanban-category'
+import { useKanbanDisplay } from '../../state/kanbanDisplay'
 import type { NodeIcon } from '@shared/node-icon'
 import { AGENT_CONFIG, BUILTIN_AGENT_IDS, type AgentId } from '@shared/agents/config'
 import { useViewMode } from '../../state/viewMode'
@@ -9,7 +13,7 @@ import { useBoardWallpaperStyle } from '../../state/wallpaper'
 import {
   addColumn, assignNode, assignedTo, boardLabels, cardMatchesLabelFilter, cardMeta, columnForNode,
   deleteColumn, labelsForCard, moveColumn,
-  nextColumnColor, pruneAssignments, recolorColumn, renameColumn, unassigned
+  nextColumnColor, pruneAssignments, recolorColumn, renameColumn, setColumnCategory, unassigned
 } from '../../lib/kanban'
 import { markCanvasCovered } from '../../lib/canvasCovered'
 import { labelSwatch } from '../../lib/kanbanLabelColors'
@@ -169,6 +173,13 @@ export const KanbanView = memo(function KanbanView({
   const projectId = useProjects((s) => s.activeProjectId)
   const projectName = useProjects((s) => s.projects.find((p) => p.id === s.activeProjectId)?.name)
   const projectColor = useProjects((s) => s.projects.find((p) => p.id === s.activeProjectId)?.color)
+  // Per-user display: whether `closed` columns are on screen (localStorage, never the board).
+  const showClosed = useKanbanDisplay((s) => s.byProject[projectId]?.showClosed === true)
+  const setShowClosed = useKanbanDisplay((s) => s.setShowClosed)
+  // A category change that would re-mean cards waits here for an explicit confirmation.
+  const [pendingCategory, setPendingCategory] = useState<
+    { columnId: string; category: KanbanColumnCategory | undefined; message: string } | null
+  >(null)
   const github = useGitHubIssues((state) => state.projects[projectId])
   const githubReadOnly = Object.values(github?.pages ?? {}).some((page) => page.readOnly)
   // Pull requests are evicted first when a repository outgrows the cache bounds, so the lane can
@@ -391,6 +402,18 @@ export const KanbanView = memo(function KanbanView({
     }
   }, [board, byId, sessionIds, activeLocalFilter])
 
+  // Lifecycle: the board's progress (null when no column says what "complete" means) and the
+  // columns this user sees — `closed` ones only when they asked for them.
+  const progress = useMemo(() => boardProgress(board, sessionIds), [board, sessionIds])
+  const closedCount = useMemo(
+    () => board.columns.filter((c) => columnCategory(c) === 'closed').length,
+    [board.columns]
+  )
+  const shownColumns = useMemo(
+    () => (showClosed ? board.columns : board.columns.filter((c) => columnCategory(c) !== 'closed')),
+    [board.columns, showClosed]
+  )
+
   // Stable column/card plumbing — every handler the memoized columns receive is identity-stable
   // across renders (the column binds its own id; cards bind theirs).
   const handleCardDragStart = useCallback((id: string) => {
@@ -420,6 +443,21 @@ export const KanbanView = memo(function KanbanView({
   const handleDeleteColumn = useCallback(
     (columnId: string) => commit(deleteColumn(board, columnId)),
     [board, commit]
+  )
+  // A category is a claim about every card in the column, so a change that would re-mean cards is
+  // never applied silently: an empty column changes at once, a populated one asks first.
+  const handleSetCategory = useCallback(
+    (columnId: string, category: KanbanColumnCategory | undefined) => {
+      const impact = categoryChangeImpact(board, columnId, category, sessionIds)
+      if (!impact) {
+        const next = setColumnCategory(board, columnId, category)
+        if (next !== board) commit(next)
+        return
+      }
+      const title = board.columns.find((c) => c.id === columnId)?.title ?? 'this column'
+      setPendingCategory({ columnId, category, message: categoryChangeMessage(title, impact, !showClosed) })
+    },
+    [board, commit, sessionIds, showClosed]
   )
   const handleMoveGitHub = requestGitHubMove
   const githubPage = useCallback((columnId: string | null) =>
@@ -563,6 +601,30 @@ export const KanbanView = memo(function KanbanView({
       <div className="kanban-header">
         <span className="kanban-header__dot" style={{ background: projectColor }} />
         <span className="kanban-header__name">{projectName}</span>
+        {progress && (
+          <span
+            className="kanban-progress"
+            title="Cards in Done and Closed columns, out of every card on the board"
+          >
+            <span className="kanban-progress__bar">
+              <span
+                className="kanban-progress__fill"
+                style={{ width: `${Math.round((progress.complete / progress.total) * 100)}%` }}
+              />
+            </span>
+            {progress.complete}/{progress.total} done
+          </span>
+        )}
+        {closedCount > 0 && (
+          <button
+            className={`kanban-filter-btn kanban-closed-toggle${showClosed ? ' kanban-filter-btn--on' : ''}`}
+            title={showClosed ? 'Hide closed columns' : 'Show closed columns'}
+            aria-pressed={showClosed}
+            onClick={() => setShowClosed(projectId, !showClosed)}
+          >
+            {showClosed ? 'Hide closed' : `Show closed · ${closedCount}`}
+          </button>
+        )}
         {board.github && <KanbanSourceFilter value={source} onChange={setSource} />}
         {board.github && github?.loading && <span className="kanban-github-status">Loading GitHub issues…</span>}
         {board.github && github?.error && (
@@ -645,7 +707,7 @@ export const KanbanView = memo(function KanbanView({
             onDragEnd={handleDragEnd}
             onDropOnColumn={dropOnColumn}
           />
-          {board.columns.map((col) => (
+          {shownColumns.map((col) => (
             <KanbanColumn
               key={col.id}
               column={col}
@@ -653,6 +715,7 @@ export const KanbanView = memo(function KanbanView({
               onRename={handleRenameColumn}
               onRecolor={handleRecolorColumn}
               onDelete={handleDeleteColumn}
+              onSetCategory={handleSetCategory}
               createOptions={createOptions}
               onCreate={onCreateNode}
               onColumnDragStart={handleColumnDragStart}
@@ -704,6 +767,19 @@ export const KanbanView = memo(function KanbanView({
           status={github?.issueStatus[modalIssue.item.number]}
           onMove={(columnId) => handleMoveGitHub(modalIssue.item, columnId)}
           onClose={() => setModalIssue(null)}
+        />
+      )}
+      {pendingCategory && (
+        <ConfirmDialog
+          message={pendingCategory.message}
+          confirmLabel="Change category"
+          onCancel={() => setPendingCategory(null)}
+          onConfirm={() => {
+            const { columnId, category } = pendingCategory
+            setPendingCategory(null)
+            const next = setColumnCategory(board, columnId, category)
+            if (next !== board) commit(next)
+          }}
         />
       )}
       {pendingGitHubMove && (

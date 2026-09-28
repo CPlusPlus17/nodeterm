@@ -233,6 +233,18 @@ describe('inline (cwd-less) project kanban shape guard', () => {
     const loaded = await new WorkspaceStore().load()
     expect(loaded.projects[0].kanban).toEqual(board)
   })
+
+  it('sanitizes an inline board like a file one (the inline branch bypasses fileToProject)', async () => {
+    await writeInlineIndex({
+      columns: [null, { id: 'kcol-a', title: 'To Do', color: '#0a84ff', category: 5 }],
+      assignments: [{ nodeId: 3 }]
+    })
+    const loaded = await new WorkspaceStore().load()
+    expect(loaded.projects[0].kanban).toEqual({
+      columns: [{ id: 'kcol-a', title: 'To Do', color: '#0a84ff' }],
+      assignments: []
+    })
+  })
 })
 
 describe('one-time exec migration (pre-existing project files)', () => {

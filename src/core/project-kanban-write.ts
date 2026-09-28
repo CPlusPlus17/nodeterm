@@ -13,7 +13,7 @@
 // parse must never be invented or overwritten), or a request that is already satisfied (a board that
 // exists, a card already in that column) — a retry must not churn `rev`.
 
-import { DEFAULT_BOARD_COLUMNS, makeColumnId } from '../shared/kanban-default-board'
+import { defaultBoardColumns, makeColumnId } from '../shared/kanban-default-board'
 import {
   KANBAN_LABEL_COLORS,
   boardLabels,
@@ -73,7 +73,7 @@ export function ensureProjectBoard(raw: string, now: Date, mintId = makeColumnId
   const board = boardOf(root)
   if (!board) return null
   if (columnsOf(board).length > 0) return null
-  board.columns = DEFAULT_BOARD_COLUMNS.map((c) => ({ id: mintId(), title: c.title, color: c.color }))
+  board.columns = defaultBoardColumns(mintId)
   if (!Array.isArray(board.assignments)) board.assignments = []
   root.kanban = board
   return bumped(root, now)
@@ -255,7 +255,7 @@ export function editProjectCardLabels(
 
   const next = k as unknown as Record<string, unknown>
   if (columnsOf(next).length === 0) {
-    next.columns = DEFAULT_BOARD_COLUMNS.map((c) => ({ id: mintId(), title: c.title, color: c.color }))
+    next.columns = defaultBoardColumns(mintId)
   }
   if (!Array.isArray(next.assignments)) next.assignments = []
   root.kanban = next

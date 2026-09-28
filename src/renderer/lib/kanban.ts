@@ -1,6 +1,9 @@
-import type { CanvasNodeState, KanbanAssignment, KanbanColumn, Project, ProjectKanban } from '@shared/types'
+import type {
+  CanvasNodeState, KanbanAssignment, KanbanColumn, KanbanColumnCategory, Project, ProjectKanban
+} from '@shared/types'
+import { columnCategory } from '@shared/kanban-category'
 import { SYSTEM_NODE_COLORS } from '../state/workspace'
-import { DEFAULT_BOARD_COLUMNS, makeColumnId } from '@shared/kanban-default-board'
+import { defaultBoardColumns } from '@shared/kanban-default-board'
 import { autoLabelColor, boardLabels, cardMeta, createLabel, metaList, setCardLabels } from '@shared/kanban-labels'
 
 // The card-meta + label transforms live in `@shared/kanban-labels` (the host core applies the
@@ -21,7 +24,7 @@ const kid = (prefix: string): string => `${prefix}-${Math.random().toString(36).
  *  shared definition so a board born on either surface is the same board. */
 export function defaultKanban(): ProjectKanban {
   return {
-    columns: DEFAULT_BOARD_COLUMNS.map((c) => ({ id: makeColumnId(), title: c.title, color: c.color })),
+    columns: defaultBoardColumns(),
     assignments: []
   }
 }
@@ -59,6 +62,26 @@ export function renameColumn(k: ProjectKanban, columnId: string, title: string):
 
 export function recolorColumn(k: ProjectKanban, columnId: string, color: string): ProjectKanban {
   return { ...k, columns: k.columns.map((c) => (c.id === columnId ? { ...c, color } : c)) }
+}
+
+/** Sets (or, with `undefined`, clears) a column's lifecycle category. Returns the SAME board when
+ *  nothing changes (unknown column, or the value it already reads as), so a caller can skip a
+ *  no-op persist. The UI confirms first when the column holds cards (`categoryChangeImpact`). */
+export function setColumnCategory(
+  k: ProjectKanban,
+  columnId: string,
+  category: KanbanColumnCategory | undefined
+): ProjectKanban {
+  const target = k.columns.find((c) => c.id === columnId)
+  if (!target || columnCategory(target) === columnCategory({ category })) return k
+  return {
+    ...k,
+    columns: k.columns.map((c) => {
+      if (c.id !== columnId) return c
+      const { category: _old, ...rest } = c
+      return category ? { ...rest, category } : rest
+    })
+  }
 }
 
 /** Moves a column before `beforeId` (null = to the end). */

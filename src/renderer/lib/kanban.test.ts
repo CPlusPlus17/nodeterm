@@ -6,7 +6,8 @@ import {
   setCardDue, setCardPriority, toggleAssignee, unassigned,
   boardLabels, cardMatchesLabelFilter, createLabel, deleteLabel, labelColor, labelsForCard,
   recolorLabel, renameLabel, reorderLabels, toggleCardLabel,
-  autoLabelColor, migrateProjectTags, migrateTagsToLabels, setCardLabels, resolveColumnRef
+  autoLabelColor, migrateProjectTags, migrateTagsToLabels, setCardLabels, resolveColumnRef,
+  setColumnCategory
 } from './kanban'
 import type { Project } from '@shared/types'
 
@@ -26,6 +27,7 @@ describe('defaultKanban', () => {
   it('makes To Do / In Progress / Done with unique ids and no assignments', () => {
     const k = defaultKanban()
     expect(k.columns.map((c) => c.title)).toEqual(['To Do', 'In Progress', 'Done'])
+    expect(k.columns.map((c) => c.category)).toEqual(['unstarted', 'started', 'done'])
     expect(new Set(k.columns.map((c) => c.id)).size).toBe(3)
     expect(k.assignments).toEqual([])
   })
@@ -52,6 +54,21 @@ describe('columns', () => {
     const k = recolorColumn(renameColumn(board(), 'b', 'WIP'), 'b', '#fff')
     expect(k.columns[1]).toMatchObject({ id: 'b', title: 'WIP', color: '#fff' })
     expect(k.columns[0]).toEqual(board().columns[0])
+  })
+  it('setColumnCategory sets, changes and clears ONLY the target column', () => {
+    const set = setColumnCategory(board(), 'b', 'done')
+    expect(set.columns[1]).toEqual({ id: 'b', title: 'Doing', color: '#ffd60a', category: 'done' })
+    expect(set.columns[0]).toEqual(board().columns[0])
+    const cleared = setColumnCategory(set, 'b', undefined)
+    expect(cleared.columns[1]).toEqual(board().columns[1])
+    expect('category' in cleared.columns[1]).toBe(false)
+  })
+  it('setColumnCategory: unknown column or unchanged value returns the SAME board (no persist)', () => {
+    const k = board()
+    expect(setColumnCategory(k, 'nope', 'done')).toBe(k)
+    expect(setColumnCategory(k, 'a', undefined)).toBe(k)
+    const set = setColumnCategory(k, 'a', 'started')
+    expect(setColumnCategory(set, 'a', 'started')).toBe(set)
   })
   it('moveColumn before a target and to the end (null)', () => {
     expect(moveColumn(board(), 'b', 'a').columns.map((c) => c.id)).toEqual(['b', 'a'])

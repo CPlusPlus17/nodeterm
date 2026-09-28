@@ -32,6 +32,15 @@ describe('ensureProjectBoard', () => {
     expect(out.savedAt).toBe(NOW.toISOString())
   })
 
+  it('seeds the lifecycle category the desktop default carries (a phone-born board is the same board)', () => {
+    const out = parse(ensureProjectBoard(file(), NOW, () => 'kcol-fixed'))
+    expect(out.kanban.columns.map((c: { category?: string }) => c.category)).toEqual([
+      'unstarted',
+      'started',
+      'done'
+    ])
+  })
+
   it('mints a distinct id per column, in the desktop shape', () => {
     const out = parse(ensureProjectBoard(file(), NOW))
     const ids: string[] = out.kanban.columns.map((c: { id: string }) => c.id)

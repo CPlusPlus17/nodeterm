@@ -616,11 +616,19 @@ export interface BridgeLink {
   target: string
 }
 
+/** Where a column sits in a card's lifecycle (see @shared/kanban-category). A closed set; an
+ *  unknown value read from a hand-edited or newer file reads as ABSENT (`columnCategory`), and is
+ *  left in the file untouched so a newer build's value survives an older build's save. */
+export type KanbanColumnCategory = 'unstarted' | 'started' | 'done' | 'closed'
+
 /** One kanban board column. Column order = array order in ProjectKanban.columns. */
 export interface KanbanColumn {
   id: string
   title: string
   color: string
+  /** Optional lifecycle category. Absent = uncategorized (the pre-category board, and any column
+   *  the user never categorized). Read it through `columnCategory`, never directly. */
+  category?: KanbanColumnCategory
 }
 
 /** Assignment of one session node to a board column. A session with no assignment sits
