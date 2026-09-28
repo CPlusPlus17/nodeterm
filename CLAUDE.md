@@ -2592,6 +2592,22 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `readQuestions`), and only while the pane is in a dialog state. They send a `PermissionAnswer`
   through `answerPermission`; a refusal is a quiet retryable error pointing at the terminal. Plan's
   default button is `restore` — never auto. See docs/hook-reply-approvals.md.
+  **A card answers only the request the THREAD was read for** (`answerCardState`, same rule as
+  iOS #41): `threadHeldFor` = the held ticket at the START of the last applied tail read, keyed by
+  transcript identity. While held moves A → B (a revised plan) plan A's card can still be on screen
+  unanswered, and a tool-name match would approve B from it — so until a read started under B lands,
+  the latest unanswered card of that tool says "Updating… — or answer in the terminal" and nothing
+  is answerable. A held change forces a tail reload (queued behind a read in flight, which started
+  under A and cannot bind B, and behind an older-page fetch, which it never cancels). It is a QUIET
+  read (no "Loading…"), and one path owns it: on working → blocked the turn-end reload does. While a
+  request is unbound it retries with backoff (`rebindRetryDelay`: 2 s doubling to 30 s, reset per
+  request) — card on screen or not; it stops once B surfaces on a new card (a duplicate ticket for the same tool_use keeps a quiet 30 s retry while the agent stays blocked). A read under B that still shows the card A was bound to (same tool id / line offset —
+  the transcript can lag the hook) stays "Updating…": B must surface on a card the thread shows as
+  new. The answer payload carries the BOUND id, re-checked against store and binding at send time.
+  Residuals: the previous-card memory is per MOUNT (a panel opened fresh under B has none, so it
+  binds B to the latest matching card); a re-issued ticket for the SAME tool_use (duplicate hooks)
+  stays "Updating…" and is answered in the terminal; and the whole guarantee assumes Claude writes
+  the tool_use to the transcript before the hook fires.
   **The thread look (2026-09-26, claude.ai-style)**: the user's message is a neutral rounded bubble
   on the right (`term-chat__bubble`, a tint lift — never the blue accent), the assistant's is plain
   full-width text with no bubble. One quiet action row per assistant TURN (`lib/chatThread.ts`

@@ -164,6 +164,22 @@ While controls are up, the composer placeholder and the status row point at the 
 (`chatComposerPlaceholder({answerOnCard})`). The kanban card modal mounts the same `ChatPanel`, so the
 controls appear there too.
 
+**Binding to the thread that was read (2026-09-28).** A card answers only the request the DISPLAYED
+thread was read for (`answerCardState`; the iOS fix of the same race is #41): `threadHeldFor` is the
+held ticket at the start of the last applied tail read. While the hook moves held A → held B, plan A's
+card can still be on screen with no result; matched by tool name alone it would approve B. So a
+request the thread was not read for gets no controls — the latest unanswered card of its tool shows
+"Updating… — or answer in the terminal" — and the panel forces a quiet tail reload (queued behind a
+read or an older-page fetch in flight; retried with 2 s → 30 s backoff until a read under the new
+request lands, whether or not a card is on screen to say "Updating…").
+A read under B that still shows the very card A was bound to does not bind B either: the transcript
+can lag the hook, and a new request must surface on a card the thread shows as new. The answer
+payload names the bound id, re-checked against both the store and the binding at send time.
+Residuals: the previous-card memory lives per panel mount, so a panel opened fresh under B binds B to
+the latest matching card; a re-issued ticket for the same tool_use (duplicate hooks) stays
+"Updating…" and must be answered in the terminal; and the guarantee assumes Claude writes the
+tool_use to the transcript before the hook fires.
+
 **Surfaces.** Desktop: local + SSH (ControlMaster read + stdin write). Server Edition: local projects
 (SSH projects remain unsupported there, as before). Relay: unchanged. Mobile: keeps writing
 `allow`/`deny`; its plan approve now works through the script mapping once the host's script is current;
