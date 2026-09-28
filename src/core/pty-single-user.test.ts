@@ -888,4 +888,21 @@ describe('SINGLE-USER REGRESSION: co-attach must not change the solo path', () =
     expect(again.sessionId).not.toBe(sessionId)
     expect(again.fresh).toBe(true)
   })
+
+  // ── persistentSpawnAvailable (#925) ────────────────────────────────────────────────────────
+  // Nested here, not at top level: `tmuxManager()` and the platform/userData harness it needs are
+  // scoped to this describe.
+  describe('persistentSpawnAvailable (#925)', () => {
+    it('is true with tmux found and enabled', async () => {
+      const m = await tmuxManager()
+      expect(m.persistentSpawnAvailable()).toBe(true)
+    })
+    it('is false when tmux persistence is switched off (and no session-host applies on this platform)', async () => {
+      const { PtyManager } = await import('./pty-manager')
+      const m = new PtyManager()
+      m.init(() => ({ ...DEFAULT_SETTINGS, tmuxEnabled: false }))
+      m.registerIpc()
+      expect(m.persistentSpawnAvailable()).toBe(false)
+    })
+  })
 })
