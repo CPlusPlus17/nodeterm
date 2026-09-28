@@ -9,7 +9,17 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import osDefault from 'os'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, statSync } from 'node:fs'
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  rmSync,
+  statSync,
+  lstatSync,
+  symlinkSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -129,9 +139,19 @@ describe('the bundle', () => {
   })
 
   it('recognizes both leaves on every platform, and nothing foreign', () => {
-    expect(isAntigravityManagedCommand('sh /x/agent-hooks/antigravity.sh')).toBe(true)
-    expect(isAntigravityManagedCommand('C:\\x\\agent-hooks\\antigravity-hook.cmd Stop')).toBe(true)
-    expect(isAntigravityManagedCommand('sh /x/agent-hooks/gemini.sh')).toBe(false)
+    expect(isAntigravityManagedCommand('sh /x/.nodeterm/agent-hooks/antigravity.sh')).toBe(true)
+    expect(isAntigravityManagedCommand('C:\\x\\.nodeterm\\agent-hooks\\antigravity-hook.cmd Stop')).toBe(true)
+    // The shape the Windows command really has: relative to hooks.json's directory.
+    expect(
+      isAntigravityManagedCommand(
+        'if exist ..\\..\\.nodeterm\\agent-hooks\\antigravity-hook.cmd (call ..\\..\\.nodeterm\\agent-hooks\\antigravity-hook.cmd Stop) & exit 0'
+      )
+    ).toBe(true)
+    expect(isAntigravityManagedCommand('sh /x/.nodeterm/agent-hooks/gemini.sh')).toBe(false)
+    // A user's OWN gate that merely shares the leaf name is not ours (the suffix match codex and
+    // claude use would have swept it, and the withdrawal would have reported removing our bundle).
+    expect(isAntigravityManagedCommand('~/work/agent-hooks/antigravity.sh --policy strict')).toBe(false)
+    expect(isAntigravityManagedCommand('C:\\tools\\agent-hooks\\antigravity-hook.cmd')).toBe(false)
     expect(isAntigravityManagedCommand('/opt/other-tool/antigravity.sh')).toBe(false)
     expect(isAntigravityManagedCommand(undefined)).toBe(false)
     expect(isAntigravityManagedCommand(7)).toBe(false)
@@ -243,10 +263,75 @@ describe('installAntigravityHooks / removeAntigravityHooks', () => {
     expect(own(removed, ANTIGRAVITY_BUNDLE_KEY)).toBe(false)
   })
 
+  it('keeps the user\'s "enabled": false on our bundle across a re-install (the opt-out)', () => {
+    const f = join(fresh(), 'hooks.json')
+    install(f)
+    const disabled = read(f)
+    ;(disabled[ANTIGRAVITY_BUNDLE_KEY] as Record<string, unknown>).enabled = false
+    writeFileSync(f, JSON.stringify(disabled), 'utf8')
+    expect(install(f)).toBe('installed')
+    const after = read(f)[ANTIGRAVITY_BUNDLE_KEY] as Record<string, unknown>
+    expect(after.enabled).toBe(false)
+    // …and the handlers are still refreshed, so re-enabling later gets the current commands.
+    expect({ ...after, enabled: undefined }).toEqual({
+      enabled: undefined,
+      ...buildAntigravityBundle((ev) => antigravityCommandFor(POSIX_SCRIPT, ev, 'linux'))
+    })
+  })
+
+  it('does not invent an "enabled" key, and treats anything but a literal false as enabled', () => {
+    const f = join(fresh(), 'hooks.json')
+    install(f)
+    expect(Object.hasOwn(read(f)[ANTIGRAVITY_BUNDLE_KEY] as object, 'enabled')).toBe(false)
+    const withTrue = read(f)
+    ;(withTrue[ANTIGRAVITY_BUNDLE_KEY] as Record<string, unknown>).enabled = 'false'
+    writeFileSync(f, JSON.stringify(withTrue), 'utf8')
+    install(f)
+    expect(Object.hasOwn(read(f)[ANTIGRAVITY_BUNDLE_KEY] as object, 'enabled')).toBe(false)
+  })
+
+  it("never sweeps a user's own gate that merely shares our script's leaf name", () => {
+    const f = join(fresh(), 'hooks.json')
+    const mine = {
+      PreToolUse: [
+        { matcher: 'run_command', hooks: [{ command: '~/work/agent-hooks/antigravity.sh --policy strict' }] }
+      ]
+    }
+    writeFileSync(f, JSON.stringify({ 'my-safety-gate': mine }), 'utf8')
+    install(f)
+    expect(read(f)['my-safety-gate']).toEqual(mine)
+    expect(removeAntigravityHooks({ hooksJson: f })).toBe('withdrawn')
+    expect(read(f)).toEqual({ 'my-safety-gate': mine })
+    // With only the user's gate left, a second withdrawal finds nothing of ours.
+    expect(removeAntigravityHooks({ hooksJson: f })).toBe('absent')
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'a symlinked hooks.json stays a symlink, its target gets the bundle, and its mode is kept',
+    () => {
+      // A dotfiles setup: ~/.gemini/config/hooks.json -> ~/dotfiles/agy-hooks.json. A plain rename
+      // replaced the link with a regular file, so the dotfile never saw the bundle (and 0600
+      // became 0644). Symlinks need privileges on Windows, hence the skip.
+      const d = fresh()
+      const target = join(d, 'dotfiles-hooks.json')
+      writeFileSync(target, JSON.stringify({ mine: {} }), { encoding: 'utf8', mode: 0o600 })
+      const link = join(d, 'config', 'hooks.json')
+      mkdirSync(join(d, 'config'), { recursive: true })
+      symlinkSync(target, link)
+      expect(install(link)).toBe('installed')
+      expect(lstatSync(link).isSymbolicLink()).toBe(true)
+      expect(Object.keys(read(target))).toEqual(['mine', ANTIGRAVITY_BUNDLE_KEY])
+      expect(statSync(target).mode & 0o777).toBe(0o600)
+      expect(removeAntigravityHooks({ hooksJson: link })).toBe('withdrawn')
+      expect(lstatSync(link).isSymbolicLink()).toBe(true)
+      expect(read(target)).toEqual({ mine: {} })
+    }
+  )
+
   it('a "__proto__" key inside a foreign bundle survives the sweep of a stray entry of ours', () => {
     const out = applyAntigravityBundle(
       JSON.parse(
-        '{"other":{"__proto__":[{"type":"command","command":"keep"}],"Stop":[{"type":"command","command":"sh /u/agent-hooks/antigravity.sh"}]}}'
+        '{"other":{"__proto__":[{"type":"command","command":"keep"}],"Stop":[{"type":"command","command":"sh /u/.nodeterm/agent-hooks/antigravity.sh"}]}}'
       ),
       null
     )
@@ -268,7 +353,7 @@ describe('installAntigravityHooks / removeAntigravityHooks', () => {
 
   it("keeps a foreign event that was already empty when it sweeps another of that bundle's events", () => {
     const out = applyAntigravityBundle(
-      { foreign: { PostToolUse: [], Stop: [{ type: 'command', command: 'sh /u/agent-hooks/antigravity.sh' }] } },
+      { foreign: { PostToolUse: [], Stop: [{ type: 'command', command: 'sh /u/.nodeterm/agent-hooks/antigravity.sh' }] } },
       null
     )
     expect(out.foreign).toEqual({ PostToolUse: [] })

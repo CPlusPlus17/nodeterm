@@ -84,7 +84,7 @@ describe('the nodeterm_hook_event form field', () => {
     expect(events[0].state).toBe('working')
   })
 
-  it('without the field, a planted value is all there is — and a POST without either maps to nothing', async () => {
+  it('a POST without the field maps to nothing', async () => {
     const res = await post('antigravity', {
       nodeId: 'term-agy-1',
       payload: JSON.stringify({ fullyIdle: true, conversationId: 'x' })
@@ -114,6 +114,26 @@ describe('the nodeterm_hook_event form field', () => {
       payload: JSON.stringify({ conversationId: 'x' })
     })
     expect(events).toHaveLength(0)
+    expect(raws[0]).not.toHaveProperty('nodeterm_hook_event')
+  })
+
+  it('without the field, a value planted in the agent JSON is DELETED, not trusted', async () => {
+    // The form is the one source for antigravity: the script always sends it, so a payload that
+    // names its own event (it never does) is someone else's word and must not stand.
+    await post('antigravity', {
+      nodeId: 'term-agy-1',
+      payload: JSON.stringify({ nodeterm_hook_event: 'Stop', fullyIdle: true, conversationId: 'x' })
+    })
+    expect(events).toHaveLength(0)
+    expect(raws[0]).not.toHaveProperty('nodeterm_hook_event')
+  })
+
+  it('is merged for antigravity only — another agent never sees the field in its payload', async () => {
+    await post('claude', {
+      nodeId: 'term-claude-1',
+      nodeterm_hook_event: 'PreInvocation',
+      payload: JSON.stringify({ hook_event_name: 'Stop', session_id: 's' })
+    })
     expect(raws[0]).not.toHaveProperty('nodeterm_hook_event')
   })
 

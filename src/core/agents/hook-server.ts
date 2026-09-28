@@ -837,7 +837,12 @@ export class HookServer {
           // JSON. Deliberately NOT `hook_event_name`: that is a real payload field for claude, codex,
           // gemini and copilot, and a name of our own cannot collide with any of them. The value is
           // only ever compared against a closed set (normalizeAntigravity), never interpolated.
-          if (form.nodeterm_hook_event) payload.nodeterm_hook_event = form.nodeterm_hook_event
+          // Antigravity only: no other normalizer reads it, and for antigravity the form is the ONE
+          // source — an empty field DELETES a value planted in the JSON rather than letting it stand.
+          if (agentId === 'antigravity') {
+            if (form.nodeterm_hook_event) payload.nodeterm_hook_event = form.nodeterm_hook_event
+            else delete payload.nodeterm_hook_event
+          }
           // Raw listener first: it drives the transcript-tailing features (which need
           // transcript_path). Inside the try so a throwing raw listener still ends 204.
           this.rawListener?.(agentId, nodeId, payload, {

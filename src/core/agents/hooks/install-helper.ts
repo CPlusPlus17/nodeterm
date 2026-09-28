@@ -131,7 +131,13 @@ export function buildManagedHookCommand(scriptPath: string, opts: ManagedHookCom
     })
     .join('')
   const answer = opts.fallbackStdout !== undefined ? `printf '%s\\n' ${shQuote(opts.fallbackStdout)}; ` : ''
-  return `${prefix}if [ -r ${q} ]; then sh ${q}; else ${answer}cat >/dev/null 2>&1 || :; fi`
+  // An agent that reads our stdout as a DECISION (fallbackStdout set) also reads the exit status:
+  // for antigravity a non-zero exit is a measured DENY even when the right answer was already
+  // printed (the script answers FIRST, then sources the endpoint file, whose syntax error would
+  // otherwise leak out as `sh`'s status). So that branch forces 0, as the Windows wrapper does.
+  // Every other agent's command stays byte-identical.
+  const exitZero = opts.fallbackStdout !== undefined ? ' || :' : ''
+  return `${prefix}if [ -r ${q} ]; then sh ${q}${exitZero}; else ${answer}cat >/dev/null 2>&1 || :; fi`
 }
 
 /**

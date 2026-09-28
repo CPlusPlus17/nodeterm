@@ -40,13 +40,23 @@ interface Run {
   stdout: string
   stderr: string
   status: number | null
+  /** Wall time of the script run — what agy waits for before it reads the decision. */
+  elapsedMs: number
   /** Every fake-curl invocation's argv, once the (backgrounded) POST has finished. */
   posts: () => string[]
 }
 
-/** A stand-in curl that appends its argv (and nothing to stdout) to a log. */
-const FAKE_CURL = (log: string): string =>
-  ['#!/bin/sh', `printf 'ARGV %s\\n' "$*" >> '${log.replaceAll('\\', '/')}'`, 'cat >/dev/null', 'exit 0', ''].join('\n')
+/** A stand-in curl that appends its argv (and nothing to stdout) to a log. `delaySec` makes it
+ *  behave like an endpoint that accepts and never answers (curl's own --max-time is 1.5 s). */
+const FAKE_CURL = (log: string, delaySec = 0): string =>
+  [
+    '#!/bin/sh',
+    ...(delaySec > 0 ? [`sleep ${delaySec}`] : []),
+    `printf 'ARGV %s\\n' "$*" >> '${log.replaceAll('\\', '/')}'`,
+    'cat >/dev/null',
+    'exit 0',
+    ''
+  ].join('\n')
 
 function runScript(opts: {
   event?: string
@@ -56,6 +66,8 @@ function runScript(opts: {
   append?: string
   /** No endpoint file at all: the POST has nowhere to go. */
   noEndpoint?: boolean
+  /** Seconds the fake curl stalls before it answers (a blackholed endpoint). */
+  curlDelaySec?: number
 }): Run {
   const dir = join(root, `case-${++seq}`)
   const bin = join(dir, 'bin')
@@ -63,7 +75,7 @@ function runScript(opts: {
   mkdirSync(bin, { recursive: true })
   mkdirSync(join(home, '.nodeterm'), { recursive: true })
   const log = join(dir, 'curl.log')
-  writeFileSync(join(bin, 'curl'), FAKE_CURL(log), { encoding: 'utf8', mode: 0o755 })
+  writeFileSync(join(bin, 'curl'), FAKE_CURL(log, opts.curlDelaySec), { encoding: 'utf8', mode: 0o755 })
   const endpoint = join(home, '.nodeterm', 'hook-endpoint.env')
   if (!opts.noEndpoint) {
     writeFileSync(endpoint, 'NODETERM_HOOK_PORT=45999\nNODETERM_HOOK_TOKEN=t\nNODETERM_HOOK_VERSION=2\n', 'utf8')
@@ -79,9 +91,12 @@ function runScript(opts: {
   if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot
   if (opts.nodeId !== null) env.NODETERM_NODE_ID = opts.nodeId ?? 'term-agy-1'
   if (opts.event !== undefined) env[ANTIGRAVITY_EVENT_ENV] = opts.event
+  const started = Date.now()
   const res = spawnSync('sh', [script], { input: opts.input ?? '{"conversationId":"c1"}', env, timeout: T })
+  const elapsedMs = Date.now() - started
   return {
     dir,
+    elapsedMs,
     stdout: res.stdout.toString('utf8'),
     stderr: res.stderr.toString('utf8'),
     status: res.status,
@@ -300,7 +315,7 @@ describe('the hooks.json command (POSIX form)', () => {
     })
     expect(cmd).toBe(
       "NODETERM_AGY_EVENT='PreToolUse'; export NODETERM_AGY_EVENT; " +
-        "if [ -r '/h/.nodeterm/agent-hooks/antigravity.sh' ]; then sh '/h/.nodeterm/agent-hooks/antigravity.sh'; " +
+        "if [ -r '/h/.nodeterm/agent-hooks/antigravity.sh' ]; then sh '/h/.nodeterm/agent-hooks/antigravity.sh' || :; " +
         "else printf '%s\\n' '{\"decision\":\"ask\"}'; cat >/dev/null 2>&1 || :; fi"
     )
   })
@@ -336,4 +351,51 @@ describe('the hooks.json command (POSIX form)', () => {
     },
     T
   )
+
+  it.skipIf(!shAvailable)(
+    'exits 0 even when the script fails AFTER answering (a broken endpoint file is sourced late)',
+    () => {
+      // The script answers FIRST, then sources the endpoint file. A syntax error there used to leak
+      // out as `sh`'s exit status 2 — the right answer on stdout with a non-zero exit, a pair agy
+      // was never measured on (silence + exit 1 is a measured DENY). The command forces 0.
+      const dir = join(root, `cmd-${++seq}`)
+      mkdirSync(dir, { recursive: true })
+      const script = join(dir, 'antigravity.sh').replaceAll('\\', '/')
+      writeFileSync(script, buildManagedScript('antigravity', null), { encoding: 'utf8', mode: 0o755 })
+      const endpoint = join(dir, 'hook-endpoint.env')
+      writeFileSync(endpoint, 'if then\n', 'utf8')
+      const answer = antigravityDecisionFor('PreToolUse')!
+      const cmd = buildManagedHookCommand(script, {
+        env: { [ANTIGRAVITY_EVENT_ENV]: 'PreToolUse' },
+        fallbackStdout: answer
+      })
+      const env: Record<string, string> = {
+        PATH: process.env.PATH ?? '',
+        HOME: dir,
+        NODETERM_NODE_ID: 'term-agy-1',
+        NODETERM_HOOK_ENDPOINT: endpoint
+      }
+      const res = spawnSync('sh', ['-c', cmd], { input: '{"conversationId":"c"}', env, timeout: T })
+      expect(res.stdout.toString()).toBe(`${answer}\n`)
+      expect(res.status).toBe(0)
+    },
+    T
+  )
+})
+
+describe.skipIf(!shAvailable)('the POST never holds up the answer', () => {
+  it('a stalled endpoint does not delay the script: the POST runs in the background', () => {
+    // agy waits for the hook PROCESS to exit before it acts on the decision, and our handler's
+    // timeout is ANTIGRAVITY_HOOK_TIMEOUT (5 s). A foreground POST against an endpoint that accepts
+    // and never answers, plus the bounded fallback walk, measured ~6 s — past that timeout, on
+    // every tool call. The fake curl here stalls for 6 s; the script must be long gone by then,
+    // and the POST must still arrive afterwards.
+    const r = runScript({ event: 'PreToolUse', curlDelaySec: 6 })
+    expect(r.stdout).toBe(`${antigravityDecisionFor('PreToolUse')}\n`)
+    expect(r.status).toBe(0)
+    expect(r.elapsedMs).toBeLessThan(3000)
+    const posts = r.posts()
+    expect(posts).toHaveLength(1)
+    expect(posts[0]).toContain('nodeterm_hook_event=PreToolUse')
+  }, T)
 })
