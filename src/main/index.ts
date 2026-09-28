@@ -81,7 +81,7 @@ import type { RemoteLogExec } from '../core/board-log'
 import type { PtyCreateOptions, TranscriptPresence } from '../shared/types'
 import { boardLogRemotePath } from '../core/board-log'
 import { PtyManager } from '../core/pty-manager'
-import { launchHeadless } from '../core/headless-launch'
+import { desktopHeadlessRequest, launchHeadless } from '../core/headless-launch'
 import { WorkspaceStore } from '../core/workspace-store'
 import type { CardLabelEdit } from '../core/project-kanban-write'
 import { WorkspaceWatcher } from '../core/workspace-watcher'
@@ -1498,19 +1498,16 @@ app.whenReady().then(async () => {
   // block below on the server side too — this one is here beside its sibling.
   corePlatform.handle(IPC.ptySessionAge, (persistKey: string) => ptyManager.sessionAgeSeconds(persistKey))
 
-  // #925: canvas-control `--run-now` / `run`. Registered here rather than in core's shared
-  // `registerIpc` so no browser client can reach it: the Server Edition starts nodes through its
-  // own factory. All logic lives in core/headless-launch. Local-only by construction: the
-  // renderer never sends SSH fields for this, and this strips them anyway.
+  // #925: canvas-control `--run-now` / `run`, desktop only. Registered here rather than in core's
+  // shared `registerIpc`, so a Server Edition browser cannot reach it (the server starts nodes
+  // through its own HeadlessNodeFactory). A relay peer does reach this table, and is refused
+  // host-side because the channel is in `HOST_ONLY_CHANNELS` (shared/host-control). All logic lives
+  // in core/headless-launch: `desktopHeadlessRequest` strips `sshRemote`, keeps `requireRemote` so
+  // core still refuses to spawn a remote node locally, and forces release + requirePersistent.
   corePlatform.handle(
     IPC.ptyLaunchHeadless,
     (req: { ptyOptions: PtyCreateOptions; command: string }) =>
-      launchHeadless(ptyManager, {
-        ptyOptions: { ...req.ptyOptions, sshRemote: undefined, requireRemote: undefined },
-        command: String(req.command ?? ''),
-        release: true,
-        requirePersistent: true
-      })
+      launchHeadless(ptyManager, desktopHeadlessRequest(req))
   )
 
   // Gemini's title read needs the transcript path its own context tail already tracks (nothing

@@ -35,6 +35,29 @@ export interface HeadlessLaunchDeps {
   timing?: { quietMs: number; capMs: number; maxMs?: number }
 }
 
+/**
+ * The desktop's `pty.launchHeadless` request, as main runs it: the renderer sends only
+ * `{ ptyOptions, command }`, and the desktop always releases its synthetic client, so it always
+ * requires a persistent backend. Whatever else the wire carries is overwritten here.
+ *
+ * `sshRemote` is stripped: this path never spawns over a ControlMaster. `requireRemote` is KEPT as
+ * sent. It is core's own refusal to spawn a remote node locally (`spawnNew` → `unavailable:'ssh'`
+ * → `spawn-failed`), and clearing it with `sshRemote` would start a LOCAL `nt-<id>` wearing the
+ * remote node's identity and type its launch there (CLAUDE.md, "A remote node is NEVER spawned
+ * locally").
+ */
+export function desktopHeadlessRequest(req: {
+  ptyOptions: PtyCreateOptions
+  command: string
+}): HeadlessLaunchRequest {
+  return {
+    ptyOptions: { ...req.ptyOptions, sshRemote: undefined },
+    command: String(req.command ?? ''),
+    release: true,
+    requirePersistent: true
+  }
+}
+
 export async function launchHeadless(
   deps: HeadlessLaunchDeps,
   req: HeadlessLaunchRequest

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DELIVERY_ATTEMPTS, KILL_LINE, VERIFY_TIMEOUT_MS } from '@shared/command-delivery'
 import type { HeadlessLaunchRequest } from '@shared/headless-launch'
 import {
+  desktopHeadlessRequest,
   launchHeadless,
   SETTLE_CAP_MS,
   SETTLE_MAX_MS,
@@ -303,5 +304,62 @@ describe('launchHeadless (#925)', () => {
     const { deps, writes } = harness({ fresh: false, pane: 'pwsh' })
     await launchHeadless(deps, req({ ptyOptions: { cols: 1, rows: 1, persistKey: 'n1', shell: 'pwsh.exe' } }))
     expect(writes[0]).toBe('\x1b')
+  })
+})
+
+describe('desktopHeadlessRequest (#925)', () => {
+  const opts = { cols: 120, rows: 36, persistKey: 'n1', cwd: '/repo' }
+  const ssh = { controlPath: '/tmp/cm', conn: { host: 'h', user: 'u' } } as never
+
+  it('forces release and requirePersistent true, whatever the wire claims', () => {
+    const out = desktopHeadlessRequest({
+      ptyOptions: opts,
+      command: CMD,
+      release: false,
+      requirePersistent: false
+    } as never)
+    expect(out.release).toBe(true)
+    expect(out.requirePersistent).toBe(true)
+    expect(out.command).toBe(CMD)
+  })
+
+  it('removes sshRemote: this path never spawns over a ControlMaster', () => {
+    const out = desktopHeadlessRequest({ ptyOptions: { ...opts, sshRemote: ssh }, command: CMD })
+    expect(out.ptyOptions.sshRemote).toBeUndefined()
+    expect(out.ptyOptions).toMatchObject(opts)
+  })
+
+  it('keeps requireRemote, so core still refuses to spawn a remote node locally', () => {
+    const out = desktopHeadlessRequest({
+      ptyOptions: { ...opts, sshRemote: ssh, requireRemote: true },
+      command: CMD
+    })
+    expect(out.ptyOptions.requireRemote).toBe(true)
+  })
+
+  it('coerces a non-string command', () => {
+    expect(desktopHeadlessRequest({ ptyOptions: opts, command: 42 as never }).command).toBe('42')
+    expect(desktopHeadlessRequest({ ptyOptions: opts, command: undefined as never }).command).toBe('')
+    expect(desktopHeadlessRequest({ ptyOptions: opts, command: null as never }).command).toBe('')
+  })
+
+  it("a remote node's options end as spawn-failed with nothing typed (core's unavailable:'ssh')", async () => {
+    const { deps, writes } = harness()
+    ;(deps.createHeadless as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+      sessionId: 's',
+      fresh: true,
+      unavailable: 'ssh' as const
+    }))
+    const r = desktopHeadlessRequest({
+      ptyOptions: { ...opts, sshRemote: ssh, requireRemote: true },
+      command: CMD
+    })
+    expect(await launchHeadless(deps, r)).toMatchObject({ outcome: 'failed', reason: 'spawn-failed' })
+    // What reached core carried the refusal flag, and no ControlMaster.
+    expect(deps.createHeadless).toHaveBeenCalledWith(
+      expect.objectContaining({ requireRemote: true, sshRemote: undefined })
+    )
+    expect(writes).toEqual([])
+    expect(deps.writeHeadless).not.toHaveBeenCalled()
   })
 })
