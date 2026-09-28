@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
   GitHubAuthProvider,
   GitHubAuthStatus,
@@ -9,6 +9,7 @@ import { useProjects } from '../../../state/projects'
 import { useSettings } from '../../../state/settings'
 import { prunePullAutoMove, sanitizeKanbanPullAutoMove } from '@shared/kanban-pull-links'
 import { markWorkspaceDirty } from '../../../state/workspaceDirty'
+import { SAVE_DEBOUNCE_MS } from '../../../lib/savePersistence'
 import { SettingsSection } from '../SettingsSection'
 import { SearchableRow } from '../SearchableRow'
 import { useSettingsSearch } from '../context'
@@ -53,6 +54,12 @@ const ROWS = {
   }
 }
 const ENTRIES = Object.values(ROWS)
+
+/** The host reads the GitHub config from the project FILE, which a local edit reaches only through
+ *  the debounced autosave — so a status read right after an edit would describe the old mapping
+ *  (e.g. keep saying "Ready as …" for labels this machine has not approved). Re-read once, a margin
+ *  after that save can have landed. */
+export const STATUS_AFTER_EDIT_MS = SAVE_DEBOUNCE_MS + 700
 
 type Confirmation = 'labels' | 'cache' | 'revoke' | null
 type NoticeRow = 'repository' | 'authentication' | 'data'
@@ -171,6 +178,28 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
   useEffect(() => {
     setRepositoryDraft(githubConfig?.repository ?? '')
   }, [projectId, githubConfig?.repository])
+
+  // A config edit changes what the host will answer, but only once it is on disk: re-read the status
+  // after the save can have landed (see STATUS_AFTER_EDIT_MS). The first render is not an edit.
+  const configKey = JSON.stringify(githubConfig ?? null)
+  const statusConfigKey = useRef(configKey)
+  useEffect(() => {
+    if (!isActive || !projectId || project?.remote || statusConfigKey.current === configKey) return
+    statusConfigKey.current = configKey
+    let live = true
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const next = await window.nodeTerminal.githubControl.status(projectId)
+          if (!live) return
+          setView(next)
+          const block = await authBlockFor(next)
+          if (live) setAuth(block)
+        } catch { /* the last status stays; the next action re-reads it */ }
+      })()
+    }, STATUS_AFTER_EDIT_MS)
+    return () => { live = false; clearTimeout(timer) }
+  }, [configKey, isActive, projectId, project?.remote])
 
   /** The host reads this project from DISK (`workspaceStore.githubProject`), so an edit that stays
    *  in the renderer store is invisible to approve/refresh — `resolveProject` sees no `github`

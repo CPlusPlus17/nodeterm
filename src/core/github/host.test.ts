@@ -27,7 +27,10 @@ const project: Project = {
   }
 }
 
-function fixture(options: { onRevoked?: (projectId: string) => Promise<void> } = {}) {
+function fixture(options: {
+  onRevoked?: (projectId: string) => Promise<void>
+  onApprovalChanged?: (projectId: string) => void
+} = {}) {
   let current: Project = project
   let state: GitHubControlState = {
     version: 1,
@@ -122,6 +125,7 @@ function fixture(options: { onRevoked?: (projectId: string) => Promise<void> } =
         : { status: 'unauthorized' }),
     client: vi.fn(() => client),
     ...(options.onRevoked ? { onRevoked: options.onRevoked } : {}),
+    ...(options.onApprovalChanged ? { onApprovalChanged: options.onApprovalChanged } : {}),
     rate: (userId: string) => userId === '1'
       ? {
           status: { resource: 'core', limit: 5_000, remaining: 7, resetAt: 9, observedAt: 1 },
@@ -218,6 +222,22 @@ describe('GitHubHostController', () => {
     await expect(controller.revoke({ projectId: 'project-1', expectedRevision: 0 }))
       .rejects.toMatchObject({ code: 'revoked-cache-kept' })
     expect(order).toEqual(['revoke', 'clear:project-1'])
+  })
+
+  it('tells open boards the approval changed, on approve and on a revoke whose cache clear failed', async () => {
+    const changed = vi.fn()
+    const { controller } = fixture({
+      onApprovalChanged: changed,
+      onRevoked: async () => { throw new Error('EBUSY') }
+    })
+    await controller.approve({ projectId: 'project-1', repository: 'owner/repo', expectedRevision: 0 })
+    expect(changed).toHaveBeenCalledWith('project-1')
+    changed.mockClear()
+    // A successful clear already prompts the board (it empties the cache it shows); a failed one
+    // does not, and the board must still learn it is no longer approved.
+    await expect(controller.revoke({ projectId: 'project-1', expectedRevision: 1 }))
+      .rejects.toMatchObject({ code: 'revoked-cache-kept' })
+    expect(changed).toHaveBeenCalledWith('project-1')
   })
 
   it('rejects approval for a repository other than the configured or detected repository', async () => {

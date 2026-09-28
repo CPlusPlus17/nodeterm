@@ -928,7 +928,14 @@ export class GitHubIssueService {
     // The heartbeat is also what decides whether pull request CI/mergeability is worth a GraphQL
     // read. It runs beside the issue scan, not after it: the board's issues never wait on it.
     this.readPullStatusAfterHeartbeat(captured, !beat.notModified, !background)
-    if (beat.notModified && !full && previous && !state.incomplete) return
+    if (beat.notModified && !full && previous && !state.incomplete) {
+      // Nothing to fetch — but subscribers still re-read their pages, from the local cache, as every
+      // successful refresh has always made them do. A page is not only issues: read only, the
+      // mapping approval and the completion column are derived by the host at query time, and a
+      // board never prompted keeps showing the old answer (e.g. read only after its approval).
+      this.emitDelta(state, [], true)
+      return
+    }
     const heartbeatEtag = beat.etag
     const etags: Record<string, string> = heartbeatEtag ? { [HEARTBEAT_ETAG_KEY]: heartbeatEtag } : {}
     let page = 1
@@ -1034,8 +1041,9 @@ export class GitHubIssueService {
         // would stop us ever trying the next subscriber's context.
         // It IS a background refresh, though, so the rate budget may hold it.
         const throttle = await this.refreshWithinFloor({ projectId }, undefined, true)
+        // A refresh that ran prompted its subscribers itself (a 304 included), which is also what
+        // clears a lifted "held until" line from the board.
         if (throttle) this.announceThrottle(state, throttle.until)
-        else this.announceThrottleLifted(state)
         return
       } catch (error) {
         const failure = classifyGitHubFailure(error)
@@ -1055,12 +1063,15 @@ export class GitHubIssueService {
     this.emitDelta(state, [], true)
   }
 
-  /** The poll ran again. A 304 heartbeat emits nothing, so without this the board would keep
-   *  saying "paused until HH:MM" long after that time — prompt a re-read once when the hold ends. */
-  private announceThrottleLifted(state: RepositoryState): void {
-    if (state.announcedThrottleUntil === undefined) return
-    delete state.announcedThrottleUntil
-    this.emitDelta(state, [], true)
+  /** Prompts one project's subscribers to re-read their pages. For a change the host makes that
+   *  no refresh would report — an approval given or withdrawn — so the board does not wait for the
+   *  next poll (or, before polls re-prompted, for something to change on GitHub). */
+  notifyProject(projectId: string): void {
+    const key = this.projectKeys.get(projectId)
+    const state = key ? this.repositories.get(key) : undefined
+    for (const uiId of state?.subscribers.get(projectId) ?? []) {
+      this.options.onDelta?.(uiId, projectId, [])
+    }
   }
 
   private migrateProjectState(projectId: string, key: string, target: RepositoryState): void {

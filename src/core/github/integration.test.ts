@@ -5,6 +5,7 @@ import path from 'node:path'
 import type { Project } from '../../shared/types'
 import type { CorePlatform } from '../platform'
 import { registerGitHubIntegration } from './integration'
+import { IPC } from '../../shared/ipc'
 import type { CommandRunner, GitHubSecretStore } from './credentials'
 
 let userDataDir: string
@@ -207,5 +208,55 @@ describe('registerGitHubIntegration revoke', () => {
 
     expect(await fs.readdir(cacheDir)).toEqual([])
     expect(await fs.readdir(path.join(userDataDir, 'github-issues-bindings'))).toEqual([])
+  })
+})
+
+describe('registerGitHubIntegration approval reaches the board', () => {
+  it('prompts the project\'s subscribers to re-read when its approval changes', async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => String(input).endsWith('/user')
+      ? new Response(JSON.stringify({ id: 1, login: 'octocat' }), { status: 200 })
+      : new Response('[]', { status: 200, headers: { etag: 'W/"top"' } })
+    ) as typeof globalThis.fetch
+    const sent: Array<[number, string, unknown]> = []
+    const platform = {
+      ...fakePlatform(),
+      sendTo: (uiId: number, channel: string, payload: unknown) => { sent.push([uiId, channel, payload]) }
+    } as unknown as CorePlatform
+    let current: Project = project
+    const { controller, service } = registerGitHubIntegration({
+      platform,
+      userDataDir,
+      project: async (id) => id === current.id ? { project: current, localApprovalId: 'local-1' } : null,
+      detectRepository: async () => 'owner/repo',
+      secret: {
+        availability: 'encrypted',
+        readForHost: async () => 'stored-token',
+        save: async () => undefined,
+        clear: async () => undefined
+      },
+      run: async () => ({ ok: false, stdout: '', stderr: 'not logged in' })
+    })
+    const initial = await controller.status('project-1')
+    await controller.approve({ projectId: 'project-1', repository: 'owner/repo', expectedRevision: initial.control.revision })
+    await service.subscribe(5, { projectId: 'project-1' })
+
+    // A pulled commit changes the mapping: the board is read only until this machine approves it.
+    current = { ...project, kanban: { ...project.kanban!, github: { ...project.kanban!.github!, completionColumnId: 'todo' } } }
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).mappingNotApproved).toBe(true)
+    sent.length = 0
+
+    const status = await controller.status('project-1')
+    await controller.approve({ projectId: 'project-1', repository: 'owner/repo', expectedRevision: status.control.revision })
+
+    // The Settings overlay leaves the board mounted; without this prompt it stayed read only
+    // until something changed on GitHub.
+    expect(sent).toContainEqual([5, IPC.githubIssuesChanged('project-1'), []])
+    expect((await service.query({ projectId: 'project-1', columnId: null, pageSize: 50 })).mappingNotApproved)
+      .toBeUndefined()
+
+    sent.length = 0
+    const approved = await controller.status('project-1')
+    await controller.revoke({ projectId: 'project-1', expectedRevision: approved.control.revision })
+    expect(sent.some(([uiId, channel]) => uiId === 5 && channel === IPC.githubIssuesChanged('project-1'))).toBe(true)
   })
 })

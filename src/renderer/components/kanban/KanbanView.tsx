@@ -34,7 +34,7 @@ import {
   githubMoveIntent,
   type GitHubMoveConfirmation
 } from '../../lib/githubIssueMove'
-import { githubThrottleSentence } from '../../lib/githubSyncStatus'
+import { GITHUB_MAPPING_NOT_APPROVED, githubThrottleSentence } from '../../lib/githubSyncStatus'
 import { pullStatusFreshness, type GitHubPullStatus } from '@shared/github-pull-status'
 import { pullsClosingIssue, pullsForCard, pullStatusByNumber } from '../../lib/pullLinks'
 import { usePullAutoMove, usePullChase } from './usePullAutoMove'
@@ -657,7 +657,7 @@ export const KanbanView = memo(function KanbanView({
         {board.github && githubReadOnly && (
           <span className="kanban-github-status kanban-github-status--error">
             {githubMappingNotApproved
-              ? 'The column labels changed. Approve them in Settings → GitHub Issues to move issues again.'
+              ? GITHUB_MAPPING_NOT_APPROVED
               : 'GitHub issues are read only until configuration and refresh are complete.'}
           </span>
         )}

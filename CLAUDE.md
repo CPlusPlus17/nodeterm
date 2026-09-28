@@ -5059,6 +5059,14 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   `snapshot.etags.heartbeat` (a restart does not pay a full read), and a 304 NEVER skips a full
   reconciliation (a deletion or transfer does not move the top item) or an incomplete repository.
   It covers pull requests by construction: same endpoint, same `updated_at` the scan filters on.
+  **A 304 still prompts the board to re-read** (an empty delta, served from the local cache, no
+  GitHub cost) exactly as every successful refresh always did: a page is not only issues — read
+  only, the mapping approval and the completion column are derived by the host at query time, and
+  the first version, which emitted nothing on a 304, left a board read only after its user
+  approved the mapping (review of #1001). Approve and revoke also notify the project's open boards
+  at once (`service.notifyProject`). **Unknown `state_reason` values decode as no reason**: GitHub
+  added `duplicate` (one of cli/cli's last 100 closed issues, measured 2026-09-29), and the strict
+  decoder failed that repository's whole scan as malformed — it never synced.
   **The credential check is conditional too** (`createTokenValidator`): every poll re-resolves the
   credential (30 s memo, 60 s poll), and each resolve was an unconditional `GET /user` — one real
   request per poll even after the heartbeat. With `If-None-Match` an unchanged identity is a free

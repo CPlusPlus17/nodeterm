@@ -130,15 +130,24 @@ function pullFrom(item: Record<string, unknown>): GitHubPullMeta | null | undefi
   return { draft: item.draft === true, mergedAt: (mergedAt ?? null) as string | null }
 }
 
+const KNOWN_STATE_REASONS: ReadonlySet<string> = new Set(['completed', 'not_planned', 'reopened', 'duplicate'])
+
+/** GitHub grows this enum (`duplicate` arrived after the decoder was written, and one such issue
+ *  failed the WHOLE scan as malformed, so that repository never synced). A value we do not know
+ *  yet is read as "no reason" — the issue itself is perfectly valid. */
+function stateReasonFrom(value: unknown): GitHubIssue['stateReason'] {
+  return typeof value === 'string' && KNOWN_STATE_REASONS.has(value)
+    ? value as GitHubIssue['stateReason']
+    : null
+}
+
 function issueFrom(value: unknown): GitHubIssue | null {
   const item = object(value)
   if (!item || !positiveInteger(Number(item.id), Number.MAX_SAFE_INTEGER) ||
       !positiveInteger(Number(item.number), Number.MAX_SAFE_INTEGER) ||
       !string(item.title, 1_024) || !(item.body === null || string(item.body, 1_000_000)) ||
       (item.state !== 'open' && item.state !== 'closed') ||
-      !(item.state_reason === null || item.state_reason === undefined ||
-        item.state_reason === 'completed' || item.state_reason === 'not_planned' ||
-        item.state_reason === 'reopened') ||
+      !(item.state_reason === null || item.state_reason === undefined || string(item.state_reason, 64)) ||
       !string(item.html_url, 2_048) || !string(item.url, 2_048) ||
       !Array.isArray(item.labels) || item.labels.length > 100 ||
       !Array.isArray(item.assignees) || item.assignees.length > 100 ||
@@ -165,7 +174,7 @@ function issueFrom(value: unknown): GitHubIssue | null {
     title: item.title,
     body: item.body ?? '',
     state: item.state,
-    stateReason: (item.state_reason ?? null) as GitHubIssue['stateReason'],
+    stateReason: stateReasonFrom(item.state_reason),
     htmlUrl: html.toString(),
     apiUrl: api.toString(),
     labels: labels as GitHubIssueLabel[],

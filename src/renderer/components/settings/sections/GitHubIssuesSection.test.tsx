@@ -6,7 +6,8 @@ import type { GitHubAuthStatus, GitHubControlView } from '@shared/github-issues'
 import { useProjects } from '../../../state/projects'
 import { registerWorkspaceDirty } from '../../../state/workspaceDirty'
 import { SettingsSearchContext } from '../context'
-import { GitHubIssuesSection } from './GitHubIssuesSection'
+import { GitHubIssuesSection, STATUS_AFTER_EDIT_MS } from './GitHubIssuesSection'
+import { SAVE_DEBOUNCE_MS } from '../../../lib/savePersistence'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -176,6 +177,28 @@ describe('GitHubIssuesSection', () => {
     const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Approve column labels')!
     await act(async () => { button.click() })
     expect(approve).toHaveBeenCalledWith({ projectId: 'p1', repository: 'owner/repo', expectedRevision: 0 })
+  })
+
+  it('re-reads the status once a label edit has had time to save, instead of keeping "Ready as"', async () => {
+    stub(viewWith({}, true))
+    await mount()
+    const before = status.mock.calls.length
+    vi.useFakeTimers()
+    try {
+      const input = host.querySelector<HTMLInputElement>('#github-label-todo')!
+      await act(async () => {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+        setter.call(input, 'workflow:ready')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      // Not before the edit can have reached the project file the host reads.
+      await act(async () => { vi.advanceTimersByTime(SAVE_DEBOUNCE_MS) })
+      expect(status.mock.calls.length).toBe(before)
+      await act(async () => { vi.advanceTimersByTime(STATUS_AFTER_EDIT_MS - SAVE_DEBOUNCE_MS) })
+      expect(status.mock.calls.length).toBeGreaterThan(before)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('clears the write-only token field after Save and never renders the stored token', async () => {

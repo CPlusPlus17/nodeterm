@@ -38,3 +38,8 @@ export function githubUnreachableSentence(
   }
   return 'GitHub could not be reached to check the sign-in.'
 }
+
+/** Why the board will not write: this machine has not approved the column mapping now in the
+ *  project file. Shared by the board header and a refused move, so both point at the same fix. */
+export const GITHUB_MAPPING_NOT_APPROVED =
+  'The column labels changed. Approve them in Settings → GitHub Issues to move issues again.'
