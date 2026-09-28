@@ -33,13 +33,13 @@ export const PULL_STATUS_QUERY = `query($owner:String!,$name:String!){
     open: pullRequests(states:OPEN, first:${OPEN_PULLS_PER_READ}, orderBy:{field:UPDATED_AT,direction:DESC}){
       totalCount
       nodes{
-        number headRefName headRefOid isDraft mergeable mergeStateStatus
+        number headRefName headRefOid isCrossRepository isDraft mergeable mergeStateStatus
         closingIssuesReferences(first:${MAX_CLOSING_ISSUES}){ nodes{ number repository{ nameWithOwner } } }
         commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state } } } }
       }
     }
     recent: pullRequests(states:[MERGED,CLOSED], first:${RECENT_PULLS_PER_READ}, orderBy:{field:UPDATED_AT,direction:DESC}){
-      nodes{ number headRefName state }
+      nodes{ number headRefName isCrossRepository state }
     }
   }
 }`
@@ -69,7 +69,7 @@ export interface PullStatusRead {
   open: PullStatusFacts[]
   /** Recently merged/closed PRs, newest first — enough to keep a session card's branch link (and
    *  see it merge) after its PR leaves the open list. */
-  recent: Array<{ number: number; headRefName: string; lifecycle: 'merged' | 'closed' }>
+  recent: Array<{ number: number; headRefName: string; crossRepository: boolean; lifecycle: 'merged' | 'closed' }>
   access: { ci: boolean; merge: boolean }
   truncated: boolean
   rateLimit?: GraphQLRateLimit
@@ -179,7 +179,9 @@ export function parsePullStatusResponse(body: unknown, repository: string): Pull
   const open = list(openConnection, OPEN_PULLS_PER_READ).map((entry): PullStatusFacts => {
     const node = object(entry)
     if (!node || !positive(node.number) || !refName(node.headRefName) || !oid(node.headRefOid) ||
-        typeof node.isDraft !== 'boolean') throw new GraphQLShapeError()
+        typeof node.isDraft !== 'boolean' || typeof node.isCrossRepository !== 'boolean') {
+      throw new GraphQLShapeError()
+    }
     let mergeable: GitHubMergeable | null = null
     let mergeStateStatus: string | null = null
     if (access.merge) {
@@ -223,6 +225,7 @@ export function parsePullStatusResponse(body: unknown, repository: string): Pull
       number: node.number,
       headRefName: node.headRefName,
       headRefOid: node.headRefOid,
+      crossRepository: node.isCrossRepository,
       isDraft: node.isDraft,
       mergeable,
       mergeStateStatus,
@@ -234,10 +237,12 @@ export function parsePullStatusResponse(body: unknown, repository: string): Pull
   const recent = list(repositoryValue.recent, RECENT_PULLS_PER_READ).map((entry) => {
     const node = object(entry)
     if (!node || !positive(node.number) || !refName(node.headRefName) ||
+        typeof node.isCrossRepository !== 'boolean' ||
         (node.state !== 'MERGED' && node.state !== 'CLOSED')) throw new GraphQLShapeError()
     return {
       number: node.number,
       headRefName: node.headRefName,
+      crossRepository: node.isCrossRepository,
       lifecycle: node.state === 'MERGED' ? 'merged' as const : 'closed' as const
     }
   })

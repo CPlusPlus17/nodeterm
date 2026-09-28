@@ -21,7 +21,7 @@ const config: NormalisedProjectKanbanGitHub = {
 
 function facts(number: number, over: Partial<PullStatusFacts> = {}): PullStatusFacts {
   return {
-    number, headRefName: `feat/${number}`, headRefOid: HEAD, isDraft: false, mergeable: 'MERGEABLE',
+    number, headRefName: `feat/${number}`, headRefOid: HEAD, crossRepository: false, isDraft: false, mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN', rollup: 'SUCCESS', rollupOid: HEAD, closes: [], ...over
   }
 }

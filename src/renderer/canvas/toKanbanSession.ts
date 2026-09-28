@@ -58,3 +58,24 @@ export function toKanbanSession(n: CanvasNode): KanbanSession | null {
     }
   }
 }
+
+/** The branch of the worktree the node's nearest BOUND ancestor group works in — the same frame
+ *  `cwdForNewNodeIn` hands a worktree path from. A pull request whose head is this branch links to
+ *  the node's card. Read from the persisted binding (`data.worktree.branch`), so it needs no git
+ *  read; a stale binding (directory deleted) still names the branch, which is exactly when its PR
+ *  tends to merge. Cycle-safe: a hand-edited parent loop ends the walk. */
+export function worktreeBranchOf(n: CanvasNode, byId: ReadonlyMap<string, CanvasNode>): string | undefined {
+  const seen = new Set<string>()
+  let parentId = n.parentId
+  while (parentId && !seen.has(parentId)) {
+    seen.add(parentId)
+    const parent = byId.get(parentId)
+    if (!parent) return undefined
+    const worktree = parent.data?.worktree as { branch?: unknown } | undefined
+    if (parent.type === 'group' && worktree && typeof worktree.branch === 'string' && worktree.branch) {
+      return worktree.branch
+    }
+    parentId = parent.parentId
+  }
+  return undefined
+}

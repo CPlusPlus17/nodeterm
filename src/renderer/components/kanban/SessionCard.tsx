@@ -8,6 +8,8 @@ import { NodeIconView } from '../NodeIcon'
 import { LabelChips } from './LabelChips'
 import { PRIORITIES } from './CardMetaBar'
 import type { KanbanSession } from './KanbanView'
+import type { GitHubPullStatus, PullStatusFreshness } from '@shared/github-pull-status'
+import { PullRefChip } from './PullStatusBadges'
 
 const PRIO_COLOR = Object.fromEntries(PRIORITIES.map((p) => [p.id, p.color])) as Record<KanbanPriority, string>
 
@@ -26,10 +28,14 @@ interface SessionCardProps {
   onDropAt: (nodeId: string, side: 'before' | 'after') => void
   /** Right-click on the card — opens the actions menu at the cursor. */
   onContext: (nodeId: string, x: number, y: number) => void
+  /** Pull requests linked to this card through its worktree branch (stable array per card). */
+  pulls?: GitHubPullStatus[]
+  pullFreshness?: PullStatusFreshness
 }
 
 export const SessionCard = memo(function SessionCard({
-  session, meta, labels = [], onOpen, onDragStart, onDragEnd, onDropAt, onContext
+  session, meta, labels = [], onOpen, onDragStart, onDragEnd, onDropAt, onContext, pulls,
+  pullFreshness = 'fresh'
 }: SessionCardProps) {
   // THIS card's agent status, subscribed per card rather than threaded down from the board.
   // KanbanView used to hold `useAgentStatus((s) => s.byId)` and pass the map through the column:
@@ -149,6 +155,13 @@ export const SessionCard = memo(function SessionCard({
         )}
         {status?.unread && <span className="kanban-card__unread" />}
       </div>
+      {pulls && pulls.length > 0 && (
+        <div className="pull-refs pull-refs--session">
+          {pulls.slice(0, 3).map((pull) => (
+            <PullRefChip key={pull.number} status={pull} freshness={pullFreshness} />
+          ))}
+        </div>
+      )}
       {(labels.length > 0 || assignees.length > 0 || due !== undefined || priority !== undefined) && (
         <div className="kanban-card__metarow">
           {/* Labels share the priority/due/avatars row (left); the meta chips hug the right. */}

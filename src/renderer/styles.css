@@ -10553,6 +10553,169 @@ button.group-node__setup:disabled {
 .github-pull-badge--closed {
   color: var(--danger);
 }
+/* Pull request CI + mergeability (PullStatusBadges.tsx). Hues are the text-safe status tokens:
+   the text sits on the card. A stale snapshot is dashed; one stale past the threshold greys. */
+.pull-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 4px 0 0 17px;
+  font-size: 10px;
+}
+.github-issue-modal .pull-status {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+.pull-status__ci--passed { color: var(--success); }
+.pull-status__ci--failed { color: var(--danger); }
+.pull-status__ci--pending { color: var(--caution); }
+.pull-status__ci--skipped,
+.pull-status__ci--neutral { color: rgba(var(--tint-rgb), 0.5); }
+.pull-status__merge--ready { color: var(--success); }
+.pull-status__merge--conflict { color: var(--danger); }
+.pull-status__merge--blocked,
+.pull-status__merge--behind { color: var(--warn); }
+.pull-status__merge--undecided { color: rgba(var(--tint-rgb), 0.5); }
+.pull-status__stale {
+  color: rgba(var(--tint-rgb), 0.45);
+  font-style: italic;
+}
+.pull-status--stale {
+  text-decoration: underline dashed rgba(var(--tint-rgb), 0.35);
+}
+.pull-status--expired,
+.pull-status--expired * {
+  color: rgba(var(--tint-rgb), 0.35) !important;
+}
+.pull-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 0 17px;
+}
+.pull-refs--session {
+  margin: 6px 0 0;
+}
+.github-issue-modal .pull-refs {
+  margin: 8px 0 0;
+}
+.pull-ref {
+  border: 1px solid rgba(var(--tint-rgb), 0.15);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: rgba(var(--tint-rgb), 0.7);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.pull-ref--merged { color: #a371f7; }
+.pull-ref--closed { color: rgba(var(--tint-rgb), 0.45); }
+.pull-ref__ready { color: var(--success); }
+.pull-ref__conflict { color: var(--danger); }
+.pull-closes {
+  margin: 4px 0 0 17px;
+  color: rgba(var(--tint-rgb), 0.5);
+  font-size: 10px;
+}
+.github-issue-modal .pull-closes {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+.pull-checks {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.pull-checks__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.pull-checks__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  color: var(--text);
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+}
+button.pull-checks__name {
+  cursor: pointer;
+  text-decoration: underline dotted rgba(var(--tint-rgb), 0.35);
+}
+.pull-checks__state,
+.pull-checks__note {
+  color: rgba(var(--tint-rgb), 0.5);
+  font-size: 11px;
+}
+.pull-checks__note {
+  margin: 8px 0 0;
+}
+/* The card modal's "Pull requests" section (CardPullRequests.tsx). */
+.card-pulls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 16px 8px;
+  border-bottom: 1px solid rgba(var(--tint-rgb), 0.08);
+  font-size: 12px;
+}
+.card-pulls__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.card-pulls__title {
+  color: rgba(var(--tint-rgb), 0.6);
+  font-size: 11px;
+  font-weight: 600;
+}
+.card-pulls__branch {
+  color: rgba(var(--tint-rgb), 0.45);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
+.card-pulls__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card-pulls__row--unlinked .pull-ref {
+  opacity: 0.6;
+}
+.card-pulls__action {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: rgba(var(--tint-rgb), 0.55);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.card-pulls__action:hover {
+  color: var(--text);
+}
+.card-pulls__note {
+  margin: 0;
+  color: rgba(var(--tint-rgb), 0.5);
+  font-size: 11px;
+}
+.card-pulls__note--warn {
+  color: var(--warn);
+}
+.card-pulls__optout {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(var(--tint-rgb), 0.65);
+  font-size: 11px;
+}
 .github-issue-source {
   flex: 0 0 auto;
   border: 1px solid rgba(var(--tint-rgb), 0.15);

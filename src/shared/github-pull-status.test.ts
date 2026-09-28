@@ -26,6 +26,7 @@ function facts(over: Partial<PullStatusFacts> = {}): PullStatusFacts {
     number: 7,
     headRefName: 'feat/x',
     headRefOid: HEAD,
+    crossRepository: false,
     isDraft: false,
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',

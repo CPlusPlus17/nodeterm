@@ -16,6 +16,7 @@ function node(number: number, over: Record<string, unknown> = {}) {
     number,
     headRefName: `feat/${number}`,
     headRefOid: HEAD,
+    isCrossRepository: false,
     isDraft: false,
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
@@ -41,13 +42,14 @@ function body(nodes: unknown[], over: { errors?: unknown[]; totalCount?: number;
 describe('parsePullStatusResponse', () => {
   it('decodes open pull requests, the rate limit and recent merges', () => {
     const read = parsePullStatusResponse(body([node(1)], {
-      recent: [{ number: 9, headRefName: 'feat/9', state: 'MERGED' }]
+      recent: [{ number: 9, headRefName: 'feat/9', isCrossRepository: true, state: 'MERGED' }]
     }), REPO)
     expect(read.open).toEqual([{
-      number: 1, headRefName: 'feat/1', headRefOid: HEAD, isDraft: false, mergeable: 'MERGEABLE',
+      number: 1, headRefName: 'feat/1', headRefOid: HEAD, crossRepository: false, isDraft: false,
+      mergeable: 'MERGEABLE',
       mergeStateStatus: 'CLEAN', rollup: 'SUCCESS', rollupOid: HEAD, closes: []
     }])
-    expect(read.recent).toEqual([{ number: 9, headRefName: 'feat/9', lifecycle: 'merged' }])
+    expect(read.recent).toEqual([{ number: 9, headRefName: 'feat/9', crossRepository: true, lifecycle: 'merged' }])
     expect(read.access).toEqual({ ci: true, merge: true })
     expect(read.rateLimit).toEqual({ cost: 1, remaining: 4820, limit: 5000, resetAt: Date.parse('2026-09-28T21:01:03Z') })
   })

@@ -10,7 +10,7 @@ const KEY = 'user-1\0o/r'
 
 function facts(number: number, over: Partial<PullStatusFacts> = {}): PullStatusFacts {
   return {
-    number, headRefName: `feat/${number}`, headRefOid: HEAD, isDraft: false, mergeable: 'MERGEABLE',
+    number, headRefName: `feat/${number}`, headRefOid: HEAD, crossRepository: false, isDraft: false, mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN', rollup: 'SUCCESS', rollupOid: HEAD, closes: [], ...over
   }
 }
@@ -33,7 +33,7 @@ describe('GitHubPullStatusTracker', () => {
   it('publishes open pull requests and recent merges', async () => {
     const { subject } = tracker()
     await subject.read(KEY, 'user-1', 'heartbeat', async () => read([facts(1)], {
-      recent: [{ number: 2, headRefName: 'feat/2', lifecycle: 'merged' }]
+      recent: [{ number: 2, headRefName: 'feat/2', crossRepository: false, lifecycle: 'merged' }]
     }))
     const board = subject.board(KEY)
     expect(board.pulls.map((pull) => [pull.number, pull.lifecycle, pull.ci, pull.merge])).toEqual([

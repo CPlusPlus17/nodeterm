@@ -6,6 +6,8 @@ import type {
   ProjectKanbanGitHub
 } from '@shared/github-issues'
 import { useProjects } from '../../../state/projects'
+import { useSettings } from '../../../state/settings'
+import { prunePullAutoMove, sanitizeKanbanPullAutoMove } from '@shared/kanban-pull-links'
 import { markWorkspaceDirty } from '../../../state/workspaceDirty'
 import { SettingsSection } from '../SettingsSection'
 import { SearchableRow } from '../SearchableRow'
@@ -39,6 +41,11 @@ const ROWS = {
   mapping: {
     title: 'Column labels',
     keywords: ['github', 'labels', 'columns', 'mapping', 'workflow', 'completion']
+  },
+  pullAutoMove: {
+    title: 'Move merged session cards',
+    description: 'When every pull request linked to a session card has merged, move the card to this column.',
+    keywords: ['github', 'pull request', 'merged', 'move', 'automation', 'worktree', 'session']
   },
   data: {
     title: 'Sync and local data',
@@ -103,6 +110,22 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
   const [noticeRow, setNoticeRow] = useState<NoticeRow>('data')
   const [confirmation, setConfirmation] = useState<Confirmation>(null)
   const searchQuery = useSettingsSearch()
+  const autoMoveRaw = useSettings((state) => state.settings.kanbanPullAutoMove)
+  const updateSettings = useSettings((state) => state.update)
+  const autoMoveColumn = projectId
+    ? sanitizeKanbanPullAutoMove(autoMoveRaw).projects[projectId]?.columnId ?? ''
+    : ''
+  /** Machine-local on purpose (see @shared/kanban-pull-links): switching it on here never changes
+   *  what a teammate's app does. Every write prunes projects this machine no longer has. */
+  const setAutoMoveColumn = (columnId: string): void => {
+    if (!projectId) return
+    const live = new Set(useProjects.getState().projects.map((item) => item.id))
+    const current = prunePullAutoMove(sanitizeKanbanPullAutoMove(autoMoveRaw), live)
+    const { [projectId]: _previous, ...others } = current.projects
+    updateSettings({
+      kanbanPullAutoMove: { projects: columnId ? { ...others, [projectId]: { columnId } } : others }
+    })
+  }
 
   /** `GitHubHostController.status(projectId)` MASKS the auth block for a project that is not
    *  approved on this machine (`ghAuthenticated: false, activeProvider: null, tokenPresent: false`)
@@ -554,6 +577,26 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                 }
               />
             </div>
+          </SearchableRow>
+
+          <SearchableRow {...ROWS.pullAutoMove}>
+            <FieldRow
+              label={ROWS.pullAutoMove.title}
+              htmlFor="github-pull-auto-move"
+              description={`${ROWS.pullAutoMove.description} Only session cards in a worktree group move — GitHub closes linked issues itself. A card moves only after this machine saw one of its pull requests open, and never if one closed without merging. This setting is for this machine only.`}
+              control={
+                <Select
+                  id="github-pull-auto-move"
+                  value={board.columns.some((column) => column.id === autoMoveColumn) ? autoMoveColumn : ''}
+                  onChange={(event) => setAutoMoveColumn(event.target.value)}
+                >
+                  <option value="">Off</option>
+                  {board.columns.map((column) => (
+                    <option key={column.id} value={column.id}>{column.title}</option>
+                  ))}
+                </Select>
+              }
+            />
           </SearchableRow>
 
           <SearchableRow {...ROWS.data}>

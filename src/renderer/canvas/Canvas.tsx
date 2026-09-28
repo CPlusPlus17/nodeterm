@@ -658,7 +658,8 @@ import {
 } from './claude-account-switch'
 import type { CodexAccount } from '@shared/codex-account'
 import { useSystemCodexAccount } from '../state/systemCodexAccount'
-import { toKanbanSession } from './toKanbanSession'
+import { toKanbanSession, worktreeBranchOf } from './toKanbanSession'
+import { applyPullAutoMove } from '../lib/pullAutoMove'
 import { useWallpaperBackground, wallpaperLayers } from '../state/wallpaper'
 import { showCanvasDots } from '../lib/canvasDots'
 
@@ -2812,6 +2813,31 @@ export function Canvas() {
       }
     },
     [markDirty, api, seedBoard]
+  )
+
+  // The board moving a session card by itself because every pull request linked to it merged
+  // (lib/pullAutoMove.ts decides). A compare-and-set against the store's CURRENT board: the card
+  // must still sit in the column the decision saw, on the project the decision was made for. Logged
+  // as ONE card-moved line naming the PRs — it bypasses onKanbanChange so the diff funnel does not
+  // log the same move a second time without its reason.
+  const autoMoveCardFromPulls = useCallback(
+    (projectId: string, cardId: string, fromColumnId: string | null, toColumnId: string, note: string) => {
+      if (useProjects.getState().activeProjectId !== projectId) return
+      const current = useProjects.getState().getProject(projectId)?.kanban
+      if (!current) return
+      const next = applyPullAutoMove(current, cardId, fromColumnId, toColumnId)
+      if (!next) return
+      useProjects.getState().setProjectKanban(projectId, next)
+      markDirty()
+      const title = (id: string | null): string =>
+        (id && current.columns.find((column) => column.id === id)?.title) || 'Ungrouped'
+      useBoardLog.getState().append(api, projectId, {
+        kind: 'event',
+        nodeId: cardId,
+        event: { type: 'card-moved', from: title(fromColumnId), to: title(toColumnId), title: note }
+      })
+    },
+    [markDirty, api]
   )
 
   // The node states that go on the wire: React Flow's managed nodes minus the ephemeral cards
@@ -9609,13 +9635,18 @@ export function Canvas() {
   // board's own consumer is rendered under the same `kanbanOpen` flag, and the board-log's
   // `cardTitle` reads the nodes directly (see onKanbanChange), so nothing else depends on this
   // list existing while the canvas is what you are looking at.
-  const kanbanSessions = useMemo(
-    () =>
-      perProjectKanbanOpen
-        ? nodes.map(toKanbanSession).filter((s): s is KanbanSession => s !== null)
-        : NO_KANBAN_SESSIONS,
-    [nodes, perProjectKanbanOpen]
-  )
+  const kanbanSessions = useMemo(() => {
+    if (!perProjectKanbanOpen) return NO_KANBAN_SESSIONS
+    // The worktree branch a card works on comes from its enclosing bound group — the link a pull
+    // request's head branch is matched against (lib/pullLinks.ts).
+    const byId = new Map(nodes.map((n) => [n.id, n]))
+    return nodes.flatMap((n): KanbanSession[] => {
+      const card = toKanbanSession(n)
+      if (!card) return []
+      const worktreeBranch = worktreeBranchOf(n, byId)
+      return [worktreeBranch ? { ...card, worktreeBranch } : card]
+    })
+  }, [nodes, perProjectKanbanOpen])
 
   // Create a node from the board's per-column "+ New" menu: it lands on the canvas (view
   // center) and, for a real column, is assigned there. The assignment is written directly —
@@ -14864,6 +14895,7 @@ export function Canvas() {
           onBrowserNav={browserNavFromKanban}
           onSetIcon={setNodeIcon}
           accountMenuItems={accountSwitchRows}
+          onAutoMoveFromPulls={autoMoveCardFromPulls}
         />
       )}
       <UpdateCard />

@@ -39,6 +39,8 @@ export interface PullStatusFacts {
   number: number
   headRefName: string
   headRefOid: string
+  /** The head branch lives in a fork. Its name says nothing about this repository's branches. */
+  crossRepository: boolean
   isDraft: boolean
   mergeable: GitHubMergeable | null
   mergeStateStatus: string | null
@@ -54,6 +56,9 @@ export interface GitHubPullStatus {
   number: number
   lifecycle: PullLifecycle
   headRefName: string
+  /** Present (true) when the head branch is in a fork: such a PR never links to a local worktree
+   *  branch, however its name matches. */
+  crossRepository?: true
   /** Open PRs only: the commit the status below was taken at. */
   headRefOid?: string
   ci?: PullCiState
@@ -146,6 +151,7 @@ export function pullStatusFrom(
     number: facts.number,
     lifecycle,
     headRefName: facts.headRefName,
+    ...(facts.crossRepository ? { crossRepository: true as const } : {}),
     headRefOid: facts.headRefOid,
     ...(ci !== undefined ? { ci } : {}),
     ...(merge !== undefined ? { merge } : {}),

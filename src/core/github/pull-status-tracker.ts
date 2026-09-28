@@ -186,7 +186,11 @@ export class GitHubPullStatusTracker {
     const finished = result.recent
       .filter((pull) => !openNumbers.has(pull.number))
       .map((pull): GitHubPullStatus => ({
-        number: pull.number, lifecycle: pull.lifecycle, headRefName: pull.headRefName, closes: []
+        number: pull.number,
+        lifecycle: pull.lifecycle,
+        headRefName: pull.headRefName,
+        ...(pull.crossRepository ? { crossRepository: true as const } : {}),
+        closes: []
       }))
     const pulls = [...open, ...finished]
     const nextNumbers = new Set(pulls.map((pull) => pull.number))
