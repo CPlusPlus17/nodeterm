@@ -23,6 +23,7 @@ import { parseGrokChat } from './grok-chat'
 import type { RemoteGrokChat } from './remote-grok-chat'
 import { readGeminiChatTranscript } from './gemini-chat'
 import { chatMessagesFromCodex, locateCodexRollout, parseCodexChatWindow } from './codex-chat'
+import { chatMessagesFromCopilot, locateCopilotTranscript, parseCopilotChatWindow } from './copilot-chat'
 import { locateGrok } from './handoff/locate'
 import { capabilityAgentId } from '../shared/agents/config'
 import {
@@ -141,6 +142,7 @@ async function parseGrowingWindow(
   page: ChatTranscriptPage,
   first: { data: Buffer; start: number },
   read: WindowRead,
+  // The window parser: claude's, or another append-only JSONL reader's (codex's, copilot's).
   parse: (buf: Buffer, bufStart: number) => ChatWindowParse = parseChatWindow
 ): Promise<ChatTranscriptResult> {
   let w = first
@@ -241,6 +243,38 @@ async function readCodexChatPage(
   const w = await readChatWindow(p, page)
   if (!w) return notFoundPage()
   return parseGrowingWindow(page, w, async (pg) => (await readChatWindow(p, pg)) ?? null, parseCodexChatWindow)
+}
+
+/**
+ * A copilot node's read. Its journal (`<COPILOT_HOME>/session-state/<id>/events.jsonl`) is
+ * append-only JSONL, so it pages exactly like claude's — same window, growth and cursor rules
+ * (`parseGrowingWindow`), copilot's record parser.
+ *
+ * Located STRICTLY by the node's session id: no cwd fallback, no claude resolver, no hook-fed claude
+ * path, no remote claude reader — each of those answers a copilot id with some other session. A
+ * remote (SSH) node's journal is on the host and no remote copilot reader exists yet, so it is
+ * `unreadable` (paged) / not found (legacy) BEFORE anything is read — never this machine's disk.
+ * A local read that fails is a plain not-found, like grok's, so `unreadable` on a copilot result
+ * can only mean "remote", which is what the panel says.
+ */
+async function readCopilotChat(
+  sessionId: string | undefined,
+  remoteOnly: boolean | undefined,
+  page: ChatTranscriptPage | null
+): Promise<ChatTranscriptResult> {
+  if (remoteOnly) return page ? unreadablePage() : { messages: [], found: false }
+  const p = await locateCopilotTranscript(sessionId)
+  if (!page) {
+    const buf = p ? await readCappedTail(p) : undefined
+    return buf === undefined ? { messages: [], found: false } : { messages: chatMessagesFromCopilot(buf), found: true }
+  }
+  if (!p) return notFoundPage()
+  const w = await readChatWindow(p, page)
+  if (!w) return notFoundPage()
+  const out = await parseGrowingWindow(page, w, async (pg) => (await readChatWindow(p, pg)) ?? null, parseCopilotChatWindow)
+  // A LOCAL growth re-read that failed (the journal vanished mid-read) comes back `unreadable`, but
+  // on a copilot result the panel reads `unreadable` as "remote, unsupported" — keep that claim true.
+  return out.unreadable ? notFoundPage() : out
 }
 
 /**
@@ -351,7 +385,7 @@ export async function readChatTranscript(
   }
   // Gemini, routed through the base harness so a custom agent built on it (which the relay serves)
   // reads gemini's file too. Its own locator, keyed strictly on the session id in the file header —
-  // never claude's resolver, never a cwd — and local-only, like grok.
+  // never claude's resolver, never a cwd — and local-only (`CHAT_LOCAL_ONLY`).
   if (agentId && capabilityAgentId(agentId) === 'gemini') return readGeminiChatTranscript({ sessionId, remoteOnly }, page)
   // Codex — the builtin or a custom agent whose base harness it is — is routed BEFORE the claude
   // path for the same reason as grok: a codex thread id never resolves under claude's tree, and the
@@ -365,6 +399,9 @@ export async function readChatTranscript(
     const text = cp ? await readCappedTail(cp) : undefined
     return text === undefined ? { messages: [], found: false } : { messages: chatMessagesFromCodex(text), found: true }
   }
+  // Copilot, by its base harness (a custom agent built on it reads the same journal). Before
+  // anything claude-shaped, for the same reason as grok and codex. Local-only (`CHAT_LOCAL_ONLY`).
+  if (agentId && capabilityAgentId(agentId) === 'copilot') return readCopilotChat(sessionId, remoteOnly, page)
   if (page) return readChatPage({ sessionId, cwd, accountId, nodeId, ...(remoteOnly ? { remoteOnly } : {}) }, page, deps)
   const remote = deps.readRemote ? await deps.readRemote({ sessionId, cwd, accountId, nodeId }) : null
   // A resolved-but-unreadable remote file is NOT "no conversation yet" — the read failed

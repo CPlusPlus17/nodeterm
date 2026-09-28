@@ -164,3 +164,107 @@ Each agent with its own reader keeps its fixtures in a subdirectory with its own
 by its own test; the pager and step format are the ones above.
 
 - `codex/` — codex rollouts (`src/core/codex-chat.ts`, `src/core/codex-chat-fixtures.test.ts`).
+- `gemini/` — gemini session files (`src/core/gemini-chat.ts`), one capped page; see its README.
+- `grok/` — grok `chat_history.jsonl` (`src/core/grok-chat.ts`), one capped page; see its README.
+- `copilot/` — copilot session journals (`src/core/copilot-chat.ts`); its rules are the "Copilot"
+  section below.
+
+## Copilot (`copilot/`)
+
+The same contract for GitHub Copilot CLI's reader (`src/core/copilot-chat.ts`). Its session journal
+is `<COPILOT_HOME>/session-state/<sessionId>/events.jsonl` (`COPILOT_HOME` defaults to
+`~/.copilot`; the snap package writes under `~/snap/copilot-cli/common/.copilot`), one session
+event per line in the envelope `{type, data, [agentId], id, timestamp, parentId}`. The record
+shapes were **measured** on copilot 1.0.88 (a real CLI run in BYOK mode against a local fake model,
+so every byte of content was synthetic) and cross-checked against the CLI's own
+`schemas/session-events.schema.json`. The inputs here are synthetic too.
+
+```sh
+UPDATE_CHAT_FIXTURES=1 npx vitest run src/core/copilot-chat-fixtures.test.ts
+```
+
+| path | what it is |
+|---|---|
+| `copilot/inputs/<name>.jsonl` | A synthetic copilot session journal. |
+| `copilot/expected/<name>.pages.json` | The page sequence, in exactly the format of the claude set above. |
+
+**The pager and the window rules are the claude ones, byte for byte** (256 KiB tail, 512 KiB older
+pages, ×4 growth to 5 MiB, one lookbehind byte, `olderCursor`, `noCompleteLine`): the journal is
+append-only JSONL (compaction APPENDS `session.compaction_*` events; measured), so core reuses
+`parseChatWindow` and `parseGrowingWindow` with copilot's record parser. `key` is the line's
+absolute byte offset, a tool part's `id` is the call id, both only on a paged read.
+
+### Record rules (the Swift port must replicate this exactly)
+
+`parseCopilotRecords`, applied to each complete line in order:
+
+1. A blank line is ignored. A line that is not JSON, not a JSON object, has no string `type` or no
+   object `data` is skipped (and counted in the reader's diagnostic `skipped`, which is never on the
+   wire).
+2. **Sub-agent events are dropped**, by the CLI's own test: a non-empty string `agentId` on the
+   envelope, OR a non-empty string `data.agentId`, OR a non-empty string `data.parentToolCallId`.
+   A sub-agent's turns belong to the `task` call whose result the main thread already shows.
+3. `at` = `Date.parse(timestamp)` in epoch ms when the envelope's `timestamp` is a parseable
+   non-empty string, else absent.
+4. `user.message`: `data.content` must be a string (else skipped). It becomes
+   `{role:"user", parts:[{kind:"text", text: content}]}` (verbatim, untrimmed) only when
+   `content.trim()` is non-empty AND the source is one copilot's own timeline shows: `data.source`
+   absent, `null`, `"user"`, or a string starting with `command-`, `schedule-` or `autopilot-`. Any
+   other source (`skill-*` injections, `agent-*` inter-agent prompts, a non-string) is hidden.
+   `transformedContent` (the model-facing text with injected datetime/instructions) and
+   `attachments` are never read.
+5. `assistant.message`: `data.content` (absent or `null` = `""`) must be a string and
+   `data.toolRequests` (absent or `null` = `[]`) an array, else the record is skipped. On a paged
+   read, `model` is set to `data.model` when it is a string of 1..100 UTF-16 units and CLEARED
+   otherwise, for every main-thread `assistant.message` (so the newest one decides, even one that
+   yields no parts; never carried forward). Parts, in order: a text part when `content.trim()` is
+   non-empty (text verbatim); then per request, which must be an object with non-empty string
+   `name` and `toolCallId` (else that one request is skipped): `{kind:"tool", name, arg}`, plus
+   `id: toolCallId` when paged. Pushed as an assistant message only when it has parts.
+   `reasoningText`, `reasoningOpaque`, `encryptedContent` and the `assistant.reasoning` event are
+   never read.
+6. **The `arg` rule:** `arguments` a string (a `custom` tool such as `apply_patch`) → its first 200
+   UTF-16 units. A plain object → the first of `command`, `path`, `file_path`, `pattern`, `url`,
+   `query`, `description`, `prompt`, `skill`, `question`, `intent` whose value is a NON-EMPTY
+   STRING (a non-string under an earlier key does not stop the search), first 200 units, untrimmed.
+   Anything else → `""`.
+7. `tool.user_requested` (a tool the USER ran, `!cmd` shell mode being a `bash` call): non-empty
+   string `toolName` and `toolCallId` required (else skipped). With `toolName === "bash"` and a
+   string `arguments.command`: `{kind:"tool", name:"!", arg: command.trim().slice(0, 200)}` — the
+   claude `!` line's shape. Otherwise `{kind:"tool", name: toolName, arg: <arg rule>}`. `id` when
+   paged. Pushed as its own assistant message. (Schema-derived: `-p` mode cannot produce it, so
+   this shape was not captured from a live run.)
+8. `tool.execution_complete`: non-empty string `toolCallId` required (else skipped). With
+   `error` = `data.error.message` if a string else `""`, and `content` = `data.result.content` if
+   a string else `""`: the text is `"Error: " + error` when `data.success !== true` and `error` is
+   non-empty, else `content`. `result` = that text split on `\n`, the first three lines joined by a
+   space, the first 500 UTF-16 units (claude's `summarizeResult`). An empty result sets nothing.
+   Otherwise it is set on the tool part registered under that call id (a later completion
+   overwrites; a later registration of the same id replaces the earlier part as the target); with
+   no such part, a paged read carries it in `unmatchedResults` (JS `Map` order: first insertion
+   wins the position, a later one the value).
+9. `session.error` / `session.warning` / `session.info`: `data.message` must be a string (else
+   skipped); pushed as an assistant text part `"Error: "` / `"Warning: "` / `"Info: "` + message —
+   the same three notices copilot's own chat adapter (ACP) emits.
+10. Every other type yields nothing and is not counted: `session.start`/`resume`/`shutdown`,
+    `system.message` (the ~44 KB system prompt), turn boundaries, permissions, hooks,
+    `abort`, compaction, model/mode/plan changes, `system.notification`, `skill.invoked`,
+    `subagent.*`, `session.binary_asset`, `tool.execution_start`, and any type a newer CLI adds.
+11. `effort` is never set: copilot records no per-response effort.
+
+| fixture | pins |
+|---|---|
+| `plain-turns` | Prompts and markdown answers, non-ASCII, two assistant messages in one turn, a resume and a model change in between (the second model wins); the system prompt and all bookkeeping yield nothing. |
+| `tools` | Nine tool calls: the arg rule per tool (`bash`→command, `view`/`create`/`edit`→path, `grep`→pattern, `sql`→query before description, `apply_patch`'s raw string, `read_bash`→`""`, a 200-unit cap), a denied call's `Error:` result, a >3-line result, a 500-unit cap, an empty result (no key), and a failure with no error message falling back to its content. |
+| `tools-cross-page` | A call in the older page, its completion in the tail: the tail carries it in `unmatchedResults`, the older page has the tool part with its `id` and no `result`. |
+| `subagent` | A `task` call with a sub-agent's full event run (envelope `agentId`, its own prompt, messages, tool calls and model): only the `task` part and its result reach the thread. |
+| `notices` | `session.error` / `session.warning` / `session.info` rendered; `abort`, compaction, notifications, skill bodies, context/plan/mode changes, hooks, binary assets and an unknown type rendered as nothing. |
+| `hidden-prompts` | Which `source` values show a prompt, and that blank prompts, the empty autopilot continuation and attachments add nothing. |
+| `reasoning` | No reasoning, on the event or on a message; a reasoning-only message and a whitespace-only message yield nothing. |
+| `model` | The newest main-thread message's model; a newer sub-agent message does not count. |
+| `model-absent` | The newest main-thread message states no model: the key is absent (not carried forward). |
+| `model-utf16` | 50 × U+1F9EA (exactly 100 UTF-16 units) is kept. |
+| `model-over-cap` | 101 units: absent. |
+| `user-requested` | A user `!` bash command (`name:"!"`, trimmed arg) and a user-requested `view`, each with its result. |
+| `malformed` | Thirteen unreadable or ill-shaped lines, plus a good message holding two bad tool requests, between good ones: the good ones render, and a bad tool request costs only itself. |
+| `huge-last-line` | A tool result carrying an image for the model (~300 KB) is the last line: the tail grows past 256 KiB and the result still attaches. |

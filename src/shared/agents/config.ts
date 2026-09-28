@@ -301,14 +301,17 @@ export const USAGE_CAPABLE = ['claude', 'codex', 'gemini', 'grok'] as const
 // log, not claude's shape, and it is located strictly by the session id in the file's header.
 // codex joined 2026-09-28 with its own reader (core/codex-chat.ts: the rollout's UI stream for what
 // the user typed, the model stream for answers and tools), local and over SSH.
-export const CHAT_CAPABLE = ['claude', 'grok', 'gemini', 'codex'] as const
+// copilot joined 2026-09 with its own leaf, `core/copilot-chat.ts`: `<COPILOT_HOME>/session-state/
+// <id>/events.jsonl`, located strictly by session id and routed there before anything claude-shaped
+// (`readChatTranscript`). Like the others it is NOT in CLAUDE_TRANSCRIPT_READABLE below.
+export const CHAT_CAPABLE = ['claude', 'grok', 'gemini', 'codex', 'copilot'] as const
 // CHAT_CAPABLE agents whose reader has NO remote leg: a remote (SSH) node's session lives on its
 // host, so core answers `unreadable` before touching anything — and the local reader never sets that
-// flag. So an unreadable read of one of these can only mean "remote, unsupported", and the ⌘M panel
-// names it from the agent alone rather than offering a Retry that can never succeed. grok and codex
-// are NOT here: their remote nodes are read on the host (`core/remote-grok-chat.ts`,
-// `main/remote-codex-chat-page.ts`).
-export const CHAT_LOCAL_ONLY = ['gemini'] as const
+// flag (copilot maps a failed local read to not-found for exactly this reason). So an unreadable read
+// of one of these can only mean "remote, unsupported", and the ⌘M panel names it from the agent
+// alone rather than offering a Retry that can never succeed. grok and codex are NOT here: their
+// remote nodes are read on the host (`core/remote-grok-chat.ts`, `main/remote-codex-chat-page.ts`).
+export const CHAT_LOCAL_ONLY = ['gemini', 'copilot'] as const
 // Agents whose transcript CLAUDE's own resolver can locate and parse — the gate for everything that
 // goes through `resolveTranscript` (the find bar's index, the meter's mount-time rehydration).
 //

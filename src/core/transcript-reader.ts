@@ -251,7 +251,7 @@ export async function readTranscriptLines(filePath: string): Promise<TranscriptL
 // `paged` switches on the three things only a paged read needs (the legacy result grows only by
 // the optional `at` both paths carry): a `key` per message (its line's absolute byte offset), the `tool_use` id on
 // each tool part, and the list of results whose tool was not among these lines.
-interface ChatRecordsOut {
+export interface ChatRecordsOut {
   messages: ChatMessage[]
   unmatched: Map<string, string>
   /** PAGED only: `message.model` / `effort` of the newest non-synthetic assistant record (one record). */
@@ -261,7 +261,7 @@ interface ChatRecordsOut {
 
 /** Longest `model` / `effort` value a paged read reports, in UTF-16 code units (JS `.length`; Swift
  *  `utf16.count`); anything longer is not a model name. */
-const CHAT_META_MAX_CHARS = 100
+export const CHAT_META_MAX_CHARS = 100
 /** The model claude stamps on a line it wrote itself (an API error, an interrupt) — not a model. */
 const SYNTHETIC_MODEL = '<synthetic>'
 
@@ -270,7 +270,7 @@ export function metaString(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 && v.length <= CHAT_META_MAX_CHARS ? v : undefined
 }
 /** A transcript line's ISO `timestamp` as epoch ms; undefined when absent or not a date string. */
-function lineTime(v: unknown): number | undefined {
+export function lineTime(v: unknown): number | undefined {
   if (typeof v !== 'string' || !v) return undefined
   const t = Date.parse(v)
   return Number.isFinite(t) ? t : undefined
@@ -453,7 +453,14 @@ export interface ChatWindowParse {
  * (`readChatPage`, only once the window is already at the 5 MB cap) keeps paging and skips that one
  * record. Answering the window end instead would ask for the identical window forever.
  */
-export function parseChatWindow(buf: Buffer, bufStart: number): ChatWindowParse {
+export function parseChatWindow(
+  buf: Buffer,
+  bufStart: number,
+  // The record parser for the window's complete lines. Claude's by default; another agent whose
+  // transcript is also append-only JSONL (copilot's `events.jsonl`) passes its own, so the byte
+  // window, the lookbehind and the cursor rules exist exactly once.
+  parseRecords: (records: Iterable<{ raw: string; offset: number }>, paged: true) => ChatRecordsOut = parseChatRecords
+): ChatWindowParse {
   const end = bufStart + buf.length
   let from = 0
   let olderCursor: number | null = null
@@ -472,7 +479,7 @@ export function parseChatWindow(buf: Buffer, bufStart: number): ChatWindowParse 
     if (to > from) records.push({ raw: buf.toString('utf8', from, to), offset: bufStart + from })
     from = to + 1
   }
-  const { messages, unmatched, model, effort } = parseChatRecords(records, true)
+  const { messages, unmatched, model, effort } = parseRecords(records, true)
   return {
     messages,
     olderCursor,

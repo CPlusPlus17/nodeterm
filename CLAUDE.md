@@ -1738,8 +1738,9 @@ else, and its context links must keep classifying across restarts).
   `PERMISSION_MODE_CAPABLE`, `MODEL_SWITCH_CAPABLE`, with helpers (`hasHooks`,
   `canBranch`, `canContextLink`, `canChat`, `canRename`, `canReadTitle`, `hasPermissionMode`, …).
   Branch stays **Claude-only** purely by being in only `BRANCH_CAPABLE`. The ⌘M **ChatPanel**
-  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok + gemini + codex** since 2026-09 (each with its own reader): grok's
-  `chat_history.jsonl` gets its own reader, and `chat:read-transcript` routes by agent. That list had
+  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok + gemini + codex + copilot** since
+  2026-09: grok's `chat_history.jsonl`, gemini's session file, codex's rollout and copilot's
+  `events.jsonl` each get their own reader, and `chat:read-transcript` routes by agent. That list had
   to be SPLIT to do it — `CHAT_CAPABLE` carried two facts that coincided while claude was its only
   member ("we can render this" and "claude's resolver can locate and parse this file"), and the
   second now lives in `CLAUDE_TRANSCRIPT_READABLE` (claude only). Merging them back is a
@@ -1833,6 +1834,21 @@ else, and its context links must keep classifying across restarts).
   `src/shared/chat-fixtures/grok/`. Not supported: the composer's model/effort labels (grok's `/model`
   and `/effort` pickers are unmeasured — the TUI needed a login here), plan/question answer cards
   (claude-only), pre-compaction history, and a local session whose map entry `SessionEnd` retired.
+- **Copilot ⌘M chat view** (`core/copilot-chat.ts`, 2026-09; copilot 1.0.88 measured in BYOK mode
+  against a local fake model, plus the CLI's own `schemas/session-events.schema.json`). Reads
+  `<COPILOT_HOME>/session-state/<id>/events.jsonl` (then the snap package's
+  `~/snap/copilot-cli/common/.copilot`), located STRICTLY by the node's session id and routed by
+  `capabilityAgentId` before anything claude-shaped, so a missing journal is "not found", never
+  claude's cwd-newest or another session. The journal is append-only JSONL (compaction appends), so it
+  PAGES like claude's — `parseChatWindow`/`parseGrowingWindow` take copilot's record parser — and the
+  phone gets the same pages over the relay (`page()` gates only on `canChat`). Shown: typed prompts
+  (`content`, never `transformedContent`; the sources copilot's own timeline hides stay hidden),
+  assistant text, tool calls with results (`Error: …` on failure), a user's `!` shell command as the
+  `!` part, `Error:`/`Warning:`/`Info:` notices, and `model`. Never shown: the system prompt,
+  reasoning, sub-agent events (envelope `agentId` / `data.agentId` / `data.parentToolCallId`). Not
+  supported: remote (SSH) nodes (`unreadable`, "not supported yet" — never this machine's disk),
+  `effort` (not recorded), plan/question answer cards (claude-only), composer model labels (claude's
+  picker commands only). Golden fixtures: `src/shared/chat-fixtures/copilot/` (README "Copilot").
 - **Antigravity** (`agy` 1.2.3 measured on Windows; the 1.2.12 Linux binary read; builtin since
   2026-09 — Google's replacement for Gemini CLI on personal accounts) — in `AGENT_HOOK_TARGETS`
   (badge, NEEDS YOU from `ask_question`, a closed set of one, `--after` and triggers) and
