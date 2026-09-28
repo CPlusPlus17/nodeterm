@@ -598,11 +598,12 @@ export const IPC = {
   // tunnel only: the core relay host INTERCEPTS them per session and they are never registered on
   // the platform, so a browser client (gated by the server password, not a team role) cannot reach
   // them. `relayHostedPeerPending` / `relayHostedPendingClosed` are events sent to connected OWNERS
-  // only; `relayHostedApprove` (pendingId, role), `relayHostedDeny` (pendingId) and
-  // `relayHostedInviteCode` () are owner-only requests; `relayHostedSelf` () is open to any approved
-  // peer and answers its own role.
+  // only; `relayHostedApprove` (pendingId, role), `relayHostedDeny` (pendingId),
+  // `relayHostedInviteCode` () and `relayHostedPending` () (the open requests, pulled) are
+  // owner-only requests; `relayHostedSelf` () is open to any approved peer and answers its own role.
   relayHostedPeerPending: 'relay:hosted:peer-pending',
   relayHostedPendingClosed: 'relay:hosted:pending-closed',
+  relayHostedPending: 'relay:hosted:pending',
   relayHostedApprove: 'relay:hosted:approve',
   relayHostedDeny: 'relay:hosted:deny',
   relayHostedInviteCode: 'relay:hosted:invite-code',

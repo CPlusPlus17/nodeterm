@@ -4,31 +4,67 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createHostedService, PENDING_TTL_MS, type HostedService, type HostedServiceDeps } from './hosted-service'
+import { createHostedService, PENDING_TTL_MS, PENDING_MAX, type HostedService, type HostedServiceDeps } from './hosted-service'
 import { transportPair } from './transport-pair'
-import { connectRelayClient } from './relay-client'
+import { connectRelayClient, type RelayClientSession } from './relay-client'
 import { killRelayHostsByPeerKey, type PeerAttach } from './relay-host'
 import { connectRelay } from './relay-socket'
+import { loadHostKey } from './host-key'
 import { genKeyPair, publicKeyToB64, type KeyPair } from './e2ee'
 import { decodeJoinCode } from './join-code'
 import { IPC } from '../../shared/ipc'
 import type { RelayTransport } from './relay-socket'
+import type { UiSink } from '../ui-sink-registry'
+
+// The team store's disk write, holdable and failable per test: a pin write that is still in flight,
+// or one that fails, is what several of the rules below are about. Pass-through unless armed.
+const disk = vi.hoisted(() => ({ holdTeamWrite: false, failTeamWrite: false, held: [] as Array<() => void>, done: 0 }))
+vi.mock('../fs-atomic', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../fs-atomic')>()
+  return {
+    ...real,
+    writeFileAtomic: async (file: string, data: string, opts?: { mode?: number }) => {
+      if (String(file).endsWith('team.json')) {
+        if (disk.failTeamWrite) {
+          disk.failTeamWrite = false
+          throw new Error('disk full')
+        }
+        if (disk.holdTeamWrite) {
+          disk.holdTeamWrite = false
+          await new Promise<void>((r) => disk.held.push(r))
+        }
+      }
+      await real.writeFileAtomic(file, data, opts)
+      if (String(file).endsWith('team.json')) disk.done++
+    }
+  }
+})
+const releaseHeldWrites = () => { for (const r of disk.held.splice(0)) r() }
 
 const pub = (k: KeyPair) => publicKeyToB64(k.publicKey)
+const settle = () => new Promise((r) => setTimeout(r, 25))
 
-interface Armed { ms: number; h: unknown; cleared: boolean }
+interface Armed { ms: number; h: unknown; fn: () => void; cleared: boolean }
 
 const live: Array<{ svc: HostedService; dataDir: string }> = []
 afterEach(() => {
+  releaseHeldWrites()
+  disk.holdTeamWrite = false
+  disk.failTeamWrite = false
   for (const w of live.splice(0)) {
     w.svc.stop()
     fs.rmSync(w.dataDir, { recursive: true, force: true })
   }
 })
 
-function world(opts: Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectOfNode'>> & { recordTimers?: boolean } = {}) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-'))
-  const sinks = new Map<number, { sendText(j: string): void }>()
+type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectOfNode' | 'killPeer'>> & {
+  recordTimers?: boolean
+  dataDir?: string
+}
+
+function world(opts: WorldOpts = {}) {
+  const dataDir = opts.dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-'))
+  const sinks = new Map<number, UiSink>()
   const dispatched: string[] = []
   const casts: string[] = []
   let next = 1
@@ -49,7 +85,7 @@ function world(opts: Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'p
   const armed: Armed[] = []
   const timerDeps: Pick<HostedServiceDeps, 'setTimeout' | 'clearTimeout'> = opts.recordTimers
     ? {
-        setTimeout: (fn, ms) => { const h = setTimeout(fn, ms); armed.push({ ms, h, cleared: false }); return h },
+        setTimeout: (fn, ms) => { const h = setTimeout(fn, ms); armed.push({ ms, h, fn, cleared: false }); return h },
         clearTimeout: (h) => {
           for (const a of armed) if (a.h === h) a.cleared = true
           clearTimeout(h as ReturnType<typeof setTimeout>)
@@ -65,10 +101,11 @@ function world(opts: Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'p
     transport: () => { const { hostT, peerT } = transportPair(); peersT.push(peerT); return hostT },
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.monotonicNow ? { monotonicNow: opts.monotonicNow } : {}),
+    ...(opts.killPeer ? { killPeer: opts.killPeer } : {}),
     ...timerDeps
   })
   live.push({ svc, dataDir })
-  const join = (keys = genKeyPair(), auto = false, humanConfirms = true) => {
+  const join = (keys = genKeyPair(), auto = false, humanConfirms = true, onApproved?: (c: RelayClientSession) => void) => {
     const frames: string[] = []
     const denied: string[] = []
     let approved = false
@@ -76,10 +113,10 @@ function world(opts: Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'p
     const peerT = peersT.shift()!
     const c = connectRelayClient({
       url: 'ws://127.0.0.1/r', token: 'T', hostKeyB64: svc.info()!.hostPublicKeyB64, ourKeys: keys, transport: peerT,
-      // The guest's human confirms on a LATER turn, as a human does. Over this in-process transport
-      // onSas runs inside connectRelay, before the client holds its socket, so a confirm sent there
-      // would be dropped (a real WebSocket never delivers inside connectRelay).
-      autoApprove: auto, onSas: (s) => { if (humanConfirms) queueMicrotask(() => s.confirm()) }, onApproved: () => { approved = true }, onFrame: (j) => frames.push(j),
+      // A human who confirms at once — synchronously inside onSas, which over this in-process
+      // transport runs before the client holds its socket (the client defers that confirm).
+      autoApprove: auto, onSas: (s) => { if (humanConfirms) s.confirm() },
+      onApproved: (s) => { approved = true; onApproved?.(s) }, onFrame: (j) => frames.push(j),
       onPtyData: () => {}, onClose: () => { closed++ }, onDenied: (r) => denied.push(r)
     })
     const res = (id: number) => {
@@ -110,14 +147,9 @@ function world(opts: Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'p
     }
     return { frames, res, req: (id: number, method: string, args: unknown[] = []) => socket.sendTunnelText(JSON.stringify({ t: 'req', id, method, args })) }
   }
-  return { svc, join, rawPeer, sinks, dispatched, casts, dataDir, armed, mints: () => mints }
-}
-
-/** The HOST opened the session. The client's own open can come first: the host pins an
- *  owner-approved teammate into the team store before it opens. */
-async function hostOpened(w: ReturnType<typeof world>, keys: KeyPair) {
-  // An approved request leaves `pending` in the host's onOpen (the tests here never deny these).
-  await vi.waitFor(() => expect(w.svc.status().pending.some((p) => p.peerKeyB64 === pub(keys))).toBe(false))
+  const teamOnDisk = (): Array<{ pubkeyB64: string; role: string; addedBy: string; addedAt: string; label: string }> =>
+    JSON.parse(fs.readFileSync(path.join(dataDir, 'relay', 'team.json'), 'utf-8')).peers
+  return { svc, join, rawPeer, sinks, dispatched, casts, dataDir, armed, teamOnDisk, mints: () => mints }
 }
 
 async function ownerOnline(w: ReturnType<typeof world>, ownerKeys = genKeyPair()) {
@@ -132,20 +164,26 @@ async function ownerOnline(w: ReturnType<typeof world>, ownerKeys = genKeyPair()
 }
 
 /** A guest whose first connect is waiting for an owner. */
-async function pendingGuest(w: ReturnType<typeof world>, keys = genKeyPair()) {
+async function pendingGuest(w: ReturnType<typeof world>, keys = genKeyPair(), humanConfirms = true) {
   await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
-  const before = w.svc.status().pending.length
-  const g = w.join(keys)
-  await vi.waitFor(() => expect(w.svc.status().pending).toHaveLength(before + 1))
+  const g = w.join(keys, false, humanConfirms)
+  await vi.waitFor(() => expect(w.svc.status().pending.some((p) => p.peerKeyB64 === pub(keys))).toBe(true))
   const pendingId = w.svc.status().pending.find((p) => p.peerKeyB64 === pub(keys))!.pendingId
   return { g, pendingId }
+}
+
+/** The HOST opened the session. The client's own open can come first: the host pins an
+ *  owner-approved teammate into the team store before it opens. */
+async function hostOpened(w: ReturnType<typeof world>, keys: KeyPair) {
+  // An approved request leaves `pending` in the host's onOpen (the tests here never deny these).
+  await vi.waitFor(() => expect(w.svc.status().pending.some((p) => p.peerKeyB64 === pub(keys))).toBe(false))
 }
 
 async function approvedGuest(w: ReturnType<typeof world>, owner: Awaited<ReturnType<typeof ownerOnline>>, role: string, id: number, keys = genKeyPair()) {
   const { g, pendingId } = await pendingGuest(w, keys)
   owner.req(id, IPC.relayHostedApprove, [pendingId, role])
   await vi.waitFor(() => expect(g.isApproved()).toBe(true))
-  await vi.waitFor(() => expect(w.svc.status().pending.some((p) => p.pendingId === pendingId)).toBe(false))
+  await hostOpened(w, keys)
   return g
 }
 
@@ -180,7 +218,6 @@ describe('hosted service', () => {
     await vi.waitFor(() => expect(w.svc.status().pending).toHaveLength(1))
     owner.req(5, IPC.relayHostedApprove, [w.svc.status().pending[0].pendingId, 'viewer'])
     await vi.waitFor(() => expect(guest.isApproved()).toBe(true))
-    await hostOpened(w, guest.keys)
     guest.req(2, IPC.fsWrite, ['/srv/app/x', 'y'])
     await vi.waitFor(() => expect(guest.frames.some((f) => f.includes('"id":2') && f.includes('E_ROLE'))).toBe(true))
     guest.req(3, IPC.workspaceLoad)
@@ -198,7 +235,6 @@ describe('hosted service', () => {
     await vi.waitFor(() => expect(w.svc.status().pending).toHaveLength(1))
     owner.req(5, IPC.relayHostedApprove, [w.svc.status().pending[0].pendingId, 'editor'])
     await vi.waitFor(() => expect(g1.isApproved()).toBe(true))
-    await hostOpened(w, g1.keys)
     await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
     const g2 = w.join()
     await vi.waitFor(() => expect(w.svc.status().pending).toHaveLength(1))
@@ -216,7 +252,8 @@ describe('hosted service', () => {
     await vi.waitFor(() => expect(w.svc.status().pending).toHaveLength(1))
     owner.req(5, IPC.relayHostedApprove, [w.svc.status().pending[0].pendingId, 'editor'])
     await vi.waitFor(() => expect(g.isApproved()).toBe(true))
-    await hostOpened(w, keys)
+    // The reconnect below auto-approves only once the approval is pinned.
+    await vi.waitFor(() => expect(w.svc.status().peers.some((p) => p.role === 'editor')).toBe(true))
     g.c.close()
     await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
     const again = w.join(keys, true)
@@ -247,8 +284,33 @@ describe('hosted service', () => {
     }
   })
 
-  it('the pending TTL is ten minutes', () => {
+  it('the pending TTL is ten minutes and at most sixteen requests wait at once', () => {
     expect(PENDING_TTL_MS).toBe(600_000)
+    expect(PENDING_MAX).toBe(16)
+  })
+})
+
+describe('hosted service — the first request of a new teammate (R24)', () => {
+  it('a request sent the moment the guest is approved, during the host’s pin write, is answered — not refused', async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
+    let sent = false
+    const g = w.join(genKeyPair(), false, true, (c) => {
+      sent = c.send(JSON.stringify({ t: 'req', id: 1, method: IPC.workspaceLoad, args: [] }))
+    })
+    await vi.waitFor(() => expect(w.svc.status().pending).toHaveLength(1))
+    disk.holdTeamWrite = true // the pin write is in flight until we say so
+    owner.req(5, IPC.relayHostedApprove, [w.svc.status().pending[0].pendingId, 'viewer'])
+    await vi.waitFor(() => expect(g.isApproved()).toBe(true))
+    expect(sent).toBe(true)
+    await vi.waitFor(() => expect(disk.held).toHaveLength(1))
+    await settle()
+    expect(g.res(1)).toBeUndefined() // held, not refused
+    expect(w.dispatched).toEqual([])
+    releaseHeldWrites()
+    await vi.waitFor(() => expect(g.res(1)).toMatchObject({ ok: true, result: { projects: [{ id: 'P' }], activeProjectId: 'P' } }))
+    expect(g.frames.some((f) => f.includes('E_UNAUTHORIZED'))).toBe(false)
   })
 })
 
@@ -278,6 +340,34 @@ describe('hosted service — owner routing', () => {
     expect(editor.frames.some((f) => f.includes('relay:hosted:'))).toBe(false)
   })
 
+  it('R25: an owner can PULL the open requests; anyone else is refused', async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    const viewer = await approvedGuest(w, owner, 'viewer', 5)
+    const keys = genKeyPair()
+    const { pendingId } = await pendingGuest(w, keys)
+    owner.req(1, IPC.relayHostedPending)
+    viewer.req(2, IPC.relayHostedPending)
+    await vi.waitFor(() => expect(owner.res(1)).toBeDefined())
+    await vi.waitFor(() => expect(viewer.res(2)).toBeDefined())
+    expect(owner.res(1).result).toEqual(w.svc.status().pending)
+    expect(owner.res(1).result).toEqual([expect.objectContaining({ pendingId, peerKeyB64: pub(keys) })])
+    expect(viewer.res(2)).toMatchObject({ ok: false, error: { message: expect.stringMatching(/Only an owner/) } })
+  })
+
+  it('the pending event carries the SAS the guest sees and the guest’s key', async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    const keys = genKeyPair()
+    await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
+    const g = w.join(keys)
+    await vi.waitFor(() => expect(owner.events(IPC.relayHostedPeerPending)).toHaveLength(1))
+    const ev = owner.events(IPC.relayHostedPeerPending)[0]
+    expect(ev.peerKeyB64).toBe(pub(keys))
+    expect(ev.sas).toBe(g.c.sas())
+    expect(typeof ev.pendingId).toBe('string')
+  })
+
   it('a pinned peer that never confirms does not hold the room’s only idle listener', async () => {
     const w = world()
     await ownerOnline(w)
@@ -293,18 +383,36 @@ describe('hosted service — owner routing', () => {
     const { pendingId } = await pendingGuest(w)
     expect(typeof pendingId).toBe('string')
   })
+})
 
-  it('the pending event carries the SAS the guest sees and the guest’s key', async () => {
+describe('hosted service — at most one request per device, and a bounded queue (R28)', () => {
+  it('a second connection from the same key replaces the first request, which is denied', async () => {
     const w = world()
     const owner = await ownerOnline(w)
     const keys = genKeyPair()
+    const first = await pendingGuest(w, keys)
+    const second = await pendingGuest(w, keys)
+    await vi.waitFor(() => expect(first.g.denied).toEqual(['denied']))
+    expect(second.pendingId).not.toBe(first.pendingId)
+    expect(w.svc.status().pending.map((p) => p.pendingId)).toEqual([second.pendingId])
+    await vi.waitFor(() => expect(owner.events(IPC.relayHostedPendingClosed)).toContainEqual({ pendingId: first.pendingId, reason: 'replaced' }))
+    expect(second.g.denied).toEqual([])
+  })
+
+  it(`over ${16} waiting requests, the next is denied at once and no owner is told`, async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    for (let i = 0; i < PENDING_MAX; i++) await pendingGuest(w)
+    expect(w.svc.status().pending).toHaveLength(PENDING_MAX)
+    await vi.waitFor(() => expect(owner.events(IPC.relayHostedPeerPending)).toHaveLength(PENDING_MAX))
     await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
-    const g = w.join(keys)
-    await vi.waitFor(() => expect(owner.events(IPC.relayHostedPeerPending)).toHaveLength(1))
-    const ev = owner.events(IPC.relayHostedPeerPending)[0]
-    expect(ev.peerKeyB64).toBe(pub(keys))
-    expect(ev.sas).toBe(g.c.sas())
-    expect(typeof ev.pendingId).toBe('string')
+    const bridgedBefore = w.svc.status().scheduler!.bridged
+    const over = w.join()
+    await vi.waitFor(() => expect(over.denied).toEqual(['denied']))
+    expect(w.svc.status().pending).toHaveLength(PENDING_MAX)
+    await settle()
+    expect(owner.events(IPC.relayHostedPeerPending)).toHaveLength(PENDING_MAX)
+    await vi.waitFor(() => expect(w.svc.status().scheduler?.bridged).toBe(bridgedBefore))
   })
 })
 
@@ -364,8 +472,7 @@ describe('hosted service — approve and deny', () => {
     expect(w.svc.status().pending[0].since).toBe(fixed)
     owner.req(5, IPC.relayHostedApprove, [pendingId, 'commenter'])
     await vi.waitFor(() => expect(w.svc.status().peers.some((p) => p.role === 'commenter')).toBe(true))
-    const doc = JSON.parse(fs.readFileSync(path.join(w.dataDir, 'relay', 'team.json'), 'utf-8'))
-    expect(doc.peers.find((p: { pubkeyB64: string }) => p.pubkeyB64 === pub(keys))).toEqual({
+    expect(w.teamOnDisk().find((p) => p.pubkeyB64 === pub(keys))).toEqual({
       pubkeyB64: pub(keys), label: '', role: 'commenter', addedAt: new Date(fixed).toISOString(), addedBy: pub(ownerKeys)
     })
   })
@@ -381,6 +488,79 @@ describe('hosted service — approve and deny', () => {
     expect(w.svc.status().pending).toHaveLength(1)
     expect(w.casts).toEqual([])
     expect(w.dispatched).toEqual([])
+  })
+})
+
+describe('hosted service — a refusal while the approval’s pin is being written (R26)', () => {
+  it('a deny that lands while the pin write waits its turn pins nothing', async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    const keys = genKeyPair()
+    const { g, pendingId } = await pendingGuest(w, keys)
+    disk.holdTeamWrite = true
+    const sharing = w.svc.share('Z', true) // holds the team store's chain
+    await vi.waitFor(() => expect(disk.held).toHaveLength(1))
+    owner.req(5, IPC.relayHostedApprove, [pendingId, 'editor'])
+    await vi.waitFor(() => expect(g.isApproved()).toBe(true)) // both confirmed: the pin is queued
+    owner.req(6, IPC.relayHostedDeny, [pendingId])
+    await vi.waitFor(() => expect(g.denied).toEqual(['denied']))
+    const writes = disk.done
+    releaseHeldWrites()
+    await sharing
+    await settle() // the queued pin runs right behind the share; a skipped one writes nothing
+    expect(disk.done).toBe(writes + 1)
+    expect(w.teamOnDisk().some((p) => p.pubkeyB64 === pub(keys))).toBe(false)
+    expect(w.svc.status().peers.map((p) => p.role)).toEqual(['owner'])
+  })
+
+  it('a deny that lands while the pin write itself is in flight takes the pin back', async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    const keys = genKeyPair()
+    const { g, pendingId } = await pendingGuest(w, keys)
+    disk.holdTeamWrite = true
+    owner.req(5, IPC.relayHostedApprove, [pendingId, 'editor'])
+    await vi.waitFor(() => expect(disk.held).toHaveLength(1)) // the pin's own write is on disk's doorstep
+    owner.req(6, IPC.relayHostedDeny, [pendingId])
+    await vi.waitFor(() => expect(g.denied).toEqual(['denied']))
+    const writes = disk.done
+    releaseHeldWrites()
+    // The pin write lands, then the write that takes it back: only then is the file settled.
+    await vi.waitFor(() => expect(disk.done).toBe(writes + 2))
+    expect(w.teamOnDisk().some((p) => p.pubkeyB64 === pub(keys))).toBe(false)
+    expect(w.svc.status().peers.map((p) => p.role)).toEqual(['owner'])
+  })
+
+  it('an expiry that lands while the pin write is in flight takes the pin back too', async () => {
+    const w = world({ recordTimers: true })
+    const owner = await ownerOnline(w)
+    const keys = genKeyPair()
+    const { g, pendingId } = await pendingGuest(w, keys)
+    const expiry = w.armed.find((a) => a.ms === PENDING_TTL_MS)!
+    disk.holdTeamWrite = true
+    owner.req(5, IPC.relayHostedApprove, [pendingId, 'editor'])
+    await vi.waitFor(() => expect(disk.held).toHaveLength(1))
+    expiry.fn() // the ten minutes are up, mid-write
+    await vi.waitFor(() => expect(g.denied).toEqual(['expired']))
+    const writes = disk.done
+    releaseHeldWrites()
+    await vi.waitFor(() => expect(disk.done).toBe(writes + 2))
+    expect(w.teamOnDisk().some((p) => p.pubkeyB64 === pub(keys))).toBe(false)
+    expect(w.svc.status().peers.map((p) => p.role)).toEqual(['owner'])
+  })
+
+  it('a guest that merely DROPS during the pin write stays pinned: both humans did approve', async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    const keys = genKeyPair()
+    const { g, pendingId } = await pendingGuest(w, keys)
+    disk.holdTeamWrite = true
+    owner.req(5, IPC.relayHostedApprove, [pendingId, 'editor'])
+    await vi.waitFor(() => expect(disk.held).toHaveLength(1))
+    g.c.close()
+    await vi.waitFor(() => expect(w.svc.status().pending).toHaveLength(0))
+    releaseHeldWrites()
+    await vi.waitFor(() => expect(w.teamOnDisk().some((p) => p.pubkeyB64 === pub(keys) && p.role === 'editor')).toBe(true))
   })
 })
 
@@ -429,6 +609,8 @@ describe('hosted service — roles', () => {
     await vi.waitFor(() => expect(editor.res(2)).toBeDefined())
     expect(viewer.res(1).result).toEqual([{ nodeId: 'n-shared', task: 'shared task' }])
     expect(JSON.stringify(viewer.frames)).not.toContain('SECRET')
+    // By design: an editor sees other projects' subagent tasks too. Editor is shell access on this
+    // host (D8), so withholding a task text an editor could read from disk would be theatre.
     expect(editor.res(2).result.map((e: { nodeId: string }) => e.nodeId)).toEqual(['n-shared', 'n-other'])
   })
 
@@ -451,6 +633,58 @@ describe('hosted service — roles', () => {
     g.c.close()
     await vi.waitFor(() => expect(w.svc.status().peers[1].connected).toBe(false))
     expect(w.svc.status().enabled).toBe(true)
+  })
+})
+
+describe('hosted service — a session with no team entry (R27)', () => {
+  it('in the window between a removal’s team write and its kill, the removed peer is served NOTHING', async () => {
+    const kills: Array<[string, string]> = []
+    const w = world({ killPeer: (key, reason) => { kills.push([key, reason]) } }) // the kill is held back
+    const owner = await ownerOnline(w)
+    const keys = genKeyPair()
+    const g = await approvedGuest(w, owner, 'editor', 5, keys)
+    const sink = [...w.sinks.values()].at(-1)!
+    const event = (n: number) => JSON.stringify({ t: 'ev', channel: IPC.agentStatus, args: [{ nodeId: 'n-shared', n }] })
+    sink.sendText(event(1)) // positive control: an editor receives it
+    await vi.waitFor(() => expect(g.frames.some((f) => f.includes('"n":1'))).toBe(true))
+
+    expect(await w.svc.remove(pub(keys), false)).toBe('removed')
+    expect(kills).toEqual([[pub(keys), 'removed']])
+    g.req(1, IPC.workspaceLoad)
+    g.req(2, IPC.fsWrite, ['/srv/app/x', 'y'])
+    g.req(3, IPC.relayHostedSelf)
+    sink.sendText(event(2))
+    await vi.waitFor(() => expect(g.res(3)).toBeDefined())
+    expect(g.res(1)).toMatchObject({ ok: false, error: { code: 'E_ROLE', message: expect.stringMatching(/not a member/) } })
+    expect(g.res(2)).toMatchObject({ ok: false, error: { code: 'E_ROLE', message: expect.stringMatching(/not a member/) } })
+    expect(g.res(3)).toMatchObject({ ok: false, error: { message: expect.stringMatching(/not a member/) } })
+    expect(g.frames.some((f) => f.includes('"n":2'))).toBe(false)
+    expect(w.dispatched).toEqual([])
+    killRelayHostsByPeerKey(pub(keys), 'removed') // the kill finally lands
+    await vi.waitFor(() => expect(g.denied).toEqual(['removed']))
+  })
+
+  it('a session whose OWN pin write failed keeps the documented viewer fallback', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const w = world()
+      const owner = await ownerOnline(w)
+      const keys = genKeyPair()
+      const { g, pendingId } = await pendingGuest(w, keys)
+      disk.failTeamWrite = true
+      owner.req(5, IPC.relayHostedApprove, [pendingId, 'editor'])
+      await vi.waitFor(() => expect(g.isApproved()).toBe(true))
+      await hostOpened(w, keys)
+      g.req(1, IPC.workspaceLoad)
+      g.req(2, IPC.fsWrite, ['/srv/app/x', 'y'])
+      await vi.waitFor(() => expect(g.res(2)).toBeDefined())
+      expect(g.res(1)).toMatchObject({ ok: true, result: { projects: [{ id: 'P' }] } })
+      expect(g.res(2)).toMatchObject({ ok: false, error: { code: 'E_ROLE', message: expect.stringMatching(/Viewers/) } })
+      expect(w.svc.status().peers.map((p) => p.role)).toEqual(['owner'])
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/could not record an approved teammate/))
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 
@@ -564,6 +798,22 @@ describe('hosted service — lifecycle', () => {
     expect(w.svc.status().enabled).toBe(false)
   })
 
+  it('R30: the team is loaded before the host key, so status shows members even when the key is unreadable', async () => {
+    const w = world()
+    await w.svc.init()
+    await w.svc.addOwner(pub(genKeyPair()), 'Enes')
+    fs.writeFileSync(path.join(w.dataDir, 'relay', 'host-key.json'), 'not json')
+    const fresh = world({ dataDir: w.dataDir }) // nothing loaded yet
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      expect(fresh.svc.status().peers).toEqual([])
+      expect(await fresh.svc.start()).toBe('host-key-unreadable')
+    } finally {
+      err.mockRestore()
+    }
+    expect(fresh.svc.status().peers).toEqual([{ label: 'Enes', role: 'owner', connected: false }])
+  })
+
   it('R2: start is idempotent — a running or concurrently starting service never gets a second scheduler', async () => {
     const w = world()
     await w.svc.init()
@@ -599,15 +849,34 @@ describe('hosted service — lifecycle', () => {
     expect(w.mints()).toBe(0)
   })
 
-  it('rotateKey replaces the host address and keeps hosting', async () => {
+  it('R31: rotateKey on a running service replaces the address and restarts, returning the start result', async () => {
     const w = world()
     await ownerOnline(w)
     const before = w.svc.info()!.hostPublicKeyB64
-    await w.svc.rotateKey()
+    expect(await w.svc.rotateKey()).toBe('started')
     expect(w.svc.info()!.hostPublicKeyB64).not.toBe(before)
     expect(w.svc.status().enabled).toBe(true)
     await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
     expect(decodeJoinCode(w.svc.joinCode()!)!.hostPublicKeyB64).toBe(w.svc.info()!.hostPublicKeyB64)
+  })
+
+  it('R31: rotateKey on a never-started or stopped service rotates WITHOUT starting hosting', async () => {
+    const w = world()
+    await w.svc.init()
+    const onDisk = async () => publicKeyToB64((await loadHostKey(path.join(w.dataDir, 'relay')))!.publicKey)
+    const first = await onDisk()
+    expect(await w.svc.rotateKey()).toBe('not-running')
+    expect(w.svc.status().enabled).toBe(false)
+    expect(w.mints()).toBe(0)
+    const second = await onDisk()
+    expect(second).not.toBe(first)
+    expect(w.svc.info()!.hostPublicKeyB64).toBe(second)
+
+    expect(await w.svc.start()).toBe('started')
+    w.svc.stop()
+    expect(await w.svc.rotateKey()).toBe('not-running')
+    expect(w.svc.status().enabled).toBe(false)
+    expect(await onDisk()).not.toBe(second)
   })
 
   it('R22: the scheduler runs on the monotonic clock, not the wall clock', async () => {
@@ -623,7 +892,7 @@ describe('hosted service — lifecycle', () => {
 
   it('every hosted channel lives under the one prefix the access hook refuses outside the interceptor', () => {
     const hosted = Object.entries(IPC).filter(([k]) => k.startsWith('relayHosted')).map(([, v]) => v)
-    expect(hosted).toHaveLength(6)
+    expect(hosted).toHaveLength(7)
     for (const ch of hosted) expect(ch).toMatch(/^relay:hosted:/)
   })
 })
