@@ -27,6 +27,16 @@ export class HostKeyUnreadableError extends Error {
   }
 }
 
+/** `createHostKey` found a key already there. Typed, so a caller that lost an init race (two
+ *  `team init`s at once) can recognise it by `code` rather than by matching message text. */
+export class HostKeyExistsError extends Error {
+  readonly code = 'E_HOST_KEY_EXISTS'
+  constructor() {
+    super('A team host key already exists.')
+    this.name = 'HostKeyExistsError'
+  }
+}
+
 const file = (dir: string): string => path.join(dir, 'host-key.json')
 
 async function persist(dir: string, keys: KeyPair): Promise<void> {
@@ -70,11 +80,11 @@ export async function loadHostKey(dir: string): Promise<KeyPair | null> {
   return decoded.keys
 }
 
-/** Mint the first key. Refuses when one exists, and throws `HostKeyUnreadableError` (without
- *  writing) when one exists but cannot be read. */
+/** Mint the first key. Refuses with `HostKeyExistsError` when one exists, and throws
+ *  `HostKeyUnreadableError` (without writing) when one exists but cannot be read. */
 export function createHostKey(dir: string): Promise<KeyPair> {
   return serializeWrite(dir, async () => {
-    if ((await loadHostKey(dir)) !== null) throw new Error('A team host key already exists.')
+    if ((await loadHostKey(dir)) !== null) throw new HostKeyExistsError()
     const keys = genKeyPair()
     await persist(dir, keys)
     return keys

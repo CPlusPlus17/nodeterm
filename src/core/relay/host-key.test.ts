@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createHostKey, loadHostKey, rotateHostKey, hostAddress, HostKeyUnreadableError } from './host-key'
+import { createHostKey, loadHostKey, rotateHostKey, hostAddress, HostKeyUnreadableError, HostKeyExistsError } from './host-key'
 import { genKeyPair, publicKeyToB64 } from './e2ee'
 import { hostIdFromPublicKeyB64 } from './relay-id'
 
@@ -89,6 +89,9 @@ describe('server host key', () => {
     const dir = tmp()
     const a = await createHostKey(dir)
     await expect(createHostKey(dir)).rejects.toThrow(/already exists/)
+    // A typed code, so a caller that lost an init race recognises it without matching message text.
+    await expect(createHostKey(dir)).rejects.toMatchObject({ code: 'E_HOST_KEY_EXISTS' })
+    await expect(createHostKey(dir)).rejects.toBeInstanceOf(HostKeyExistsError)
     expect(publicKeyToB64((await loadHostKey(dir))!.publicKey)).toBe(publicKeyToB64(a.publicKey))
     const b = await rotateHostKey(dir)
     expect(publicKeyToB64(b.publicKey)).not.toBe(publicKeyToB64(a.publicKey))

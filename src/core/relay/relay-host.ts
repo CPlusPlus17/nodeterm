@@ -88,7 +88,15 @@ export type AccessDecision = { allow: true; args?: unknown[] } | { allow: false;
  * for a req, dropped and logged for a cast. Only an ABSENT `access` hook means allow-all.
  */
 export interface RelayHostHooks {
-  /** Answer a request here instead of dispatching it. `null` = not intercepted. */
+  /**
+   * Answer a request here instead of dispatching it. `null` = not intercepted.
+   *
+   * An intercepted request BYPASSES `access` and every project-scope jail below: nothing else looks
+   * at it. An interceptor therefore enforces its own role and scope checks. The hosted team's do
+   * (src/core/relay/hosted-service.ts): only `relay:hosted:self` is open to any approved peer;
+   * approve, deny and invite-code are owner-only, judged from the CALLER's own session key in the
+   * team store — never from anything the request carries.
+   */
   interceptReq?(s: RelayHostSession, method: string, args: unknown[]): Promise<unknown> | null
   /** Allow (optionally rewriting args) or refuse a request/cast before any scope check or dispatch. */
   access?(s: RelayHostSession, kind: 'req' | 'cast', method: string, args: unknown[]): AccessDecision
@@ -143,9 +151,11 @@ export interface ConnectRelayHostOptions {
   /** Mutually approved: the peer is a CorePlatform client of this core now. */
   onOpen(session: RelayHostSession): void
   /**
-   * The session ended without this shell asking: fires AT MOST ONCE, when the relay socket drops or
-   * when a throwing `wrapSink` fails the session closed. The peer is already torn down when it fires.
-   * `close()`, `deny()` and `killRelayHostsByPeerKey` NEVER fire it — their caller already knows.
+   * The session ended without this shell asking: fires AT MOST ONCE, when the relay socket drops,
+   * when a throwing `wrapSink` fails the session closed, or when the session key is found swapped
+   * (the key-swap self-close). The peer is already torn down when it fires. `close()`, `deny()` and
+   * `killRelayHostsByPeerKey` NEVER fire it — their caller already knows, and owes its own
+   * bookkeeping for that end.
    */
   onClose(): void
 }
@@ -248,7 +258,12 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
     if (keySwapped) return false
     if (sessionPeerKey !== null && socket.peerPublicKeyB64() === sessionPeerKey) return true
     keySwapped = true
+    const wasLive = !closed
     session.close()
+    // A self-initiated close() never reaches the socket's onClose, and the shell did not ask for this
+    // one: tell it, at most once (the wrapSink fail-closed rule). Its bookkeeping (a seat, a pending
+    // request, a standing listener counted as bridged) must hear every end.
+    if (wasLive) opts.onClose()
     return false
   }
 
