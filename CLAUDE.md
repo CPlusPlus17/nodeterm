@@ -2601,7 +2601,7 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   under A and cannot bind B, and behind an older-page fetch, which it never cancels). It is a QUIET
   read (no "Loading…"), and one path owns it: on working → blocked the turn-end reload does. While a
   request is unbound it retries with backoff (`rebindRetryDelay`: 2 s doubling to 30 s, reset per
-  request) — card on screen or not; it stops once a read under the new request lands. A read under B that still shows the card A was bound to (same tool id / line offset —
+  request) — card on screen or not; it stops once B surfaces on a new card (a duplicate ticket for the same tool_use keeps a quiet 30 s retry while the agent stays blocked). A read under B that still shows the card A was bound to (same tool id / line offset —
   the transcript can lag the hook) stays "Updating…": B must surface on a card the thread shows as
   new. The answer payload carries the BOUND id, re-checked against store and binding at send time.
   Residuals: the previous-card memory is per MOUNT (a panel opened fresh under B has none, so it
