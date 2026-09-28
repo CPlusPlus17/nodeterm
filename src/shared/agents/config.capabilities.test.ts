@@ -283,6 +283,11 @@ describe('grok capabilities', () => {
  * exclusion below says which leaf is missing — measured facts (`agy` 1.2.3, Windows 11).
  */
 describe('antigravity capabilities', () => {
+  it('is offered ABOVE gemini wherever agents are listed (BUILTIN_AGENT_IDS is display order)', () => {
+    // Google moved personal accounts from Gemini CLI to Antigravity on 2026-06-18.
+    expect(BUILTIN_AGENT_IDS.indexOf('antigravity')).toBeLessThan(BUILTIN_AGENT_IDS.indexOf('gemini'))
+  })
+
   it('reports status on THIS machine only — an SSH host has no agy hook installer yet', () => {
     // `--after` asks this before accepting a dependency in an SSH project: a node that can never
     // report "done" there would hold its dependant QUEUED forever.
