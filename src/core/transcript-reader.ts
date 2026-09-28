@@ -41,7 +41,7 @@ function textOf(content: unknown): string {
   return ''
 }
 
-function summarizeResult(content: unknown): string {
+export function summarizeResult(content: unknown): string {
   return textOf(content).split('\n').slice(0, 3).join(' ').slice(0, 500)
 }
 
@@ -262,7 +262,7 @@ const CHAT_META_MAX_CHARS = 100
 const SYNTHETIC_MODEL = '<synthetic>'
 
 /** A string field worth reporting as chat metadata, else undefined. */
-function metaString(v: unknown): string | undefined {
+export function metaString(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 && v.length <= CHAT_META_MAX_CHARS ? v : undefined
 }
 /** A transcript line's ISO `timestamp` as epoch ms; undefined when absent or not a date string. */

@@ -84,17 +84,7 @@ interface ChatPanelProps {
  * initial `[]` because nothing caught the rejection, and a failed resolution was indistinguishable
  * from a session nobody has spoken to. They need different words — and two of them are retryable.
  */
-type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'error'
-
-/**
- * An `unreadable` read of a GROK node can only be the remote case: core's grok leg is local-only
- * and answers a remote grok node (`remoteOnly`) with `unreadable` before touching anything, while
- * its local reader never sets the flag. So the agent alone names it — no renderer-side remoteness
- * guess, and no new field on the wire (the phone contract keeps `unreadable`). `=== 'grok'`
- * exactly, mirroring core's routing (`readChatTranscript` routes only the builtin id to grok's
- * reader). Retry cannot heal it, so it must not read as a transient failure.
- */
-const remoteGrokUnreadable = (agentId: string | undefined): boolean => agentId === 'grok'
+type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'error'
 
 const isUnsupported = (e: unknown): boolean =>
   !!e && typeof e === 'object' && (e as { code?: string }).code === E_UNSUPPORTED
@@ -103,7 +93,7 @@ const isUnsupported = (e: unknown): boolean =>
  *  `missing` is a CLEAN miss — the (local or remote) host looked and there is no file: a transcript
  *  Claude has cleaned up (30 days by default), or a session that has not written one yet (the
  *  second heals the moment it speaks). A host that could not be ASKED is `error`, which Retry can
- *  fix; `remoteUnsupported` is a remote node whose agent has no remote reader, which it never can. */
+ *  fix — a remote grok node included, whose host is read by `core/remote-grok-chat.ts`. */
 const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
   loading: { title: 'Loading conversation…' },
   ok: { title: 'No conversation yet.' },
@@ -115,7 +105,6 @@ const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
     title: "Transcripts can't be read on this surface.",
     detail: 'Open this session on the desktop app to read its conversation.'
   },
-  remoteUnsupported: { title: "Reading a remote Grok session's transcript isn't supported yet." },
   error: {
     title: "Couldn't read the transcript.",
     detail: "The agent's host may not be reachable — Retry once it is."
@@ -338,7 +327,7 @@ export function ChatPanel({
           setThread(emptyThread(identity))
           // A read that FAILED (the host did not answer, a remote node with no reachable master)
           // is not "no transcript": it gets the error copy, and ↻ is the way out.
-          setLoadState(!res.unreadable ? 'missing' : remoteGrokUnreadable(agentId) ? 'remoteUnsupported' : 'error')
+          setLoadState(res.unreadable ? 'error' : 'missing')
           setHeldRead({ identity, pendingId: heldAtStart })
           settleHeldReload(heldAtStart)
           return
@@ -480,7 +469,7 @@ export function ChatPanel({
   attemptLiveRef.current = () => {
     if (!livePendingRef.current) return
     // This surface cannot read transcripts at all (relay tab): every live read would be refused.
-    if (loadStateRef.current === 'unsupported' || loadStateRef.current === 'remoteUnsupported') {
+    if (loadStateRef.current === 'unsupported') {
       livePendingRef.current = false
       return
     }
@@ -768,7 +757,7 @@ export function ChatPanel({
             {EMPTY_TEXT[loadState].detail && (
               <div className="term-chat__empty-detail">{EMPTY_TEXT[loadState].detail}</div>
             )}
-            {loadState !== 'unsupported' && loadState !== 'remoteUnsupported' && loadState !== 'ok' && (
+            {loadState !== 'unsupported' && loadState !== 'ok' && (
               <button className="term-chat__retry" onClick={() => load()}>
                 Retry
               </button>

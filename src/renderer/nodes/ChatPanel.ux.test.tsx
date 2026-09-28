@@ -240,14 +240,16 @@ describe('ChatPanel empty states', () => {
     expect(host.querySelector('.term-chat__retry')).not.toBeNull()
   })
 
-  it('an unreadable REMOTE grok read says it is unsupported, with no Retry (Retry can never fix it)', async () => {
+  it('an unreadable REMOTE grok read is a host failure like any other: it says so and offers Retry', async () => {
+    // Grok has a remote reader now (core/remote-grok-chat.ts): `unreadable` means the HOST did not
+    // answer, which a retry can heal — not "remote grok is unsupported", which it never could.
     await render({ agentId: 'grok' })
     await act(async () => {
       pending[0].resolve({ messages: [], found: false, olderCursor: null, unmatchedResults: [], unreadable: true })
     })
-    expect(msgs().textContent).toContain("Reading a remote Grok session's transcript isn't supported yet.")
-    expect(msgs().textContent).not.toContain("Couldn't read")
-    expect(host.querySelector('.term-chat__retry')).toBeNull()
+    expect(msgs().textContent).toContain("Couldn't read the transcript.")
+    expect(msgs().textContent).not.toContain("isn't supported yet")
+    expect(host.querySelector('.term-chat__retry')).not.toBeNull()
   })
 
   it('a clean miss still says no transcript was found', async () => {

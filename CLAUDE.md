@@ -1815,6 +1815,24 @@ else, and its context links must keep classifying across restarts).
   harmful. The `auto` permission-mode **version gate is claude's alone** (it is fed by a `claude
   --version` probe), and grok's mode flag must go **BEFORE** its `--` separator, which is
   end-of-options. Full picture, dialect traps and the device checklist: **`docs/grok-agent.md`**.
+- **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads
+  `chat_history.jsonl` into claude's `ChatMessage`/`ChatPart` shapes (no new wire field): typed
+  prompts, assistant text, tool calls (`arg` = the salient argument — `command`, `target_file`, …, in
+  claude's `toolArg` order — else the raw JSON, 200 units) with results summarised like claude's,
+  `web_search` backend calls, harness-injected `synthetic_reason` lines as assistant-side `[reason]`
+  notes, and `model_id`/`reasoning_effort` of the NEWEST assistant record (never carried forward).
+  `reasoning` is hidden. It does NOT page: measured on 1.0.13, the file is rewritten via
+  `.sync.tmp` + rename and `/compact`/`/rewind`/history repair replace lines, so it is one capped
+  whole-file read with no keys and no `at`. Routing is by `capabilityAgentId`, so a custom agent built
+  on grok reaches grok's reader, never claude's cwd fallback. **A remote (SSH) grok node is read on its
+  host** (`core/remote-grok-chat.ts`, one `sh -c` round trip: `$GROK_HOME` if absolute else
+  `$HOME/.grok`, the session found by id across `sessions/*/<id>/`, two matches refused, the
+  paged-transcript window at 5 MiB) — its failures are terminal, never this machine's disk (the
+  hook-derived local map names a wrong-machine path for these nodes). The phone gets it for free:
+  `chat.page` reads through the same deps. Golden fixtures + exact rules for the Swift port:
+  `src/shared/chat-fixtures/grok/`. Not supported: the composer's model/effort labels (grok's `/model`
+  and `/effort` pickers are unmeasured — the TUI needed a login here), plan/question answer cards
+  (claude-only), pre-compaction history, and a local session whose map entry `SessionEnd` retired.
 - **Antigravity** (`agy` 1.2.3 measured on Windows; the 1.2.12 Linux binary read; builtin since
   2026-09 — Google's replacement for Gemini CLI on personal accounts) — in `AGENT_HOOK_TARGETS`
   (badge, NEEDS YOU from `ask_question`, a closed set of one, `--after` and triggers) and
@@ -2553,8 +2571,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the same deps and the same distinction. Before this, a mounted SSH node whose locate missed (or
   whose master was down) read THIS machine's resolver, cwd-newest fallback included. `transcriptExists` shares the same locate
   (`remotePresenceFromLocate`: ref/absent/unreadable → present/absent/unknown, a malformed id
-  `unknown`), so it also works for a node with no live pty. A remote grok node (no remote reader)
-  shows "not supported yet", not the retryable error. (2) **The cwd fallback keeps `accountId`** in BOTH
+  `unknown`), so it also works for a node with no live pty. A remote grok node is read on its host
+  by its own leg (`readRemoteGrok`, see the grok chat bullet), with the same absent/unreadable split. (2) **The cwd fallback keeps `accountId`** in BOTH
   `resolveTranscript` and `contextEnsure`; without it a managed-account node fell back to the
   system root and could adopt an unrelated session's newest transcript. (3) **Relay tabs** stay
   local-only (a transcript read over the relay would read the GUEST's disk) and reject with
@@ -2593,7 +2611,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   trip, dd status inside the base64 like the context-tail's window command) instead of pulling the
   5 MB tail on every open and every turn-end reload; its `{ok:false}` is terminal (never the local
   disk), and it is tested under a real `/bin/sh` (`transcript-page.realsh.test.ts`). **Grok does not
-  page**: a paged request gets its whole capped read with `olderCursor: null` and no keys.
+  page** (its file is rewritten in place, so offsets are no identity): a paged request gets its whole
+  capped read with `olderCursor: null`, no keys, and the newest record's `model`/`effort`.
   Server Edition passes `page` through ws-bridge to the same core handler; relay still refuses.
   **ChatPanel consumes it progressively** (pure state in `renderer/lib/chatPaging.ts`): the first
   read is a 256 KB tail (`CHAT_TAIL_PAGE_BYTES`, with a "Loading conversation…" row), older 512 KB

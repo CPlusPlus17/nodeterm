@@ -14,8 +14,10 @@ import { IPC } from '../shared/ipc'
 import type { ChatTranscriptResult, TranscriptLine, TranscriptPresence } from '../shared/types'
 import { CHAT_PAGE_MAX_BYTES, normalizeChatPage, type ChatTranscriptPage } from '../shared/chat-page'
 import { platform } from './platform'
-import { chatMessagesFromGrok } from './grok-chat'
+import { parseGrokChat } from './grok-chat'
+import type { RemoteGrokChat } from './remote-grok-chat'
 import { locateGrok } from './handoff/locate'
+import { capabilityAgentId } from '../shared/agents/config'
 import {
   parseChatMessages,
   parseChatWindow,
@@ -78,6 +80,14 @@ export interface TranscriptIpcDeps {
    * (the Server Edition — it runs ON the host) = no node is remote, which is correct there.
    */
   isRemoteNode?(nodeId: string): boolean
+  /**
+   * A REMOTE grok node's conversation, read ON the host (`createReadRemoteGrokChat`). `null` = not
+   * a remote session (take the local path); `{ok:false}` = it IS remote and the host could not be
+   * read; `{ok:false, absent:true}` = the host looked and has no such session. Grok's own leg —
+   * claude's `readRemotePage` tails a claude file and must never answer for a grok node.
+   * Electron-only, like the other remote legs.
+   */
+  readRemoteGrok?(q: TranscriptQuery): Promise<RemoteGrokChat | null>
 }
 
 export type RemoteTranscriptPage = { ok: true; data: Buffer; start: number } | { ok: false; absent?: true }
@@ -192,6 +202,52 @@ export async function resolveTranscript(
   return p
 }
 
+/**
+ * A grok node's chat read. Grok does NOT page: its `chat_history.jsonl` is rewritten in place (a
+ * `.sync.tmp` + rename; `/compact`, `/rewind` and history repair replace lines), so a byte offset
+ * is no stable identity for a line. A paged request therefore gets the whole capped read with
+ * `olderCursor: null` ("nothing older to fetch"), no carried results and no keys — plus the newest
+ * assistant record's `model` / `effort`, as claude's paged reads carry theirs. The legacy unpaged
+ * read stays `{messages, found}` byte for byte.
+ *
+ * Remote first, and its answer is TERMINAL: a remote grok session lives on the host, and the local
+ * map can even hold a path derived for it on THIS machine (the hook listener builds it from the
+ * local sessions root and the host's cwd), so falling through would read the wrong machine.
+ */
+async function readGrokChat(
+  q: TranscriptQuery,
+  page: ChatTranscriptPage | null,
+  deps: TranscriptIpcDeps
+): Promise<ChatTranscriptResult> {
+  const paging = page ? { olderCursor: null, unmatchedResults: [] } : {}
+  const notFound = (): ChatTranscriptResult => ({ messages: [], found: false, ...paging })
+  const unreadable = (): ChatTranscriptResult => (page ? unreadablePage() : { messages: [], found: false })
+  const served = (buf: string): ChatTranscriptResult => {
+    const { messages, model, effort } = parseGrokChat(buf)
+    return {
+      messages,
+      found: true,
+      ...paging,
+      ...(page && model !== undefined ? { model } : {}),
+      ...(page && effort !== undefined ? { effort } : {})
+    }
+  }
+  if (deps.readRemoteGrok) {
+    const remote = await deps.readRemoteGrok(q)
+    if (remote !== null) {
+      if (!remote.ok) return remote.absent ? notFound() : unreadable()
+      return served(remote.text)
+    }
+  }
+  // A node its caller KNOWS is remote whose remote leg could not resolve it: a failed read, never
+  // this machine's disk.
+  if (q.remoteOnly) return unreadable()
+  const gp = q.sessionId ? await locateGrok(q.sessionId) : undefined
+  if (!gp) return notFound()
+  const buf = await readCappedTail(gp)
+  return buf === undefined ? notFound() : served(buf)
+}
+
 /** What a chat read is asked for — the IPC channel's positional arguments, named. */
 export interface ChatReadQuery {
   sessionId?: string
@@ -200,7 +256,7 @@ export interface ChatReadQuery {
   nodeId?: string
   agentId?: string
   /** See `TranscriptQuery.remoteOnly`. Honoured by every read: paged, legacy unpaged, and grok's
-   *  local-only reader. */
+   *  reader (whose remote leg is `readRemoteGrok`). */
   remoteOnly?: boolean
 }
 
@@ -208,7 +264,8 @@ export interface ChatReadQuery {
  * The `chat:read-transcript` read, callable without the IPC seam — the relay's `chat.page` verb
  * serves the phone through it, so the phone and the ⌘M panel can never read a session differently.
  * `rawPage` is untrusted (IPC / WS bridge / relay) and validated here; absent = the legacy unpaged
- * read, byte for byte. Paged claude results also carry `model` / `effort` (see `parseChatWindow`).
+ * read, byte for byte. Paged claude and grok results also carry `model` / `effort` (see
+ * `parseChatWindow` / `parseGrokChat`).
  */
 export async function readChatTranscript(
   q: ChatReadQuery,
@@ -222,21 +279,10 @@ export async function readChatTranscript(
   // Routed by agent BEFORE anything claude-shaped runs. `resolveTranscript` below falls back to
   // the newest claude transcript for the cwd when its sessionId leg misses, and a grok id always
   // misses — so reaching that fallback with a grok node would answer with a stranger's
-  // conversation. The remote leg is claude-only too (its reader tails claude's file), so a grok
-  // node is served locally or not at all rather than being handed the wrong host's claude log.
-  if (agentId === 'grok') {
-    // Grok is read locally only — a remote grok node's history is on the host.
-    if (remoteOnly) return page ? unreadablePage() : { messages: [], found: false }
-    const gp = sessionId ? await locateGrok(sessionId) : undefined
-    // Grok does NOT page: its history is small and its reader has no byte-offset keys, so a
-    // paged request gets the whole (capped) read with `olderCursor: null` — "nothing older to
-    // fetch" — and no carried results. Keys are absent; the panel falls back to its own.
-    const paging = page ? { olderCursor: null, unmatchedResults: [] } : {}
-    if (!gp) return { messages: [], found: false, ...paging }
-    const buf = await readCappedTail(gp)
-    return buf === undefined
-      ? { messages: [], found: false, ...paging }
-      : { messages: chatMessagesFromGrok(buf), found: true, ...paging }
+  // conversation. Resolved through the base harness, so a custom agent built on grok (which the
+  // panel and the phone admit via `canChat`) is routed here too instead of into that fallback.
+  if (agentId !== undefined && capabilityAgentId(agentId) === 'grok') {
+    return readGrokChat({ sessionId, cwd, accountId, nodeId, ...(remoteOnly ? { remoteOnly } : {}) }, page, deps)
   }
   if (page) return readChatPage({ sessionId, cwd, accountId, nodeId, ...(remoteOnly ? { remoteOnly } : {}) }, page, deps)
   const remote = deps.readRemote ? await deps.readRemote({ sessionId, cwd, accountId, nodeId }) : null
