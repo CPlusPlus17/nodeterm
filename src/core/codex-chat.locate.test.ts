@@ -81,7 +81,9 @@ describe('locateCodexRollout', () => {
 
   it('reads a MANAGED account\'s own home, never the system one', async () => {
     const acct = 'acct-1'
-    const managed = path.join(codexHomeForAccount(f.userDataDir, acct, path.join(home, '.nodeterm', 'cx')), 'sessions')
+    // os.homedir() is mocked, so the managed short root lands inside this test's temp home.
+    const managed = path.join(codexHomeForAccount(f.userDataDir, acct), 'sessions')
+    expect(managed.startsWith(home)).toBe(true)
     put(sessions(), `2026/09/24/rollout-2026-09-24T09-00-00-${ID}.jsonl`) // the system home's copy
     expect(await locateCodexRollout({ sessionId: ID, accountId: acct })).toBeUndefined()
     const mine = put(managed, `2026/09/24/rollout-2026-09-24T09-00-00-${ID}.jsonl`)

@@ -59,7 +59,7 @@ const records = (text: string): Array<{ raw: string; offset: number }> => {
 }
 const parsePaged = (text: string) => parseCodexChatRecords(records(text), true)
 const texts = (msgs: ReturnType<typeof chatMessagesFromCodex>) =>
-  msgs.map((m) => `${m.role}:${m.parts.map((p) => (p.kind === 'text' ? p.text : `[${p.name}] ${p.arg}`)).join('|')}`)
+  msgs.map((m) => `${m.role}:${m.parts.map((p) => (p.kind === 'text' ? p.text : p.kind === 'tool' ? `[${p.name}] ${p.arg}` : `<${p.kind}>`)).join('|')}`)
 
 describe('user turns', () => {
   it('reads the TYPED prompt from the UI record, never the model-side copy or the injected context (paginated)', () => {

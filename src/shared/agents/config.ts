@@ -293,7 +293,9 @@ export const USAGE_CAPABLE = ['claude', 'codex', 'gemini', 'grok'] as const
 // newest CLAUDE transcript for that cwd. A grok node in this list would therefore show a stranger's
 // conversation in its find bar and rehydrate its meter from it. That exact bug already happened once
 // with codex and gemini; transcriptGates.ts documents it.
-export const CHAT_CAPABLE = ['claude', 'grok'] as const
+// codex joined 2026-09-28 with its own reader (core/codex-chat.ts: the rollout's UI stream for what
+// the user typed, the model stream for answers and tools), local and over SSH.
+export const CHAT_CAPABLE = ['claude', 'grok', 'codex'] as const
 // Agents whose transcript CLAUDE's own resolver can locate and parse — the gate for everything that
 // goes through `resolveTranscript` (the find bar's index, the meter's mount-time rehydration).
 //
