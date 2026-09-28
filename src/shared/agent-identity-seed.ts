@@ -15,6 +15,7 @@
  * `nt-<nodeId>` tmux names). Anything that does not match is dropped whole — never repaired.
  */
 import { isSafeNodeId } from './safe-id'
+import { SAFE_SESSION_ID } from './session-id'
 import { BUILTIN_AGENT_IDS } from './agents/config'
 import type { ObservedClaudeAccount } from './types'
 
@@ -30,8 +31,6 @@ export interface IdentitySeedEntry {
   account?: ObservedClaudeAccount
 }
 
-/** The same session-id alphabet `resumeCommand` / `agent-launch.ts` accept, bounded. */
-const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/
 /** `custom:<uuid>` — the node-id alphabet after the prefix. */
 const CUSTOM_AGENT_ID = /^custom:[A-Za-z0-9._-]{1,128}$/
 const CONFIG_DIR_MAX = 4096

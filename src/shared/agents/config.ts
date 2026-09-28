@@ -2,6 +2,8 @@
 // Design: an open AgentId string, a declarative config record, and
 // capabilities expressed as const membership lists (not a capability object).
 
+import { SAFE_SESSION_ID_UNBOUNDED } from '../session-id'
+
 export type BuiltinAgentId = 'claude' | 'codex' | 'gemini' | 'opencode' | 'grok' | 'copilot'
 // Open type — custom agents are any string ('custom:<uuid>'). Never restrict the set.
 export type AgentId = BuiltinAgentId | (string & {})
@@ -502,8 +504,10 @@ export function createdAgentId(
 
 // Session ids are interpolated into a shell command line (written into the live shell on a
 // cold restart), so accept only the safe charset agents actually use (UUIDs etc.) — never a
-// flag-like or metacharacter-bearing value.
-const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+// flag-like or metacharacter-bearing value. The shared alphabet in its UNBOUNDED form: these
+// helpers never capped the length, and capping them now would stop resuming an id that works today
+// (see `@shared/session-id`).
+const SAFE_SESSION_ID = SAFE_SESSION_ID_UNBOUNDED
 
 /**
  * Appends the minted-session-id flag to a FIRST-LAUNCH command, for agents in

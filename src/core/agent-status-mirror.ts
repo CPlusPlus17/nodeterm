@@ -2104,10 +2104,18 @@ export function setNodeHibernated(nodeId: string, on: boolean): void {
  *    and the renderer's own filter;
  *  - an entry that already carries a `sessionId` is NEVER touched — a hook-fed id is fresher than
  *    anything localStorage remembers — and neither is one whose `agentId` disagrees;
- *  - an entry with no identity at all (the boot replay's hibernated-only entry) gets its identity
- *    filled, nothing else;
- *  - a new entry is the IDENTITY-ONLY shape (`stateExpired`, no state, no proof): it says nothing
- *    about what the node is doing, so every state-gated reader sees "no current observation".
+ *  - an entry holding a STATE is never filled either, even with no session id: a seeded id is
+ *    last-known and possibly stale, and beside a live state it would read as the id of the session
+ *    that state belongs to (the phone's permission-dialog guard reads it exactly so);
+ *  - a STATELESS entry with no session id (the boot replay's hibernated-only entry, a restored
+ *    stateless one) gets its identity filled, nothing else;
+ *  - a new entry is the IDENTITY-ONLY shape (`stateExpired`, no state, no proof) with `updatedAt`
+ *    set just past EXPIRE_MS, so it reads as OLD to every freshness check. That matters because
+ *    `stateExpired` is not persisted: restored after a restart it is re-derived from the age, so a
+ *    fresh `updatedAt` would come back as a plain stateless entry and join the session-name sweep
+ *    (a transcript read per pass, over ssh for a remote node). The identity TTL then runs from the
+ *    seed — but the renderer re-seeds whenever the entry has been pruned, so in practice the
+ *    identity lives as long as the node and its localStorage entry do.
  * Returns how many entries changed. Schedules a write (and so an SSH slice push) only then.
  */
 export function seedNodeIdentities(input: unknown): number {
@@ -2120,7 +2128,7 @@ export function seedNodeIdentities(input: unknown): number {
     if (liveIds && !liveIds.has(s.nodeId)) continue
     const e = state.get(s.nodeId)
     if (e) {
-      if (e.sessionId) continue
+      if (e.sessionId || e.state) continue
       if (e.agentId && e.agentId !== s.agentId) continue
       state.set(s.nodeId, {
         ...e,
@@ -2133,7 +2141,7 @@ export function seedNodeIdentities(input: unknown): number {
         agentId: s.agentId,
         sessionId: s.sessionId,
         ...(s.account ? { account: s.account } : {}),
-        updatedAt: now,
+        updatedAt: now - EXPIRE_MS - 1,
         stateExpired: true
       })
     }

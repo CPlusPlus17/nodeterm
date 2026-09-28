@@ -19,6 +19,9 @@ import {
   initAgentStatusMirror,
   filterMirrorForNodes,
   mirrorEntry,
+  sessionNameSweepEntries,
+  EXPIRE_MS,
+  IDENTITY_EXPIRE_MS,
   _resetForTest,
   _snapshot,
   type MirrorFile
@@ -73,6 +76,16 @@ describe('seedNodeIdentities', () => {
     expect(seedNodeIdentities([{ nodeId: 'n1', agentId: 'claude', sessionId: 's' }])).toBe(0)
     expect(mirrorEntry('n1')!.agentId).toBe('codex')
     expect(mirrorEntry('n1')!.sessionId).toBeUndefined()
+  })
+
+  it('never fills an entry that holds a live STATE this run, even with no session id', () => {
+    // A seeded id is last-known and possibly stale; next to a live state it would read as the id
+    // of the session that state belongs to (the phone's permission-dialog guard reads it so).
+    recordAgentEvent({ nodeId: 'n1', agentId: 'claude', kind: 'state', state: 'blocked' })
+    expect(mirrorEntry('n1')!.sessionId).toBeUndefined()
+    expect(seedNodeIdentities([{ nodeId: 'n1', agentId: 'claude', sessionId: 'stale' }])).toBe(0)
+    expect(mirrorEntry('n1')!.sessionId).toBeUndefined()
+    expect(mirrorEntry('n1')!.state).toBe('blocked')
   })
 
   it('fills the identity of a hibernated-only entry without touching the flag', () => {
@@ -130,6 +143,27 @@ describe('seedNodeIdentities', () => {
     }))
     expect(seedNodeIdentities(many)).toBe(IDENTITY_SEED_MAX)
     expect(Object.keys(_snapshot())).toHaveLength(IDENTITY_SEED_MAX)
+  })
+
+  it('a seeded entry reads as OLD: past EXPIRE_MS, inside the identity TTL, out of the name sweep', () => {
+    const before = Date.now()
+    seedNodeIdentities([{ nodeId: 'n1', agentId: 'claude', sessionId: 's' }])
+    const at = mirrorEntry('n1')!.updatedAt
+    expect(before - at).toBeGreaterThan(EXPIRE_MS)
+    expect(Date.now() - at).toBeLessThan(IDENTITY_EXPIRE_MS)
+    expect(sessionNameSweepEntries()).toEqual([])
+  })
+
+  it('stays identity-only across a restart (the marker itself is not persisted)', async () => {
+    const file = path.join(dir, 'agent-status.json')
+    seedNodeIdentities([{ nodeId: 'n1', agentId: 'claude', sessionId: 's' }])
+    await flush()
+    _resetForTest()
+    initAgentStatusMirror(file)
+    const e = mirrorEntry('n1')!
+    expect(e.sessionId).toBe('s')
+    expect(e.stateExpired).toBe(true)
+    expect(sessionNameSweepEntries()).toEqual([])
   })
 
   it('a later hook event supersedes the seed normally', () => {
