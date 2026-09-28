@@ -1738,7 +1738,7 @@ else, and its context links must keep classifying across restarts).
   `PERMISSION_MODE_CAPABLE`, `MODEL_SWITCH_CAPABLE`, with helpers (`hasHooks`,
   `canBranch`, `canContextLink`, `canChat`, `canRename`, `canReadTitle`, `hasPermissionMode`, …).
   Branch stays **Claude-only** purely by being in only `BRANCH_CAPABLE`. The ⌘M **ChatPanel**
-  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok** since 2026-09: grok's
+  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok + opencode** since 2026-09: grok's
   `chat_history.jsonl` gets its own reader, and `chat:read-transcript` routes by agent. That list had
   to be SPLIT to do it — `CHAT_CAPABLE` carried two facts that coincided while claude was its only
   member ("we can render this" and "claude's resolver can locate and parse this file"), and the
@@ -1873,6 +1873,27 @@ else, and its context links must keep classifying across restarts).
   cost before the backgrounding. Full picture,
   limits (permission prompt and ESC fire no hook) and the device checklist:
   **`docs/antigravity-agent.md`**.
+- **opencode in the ⌘M chat view** (2026-09-28, opencode 1.18.25 measured) — opencode has NO
+  transcript file (SQLite since 1.18; that database also holds its account tokens and is never
+  opened), so `readChatTranscript` routes `capabilityAgentId(agentId) === 'opencode'` to
+  `core/opencode-chat.ts`, which runs `opencode export <sessionId>` (argv only, no flag an older
+  yargs-strict CLI might refuse) and parses the one JSON document into claude's `ChatMessage` shape:
+  user/assistant text, tool chips (arg by an opencode key order, result = 3 lines / 500 units,
+  `Error: …` on a failed call), `[name] message` for an errored turn, compaction/subtask chips,
+  `at` from `time.created`, `model`/`effort` from the newest assistant's `modelID`/`variant`.
+  Reasoning, `synthetic`/`ignored` text, file/agent parts and step bookkeeping are dropped;
+  unmappable shapes are skipped and counted. **One page, always** (`olderCursor: null`, newest
+  messages within 5 MB): there are no byte offsets to page by. Refusals: no/unsafe session id runs
+  nothing (a bare `opencode export` opens a picker over the NEWEST sessions — someone else's); an
+  export whose `info.id` is another session is `unreadable`; only `Session not found: <id>` with
+  exit 1 and empty stdout is a clean miss. **Remote (SSH) nodes are refused** (`unreadable`, no
+  export runs) — their sessions are in the host's database and there is no remote leg yet; the
+  panel's copy names both causes an opencode `unreadable` can have. One export costs 1.0–1.7 s and
+  ~320 MB, so `createOpencodeExportGate` runs at most one per session (starts ≥ 2 s apart, a caller
+  arriving mid-run gets a FRESH export, never a cached one) and two in total. Plan/question answer
+  cards stay claude-only (no `body`/`questions` on opencode's `question` tool). Desktop and Server
+  Edition both serve it (core handler); the phone gets it over the relay `chat.page` for free.
+  Fixtures + the exact rules for the iOS port: `src/shared/chat-fixtures/opencode/README.md`.
 - **Gemini + codex parity** (2026-08-09) — brought both up to grok's level in the lists above. Unlike
   grok, **both CLIs are installed** and gemini **ships its own hook reference**
   (`/usr/lib/node_modules/@google/gemini-cli/bundle/docs/hooks/reference.md`), so almost every fact is

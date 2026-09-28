@@ -106,9 +106,16 @@ describe('opencode capabilities', () => {
     expect(canControlCanvas('opencode')).toBe(true)
   })
   it('stays out of the claude-only capability lists', () => {
-    for (const can of [canSubagent, canRecur, canBranch, hasUsage, canChat, canTransferFrom, canRename, canReadTitle, hasPermissionMode]) {
+    for (const can of [canSubagent, canRecur, canBranch, hasUsage, canTransferFrom, canRename, canReadTitle, hasPermissionMode]) {
       expect(can('opencode')).toBe(false)
     }
+  })
+  it('shows its conversation in the ⌘M chat panel — read through `opencode export`, never claude\'s resolver', () => {
+    // Same pair grok pins below: opencode's sessions live in a database read by `opencode export`
+    // (core/opencode-chat.ts), so claude's resolver — whose cwd fallback returns a stranger's newest
+    // transcript — must never be asked for one.
+    expect(canChat('opencode')).toBe(true)
+    expect(readsClaudeShapedTranscript('opencode')).toBe(false)
   })
 })
 

@@ -15,6 +15,8 @@ import type { ChatTranscriptResult, TranscriptLine, TranscriptPresence } from '.
 import { CHAT_PAGE_MAX_BYTES, normalizeChatPage, type ChatTranscriptPage } from '../shared/chat-page'
 import { platform } from './platform'
 import { chatMessagesFromGrok } from './grok-chat'
+import { readOpencodeChat, type OpencodeExportRun } from './opencode-chat'
+import { capabilityAgentId } from '../shared/agents/config'
 import { locateGrok } from './handoff/locate'
 import {
   parseChatMessages,
@@ -78,6 +80,9 @@ export interface TranscriptIpcDeps {
    * (the Server Edition — it runs ON the host) = no node is remote, which is correct there.
    */
   isRemoteNode?(nodeId: string): boolean
+  /** `opencode export <id>` for an opencode node's chat read. A test seam: absent = the real,
+   *  bounded and gated CLI call (`defaultOpencodeExport`) — both shells run it on their own host. */
+  opencodeExport?: OpencodeExportRun
 }
 
 export type RemoteTranscriptPage = { ok: true; data: Buffer; start: number } | { ok: false; absent?: true }
@@ -237,6 +242,14 @@ export async function readChatTranscript(
     return buf === undefined
       ? { messages: [], found: false, ...paging }
       : { messages: chatMessagesFromGrok(buf), found: true, ...paging }
+  }
+  // opencode has no transcript file — its sessions live in a database read through
+  // `opencode export <id>` — so it must never reach claude's resolver below (whose cwd fallback
+  // would answer with a stranger's session). Routed through the base harness, so a custom agent
+  // built on opencode reads as opencode. Local only: a remote node is refused inside, before
+  // anything runs. See core/opencode-chat.ts.
+  if (agentId && capabilityAgentId(agentId) === 'opencode') {
+    return readOpencodeChat({ sessionId, remoteOnly }, page, deps.opencodeExport)
   }
   if (page) return readChatPage({ sessionId, cwd, accountId, nodeId, ...(remoteOnly ? { remoteOnly } : {}) }, page, deps)
   const remote = deps.readRemote ? await deps.readRemote({ sessionId, cwd, accountId, nodeId }) : null

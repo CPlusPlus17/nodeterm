@@ -14,6 +14,7 @@ import { createHostChat, mirrorChatSendRefusal, type HostChatDeps } from './host
 import { setCustomAgentBaseResolver } from '../../shared/agents/config'
 import type { ChatTranscriptResult } from '../../shared/types'
 import type { HeldPermissionIo } from '../../core/agents/permission-decision'
+import { readChatTranscript, type ChatReadQuery } from '../../core/transcript-ipc'
 
 const RESULT: ChatTranscriptResult = { messages: [], found: true, olderCursor: null, unmatchedResults: [], model: 'm' }
 const RSTATUS = { state: 'done' as const, held: null, hibernated: false, paused: false, dropped: false, sessionEnded: false }
@@ -79,6 +80,38 @@ describe('host-chat page', () => {
     } finally {
       setCustomAgentBaseResolver(null)
     }
+  })
+  it('serves an opencode node through the REAL reader: its own export locally, refused remote', async () => {
+    // The phone gets opencode for free once the desktop parses it: `page` gates on canChat, and the
+    // real `readChatTranscript` routes opencode to `opencode export <id>` (core/opencode-chat.ts).
+    const SID = 'ses_0a1b2c3d4ffeSynthetic000001'
+    const stdout = JSON.stringify({
+      info: { id: SID },
+      messages: [{ info: { id: 'msg_1', sessionID: SID, role: 'user', time: { created: 1 } }, parts: [{ type: 'text', text: 'hi from opencode' }] }]
+    })
+    const opencodeExport = vi.fn(async () => ({ ok: true as const, stdout }))
+    const real = (q: ChatReadQuery, rawPage: unknown) => readChatTranscript(q, rawPage, { opencodeExport })
+    const local = deps({
+      lookupNode: () => ({ cwd: '/srv/app', agentId: 'opencode', sessionId: SID }),
+      readTranscript: vi.fn(real),
+      renderer: { ...deps().renderer, session: vi.fn(async () => ({ sessionId: SID })) }
+    })
+    expect(await createHostChat(local).page('n1', {})).toMatchObject({
+      version: 1,
+      sessionId: SID,
+      found: true,
+      olderCursor: null,
+      messages: [{ role: 'user', parts: [{ kind: 'text', text: 'hi from opencode' }] }]
+    })
+    expect(opencodeExport).toHaveBeenCalledWith(SID)
+    opencodeExport.mockClear()
+    const remote = deps({
+      lookupNode: () => ({ cwd: '/srv/app', agentId: 'opencode', sessionId: SID, remote: true }),
+      readTranscript: vi.fn(real),
+      renderer: { ...deps().renderer, session: vi.fn(async () => ({ sessionId: SID })) }
+    })
+    await expect(createHostChat(remote).page('n1', {})).rejects.toThrow('Could not read the transcript.')
+    expect(opencodeExport).not.toHaveBeenCalled()
   })
   it('an absent page is the default paged tail, not the legacy read', async () => {
     const d = deps()

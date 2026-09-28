@@ -22,6 +22,7 @@ import { E_UNSUPPORTED } from '@shared/rpc'
 import { Spinner } from '../components/Spinner'
 import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
 import { sentCommand } from '@shared/chat-command'
+import { capabilityAgentId } from '@shared/agents/config'
 import { ChatLoadingStatus } from './ChatPanelFallback'
 import { answerCardState, answerRebindPending, rebindRetryDelay, type BoundAnswerCard } from '../lib/chatAnswer'
 import { AnswerControlsUpdating, PlanAnswerControls, QuestionAnswerControls } from './ChatAnswerControls'
@@ -84,7 +85,7 @@ interface ChatPanelProps {
  * initial `[]` because nothing caught the rejection, and a failed resolution was indistinguishable
  * from a session nobody has spoken to. They need different words — and two of them are retryable.
  */
-type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'error'
+type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'exportError' | 'error'
 
 /**
  * An `unreadable` read of a GROK node can only be the remote case: core's grok leg is local-only
@@ -95,6 +96,16 @@ type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupport
  * reader). Retry cannot heal it, so it must not read as a transient failure.
  */
 const remoteGrokUnreadable = (agentId: string | undefined): boolean => agentId === 'grok'
+
+/**
+ * An `unreadable` read of an OPENCODE node has two causes and nothing on the wire tells them apart:
+ * a local `opencode export` that failed (Retry heals it) and a remote node core refuses before
+ * running anything (it never heals). So its copy names both instead of guessing — and never blames
+ * an unreachable host for a local failure. Through the base harness, mirroring core's routing
+ * (`readChatTranscript` routes `capabilityAgentId(...) === 'opencode'` to `opencode-chat.ts`).
+ */
+const opencodeUnreadable = (agentId: string | undefined): boolean =>
+  !!agentId && capabilityAgentId(agentId) === 'opencode'
 
 const isUnsupported = (e: unknown): boolean =>
   !!e && typeof e === 'object' && (e as { code?: string }).code === E_UNSUPPORTED
@@ -116,6 +127,10 @@ const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
     detail: 'Open this session on the desktop app to read its conversation.'
   },
   remoteUnsupported: { title: "Reading a remote Grok session's transcript isn't supported yet." },
+  exportError: {
+    title: "Couldn't read this opencode session.",
+    detail: "opencode export failed on this machine — Retry once it works. A session on a remote host can't be read here yet."
+  },
   error: {
     title: "Couldn't read the transcript.",
     detail: "The agent's host may not be reachable — Retry once it is."
@@ -338,7 +353,15 @@ export function ChatPanel({
           setThread(emptyThread(identity))
           // A read that FAILED (the host did not answer, a remote node with no reachable master)
           // is not "no transcript": it gets the error copy, and ↻ is the way out.
-          setLoadState(!res.unreadable ? 'missing' : remoteGrokUnreadable(agentId) ? 'remoteUnsupported' : 'error')
+          setLoadState(
+            !res.unreadable
+              ? 'missing'
+              : remoteGrokUnreadable(agentId)
+                ? 'remoteUnsupported'
+                : opencodeUnreadable(agentId)
+                  ? 'exportError'
+                  : 'error'
+          )
           setHeldRead({ identity, pendingId: heldAtStart })
           settleHeldReload(heldAtStart)
           return

@@ -250,6 +250,21 @@ describe('ChatPanel empty states', () => {
     expect(host.querySelector('.term-chat__retry')).toBeNull()
   })
 
+  it('an unreadable opencode read names BOTH causes it can have, and keeps Retry', async () => {
+    // opencode's reader sets `unreadable` for a local `opencode export` that failed (heals on retry)
+    // AND for a remote node it refuses (never heals). No wire field tells them apart, so the copy
+    // says both rather than guessing — and never blames an unreachable host for a local failure.
+    await render({ agentId: 'opencode' })
+    await act(async () => {
+      pending[0].resolve({ messages: [], found: false, olderCursor: null, unmatchedResults: [], unreadable: true })
+    })
+    expect(msgs().textContent).toContain("Couldn't read this opencode session.")
+    expect(msgs().textContent).toContain('opencode export')
+    expect(msgs().textContent).toContain('remote host')
+    expect(msgs().textContent).not.toContain("The agent's host may not be reachable")
+    expect(host.querySelector('.term-chat__retry')).not.toBeNull()
+  })
+
   it('a clean miss still says no transcript was found', async () => {
     await render()
     await act(async () => {

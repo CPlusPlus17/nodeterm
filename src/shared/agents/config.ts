@@ -293,7 +293,10 @@ export const USAGE_CAPABLE = ['claude', 'codex', 'gemini', 'grok'] as const
 // newest CLAUDE transcript for that cwd. A grok node in this list would therefore show a stranger's
 // conversation in its find bar and rehydrate its meter from it. That exact bug already happened once
 // with codex and gemini; transcriptGates.ts documents it.
-export const CHAT_CAPABLE = ['claude', 'grok'] as const
+//
+// opencode joined 2026-09-28: it has no transcript file at all (SQLite since 1.18), so its chat is
+// read through `opencode export <id>` (core/opencode-chat.ts) and it stays out of the list below.
+export const CHAT_CAPABLE = ['claude', 'grok', 'opencode'] as const
 // Agents whose transcript CLAUDE's own resolver can locate and parse — the gate for everything that
 // goes through `resolveTranscript` (the find bar's index, the meter's mount-time rehydration).
 //
