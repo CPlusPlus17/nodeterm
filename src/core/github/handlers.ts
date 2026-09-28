@@ -26,6 +26,7 @@ export interface GitHubIssueHandlerService {
   pullStatus(request: { projectId: string }): Promise<GitHubPullBoard>
   chasePulls(request: { projectId: string }): Promise<boolean>
   pullChecks(request: { projectId: string; pullNumber: number }): Promise<GitHubPullChecksResult>
+  claimPullAutoMove(request: { projectId: string; cardId: string; pulls: number[] }): Promise<boolean>
 }
 
 export function registerGitHubIssueHandlers(
@@ -50,4 +51,6 @@ export function registerGitHubIssueHandlers(
     service.chasePulls({ projectId }))
   platform.handle(IPC.githubIssuesPullChecks, (projectId: string, pullNumber: number) =>
     service.pullChecks({ projectId, pullNumber }))
+  platform.handle(IPC.githubIssuesClaimPullAutoMove,
+    (request: { projectId: string; cardId: string; pulls: number[] }) => service.claimPullAutoMove(request))
 }

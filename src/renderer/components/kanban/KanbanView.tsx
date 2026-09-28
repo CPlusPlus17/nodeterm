@@ -392,6 +392,7 @@ export const KanbanView = memo(function KanbanView({
     [onAutoMoveFromPulls, projectId]
   )
   usePullAutoMove({
+    api: api.githubIssues,
     projectId,
     cards: sessions,
     board,

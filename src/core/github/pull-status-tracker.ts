@@ -3,8 +3,8 @@
 // owns only the decisions, so each rule can be pressed by a test without a network.
 //
 // WHEN a read happens — nothing else triggers one:
-//  1. The issues heartbeat (Wave 1) reported a change. A push, a merge, a label, a comment all move
-//     the repository's most recently updated item; a finished check run does NOT, which is why:
+//  1. The issues heartbeat reported a change. A push, a merge, a label, a comment all move the
+//     repository's most recently updated item; a finished check run does NOT, which is why:
 //  2. An undecided PR (mergeability UNKNOWN, or a rollup still PENDING) is CHASED — 30 s, 1 min,
 //     2 min, then 5 min, at most 12 reads per episode — and only while a board is VISIBLE. The
 //     renderer asserts visibility by asking (`claimChase`); a hidden or closed board stops asking.
@@ -13,6 +13,9 @@
 //
 // A read the budget holds is skipped, never queued, and remembered as owed; a failed read keeps the
 // last snapshot and marks it stale. Neither blanks what the board shows.
+//
+// Every read is also folded into the repository's persisted MEMORY (pull-memory.ts): what this
+// machine has observed about each PR, and the one-time claims the merge-driven column move takes.
 import {
   EMPTY_PULL_BOARD,
   PULL_CHASE_MAX,
@@ -21,9 +24,18 @@ import {
   pullStatusFrom,
   type GitHubPullBoard,
   type GitHubPullStatus,
-  type PullChaseState
+  type PullChaseState,
+  type PullLifecycle
 } from '../../shared/github-pull-status'
 import type { PullStatusRead } from './graphql-pulls'
+import {
+  claimInMemory,
+  emptyPullMemory,
+  rememberPulls,
+  rememberedForBoard,
+  withObservations,
+  type PullMemory
+} from './pull-memory'
 import type { GitHubRequestCoordinator } from './request-coordinator'
 
 export type PullReadReason = 'heartbeat' | 'foreground' | 'chase'
@@ -38,8 +50,12 @@ type PullRepositoryState = {
   /** A read was skipped by the rate budget; the next opportunity reads even if nothing changed. */
   owed: boolean
   inFlight?: Promise<void>
-  /** Bumped by `forget` so a read in flight when the cache was cleared cannot publish. */
+  /** Bumped by `forgetRepository` so nothing started before a cache clear can publish or persist. */
   generation: number
+  memory?: PullMemory
+  memoryLoad?: Promise<PullMemory>
+  /** Saves run one after another, so the file always ends at the latest memory. */
+  saving: Promise<void>
 }
 
 type TrackerOptions = {
@@ -47,14 +63,26 @@ type TrackerOptions = {
   now?: () => number
   /** Something the board shows changed for this repository key. */
   onChanged: (key: string, changedPullNumbers: number[]) => void
+  /** Persistence for the memory; absent = memory lives for this process only. */
+  memory?: {
+    load(userId: string, repository: string): Promise<PullMemory>
+    save(userId: string, repository: string, memory: PullMemory): Promise<void>
+  }
+  /** Every PR's lifecycle from the REST issues harvest, for remembered PRs the GraphQL read no
+   *  longer lists. */
+  harvest?: (key: string) => ReadonlyMap<number, PullLifecycle>
 }
 
-/** Why a read did not produce a snapshot. `hidden` is an ANSWER (the token may not read these
- *  fields), not a failure. */
 function errorCode(error: unknown): string | undefined {
   return error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
     ? (error as { code: string }).code
     : undefined
+}
+
+/** Repository keys are `${userId}\0${repository}` — the issue service's own key. */
+function splitKey(key: string): [string, string] {
+  const at = key.indexOf('\0')
+  return [key.slice(0, at), key.slice(at + 1)]
 }
 
 export class GitHubPullStatusTracker {
@@ -88,22 +116,48 @@ export class GitHubPullStatusTracker {
   /**
    * Claims one chase read, synchronously, so two boards asking at once cannot both spend it. True
    * means the caller must now `read(…, 'chase')`. The attempt is counted HERE, before the read: a
-   * chase read that fails still spends one of the twelve.
+   * chase read that fails still spends one of the twelve. The claim that spends the last one tells
+   * the boards at once, so they stop asking.
    */
   claimChase(key: string): boolean {
     const state = this.states.get(key)
     if (!state || state.inFlight || !pullChaseDue(state.chase, this.now())) return false
     state.chase = { ...state.chase!, attempts: state.chase!.attempts + 1, lastReadAt: this.now() }
+    if (state.chase.attempts >= PULL_CHASE_MAX) this.options.onChanged(key, [])
     return true
   }
 
-  /** Drops every repository state for `repository` (a cache clear or revoke). */
-  forgetRepository(repository: string): void {
+  /**
+   * The one-time permission to move a card for a set of merged PRs. The first caller for a key wins,
+   * whichever window it comes from, and the claim is persisted — a card the user dragged back is not
+   * moved again for the same merges.
+   */
+  async claim(key: string, claimKey: string): Promise<boolean> {
+    const state = this.stateFor(key)
+    const generation = state.generation
+    const memory = await this.memoryFor(key, state)
+    if (generation !== state.generation) return false
+    const { memory: next, claimed } = claimInMemory(state.memory ?? memory, claimKey)
+    if (!claimed) return false
+    state.memory = next
+    this.persist(key, state)
+    return true
+  }
+
+  /**
+   * Drops every repository state for `repository` (a cache clear or revoke). Resolves once any save
+   * already under way has finished, so a caller deleting the file afterwards cannot have it written
+   * back by a save that started before.
+   */
+  forgetRepository(repository: string): Promise<void> {
+    const pending: Promise<void>[] = []
     for (const [key, state] of this.states) {
       if (!key.endsWith(`\0${repository}`)) continue
       state.generation += 1
+      pending.push(state.saving)
       this.states.delete(key)
     }
+    return Promise.all(pending).then(() => undefined)
   }
 
   /**
@@ -119,8 +173,8 @@ export class GitHubPullStatusTracker {
   ): Promise<void> {
     const state = this.stateFor(key)
     if (state.inFlight) return state.inFlight
-    // Background reads (heartbeat, chase) respect the whole budget, including the floor Wave 1 keeps
-    // for the user's own tools. A read the user asked for respects only a hard limit.
+    // Background reads (heartbeat, chase) respect the whole budget, including the floor kept for
+    // the user's own tools. A read the user asked for respects only a hard limit.
     const throttle = this.options.coordinator.throttle(userId, this.now(), 'graphql')
     if (throttle && (reason !== 'foreground' || throttle.kind === 'rate-limited')) {
       state.owed = true
@@ -153,7 +207,7 @@ export class GitHubPullStatusTracker {
         return
       }
       if (code === 'insufficient-permission') {
-        this.publish(key, state, {
+        await this.publish(key, state, generation, {
           open: [], recent: [], access: { ci: false, merge: false }, truncated: false
         }, userId)
         return
@@ -166,10 +220,18 @@ export class GitHubPullStatusTracker {
       return
     }
     if (generation !== state.generation) return
-    this.publish(key, state, result, userId)
+    await this.publish(key, state, generation, result, userId)
   }
 
-  private publish(key: string, state: PullRepositoryState, result: PullStatusRead, userId: string): void {
+  private async publish(
+    key: string,
+    state: PullRepositoryState,
+    generation: number,
+    result: PullStatusRead,
+    userId: string
+  ): Promise<void> {
+    const memory = await this.memoryFor(key, state)
+    if (generation !== state.generation) return
     const now = this.now()
     if (result.rateLimit) {
       // The body's own reading, in case a proxy stripped the headers the client already fed in.
@@ -192,7 +254,17 @@ export class GitHubPullStatusTracker {
         ...(pull.crossRepository ? { crossRepository: true as const } : {}),
         closes: []
       }))
-    const pulls = [...open, ...finished]
+    const listed = [...open, ...finished]
+    const remembered = rememberPulls(memory.pulls, listed, this.options.harvest?.(key) ?? new Map(), now)
+    if (JSON.stringify(remembered) !== JSON.stringify(memory.pulls)) {
+      state.memory = { ...(state.memory ?? memory), pulls: remembered }
+      this.persist(key, state)
+    }
+    const rememberedByNumber = new Map(remembered.map((pull) => [pull.number, pull]))
+    const pulls = [
+      ...listed.map((pull) => withObservations(pull, rememberedByNumber.get(pull.number))),
+      ...rememberedForBoard(remembered, new Set(listed.map((pull) => pull.number)), now)
+    ]
     const nextNumbers = new Set(pulls.map((pull) => pull.number))
     const changed = [
       ...pulls.filter((pull) => JSON.stringify(pull) !== JSON.stringify(previous.get(pull.number)))
@@ -213,12 +285,38 @@ export class GitHubPullStatusTracker {
     if (changed.length || accessChanged || wasStale || chaseChanged) this.options.onChanged(key, changed)
   }
 
+  private memoryFor(key: string, state: PullRepositoryState): Promise<PullMemory> {
+    if (state.memory) return Promise.resolve(state.memory)
+    if (!state.memoryLoad) {
+      const [userId, repository] = splitKey(key)
+      state.memoryLoad = (this.options.memory
+        ? this.options.memory.load(userId, repository)
+        : Promise.resolve(emptyPullMemory())).catch(() => emptyPullMemory())
+    }
+    return state.memoryLoad.then((loaded) => {
+      if (!state.memory) state.memory = loaded
+      return state.memory
+    })
+  }
+
+  private persist(key: string, state: PullRepositoryState): void {
+    const save = this.options.memory?.save
+    if (!save) return
+    const [userId, repository] = splitKey(key)
+    const generation = state.generation
+    state.saving = state.saving.then(async () => {
+      // Written at its turn with the LATEST memory, and never after the repository was forgotten.
+      if (generation !== state.generation || !state.memory) return
+      await save(userId, repository, state.memory)
+    }).catch(() => undefined)
+  }
+
   private stateFor(key: string): PullRepositoryState {
     let state = this.states.get(key)
     if (!state) {
       state = {
         pulls: [], stale: false, access: { ci: true, merge: true }, truncated: false,
-        chase: null, owed: false, generation: 0
+        chase: null, owed: false, generation: 0, saving: Promise.resolve()
       }
       this.states.set(key, state)
     }

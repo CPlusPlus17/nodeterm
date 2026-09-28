@@ -37,8 +37,12 @@ class PullClient implements GitHubIssuesClientLike {
   failChecks?: Error
 
   async listIssues() { return { items: [] as GitHubIssue[] } }
+  /** Runs inside the heartbeat — lets a test change the configuration between the heartbeat and the
+   *  pull status read that follows it. */
+  onHeartbeat?: () => void
   async issuesHeartbeat(_repository: string, etag?: string): Promise<IssueHeartbeatResult> {
     this.heartbeats += 1
+    this.onHeartbeat?.()
     if (this.changed || !etag) { this.changed = false; return { notModified: false, etag: `W/"${Math.random()}"` } }
     return { notModified: true, etag }
   }
@@ -59,9 +63,10 @@ class PullClient implements GitHubIssuesClientLike {
   }
 }
 
-function context(client: PullClient): GitHubIssueServiceContext {
+function context(client: PullClient, revision = config.revision): GitHubIssueServiceContext {
   return {
-    localApprovalId: 'local-1', projectId: 'project-1', repository: 'o/r', config, controlRevision: 1,
+    localApprovalId: 'local-1', projectId: 'project-1', repository: 'o/r', config: { ...config, revision },
+    controlRevision: 1,
     credentialGeneration: 1, userId: 'user-1', client, columnColors: {}, mappingApproved: true
   }
 }
@@ -76,10 +81,11 @@ function harness(client = new PullClient()) {
   let now = 1_000_000
   let poll: (() => void) | undefined
   let contexts = 0
+  let revision = config.revision
   const service = new GitHubIssueService({
     cache: new GitHubIssueCache(userDataDir),
     coordinator: new GitHubRequestCoordinator({ now: () => now }),
-    contextForProject: async () => { contexts += 1; return context(client) },
+    contextForProject: async () => { contexts += 1; return context(client, revision) },
     now: () => now,
     setInterval: (fn) => { poll = fn; return 1 },
     clearInterval: () => { poll = undefined }
@@ -88,7 +94,8 @@ function harness(client = new PullClient()) {
     client, service,
     advance: (ms: number) => { now += ms },
     poll: async () => { poll?.(); await flush() },
-    contexts: () => contexts
+    contexts: () => contexts,
+    setRevision: (next: string) => { revision = next }
   }
 }
 
@@ -179,11 +186,53 @@ describe('GitHubIssueService pull status', () => {
     expect(h.client.checkReads).toBe(0)
   })
 
-  it('clearing the cache forgets pull status', async () => {
+  it('clearing the cache forgets pull status and deletes its memory file', async () => {
     const h = harness()
     await h.service.subscribe(7, { projectId: 'project-1' })
-    await flush()
+    await vi.waitFor(() => expect(h.client.statusReads).toBe(1))
+    const memoryDir = path.join(userDataDir, 'github-pull-memory')
+    await vi.waitFor(async () => expect(await fs.readdir(memoryDir).catch(() => [])).toHaveLength(1))
     await h.service.clearCache({ projectId: 'project-1' })
+    expect(await fs.readdir(memoryDir).catch(() => [])).toEqual([])
+    // Bind the same identity again with a read that never answers: nothing from before the clear may
+    // come back under that key.
+    h.client.pullRequestStatuses = () => new Promise(() => undefined)
+    h.advance(120_000)
+    await h.service.refresh({ projectId: 'project-1' })
+    await flush()
     expect((await h.service.pullStatus({ projectId: 'project-1' })).pulls).toEqual([])
+  })
+
+  it('a configuration change between the heartbeat and the read is not a failed read', async () => {
+    const h = harness()
+    await h.service.subscribe(7, { projectId: 'project-1' })
+    await vi.waitFor(() => expect(h.client.statusReads).toBe(1))
+    h.client.changed = true
+    h.client.onHeartbeat = () => h.setRevision('mapping-2')
+    h.advance(120_000)
+    await h.service.refresh({ projectId: 'project-1' })
+    await flush()
+    expect(h.client.statusReads).toBe(1)
+    expect((await h.service.pullStatus({ projectId: 'project-1' })).stale).toBe(false)
+  })
+
+  it('a move claim is won once, and malformed asks are refused', async () => {
+    const h = harness()
+    expect(await h.service.claimPullAutoMove({ projectId: 'project-1', cardId: 'n', pulls: [1] })).toBe(false)
+    await h.service.subscribe(7, { projectId: 'project-1' })
+    await vi.waitFor(() => expect(h.client.statusReads).toBe(1))
+    expect(await h.service.claimPullAutoMove({ projectId: 'project-1', cardId: 'n', pulls: [2, 1] })).toBe(true)
+    expect(await h.service.claimPullAutoMove({ projectId: 'project-1', cardId: 'n', pulls: [1, 2] })).toBe(false)
+    expect(await h.service.claimPullAutoMove({ projectId: 'project-1', cardId: 'other', pulls: [1, 2] })).toBe(true)
+    for (const bad of [
+      { projectId: 'project-1', cardId: '', pulls: [1] },
+      { projectId: 'project-1', cardId: 'x'.repeat(300), pulls: [1] },
+      { projectId: 'project-1', cardId: 'n\u0001', pulls: [1] },
+      { projectId: 'project-1', cardId: 'n', pulls: [] },
+      { projectId: 'project-1', cardId: 'n', pulls: [0] },
+      null
+    ]) {
+      expect(await h.service.claimPullAutoMove(bad as never)).toBe(false)
+    }
   })
 })

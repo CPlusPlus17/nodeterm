@@ -67,6 +67,15 @@ describe('board pull links (git-shared, hostile input)', () => {
       .toEqual({ unlinked: [], noAutoMove: [] })
   })
 
+  it('a write keeps keys a newer build stored in the block', () => {
+    const newer = { ...empty, pullLinks: { issueLinks: [{ nodeId: 'n', issue: 4 }] } } as unknown as ProjectKanban
+    const next = unlinkPull(newer, 'n', 5)
+    expect((next.pullLinks as unknown as Record<string, unknown>).issueLinks).toEqual([{ nodeId: 'n', issue: 4 }])
+    expect(readPullLinks(next).unlinked).toEqual([{ nodeId: 'n', pull: 5 }])
+    const cleared = relinkPull(next, 'n', 5)
+    expect(cleared.pullLinks).toEqual({ issueLinks: [{ nodeId: 'n', issue: 4 }] })
+  })
+
   it('an emptied block leaves no key in the file', () => {
     const on = setNoAutoMove(empty, 'n', true)
     expect(on.pullLinks).toEqual({ noAutoMove: ['n'] })
@@ -90,12 +99,14 @@ describe('board pull links (git-shared, hostile input)', () => {
 })
 
 describe('the machine-local switch', () => {
-  it('reads hand-edited settings defensively', () => {
+  it('reads hand-edited settings defensively; an entry without a valid arming time is off', () => {
     expect(sanitizeKanbanPullAutoMove({ projects: {
-      p1: { columnId: 'done', seen: { n: { '5': 'open', '6': 'weird', x: 'open' }, bad: 3 } },
-      p2: { columnId: 4 },
-      p3: 'no'
-    } })).toEqual({ projects: { p1: { columnId: 'done', seen: { n: { '5': 'open' } } } } })
+      p1: { columnId: 'done', armedAt: 5, seen: { n: { '5': 'open' } } },
+      p2: { columnId: 4, armedAt: 1 },
+      p3: 'no',
+      p4: { columnId: 'done' },
+      p5: { columnId: 'done', armedAt: -1 }
+    } })).toEqual({ projects: { p1: { columnId: 'done', armedAt: 5 } } })
     expect(sanitizeKanbanPullAutoMove(undefined)).toEqual({ projects: {} })
   })
 })

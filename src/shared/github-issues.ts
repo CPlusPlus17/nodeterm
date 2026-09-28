@@ -287,6 +287,9 @@ export interface GitHubIssuesApi {
   chasePulls(projectId: string): Promise<boolean>
   /** Per-check detail for one PR — read only when its modal opens. */
   pullChecks(projectId: string, pullNumber: number): Promise<GitHubPullChecksResult>
+  /** The one-time permission to move a session card because its linked PRs merged. The first ask
+   *  across every window wins; the host remembers it. */
+  claimPullAutoMove(request: { projectId: string; cardId: string; pulls: number[] }): Promise<boolean>
   onChanged(projectId: string, listener: (changedIssueNumbers: number[]) => void): () => void
   /** Resolve the project's GitHub org/user avatar (owner derived host-side from the project's own
    *  origin — never a caller-supplied slug). Null when the project has no GitHub origin or the

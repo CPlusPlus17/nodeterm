@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { ProjectKanban } from '@shared/types'
 import type { GitHubIssuesApi } from '@shared/github-issues'
 import type { GitHubPullBoard } from '@shared/github-pull-status'
@@ -10,11 +10,14 @@ import { documentChaseDeps, startPullChase } from '../../lib/pullChase'
 
 /**
  * Runs the merge-driven move for SESSION cards while the board is open (the pull status it reads is
- * only fresh while a board is subscribed). All decisions are `planPullAutoMoves`; this glue only
- * applies them: each move goes to `onAutoMove`, which compare-and-sets against the latest board and
- * writes the board-log line, and the last-seen map goes to this machine's settings.
+ * only fresh while a board is subscribed). All decisions are `planPullAutoMoves`, which writes
+ * nothing; this glue asks the host for each move's one-time claim and applies only the moves it wins,
+ * through `onAutoMove` (a compare-and-set against the latest board + the board-log line). It never
+ * writes settings: a background settings write from one Server Edition tab would overwrite whatever
+ * the user just changed in another.
  */
 export function usePullAutoMove(input: {
+  api: Pick<GitHubIssuesApi, 'claimPullAutoMove'>
   projectId: string
   cards: Array<{ id: string; kind: string; worktreeBranch?: string }>
   board: ProjectKanban
@@ -29,32 +32,32 @@ export function usePullAutoMove(input: {
     () => relay ? undefined : sanitizeKanbanPullAutoMove(raw).projects[input.projectId],
     [raw, input.projectId, relay]
   )
-  const { projectId, cards, board, pullBoard, onAutoMove } = input
+  const { api, projectId, cards, board, pullBoard, onAutoMove } = input
+  // The BOARD's lifetime, not one effect run: the pull board is re-read every minute, and a re-render
+  // landing between a won claim and its answer must not throw the move away — the claim is spent
+  // either way, so dropping it would lose the move for good.
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+  const latest = useRef(onAutoMove)
+  latest.current = onAutoMove
   useEffect(() => {
     if (!entry || !onAutoMove) return
-    const plan = planPullAutoMoves({ cards, board, pullBoard, entry })
-    if (plan.seen !== null) {
-      // Recorded BEFORE the moves: a re-run triggered by the move then sees the transition as
-      // consumed. A move whose compare-and-set fails (the user moved the card meanwhile) is not
-      // retried — the user's placement wins.
-      const current = sanitizeKanbanPullAutoMove(useSettings.getState().settings.kanbanPullAutoMove)
-      const own = current.projects[projectId]
-      if (own) {
-        const { seen: _old, ...rest } = own
-        useSettings.getState().update({
-          kanbanPullAutoMove: {
-            projects: {
-              ...current.projects,
-              [projectId]: Object.keys(plan.seen).length ? { ...rest, seen: plan.seen } : rest
-            }
+    for (const move of planPullAutoMoves({ cards, board, pullBoard, entry }).moves) {
+      void api.claimPullAutoMove({ projectId, cardId: move.cardId, pulls: move.pulls })
+        .then((claimed) => {
+          // A claim that lands after this board closed is spent, not applied: the card stays where it
+          // is, which is the safe side of a lost move. The move itself is a compare-and-set against
+          // the latest board, so a late answer cannot undo a drag made meanwhile.
+          if (claimed && mounted.current) {
+            latest.current?.(move.cardId, move.fromColumnId, entry.columnId, autoMoveNote(move.pulls))
           }
         })
-      }
+        .catch(() => undefined)
     }
-    for (const move of plan.moves) {
-      onAutoMove(move.cardId, move.fromColumnId, entry.columnId, autoMoveNote(move.pulls))
-    }
-  }, [entry, cards, board, pullBoard, projectId, onAutoMove])
+  }, [api, entry, cards, board, pullBoard, projectId, onAutoMove])
 }
 
 /** While some PR is undecided, ask the host (only while the page is visible) whether a chase read

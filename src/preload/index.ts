@@ -232,6 +232,7 @@ const api: NodeTerminalApi = {
     chasePulls: (projectId) => ipcRenderer.invoke(IPC.githubIssuesChasePulls, projectId),
     pullChecks: (projectId, pullNumber) =>
       ipcRenderer.invoke(IPC.githubIssuesPullChecks, projectId, pullNumber),
+    claimPullAutoMove: (request) => ipcRenderer.invoke(IPC.githubIssuesClaimPullAutoMove, request),
     projectAvatar: (projectId) => ipcRenderer.invoke(IPC.githubProjectAvatar, projectId),
     onChanged: (projectId, listener) => {
       const channel = IPC.githubIssuesChanged(projectId)

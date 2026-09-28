@@ -132,7 +132,13 @@ export function GitHubIssueSummaryModal({
             {closingPulls.map((pull) => <PullRefChip key={pull.number} status={pull} freshness={pullFreshness} />)}
           </div>
         )}
-        {isPull && pullOpen && <PullChecks result={checks} onOpen={(url) => void api.shell.openExternal(url)} />}
+        {isPull && pullOpen && (
+          <PullChecks
+            result={checks}
+            expectedHead={pullStatus?.headRefOid}
+            onOpen={(url) => void api.shell.openExternal(url)}
+          />
+        )}
         <div className="github-issue-modal__body">
           {issue.body.trim() || 'No description provided.'}
         </div>
@@ -168,17 +174,21 @@ const CHECK_GLYPH = { passed: '✓', failed: '✗', pending: '●', skipped: '�
 
 /** The checks list. A token that may not read checks (`hidden`) shows NOTHING, and a commit with no
  *  checks says so in words — never a green tick for checks that do not exist. */
-function PullChecks({
+export function PullChecks({
   result,
+  expectedHead,
   onOpen
 }: {
   result: GitHubPullChecksResult | 'loading' | null
+  /** The head the status line above describes. Checks read at another commit are not shown under
+   *  it (the host may answer from a read taken a few seconds before a push). */
+  expectedHead?: string
   onOpen: (url: string) => void
 }): React.JSX.Element | null {
   if (result === null || (result !== 'loading' && result.status === 'hidden')) return null
   if (result === 'loading') return <p className="pull-checks__note">Loading checks…</p>
   if (result.status === 'no-checks') return <p className="pull-checks__note">No checks on the head commit.</p>
-  if (result.status === 'moved') return <p className="pull-checks__note">The branch moved while reading its checks. Reopen to see the new commit's.</p>
+  if (result.status === 'moved' || (result.status === 'ok' && expectedHead && result.headRefOid !== expectedHead)) return <p className="pull-checks__note">The branch moved while reading its checks. Reopen to see the new commit's.</p>
   if (result.status === 'unavailable') return <p className="pull-checks__note">Checks could not be read from GitHub.</p>
   return (
     <ul className="pull-checks" aria-label="Checks">

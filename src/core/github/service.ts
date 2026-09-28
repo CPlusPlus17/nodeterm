@@ -26,7 +26,7 @@ import { classifyGitHubFailure } from './failure'
 import type { GitHubRequestCoordinator } from './request-coordinator'
 import type { PullStatusRead } from './graphql-pulls'
 import { GitHubPullStatusTracker } from './pull-status-tracker'
-import type { GitHubPullBoard, GitHubPullChecksResult } from '../../shared/github-pull-status'
+import type { GitHubPullBoard, GitHubPullChecksResult, PullLifecycle } from '../../shared/github-pull-status'
 
 const MAX_ISSUES = 10_000
 const MAX_CACHE_BYTES = 64 * 1024 * 1024
@@ -237,6 +237,20 @@ export class GitHubIssueService {
       onChanged: (key, changed) => {
         const state = this.repositories.get(key)
         if (state) this.emitDelta(state, changed, true)
+      },
+      memory: {
+        load: (userId, repository) => options.cache.loadPullMemory(userId, repository),
+        save: (userId, repository, memory) => options.cache.savePullMemory(userId, repository, memory)
+      },
+      harvest: (key) => {
+        const lifecycles = new Map<number, PullLifecycle>()
+        for (const item of this.repositories.get(key)?.snapshot?.issues ?? []) {
+          if (!item.pull) continue
+          lifecycles.set(item.number, item.state === 'closed'
+            ? item.pull.mergedAt ? 'merged' : 'closed'
+            : item.pull.draft ? 'draft' : 'open')
+        }
+        return lifecycles
       }
     })
   }
@@ -670,10 +684,12 @@ export class GitHubIssueService {
       await Promise.allSettled([
         ...this.statePreparations.get(context.repository) ?? [],
         ...affected.flatMap((state) => state.refresh ? [state.refresh] : []),
-        ...mutations
+        ...mutations,
+        // Forgotten BEFORE the files go, and waited for: a memory save already under way would
+        // otherwise write the pull memory back after clearBound deleted it.
+        this.pulls.forgetRepository(context.repository)
       ])
       await this.options.cache.clearBound(context.localApprovalId, context.projectId, context.repository)
-      this.pulls.forgetRepository(context.repository)
       for (const state of this.repositoryStates(context.localApprovalId, context.repository)) {
         state.cacheGeneration += 1
         state.snapshot = undefined
@@ -713,6 +729,24 @@ export class GitHubIssueService {
     await this.pulls.read(key, captured.userId, 'chase', () =>
       this.readWithEpoch(captured, () => captured.client.pullRequestStatuses!(captured.repository)))
     return true
+  }
+
+  /**
+   * The one-time permission for the board to move `cardId` because every PR in `pulls` merged. The
+   * first ask wins across every window (two Server Edition tabs cannot both move it), and it is
+   * remembered, so a card the user dragged back is not moved again for the same merges. It sends no
+   * request and resolves no credential.
+   */
+  async claimPullAutoMove(request: { projectId: string; cardId: string; pulls: number[] }): Promise<boolean> {
+    const { projectId, cardId, pulls } = request ?? {}
+    if (typeof projectId !== 'string' || typeof cardId !== 'string' || !cardId || cardId.length > 256 ||
+        /[\u0000-\u001f]/.test(cardId) || !Array.isArray(pulls) || pulls.length === 0 || pulls.length > 100 ||
+        pulls.some((pull) => !Number.isSafeInteger(pull) || pull < 1)) return false
+    const key = this.projectKeys.get(projectId)
+    if (!key || key.startsWith('unbound:')) return false
+    if (this.repositoryControl(key.slice(key.indexOf('\0') + 1)).deletion) return false
+    const numbers = [...new Set(pulls)].sort((a, b) => a - b).join(',')
+    return this.pulls.claim(key, `${projectId}\0${cardId}\0${numbers}`)
   }
 
   /** Per-check detail for one PR, read when its modal opens. Never throws: every failure is one of
@@ -1197,5 +1231,9 @@ export class GitHubIssueService {
   }
 }
 
-class ConfigurationChangedError extends Error {}
+/** Carries a `code` like every other error the pull status tracker reads: a context that changed
+ *  mid-read is not a failed read, and must not mark the board stale. */
+class ConfigurationChangedError extends Error {
+  readonly code = 'configuration-changed'
+}
 class RepositoryClearedError extends Error {}

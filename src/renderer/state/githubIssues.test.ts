@@ -37,6 +37,7 @@ function api(): GitHubIssuesApi {
     })),
     chasePulls: vi.fn(async () => false),
     pullChecks: vi.fn(async () => ({ status: 'no-checks' as const })),
+    claimPullAutoMove: vi.fn(async () => false),
     projectAvatar: vi.fn(async () => null),
     onChanged: vi.fn(() => () => {})
   }

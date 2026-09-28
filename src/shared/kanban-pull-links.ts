@@ -18,11 +18,11 @@
 //    the auto-move on makes THIS machine write the shared board on its own, whenever a merge is
 //    observed. If the switch lived in the project file, cloning or pulling a repository would make
 //    every teammate's app start moving cards (and committing those moves) without anyone on that
-//    machine having asked for it — so it is off unless this machine turns it on. The same entry
-//    holds the last PR state this machine saw per card, so a move fires only on a transition it
-//    observed, never merely because a merged PR was found on first sight.
+//    machine having asked for it — so it is off unless this machine turns it on. It is written
+//    ONLY by the user's own Settings action: what this machine has observed about each PR lives in
+//    core (core/github/pull-memory.ts), because a background settings write from a second Server
+//    Edition tab would overwrite whatever the user just changed in the first.
 import type { ProjectKanban } from './types'
-import type { PullLifecycle } from './github-pull-status'
 
 export interface KanbanPullLinks {
   /** Card ↔ PR links the user removed. A branch auto-link never re-adds one. */
@@ -64,15 +64,23 @@ export function readPullLinks(board: ProjectKanban | undefined): {
   return { unlinked, noAutoMove }
 }
 
+/** Writes the two lists back. Any OTHER key already in the block — one a newer build added — rides
+ *  along untouched: the file is shared with builds this one cannot know about, and a write here
+ *  must not erase what they stored. */
 function withPullLinks(
   board: ProjectKanban,
   next: { unlinked: Array<{ nodeId: string; pull: number }>; noAutoMove: string[] }
 ): ProjectKanban {
-  const { pullLinks: _previous, ...bare } = board
-  const links: KanbanPullLinks = {
+  const { pullLinks: previous, ...bare } = board
+  const others = previous && typeof previous === 'object' && !Array.isArray(previous)
+    ? Object.fromEntries(Object.entries(previous as Record<string, unknown>)
+      .filter(([key]) => key !== 'unlinked' && key !== 'noAutoMove'))
+    : {}
+  const links = {
+    ...others,
     ...(next.unlinked.length ? { unlinked: next.unlinked } : {}),
     ...(next.noAutoMove.length ? { noAutoMove: next.noAutoMove } : {})
-  }
+  } as KanbanPullLinks
   return Object.keys(links).length ? { ...bare, pullLinks: links } : bare
 }
 
@@ -114,24 +122,22 @@ export function prunePullLinks(board: ProjectKanban, live: ReadonlySet<string>):
   return withPullLinks(board, { unlinked, noAutoMove })
 }
 
-// ── Machine-local switch + last-seen memory ─────────────────────────────────────────────────────
+// ── Machine-local switch ────────────────────────────────────────────────────────────────────────
 
 export interface KanbanPullAutoMoveEntry {
   /** The column cards move to. A column deleted since then means no move, not a guess. */
   columnId: string
-  /** Last PR state this machine saw, per card id then PR number. */
-  seen?: Record<string, Record<string, PullLifecycle>>
+  /** When this machine switched it on (epoch ms). Only merges observed AFTER this count, so turning
+   *  the switch on never sweeps cards whose PRs merged earlier. */
+  armedAt: number
 }
 
 export interface KanbanPullAutoMove {
   projects: Record<string, KanbanPullAutoMoveEntry>
 }
 
-const LIFECYCLES = new Set<PullLifecycle>(['open', 'draft', 'merged', 'closed'])
-const MAX_SEEN_CARDS = 500
-const MAX_SEEN_PULLS = 20
-
-/** settings.json is hand-editable: read it through this, never directly. */
+/** settings.json is hand-editable: read it through this, never directly. An entry without a valid
+ *  `armedAt` is OFF — a guessed arming time would decide which past merges count. */
 export function sanitizeKanbanPullAutoMove(raw: unknown): KanbanPullAutoMove {
   const value = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : {}
   const projects = value.projects && typeof value.projects === 'object' && !Array.isArray(value.projects)
@@ -141,20 +147,9 @@ export function sanitizeKanbanPullAutoMove(raw: unknown): KanbanPullAutoMove {
   for (const [projectId, entryRaw] of Object.entries(projects).slice(0, 500)) {
     const entry = entryRaw && typeof entryRaw === 'object' ? entryRaw as Record<string, unknown> : null
     if (!nodeId(projectId) || !entry || !nodeId(entry.columnId)) continue
-    const seen: Record<string, Record<string, PullLifecycle>> = {}
-    const seenRaw = entry.seen && typeof entry.seen === 'object' && !Array.isArray(entry.seen)
-      ? entry.seen as Record<string, unknown>
-      : {}
-    for (const [cardId, pullsRaw] of Object.entries(seenRaw).slice(0, MAX_SEEN_CARDS)) {
-      if (!nodeId(cardId) || !pullsRaw || typeof pullsRaw !== 'object' || Array.isArray(pullsRaw)) continue
-      const pulls: Record<string, PullLifecycle> = {}
-      for (const [number, lifecycle] of Object.entries(pullsRaw as Record<string, unknown>).slice(0, MAX_SEEN_PULLS)) {
-        if (pullNumber(Number(number)) && String(Number(number)) === number &&
-            LIFECYCLES.has(lifecycle as PullLifecycle)) pulls[number] = lifecycle as PullLifecycle
-      }
-      if (Object.keys(pulls).length) seen[cardId] = pulls
-    }
-    out[projectId] = { columnId: entry.columnId, ...(Object.keys(seen).length ? { seen } : {}) }
+    const armedAt = entry.armedAt
+    if (typeof armedAt !== 'number' || !Number.isSafeInteger(armedAt) || armedAt < 0) continue
+    out[projectId] = { columnId: entry.columnId, armedAt }
   }
   return { projects: out }
 }

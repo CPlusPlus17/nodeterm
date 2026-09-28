@@ -40,9 +40,9 @@ function setup(ssh = false): void {
     }]
   } as never)
   useGitHubIssues.setState({ projects: { p1: { pullBoard } as never } })
-  useSettings.setState((state) => ({
-    settings: { ...state.settings, kanbanPullAutoMove: { projects: { p1: { columnId: 'done' } } } }
-  }))
+  useSettings.setState({
+    settings: { ...useSettings.getState().settings, kanbanPullAutoMove: { projects: { p1: { columnId: 'done', armedAt: 1 } } } }
+  })
 }
 
 function render(k: ProjectKanban, card = session()): { host: HTMLElement; onChange: ReturnType<typeof vi.fn> } {

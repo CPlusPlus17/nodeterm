@@ -5354,21 +5354,37 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   next member/due/label edit. SSH projects show the worktree reason instead (no worktree groups
   there). The open seam: joining PR → issue → node through the `issueRef` an agent started from an
   issue card will carry (not on main yet) — `pullsForCard` is where that second link source plugs in.
-  **Merge-driven move — session cards only, OFF by default.** The switch and the target column are
-  MACHINE-LOCAL (`settings.kanbanPullAutoMove.projects[projectId]`): it makes this machine write the
-  shared board on its own, so a switch in the project file would make every clone move and commit
-  cards nobody on that machine asked for. Per-card opt-out is board content (`pullLinks.noAutoMove`).
-  Guards in order (`decidePullAutoMove`): opted out → never; any linked PR open/draft → wait; any
-  closed unmerged → blocked until the user unlinks it; already in target → nothing; all merged but
-  this machine never SAW one open (`seen`, same settings entry) → no move. The move is a
-  compare-and-set on the column the decision saw (`applyPullAutoMove`, run by Canvas against the
-  store's latest board) and writes ONE `card-moved` board-log line whose `title` names the PRs. It
-  runs only while the board is open (that is when pull status is fresh) and never on a stale
-  snapshot. **GitHub issue cards are never auto-moved** — GitHub already closes them when a
-  `Closes #N` PR merges, and a second writer would race it and could clobber `state_reason`.
+  **What this machine observed lives on the HOST** (`core/github/pull-memory.ts`, persisted beside
+  the issue cache per identity + repository, deleted with it): every PR it has seen, its head, its
+  lifecycle, whether it was seen open, and `mergedSeenAt` — the first time it was seen merged AFTER
+  being seen open (an OBSERVED merge). The read lists only 50 open + 30 recent PRs, so without it a
+  closed-unmerged PR's block would expire once 30 newer PRs closed; remembered PRs stay on the pull
+  board (closed ones until unlinked, merges for 30 days) and an unlisted one takes its lifecycle
+  from the REST harvest. The first version kept a per-card "seen" map in settings.json instead, and
+  review found three failures in that shape: the planner's output exceeded the sanitizer's bounds so
+  the hook rewrote settings in a loop until React threw; the block expired; and two Server Edition
+  tabs both moved the card while a background tab's settings write reverted another tab's changes.
+  **Merge-driven move — session cards only, OFF by default.** The switch, the target column and
+  `armedAt` are MACHINE-LOCAL (`settings.kanbanPullAutoMove.projects[projectId]`, written ONLY by
+  the user's own Settings action): it makes this machine write the shared board on its own, so a
+  switch in the project file would make every clone move and commit cards nobody on that machine
+  asked for. Per-card opt-out is board content (`pullLinks.noAutoMove`). Guards in order
+  (`decidePullAutoMove`): opted out → never; any linked PR open/draft → wait; any closed unmerged →
+  blocked until the user unlinks it; already in target → nothing; no linked merge with
+  `mergedSeenAt >= armedAt` → no move (arming never sweeps old merges). Each planned move must then
+  win the host's one-time CLAIM (`githubIssues:claim-pull-auto-move`, persisted in the same memory,
+  keyed by project + card + PR set) — the first ask across every window wins, and a card dragged
+  back is not moved again for the same merges — and is applied as a compare-and-set on the column
+  the decision saw (`applyPullAutoMove`, run by Canvas against the store's latest board), writing
+  ONE `card-moved` board-log line whose `title` names the PRs. The planner writes nothing; it runs
+  only while the board is open and never on a stale snapshot. **GitHub issue cards are never
+  auto-moved** — GitHub already closes them when a `Closes #N` PR merges, and a second writer would
+  race it and could clobber `state_reason`.
   Surfaces: Desktop + Server Edition identical (core + renderer; `githubIssues:pull-status`,
-  `:chase-pulls`, `:pull-checks` are registered by the shared core handlers and served to relay
-  tabs through the project-scope table). **Mobile: follow-up** — the phone board carries session
+  `:chase-pulls`, `:pull-checks`, `:claim-pull-auto-move` are registered by the shared core handlers
+  and served to relay tabs through the project-scope table; a relay tab never auto-moves — the
+  board belongs to the other machine). Check detail is bounded for relay guests: one read per PR per
+  15 s, ten per project per minute, both decided before a credential is resolved. **Mobile: follow-up** — the phone board carries session
   cards only; showing PR CI there means carrying `GitHubPullBoard` over the relay dialect.
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,
   2026-08-30 — the same membership-plus-one-leaf discipline `AGENT_CONFIG` uses): each entry declares

@@ -133,9 +133,12 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
     if (!projectId) return
     const live = new Set(useProjects.getState().projects.map((item) => item.id))
     const current = prunePullAutoMove(sanitizeKanbanPullAutoMove(autoMoveRaw), live)
-    const { [projectId]: _previous, ...others } = current.projects
+    const { [projectId]: previous, ...others } = current.projects
+    // Switching it ON starts the clock: only merges observed from now on move a card. Changing only
+    // the target column keeps the original time — the switch never went off.
+    const armedAt = previous?.armedAt ?? Date.now()
     updateSettings({
-      kanbanPullAutoMove: { projects: columnId ? { ...others, [projectId]: { columnId } } : others }
+      kanbanPullAutoMove: { projects: columnId ? { ...others, [projectId]: { columnId, armedAt } } : others }
     })
   }
 
@@ -617,7 +620,7 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
             <FieldRow
               label={ROWS.pullAutoMove.title}
               htmlFor="github-pull-auto-move"
-              description={`${ROWS.pullAutoMove.description} Only session cards in a worktree group move — GitHub closes linked issues itself. A card moves only after this machine saw one of its pull requests open, and never if one closed without merging. This setting is for this machine only.`}
+              description={`${ROWS.pullAutoMove.description} Only session cards in a worktree group move — GitHub closes linked issues itself. Only merges this machine sees after you turn this on count (it must have seen the pull request open first), and a card never moves while one of its pull requests closed without merging. This setting is for this machine only.`}
               control={
                 <Select
                   id="github-pull-auto-move"

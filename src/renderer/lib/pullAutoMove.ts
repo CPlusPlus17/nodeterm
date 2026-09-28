@@ -11,9 +11,17 @@
 //   4. any linked PR closed WITHOUT merging    → blocked until the user removes that link; an
 //                                                abandoned PR is not finished work
 //   5. already in the target column            → nothing to do
-//   6. all merged, but this machine never saw one of them open → no move: it only acts on a
-//      transition it observed, so arming the switch (or cloning a repo whose PRs merged long ago)
+//   6. all merged, but none of the merges was OBSERVED by this machine since the switch went on →
+//      no move. The host remembers each PR it saw open and when it then saw it merge
+//      (core/github/pull-memory.ts); arming the switch, or cloning a repo whose PRs merged long ago,
 //      never sweeps old cards across the board.
+//
+// Remembered PRs keep a card blocked: a PR that closed unmerged stays on the host's pull board (and
+// so stays linked) until the user unlinks it — it does not expire when 30 newer PRs close.
+//
+// Nothing here writes. Each planned move must still win the host's one-time claim
+// (`githubIssues.claimPullAutoMove`) — so two windows cannot both move a card, and a card the user
+// dragged back is not moved again for the same merges — and is then applied as a compare-and-set.
 import type { ProjectKanban } from '@shared/types'
 import type { GitHubPullBoard, PullLifecycle } from '@shared/github-pull-status'
 import { readPullLinks, type KanbanPullAutoMoveEntry } from '@shared/kanban-pull-links'
@@ -29,11 +37,11 @@ export type PullAutoMoveDecision =
 
 export function decidePullAutoMove(input: {
   optedOut: boolean
-  linked: Array<{ number: number; lifecycle: PullLifecycle }>
-  /** What this machine last saw for this card, by PR number. */
-  seen: Record<string, PullLifecycle> | undefined
+  linked: Array<{ number: number; lifecycle: PullLifecycle; mergedSeenAt?: number }>
   columnId: string | null
   targetColumnId: string
+  /** When this machine switched the move on; only merges it OBSERVED since then count. */
+  armedAt: number
 }): PullAutoMoveDecision {
   if (input.optedOut) return { kind: 'none', reason: 'opted-out' }
   if (input.linked.length === 0) return { kind: 'none', reason: 'no-links' }
@@ -42,25 +50,12 @@ export function decidePullAutoMove(input: {
   }
   if (input.linked.some((pull) => pull.lifecycle === 'closed')) return { kind: 'none', reason: 'blocked' }
   if (input.columnId === input.targetColumnId) return { kind: 'none', reason: 'in-target' }
-  const observed = input.linked.some((pull) => {
-    const before = input.seen?.[String(pull.number)]
-    return before === 'open' || before === 'draft'
-  })
+  // The host records `mergedSeenAt` only for a PR it had seen open before — a merge first seen
+  // already-merged has none, and never counts.
+  const observed = input.linked.some((pull) =>
+    pull.mergedSeenAt !== undefined && pull.mergedSeenAt >= input.armedAt)
   if (!observed) return { kind: 'none', reason: 'no-transition' }
   return { kind: 'move', pulls: input.linked.map((pull) => pull.number).sort((a, b) => a - b) }
-}
-
-/** The card's next "last seen" record: exactly its linked PRs, as they are now. Returns the SAME
- *  object when nothing changed, so an unchanged observation writes nothing to settings. */
-export function nextSeen(
-  previous: Record<string, PullLifecycle> | undefined,
-  linked: Array<{ number: number; lifecycle: PullLifecycle }>
-): Record<string, PullLifecycle> | undefined {
-  if (!linked.length) return undefined
-  const next = Object.fromEntries(linked.map((pull) => [String(pull.number), pull.lifecycle]))
-  if (previous && Object.keys(previous).length === linked.length &&
-      linked.every((pull) => previous[String(pull.number)] === pull.lifecycle)) return previous
-  return next
 }
 
 /**
@@ -92,14 +87,13 @@ const SESSION_CARD_KINDS = new Set(['terminal', 'sticky', 'browser'])
 
 export interface PullAutoMovePlan {
   moves: Array<{ cardId: string; fromColumnId: string | null; pulls: number[] }>
-  /** This project's next last-seen map, or null when nothing changed (write nothing). */
-  seen: NonNullable<KanbanPullAutoMoveEntry['seen']> | null
 }
 
 /**
- * One pass over the board: what to move, and what this machine has now seen. Nothing happens while
- * the switch is off, while the pull status is unknown or STALE (a decision on a snapshot GitHub
- * could not confirm is a guess), or while the target column does not exist.
+ * One pass over the board: which cards to move. Nothing moves while the switch is off, while the pull
+ * status is unknown or STALE (a decision on a snapshot GitHub could not confirm is a guess), or while
+ * the target column does not exist. Write-free by design — an earlier version kept "last seen" in
+ * settings.json and could loop against the sanitizer's bounds; observation now lives on the host.
  */
 export function planPullAutoMoves(input: {
   cards: Array<{ id: string; kind: string; worktreeBranch?: string }>
@@ -107,31 +101,22 @@ export function planPullAutoMoves(input: {
   pullBoard: GitHubPullBoard | undefined
   entry: KanbanPullAutoMoveEntry | undefined
 }): PullAutoMovePlan {
-  const idle: PullAutoMovePlan = { moves: [], seen: null }
   const { entry, pullBoard, board } = input
-  if (!entry || !pullBoard || pullBoard.observedAt === undefined || pullBoard.stale) return idle
-  if (!board.columns.some((column) => column.id === entry.columnId)) return idle
+  if (!entry || !pullBoard || pullBoard.observedAt === undefined || pullBoard.stale) return { moves: [] }
+  if (!board.columns.some((column) => column.id === entry.columnId)) return { moves: [] }
   const optedOut = new Set(readPullLinks(board).noAutoMove)
-  const previous = entry.seen ?? {}
-  const seen: NonNullable<KanbanPullAutoMoveEntry['seen']> = {}
   const moves: PullAutoMovePlan['moves'] = []
   for (const card of input.cards) {
     if (!SESSION_CARD_KINDS.has(card.kind)) continue
-    const linked = pullsForCard(card, pullBoard, board).linked
-      .map((pull) => ({ number: pull.number, lifecycle: pull.lifecycle }))
     const fromColumnId = columnForNode(board, card.id)?.id ?? null
     const decision = decidePullAutoMove({
       optedOut: optedOut.has(card.id),
-      linked,
-      seen: previous[card.id],
+      linked: pullsForCard(card, pullBoard, board).linked,
       columnId: fromColumnId,
-      targetColumnId: entry.columnId
+      targetColumnId: entry.columnId,
+      armedAt: entry.armedAt
     })
     if (decision.kind === 'move') moves.push({ cardId: card.id, fromColumnId, pulls: decision.pulls })
-    const next = nextSeen(previous[card.id], linked)
-    if (next) seen[card.id] = next
   }
-  const changed = Object.keys(seen).length !== Object.keys(previous).length ||
-    Object.entries(seen).some(([cardId, value]) => previous[cardId] !== value)
-  return { moves, seen: changed ? seen : null }
+  return { moves }
 }

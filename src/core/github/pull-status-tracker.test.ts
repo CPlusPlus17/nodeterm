@@ -4,6 +4,7 @@ import { GitHubRequestCoordinator } from './request-coordinator'
 import type { PullStatusRead } from './graphql-pulls'
 import { PULL_CHASE_MAX } from '../../shared/github-pull-status'
 import type { PullStatusFacts } from '../../shared/github-pull-status'
+import { emptyPullMemory, type PullMemory } from './pull-memory'
 
 const HEAD = 'a'.repeat(40)
 const KEY = 'user-1\0o/r'
@@ -19,14 +20,34 @@ function read(open: PullStatusFacts[], over: Partial<PullStatusRead> = {}): Pull
   return { open, recent: [], access: { ci: true, merge: true }, truncated: false, ...over }
 }
 
-function tracker(start = 0) {
+/** An on-disk memory stand-in shared across tracker instances (an app restart = a new tracker). */
+function memoryStore() {
+  const files = new Map<string, PullMemory>()
+  const saves: PullMemory[] = []
+  return {
+    files,
+    saves,
+    load: async (userId: string, repository: string) =>
+      structuredClone(files.get(`${userId}\0${repository}`) ?? emptyPullMemory()),
+    save: async (userId: string, repository: string, memory: PullMemory) => {
+      saves.push(structuredClone(memory))
+      files.set(`${userId}\0${repository}`, structuredClone(memory))
+    }
+  }
+}
+
+function tracker(start = 0, store = memoryStore()) {
   let now = start
   const changes: number[][] = []
   const coordinator = new GitHubRequestCoordinator({ now: () => now })
   const subject = new GitHubPullStatusTracker({
-    coordinator, now: () => now, onChanged: (_key, numbers) => changes.push(numbers)
+    coordinator, now: () => now, onChanged: (_key, numbers) => changes.push(numbers), memory: store
   })
-  return { subject, coordinator, changes, advance: (ms: number) => { now += ms }, at: () => now }
+  return { subject, coordinator, changes, store, advance: (ms: number) => { now += ms }, at: () => now }
+}
+
+async function settleSaves(): Promise<void> {
+  for (let index = 0; index < 10; index++) await Promise.resolve()
 }
 
 describe('GitHubPullStatusTracker', () => {
@@ -155,5 +176,97 @@ describe('GitHubPullStatusTracker', () => {
     await subject.read(KEY, 'user-1', 'heartbeat', async () =>
       read([facts(1, { headRefOid: pushed, rollup: 'SUCCESS', rollupOid: HEAD })]))
     expect(subject.board(KEY).pulls[0]).toMatchObject({ headRefOid: pushed, ci: 'pending' })
+  })
+
+  describe('memory', () => {
+    it('a PR closed without merging stays on the board after it leaves the recent list', async () => {
+      const { subject } = tracker()
+      await subject.read(KEY, 'user-1', 'heartbeat', async () => read([], {
+        recent: [{ number: 12, headRefName: 'feat/x', crossRepository: false, lifecycle: 'closed' }]
+      }))
+      // Thirty newer PRs closed: #12 is no longer in the read at all.
+      await subject.read(KEY, 'user-1', 'foreground', async () => read([]))
+      expect(subject.board(KEY).pulls).toEqual([
+        { number: 12, lifecycle: 'closed', headRefName: 'feat/x', closes: [] }
+      ])
+    })
+
+    it('marks a merge as observed only when it had seen the PR open, and remembers it across a restart', async () => {
+      const store = memoryStore()
+      const first = tracker(100, store)
+      await first.subject.read(KEY, 'user-1', 'heartbeat', async () => read([facts(1, { headRefName: 'feat/x' })]))
+      await settleSaves()
+      // An app restart: a new tracker over the same stored memory, and #1 has merged meanwhile.
+      const second = tracker(500, store)
+      await second.subject.read(KEY, 'user-1', 'heartbeat', async () => read([], {
+        recent: [{ number: 1, headRefName: 'feat/x', crossRepository: false, lifecycle: 'merged' }]
+      }))
+      expect(second.subject.board(KEY).pulls[0]).toMatchObject({ number: 1, lifecycle: 'merged', openSeen: true, mergedSeenAt: 500 })
+      // A merge this machine never saw open carries no observation.
+      await second.subject.read(KEY, 'user-1', 'foreground', async () => read([], {
+        recent: [{ number: 2, headRefName: 'feat/y', crossRepository: false, lifecycle: 'merged' }]
+      }))
+      expect(second.subject.board(KEY).pulls.find((pull) => pull.number === 2)).not.toHaveProperty('mergedSeenAt')
+    })
+
+    it('a claim is won once, across concurrent asks and across a restart', async () => {
+      const store = memoryStore()
+      const { subject } = tracker(0, store)
+      const answers = await Promise.all([subject.claim(KEY, 'p\u0000n\u00001'), subject.claim(KEY, 'p\u0000n\u00001')])
+      expect(answers.sort()).toEqual([false, true])
+      await settleSaves()
+      const restarted = tracker(0, store)
+      expect(await restarted.subject.claim(KEY, 'p\u0000n\u00001')).toBe(false)
+      expect(await restarted.subject.claim(KEY, 'p\u0000n\u00002')).toBe(true)
+    })
+
+    it('a save queued behind a slow one is dropped once the repository is forgotten', async () => {
+      const store = memoryStore()
+      let releaseFirst!: () => void
+      const firstSave = new Promise<void>((resolve) => { releaseFirst = resolve })
+      const save = store.save
+      let calls = 0
+      store.save = async (...args) => {
+        calls += 1
+        if (calls === 1) await firstSave
+        return save(...args)
+      }
+      const { subject } = tracker(0, store)
+      expect(await subject.claim(KEY, 'one')).toBe(true)
+      expect(await subject.claim(KEY, 'two')).toBe(true)
+      const forgotten = subject.forgetRepository('o/r')
+      releaseFirst()
+      await forgotten
+      expect(calls).toBe(1)
+      expect(store.saves).toHaveLength(1)
+    })
+
+    it('nothing started before a cache clear writes the memory back', async () => {
+      const store = memoryStore()
+      const { subject } = tracker(0, store)
+      let release!: (value: PullStatusRead) => void
+      const pending = subject.read(KEY, 'user-1', 'heartbeat', () => new Promise((resolve) => { release = resolve }))
+      await subject.forgetRepository('o/r')
+      release(read([facts(1)]))
+      await pending
+      await settleSaves()
+      expect(store.saves).toEqual([])
+    })
+  })
+
+  it('the chase read that spends the last attempt tells the boards at once', async () => {
+    const { subject, advance, changes } = tracker()
+    const undecided = async () => read([facts(1, { mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' })])
+    await subject.read(KEY, 'user-1', 'heartbeat', undecided)
+    for (let attempt = 0; attempt < PULL_CHASE_MAX - 1; attempt++) {
+      advance(300_000)
+      expect(subject.claimChase(KEY)).toBe(true)
+      await subject.read(KEY, 'user-1', 'chase', undecided)
+    }
+    changes.length = 0
+    advance(300_000)
+    expect(subject.claimChase(KEY)).toBe(true)
+    expect(changes).toEqual([[]])
+    expect(subject.board(KEY).undecided).toBe(false)
   })
 })

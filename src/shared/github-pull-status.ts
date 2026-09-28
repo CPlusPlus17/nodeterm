@@ -65,6 +65,11 @@ export interface GitHubPullStatus {
   merge?: PullMergeState
   /** Open PRs only. */
   closes: number[]
+  /** This machine has seen the PR open or as a draft (remembered across restarts, per repository). */
+  openSeen?: true
+  /** Epoch ms when this machine first saw the PR merged AFTER having seen it open — an OBSERVED
+   *  merge. Absent for a PR that was already merged when this machine first saw it. */
+  mergedSeenAt?: number
 }
 
 /** Everything the board knows about a repository's pull requests beyond the issues harvest. */

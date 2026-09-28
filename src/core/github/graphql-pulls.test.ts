@@ -93,6 +93,20 @@ describe('parsePullStatusResponse', () => {
     expect(read.open[0].closes).toEqual([4])
   })
 
+  it('a closing reference the token may not see drops that reference, not the whole read', () => {
+    const read = parsePullStatusResponse(body([node(1, {
+      closingIssuesReferences: { nodes: [null, { number: 4, repository: { nameWithOwner: 'eneskirca/nodeterm' } }] }
+    })], {
+      errors: [{ type: 'FORBIDDEN', path: ['repository', 'open', 'nodes', 0, 'closingIssuesReferences', 'nodes', 0] }]
+    }), REPO)
+    expect(read.open[0].closes).toEqual([4])
+    expect(read.access).toEqual({ ci: true, merge: true })
+    // Without a permission error explaining it, a null reference is still a malformed answer.
+    expect(() => parsePullStatusResponse(body([node(1, {
+      closingIssuesReferences: { nodes: [null] }
+    })]), REPO)).toThrow(GraphQLShapeError)
+  })
+
   it('reports a truncated list', () => {
     expect(parsePullStatusResponse(body([node(1)], { totalCount: 60 }), REPO).truncated).toBe(true)
   })

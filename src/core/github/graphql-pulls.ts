@@ -173,6 +173,9 @@ export function parsePullStatusResponse(body: unknown, repository: string): Pull
     ci: !permission.some((error) => !error.path || touches(error, ['commits', 'statusCheckRollup'])),
     merge: !permission.some((error) => !error.path || touches(error, ['mergeable', 'mergeStateStatus']))
   }
+  // A closing reference the token may not see (an issue in a private repository elsewhere) comes back
+  // as a null node plus a FORBIDDEN error. That hides ONE reference — it is not a failed read.
+  const closingHidden = permission.some((error) => touches(error, ['closingIssuesReferences']))
   const openConnection = object(repositoryValue.open)
   if (!openConnection || !nonNegative(openConnection.totalCount)) throw new GraphQLShapeError()
   const repositoryFolded = repository.toLocaleLowerCase('en-US')
@@ -213,6 +216,7 @@ export function parsePullStatusResponse(body: unknown, repository: string): Pull
     const closes = node.closingIssuesReferences === null
       ? []
       : list(node.closingIssuesReferences, MAX_CLOSING_ISSUES).flatMap((reference) => {
+        if (reference === null && closingHidden) return []
         const issue = object(reference)
         const nameWithOwner = object(issue?.repository)?.nameWithOwner
         if (!issue || !positive(issue.number) || typeof nameWithOwner !== 'string') {
