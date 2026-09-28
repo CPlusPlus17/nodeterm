@@ -19,8 +19,6 @@
 // controlRouting.ts / projectOpen.ts / pendingLaunch.ts — vitest runs in the node environment, so
 // the React component is not testable and these are.
 
-import { rootPositionIn, type PlacedNode } from './projectOpen'
-
 /** A serialized node, as the projects store keeps them for non-active projects. Structural subset
  *  of `CanvasNodeState` — deliberately not the type itself, so tests can build one in a line. */
 export interface ColdNode {
@@ -36,16 +34,6 @@ export interface ColdNode {
   tags?: string[]
   worktree?: { path?: string }
 }
-
-const asPlaced = (n: ColdNode): PlacedNode => ({
-  id: n.id,
-  parentId: n.parentId,
-  position: n.position,
-  size: n.size
-})
-
-const widthOf = (n: ColdNode): number => n.size?.width ?? 600
-const heightOf = (n: ColdNode): number => n.size?.height ?? 400
 
 /**
  * Which agent (if any) runs in a stored node — the serialized counterpart of Canvas's `agentIdOf`,
@@ -144,24 +132,6 @@ export function coldResolveAfter(
     }
   }
   return { ok: true, after: ids }
-}
-
-/**
- * Where the i-th opened node lands when the source IS in this project: the same geometry the live
- * path's `placeBelow` uses (below the source, fanned right), computed from the source's PERSISTED
- * size and resolved to ROOT space so a source sitting inside a frame still places correctly.
- * Returns a CENTER point — the factories' `center` parameter.
- */
-export function coldPlaceBelow(
-  nodes: readonly ColdNode[],
-  source: ColdNode,
-  i: number
-): { x: number; y: number } {
-  const abs = rootPositionIn(nodes.map(asPlaced), asPlaced(source))
-  return {
-    x: abs.x + widthOf(source) / 2 + i * 460,
-    y: abs.y + heightOf(source) + 80 + 210
-  }
 }
 
 // Grid geometry for nodes opened INTO a group frame. Exported so Canvas's LIVE path uses these
