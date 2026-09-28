@@ -296,7 +296,15 @@ export const USAGE_CAPABLE = ['claude', 'codex', 'gemini', 'grok'] as const
 // newest CLAUDE transcript for that cwd. A grok node in this list would therefore show a stranger's
 // conversation in its find bar and rehydrate its meter from it. That exact bug already happened once
 // with codex and gemini; transcriptGates.ts documents it.
-export const CHAT_CAPABLE = ['claude', 'grok'] as const
+//
+// gemini joined in 2026-09 with its own reader (`core/gemini-chat.ts`): its session file is an upsert
+// log, not claude's shape, and it is located strictly by the session id in the file's header.
+export const CHAT_CAPABLE = ['claude', 'grok', 'gemini'] as const
+// CHAT_CAPABLE agents whose reader has NO remote leg: a remote (SSH) node's session lives on its
+// host, so core answers `unreadable` before touching anything — and the local reader never sets that
+// flag. So an unreadable read of one of these can only mean "remote, unsupported", and the ⌘M panel
+// names it from the agent alone rather than offering a Retry that can never succeed.
+export const CHAT_LOCAL_ONLY = ['grok', 'gemini'] as const
 // Agents whose transcript CLAUDE's own resolver can locate and parse — the gate for everything that
 // goes through `resolveTranscript` (the find bar's index, the meter's mount-time rehydration).
 //
@@ -517,6 +525,7 @@ export const canBranch = (id: AgentId): boolean => includes(BRANCH_CAPABLE, id)
 export const canContextLink = (id: AgentId): boolean => includes(CONTEXT_LINK_CAPABLE, id)
 export const hasUsage = (id: AgentId): boolean => includes(USAGE_CAPABLE, id)
 export const canChat = (id: AgentId): boolean => includes(CHAT_CAPABLE, id)
+export const chatReadsLocalOnly = (id: AgentId): boolean => includes(CHAT_LOCAL_ONLY, id)
 /** Can CLAUDE's transcript resolver locate and parse this agent's conversation? Never widen this
  *  to mean "can we read this agent" — see CLAUDE_TRANSCRIPT_READABLE. */
 export const readsClaudeShapedTranscript = (id: AgentId): boolean =>

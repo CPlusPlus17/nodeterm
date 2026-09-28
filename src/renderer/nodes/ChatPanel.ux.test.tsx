@@ -250,6 +250,16 @@ describe('ChatPanel empty states', () => {
     expect(host.querySelector('.term-chat__retry')).toBeNull()
   })
 
+  it('an unreadable REMOTE gemini read names Gemini, not Grok, and offers no Retry', async () => {
+    await render({ agentId: 'gemini' })
+    await act(async () => {
+      pending[0].resolve({ messages: [], found: false, olderCursor: null, unmatchedResults: [], unreadable: true })
+    })
+    expect(msgs().textContent).toContain("Reading a remote Gemini session's transcript isn't supported yet.")
+    expect(msgs().textContent).not.toContain('Grok')
+    expect(host.querySelector('.term-chat__retry')).toBeNull()
+  })
+
   it('a clean miss still says no transcript was found', async () => {
     await render()
     await act(async () => {

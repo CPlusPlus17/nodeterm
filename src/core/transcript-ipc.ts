@@ -15,6 +15,8 @@ import type { ChatTranscriptResult, TranscriptLine, TranscriptPresence } from '.
 import { CHAT_PAGE_MAX_BYTES, normalizeChatPage, type ChatTranscriptPage } from '../shared/chat-page'
 import { platform } from './platform'
 import { chatMessagesFromGrok } from './grok-chat'
+import { readGeminiChatTranscript } from './gemini-chat'
+import { capabilityAgentId } from '../shared/agents/config'
 import { locateGrok } from './handoff/locate'
 import {
   parseChatMessages,
@@ -238,6 +240,10 @@ export async function readChatTranscript(
       ? { messages: [], found: false, ...paging }
       : { messages: chatMessagesFromGrok(buf), found: true, ...paging }
   }
+  // Gemini, routed through the base harness so a custom agent built on it (which the relay serves)
+  // reads gemini's file too. Its own locator, keyed strictly on the session id in the file header —
+  // never claude's resolver, never a cwd — and local-only, like grok.
+  if (agentId && capabilityAgentId(agentId) === 'gemini') return readGeminiChatTranscript({ sessionId, remoteOnly }, page)
   if (page) return readChatPage({ sessionId, cwd, accountId, nodeId, ...(remoteOnly ? { remoteOnly } : {}) }, page, deps)
   const remote = deps.readRemote ? await deps.readRemote({ sessionId, cwd, accountId, nodeId }) : null
   // A resolved-but-unreadable remote file is NOT "no conversation yet" — the read failed
