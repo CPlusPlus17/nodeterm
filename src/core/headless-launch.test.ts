@@ -77,13 +77,38 @@ describe('launchHeadless (#925)', () => {
     expect(deps.releaseHeadless).toHaveBeenCalledWith('n1')
   })
 
-  it('delivers into a non-persistent spawn when the caller does not require persistence', async () => {
-    const { deps, writes } = harness()
+  // The pty IS the shell just spawned, and a plain shell has no tmux pane to ask: the real probe
+  // answers null. Like the mounted writer (`trustsFreshShell`), a fresh one is trusted unprobed.
+  it('delivers into a fresh non-persistent spawn without probing, when persistence is not required', async () => {
+    const { deps, writes } = harness({ pane: null })
     ;(deps.createHeadless as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: 's1', fresh: true, persistent: false })
     const p = launchHeadless(deps, req({ requirePersistent: false }))
     await vi.advanceTimersByTimeAsync(SETTLE_CAP_MS)
     expect(await p).toEqual({ outcome: 'delivered', fresh: true })
     expect(writes).toEqual([CMD, '\r'])
+    expect(deps.paneCommand).not.toHaveBeenCalled()
+  })
+
+  // #916: the session host's probe walks the process tree and reads a prompt helper as "not a
+  // shell", so a fresh session-host shell is trusted after the settle, as the mounted writer does.
+  it('trusts a fresh session-host shell after the settle, without probing', async () => {
+    const { deps, writes } = harness({ pane: 'git' })
+    ;(deps.createHeadless as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: 's1', fresh: true, persistent: true, sessionHost: true })
+    const p = launchHeadless(deps, req())
+    await vi.advanceTimersByTimeAsync(SETTLE_CAP_MS - 1)
+    expect(writes).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await p).toEqual({ outcome: 'delivered', fresh: true })
+    expect(writes).toEqual([CMD, '\r'])
+    expect(deps.paneCommand).not.toHaveBeenCalled()
+  })
+
+  it('still probes a session-host session that already existed', async () => {
+    const { deps, writes } = harness({ pane: 'git' })
+    ;(deps.createHeadless as ReturnType<typeof vi.fn>).mockResolvedValue({ sessionId: 's1', fresh: false, persistent: true, sessionHost: true })
+    expect(await launchHeadless(deps, req())).toEqual({ outcome: 'failed', reason: 'no-shell', fresh: false })
+    expect(deps.paneCommand).toHaveBeenCalledWith('n1')
+    expect(writes).toEqual([])
   })
 
   it('an older core that omits `persistent` counts as persistent', async () => {
@@ -103,6 +128,8 @@ describe('launchHeadless (#925)', () => {
     await vi.advanceTimersByTimeAsync(1)
     expect(await p).toEqual({ outcome: 'delivered', fresh: true })
     expect(writes).toEqual([CMD, '\r'])
+    // A fresh TMUX pane is still probed (it answers exactly, and covers the new-session -A race).
+    expect(deps.paneCommand).toHaveBeenCalledWith('n1')
     expect(deps.releaseHeadless).toHaveBeenCalledWith('n1')
     // Both output taps (the settle's and the delivery's) are gone once the launch is over.
     expect(listeners.size).toBe(0)

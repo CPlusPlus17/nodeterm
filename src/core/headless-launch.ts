@@ -1,7 +1,9 @@
 // The headless launcher (#925): start a node's session with no viewer and deliver its launch
-// command exactly the way a mounted terminal does — settle, prove a shell owns the pane, then the
-// echo-verified writer (@shared/command-delivery). The desktop runs it for canvas-control
-// `--run-now` / `run`; the Server Edition runs it for every immediate open.
+// command by the rule a mounted terminal's automatic launch writer applies — settle a fresh shell,
+// then either trust it (`trustsFreshShell`: a fresh plain shell or session-host session, whose
+// probe is useless or unreliable) or prove a shell owns the pane, then the echo-verified writer
+// (@shared/command-delivery). The desktop runs it for canvas-control `--run-now` / `run`; the
+// Server Edition runs it for every immediate open.
 //
 // Never a blind paste: zsh's rc/ZLE setup FLUSHES the tty (#556) and a canonical-mode line is cut
 // at the tty's cap (#706). A tmux paste is not immune to either, which is why the desktop rule
@@ -9,6 +11,7 @@
 import { deliverCommand, type DeliveryIo, type DeliveryOutcome } from '../shared/command-delivery'
 import { isLaunchShell } from '../shared/agents/pane'
 import type { HeadlessLaunchRequest, HeadlessLaunchResult } from '../shared/headless-launch'
+import { trustsFreshShell } from '../shared/launch-trust'
 import { shellKillLineSequence } from '../shared/shell-kill-line'
 import type { PtyCreateOptions, PtyCreateResult } from '../shared/types'
 
@@ -50,19 +53,30 @@ export async function launchHeadless(
     // The probe above can be stale by the time the spawn lands (tmux switched off in between), and
     // a plain shell dies with the client this launcher is about to release — typing a launch into
     // it would start an agent only to kill it. `persistent` absent = an older core, persistent by
-    // the field's own contract (`PtyCreateResult.persistent`, and `trustsFreshShell` reads it so).
+    // the field's own contract (`PtyCreateResult.persistent`; `trustsFreshShell` reads it so too).
     if (req.requirePersistent && created.persistent === false) {
       return { outcome: 'failed', reason: 'not-persistent', fresh }
     }
     if (fresh) await settle(deps, key)
-    let pane: string | null
-    try {
-      pane = await deps.paneCommand(key)
-    } catch {
-      pane = null
+    // The mounted writer's rule, not a stricter one: a fresh plain shell has no pane to ask (the
+    // probe answers null) and a fresh session-host probe misreads a prompt helper (#916). Every
+    // other session — a fresh tmux pane included — must prove a shell owns it.
+    const trusted = trustsFreshShell({
+      manual: false,
+      fresh,
+      persistent: created.persistent,
+      sessionHost: created.sessionHost
+    })
+    if (!trusted) {
+      let pane: string | null
+      try {
+        pane = await deps.paneCommand(key)
+      } catch {
+        pane = null
+      }
+      // Unknown is not a shell: an un-typed launch is recoverable (Run now), a spliced one is not.
+      if (!isLaunchShell(pane)) return { outcome: 'failed', reason: 'no-shell', fresh }
     }
-    // Unknown is not a shell: an un-typed launch is recoverable (Run now), a spliced one is not.
-    if (!isLaunchShell(pane)) return { outcome: 'failed', reason: 'no-shell', fresh }
     const killLine = shellKillLineSequence(undefined, req.ptyOptions.shell)
     const outcome = await deliver(deps, key, req.command, killLine, !fresh)
     return outcome === 'submitted'
