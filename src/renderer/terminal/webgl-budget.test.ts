@@ -10,7 +10,6 @@ import {
   setWebglGesture,
   setWebglZoom,
   setWebglDevicePixelRatio,
-  watchWebglDevicePixelRatio,
   WEBGL_LOW_DPI_CRISP_ABOVE_ZOOM,
   WEBGL_LOW_DPI_GPU_RESUME_BELOW_ZOOM,
   WEBGL_ACQUIRE_DEBOUNCE_MS,
@@ -500,33 +499,17 @@ describe('webgl-budget coordinator', () => {
       expect(a.rec.held).toBe(true)
     })
 
-    it('watchWebglDevicePixelRatio reports the ratio now and on every display change, then unsubscribes', () => {
-      const listeners = new Set<() => void>()
-      const queries: string[] = []
-      const win = {
-        devicePixelRatio: 2,
-        matchMedia(q: string) {
-          queries.push(q)
-          return {
-            addEventListener: (_: 'change', fn: () => void) => listeners.add(fn),
-            removeEventListener: (_: 'change', fn: () => void) => listeners.delete(fn)
-          }
-        }
-      }
+    it('a display change decides on the entry threshold of the NEW display, not the hysteresis band', () => {
+      // Crisp at 170% on the 1x display; 170% is inside the retina band (160–175%) but never
+      // crossed the retina entry line, so on the retina display it must go back to the GPU.
+      setWebglDevicePixelRatio(1)
       const a = fakeClient('a')
-      const stop = watchWebglDevicePixelRatio(win)
       grant(a)
-      zoomTo(1.25)
-      expect(a.rec.held).toBe(true)
-      win.devicePixelRatio = 1
-      ;[...listeners].forEach((fn) => fn())
-      vi.advanceTimersByTime(WEBGL_DRAIN_MS * 10)
+      zoomTo(1.7)
       expect(a.rec.held).toBe(false)
-      // The query is ratio-specific, so each change re-subscribes against the NEW ratio.
-      expect(queries).toEqual(['(resolution: 2dppx)', '(resolution: 1dppx)'])
-      expect(listeners.size).toBe(1)
-      stop()
-      expect(listeners.size).toBe(0)
+      setWebglDevicePixelRatio(2)
+      vi.advanceTimersByTime(WEBGL_DRAIN_MS * 10)
+      expect(a.rec.held).toBe(true)
     })
 
     it('ignores a non-finite or non-positive ratio', () => {

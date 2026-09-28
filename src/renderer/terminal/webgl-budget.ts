@@ -168,45 +168,16 @@ let lastZoom = 1
 let devicePixelRatio = Number.POSITIVE_INFINITY
 
 /**
- * Report the window's devicePixelRatio (it changes when the window moves between displays).
- * Re-evaluates the current zoom against the thresholds for the new ratio.
+ * Report the window's devicePixelRatio (it changes when the window moves between displays, and
+ * with browser zoom in the Server Edition). Re-evaluates the current zoom against the ENTRY
+ * threshold of the new display only: hysteresis guards a pinch hovering at one boundary, and a
+ * display change is not that — at 170% on a 1x display the terminals are crisp, and 170% on a
+ * retina display never crossed its 175% line, so they belong back on the GPU.
  */
 export function setWebglDevicePixelRatio(dpr: number): void {
   if (!Number.isFinite(dpr) || dpr <= 0 || dpr === devicePixelRatio) return
   devicePixelRatio = dpr
-  applyZoomCrisp(lastZoom)
-}
-
-interface DprMediaQuery {
-  addEventListener(type: 'change', listener: () => void): void
-  removeEventListener(type: 'change', listener: () => void): void
-}
-
-/**
- * Report `win.devicePixelRatio` now, and again whenever it changes (a window dragged between a
- * retina and a low-DPI display). A `(resolution: Ndppx)` query only fires when the ratio LEAVES N,
- * so every change re-subscribes against the new ratio. Returns the unsubscribe.
- */
-export function watchWebglDevicePixelRatio(win: {
-  devicePixelRatio: number
-  matchMedia?: (query: string) => DprMediaQuery
-}): () => void {
-  let query: DprMediaQuery | null = null
-  const subscribe = (): void => {
-    setWebglDevicePixelRatio(win.devicePixelRatio)
-    if (typeof win.matchMedia !== 'function') return
-    query = win.matchMedia(`(resolution: ${win.devicePixelRatio}dppx)`)
-    query.addEventListener('change', onChange)
-  }
-  function onChange(): void {
-    query?.removeEventListener('change', onChange)
-    subscribe()
-  }
-  subscribe()
-  return () => {
-    query?.removeEventListener('change', onChange)
-    query = null
-  }
+  applyZoomCrisp(lastZoom, true)
 }
 
 /**
@@ -223,11 +194,11 @@ export function setWebglZoom(zoom: number): void {
   applyZoomCrisp(zoom)
 }
 
-function applyZoomCrisp(zoom: number): void {
+function applyZoomCrisp(zoom: number, displayChanged = false): void {
   const lowDpi = devicePixelRatio < LOW_DPI_BELOW
   const crispAbove = lowDpi ? WEBGL_LOW_DPI_CRISP_ABOVE_ZOOM : WEBGL_CRISP_ABOVE_ZOOM
   const resumeBelow = lowDpi ? WEBGL_LOW_DPI_GPU_RESUME_BELOW_ZOOM : WEBGL_GPU_RESUME_BELOW_ZOOM
-  const next = zoomCrisp ? zoom > resumeBelow : zoom > crispAbove
+  const next = zoomCrisp && !displayChanged ? zoom > resumeBelow : zoom > crispAbove
   if (next === zoomCrisp) return
   zoomCrisp = next
   if (zoomCrisp) {
