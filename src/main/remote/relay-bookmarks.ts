@@ -50,8 +50,8 @@ export class BookmarkStore {
 
   constructor(private readonly file: string) {}
 
-  /** The bookmarks on disk. A missing or unreadable file reads as none; malformed entries are
-   *  dropped. Reading never writes, so a corrupt file stays as it is until the next write. */
+  /** The bookmarks on disk, for DISPLAY. A missing or unreadable file reads as none; malformed
+   *  entries are dropped. Reading never writes. Never build a write on this: see `readForWrite`. */
   async list(): Promise<RelayBookmark[]> {
     try {
       const j = JSON.parse(await fs.readFile(this.file, 'utf-8')) as unknown
@@ -61,9 +61,33 @@ export class BookmarkStore {
     }
   }
 
+  /**
+   * The bookmarks every write starts from. Only a MISSING file is "none". A file that cannot be read,
+   * or does not parse, or holds an entry this build does not understand, rejects: rewriting it from
+   * a guess would silently drop other teams' device tokens and approvals (unknown trust state is
+   * never overwritten). The refusal names the file, never its contents: they hold tokens.
+   */
+  async readForWrite(): Promise<RelayBookmark[]> {
+    let raw: string
+    try {
+      raw = await fs.readFile(this.file, 'utf-8')
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return []
+      throw new Error(`relay bookmarks could not be read (${(err as NodeJS.ErrnoException)?.code ?? 'unknown error'}); not rewriting them`)
+    }
+    let j: unknown
+    try {
+      j = JSON.parse(raw)
+    } catch {
+      throw new Error('relay bookmarks file is not valid JSON; not rewriting it')
+    }
+    if (!Array.isArray(j) || !j.every(valid)) throw new Error('relay bookmarks file holds entries this build cannot read; not rewriting it')
+    return j
+  }
+
   private write(fn: (l: RelayBookmark[]) => RelayBookmark[] | null): Promise<void> {
     const run = this.tail.then(async () => {
-      const next = fn(await this.list())
+      const next = fn(await this.readForWrite())
       if (next) await writeFileAtomic(this.file, JSON.stringify(next, null, 2), { mode: 0o600 })
     })
     this.tail = run.catch(() => {})
@@ -75,10 +99,19 @@ export class BookmarkStore {
     return this.write((l) => [...l.filter((x) => x.hostId !== b.hostId), b])
   }
 
-  /** Change fields of an EXISTING bookmark; a no-op when there is none. For updates that follow a
-   *  connection's events, so a bookmark the user removed meanwhile is not brought back. */
-  update(hostId: string, patch: Partial<Pick<RelayBookmark, 'deviceToken' | 'approvedAt'>>): Promise<void> {
-    return this.write((l) => (l.some((x) => x.hostId === hostId) ? l.map((x) => (x.hostId === hostId ? { ...x, ...patch } : x)) : null))
+  /** Change fields of an EXISTING bookmark; a no-op when there is none, or when the stored one no
+   *  longer satisfies `onlyIf`. For updates that follow a connection's events: a bookmark the user
+   *  removed meanwhile is not brought back, and one another attempt rewrote is not clobbered. */
+  update(
+    hostId: string,
+    patch: Partial<Pick<RelayBookmark, 'deviceToken' | 'approvedAt'>>,
+    onlyIf: (current: RelayBookmark) => boolean = () => true
+  ): Promise<void> {
+    return this.write((l) => {
+      const current = l.find((x) => x.hostId === hostId)
+      if (!current || !onlyIf(current)) return null
+      return l.map((x) => (x === current ? { ...x, ...patch } : x))
+    })
   }
 
   remove(hostId: string): Promise<void> {

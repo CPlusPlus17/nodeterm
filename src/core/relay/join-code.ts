@@ -7,7 +7,11 @@ import { hostIdFromPublicKeyB64 } from './relay-id'
 export interface JoinCode { v: 1; relayEndpoint: string; hostId: string; hostPublicKeyB64: string; hostDeviceId: string; label: string }
 const PREFIX = 'nodeterm://join?code='
 
-function allowedEndpoint(endpoint: string): boolean {
+/** A relay endpoint we will dial: `wss:` anywhere, plaintext `ws:` only to loopback. Applied to a
+ *  code's endpoint AND to the one the join API hands back, so neither can send a client token over
+ *  plaintext to another machine. */
+export function allowedEndpoint(endpoint: string): boolean {
+  if (typeof endpoint !== 'string') return false
   let u: URL
   try { u = new URL(endpoint) } catch { return false }
   if (u.protocol === 'wss:') return true

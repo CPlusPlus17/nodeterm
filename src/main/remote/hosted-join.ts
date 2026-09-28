@@ -16,7 +16,13 @@
 //    token is persisted the moment it is minted (a join that then fails does not throw it away), a
 //    bookmarked token earns one re-mint on `bad-token` and nothing more, and `revoked` earns none.
 //  - The keys are loaded before anything is minted: a locked keyring must not cost a mint.
-import { decodeJoinCode, encodeJoinCode } from '../../core/relay/join-code'
+//  - One device id PER TEAM (`<machine id>:<hostId>`). The relay's device record is keyed by the id
+//    alone and re-registering one for a different host needs proof this device cannot give on the
+//    free tier, so a single id per machine would make every team after the first unjoinable.
+//  - Every failure leaves with a stable `[E_JOIN_…]` code at the head of its message (the only part
+//    of it Electron IPC carries to the renderer), so an unattended reconnect can tell a network
+//    blip (retry) from anything a retry cannot fix (stop) — see @shared/relay-join-errors.
+import { allowedEndpoint, decodeJoinCode, encodeJoinCode } from '../../core/relay/join-code'
 import { mintDeviceToken, mintJoinToken, type DeviceMintResult, type JoinMintResult } from '../../core/relay/join-token'
 import {
   connectRelayClient,
@@ -28,11 +34,24 @@ import type { KeyPair } from '../../core/relay/e2ee'
 import type { BookmarkStore, RelayBookmark } from './relay-bookmarks'
 import { IPC } from '../../shared/ipc'
 import type { RelayClosedReason } from '../../shared/types'
+import type { JoinErrorCode } from '../../shared/relay-join-errors'
 
 /** What a hosted join hands the relay client: never a pin store. */
 export type HostedConnectOptions = Omit<ConnectRelayClientOptions, 'pins' | 'transport'>
 
-export type HostedJoinFailure = 'invalid-code' | 'rate-limited' | 'refused' | 'network' | 'bad-token' | 'revoked'
+export type HostedJoinFailure = 'invalid-code' | 'rate-limited' | 'refused' | 'network' | 'bad-token' | 'revoked' | 'key-locked'
+
+/** Each failure's stable code. `bad-token` is a refusal: a token the service will not accept even
+ *  freshly minted cannot be fixed by retrying, which would only spend damped mints. */
+const CODES: Record<HostedJoinFailure, JoinErrorCode> = {
+  'invalid-code': 'E_JOIN_BAD_CODE',
+  'rate-limited': 'E_JOIN_RATE',
+  refused: 'E_JOIN_REFUSED',
+  'bad-token': 'E_JOIN_REFUSED',
+  network: 'E_JOIN_NETWORK',
+  revoked: 'E_JOIN_REVOKED',
+  'key-locked': 'E_JOIN_KEY_LOCKED'
+}
 
 const MESSAGES: Record<HostedJoinFailure, string> = {
   'invalid-code': 'That team code is invalid.',
@@ -40,16 +59,22 @@ const MESSAGES: Record<HostedJoinFailure, string> = {
   refused: 'The nodeterm service refused to register this device for that team.',
   network: 'Could not reach the nodeterm service. Check the connection and try again.',
   'bad-token': "The nodeterm service did not accept this device's token for that team.",
-  revoked: "This device's relay access was revoked."
+  revoked: "This device's relay access was revoked.",
+  'key-locked': 'This device identity could not be loaded.'
 }
 
-/** A join that did not reach the relay. `kind` says why; the message is for the human. */
+/** A join that did not reach the relay. `kind` says why; the message is `[<code>] <for the human>`,
+ *  with `detail` in place of the stock sentence when the failing step said something better. */
 export class HostedJoinError extends Error {
-  constructor(readonly kind: HostedJoinFailure) {
-    super(MESSAGES[kind])
+  readonly code: JoinErrorCode
+  constructor(readonly kind: HostedJoinFailure, detail?: string) {
+    super(`[${CODES[kind]}] ${detail ?? MESSAGES[kind]}`)
+    this.code = CODES[kind]
     this.name = 'HostedJoinError'
   }
 }
+
+const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 export interface HostedJoinDeps {
   apiBase: string
@@ -85,10 +110,17 @@ function bookmarkedKey(b: RelayBookmark): string | null {
 export async function joinHostedTeam(codeText: string, deps: HostedJoinDeps, ev: HostedJoinEvents): Promise<RelayClientSession> {
   const code = decodeJoinCode(codeText)
   if (!code) throw new HostedJoinError('invalid-code')
-  const keys = await deps.loadKeys()
+  let keys: KeyPair
+  try {
+    keys = await deps.loadKeys()
+  } catch (e) {
+    // The loader's own sentence (a locked keyring says to unlock and reconnect) is the useful one.
+    throw new HostedJoinError('key-locked', messageOf(e))
+  }
   const found = (await deps.bookmarks.list()).find((b) => b.hostId === code.hostId)
   // A bookmark is trusted only for the exact key it was made with; otherwise this is a new host.
-  const existing = found && bookmarkedKey(found) === code.hostPublicKeyB64 ? found : undefined
+  const sameKey = (b: RelayBookmark): boolean => bookmarkedKey(b) === code.hostPublicKeyB64
+  const existing = found && sameKey(found) ? found : undefined
 
   let deviceToken = existing?.deviceToken ?? null
   let approvedAt = existing?.approvedAt ?? null
@@ -101,10 +133,29 @@ export async function joinHostedTeam(codeText: string, deps: HostedJoinDeps, ev:
     source: existing?.source ?? 'code'
   })
   // A bookmark that could not be written costs a mint and a SAS dialog next time, never access, so a
-  // failed write does not fail the join.
-  const persist = (): Promise<void> => deps.bookmarks.upsert(record()).catch(() => {})
+  // failed write does not fail the join. It is said, once per failure: the host and why, never the
+  // code or a token.
+  const saveFailed = (e: unknown): void => {
+    console.warn(`[hosted-join] could not save the bookmark for host ${code.hostId}: ${messageOf(e)}`)
+  }
+  let saved = found ? JSON.stringify(found) : null
+  const persist = async (): Promise<void> => {
+    const next = record()
+    try {
+      await deps.bookmarks.upsert(next)
+      saved = JSON.stringify(next)
+    } catch (e) {
+      saveFailed(e)
+    }
+  }
   const mintDevice = async (): Promise<string> => {
-    const d: DeviceMintResult = await mintDeviceToken({ apiBase: deps.apiBase, deviceId: deps.deviceId(), code, label: deps.label, fetch: deps.fetch })
+    const d: DeviceMintResult = await mintDeviceToken({
+      apiBase: deps.apiBase,
+      deviceId: `${deps.deviceId()}:${code.hostId}`,
+      code,
+      label: deps.label,
+      fetch: deps.fetch
+    })
     if (!d.ok) throw new HostedJoinError(d.kind)
     deviceToken = d.deviceToken
     await persist()
@@ -122,37 +173,48 @@ export async function joinHostedTeam(codeText: string, deps: HostedJoinDeps, ev:
     j = await mintJoinToken({ apiBase: deps.apiBase, deviceToken: await mintDevice(), fetch: deps.fetch })
   }
   if (!j.ok) throw new HostedJoinError(j.kind)
-  if (JSON.stringify(record()) !== JSON.stringify(found ?? null)) await persist()
+  // The client token is a bearer for the relay: never send it over plaintext to another machine,
+  // whoever named the endpoint. Same rule a join code's own endpoint is held to.
+  if (!allowedEndpoint(j.relayEndpoint)) {
+    throw new HostedJoinError('network', 'The nodeterm service named a relay this device will not use.')
+  }
+  if (JSON.stringify(record()) !== saved) await persist()
 
   let deniedReason: TrustDeniedReason | undefined
   const connect = deps.connect ?? connectRelayClient
   const now = deps.now ?? Date.now
-  return connect({
-    url: j.relayEndpoint,
-    token: j.pairingToken,
-    hostKeyB64: code.hostPublicKeyB64,
-    ourKeys: keys,
-    autoApprove: approvedAt !== null,
-    onSas: (s) => ev.onSas(s.sas()),
-    onApproved: () => {
-      if (approvedAt === null) {
-        approvedAt = new Date(now()).toISOString()
-        void deps.bookmarks.update(code.hostId, { approvedAt, deviceToken }).catch(() => {})
-      }
-      ev.onApproved()
-    },
-    onFrame: (json) => ev.onFrame(json),
-    onPtyData: (sessionId, data) => ev.onPtyData(sessionId, data),
-    onDenied: (reason) => {
-      deniedReason = reason
-      // The host no longer counts this device as approved: the next attempt shows the SAS again.
-      if (approvedAt !== null) {
-        approvedAt = null
-        void deps.bookmarks.update(code.hostId, { approvedAt: null }).catch(() => {})
-      }
-    },
-    onClose: () => ev.onClosed(deniedReason)
-  })
+  try {
+    return connect({
+      url: j.relayEndpoint,
+      token: j.pairingToken,
+      hostKeyB64: code.hostPublicKeyB64,
+      ourKeys: keys,
+      autoApprove: approvedAt !== null,
+      onSas: (s) => ev.onSas(s.sas()),
+      onApproved: () => {
+        if (approvedAt === null) {
+          approvedAt = new Date(now()).toISOString()
+          // The approval ONLY: a concurrent attempt may have re-minted the token since this one read
+          // it, and the approval is about this device's key on that host, not about a token.
+          void deps.bookmarks.update(code.hostId, { approvedAt }, sameKey).catch(saveFailed)
+        }
+        ev.onApproved()
+      },
+      onFrame: (json) => ev.onFrame(json),
+      onPtyData: (sessionId, data) => ev.onPtyData(sessionId, data),
+      onDenied: (reason) => {
+        deniedReason = reason
+        // The host no longer counts this device as approved: the next attempt shows the SAS again.
+        if (approvedAt !== null) {
+          approvedAt = null
+          void deps.bookmarks.update(code.hostId, { approvedAt: null }, sameKey).catch(saveFailed)
+        }
+      },
+      onClose: () => ev.onClosed(deniedReason)
+    })
+  } catch (e) {
+    throw new HostedJoinError('network', messageOf(e))
+  }
 }
 
 /** How `connectHostedTeam` reaches the renderer and the handler's connection registry. */
@@ -167,23 +229,30 @@ export interface HostedConnectIo {
 /**
  * The `relay:client:connect` leg for a join code: run the join, route its events to the same
  * per-connection channels a pairing offer uses, and register the session. Resolves with the
- * connection id; rejects (with the human message) when the join never reached the relay.
+ * connection id; rejects when the join never reached the relay, ALWAYS with a HostedJoinError, so
+ * the message the renderer sees starts with a stable code whatever went wrong.
  */
 export async function connectHostedTeam(codeText: string, deps: HostedJoinDeps, io: HostedConnectIo): Promise<string> {
   const connectionId = io.newId()
   let ended = false
-  const session = await joinHostedTeam(codeText, deps, {
-    onSas: (sas) => io.send(IPC.relayClientSas(connectionId), sas),
-    onApproved: () => io.send(IPC.relayClientApproved(connectionId)),
-    onFrame: (json) => io.send(IPC.relayClientFrame(connectionId), json),
-    // pty output arrives on the SAME per-session channel a local pty uses.
-    onPtyData: (sessionId, data) => io.send(IPC.ptyData(sessionId), data),
-    onClosed: (reason) => {
-      ended = true
-      io.sessions.delete(connectionId)
-      io.send(IPC.relayClientClosed(connectionId), reason)
-    }
-  })
+  let session: RelayClientSession
+  try {
+    session = await joinHostedTeam(codeText, deps, {
+      onSas: (sas) => io.send(IPC.relayClientSas(connectionId), sas),
+      onApproved: () => io.send(IPC.relayClientApproved(connectionId)),
+      onFrame: (json) => io.send(IPC.relayClientFrame(connectionId), json),
+      // pty output arrives on the SAME per-session channel a local pty uses.
+      onPtyData: (sessionId, data) => io.send(IPC.ptyData(sessionId), data),
+      onClosed: (reason) => {
+        ended = true
+        io.sessions.delete(connectionId)
+        io.send(IPC.relayClientClosed(connectionId), reason)
+      }
+    })
+  } catch (e) {
+    // Not one of ours (a bug, an environment surprise): say it, under the one code that may retry.
+    throw e instanceof HostedJoinError ? e : new HostedJoinError('network', messageOf(e))
+  }
   // A socket that already closed must not leave a dead session behind in the registry.
   if (!ended) io.sessions.set(connectionId, session)
   return connectionId

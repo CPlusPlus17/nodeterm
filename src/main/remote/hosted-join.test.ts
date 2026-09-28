@@ -7,7 +7,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { joinHostedTeam, connectHostedTeam, HostedJoinError, type HostedJoinDeps, type HostedJoinEvents, type HostedConnectOptions } from './hosted-join'
+import { joinHostedTeam, connectHostedTeam, HostedJoinError, type HostedJoinDeps, type HostedJoinEvents, type HostedConnectOptions, type HostedJoinFailure } from './hosted-join'
+import { joinErrorCode } from '../../shared/relay-join-errors'
 import { BookmarkStore, type RelayBookmark } from './relay-bookmarks'
 import { encodeJoinCode, type JoinCode } from '../../core/relay/join-code'
 import { hostIdFromPublicKeyB64 } from '../../core/relay/relay-id'
@@ -82,7 +83,7 @@ function setup(opts: { routes?: Parameters<typeof api>[0]; bookmarks?: RelayBook
     bookmarks: store, loadKeys: opts.loadKeys ?? (async () => ourKeys), connect: c.connect, fetch: a.f,
     now: () => Date.parse('2026-09-29T10:00:00Z')
   }
-  return { store, api: a, c, deps, ourKeys }
+  return { store, file: path.join(dir, 'relay-bookmarks.json'), api: a, c, deps, ourKeys }
 }
 
 const hostKeys = genKeyPair()
@@ -96,7 +97,7 @@ describe('joinHostedTeam', () => {
     const loadKeys = vi.fn(async () => genKeyPair())
     const s = setup({ loadKeys })
     const tampered = encodeJoinCode({ ...code, hostId: 'x'.repeat(22) })
-    await expect(joinHostedTeam(tampered, s.deps, events().ev)).rejects.toMatchObject({ kind: 'invalid-code', message: 'That team code is invalid.' })
+    await expect(joinHostedTeam(tampered, s.deps, events().ev)).rejects.toMatchObject({ kind: 'invalid-code', message: '[E_JOIN_BAD_CODE] That team code is invalid.' })
     expect(s.api.calls).toEqual([])
     expect(loadKeys).not.toHaveBeenCalled()
     expect(s.c.opened).toEqual([])
@@ -107,7 +108,8 @@ describe('joinHostedTeam', () => {
     const e = events()
     const session = await joinHostedTeam(codeText, s.deps, e.ev)
     expect(s.api.calls).toEqual([
-      { route: 'device', body: { deviceId: 'my-device', hostDeviceId: 'host-dev', hostPublicKeyB64: code.hostPublicKeyB64, label: 'laptop' } },
+      // R34: one device id PER TEAM, so joining a second team never re-registers the first's row.
+      { route: 'device', body: { deviceId: `my-device:${code.hostId}`, hostDeviceId: 'host-dev', hostPublicKeyB64: code.hostPublicKeyB64, label: 'laptop' } },
       { route: 'join', body: { deviceToken: 'DT' } }
     ])
     const o = s.c.last()
@@ -210,7 +212,7 @@ describe('joinHostedTeam', () => {
 
   it('revoked: the honest message, and no re-mint', async () => {
     const s = setup({ bookmarks: [bookmark()], routes: { join: [[403, { error: 'revoked' }]] } })
-    await expect(joinHostedTeam(codeText, s.deps, events().ev)).rejects.toMatchObject({ kind: 'revoked', message: "This device's relay access was revoked." })
+    await expect(joinHostedTeam(codeText, s.deps, events().ev)).rejects.toMatchObject({ kind: 'revoked', message: "[E_JOIN_REVOKED] This device's relay access was revoked." })
     expect(s.api.count('device')).toBe(0)
   })
 
@@ -237,8 +239,85 @@ describe('joinHostedTeam', () => {
 
   it('a locked keyring rejects before any mint is spent', async () => {
     const s = setup({ loadKeys: async () => { throw Object.assign(new Error('keyring locked'), { code: 'E_PEER_KEY_LOCKED' }) } })
-    await expect(joinHostedTeam(codeText, s.deps, events().ev)).rejects.toThrow('keyring locked')
+    const err = await joinHostedTeam(codeText, s.deps, events().ev).catch((e: Error) => e)
+    // The loader's own sentence is kept (it tells the human to unlock and reconnect), behind the code.
+    expect((err as Error).message).toBe('[E_JOIN_KEY_LOCKED] keyring locked')
     expect(s.api.calls).toEqual([])
+  })
+
+  it('R34: two teams get two device ids, both derived from this machine\'s', async () => {
+    const other = codeFor(genKeyPair(), { hostDeviceId: 'other-host-dev' })
+    const s = setup()
+    await joinHostedTeam(codeText, s.deps, events().ev)
+    await joinHostedTeam(encodeJoinCode(other), s.deps, events().ev)
+    const ids = s.api.calls.filter((c) => c.route === 'device').map((c) => c.body.deviceId)
+    expect(ids).toEqual([`my-device:${code.hostId}`, `my-device:${other.hostId}`])
+    expect(ids[0]).not.toBe(ids[1])
+    expect(String(ids[0]).length).toBeLessThanOrEqual(200) // the backend's deviceId limit
+  })
+
+  it('R35: every failure kind carries its stable code, readable through Electron\'s wrapper', () => {
+    const expected: Record<HostedJoinFailure, string> = {
+      'invalid-code': 'E_JOIN_BAD_CODE',
+      'rate-limited': 'E_JOIN_RATE',
+      refused: 'E_JOIN_REFUSED',
+      // A token the service will not accept even fresh: retrying only spends mints, so it stops.
+      'bad-token': 'E_JOIN_REFUSED',
+      network: 'E_JOIN_NETWORK',
+      revoked: 'E_JOIN_REVOKED',
+      'key-locked': 'E_JOIN_KEY_LOCKED'
+    }
+    for (const [kind, codeName] of Object.entries(expected) as Array<[HostedJoinFailure, string]>) {
+      const e = new HostedJoinError(kind)
+      expect(e.message.startsWith(`[${codeName}] `)).toBe(true)
+      expect(e.code).toBe(codeName)
+      expect(joinErrorCode(`Error invoking remote method 'relay:client:connect': Error: ${e.message}`)).toBe(codeName)
+    }
+  })
+
+  it('R35: a connect that throws synchronously is a network failure', async () => {
+    const s = setup()
+    const connect = () => { throw new Error('Invalid URL') }
+    await expect(joinHostedTeam(codeText, { ...s.deps, connect }, events().ev)).rejects.toMatchObject({ message: '[E_JOIN_NETWORK] Invalid URL' })
+  })
+
+  it('R36(4): a relay endpoint from the API that is not wss (or loopback ws) is never dialed', async () => {
+    const s = setup({ routes: { device: [DEVICE_OK()], join: [[200, { pairingToken: 'PT', hostId: 'H', relayEndpoint: 'ws://evil.example', exp: 1 }]] } })
+    await expect(joinHostedTeam(codeText, s.deps, events().ev)).rejects.toMatchObject({ kind: 'network', message: expect.stringMatching(/^\[E_JOIN_NETWORK\] /) })
+    expect(s.c.opened).toEqual([])
+  })
+
+  it('R36(3): an approval never overwrites a token a concurrent attempt re-minted meanwhile', async () => {
+    const s = setup({ bookmarks: [bookmark()] })
+    await joinHostedTeam(codeText, s.deps, events().ev) // this session uses 'OLD'
+    await s.store.upsert(bookmark({ deviceToken: 'REMINTED' })) // another attempt's fresh token
+    s.c.last().onApproved(s.c.sessions[0])
+    await vi.waitFor(async () => expect((await s.store.list())[0].approvedAt).toBe('2026-09-29T10:00:00.000Z'))
+    expect((await s.store.list())[0].deviceToken).toBe('REMINTED')
+  })
+
+  it('R36(2): a bookmark write that fails is logged once, naming the host and never a token or the code', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const s = setup({ routes: { device: [DEVICE_OK('MINTED-TOKEN-XYZ')], join: [JOIN_OK] } })
+      // A corrupt file holding a token: writes refuse it (its trust state is unknown).
+      // Shaped so that V8's JSON.parse error would quote the token, were it ever passed through.
+      fs.writeFileSync(s.file, '[{"deviceToken": SECRET-TOKEN}]')
+      await joinHostedTeam(codeText, s.deps, events().ev)
+      s.c.last().onApproved(s.c.sessions[0])
+      s.c.last().onDenied?.('removed')
+      await vi.waitFor(() => expect(warn.mock.calls.length).toBeGreaterThanOrEqual(3))
+      for (const call of warn.mock.calls) {
+        const line = call.map(String).join(' ')
+        expect(line).toContain(code.hostId)
+        expect(line).not.toContain('SECRET')
+        expect(line).not.toContain('MINTED-TOKEN') // the device token minted in this attempt
+        expect(line).not.toContain('nodeterm://join')
+        expect(line).not.toContain(codeText.slice('nodeterm://join?code='.length, 40))
+      }
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('a denial is passed to onClosed and withdraws the joiner-side pin', async () => {
@@ -323,10 +402,18 @@ describe('connectHostedTeam (the relay:client:connect leg for a join code)', () 
     expect(x.sent).toEqual([[IPC.relayClientClosed('c1'), undefined]])
   })
 
+  it('R35: a failure that is not ours still leaves with a stable code', async () => {
+    const s = setup()
+    const x = io()
+    const deviceId = () => { throw new Error('platform not initialised') }
+    await expect(connectHostedTeam(codeText, { ...s.deps, deviceId }, x.io)).rejects.toThrow(/^\[E_JOIN_NETWORK\] platform not initialised$/)
+    expect(x.sessions.size).toBe(0)
+  })
+
   it('a failed join registers nothing and rejects with the human message', async () => {
     const s = setup({ routes: { device: [[429, {}]] } })
     const x = io()
-    await expect(connectHostedTeam(codeText, s.deps, x.io)).rejects.toThrow('Too many join attempts for this team today. Try again tomorrow.')
+    await expect(connectHostedTeam(codeText, s.deps, x.io)).rejects.toThrow('[E_JOIN_RATE] Too many join attempts for this team today. Try again tomorrow.')
     expect(x.sessions.size).toBe(0)
     expect(x.sent).toEqual([])
   })

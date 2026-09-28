@@ -29,11 +29,48 @@ describe('relay bookmarks', () => {
     expect((fs.statSync(file).mode & 0o777).toString(8)).toBe('600')
   })
 
-  it('a corrupt file reads as empty and is not overwritten until the next write', async () => {
+  it('a corrupt file reads as empty for display, and no write ever replaces it', async () => {
+    // A corrupt file may still hold other teams' tokens and approvals: unknown trust state is never
+    // overwritten, so every write refuses until the file is readable again.
     const file = tmpFile()
     fs.writeFileSync(file, 'nope')
-    expect(await new BookmarkStore(file).list()).toEqual([])
+    const s = new BookmarkStore(file)
+    expect(await s.list()).toEqual([])
+    await expect(s.upsert(b)).rejects.toThrow()
+    await expect(s.update('H', { approvedAt: 'now' })).rejects.toThrow()
+    await expect(s.remove('H')).rejects.toThrow()
     expect(fs.readFileSync(file, 'utf8')).toBe('nope')
+  })
+
+  it('a file with a malformed entry is refused for writes too (that entry would be dropped)', async () => {
+    const file = tmpFile()
+    const raw = JSON.stringify([b, { hostId: 'X' }])
+    fs.writeFileSync(file, raw)
+    const s = new BookmarkStore(file)
+    await expect(s.upsert({ ...b, hostId: 'H2' })).rejects.toThrow()
+    fs.writeFileSync(file, JSON.stringify({ not: 'a list' }))
+    await expect(s.upsert(b)).rejects.toThrow()
+    fs.writeFileSync(file, raw)
+    await expect(s.remove('H')).rejects.toThrow()
+    expect(fs.readFileSync(file, 'utf8')).toBe(raw)
+  })
+
+  it('readForWrite: none on a missing file; a refusal never quotes the file (it holds tokens)', async () => {
+    const file = tmpFile()
+    const s = new BookmarkStore(file)
+    expect(await s.readForWrite()).toEqual([])
+    // An unquoted token: V8's JSON.parse error QUOTES the text around it ('..."ceToken": SECRET-TOK"...').
+    fs.writeFileSync(file, '[{"deviceToken": SECRET-TOKEN}]')
+    const err = await s.readForWrite().catch((e: Error) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).not.toContain('SECRET')
+  })
+
+  it.skipIf(process.platform === 'win32')('an unreadable file (not a missing one) is refused for writes', async () => {
+    // A directory where the file should be: reading it fails with EISDIR, which is not absence.
+    const file = tmpFile()
+    fs.mkdirSync(file)
+    await expect(new BookmarkStore(file).upsert(b)).rejects.toThrow()
   })
 
   it('drops malformed entries on read', async () => {
@@ -46,6 +83,15 @@ describe('relay bookmarks', () => {
     const s = new BookmarkStore(tmpFile())
     await Promise.all(['A', 'B', 'C', 'D'].map((hostId) => s.upsert({ ...b, hostId })))
     expect((await s.list()).map((x) => x.hostId).sort()).toEqual(['A', 'B', 'C', 'D'])
+  })
+
+  it('update applies only when the stored bookmark still satisfies the caller\'s condition', async () => {
+    const s = new BookmarkStore(tmpFile())
+    await s.upsert({ ...b, deviceToken: 'NEWER' })
+    await s.update('H', { approvedAt: 'now' }, (x) => x.deviceToken === 'OLDER')
+    expect((await s.list())[0].approvedAt).toBeNull()
+    await s.update('H', { approvedAt: 'now' }, (x) => x.deviceToken === 'NEWER')
+    expect((await s.list())[0].approvedAt).toBe('now')
   })
 
   it('update patches an existing bookmark and never creates one', async () => {

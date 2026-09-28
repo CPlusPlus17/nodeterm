@@ -1,6 +1,6 @@
 // src/core/relay/join-code.test.ts
 import { describe, it, expect } from 'vitest'
-import { encodeJoinCode, decodeJoinCode, isJoinCode } from './join-code'
+import { encodeJoinCode, decodeJoinCode, isJoinCode, allowedEndpoint } from './join-code'
 import { genKeyPair, publicKeyToB64 } from './e2ee'
 import { hostIdFromPublicKeyB64 } from './relay-id'
 
@@ -25,5 +25,9 @@ describe('join code', () => {
   it('never throws on junk', () => {
     expect(decodeJoinCode('nodeterm://join?code=%%%')).toBeNull()
     expect(decodeJoinCode('')).toBeNull()
+  })
+  it('allowedEndpoint: wss anywhere, plaintext ws only to loopback', () => {
+    for (const ok of ['wss://relay.nodeterm.dev', 'wss://1.2.3.4:443/x', 'ws://127.0.0.1:8080', 'ws://localhost', 'ws://[::1]:9']) expect(allowedEndpoint(ok), ok).toBe(true)
+    for (const bad of ['ws://evil.example', 'ws://10.0.0.5', 'http://relay.nodeterm.dev', 'https://relay.nodeterm.dev', 'junk', '']) expect(allowedEndpoint(bad), bad).toBe(false)
   })
 })
