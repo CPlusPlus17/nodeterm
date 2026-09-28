@@ -665,6 +665,7 @@ export function buildAgentApi(
   | 'answerPermission'
   | 'ackDone'
   | 'reportHibernated'
+  | 'seedAgentIdentity'
   | 'onAgentWake'
   | 'onRemoteViewers'
   | 'onAgentRefreshNode'
@@ -679,6 +680,10 @@ export function buildAgentApi(
     // over its SSH browse path — a browser canvas hibernating a node must reach that file too.
     reportHibernated: (nodeId, on) => {
       void client.request(IPC.agentHibernated, { nodeId, on }).catch(() => undefined)
+    },
+    // REAL forward, same reason: the server's mirror is what a phone browsing that host reads.
+    seedAgentIdentity: (entries) => {
+      void client.request(IPC.agentSeedIdentity, entries).catch(() => undefined)
     },
     // Deliberate no-op subscriptions, not stubs-by-accident: both signals originate in the phone
     // RELAY host, which lives only in the desktop main process — the Server Edition serves no

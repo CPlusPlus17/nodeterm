@@ -79,6 +79,7 @@ import {
   type MirrorServer,
   setNodeSessionName,
   setNodeHibernated,
+  seedNodeIdentities,
   sessionNameSweepEntries,
   nodeSessionName
 } from '../core/agent-status-mirror'
@@ -551,6 +552,12 @@ export async function startServer(
   platform.handle(IPC.agentHibernated, (msg: { nodeId?: unknown; on?: unknown }) => {
     if (typeof msg?.nodeId !== 'string' || !msg.nodeId) return
     setNodeHibernated(msg.nodeId, msg.on === true)
+  })
+  // Identity seed (parity with desktop's ipcMain.on(IPC.agentSeedIdentity)): the browser renderer's
+  // persisted agentStatus store fills session ids this server's mirror has none for, so a phone
+  // browsing this host finds an idle node's transcript. Add-only and validated in core.
+  platform.handle(IPC.agentSeedIdentity, (entries: unknown) => {
+    seedNodeIdentities(entries)
   })
   // Phone→host read-acks: the phone drops `~/.nodeterm/acks/<nodeId>.seen` on this host when it READS
   // a finished session. Sweep it (15s cadence, cheap dir-mtime gate) and for each ack: `ackDone`

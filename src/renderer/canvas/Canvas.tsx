@@ -8,6 +8,7 @@ import { commitOwnedLaunchAttempt, registerLaunchCommit } from '../terminal/laun
 import { launchCommand } from '../terminal/launch-command'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useContextLinkSync } from './useContextLinkSync'
+import { useMirrorIdentitySeed } from './useMirrorIdentitySeed'
 import { useShallow } from 'zustand/react/shallow'
 import { playSfx, primeSfx } from '@renderer/lib/sfx'
 import { fanoutStillWorking } from '@renderer/lib/completionAlert'
@@ -3760,6 +3761,9 @@ export function Canvas() {
   }, [nodes])
 
   useContextLinkSync({ projectId: nodesProjectIdRef.current, nodes, edges: linkEdges })
+  // Phone chat: tell the core's agent-status mirror which session each node was last running, for
+  // nodes it learned nothing about this run (see useMirrorIdentitySeed).
+  useMirrorIdentitySeed()
 
   // Pruning is separate from publication: node geometry changes must not postpone link writes.
   useEffect(() => {

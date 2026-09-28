@@ -7,6 +7,7 @@ import type { AgentId } from '@shared/agents/config'
 import type { AgentState, NormalizedAgentEvent } from '@shared/agents/normalize'
 import type { ObservedClaudeAccount } from '@shared/types'
 import { WORKING_STALE_MS, isStaleWorking } from '@shared/agents/stale'
+import { parseIdentitySeed } from '@shared/agent-identity-seed'
 
 /**
  * Mirrors the live per-node agent status to a small JSON file so an EXTERNAL reader (the
@@ -2085,6 +2086,69 @@ export function setNodeHibernated(nodeId: string, on: boolean): void {
     state.set(nodeId, next)
   }
   scheduleWrite()
+}
+
+/**
+ * Seed IDENTITY for nodes the mirror has no session for — the `agent:seed-identity` cast's only
+ * writer. The renderer's agentStatus store keeps each node's `sessionId`/`agentId` in localStorage
+ * indefinitely, while this mirror learns them only from hook events; a node idle since before this
+ * app run (or whose entry was dropped before identity outlived the state) is therefore absent here,
+ * and the phone — which finds a transcript only by the session id it reads off this file — showed
+ * "No conversation yet" until the next prompt fired a hook.
+ *
+ * The rules, each a refusal:
+ *  - validated by `parseIdentitySeed` (bounded count, safe ids — the values come from hand-editable
+ *    localStorage and the ids are shell-reaching elsewhere);
+ *  - a node the workspace does not know is skipped (a deleted node's stale localStorage entry must
+ *    not be advertised); an unknowable workspace (`undefined`) accepts, bounded by the identity TTL
+ *    and the renderer's own filter;
+ *  - an entry that already carries a `sessionId` is NEVER touched — a hook-fed id is fresher than
+ *    anything localStorage remembers — and neither is one whose `agentId` disagrees;
+ *  - an entry holding a STATE is never filled either, even with no session id: a seeded id is
+ *    last-known and possibly stale, and beside a live state it would read as the id of the session
+ *    that state belongs to (the phone's permission-dialog guard reads it exactly so);
+ *  - a STATELESS entry with no session id (the boot replay's hibernated-only entry, a restored
+ *    stateless one) gets its identity filled, nothing else;
+ *  - a new entry is the IDENTITY-ONLY shape (`stateExpired`, no state, no proof) with `updatedAt`
+ *    set just past EXPIRE_MS, so it reads as OLD to every freshness check. That matters because
+ *    `stateExpired` is not persisted: restored after a restart it is re-derived from the age, so a
+ *    fresh `updatedAt` would come back as a plain stateless entry and join the session-name sweep
+ *    (a transcript read per pass, over ssh for a remote node). The identity TTL then runs from the
+ *    seed — but the renderer re-seeds whenever the entry has been pruned, so in practice the
+ *    identity lives as long as the node and its localStorage entry do.
+ * Returns how many entries changed. Schedules a write (and so an SSH slice push) only then.
+ */
+export function seedNodeIdentities(input: unknown): number {
+  const entries = parseIdentitySeed(input)
+  if (entries.length === 0) return 0
+  const liveIds = safeLiveNodes()
+  const now = Date.now()
+  let changed = 0
+  for (const s of entries) {
+    if (liveIds && !liveIds.has(s.nodeId)) continue
+    const e = state.get(s.nodeId)
+    if (e) {
+      if (e.sessionId || e.state) continue
+      if (e.agentId && e.agentId !== s.agentId) continue
+      state.set(s.nodeId, {
+        ...e,
+        agentId: s.agentId,
+        sessionId: s.sessionId,
+        ...(!e.account && s.account ? { account: s.account } : {})
+      })
+    } else {
+      state.set(s.nodeId, {
+        agentId: s.agentId,
+        sessionId: s.sessionId,
+        ...(s.account ? { account: s.account } : {}),
+        updatedAt: now - EXPIRE_MS - 1,
+        stateExpired: true
+      })
+    }
+    changed++
+  }
+  if (changed > 0) scheduleWrite()
+  return changed
 }
 
 /** A node's published session name (see MirrorEntry.name), or undefined. */

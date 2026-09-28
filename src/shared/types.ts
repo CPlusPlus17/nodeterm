@@ -1,4 +1,5 @@
 import type { TextDeliveryResult } from './text-delivery'
+import type { IdentitySeedEntry } from './agent-identity-seed'
 // Types shared across the main, preload, and renderer processes.
 
 import { TABBAR_HEIGHT_PX } from './window-chrome-metrics'
@@ -3803,6 +3804,11 @@ export interface NodeTerminalApi {
    *  mirrors it into the agent-status file so the phone can render SLEEPING). Fire-and-forget;
    *  called on every `setHibernated` change and replayed for the persisted set at boot. */
   reportHibernated(nodeId: string, on: boolean): void
+  /** Seed the core's agent-status mirror with node identities from this renderer's persisted
+   *  agentStatus store (see `@shared/agent-identity-seed`). Fire-and-forget and add-only: the core
+   *  fills only nodes it has no session for, and validates every field. A relay tab's api is a
+   *  deliberate no-op — its nodes belong to another core, whose own renderer seeds it. */
+  seedAgentIdentity(entries: IdentitySeedEntry[]): void
   /** Fires when the core asks this renderer to WAKE a hibernated node NOW (a phone viewer just
    *  attached to its session over the relay). A nudge with `wakeHibernatedNode`'s exact contract:
    *  re-read the flag, no-op when not hibernated or not mounted. Returns unsubscribe.
