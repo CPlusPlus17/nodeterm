@@ -88,6 +88,20 @@ function isLoopback(host: string): boolean {
 }
 
 /**
+ * The server's data directory, exactly as `resolveConfig` resolves it (argv > env > default). Split
+ * out for the `team` admin CLI, which needs the data dir — where the admin socket lives — but none of
+ * the serving config, and must not trip `resolveConfig`'s serving-only refusals (a non-loopback
+ * NODETERM_HOST in the operator's shell, a trust-proxy half-configuration).
+ */
+export function resolveDataDir(env: NodeJS.ProcessEnv, argv: string[]): string {
+  const arg = parseArgv(argv)['data-dir']
+  if (typeof arg === 'string') return arg
+  const ev = env.NODETERM_DATA_DIR
+  if (ev !== undefined && ev !== '') return ev
+  return path.join(os.homedir(), '.nodeterm-server')
+}
+
+/**
  * Resolve the server config from `env` + `argv`. Precedence is argv > env > default.
  * Binding a non-loopback host without `--insecure-http` throws: plain HTTP on a
  * public interface would leak the session cookie, so the server insists on being
@@ -105,7 +119,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
 
   const port = Number(pick('port', 'NODETERM_PORT', '8443'))
   const host = pick('host', 'NODETERM_HOST', '127.0.0.1')
-  const dataDir = pick('data-dir', 'NODETERM_DATA_DIR', path.join(os.homedir(), '.nodeterm-server'))
+  const dataDir = resolveDataDir(env, argv)
   const rendererDir = pick('renderer-dir', 'NODETERM_RENDERER_DIR', path.resolve('out/renderer'))
   const insecureHttp = args['insecure-http'] === true
   const passwordSeed = env.NODETERM_SERVER_PASSWORD || undefined

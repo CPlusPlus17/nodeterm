@@ -17,7 +17,10 @@ export const TEAM_ROLES: readonly TeamRole[] = ['owner', 'editor', 'commenter', 
 export interface TeamPeer { pubkeyB64: string; label: string; role: TeamRole; addedAt: string; addedBy: string }
 export interface TeamDoc { v: 1; peers: TeamPeer[]; sharedProjects: string[] }
 
-const LABEL_MAX = 60
+/** The longest member label `team.json` accepts. Exported so the admin CLI refuses what this reader would. */
+export const TEAM_LABEL_MAX = 60
+/** The longest shared project id `team.json` accepts. */
+export const TEAM_PROJECT_ID_MAX = 128
 const isStr = (v: unknown, max = 512): v is string => typeof v === 'string' && v.length > 0 && v.length <= max
 
 export function emptyTeam(): TeamDoc {
@@ -35,14 +38,14 @@ export function parseTeam(raw: unknown): TeamDoc | null {
   for (const p of o.peers) {
     if (!p || typeof p !== 'object') return null
     const q = p as Record<string, unknown>
-    if (!isStr(q.pubkeyB64, 64) || typeof q.label !== 'string' || q.label.length > LABEL_MAX) return null
+    if (!isStr(q.pubkeyB64, 64) || typeof q.label !== 'string' || q.label.length > TEAM_LABEL_MAX) return null
     if (!(TEAM_ROLES as readonly unknown[]).includes(q.role)) return null
     if (!isStr(q.addedAt, 40) || !isStr(q.addedBy, 64)) return null
     if (seen.has(q.pubkeyB64)) return null
     seen.add(q.pubkeyB64)
     peers.push({ pubkeyB64: q.pubkeyB64, label: q.label, role: q.role as TeamRole, addedAt: q.addedAt, addedBy: q.addedBy })
   }
-  if (!o.sharedProjects.every((s) => isStr(s, 128))) return null
+  if (!o.sharedProjects.every((s) => isStr(s, TEAM_PROJECT_ID_MAX))) return null
   return { v: 1, peers, sharedProjects: [...new Set(o.sharedProjects as string[])] }
 }
 
@@ -51,7 +54,7 @@ export function peerFor(doc: TeamDoc, pubkeyB64: string): TeamPeer | undefined {
 }
 
 export function upsertPeer(doc: TeamDoc, p: TeamPeer): TeamDoc {
-  const label = p.label.slice(0, LABEL_MAX)
+  const label = p.label.slice(0, TEAM_LABEL_MAX)
   return { ...doc, peers: [...doc.peers.filter((x) => x.pubkeyB64 !== p.pubkeyB64), { ...p, label }] }
 }
 
