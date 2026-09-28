@@ -23,8 +23,10 @@
 // reach any channel the shell registered on the platform) only from the trust gate's `onOpen`, i.e.
 // after BOTH humans compared the same SAS and pressed Confirm. The E2EE handshake completing
 // (`onReady`) proves only that SOMEONE holds the pairing token — a pre-approval request is answered
-// with E_UNAUTHORIZED and never touches a handler. A pairing grants shell access; the SAS is the
-// only thing between a relay MITM and that shell.
+// with E_UNAUTHORIZED and never touches a handler. Between mutual approval and `onOpen` (the pin
+// write is in flight) the peer's frames are HELD, not refused, and served at open through the same
+// checks as live ones — still nothing before it (see HELD_FRAMES_MAX). A pairing grants shell
+// access; the SAS is the only thing between a relay MITM and that shell.
 //
 // SCOPE: this is the DESKTOP-peer vocabulary (the invited peer is fully trusted, as the invite copy
 // states). The standing PHONE host keeps its existing legacy vocabulary in `host-service.ts` — with
@@ -43,6 +45,7 @@ import type { UiSink } from '../ui-sink-registry'
 import {
   E_UNAUTHORIZED,
   parseRpcMessage,
+  type RpcCast,
   type RpcErr,
   type RpcOk,
   type RpcRequest
@@ -152,8 +155,9 @@ export interface ConnectRelayHostOptions {
   onOpen(session: RelayHostSession): void
   /**
    * The session ended without this shell asking: fires AT MOST ONCE, when the relay socket drops,
-   * when a throwing `wrapSink` fails the session closed, or when the session key is found swapped
-   * (the key-swap self-close). The peer is already torn down when it fires. `close()`, `deny()` and
+   * when a throwing `wrapSink` fails the session closed, when the session key is found swapped (the
+   * key-swap self-close), or when the peer overflows the frames held between approval and open
+   * (`HELD_FRAMES_MAX`). The peer is already torn down when it fires. `close()`, `deny()` and
    * `killRelayHostsByPeerKey` NEVER fire it — their caller already knows, and owes its own
    * bookkeeping for that end.
    */
@@ -179,6 +183,15 @@ type AccessVerdict =
 
 /** The refusal a req gets when the access hook's answer is not a decision (never its raw value). */
 const ACCESS_CHECK_FAILED = 'Access check failed.'
+
+/**
+ * How many req/cast frames a peer may send between mutual approval and `open` (while the pin write
+ * is in flight) before the session is closed. Those frames are HELD, not refused: a client opens as
+ * soon as it has the host's confirm, so the first thing a new teammate sends (`workspace:load` at
+ * `onApproved`) routinely lands inside the host's pin write. Bounded, because nothing reads them
+ * until the pin settles.
+ */
+export const HELD_FRAMES_MAX = 256
 
 /** Live bridged peers, for revocation: unpinning a key refuses the NEXT handshake, but the OPEN
  *  socket keeps full shell access until it is cut (see revocation.ts). */
@@ -216,6 +229,10 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
   // below this connection's own contribution (an unbalanced guest unsubscribe is ignored).
   const boardLogSubs = new Map<string, number>()
 
+  // Frames the peer sent after BOTH humans approved but before `open` (the pin write is in flight).
+  // Served in arrival order at `open`, through the same path as live frames; dropped with the session.
+  const held: Array<RpcRequest | RpcCast> = []
+
   /** The ONE teardown, mirroring src/server/ws.ts's close path exactly: `attach.detach` IS the three
    *  steps (presence leave → onPeerGone → PtyManager.dropClient → registry prune). Do NOT
    *  re-implement them here. */
@@ -246,10 +263,22 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
     close() {
       if (closed) return
       closed = true
+      held.length = 0
       live.delete(session)
       detach()
       socket.close()
     }
+  }
+
+  /** End the session on the core's own initiative (a swapped key, a throwing wrapSink, a flooded
+   *  hold queue). A self-initiated close() never reaches the socket's onClose, and the shell did not
+   *  ask for this one: tell it, at most once, and never for a session that was already closed. Its
+   *  bookkeeping (a seat, a pending request, a standing listener counted as bridged) must hear every
+   *  end. */
+  const closeUnasked = (): void => {
+    const wasLive = !closed
+    session.close()
+    if (wasLive) opts.onClose()
   }
 
   /** The socket's live peer key still matches the one bound into the gate/approval state. A false
@@ -258,12 +287,7 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
     if (keySwapped) return false
     if (sessionPeerKey !== null && socket.peerPublicKeyB64() === sessionPeerKey) return true
     keySwapped = true
-    const wasLive = !closed
-    session.close()
-    // A self-initiated close() never reaches the socket's onClose, and the shell did not ask for this
-    // one: tell it, at most once (the wrapSink fail-closed rule). Its bookkeeping (a seat, a pending
-    // request, a standing listener counted as bridged) must hear every end.
-    if (wasLive) opts.onClose()
+    closeUnasked()
     return false
   }
 
@@ -297,17 +321,21 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
       } catch (err) {
         // FAIL CLOSED. A wrapSink is a FILTER (a viewer's view of the host); falling back to the bare
         // base sink would hand the peer everything the filter exists to withhold. Attach nothing and
-        // end the session. A self-initiated close() never reaches the socket's onClose, so tell the
-        // shell here — it did not ask for this, and its bookkeeping (a seat, a dialog) must hear it.
+        // end the session, and tell the shell (closeUnasked).
         console.warn(`[relay-host] wrapSink threw; closing the session: ${errorMessage(err)}`)
-        session.close()
-        opts.onClose()
+        closeUnasked()
         return
       }
     }
     const id = opts.attach.attach(sink)
     clientId = id
     opts.onOpen(session)
+    // What the peer sent while the pin was being written, in arrival order, exactly as if it had
+    // arrived now. A frame that ends the session stops the rest.
+    for (const m of held.splice(0)) {
+      if (closed || clientId === null) break
+      serve(m)
+    }
   }
 
   /** UX scope, NOT a trust boundary: for the ONE `workspace:load` method, when this hosting session
@@ -390,6 +418,105 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
     }
   })
 
+  /** Serve one req/cast of an OPEN session: interceptor, access, scope jails, then dispatch/cast.
+   *  Live frames and held ones (see `held`) both come through here, so they meet the same checks. */
+  const serve = (m: RpcRequest | RpcCast): void => {
+    if (clientId === null) return
+    if (m.t === 'req') {
+      // A hook may answer the request itself — it then never reaches a scope check or the core.
+      // Every hook call below is guarded: a throw is ANSWERED (E_HANDLER), never let into the
+      // socket's message emit (see RelayHostHooks).
+      let intercepted: Promise<unknown> | null
+      try {
+        intercepted = opts.hooks?.interceptReq?.(session, m.method, m.args) ?? null
+      } catch (err) {
+        socket.sendTunnelText(handlerError(m.id, err))
+        return
+      }
+      if (intercepted) {
+        void intercepted.then(
+          (result) => respond(m.id, () => ({ t: 'res', id: m.id, ok: true, result: result ?? null })),
+          (err) => socket.sendTunnelText(handlerError(m.id, err))
+        )
+        return
+      }
+      const verdict = checkAccess('req', m.method, m.args)
+      if (verdict.kind === 'threw') {
+        socket.sendTunnelText(handlerError(m.id, verdict.err))
+        return
+      }
+      if (verdict.kind === 'malformed') {
+        console.warn(`[relay-host] access returned a malformed decision on req ${m.method}; refused`)
+        socket.sendTunnelText(JSON.stringify({ t: 'res', id: m.id, ok: false, error: { code: 'E_ROLE', message: ACCESS_CHECK_FAILED } }))
+        return
+      }
+      const decision = verdict.decision
+      if (!decision.allow) {
+        socket.sendTunnelText(JSON.stringify({ t: 'res', id: m.id, ok: false, error: { code: 'E_ROLE', message: decision.message } }))
+        return
+      }
+      const args = decision.args ?? m.args
+      // Board-log read/append naming a project outside this session's scope: refuse WITHOUT
+      // dispatching (the host router never resolves it), degrading exactly as an unknown project.
+      // Checked before the generic jail so these two keep their established degraded shape.
+      if (
+        (m.method === IPC.boardLogAppend || m.method === IPC.boardLogRead) &&
+        boardLogOutOfScope(args[0])
+      ) {
+        socket.sendTunnelText(JSON.stringify(boardLogRefusal(m.method, m.id)))
+        return
+      }
+      if (projectOutOfScope(m.method, args)) {
+        socket.sendTunnelText(JSON.stringify(projectScopeRefusal(m.method, m.id)))
+        return
+      }
+      const id = clientId
+      let pending: Promise<RpcOk | RpcErr>
+      try {
+        pending = opts.attach.dispatch(id, { ...m, args })
+      } catch (err) {
+        socket.sendTunnelText(handlerError(m.id, err))
+        return
+      }
+      void pending.then(
+        (res) => respond(m.id, () => narrowResponse(m.method, scopeResponse(m.method, res))),
+        (err) => socket.sendTunnelText(handlerError(m.id, err))
+      )
+    } else if (m.t === 'cast') {
+      // A cast has no reply channel: a policy that throws or cannot decide DROPS it — and says so,
+      // because a silently dropped pty:write swallows keystrokes with nothing in any log (the same
+      // reason both platforms log a throwing cast listener).
+      const verdict = checkAccess('cast', m.method, m.args)
+      if (verdict.kind === 'threw') {
+        console.warn(`[relay-host] access threw on cast ${m.method}:`, errorMessage(verdict.err))
+        return
+      }
+      if (verdict.kind === 'malformed') {
+        console.warn(`[relay-host] access returned a malformed decision on cast ${m.method}; dropped`)
+        return
+      }
+      const d = verdict.decision
+      if (!d.allow) return
+      const args = d.args ?? m.args
+      if (projectOutOfScope(m.method, args)) return
+      // Board-log subscribe/unsubscribe: scope-jail out-of-scope projects, and track this
+      // connection's net per-project count so a dropped guest's watch is released in detach().
+      if (m.method === IPC.boardLogSubscribe || m.method === IPC.boardLogUnsubscribe) {
+        const projectId = args[0]
+        if (typeof projectId !== 'string' || boardLogOutOfScope(projectId)) return
+        if (m.method === IPC.boardLogSubscribe) {
+          boardLogSubs.set(projectId, (boardLogSubs.get(projectId) ?? 0) + 1)
+        } else {
+          const cur = boardLogSubs.get(projectId) ?? 0
+          if (cur <= 0) return // this connection holds no such watch — never decrement the shared count
+          if (cur === 1) boardLogSubs.delete(projectId)
+          else boardLogSubs.set(projectId, cur - 1)
+        }
+      }
+      opts.attach.cast(clientId, m.method, args)
+    }
+  }
+
   const socket = connectRelay({
     url: opts.url,
     token: opts.token,
@@ -453,6 +580,18 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
       const m = parseRpcMessage(json)
       if (!m) return
       if (clientId === null) {
+        // Mutually approved, not yet open (the pin write is in flight): HOLD, never refuse — the
+        // client is already open and its first request would otherwise fail. Nothing is judged or
+        // served before `open`; a peer that floods the hold is cut.
+        if (gate?.isApproved() && (m.t === 'req' || m.t === 'cast')) {
+          if (held.length >= HELD_FRAMES_MAX) {
+            console.warn(`[relay-host] a peer sent more than ${HELD_FRAMES_MAX} frames before its session opened; closing it`)
+            closeUnasked()
+            return
+          }
+          held.push(m)
+          return
+        }
         // Not mutually approved: refuse — but ANSWER, or the peer's `await` would hang forever.
         if (m.t === 'req') {
           socket.sendTunnelText(
@@ -466,100 +605,8 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
         }
         return
       }
-      if (m.t === 'req') {
-        // A hook may answer the request itself — it then never reaches a scope check or the core.
-        // Every hook call below is guarded: a throw is ANSWERED (E_HANDLER), never let into the
-        // socket's message emit (see RelayHostHooks).
-        let intercepted: Promise<unknown> | null
-        try {
-          intercepted = opts.hooks?.interceptReq?.(session, m.method, m.args) ?? null
-        } catch (err) {
-          socket.sendTunnelText(handlerError(m.id, err))
-          return
-        }
-        if (intercepted) {
-          void intercepted.then(
-            (result) => respond(m.id, () => ({ t: 'res', id: m.id, ok: true, result: result ?? null })),
-            (err) => socket.sendTunnelText(handlerError(m.id, err))
-          )
-          return
-        }
-        const verdict = checkAccess('req', m.method, m.args)
-        if (verdict.kind === 'threw') {
-          socket.sendTunnelText(handlerError(m.id, verdict.err))
-          return
-        }
-        if (verdict.kind === 'malformed') {
-          console.warn(`[relay-host] access returned a malformed decision on req ${m.method}; refused`)
-          socket.sendTunnelText(JSON.stringify({ t: 'res', id: m.id, ok: false, error: { code: 'E_ROLE', message: ACCESS_CHECK_FAILED } }))
-          return
-        }
-        const decision = verdict.decision
-        if (!decision.allow) {
-          socket.sendTunnelText(JSON.stringify({ t: 'res', id: m.id, ok: false, error: { code: 'E_ROLE', message: decision.message } }))
-          return
-        }
-        const args = decision.args ?? m.args
-        // Board-log read/append naming a project outside this session's scope: refuse WITHOUT
-        // dispatching (the host router never resolves it), degrading exactly as an unknown project.
-        // Checked before the generic jail so these two keep their established degraded shape.
-        if (
-          (m.method === IPC.boardLogAppend || m.method === IPC.boardLogRead) &&
-          boardLogOutOfScope(args[0])
-        ) {
-          socket.sendTunnelText(JSON.stringify(boardLogRefusal(m.method, m.id)))
-          return
-        }
-        if (projectOutOfScope(m.method, args)) {
-          socket.sendTunnelText(JSON.stringify(projectScopeRefusal(m.method, m.id)))
-          return
-        }
-        const id = clientId
-        let pending: Promise<RpcOk | RpcErr>
-        try {
-          pending = opts.attach.dispatch(id, { ...m, args })
-        } catch (err) {
-          socket.sendTunnelText(handlerError(m.id, err))
-          return
-        }
-        void pending.then(
-          (res) => respond(m.id, () => narrowResponse(m.method, scopeResponse(m.method, res))),
-          (err) => socket.sendTunnelText(handlerError(m.id, err))
-        )
-      } else if (m.t === 'cast') {
-        // A cast has no reply channel: a policy that throws or cannot decide DROPS it — and says so,
-        // because a silently dropped pty:write swallows keystrokes with nothing in any log (the same
-        // reason both platforms log a throwing cast listener).
-        const verdict = checkAccess('cast', m.method, m.args)
-        if (verdict.kind === 'threw') {
-          console.warn(`[relay-host] access threw on cast ${m.method}:`, errorMessage(verdict.err))
-          return
-        }
-        if (verdict.kind === 'malformed') {
-          console.warn(`[relay-host] access returned a malformed decision on cast ${m.method}; dropped`)
-          return
-        }
-        const d = verdict.decision
-        if (!d.allow) return
-        const args = d.args ?? m.args
-        if (projectOutOfScope(m.method, args)) return
-        // Board-log subscribe/unsubscribe: scope-jail out-of-scope projects, and track this
-        // connection's net per-project count so a dropped guest's watch is released in detach().
-        if (m.method === IPC.boardLogSubscribe || m.method === IPC.boardLogUnsubscribe) {
-          const projectId = args[0]
-          if (typeof projectId !== 'string' || boardLogOutOfScope(projectId)) return
-          if (m.method === IPC.boardLogSubscribe) {
-            boardLogSubs.set(projectId, (boardLogSubs.get(projectId) ?? 0) + 1)
-          } else {
-            const cur = boardLogSubs.get(projectId) ?? 0
-            if (cur <= 0) return // this connection holds no such watch — never decrement the shared count
-            if (cur === 1) boardLogSubs.delete(projectId)
-            else boardLogSubs.set(projectId, cur - 1)
-          }
-        }
-        opts.attach.cast(clientId, m.method, args)
-      }
       // res/ev from a peer are ignored (mirrors src/server/ws.ts).
+      if (m.t === 'req' || m.t === 'cast') serve(m)
     },
     onClose: () => {
       // The peer is GONE — the same state a closed browser tab leaves the core in. Mark the session
@@ -567,6 +614,7 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
       // must then bail — never attach the peer to this dead socket, and never reach the wrapSink
       // fail-closed path that would fire onClose a second time (R13).
       closed = true
+      held.length = 0
       live.delete(session)
       detach()
       opts.onClose()

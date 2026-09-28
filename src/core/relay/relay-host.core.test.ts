@@ -1,6 +1,6 @@
 // src/core/relay/relay-host.core.test.ts
 import { describe, it, expect, vi } from 'vitest'
-import { connectRelayHost, killRelayHostsByPeerKey, type PeerAttach, type RelayHostSession } from './relay-host'
+import { connectRelayHost, killRelayHostsByPeerKey, HELD_FRAMES_MAX, type PeerAttach, type RelayHostSession } from './relay-host'
 import { connectRelayClient } from './relay-client'
 import { transportPair } from './transport-pair'
 import { genKeyPair, publicKeyToB64 } from './e2ee'
@@ -530,5 +530,189 @@ describe('core relay host — review round 2 (cast logging, R12 malformed decisi
     expect(t.counts.hostOpened).toBe(0)
     expect(t.host.clientId()).toBeNull()
     expect(t.counts.hostClosed).toBe(1)
+  })
+})
+
+describe('core relay host — frames between approval and open are held, not refused (R24)', () => {
+  /** Both ends auto-approve; the host's pin write is finished by hand. `onApproved` runs on the
+   *  CLIENT, which opens before the host while the host's pin write is in flight. */
+  function openWithSlowPin(onApproved: (c: ReturnType<typeof connectRelayClient>) => void = () => {}) {
+    const hostKeys = genKeyPair()
+    const { hostT, peerT } = transportPair()
+    const fa = fakeAttach()
+    const frames: string[] = []
+    const counts = { hostOpened: 0, hostClosed: 0, clientClosed: 0, records: 0, clientApproved: 0 }
+    let finishPin!: () => void
+    const host = connectRelayHost({
+      url: 'ws://127.0.0.1/x', token: 't', ourKeys: hostKeys, attach: fa.attach, transport: hostT,
+      autoApprove: () => true,
+      pins: { record: () => { counts.records++; return new Promise<void>((r) => { finishPin = r }) } },
+      onPeerPending: () => {}, onOpen: () => counts.hostOpened++, onClose: () => counts.hostClosed++
+    })
+    const client: ReturnType<typeof connectRelayClient> = connectRelayClient({
+      url: 'ws://127.0.0.1/x', token: 't', hostKeyB64: publicKeyToB64(hostKeys.publicKey), ourKeys: genKeyPair(),
+      transport: peerT, autoApprove: true, onSas: () => {},
+      onApproved: (s) => { counts.clientApproved++; onApproved(s as ReturnType<typeof connectRelayClient>) },
+      onFrame: (j) => frames.push(j), onPtyData: () => {}, onClose: () => counts.clientClosed++
+    })
+    const res = (id: number) => frames.map((f) => JSON.parse(f)).find((m) => m.t === 'res' && m.id === id)
+    return { host, client, fa, frames, res, counts, finishPin: () => finishPin() }
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 20))
+
+  it('a request sent at the client’s onApproved, during a slow pin, is answered after open — not refused', async () => {
+    const t = openWithSlowPin((c) => {
+      c.send(JSON.stringify({ t: 'req', id: 1, method: 'first', args: [] }))
+    })
+    await vi.waitFor(() => expect(t.counts.clientApproved).toBe(1))
+    expect(t.counts.records).toBe(1) // the host's pin write is in flight
+    await settle()
+    expect(t.res(1)).toBeUndefined() // held: neither refused nor served before open
+    expect(t.fa.dispatched).toEqual([])
+    t.finishPin()
+    await vi.waitFor(() => expect(t.res(1)).toMatchObject({ ok: true, result: 'ok' }))
+    expect(t.counts.hostOpened).toBe(1)
+  })
+
+  it('held frames run in arrival order, through the same access path as live ones', async () => {
+    const seen: string[] = []
+    const hostKeys = genKeyPair()
+    const { hostT, peerT } = transportPair()
+    const fa = fakeAttach()
+    const frames: string[] = []
+    let finishPin!: () => void
+    let approved = false
+    let opened = false
+    connectRelayHost({
+      url: 'ws://127.0.0.1/x', token: 't', ourKeys: hostKeys, attach: fa.attach, transport: hostT,
+      autoApprove: () => true,
+      pins: { record: () => new Promise<void>((r) => { finishPin = r }) },
+      hooks: {
+        access: (_s, kind, method) => {
+          seen.push(`${kind}:${method}`)
+          return method === 'refused' ? { allow: false, message: 'no' } : { allow: true }
+        }
+      },
+      onPeerPending: () => {}, onOpen: () => { opened = true }, onClose: () => {}
+    })
+    const client = connectRelayClient({
+      url: 'ws://127.0.0.1/x', token: 't', hostKeyB64: publicKeyToB64(hostKeys.publicKey), ourKeys: genKeyPair(),
+      transport: peerT, autoApprove: true, onSas: () => {}, onApproved: () => { approved = true },
+      onFrame: (j) => frames.push(j), onPtyData: () => {}, onClose: () => {}
+    })
+    await vi.waitFor(() => expect(approved).toBe(true))
+    client.send(JSON.stringify({ t: 'req', id: 1, method: 'a', args: [] }))
+    client.send(JSON.stringify({ t: 'cast', method: 'b', args: [] }))
+    client.send(JSON.stringify({ t: 'req', id: 2, method: 'refused', args: [] }))
+    client.send(JSON.stringify({ t: 'req', id: 3, method: 'c', args: [] }))
+    await settle()
+    expect(seen).toEqual([]) // nothing is judged, let alone served, before open
+    finishPin()
+    await vi.waitFor(() => expect(frames.some((f) => JSON.parse(f).id === 3)).toBe(true))
+    expect(opened).toBe(true)
+    expect(seen).toEqual(['req:a', 'cast:b', 'req:refused', 'req:c'])
+    expect(fa.dispatched.map((r) => r.method)).toEqual(['a', 'c'])
+    expect(fa.casts).toEqual([{ method: 'b', args: [] }])
+    expect(frames.map((f) => JSON.parse(f)).find((m) => m.id === 2)).toMatchObject({ ok: false, error: { code: 'E_ROLE' } })
+  })
+
+  it('the held queue is dropped when the peer drops before open', async () => {
+    const t = openWithSlowPin((c) => {
+      c.send(JSON.stringify({ t: 'req', id: 1, method: 'x', args: [] }))
+      c.send(JSON.stringify({ t: 'cast', method: 'y', args: [] }))
+    })
+    await vi.waitFor(() => expect(t.counts.clientApproved).toBe(1))
+    t.client.close()
+    t.finishPin()
+    await settle()
+    expect(t.fa.dispatched).toEqual([])
+    expect(t.fa.casts).toEqual([])
+    expect(t.fa.sinks.size).toBe(0)
+    expect(t.counts.hostOpened).toBe(0)
+  })
+
+  it('the held queue is dropped when the shell closes the session before open', async () => {
+    const t = openWithSlowPin((c) => {
+      c.send(JSON.stringify({ t: 'req', id: 1, method: 'x', args: [] }))
+    })
+    await vi.waitFor(() => expect(t.counts.clientApproved).toBe(1))
+    t.host.close()
+    t.finishPin()
+    await settle()
+    expect(t.fa.dispatched).toEqual([])
+    expect(t.counts.hostOpened).toBe(0)
+    expect(t.counts.hostClosed).toBe(0) // the shell asked for this close
+  })
+
+  it('an overflowing queue closes the session (and tells the shell once); nothing is served', async () => {
+    const t = openWithSlowPin((c) => {
+      for (let i = 0; i <= HELD_FRAMES_MAX; i++) c.send(JSON.stringify({ t: 'cast', method: 'flood', args: [i] }))
+    })
+    await vi.waitFor(() => expect(t.counts.clientApproved).toBe(1))
+    await vi.waitFor(() => expect(t.counts.hostClosed).toBe(1))
+    expect(t.counts.clientClosed).toBe(1)
+    t.finishPin()
+    await settle()
+    expect(t.fa.casts).toEqual([])
+    expect(t.fa.sinks.size).toBe(0)
+    expect(t.counts.hostOpened).toBe(0)
+    expect(t.counts.hostClosed).toBe(1)
+  })
+
+  it('exactly HELD_FRAMES_MAX held frames is not an overflow', async () => {
+    const t = openWithSlowPin((c) => {
+      for (let i = 0; i < HELD_FRAMES_MAX; i++) c.send(JSON.stringify({ t: 'cast', method: 'burst', args: [i] }))
+    })
+    await vi.waitFor(() => expect(t.counts.clientApproved).toBe(1))
+    t.finishPin()
+    await vi.waitFor(() => expect(t.fa.casts).toHaveLength(HELD_FRAMES_MAX))
+    expect(t.fa.casts.map((c) => c.args[0])).toEqual([...Array(HELD_FRAMES_MAX).keys()])
+    expect(t.counts.hostClosed).toBe(0)
+  })
+
+  it('a request before approval is still refused E_UNAUTHORIZED, never held', async () => {
+    const hostKeys = genKeyPair()
+    const { hostT, peerT } = transportPair()
+    const fa = fakeAttach()
+    let opened = false
+    connectRelayHost({
+      url: 'ws://127.0.0.1/x', token: 't', ourKeys: hostKeys, attach: fa.attach, transport: hostT,
+      onPeerPending: () => {}, onOpen: () => { opened = true }, onClose: () => {}
+    })
+    const frames: string[] = []
+    const peer = connectRelay({
+      url: 'ws://127.0.0.1/x', token: 't', role: 'client', ourKeys: genKeyPair(),
+      theirPubB64: publicKeyToB64(hostKeys.publicKey), transport: peerT,
+      onReady: () => {}, onRpc: () => {}, onFrame: () => {}, onClose: () => {},
+      onTunnel: (kind, payload) => { if (kind === 'text') frames.push(new TextDecoder().decode(payload)) }
+    })
+    peer.sendTunnelText(JSON.stringify({ t: 'req', id: 1, method: 'x', args: [] }))
+    await vi.waitFor(() => expect(frames.length).toBe(1))
+    expect(JSON.parse(frames[0])).toMatchObject({ id: 1, ok: false, error: { code: 'E_UNAUTHORIZED' } })
+    expect(fa.dispatched).toEqual([])
+    expect(opened).toBe(false)
+  })
+})
+
+describe('core relay client — a confirm made before the client holds its socket (R29)', () => {
+  it('a human confirm inside onSas (in-process: before the socket exists) still reaches the host', async () => {
+    const hostKeys = genKeyPair()
+    const { hostT, peerT } = transportPair()
+    const opened: string[] = []
+    let hostSession!: RelayHostSession
+    connectRelayHost({
+      url: 'ws://127.0.0.1/x', token: 't', ourKeys: hostKeys, attach: fakeAttach().attach, transport: hostT,
+      onPeerPending: (s) => { hostSession = s }, onOpen: () => opened.push('host'), onClose: () => {}
+    })
+    connectRelayClient({
+      url: 'ws://127.0.0.1/x', token: 't', hostKeyB64: publicKeyToB64(hostKeys.publicKey), ourKeys: genKeyPair(),
+      transport: peerT, autoApprove: false,
+      onSas: (s) => s.confirm(), // synchronous: over this transport, connectRelay has not returned yet
+      onApproved: () => opened.push('peer'), onFrame: () => {}, onPtyData: () => {}, onClose: () => {}
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(opened).toEqual([]) // the host's human has not answered
+    hostSession.confirm()
+    await vi.waitFor(() => expect(opened.sort()).toEqual(['host', 'peer']))
   })
 })

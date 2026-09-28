@@ -90,8 +90,8 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
   let socket: RelaySocket | null = null
   // Everything that can happen in that window and needs the socket is settled right after
   // `connectRelay` returns (see the end of this function):
-  //   - our auto-approve confirm: sent inside onReady it would ride `socket?.` into nothing, the host
-  //     would never hear it, and a pinned reconnect would never open;
+  //   - our confirm, auto-approved or a human's made inside `onSas`: sent inside onReady it would
+  //     ride `socket?.` into nothing, the host would never hear it, and nothing would open there;
   //   - tunnel frames and the close: the host may answer inside its own onReady (a denial, its own
   //     confirm) and even close. Such a frame cannot pass peerKeyIntact() without a socket to read the
   //     live key from, so it is HELD here, in arrival order, and replayed through the same path.
@@ -111,7 +111,16 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
   const session: RelayClientSession = {
     sas: () => gate?.sas() ?? null,
     peerKeyB64: () => gate?.peerKeyB64() ?? null,
-    confirm: () => gate?.confirmHere(),
+    confirm: () => {
+      // A confirm made before we hold our socket (in-process, `onSas` runs inside connectRelay)
+      // would latch OUR half while its frame went nowhere: this side then opens on the host's
+      // confirm and the host never does. Defer it exactly like the auto-approve one.
+      if (!socket) {
+        if (gate) confirmOwed = true
+        return
+      }
+      gate?.confirmHere()
+    },
     send: (json) => {
       if (!opened || closed || !socket) return false
       return socket.sendTunnelText(json)
@@ -142,7 +151,8 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
     opts.onApproved(session)
   }
 
-  /** Our auto-approve confirm (never a human's): sent only once `socket` exists, see `confirmOwed`. */
+  /** Our owed confirm (the auto-approve one, or a human's made before the socket existed): sent
+   *  only once `socket` exists, see `confirmOwed`. */
   const autoConfirm = (): void => {
     if (!closed) gate?.confirmHere()
   }

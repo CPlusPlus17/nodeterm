@@ -75,6 +75,12 @@ export interface TrustGate {
    */
   onTunnelText(json: string): boolean
   /**
+   * Both humans confirmed. Latched the moment the second confirm arrives, BEFORE the pin write and
+   * `onOpen`: true while the pin is still in flight, and it never goes back to false. A host uses it
+   * to tell "approved, opening" (hold the peer's frames) from "not approved" (refuse them).
+   */
+  isApproved(): boolean
+  /**
    * Both humans confirmed → the pin attempt has settled and `onOpen` has fired. True exactly when
    * `onOpen` has run: never while the pin write is still in flight.
    */
@@ -168,6 +174,7 @@ export function createTrustGate(opts: TrustGateOptions): TrustGate {
       settle()
       return true // consumed: a trust frame is NEVER forwarded to the RPC dispatcher
     },
+    isApproved: () => approved,
     isOpen: () => opened,
     peerKeyB64: () => opts.peerKeyB64
   }
