@@ -1,0 +1,122 @@
+// The headless launcher (#925): start a node's session with no viewer and deliver its launch
+// command exactly the way a mounted terminal does — settle, prove a shell owns the pane, then the
+// echo-verified writer (@shared/command-delivery). The desktop runs it for canvas-control
+// `--run-now` / `run`; the Server Edition runs it for every immediate open.
+//
+// Never a blind paste: zsh's rc/ZLE setup FLUSHES the tty (#556) and a canonical-mode line is cut
+// at the tty's cap (#706). A tmux paste is not immune to either, which is why the desktop rule
+// "launches use the echo-verified writer, not sendText" now covers this path too.
+import { deliverCommand, type DeliveryIo, type DeliveryOutcome } from '../shared/command-delivery'
+import { isLaunchShell } from '../shared/agents/pane'
+import type { HeadlessLaunchRequest, HeadlessLaunchResult } from '../shared/headless-launch'
+import { shellKillLineSequence } from '../shared/shell-kill-line'
+import type { PtyCreateOptions, PtyCreateResult } from '../shared/types'
+
+/** Same numbers as TerminalNode's `whenShellSettled`: 200 ms of quiet after output = prompt is up;
+ *  1500 ms of total silence = write anyway. */
+export const SETTLE_QUIET_MS = 200
+export const SETTLE_CAP_MS = 1500
+
+export interface HeadlessLaunchDeps {
+  persistentSpawnAvailable(): boolean
+  createHeadless(options: PtyCreateOptions): Promise<PtyCreateResult>
+  paneCommand(persistKey: string): Promise<string | null>
+  writeHeadless(persistKey: string, data: string): boolean
+  onOutput(persistKey: string, cb: (chunk: string) => void): () => void
+  releaseHeadless(persistKey: string): void
+  /** Test seam; production uses SETTLE_QUIET_MS / SETTLE_CAP_MS. */
+  timing?: { quietMs: number; capMs: number }
+}
+
+export async function launchHeadless(
+  deps: HeadlessLaunchDeps,
+  req: HeadlessLaunchRequest
+): Promise<HeadlessLaunchResult> {
+  const key = req.ptyOptions.persistKey
+  if (!key) return { outcome: 'failed', reason: 'spawn-failed' }
+  if (req.requirePersistent && !deps.persistentSpawnAvailable()) {
+    return { outcome: 'failed', reason: 'not-persistent' }
+  }
+  let created: PtyCreateResult
+  try {
+    created = await deps.createHeadless(req.ptyOptions)
+  } catch {
+    return { outcome: 'failed', reason: 'spawn-failed' }
+  }
+  if (!created.sessionId) return { outcome: 'failed', reason: 'spawn-failed' }
+  const fresh = created.fresh
+  try {
+    if (created.unavailable) return { outcome: 'failed', reason: 'spawn-failed', fresh }
+    // The probe above can be stale by the time the spawn lands (tmux switched off in between), and
+    // a plain shell dies with the client this launcher is about to release — typing a launch into
+    // it would start an agent only to kill it. `persistent` absent = an older core, persistent by
+    // the field's own contract (`PtyCreateResult.persistent`, and `trustsFreshShell` reads it so).
+    if (req.requirePersistent && created.persistent === false) {
+      return { outcome: 'failed', reason: 'not-persistent', fresh }
+    }
+    if (fresh) await settle(deps, key)
+    let pane: string | null
+    try {
+      pane = await deps.paneCommand(key)
+    } catch {
+      pane = null
+    }
+    // Unknown is not a shell: an un-typed launch is recoverable (Run now), a spliced one is not.
+    if (!isLaunchShell(pane)) return { outcome: 'failed', reason: 'no-shell', fresh }
+    const killLine = shellKillLineSequence(undefined, req.ptyOptions.shell)
+    const outcome = await deliver(deps, key, req.command, killLine, !fresh)
+    return outcome === 'submitted'
+      ? { outcome: 'delivered', fresh }
+      : { outcome: 'failed', reason: outcome, fresh }
+  } finally {
+    if (req.release) deps.releaseHeadless(key)
+  }
+}
+
+function settle(deps: HeadlessLaunchDeps, key: string): Promise<void> {
+  const quietMs = deps.timing?.quietMs ?? SETTLE_QUIET_MS
+  const capMs = deps.timing?.capMs ?? SETTLE_CAP_MS
+  return new Promise((resolve) => {
+    let done = false
+    let unsub: (() => void) | undefined
+    const finish = (): void => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      unsub?.()
+      resolve()
+    }
+    let timer = setTimeout(finish, capMs)
+    unsub = deps.onOutput(key, () => {
+      if (done) return
+      clearTimeout(timer)
+      timer = setTimeout(finish, quietMs)
+    })
+  })
+}
+
+function deliver(
+  deps: HeadlessLaunchDeps,
+  key: string,
+  command: string,
+  killLine: string,
+  clearFirst: boolean
+): Promise<DeliveryOutcome> {
+  return new Promise((resolve) => {
+    const io: DeliveryIo = {
+      write: (data) => {
+        // A refused write means client 0 no longer holds the session: end the delivery (cancelled)
+        // rather than keep typing into nothing.
+        if (!deps.writeHeadless(key, data)) throw new Error('headless write refused')
+      },
+      onData: (cb) => deps.onOutput(key, cb)
+    }
+    try {
+      // A live session may hold a half-typed line; start clean, as the manual Run now path does.
+      if (clearFirst) io.write(killLine)
+      deliverCommand(io, command, resolve, { killLine })
+    } catch {
+      resolve('cancelled')
+    }
+  })
+}
