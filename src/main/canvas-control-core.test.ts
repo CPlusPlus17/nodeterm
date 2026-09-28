@@ -93,6 +93,45 @@ describe('parseControlRequest', () => {
     }
   })
 
+  it('both bodies document --run-now: headless start, reply shape, closed-tab exception (#925)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      expect(body, name).toMatch(/`--run-now`/)
+      expect(body, name).toMatch(/LAST on the line/)
+      expect(body, name).toContain('`--run-now=1`')
+      expect(body, name).toContain('startedIds')
+      expect(body, name).toMatch(/tab restored\s+\(not\s+switched\s+to\)/)
+      expect(body, name).toMatch(/`--run-now` cannot be\s+combined with `--after`/)
+      expect(body, name).toMatch(/keeps its Run now/)
+      // The pre-existing contract survives next to the new flag.
+      expect(body, name).toMatch(/not reopened/i)
+      expect(body, name).toMatch(/starts when the user next views/)
+      expect(body, name).not.toMatch(/without switching/)
+    }
+  })
+
+  it('both bodies state the run / --run-now edges the implementation actually has (#925)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      // `run` skips an `--after` wait only off screen or on a mounted node: an on-screen node whose
+      // terminal is not mounted, armed or failed, is refused — the mount will not fire it.
+      expect(body, name).toContain('`run-not-mounted`')
+      expect(body, name).not.toMatch(/and it skips an `--after` wait/)
+      // An SSH project's node cannot start headless: it stays queued with that reason.
+      expect(body, name).toContain('`remote-unsupported`')
+      // `list` prints STARTING while a headless start is in flight, and says not to run it again.
+      expect(body, name).toMatch(/`list` names QUEUED, STARTING,/)
+      expect(body, name).toMatch(/STARTING means a background start is in flight/)
+      // The Server Edition: --run-now is a no-op there, and `run` is creator-owned.
+      expect(body, name).toMatch(/On the Server\s+Edition `--run-now` changes\s+nothing \(opens start at once\)/)
+      expect(body, name).toMatch(/`run` reaches only\s+nodes you opened during this server run/)
+    }
+  })
+
   it('requires a source for show verbs', () => {
     expect(parseControlRequest('show-video', {})).toEqual({ error: 'show-video requires --path' })
     expect(parseControlRequest('show-web', {})).toEqual({
