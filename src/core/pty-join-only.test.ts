@@ -14,6 +14,8 @@ import type { PtyCreateOptions, PtyCreateResult } from '../shared/types'
 
 /** One fake pty per spawn, recorded so a test can assert "exactly one spawn" and push output. */
 interface FakePty {
+  /** The argv the pty was spawned with — the tmux attach flags are asserted from it. */
+  args: string[]
   onDataCb?: (d: string) => void
   onExitCb?: (e: { exitCode: number }) => void
   writes: string[]
@@ -29,8 +31,8 @@ vi.mock('./session-host-backend', async () =>
 )
 
 vi.mock('node-pty', () => ({
-  spawn: (_file: string, _args: string[], _opts: unknown) => {
-    const p: FakePty = { writes: [], resizes: [], killed: false }
+  spawn: (_file: string, args: string[], _opts: unknown) => {
+    const p: FakePty = { args: [...(args ?? [])], writes: [], resizes: [], killed: false }
     spawned.push(p)
     return {
       onData: (cb: (d: string) => void) => {
@@ -57,6 +59,22 @@ vi.mock('./pty-devices', async (importOriginal) => ({
   readPtyDevices: () => ({ ceiling: 511, inUse: 8 })
 }))
 
+// The SSH cases never run a real `ssh`: with no ssh executable the only thing a create that gets
+// PAST the join-only gate can do is spawn (a local plain shell here), which is exactly what those
+// tests must not see. Every other executable lookup is the real one.
+vi.mock('./exec-path', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./exec-path')>()
+  return {
+    ...real,
+    findExecutableSync: (bin: string, fallbacks?: string[]) =>
+      bin === 'ssh' ? null : real.findExecutableSync(bin, fallbacks)
+  }
+})
+vi.mock('./remote-ssh/agent-probe', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./remote-ssh/agent-probe')>()),
+  probeAgentSockToPin: async () => undefined
+}))
+
 const OWNER = 1
 const VIEWER = 2
 
@@ -73,31 +91,74 @@ afterEach(() => {
   resetPlatformForTests()
 })
 
+type ConfirmedProcessRun = (file: string, args: readonly string[], opts?: object) => Promise<unknown>
+
 /** The default manager: no tmux (init() never runs in unit tests), so a session is a plain shell. */
-async function manager() {
+async function manager(deps: { confirmedProcessRun?: ConfirmedProcessRun } = {}) {
   const { PtyManager } = await import('./pty-manager')
-  const m = new PtyManager()
+  const m = new PtyManager(deps)
   m.registerIpc()
   return m
 }
 
 /**
- * A manager whose sessions are tmux-BACKED, with the `has-session` probe answering `exists`. The
- * tmux path is forced (as pty-coattach.test.ts does) and every tmux subprocess the spawn path would
- * run is stubbed, so no real tmux socket is touched.
+ * What `tmux has-session` does for this node: the session is there, tmux says it is not (its own
+ * exit 1), or the probe could not run at all (EAGAIN under a bulk load, a timeout).
  */
-async function tmuxManager(exists: boolean) {
-  const m = await manager()
+type Probe = 'present' | 'absent' | 'error'
+
+/**
+ * `tmux has-session -t <target>` against a set of live session names, the way tmux 3.4 resolves
+ * the target (measured): `=name` matches exactly; a bare name falls through to PREFIX matching on
+ * a miss, so `nt-n1` "exists" while only `nt-n12` is alive.
+ */
+function hasSession(live: string[], args: readonly string[]): boolean {
+  const target = args[args.indexOf('-t') + 1] ?? ''
+  if (target.startsWith('=')) return live.includes(target.slice(1))
+  return live.some((s) => s === target || s.startsWith(target))
+}
+
+/**
+ * A manager whose sessions are tmux-BACKED. The tmux path is forced (as pty-coattach.test.ts does)
+ * and both existence probes answer from `probe` without touching a tmux socket:
+ *  - the STRICT one through the injected process runner, which emulates `has-session` (above) and
+ *    rejects the way `execFile` does — `code: 1` for tmux's own "no session", `code: 'EAGAIN'` for
+ *    a probe that could not run;
+ *  - the FOLDED warm/cold one (`tmuxSessionExists`, a bare target) stubbed to what the real one
+ *    answers: only tmux's own exit 1 is absence, so a failed probe reads as "exists".
+ */
+async function tmuxManager(probe: Probe, live: string[] = probe === 'present' ? ['nt-n1'] : []) {
+  const confirmedProcessRun: ConfirmedProcessRun = async (_file, args) => {
+    if (probe === 'error')
+      throw Object.assign(new Error('spawn EAGAIN'), { code: 'EAGAIN' })
+    if (hasSession(live, args)) return { stdout: '', stderr: '' }
+    throw Object.assign(new Error("can't find session"), { code: 1 })
+  }
+  const m = await manager({ confirmedProcessRun })
   ;(m as unknown as { tmuxPath: string }).tmuxPath = '/usr/bin/tmux'
   vi.spyOn(
     m as unknown as { tmuxSessionExists: (k: string) => Promise<boolean> },
     'tmuxSessionExists'
-  ).mockResolvedValue(exists)
+  ).mockImplementation(async (k: string) =>
+    probe === 'error' ? true : hasSession(live, ['-t', `nt-${k}`])
+  )
   // The warm-reattach stale-cwd probe runs `tmux display-message`; answer "not stale".
   vi.spyOn(
     m as unknown as { paneCwdStale: (k: string) => Promise<boolean> },
     'paneCwdStale'
   ).mockResolvedValue(false)
+  return m
+}
+
+const SSH_REMOTE = { controlPath: '/tmp/nt-test-cm', conn: { host: 'h', user: 'u' }, remoteCwd: '/srv/app' }
+
+/** A manager whose REMOTE freshness read answers `verdict` (see remote-session-index.ts). */
+async function sshManager(verdict: 'present' | 'absent' | 'unknown') {
+  const m = await manager()
+  vi.spyOn(
+    m as unknown as { remoteSessionVerdict: () => Promise<string> },
+    'remoteSessionVerdict'
+  ).mockResolvedValue(verdict)
   return m
 }
 
@@ -123,7 +184,7 @@ describe('joinOnly: a viewer may watch a terminal but never start one', () => {
   })
 
   it('refuses when tmux says the session is gone, and spawns no tmux client', async () => {
-    await tmuxManager(false)
+    await tmuxManager('absent')
     expect(await create(VIEWER, { joinOnly: true })).toEqual(REFUSED)
     expect(spawned).toHaveLength(0)
   })
@@ -153,7 +214,7 @@ describe('joinOnly: a viewer may watch a terminal but never start one', () => {
   })
 
   it('warm-reattaches a tmux session that is still running', async () => {
-    await tmuxManager(true)
+    await tmuxManager('present')
     const res = await create(VIEWER, { joinOnly: true })
     expect(res.unavailable).toBeUndefined()
     expect(res.sessionId).not.toBe('')
@@ -168,6 +229,65 @@ describe('joinOnly: a viewer may watch a terminal but never start one', () => {
     expect(a.sessionId).not.toBe('')
     expect(a.fresh).toBe(true)
     expect(spawned).toHaveLength(1)
+  })
+
+  // The folded warm/cold probe answers "exists" when tmux could not be asked, because for the
+  // OWNER that is the safe fold (never type a resume into a live pane). For a viewer it is the
+  // unsafe one: "exists" sends it on to `new-session -A`, which CREATES the session if it was
+  // really gone — and then the owner's next open reads `fresh:false` and skips its cold restore.
+  it('refuses when the tmux probe could not run (EAGAIN), and spawns nothing', async () => {
+    await tmuxManager('error')
+    expect(await create(VIEWER, { joinOnly: true })).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+  })
+
+  it('refuses when there is no tmux to ask at all (the binary cannot be executed)', async () => {
+    // No stubs: both probes run for real against a path that does not exist (spawn ENOENT).
+    const m = await manager()
+    ;(m as unknown as { tmuxPath: string }).tmuxPath = '/nonexistent/nodeterm-test/tmux'
+    expect(await create(VIEWER, { joinOnly: true })).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+  })
+
+  // App-minted node ids share a prefix and differ in a trailing counter (`term-abc-1`,
+  // `term-abc-12`). tmux resolves a BARE target by prefix on a miss, while `new-session -A -s`
+  // matches exactly — so a bare probe would read `nt-n1` as alive and the attach would create it.
+  it('refuses when only a session whose name EXTENDS this one is alive (exact-target probe)', async () => {
+    await tmuxManager('absent', ['nt-n12'])
+    expect(await create(VIEWER, { joinOnly: true, persistKey: 'n1' })).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+  })
+
+  it('refuses an SSH node whose host could not be read (verdict unknown)', async () => {
+    await sshManager('unknown')
+    expect(await create(VIEWER, { joinOnly: true, sshRemote: SSH_REMOTE })).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+  })
+
+  it('refuses an SSH node whose host says the session is gone', async () => {
+    await sshManager('absent')
+    expect(await create(VIEWER, { joinOnly: true, sshRemote: SSH_REMOTE })).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+  })
+
+  // `-D` detaches every OTHER tmux client of the session on attach: the user's own
+  // `tmux -L node-terminal attach`, another app on the same socket. A watch-only view must mirror
+  // them, the way a relay-served pty does (`tmuxAttachFlags`), never kick them off.
+  it('a join-only warm reattach does not detach other tmux clients (no -D)', async () => {
+    await tmuxManager('present')
+    await create(VIEWER, { joinOnly: true })
+    expect(spawned).toHaveLength(1)
+    const argv = spawned[0].args
+    expect(argv).toContain('new-session')
+    expect(argv).toContain('-A')
+    expect(argv).not.toContain('-D')
+  })
+
+  it('control: the owner\'s warm reattach still takes the session over (-D)', async () => {
+    await tmuxManager('present')
+    await create(OWNER, {})
+    expect(spawned).toHaveLength(1)
+    expect(spawned[0].args).toContain('-D')
   })
 
   it('an absent joinOnly still spawns (the non-viewer path is unchanged)', async () => {
@@ -222,11 +342,23 @@ describe('sizeVote: false — a viewer never constrains the shared pty size', ()
     expect(spawned[0].resizes).toEqual([])
   })
 
+  // The same subscriber key can join twice: a renderer reload re-joins under the same ClientId,
+  // and so does a client whose role changed from editor to viewer. Its earlier vote must not
+  // survive the re-join that says it no longer votes.
+  it('a re-join as a non-voter withdraws the vote the same view held before', async () => {
+    await manager()
+    await create(OWNER, { cols: 120, rows: 40 })
+    await create(VIEWER, { cols: 60, rows: 20 }) // an editor: votes, the pty shrinks
+    expect(spawned[0].resizes.at(-1)).toEqual({ cols: 60, rows: 20 })
+    await create(VIEWER, { cols: 60, rows: 20, sizeVote: false }) // same view, now watch-only
+    expect(spawned[0].resizes.at(-1)).toEqual({ cols: 120, rows: 40 })
+  })
+
   it('a viewer that warm-reattached holds no vote once the owner joins', async () => {
     // The viewer's create is the first in this process, so it SPAWNS the tmux client (at its own
     // grid — the pty needs some size). That must not seed a vote: when the owner then co-attaches,
     // the pty takes the owner's size instead of staying pinned at the viewer's small window.
-    await tmuxManager(true)
+    await tmuxManager('present')
     const v = await create(VIEWER, { cols: 40, rows: 10, joinOnly: true, sizeVote: false })
     expect(v.fresh).toBe(false)
     const a = await create(OWNER, { cols: 120, rows: 40 })

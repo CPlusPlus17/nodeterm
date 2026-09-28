@@ -752,11 +752,13 @@ export interface DetachedSinks {
  * subscribes to the existing `Session` in this process — it does NOT start a second tmux client.
  * The app therefore always has exactly ONE tmux client per session, so tmux's own multi-client
  * size negotiation never engages and "smallest subscriber wins" is decided by us (pty-size.ts).
- * A relay-served (detached) pty is the one exception: the host's local client is already attached
- * to the same session and must be mirrored, not kicked off.
+ * A relay-served (detached) pty is one exception: the host's local client is already attached
+ * to the same session and must be mirrored, not kicked off. A JOIN-ONLY reattach (a hosted-relay
+ * viewer, `PtyCreateOptions.joinOnly`) is the other: a watch-only view must never detach the
+ * user's own `tmux attach`, another app on the same socket, or a relay-served pty.
  */
-export function tmuxAttachFlags(detached: boolean): string[] {
-  return detached ? ['-A'] : ['-A', '-D']
+export function tmuxAttachFlags(mirror: boolean): string[] {
+  return mirror ? ['-A'] : ['-A', '-D']
 }
 
 // Output coalescing: a fast producer (e.g. `yes`, a verbose build, tmux full-screen
@@ -2149,8 +2151,11 @@ export class PtyManager {
     const size = normalizeSize(options.cols, options.rows)
     // A non-voting view (`sizeVote: false`, a hosted-relay viewer) stays out of the min, exactly
     // like a parked subscriber: it still gets output, and `shown` makes applySize tell it the
-    // authoritative size to render.
+    // authoritative size to render. The same key can arrive here already holding a vote (a
+    // renderer reload re-joins under the same ClientId, and so does a client whose role changed
+    // from editor to viewer), so a non-voting join WITHDRAWS it; applySize below re-derives the size.
     if (options.sizeVote !== false) existing.sizes.set(sub, size)
+    else existing.sizes.delete(sub)
     existing.shown.set(sub, size)
     const before = existing.appliedSize
     this.applySize(existingId, existing)
@@ -2279,19 +2284,33 @@ export class PtyManager {
       ? await this.remoteSessionVerdict(options.sshRemote, sessionName(options.persistKey as string))
       : undefined
     const freshUnverified = remoteVerdict === 'unknown'
+    // A join-only create (hosted-relay viewer) asks the STRICT local question instead of the folded
+    // one: `tmuxSessionExists` answers "exists" when tmux could not be asked, which is the safe fold
+    // for an owner (never type a resume into a live pane) and the unsafe one for a viewer — it sends
+    // the create on to `new-session -A`, which CREATES the session if it was really gone, and the
+    // owner's next open then reads `fresh:false` and skips its cold restore.
+    const joinOnlyLocalVerdict =
+      options.joinOnly && !options.sshRemote && !warmWindowsBackend && tmuxBacked
+        ? await this.strictTmuxVerdict(options.persistKey as string)
+        : undefined
     let fresh = options.sshRemote
       ? remoteVerdict === 'absent'
       : warmWindowsBackend
         ? false
         : tmuxBacked
-        ? !(await this.tmuxSessionExists(options.persistKey as string))
+        ? joinOnlyLocalVerdict
+          ? joinOnlyLocalVerdict === 'absent'
+          : !(await this.tmuxSessionExists(options.persistKey as string))
         : true
-    // A join-only create (hosted-relay viewer) must never start a session: only a reattach to one
-    // that already exists is allowed. `fresh` here is "nothing to reattach to" — and for a node
-    // that would land on the session-host backend it is a placeholder `true` (that backend's
-    // attach-or-create IS its probe, see above), so a join-only create is refused there too rather
-    // than sent a round trip that could create. Fails closed: a viewer never starts anything.
-    if (options.joinOnly && fresh) return { sessionId: '', fresh: false, unavailable: 'join-only' }
+    // A join-only create must never start a session: only a reattach to one we POSITIVELY saw is
+    // allowed. Refused when there is nothing to reattach to (`fresh`) and when we could not tell
+    // (`freshUnverified` for SSH, an unanswered strict probe locally). For a node that would land
+    // on the session-host backend `fresh` is a placeholder `true` (that backend's attach-or-create
+    // IS its probe, see above), so it is refused there too rather than sent a round trip that could
+    // create. Fails closed: a viewer never starts anything. One refusal value for both reasons —
+    // the renderer's sentence claims only that no running terminal was found.
+    if (options.joinOnly && (fresh || freshUnverified || joinOnlyLocalVerdict === 'unknown'))
+      return { sessionId: '', fresh: false, unavailable: 'join-only' }
     // Ensure the login-shell PATH is resolved (prewarmed in init(); usually already settled)
     // so the session env below picks it up — awaiting keeps the event loop free either way.
     await resolveShellPath()
@@ -2670,6 +2689,31 @@ export class PtyManager {
       // the reboot case) is absence; a spawn failure (EAGAIN under a bulk project load) is
       // not, and cold-restoring on it would type into a live session.
       return !probeSaysAbsent(e)
+    }
+  }
+
+  /**
+   * The strict existence probe a JOIN-ONLY create needs, as a tri-state: `unknown` when tmux could
+   * not be asked (a spawn error, a timeout), which such a create must refuse rather than read as
+   * "exists" the way the warm/cold fold (`tmuxSessionExists`) does.
+   *
+   * The target is EXACT (`-t =nt-<id>`), unlike `confirmedTmuxSessionExists`'s bare name. Measured
+   * on tmux 3.4: with only `nt-term-abc-12` alive, `has-session -t nt-term-abc-1` exits 0 (a miss
+   * falls through to fnmatch then PREFIX matching), while `new-session -A -s nt-term-abc-1` matches
+   * exactly and CREATES `nt-term-abc-1`. App-minted ids share a prefix and differ in a trailing
+   * counter, so a bare probe would let a viewer start a session whenever a longer id is alive.
+   */
+  private async strictTmuxVerdict(persistKey: string): Promise<'present' | 'absent' | 'unknown'> {
+    if (!this.tmuxPath) return 'absent'
+    try {
+      await this.confirmedProcessRun(
+        this.tmuxPath,
+        ['-L', TMUX_SOCKET, 'has-session', '-t', `=${sessionName(persistKey)}`],
+        { timeout: PROBE_TIMEOUT_MS }
+      )
+      return 'present'
+    } catch (error) {
+      return probeSaysAbsent(error) ? 'absent' : 'unknown'
     }
   }
 
@@ -3280,7 +3324,8 @@ export class PtyManager {
       // local renderer client (a remount should take sole ownership of its session). A host-served
       // PTY (sinks set) MUST NOT detach others: the host's own local client is attached to the same
       // `nt-<id>` session, and a connecting client should MIRROR it (tmux co-attach), not kick it
-      // off — `-D` there is exactly what showed "[detached]" in every host window on connect.
+      // off — `-D` there is exactly what showed "[detached]" in every host window on connect. A
+      // join-only (watch-only) reattach mirrors for the same reason: see `tmuxAttachFlags`.
       // (tmux sizes a co-attached session to the smallest client — the accepted mirroring tradeoff.)
       // `-e` sets the session environment explicitly (the tmux server is shared, so relying
       // on the client's inherited env would leak the first session's values into later ones).
@@ -3296,7 +3341,8 @@ export class PtyManager {
           '-f',
           this.confPath,
           'attach-session',
-          ...(sinks ? [] : ['-d']),
+          // `-d` detaches other clients, so it follows `tmuxAttachFlags`' mirror rule.
+          ...(sinks || options.joinOnly ? [] : ['-d']),
           '-t',
           sessionName(options.persistKey)
         ]
@@ -3337,7 +3383,7 @@ export class PtyManager {
         ...Object.keys(customEnvMerged),
         ...Object.keys(projectEnv ?? {})
       ])
-      const attachFlags = tmuxAttachFlags(!!sinks)
+      const attachFlags = tmuxAttachFlags(!!sinks || !!options.joinOnly)
       args = [
         '-L',
         TMUX_SOCKET,

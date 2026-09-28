@@ -360,8 +360,9 @@ export interface PtyCreateResult {
    * (§5 property 4). Remote managed Codex accounts refuse unknown/unsafe ids or unresolved/unsafe homes.
    * System SSH Codex may attach before remote home discovery. Nothing spawned on refusal.
    *
-   * `'join-only'`: `PtyCreateOptions.joinOnly` was set (a hosted-relay viewer) and there was no
-   * running session to join or reattach to, so nothing was started. Not a lost connection.
+   * `'join-only'`: `PtyCreateOptions.joinOnly` was set (a hosted-relay viewer) and no running
+   * session could be confirmed to join or reattach to — either it is gone, or its existence could
+   * not be checked — so nothing was started. Not a lost connection.
    */
   unavailable?: 'ssh' | 'codex-account' | 'join-only'
 }
