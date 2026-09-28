@@ -253,6 +253,7 @@ export function ChatPanel({
   // PREVIOUS request and cannot bind the new one. Any read that STARTS later satisfies it.
   const heldReloadQueuedRef = useRef(false)
   const loadRef = useRef<(live?: boolean, rebind?: boolean) => void>(() => {})
+  const requestHeldReloadRef = useRef<() => void>(() => {})
 
   // `live` = a read driven by a hook event while the agent works (see `attemptLive`), as opposed to
   // the first open, the turn-end reload and ↻. A live read is background refresh: it keeps
@@ -365,8 +366,10 @@ export function ChatPanel({
       // has landed (microtask: after its setThread below).
       if (heldReloadQueuedRef.current) {
         heldReloadQueuedRef.current = false
+        // Through the one entry point: a tail read that started meanwhile (and so already captured
+        // the new request) is queued behind, never superseded.
         queueMicrotask(() => {
-          if (rebindForRef.current !== null) loadRef.current(false, true)
+          if (rebindForRef.current !== null) requestHeldReloadRef.current()
         })
       }
     }
@@ -410,6 +413,7 @@ export function ChatPanel({
     if (tailInFlightRef.current || olderInFlightRef.current) heldReloadQueuedRef.current = true
     else loadRef.current(false, true)
   }, [])
+  requestHeldReloadRef.current = requestHeldReload
   // Retries back off (`rebindRetryDelay`), counted per held request: a new one starts over.
   const rebindAttemptRef = useRef(0)
   useEffect(() => {
@@ -420,16 +424,16 @@ export function ChatPanel({
   }, [rebindFor, requestHeldReload]) // eslint-disable-line react-hooks/exhaustive-deps -- `state` is read, not a trigger
   // …and while a card stays on "Updating…" with no read in flight (the reload failed, or the
   // transcript has not caught up), try again: nothing else reads the tail while the agent is
-  // blocked. Only while there IS a card saying so — with none, a reload changes nothing on screen.
-  const hasUpdatingCard = updatingCard !== null
+  // blocked. Also with no card on screen (A answered, B's card not read yet): the reload is quiet,
+  // backs off, and stops by itself once a read under the new request lands.
   useEffect(() => {
-    if (rebindFor === null || tailLoading || !hasUpdatingCard) return
+    if (rebindFor === null || tailLoading) return
     const t = setTimeout(() => {
       rebindAttemptRef.current++
       requestHeldReload()
     }, rebindRetryDelay(rebindAttemptRef.current))
     return () => clearTimeout(t)
-  }, [rebindFor, tailLoading, hasUpdatingCard, requestHeldReload])
+  }, [rebindFor, tailLoading, requestHeldReload])
 
   // Invalidate any in-flight read when the panel goes away.
   useEffect(

@@ -243,15 +243,31 @@ describe('answer card binding', () => {
     expect(pending).toHaveLength(7)
   })
 
-  it('no retry when there is no card to update (nothing on screen would change)', async () => {
+  it('with no card on screen (A answered), a failed reload still retries — quietly, with backoff — until B lands', async () => {
+    const ANSWERED = [planMsg(0, 'Plan A', 'User approved')]
     await hold(A)
     await render()
-    await settle(0, [planMsg(0, 'Plan A', 'User rejected')])
+    await settle(0, ANSWERED)
     await hold(B)
-    expect(pending).toHaveLength(2) // the one forced reload on the change
+    expect(pending).toHaveLength(2) // the forced reload on the change
+    expect(updatingOn()).toEqual([]) // no card to say "Updating…" on
     await fail(1)
+    await advance(CHAT_ANSWER_REBIND_RETRY_MS)
+    expect(pending).toHaveLength(3)
+    await fail(2)
+    await advance(CHAT_ANSWER_REBIND_RETRY_MS) // backed off: the next one waits 4 s
+    expect(pending).toHaveLength(3)
+    await advance(CHAT_ANSWER_REBIND_RETRY_MS)
+    expect(pending).toHaveLength(4)
+    // Silent throughout: the answered thread stays, no "Loading…", no error line.
+    expect(host.textContent).toContain('Plan A')
+    expect(host.textContent).not.toContain('Loading conversation')
+    expect(host.textContent).not.toContain("Couldn't read")
+    // B's card lands: bound, and the retries stop.
+    await settle(3, [...ANSWERED, planMsg(10, 'Plan B')])
+    expect(controlsOn()).toEqual([1])
     await advance(CHAT_ANSWER_REBIND_RETRY_MAX_MS * 2)
-    expect(pending).toHaveLength(2)
+    expect(pending).toHaveLength(4)
   })
 
   it('the rebind reload never cancels an older-page fetch: it waits for it, and the page lands', async () => {
