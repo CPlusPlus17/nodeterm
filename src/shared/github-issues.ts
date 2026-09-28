@@ -40,6 +40,10 @@ export interface GitHubProjectApproval {
   repository: string
   enabled: true
   approvedAt: number
+  /** Digest of the column mapping this approval covers (repository + completion column + column
+   *  labels — see `githubMappingDigest`). Board WRITES require it to match the mapping on disk;
+   *  absent on an approval given before mappings were bound, which therefore allows reads only. */
+  mappingDigest?: string
 }
 
 export interface GitHubControlState {
@@ -215,6 +219,9 @@ export interface GitHubIssuePage {
   readOnly: boolean
   lastSuccessfulRefreshAt?: number
   lastFullReconciliationAt?: number
+  /** The board is read only because this machine has not approved the column mapping now in the
+   *  project file (it changed, or the approval predates mapping approval). */
+  mappingNotApproved?: true
   /** Present while sync for this project's GitHub identity is held by the rate budget. */
   throttle?: GitHubThrottle
 }
@@ -249,6 +256,9 @@ export interface GitHubControlView {
     repository?: string
     detectedRepository?: string
     approved: boolean
+    /** The approval also covers the column mapping now in the project file, so the board may
+     *  write. False while approved means the mapping changed (or predates mapping approval). */
+    mappingApproved?: boolean
   }
 }
 

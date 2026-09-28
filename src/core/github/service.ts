@@ -70,6 +70,10 @@ export interface GitHubIssueProjectContext {
   config: NormalisedProjectKanbanGitHub
   controlRevision: number
   columnColors: Record<string, string>
+  /** This machine approved the column mapping now on disk (see `githubMappingDigest`). Without it
+   *  the board reads but never writes: the mapping decides what a write DOES, and it arrives
+   *  through the git-shared project file. */
+  mappingApproved: boolean
 }
 
 export interface GitHubIssueServiceContext extends GitHubIssueProjectContext {
@@ -371,8 +375,9 @@ export class GitHubIssueService {
         (wantPull && !!state.snapshot?.pullsTruncated),
       // The board never writes a pull request, so its page says so on the wire rather than
       // relying on every consumer to remember.
-      readOnly: wantPull ||
+      readOnly: wantPull || !context.mappingApproved ||
         state.incomplete || !state.snapshot || !context.config.completionColumnId,
+      ...(context.mappingApproved ? {} : { mappingNotApproved: true as const }),
       ...(state.snapshot ? {
         lastSuccessfulRefreshAt: state.snapshot.lastSuccessfulRefreshAt,
         lastFullReconciliationAt: state.snapshot.lastFullReconciliationAt
@@ -407,7 +412,8 @@ export class GitHubIssueService {
         throw error
       }
       const cacheGeneration = state.cacheGeneration
-      if (state.incomplete || !state.snapshot || !captured.config.completionColumnId) {
+      if (!captured.mappingApproved || state.incomplete || !state.snapshot ||
+          !captured.config.completionColumnId) {
         return { status: 'read-only' }
       }
       const target = state.snapshot.issues.find((item) => item.number === request.issueNumber)
@@ -527,7 +533,8 @@ export class GitHubIssueService {
       }
       throw error
     }
-    if (state.incomplete || !captured.config.completionColumnId) {
+    // Label names come from the column mapping, so creating them is a write the mapping drives.
+    if (!captured.mappingApproved || state.incomplete || !captured.config.completionColumnId) {
       return {
         status: 'read-only',
         created: [],

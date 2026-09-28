@@ -7,7 +7,7 @@ import type {
   GitHubRateStatus,
   GitHubThrottle
 } from '../../shared/github-issues'
-import { normaliseProjectKanbanGitHub, parseGitHubRepository } from './config'
+import { githubMappingDigest, normaliseProjectKanbanGitHub, parseGitHubRepository } from './config'
 import type { GitHubSecretStore, ResolvedGitHubCredential, TokenValidation } from './credentials'
 import { GitHubReachabilityError } from './failure'
 import type {
@@ -39,6 +39,7 @@ type ControlStoreLike = {
     localApprovalId: string
     projectId: string
     repository: string
+    mappingDigest?: string
   }): Promise<GitHubControlState>
   revoke(input: { expectedRevision: number; localApprovalId: string }): Promise<GitHubControlState>
   selectProvider(input: {
@@ -49,6 +50,12 @@ type ControlStoreLike = {
     localApprovalId: string
     projectId: string
     repository: string
+  }): boolean
+  isMappingApproved(state: GitHubControlState, input: {
+    localApprovalId: string
+    projectId: string
+    repository: string
+    mappingDigest: string
   }): boolean
 }
 
@@ -106,6 +113,16 @@ export class GitHubHostController {
       projectId,
       repository
     })
+    // Only a VALID configuration has a mapping to approve; an invalid one keeps writes off anyway.
+    const board = record.project.kanban
+    const config = board?.github ? normaliseProjectKanbanGitHub(board.github, board.columns) : null
+    const mappingApproved = approved && !!repository && !!config?.ok &&
+      this.dependencies.controls.isMappingApproved(state, {
+        localApprovalId: record.localApprovalId,
+        projectId,
+        repository,
+        mappingDigest: githubMappingDigest(repository, config.value)
+      })
     const authed = approved
       ? this.authView(await this.dependencies.resolver.status(state.authProvider))
       : {
@@ -124,7 +141,8 @@ export class GitHubHostController {
         projectId,
         ...(repository ? { repository } : {}),
         ...(detected ? { detectedRepository: detected } : {}),
-        approved
+        approved,
+        ...(approved ? { mappingApproved } : {})
       }
     }
   }
@@ -138,10 +156,13 @@ export class GitHubHostController {
     if (parseGitHubRepository(input.repository) !== project.repository) {
       throw new GitHubHostError('repository-mismatch')
     }
+    // The approval covers the column mapping as it is on disk NOW — what the user is looking at
+    // when they click Approve. A later change to it (a pull, a teammate's commit) re-asks.
     await this.dependencies.controls.approve({
       ...input,
       localApprovalId: project.localApprovalId,
-      repository: project.repository
+      repository: project.repository,
+      mappingDigest: githubMappingDigest(project.repository, project.config)
     })
     return this.status(input.projectId)
   }
@@ -229,18 +250,25 @@ export class GitHubHostController {
       projectId,
       repository: project.repository
     })) throw new GitHubHostError('not-approved')
-    return this.cacheProjectContext(project, state.revision)
+    return this.cacheProjectContext(project, state.revision, this.dependencies.controls.isMappingApproved(state, {
+      localApprovalId: project.localApprovalId,
+      projectId,
+      repository: project.repository,
+      mappingDigest: githubMappingDigest(project.repository, project.config)
+    }))
   }
 
   async projectContextForCacheDeletion(projectId: string): Promise<GitHubIssueProjectContext> {
     const project = await this.resolveProject(projectId)
     const state = await this.dependencies.controls.load()
-    return this.cacheProjectContext(project, state.revision)
+    // Deletion needs no approval at all, and certainly never writes to GitHub.
+    return this.cacheProjectContext(project, state.revision, false)
   }
 
   private cacheProjectContext(
     project: ResolvedProject,
-    controlRevision: number
+    controlRevision: number,
+    mappingApproved: boolean
   ): GitHubIssueProjectContext {
     return {
       localApprovalId: project.localApprovalId,
@@ -248,6 +276,7 @@ export class GitHubHostController {
       repository: project.repository,
       config: project.config,
       controlRevision,
+      mappingApproved,
       columnColors: Object.fromEntries(
         (project.project.kanban?.columns ?? []).map((column) => [column.id, column.color])
       )

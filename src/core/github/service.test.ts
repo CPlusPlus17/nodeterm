@@ -139,6 +139,7 @@ function context(client: FixtureClient, over: Partial<GitHubIssueServiceContext>
     userId: 'user-1',
     client,
     columnColors: { todo: '#0a84ff', doing: '#ffd60a', done: '#30d158' },
+    mappingApproved: true,
     ...over
   }
 }
@@ -1269,5 +1270,51 @@ describe('GitHubIssueService close reason', () => {
       projectId: 'project-1', issueNumber: 1, toColumnId: 'done',
       expectedUpdatedAt: shown.updatedAt, closeReason: 'not_planned'
     })).rejects.toThrow('mutation-not-confirmed')
+  })
+})
+
+describe('GitHubIssueService mapping approval', () => {
+  async function ready(mappingApproved: boolean) {
+    const shown = issue(1, { labels: [{ id: 1, name: 'status:todo', color: '0a84ff' }] })
+    const client = new FixtureClient([shown])
+    const cache = new GitHubIssueCache(userDataDir)
+    await cache.bind('local-1', 'project-1', 'o/r', 'user-1')
+    await cache.saveComplete('user-1', 'o/r', {
+      issues: [shown], etags: {}, lastSuccessfulRefreshAt: 1, lastFullReconciliationAt: 1
+    })
+    const service = new GitHubIssueService({
+      cache, coordinator: new GitHubRequestCoordinator(),
+      contextForProject: async () => context(client, { mappingApproved }), now: () => 10_000
+    })
+    return { client, service, shown }
+  }
+
+  it('writes nothing to GitHub under a column mapping this machine has not approved', async () => {
+    const { client, service, shown } = await ready(false)
+    expect(await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'done', expectedUpdatedAt: shown.updatedAt
+    })).toEqual({ status: 'read-only' })
+    expect((await service.createMissingLabels({ projectId: 'project-1' })).status).toBe('read-only')
+    expect(client.updates).toEqual([])
+    expect(client.createdLabels).toEqual([])
+  })
+
+  it('still shows the issues, read only, and says the mapping is what needs approving', async () => {
+    const { service } = await ready(false)
+    const page = await service.query({ projectId: 'project-1', columnId: 'todo', pageSize: 50 })
+    expect(page.items.map((item) => item.number)).toEqual([1])
+    expect(page.readOnly).toBe(true)
+    expect(page.mappingNotApproved).toBe(true)
+  })
+
+  it('writes as before once the mapping is approved', async () => {
+    const { client, service, shown } = await ready(true)
+    const page = await service.query({ projectId: 'project-1', columnId: 'todo', pageSize: 50 })
+    expect(page.readOnly).toBe(false)
+    expect(page.mappingNotApproved).toBeUndefined()
+    await service.moveIssue({
+      projectId: 'project-1', issueNumber: 1, toColumnId: 'doing', expectedUpdatedAt: shown.updatedAt
+    })
+    expect(client.updates).toHaveLength(1)
   })
 })

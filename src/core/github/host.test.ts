@@ -28,6 +28,7 @@ const project: Project = {
 }
 
 function fixture() {
+  let current: Project = project
   let state: GitHubControlState = {
     version: 1,
     revision: 0,
@@ -49,11 +50,20 @@ function fixture() {
       repository: string
     }) => current.approvals.some((item) => item.localApprovalId === input.localApprovalId &&
       item.projectId === input.projectId && item.repository === input.repository)),
+    isMappingApproved: vi.fn((current: GitHubControlState, input: {
+      localApprovalId: string
+      projectId: string
+      repository: string
+      mappingDigest: string
+    }) => current.approvals.some((item) => item.localApprovalId === input.localApprovalId &&
+      item.projectId === input.projectId && item.repository === input.repository &&
+      item.mappingDigest === input.mappingDigest)),
     approve: vi.fn(async (input: {
       expectedRevision: number
       localApprovalId: string
       projectId: string
       repository: string
+      mappingDigest?: string
     }) => {
       state = {
         ...state,
@@ -98,8 +108,8 @@ function fixture() {
     createIssueComment: vi.fn()
   }
   const controller = new GitHubHostController({
-    project: vi.fn(async (id: string) => id === project.id
-      ? { project, localApprovalId: 'local-private-id' }
+    project: vi.fn(async (id: string) => id === current.id
+      ? { project: current, localApprovalId: 'local-private-id' }
       : null),
     detectRepository: vi.fn(async () => 'owner/repo'),
     controls,
@@ -118,7 +128,11 @@ function fixture() {
         }
       : {}
   })
-  return { controller, controls, resolver, secret, client }
+  return {
+    controller, controls, resolver, secret, client,
+    setProject: (next: Project) => { current = next },
+    setState: (next: GitHubControlState) => { state = next }
+  }
 }
 
 describe('GitHubHostController', () => {
@@ -156,6 +170,39 @@ describe('GitHubHostController', () => {
       userId: '1',
       columnColors: { todo: '#2563eb', done: '#16a34a' }
     })
+  })
+
+  it('stops writes when a pulled commit changes the column mapping, until this machine approves it again', async () => {
+    const { controller, setProject } = fixture()
+    await controller.approve({ projectId: 'project-1', repository: 'owner/repo', expectedRevision: 0 })
+    expect((await controller.contextForProject('project-1')).mappingApproved).toBe(true)
+
+    // The completion column now closes issues from "Todo" — nobody on this machine agreed to that.
+    setProject({ ...project, kanban: { ...project.kanban!, github: {
+      ...project.kanban!.github!, completionColumnId: 'todo'
+    } } })
+    const changed = await controller.contextForProject('project-1')
+    expect(changed.mappingApproved).toBe(false)
+    const view = await controller.status('project-1')
+    expect(view.project).toMatchObject({ approved: true, mappingApproved: false })
+
+    await controller.approve({ projectId: 'project-1', repository: 'owner/repo', expectedRevision: 1 })
+    expect((await controller.contextForProject('project-1')).mappingApproved).toBe(true)
+    expect((await controller.status('project-1')).project?.mappingApproved).toBe(true)
+  })
+
+  it('keeps reading under an approval from before mappings were bound, but never writes under it', async () => {
+    const { controller, setState } = fixture()
+    setState({
+      version: 1, revision: 4, authProvider: 'auto',
+      approvals: [{
+        localApprovalId: 'local-private-id', projectId: 'project-1', repository: 'owner/repo',
+        enabled: true, approvedAt: 1
+      }]
+    })
+    const context = await controller.projectContextForCache('project-1')
+    expect(context.mappingApproved).toBe(false)
+    expect((await controller.status('project-1')).project).toMatchObject({ approved: true, mappingApproved: false })
   })
 
   it('rejects approval for a repository other than the configured or detected repository', async () => {

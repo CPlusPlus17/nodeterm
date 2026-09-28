@@ -176,6 +176,7 @@ export const KanbanView = memo(function KanbanView({
   const projectColor = useProjects((s) => s.projects.find((p) => p.id === s.activeProjectId)?.color)
   const github = useGitHubIssues((state) => state.projects[projectId])
   const githubReadOnly = Object.values(github?.pages ?? {}).some((page) => page.readOnly)
+  const githubMappingNotApproved = Object.values(github?.pages ?? {}).some((page) => page.mappingNotApproved)
   // Every page of one project carries the same identity's throttle; any one of them answers.
   const githubThrottle = Object.values(github?.pages ?? {}).find((page) => page.throttle)?.throttle
   // Pull requests are evicted first when a repository outgrows the cache bounds, so the lane can
@@ -582,7 +583,9 @@ export const KanbanView = memo(function KanbanView({
         )}
         {board.github && githubReadOnly && (
           <span className="kanban-github-status kanban-github-status--error">
-            GitHub issues are read only until configuration and refresh are complete.
+            {githubMappingNotApproved
+              ? 'The column labels changed. Approve them in Settings → GitHub Issues to move issues again.'
+              : 'GitHub issues are read only until configuration and refresh are complete.'}
           </span>
         )}
         {board.github && githubThrottle && (

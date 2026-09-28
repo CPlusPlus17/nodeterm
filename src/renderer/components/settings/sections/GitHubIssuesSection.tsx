@@ -214,10 +214,21 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
   const enabled = !!githubConfig
   const repository = githubConfig?.repository ?? view?.project?.detectedRepository
   const approved = enabled && !!view?.project?.approved
+  // The repository approval lets the board READ; writes also need this machine to have approved the
+  // column mapping now in the (git-shared) project file. Only an explicit false withholds it.
+  const mappingApproved = approved && view?.project?.mappingApproved !== false
   const authenticated = !!view?.auth.activeProvider
   const completionReady = !!githubConfig?.completionColumnId &&
     mappings.has(githubConfig.completionColumnId)
-  const ready = approved && authenticated && completionReady
+  const ready = approved && mappingApproved && authenticated && completionReady
+  const approveRepository = (): Promise<void> => run('approve', async () => {
+    const status = await window.nodeTerminal.githubControl.status(projectId)
+    await window.nodeTerminal.githubControl.approve({
+      projectId,
+      repository: repository!,
+      expectedRevision: status.control.revision
+    })
+  }, 'Repository approved on this machine.', 'repository')
 
   // What actually authenticates a request is `activeProvider` — the RESULT of the selected provider
   // meeting the credentials that exist. `ghAuthenticated` alone lies in both directions: pinned to
@@ -369,6 +380,8 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                 <span className="text-muted">
                   {ready
                     ? `Ready as ${view?.auth.login ?? 'GitHub user'}`
+                    : approved && !mappingApproved
+                      ? 'The column labels changed since this machine approved them. Approve them to let the board change issues on GitHub.'
                     : view?.project?.approved
                       ? view.auth.unreachable && !authenticated
                         ? 'Repository approved. GitHub could not be reached to check the sign-in.'
@@ -376,19 +389,13 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                       : 'Approval is required before nodeterm reads the repository.'}
                 </span>
                 {!view?.project?.approved && repository && (
-                  <Button
-                    variant="primary"
-                    disabled={busy !== ''}
-                    onClick={() => void run('approve', async () => {
-                      const status = await window.nodeTerminal.githubControl.status(projectId)
-                      await window.nodeTerminal.githubControl.approve({
-                        projectId,
-                        repository,
-                        expectedRevision: status.control.revision
-                      })
-                    }, 'Repository approved on this machine.', 'repository')}
-                  >
+                  <Button variant="primary" disabled={busy !== ''} onClick={() => void approveRepository()}>
                     Approve this machine
+                  </Button>
+                )}
+                {approved && !mappingApproved && repository && (
+                  <Button variant="primary" disabled={busy !== ''} onClick={() => void approveRepository()}>
+                    Approve column labels
                   </Button>
                 )}
               </div>

@@ -165,6 +165,19 @@ describe('GitHubIssuesSection', () => {
     expect(host.textContent).toContain('GitHub could not be reached. Nothing was changed')
   })
 
+  it('asks to approve a changed column mapping before the board may change issues again', async () => {
+    const approve = vi.fn(async () => viewWith({}, true))
+    ;(window as unknown as { nodeTerminal: any }).nodeTerminal.githubControl.approve = approve
+    const view = viewWith({}, true)
+    stub({ ...view, project: { ...view.project!, mappingApproved: false } })
+    await mount()
+    expect(host.textContent).toContain('The column labels changed since this machine approved them')
+    expect(host.textContent).not.toContain('Ready as')
+    const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Approve column labels')!
+    await act(async () => { button.click() })
+    expect(approve).toHaveBeenCalledWith({ projectId: 'p1', repository: 'owner/repo', expectedRevision: 0 })
+  })
+
   it('clears the write-only token field after Save and never renders the stored token', async () => {
     await mount()
     const input = host.querySelector<HTMLInputElement>('#github-personal-access-token')!
