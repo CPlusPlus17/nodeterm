@@ -35,6 +35,27 @@ describe('subagent reload memory', () => {
     replay.record(start, 500)
     expect(replay.snapshot(499)).toEqual([])
   })
+  it('keeps a long-running start while its transcript streams, and expires it after the window of silence', () => {
+    // WORKING_STALE_MS is "this long without a sign of life": counted from the start alone, a
+    // subagent running longer than the window was dropped here, so a renderer reload lost its card.
+    const replay = new SubagentReplay()
+    replay.record(start, 100)
+    replay.touch('child', 100 + WORKING_STALE_MS * 2)
+    expect(replay.snapshot(100 + WORKING_STALE_MS * 2 + 60_000)).toEqual([
+      { ...start, subagentType: undefined, subagentStartedAt: 100 }
+    ])
+    expect(replay.snapshot(100 + WORKING_STALE_MS * 3 + 1)).toEqual([])
+  })
+  it('touch ignores unknown ids and never resurrects an ended start', () => {
+    const replay = new SubagentReplay()
+    replay.touch('child', 100)
+    replay.record(start, 200)
+    replay.record({ ...start, kind: 'subagent-end' }, 300)
+    replay.touch('child', 400)
+    expect(replay.snapshot(400)).toEqual([])
+    replay.record(start, 500)
+    expect(replay.snapshot(500 + WORKING_STALE_MS)).toEqual([])
+  })
   it('the shared mirror path records starts and synthetic ends; node deletion clears replay', () => {
     recordAgentEvent(start)
     expect(subagentReplay.snapshot()).toHaveLength(1)

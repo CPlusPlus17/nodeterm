@@ -2574,6 +2574,7 @@ app.whenReady().then(async () => {
   // A raw listener drives the transcript-tailing features (context meter + subagent transcript),
   // which need the raw transcript_path the NormalizedAgentEvent intentionally drops.
   const subagentTail = createSubagentTail(({ toolUseId, chunk }) => {
+    subagentReplay.touch(toolUseId) // a streaming subagent is alive: keep it in the reload replay
     if (!win.isDestroyed()) win.webContents.send(IPC.agentSubagentActivity, { toolUseId, chunk })
   })
   // Claude's two subagent signal paths merged into one card per child (native SubagentStart/Stop
