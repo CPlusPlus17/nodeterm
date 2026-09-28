@@ -18,12 +18,18 @@ export const CHAT_PAGE_DEFAULT_BYTES = 256 * 1024
 export interface ChatTranscriptPageRequest {
   before?: number
   maxBytes?: number
+  /** A live refresh the panel issued on its own (a hook event), not an open or a Retry the user
+   *  asked for. Readers whose read is expensive (opencode's `export`) may space these out; a
+   *  reader that ignores it answers exactly as before. */
+  background?: boolean
 }
 
 /** A validated page: `before: null` = end of file. */
 export interface ChatTranscriptPage {
   before: number | null
   maxBytes: number
+  /** Present (and `true`) only for a background live refresh — see the request field. */
+  background?: true
 }
 
 /**
@@ -51,5 +57,6 @@ export function normalizeChatPage(page: unknown): ChatTranscriptPage | null {
   if (typeof maxBytes === 'number' && Number.isFinite(maxBytes)) {
     m = Math.min(CHAT_PAGE_MAX_BYTES, Math.max(CHAT_PAGE_MIN_BYTES, Math.floor(maxBytes)))
   }
-  return { before: b, maxBytes: m }
+  const { background } = page as { background?: unknown }
+  return background === true ? { before: b, maxBytes: m, background: true } : { before: b, maxBytes: m }
 }

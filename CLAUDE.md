@@ -1882,15 +1882,26 @@ else, and its context links must keep classifying across restarts).
   `Error: …` on a failed call), `[name] message` for an errored turn, compaction/subtask chips,
   `at` from `time.created`, `model`/`effort` from the newest assistant's `modelID`/`variant`.
   Reasoning, `synthetic`/`ignored` text, file/agent parts and step bookkeeping are dropped;
-  unmappable shapes are skipped and counted. **One page, always** (`olderCursor: null`, newest
-  messages within 5 MB): there are no byte offsets to page by. Refusals: no/unsafe session id runs
+  unmappable shapes are skipped and counted. **One page, always** (`olderCursor: null`): there are
+  no byte offsets to page by. The page honours the caller's `maxBytes` (the phone asks 256 KB),
+  grows ×4 up to 5 MB like claude's reader when it holds no whole message, and shows a newest
+  message larger than 5 MB TRUNCATED (with a note) rather than as an empty conversation. Refusals: no/unsafe session id runs
   nothing (a bare `opencode export` opens a picker over the NEWEST sessions — someone else's); an
   export whose `info.id` is another session is `unreadable`; only `Session not found: <id>` with
   exit 1 and empty stdout is a clean miss. **Remote (SSH) nodes are refused** (`unreadable`, no
   export runs) — their sessions are in the host's database and there is no remote leg yet; the
   panel's copy names both causes an opencode `unreadable` can have. One export costs 1.0–1.7 s and
-  ~320 MB, so `createOpencodeExportGate` runs at most one per session (starts ≥ 2 s apart, a caller
-  arriving mid-run gets a FRESH export, never a cached one) and two in total. Plan/question answer
+  ~320 MB, so `createOpencodeExportGate` runs at most one per session (a caller arriving mid-run
+  gets a FRESH export) and two in total; the panel's hook-driven refreshes are marked
+  `page.background` and spaced ≥ 5 s per session, while an open / ↻ / Retry is immediate (and wakes
+  a sleeping background one). A **change gate** in front of it `stat`s (never opens) opencode's
+  `opencode*.db` + `-wal` in `$XDG_DATA_HOME/opencode` (else `~/.local/share/opencode`, opencode's
+  own xdg-basedir rule) BEFORE exporting, and an unchanged fingerprint answers from a 4-session LRU
+  of parsed exports; no db file found, or `OPENCODE_DB` set, means no caching. The export runs with
+  `cwd: os.tmpdir()` (from a repo cwd opencode writes `<repo>/.git/opencode`; sessions resolve by
+  global id). **It inherits the APP's `process.env`, not the node's shell env**: a user who
+  relocates opencode's data via `XDG_DATA_HOME` / `OPENCODE_*` only in their shell rc gets
+  "Session not found" — an honest miss, not a bug in the reader. Plan/question answer
   cards stay claude-only (no `body`/`questions` on opencode's `question` tool). Desktop and Server
   Edition both serve it (core handler); the phone gets it over the relay `chat.page` for free.
   Fixtures + the exact rules for the iOS port: `src/shared/chat-fixtures/opencode/README.md`.

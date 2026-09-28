@@ -28,7 +28,11 @@ strict and exits 1 on an option an older build does not know). Measured on 1.18.
   coloured) — the only answer read as a clean miss (`found: false`); every other failure is a
   failed read (`unreadable: true`);
 - one export costs 1.0–1.7 s and ~320 MB peak RSS, so the desktop runs at most one per session at a
-  time (starts spaced 2 s apart) and two in total.
+  time and two in total; the panel's background refreshes are spaced 5 s, and an unchanged
+  database (stat of `opencode*.db` + `-wal`, never opened) is answered from a small cache.
+- a page honours the request's `maxBytes`, grows ×4 up to 5 MB when it holds no whole message (as
+  claude's reader does), and a newest message above 5 MB is served truncated with a note, never as
+  an empty page. The phone should expect that note in the text, not a separate field.
 
 The reader never runs an export without a session id (a bare `opencode export` opens a picker over
 the newest sessions), never for an id outside `^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$`, and never for a

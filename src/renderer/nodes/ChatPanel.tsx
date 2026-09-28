@@ -330,7 +330,10 @@ export function ChatPanel({
     // presenting itself as an empty conversation. Only the newest TAIL window is read — older
     // history pages in on scroll-up, and a reload merges by key instead of discarding it.
     void api.chat.readTranscript(sessionId, cwd, accountId, nodeId, agentId, {
-      maxBytes: CHAT_TAIL_PAGE_BYTES
+      maxBytes: CHAT_TAIL_PAGE_BYTES,
+      // A hook-driven refresh the user did not ask for: an expensive reader (opencode's export) may
+      // space these out. An open, ↻, Retry or a held-request rebind is never marked.
+      ...(live && !rebind ? { background: true } : {})
     }).then(
       (res) => {
         if (token !== reqRef.current) return

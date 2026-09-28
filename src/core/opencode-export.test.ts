@@ -84,6 +84,14 @@ describe('runOpencodeExportAt — the tri-state', () => {
     expect(Date.now() - t0).toBeLessThan(10_000)
   })
 
+  it('runs outside the app cwd (os.tmpdir), so opencode never bootstraps inside a repo', async () => {
+    // Run from inside a repo, an export writes `<repo>/.git/opencode`. Sessions resolve by their
+    // global id, so the cwd carries no meaning for the read.
+    const bin = writeFakeOpencode(dir, 'process.stdout.write(process.cwd())\n')
+    const out = await runOpencodeExportAt(bin, SID, 10_000)
+    expect(out.ok && fs.realpathSync(out.stdout)).toBe(fs.realpathSync(os.tmpdir()))
+  })
+
   it('a binary that does not exist is a failure', async () => {
     expect(await runOpencodeExportAt(path.join(dir, 'nope'), SID, 10_000)).toEqual({ ok: false })
   })

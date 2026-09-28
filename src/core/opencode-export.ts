@@ -11,6 +11,7 @@
 // option exits 1 (yargs strict), so no flag is passed that an older CLI might not know. One export
 // costs 1.0–1.7 s wall and ~320 MB peak RSS on this host, which is why the chat view gates it
 // (`createOpencodeExportGate`).
+import os from 'os'
 import { directExecutableInvocation } from './exec-path'
 
 /** An export names ONE provider session. The id reaches us from a hook payload, so it is re-checked
@@ -53,6 +54,10 @@ export async function runOpencodeExportAt(
         invocation.args,
         {
           ...invocation.options,
+          // Never the app's cwd: opencode bootstraps a project for its cwd and, inside a git repo,
+          // writes `<repo>/.git/opencode`. An export resolves the session by its GLOBAL id, so a
+          // neutral directory changes nothing about what is read.
+          cwd: os.tmpdir(),
           encoding: 'utf-8',
           maxBuffer: OPENCODE_EXPORT_MAX_BYTES,
           timeout: timeoutMs

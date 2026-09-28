@@ -28,6 +28,9 @@
 //
 // Every mapping rule is written down in `src/shared/chat-fixtures/opencode/README.md` for the iOS
 // port, and pinned by the golden fixtures there.
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 import type { ChatMessage, ChatPart, ChatTranscriptResult } from '../shared/types'
 import { CHAT_TOOL_ARG_MAX } from '../shared/chat-command'
 import { CHAT_PAGE_MAX_BYTES, type ChatTranscriptPage } from '../shared/chat-page'
@@ -222,9 +225,8 @@ export function parseOpencodeExport(raw: string, sessionId: string): OpencodeCha
   return out
 }
 
-/** The newest messages whose JSON fits in `maxBytes` (UTF-8), in order. One export is one page,
- *  and a page stays within the legacy read's cap (`CHAT_PAGE_MAX_BYTES`) — it crosses the relay
- *  to a phone. Like grok's capped tail, the cut is not announced (`olderCursor` stays null). */
+/** The newest messages whose JSON fits in `maxBytes` (UTF-8), in order. Like grok's capped tail,
+ *  the cut is not announced (`olderCursor` stays null). */
 export function newestWithinBytes(messages: ChatMessage[], maxBytes: number): ChatMessage[] {
   let total = 0
   let i = messages.length
@@ -237,13 +239,159 @@ export function newestWithinBytes(messages: ChatMessage[], maxBytes: number): Ch
   return messages.slice(i)
 }
 
+/** Same growth as claude's paged reader (`parseGrowingWindow`): a page that holds no whole message
+ *  is re-evaluated at ×4 the size, up to the legacy 5 MB cap. */
+const PAGE_GROWTH = 4
+
+const TRUNCATED_NOTE = (droppedBytes: number) =>
+  `\n\n[… truncated: ${Math.ceil(droppedBytes / 1024)} KB more of this message is only in opencode]`
+
+/** `text` cut to at most `maxBytes` UTF-8 bytes, never splitting a surrogate pair. */
+function cutToBytes(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return ''
+  if (Buffer.byteLength(text) <= maxBytes) return text
+  let lo = 0
+  let hi = Math.min(text.length, maxBytes)
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2)
+    if (Buffer.byteLength(text.slice(0, mid)) <= maxBytes) lo = mid
+    else hi = mid - 1
+  }
+  let out = text.slice(0, lo)
+  const last = out.charCodeAt(out.length - 1)
+  if (last >= 0xd800 && last <= 0xdbff) out = out.slice(0, -1)
+  return out
+}
+
+/**
+ * One message too big for the largest page: its text parts cut (largest first) until its JSON fits
+ * `maxBytes`, each cut announced in the text itself. Better than the alternative the byte budget
+ * leaves — `messages: []` with `found: true`, which reads as an empty conversation. Tool chips are
+ * already bounded (arg 200, result 500 units), so text is the only thing that can be this big.
+ */
+export function truncateMessage(m: ChatMessage, maxBytes: number): ChatMessage {
+  const parts = m.parts.map((p) => ({ ...p }))
+  const size = () => Buffer.byteLength(JSON.stringify({ ...m, parts }))
+  // JSON escaping can make a text's serialized form larger than its UTF-8 bytes, so iterate.
+  for (let guard = 0; guard < 8 && size() > maxBytes; guard++) {
+    let idx = -1
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i]
+      if (p.kind === 'text' && (idx < 0 || p.text.length > (parts[idx] as { text: string }).text.length)) idx = i
+    }
+    if (idx < 0) break
+    const p = parts[idx] as Extract<ChatPart, { kind: 'text' }>
+    const over = size() - maxBytes
+    const full = Buffer.byteLength(p.text)
+    const note = TRUNCATED_NOTE(full)
+    const keep = Math.max(0, full - over - Buffer.byteLength(JSON.stringify(note)) - 64 * (guard + 1))
+    const kept = cutToBytes(p.text, keep)
+    p.text = kept + TRUNCATED_NOTE(full - Buffer.byteLength(kept))
+  }
+  return { ...m, parts }
+}
+
+/**
+ * The messages a page answers with. `maxBytes` is the caller's own window (the panel's tail read,
+ * the phone's 256 KB) and is honoured; when it holds no whole message the window grows exactly as
+ * claude's does (×4, up to 5 MB); a newest message bigger even than that is shown truncated.
+ */
+export function opencodePageMessages(messages: ChatMessage[], maxBytes: number): ChatMessage[] {
+  if (!messages.length) return []
+  let bytes = Math.min(maxBytes, CHAT_PAGE_MAX_BYTES)
+  for (;;) {
+    const out = newestWithinBytes(messages, bytes)
+    if (out.length) return out
+    if (bytes >= CHAT_PAGE_MAX_BYTES) break
+    bytes = Math.min(CHAT_PAGE_MAX_BYTES, bytes * PAGE_GROWTH)
+  }
+  return [truncateMessage(messages[messages.length - 1], CHAT_PAGE_MAX_BYTES)]
+}
+
+// ── The change gate: stat opencode's database, never open it ─────────────────────────────────
+
+/** opencode's data directory, resolved the way opencode resolves it (xdg-basedir's `xdgData`:
+ *  `$XDG_DATA_HOME`, else `~/.local/share` — on every platform) plus `opencode`. */
+export function opencodeDataDir(env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): string {
+  const base = env.XDG_DATA_HOME ? env.XDG_DATA_HOME : path.join(home, '.local', 'share')
+  return path.join(base, 'opencode')
+}
+
+/** `opencode.db`, a channel build's `opencode-<channel>.db`, and their WALs. */
+const OPENCODE_DB_FILE = /^opencode(-[A-Za-z0-9._-]+)?\.db(-wal)?$/
+
+/**
+ * A fingerprint of opencode's session store: size, mtime (ns), ctime and inode of every database
+ * and WAL file in `dir`, from `readdir` + `stat` — the database itself is never opened (it also
+ * holds opencode's account tokens). `null` = we cannot vouch for the store, so nothing is cached:
+ * no database file found (a relocated store we would otherwise see as "never changes"), the
+ * directory unreadable, or `OPENCODE_DB` pointing opencode somewhere else.
+ */
+export async function opencodeDbFingerprint(
+  dir: string = opencodeDataDir(),
+  env: NodeJS.ProcessEnv = process.env
+): Promise<string | null> {
+  if (env.OPENCODE_DB) return null
+  try {
+    const names = (await fs.promises.readdir(dir)).filter((n) => OPENCODE_DB_FILE.test(n)).sort()
+    if (!names.some((n) => n.endsWith('.db'))) return null
+    const rows = await Promise.all(
+      names.map(async (n) => {
+        const st = await fs.promises.stat(path.join(dir, n), { bigint: true })
+        return `${n}:${st.size}:${st.mtimeNs}:${st.ctimeNs}:${st.ino}`
+      })
+    )
+    return rows.join('|')
+  } catch {
+    return null
+  }
+}
+
+export interface OpencodeChatCache {
+  fingerprint(): Promise<string | null>
+  get(sessionId: string, fingerprint: string): OpencodeChatParse | undefined
+  set(sessionId: string, fingerprint: string, parsed: OpencodeChatParse): void
+}
+
+/** A few sessions' parsed exports, keyed by the store fingerprint taken BEFORE their export, LRU. */
+export function createOpencodeChatCache(opts: {
+  fingerprint: () => Promise<string | null>
+  maxSessions: number
+}): OpencodeChatCache {
+  const entries = new Map<string, { fingerprint: string; parsed: OpencodeChatParse }>()
+  return {
+    fingerprint: opts.fingerprint,
+    get(sessionId, fingerprint) {
+      const e = entries.get(sessionId)
+      if (!e || e.fingerprint !== fingerprint) return undefined
+      entries.delete(sessionId)
+      entries.set(sessionId, e)
+      return e.parsed
+    },
+    set(sessionId, fingerprint, parsed) {
+      entries.delete(sessionId)
+      entries.set(sessionId, { fingerprint, parsed })
+      while (entries.size > opts.maxSessions) entries.delete(entries.keys().next().value as string)
+    }
+  }
+}
+
+let defaultCache: OpencodeChatCache | undefined
+export function defaultOpencodeChatCache(): OpencodeChatCache {
+  defaultCache ??= createOpencodeChatCache({ fingerprint: () => opencodeDbFingerprint(), maxSessions: 4 })
+  return defaultCache
+}
+
 // ── The export gate ─────────────────────────────────────────────────────────────────────────────
 
-export type OpencodeExportRun = (sessionId: string) => Promise<OpencodeExportOutcome>
+export type OpencodeExportRun = (sessionId: string, opts?: { background?: boolean }) => Promise<OpencodeExportOutcome>
 
 export interface OpencodeExportGateOptions {
-  /** Minimum time between two export STARTS for one session. */
+  /** Minimum time between two export STARTS for one session, for a read the user asked for. */
   minSpacingMs: number
+  /** The same, for a BACKGROUND live refresh (hook-driven, while the agent works). Defaults to
+   *  `minSpacingMs`. An explicit read joining a background refresh still sleeping wakes it. */
+  backgroundSpacingMs?: number
   /** Most exports running at once, across sessions. */
   maxConcurrent: number
   now?: () => number
@@ -257,14 +405,23 @@ export interface OpencodeExportGateOptions {
  *  - joins a caller to an export that has not STARTED yet (its answer is still fresh for them);
  *  - gives a caller arriving while one RUNS a new export started after it — never a stale answer,
  *    which would leave the panel's final turn-end read one turn behind — shared by every such caller;
- *  - spaces starts for one session by `minSpacingMs`, and caps exports running at once;
- *  - caches nothing: a failure is answered once and the next call runs again.
+ *  - spaces starts for one session by `minSpacingMs` (an explicit read) or `backgroundSpacingMs`
+ *    (a live refresh), and caps exports running at once;
+ *  - caches nothing itself: a failure is answered once and the next call runs again. Answering an
+ *    UNCHANGED store without exporting is the change gate's job (`opencodeDbFingerprint`).
  */
 export function createOpencodeExportGate(run: OpencodeExportRun, opts: OpencodeExportGateOptions): OpencodeExportRun {
   const now = opts.now ?? Date.now
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const bgSpacing = opts.backgroundSpacingMs ?? opts.minSpacingMs
+  const longest = Math.max(opts.minSpacingMs, bgSpacing)
+  interface Waiting {
+    job: Promise<OpencodeExportOutcome>
+    background: boolean
+    wake: () => void
+  }
   interface Session {
-    waiting?: Promise<OpencodeExportOutcome>
+    waiting?: Waiting
     running?: Promise<OpencodeExportOutcome>
     lastStart: number
   }
@@ -286,11 +443,11 @@ export function createOpencodeExportGate(run: OpencodeExportRun, opts: OpencodeE
   const prune = (): void => {
     const t = now()
     for (const [id, s] of sessions) {
-      if (!s.waiting && !s.running && t - s.lastStart > opts.minSpacingMs) sessions.delete(id)
+      if (!s.waiting && !s.running && t - s.lastStart > longest) sessions.delete(id)
     }
   }
 
-  return (sessionId) => {
+  return (sessionId, callOpts) => {
     prune()
     let s = sessions.get(sessionId)
     if (!s) {
@@ -298,16 +455,26 @@ export function createOpencodeExportGate(run: OpencodeExportRun, opts: OpencodeE
       sessions.set(sessionId, s)
     }
     const st = s
-    if (st.waiting) return st.waiting
+    const background = callOpts?.background === true
+    if (st.waiting) {
+      // An open or Retry the user asked for is not held behind a background refresh's spacing.
+      if (!background && st.waiting.background) {
+        st.waiting.background = false
+        st.waiting.wake()
+      }
+      return st.waiting.job
+    }
+    let wake!: () => void
+    const woken = new Promise<void>((r) => (wake = r))
+    const w = { background, wake } as Waiting
     // Assigned before its body's first `await` returns, so the body can recognise itself.
-    let job!: Promise<OpencodeExportOutcome>
-    job = (async () => {
+    w.job = (async () => {
       if (st.running) await st.running
-      const wait = st.lastStart + opts.minSpacingMs - now()
-      if (wait > 0) await sleep(wait)
+      const wait = st.lastStart + (w.background ? bgSpacing : opts.minSpacingMs) - now()
+      if (wait > 0) await Promise.race([sleep(wait), woken])
       await acquire()
       // Started: later callers get the NEXT export, not this one.
-      if (st.waiting === job) st.waiting = undefined
+      if (st.waiting === w) st.waiting = undefined
       st.lastStart = now()
       const running = (async (): Promise<OpencodeExportOutcome> => {
         try {
@@ -323,8 +490,8 @@ export function createOpencodeExportGate(run: OpencodeExportRun, opts: OpencodeE
       if (st.running === running) st.running = undefined
       return out
     })()
-    st.waiting = job
-    return job
+    st.waiting = w
+    return w.job
   }
 }
 
@@ -340,7 +507,9 @@ export function defaultOpencodeExport(): OpencodeExportRun {
       const bin = await findInLoginPath('opencode')
       return bin ? runOpencodeExportAt(bin, sessionId, OPENCODE_CHAT_EXPORT_TIMEOUT_MS) : { ok: false }
     },
-    { minSpacingMs: 2000, maxConcurrent: 2 }
+    // A read the user asked for (open, ↻, Retry) is immediate; the panel's hook-driven refreshes
+    // during a turn are spaced to one export per 5 s per session.
+    { minSpacingMs: 0, backgroundSpacingMs: 5000, maxConcurrent: 2 }
   )
   return defaultExport
 }
@@ -362,8 +531,12 @@ export function defaultOpencodeExport(): OpencodeExportRun {
 export async function readOpencodeChat(
   q: { sessionId?: string; remoteOnly?: boolean },
   page: ChatTranscriptPage | null,
-  run: OpencodeExportRun = defaultOpencodeExport()
+  run?: OpencodeExportRun,
+  cache?: OpencodeChatCache | null
 ): Promise<ChatTranscriptResult> {
+  // An injected runner (a test seam) gets no cache unless one is passed with it.
+  const exportRun = run ?? defaultOpencodeExport()
+  const store = cache === undefined ? (run ? null : defaultOpencodeChatCache()) : cache
   const notFound = (): ChatTranscriptResult =>
     page ? { messages: [], found: false, olderCursor: null, unmatchedResults: [] } : { messages: [], found: false }
   const unreadable = (): ChatTranscriptResult => (page ? { ...notFound(), unreadable: true } : notFound())
@@ -371,11 +544,19 @@ export async function readOpencodeChat(
   if (page && page.before !== null) return { messages: [], found: true, olderCursor: null, unmatchedResults: [] }
   const sessionId = q.sessionId
   if (!sessionId || !isSafeOpencodeSessionId(sessionId)) return notFound()
-  const out = await run(sessionId)
-  if (!out.ok) return out.absent ? notFound() : unreadable()
-  const parsed = parseOpencodeExport(out.stdout, sessionId)
-  if (!parsed) return unreadable()
-  const messages = newestWithinBytes(parsed.messages, CHAT_PAGE_MAX_BYTES)
+  // Taken BEFORE the export: a write that lands while it runs changes the next fingerprint, so the
+  // next read exports again rather than serving this (possibly older) answer.
+  const fingerprint = store ? await store.fingerprint() : null
+  let parsed = fingerprint !== null && store ? store.get(sessionId, fingerprint) : undefined
+  if (!parsed) {
+    const out = await exportRun(sessionId, { background: page?.background === true })
+    if (!out.ok) return out.absent ? notFound() : unreadable()
+    const fresh = parseOpencodeExport(out.stdout, sessionId)
+    if (!fresh) return unreadable()
+    parsed = fresh
+    if (fingerprint !== null && store) store.set(sessionId, fingerprint, fresh)
+  }
+  const messages = opencodePageMessages(parsed.messages, page ? page.maxBytes : CHAT_PAGE_MAX_BYTES)
   if (!page) return { messages, found: true }
   return {
     messages,

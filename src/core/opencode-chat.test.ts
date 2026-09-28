@@ -416,7 +416,7 @@ describe('readChatTranscript — opencode', () => {
       model: 'm1',
       effort: 'low'
     })
-    expect(opencodeExport).toHaveBeenCalledWith(SID)
+    expect(opencodeExport).toHaveBeenCalledWith(SID, { background: false })
   })
 
   it('an unpaged read keeps the legacy shape exactly', async () => {
@@ -486,11 +486,15 @@ describe('readChatTranscript — opencode', () => {
     }
   })
 
-  it('keeps a page within the legacy 5 MB cap: the newest messages, in order', async () => {
+  it('a page too small for one message grows like claude\'s (×4); the legacy read keeps 5 MB', async () => {
     const big = (i: number) => asst(`msg_${i}`, [text(String(i).repeat(1024 * 1024))])
     const stdout = doc([1, 2, 3, 4, 5, 6].map(big))
-    const res = await read({ sessionId: SID, agentId: 'opencode' }, { maxBytes: 262144 }, { opencodeExport: exportOf({ ok: true, stdout }) })
-    expect(res.messages.map((m) => (m.parts[0] as { text: string }).text[0])).toEqual(['3', '4', '5', '6'])
+    const first = (r: { messages: ChatMessage[] }) => r.messages.map((m) => (m.parts[0] as { text: string }).text[0])
+    // 256 KB and 1 MB hold no whole ~1 MB message; 4 MB holds three.
+    const paged = await read({ sessionId: SID, agentId: 'opencode' }, { maxBytes: 262144 }, { opencodeExport: exportOf({ ok: true, stdout }) })
+    expect(first(paged)).toEqual(['4', '5', '6'])
+    const legacy = await read({ sessionId: SID, agentId: 'opencode' }, undefined, { opencodeExport: exportOf({ ok: true, stdout }) })
+    expect(first(legacy)).toEqual(['3', '4', '5', '6'])
   })
 
   it('an OLDER-page request has nothing older to give, and costs no export', async () => {
