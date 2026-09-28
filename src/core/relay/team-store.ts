@@ -7,9 +7,10 @@
 // Corrupt ⇒ CLOSED: the file is set aside and the store starts with no peers, so nobody
 // auto-reconnects. The owner recovers with `team add-owner` over SSH, which is also the
 // root of trust.
-import { promises as fs, existsSync, mkdirSync, chmodSync } from 'node:fs'
+import { promises as fs, existsSync } from 'node:fs'
 import path from 'node:path'
 import { writeFileAtomic, renameAtomic } from '../fs-atomic'
+import { ensurePrivateDir } from './private-dir'
 
 export type TeamRole = 'owner' | 'editor' | 'commenter' | 'viewer'
 export const TEAM_ROLES: readonly TeamRole[] = ['owner', 'editor', 'commenter', 'viewer']
@@ -97,12 +98,7 @@ export class TeamStore {
       // Never publish what our own reader rejects: the write would land, and the NEXT load would set
       // the whole team aside as corrupt. Throwing here leaves both the file and `this.doc` as they were.
       if (!parseTeam(next)) throw new Error('team.json: refusing to write a team doc that fails validation')
-      mkdirSync(this.dir, { recursive: true, mode: 0o700 })
-      // mkdir's mode applies only when it CREATES the directory; tighten one that already existed.
-      // Best-effort, and POSIX only: the bits mean nothing on Windows.
-      if (process.platform !== 'win32') {
-        try { chmodSync(this.dir, 0o700) } catch { /* not ours to fix: the 0600 file is the guard */ }
-      }
+      ensurePrivateDir(this.dir)
       await writeFileAtomic(this.file(), JSON.stringify(next, null, 2) + '\n', { mode: 0o600 })
       this.doc = next
       return next
