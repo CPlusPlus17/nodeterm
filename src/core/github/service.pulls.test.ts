@@ -139,8 +139,32 @@ describe('GitHubIssueService pull status', () => {
     h.client.failChecks = Object.assign(new Error('insufficient-permission'), { code: 'insufficient-permission', status: 403 })
     expect(await h.service.pullChecks({ projectId: 'project-1', pullNumber: 1 })).toEqual({ status: 'hidden' })
     h.client.failChecks = Object.assign(new Error('request-failed'), { code: 'request-failed', status: 502 })
+    h.advance(15_000)
     expect(await h.service.pullChecks({ projectId: 'project-1', pullNumber: 1 })).toEqual({ status: 'unavailable' })
     expect(await h.service.pullChecks({ projectId: 'project-1', pullNumber: -3 })).toEqual({ status: 'unavailable' })
+  })
+
+  it('bounds check-detail reads: one per PR per 15 s, ten per project per minute', async () => {
+    const h = harness()
+    h.client.checks = { status: 'no-checks' }
+    await h.service.pullChecks({ projectId: 'project-1', pullNumber: 1 })
+    await h.service.pullChecks({ projectId: 'project-1', pullNumber: 1 })
+    expect(h.client.checkReads).toBe(1)
+    for (let number = 2; number <= 10; number++) {
+      await h.service.pullChecks({ projectId: 'project-1', pullNumber: number })
+    }
+    expect(h.client.checkReads).toBe(10)
+    const contexts = h.contexts()
+    for (let number = 11; number <= 20; number++) {
+      expect(await h.service.pullChecks({ projectId: 'project-1', pullNumber: number }))
+        .toEqual({ status: 'unavailable' })
+    }
+    expect(h.client.checkReads).toBe(10)
+    // Refused before a context (the credential chain) is resolved.
+    expect(h.contexts()).toBe(contexts)
+    h.advance(60_000)
+    await h.service.pullChecks({ projectId: 'project-1', pullNumber: 21 })
+    expect(h.client.checkReads).toBe(11)
   })
 
   it('does not ask for check detail once the list read showed the token cannot read checks', async () => {

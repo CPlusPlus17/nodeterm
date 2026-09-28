@@ -4,6 +4,7 @@ import type { GitHubIssuesApi } from '@shared/github-issues'
 import type { GitHubPullBoard } from '@shared/github-pull-status'
 import { sanitizeKanbanPullAutoMove } from '@shared/kanban-pull-links'
 import { useSettings } from '../../state/settings'
+import { useProjects } from '../../state/projects'
 import { autoMoveNote, planPullAutoMoves } from '../../lib/pullAutoMove'
 import { documentChaseDeps, startPullChase } from '../../lib/pullChase'
 
@@ -21,9 +22,12 @@ export function usePullAutoMove(input: {
   onAutoMove?: (cardId: string, fromColumnId: string | null, toColumnId: string, note: string) => void
 }): void {
   const raw = useSettings((state) => state.settings.kanbanPullAutoMove)
+  // A relay tab is another machine's project: that machine decides whether its board moves itself.
+  // Settings refuses to arm one; this is the backstop for a hand-edited settings.json.
+  const relay = useProjects((state) => !!state.projects.find((item) => item.id === input.projectId)?.remote)
   const entry = useMemo(
-    () => sanitizeKanbanPullAutoMove(raw).projects[input.projectId],
-    [raw, input.projectId]
+    () => relay ? undefined : sanitizeKanbanPullAutoMove(raw).projects[input.projectId],
+    [raw, input.projectId, relay]
   )
   const { projectId, cards, board, pullBoard, onAutoMove } = input
   useEffect(() => {

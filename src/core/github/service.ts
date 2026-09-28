@@ -46,6 +46,13 @@ export const HEARTBEAT_ETAG_KEY = 'heartbeat'
 export const REFRESH_MIN_INTERVAL_MS = 30_000
 export const FULL_REFRESH_MIN_INTERVAL_MS = 120_000
 
+/** Check detail is read when a PR's modal opens — reachable from the renderer AND a relay guest,
+ *  and each read is a GraphQL request plus a credential resolve. So: the same PR within this window
+ *  shares one read, and a project gets at most `PULL_CHECKS_PER_MINUTE` reads a minute. Both are
+ *  checked before anything is resolved or sent. */
+export const PULL_CHECKS_REUSE_MS = 15_000
+export const PULL_CHECKS_PER_MINUTE = 10
+
 export interface GitHubIssuesClientLike {
   listIssues(repository: string, options: ListIssueOptions): Promise<IssuePageResult>
   issuesHeartbeat(repository: string, etag?: string): Promise<IssueHeartbeatResult>
@@ -213,6 +220,8 @@ export class GitHubIssueService {
   private readonly refreshFloors = new Map<string, { any: number; full: number }>()
   /** Pull request CI/mergeability per repository key — see pull-status-tracker.ts. */
   private readonly pulls: GitHubPullStatusTracker
+  private readonly checkReads = new Map<string, { at: number; result: Promise<GitHubPullChecksResult> }>()
+  private readonly checkStarts = new Map<string, number[]>()
   private operationSequence = 0
   private readonly now: () => number
   private readonly schedule: NonNullable<ServiceOptions['setInterval']>
@@ -712,6 +721,25 @@ export class GitHubIssueService {
     if (!Number.isSafeInteger(request.pullNumber) || request.pullNumber < 1) {
       return { status: 'unavailable' }
     }
+    const now = this.now()
+    const key = `${request.projectId}\0${request.pullNumber}`
+    const recent = this.checkReads.get(key)
+    if (recent && now - recent.at < PULL_CHECKS_REUSE_MS) return recent.result
+    const starts = (this.checkStarts.get(request.projectId) ?? []).filter((at) => now - at < 60_000)
+    if (starts.length >= PULL_CHECKS_PER_MINUTE) {
+      this.checkStarts.set(request.projectId, starts)
+      return { status: 'unavailable' }
+    }
+    this.checkStarts.set(request.projectId, [...starts, now])
+    for (const [candidate, entry] of this.checkReads) {
+      if (now - entry.at >= PULL_CHECKS_REUSE_MS) this.checkReads.delete(candidate)
+    }
+    const result = this.readPullChecks(request)
+    this.checkReads.set(key, { at: now, result })
+    return result
+  }
+
+  private async readPullChecks(request: { projectId: string; pullNumber: number }): Promise<GitHubPullChecksResult> {
     let captured: GitHubIssueServiceContext
     try {
       captured = await this.options.contextForProject(request.projectId)
