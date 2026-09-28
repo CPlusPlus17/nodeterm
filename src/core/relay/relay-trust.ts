@@ -105,6 +105,17 @@ export interface TrustGateOptions {
    * trusts. It never touches the REMOTE half: the peer's human (or the peer's own pin) must still
    * confirm over the encrypted tunnel before anything opens. Absent/false = byte-identical legacy
    * behavior (nothing is sent until `confirmHere()`).
+   *
+   * (a) The confirm is sent SYNCHRONOUSLY, inside `createTrustGate` itself — before the caller has
+   * even stored the returned gate. `sendConfirm` must therefore already be able to deliver: over an
+   * in-process transport the relay socket may not exist yet during `onReady`, and a confirm sent
+   * into nothing is lost silently (a pinned reconnect then never opens). A caller that cannot promise
+   * that passes `false` and calls `confirmHere()` itself once the socket and the gate exist, as the
+   * core relay host and client do.
+   *
+   * (b) Derive it from the caller's OWN pin store, for exactly `peerKeyB64` (this session's ECDH
+   * peer key) — never from anything the peer sent. A value the peer can influence turns this into a
+   * remote-controlled local confirm, i.e. one-way approval.
    */
   autoApprove?: boolean
 }

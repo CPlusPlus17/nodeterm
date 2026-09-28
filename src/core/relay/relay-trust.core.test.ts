@@ -40,6 +40,7 @@ describe('core trust gate', () => {
     t.flush()
     await new Promise((r) => setTimeout(r, 10))
     expect(t.opened).toEqual([])
+    expect(t.recorded).toEqual([])
     t.peer.confirmHere()
     t.flush()
     await vi.waitFor(() => expect(t.opened.sort()).toEqual(['host', 'peer']))
