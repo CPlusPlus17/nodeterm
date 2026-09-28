@@ -574,12 +574,16 @@ import { chordHeld, isHoldChord, isModifierEventKey, matchesShortcut } from '@sh
 // The dispatch below is the CONSUMER of the confirm-gated set. Before this import the set named
 // write/close as "the confirm-gated pair" from inside `src/main` — which this project cannot see —
 // while the gating lived in two hand-written blocks here, so the set decided nothing.
-import { isDestructiveVerb, dryRunRequested, runNowRequested } from '@shared/control-verbs'
+import {
+  isDestructiveVerb,
+  dryRunRequested,
+  runNowRequested,
+  RUN_NOW_AFTER_REFUSAL
+} from '@shared/control-verbs'
 import {
   headlessStartNoticeText,
   mergeRunNow,
   planRunVerb,
-  RUN_NOW_AFTER_REFUSAL,
   savePendingAnywhere,
   startHeadless,
   type HeadlessStartOutcome

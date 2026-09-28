@@ -6,9 +6,6 @@ import type { CanvasNodeState, PendingLaunch, Project, PtyCreateOptions } from '
 import type { HeadlessLaunchFailure, HeadlessLaunchResult } from '@shared/headless-launch'
 import { HEADLESS_COLS, HEADLESS_ROWS, localNodePtyOptions } from '@shared/node-pty-options'
 
-export const RUN_NOW_AFTER_REFUSAL =
-  'run-now-after-unsupported: --run-now cannot be combined with --after'
-
 export type RunVerbPlan =
   | 'nothing-queued'
   | 'already-starting'

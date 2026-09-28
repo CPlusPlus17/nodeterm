@@ -36,6 +36,7 @@ import {
 import { assembleLaunchCommand } from '../shared/agents/launch'
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { oneLine } from '../shared/one-line'
+import { RUN_NOW_AFTER_REFUSAL, runNowRequested } from '../shared/control-verbs'
 import { isRemoteSessionNode } from '../shared/worktree'
 import { UNKNOWN_CODEX_CLI_CAPS } from '../shared/types'
 import type {
@@ -1053,10 +1054,18 @@ export class HeadlessNodeFactory {
       if (flagError) return { ok: false, error: `run: ${flagError}` }
       const id = (args.node ?? '').trim()
       if (!this.ownsSpawn(sourceNodeId, id)) return this.ownershipRefusal('run', sourceNodeId, id)
+      // Resolve through the ownership record, never by first id match: node ids repeat across
+      // projects (a committed project.json opened from a second folder), and `attach()` is keyed
+      // by id alone, so a stranger copy sorting first would be claimed while the owned session is
+      // typed into. `close` resolves the same way. A `--project` naming any other project is the
+      // desktop's lookup inside the named project coming up empty.
+      const owner = this.ownership.ownerOf(id)!
+      const noNode: ServerControlReply = { ok: false, error: `run: no node with id ${id}` }
+      if (args.project !== undefined && args.project !== owner.projectId) return noNode
       const workspace = await this.deps.workspaceStore.load({ sideline: false })
-      const project = workspace.projects.find((p) => p.nodes.some((n) => n.id === id))
+      const project = workspace.projects.find((p) => p.id === owner.projectId)
       const node = project?.nodes.find((n) => n.id === id)
-      if (!project || !node) return { ok: false, error: `run: no node with id ${id}` }
+      if (!project || !node) return noNode
       const held = node.pendingLaunch
       if (!held?.command) return { ok: false, error: `run-nothing-queued: ${id} has no queued launch` }
       // A remote node is NEVER spawned locally, and this launcher only spawns locally. Refuse
@@ -1138,12 +1147,16 @@ export class HeadlessNodeFactory {
     return this.runExclusive(async () => {
       const flagError = unsupportedFlags(
         args,
-        // `run-now` (#925) is accepted and ignored: a server open already delivers immediately.
+        // `run-now` (#925) is a no-op, since a server open already delivers immediately; only its
+        // pairing with `--after` is refused, just below.
         verb === 'open-terminal'
           ? new Set(['count', 'cwd', 'cmd', 'after', 'project', 'run-now'])
           : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model', 'run-now'])
       )
       if (flagError) return { ok: false, error: `${verb}: ${flagError}` }
+      // "Start now" and "start when X is done" contradict each other: refused in the desktop's
+      // words, before anything is created, rather than silently opening an armed node.
+      if (runNowRequested(args) && args.after) return { ok: false, error: RUN_NOW_AFTER_REFUSAL }
       if (!verified) {
         return {
           ok: false,

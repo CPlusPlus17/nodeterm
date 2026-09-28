@@ -8,6 +8,7 @@ import { fakePlatform } from '../core/platform-fake'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { WorkspaceStore } from '../core/workspace-store'
 import type { AgentState } from '../shared/agents/normalize'
+import { RUN_NOW_AFTER_REFUSAL } from '../shared/control-verbs'
 import {
   DEFAULT_SETTINGS,
   type CanvasNodeState,
@@ -1326,6 +1327,51 @@ describe('HeadlessNodeFactory', () => {
     expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'brief'" }])
   })
 
+  it('refuses --run-now with --after on open-terminal before anything is created, saved or sent (#925)', async () => {
+    states['term-upstream'] = 'working'
+    const save = vi.spyOn(store, 'save')
+    const reply = await factory.openTerminal(
+      'term-source',
+      { cwd: projectDir, cmd: 'printf hi', after: 'term-upstream', 'run-now': '' },
+      true
+    )
+    expect(reply).toEqual({ ok: false, error: RUN_NOW_AFTER_REFUSAL })
+    expect(save).not.toHaveBeenCalled()
+    expect(pty.creates).toEqual([])
+    expect(pty.sends).toEqual([])
+    expect(published).toEqual([])
+    expect((await store.load({ sideline: false })).projects[0].nodes).toHaveLength(3)
+  })
+
+  it('refuses --run-now with --after on open-agent in the same words (#925)', async () => {
+    states['term-upstream'] = 'working'
+    const save = vi.spyOn(store, 'save')
+    const reply = await factory.openAgent(
+      'term-source',
+      { agent: 'claude', prompt: 'brief', after: 'term-upstream', 'run-now': '1' },
+      true
+    )
+    expect(reply).toEqual({ ok: false, error: RUN_NOW_AFTER_REFUSAL })
+    expect(save).not.toHaveBeenCalled()
+    expect(pty.creates).toEqual([])
+    expect(pty.sends).toEqual([])
+  })
+
+  it('an explicit --run-now 0 is off, so --after still arms (#925)', async () => {
+    states['term-upstream'] = 'working'
+    const reply = await factory.openAgent(
+      'term-source',
+      { agent: 'claude', prompt: 'consume result', after: 'term-upstream', 'run-now': '0' },
+      true
+    )
+    expect(reply.ok).toBe(true)
+    const id = (reply.result as { id: string }).id
+    expect(reply.result).toMatchObject({ queued: true, queuedIds: [id], deliveredIds: [] })
+    expect(pty.sends).toEqual([])
+    const node = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
+    expect(node?.pendingLaunch).toMatchObject({ after: ['term-upstream'], attempted: false })
+  })
+
   it('run delivers a retained launch for the node owner (#925)', async () => {
     const spy = vi.spyOn(pty, 'writeHeadless').mockReturnValue(false)
     const opened = await factory.openTerminal('term-source', { cwd: projectDir, cmd: 'printf hi' }, true)
@@ -1408,6 +1454,64 @@ describe('HeadlessNodeFactory', () => {
     await factory.refreshArmed({ nodeId: agentNode, state: 'working' })
     await factory.refreshArmed({ nodeId: agentNode, state: 'done' })
     expect(pty.sends).toEqual([{ nodeId: depId, text: 'printf after' }])
+  })
+
+  describe('run with a node id that two projects share (#925)', () => {
+    // A committed `.nodeterm/project.json` opened from a second folder carries the same node ids.
+    // The copy this caller spawned is in `project-1`; the stranger sorts FIRST.
+    const held = { after: [], command: 'printf dup', executor: 'server' as const, attempted: false }
+    let otherDir = ''
+
+    beforeEach(async () => {
+      otherDir = path.join(dataDir, 'other')
+      fs.mkdirSync(otherDir, { recursive: true })
+      const workspace = await store.load({ sideline: false })
+      workspace.projects[0].nodes.push({ ...terminal('term-dup', 'Owned copy'), pendingLaunch: held })
+      workspace.projects.unshift({
+        id: 'project-0',
+        name: 'Other checkout',
+        color: '#0a84ff',
+        cwd: otherDir,
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [terminal('term-dup', 'Stranger copy')],
+        bridges: [],
+        ropes: []
+      })
+      await store.save(workspace)
+      ownership.record('term-dup', { sourceNodeId: 'term-source', projectId: 'project-1' })
+      const ordered = (await store.load({ sideline: false })).projects.map((p) => p.id)
+      expect(ordered).toEqual(['project-0', 'project-1'])
+    })
+
+    const copies = async (): Promise<Record<string, CanvasNodeState | undefined>> => {
+      const workspace = await store.load({ sideline: false })
+      return Object.fromEntries(
+        workspace.projects.map((p) => [p.id, p.nodes.find((n) => n.id === 'term-dup')])
+      )
+    }
+
+    it('delivers and clears the OWNED copy, leaving the other project untouched', async () => {
+      const before = (await copies())['project-0']
+      const reply = await factory.run('term-source', { node: 'term-dup' }, true)
+      expect(reply).toMatchObject({ ok: true, result: { started: true, startedIds: ['term-dup'] } })
+      expect(pty.creates).toEqual([
+        expect.objectContaining({ persistKey: 'term-dup', ownerProjectId: 'project-1' })
+      ])
+      expect(pty.sends).toEqual([{ nodeId: 'term-dup', text: 'printf dup' }])
+      const after = await copies()
+      expect(after['project-1']?.pendingLaunch).toBeUndefined()
+      expect(after['project-0']).toEqual(before)
+    })
+
+    it('refuses a --project that is not the owned node\'s project, as the desktop does', async () => {
+      expect(await factory.run('term-source', { node: 'term-dup', project: 'project-0' }, true))
+        .toEqual({ ok: false, error: 'run: no node with id term-dup' })
+      expect(pty.creates).toEqual([])
+      expect((await copies())['project-1']?.pendingLaunch).toEqual(held)
+      // The owned project named explicitly is the same as naming none.
+      expect(await factory.run('term-source', { node: 'term-dup', project: 'project-1' }, true))
+        .toMatchObject({ ok: true, result: { started: true } })
+    })
   })
 
   it('run refuses an SSH node before any claim (#925)', async () => {

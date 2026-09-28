@@ -117,6 +117,11 @@ export function runNowRequested(args: Record<string, string | undefined>): boole
   return !/^(false|no|0)$/i.test(v.trim())
 }
 
+/** "Start now" and "start when X is done" contradict each other, so `--run-now` with `--after` is
+ *  refused on every open verb. Shared so the desktop and the Server Edition refuse in one sentence. */
+export const RUN_NOW_AFTER_REFUSAL =
+  'run-now-after-unsupported: --run-now cannot be combined with --after'
+
 /** The refusal for `--dry-run` on a verb outside DRY_RUN_VERBS — derived from the set so the
  *  sentence can never name a verb the gate does not honour. */
 export function dryRunRefusal(verb: string): string {
