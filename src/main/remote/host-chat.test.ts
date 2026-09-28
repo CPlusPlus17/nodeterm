@@ -67,7 +67,7 @@ describe('host-chat page', () => {
     await expect(createHostChat(d).page('n1', {})).rejects.toThrow()
   })
   it('serves only chat-capable agents (resolved through the base harness), and reads nothing otherwise', async () => {
-    for (const agentId of ['codex', 'gemini', undefined]) {
+    for (const agentId of ['codex', 'antigravity', undefined]) {
       const d = deps({ lookupNode: () => ({ agentId, sessionId: 'sid-1' }) })
       expect(await createHostChat(d).page('n1', {})).toBe('unsupported')
       expect(d.readTranscript).not.toHaveBeenCalled()
@@ -79,6 +79,11 @@ describe('host-chat page', () => {
     } finally {
       setCustomAgentBaseResolver(null)
     }
+  })
+  it('serves gemini, handing its OWN agent id to the reader (which routes it off claude\'s resolver)', async () => {
+    const d = deps({ lookupNode: () => ({ agentId: 'gemini', sessionId: 'sid-1' }) })
+    expect(await createHostChat(d).page('n1', {})).toMatchObject({ version: 1 })
+    expect(d.readTranscript).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'gemini', sessionId: 'sid-1' }), {})
   })
   it('an absent page is the default paged tail, not the legacy read', async () => {
     const d = deps()

@@ -1927,6 +1927,20 @@ else, and its context links must keep classifying across restarts).
   in its frame) + Google's migration guide. It types and relaunches NOTHING, which is why a phrase
   match is enough here where `resume-fallback.ts` needs three refusals. `AgentConfig.notice` carries
   the one-line caveat to the menus/Dock tooltips; it is never read to decide behaviour.
+- **Gemini ⌘M chat view** (2026-09, `core/gemini-chat.ts`) — gemini is in `CHAT_CAPABLE` with its own
+  reader, routed in `readChatTranscript` via `capabilityAgentId` BEFORE anything claude-shaped and
+  located only by the header session id (`locateGemini`, which now reads just the header and honours
+  `GEMINI_CLI_HOME`). Its session file is an UPSERT log, not a message list: one id is rewritten in
+  full as tool results/tokens land, `$rewindTo` truncates, and `$set.messages` replaces the MODEL's
+  context at start, compression and rollback. The thread is the message records upserted by id with
+  rewinds honoured and **`$set.messages` ignored** — honouring it erases the thread at every
+  compression and shows the `<state_snapshot>` as the human's words. Not paged (a record depends on
+  earlier ones): one read under the 5 MB cap, `olderCursor: null`, like grok. Shows typed prompts
+  (`displayContent` over `@file` expansion; `<session_context>`/`<hook_context>` dropped per part),
+  replies, tool calls with results, `[info]`/`[warning]`/`[error]` notes and (paged) the model;
+  thinking is dropped. NOT supported: remote (SSH) nodes (`CHAT_LOCAL_ONLY` → "not supported yet"),
+  plan/question answer cards, the composer's model/effort labels. The phone gets it over the relay
+  unchanged; fixtures and exact rules: `src/shared/chat-fixtures/gemini/`, `docs/gemini-agent.md` §3.
 - **Claude session context capacity (#818)** — the managed hook reports only
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` from the effective Claude process environment (including
   `--settings` env), never the GUI/server process environment. HookServer validates decimal safe
