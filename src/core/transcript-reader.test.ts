@@ -746,3 +746,63 @@ describe('parseTranscriptLines — local-command records', () => {
     ])
   })
 })
+
+// Review round 1: an isMeta record that STARTS a turn (a peer hand-back, a scheduled / loop wakeup,
+// an auto-continuation) is claude marking where the prompt came from, not a meta record to hide —
+// without it a /loop thread shows replies with no prompt between them. Measured: those carry
+// `promptSource` and/or `origin` / `turnOrigin`; the caveat and skill bodies carry none of them.
+describe('isMeta records that start a turn stay visible', () => {
+  const peer = userStr('Peer says: the build is green.', {
+    isMeta: true,
+    promptSource: 'system',
+    origin: { kind: 'peer', from: 'demo-peer', body: 'the build is green', handback: true },
+    turnOrigin: 'peer'
+  })
+  const scheduled = userStr('Scheduled check: run the demo report.', {
+    isMeta: true,
+    promptSource: 'system',
+    turnOrigin: 'scheduled',
+    scheduledTaskId: 'task-demo-1'
+  })
+  const autoCont = userStr('Continue from where you left off.', {
+    isMeta: true,
+    promptSource: 'system',
+    origin: { kind: 'auto-continuation' }
+  })
+  const onlyTurnOrigin = userStr('turn origin only', { isMeta: true, turnOrigin: 'system' })
+  const onlyOrigin = userStr('origin only', { isMeta: true, origin: { kind: 'peer' } })
+  const onlyPromptSource = userStr('prompt source only', { isMeta: true, promptSource: 'system' })
+  const nulls = userStr('all null', { isMeta: true, promptSource: null, origin: null, turnOrigin: null })
+
+  it('keeps peer / scheduled / auto-continuation prompts as user messages; still skips the caveat', () => {
+    const msgs = parseChatMessages(
+      (userStr(CAVEAT, { isMeta: true }) + peer + scheduled + autoCont + onlyTurnOrigin + onlyOrigin + onlyPromptSource + nulls).split('\n')
+    )
+    expect(msgs.map((m) => [m.role, textOfMsg(m)])).toEqual([
+      ['user', 'Peer says: the build is green.'],
+      ['user', 'Scheduled check: run the demo report.'],
+      ['user', 'Continue from where you left off.'],
+      ['user', 'turn origin only'],
+      ['user', 'origin only'],
+      ['user', 'prompt source only']
+    ])
+  })
+
+  it('the find-bar index applies the same rule', () => {
+    expect(parseTranscriptLines(userStr(CAVEAT, { isMeta: true }) + scheduled + onlyOrigin)).toEqual([
+      { role: 'user', text: 'Scheduled check: run the demo report.' },
+      { role: 'user', text: 'origin only' }
+    ])
+  })
+})
+
+describe('command args are capped like tool args', () => {
+  it('caps a slash command arg and a `!` command at 200 characters', () => {
+    const long = 'a'.repeat(250)
+    expect(parseChatMessages(cmdRec('/compact', long).split('\n'))[0].parts[0]).toMatchObject({ arg: 'a'.repeat(200) })
+    expect(parseChatMessages(userStr(`<bash-input>${long}</bash-input>`).split('\n'))[0].parts[0]).toMatchObject({
+      name: '!',
+      arg: 'a'.repeat(200)
+    })
+  })
+})

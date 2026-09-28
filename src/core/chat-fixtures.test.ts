@@ -333,6 +333,8 @@ function localCommands(): string {
     isMeta(user(CAVEAT)),
     slash('/effort', '  high  '),
     user('<local-command-stderr>Effort set to \u001b[36mhigh\u001b[39m</local-command-stderr>'),
+    // An arg longer than the 200-unit cap (`CHAT_TOOL_ARG_MAX`): trimmed, then cut at 200.
+    slash('/compact', ' keep the ' + 'demo '.repeat(60) + 'notes '),
     // A command whose stdout is empty: no result.
     slash('/exit'),
     user('<local-command-stdout></local-command-stdout>'),
@@ -359,6 +361,40 @@ function bashMode(): string {
     user('<bash-stdout></bash-stdout><bash-stderr>cat: missing.txt: No such file or directory</bash-stderr>'),
     user('What was in a.txt?'),
     assistant([text('Twelve bytes of demo text.')])
+  ])
+}
+
+/** `isMeta` records that START a turn stay user messages; only the ones carrying none of
+ *  `promptSource` / `origin` / `turnOrigin` (the caveat, a skill body) are skipped. Shapes measured
+ *  (fields only — the texts here are invented). */
+function metaTurns(): string {
+  return jsonl([
+    user('Keep an eye on the demo build.'),
+    isMeta(user(CAVEAT)),
+    // A peer / subagent hand-back.
+    {
+      ...isMeta(user('Hand-back from demo-peer: the demo build is green.')),
+      promptSource: 'system',
+      origin: { kind: 'peer', from: 'demo-peer', senderTaskId: 'task-demo-7', body: 'the demo build is green', handback: true },
+      turnOrigin: 'peer'
+    },
+    assistant([text('Noted: green.')]),
+    // A scheduled / loop wakeup.
+    {
+      ...isMeta(user('Scheduled wakeup: check the demo build again.')),
+      promptSource: 'system',
+      turnOrigin: 'scheduled',
+      scheduledTaskId: 'sched-demo-1'
+    },
+    assistant([text('Still green.')]),
+    // An auto-continuation.
+    { ...isMeta(user('Continue from where you left off.')), promptSource: 'system', origin: { kind: 'auto-continuation' } },
+    assistant([text('Continuing.')]),
+    // `promptSource` alone is enough to keep it.
+    { ...isMeta(user('System prompt source only.')), promptSource: 'system' },
+    assistant([text('Seen.')]),
+    // A skill body (isMeta, none of the three fields): still skipped.
+    isMeta(user([text('Base directory for this skill: /srv/demo/skills/demo-skill')]))
   ])
 }
 
@@ -471,7 +507,8 @@ const INPUTS: Record<string, string> = {
   'model-effort-utf16.jsonl': modelEffortUtf16(),
   'thinking.jsonl': thinking(),
   'local-commands.jsonl': localCommands(),
-  'bash-mode.jsonl': bashMode()
+  'bash-mode.jsonl': bashMode(),
+  'meta-turns.jsonl': metaTurns()
 }
 
 // ── Plumbing ─────────────────────────────────────────────────────────────────────────────────────

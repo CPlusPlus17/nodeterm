@@ -1,4 +1,5 @@
 import type { ChatMessage, ChatPart, ChatTranscriptResult } from '@shared/types'
+import { BASH_COMMAND_TOOL, sentCommand } from '@shared/chat-command'
 
 /**
  * Pure paging state for the ⌘M chat panel (`nodes/ChatPanel.tsx`). The panel reads a SMALL tail
@@ -127,6 +128,14 @@ const userText = (m: ChatMessage): string =>
     .join('')
     .trim()
 
+/** A command message's tool part (`/model`, `!`), as the reader renders a command record. */
+function commandPart(m: ChatMessage): { name: string; arg: string } | null {
+  if (m.role !== 'assistant' || m.parts.length !== 1) return null
+  const p = m.parts[0]
+  if (p.kind !== 'tool' || (p.name !== BASH_COMMAND_TOOL && !p.name.startsWith('/'))) return null
+  return { name: p.name, arg: p.arg.trim() }
+}
+
 /**
  * The optimistic "just sent" bubbles a LIVE tail read must not drop. A live read fires on the very
  * hook event the send caused (UserPromptSubmit), racing the agent's own transcript write — so the
@@ -137,7 +146,9 @@ const userText = (m: ChatMessage): string =>
  * unkeyed; grok's thread is unkeyed throughout, but its whole-file read contains every prompt it
  * rendered, so each one is matched and dropped). Each one is dropped when the new read contains a user message with
  * the same trimmed text, ONE-FOR-ONE, and only among messages NEWER than anything the thread had
- * keyed — an older identical "yes" already on screen must not confirm a new "yes".
+ * keyed — an older identical "yes" already on screen must not confirm a new "yes". A sent slash
+ * command / `!` line is confirmed the same way by a command tool part (`sentCommand`): same name,
+ * and the same trimmed arg when both sides have one.
  *
  * A non-live reload (turn end, ↻) never carries: by then the transcript holds the prompt, and a
  * send whose transcript line never matches (a CLI that rewrites the prompt) must not stay duplicated.
@@ -152,13 +163,22 @@ function unconfirmedSends(t: ChatThread, res: ChatTranscriptResult): ChatMessage
   if (trailing.length === 0) return []
   let newest = -Infinity
   for (const m of t.messages) if (m.key !== undefined && m.key > newest) newest = m.key
-  const available = res.messages
-    .filter((m) => m.role === 'user' && (m.key === undefined || m.key > newest))
-    .map(userText)
+  const fresh = res.messages.filter((m) => m.key === undefined || m.key > newest)
+  const available = fresh.filter((m) => m.role === 'user').map(userText)
+  // A slash command / `!` line is recorded as a command, which the reader renders as an assistant
+  // tool part — never as the typed text — so a send of one is confirmed by that part instead.
+  const commands = fresh.map(commandPart).filter((c): c is { name: string; arg: string } => c !== null)
   return trailing.filter((m) => {
     const i = available.indexOf(userText(m))
-    if (i < 0) return true
-    available.splice(i, 1)
+    if (i >= 0) {
+      available.splice(i, 1)
+      return false
+    }
+    const sent = sentCommand(userText(m))
+    if (!sent) return true
+    const j = commands.findIndex((c) => c.name === sent.name && (!c.arg || !sent.arg || c.arg === sent.arg))
+    if (j < 0) return true
+    commands.splice(j, 1)
     return false
   })
 }

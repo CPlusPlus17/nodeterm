@@ -10,6 +10,7 @@ import { linkedClaudeConfigDirFor } from './claude-config-dir'
 import { platform } from './platform'
 import { toolBody } from './chat-tool-body'
 import { ASK_USER_QUESTION_TOOL, readQuestions } from '../shared/agents/permission-answer'
+import { BASH_COMMAND_TOOL, CHAT_TOOL_ARG_MAX } from '../shared/chat-command'
 
 // Transcript root for a managed account (its `projects` dir) or the system default
 // (`~/.claude/projects` when accountId is undefined — bit-for-bit the old behavior). Impure
@@ -48,10 +49,9 @@ function toolArg(input: unknown): string {
   if (!input || typeof input !== 'object') return ''
   const o = input as Record<string, unknown>
   const v = o.command ?? o.file_path ?? o.path ?? o.pattern ?? o.description ?? o.prompt
-  return typeof v === 'string' ? v.slice(0, 200) : ''
+  return typeof v === 'string' ? v.slice(0, CHAT_TOOL_ARG_MAX) : ''
 }
 
-// Extract 0..n searchable lines from one raw transcript JSONL line.
 // ── Local-command records ────────────────────────────────────────────────────────────────────────
 // A slash command (`/model`) and a `!` bash-mode line are written by claude as `type:"user"` records
 // whose content is a STRING of tags — measured on real transcripts (2026-09):
@@ -109,16 +109,37 @@ function outputText(tags: Map<string, string>): string {
     .join('\n')
 }
 
+/** A command's arg: trimmed, then capped like `toolArg` (the composer's `sentCommand` agrees). */
+const capArg = (v: string | undefined): string => (v ?? '').trim().slice(0, CHAT_TOOL_ARG_MAX)
+
+/**
+ * claude's own meta records — the local-command caveat, skill bodies, injected reminders — are not
+ * something the user said, and are skipped. But an `isMeta` record that STARTS a turn (a peer
+ * hand-back, a scheduled / loop wakeup, an auto-continuation) says where that turn's prompt came
+ * from, and hiding it leaves replies with no prompt between them. Measured: those carry
+ * `promptSource` and/or `origin` / `turnOrigin` (present and not null); the hidden kinds carry none.
+ * Measured too: no `isMeta` record carries a tool_result, so skipping one loses nothing.
+ */
+export function isHiddenMetaRecord(o: {
+  type?: string
+  isMeta?: unknown
+  promptSource?: unknown
+  origin?: unknown
+  turnOrigin?: unknown
+}): boolean {
+  return o.type === 'user' && o.isMeta === true && o.promptSource == null && o.origin == null && o.turnOrigin == null
+}
+
 export function classifyLocalCommand(content: string): LocalCommandRecord | null {
   const tags = tagSequence(content)
   if (!tags) return null
   if (onlyFrom(tags, SLASH_TAGS)) {
     const name = (tags.get('command-name') ?? '').trim()
     if (!name) return null
-    return { kind: 'command', family: 'slash', name, arg: (tags.get('command-args') ?? '').trim() }
+    return { kind: 'command', family: 'slash', name, arg: capArg(tags.get('command-args')) }
   }
   if (onlyFrom(tags, BASH_INPUT_TAGS)) {
-    return { kind: 'command', family: 'bash', name: '!', arg: (tags.get('bash-input') ?? '').trim() }
+    return { kind: 'command', family: 'bash', name: BASH_COMMAND_TOOL, arg: capArg(tags.get('bash-input')) }
   }
   if (onlyFrom(tags, SLASH_OUT_TAGS)) return { kind: 'output', family: 'slash', text: outputText(tags) }
   if (onlyFrom(tags, BASH_OUT_TAGS)) return { kind: 'output', family: 'bash', text: outputText(tags) }
@@ -128,8 +149,9 @@ export function classifyLocalCommand(content: string): LocalCommandRecord | null
 /** The name an output record's tool part gets when there is no command to attach it to. */
 export const COMMAND_OUTPUT_TOOL = 'command output'
 
+// Extract 0..n searchable lines from one raw transcript JSONL line.
 function linesFrom(raw: string): TranscriptLine[] {
-  let o: { type?: string; isMeta?: unknown; message?: { content?: unknown } }
+  let o: Parameters<typeof isHiddenMetaRecord>[0] & { message?: { content?: unknown } }
   try {
     o = JSON.parse(raw)
   } catch {
@@ -137,9 +159,8 @@ function linesFrom(raw: string): TranscriptLine[] {
   }
   // Same rule as the chat parser: a `null` / scalar line is one skipped line, never a failed read.
   if (!o || typeof o !== 'object' || Array.isArray(o)) return []
-  // Same rule as the chat parser: claude's own meta records (the local-command caveat, skill bodies,
-  // injected reminders) are not something the user said.
-  if (o.type === 'user' && o.isMeta === true) return []
+  // Same rule as the chat parser (see `isHiddenMetaRecord`).
+  if (isHiddenMetaRecord(o)) return []
   const content = o.message?.content
   const out: TranscriptLine[] = []
   if (o.type === 'assistant' && Array.isArray(content)) {
@@ -279,9 +300,7 @@ function parseChatRecords(
   }
   for (const { raw, offset } of records) {
     if (!raw.trim()) continue
-    let o: {
-      type?: string
-      isMeta?: unknown
+    let o: Parameters<typeof isHiddenMetaRecord>[0] & {
       timestamp?: unknown
       effort?: unknown
       message?: { content?: unknown; model?: unknown }
@@ -294,9 +313,7 @@ function parseChatRecords(
     // `null` / a number / a string parse fine and would throw on the reads below, failing the whole
     // page over one line another program wrote. One bad line costs one line (the Swift port agrees).
     if (!o || typeof o !== 'object' || Array.isArray(o)) continue
-    // claude's own meta records (the local-command caveat, skill bodies, injected reminders): never
-    // something the user said. Measured: none carries a tool_result, so nothing is lost by skipping.
-    if (o.type === 'user' && o.isMeta === true) continue
+    if (isHiddenMetaRecord(o)) continue
     at = lineTime(o.timestamp)
     const content = o.message?.content
     if (paged && o.type === 'assistant' && o.message?.model !== SYNTHETIC_MODEL) {

@@ -48,8 +48,8 @@
           "parts": [
             {
               "kind": "tool",
-              "name": "/exit",
-              "arg": ""
+              "name": "/compact",
+              "arg": "keep the demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo demo d"
             }
           ],
           "at": 1790362807000,
@@ -60,12 +60,24 @@
           "parts": [
             {
               "kind": "tool",
+              "name": "/exit",
+              "arg": ""
+            }
+          ],
+          "at": 1790362808000,
+          "key": 3497
+        },
+        {
+          "role": "assistant",
+          "parts": [
+            {
+              "kind": "tool",
               "name": "/demo-skill",
               "arg": ""
             }
           ],
-          "at": 1790362809000,
-          "key": 3469
+          "at": 1790362810000,
+          "key": 4170
         },
         {
           "role": "assistant",
@@ -75,8 +87,8 @@
               "text": "Using the skill."
             }
           ],
-          "at": 1790362811000,
-          "key": 4151
+          "at": 1790362812000,
+          "key": 4852
         },
         {
           "role": "assistant",
@@ -88,8 +100,8 @@
               "result": "Orphaned output second line third line"
             }
           ],
-          "at": 1790362812000,
-          "key": 4550
+          "at": 1790362813000,
+          "key": 5251
         },
         {
           "role": "user",
@@ -99,8 +111,8 @@
               "text": "Why does <command-name>/model</command-name> show up raw in the thread?"
             }
           ],
-          "at": 1790362813000,
-          "key": 4901
+          "at": 1790362814000,
+          "key": 5602
         },
         {
           "role": "assistant",
@@ -110,8 +122,8 @@
               "text": "Because it was a local command record."
             }
           ],
-          "at": 1790362814000,
-          "key": 5221
+          "at": 1790362815000,
+          "key": 5922
         }
       ],
       "olderCursor": null,
