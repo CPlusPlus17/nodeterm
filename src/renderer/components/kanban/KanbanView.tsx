@@ -4,6 +4,10 @@ import {
   boardProgress, categoryChangeImpact, categoryChangeMessage, columnCategory
 } from '@shared/kanban-category'
 import { useKanbanDisplay } from '../../state/kanbanDisplay'
+import {
+  STATUS_CHIPS, chipCounts, matchesStatusChips, parseStatusChipSig, statusChipSig,
+  type StatusChip, type StatusChipCard
+} from '../../lib/kanbanStatusChips'
 import type { NodeIcon } from '@shared/node-icon'
 import { AGENT_CONFIG, BUILTIN_AGENT_IDS, type AgentId } from '@shared/agents/config'
 import { useViewMode } from '../../state/viewMode'
@@ -159,6 +163,9 @@ export const KanbanView = memo(function KanbanView({
   // show everything; otherwise a card must carry at least one selected label (cardMatchesLabelFilter).
   const [labelFilter, setLabelFilter] = useState<string[]>([])
   const [filterOpen, setFilterOpen] = useState(false)
+  // Status chips (Running / Needs you / Unread) — TRANSIENT component state, never persisted and
+  // never part of a saved view: they filter on second-by-second agent state (lib/kanbanStatusChips).
+  const [statusChips, setStatusChips] = useState<StatusChip[]>([])
   const [source, setSource] = useState<KanbanSource>('all')
   // One GitHub summary modal for both kinds; the kind decides whether it offers a move.
   const [modalIssue, setModalIssue] = useState<
@@ -258,6 +265,7 @@ export const KanbanView = memo(function KanbanView({
   useEffect(() => {
     setSource('all')
     setModalIssue(null)
+    setStatusChips([])
   }, [projectId])
   useEffect(() => {
     if (!modalIssue || !github) return
@@ -298,6 +306,15 @@ export const KanbanView = memo(function KanbanView({
   )
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions])
   const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions])
+  // The chips' facts through a DERIVED SIGNATURE (a primitive that changes only when a card's
+  // running / needs-you / unread fact does) — never `byId`, which changes on every hook event of
+  // every node and would re-render the whole board each time.
+  const chipCards = useMemo<StatusChipCard[]>(() => sessions.map((s) => ({ id: s.id, kind: s.kind })), [sessions])
+  const statusSig = useAgentStatus((st) => statusChipSig(st.byId, chipCards))
+  const statusFacts = useMemo(() => parseStatusChipSig(statusSig), [statusSig])
+  const statusCounts = useMemo(() => chipCounts(statusFacts), [statusFacts])
+  const toggleStatusChip = (chip: StatusChip): void =>
+    setStatusChips((cur) => (cur.includes(chip) ? cur.filter((c) => c !== chip) : [...cur, chip]))
 
   // Stable per-card label arrays: labelsForCard allocates a fresh array per call, and that
   // identity churn alone would defeat SessionCard's memo. Recomputed only on a board change.
@@ -390,8 +407,15 @@ export const KanbanView = memo(function KanbanView({
   // them per column — and their identities hold across renders that change neither the board,
   // the sessions, nor the filter, which is what lets the memoized columns skip.
   const columnCards = useMemo(() => {
+    // Label filter AND status chips (each an OR within itself).
     const vis = (ids: string[]): string[] =>
-      activeLocalFilter.length ? ids.filter((id) => cardMatchesLabelFilter(board, id, activeLocalFilter)) : ids
+      activeLocalFilter.length || statusChips.length
+        ? ids.filter(
+          (id) =>
+            (!activeLocalFilter.length || cardMatchesLabelFilter(board, id, activeLocalFilter)) &&
+            matchesStatusChips(statusFacts, id, statusChips)
+        )
+        : ids
     const toCards = (ids: string[]): KanbanSession[] => {
       const cards = ids.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []))
       return cards.length ? cards : NO_CARDS
@@ -400,7 +424,7 @@ export const KanbanView = memo(function KanbanView({
       ungrouped: toCards(vis(unassigned(board, sessionIds))),
       byColumn: new Map(board.columns.map((c) => [c.id, toCards(vis(assignedTo(board, c.id)))]))
     }
-  }, [board, byId, sessionIds, activeLocalFilter])
+  }, [board, byId, sessionIds, activeLocalFilter, statusChips, statusFacts])
 
   // Lifecycle: the board's progress (null when no column says what "complete" means) and the
   // columns this user sees — `closed` ones only when they asked for them.
@@ -645,6 +669,23 @@ export const KanbanView = memo(function KanbanView({
             Showing the most recently updated pull requests only.
           </span>
         )}
+        <div className="kanban-status-chips" role="group" aria-label="Filter by agent status">
+          {STATUS_CHIPS.map(({ id, label }) => {
+            const on = statusChips.includes(id)
+            return (
+              <button
+                key={id}
+                className={`kanban-status-chip kanban-status-chip--${id}${on ? ' kanban-status-chip--on' : ''}`}
+                aria-pressed={on}
+                title={`Show only ${label.toLowerCase()} sessions (not saved — this follows live agent state)`}
+                onClick={() => toggleStatusChip(id)}
+              >
+                {label}
+                <span className="kanban-status-chip__count">{statusCounts[id]}</span>
+              </button>
+            )
+          })}
+        </div>
         {(paletteLabels.length > 0 || githubLabels.length > 0 || activeFilter.length > 0) && (
           <div className="kanban-header__filter">
             <button

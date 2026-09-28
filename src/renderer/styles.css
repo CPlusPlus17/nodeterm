@@ -11974,6 +11974,52 @@ button.group-node__setup:disabled {
   color: var(--accent);
 }
 
+/* ── Board status chips (header) — transient filters on live agent state ── */
+.kanban-status-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+.kanban-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid rgba(var(--tint-rgb), 0.12);
+  border-radius: 999px;
+  color: rgba(var(--tint-rgb), 0.65);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kanban-status-chip:hover {
+  color: var(--text-strong);
+  background: rgba(var(--tint-rgb), 0.06);
+}
+.kanban-status-chip__count {
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--tint-rgb), 0.45);
+}
+.kanban-status-chip--on {
+  border-color: var(--accent);
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.kanban-status-chip--running.kanban-status-chip--on {
+  border-color: var(--state-working);
+  background: color-mix(in srgb, var(--state-working) 14%, transparent);
+}
+.kanban-status-chip--needs.kanban-status-chip--on {
+  border-color: var(--state-attention);
+  background: color-mix(in srgb, var(--state-attention) 14%, transparent);
+}
+.kanban-status-chip--unread.kanban-status-chip--on {
+  border-color: var(--state-unread);
+  background: color-mix(in srgb, var(--state-unread) 14%, transparent);
+}
+
 /* ── Board label filter (header) ── */
 .kanban-header__filter {
   position: relative;
