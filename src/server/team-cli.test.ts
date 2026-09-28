@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseTeamArgv, runTeamCli, describeStatus } from './team-cli'
+import { parseTeamArgv, runTeamCli, describeStatus, teamArgv } from './team-cli'
 import { startTeamAdmin, adminSocketPath, type AdminStatusResult } from '../core/relay/team-admin'
 import { genKeyPair, publicKeyToB64 } from '../core/relay/e2ee'
 import type { HostedService, HostedStatus } from '../core/relay/hosted-service'
@@ -49,6 +49,26 @@ describe('team argv', () => {
 
   it('share names a bad project id', () => {
     expect(parseTeamArgv(['share', 'x'.repeat(129)])).toEqual({ error: expect.stringMatching(/128/) })
+  })
+})
+
+describe('teamArgv (main.cjs dispatch)', () => {
+  it('finds `team` as the first non-flag argument, after server flags and their values', () => {
+    expect(teamArgv(['team', 'status'])).toEqual(['status'])
+    expect(teamArgv(['--data-dir', '/x', 'team', 'status'])).toEqual(['status', '--data-dir', '/x'])
+    expect(teamArgv(['--data-dir=/x', 'team', 'info', '--json'])).toEqual(['info', '--json', '--data-dir=/x'])
+    expect(teamArgv(['--insecure-http', '--port', '9000', 'team', 'status'])).toEqual(['status'])
+    // Only --data-dir matters to the CLI; the other server flags configure a boot that is not happening.
+    expect(teamArgv(['--port', '9000', '--data-dir', '/x', 'team', 'init'])).toEqual(['init', '--data-dir', '/x'])
+  })
+
+  it('anything else is a server boot', () => {
+    expect(teamArgv([])).toBeNull()
+    expect(teamArgv(['--port', '9000'])).toBeNull()
+    expect(teamArgv(['--insecure-http'])).toBeNull()
+    // A flag value named "team" is a value, exactly as the server's own parser reads it.
+    expect(teamArgv(['--data-dir', 'team'])).toBeNull()
+    expect(teamArgv(['serve', 'team'])).toBeNull()
   })
 })
 
@@ -123,6 +143,20 @@ describe('describeStatus', () => {
   it('tolerates a reply shape it does not know (an older or newer server)', () => {
     expect(() => describeStatus({} as never)).not.toThrow()
     expect(describeStatus({ enabled: false, off: { reason: 'constructor' } } as never).join('\n')).toMatch(/Hosting: OFF — hosting is not running\./)
+  })
+
+  it('never prints control or bidi characters from lastError, the off detail or a SAS', () => {
+    const evil = 'x\u001b]0;t\u0007\u202eY\u2066'
+    const running = describeStatus(idleStatus({ idle: 0, lastError: evil })).join('\n')
+    const refused = describeStatus(idleStatus({ state: 'backend-refused', idle: 0, lastError: evil })).join('\n')
+    const recovering = describeStatus(idleStatus({ lastError: evil })).join('\n')
+    const off = describeStatus({ enabled: false, scheduler: null, peers: [], pending: [], off: { reason: 'host-key-unreadable', detail: evil } }).join('\n')
+    const sas = describeStatus(idleStatus({}, { pending: [{ pendingId: 'p', sas: evil, peerKeyB64: 'k', since: 0 }] })).join('\n')
+    const bad = new RegExp('[\\p{Cc}\\u202E\\u2066]', 'u')
+    for (const text of [running, refused, recovering, off, sas]) {
+      expect(text.replace(/\n/g, ' '), text).not.toMatch(bad)
+      expect(text).toContain('x?]0;t??Y?')
+    }
   })
 
   it('never prints control characters from a label', () => {
@@ -289,6 +323,33 @@ describe.skipIf(process.platform === 'win32')('runTeamCli over the admin socket 
     expect(miss.err).toMatch(/not running/)
     expect(miss.err).toContain(adminSocketPath(wrong))
     expect(miss.err).toMatch(/--data-dir/)
+  })
+
+  it('--json output escapes control and bidi characters (still valid JSON, nothing raw on the terminal)', async () => {
+    const dataDir = tmp()
+    fs.mkdirSync(path.join(dataDir, 'relay'), { recursive: true, mode: 0o700 })
+    const f = fake({ running: true })
+    const evilLabel = 'box\u202e\u007f'
+    f.svc.info = () => ({ ...INFO, label: evilLabel })
+    const admin = await startTeamAdmin(dataDir, f.svc)
+    closers.push(() => admin.close())
+    const r = await run(['info', '--json'], dataDir)
+    // Nothing raw but the pretty-printing newlines.
+    expect(r.out).not.toMatch(new RegExp('[\\u0000-\\u0009\\u000B-\\u001F\\u007F-\\u009F\\u202E]'))
+    expect(JSON.parse(r.out).info.label).toBe(evilLabel)
+  })
+
+  it('an error from the server is printed without control characters', async () => {
+    const dataDir = tmp()
+    const f = fake({ running: true })
+    f.svc.init = async () => {
+      throw new Error('bad\u001b[2Jthing\u202e')
+    }
+    const admin = await startTeamAdmin(dataDir, f.svc)
+    closers.push(() => admin.close())
+    const r = await run(['init'], dataDir)
+    expect(r.code).toBe(1)
+    expect(r.err).toContain('bad?[2Jthing?')
   })
 
   it('usage errors exit 2; help exits 0', async () => {

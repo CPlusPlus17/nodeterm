@@ -6,6 +6,7 @@
 // Exit codes: 0 done, 1 the server refused or could not be reached, 2 the command line is wrong.
 import path from 'node:path'
 import {
+  CONTROL_RE,
   callTeamAdmin,
   ownerKeyProblem,
   ownerLabelProblem,
@@ -16,6 +17,18 @@ import {
   type AdminRotateResult,
   type AdminStatusResult
 } from '../core/relay/team-admin'
+
+// One rule for what never reaches the admin's terminal: the same characters a label may not
+// contain (C0/C1 controls, DEL, and the text-direction controls). Server-supplied strings can carry
+// them — a hand-edited team.json, an error message quoting a path, a peer-influenced lastError.
+const CONTROL_G = new RegExp(CONTROL_RE.source, 'gu')
+const clean = (s: string): string => s.replace(CONTROL_G, '?')
+/** JSON for the terminal. JSON.stringify already escapes C0 controls inside strings, but leaves
+ *  DEL, the C1 controls and the bidi controls raw; those become \u escapes here. Still valid JSON:
+ *  they only ever occur inside strings (the raw newlines are the pretty-printing, left alone). */
+const JSON_RAW_G = /[\u007F-\u009F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g
+const safeJson = (v: unknown): string =>
+  JSON.stringify(v, null, 2).replace(JSON_RAW_G, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`)
 
 const USAGE_ROWS: Array<[string, string]> = [
   ['init', 'create the host key and the team, and start hosting'],
@@ -61,7 +74,7 @@ export function parseTeamArgv(argv: string[]): AdminRequest | { error: string } 
   const [cmd, ...rest] = argv
   if (cmd === undefined) return usageError('A command is required.')
   const spec = Object.hasOwn(COMMANDS, cmd) ? COMMANDS[cmd] : undefined
-  if (!spec) return usageError(`unknown command "${cmd}"`)
+  if (!spec) return usageError(`unknown command "${clean(cmd)}"`)
   const positionals: string[] = []
   const flags: Record<string, string | true> = {}
   for (let i = 0; i < rest.length; i++) {
@@ -73,7 +86,7 @@ export function parseTeamArgv(argv: string[]): AdminRequest | { error: string } 
     const eq = tok.indexOf('=')
     const name = tok.slice(2, eq < 0 ? undefined : eq)
     const kind = Object.hasOwn(spec.flags, name) ? spec.flags[name] : undefined
-    if (!kind) return usageError(`unknown option --${name} for "team ${cmd}"`)
+    if (!kind) return usageError(`unknown option --${clean(name)} for "team ${cmd}"`)
     if (kind === 'bool') {
       if (eq >= 0) return usageError(`--${name} takes no value`)
       flags[name] = true
@@ -109,7 +122,34 @@ export function parseTeamArgv(argv: string[]): AdminRequest | { error: string } 
       return problem ? { error: problem } : { cmd: 'share', projectId: positionals[0], on: cmd === 'share' }
     }
   }
-  return usageError(`unknown command "${cmd}"`)
+  return usageError(`unknown command "${clean(cmd)}"`)
+}
+
+/**
+ * `main.cjs [server flags] team <command> …`: the team CLI's own argv, or null for a server boot.
+ * `team` is recognised as the first NON-FLAG argument, skipping flag values the way the server's own
+ * argv parser reads them (a `--flag` followed by a non-flag token takes it as its value, except
+ * `--insecure-http`). So `main.cjs --data-dir X team status` runs the CLI rather than booting a whole
+ * second server on X. Of the flags before `team`, only `--data-dir` means anything to the CLI; it is
+ * carried over (runTeamCli reads it anywhere), and the rest configure a boot that is not happening.
+ */
+export function teamArgv(argv: string[]): string[] | null {
+  const carried: string[] = []
+  for (let i = 0; i < argv.length; i++) {
+    const tok = argv[i]
+    if (!tok.startsWith('--')) return tok === 'team' ? [...argv.slice(i + 1), ...carried] : null
+    if (tok.startsWith('--data-dir=')) {
+      carried.push(tok)
+      continue
+    }
+    if (tok.includes('=') || tok === '--insecure-http') continue
+    const next = argv[i + 1]
+    if (next !== undefined && !next.startsWith('--')) {
+      if (tok === '--data-dir') carried.push(tok, next)
+      i++
+    }
+  }
+  return null
 }
 
 /** Take a global `--data-dir <dir>` / `--data-dir=<dir>` off the command line, wherever it sits. */
@@ -134,9 +174,8 @@ function takeDataDir(argv: string[]): { dataDir?: string; argv: string[] } | { e
 
 const obj = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
-// Control characters never reach the admin's terminal: a label in a hand-edited team.json could
-// otherwise carry escape sequences.
-const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v.replace(/\p{Cc}/gu, '?') : fallback)
+// Every server-supplied string is printed through `str` (see `clean`).
+const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? clean(v) : fallback)
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`
 
@@ -170,7 +209,7 @@ export function describeStatus(result: AdminStatusResult): string[] {
   const s = obj(result)
   const lines: string[] = []
   const sched = obj(s.scheduler)
-  const lastError = typeof sched.lastError === 'string' ? sched.lastError : null
+  const lastError = typeof sched.lastError === 'string' ? str(sched.lastError) : null
   const idle = num(sched.idle)
   const bridged = num(sched.bridged)
   if (s.enabled !== true) {
@@ -256,7 +295,7 @@ function render(req: AdminRequest, result: unknown, json: boolean): { lines: str
     case 'info': {
       const r = obj(result) as Partial<AdminInfoResult>
       const has = r.info !== null && r.info !== undefined
-      if (json) return { lines: [JSON.stringify(result, null, 2)], code: has ? 0 : 1 }
+      if (json) return { lines: [safeJson(result)], code: has ? 0 : 1 }
       if (!has) {
         return {
           lines: ['Hosting has not started on this server, so there is no team address yet. Run `team init` (see `team status` for why).'],
@@ -268,7 +307,7 @@ function render(req: AdminRequest, result: unknown, json: boolean): { lines: str
       return { lines, code: 0 }
     }
     case 'status':
-      return { lines: json ? [JSON.stringify(result, null, 2)] : describeStatus(result as AdminStatusResult), code: 0 }
+      return { lines: json ? [safeJson(result)] : describeStatus(result as AdminStatusResult), code: 0 }
     case 'rotate-key': {
       const r = obj(result) as Partial<AdminRotateResult>
       if (r.result === 'not-running') {
@@ -316,7 +355,7 @@ export async function runTeamCli(
   }
   const r = await callTeamAdmin(dd.dataDir ?? dataDir, req)
   if (!r.ok) {
-    err(r.error)
+    err(clean(r.error))
     return 1
   }
   // The reply is printed to `out` even when the exit code is 1: the command ran, and what it found

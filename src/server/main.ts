@@ -1,6 +1,6 @@
 import { resolveConfig, resolveDataDir } from './config'
 import { startServer } from './index'
-import { runTeamCli } from './team-cli'
+import { runTeamCli, teamArgv } from './team-cli'
 
 /**
  * Script entry point for the headless server. Kept separate from index.ts so that
@@ -13,12 +13,14 @@ process.on('unhandledRejection', (e) => console.error('[nodeterm-server] unhandl
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2)
-  if (argv[0] === 'team') {
-    // `main.cjs team <command>`: the hosted team's admin CLI, not a server boot. It talks to the
-    // RUNNING server over <dataDir>/relay/admin.sock, so it needs the data dir and nothing else —
-    // `resolveDataDir`, not `resolveConfig`, whose serving-only refusals do not apply here.
-    // `--data-dir` on the team command line overrides it (runTeamCli reads that itself).
-    const code = await runTeamCli(argv.slice(1), resolveDataDir(process.env, []), (s) => console.log(s), (s) => console.error(s))
+  const team = teamArgv(argv)
+  if (team) {
+    // `main.cjs [server flags] team <command>`: the hosted team's admin CLI, not a server boot —
+    // including with server flags before `team` (`--data-dir X team status` must not boot a second
+    // server on X). It talks to the RUNNING server over <dataDir>/relay/admin.sock, so it needs the
+    // data dir and nothing else: `resolveDataDir`, not `resolveConfig`, whose serving-only refusals
+    // do not apply here. A `--data-dir` on the line overrides it (runTeamCli reads that itself).
+    const code = await runTeamCli(team, resolveDataDir(process.env, []), (s) => console.log(s), (s) => console.error(s))
     // Let buffered output reach a pipe before exiting (stdout to a pipe is asynchronous on macOS).
     await new Promise<void>((resolve) => process.stdout.write('', () => resolve()))
     await new Promise<void>((resolve) => process.stderr.write('', () => resolve()))

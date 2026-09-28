@@ -134,6 +134,8 @@ export class WorkspaceStore {
    *  its last write on EVERY autosave; re-parsing each file each time was pure waste. Keyed by the
    *  raw string, so any `lastWritten.set` elsewhere invalidates it by construction. */
   private lastWrittenParsed = new Map<string, { raw: string; parsed: ProjectFileV1 }>()
+  /** `projectIdForNode`'s node → project map, and the `canvasInputs` snapshot it was built from. */
+  private nodeProjectMemo: { inputs: unknown[]; map: Map<string, string> } | null = null
   /** The index bytes we last wrote and the file's size/mtime/inode right after, so an unchanged
    *  index is not rewritten on every autosave — but one another writer changed on disk still is.
    *  The inode is what catches a same-size rewrite on a coarse-mtime filesystem: every writer
@@ -1502,6 +1504,45 @@ export class WorkspaceStore {
       if (node) return { node, root: !e.project && !e.cache && e.cwd ? e.cwd : undefined }
     }
     return undefined
+  }
+
+  /**
+   * The project a node belongs to — the first project that has it, exactly as a `persistedCanvases`
+   * scan answers. Memoized, because a hosted-team relay asks it once per access decision for every
+   * viewer (each agent:status event, subagent-activity chunk, unread-clear, snapshot element) and a
+   * `persistedCanvases()` call re-parses every local project's cached file.
+   *
+   * The memo is validated against the IDENTITY of every input `persistedCanvases` reads
+   * (`canvasInputs`), not a version counter: a counter is only as good as the writers that remember
+   * to bump it, and this class changes those inputs from a dozen places — `lastWritten.set`, index
+   * reassignment, and in-place entry updates (`e.cache = …`, `e.project = …`, `e.id = …` on a
+   * re-key). Every one of them replaces a reference, so a snapshot comparison sees all of them,
+   * including writers added later. It rests on one rule this file already keeps: a project's node
+   * array is replaced, never mutated in place.
+   */
+  projectIdForNode(nodeId: string): string | undefined {
+    const inputs = this.canvasInputs()
+    const memo = this.nodeProjectMemo
+    const fresh =
+      memo !== null && memo.inputs.length === inputs.length && memo.inputs.every((v, i) => v === inputs[i])
+    if (fresh) return memo.map.get(nodeId)
+    const map = new Map<string, string>()
+    for (const c of this.persistedCanvases()) {
+      for (const n of c.nodes) if (!map.has(n.id)) map.set(n.id, c.id)
+    }
+    this.nodeProjectMemo = { inputs, map }
+    return map.get(nodeId)
+  }
+
+  /** Every input `persistedCanvases` reads, by identity: the index object, and per entry the entry,
+   *  its id, its inline project, its ssh cache, its cwd and the text last written/read for that
+   *  cwd's project file. */
+  private canvasInputs(): unknown[] {
+    const out: unknown[] = [this.index]
+    for (const e of this.index?.entries ?? []) {
+      out.push(e, e.id, e.project, e.cache, e.cwd, e.cwd ? this.lastWritten.get(projectFilePath(e.cwd)) : undefined)
+    }
+    return out
   }
 
   /**

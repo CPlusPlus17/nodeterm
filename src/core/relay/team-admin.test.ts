@@ -117,6 +117,22 @@ function rawExchange(dataDir: string, payload: string): Promise<string> {
   })
 }
 
+// Trojan Source: a raw bidi control character in source is invisible in review and can make code read
+// differently from how it runs. The admin/CLI sources name these characters, so they must do it with
+// \u escapes only.
+describe('no raw bidi control characters in the admin and CLI sources', () => {
+  it('every one is written as an escape', () => {
+    const bidi = new RegExp('[\\u061C\\u200E\\u200F\\u202A-\\u202E\\u2066-\\u2069]')
+    const files = [
+      path.join(__dirname, 'team-admin.ts'),
+      path.join(__dirname, 'team-admin.test.ts'),
+      path.join(__dirname, '../../server/team-cli.ts'),
+      path.join(__dirname, '../../server/team-cli.test.ts')
+    ]
+    for (const f of files) expect(bidi.test(fs.readFileSync(f, 'utf8')), f).toBe(false)
+  })
+})
+
 describe('validation helpers (platform-neutral)', () => {
   it('accepts a canonical 32-byte base64 key and says what is wrong with anything else', () => {
     expect(ownerKeyProblem(validKey())).toBeNull()
@@ -136,7 +152,7 @@ describe('validation helpers (platform-neutral)', () => {
     expect(ownerLabelProblem('x'.repeat(61))).toMatch(/61.*60/)
     expect(ownerLabelProblem('a\nb')).toMatch(/control/)
     expect(ownerLabelProblem('a\u001b[31m')).toMatch(/control/)
-    expect(ownerLabelProblem('a‮b')).toMatch(/control/)
+    expect(ownerLabelProblem('a\u202eb')).toMatch(/control/)
   })
 
   it('project ids are non-empty, bounded and control-free', () => {
@@ -361,7 +377,10 @@ describe.skipIf(process.platform === 'win32')('team admin socket (unix socket, P
   it('refuses to steal the socket from a live admin server', async () => {
     const dataDir = tmp()
     await boot(dataDir, fakeService().svc)
-    await expect(startTeamAdmin(dataDir, fakeService().svc)).rejects.toThrow(/already answering/)
+    await expect(startTeamAdmin(dataDir, fakeService().svc)).rejects.toMatchObject({
+      code: 'E_ADMIN_SOCKET_BUSY',
+      message: expect.stringMatching(/already answering/)
+    })
     // The first one is untouched.
     expect((await callTeamAdmin(dataDir, { cmd: 'status' })).ok).toBe(true)
   })
@@ -370,7 +389,9 @@ describe.skipIf(process.platform === 'win32')('team admin socket (unix socket, P
     const dataDir = tmp()
     fs.mkdirSync(relayDir(dataDir), { recursive: true })
     fs.writeFileSync(adminSocketPath(dataDir), 'mine')
-    await expect(startTeamAdmin(dataDir, fakeService().svc)).rejects.toThrow(/not a socket/)
+    const err = await startTeamAdmin(dataDir, fakeService().svc).catch((e: unknown) => e)
+    expect(err).toMatchObject({ message: expect.stringMatching(/not a socket/) })
+    expect((err as { code?: string }).code).not.toBe('E_ADMIN_SOCKET_BUSY')
     expect(fs.readFileSync(adminSocketPath(dataDir), 'utf8')).toBe('mine')
   })
 
@@ -381,6 +402,31 @@ describe.skipIf(process.platform === 'win32')('team admin socket (unix socket, P
     expect(Buffer.byteLength(adminSocketPath(dataDir))).toBeGreaterThan(107)
     await expect(startTeamAdmin(dataDir, fakeService().svc)).rejects.toThrow(/shorter data directory/)
     expect(await callTeamAdmin(dataDir, { cmd: 'status' })).toEqual({ ok: false, error: expect.stringMatching(/shorter data directory/) })
+  })
+
+  it('an init still inside svc.init() when close() starts never starts hosting', async () => {
+    const dataDir = tmp()
+    const { svc, calls } = fakeService()
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    let entered!: () => void
+    const inInit = new Promise<void>((r) => (entered = r))
+    const realInit = svc.init.bind(svc)
+    svc.init = async () => {
+      entered()
+      await gate
+      return realInit()
+    }
+    const admin = await startTeamAdmin(dataDir, svc)
+    const reply = callTeamAdmin(dataDir, { cmd: 'init' })
+    await inInit
+    const closed = admin.close()
+    release()
+    await closed
+    await reply
+    // Let the in-flight handler run to completion.
+    await new Promise((r) => setTimeout(r, 20))
+    expect(calls).toEqual(['init'])
   })
 
   it('close() removes the socket and does not hang on a connection that never sends a request', async () => {

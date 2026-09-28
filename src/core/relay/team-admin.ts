@@ -79,6 +79,17 @@ const REMOVE_KEY_MAX = 256
 
 const NO_TEAM = 'There is no hosted team on this server yet. Run `team init` first.'
 
+/** Something may already be serving this admin socket: another server answered on it, or it could
+ *  not be told apart from one. Typed, because the caller's answer differs from every other admin
+ *  failure: a second server on the same data dir must not ALSO host the team on the same host key. */
+export class AdminSocketBusyError extends Error {
+  readonly code = 'E_ADMIN_SOCKET_BUSY'
+  constructor(message: string) {
+    super(message)
+    this.name = 'AdminSocketBusyError'
+  }
+}
+
 export function adminSocketPath(dataDir: string): string {
   return path.join(relayDirOf(dataDir), 'admin.sock')
 }
@@ -130,8 +141,9 @@ export function ownerKeyProblem(key: string): string | null {
 }
 
 // C0/C1 controls and DEL (\p{Cc}), plus the text-direction controls that let a label reorder the
-// text around it when printed in a terminal.
-const CONTROL_RE = /[\p{Cc}؜‎‏‪-‮⁦-⁩]/u
+// text around it when printed in a terminal. Written as \u escapes, never as the characters
+// themselves: a raw bidi control in source is invisible in review (Trojan Source).
+export const CONTROL_RE = /[\p{Cc}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u
 
 /** Why `label` cannot be a member label, or null. The same limit `team.json`'s reader enforces. */
 export function ownerLabelProblem(label: string): string | null {
@@ -224,13 +236,26 @@ const fail = (error: string): AdminReply => ({ ok: false, error })
 const address = (svc: HostedService, running: boolean): { info: HostedInfo | null; joinCode: string | null } =>
   running ? { info: svc.info(), joinCode: svc.joinCode() } : { info: null, joinCode: null }
 
-async function handle(relayDir: string, svc: HostedService, req: AdminRequest): Promise<AdminReply> {
+const SHUTTING_DOWN = 'The nodeterm server is shutting down.'
+
+async function handle(
+  relayDir: string,
+  svc: HostedService,
+  req: AdminRequest,
+  closing: () => boolean
+): Promise<AdminReply> {
   if (req.cmd !== 'init' && req.cmd !== 'status' && req.cmd !== 'info' && !(await teamIsSetUp(relayDir, svc))) {
     return fail(NO_TEAM)
   }
   switch (req.cmd) {
     case 'init': {
       const { created } = await svc.init()
+      // The admin closes BEFORE the server stops hosting. A `start()` issued after that stop would
+      // bring a scheduler up on a server that is going away, so an init still inside `svc.init()`
+      // when close() began does not start hosting.
+      if (closing()) {
+        return fail(`${SHUTTING_DOWN} ${created ? 'The team was created but hosting was not started.' : 'Hosting was not started.'}`)
+      }
       const start = await svc.start()
       const result: AdminInitResult = { created, start, ...address(svc, start === 'started') }
       return ok(result)
@@ -264,7 +289,8 @@ async function handle(relayDir: string, svc: HostedService, req: AdminRequest): 
   }
 }
 
-async function answer(relayDir: string, svc: HostedService, line: string): Promise<AdminReply> {
+async function answer(relayDir: string, svc: HostedService, line: string, closing: () => boolean): Promise<AdminReply> {
+  if (closing()) return fail(SHUTTING_DOWN)
   let raw: unknown
   try {
     raw = JSON.parse(line)
@@ -274,7 +300,7 @@ async function answer(relayDir: string, svc: HostedService, line: string): Promi
   const req = parseAdminRequest(raw)
   if (typeof req === 'string') return fail(req)
   try {
-    return await handle(relayDir, svc, req)
+    return await handle(relayDir, svc, req, closing)
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err))
   }
@@ -318,11 +344,11 @@ async function clearStaleSocket(sock: string): Promise<void> {
     return
   }
   if (verdict === 'live') {
-    throw new Error(
+    throw new AdminSocketBusyError(
       `Another nodeterm server is already answering on ${sock} (two servers sharing one data directory?). Not replacing it.`
     )
   }
-  throw new Error(`Could not tell whether ${sock} is still in use (${verdict}); not replacing it.`)
+  throw new AdminSocketBusyError(`Could not tell whether ${sock} is still in use (${verdict}); not replacing it.`)
 }
 
 export async function startTeamAdmin(dataDir: string, svc: HostedService): Promise<{ close(): Promise<void> }> {
@@ -334,6 +360,8 @@ export async function startTeamAdmin(dataDir: string, svc: HostedService): Promi
   await clearStaleSocket(sock)
 
   const conns = new Set<net.Socket>()
+  let closing: Promise<void> | null = null
+  const isClosing = (): boolean => closing !== null
   const server = net.createServer((c) => {
     conns.add(c)
     c.on('close', () => conns.delete(c))
@@ -354,7 +382,7 @@ export async function startTeamAdmin(dataDir: string, svc: HostedService): Promi
       if (nl < 0) return
       taken = true
       c.setTimeout(0)
-      void answer(relayDir, svc, buf.slice(0, nl)).then((reply) => {
+      void answer(relayDir, svc, buf.slice(0, nl), isClosing).then((reply) => {
         if (!c.destroyed) c.end(JSON.stringify(reply) + '\n')
       })
     })
@@ -373,7 +401,6 @@ export async function startTeamAdmin(dataDir: string, svc: HostedService): Promi
     throw err
   }
 
-  let closing: Promise<void> | null = null
   return {
     close: () =>
       (closing ??= new Promise<void>((resolve) => {

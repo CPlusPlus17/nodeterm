@@ -860,25 +860,39 @@ export async function startServer(
       dispatch: (id, req) => platform.dispatch(id, req),
       cast: (id, method, args) => platform.cast(id, method, args)
     },
-    projectOfNode: (nodeId) =>
-      workspaceStore.persistedCanvases().find((c) => c.nodes.some((n) => n.id === nodeId))?.id,
+    // Memoized in the store: asked once per access decision for every viewer, and a
+    // persistedCanvases() scan re-parses every local project's file (measured 4.5 ms per call at
+    // 20 projects x 100 nodes).
+    projectOfNode: (nodeId) => workspaceStore.projectIdForNode(nodeId),
     projectCwd: (projectId) => workspaceStore.localCwdForProject(projectId)
   })
-  const hostedStart = await hosted.start().catch((err: unknown) => {
-    console.error('[hosted-team] start failed:', err)
-    return null
-  })
-  if (hostedStart === 'started') console.log('Hosted team relay: ON (see `team status`).')
-  else if (hostedStart === 'host-key-unreadable') {
-    console.error('Hosted team relay: OFF — the host key could not be read (see above; `team status`).')
-  }
-  // The local admin channel for the `team` CLI. Never fatal: a data dir too long for a unix socket,
-  // or a second server on the same data dir, disables administration — it must not take the rest of
-  // the Server Edition down with it.
+  // The local admin channel for the `team` CLI, opened BEFORE hosting starts: it is also how this
+  // server learns that another one already runs on this data dir (someone answers on its socket).
+  // Two servers hosting one team would register relay listeners for the same host key and both write
+  // team.json, so a busy socket skips hosting here. Otherwise never fatal: a data dir too long for a
+  // unix socket, or Windows, disables administration — it must not take the rest of the Server
+  // Edition down with it.
+  let otherServerHere = false
   const teamAdmin = await startTeamAdmin(config.dataDir, hosted).catch((err: unknown) => {
+    if ((err as { code?: unknown } | null)?.code === 'E_ADMIN_SOCKET_BUSY') otherServerHere = true
     console.error(`[hosted-team] team admin socket disabled: ${err instanceof Error ? err.message : String(err)}`)
     return { close: async (): Promise<void> => {} }
   })
+  if (otherServerHere) {
+    console.error(
+      'Hosted team relay: NOT started — another nodeterm server is already running on this data ' +
+        `directory (${config.dataDir}). Stop it, or give this server its own --data-dir.`
+    )
+  } else {
+    const hostedStart = await hosted.start().catch((err: unknown) => {
+      console.error('[hosted-team] start failed:', err)
+      return null
+    })
+    if (hostedStart === 'started') console.log('Hosted team relay: ON (see `team status`).')
+    else if (hostedStart === 'host-key-unreadable') {
+      console.error('Hosted team relay: OFF — the host key could not be read (see above; `team status`).')
+    }
+  }
 
   // Headless notification host: every core service above (incl. the loopback hook server, which
   // is its own listener and MUST run) is booted, but we bind NO public HTTP/WS listener — no

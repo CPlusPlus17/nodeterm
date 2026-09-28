@@ -28,6 +28,25 @@ describe('hosted team boot wiring (source)', () => {
     }
   })
 
+  it('opens the admin socket BEFORE hosting, and skips hosting when another server holds it', () => {
+    const admin = src.indexOf('startTeamAdmin(')
+    const start = src.indexOf('hosted.start()')
+    expect(admin).toBeGreaterThan(0)
+    expect(admin).toBeLessThan(start)
+    expect(src.slice(admin, start)).toContain("'E_ADMIN_SOCKET_BUSY'")
+  })
+
+  it('main.cjs dispatches `team` through teamArgv (server flags may precede it) before any boot', () => {
+    const main = fs.readFileSync(path.join(__dirname, 'main.ts'), 'utf8').replace(/\r\n/g, '\n')
+    expect(main.indexOf('teamArgv(argv)')).toBeGreaterThan(0)
+    expect(main.indexOf('teamArgv(argv)')).toBeLessThan(main.indexOf('resolveConfig(process.env'))
+    expect(main).not.toMatch(/argv\[0\] === 'team'/)
+  })
+
+  it('projectOfNode uses the store\'s memoized lookup, not a persistedCanvases scan per call', () => {
+    expect(src).toMatch(/projectOfNode: \(nodeId\) => workspaceStore\.projectIdForNode\(nodeId\)/)
+  })
+
   it('boots after the workspace index is loaded (the access policy reads it)', () => {
     expect(src.indexOf('await workspaceStore.load(')).toBeGreaterThan(0)
     expect(src.indexOf('await workspaceStore.load(')).toBeLessThan(src.indexOf('createHostedService('))
@@ -43,6 +62,8 @@ describe('hosted team boot wiring (source)', () => {
       const body = src.slice(at, src.indexOf('await ptyManager.killAll()', at))
       expect(body).toContain('hosted.stop()')
       expect(body).toContain('await teamAdmin.close()')
+      // Admin first: once it is closing, an in-flight `team init` can no longer start hosting.
+      expect(body.indexOf('await teamAdmin.close()')).toBeLessThan(body.indexOf('hosted.stop()'))
     }
   })
 
