@@ -52,8 +52,84 @@ function toolArg(input: unknown): string {
 }
 
 // Extract 0..n searchable lines from one raw transcript JSONL line.
+// ── Local-command records ────────────────────────────────────────────────────────────────────────
+// A slash command (`/model`) and a `!` bash-mode line are written by claude as `type:"user"` records
+// whose content is a STRING of tags — measured on real transcripts (2026-09):
+//   <command-name>/model</command-name>\n   <command-message>model</command-message>\n   <command-args></command-args>
+//   <local-command-stdout>Set model to \x1b[1m…\x1b[22m</local-command-stdout>
+//   <bash-input>ls</bash-input>
+//   <bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>        (ONE record, either may be empty)
+// preceded by an `isMeta:true` `<local-command-caveat>` record. A skill invocation writes
+// `<command-message>` BEFORE `<command-name>` (no args), so order is free. Only a record that is
+// EXACTLY such a tag sequence (whitespace between tags) is one; a record that merely mentions a tag
+// inside prose is a normal user message. Never seen as an array text part, so only string content
+// is matched.
+export type LocalCommandRecord =
+  | { kind: 'command'; family: 'slash' | 'bash'; name: string; arg: string }
+  | { kind: 'output'; family: 'slash' | 'bash'; text: string }
+
+const TAG_RE = /<([a-z-]+)>([\s\S]*?)<\/\1>/y
+const SLASH_TAGS = new Set(['command-name', 'command-message', 'command-args'])
+const BASH_INPUT_TAGS = new Set(['bash-input'])
+const SLASH_OUT_TAGS = new Set(['local-command-stdout', 'local-command-stderr'])
+const BASH_OUT_TAGS = new Set(['bash-stdout', 'bash-stderr'])
+
+/** The record as a sequence of whole tags, each at most once; null if anything else is in it. */
+function tagSequence(content: string): Map<string, string> | null {
+  const tags = new Map<string, string>()
+  let i = 0
+  for (;;) {
+    while (i < content.length && /\s/.test(content[i])) i++
+    if (i >= content.length) break
+    TAG_RE.lastIndex = i
+    const m = TAG_RE.exec(content)
+    if (!m || tags.has(m[1])) return null
+    tags.set(m[1], m[2])
+    i = TAG_RE.lastIndex
+  }
+  return tags.size ? tags : null
+}
+
+const onlyFrom = (tags: Map<string, string>, allowed: Set<string>): boolean =>
+  [...tags.keys()].every((k) => allowed.has(k))
+
+/** CSI (`ESC [ … final`), OSC (`ESC ] … BEL|ESC \\`) and two-byte `ESC x` escapes. */
+export function stripAnsi(s: string): string {
+  return s
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b[@-_]/g, '')
+}
+
+/** Output tags → one text: each non-empty part ANSI-stripped + trimmed, joined by `\n`. */
+function outputText(tags: Map<string, string>): string {
+  return [...tags.values()]
+    .map((v) => stripAnsi(v).trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
+export function classifyLocalCommand(content: string): LocalCommandRecord | null {
+  const tags = tagSequence(content)
+  if (!tags) return null
+  if (onlyFrom(tags, SLASH_TAGS)) {
+    const name = (tags.get('command-name') ?? '').trim()
+    if (!name) return null
+    return { kind: 'command', family: 'slash', name, arg: (tags.get('command-args') ?? '').trim() }
+  }
+  if (onlyFrom(tags, BASH_INPUT_TAGS)) {
+    return { kind: 'command', family: 'bash', name: '!', arg: (tags.get('bash-input') ?? '').trim() }
+  }
+  if (onlyFrom(tags, SLASH_OUT_TAGS)) return { kind: 'output', family: 'slash', text: outputText(tags) }
+  if (onlyFrom(tags, BASH_OUT_TAGS)) return { kind: 'output', family: 'bash', text: outputText(tags) }
+  return null
+}
+
+/** The name an output record's tool part gets when there is no command to attach it to. */
+export const COMMAND_OUTPUT_TOOL = 'command output'
+
 function linesFrom(raw: string): TranscriptLine[] {
-  let o: { type?: string; message?: { content?: unknown } }
+  let o: { type?: string; isMeta?: unknown; message?: { content?: unknown } }
   try {
     o = JSON.parse(raw)
   } catch {
@@ -61,6 +137,9 @@ function linesFrom(raw: string): TranscriptLine[] {
   }
   // Same rule as the chat parser: a `null` / scalar line is one skipped line, never a failed read.
   if (!o || typeof o !== 'object' || Array.isArray(o)) return []
+  // Same rule as the chat parser: claude's own meta records (the local-command caveat, skill bodies,
+  // injected reminders) are not something the user said.
+  if (o.type === 'user' && o.isMeta === true) return []
   const content = o.message?.content
   const out: TranscriptLine[] = []
   if (o.type === 'assistant' && Array.isArray(content)) {
@@ -86,7 +165,12 @@ function linesFrom(raw: string): TranscriptLine[] {
       }
     }
   } else if (o.type === 'user' && typeof content === 'string') {
-    out.push({ role: 'user', text: content })
+    const cmd = classifyLocalCommand(content)
+    if (cmd?.kind === 'command') out.push({ role: 'tool', text: `$ ${cmd.name}${cmd.arg ? ` ${cmd.arg}` : ''}` })
+    else if (cmd?.kind === 'output') {
+      const s = summarizeResult(cmd.text)
+      if (s) out.push({ role: 'tool', text: s })
+    } else out.push({ role: 'user', text: content })
   }
   return out
 }
@@ -182,7 +266,12 @@ function parseChatRecords(
   // with no `effort`) are claude's own, not a model turn, so they are skipped entirely.
   let model: string | undefined
   let effort: string | undefined
+  // The tool part of the LAST pushed message when that message is a local command still waiting for
+  // its output record (cleared by any other push, so output attaches only to the record right
+  // before it).
+  let awaitingOutput: { family: 'slash' | 'bash'; part: Extract<ChatPart, { kind: 'tool' }> } | null = null
   const push = (m: ChatMessage, offset: number): void => {
+    awaitingOutput = null
     // `at` rides BOTH paths (additive): the time the line was written, for the thread's relative
     // timestamp. Absent when the line states none — never a made-up time.
     const withAt = at === undefined ? m : { ...m, at }
@@ -190,7 +279,13 @@ function parseChatRecords(
   }
   for (const { raw, offset } of records) {
     if (!raw.trim()) continue
-    let o: { type?: string; timestamp?: unknown; effort?: unknown; message?: { content?: unknown; model?: unknown } }
+    let o: {
+      type?: string
+      isMeta?: unknown
+      timestamp?: unknown
+      effort?: unknown
+      message?: { content?: unknown; model?: unknown }
+    }
     try {
       o = JSON.parse(raw)
     } catch {
@@ -199,6 +294,9 @@ function parseChatRecords(
     // `null` / a number / a string parse fine and would throw on the reads below, failing the whole
     // page over one line another program wrote. One bad line costs one line (the Swift port agrees).
     if (!o || typeof o !== 'object' || Array.isArray(o)) continue
+    // claude's own meta records (the local-command caveat, skill bodies, injected reminders): never
+    // something the user said. Measured: none carries a tool_result, so nothing is lost by skipping.
+    if (o.type === 'user' && o.isMeta === true) continue
     at = lineTime(o.timestamp)
     const content = o.message?.content
     if (paged && o.type === 'assistant' && o.message?.model !== SYNTHETIC_MODEL) {
@@ -258,7 +356,24 @@ function parseChatRecords(
       }
       if (parts.length) push({ role: 'user', parts }, offset)
     } else if (o.type === 'user' && typeof content === 'string' && content.trim()) {
-      push({ role: 'user', parts: [{ kind: 'text', text: content }] }, offset)
+      const cmd = classifyLocalCommand(content)
+      if (cmd?.kind === 'command') {
+        // The user running a command reads like a tool call — no new role or part kind on the wire.
+        const part: Extract<ChatPart, { kind: 'tool' }> = { kind: 'tool', name: cmd.name, arg: cmd.arg }
+        push({ role: 'assistant', parts: [part] }, offset)
+        awaitingOutput = { family: cmd.family, part }
+      } else if (cmd?.kind === 'output') {
+        const s = summarizeResult(cmd.text)
+        if (!s) continue
+        if (awaitingOutput && awaitingOutput.family === cmd.family) {
+          awaitingOutput.part.result = s
+          awaitingOutput = null
+        } else {
+          push({ role: 'assistant', parts: [{ kind: 'tool', name: COMMAND_OUTPUT_TOOL, arg: '', result: s }] }, offset)
+        }
+      } else {
+        push({ role: 'user', parts: [{ kind: 'text', text: content }] }, offset)
+      }
     }
   }
   const out: ChatRecordsOut = { messages, unmatched }
