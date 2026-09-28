@@ -29,6 +29,13 @@ describe('rememberPulls', () => {
       { number: 1, headRefName: 'feat/1', lifecycle: 'merged' })
   })
 
+  it('remembers what a PR closed while open, through its merge', () => {
+    const open = rememberPulls([], [status(1, 'open', { closes: [4] })], none, 10)
+    const merged = rememberPulls(open, [status(1, 'merged')], none, 20)
+    expect(merged[0]).toMatchObject({ lifecycle: 'merged', closes: [4] })
+    expect(rememberedForBoard(merged, new Set(), 30)[0].closes).toEqual([4])
+  })
+
   it('keeps a PR the read no longer lists — a closed one stays closed', () => {
     const closed = rememberPulls([], [status(1, 'closed')], none, 10)
     expect(rememberPulls(closed, [], none, 20)).toEqual(closed)

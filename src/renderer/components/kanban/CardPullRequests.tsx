@@ -21,10 +21,10 @@ export const PULL_LINK_SSH_REASON =
   'Linking pull requests needs a worktree group, and worktrees are not supported on SSH projects yet.'
 
 /**
- * The card modal's "Pull requests" section: the PRs whose head is this card's worktree branch, each
- * removable (the removal is a git-shared tombstone, so the branch auto-link does not come back),
- * plus this card's auto-move opt-out. Renders nothing for a board without GitHub or a card outside
- * a worktree group — there is nothing to say there.
+ * The card modal's "Pull requests" section: the PRs whose head is this card's worktree branch, and
+ * the PRs that close the issue the session was started on, each removable (the removal is a
+ * git-shared tombstone, so the auto-link does not come back), plus this card's auto-move opt-out.
+ * Renders nothing for a board without GitHub, or a card with neither a worktree group nor an issue.
  */
 export function CardPullRequests({
   session,
@@ -44,14 +44,15 @@ export function CardPullRequests({
     return entry ? board.columns.find((column) => column.id === entry.columnId) : undefined
   }, [autoMoveRaw, projectId, board.columns])
   if (!board.github) return null
-  if (ssh) {
+  // On SSH only the branch half is unavailable: an issue-bound session still links through its issue.
+  if (ssh && !session.issueRef) {
     return (
       <section className="card-pulls" aria-label="Pull requests">
         <p className="card-pulls__note">{PULL_LINK_SSH_REASON}</p>
       </section>
     )
   }
-  if (!session.worktreeBranch) return null
+  if (!session.worktreeBranch && !session.issueRef) return null
   const links = pullsForCard(session, pullBoard, board)
   const freshness = pullBoard ? pullStatusFreshness(pullBoard, Date.now()) : 'fresh'
   const optedOut = readPullLinks(board).noAutoMove.includes(session.id)
@@ -60,13 +61,24 @@ export function CardPullRequests({
     <section className="card-pulls" aria-label="Pull requests">
       <div className="card-pulls__head">
         <span className="card-pulls__title">Pull requests</span>
-        <span className="card-pulls__branch" title="The branch of this card's worktree group">
-          {session.worktreeBranch}
-        </span>
+        {session.worktreeBranch && (
+          <span className="card-pulls__branch" title="The branch of this card's worktree group">
+            {session.worktreeBranch}
+          </span>
+        )}
+        {session.issueRef && (
+          <span className="card-pulls__branch" title="Pull requests that close the issue this session was started on">
+            closes #{session.issueRef.number}
+          </span>
+        )}
       </div>
       {links.linked.length === 0 && links.unlinked.length === 0 && (
         <p className="card-pulls__note">
-          {pullBoard ? 'No pull request from this branch yet.' : 'Pull request status is not available.'}
+          {!pullBoard
+            ? 'Pull request status is not available.'
+            : session.worktreeBranch
+              ? 'No pull request from this branch yet.'
+              : 'No open pull request closes this issue yet.'}
         </p>
       )}
       {links.linked.map((pull) => (

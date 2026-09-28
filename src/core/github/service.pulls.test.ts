@@ -11,7 +11,8 @@ import type { GitHubPullChecksResult, PullStatusFacts } from '../../shared/githu
 
 let userDataDir: string
 beforeEach(async () => { userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nt-github-pulls-')) })
-afterEach(async () => { await fs.rm(userDataDir, { recursive: true, force: true }) })
+// A claim persists the pull memory asynchronously, so a save can still be landing as a test ends.
+afterEach(async () => { await fs.rm(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }) })
 
 const HEAD = 'a'.repeat(40)
 const config: NormalisedProjectKanbanGitHub = {

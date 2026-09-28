@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import type { ProjectKanban } from '@shared/types'
 import type { GitHubIssuesApi } from '@shared/github-issues'
 import type { GitHubPullBoard } from '@shared/github-pull-status'
+import type { IssueRef } from '@shared/github-issue-ref'
 import { sanitizeKanbanPullAutoMove } from '@shared/kanban-pull-links'
 import { useSettings } from '../../state/settings'
 import { useProjects } from '../../state/projects'
@@ -19,7 +20,7 @@ import { documentChaseDeps, startPullChase } from '../../lib/pullChase'
 export function usePullAutoMove(input: {
   api: Pick<GitHubIssuesApi, 'claimPullAutoMove'>
   projectId: string
-  cards: Array<{ id: string; kind: string; worktreeBranch?: string }>
+  cards: Array<{ id: string; kind: string; worktreeBranch?: string; issueRef?: IssueRef }>
   board: ProjectKanban
   pullBoard: GitHubPullBoard | undefined
   onAutoMove?: (cardId: string, fromColumnId: string | null, toColumnId: string, note: string) => void

@@ -34,6 +34,8 @@ import type { ModalSpawn } from './ModalTerminal'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
 import { IconAgent, IconExternal, IconNote, IconSwitch, IconTerminal, IconTrash, IconWeb } from '../icons'
 import type { GitHubCloseReason, GitHubIssueCardView } from '@shared/github-issues'
+import { issueKey, issueRefFromHtmlUrl, issueUrl, type IssueRef } from '@shared/github-issue-ref'
+import { NO_ISSUE_RUNS, boundRunsByIssue, type IssueRun } from '../../lib/issueRuns'
 import { useGitHubIssues } from '../../state/githubIssues'
 import { useAgentStatus } from '../../state/agentStatus'
 import { useSession } from '../../session/session'
@@ -68,6 +70,10 @@ export interface KanbanSession {
   /** Browser node session partition (kind 'browser' only) — threaded to the modal webview so it
    *  shares the canvas node's jar (`browser-partition-parity.test.tsx`). Absent = default session. */
   partition?: string
+  /** The GitHub issue this session was started on (terminal cards only) — see
+   *  `CanvasNodeState.issueRef`. The issue card shows the session as a live chip, and this card shows
+   *  `#N`: the board is the canvas's other view of the same binding. */
+  issueRef?: IssueRef
   /** The node's user-chosen icon (see @shared/node-icon). The board is the canvas's other view of
    *  the same session, so a session the user marked with an icon carries it here too. Terminal
    *  cards only in v1 — that is the only kind whose canvas node offers the action, and a card
@@ -128,6 +134,12 @@ export interface KanbanViewProps {
   onAutoMoveFromPulls?: (
     projectId: string, cardId: string, fromColumnId: string | null, toColumnId: string, note: string
   ) => void
+  /**
+   * "Start with agent ▸" rows for a GitHub issue card — the canvas's own agent + account picker
+   * (`agentCreationEntries`), pointed at starting a bound session on that issue. Optional for the
+   * same reason as `accountMenuItems`: a board with no canvas behind it offers none.
+   */
+  issueAgentMenu?: (issue: GitHubIssueCardView) => MenuItem[]
 }
 
 type Drag =
@@ -197,7 +209,7 @@ function useCanvasCovered(): void {
 
 export const KanbanView = memo(function KanbanView({
   board, sessions, onChange, onOpenNode, onCreateNode, onRenameNode, onEditSticky, onDeleteNode,
-  onModalNodeChange, onBrowserNav, onSetIcon, accountMenuItems, onAutoMoveFromPulls
+  onModalNodeChange, onBrowserNav, onSetIcon, accountMenuItems, onAutoMoveFromPulls, issueAgentMenu
 }: KanbanViewProps) {
   useCanvasCovered()
   const { api } = useSession()
@@ -219,6 +231,8 @@ export const KanbanView = memo(function KanbanView({
     { item: GitHubIssueCardView; kind: 'issue' | 'pull' } | null
   >(null)
   const [githubRetry, setGitHubRetry] = useState(0)
+  // Right-click menu on a GitHub issue card ("Start with agent ▸", Open on GitHub).
+  const [issueMenu, setIssueMenu] = useState<{ issue: GitHubIssueCardView; x: number; y: number } | null>(null)
   // A move that would close or reopen the issue on GitHub waits here for an explicit confirmation.
   const [pendingGitHubMove, setPendingGitHubMove] = useState<{
     issue: GitHubIssueCardView
@@ -331,8 +345,32 @@ export const KanbanView = memo(function KanbanView({
   useEffect(() => {
     setSource('all')
     setModalIssue(null)
+    setIssueMenu(null)
     setStatusChips([])
   }, [projectId])
+  // A node's `#N` chip asked for its issue (openIssueOnBoard). Open the issue's summary once the
+  // issue lane has loaded; when the board cannot show it — no GitHub sync on this board, another
+  // repository, a closed issue on a page not fetched, a lane that failed — open it on GitHub
+  // instead. Never a silent no-op: the chip was clicked, something opens.
+  const requestedIssue = useViewMode((s) => s.requestedIssue)
+  useEffect(() => {
+    if (!requestedIssue) return
+    // Still connecting: wait for the lane (this effect re-runs on every store change).
+    if (board.github && (!github || github.loading)) return
+    const key = issueKey(requestedIssue)
+    const found = key && board.github
+      ? Object.values(github?.pages ?? {})
+          .flatMap((page) => page.items)
+          .find((item) => issueKey(issueRefFromHtmlUrl(item.htmlUrl, item.number)) === key)
+      : undefined
+    useViewMode.getState().clearIssueRequest()
+    if (found) {
+      setModalIssue({ item: found, kind: 'issue' })
+      return
+    }
+    const url = issueUrl(requestedIssue)
+    if (url) void api.shell.openExternal(url)
+  }, [requestedIssue, github, board.github, api])
   useEffect(() => {
     if (!modalIssue || !github) return
     const source = modalIssue.kind === 'pull' ? github.pullPages : github.pages
@@ -371,6 +409,25 @@ export const KanbanView = memo(function KanbanView({
     [customAgents, disabledAgents]
   )
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions])
+  // Sessions bound to each GitHub issue, keyed case-insensitively. The previous map is handed back
+  // in so an unchanged group keeps its array — `sessions` is re-derived on every canvas change, and
+  // a fresh array per render would re-render every bound issue card.
+  const runsRef = useRef<ReadonlyMap<string, readonly IssueRun[]>>(new Map())
+  const runsByIssue = useMemo(() => {
+    runsRef.current = boundRunsByIssue(sessions, runsRef.current)
+    return runsRef.current
+  }, [sessions])
+  const runsFor = useCallback((issue: GitHubIssueCardView): readonly IssueRun[] => {
+    const key = issueKey(issueRefFromHtmlUrl(issue.htmlUrl, issue.number))
+    return (key && runsByIssue.get(key)) || NO_ISSUE_RUNS
+  }, [runsByIssue])
+  const handleIssueContext = useCallback(
+    (issue: GitHubIssueCardView, x: number, y: number) => setIssueMenu({ issue, x, y }),
+    []
+  )
+  const handleOpenIssueRef = useCallback((ref: IssueRef) => {
+    useViewMode.getState().requestIssue(ref)
+  }, [])
   const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions])
   // Stable per-card PR arrays (SessionCard is memoized): rebuilt only when the pull board, the
   // cards or the board's own link tombstones change.
@@ -676,6 +733,7 @@ export const KanbanView = memo(function KanbanView({
             meta={metaOf(s.id)}
             labels={labelsOf(s.id)}
             onOpen={setModalNodeId}
+            onOpenIssue={handleOpenIssueRef}
             onContext={handleCardContext}
             onDragStart={handleCardDragStart}
             onDragEnd={handleDragEnd}
@@ -706,6 +764,9 @@ export const KanbanView = memo(function KanbanView({
             onMove={handleMoveGitHub}
             onDragStart={handleGitHubDragStart}
             onDragEnd={handleDragEnd}
+            runs={runsFor(issue)}
+            onOpenRun={setModalNodeId}
+            onContext={handleIssueContext}
           />
         )),
         footer: page?.nextCursor
@@ -944,6 +1005,34 @@ export const KanbanView = memo(function KanbanView({
           onClose={() => setCardMenu(null)}
         />
       )}
+      {issueMenu && (
+        <ContextMenu
+          x={issueMenu.x}
+          y={issueMenu.y}
+          zIndex={60}
+          items={[
+            ...(issueAgentMenu
+              ? ([{
+                  type: 'submenu',
+                  label: 'Start with agent',
+                  icon: <IconAgent />,
+                  children: issueAgentMenu(issueMenu.issue)
+                }] as MenuItem[])
+              : []),
+            {
+              label: 'Open summary',
+              icon: <IconExternal />,
+              onClick: () => setModalIssue({ item: issueMenu.issue, kind: 'issue' })
+            },
+            {
+              label: 'Open on GitHub',
+              icon: <IconExternal />,
+              onClick: () => void api.shell.openExternal(issueMenu.issue.htmlUrl)
+            }
+          ]}
+          onClose={() => setIssueMenu(null)}
+        />
+      )}
       {modalNodeId && byId.has(modalNodeId) && (
         <CardModal
           session={byId.get(modalNodeId)!}
@@ -959,6 +1048,12 @@ export const KanbanView = memo(function KanbanView({
           onEditSticky={(t) => onEditSticky(modalNodeId, t)}
           onBrowserNav={(patch) => onBrowserNav(modalNodeId, patch)}
           onSetIcon={(icon) => onSetIcon(modalNodeId, icon)}
+          onOpenIssue={(ref) => {
+            // The issue summary is its own modal: close the card, then ask for the issue (the same
+            // request the session card's `#N` makes — summary if the lane has it, else GitHub).
+            setModalNodeId(null)
+            handleOpenIssueRef(ref)
+          }}
         />
       )}
       {modalIssue && (
@@ -976,6 +1071,15 @@ export const KanbanView = memo(function KanbanView({
           closingPulls={modalIssue.kind === 'issue' ? pullsByIssue.get(modalIssue.item.number) : undefined}
           pullFreshness={pullFreshness}
           pullObservedAt={pullBoard?.observedAt}
+          startMenu={modalIssue.kind === 'issue' && issueAgentMenu
+            ? () => issueAgentMenu(modalIssue.item)
+            : undefined}
+          runs={modalIssue.kind === 'issue' ? runsFor(modalIssue.item) : NO_ISSUE_RUNS}
+          onOpenRun={(nodeId) => {
+            setModalIssue(null)
+            setModalNodeId(nodeId)
+          }}
+          showRunHistory={modalIssue.kind === 'issue'}
         />
       )}
       {pendingCategory && (

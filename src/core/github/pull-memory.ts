@@ -25,6 +25,9 @@ export interface RememberedPull {
   lifecycle: PullLifecycle
   openSeen?: true
   mergedSeenAt?: number
+  /** The same-repository issues it closes, as last seen while it was open — the read only reports
+   *  closing issues for OPEN PRs, and the merge is exactly when an issue-bound card needs them. */
+  closes?: number[]
 }
 
 export interface PullMemory {
@@ -53,7 +56,9 @@ function validRemembered(value: unknown): value is RememberedPull {
     (pull.crossRepository === undefined || pull.crossRepository === true) &&
     LIFECYCLES.has(pull.lifecycle) &&
     (pull.openSeen === undefined || pull.openSeen === true) &&
-    (pull.mergedSeenAt === undefined || (Number.isSafeInteger(pull.mergedSeenAt) && pull.mergedSeenAt >= 0))
+    (pull.mergedSeenAt === undefined || (Number.isSafeInteger(pull.mergedSeenAt) && pull.mergedSeenAt >= 0)) &&
+    (pull.closes === undefined || (Array.isArray(pull.closes) && pull.closes.length <= 10 &&
+      pull.closes.every((number) => Number.isSafeInteger(number) && number > 0)))
 }
 
 export function validPullMemory(value: unknown): value is PullMemory {
@@ -80,25 +85,31 @@ export function rememberPulls(
 ): RememberedPull[] {
   const byNumber = new Map(previous.map((pull) => [pull.number, pull]))
   const next = new Map<number, RememberedPull>()
-  const apply = (number: number, headRefName: string, crossRepository: boolean, lifecycle: PullLifecycle): void => {
+  const apply = (
+    number: number, headRefName: string, crossRepository: boolean, lifecycle: PullLifecycle, closes: number[]
+  ): void => {
     const before = byNumber.get(number)
     const openSeen = !!before?.openSeen || UNFINISHED.has(lifecycle)
     const mergedSeenAt = before?.mergedSeenAt ??
       (lifecycle === 'merged' && before?.openSeen ? now : undefined)
+    // An open PR's read is the truth about what it closes; a finished one's read says nothing, so
+    // what was seen while it was open stands.
+    const closing = UNFINISHED.has(lifecycle) ? closes.slice(0, 10) : before?.closes ?? closes.slice(0, 10)
     next.set(number, {
       number,
       headRefName,
       ...(crossRepository ? { crossRepository: true as const } : {}),
       lifecycle,
       ...(openSeen ? { openSeen: true as const } : {}),
-      ...(mergedSeenAt !== undefined ? { mergedSeenAt } : {})
+      ...(mergedSeenAt !== undefined ? { mergedSeenAt } : {}),
+      ...(closing.length ? { closes: closing } : {})
     })
   }
-  for (const pull of listed) apply(pull.number, pull.headRefName, !!pull.crossRepository, pull.lifecycle)
+  for (const pull of listed) apply(pull.number, pull.headRefName, !!pull.crossRepository, pull.lifecycle, pull.closes)
   for (const pull of previous) {
     if (next.has(pull.number)) continue
     const lifecycle = harvest.get(pull.number) ?? pull.lifecycle
-    apply(pull.number, pull.headRefName, !!pull.crossRepository, lifecycle)
+    apply(pull.number, pull.headRefName, !!pull.crossRepository, lifecycle, pull.closes ?? [])
   }
   // Bound: unfinished PRs are kept first (dropping one would turn "wait" into "not linked"), then the
   // newest. An evicted merged PR only loses its place on a board long after it mattered.
@@ -125,7 +136,7 @@ export function rememberedForBoard(
       lifecycle: pull.lifecycle,
       headRefName: pull.headRefName,
       ...(pull.crossRepository ? { crossRepository: true as const } : {}),
-      closes: [],
+      closes: pull.closes ?? [],
       ...(pull.openSeen ? { openSeen: true as const } : {}),
       ...(pull.mergedSeenAt !== undefined ? { mergedSeenAt: pull.mergedSeenAt } : {})
     }))
@@ -136,6 +147,8 @@ export function withObservations(status: GitHubPullStatus, remembered: Remembere
   if (!remembered) return status
   return {
     ...status,
+    // A finished PR's read carries no closing issues; the ones seen while it was open still apply.
+    ...(status.closes.length === 0 && remembered.closes?.length ? { closes: remembered.closes } : {}),
     ...(remembered.openSeen ? { openSeen: true as const } : {}),
     ...(remembered.mergedSeenAt !== undefined ? { mergedSeenAt: remembered.mergedSeenAt } : {})
   }

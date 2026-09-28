@@ -7,9 +7,14 @@ import type {
 } from '@shared/github-pull-status'
 import { PullRefChip, PullStatusLine } from './PullStatusBadges'
 import type { KanbanColumn } from '@shared/types'
+import { issueLogId, issueRefFromHtmlUrl } from '@shared/github-issue-ref'
 import { useSession } from '../../session/session'
 import { Button } from '@renderer/ui/Button'
 import { Select } from '@renderer/ui/Select'
+import { ContextMenu, type MenuItem } from '../ContextMenu'
+import { NO_ISSUE_RUNS, type IssueRun } from '../../lib/issueRuns'
+import { IssueRunChips } from './IssueRunChips'
+import { BoardLogPanel } from './BoardLogPanel'
 
 export function GitHubIssueSummaryModal({
   issue,
@@ -24,7 +29,11 @@ export function GitHubIssueSummaryModal({
   pullStatus,
   closingPulls = [],
   pullFreshness = 'fresh',
-  pullObservedAt
+  pullObservedAt,
+  startMenu,
+  runs = NO_ISSUE_RUNS,
+  onOpenRun,
+  showRunHistory = false
 }: {
   issue: GitHubIssueCardView
   columns: KanbanColumn[]
@@ -44,9 +53,23 @@ export function GitHubIssueSummaryModal({
   closingPulls?: GitHubPullStatus[]
   pullFreshness?: PullStatusFreshness
   pullObservedAt?: number
+  /** The "Start with agent ▸" rows (the canvas's own agent + account picker, pointed at this
+   *  issue). Absent = no button — a pull request, or a board with no canvas behind it. */
+  startMenu?: () => MenuItem[]
+  /** Sessions already working on this issue — the same live chips the card shows. */
+  runs?: readonly IssueRun[]
+  onOpenRun?: (nodeId: string) => void
+  /** Show the issue card's read-only run history (its board-log feed). */
+  showRunHistory?: boolean
 }): React.JSX.Element {
   const isPull = kind === 'pull'
   const { api } = useSession()
+  const [startAt, setStartAt] = useState<{ x: number; y: number } | null>(null)
+  // The run history is filed under the issue card's synthetic board-log id. No id (a card whose
+  // URL did not parse) = no history panel, rather than a panel keyed on something made up.
+  const logId = !isPull && showRunHistory
+    ? issueLogId(issueRefFromHtmlUrl(issue.htmlUrl, issue.number))
+    : undefined
   const pullOpen = isPull && issue.state === 'open'
   const checks = usePullChecks(api.githubIssues, pullOpen ? projectId : undefined, issue.number,
     pullStatus?.headRefOid)
@@ -113,8 +136,24 @@ export function GitHubIssueSummaryModal({
               </Select>
             </label>
           )}
+          {!isPull && startMenu && (
+            <Button
+              aria-haspopup="menu"
+              onClick={(event) => {
+                const r = (event.currentTarget as HTMLElement).getBoundingClientRect()
+                setStartAt({ x: r.left, y: r.bottom + 4 })
+              }}
+            >
+              Start with agent ▾
+            </Button>
+          )}
           <Button onClick={() => void api.shell.openExternal(issue.htmlUrl)}>Open on GitHub</Button>
         </div>
+        {!isPull && onOpenRun && runs.length > 0 && (
+          <div className="github-issue-modal__runs">
+            <IssueRunChips runs={runs} onOpen={onOpenRun} />
+          </div>
+        )}
         {!isPull && issue.conflict && (
           <p className="github-issue-modal__warning">
             This issue has conflicting mapped labels. Choose a column to replace them with one exact label.
@@ -142,6 +181,25 @@ export function GitHubIssueSummaryModal({
         <div className="github-issue-modal__body">
           {issue.body.trim() || 'No description provided.'}
         </div>
+        {logId && (
+          <div className="github-issue-modal__history">
+            <BoardLogPanel
+              card={{ id: logId }}
+              title="Agent runs"
+              readOnly
+              emptyText="No agent has worked on this issue from this project yet. This history stays in the project's board log and is never posted to GitHub."
+            />
+          </div>
+        )}
+        {startAt && startMenu && (
+          <ContextMenu
+            x={startAt.x}
+            y={startAt.y}
+            zIndex={60}
+            items={startMenu()}
+            onClose={() => setStartAt(null)}
+          />
+        )}
       </section>
     </div>
   )

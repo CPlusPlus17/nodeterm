@@ -10,6 +10,8 @@ import { PRIORITIES } from './CardMetaBar'
 import type { KanbanSession } from './KanbanView'
 import type { GitHubPullStatus, PullStatusFreshness } from '@shared/github-pull-status'
 import { PullRefChip } from './PullStatusBadges'
+import type { IssueRef } from '@shared/github-issue-ref'
+import { IssueRefChip } from '../IssueRefChip'
 import { cardBadge } from '../../lib/kanbanStatusChips'
 
 const PRIO_COLOR = Object.fromEntries(PRIORITIES.map((p) => [p.id, p.color])) as Record<KanbanPriority, string>
@@ -32,11 +34,13 @@ interface SessionCardProps {
   /** Pull requests linked to this card through its worktree branch (stable array per card). */
   pulls?: GitHubPullStatus[]
   pullFreshness?: PullStatusFreshness
+  /** The session's `#N` chip (it was started on a GitHub issue): open that issue. */
+  onOpenIssue?: (ref: IssueRef) => void
 }
 
 export const SessionCard = memo(function SessionCard({
   session, meta, labels = [], onOpen, onDragStart, onDragEnd, onDropAt, onContext, pulls,
-  pullFreshness = 'fresh'
+  pullFreshness = 'fresh', onOpenIssue
 }: SessionCardProps) {
   // THIS card's agent status, subscribed per card rather than threaded down from the board.
   // KanbanView used to hold `useAgentStatus((s) => s.byId)` and pass the map through the column:
@@ -115,6 +119,9 @@ export const SessionCard = memo(function SessionCard({
         <span className="kanban-card__nodedot" style={{ background: session.color }} />
         <NodeIconView icon={session.icon} size={14} className="kanban-card__icon" />
         <span className="kanban-card__title">{session.title}</span>
+        {session.kind === 'terminal' && onOpenIssue && (
+          <IssueRefChip issueRef={session.issueRef} onOpen={onOpenIssue} />
+        )}
         {session.kind === 'sticky' && <span className="kanban-card__kind">note</span>}
         {session.kind === 'browser' && <span className="kanban-card__kind">web</span>}
         {badge === 'dropped' && (

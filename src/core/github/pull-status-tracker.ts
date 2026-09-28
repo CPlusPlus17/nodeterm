@@ -95,8 +95,10 @@ export class GitHubPullStatusTracker {
 
   board(key: string): GitHubPullBoard {
     const state = this.states.get(key)
-    if (!state) return { ...EMPTY_PULL_BOARD, access: { ...EMPTY_PULL_BOARD.access } }
+    const repository = splitKey(key)[1]
+    if (!state) return { ...EMPTY_PULL_BOARD, access: { ...EMPTY_PULL_BOARD.access }, repository }
     return {
+      repository,
       pulls: state.pulls.map((pull) => ({ ...pull, closes: [...pull.closes] })),
       ...(state.observedAt !== undefined ? { observedAt: state.observedAt } : {}),
       stale: state.stale,

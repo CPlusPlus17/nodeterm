@@ -268,6 +268,7 @@ import { initContextLink, setNodeTranscript } from '../core/context-link'
 import { transcriptPathOf } from '../core/context-link-core'
 import { initCanvasControl, installCanvasSkillInto } from './canvas-control'
 import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control-verbs'
+import { issueFlagRefusal } from '../core/canvas-control-core'
 import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
 import { initTranscriptIndex, searchTranscripts } from '../core/transcript-index'
 import { initTelemetry } from './telemetry'
@@ -3713,6 +3714,11 @@ app.whenReady().then(async () => {
       const msg = dryRunRefusal(verb)
       return { ok: false, error: msg, message: msg }
     }
+    // `--issue` (a GitHub issue reference for a new agent session): its shape is refused HERE,
+    // before the renderer ever sees it, by the same gate the Server Edition's parser runs. The
+    // renderer resolves `#N` against the project's repository and re-parses with the same grammar.
+    const issueRefusal = issueFlagRefusal(verb, args)
+    if (issueRefusal) return { ok: false, error: issueRefusal, message: issueRefusal }
     // `browser` is answered in MAIN and never forwarded to the renderer's agent-control dispatch:
     // the debugger handle and the CDP allowlist are main-side, and the renderer is the more
     // attackable half. Every other verb still round-trips to the renderer below.

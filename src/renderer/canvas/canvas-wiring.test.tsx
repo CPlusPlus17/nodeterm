@@ -397,7 +397,8 @@ describe('node creation resolves its project LIVE and only onto a matching canva
   it('reads the active project from the store at call time in every creation funnel', () => {
     const liveReads =
       CANVAS_SRC.match(/const targetProjectId = useProjects\.getState\(\)\.activeProjectId/g) ?? []
-    // addAgentNode, addTerminal, createNodeInColumn, explainCommit.
+    // addAgentNode, addTerminal, createNodeInColumn, explainCommit. (startIssueAgent creates THROUGH
+    // addAgentNode and uses the project id it returns — it never reads the store a second time.)
     expect(liveReads.length).toBe(4)
   })
 

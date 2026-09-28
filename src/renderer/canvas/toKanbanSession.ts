@@ -1,5 +1,6 @@
 import type { SshConnection } from '@shared/ssh'
 import type { NodeIcon } from '@shared/node-icon'
+import { normalizeIssueRef } from '@shared/github-issue-ref'
 import { SYSTEM_NODE_COLORS, type CanvasNode } from '../state/workspace'
 import type { KanbanSession } from '../components/kanban/KanbanView'
 
@@ -46,6 +47,9 @@ export function toKanbanSession(n: CanvasNode): KanbanSession | null {
     kind: 'terminal',
     agentId: n.data.agentId as string | undefined,
     icon: n.data.icon as NodeIcon | undefined,
+    // Re-validated, like everything read off node data for display: the issue card groups sessions
+    // by this, and a malformed value must bind to nothing rather than to a wrong card.
+    issueRef: normalizeIssueRef(n.data.issueRef),
     // What the card modal's co-attach terminal needs to join THIS node's session the same way the
     // canvas TerminalNode does.
     spawn: {

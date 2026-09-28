@@ -31,6 +31,8 @@ const pulls = (items: GitHubPullStatus[], over: Partial<GitHubPullBoard> = {}): 
 const card = { id: 'card-1', kind: 'terminal', worktreeBranch: 'feat/x' }
 const entry = { columnId: 'done', armedAt: ARMED }
 
+const boardFor = (): ProjectKanban => board()
+
 describe('decidePullAutoMove — the guard order', () => {
   const base = { optedOut: false, columnId: 'doing', targetColumnId: 'done', armedAt: ARMED }
   const merged = { number: 1, lifecycle: 'merged' as const, mergedSeenAt: ARMED + 1 }
@@ -114,6 +116,13 @@ describe('planPullAutoMoves', () => {
     expect(planPullAutoMoves({ cards: [card], board: board(), pullBoard: both, entry }).moves).toEqual([])
     expect(planPullAutoMoves({ cards: [card], board: unlinkPull(board(), 'card-1', 2), pullBoard: both, entry }).moves)
       .toEqual([{ cardId: 'card-1', fromColumnId: 'doing', pulls: [1] }])
+  })
+
+  it('moves a session started on an issue once the PR that closes it merged', () => {
+    const issueCard = { id: 'card-1', kind: 'terminal', issueRef: { owner: 'o', repo: 'r', number: 4 } }
+    const board = { ...pulls([observedMerge(9, { closes: [4], headRefName: 'someone/else' })]), repository: 'o/r' }
+    expect(planPullAutoMoves({ cards: [issueCard], board: boardFor(), pullBoard: board, entry }).moves)
+      .toEqual([{ cardId: 'card-1', fromColumnId: 'doing', pulls: [9] }])
   })
 
   it("a fork PR on a same-named branch is not this card's work", () => {

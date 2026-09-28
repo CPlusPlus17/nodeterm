@@ -24,6 +24,7 @@
 // dragged back is not moved again for the same merges — and is then applied as a compare-and-set.
 import type { ProjectKanban } from '@shared/types'
 import type { GitHubPullBoard, PullLifecycle } from '@shared/github-pull-status'
+import type { IssueRef } from '@shared/github-issue-ref'
 import { readPullLinks, type KanbanPullAutoMoveEntry } from '@shared/kanban-pull-links'
 import { assignNode, columnForNode } from './kanban'
 import { pullsForCard } from './pullLinks'
@@ -96,7 +97,7 @@ export interface PullAutoMovePlan {
  * settings.json and could loop against the sanitizer's bounds; observation now lives on the host.
  */
 export function planPullAutoMoves(input: {
-  cards: Array<{ id: string; kind: string; worktreeBranch?: string }>
+  cards: Array<{ id: string; kind: string; worktreeBranch?: string; issueRef?: IssueRef }>
   board: ProjectKanban
   pullBoard: GitHubPullBoard | undefined
   entry: KanbanPullAutoMoveEntry | undefined

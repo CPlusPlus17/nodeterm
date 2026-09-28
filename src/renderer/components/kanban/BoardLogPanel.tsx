@@ -10,8 +10,15 @@ import type { KanbanSession } from './KanbanView'
 interface BoardLogPanelProps {
   /** The card/node whose activity this panel shows — feed + composer are scoped to `card.id`.
    *  Only the id is needed, so the canvas node flyout can use this panel without building a
-   *  full KanbanSession. */
+   *  full KanbanSession. A GitHub issue card passes its synthetic board-log id (`issueLogId`). */
   card: Pick<KanbanSession, 'id'>
+  /** Panel heading. Defaults to the session card's "Comments & activity". */
+  title?: string
+  /** Hide the comment composer — the issue card's run history is read-only, because a comment box
+   *  under a GitHub issue reads as "post to GitHub", and this log never leaves the project. */
+  readOnly?: boolean
+  /** Shown when the feed is empty (defaults to nothing). */
+  emptyText?: string
 }
 
 /** The activity sentence WITHOUT the leading author name — the name is rendered separately in
@@ -48,10 +55,23 @@ export function eventBody(e: BoardLogEvent): string {
       // A loud, human-visible line for a cookie read (the whole point of the trace). `from` names the
       // agent, `to` the domain it read; `title` names the browser node it drove.
       return `read cookies for ${e.to ?? 'a site'}${e.title ? ` via ${e.title}` : ''}`
+    case 'run-started':
+      // The run's fields come from a git-shared file like everything else here: rendered as text
+      // only (React escapes it), and never turned into an action.
+      return `started ${runName(e)} on this issue`
+    case 'run-ended':
+      return `closed ${runName(e)}${e.run?.end ? ` (last state: ${e.run.end})` : ''}`
     default:
       // A newer peer may write event types this build doesn't know — show them neutrally.
       return `updated this card`
   }
+}
+
+/** "Claude session term-1a2b" — the node title when the event recorded one, else the node id. */
+function runName(e: BoardLogEvent): string {
+  const who = typeof e.title === 'string' && e.title ? e.title : 'a session'
+  const id = typeof e.run?.nodeId === 'string' ? ` (${e.run.nodeId})` : ''
+  return `${who}${id}`
 }
 
 /** Absolute, Trello-style stamp ("19 Jul 2026, 22:50") — the feed shows dates, not "2h ago"
@@ -71,7 +91,7 @@ function formatStamp(ts: number): string {
  *  comments + activity feed newest-first. Reads/writes the board log for the ACTIVE project via
  *  its session api — resolved here (not threaded from Canvas). Subscribes on mount, so a teammate's
  *  comment or a board change lands live; unsubscribes on unmount / card swap. */
-export function BoardLogPanel({ card }: BoardLogPanelProps) {
+export function BoardLogPanel({ card, title, readOnly, emptyText }: BoardLogPanelProps) {
   const { api } = useSession()
   const projectId = useProjects((s) => s.activeProjectId)
   const entries = useBoardLog((s) => s.entriesFor(projectId))
@@ -98,10 +118,10 @@ export function BoardLogPanel({ card }: BoardLogPanelProps) {
 
   return (
     <div className="board-log">
-      <div className="board-log__title">Comments & activity</div>
+      <div className="board-log__title">{title ?? 'Comments & activity'}</div>
       {unsupported ? (
         <div className="board-log__hint">Board history needs a project folder</div>
-      ) : (
+      ) : readOnly ? null : (
         <textarea
           className="board-log__composer"
           value={draft}
@@ -119,6 +139,9 @@ export function BoardLogPanel({ card }: BoardLogPanelProps) {
       )}
       {!unsupported && error && (
         <div className="board-log__error">Some board history couldn’t be saved.</div>
+      )}
+      {!unsupported && feed.length === 0 && emptyText && (
+        <div className="board-log__hint">{emptyText}</div>
       )}
       <BoardLogFeed feed={feed} />
     </div>

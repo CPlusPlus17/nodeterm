@@ -87,6 +87,17 @@ describe('CardPullRequests', () => {
     expect(render(board).host.textContent).toContain(PULL_LINK_SSH_REASON)
   })
 
+  it('an issue-bound session shows the PRs closing its issue, on SSH too', () => {
+    setup(true)
+    useGitHubIssues.setState({ projects: { p1: { pullBoard: { ...pullBoard, repository: 'o/r', pulls: [
+      { number: 21, lifecycle: 'open', headRefName: 'elsewhere', closes: [4] }
+    ] } } as never } })
+    const host = render(board, session({ worktreeBranch: undefined, issueRef: { owner: 'o', repo: 'r', number: 4 } })).host
+    expect(host.textContent).toContain('PR #21')
+    expect(host.textContent).toContain('closes #4')
+    expect(host.textContent).not.toContain(PULL_LINK_SSH_REASON)
+  })
+
   it('renders nothing for a board without GitHub or a card outside a worktree group', () => {
     const { github: _github, ...plain } = board
     expect(render(plain).host.textContent).toBe('')

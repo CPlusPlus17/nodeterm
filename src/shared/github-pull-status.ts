@@ -74,6 +74,8 @@ export interface GitHubPullStatus {
 
 /** Everything the board knows about a repository's pull requests beyond the issues harvest. */
 export interface GitHubPullBoard {
+  /** `owner/name` these pull requests belong to (the one `closes` numbers refer to). */
+  repository?: string
   pulls: GitHubPullStatus[]
   /** Epoch ms of the last read that succeeded. Absent = none yet in this app run. */
   observedAt?: number

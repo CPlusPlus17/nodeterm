@@ -62,6 +62,7 @@ describe('GitHubPullStatusTracker', () => {
     ])
     expect(board.stale).toBe(false)
     expect(board.observedAt).toBe(0)
+    expect(board.repository).toBe('o/r')
   })
 
   it('a failed read keeps the last snapshot and marks it stale instead of going blank', async () => {

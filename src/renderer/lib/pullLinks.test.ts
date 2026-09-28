@@ -16,6 +16,7 @@ const empty: ProjectKanban = { columns: [], assignments: [] }
 const pull = (number: number, over: Partial<GitHubPullStatus> = {}): GitHubPullStatus =>
   ({ number, lifecycle: 'open', headRefName: 'feat/x', closes: [], ...over })
 const pulls = (items: GitHubPullStatus[]): GitHubPullBoard => ({
+  repository: 'o/r',
   pulls: items, observedAt: 1, stale: false, access: { ci: true, merge: true }, undecided: false, truncated: false
 })
 
@@ -45,6 +46,28 @@ describe('pullsForCard', () => {
       .linked.map((item) => item.number)).toEqual([5])
     // The tombstone is per card: another card on the same branch still links.
     expect(pullsForCard({ id: 'other', worktreeBranch: 'feat/x' }, pulls([pull(5)]), board).linked).toHaveLength(1)
+  })
+})
+
+describe('pullsForCard — a session started on an issue', () => {
+  const issueCard = { id: 'n', issueRef: { owner: 'O', repo: 'R', number: 4 } }
+
+  it('links the PRs that close its issue, forks included, from the same repository only', () => {
+    const board = pulls([
+      pull(7, { closes: [4], headRefName: 'anything' }),
+      pull(8, { closes: [4], crossRepository: true, headRefName: 'fork/x' }),
+      pull(9, { closes: [5] })
+    ])
+    expect(pullsForCard(issueCard, board, empty).linked.map((item) => item.number)).toEqual([8, 7])
+    expect(pullsForCard({ ...issueCard, issueRef: { owner: 'else', repo: 'R', number: 4 } }, board, empty).linked)
+      .toEqual([])
+  })
+
+  it('joins with the branch link without duplicates, and honours tombstones', () => {
+    const board = pulls([pull(7, { closes: [4] }), pull(6)])
+    const card = { ...issueCard, worktreeBranch: 'feat/x' }
+    expect(pullsForCard(card, board, empty).linked.map((item) => item.number)).toEqual([7, 6])
+    expect(pullsForCard(card, board, unlinkPull(empty, 'n', 7)).linked.map((item) => item.number)).toEqual([6])
   })
 })
 
