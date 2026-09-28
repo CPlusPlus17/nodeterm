@@ -82,6 +82,7 @@ import { terminalKey } from '../terminal/terminal-config'
 import {
   setWebglGesture,
   setWebglZoom,
+  watchWebglDevicePixelRatio,
   releaseAllHiddenGrants,
   WEBGL_GESTURE_SETTLE_MS
 } from '../terminal/webgl-budget'
@@ -9535,9 +9536,10 @@ export function Canvas() {
           zoomRafRef.current = null
           setZoomPct(Math.round(viewportRef.current.zoom * 100))
           setGroupLabelBoost(viewportRef.current.zoom)
-          // Feed the crisp gate (GPU text is a magnified bitmap past ~175%; the DOM renderer
-          // re-rasters and stays sharp). Idempotent + hysteresis inside, and the swaps it queues
-          // only run once the gesture settles — per-frame cost here is a float compare.
+          // Feed the crisp gate (GPU text is a magnified bitmap past ~175%, or past 100% on a
+          // low-DPI display; the DOM renderer re-rasters and stays sharp). Idempotent + hysteresis
+          // inside, and the swaps it queues only run once the gesture settles — per-frame cost
+          // here is a float compare.
           setWebglZoom(viewportRef.current.zoom)
         })
       }
@@ -13540,6 +13542,10 @@ export function Canvas() {
       }
     })
   }, [])
+
+  // The crisp gate's zoom threshold depends on the display (issue #986): report the device-pixel
+  // ratio now and whenever the window moves to a display with a different one.
+  useEffect(() => watchWebglDevicePixelRatio(window), [])
 
   // Safety net for a lost Stop POST / crashed CLI: decay working entries that saw no hook
   // event at all for STALE_WORKING_MS (the sweep itself is cheap; see agentStatus.ts).

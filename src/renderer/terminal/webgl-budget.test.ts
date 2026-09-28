@@ -9,6 +9,10 @@ import {
   setWebglEnabled,
   setWebglGesture,
   setWebglZoom,
+  setWebglDevicePixelRatio,
+  watchWebglDevicePixelRatio,
+  WEBGL_LOW_DPI_CRISP_ABOVE_ZOOM,
+  WEBGL_LOW_DPI_GPU_RESUME_BELOW_ZOOM,
   WEBGL_ACQUIRE_DEBOUNCE_MS,
   WEBGL_CRISP_ABOVE_ZOOM,
   WEBGL_GPU_RESUME_BELOW_ZOOM,
@@ -435,6 +439,103 @@ describe('webgl-budget coordinator', () => {
       const a = fakeClient('a')
       grant(a)
       zoomTo(Number.NaN)
+      expect(a.rec.held).toBe(true)
+    })
+  })
+
+  describe('crisp gate on a low-DPI display (issue #986)', () => {
+    // At devicePixelRatio 1 there is no spare resolution: ANY non-integer magnification of the GPU
+    // bitmap smears glyph edges. Measured at DPR 1 (mid-ramp share of ink, higher = blurrier):
+    // webgl 35.6% at 100% but ~62% from 110% up to 175%, while dom stays at or under ~40%.
+    const zoomTo = (zoom: number): void => {
+      setWebglZoom(zoom)
+      vi.advanceTimersByTime(WEBGL_DRAIN_MS * 10)
+    }
+
+    it('at DPR 1 a zoom just past 100% already goes crisp, and 100% itself stays on the GPU', () => {
+      setWebglDevicePixelRatio(1)
+      const a = fakeClient('a')
+      zoomTo(1)
+      grant(a)
+      expect(a.rec.held).toBe(true)
+      zoomTo(1.1)
+      expect(a.rec.held).toBe(false)
+      zoomTo(1)
+      expect(a.rec.held).toBe(true)
+    })
+
+    it('keeps its own hysteresis band just above 100%', () => {
+      setWebglDevicePixelRatio(1)
+      const a = fakeClient('a')
+      grant(a)
+      zoomTo(WEBGL_LOW_DPI_CRISP_ABOVE_ZOOM + 0.001)
+      expect(a.rec.releases).toBe(1)
+      zoomTo(WEBGL_LOW_DPI_GPU_RESUME_BELOW_ZOOM + 0.001) // in the band: still crisp
+      expect(a.rec.acquires).toBe(1)
+      zoomTo(WEBGL_LOW_DPI_GPU_RESUME_BELOW_ZOOM - 0.001)
+      expect(a.rec.acquires).toBe(2)
+    })
+
+    it('a high-DPI display keeps the original 175% threshold', () => {
+      setWebglDevicePixelRatio(2)
+      const a = fakeClient('a')
+      grant(a)
+      zoomTo(1.5)
+      expect(a.rec.held).toBe(true)
+      zoomTo(WEBGL_CRISP_ABOVE_ZOOM + 0.01)
+      expect(a.rec.held).toBe(false)
+    })
+
+    it('moving the window between displays re-evaluates the current zoom', () => {
+      const a = fakeClient('a')
+      setWebglDevicePixelRatio(2)
+      grant(a)
+      zoomTo(1.25)
+      expect(a.rec.held).toBe(true)
+      setWebglDevicePixelRatio(1) // dragged onto the low-DPI monitor
+      vi.advanceTimersByTime(WEBGL_DRAIN_MS * 10)
+      expect(a.rec.held).toBe(false)
+      setWebglDevicePixelRatio(2) // and back onto the retina display
+      vi.advanceTimersByTime(WEBGL_DRAIN_MS * 10)
+      expect(a.rec.held).toBe(true)
+    })
+
+    it('watchWebglDevicePixelRatio reports the ratio now and on every display change, then unsubscribes', () => {
+      const listeners = new Set<() => void>()
+      const queries: string[] = []
+      const win = {
+        devicePixelRatio: 2,
+        matchMedia(q: string) {
+          queries.push(q)
+          return {
+            addEventListener: (_: 'change', fn: () => void) => listeners.add(fn),
+            removeEventListener: (_: 'change', fn: () => void) => listeners.delete(fn)
+          }
+        }
+      }
+      const a = fakeClient('a')
+      const stop = watchWebglDevicePixelRatio(win)
+      grant(a)
+      zoomTo(1.25)
+      expect(a.rec.held).toBe(true)
+      win.devicePixelRatio = 1
+      ;[...listeners].forEach((fn) => fn())
+      vi.advanceTimersByTime(WEBGL_DRAIN_MS * 10)
+      expect(a.rec.held).toBe(false)
+      // The query is ratio-specific, so each change re-subscribes against the NEW ratio.
+      expect(queries).toEqual(['(resolution: 2dppx)', '(resolution: 1dppx)'])
+      expect(listeners.size).toBe(1)
+      stop()
+      expect(listeners.size).toBe(0)
+    })
+
+    it('ignores a non-finite or non-positive ratio', () => {
+      const a = fakeClient('a')
+      grant(a)
+      zoomTo(1.25)
+      setWebglDevicePixelRatio(Number.NaN)
+      setWebglDevicePixelRatio(0)
+      vi.advanceTimersByTime(WEBGL_DRAIN_MS * 10)
       expect(a.rec.held).toBe(true)
     })
   })

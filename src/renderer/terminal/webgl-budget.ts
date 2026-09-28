@@ -141,8 +141,73 @@ export const WEBGL_CRISP_ABOVE_ZOOM = 1.75
  *  boundary must not thrash swap cycles — renderer churn is its own hazard. */
 export const WEBGL_GPU_RESUME_BELOW_ZOOM = 1.6
 
+/**
+ * The crisp gate on a LOW-DPI display (devicePixelRatio under 2, issue #986). There is no spare
+ * resolution there, so any non-integer magnification of the GPU bitmap smears glyph edges, well
+ * below 175%. Measured at DPR 1 with the same metric as above: webgl 35.6% at 100%, ~62% from 110%
+ * all the way to 175%; dom 39.7% at 100%, 38.1% at 110%, falling to 26.5% at 200%. At DPR 2 the
+ * softening is milder and reads as fine, so a high-DPI display keeps the 175% threshold.
+ *
+ * On a low-DPI display every zoom-in past 100% therefore swaps to DOM. That is more terminals than
+ * the high-DPI case (at 110% most of a canvas can still be on screen), so it costs DOM rendering
+ * where there used to be GPU; that is the trade #361 left open ("moves to ~1.2 and nothing else
+ * changes") and the one #986 asks for. 100% itself, and every zoom-out, stay on the GPU.
+ */
+export const WEBGL_LOW_DPI_CRISP_ABOVE_ZOOM = 1.02
+/** Resume threshold for the low-DPI gate — the same hysteresis rule, just above 100%. */
+export const WEBGL_LOW_DPI_GPU_RESUME_BELOW_ZOOM = 1.01
+/** Below this devicePixelRatio the low-DPI thresholds apply. */
+const LOW_DPI_BELOW = 2
+
 /** True while the canvas is zoomed past the crisp threshold — grants are blocked. */
 let zoomCrisp = false
+/** Last reported canvas zoom, so a display change can re-evaluate it. */
+let lastZoom = 1
+/** Last reported devicePixelRatio. Unknown until the canvas reports one, and unknown behaves as
+ *  high-DPI — the thresholds this gate had before #986. */
+let devicePixelRatio = Number.POSITIVE_INFINITY
+
+/**
+ * Report the window's devicePixelRatio (it changes when the window moves between displays).
+ * Re-evaluates the current zoom against the thresholds for the new ratio.
+ */
+export function setWebglDevicePixelRatio(dpr: number): void {
+  if (!Number.isFinite(dpr) || dpr <= 0 || dpr === devicePixelRatio) return
+  devicePixelRatio = dpr
+  applyZoomCrisp(lastZoom)
+}
+
+interface DprMediaQuery {
+  addEventListener(type: 'change', listener: () => void): void
+  removeEventListener(type: 'change', listener: () => void): void
+}
+
+/**
+ * Report `win.devicePixelRatio` now, and again whenever it changes (a window dragged between a
+ * retina and a low-DPI display). A `(resolution: Ndppx)` query only fires when the ratio LEAVES N,
+ * so every change re-subscribes against the new ratio. Returns the unsubscribe.
+ */
+export function watchWebglDevicePixelRatio(win: {
+  devicePixelRatio: number
+  matchMedia?: (query: string) => DprMediaQuery
+}): () => void {
+  let query: DprMediaQuery | null = null
+  const subscribe = (): void => {
+    setWebglDevicePixelRatio(win.devicePixelRatio)
+    if (typeof win.matchMedia !== 'function') return
+    query = win.matchMedia(`(resolution: ${win.devicePixelRatio}dppx)`)
+    query.addEventListener('change', onChange)
+  }
+  function onChange(): void {
+    query?.removeEventListener('change', onChange)
+    subscribe()
+  }
+  subscribe()
+  return () => {
+    query?.removeEventListener('change', onChange)
+    query = null
+  }
+}
 
 /**
  * Report the canvas zoom (React Flow viewport scale). Cheap and idempotent — call it from the
@@ -154,7 +219,15 @@ let zoomCrisp = false
  */
 export function setWebglZoom(zoom: number): void {
   if (!Number.isFinite(zoom)) return
-  const next = zoomCrisp ? zoom > WEBGL_GPU_RESUME_BELOW_ZOOM : zoom > WEBGL_CRISP_ABOVE_ZOOM
+  lastZoom = zoom
+  applyZoomCrisp(zoom)
+}
+
+function applyZoomCrisp(zoom: number): void {
+  const lowDpi = devicePixelRatio < LOW_DPI_BELOW
+  const crispAbove = lowDpi ? WEBGL_LOW_DPI_CRISP_ABOVE_ZOOM : WEBGL_CRISP_ABOVE_ZOOM
+  const resumeBelow = lowDpi ? WEBGL_LOW_DPI_GPU_RESUME_BELOW_ZOOM : WEBGL_GPU_RESUME_BELOW_ZOOM
+  const next = zoomCrisp ? zoom > resumeBelow : zoom > crispAbove
   if (next === zoomCrisp) return
   zoomCrisp = next
   if (zoomCrisp) {
@@ -569,6 +642,8 @@ export function __resetWebglBudgetForTests(): void {
   budget = WEBGL_BUDGET
   enabled = true
   zoomCrisp = false
+  lastZoom = 1
+  devicePixelRatio = Number.POSITIVE_INFINITY
   gestureActive = false
   owed.clear()
   if (drainTimer) {
