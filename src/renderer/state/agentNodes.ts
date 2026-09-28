@@ -41,6 +41,11 @@ interface AgentNodesState {
    */
   activityById: Record<string, string>
   /**
+   * When each subagent last streamed transcript, for `sweepStaleWorking`. Kept out of `byId` for the
+   * same reason as `activityById`: it changes on every chunk, and Canvas lays out from `byId`.
+   */
+  lastActivityAt: Record<string, number>
+  /**
    * Per-ephemeral-node UI overrides (keyed by node id: subagent ids + `loop-<parentId>`).
    * `positions` holds an OFFSET FROM THE PARENT AGENT NODE, not a canvas position: the card
    * always shares the agent's coordinate space (it inherits the agent's `parentId`), so an
@@ -136,7 +141,7 @@ interface AgentNodesState {
    */
   clearFinishedForParent(parentNodeId: string): void
   /**
-   * Mark every card still `working` past `staleMs` as done — the decay `clearFinishedForParent`
+   * Mark every card still `working` with no sign of life for `staleMs` as done — the decay `clearFinishedForParent`
    * depends on.
    *
    * Without it a subagent whose `finish()` never arrives (crashed CLI, killed pane, slept machine)
@@ -144,6 +149,10 @@ interface AgentNodesState {
    * one being fixed. The number is `WORKING_STALE_MS`, imported rather than chosen: that module
    * exists because three surfaces each invented their own timeout, and a subagent card inventing a
    * fourth would be the same mistake in a new place.
+   *
+   * "No sign of life" counts from the card's last streamed activity, falling back to its start.
+   * Counting from the start alone declared every subagent that ran longer than the window dead
+   * while its transcript was still streaming, and the next turn boundary then removed its card.
    *
    * It marks done rather than deleting, so the card stays readable and the next turn boundary takes
    * it; `finish()` landing late is a no-op on an entry that is already done.
@@ -200,6 +209,7 @@ function dropCards(s: AgentNodesState, ids: string[]): Partial<AgentNodesState> 
   if (!ids.length) return s
   const byId = { ...s.byId }
   const activityById = { ...s.activityById }
+  const lastActivityAt = { ...s.lastActivityAt }
   const positions = { ...s.positions }
   const sizes = { ...s.sizes }
   const expanded = { ...s.expanded }
@@ -208,6 +218,7 @@ function dropCards(s: AgentNodesState, ids: string[]): Partial<AgentNodesState> 
   for (const id of ids) {
     delete byId[id]
     delete activityById[id]
+    delete lastActivityAt[id]
     delete positions[id]
     delete sizes[id]
     delete expanded[id]
@@ -215,7 +226,7 @@ function dropCards(s: AgentNodesState, ids: string[]): Partial<AgentNodesState> 
   // A card that just vanished must not stay "selected" — a later card reusing the id would come
   // back pre-selected.
   const selectedId = s.selectedId && ids.includes(s.selectedId) ? null : s.selectedId
-  return { byId, activityById, positions, sizes, expanded, selectedId }
+  return { byId, activityById, lastActivityAt, positions, sizes, expanded, selectedId }
 }
 
 function saveLoopOverrides(s: Overrides): void {
@@ -234,6 +245,7 @@ function saveLoopOverrides(s: Overrides): void {
 export const useAgentNodes = create<AgentNodesState>((set) => ({
   byId: {},
   activityById: {},
+  lastActivityAt: {},
   selectedId: null,
   autoHideFinished: false,
   ...loadLoopOverrides(),
@@ -318,7 +330,10 @@ export const useAgentNodes = create<AgentNodesState>((set) => ({
     set((s) => {
       if (!s.byId[toolUseId]) return s
       const activity = ((s.activityById[toolUseId] ?? '') + chunk).slice(-12000) // bounded tail
-      return { activityById: { ...s.activityById, [toolUseId]: activity } }
+      return {
+        activityById: { ...s.activityById, [toolUseId]: activity },
+        lastActivityAt: { ...s.lastActivityAt, [toolUseId]: Date.now() }
+      }
     }),
 
   clearForParent: (parentNodeId) => set((s) => dropCards(s, cardsOf(s, parentNodeId))),
@@ -329,7 +344,9 @@ export const useAgentNodes = create<AgentNodesState>((set) => ({
   sweepStaleWorking: (now = Date.now(), staleMs = WORKING_STALE_MS) =>
     set((s) => {
       const stale = Object.keys(s.byId).filter(
-        (id) => s.byId[id].state === 'working' && now - s.byId[id].startedAt > staleMs
+        (id) =>
+          s.byId[id].state === 'working' &&
+          now - Math.max(s.byId[id].startedAt, s.lastActivityAt[id] ?? 0) > staleMs
       )
       if (!stale.length) return s
       const byId = { ...s.byId }
