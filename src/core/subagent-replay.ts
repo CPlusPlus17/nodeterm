@@ -46,7 +46,10 @@ export class SubagentReplay {
 
   snapshot(now = Date.now()): NormalizedAgentEvent[] {
     this.prune(now)
-    return [...this.starts.values()].map((e) => ({ ...e }))
+    return [...this.starts].map(([key, e]) => {
+      const last = this.lastActivity.get(key)
+      return last === undefined ? { ...e } : { ...e, subagentLastActivityAt: last }
+    })
   }
   clearParent(nodeId: string): void {
     for (const [key, e] of this.starts) if (e.nodeId === nodeId) this.forget(key)

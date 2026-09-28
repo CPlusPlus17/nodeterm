@@ -42,7 +42,7 @@ describe('subagent reload memory', () => {
     replay.record(start, 100)
     replay.touch('child', 100 + WORKING_STALE_MS * 2)
     expect(replay.snapshot(100 + WORKING_STALE_MS * 2 + 60_000)).toEqual([
-      { ...start, subagentType: undefined, subagentStartedAt: 100 }
+      { ...start, subagentType: undefined, subagentStartedAt: 100, subagentLastActivityAt: 100 + WORKING_STALE_MS * 2 }
     ])
     expect(replay.snapshot(100 + WORKING_STALE_MS * 3 + 1)).toEqual([])
   })

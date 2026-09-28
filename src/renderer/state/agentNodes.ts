@@ -97,10 +97,14 @@ interface AgentNodesState {
    * expansion and selection move to the new key, so the user sees one card that never moved. Its
    * streamed activity is DROPPED, not moved: the native tail reads the same transcript file from
    * its first byte, and moving it would print everything twice.
+   *
+   * `lastActivityAt` seeds the sweep's clock for a card replayed after a reload; it is kept out of
+   * `byId` like every activity time. A superseded card's clock is carried too (it is a time, not
+   * text, so it cannot double) — the new key must not look older than the card it replaces.
    */
   start(
     toolUseId: string,
-    viz: Omit<SubagentViz, 'state' | 'startedAt'> & { startedAt?: number },
+    viz: Omit<SubagentViz, 'state' | 'startedAt'> & { startedAt?: number; lastActivityAt?: number },
     supersedes?: string
   ): void
   /**
@@ -285,12 +289,19 @@ export const useAgentNodes = create<AgentNodesState>((set) => ({
       return { positions, sizes }
     }),
 
-  start: (toolUseId, viz, supersedes) =>
+  start: (toolUseId, { lastActivityAt: seed, ...viz }, supersedes) =>
     set((s) => {
       const old = supersedes && supersedes !== toolUseId ? s.byId[supersedes] : undefined
       const startedAt = viz.startedAt ?? s.byId[toolUseId]?.startedAt ?? old?.startedAt ?? Date.now()
       const card: SubagentViz = { ...viz, state: 'working', startedAt }
-      if (!old || !supersedes) return { byId: { ...s.byId, [toolUseId]: card } }
+      // The sweep's clock: the newest of the replayed seed, this key's own and the replaced card's.
+      const clocks = [seed, s.lastActivityAt[toolUseId], old && supersedes ? s.lastActivityAt[supersedes] : undefined]
+        .filter((t): t is number => t !== undefined)
+      const withClock = (m: Record<string, number>): Record<string, number> =>
+        clocks.length ? { ...m, [toolUseId]: Math.max(...clocks) } : m
+      if (!old || !supersedes) {
+        return { byId: { ...s.byId, [toolUseId]: card }, lastActivityAt: withClock(s.lastActivityAt) }
+      }
       const next = dropCards(s, [supersedes]) as AgentNodesState
       // Move what the user did to the old card, unless the new key already carries its own.
       const inherit = !(toolUseId in s.byId)
@@ -299,6 +310,7 @@ export const useAgentNodes = create<AgentNodesState>((set) => ({
       return {
         ...next,
         byId: { ...next.byId, [toolUseId]: card },
+        lastActivityAt: withClock(next.lastActivityAt),
         positions: carry(next.positions, s.positions),
         sizes: carry(next.sizes, s.sizes),
         expanded: carry(next.expanded, s.expanded),

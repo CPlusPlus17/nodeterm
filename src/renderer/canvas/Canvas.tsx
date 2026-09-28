@@ -15852,7 +15852,8 @@ export function Canvas() {
                 parentNodeId: e.nodeId,
                 type: e.subagentType,
                 label: e.taskLabel,
-                startedAt: e.subagentStartedAt
+                startedAt: e.subagentStartedAt,
+                lastActivityAt: e.subagentLastActivityAt
               },
               // A Claude native card replacing the card its tool call drew (claude-subagent-lifecycle).
               e.supersedes

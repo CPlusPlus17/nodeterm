@@ -187,6 +187,16 @@ describe('sweepStaleWorking counts from the LAST activity, not from the start', 
     expect(useAgentNodes.getState().byId).toBe(before)
   })
 
+  it('a replayed card keeps the host-reported last activity, so the first sweep after a reload spares it', () => {
+    const s = useAgentNodes.getState()
+    const now = 1_000_000 + WORKING_STALE_MS * 3
+    vi.setSystemTime(now)
+    s.start('tu1', { parentNodeId: 'n1', startedAt: 1_000_000, lastActivityAt: now - 30_000 })
+    expect(useAgentNodes.getState().byId['tu1']).not.toHaveProperty('lastActivityAt')
+    s.sweepStaleWorking(now + 60_000)
+    expect(useAgentNodes.getState().byId['tu1'].state).toBe('working')
+  })
+
   it('forgets the activity time when the card is dropped', () => {
     const s = useAgentNodes.getState()
     s.start('tu1', { parentNodeId: 'n1' })
