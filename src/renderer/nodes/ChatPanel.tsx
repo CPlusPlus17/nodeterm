@@ -5,6 +5,7 @@ import { useAgentStatus } from '../state/agentStatus'
 import { useSession } from '../session/session'
 import { chipFor } from '../lib/keybindingOverrides'
 import { chatComposerPlaceholder, chatSendRefusal } from '../lib/chatSendGate'
+import { chatPaneRefusal, chatPaneRefusalToast } from '../lib/chatPaneGate'
 import { chatAgentLabel, isNearBottom, shouldFollowOnLoad, toolCardTitle } from '../lib/chatPanel'
 import { useSettings } from '../state/settings'
 import {
@@ -643,6 +644,17 @@ export function ChatPanel({
     // Read the store at SEND time, not the render-time values: a PermissionRequest (or an Eco
     // hibernation) that landed between the last render and this keypress must still block.
     if (!text || chatSendRefusal(agentId, useAgentStatus.getState().byId[nodeId] ?? {}) !== null) return
+    // The kernel's say (chatPaneGate.ts): an agent that announces no quit (codex) may have left a
+    // SHELL in the pane while the store still reads `done` — typed there, the message would run.
+    const pane = await chatPaneRefusal(agentId, nodeId, {
+      paneOwner: (n) => api.pty.paneOwner(n),
+      customAgents: useSettings.getState().settings.customAgents
+    })
+    if (pane) {
+      const message = chatPaneRefusalToast(pane, chatAgentLabel(agentId, useSettings.getState().settings.customAgents))
+      window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message } }))
+      return
+    }
     const ok = await api.pty.sendText(nodeId, text)
     if (ok === 'pasted-not-submitted') {
       window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message: TEXT_NOT_SUBMITTED } }))

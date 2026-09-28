@@ -1738,7 +1738,7 @@ else, and its context links must keep classifying across restarts).
   `PERMISSION_MODE_CAPABLE`, `MODEL_SWITCH_CAPABLE`, with helpers (`hasHooks`,
   `canBranch`, `canContextLink`, `canChat`, `canRename`, `canReadTitle`, `hasPermissionMode`, …).
   Branch stays **Claude-only** purely by being in only `BRANCH_CAPABLE`. The ⌘M **ChatPanel**
-  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok** since 2026-09: grok's
+  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok + gemini + codex** since 2026-09 (each with its own reader): grok's
   `chat_history.jsonl` gets its own reader, and `chat:read-transcript` routes by agent. That list had
   to be SPLIT to do it — `CHAT_CAPABLE` carried two facts that coincided while claude was its only
   member ("we can render this" and "claude's resolver can locate and parse this file"), and the
@@ -1903,7 +1903,26 @@ else, and its context links must keep classifying across restarts).
   wrong guess, so none ships, not even unwired. The capture recipe is §7.1 and §8.1 of the doc, using
   `scripts/agy-transcript-shape.mjs`, which dumps shapes and never text. When it lands: locate
   strictly by id (`brain/` holds every conversation on the machine), and have a remote node answer
-  `remoteOnly` → unreadable like grok.
+  `remoteOnly` → unreadable like gemini.
+- **Codex in the ⌘M chat view** (2026-09-28; the desktop panel, the kanban card modal, the phone's
+  `chat.page`). `core/codex-chat.ts` reads the rollout with codex's own rules, never claude's
+  resolver. It takes USER text from the UI stream only: `event_msg/user_message` (legacy, ≤ 0.146) or
+  an `item_completed` `UserMessage` (paginated, ≥ 0.151). Model-side `role:user` messages also carry
+  injected context (AGENTS.md, `<environment_context>`, image wrappers), so they are never read.
+  Assistant text and tools come from `response_item`, correlated by `call_id`. The UI copies
+  (`agent_message`, `AgentMessage`) and reasoning are skipped. Failed and interrupted turns become
+  `[error] …` / `[turn aborted…]` notes. A tool result drops codex's `… Output:` preamble. The rollout
+  is append-only, so it pages by byte offset like claude. The locator matches a WHOLE-uuid thread id
+  (`CODEX_THREAD_ID_RE`), because a uuid's last group passes `SESSION_ID_RE` and suffix-matches
+  another thread's file. It searches only the node's own account home, and uses the codex tail's hook
+  path only as a checked hint. An SSH node is read on its host (`main/remote-codex-chat-page.ts`,
+  through the same resolvers as its remote meter) or not at all. Because codex announces no session
+  end, a chat send first asks the kernel (`renderer/lib/chatPaneGate.ts`, `isAgentPane`). After a
+  `/quit` the store still reads `done`, and the message would otherwise run in the shell. **Not
+  supported:** images in prompts, reasoning summaries, the composer's model/effort labels (the
+  `/model` picker is measured for claude only), plan/question answer cards (codex never sets
+  `held`), and a closed REMOTE session's transcript. Record rules and fixtures:
+  `src/shared/chat-fixtures/codex/`.
 - **Gemini + codex parity** (2026-08-09) — brought both up to grok's level in the lists above. Unlike
   grok, **both CLIs are installed** and gemini **ships its own hook reference**
   (`/usr/lib/node_modules/@google/gemini-cli/bundle/docs/hooks/reference.md`), so almost every fact is

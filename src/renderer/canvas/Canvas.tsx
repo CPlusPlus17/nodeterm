@@ -393,6 +393,7 @@ import {
 import { useProjects } from '../state/projects'
 import { useAgentStatus } from '../state/agentStatus'
 import { hostChatSend, hostChatSession, hostChatStatus } from '../lib/hostChatQuery'
+import { chatPaneRefusal } from '../lib/chatPaneGate'
 import { useLaunchDelivery } from '../state/launchDelivery'
 import { useBrowserLease, drivingNodeIds } from '../state/browserLease'
 import { useTerminalFocus } from '../state/terminalFocus'
@@ -10005,7 +10006,13 @@ export function Canvas() {
       void hostChatSend(q, {
         getStatus: (id) => useAgentStatus.getState().byId[id],
         sendText: (id, text) => api.pty.sendText(id, text),
-        now: Date.now
+        now: Date.now,
+        // The kernel's say on whether the agent is still in the pane (codex announces no quit).
+        paneRefusal: (id, agentId) =>
+          chatPaneRefusal(agentId, id, {
+            paneOwner: (n) => api.pty.paneOwner(n),
+            customAgents: useSettings.getState().settings.customAgents
+          })
       }).then((out) => api.sendHostChatReply({ requestId: q.requestId, kind: 'send', ...out }))
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps

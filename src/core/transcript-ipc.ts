@@ -22,12 +22,14 @@ import { platform } from './platform'
 import { parseGrokChat } from './grok-chat'
 import type { RemoteGrokChat } from './remote-grok-chat'
 import { readGeminiChatTranscript } from './gemini-chat'
+import { chatMessagesFromCodex, locateCodexRollout, parseCodexChatWindow } from './codex-chat'
 import { locateGrok } from './handoff/locate'
 import { capabilityAgentId } from '../shared/agents/config'
 import {
   parseChatMessages,
   parseChatWindow,
   parseTranscriptLines,
+  type ChatWindowParse,
   readChatWindow,
   readCappedTail,
   readChatMessages,
@@ -94,6 +96,20 @@ export interface TranscriptIpcDeps {
    * Electron-only, like the other remote legs.
    */
   readRemoteGrok?(q: TranscriptQuery, opts?: { maxBytes?: number }): Promise<RemoteGrokChat | null>
+  /**
+   * The rollout path the CODEX context tail learned from a hook for this session (the `pathFor` above
+   * is CLAUDE's tail and must never answer for a codex id). A hint only: `locateCodexRollout` uses it
+   * when its file name names this very thread and it exists. Both shells wire it.
+   */
+  codexPathFor?(sessionId: string): string | undefined
+  /**
+   * ONE page of a REMOTE codex node's rollout, located ON the host under the node's own account home
+   * and read with the same ranged read claude's remote leg uses. Same conventions as
+   * `readRemotePage`: `null` = not a remote node; `{ok:false}` = remote and unreadable (terminal —
+   * never this machine's disk); `{ok:false, absent:true}` = the host looked and has no such rollout.
+   * Electron-only; the Server Edition runs on the host it reads.
+   */
+  readRemoteCodexPage?(q: TranscriptQuery, page: ChatTranscriptPage): Promise<RemoteTranscriptPage | null>
 }
 
 export type RemoteTranscriptPage = { ok: true; data: Buffer; start: number } | { ok: false; absent?: true }
@@ -124,12 +140,13 @@ type WindowRead = (page: ChatTranscriptPage) => Promise<{ data: Buffer; start: n
 async function parseGrowingWindow(
   page: ChatTranscriptPage,
   first: { data: Buffer; start: number },
-  read: WindowRead
+  read: WindowRead,
+  parse: (buf: Buffer, bufStart: number) => ChatWindowParse = parseChatWindow
 ): Promise<ChatTranscriptResult> {
   let w = first
   let maxBytes = page.maxBytes
   for (;;) {
-    const { noCompleteLine, ...parsed } = parseChatWindow(w.data, w.start)
+    const { noCompleteLine, ...parsed } = parse(w.data, w.start)
     if (!noCompleteLine || w.start === 0 || maxBytes >= CHAT_PAGE_MAX_BYTES) return { found: true, ...parsed }
     maxBytes = Math.min(CHAT_PAGE_MAX_BYTES, maxBytes * CHAT_PAGE_GROWTH)
     const next = await read({ before: page.before, maxBytes })
@@ -188,6 +205,42 @@ async function readChatPage(
   // Resolved but unreadable (deleted between resolve and read): not-found, like a failed remote.
   if (!w) return notFoundPage()
   return parseGrowingWindow(page, w, async (pg) => (await readChatWindow(p, pg)) ?? null)
+}
+
+/**
+ * A paged read of a CODEX node's rollout — `readChatPage`'s shape with codex's own locator and parser
+ * (a rollout is append-only JSONL, so it pages by byte offset exactly like claude's transcript).
+ * Nothing claude-shaped runs: not `resolveTranscript` (its cwd fallback answers with the newest
+ * CLAUDE session in the directory), not claude's remote leg (it locates a claude file on the host).
+ * Remote first and terminal, as everywhere: a remote node is read on its host or not at all.
+ */
+async function readCodexChatPage(
+  q: TranscriptQuery,
+  page: ChatTranscriptPage,
+  deps: TranscriptIpcDeps
+): Promise<ChatTranscriptResult> {
+  const readRemote = deps.readRemoteCodexPage
+  if (readRemote) {
+    const remote = await readRemote(q, page)
+    if (remote !== null) {
+      if (!remote.ok) return remote.absent ? notFoundPage() : unreadablePage()
+      return parseGrowingWindow(
+        page,
+        remote,
+        async (p) => {
+          const r = await readRemote(q, p)
+          return r && r.ok ? r : null
+        },
+        parseCodexChatWindow
+      )
+    }
+  }
+  if (q.remoteOnly) return unreadablePage()
+  const p = await locateCodexRollout({ sessionId: q.sessionId, accountId: q.accountId }, deps.codexPathFor)
+  if (!p) return notFoundPage()
+  const w = await readChatWindow(p, page)
+  if (!w) return notFoundPage()
+  return parseGrowingWindow(page, w, async (pg) => (await readChatWindow(p, pg)) ?? null, parseCodexChatWindow)
 }
 
 /**
@@ -300,6 +353,18 @@ export async function readChatTranscript(
   // reads gemini's file too. Its own locator, keyed strictly on the session id in the file header —
   // never claude's resolver, never a cwd — and local-only, like grok.
   if (agentId && capabilityAgentId(agentId) === 'gemini') return readGeminiChatTranscript({ sessionId, remoteOnly }, page)
+  // Codex — the builtin or a custom agent whose base harness it is — is routed BEFORE the claude
+  // path for the same reason as grok: a codex thread id never resolves under claude's tree, and the
+  // cwd fallback would then answer with somebody else's claude session.
+  if (agentId && capabilityAgentId(agentId) === 'codex') {
+    if (page) return readCodexChatPage({ sessionId, cwd, accountId, nodeId, ...(remoteOnly ? { remoteOnly } : {}) }, page, deps)
+    // The unpaged (legacy) read has no live caller — the ⌘M panel and the phone always page — so it
+    // is served locally or not at all, like grok's: a remote node's rollout is on its host.
+    if (remoteOnly) return { messages: [], found: false }
+    const cp = await locateCodexRollout({ sessionId, accountId }, deps.codexPathFor)
+    const text = cp ? await readCappedTail(cp) : undefined
+    return text === undefined ? { messages: [], found: false } : { messages: chatMessagesFromCodex(text), found: true }
+  }
   if (page) return readChatPage({ sessionId, cwd, accountId, nodeId, ...(remoteOnly ? { remoteOnly } : {}) }, page, deps)
   const remote = deps.readRemote ? await deps.readRemote({ sessionId, cwd, accountId, nodeId }) : null
   // A resolved-but-unreadable remote file is NOT "no conversation yet" — the read failed
