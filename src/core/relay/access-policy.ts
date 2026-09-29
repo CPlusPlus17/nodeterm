@@ -11,8 +11,11 @@
 //  - "READ" IS NOT "SAFE": relay peers were fully trusted, so fs:read is not jailed, pty:create on
 //    any persistKey joins OR SPAWNS (and its options can name an ssh route), and two git "reads"
 //    are not reads at all — `git diff --no-index` diffs any file on the host, and a `git show` ref
-//    that starts with `-` is parsed as an option (`--output=<file>` WRITES a file). Every VIEW entry
-//    therefore carries its own argument check.
+//    that starts with `-` is parsed as an option (`--output=<file>` WRITES a file). Git also reads
+//    past the folder: `git show <ref>:<path>` resolves `<path>` against the REPOSITORY's top level,
+//    so git needs the shared root to be its own repository. And a shared root can contain this
+//    server's data directory, which no non-editor reads. Every VIEW entry therefore carries its own
+//    argument check.
 //
 // Editors and owners pass untouched: Editor is shell access by definition, so gating them would be
 // theatre.
