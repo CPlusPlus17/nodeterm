@@ -16,6 +16,7 @@
 
 import type { HostedRole, HostedSessionApi, Project, RelayClientApi } from '@shared/types'
 import { buildRelayApi, type RelayApiHandle } from '../bridge/relay-api'
+import { E_DISCONNECTED } from '../../shared/rpc'
 import { onLocalRelayClose } from '../bridge/relay-local-close'
 import { closedReasonMessage, RelayApprovalError } from '../lib/hostedTeam'
 import { attachHostedOwner } from '../lib/hostedOwner'
@@ -79,7 +80,12 @@ const ROLES: readonly HostedRole[] = ['owner', 'editor', 'commenter', 'viewer']
  * in is "shows less", never "sends what will be refused".
  */
 async function learnHostedRole(hosted: HostedSessionApi, handle: RelayApiHandle, label: string): Promise<HostedTeamInfo> {
-  const self = await hosted.self().catch(() => null)
+  const self = await hosted.self().catch((err: unknown) => {
+    // The connection itself is gone (closed from either side): there is no tab to open — never a
+    // Viewer guess over a dead socket (R41).
+    if ((err as { code?: unknown } | null)?.code === E_DISCONNECTED) throw err
+    return null
+  })
   const role: HostedRole = self && ROLES.includes(self.role) ? self.role : 'viewer'
   handle.setHostedRole?.(role)
   const hostLabel = self && typeof self.hostLabel === 'string' ? self.hostLabel.trim() : ''

@@ -3,6 +3,7 @@ import type { HostedPendingClosedReason } from '@shared/types'
 import {
   EMPTY_PENDING_QUEUE,
   addRequest,
+  attachProject,
   beginAnswer,
   closeRequest,
   finishAnswer,
@@ -27,8 +28,11 @@ interface HostedPendingStore {
   settle: (pendingId: string) => void
   /** An answer is on its way (off the screen, not re-added by a replay). */
   beginAnswer: (pendingId: string) => void
-  /** It came back; `landed` settles it, otherwise it stays answerable. */
-  finishAnswer: (pendingId: string, landed: boolean) => void
+  /** It came back; `landed` settles it, otherwise it stays answerable (and goes back on screen
+   *  once, while its owner tab is attached). */
+  finishAnswer: (item: QueuedRequest, landed: boolean) => void
+  /** An owner tab's subscription is live. */
+  attach: (projectId: string) => void
   drop: (projectId: string) => void
 }
 
@@ -46,7 +50,11 @@ export const useHostedPending = create<HostedPendingStore>((set) => ({
     }),
   settle: (pendingId) => set((s) => ({ queue: settleRequest(s.queue, pendingId) })),
   beginAnswer: (pendingId) => set((s) => ({ queue: beginAnswer(s.queue, pendingId) })),
-  finishAnswer: (pendingId, landed) => set((s) => ({ queue: finishAnswer(s.queue, pendingId, landed) })),
+  finishAnswer: (item, landed) => set((s) => ({ queue: finishAnswer(s.queue, item, landed) })),
+  attach: (projectId) => set((s) => {
+    const queue = attachProject(s.queue, projectId)
+    return queue === s.queue ? s : { queue }
+  }),
   drop: (projectId) => set((s) => {
     const queue = dropProjectRequests(s.queue, projectId)
     return queue === s.queue ? s : { queue }
@@ -55,6 +63,7 @@ export const useHostedPending = create<HostedPendingStore>((set) => ({
 
 /** The store as the owner subscription's sink. */
 export const hostedPendingSink: OwnerQueueSink = {
+  attach: (projectId) => useHostedPending.getState().attach(projectId),
   add: (item) => useHostedPending.getState().add(item),
   close: (pendingId, reason) => useHostedPending.getState().close(pendingId, reason),
   drop: (projectId) => useHostedPending.getState().drop(projectId)

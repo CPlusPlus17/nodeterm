@@ -8,6 +8,7 @@ import {
   headRequest,
   beginAnswer,
   finishAnswer,
+  attachProject,
   SETTLED_MEMORY,
   type QueuedRequest
 } from './hostedPendingQueue'
@@ -97,15 +98,42 @@ describe('hosted pending queue (R37)', () => {
     q = beginAnswer(q, 'a')
     expect(headRequest(q)?.pending.pendingId).toBe('b')
     expect(addRequest(q, req('a', 10)).items.map((i) => i.pending.pendingId)).toEqual(['b']) // a replay mid-flight
-    q = finishAnswer(q, 'a', true)
+    q = finishAnswer(q, req('a', 10), true)
     expect(addRequest(q, req('a', 10)).items.map((i) => i.pending.pendingId)).toEqual(['b'])
   })
 
   it('R40: an answer that never landed (the tab dropped) stays answerable — the reconnect\'s pull brings it back', () => {
     let q = addRequest(EMPTY_PENDING_QUEUE, req('a', 10))
     q = beginAnswer(q, 'a')
-    q = finishAnswer(q, 'a', false)
+    q = finishAnswer(q, req('a', 10), false) // its tab is not attached here: nothing to put back
     expect(q.settled).not.toContain('a')
+    expect(q.items).toEqual([])
     expect(addRequest(q, req('a', 10)).items.map((i) => i.pending.pendingId)).toEqual(['a'])
+  })
+
+  it('R41: a failed answer on a tab that is still attached goes back on screen, to be answered again', () => {
+    let q = attachProject(EMPTY_PENDING_QUEUE, 'p1')
+    q = addRequest(addRequest(q, req('a', 10)), req('b', 20))
+    q = beginAnswer(q, 'a')
+    q = finishAnswer(q, req('a', 10), false)
+    expect(q.items.map((i) => i.pending.pendingId)).toEqual(['a', 'b'])
+    expect(q.settled).not.toContain('a')
+  })
+
+  it('R41: …once: a second failure leaves it off the screen (a host that keeps refusing must not trap the owner)', () => {
+    let q = addRequest(attachProject(EMPTY_PENDING_QUEUE, 'p1'), req('a', 10))
+    q = finishAnswer(beginAnswer(q, 'a'), req('a', 10), false)
+    q = finishAnswer(beginAnswer(q, 'a'), req('a', 10), false)
+    expect(q.items).toEqual([])
+    expect(q.settled).not.toContain('a') // still answerable if the host offers it again
+  })
+
+  it('R41: a failed answer on a tab that dropped meanwhile is NOT put back (the reconnect\'s pull will)', () => {
+    let q = addRequest(attachProject(EMPTY_PENDING_QUEUE, 'p1'), req('a', 10))
+    q = beginAnswer(q, 'a')
+    q = dropProjectRequests(q, 'p1') // the drop's teardown ran before the rejection landed
+    q = finishAnswer(q, req('a', 10), false)
+    expect(q.items).toEqual([])
+    expect(addRequest(q, req('a', 10)).items).toHaveLength(1)
   })
 })

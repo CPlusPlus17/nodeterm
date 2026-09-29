@@ -28,9 +28,13 @@ export interface PendingQueue {
   /** Requests whose answer is on its way: off the screen, and not re-added by a replay meanwhile.
    *  Settled only once the host answers; an answer that never landed leaves them answerable. */
   answering?: readonly string[]
+  /** Owner tabs whose subscription is live: a failed answer on one of these goes back on screen. */
+  attached?: readonly string[]
+  /** Requests whose answer already failed once and went back: a second failure does not (R41). */
+  retried?: readonly string[]
 }
 
-export const EMPTY_PENDING_QUEUE: PendingQueue = Object.freeze({ items: [], settled: [], answering: [] })
+export const EMPTY_PENDING_QUEUE: PendingQueue = Object.freeze({ items: [], settled: [], answering: [], attached: [], retried: [] })
 
 /** How many closed request ids are remembered (4× the host's concurrent cap). */
 export const SETTLED_MEMORY = 64
@@ -98,19 +102,33 @@ export function beginAnswer(q: PendingQueue, pendingId: string): PendingQueue {
   }
 }
 
-/** The answer came back. `landed` (the host said true or false) settles it; an answer that never
- *  landed (the tab dropped, the call failed) leaves it answerable: the reconnect's pull brings the
- *  request back if it is still pending (R40). */
-export function finishAnswer(q: PendingQueue, pendingId: string, landed: boolean): PendingQueue {
-  if (landed) return settleRequest(q, pendingId)
-  return { ...q, answering: (q.answering ?? []).filter((x) => x !== pendingId) }
+/**
+ * The answer came back. `landed` (the host said true or false) settles it. An answer that never
+ * landed is not remembered (R40), and:
+ *  - on a tab that is still attached, it goes back on screen to be answered again — ONCE: a host
+ *    that keeps refusing must not trap the owner in a dialog that returns after every answer;
+ *  - on a tab that dropped meanwhile, it stays off: that tab's reconnect pulls it back if it is
+ *    still pending (R41).
+ */
+export function finishAnswer(q: PendingQueue, item: QueuedRequest, landed: boolean): PendingQueue {
+  const id = item.pending.pendingId
+  if (landed) return settleRequest(q, id)
+  const next: PendingQueue = { ...q, answering: (q.answering ?? []).filter((x) => x !== id) }
+  if (!(next.attached ?? []).includes(item.projectId) || (next.retried ?? []).includes(id)) return next
+  return addRequest({ ...next, retried: [...(next.retried ?? []), id].slice(-SETTLED_MEMORY) }, item)
 }
 
 /** The owner's tab went away (dropped, closed): its requests leave the queue unanswered — its
  *  reconnect pulls them again, so they are not marked settled. */
 export function dropProjectRequests(q: PendingQueue, projectId: string): PendingQueue {
   const items = q.items.filter((i) => i.projectId !== projectId)
-  return items.length === q.items.length ? q : { ...q, items }
+  const attached = (q.attached ?? []).filter((p) => p !== projectId)
+  return items.length === q.items.length && attached.length === (q.attached ?? []).length ? q : { ...q, items, attached }
+}
+
+/** An owner tab's subscription is live (its failed answers may go back on screen). */
+export function attachProject(q: PendingQueue, projectId: string): PendingQueue {
+  return (q.attached ?? []).includes(projectId) ? q : { ...q, attached: [...(q.attached ?? []), projectId] }
 }
 
 /** The request the dialog shows: the oldest one. */

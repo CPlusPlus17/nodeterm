@@ -37,7 +37,8 @@ const sink = () => {
   const added: QueuedRequest[] = []
   const closed: Array<[string, string]> = []
   const dropped: string[] = []
-  return { added, closed, dropped, add: (i: QueuedRequest) => added.push(i), close: (id: string, r: HostedPendingClosedReason) => closed.push([id, r]), drop: (p: string) => dropped.push(p) }
+  const attached: string[] = []
+  return { added, closed, dropped, attached, attach: (p: string) => attached.push(p), add: (i: QueuedRequest) => added.push(i), close: (id: string, r: HostedPendingClosedReason) => closed.push([id, r]), drop: (p: string) => dropped.push(p) }
 }
 const P = (id: string, since = 1): HostedPending => ({ pendingId: id, sas: '1 2', peerKeyB64: 'K', since })
 const flush = () => new Promise((r) => setTimeout(r, 0))
@@ -47,6 +48,7 @@ describe('attachHostedOwner (R25)', () => {
     const f = fakeHosted([P('pulled')])
     const s = sink()
     attachHostedOwner(f.hosted, { projectId: 'p1', teamLabel: 'box' }, s)
+    expect(s.attached).toEqual(['p1']) // its failed answers may go back on screen while attached (R41)
     expect(f.calls).toEqual(['sub:pending', 'sub:closed', 'pull'])
     f.push(P('pushed'))
     await flush()
@@ -86,7 +88,11 @@ describe('answerHostedRequest', () => {
   const item = (hosted: HostedSessionApi): QueuedRequest => ({ projectId: 'p1', teamLabel: 'box', pending: P('x'), answerer: hosted })
   const ledger = () => {
     const log: string[] = []
-    return { log, begin: (id: string) => log.push(`begin:${id}`), finish: (id: string, landed: boolean) => log.push(`finish:${id}:${landed}`) }
+    return {
+      log,
+      begin: (id: string) => log.push(`begin:${id}`),
+      finish: (item: QueuedRequest, landed: boolean) => log.push(`finish:${item.pending.pendingId}:${landed}`)
+    }
   }
 
   it('R40: settles only once the host ANSWERED (true or false); a rejection leaves the request answerable', async () => {

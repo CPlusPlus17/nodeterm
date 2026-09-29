@@ -4196,7 +4196,7 @@ export function Canvas() {
       label = 'Remote host',
       reconnectProjectId?: string,
       staleSessionId?: string,
-      hosted?: { activate: boolean }
+      hosted?: { activate: boolean; onSasConfirmed?: () => void }
     ): Promise<HostedMountOutcome | null> => {
       if (relayTabsRef.current.has(connectionId)) return Promise.resolve(null)
       return openRelayTab(connectionId, label, {
@@ -4273,7 +4273,7 @@ export function Canvas() {
       label: string,
       reconnectProjectId?: string,
       staleSessionId?: string,
-      hosted?: { activate: boolean }
+      hosted?: { activate: boolean; onSasConfirmed?: () => void }
     ): Promise<HostedMountOutcome | null> => {
       const unSas = window.nodeTerminal.relayClient.onSas(connectionId, (sas) => {
         unSas()
@@ -4284,6 +4284,8 @@ export function Canvas() {
           : `Verify this code matches the one shown on the host:\n\n${sas}`
         if (sas && window.confirm(question)) {
           window.nodeTerminal.relayClient.confirm(connectionId)
+          // Nothing left for this user to do: the owner's wait starts now (the joiner says so).
+          hosted?.onSasConfirmed?.()
         } else {
           // Deliberate decline: mark it so the bootstrap's close-reject isn't surfaced as an error.
           cancelledConnsRef.current.add(connectionId)
@@ -4316,6 +4318,7 @@ export function Canvas() {
         }
       },
       onApproved: (id, listener) => window.nodeTerminal.relayClient.onApproved(id, listener),
+      onSas: (id, listener) => window.nodeTerminal.relayClient.onSas(id, () => listener()),
       // A connection the joiner gives up on (its tab closed mid-approval, a cancelled late connect):
       // main never reports a close it was asked for, so it is announced here too.
       disconnect: (id) => {
@@ -4324,7 +4327,7 @@ export function Canvas() {
       },
       bookmarks: async () => (await window.nodeTerminal.relayHosted?.bookmarks()) ?? [],
       removeBookmark: (hostId) => window.nodeTerminal.relayHosted.removeBookmark(hostId),
-      mount: (connectionId, req) => {
+      mount: (connectionId, req, hooks) => {
         const bound = req.reconnectProjectId ? sessionForProject(req.reconnectProjectId) : null
         return confirmAndMount(
           connectionId,
@@ -4332,7 +4335,7 @@ export function Canvas() {
           req.reconnectProjectId,
           bound?.source === 'relay' ? bound.id : undefined,
           // Only a reconnect the user asked for takes the screen (or one with nothing on it).
-          { activate: req.manual || !useProjects.getState().activeProjectId }
+          { activate: req.manual || !useProjects.getState().activeProjectId, onSasConfirmed: hooks.sasConfirmed }
         ).then((o): HostedMountOutcome => o ?? { error: new Error('That connection is already open.'), declined: true })
       },
       tabOpen: isOpenTab,

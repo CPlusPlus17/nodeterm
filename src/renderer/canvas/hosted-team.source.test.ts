@@ -97,4 +97,12 @@ describe('hosted team glue in Canvas', () => {
     expect(body).toContain('{ begin: q.beginAnswer, finish: q.finishAnswer }')
     expect(body).not.toContain('.settle(')
   })
+
+  it('R41: the owner\'s wait starts only once the SAS was confirmed (hosted), and the joiner hears the SAS', () => {
+    const body = between('const confirmAndMount = useCallback(', 'return mountRemoteMirror(')
+    expect(body.indexOf('window.nodeTerminal.relayClient.confirm(connectionId)')).toBeLessThan(body.indexOf('hosted?.onSasConfirmed?.()'))
+    const joiner = between('const joiner = createHostedJoiner({', '}, [confirmAndMount])')
+    expect(joiner).toContain('onSas: (id, listener) =>')
+    expect(joiner).toContain('onSasConfirmed: hooks.sasConfirmed')
+  })
 })

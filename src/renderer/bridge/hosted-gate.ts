@@ -13,19 +13,33 @@
 // wrong guess must err in. Only a relay tab joined by a hosted team's code is built with this; a
 // Team Access relay tab keeps the plain RpcClient. See docs/hosted-team-relay.md.
 import { hostedMayCall, hostedRoleRefusal } from '../../shared/hosted-access'
+import { E_DISCONNECTED } from '../../shared/rpc'
 import type { HostedRole } from '../../shared/types'
 import type { FrameTransport } from './frame-transport'
 import { RpcClient } from './ws-bridge'
 
 export class RoleGatedRpcClient extends RpcClient {
+  /** The connection is gone: nothing can answer a request any more. */
+  private closed = false
+
   constructor(
     transport: FrameTransport,
     private readonly role: () => HostedRole | null
   ) {
     super(transport)
+    this.onClose(() => {
+      this.closed = true
+    })
   }
 
   override request(method: string, ...args: unknown[]): Promise<unknown> {
+    if (this.closed) {
+      // A request sent into a closed hosted connection would wait forever (nothing will answer it,
+      // and nothing fails it later): fail it now, like the in-flight ones were (R41).
+      const gone = Promise.reject(Object.assign(new Error('The connection to the server was lost.'), { code: E_DISCONNECTED }))
+      gone.catch(() => {})
+      return gone
+    }
     const role = this.role()
     if (!hostedMayCall(role, method)) {
       const refused = Promise.reject(hostedRoleRefusal(role))
@@ -38,7 +52,7 @@ export class RoleGatedRpcClient extends RpcClient {
   }
 
   override cast(method: string, ...args: unknown[]): void {
-    if (!hostedMayCall(this.role(), method)) return
+    if (this.closed || !hostedMayCall(this.role(), method)) return
     super.cast(method, ...args)
   }
 }

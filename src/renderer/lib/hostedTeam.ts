@@ -1,7 +1,7 @@
 // Pure helpers for a hosted team (a Server Edition hosting over the E2EE relay, joined by a
 // `nodeterm://join` code): the unattended reconnect's backoff and retry decision, the sentences a
 // refusal is told in, and the role wording. No React, no window — see docs/hosted-team-relay.md.
-import { joinErrorCode, joinErrorRetries, type JoinErrorCode } from '@shared/relay-join-errors'
+import { joinErrorCode, joinErrorRetries, joinRetryAfterMs, type JoinErrorCode } from '@shared/relay-join-errors'
 import type { HostedPendingClosedReason, HostedRole, RelayClosedReason } from '@shared/types'
 
 const BACKOFF = [1000, 2000, 4000, 8000, 15000]
@@ -10,6 +10,13 @@ const BACKOFF = [1000, 2000, 4000, 8000, 15000]
 export function reconnectDelayMs(attempt: number): number {
   return attempt < BACKOFF.length ? BACKOFF[attempt] : 60_000
 }
+
+/** What an unattended reconnect says, once per streak, while the service's per-network limiter
+ *  holds it back (R41). */
+export const THROTTLED_NOTICE = 'The nodeterm service is limiting requests from this network — retrying in a minute.'
+
+/** A throttled retry never comes sooner than this, whatever Retry-After says (R41). */
+export const THROTTLE_MIN_DELAY_MS = 60_000
 
 /** How many times an unattended attempt retries a connection that dropped before the host answered
  *  (a host restarting): the short steps of the ladder, 1/2/4/8/15 s, and then it stops and says so
@@ -80,14 +87,28 @@ export interface JoinFailure {
   retry: boolean
   /** Another attempt of OURS for the same team is running — never a verdict about the team. */
   busy: boolean
+  /** The service's per-network limiter: retry, but never faster than once a minute (R41). */
+  throttled: boolean
+  /** The Retry-After the service named, when it named one. */
+  retryAfterMs: number | null
   /** Main's own sentence, without Electron's prefix or the code tag. */
   detail: string
 }
 
 export function classifyJoinFailure(message: string): JoinFailure {
   const code = joinErrorCode(String(message))
-  const detail = stripIpcPrefix(message).replace(/^\[E_JOIN_[A-Z_]+\]\s*/, '').trim()
-  return { code, retry: joinErrorRetries(code), busy: code === 'E_JOIN_BUSY', detail }
+  const detail = stripIpcPrefix(message)
+    .replace(/^\[E_JOIN_[A-Z_]+\]\s*/, '')
+    .replace(/\s*\[retry-after:\d+\]/, '')
+    .trim()
+  return {
+    code,
+    retry: joinErrorRetries(code),
+    busy: code === 'E_JOIN_BUSY',
+    throttled: code === 'E_JOIN_THROTTLED',
+    retryAfterMs: joinRetryAfterMs(String(message)),
+    detail
+  }
 }
 
 const teamName = (label: string): string => label.trim() || 'the team'
@@ -107,6 +128,8 @@ export function joinStopMessage(f: JoinFailure, teamLabel: string): string | nul
       return `This device's access to ${team} was revoked. Remove the team and join again with a fresh invite code.`
     case 'E_JOIN_RATE':
       return `Too many join attempts for ${team} today. Try again tomorrow.`
+    case 'E_JOIN_THROTTLED':
+      return 'The nodeterm service is limiting requests from this network. Try again in a minute.'
     case 'E_JOIN_BAD_CODE':
       return `The invite code for ${team} is not valid. Ask an owner for a fresh code.`
     case 'E_JOIN_KEY_LOCKED':

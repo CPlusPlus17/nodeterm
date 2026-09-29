@@ -14,7 +14,8 @@ import {
   waitingForOwnerText,
   RelayApprovalError,
   mountFailureRetries,
-  mountFailureMessage
+  mountFailureMessage,
+  THROTTLED_NOTICE
 } from './hostedTeam'
 
 describe('hosted team helpers', () => {
@@ -130,5 +131,20 @@ describe('a hosted tab that never opened', () => {
   it('names the team and says what happened', () => {
     expect(mountFailureMessage(new RelayApprovalError('An owner declined the request.', 'denied'), 'box')).toBe('Could not open box: An owner declined the request.')
     expect(mountFailureMessage(new Error("Error invoking remote method 'x': Error: boom"), '')).toBe('Could not open the team: boom')
+  })
+})
+
+describe('R41: the per-network throttle', () => {
+  const wrap = (m: string) => `Error invoking remote method 'relay:client:connect': Error: ${m}`
+  it('is retried, carries a Retry-After when main attached one, and is not a BUSY', () => {
+    expect(classifyJoinFailure(wrap('[E_JOIN_THROTTLED] limiting'))).toMatchObject({ code: 'E_JOIN_THROTTLED', retry: true, throttled: true, retryAfterMs: null })
+    expect(classifyJoinFailure(wrap('[E_JOIN_THROTTLED] limiting [retry-after:90]'))).toMatchObject({ throttled: true, retryAfterMs: 90_000 })
+    expect(classifyJoinFailure(wrap('[E_JOIN_NETWORK] x')).throttled).toBe(false)
+  })
+  it('says a minute, never "tomorrow"', () => {
+    expect(joinStopMessage(classifyJoinFailure(wrap('[E_JOIN_THROTTLED] x')), 'box')).toBe(
+      'The nodeterm service is limiting requests from this network. Try again in a minute.'
+    )
+    expect(THROTTLED_NOTICE).toBe('The nodeterm service is limiting requests from this network — retrying in a minute.')
   })
 })

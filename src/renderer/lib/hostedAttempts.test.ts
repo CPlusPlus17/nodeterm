@@ -17,9 +17,11 @@ function harness() {
   const ended: Array<{ req: HostedAttemptRequest; projectId: string; reason?: RelayClosedReason }> = []
   const disconnected: string[] = []
   const exhausted: HostedAttemptRequest[] = []
+  const throttledSaid: HostedAttemptRequest[] = []
   const wanted = { value: true }
   const deps: HostedAttemptDeps = {
     exhausted: (req) => exhausted.push(req),
+    throttled: (req) => throttledSaid.push(req),
     wanted: () => wanted.value,
     connect: (code) => new Promise((resolve, reject) => connects.push({ code, resolve, reject })),
     mount: (id, req) => new Promise((resolve) => mounts.push({ id, req, resolve })),
@@ -46,7 +48,7 @@ function harness() {
     t.fn()
   }
   const armed = () => timers.filter((t) => !t.cleared)
-  return { deps, connects, mounts, closeCbs, unsubs, timers, armed, fire, stopped, ended, disconnected, exhausted, wanted }
+  return { deps, connects, mounts, closeCbs, unsubs, timers, armed, fire, stopped, ended, disconnected, exhausted, wanted, throttledSaid }
 }
 
 const boot = (over: Partial<HostedAttemptRequest> = {}): HostedAttemptRequest => ({
@@ -453,5 +455,93 @@ describe('hosted attempts: one attempt and one live connection per team (R38/R39
     h.connects[1].resolve('c1')
     await flush()
     expect(h.mounts[0].req.reconnectProjectId).toBe('proj-1')
+  })
+
+  // ── R41 ─────────────────────────────────────────────────────────────────────────────────────────
+  it('R41: a throttle is retried after at least a minute, or the Retry-After when longer, and joins the 60 s tail', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot())
+    h.connects[0].reject(wrap('[E_JOIN_THROTTLED] limiting'))
+    await flush()
+    expect(a.phase('H1')).toBe('waiting')
+    expect(h.armed()[0].ms).toBe(60_000)
+    h.fire()
+    h.connects[1].reject(wrap('[E_JOIN_THROTTLED] limiting [retry-after:150]'))
+    await flush()
+    expect(h.armed()[0].ms).toBe(150_000)
+    h.fire()
+    h.connects[2].reject(wrap('[E_JOIN_THROTTLED] limiting [retry-after:5]'))
+    await flush()
+    expect(h.armed()[0].ms).toBe(60_000) // never faster than once a minute
+    h.fire()
+    // A network failure right after a throttle stays on the tail: no burst back down to 1 s.
+    h.connects[3].reject(wrap('[E_JOIN_NETWORK] x'))
+    await flush()
+    expect(h.armed()[0].ms).toBe(60_000)
+    expect(h.stopped).toEqual([])
+  })
+
+  it('R41: a throttle streak is announced once; a new streak (after the service answered) again', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot())
+    for (let i = 0; i < 3; i++) {
+      h.connects[i].reject(wrap('[E_JOIN_THROTTLED] limiting'))
+      await flush()
+      h.fire()
+    }
+    expect(h.throttledSaid).toHaveLength(1)
+    h.connects[3].resolve('c3') // the service answered: the streak is over
+    await flush()
+    h.mounts[0].resolve({ retry: true })
+    await flush()
+    h.fire()
+    h.connects[4].reject(wrap('[E_JOIN_THROTTLED] limiting'))
+    await flush()
+    expect(h.throttledSaid).toHaveLength(2)
+  })
+
+  it('R41: a throttle on an attempt that asked not to retry (a pasted code) is told, not looped', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot({ manual: true, retry: false }))
+    h.connects[0].reject(wrap('[E_JOIN_THROTTLED] limiting'))
+    await flush()
+    expect(h.armed()).toEqual([])
+    expect(h.stopped[0].f.code).toBe('E_JOIN_THROTTLED')
+    expect(h.throttledSaid).toEqual([])
+  })
+
+  it('R41: a reconnect after a drop waits the 1 s rung first, then spends the rest of a fresh drop budget', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot({ reconnectProjectId: 'proj-1', afterDrop: true }))
+    expect(h.connects).toHaveLength(0)
+    expect(a.phase('H1')).toBe('waiting')
+    const delays = [h.armed()[0].ms]
+    h.fire()
+    for (let i = 0; i < 5; i++) {
+      h.connects[i].resolve(`c${i}`)
+      await flush()
+      h.mounts[i].resolve({ retry: true })
+      await flush()
+      if (i < 4) {
+        delays.push(h.armed()[0].ms)
+        h.fire()
+      }
+    }
+    expect(delays).toEqual([1000, 2000, 4000, 8000, 15000])
+    expect(h.connects).toHaveLength(5)
+    expect(h.exhausted).toHaveLength(1)
+  })
+
+  it('R41: a click during that first second hurries it (the user asked)', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot({ reconnectProjectId: 'proj-1', afterDrop: true }))
+    expect(a.run(boot({ manual: true, reconnectProjectId: 'proj-1' }))).toBe('started')
+    expect(h.connects).toHaveLength(1)
+    expect(h.armed()).toEqual([])
   })
 })

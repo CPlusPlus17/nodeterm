@@ -282,6 +282,16 @@ describe('buildRelayApi — hosted team tabs', () => {
     expect(legacy).not.toHaveBeenCalled()
   })
 
+  it('R41: once its connection closed, a hosted tab\'s requests fail at once instead of waiting forever', async () => {
+    const t = new FakeTransport()
+    const handle = buildRelayApi('conn-1', t, { hosted: true })
+    handle.setHostedRole!('owner')
+    ;(t as unknown as { closeCb: () => void }).closeCb()
+    await expect(handle.api.workspace.load()).rejects.toMatchObject({ code: 'E_DISCONNECTED' })
+    handle.api.pty.write('s1', 'x')
+    expect(t.sent).toEqual([])
+  })
+
   it('a commenter may also chat; an editor sends everything', () => {
     const t = new FakeTransport()
     const handle = buildRelayApi('conn-1', t, { hosted: true })

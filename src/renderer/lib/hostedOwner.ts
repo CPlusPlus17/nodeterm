@@ -9,6 +9,8 @@ import type { QueuedRequest } from './hostedPendingQueue'
 import { stripIpcPrefix } from './hostedTeam'
 
 export interface OwnerQueueSink {
+  /** This owner tab's subscription is live. */
+  attach(projectId: string): void
   add(item: QueuedRequest): void
   close(pendingId: string, reason: HostedPendingClosedReason): void
   /** The tab is going away: drop its requests. */
@@ -22,6 +24,7 @@ export function attachHostedOwner(
   sink: OwnerQueueSink
 ): () => void {
   let live = true
+  sink.attach(ctx.projectId)
   const add = (pending: unknown): void => {
     if (live) sink.add({ projectId: ctx.projectId, teamLabel: ctx.teamLabel, pending: pending as QueuedRequest['pending'], answerer: hosted })
   }
@@ -52,7 +55,7 @@ export type HostedAnswer = { kind: 'approve'; role: HostedRole } | { kind: 'deny
 export interface AnswerLedger {
   begin(pendingId: string): void
   /** `landed` = the host answered (true or false); false = it never did. */
-  finish(pendingId: string, landed: boolean): void
+  finish(item: QueuedRequest, landed: boolean): void
 }
 
 /** Send an owner's answer. The request leaves the screen at once, and is settled only if the host
@@ -67,11 +70,11 @@ export async function answerHostedRequest(
   ledger.begin(id)
   try {
     const ok = answer.kind === 'approve' ? await item.answerer.approve(id, answer.role) : await item.answerer.deny(id)
-    ledger.finish(id, true)
+    ledger.finish(item, true)
     // False is an answer, not a failure: another owner got there first, or the device left.
     return ok ? null : { kind: 'info', text: 'That request was already answered or has gone.' }
   } catch (err) {
-    ledger.finish(id, false)
+    ledger.finish(item, false)
     return { kind: 'error', text: `Could not answer the request: ${stripIpcPrefix(err instanceof Error ? err.message : String(err))}` }
   }
 }

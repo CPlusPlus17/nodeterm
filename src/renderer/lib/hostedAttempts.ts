@@ -11,14 +11,20 @@
 //
 // Why only network failures retry (R35): every other code needs a person (a fresh code, an unlocked
 // keyring, an owner) or a new day, and a loop on one of them spends the team's damped device mints.
-// A connection that drops before the host answered (a host restarting) is the one other retry, and
-// it is BOUNDED (R40): the 1/2/4/8/15 s steps, then it stops and says so once — every try mints a
-// join token and opens a relay socket. And no attempt outlives its tab: `wanted` is asked before
-// every retry and before every mount, and closing the tab cancels the attempt in any phase.
+// The service's per-network limiter (E_JOIN_THROTTLED, a 429 that clears within a minute) retries
+// too, but never sooner than a minute (or its Retry-After), on the 60 s tail, announced once per
+// streak (R41). A connection that drops before the host answered (a host restarting) is the other
+// retry, and it is BOUNDED (R40): the 1/2/4/8/15 s steps, then it stops and says so once — every
+// try mints a join token and opens a relay socket. A reconnect after a LIVE connection dropped
+// starts on the first rung, never at once (R41). And no attempt outlives its tab: `wanted` is asked
+// before every retry and before every mount, and closing the tab cancels the attempt in any phase.
 // Pure orchestration over injected deps, so every rule is testable without React or a relay.
 // See docs/hosted-team-relay.md.
 import type { RelayClosedReason } from '@shared/types'
-import { classifyJoinFailure, DROP_RETRY_MAX, reconnectDelayMs, type JoinFailure } from './hostedTeam'
+import { classifyJoinFailure, DROP_RETRY_MAX, reconnectDelayMs, THROTTLE_MIN_DELAY_MS, type JoinFailure } from './hostedTeam'
+
+/** The ladder rung of the 60 s tail (1/2/4/8/15 s come before it). */
+const TAIL_RUNG = 5
 
 export interface HostedAttemptRequest {
   hostId: string
@@ -33,6 +39,12 @@ export interface HostedAttemptRequest {
   retry: boolean
   /** Reconnect onto this existing tab instead of opening a new one. */
   reconnectProjectId?: string
+  /** This reconnect follows a live connection's drop: it waits the first rung (1 s) before its
+   *  first try, which counts against the drop budget — a host that approves and then drops must
+   *  never make a tight loop (R41). */
+  afterDrop?: boolean
+  /** A bookmarked reconnect: this side confirms on its own (no SAS prompt is expected). */
+  autoConfirm?: boolean
 }
 
 export type HostedAttemptPhase = 'connecting' | 'waiting' | 'mounting' | 'live'
@@ -59,6 +71,9 @@ export interface HostedAttemptDeps {
   /** An unattended attempt used up its retries for a drop the host did not explain (R40). Called
    *  once; the team is released, and the next try is the user's. */
   exhausted(req: HostedAttemptRequest): void
+  /** An unattended attempt is being held back by the service's per-network limiter and will retry
+   *  in a minute. Called once per streak of throttles (R41). */
+  throttled(req: HostedAttemptRequest): void
   /** Is this attempt still wanted? Asked before every retry and before every mount — an attempt
    *  reconnecting a tab that has since been closed or deleted must stop (R40). Default: yes. */
   wanted?(req: HostedAttemptRequest): boolean
@@ -88,6 +103,8 @@ interface Entry {
   attempt: number
   /** Retries spent on drops the host did not explain (bounded by DROP_RETRY_MAX). */
   drops: number
+  /** This streak of throttles has been announced. Ends when the service lets a connect through. */
+  throttleSaid: boolean
   timer: unknown
   connectionId: string | null
   projectId: string | null
@@ -153,6 +170,7 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
           deps.disconnect(connectionId)
           return
         }
+        e.throttleSaid = false // the service let this one through
         if (!wanted(e)) {
           // Its tab went away while it connected: never bind this connection to it.
           deps.disconnect(connectionId)
@@ -210,6 +228,17 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
       (err) => {
         if (!current(e)) return
         const failure = classifyJoinFailure(err instanceof Error ? err.message : String(err))
+        if (failure.throttled && e.req.retry) {
+          // The per-network limiter clears within a minute: wait at least that long (or its
+          // Retry-After), and stay on the 60 s tail after it — never a burst back down to 1 s.
+          if (!e.throttleSaid) {
+            e.throttleSaid = true
+            deps.throttled(e.req)
+          }
+          e.attempt = Math.max(e.attempt, TAIL_RUNG)
+          retryAfter(e, Math.max(THROTTLE_MIN_DELAY_MS, failure.retryAfterMs ?? 0))
+          return
+        }
         if (failure.retry && e.req.retry) {
           backOff(e)
           return
@@ -239,9 +268,15 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
         attempt(existing)
         return 'started'
       }
-      const e: Entry = { req, phase: 'connecting', attempt: 0, drops: 0, timer: null, connectionId: null, projectId: null, unClose: null, closedEarly: null }
+      const e: Entry = { req, phase: 'connecting', attempt: 0, drops: 0, throttleSaid: false, timer: null, connectionId: null, projectId: null, unClose: null, closedEarly: null }
       entries.set(req.hostId, e)
-      attempt(e)
+      if (req.afterDrop) {
+        // Never straight back after a drop: the first rung, and it is the drop budget's first retry.
+        e.drops = 1
+        retryAfter(e, reconnectDelayMs(0))
+      } else {
+        attempt(e)
+      }
       return 'started'
     },
     phase(hostId) {

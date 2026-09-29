@@ -3,7 +3,7 @@ import type { RelayClosedReason } from '@shared/types'
 import { JOIN_CODE_PREFIX } from '@shared/relay-join-code'
 import { createHostedJoiner, type HostedJoinerDeps, type HostedMountOutcome, type HostedNotice } from './hostedJoin'
 import type { HostedAttemptRequest } from './hostedAttempts'
-import { RelayApprovalError } from './hostedTeam'
+import { RelayApprovalError, THROTTLED_NOTICE } from './hostedTeam'
 import { WAITING_NOTICE_DELAY_MS } from './hostedJoin'
 
 const wrap = (m: string) => new Error(`Error invoking remote method 'relay:client:connect': Error: ${m}`)
@@ -16,7 +16,8 @@ type Bookmark = { hostId: string; label: string; approved: boolean; code: string
 
 function harness(bookmarks: Bookmark[] = []) {
   const connects: Array<{ code: string; resolve: (id: string) => void; reject: (e: Error) => void }> = []
-  const mounts: Array<{ id: string; req: HostedAttemptRequest; resolve: (o: HostedMountOutcome) => void }> = []
+  const mounts: Array<{ id: string; req: HostedAttemptRequest; resolve: (o: HostedMountOutcome) => void; hooks: { sasConfirmed(): void } }> = []
+  const sasCbs = new Map<string, () => void>()
   const closeCbs = new Map<string, (reason?: RelayClosedReason) => void>()
   const notices: HostedNotice[] = []
   const timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
@@ -40,7 +41,11 @@ function harness(bookmarks: Bookmark[] = []) {
     removeBookmark: vi.fn(async (hostId: string) => {
       list = list.filter((b) => b.hostId !== hostId)
     }),
-    mount: (id, req) => new Promise((resolve) => mounts.push({ id, req, resolve })),
+    mount: (id, req, hooks) => new Promise((resolve) => mounts.push({ id, req, resolve, hooks })),
+    onSas: (id, cb) => {
+      sasCbs.set(id, cb)
+      return () => sasCbs.delete(id)
+    },
     tabOpen: (projectId) => open.has(projectId),
     notify: (n) => notices.push(n),
     promptForCode: vi.fn(async () => null as string | null),
@@ -53,7 +58,7 @@ function harness(bookmarks: Bookmark[] = []) {
       ;(t as { cleared: boolean }).cleared = true
     }
   }
-  return { deps, connects, mounts, closeCbs, notices, timers, open, approvedCbs, cleared, setList: (l: Bookmark[]) => { list = l } }
+  return { deps, connects, mounts, closeCbs, notices, timers, open, approvedCbs, cleared, sasCbs, setList: (l: Bookmark[]) => { list = l } }
 }
 
 /** Connect + mount one attempt to a live tab. */
@@ -119,6 +124,10 @@ describe('hosted joiner', () => {
     await goLive(h, 0, 'proj-1')
     h.closeCbs.get('c0')!(undefined)
     await flush()
+    // R41: never at once — the first rung (1 s) first, so a host that approves and drops cannot spin.
+    expect(h.connects).toHaveLength(1)
+    expect(h.timers.filter((t) => !t.cleared && t.ms !== WAITING_NOTICE_DELAY_MS).map((t) => t.ms)).toEqual([1000])
+    fireRetry(h)
     expect(h.connects).toHaveLength(2)
     await goLive(h, 1, 'proj-1')
     expect(h.mounts[1].req).toMatchObject({ reconnectProjectId: 'proj-1', manual: false, retry: true })
@@ -301,19 +310,20 @@ describe('hosted joiner', () => {
     await goLive(h, 0, 'proj-1')
     h.closeCbs.get('c0')!(undefined) // the drop
     await flush()
-    for (let i = 1; i <= 6; i++) {
+    fireRetry(h) // the first rung (1 s) is the budget's first retry (R41)
+    for (let i = 1; i <= 5; i++) {
       h.connects[i].resolve(`c${i}`)
       await flush()
       h.mounts[i].resolve({ error: new RelayApprovalError('The relay connection closed before it was approved.'), declined: false })
       await flush()
-      if (i < 6) fireRetry(h)
+      if (i < 5) fireRetry(h)
     }
-    expect(h.connects).toHaveLength(7) // the drop's reconnect + 5 retries
+    expect(h.connects).toHaveLength(6) // the first connection + 5 tries after the drop (1/2/4/8/15 s)
     expect(h.notices).toEqual([{ kind: 'error', text: "Couldn't reconnect to box. Click its tab to try again." }])
     expect(h.timers.filter((t) => !t.cleared && t.ms !== WAITING_NOTICE_DELAY_MS)).toEqual([])
     // The tab stays greyed and clickable: a click is a fresh try.
     expect(j.reconnectTab('proj-1')).toBe(true)
-    expect(h.connects).toHaveLength(8)
+    expect(h.connects).toHaveLength(7)
   })
 
   it('R40: a boot reconnect that gives up (no tab yet) says how to try again', async () => {
@@ -337,6 +347,7 @@ describe('hosted joiner', () => {
     await goLive(h, 0, 'proj-1')
     h.closeCbs.get('c0')!(undefined)
     await flush()
+    fireRetry(h)
     h.connects[1].reject(wrap('[E_JOIN_NETWORK] x'))
     await flush()
     j.tabClosed('proj-1')
@@ -357,6 +368,7 @@ describe('hosted joiner', () => {
     await goLive(h, 0, 'proj-1')
     h.closeCbs.get('c0')!(undefined)
     await flush()
+    fireRetry(h)
     expect(h.connects).toHaveLength(2) // the in-place reconnect is connecting
     j.tabClosed('proj-1')
     h.open.delete('proj-1')
@@ -375,6 +387,7 @@ describe('hosted joiner', () => {
     await goLive(h, 0, 'proj-1')
     h.closeCbs.get('c0')!(undefined)
     await flush()
+    fireRetry(h)
     h.connects[1].resolve('c1')
     await flush()
     j.tabClosed('proj-1')
@@ -466,9 +479,11 @@ describe('hosted joiner', () => {
     h.connects[0].resolve('c0')
     await flush()
     h.approvedCbs.get('c0')!() // approved; the mount is still loading the workspace
-    const wait = h.timers.find((t) => t.ms === WAITING_NOTICE_DELAY_MS && !t.cleared)!
-    wait.cleared = true
-    wait.fn()
+    // The approval disarmed the clock: nothing is left to fire, however long the load takes…
+    expect(h.timers.filter((t) => t.ms === WAITING_NOTICE_DELAY_MS && !t.cleared)).toEqual([])
+    // …and a confirm that lands after it (a SAS answered late) does not re-arm it.
+    h.mounts[0].hooks.sasConfirmed()
+    expect(h.timers.filter((t) => t.ms === WAITING_NOTICE_DELAY_MS && !t.cleared)).toEqual([])
     expect(h.notices).toEqual([])
   })
 
@@ -484,5 +499,51 @@ describe('hosted joiner', () => {
     expect(h.timers.filter((t) => t.ms === WAITING_NOTICE_DELAY_MS).every((t) => t.cleared)).toBe(true)
     expect(h.notices).toEqual([])
     expect(h.cleared).toEqual([])
+  })
+
+  // ── R41 ─────────────────────────────────────────────────────────────────────────────────────────
+  it('R41: a throttled reconnect says so ONCE ("retrying in a minute") and keeps trying', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    for (let i = 0; i < 3; i++) {
+      h.connects[i].reject(wrap('[E_JOIN_THROTTLED] The nodeterm service is limiting requests from this network.'))
+      await flush()
+      fireRetry(h)
+    }
+    expect(h.notices).toEqual([{ kind: 'info', text: THROTTLED_NOTICE }])
+    expect(h.connects).toHaveLength(4)
+  })
+
+  it('R41: a first join arms the waiting notice only after its SAS was confirmed — never before the prompt', async () => {
+    const h = harness()
+    const j = createHostedJoiner(h.deps)
+    j.joinWithCode(codeFor('H1'))
+    h.connects[0].resolve('c0')
+    await flush()
+    const waits = () => h.timers.filter((t) => t.ms === WAITING_NOTICE_DELAY_MS && !t.cleared)
+    expect(waits()).toEqual([]) // the SAS prompt has not even come up yet
+    h.sasCbs.get('c0')!() // the SAS arrives (the prompt is on screen)
+    expect(waits()).toEqual([])
+    h.mounts[0].hooks.sasConfirmed() // the user compared and confirmed
+    expect(waits()).toHaveLength(1)
+    const t = waits()[0]
+    t.cleared = true
+    t.fn()
+    expect(h.notices).toEqual([{ kind: 'info', text: 'Waiting for an owner of box to approve this device…', sticky: true }])
+  })
+
+  it('R41: a bookmarked reconnect arms it when its connect resolves; a SAS that shows up after all disarms it', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    h.connects[0].resolve('c0')
+    await flush()
+    const waits = () => h.timers.filter((t) => t.ms === WAITING_NOTICE_DELAY_MS && !t.cleared)
+    expect(waits()).toHaveLength(1)
+    h.sasCbs.get('c0')!() // the host asked for a comparison after all (its approval was withdrawn)
+    expect(waits()).toEqual([])
+    h.mounts[0].hooks.sasConfirmed()
+    expect(waits()).toHaveLength(1)
   })
 })

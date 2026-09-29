@@ -22,6 +22,7 @@ import {
   mountFailureMessage,
   mountFailureRetries,
   stripIpcPrefix,
+  THROTTLED_NOTICE,
   waitingForOwnerText
 } from './hostedTeam'
 
@@ -48,13 +49,16 @@ export interface HostedJoinerDeps {
   onClosed(connectionId: string, listener: (reason?: RelayClosedReason) => void): () => void
   /** Both humans approved this connection (`relayClient.onApproved`). */
   onApproved(connectionId: string, listener: () => void): () => void
+  /** This connection's SAS arrived, i.e. a comparison prompt is about to show (`relayClient.onSas`). */
+  onSas(connectionId: string, listener: () => void): () => void
   /** Close a connection this joiner no longer wants (it must also count as closed locally). */
   disconnect(connectionId: string): void
   bookmarks: RelayHostedApi['bookmarks']
   removeBookmark: RelayHostedApi['removeBookmark']
   /** The SAS (a first join), the owner's approval, the tab. Never rejects on purpose; a rejection
-   *  is read as a failure with that error. */
-  mount(connectionId: string, req: HostedAttemptRequest): Promise<HostedMountOutcome>
+   *  is read as a failure with that error. `hooks.sasConfirmed` is called once this user confirmed
+   *  the SAS (only a connection that asked for one). */
+  mount(connectionId: string, req: HostedAttemptRequest, hooks: { sasConfirmed(): void }): Promise<HostedMountOutcome>
   /** Is this project still an open tab (not closed, not deleted)? */
   tabOpen(projectId: string): boolean
   notify(notice: HostedNotice): void
@@ -114,6 +118,9 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
     setTimer: deps.setTimer,
     clearTimer: deps.clearTimer,
     wanted: tabWanted,
+    throttled() {
+      deps.notify({ kind: 'info', text: THROTTLED_NOTICE })
+    },
     exhausted(req) {
       deps.notify({
         kind: 'error',
@@ -124,31 +131,47 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
     },
     async mount(connectionId, req): Promise<HostedMountResult> {
       // Any hosted mount still waiting for approval after a moment says so — a first join and a
-      // bookmarked reconnect alike (the host may no longer know this device and ask an owner).
+      // bookmarked reconnect alike (the host may no longer know this device and ask an owner). The
+      // clock starts when there is nothing left for THIS user to do: once they confirmed the SAS
+      // (a first join), or once the connection exists (a bookmarked reconnect, which confirms on
+      // its own). Never before a SAS prompt: a comparison that shows up disarms it (R41).
       const waiting = waitingForOwnerText(req.label)
       let approved = false
       let shown = false
-      const unApproved = deps.onApproved(connectionId, () => {
-        approved = true
+      let waitTimer: unknown = null
+      const disarm = (): void => {
+        if (waitTimer !== null) deps.clearTimer(waitTimer)
+        waitTimer = null
         if (shown) {
           shown = false
           deps.clearNotice(waiting)
         }
-      })
-      const waitTimer = deps.setTimer(() => {
+      }
+      const arm = (): void => {
+        disarm()
         if (approved) return
-        shown = true
-        deps.notify({ kind: 'info', text: waiting, sticky: true })
-      }, WAITING_NOTICE_DELAY_MS)
+        waitTimer = deps.setTimer(() => {
+          waitTimer = null
+          if (approved) return
+          shown = true
+          deps.notify({ kind: 'info', text: waiting, sticky: true })
+        }, WAITING_NOTICE_DELAY_MS)
+      }
+      const unApproved = deps.onApproved(connectionId, () => {
+        approved = true
+        disarm()
+      })
+      const unSas = deps.onSas(connectionId, disarm)
+      if (req.autoConfirm) arm()
       let outcome: HostedMountOutcome
       try {
-        outcome = await deps.mount(connectionId, req)
+        outcome = await deps.mount(connectionId, req, { sasConfirmed: arm })
       } catch (error) {
         outcome = { error, declined: false }
       } finally {
-        deps.clearTimer(waitTimer)
         unApproved()
-        if (shown) deps.clearNotice(waiting)
+        unSas()
+        disarm()
       }
       if ('projectId' in outcome) {
         tabs.set(outcome.projectId, { hostId: req.hostId, code: req.code, label: req.label })
@@ -185,7 +208,7 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
         (list) => {
           const b = list.find((x) => x.hostId === req.hostId)
           if (!b?.approved || !deps.tabOpen(projectId)) return
-          run({ hostId: b.hostId, code: b.code, label: b.label, manual: false, retry: true, reconnectProjectId: projectId })
+          run({ hostId: b.hostId, code: b.code, label: b.label, manual: false, retry: true, reconnectProjectId: projectId, afterDrop: true, autoConfirm: true })
         },
         () => {}
       )
@@ -240,7 +263,7 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
         )
         return true
       }
-      if (run({ hostId: t.hostId, code: t.code, label: t.label, manual: true, retry: true, reconnectProjectId: projectId }) === 'busy') {
+      if (run({ hostId: t.hostId, code: t.code, label: t.label, manual: true, retry: true, reconnectProjectId: projectId, autoConfirm: true }) === 'busy') {
         deps.notify({ kind: 'info', text: `Already reconnecting to ${team(t.label)}…` })
       }
       return true
@@ -255,7 +278,7 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
     async bootReconnect() {
       const list = await deps.bookmarks().catch(() => [])
       for (const b of list) {
-        if (b.approved) run({ hostId: b.hostId, code: b.code, label: b.label, manual: false, retry: true })
+        if (b.approved) run({ hostId: b.hostId, code: b.code, label: b.label, manual: false, retry: true, autoConfirm: true })
       }
     },
     async forget(hostId, label) {
