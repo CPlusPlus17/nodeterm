@@ -6917,6 +6917,27 @@ to the class, and no bare `.react-flow__viewport` rule carries `will-change`).
 
 ## Remote access (phone relay) — free, not Pro
 
+- **A Team Access invite that shares ONE project is a boundary, not a label**
+  (`core/relay/scoped-guest-policy.ts`, wired by `main/remote/relay-host.ts` as the core relay
+  host's hooks). The invite is consent to run commands IN that project, and nothing else: inbound is
+  an allowlist (`SCOPED`) where a node id must belong only to the shared project (or be one the
+  guest just created over `canvas:mut` that no project holds yet — the host saves on a debounce, so
+  a new terminal's first `pty:create` precedes its node on disk), paths realpath inside the project
+  root and outside userData (symlinks and dangling links refused), `pty:create` loses `sshRemote`
+  and defaults its cwd to the root, `workspace:save` is refused; outbound reuses the viewer policy's
+  per-project event/terminal-frame attribution. An unknown channel is refused, and the guard test
+  forces a decision for every relay-tab channel. `connectRelayHost` THROWS for a scoped session
+  given no scope deps rather than serve it unscoped. **What it does not claim**: the guest's own
+  terminal is a shell as the host's user and can `cd` anywhere or attach another tmux session; the
+  policy closes the app's RPC doors, not the OS. Secret-bearing RPCs are host-only for EVERY relay
+  peer (`shared/host-control.ts`, now also enforced in core `relay-host.ts` `serve`, so the Server
+  Edition's hosted peers meet it): `settings:*` (a peer that saved `modelGateway.baseUrl` and then
+  called `agent:discover-models` would have the keychain-held gateway key sent to its URL),
+  gateway credentials, `license:*`, `claude-accounts:*`/`codex-accounts:*`, `usage:*`, and the
+  pairing/relay trust plane. An UNSCOPED invite (Team Access seats) stays full access, and its copy
+  now says so. Known degrades of the scoped tab: the host-path picker starts at `/` and is refused
+  (navigate from the project instead), and an SSH project's terminals do not open over the relay.
+
 - Phone relay remote access ("Reach this Mac from anywhere") is a **Core (free) feature** as of
   2026-08-01 — the iOS app is itself paid, so a desktop Pro gate double-charged the same feature.
   The former Pro gate AND the free-tier monthly quota (`core/relay-quota.ts`, `RelayQuotaBanner`,

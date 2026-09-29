@@ -37,6 +37,7 @@ import { loadOrCreatePeerKeyPair } from './peer-identity'
 import { isPremium as licenseIsPremium, getStoredEntitlement, licensedSeats as licenseSeats } from '../../core/license'
 import { RELAY_URL, relayAllowed as hostRelayAllowed, mintPairingToken } from './host-service'
 import { canAcceptSeat } from './seat-cap'
+import type { ScopedGuestDeps } from '../../core/relay/scoped-guest-policy'
 import { revokePeerKey } from './peer-revoke'
 
 /** Thrown (as an Error message) when a new invite would exceed the licensed seat cap. The renderer
@@ -61,6 +62,9 @@ export interface RelayHostDeps {
   licensedSeats?: () => number
   /** TEST ONLY: override the wire-up (defaults to `connectRelayHost`). */
   connect?: typeof connectRelayHost
+  /** What a project-scoped seat's policy reads from this core (scoped-guest-policy.ts). A scoped
+   *  invite without it is refused (connectRelayHost throws before any socket opens). */
+  scope?: ScopedGuestDeps
 }
 
 /** Metadata options for a new seat. `email` is a DISPLAY label only (never trust/identity — the SAS
@@ -156,7 +160,9 @@ export function initRelayHost(
         platform,
         transport: deps.transport,
         // The single project this hosting session shares with the peer. Absent → unscoped, as before.
+        // Present → every peer message is judged by the scoped-guest policy over `deps.scope`.
         sharedProjectId: projectId,
+        scope: deps.scope,
         // The SAS is known — ask the human to compare it. NOTHING is served yet. Reuse the reserved
         // id (do NOT mint a fresh one) so onOpen/onClose/revoke all name the same seat.
         onPeerPending: (s) => {

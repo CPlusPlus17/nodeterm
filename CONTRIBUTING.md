@@ -467,6 +467,15 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   test forces that: without one, the event simply never arrives. Deep version: CLAUDE.md § Hosted
   team relay.
 
+- **...and in `src/core/relay/scoped-guest-policy.ts` too.** A Team Access invite that shares ONE
+  project is served through that allowlist: every relay-tab channel is in `SCOPED` (with a check
+  that its node / path / projectId belongs to the shared project) or in the reviewed
+  `SCOPED_REFUSED` set, and `scoped-guest-policy.guard.test.ts` fails on one that is neither. An
+  unlisted channel is refused to scoped guests; an event they must receive needs to be attributable
+  to the shared project (`filterScopedEvent`). Anything that touches the host's settings,
+  credentials, license or pairing belongs in `src/shared/host-control.ts` instead — refused to every
+  relay peer.
+
 - **Normalize BOTH sides of a path comparison, through one function.** A marker normalized where
   it is built and matched raw where it is used is a no-op on the machine you wrote it on and a
   silent defect on Windows. That is issue #558: the managed-hook marker was folded to `/` while
