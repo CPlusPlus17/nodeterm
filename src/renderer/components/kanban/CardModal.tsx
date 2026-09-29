@@ -20,6 +20,9 @@ import { ContextMeter } from '../ContextMeter'
 import { isRemoteSessionNode } from '@shared/worktree'
 import { AccountChip, useAccountChip } from '../AccountChip'
 import { IssueRefChip } from '../IssueRefChip'
+import { TeamProgressChip } from '../TeamProgressChip'
+import type { TeamStation } from '../../lib/teamProgress'
+import { sessionNameRepeatsTitle } from '../../lib/cardRedundancy'
 import type { IssueRef } from '@shared/github-issue-ref'
 import { useAgentStatus } from '../../state/agentStatus'
 import { useCardPanel } from '../../state/cardPanel'
@@ -86,13 +89,17 @@ interface CardModalProps {
   /** The agent sessions on this board a comment may @mention (`mentionCandidatesFrom`) — the same
    *  list the canvas node's comments flyout offers. */
   mentionables?: readonly MentionCandidate[]
+  /** The stations this session opened (lib/teamProgress) — the same ring the card shows. */
+  team?: readonly TeamStation[]
+  /** A station was picked from the ring's list: close the modal and go to that node. */
+  onTravel?: (nodeId: string) => void
 }
 
 /** Trello-style card popup over the board. Scrim click / Esc close it; the board (and the
  *  canvas under it) stay mounted. Terminal cards carry the node header's actions too:
  *  search / dictate / AI-name / the ⌘M view — ChatPanel or the output markdown, the same face the
  *  canvas node shows (the node itself is hidden under the board). */
-export function CardModal({ session, columnTitle, board, onChangeBoard, onClose, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables }: CardModalProps) {
+export function CardModal({ session, columnTitle, board, onChangeBoard, onClose, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel }: CardModalProps) {
   const { api } = useSession()
   const idRef = useRef<string>()
   if (!idRef.current) idRef.current = nextDialogId()
@@ -112,6 +119,10 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
   // Same chip as the card and the canvas node header — the modal is where a user checks WHICH
   // session this is, so the account belongs in its header chips, not only two views away.
   const observedAccount = useAgentStatus((st) => st.byId[session.id]?.account)
+  // The session name, where it is not already the title (lib/cardRedundancy — the rule the card
+  // and the canvas node header use). The card carries it on its detail line; the modal, which
+  // hides the node, carries it here so the session's name is never two views away.
+  const sessionName = useAgentStatus((st) => st.byId[session.id]?.session)
   const accountChip = useAccountChip(session.spawn.accountId, observedAccount)
   const [naming, setNaming] = useState(false)
   // Comments & activity panel: OPEN by default in the modal; the header 💬 collapses it. The
@@ -360,6 +371,12 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
           )}
           <span className="kanban-modal__column">{columnTitle ?? 'Ungrouped'}</span>
           {isTerminal && onOpenIssue && <IssueRefChip issueRef={session.issueRef} onOpen={onOpenIssue} />}
+          {isTerminal && team && team.length > 0 && onTravel && <TeamProgressChip stations={team} onTravel={onTravel} />}
+          {isTerminal && sessionName && !sessionNameRepeatsTitle(sessionName, session.title) && (
+            <span className="kanban-card__session kanban-modal__session" title={sessionName}>
+              {sessionName}
+            </span>
+          )}
           {isTerminal && <AccountChip chip={accountChip} />}
           {/* The driving chip, so a user watching a browser card THROUGH the modal is not
               driving-blind. The lease is keyed by node id (not by webview object), so this shows

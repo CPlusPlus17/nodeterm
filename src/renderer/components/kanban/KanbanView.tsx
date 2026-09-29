@@ -55,6 +55,7 @@ import { pullStatusFreshness, type GitHubPullStatus } from '@shared/github-pull-
 import { pullsClosingIssue, pullsForCard, pullStatusByNumber } from '../../lib/pullLinks'
 import { usePullAutoMove, usePullChase } from './usePullAutoMove'
 import { mentionCandidatesFrom } from '../../lib/boardMentions'
+import { NO_STATIONS, type TeamStation } from '../../lib/teamProgress'
 
 /** One session node shown as a board card — derived LIVE from the canvas nodes; the board
  *  itself stores only column assignments. */
@@ -151,6 +152,12 @@ export interface KanbanViewProps {
    * summary modal show DISABLED rather than hide. Optional like `issueAgentMenu`.
    */
   issueWorktreeMenu?: (issue: GitHubIssueCardView) => IssueWorktreeMenuAnswer
+  /**
+   * The stations each session opened (lib/teamProgress `stationsByOpener`, keyed by the opener's
+   * node id), for the team-progress ring on its card and card modal. Optional: without it no card
+   * shows one.
+   */
+  teams?: ReadonlyMap<string, readonly TeamStation[]>
 }
 
 type Drag =
@@ -221,7 +228,7 @@ function useCanvasCovered(): void {
 export const KanbanView = memo(function KanbanView({
   board, sessions, onChange, onOpenNode, onCreateNode, onRenameNode, onEditSticky, onDeleteNode,
   onModalNodeChange, onBrowserNav, onSetIcon, accountMenuItems, onAutoMoveFromPulls, issueAgentMenu,
-  issueWorktreeMenu
+  issueWorktreeMenu, teams
 }: KanbanViewProps) {
   useCanvasCovered()
   const { api } = useSession()
@@ -863,6 +870,7 @@ export const KanbanView = memo(function KanbanView({
         ? columnCards.ungrouped
         : columnCards.byColumn.get(columnId) ?? NO_CARDS
       const onDropAt = dropAtCardFor(columnId)
+      const category = columnId === null ? undefined : columnCategory(board.columns.find((c) => c.id === columnId))
       lanes.push({
         sourceId: 'sessions',
         count: cards.length,
@@ -880,6 +888,9 @@ export const KanbanView = memo(function KanbanView({
             onDropAt={onDropAt}
             pulls={pullsByCard.get(s.id) ?? NO_PULLS}
             pullFreshness={pullFreshness}
+            team={teams?.get(s.id) ?? NO_STATIONS}
+            onTravel={onOpenNode}
+            columnCategory={category}
           />
         ))
       })
@@ -1226,6 +1237,11 @@ export const KanbanView = memo(function KanbanView({
             // request the session card's `#N` makes — summary if the lane has it, else GitHub).
             setModalNodeId(null)
             handleOpenIssueRef(ref)
+          }}
+          team={teams?.get(modalNodeId) ?? NO_STATIONS}
+          onTravel={(nodeId) => {
+            setModalNodeId(null)
+            onOpenNode(nodeId)
           }}
         />
       )}

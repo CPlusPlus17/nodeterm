@@ -237,6 +237,9 @@ import { agentLaunchOverride, COLLAPSED_HEIGHT, type CanvasNode } from '../state
 import { NodeColorSwatches } from '../components/NodeColorSwatches'
 import { AccountChip, useAccountChip } from '../components/AccountChip'
 import { IssueRefChip } from '../components/IssueRefChip'
+import { TeamProgressChip } from '../components/TeamProgressChip'
+import { useTeamStations } from '../state/teamStations'
+import { sessionNameRepeatsTitle } from '../lib/cardRedundancy'
 import { effectiveAccountId } from '../lib/accountChip'
 import {
   hasHooks,
@@ -288,6 +291,12 @@ import { waitForSshRemote } from '../lib/sshRemoteWait'
 
 /** Which physical modifier the registry's abstract `Cmd` resolves to for the find-bar chord. */
 const isMac = isMacPlatform()
+
+/** A station was picked from the header's team ring: frame it — Canvas's `focusNodeById`, the same
+ *  path the Omni board's "Open on canvas" takes (it also handles a node in another project). */
+function travelToStation(nodeId: string): void {
+  window.dispatchEvent(new CustomEvent('nodeterm:focus-node', { detail: { nodeId } }))
+}
 
 /** How long a remote terminal waits for its project's ControlMaster before giving up and showing
  *  the offline overlay. Sized for the SLOW-but-fine case (a cold app load whose connect is still
@@ -1801,6 +1810,9 @@ export function TerminalNode({
    */
   const observedAccount = status?.account
   const accountChip = useAccountChip(data.accountId, observedAccount)
+  // This node's team (the stations it opened), published by Canvas from the live ropes. The store
+  // keeps each unchanged team's array identity, so this re-renders only when THIS team changes.
+  const team = useTeamStations((s) => s.byNode.get(id))
   const accountForReads = effectiveAccountId(data.accountId, observedAccount, claudeAccounts)
   /** Mirror for the session-name poll, whose effect must not restart when a late hook event
    *  finally reveals the account (see its comment). */
@@ -5694,7 +5706,7 @@ export function TerminalNode({
             {data.title || 'Untitled'}
           </span>
         )}
-        {status?.session && status.session !== data.title && (
+        {status?.session && !sessionNameRepeatsTitle(status.session, data.title) && (
           <span className="term-node__session" title={status.session}>
             {status.session}
           </span>
@@ -5713,6 +5725,9 @@ export function TerminalNode({
             )
           }}
         />
+        {/* The stations this session opened, and how far along they are — the same ring its board
+            card and card modal draw (lib/teamProgress). A row travels to that station. */}
+        {team && <TeamProgressChip stations={team} onTravel={travelToStation} menuZIndex={60} />}
         {/* The fallback, made visible. A Codex node that could not get a managed shared identity
             runs a perfectly good plain `codex` — but the user has to be able to SEE that it did,
             without reading a log, so the chip states it and its tooltip says why. Absent (and the
