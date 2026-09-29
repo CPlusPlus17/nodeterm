@@ -464,17 +464,25 @@ They are in the vocabulary now, and everything around them is the node machinery
   peer's `edge-remove` would delete the link on our canvas too. The publisher holds such an
   `edge-upsert` inside the emit that refused the node (and on every later emit while the node's last
   cast stays refused — `refusedNodeIds()`), keeps it owed, and casts it in the same batch as the node,
-  after it, on the first emit in which the node goes through. That holds across adopts too: an adopt
-  (every peer op, every project load) takes the scene on screen, which already contains the refused
-  node and the held edge, so the adopted baseline keeps the PREVIOUS baseline's entry for the owed
-  node and every edge touching it (`adoptBaseline`) — otherwise the node would re-diff only when it
-  next changed, and the edge would never differ from the baseline again and never be cast. The hold
-  is in the publisher, not a filter on the scene: dropping an edge the baseline already holds would
-  diff as an `edge-remove` — the same delete, cast by us. It is conservative: an edge to a node whose
-  EARLIER version the peer has also waits. What it does not cover: a baseline taken while the solo
-  gate is closed (`shouldPublish` false) is not rebased, so an owed item swallowed there syncs only
-  when it next changes; the gate closes on an open publisher only when a hosted role drops to
-  read-only.
+  after it, on the first emit in which the node goes through. That holds across a peer's op too: the
+  adopt that applies it takes the scene on screen, which already contains the refused node and the
+  held edge, so the adopted baseline keeps the PREVIOUS baseline's entry for an owed node that scene
+  still holds and for every edge in it touching one (`adoptBaseline`) — otherwise the node would
+  re-diff only when it next changed, and the edge would never differ from the baseline again and
+  never be cast. Only what the adopted scene still holds: one publisher serves every local project,
+  so a project switch adopts ANOTHER project's scene, and re-emitting an owed node it lacks would
+  cast a `remove` of the old project's node under the new project's id (and a peer's delete, which
+  also arrives as an adopt, would be echoed back). The hold is in the publisher, not a filter on the
+  scene: dropping an edge the baseline already holds would diff as an `edge-remove` — the same
+  delete, cast by us. It is conservative: an edge to a node whose EARLIER version the peer has also
+  waits. What it does not cover: (1) a baseline taken while the solo gate is closed (`shouldPublish`
+  false) is not rebased, so an owed item swallowed there syncs only when it next changes — the gate
+  closes on an open publisher only when a hosted role drops to read-only; (2) a round trip to
+  another project with any emit there (A → B → A): the emit in B forgets the owed node (it is not on
+  B's canvas), and the load that returns to A adopts A's whole scene, so a held edge is not cast
+  after the node is trimmed until the edge itself changes; (3) a `remove` that was itself refused (no
+  active project) and then adopted over is not retried. None of the three is a regression — the
+  publisher behaved the same way before holds existed.
 - **"This note is too large" is said only for a node upsert.** An edge op is refused only for a
   malformed or over-long id, so the sentence would name a cause nobody measured; the refusal is
   logged instead.

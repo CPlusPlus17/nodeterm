@@ -562,6 +562,55 @@ describe('an adopt does not swallow what is still owed', () => {
     expect(c.sent.slice(cast).map(label)).toEqual(['edge-remove:b1', 'remove:n'])
   })
 
+  // One publisher serves every local project, and a project switch ADOPTS the incoming project's
+  // scene. An owed node of the project we left is absent from that scene; keeping its previous entry
+  // in the new baseline would diff as a `remove` (and its edge as an `edge-remove`), cast under the
+  // NEW project's id — a rule-4 tombstone for that id on every client, and a pending entry here that
+  // deafens us to peers' edits of it in the project it actually lives in.
+  it('a project switch casts nothing for the old project’s owed node', () => {
+    const bad = new Set<string>()
+    const c = refusing(bad)
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('s'), node('t')], [link('b1', 's', 't')])) // project A, all cast
+    bad.add('s')
+    p.publish(scene([node('s', 9), node('t')], [link('b1', 's', 't')])) // s grows past the cap
+    const cast = c.sent.length
+    p.adopt(scene([node('x')])) // switch to project B
+    p.publish(scene([node('x', 1)])) // the first edit in B
+    expect(c.sent.slice(cast).map(label)).toEqual(['upsert:x'])
+  })
+
+  // The peer deleted the owed node (and its link); applying their op and adopting the result must not
+  // echo their remove back at them.
+  it('a peer’s remove of an owed node is not echoed back', () => {
+    const bad = new Set<string>()
+    const c = refusing(bad)
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('s'), node('t')], [link('b1', 's', 't')]))
+    bad.add('s')
+    p.publish(scene([node('s', 9), node('t')], [link('b1', 's', 't')]))
+    const cast = c.sent.length
+    p.adopt(scene([node('t')])) // the peer's remove of s (and b1) applied locally
+    p.publish(scene([node('t')])) // the [nodes] effect fires
+    expect(c.sent.slice(cast)).toEqual([])
+  })
+
+  // Same rule for an EDGE the adopted scene dropped: the peer removed the link of an owed node (not
+  // the node); keeping the link's previous entry would echo their edge-remove back at them.
+  it('a peer’s remove of an owed node’s edge is not echoed back', () => {
+    const bad = new Set<string>()
+    const c = refusing(bad)
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('s'), node('t')], [link('b1', 's', 't')]))
+    bad.add('s')
+    p.publish(scene([node('s', 9), node('t')], [link('b1', 's', 't')]))
+    const cast = c.sent.length
+    p.adopt(scene([node('s', 9), node('t')])) // the peer's edge-remove of b1 applied locally
+    p.publish(scene([node('s', 9), node('t')]))
+    expect(c.sent.slice(cast)).toEqual([])
+    expect(p.refusedNodeIds()).toEqual(new Set(['s'])) // s itself is still owed
+  })
+
   it('an adopt with nothing owed stays lazy', () => {
     const c = collect()
     const p = createCanvasPublisher(c.send)

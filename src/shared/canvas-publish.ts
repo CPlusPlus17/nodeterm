@@ -55,7 +55,8 @@ export interface CanvasPublisher {
   publish(next: CanvasSnapshot, opts?: { throttle?: boolean }): void
   /** Take `next` as the new baseline WITHOUT sending — the loop guard (a peer's mutation, or a
    *  programmatic project load). The next diff against it is empty, except for what is still owed
-   *  (a refused node and the edges held for it), which stays owed — see `adoptBaseline`. */
+   *  and still on the adopted scene (a refused node and the edges held for it), which stays owed —
+   *  see `adoptBaseline`. */
   adopt(next: CanvasSnapshot): void
   /** Send any coalesced drag frame immediately (drag settle / unmount). */
   flush(): void
@@ -186,6 +187,14 @@ export function createCanvasPublisher(
    * older version where it did. Dropping them outright instead would lose that older version, and a
    * later local delete of the node would diff to nothing.
    *
+   * Only for what the ADOPTED scene still holds: an owed node present in it, and edges in it that
+   * touch one. An owed node the scene no longer holds is not ours to re-emit — a project switch
+   * adopts ANOTHER project's scene (one publisher serves every local project), where keeping the old
+   * entry would cast a `remove` of the previous project's node under the new project's id; and a
+   * peer's delete arrives here as an adopt, where it would echo their remove back. The same goes for
+   * an edge the adopted scene dropped. The cost: a REMOVE that was itself refused (no active project)
+   * and then adopted over is not retried — which the publisher never did before this rule either.
+   *
    * Only while something is owed — and then the previous baseline is resolved now, one serialize per
    * adopt, because the adopted thunk must be rebased against the baseline AS OF this adopt. With
    * nothing owed an adopt is exactly what it was: a thunk stored unresolved.
@@ -198,10 +207,12 @@ export function createCanvasPublisher(
     const owed = new Set(owedNodes)
     const prev = baseline()
     const keepOwed = (next: CanvasScene): CanvasScene => {
+      const here = new Set(next.nodes.filter((n) => owed.has(n.id)).map((n) => n.id))
+      if (!here.size) return next
       const keys = new Set<string>()
-      for (const id of owed) keys.add('n:' + id)
-      for (const e of [...prev.bridges, ...prev.ropes, ...next.bridges, ...next.ropes]) {
-        if (owed.has(e.source) || owed.has(e.target)) keys.add('e:' + e.id)
+      for (const id of here) keys.add('n:' + id)
+      for (const e of [...next.bridges, ...next.ropes]) {
+        if (here.has(e.source) || here.has(e.target)) keys.add('e:' + e.id)
       }
       return rebaseRefused(prev, next, keys)
     }
