@@ -236,7 +236,10 @@ export async function initServerCanvasControl(
     callerOwnsTarget: (sourceNodeId, targetNodeId) =>
       factory.ownsSpawn(sourceNodeId, targetNodeId),
     customAgents: () => deps.settings().customAgents,
-    appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry)
+    appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry),
+    // A `send` / `reply` hands a station new work when it REACHES the pane (queued ⇒ "work pending"
+    // until it lands) — the same rule, and the same store method, as the desktop.
+    onHandover: (ev) => stationOutcomes.onHandover(ev)
   }
   const queue = createDeliveryQueue(messaging)
   messaging.queue = queue
@@ -316,8 +319,9 @@ export async function initServerCanvasControl(
 
   const baseHandler = createServerEditionControlHandler(actions)
   return {
-    // New work handed to a station (`send` / `reply` / `run` aimed at it) withdraws its outcome
-    // report — the "new task" rule in core/station-outcome-store.ts, applied after the answer.
+    // New work typed into a station by `run` withdraws its older outcome report — the "new task"
+    // rule in core/station-outcome-store.ts, applied on the answer. (`send` / `reply` go through
+    // `messaging.onHandover` above, which knows when a queued message actually lands.)
     handler: async (req) => {
       const reply = await baseHandler(req)
       clearOutcomesAfterControl(stationOutcomes, req.verb, req.args, reply, req.nodeId)

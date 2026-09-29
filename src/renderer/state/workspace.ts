@@ -40,9 +40,9 @@ import { useSettings } from './settings'
 // Re-exported so Canvas (and anything else in the renderer) keeps importing it from here, while the
 // single implementation lives in src/shared and is shared with the relay host + the canvas-sync
 // reflector.
-export { applyCanvasMutation } from '@shared/canvas-mutations'
+export { applyCanvasMutation, applyOwnCanvasMutation } from '@shared/canvas-mutations'
 export { accountNodeColor, agentAccountColor } from '@shared/agents/account-color'
-import { sanitizeInboundNode } from '@shared/node-exec'
+import { mutationTrustsLaunch, sanitizeInboundNode } from '@shared/node-exec'
 import { SYSTEM_NODE_COLORS } from '@shared/node-colors'
 
 // Preserve the renderer's long-standing import surface; validation and the palette now live in
@@ -2116,7 +2116,9 @@ export function applyMutationToFlow(nodes: CanvasNode[], m: CanvasMutation): Can
   // A peer's node never brings the exec-enabling fields with it (@shared/node-exec): they are
   // per-machine settings, and letting one into the live array is exactly how it ends up harvested
   // into this machine's "trusted" workspace.json on the next save.
-  const incoming = nodeStatesToFlow([sanitizeInboundNode(m.node)])[0]
+  // …nor a held launch (`pendingLaunch`), unless the core vouched for an owner copy (@shared/node-exec).
+  const trustLaunch = mutationTrustsLaunch(m)
+  const incoming = nodeStatesToFlow([sanitizeInboundNode(m.node, trustLaunch)])[0]
   const idx = nodes.findIndex((n) => n.id === m.node.id)
   if (idx === -1) {
     // Append, then re-sort: React Flow requires a parent to appear BEFORE its children, and a peer
@@ -2140,6 +2142,8 @@ export function applyMutationToFlow(nodes: CanvasNode[], m: CanvasMutation): Can
       ...prev.data,
       ...incoming.data,
       shell: prev.data.shell,
+      // Ours, unless the core vouched for this copy — then it is authoritative, a clear included.
+      pendingLaunch: trustLaunch ? incoming.data.pendingLaunch : prev.data.pendingLaunch,
       ...(incoming.data.ssh && prev.data.ssh?.extraArgs
         ? {
             ssh: {

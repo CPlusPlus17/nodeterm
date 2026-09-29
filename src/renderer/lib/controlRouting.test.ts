@@ -94,7 +94,7 @@ describe('needsLiveCanvas', () => {
   it('is false for sticky — a scheduled note sync must never travel the camera either', () => {
     // Same G5 shape as send/reply: routing is by SOURCE, and the verb's headline use is a cron
     // agent rewriting one note every few minutes. The non-active write path goes through the
-    // projects store (`applyNodeMutation`), not the live canvas.
+    // projects store (`applyOwnNodeMutation`), not the live canvas.
     expect(needsLiveCanvas('sticky')).toBe(false)
   })
 
@@ -538,6 +538,22 @@ it('lists every station’s own report, and where a success wait stands (--after
   expect(r2.rev.launchState).toBe('queued')
   expect(r2.rev.successWait).toBeUndefined()
   expect(controlListingText(after)).toContain('build [terminal] Builder — REPORTED SUCCESS')
+})
+
+it('a report made before queued new work is listed as not counting, and the wait keeps waiting', () => {
+  const rows = storedNodeListing(
+    [
+      { id: 'build', title: 'Builder', agentId: 'claude' },
+      { id: 'rev', title: 'Reviewer', pendingLaunch: { command: 'claude', after: ['build'], afterSuccess: { deps: ['build'], deadlineAt: 99 } } }
+    ],
+    { build: { state: 'done' } },
+    {},
+    10,
+    { build: { nodeId: 'build', outcome: 'succeeded', at: 1, workPending: true } }
+  )
+  const text = controlListingText(rows)
+  expect(text).toContain('build [terminal] Builder — REPORTED SUCCESS (before new work queued for it; not counted until it reports again)')
+  expect(text).toContain('rev [terminal] Reviewer — WAITING FOR SUCCESS — needs success from: build "Builder" (new work is queued for it; waiting for its next report)')
 })
 
 it('a hostile success hold in a stored project neither throws nor reads as met', () => {

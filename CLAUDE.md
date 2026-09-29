@@ -3668,7 +3668,22 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   **Dependency edges (`--after`, 2026-07):** `open-terminal`/`open-claude`/`open-agent` accept
   `--after <id,id>`, which opens the node **armed** — `data.pendingLaunch` ({after, command},
   `PendingLaunch` in shared/types) holds the launch the factory built, and Canvas fires it once
-  every dep reports `done`. This is what makes the canvas a DAG instead of a fan-out. Load-bearing
+  every dep reports `done`. This is what makes the canvas a DAG instead of a fan-out.
+  **`pendingLaunch` is a MACHINE-LOCAL exec field, like `shell`** (@shared/node-exec): its `command`
+  is typed into a shell once the wait is over, and `after: []` or a vanished dep counts as over, so
+  a value that arrives from outside would run a command nobody here armed. It is persisted in
+  workspace.json's `IndexEntryV3.localExec` (every ref kind: folder, SSH, local-data), NEVER in
+  `.nodeterm/project.json` or an SSH mirror (`stripSharedNodeExec`), and a file that carries one is
+  ignored on read — the one-time legacy hoist deliberately does not adopt it either (provenance
+  cannot be told apart, so an armed node written by an older build loses its held launch on
+  upgrade). On `canvas:mut` a peer's value is stripped and OUR value carried across its upserts
+  (`carryLocalNodeExec`); the reflector forwards one only between OWNER clients
+  (`CorePlatform.isOwnerClient`: the app window, a cookie-authenticated Server Edition tab — never a
+  relay peer), stamped `origin: 'core'`, which a client cannot supply and a relay tab ignores. That
+  owner→owner leg is load-bearing: it is how two Server Edition tabs agree a launch was claimed, and
+  how a headless delivery's clear reaches the browser, so nothing types it twice. Our OWN writes
+  into a background project go through `applyOwnNodeMutation` (unstripped — a cold open keeps its
+  launch, a patch to `undefined` clears it); `applyNodeMutation` is the peer path. Load-bearing
   details: (1) **an unknown agent state is NOT "satisfied"** — right after a fan-out no upstream has
   emitted a hook event yet, and reading "no news" as "finished" would fire every dependent
   instantly; a **deleted** dep IS satisfied (it can never report); and a dep that is `done` with a
@@ -3728,7 +3743,7 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   rope drops that dep from `after` (`dropAfterDep`) and takes **nothing else** — the covered bridge
   survives, because "stop waiting for it" is not "stop being able to read its work"; an emptied
   list fires. Only the `open-*`/`verify` verbs write the rope, so `missingDepRopes` heals an armed
-  node that has none at **project load**: `pendingLaunch` is persisted and the rope is not, so a node
+  node that has none at **project load**: `pendingLaunch` is persisted (machine-locally) and the rope is not, so a node
   armed by any other path — or by a build older than this one — would otherwise hold a launch with
   no arrow saying what for. All edges route through the single `floating` edge type
   (`canvas/FloatingEdge.tsx`, a bezier between the MIDPOINTS of the two nodes' facing sides — one
@@ -3903,18 +3918,43 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     (`requiresVerified`) and a node reports only about ITSELF: `--node` naming another node is
     refused (`report-outcome-not-self`), not ignored. The note is display text (`sanitizeOutcomeNote`:
     `oneLine` + format chars stripped, 200 code points) and is never typed into a pane.
-  - **When a report ends — the "new task" rule.** A later report supersedes. A `send` / `reply` /
-    `write` / `run` that SUCCEEDS against a station withdraws its report (`clearOutcomesAfterControl`,
-    run by each shell's control handler AFTER the answer). Without it, "hand a station its next task,
-    then open a dependent `--after-success` it" released the dependent at once on the previous task's
-    success — early, the direction nothing undoes; withdrawing errs toward holding, which the deadline
-    and ▶ end. A new TURN does not clear it (a turn is not a task: a station may report mid-turn, and a
-    person typing "thanks" starts a turn, not a task), and neither does a person typing in the pane or
-    a board comment. Closing a station keeps its report (the deleted-station rule reads it).
-  - **Both shells**: desktop main answers the verb before the forward and clears after it; the Server
-    Edition answers it through the same `handleReportOutcome` (`onRecorded` re-runs `refreshArmed`),
-    honours `--after-success` in the headless factory (`successFacts`: the mirror's `done` plus the
-    fresh-spawn `awaitingFirstWorking` rule) and wraps its handler with the same clearing rule.
+  - **When a report ends — the "new task" rule, decided by when work REACHES THE PANE, never by
+    when a control answer comes back.** A later report supersedes. Otherwise, "hand a station its next
+    task, then open a dependent `--after-success` on it" releases the dependent on the PREVIOUS task's
+    success. The first version withdrew the report on the `send`'s ANSWER, which for a busy station is
+    `queued` (ok: true) long before the message lands — so the station's report for the task it was
+    still on counted, its turn ended, D fired, and the queue flushed the new task on the same idle edge
+    (review of #1034). Now:
+    - `send` / `reply`: the messaging layer emits `AgentMessagingDeps.onHandover` — `queued` (the
+      queue's own `onQueued`, synchronous at the push), `landed` (bytes reached the pane: `delivered`,
+      `stalled`, `deliveredToReplacedTarget`, on a first attempt or a flush, `at` = when that attempt
+      STARTED), `settled` (one per `queued`: flushed, refused on flush, or expired). The store
+      (`StationOutcomeStore.onHandover`) marks a queued station WORK PENDING — its reports publish with
+      `workPending` and do not count — withdraws reports older than a landing's start (so a report
+      about the new work survives a stalled or late answer), and on a settle that never landed
+      withdraws the report too (holding, not the old success; the orchestrator was told it expired).
+      Only `send` / `reply` count: a board comment is a person steering and a station notice is the app.
+    - `write` / `run`: their answer IS the landing (typed after the confirm; a held launch delivered),
+      so `clearOutcomesAfterControl` withdraws reports older than the answer, from each shell's
+      control handler (desktop `finishAnswer`, which runs on a late answer too).
+    - A new TURN clears nothing (a turn is not a task: a station may report mid-turn, and a person
+      typing "thanks" starts a turn), nor does typing in the pane. Closing a station keeps its report
+      (the deleted-station rule reads it). Every rule errs toward holding, which the deadline and ▶ end.
+    `main/station-outcome-handover.test.ts` replays the review's scenario through the REAL queue and
+    fails on the answer-time rule.
+  - **Both shells**: desktop main answers the verb before the forward; the Server Edition answers it
+    through the same `handleReportOutcome` (`onRecorded` re-runs `refreshArmed`) and honours
+    `--after-success` in the headless factory (`successFacts`: the mirror's `done`, the fresh-spawn
+    `awaitingFirstWorking` rule, and #521's errored turn from its own event stream, `lastTurnErrored`
+    — so a succeeded-then-errored station holds on both editions; the server's PLAIN `--after` still
+    does not apply #521, a pre-existing gap). Both wire `onHandover` into their messaging deps and run
+    `clearOutcomesAfterControl` on answers.
+  - **The badge's deadline tick is a memo input** (`lib/useSuccessWait.ts`): nothing in any store
+    changes when a deadline passes, and a timer whose tick the memo ignores re-rendered the node with
+    the cached "waiting" — the badge kept QUEUED while `list` said EXPIRED. `useSuccessWait.test.tsx`.
+  - Reports do not survive an app restart, so a station that reported success and was then CLOSED
+    reads BLOCKED afterwards ("closed without reporting success in this app run"); nothing can report
+    for it any more, so only ▶ / `run` start that dependent. Both agent bodies say so.
     `station-outcome:list` is in `HOST_ONLY_CHANNELS` (unscoped: every project's notes); relay tabs
     take the inert stub. Pinned at source level by `main/station-outcome-wiring.test.ts`. **Not
     done:** a reported `failed` does not raise a station-failure notice to the opener (the opener
@@ -7368,6 +7408,23 @@ for the same reason: nobody reading one file can see this.
 points at tmux's `server_accept()` calling `fatal()` under the suite's process/fd burst on a
 memory-starved machine, and two identical runs finished clean. Sharing a server with the user's live
 sessions is a hazard whatever kills it; this removes the hazard, not a proven cause.
+
+**`fakePlatform()`'s directories live exactly as long as the run** (`test/setup/fake-platform-root.ts`,
+the same per-RUN `globalSetup` shape as the tmux sandbox). Each call used to `mkdtemp` in the system
+temp dir at construction and nothing removed it: a development server running the suite repeatedly
+collected ~395,000 `nodeterm-fake-*` directories, `/tmp` ran out of inodes while still showing GBs
+free, and full runs failed in 1,201 of 1,207 files with ENOSPC. Measured on 40 suites that use it:
+271 directories left behind before, 0 after. Two halves, both needed: the directory is made on first
+READ of `userDataDir` (a test that passes its own, or never reads it, makes none), and it is made
+under a run root that teardown removes once every test file has finished (vitest tears global setup
+down BEFORE it waits for its workers to exit, so a late timer is not ruled out — a per-file
+`afterAll` would be strictly worse, sweeping while that file's debounced writes are still due). The
+teardown never throws and is listed first so it runs last: vitest's teardown loop has no catch per
+file, and a throw there would silently skip the tmux sandbox's teardown. The leaf under the root is a
+bare `u-`, because every byte added is closer to the macOS unix-socket path budget
+(`hook-sock-path.ts`) for anything a test binds under `userDataDir`. A run killed before teardown
+leaves ONE directory.
+`platform-fake.test.ts` fails if the root is not in effect, so dropping the `globalSetup` entry is loud.
 
 ## Conventions
 

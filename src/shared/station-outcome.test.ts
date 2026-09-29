@@ -91,6 +91,14 @@ describe('sanitizeOutcomeRecords — the IPC/bridge boundary', () => {
       { nodeId: 'a1', outcome: 'succeeded', at: 1 },
       { nodeId: 'a2', outcome: 'failed', at: 2, note: 'x y' }
     ])
+    // The work-pending flag crosses the boundary only as a literal true.
+    expect(sanitizeOutcomeRecords([
+      { nodeId: 'a1', outcome: 'succeeded', at: 1, workPending: true },
+      { nodeId: 'a2', outcome: 'succeeded', at: 1, workPending: 'yes' }
+    ])).toEqual([
+      { nodeId: 'a1', outcome: 'succeeded', at: 1, workPending: true },
+      { nodeId: 'a2', outcome: 'succeeded', at: 1 }
+    ])
     expect(sanitizeOutcomeRecords({ nodeId: 'a1' })).toEqual([])
   })
 })
@@ -229,10 +237,21 @@ describe('evaluateSuccessDep — the whole matrix', () => {
     expect(at({ exists: true, turnDone: false })).toBe('waiting')
   })
 
+  it('a report made before new work that is still QUEUED for the station does not count', () => {
+    expect(at({ exists: true, turnDone: true, outcome: { outcome: 'succeeded', workPending: true } })).toBe('waiting')
+    // Not even a failure blocks: it speaks for the task before, and the next one is on its way.
+    expect(at({ exists: true, turnDone: true, outcome: { outcome: 'failed', workPending: true } })).toBe('waiting')
+    expect(at({ exists: false, turnDone: false, outcome: { outcome: 'succeeded', workPending: true } })).toBe('blocked')
+  })
+
   it('a CLOSED station counts only with a success reported before it went', () => {
     expect(at({ exists: false, turnDone: false, outcome: { outcome: 'succeeded' } })).toBe('met')
     expect(at({ exists: false, turnDone: false })).toBe('blocked')
     expect(at({ exists: false, turnDone: false, outcome: { outcome: 'failed' } })).toBe('blocked')
+    // Reports do not survive a restart, and the text says so — only `run` / ▶ move it then.
+    expect(evaluateSuccessDep('a1', { exists: false, turnDone: false }).detail).toBe(
+      'closed without reporting success in this app run'
+    )
   })
 })
 

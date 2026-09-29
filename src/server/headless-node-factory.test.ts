@@ -1258,6 +1258,20 @@ describe('HeadlessNodeFactory', () => {
       expect(still?.pendingLaunch?.afterSuccess).toBeDefined()
     })
 
+    it('holds when the station\'s last turn ERRORED after it reported success (#521, like the desktop)', async () => {
+      states['term-upstream'] = 'done'
+      const id = await openWaiting()
+      report('term-upstream', 'succeeded')
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'done', errored: true })
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      // The next genuine new turn clears the verdict; a clean end of it releases.
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'working', newTurn: true })
+      states['term-upstream'] = 'done'
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'done' })
+      await vi.waitFor(() => expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'ship it'" }]))
+    })
+
     it('a reported success mid-turn waits for the turn to end', async () => {
       states['term-upstream'] = 'working'
       await openWaiting()
