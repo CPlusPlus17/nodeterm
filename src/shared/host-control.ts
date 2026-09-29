@@ -48,6 +48,11 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.projectSetupConsentSubmit,
   IPC.projectSetupRequestTrust,
   IPC.ptyLaunchHeadless,
+  // A board comment that @mentions a session types into that session's pane. Only the host's own
+  // user may do that: a relay peer's comment is display-only. Registered with a raw ipcMain handler
+  // (so no peer can reach it at all); listed here too, so moving it onto the platform table later
+  // cannot quietly open it.
+  IPC.agentBoardCommentDeliver,
   IPC.stationNoticeDropped,
   IPC.stationNoticeList
 ])

@@ -855,7 +855,8 @@ const api: NodeTerminalApi = {
   },
   sendHostChatReply: (reply) => ipcRenderer.send(IPC.hostChatReply, reply),
   agentMessage: {
-    deliver: (req) => ipcRenderer.invoke(IPC.agentMessageDeliver, req)
+    deliver: (req) => ipcRenderer.invoke(IPC.agentMessageDeliver, req),
+    deliverBoardComment: (req) => ipcRenderer.invoke(IPC.agentBoardCommentDeliver, req)
   },
   stationNotice: {
     list: () => ipcRenderer.invoke(IPC.stationNoticeList),

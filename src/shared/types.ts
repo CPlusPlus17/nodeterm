@@ -14,6 +14,7 @@ import type { HostChatQuery, HostChatReply } from './mobile-chat'
 import type { AgentId, AgentPermissionMode, BuiltinAgentId, PromptInjectionMode } from './agents/config'
 import type { ControlConfirmWaivers } from './control-confirm'
 import type { AgentMessageDeliverRequest, AgentMessageReply } from './agents/agent-messaging'
+import type { BoardCommentDeliverRequest } from './board-comment'
 import type { ChatTranscriptPageRequest } from './chat-page'
 import type { BrowserLeasePush } from './browser-indicator'
 import type { GroupWorktree } from './worktree'
@@ -826,6 +827,9 @@ export interface BoardLogEvent {
   /** Column title for column-added/deleted; card title for card-created; outcome for agent-message;
    *  for card-moved, the reason when the board moved the card itself ("PR #12 merged"). */
   title?: string
+  /** agent-message only: the `notPermitted` reason when that is the outcome. From a shared file like
+   *  every field here, so a reader treats it as an untrusted string. */
+  reason?: string
   /** run-started / run-ended only. No cost or token figure: nodeterm has no cumulative number for
    *  a session, and a context-window reading is not one. */
   run?: {
@@ -4087,6 +4091,10 @@ export interface NodeTerminalApi {
    *  already rendered as a control reply — Canvas forwards it verbatim. */
   agentMessage: {
     deliver(req: AgentMessageDeliverRequest): Promise<AgentMessageReply>
+    /** Deliver one mentioned session's copy of a board comment the local user just posted, through
+     *  the same gates. `result` carries the typed outcome the comment row renders. Desktop only: the
+     *  browser and relay bridges answer `notPermitted: unsupported-edition`. */
+    deliverBoardComment(req: BoardCommentDeliverRequest): Promise<AgentMessageReply>
   }
   /** Station-failure notices (@shared/station-notice, src/core/agents/station-notice.ts): the
    *  chips on an orchestrator whose stations stopped, and the renderer's DROPPED verdicts, which

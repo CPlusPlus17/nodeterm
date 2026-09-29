@@ -46,6 +46,7 @@ import { requestTerminalFocusOnExit } from '../../terminal/useMdModeFocus'
 import type { ProjectKanban } from '@shared/types'
 import type { KanbanSession } from './KanbanView'
 import { BoardLogPanel } from './BoardLogPanel'
+import type { MentionCandidate } from '../../lib/boardMentions'
 import { CardMetaBar } from './CardMetaBar'
 import { CardPullRequests } from './CardPullRequests'
 import { ModalTerminal } from './ModalTerminal'
@@ -86,6 +87,9 @@ interface CardModalProps {
    *  (a board with no issue lane to open it on). The node header and the session card show the
    *  same chip — the canvas and the board are two views of one node. */
   onOpenIssue?: (ref: IssueRef) => void
+  /** The agent sessions on this board a comment may @mention (`mentionCandidatesFrom`) — the same
+   *  list the canvas node's comments flyout offers. */
+  mentionables?: readonly MentionCandidate[]
   /** The stations this session opened (lib/teamProgress) — the same ring the card shows. */
   team?: readonly TeamStation[]
   /** A station was picked from the ring's list: close the modal and go to that node. */
@@ -96,7 +100,7 @@ interface CardModalProps {
  *  canvas under it) stay mounted. Terminal cards carry the node header's actions too:
  *  search / dictate / AI-name / the ⌘M view — ChatPanel or the output markdown, the same face the
  *  canvas node shows (the node itself is hidden under the board). */
-export function CardModal({ session, columnTitle, board, onChangeBoard, onClose, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, team, onTravel }: CardModalProps) {
+export function CardModal({ session, columnTitle, board, onChangeBoard, onClose, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel }: CardModalProps) {
   const { api } = useSession()
   const idRef = useRef<string>()
   if (!idRef.current) idRef.current = nextDialogId()
@@ -284,6 +288,9 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
       // Esc, and closing the whole modal from inside it (or from the composer) threw the typed text
       // away. This listener runs in the CAPTURE phase, before any field's own handler could stop it.
       if (ae && ae.closest('.term-chat__answer, .term-chat__compose')) return
+      // The board-comment composer's @ picker owns Esc while it is open (it closes the picker; the
+      // draft stays). `aria-expanded` is set on the textarea exactly while the picker shows options.
+      if (ae && ae.closest('.board-log__composer[aria-expanded="true"]')) return
       e.preventDefault()
       e.stopPropagation()
       onClose()
@@ -622,7 +629,7 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
               </div>
             )}
           </div>
-          {panelOpen && <BoardLogPanel card={session} />}
+          {panelOpen && <BoardLogPanel card={session} mentionables={mentionables} />}
         </div>
       </div>
     </div>,

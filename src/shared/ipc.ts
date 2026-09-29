@@ -228,6 +228,10 @@ export const IPC = {
   agentControl: 'agent:control',
   agentControlResult: 'agent:control-result',
   agentMessageDeliver: 'agent:message-deliver',
+  /** Renderer → main: deliver ONE mentioned session's copy of a board comment the local user just
+   *  posted (`deliverBoardCommentFromUi`). Desktop-only, main-window-only, never peer-dispatchable —
+   *  see src/main/board-comment-wiring.test.ts. Arg: `BoardCommentDeliverRequest`. */
+  agentBoardCommentDeliver: 'agent:board-comment-deliver',
   /** Station-failure notices (src/core/agents/station-notice.ts). invoke: the current list
    *  (StationNoticeView[]) for a renderer that booted after the last push. */
   stationNoticeList: 'station-notice:list',

@@ -14,6 +14,7 @@ import {
   CODEX_SANDBOX_RETRY_LINE
 } from '../core/agents/hook-sandbox-hint-sh'
 import { RETRYABLE } from '../core/agents/agent-message-decide'
+import { BOARD_COMMENT_FROM_PREFIX, BOARD_COMMENT_REPLY_TO } from '../shared/board-comment'
 import {
   STATION_NOTICE_COMMON_OPTIONS,
   STATION_QUESTION_NOTICE_MS,
@@ -657,6 +658,20 @@ describe('parseControlRequest', () => {
       expect(body).toContain('current server run')
       expect(body).toMatch(/never[\s\S]*auto-adopted[\s\S]*relaunched[\s\S]*controlled at boot/)
       expect(body).toContain('before any partial mutation')
+    }
+  })
+
+  it('both agent-facing texts explain a board-comment message, rendered from the envelope constants', () => {
+    // A person can now @mention a session in a board comment, and it arrives in the SAME frame an
+    // agent's message does. The reader has to know the `from:` names a person and that there is no
+    // node to `reply` to — otherwise it runs `reply --node none (…)` and reports a failure the
+    // person never sees. Rendered from the constants the envelope itself uses, so the two cannot
+    // drift.
+    for (const body of [buildCanvasSkillBody('/x/shim.sh'), buildCanvasControlInstructions('/tmp/nodeterm.sh')]) {
+      expect(body).toContain(`\`from: ${BOARD_COMMENT_FROM_PREFIX}<name>\``)
+      expect(body).toContain(`\`reply-to: ${BOARD_COMMENT_REPLY_TO}\``)
+      expect(body).toMatch(/do not[^.]*\breply\b/i)
+      expect(body).toMatch(/same authority as any other message|no more authority/i)
     }
   })
 

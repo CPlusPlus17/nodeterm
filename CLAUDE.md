@@ -1719,6 +1719,57 @@ An unrelated active canvas is not saved for a background message. Server control
 its nodes through the authoritative store; the renderer barrier is a desktop concern. Mobile is
 not an agent-message sender.
 
+**A board comment that @mentions a session is a message from a PERSON** (`@shared/board-comment`,
+`deliverBoardCommentFromUi` in `core/agents/agent-messaging.ts`). The comment composer's @ picker
+inserts an id-based token `@[label](node:<id>)` (the id is the authority, the label only a fallback
+name); on send, each mentioned session gets its own delivery through the SAME `runDelivery` an
+agent `send` takes — scope, runtime pane ownership, the per-project `agentMessaging` switch, flow
+control, the pane probes, the nonce envelope, the receipt, the deliver-on-idle queue with its TTL.
+What differs is only who it is from: the scope is "the target is on the comment's board"
+(`resolveBoardCommentScope`); the PAIR window belongs to the board (`board:<projectId>` — one comment
+per session per 10 s, whichever comment) while the FAN-OUT budget belongs to the comment itself
+(`reserveFlow`'s `fanOutKey`, `board:<projectId>:<commentId>`), because a person's turn is one comment
+and an earlier comment's in-flight holds or queued flush must never spend a newer one's (review
+finding; both scenarios are tests); a comment mentions at most `BOARD_COMMENT_MENTION_MAX` =
+`FANOUT_PER_TURN` sessions and is refused whole above it; a pair-limited board comment is QUEUED
+rather than refused (`BOARD_QUEUE_ON` — an agent retries, a person could only post again; the
+flush re-runs the limiter) AND re-offered on a timer when the window ends
+(`DeliveryQueue.retryAfter`, armed at enqueue and at every `rateLimited` re-queue, one pending nudge
+per target): the queue otherwise flushes only on the target's `done`, and a window ending emits
+nothing — a session already idle, or whose `done` landed inside the window, left the comment to
+expire at the TTL; and the envelope reads `from: board comment by <author>` with no node id
+and `reply-to: none (…)` (`BOARD_COMMENT_REPLY_TO`; both agent-facing bodies render it from the
+constants). An agent node TITLED like that is labelled `node titled "…"` in its own `from:` line, so
+it cannot pass as a person. The body is the comment with each token turned into the `@<name>` its author saw
+(`mentionNameForAgent`: the token's label reduced to letters, digits, spaces and `. _ - #`, capped at
+40, else the node id — a node title is whatever the project file says, and it lands in another
+agent's prompt), then `sanitizeChatText` (every C0/C1 control but `\n`/`\t` — the one shared rule)
+and a cap. A comment's parallel mention deliveries share ONE `syncMessageScope` save (`coalesce`).
+**Only the local user, typing in THIS app, can trigger it.** The log is a shared file — a git pull,
+another instance, a relay peer or a team-presence guest can put a token in it — so NOTHING that
+reads the log reaches a delivery: the one call site is `BoardLogPanel`'s send
+(`board-comment-trigger.guard.test.ts`), the IPC (`agent:board-comment-deliver`) is a raw,
+main-window-only `ipcMain` handler that no peer can dispatch into and is also `HOST_ONLY`, and the
+renderer refuses a relay-bound project and a browser tab (`canDeliverBoardComments`). Around the IPC
+Canvas takes the same two steps as `send`: the target's `guardConcurrentRestart` lock and
+`syncMessageScope`. **No silent success**: every outcome is on the comment row — `sending…`, then
+the reply's typed outcome (with the `notPermitted` reason) from this app run, else the latest
+`agent-message` trace line in the log whose `from` is `board-comment:<commentId>` (the trace now
+carries `reason` too, and the queue hands its trace leg the queued request, so a board comment's
+`queued`/`expired` lines land on ITS board whoever owns the pane by then). Log lines are trusted
+ONLY for comments this machine sent (`nodeterm.boardCommentsSent`, localStorage, bounded): the log
+is shared, so a teammate's comment arrives with THEIR machine's trace lines and a forged line is one
+append away — such a comment shows no status, and its lines stay ordinary feed rows. For our own:
+a line dated in the future is ignored, a `queued` older than `BOARD_COMMENT_QUEUE_STALE_MS` (the
+queue TTL + 1 min — the queue is process memory, so a quit never writes its end) says no outcome
+was recorded, and a mention with no record at all says so too. A trace line is hidden as a row only
+on the card whose comment row shows it; the mentioned session's own card keeps "routed a board
+comment here: …". Text tables are read with `Object.hasOwn` (values come from the shared file).
+The card modal's capture-phase Escape defers to the composer while its @ picker is open. Desktop: full. Server Edition and relay
+tabs: display-only by design (the bridge answers `notPermitted: unsupported-edition`; the picker is
+not offered) — a browser or a relay guest typing into this machine's panes is exactly the
+cross-user injection this refuses. Mobile: N/A (the phone posts no board comments).
+
 The app is a pluggable multi-agent system: Claude Code is one builtin of
 several. Extra terminal-node behavior is driven per agent by a registry + capability lists, a
 shared 4-state model, and a **transient** zustand store `state/agentStatus.ts`
@@ -5990,7 +6041,12 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   replaced had a `default: not project-scoped` arm, so a new verb in one of those namespaces reached
   another project's data with no refusal anywhere. A new channel in a scoped class therefore needs a
   table row to become reachable — and `relay-project-scope.test.ts` fails if a live IPC channel in a
-  scoped class has none, so the fail-closed default cannot silently swallow a shipped verb. Deliberate v1 gaps: column-level
+  scoped class has none, so the fail-closed default cannot silently swallow a shipped verb.
+  **A comment can steer an agent**: its composer's @ picker (canvas flyout and card modal alike —
+  both build the candidates through `lib/boardMentions`) mentions an agent session on this board,
+  and on send that session receives the comment through agent messaging; the row shows each
+  delivery's outcome. A comment that ARRIVES in the log is display-only, forever — see "A board
+  comment that @mentions a session" under Agent support. Deliberate v1 gaps: column-level
   events are stored but no card feed shows them; canvas-born nodes get no card-created; no
   card-deleted type.
   Per-column "+ New session" menus create agents/terminal/sticky nodes assigned to the column
