@@ -3,7 +3,7 @@ import type { AgentMessageOutcome } from './agent-message-decide'
 /**
  * FLOW CONTROL — the first throttle the control surface has ever had.
  *
- * What exists today is timeouts (`SLOWLORIS_MS` → `CONTROL_CEILING_MS`, the 120 s `pendingControl`
+ * What exists today is timeouts (`SLOWLORIS_MS` → `CONTROL_CEILING_MS`, the 120 s control-forward
  * bound) and a one-at-a-time confirmation serializer (`confirmBusy()`). A timeout is not a throttle
  * and a modal is not a budget — and messaging skips the modal entirely once the per-project switch
  * is on, so even the accidental brake is gone. These two limits are the replacement.
