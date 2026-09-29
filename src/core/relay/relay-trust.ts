@@ -26,9 +26,12 @@
 // its own `onTunnel` — so a confirm arriving on session A's tunnel is physically unable to reach
 // session B's state, and `recordApproval` can only ever pin the key bound into the state it is given.
 //
-// LOCAL confirms have exactly three call sites: `confirmHere()` from the desktop dialog
-// (`relay:host:confirm`), `autoApprove` for a pinned key, and the hosted owner's
-// `relay:hosted:approve`. A fourth is a design change.
+// LOCAL confirms have exactly five call sites, three on the HOST side and two on the CLIENT side.
+// Host side: `confirmHere()` from the desktop's Team Access dialog (`relay:host:confirm`), the host's
+// `autoApprove` for a key its pin store holds (the hosted team's `team.json`), and a hosted owner's
+// `relay:hosted:approve`. Client side: the joining human's `relay:client:confirm`, and the client's
+// `autoApprove` for a hosted team's approved bookmark (src/main/remote/hosted-join.ts). A sixth is a
+// design change.
 import {
   confirmLocal,
   confirmRemote,
