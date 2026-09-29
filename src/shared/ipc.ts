@@ -228,6 +228,10 @@ export const IPC = {
   agentControl: 'agent:control',
   agentControlResult: 'agent:control-result',
   agentMessageDeliver: 'agent:message-deliver',
+  /** Renderer → main: deliver ONE mentioned session's copy of a board comment the local user just
+   *  posted (`deliverBoardCommentFromUi`). Desktop-only, main-window-only, never peer-dispatchable —
+   *  see src/main/board-comment-wiring.test.ts. Arg: `BoardCommentDeliverRequest`. */
+  agentBoardCommentDeliver: 'agent:board-comment-deliver',
   /** Canvas sync: a client casts its local node mutations here; the core reflector
    *  (src/core/canvas-sync.ts) stamps each with the total order (`seq`) and sends it back out on the
    *  SAME channel to EVERY attached client — the sender included, whose copy is its ack (see

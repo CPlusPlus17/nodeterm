@@ -71,6 +71,7 @@ import { appendBoardLogVia, registerBoardLogHandlers, type BoardLogRoute } from 
 import {
   createDeliveryQueue,
   deliverFromControl,
+  deliverBoardCommentFromUi,
   isDeliverRequest,
   messagingEnabledVia,
   onMessagingAgentEvent,
@@ -1901,6 +1902,16 @@ app.whenReady().then(async () => {
       return { ok: false, error: 'malformed agent-message request. Do not retry.' }
     const { reply } = await deliverFromControl(raw, messagingDeps)
     return reply
+  })
+  // A board comment that @mentions a session (the comment composer's send). Raw ipcMain on purpose —
+  // invisible to relay peers (platform-electron.ts, invariant 4c) — and guarded to the live main
+  // window, because a <webview> guest is a webContents in this process too and this handler types
+  // into a pane. Everything else (the mention↔target check, scope, ownership, switch, flow, the
+  // envelope, the queue) is `deliverBoardCommentFromUi`, over the SAME deps the agent verbs use.
+  ipcMain.handle(IPC.agentBoardCommentDeliver, async (event, raw: unknown) => {
+    if (getMainWindow()?.webContents.id !== event.sender.id)
+      return { ok: false, error: 'board comments are delivered only from the main window.' }
+    return deliverBoardCommentFromUi(raw, messagingDeps)
   })
 
   ipcMain.handle(IPC.dialogSelectFolder, async () => {

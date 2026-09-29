@@ -37,7 +37,20 @@ import {
 } from './agent-message-decide'
 import { noteNewTurn, noteSent, reserveFlow } from './agent-message-flow'
 import { recordDelivery } from './agent-message-trace'
-import { resolveDeliveryScope, scopeRefusal } from './agent-message-scope'
+import {
+  resolveBoardCommentScope,
+  resolveDeliveryScope,
+  scopeRefusal
+} from './agent-message-scope'
+import {
+  boardCommentBody,
+  boardCommentFrom,
+  boardCommentSourceId,
+  commentIdOfSource,
+  commentTextForAgent,
+  isBoardCommentDeliverRequest,
+  type BoardCommentDeliverRequest
+} from '../../shared/board-comment'
 import {
   DeliveryQueue,
   type DeliveryQueueDeps,
@@ -54,6 +67,40 @@ import type {
   CapabilityMachineDefaults,
   ProjectCapability
 } from '../../shared/project-capabilities'
+
+/**
+ * A board comment's delivery to ONE mentioned session (`deliverBoardCommentFromUi`). It rides every
+ * gate a `send` does; what differs is only who it is from — a person, not a node — so the scope is
+ * "is the target on this board", the flow budget belongs to the board, and the envelope names the
+ * author. `text` is the whole comment as typed (mention tokens included); the body the agent reads
+ * is derived from it in THIS process.
+ */
+export interface BoardCommentMessage extends BoardCommentDeliverRequest {
+  verb: 'board-comment'
+}
+
+/** Everything `runDelivery` can carry: an agent's verb, or a board comment. */
+export type MessagingRequest = AgentMessageDeliverRequest | BoardCommentMessage
+
+/** The flow-control identity of a board: one person's budget per project. `board:` can never be a
+ *  node id (no ':' in `isSafeNodeId`'s alphabet), and a project id with a control character never
+ *  gets this far (`isBoardCommentDeliverRequest`), so the pair key stays injective. */
+function boardFlowSource(projectId: string): string {
+  return `board:${projectId}`
+}
+
+/** The source id / title / body a queued or traced request carries, whichever origin it has. */
+function requestIdentity(
+  req: MessagingRequest
+): { sourceNodeId: string; sourceTitle: string; body: string } {
+  if (req.verb === 'board-comment')
+    return {
+      sourceNodeId: boardCommentSourceId(req.commentId),
+      sourceTitle: boardCommentFrom(req.author),
+      body: req.text
+    }
+  return { sourceNodeId: req.sourceNodeId, sourceTitle: req.sourceNodeId, body: req.body }
+}
 
 /** The little the service needs to know about a stored node. */
 export interface MessagingStoredNode {
@@ -217,6 +264,9 @@ export function createDeliveryQueue(
   /** Append one messaging record to a project's board log. No-ops when the project cannot be
    *  resolved (an inline/cwd-less project has no log — Constraint 10 — the ring still holds it). */
   const senderBoardLog = (req: QueuedDeliveryRequest, title: string): void => {
+    // A board comment's source (`board-comment:<id>`) is no node, so this resolves nothing and
+    // writes nothing — correctly: its trace legs (the queue's `queued`/`expired`, the flush's own
+    // outcome) already land in the comment's board, where its row reads them.
     const projectId = projectFor(req.sourceNodeId)
     if (!projectId) return
     const entry: BoardLogEntry = {
@@ -234,19 +284,27 @@ export function createDeliveryQueue(
       now,
       deliver: (qreq) =>
         runDelivery(
-          {
-            verb: qreq.verb as AgentMessageDeliverRequest['verb'],
-            sourceNodeId: qreq.sourceNodeId,
-            targetNodeId: qreq.targetNodeId,
-            body: qreq.body
-          },
+          qreq.verb === 'board-comment'
+            ? (qreq as unknown as BoardCommentMessage)
+            : {
+                verb: qreq.verb as AgentMessageDeliverRequest['verb'],
+                sourceNodeId: qreq.sourceNodeId,
+                targetNodeId: qreq.targetNodeId,
+                body: qreq.body
+              },
           deps
         ),
-      // The trace leg: ring always, board log when the TARGET's owning project is resolvable.
+      // The trace leg: ring always, board log when the TARGET's owning project is resolvable. For a
+      // board comment that falls back to the project that LISTS the target — the board the comment
+      // is on, which is where its row reads the outcome. A trace is not an authorization, and the
+      // expiry is exactly the moment runtime ownership may be gone (the target restarted), so an
+      // expired comment must not vanish from its row for want of it.
       trace: (input) =>
         recordDelivery(input, {
           appendBoardLog: (entry) => {
-            const projectId = deps.paneOwnerProject(input.targetNodeId)
+            const projectId =
+              deps.paneOwnerProject(input.targetNodeId) ??
+              (commentIdOfSource(input.sourceNodeId) ? projectFor(input.targetNodeId) : undefined)
             return projectId ? deps.appendBoardLog(projectId, entry) : Promise.resolve(false)
           },
           now
@@ -496,21 +554,30 @@ const WROTE: ReadonlySet<AgentMessageOutcome['kind']> = new Set([
  * comes back `notPermitted` here and the queue drops it.
  */
 export async function runDelivery(
-  req: AgentMessageDeliverRequest,
+  req: MessagingRequest,
   deps: AgentMessagingDeps
 ): Promise<AgentMessageOutcome> {
   const now = deps.now ?? ((): number => Date.now())
+  const board = req.verb === 'board-comment' ? req : null
+  const ident = requestIdentity(req)
 
   const projects = deps.projects()
   // WHO MAY BE ADDRESSED — the serialized store, never a live canvas (there is nothing to travel
   // toward, by construction: see agent-message-scope.ts). This is also where `isSafeNodeId` runs,
-  // which the pair limiter's key and the tmux session namespace both depend on.
-  const scope = resolveDeliveryScope(projects, req.sourceNodeId, req.targetNodeId)
+  // which the pair limiter's key and the tmux session namespace both depend on. A board comment has
+  // no sender node, so its scope is the comment's own board.
+  const scope = board
+    ? resolveBoardCommentScope(projects, board.projectId, req.targetNodeId)
+    : resolveDeliveryScope(projects, ident.sourceNodeId, req.targetNodeId)
   let notPermitted = scopeRefusal(scope)
   const projectId = scope.kind === 'same-project' ? scope.projectId : undefined
-  if (!notPermitted && deps.callerOwnsTarget &&
-      !deps.callerOwnsTarget(req.sourceNodeId, req.targetNodeId)) {
-    notPermitted = 'caller-not-owner'
+  // A shell with a creator ledger (the Server Edition) authorizes control by which AGENT spawned
+  // the target. A person's board comment is no agent's, and that shell serves no board-comment
+  // delivery at all — refused by edition rather than squeezed through a ledger it was not built for.
+  if (!notPermitted && deps.callerOwnsTarget) {
+    if (board) notPermitted = 'unsupported-edition'
+    else if (!deps.callerOwnsTarget(ident.sourceNodeId, req.targetNodeId))
+      notPermitted = 'caller-not-owner'
   }
   if (!notPermitted) {
     // OWNERSHIP IS PROVEN AT RUNTIME, NOT READ FROM THE STORE (PR #237 fix round 2). The scope
@@ -531,23 +598,29 @@ export async function runDelivery(
   // polite enough to send sequentially. `reserveFlow` checks and holds in one synchronous step;
   // the hold is released in the `finally` below, so a delivery that never reaches the pane still
   // costs nothing (noteSent's own contract). The parallel-sends test in agent-messaging.test.ts
-  // is the one that fails if this goes back to a bare check.
+  // is the one that fails if this goes back to a bare check. A board comment's budget belongs to
+  // its board (`boardFlowSource`), not to the per-comment trace id.
+  const flowSource = board ? boardFlowSource(board.projectId) : ident.sourceNodeId
   let retryAfterMs: number | undefined
   let reservation: { release(): void } | null = null
   if (!notPermitted) {
-    const flow = reserveFlow(req.sourceNodeId, req.targetNodeId, now())
+    const flow = reserveFlow(flowSource, req.targetNodeId, now())
     if (!flow.ok) retryAfterMs = flow.outcome.retryAfterMs
     else reservation = flow
   }
 
   const owner = projects.find((p) => p.id === projectId)
-  const sourceNode = owner?.nodes.find((n) => n.id === req.sourceNodeId)
+  const sourceNode = board ? undefined : owner?.nodes.find((n) => n.id === ident.sourceNodeId)
   const targetNode = owner?.nodes.find((n) => n.id === req.targetNodeId)
   // A plain terminal is not Claude by default. A hand-launched agent may still prove its runtime
   // identity through a hook event; absent either stored or runtime evidence, the binary predicate
   // receives an unknowable identity and refuses instead of guessing a provider.
   const targetAgentId = targetNode?.agentId ??
     (deps.mirrorEntry ?? coreMirrorEntry)(req.targetNodeId)?.agentId ?? ''
+  // Where the trace lands. A board comment's is always its own board — even for a refusal that
+  // resolved no project (a target on another board) — because that is where the comment's row
+  // reads its outcome, and the renderer can already append to that log.
+  const traceProject = board ? board.projectId : projectId
 
   const delivery: DeliveryDeps = {
     paneOwner: (id) => deps.paneOwner(id),
@@ -571,37 +644,50 @@ export async function runDelivery(
     trace: (input) =>
       recordDelivery(input, {
         appendBoardLog: (entry) =>
-          projectId ? deps.appendBoardLog(projectId, entry) : Promise.resolve(false),
+          traceProject ? deps.appendBoardLog(traceProject, entry) : Promise.resolve(false),
         now
       }),
     subscribeEvents: deps.subscribeReceipts ?? subscribeBus
   }
 
+  // The body. notify's is APP-OWNED (#98): substituted here, in main, whatever the request carried
+  // — the renderer's `--text` refusal is UX, this line is the boundary. The test sends a hostile
+  // body over the IPC shape and asserts it never reaches the envelope. A board comment's is the
+  // comment with each mention token turned into `@<current title>` (read off THIS process's store),
+  // stripped of every control character and capped — `boardCommentBody`, the one rule for it.
+  const titleFor = (id: string): string | undefined =>
+    projects.find((p) => p.id === board?.projectId)?.nodes.find((n) => n.id === id)?.title
+  const body =
+    req.verb === 'board-comment'
+      ? boardCommentBody(commentTextForAgent(req.text, titleFor))
+      : req.verb === 'notify'
+        ? NOTIFY_BODY
+        : req.body
+
   try {
     const outcome = await deliverAgentMessage(
       {
         targetNodeId: req.targetNodeId,
-        sourceNodeId: req.sourceNodeId,
+        sourceNodeId: ident.sourceNodeId,
         // The from-line is composed HERE from the store's title (oneLine'd inside buildEnvelope);
-        // the renderer never supplies a string that ends up inside the frame.
-        sourceTitle: sourceNode?.title || req.sourceNodeId,
-        // notify's body is APP-OWNED (#98): substituted here, in main, whatever the request
-        // carried — the renderer's `--text` refusal is UX, this line is the boundary. The test
-        // sends a hostile body over the IPC shape and asserts it never reaches the envelope.
-        body: req.verb === 'notify' ? NOTIFY_BODY : req.body,
+        // the renderer never supplies a string that ends up inside the frame — except a board
+        // comment's author name, which is the local user's own presence name.
+        sourceTitle: board ? ident.sourceTitle : sourceNode?.title || ident.sourceNodeId,
+        body,
         targetAgentId,
         targetBinaries: binariesFor(targetAgentId, deps.customAgents()),
         targetIsRemote: deps.isRemoteNode(req.targetNodeId),
         notPermitted,
         retryAfterMs,
-        targetLive: await deps.hasLiveSession(req.targetNodeId)
+        targetLive: await deps.hasLiveSession(req.targetNodeId),
+        ...(board ? { origin: 'board-comment' as const } : {})
       },
       delivery
     )
 
     // No await between the record and the release: the recorded send replaces the hold in the
     // same tick, so no concurrent reservation can slip through the seam between them.
-    if (WROTE.has(outcome.kind)) noteSent(req.sourceNodeId, req.targetNodeId, now())
+    if (WROTE.has(outcome.kind)) noteSent(flowSource, req.targetNodeId, now())
     return outcome
   } finally {
     reservation?.release()
@@ -633,6 +719,16 @@ export async function deliverFromControl(
   req: AgentMessageDeliverRequest,
   deps: AgentMessagingDeps
 ): Promise<{ outcome: AgentMessageOutcome; reply: AgentMessageReply }> {
+  return deliverWithQueue(req, deps)
+}
+
+/** `deliverFromControl`'s body, for either origin: attempt, then queue a permitted-but-not-ready
+ *  target when a queue is wired. The queued request carries everything a flush needs to re-run the
+ *  SAME origin's gate chain — a queued board comment flushes as a board comment. */
+async function deliverWithQueue(
+  req: MessagingRequest,
+  deps: AgentMessagingDeps
+): Promise<{ outcome: AgentMessageOutcome; reply: AgentMessageReply }> {
   const answer = (
     outcome: AgentMessageOutcome
   ): { outcome: AgentMessageOutcome; reply: AgentMessageReply } => ({
@@ -642,16 +738,16 @@ export async function deliverFromControl(
   const outcome = await runDelivery(req, deps)
   const queue = deps.queue
   if (queue) {
+    const ident = requestIdentity(req)
     const queued = (hibernated: boolean): Promise<AgentMessageOutcome> =>
       queue.enqueue(
         {
-          verb: req.verb,
-          sourceNodeId: req.sourceNodeId,
-          targetNodeId: req.targetNodeId,
+          ...req,
           // For the trace's `sourceTitle`; the flush re-resolves it from the store like the first
           // attempt did, so this is only ever a label on the queued/expired trace lines.
-          sourceTitle: req.sourceNodeId,
-          body: req.body
+          sourceNodeId: ident.sourceNodeId,
+          sourceTitle: ident.sourceTitle,
+          body: ident.body
         },
         { hibernated }
       )
@@ -662,6 +758,47 @@ export async function deliverFromControl(
       return answer(await queued(true))
   }
   return answer(outcome)
+}
+
+/** The comment currently spending each board's flow budget. A NEW comment starts a new turn for
+ *  its author — the board's fan-out budget resets, exactly as an agent's does on its own `newTurn`.
+ *  Bounded by the number of boards; a lost entry (restart) only means a fresh budget. */
+const boardTurnComment = new Map<string, string>()
+
+/**
+ * Deliver ONE mentioned session's copy of a board comment the local user just posted.
+ *
+ * The ONE caller is the comment composer's send handler (via the desktop's main-window-only IPC
+ * channel). There is deliberately no path from anything that READS the board log to here: a comment
+ * that arrives by git pull, by another instance writing the file, from a relay peer or a
+ * team-presence guest is display-only. Its tokens render as names and never type into a pane.
+ *
+ * Everything is re-derived in this process from the request's text: the addressed session must be
+ * one the text mentions, the body is built from the text, and every gate `send` takes runs here.
+ */
+export async function deliverBoardCommentFromUi(
+  raw: unknown,
+  deps: AgentMessagingDeps
+): Promise<AgentMessageReply> {
+  if (!isBoardCommentDeliverRequest(raw))
+    return { ok: false, error: 'malformed board-comment delivery request. Do not retry.' }
+  const source = boardFlowSource(raw.projectId)
+  if (boardTurnComment.get(source) !== raw.commentId) {
+    noteNewTurn(source)
+    boardTurnComment.set(source, raw.commentId)
+  }
+  const { reply } = await deliverWithQueue(
+    {
+      verb: 'board-comment',
+      projectId: raw.projectId,
+      commentId: raw.commentId,
+      author: raw.author,
+      text: raw.text,
+      targetNodeId: raw.targetNodeId
+    },
+    deps
+  )
+  return reply
 }
 
 /** Guard for the IPC boundary: the request came over a channel, so its shape is asserted here. */

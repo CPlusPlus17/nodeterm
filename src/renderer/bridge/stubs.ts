@@ -573,6 +573,14 @@ export function buildStubApi(): Omit<
       deliver: async () => ({
         ok: false as const,
         error: 'Agent messaging is only available in the desktop app. Do not retry.'
+      }),
+      // A board comment typed here — in a browser tab, or in a relay tab onto another machine — is
+      // display-only on purpose: it never types into a pane. The typed outcome lets the comment row
+      // say so instead of showing nothing.
+      deliverBoardComment: async () => ({
+        ok: false as const,
+        error: 'Board comments reach agents only in the desktop app.',
+        result: { kind: 'notPermitted', reason: 'unsupported-edition' }
       })
     }
   } satisfies Omit<
