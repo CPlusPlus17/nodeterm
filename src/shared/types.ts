@@ -495,6 +495,16 @@ export interface CanvasNodeState {
    */
   issueRef?: import('./github-issue-ref').IssueRef
   /**
+   * The node id of the agent that OPENED this node through a canvas-control open verb
+   * (`open-agent`/`open-claude`/`open-terminal`, `spawn-team`, `verify`) — recorded where that verb
+   * draws its lineage rope. It is what lets the app tell the right agent when this station stops
+   * (@shared/station-notice): a rope alone cannot, because an `--after` station is roped to the
+   * stations it waited on as well, with the same id shape. Git-shared, so hostile input: validated
+   * with `isSafeNodeId` at both serializer seams, and honoured only while the opener's rope to this
+   * node still exists and the opener is a canvas-capable agent node in the same project.
+   */
+  openedBy?: string
+  /**
    * One-shot "Restart on subscription" flag: when set, the next `transport.create` strips gateway +
    * inherited provider env (per `vanillaEnvStripPattern`) so the agent resumes against its own
    * default provider. Set by the clear-env recycle action, cleared after the spawn resolves so an
@@ -805,6 +815,12 @@ export interface BoardLogEvent {
      *  moment — a turn ending (`done`) is NOT a run ending, which is why this is written only when
      *  the node goes. */
     | 'run-ended'
+    /** A station an agent opened stopped, and that agent was told (src/core/agents/
+     *  station-notice.ts). Filed under the RECIPIENT's card — the orchestrator's — because that is
+     *  who has to act on it. `from` = the station's node id, `to` = the reason (a
+     *  `StationFailureReason`, @shared/station-notice), `title` = the station's title as the notice
+     *  carried it (one line, capped). Never any station output. */
+    | 'station-failed'
   from?: string
   to?: string
   /** Column title for column-added/deleted; card title for card-created; outcome for agent-message;
@@ -4071,5 +4087,14 @@ export interface NodeTerminalApi {
    *  already rendered as a control reply — Canvas forwards it verbatim. */
   agentMessage: {
     deliver(req: AgentMessageDeliverRequest): Promise<AgentMessageReply>
+  }
+  /** Station-failure notices (@shared/station-notice, src/core/agents/station-notice.ts): the
+   *  chips on an orchestrator whose stations stopped, and the renderer's DROPPED verdicts, which
+   *  are the one trigger fact core cannot measure. Desktop and Server Edition are real; a relay
+   *  tab's stations belong to the host's core, so there it is inert. */
+  stationNotice: {
+    list(): Promise<import('./station-notice').StationNoticeView[]>
+    onChanged(cb: (views: import('./station-notice').StationNoticeView[]) => void): () => void
+    reportDropped(nodeId: string, dropped: boolean): void
   }
 }

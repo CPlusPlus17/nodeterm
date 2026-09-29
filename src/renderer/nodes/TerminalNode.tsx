@@ -220,6 +220,7 @@ import { codexApprovalCaps } from '../state/codexCli'
 import { useAgentStatus, agentStatusForApi, inferInterruptAfterSettle } from '../state/agentStatus'
 import { useLaunchDelivery } from '../state/launchDelivery'
 import { erroredDeps, launchTooltip } from '../lib/pendingLaunch'
+import { StationFailedChip } from '../components/StationFailedChip'
 import { prHoldExpired, prHoldSummary } from '../lib/prWait'
 import { pullBoardFor, useGitHubIssues } from '../state/githubIssues'
 import type { AgentState } from '@shared/agents/normalize'
@@ -5912,6 +5913,14 @@ export function TerminalNode({
             thing on any surface that tells an errored station apart from one that finished. It
             clears itself on the next genuine turn. Shown beside a `done`/unknown state only: a
             live RUNNING/NEEDS YOU is about the CURRENT turn and speaks for itself. */}
+        {/* STATION FAILED: a station THIS agent opened has stopped, and this agent was told
+            (src/core/agents/station-notice.ts). Shown on the orchestrator, not the station — the
+            station already wears its own TURN FAILED / DROPPED / NEEDS YOU. */}
+        <StationFailedChip
+          nodeId={id}
+          className="term-node__status term-node__status--station-failed nodrag"
+          dot
+        />
         {status?.lastTurnError && status?.state !== 'working' && (
           <span
             className="term-node__status term-node__status--errored"

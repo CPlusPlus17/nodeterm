@@ -856,6 +856,17 @@ const api: NodeTerminalApi = {
   sendHostChatReply: (reply) => ipcRenderer.send(IPC.hostChatReply, reply),
   agentMessage: {
     deliver: (req) => ipcRenderer.invoke(IPC.agentMessageDeliver, req)
+  },
+  stationNotice: {
+    list: () => ipcRenderer.invoke(IPC.stationNoticeList),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, views: Parameters<typeof cb>[0]) => cb(views)
+      ipcRenderer.on(IPC.stationNoticeChanged, handler)
+      return () => ipcRenderer.removeListener(IPC.stationNoticeChanged, handler)
+    },
+    reportDropped: (nodeId, dropped) => {
+      void ipcRenderer.invoke(IPC.stationNoticeDropped, nodeId, dropped).catch(() => undefined)
+    }
   }
 }
 

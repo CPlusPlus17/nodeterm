@@ -280,3 +280,43 @@ describe('team membership survives the canvas pruning its ropes', () => {
     expect(stations(loaded, ['B', 'N']).size).toBe(0)
   })
 })
+
+describe('a recorded opener (data.openedBy) decides which rope names it', () => {
+  it('closes the markLegacyWaitRopes residual: a surviving wait is not promoted to opener', () => {
+    // Saved pruned before waits were marked: O (deleted) opened B and C, C waited on B. Only the
+    // wait survived, unmarked. By ropes alone it reads as "B opened C".
+    const file = [rope('B', 'C')]
+    const legacy = stationsByOpener(file, [term('B'), term('C')])
+    expect(legacy.get('B')?.map((s) => s.id)).toEqual(['C'])
+    const recorded = stationsByOpener(file, [term('B'), term('C', { openedBy: 'O' })])
+    expect(recorded.size).toBe(0)
+  })
+
+  it('the recorded opener\'s rope claims the node even when another rope comes first', () => {
+    const ropes = [rope('X', 'C'), rope('O', 'C')]
+    const map = stationsByOpener(ropes, [term('X'), term('O'), term('C', { openedBy: 'O' })])
+    expect(map.get('O')?.map((s) => s.id)).toEqual(['C'])
+    expect(map.has('X')).toBe(false)
+  })
+
+  it('the rope keeps it in force: no opener rope, no team, whatever the field says', () => {
+    const map = stationsByOpener([], [term('O'), term('C', { openedBy: 'O' })])
+    expect(map.size).toBe(0)
+  })
+
+  it('a hostile or self-naming field is ignored and the rope rule applies', () => {
+    for (const openedBy of ['../O', 42, 'C', '']) {
+      const map = stationsByOpener([rope('O', 'C')], [term('O'), term('C', { openedBy })])
+      expect(map.get('O')?.map((s) => s.id)).toEqual(['C'])
+    }
+  })
+
+  it('both node readers carry the field through', async () => {
+    const { stationNodeFromFlow, stationNodeFromState } = await import('../state/teamStations')
+    expect(
+      stationNodeFromFlow({ id: 'C', type: 'terminal', position: { x: 0, y: 0 }, data: { openedBy: 'O' } } as never)
+        .openedBy
+    ).toBe('O')
+    expect(stationNodeFromState({ id: 'C', kind: 'terminal', openedBy: 'O' } as never).openedBy).toBe('O')
+  })
+})

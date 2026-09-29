@@ -71,12 +71,15 @@ import { appendBoardLogVia, registerBoardLogHandlers, type BoardLogRoute } from 
 import {
   createDeliveryQueue,
   deliverFromControl,
+  deliverStationNotice,
   isDeliverRequest,
   messagingEnabledVia,
   onMessagingAgentEvent,
   setDeliveryQueue,
   type AgentMessagingDeps
 } from '../core/agents/agent-messaging'
+import { registerStationNoticeIpc, StationNoticeMonitor } from '../core/agents/station-notice'
+import { stationRecipient } from '../shared/station-notice'
 import type { RemoteLogExec } from '../core/board-log'
 import type { PtyCreateOptions, TranscriptPresence } from '../shared/types'
 import { boardLogRemotePath } from '../core/board-log'
@@ -1904,6 +1907,31 @@ app.whenReady().then(async () => {
     return reply
   })
 
+  // Station-failure notices (src/core/agents/station-notice.ts): when a station an agent opened
+  // stops — its turn errored, its CLI died, or it sat on an unanswered prompt while the agent that
+  // opened it idled — that agent is told ONCE. The recipient comes from MAIN's persisted canvases
+  // (the station's `openedBy` plus that agent's rope to it), never from the renderer; the canvas
+  // leg (board-log line + chip) needs no switch, the pane leg is the messaging service above with
+  // every one of its gates, the per-project `agentMessaging` switch included.
+  const stationNotices = new StationNoticeMonitor({
+    now: () => Date.now(),
+    recipientFor: (id) => stationRecipient(workspaceStore.persistedCanvases(), id),
+    // The mirror's correlated, unanswered question — the one fact that says a station is really
+    // waiting on a human (station-notice.ts: permission prompts are not a trigger).
+    pendingQuestionOf: (id) => mirrorEntry(id)?.pendingQuestion?.toolUseId,
+    appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry),
+    deliver: (notice) => deliverStationNotice(notice, messagingDeps),
+    publish: (views) => sendToMain(IPC.stationNoticeChanged, views),
+    // The memoized index scan, not `getNode` (which re-parses a project file per call): the sweep
+    // asks this for every node it tracks.
+    exists: (id) => workspaceStore.projectIdsForNode(id).length > 0
+  })
+  stationNotices.start()
+  // A queued notice's final outcome (flushed or expired) comes back here, so its chip never says
+  // "queued" about a message that has since landed or lapsed.
+  messagingDeps.onQueuedResult = (req, outcome) => stationNotices.onQueuedResult(req, outcome)
+  registerStationNoticeIpc(corePlatform, () => stationNotices)
+
   ipcMain.handle(IPC.dialogSelectFolder, async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
     return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]
@@ -2822,6 +2850,9 @@ app.whenReady().then(async () => {
     // Agent messaging taps the SAME stream: the sender's newTurn resets its fan-out budget, and
     // an open delivery receipt watch is satisfied by the target's verified advance.
     onMessagingAgentEvent(enriched)
+    // …and so does the station-failure monitor: an errored turn, a needs-you edge, and the
+    // successful turn that re-arms a station's notice all ride this one stream.
+    stationNotices.onAgentEvent(enriched)
   }
   hookServer.setListener(emitAgentStatus)
   // Deterministic hook-reply approvals (docs/hook-reply-approvals.md): the canvas Approve/Deny

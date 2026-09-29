@@ -2149,6 +2149,26 @@ body,
   color: var(--state-automation);
 }
 
+/* STATION FAILED: a station this agent opened has stopped and the agent was told
+   (station-notice.ts). On the ORCHESTRATOR, in the danger colour like TURN FAILED — a station's
+   work did not happen — and like DROPPED a <button> (click = go to the station), so it needs the
+   same base-chip reset. No pulse: it is a verdict, not a wait. */
+.term-node__status--station-failed {
+  color: var(--danger);
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+
+.term-node__status--station-failed:hover {
+  color: var(--text);
+}
+
 /* DROPPED: the agent process is gone and nothing accounted for it (see agent-liveness.ts). Warn
    colour, not danger — the conversation is intact on disk and one click brings it back — and the
    dot does NOT pulse: nothing is happening, this is a verdict about a process that already died.
@@ -11408,6 +11428,12 @@ button.pull-checks__name {
   color: var(--warn);
   background: color-mix(in srgb, var(--state-warning) 12%, transparent);
 }
+.kanban-badge--station-failed {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--state-error) 12%, transparent);
+  border: none;
+  cursor: pointer;
+}
 .kanban-card__unread {
   width: 7px;
   height: 7px;
@@ -15565,7 +15591,7 @@ body.focus-mode .dock:hover {
 :root[data-nt-glass='on'] .kanban-badge--running {
   color: var(--state-working);
 }
-:root[data-nt-glass='on'] :is(.kanban-badge--running, .kanban-badge--needs, .kanban-badge--dropped) {
+:root[data-nt-glass='on'] :is(.kanban-badge--running, .kanban-badge--needs, .kanban-badge--dropped, .kanban-badge--station-failed) {
   -webkit-text-fill-color: var(--text);
   background: color-mix(in srgb, currentColor 24%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 55%, transparent);

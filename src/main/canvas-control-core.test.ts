@@ -14,6 +14,12 @@ import {
   CODEX_SANDBOX_RETRY_LINE
 } from '../core/agents/hook-sandbox-hint-sh'
 import { RETRYABLE } from '../core/agents/agent-message-decide'
+import {
+  STATION_NOTICE_COMMON_OPTIONS,
+  STATION_QUESTION_NOTICE_MS,
+  STATION_TRIGGERS
+} from '../shared/station-notice'
+import { STATION_NOTICE_FROM } from '../shared/agents/agent-messaging'
 import { FOREIGN_ENDPOINT_HINT, OWNER_UNREACHABLE_LEAD, TUNNEL_DOWN_HINT } from '../core/agents/hook-endpoint-failover-sh'
 import { PROJECT_TARGETABLE_VERBS } from '../core/project-grants'
 import { DRY_RUN_VERBS } from '../shared/control-verbs'
@@ -666,6 +672,38 @@ describe('parseControlRequest', () => {
       const word = new RegExp(`\\b${kind}\\b`)
       expect(word.test(retryable ? yesSection : noSection), `${kind} in its group`).toBe(true)
       expect(word.test(retryable ? noSection : yesSection), `${kind} not in the other`).toBe(false)
+    }
+  })
+
+  // --- station-failure notices (src/core/agents/station-notice.ts) ------------------------------
+  // The agent that opened a station is told when it stops — the text it reads about that must be
+  // the TABLE's, so a reason or a retry sentence changed in @shared/station-notice lands here the
+  // day it changes, and a stale claim about the contract reddens.
+  it('both agent-facing texts explain station notices, rendered from the trigger table', () => {
+    for (const body of [buildCanvasSkillBody('/x/shim.sh'), buildCanvasControlInstructions('/tmp/nodeterm.sh')]) {
+      const at = body.indexOf('Station notices')
+      expect(at, 'the section exists').toBeGreaterThan(-1)
+      const section = body.slice(at, body.indexOf('\n\n', at))
+      // Every reason, with the label the notice itself carries, and its own retry.
+      for (const row of STATION_TRIGGERS) {
+        expect(section).toContain(`\`${row.reason}\`: ${row.label}.`)
+        expect(section).toContain(
+          `\`${row.reason}\` → ${row.option}: ${row.retry.replace(/<station>/g, '<station id>')}`
+        )
+      }
+      for (const [name, text] of STATION_NOTICE_COMMON_OPTIONS)
+        expect(section).toContain(`- ${name}: ${text.replace(/<station>/g, '<station id>')}`)
+      // The contract an orchestrator acts on: once, re-armed by success; the switch; the frame.
+      expect(section).toMatch(/told ONCE per station/)
+      expect(section).toMatch(/until that station completes a turn successfully/)
+      expect(section).toMatch(/agent-messaging switch is on[\s\S]*off by default/)
+      expect(section).toContain(`\`${STATION_NOTICE_FROM} (<station id>)\``)
+      expect(section).toMatch(/quotes nothing the station produced/)
+      expect(section).toContain(`you hear after ${Math.round(STATION_QUESTION_NOTICE_MS / 60_000)} minutes`)
+      // …and the honest limit: a permission prompt is never a notice.
+      expect(section).toMatch(/A PERMISSION prompt[\s\S]*is never a notice/)
+      // The Server Edition's ownership rule, in the same words it keeps for every verb.
+      expect(section).toMatch(/stations you opened during this server run/)
     }
   })
 

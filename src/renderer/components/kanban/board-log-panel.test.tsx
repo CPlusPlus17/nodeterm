@@ -37,4 +37,16 @@ describe('eventBody — the activity sentence', () => {
   it('a run line survives a malformed run record from a hand-edited log', () => {
     expect(eventBody({ type: 'run-ended', run: { nodeId: 42 } as never })).toBe('closed a session')
   })
+
+  it('renders a station notice from the closed reason table, never from the station', () => {
+    expect(
+      eventBody({ type: 'station-failed', from: 'st1', to: 'turn-errored', title: 'Worker' })
+    ).toBe(
+      'told this agent that station "Worker" (st1) stopped: its last turn ended on an API/model error and produced nothing'
+    )
+    // An unknown reason code (a newer peer, a hand edit) reads as a plain "stopped".
+    expect(eventBody({ type: 'station-failed', from: 'st1', to: 'rm -rf ~' })).toBe(
+      'told this agent that station st1 stopped: it stopped'
+    )
+  })
 })

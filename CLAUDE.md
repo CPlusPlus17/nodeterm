@@ -3682,6 +3682,91 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   caller's. The judge is armed on ids that exist only in that tick, which is why `armAfter` takes
   `extraLive` — without it the reviewers would look *deleted*, deletion counts as satisfied, and
   the judge would fire before a single review existed.
+  **Station-failure notices (2026-09, `src/core/agents/station-notice.ts` + the pure
+  `@shared/station-notice`):** when a station an agent OPENED stops, that agent is told ONCE,
+  with its options (retry or wait / reassign / skip / stop), instead of having to poll `list`.
+  Load-bearing rules:
+  - **The trigger is a closed table (`STATION_TRIGGERS`), first match wins:** `dropped` (the
+    renderer's DROPPED verdict, about a station core does not know to be mid-turn or asking),
+    `turn-errored` (a verified `done` carrying `errored`; a verified new turn OR a clean `done`
+    retires it — it describes the LAST turn), `question-unanswered` (the status mirror still holds
+    the station's correlated `pendingQuestion` 15 min after the verified event that asked it,
+    `STATION_QUESTION_NOTICE_MS`, AND the recipient's own verified state is `done`). An unknown
+    never triggers, and only VERIFIED events move a station: a notice leads an orchestrator to
+    retry, reassign or END a workflow, so a forgeable event is not evidence. 15 min because the
+    human already got NEEDS YOU + a notification; an orchestrator reassigning seconds before the
+    user answers doubles the work.
+  - **A permission prompt is NEVER a trigger, and that is a measurement, not caution.** On the main
+    thread Claude paints its dialog CONCURRENTLY with our held hook (docs/hook-reply-approvals.md),
+    and an approval given in the pane fires nothing until the approved tool FINISHES — so neither
+    `blocked` nor a `pendingId` can tell "unanswered" from "approved, twenty-minute build running",
+    and a notice there invites the orchestrator to close a working station. A question can be told
+    apart: its answer is a tool result, and the mirror's `pendingQuestion` is held across unrelated
+    traffic until it arrives. The monitor reads it through `pendingQuestionOf` (required dep)
+    rather than re-deriving it.
+  - **Once per episode, re-armed ONLY by a successful turn** — a turn that started after the notice
+    and ended `done` with no error, no interruption and not the idle-prompt rescue — and the re-arm
+    clears every fact the episode was about (error, DROPPED, question), or the next sweep re-fires
+    it. The condition merely clearing does not re-arm: a usage-limited station fails again on
+    every retry, and re-notifying each time would be a loop that burns the orchestrator's turns
+    all night. The notice says so in its own text.
+  - **Core withdraws DROPPED itself, on ANY verified hook event from the node** (the CLI speaking
+    from inside the pane — the renderer's own self-heal in `agentStatus.setState`). It must not
+    wait for the renderer's `reportDropped(false)`: the renderer's record of what it reported and
+    its transient flag both die with a reload (⌘R, a Server Edition tab closing), and a verdict
+    nobody withdraws re-fired on the healthy station after its next successful turn — typed into
+    the orchestrator with "reassign: close it" as an option (the independent review's blocker).
+  - **The recipient is the OPENER, and a rope alone cannot name it.** An `--after` station is roped
+    to every station it waited on as well as to its opener, with the same `ctrl-<src>-<dst>` id, so
+    "the other end of the rope" can be a sibling that opened nothing. The open verbs therefore
+    STAMP `data.openedBy` where they draw the opener's rope (`connect` for the live paths —
+    addAndConnect, verify, spawn-team — plus the off-canvas and cold-open writes; pure helper
+    `lib/stationOpener.ts`), and `stationRecipient` requires BOTH: `openedBy` names a canvas-capable
+    agent node in the same (single) project, AND that node's OPENER rope to the station still
+    exists — never a `ctrl-after-` wait rope (deleting the rope detaches the station). Never a bridge-linked node. `openedBy` is git-shared,
+    so `safeOpenedBy` (`isSafeNodeId`) runs at both serializer seams, and a duplicate drops it. A
+    node opened before this build has no `openedBy` and is never attributed (no guessing).
+  - **Server Edition: the creator LEDGER is the recipient rule** (`stationRecipientFromOwner` over
+    `factory.openerOf`) — only stations opened during the current server run, the same creator rule
+    as every other verb there; a restart clears it.
+  - **Two legs.** The canvas leg needs no switch: a `station-failed` board-log line on the
+    RECIPIENT's card (`from` = station id, `to` = reason code, `title` = the capped one-line
+    title; in `NEVER_COLLAPSE`) and a STATION FAILED chip (`components/StationFailedChip.tsx`, one
+    component on the node header and the card modal; the tooltip says whether the pane leg landed,
+    so "stayed on the canvas because messaging is off" is visible). The pane leg is
+    `deliverStationNotice` = the messaging service's WHOLE gate chain (scope, the per-project
+    `agentMessaging` switch — off by default ⇒ canvas only — runtime pane ownership, flow limits,
+    idle gate + deliver-on-idle queue, receipt, trace) under an internal verb
+    `STATION_NOTICE_VERB` that is deliberately NOT in `AGENT_MESSAGE_VERBS`, so neither the IPC
+    guard nor the shim can ask for a notice with a body of its choosing. The pane leg is followed to
+    its END so the chip never says "queued" about a message that landed or lapsed: a queued
+    notice's flush or expiry comes back through `AgentMessagingDeps.onQueuedResult` (called from
+    `createDeliveryQueue`, read at call time). Two outcomes get exactly ONE more attempt, each
+    because it would otherwise lose the pane leg for a reason unrelated to the notice:
+    `rateLimited` (the station `send`s its result, then errors seconds later — the pair budget is
+    spent) retries after the limiter's wait, capped at 60 s; an expiry (the orchestrator stayed busy
+    past the queue's 5-min TTL) is offered again on the orchestrator's next verified `done`. Two differences from
+    `send`, both because the APP is the author: the body is `stationNoticeBody` (fixed text from
+    the table; the only station-influenced string is the title, `oneLine`d, capped at 80, quoted,
+    and labelled data — NO station output is ever quoted), and the Server Edition's creator check
+    runs reversed (`callerOwnsTarget(recipient, station)`). The pane leg honouring the switch is
+    deliberate: the app typing into an agent's session is the capability that switch grants.
+  - **DROPPED is the renderer's fact** (it needs `hibernated`/`paused`), forwarded as EDGES by
+    `lib/stationNoticeWiring.ts` over `stationNotice.reportDropped`; the monitor never measures a
+    pane. Both request channels are in `HOST_ONLY_CHANNELS`: a relay guest never measured the
+    host's panes (its tab takes the inert stub), so a raw DROPPED report from one is a spoofed
+    verdict, and `station-notice:list` is unscoped — every project's failed-station ids and titles
+    — which a guest bound to one project must not read. It is therefore only as available as the liveness check, which asks for WATCHED nodes:
+    a station that dies off screen is noticed when it next comes into view, and a Server Edition
+    with no browser tab attached reports no DROPPED at all. Widening the check to unwatched
+    stations costs one pane read per finished station per 30 s (an ssh exec on SSH projects) and
+    is a deliberate follow-up, not an oversight.
+  - **Both shells wire it and nothing type-checks that:** desktop main feeds
+    `stationNotices.onAgentEvent(enriched)` from `emitAgentStatus`; the server's canvas-control
+    `onAgentEvent` feeds its own monitor; both call `registerStationNoticeIpc`. Pinned at source
+    level by `main/station-notice-wiring.test.ts`, along with every stamping site. Relay tabs take
+    the inert stub (a relay tab's stations are the host's). Mobile: N/A — the notice reaches the
+    orchestrator's pane, which the phone's chat view already shows.
 - **Context Link** — a node action gated by `CONTEXT_LINK_CAPABLE` (claude/codex/gemini/opencode/grok;
   custom agents + plain terminals excluded). **grok joined in 2026-09, and the file matters:** its
   readable conversation is `chat_history.jsonl`, NOT the `updates.jsonl` its own hook payloads
@@ -6072,8 +6157,11 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     the next one as its team, a verify panel's reviewed node showed its reviewers. Canvases saved
     before the mark are re-marked at LOAD by append order (`markLegacyWaitRopes`: every rope into a
     node after its first is a wait), which must run before the prune; one already pruned and saved
-    has lost that evidence (residual). Tests run the canvas's load → heal → prune steps before
-    `stationsByOpener`. Rules the count keeps: **unknown is unknown, never done** (state is
+    has lost that evidence. **A node that records its opener (`data.openedBy`, the station-notice
+    stamp) closes that residual**: only the recorded opener's rope may claim it, so a surviving
+    wait is never promoted; the rope still has to exist (delete it and the station leaves the team,
+    the same pair the station-failure notice reads). Nodes opened before the field keep the rope
+    rule. Tests run the canvas's load → heal → prune steps before `stationsByOpener`. Rules the count keeps: **unknown is unknown, never done** (state is
     transient; after a restart a station reads `unknown` until it reports), paused/hibernated count
     as a finished turn (both come only from an exit that refuses a working or blocked session), a
     CLI that announced its exit (`sessionEnded`) reads `ended` and counts (it is not running and

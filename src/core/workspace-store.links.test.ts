@@ -111,4 +111,35 @@ describe('the canvas links are admitted on every load seam', () => {
     expect(canvases.map((c) => c.id)).toEqual(['p1', 'p2'])
     for (const c of canvases) expect(c.bridges).toEqual([rope('a', 'b')])
   })
+
+  it('persistedCanvases hands the station-notice recipient rule only readable ropes', async () => {
+    // `stationRecipient` reads each rope's source/target; a hand-edited `null` would throw there.
+    await fs.mkdir(path.join(projRoot, '.nodeterm'), { recursive: true })
+    await fs.writeFile(
+      path.join(projRoot, '.nodeterm', 'project.json'),
+      JSON.stringify({
+        version: 1, rev: 3, savedAt: '2026-09-29T00:00:00.000Z', id: 'legacy', name: 'bar',
+        color: '#7aa2f7', viewport: { x: 0, y: 0, zoom: 1 }, nodes: [], ropes: HOSTILE
+      }),
+      'utf-8'
+    )
+    await writeIndex({
+      version: 3,
+      activeProjectId: 'p1',
+      entries: [
+        {
+          id: 'p1', name: 'foo', color: '#7aa2f7',
+          project: {
+            id: 'p1', name: 'foo', color: '#7aa2f7', viewport: { x: 0, y: 0, zoom: 1 }, nodes: [],
+            ropes: HOSTILE
+          }
+        },
+        { id: 'p2', name: 'bar', color: '#7aa2f7', cwd: projRoot }
+      ]
+    })
+    const store = new WorkspaceStore()
+    await store.load()
+    // Read the RAW index/file legs, not an admitted project (see persistedCanvases' own comment).
+    for (const c of store.persistedCanvases()) expect(c.ropes).toEqual([rope('a', 'b')])
+  })
 })

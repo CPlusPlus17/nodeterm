@@ -1634,16 +1634,37 @@ export class WorkspaceStore {
    * project.json, so a project whose file has never been read this run is simply absent (it
    * appears after the next load/save, which is also what re-derives the map).
    */
-  // `bridges` goes through `sanitizeLinks` on all three legs: the index entry and the last-written
-  // file are the raw, hand-editable JSON (not the admitted project), and the context-link map
-  // built from this (`buildBackgroundLinkMaps`) iterates every entry.
-  persistedCanvases(): Array<{ id: string; nodes: CanvasNodeState[]; bridges?: BridgeLink[] }> {
-    const out: Array<{ id: string; nodes: CanvasNodeState[]; bridges?: BridgeLink[] }> = []
+  // `bridges` and `ropes` go through `sanitizeLinks` on all three legs: the index entry and the
+  // last-written file are the raw, hand-editable JSON (not the admitted project), and the
+  // context-link map built from this (`buildBackgroundLinkMaps`) iterates every entry — as does the
+  // station-failure notice's recipient rule (`stationRecipient`), which reads the ropes.
+  persistedCanvases(): Array<{
+    id: string
+    nodes: CanvasNodeState[]
+    bridges?: BridgeLink[]
+    ropes?: BridgeLink[]
+  }> {
+    const out: Array<{
+      id: string
+      nodes: CanvasNodeState[]
+      bridges?: BridgeLink[]
+      ropes?: BridgeLink[]
+    }> = []
     for (const e of this.index?.entries ?? []) {
       if (e.project) {
-        out.push({ id: e.project.id, nodes: e.project.nodes, bridges: sanitizeLinks(e.project.bridges) })
+        out.push({
+          id: e.project.id,
+          nodes: e.project.nodes,
+          bridges: sanitizeLinks(e.project.bridges),
+          ropes: sanitizeLinks(e.project.ropes)
+        })
       } else if (e.cache) {
-        out.push({ id: e.id, nodes: e.cache.nodes, bridges: sanitizeLinks(e.cache.bridges) })
+        out.push({
+          id: e.id,
+          nodes: e.cache.nodes,
+          bridges: sanitizeLinks(e.cache.bridges),
+          ropes: sanitizeLinks(e.cache.ropes)
+        })
       } else if (e.cwd) {
         const raw = this.lastWritten.get(projectFilePath(e.cwd))
         if (!raw) continue
@@ -1653,7 +1674,12 @@ export class WorkspaceStore {
           // a caller sees the same absolute paths the desktop's renderer would have handed it.
           // Keyed by the ENTRY id — the map's consumers look projects up by the id the renderer
           // knows, which is never the git-shared file's (it no longer has one).
-          out.push({ id: e.id, nodes: resolveNodes(f.nodes, e.cwd), bridges: sanitizeLinks(f.bridges) })
+          out.push({
+            id: e.id,
+            nodes: resolveNodes(f.nodes, e.cwd),
+            bridges: sanitizeLinks(f.bridges),
+            ropes: sanitizeLinks(f.ropes)
+          })
         } catch {
           // Corrupt cached content: skip this entry, keep scanning the others.
         }

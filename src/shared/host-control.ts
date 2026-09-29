@@ -25,6 +25,12 @@ import { IPC } from './ipc'
  *    node's session with no viewer and types its launch on the host. The relay guest's own bridge
  *    already refuses it (a relay tab inherits ws-bridge's `pty`), and this makes the refusal hold
  *    host-side for a peer that sends the raw request (spec §6: "Relay tab | Refuses").
+ *  - `station-notice:dropped` — a DROPPED verdict makes the host tell an orchestrator, possibly in
+ *    its own session, that one of its stations died. It is a pane measurement only the HOST's
+ *    renderer makes (a relay tab takes the inert stub), so a guest sending it is claiming a fact
+ *    about the host's panes it never measured.
+ *  - `station-notice:list` — every project's failed-station ids and titles, unscoped. A relay tab
+ *    never asks (it takes the inert stub), and a guest bound to ONE project must not read the rest.
  *
  * DELIBERATELY NOT LISTED: `project-setup:subscribe`/`unsubscribe` and the `project-setup:event:*`
  * push. They neither start nor authorize anything, and a peer that can see the canvas can already
@@ -41,7 +47,9 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.projectSetupCancel,
   IPC.projectSetupConsentSubmit,
   IPC.projectSetupRequestTrust,
-  IPC.ptyLaunchHeadless
+  IPC.ptyLaunchHeadless,
+  IPC.stationNoticeDropped,
+  IPC.stationNoticeList
 ])
 
 /** What a refused peer is told. One wording, so the two shells answer identically. */
