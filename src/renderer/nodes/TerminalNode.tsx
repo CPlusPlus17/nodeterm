@@ -47,6 +47,9 @@ import {
   createUrlLinkProvider,
   installLinkClickFallback,
   installLinkContextMenu,
+  cachedCwd,
+  findExistingPath,
+  missingFileMessage,
   makeDirListingLookup
 } from '../terminal/file-links'
 import { linkMenuItems, resolveLinkTarget, type LinkMenuTarget } from '../terminal/link-menu'
@@ -3124,6 +3127,15 @@ export function TerminalNode({
         pathConvention
       )
       const getCwd = (): string | undefined => (data.cwd as string | undefined) || undefined
+      // The pane's CURRENT directory — the second anchor for a relative path (see CwdSources).
+      const getLiveCwd = cachedCwd(() => api.pty.paneCwd(id))
+      const onMissingFile = (token: string, tried: string[]): void => {
+        window.dispatchEvent(
+          new CustomEvent('nodeterm:toast', {
+            detail: { kind: 'error', message: missingFileMessage(token, tried) }
+          })
+        )
+      }
       const openFile = (abs: string, isDir: boolean): void => {
         if (isDir) window.dispatchEvent(new CustomEvent('nodeterm:reveal-file', { detail: { path: abs } }))
         else
@@ -3134,6 +3146,7 @@ export function TerminalNode({
       term.registerLinkProvider(
         createFileLinkProvider(term, {
           getCwd,
+          getLiveCwd,
           lookup,
           activate: openFile,
           convention: pathConvention
@@ -3146,8 +3159,10 @@ export function TerminalNode({
       if (term.element) {
         installLinkClickFallback(term, term.element, {
           getCwd,
+          getLiveCwd,
           lookup,
           activateFile: openFile,
+          onMissing: onMissingFile,
           openUrl: (uri) => window.nodeTerminal.shell.openExternal(uri),
           fileEnabled: () => pathConvention() !== null,
           convention: pathConvention
@@ -3156,10 +3171,13 @@ export function TerminalNode({
         // same routed lookup; the menu itself is state on whichever instance is mounted now.
         installLinkContextMenu(term, term.element, {
           getCwd,
+          getLiveCwd,
           fileEnabled: () => pathConvention() !== null,
           convention: pathConvention,
           openMenu: (hit, x, y) =>
-            void resolveLinkTarget(hit, lookup).then((target) =>
+            void resolveLinkTarget(hit, (token) =>
+              findExistingPath(token, pathConvention() ?? {}, { getCwd, getLiveCwd, lookup })
+            ).then((target) =>
               linkMenuSubs.get(termKey)?.(target, x, y)
             )
         })

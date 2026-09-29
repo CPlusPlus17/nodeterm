@@ -1369,7 +1369,13 @@ session.
   all terminals — harmless in a plain shell). **Cmd (mac) / Ctrl+click** opens links in the
   output: URLs → default browser (`@xterm/addon-web-links`), file paths → editor node and
   directories → Explorer reveal (`terminal/file-links.ts`, existence-verified against the project
-  fs via cached parent-dir listings, with `path:line[:col]` compiler-output suffixes). The path
+  fs via cached parent-dir listings, with `path:line[:col]` compiler-output suffixes). A relative
+  path is anchored on the node's LAUNCH cwd first, then on the pane's LIVE cwd (`pty:pane-cwd` —
+  tmux `#{pane_current_path}`, local or over the ControlMaster; `findExistingPath`), because an
+  agent prints paths relative to where IT runs; the launch cwd wins a tie so a link never changes
+  meaning when the pane moves. A Cmd/Ctrl+click on a path that exists under neither raises a
+  `File not found: …` toast naming where it looked — the click is swallowed before the async
+  lookup, so without it the gesture silently did nothing. The path
   dialect follows the FILESYSTEM-OWNING CORE, not the viewer: desktop-local may use its own
   platform, Server Edition and relay tabs use the core's reported `process.platform`, and SSH
   projects are POSIX. A failed host-platform read disables file links for that connection — it

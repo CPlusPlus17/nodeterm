@@ -1173,6 +1173,10 @@ export interface PtyApi {
    *  node persistKey. null when it is unknown — no session, no tmux, or the query failed — which
    *  callers must read as "not observed", never as evidence of a particular command. */
   paneCommand(persistKey: string): Promise<string | null>
+  /** The live working directory of a node's pane (`#{pane_current_path}`). null when unknown —
+   *  no session, no tmux, the session-host backend, a failed query, or a surface that does not
+   *  serve it (relay tabs) — and never a rejection. Used as the second cwd for file links. */
+  paneCwd(persistKey: string): Promise<string | null>
   /**
    * Desktop only (#925). Spawn-or-attach a node's session with no viewer and deliver `command`
    * through the echo-verified writer, then release the synthetic client (the tmux session keeps
