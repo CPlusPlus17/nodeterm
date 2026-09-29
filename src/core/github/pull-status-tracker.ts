@@ -30,7 +30,6 @@ import {
 import type { PullStatusRead } from './graphql-pulls'
 import {
   claimInMemory,
-  claimKey,
   emptyPullMemory,
   noteWaitsInMemory,
   rememberPulls,
@@ -137,21 +136,18 @@ export class GitHubPullStatusTracker {
   }
 
   /**
-   * The one-time permission to move a card for a set of merged PRs. The first caller for a key wins,
-   * whichever window it comes from, and the claim is persisted — a card the user dragged back is not
-   * moved again for the same merges. Refused unless this card was noted WAITING on one of those PRs
-   * while it was open (`noteWaits`): a card that first appeared after the merge never moves.
+   * The one-time permission to move a card for a set of merged PRs. The first caller wins, whichever
+   * window it comes from, and the claim is persisted PER PR — a card the user dragged back is not
+   * moved again for the same merges, even when the linked set later shrinks or grows. Refused unless
+   * the set holds a PR that has not moved this card yet and that this card was noted WAITING on while
+   * it was open (`noteWaits`): a card that first appeared after the merge never moves.
    */
   async claimMove(key: string, projectId: string, cardId: string, pulls: number[]): Promise<boolean> {
     const state = this.stateFor(key)
     const generation = state.generation
     const memory = await this.memoryFor(key, state)
     if (generation !== state.generation) return false
-    const { memory: next, claimed } = claimInMemory(
-      state.memory ?? memory,
-      claimKey(projectId, cardId, pulls),
-      pulls.map((pull) => waitKey(projectId, cardId, pull))
-    )
+    const { memory: next, claimed } = claimInMemory(state.memory ?? memory, projectId, cardId, pulls)
     if (!claimed) return false
     state.memory = next
     this.persist(key, state)
