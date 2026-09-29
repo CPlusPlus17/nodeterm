@@ -1,5 +1,11 @@
 import type { ReactNode } from 'react'
-import type { IssueWorktreeExisting, IssueWorktreeTarget } from '@shared/issue-worktree'
+import type {
+  IssueWorktreeBoundGroup,
+  IssueWorktreeExisting,
+  IssueWorktreeTarget
+} from '@shared/issue-worktree'
+import { boundGroups, type ScmScopeNode } from '@shared/scm-scope'
+import { normWorktreePath } from '@shared/worktree-reconcile'
 import type { MenuItem } from '../components/ContextMenu'
 import { WORKTREE_NO_CWD_HINT, WORKTREE_SSH_HINT } from './addMenuSpec'
 import { groupSizeFor, groupSlot } from './coldOpen'
@@ -88,7 +94,7 @@ export function issueWorktreeChoiceCopy(
 
 /** The notice after a start that created a worktree under a different name than the usual one. */
 export function issueWorktreeRenamedNotice(wanted: string, created: string): string {
-  return `${wanted} was already taken (a branch or folder of that name exists), so the new worktree is ${created}.`
+  return `${wanted} was already taken (a local or remote branch, or a folder, of that name exists), so the new worktree is ${created}.`
 }
 
 /** What the canvas answers for one issue card: the agent rows, or why there are none. */
@@ -146,4 +152,29 @@ export async function runExclusive(
     inFlight.delete(key)
   }
   return true
+}
+
+/** The reuse-or-new dialog's state. */
+export interface IssueWorktreeAsk {
+  message: string
+  options: { value: IssueWorktreeChoice; label: string }[]
+  value: IssueWorktreeChoice
+  run: (choice: IssueWorktreeChoice) => void
+}
+
+/**
+ * The worktree frames on this canvas that may be REUSED for an issue: bound to a worktree of THIS
+ * repository and not stale. A frame bound to another repository's worktree (the worktree store
+ * skips those too) is never offered — a hostile or foreign frame whose branch happens to read
+ * `issue-<N>-…` would otherwise be the preselected "Reuse".
+ */
+export function issueWorktreeFrames(
+  nodes: readonly ScmScopeNode[],
+  repoRoot: string,
+  staleGroupIds: readonly string[]
+): IssueWorktreeBoundGroup[] {
+  const repo = normWorktreePath(repoRoot)
+  return boundGroups(nodes as ScmScopeNode[])
+    .filter((b) => normWorktreePath(b.worktree.repoPath ?? '') === repo && !staleGroupIds.includes(b.groupId))
+    .map((b) => ({ groupId: b.groupId, branch: b.worktree.branch, path: b.worktree.path }))
 }

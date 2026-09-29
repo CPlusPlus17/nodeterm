@@ -143,8 +143,10 @@ describe('Start with agent in a new worktree', () => {
 
   it('reuse is re-validated at the click: a live, non-stale frame on that folder, else a still-listed worktree', () => {
     const inRun = body.slice(body.indexOf('run: (choice) => {'))
-    expect(inRun).toContain('normWorktreePath(b.worktree.path) === normWorktreePath(existing.path)')
-    expect(inRun).toContain('!useWorktrees.getState().staleGroupIds.includes(b.groupId)')
+    // A frame of THIS repository on that folder, not stale — `issueWorktreeFrames` owns both filters.
+    expect(inRun).toMatch(
+      /issueWorktreeFrames\(\s*nodesRef\.current,\s*repoRoot,\s*useWorktrees\.getState\(\)\.staleGroupIds\s*\)\.find\(\(b\) => normWorktreePath\(b\.path\) === normWorktreePath\(existing\.path\)\)/
+    )
     expect(inRun).toContain("existing.kind === 'bound' || !listed || listed.prunable || !listed.branch")
   })
 
@@ -188,5 +190,67 @@ describe('the setup hold is one rule', () => {
     expect(code(src)).toContain(
       'const node = extra?.awaitSetupGroup ? queueControlLaunch(bound, [], extra.awaitSetupGroup) : bound'
     )
+  })
+})
+
+describe('a worktree location from the git-shared settings file (all three create paths)', () => {
+  it('open-worktree refuses it BEFORE its dry run, unless the caller passed an explicit --path', () => {
+    const body = between("case 'open-worktree': {", "case 'close-worktree': {")
+    const check = body.indexOf('const locationRefusal = sharedWorktreeLocationRefusal({')
+    expect(check).toBeGreaterThan(-1)
+    expect(check).toBeLessThan(body.indexOf('if (dryRun) {'))
+    expect(check).toBeLessThan(body.indexOf('createBoundWorktree('))
+    expect(body).toContain('sharedBasePath: args.path?.trim() ? undefined : sharedBasePathOf(pw)')
+    // …and the refusal is ACTED on there: replied, returned, before the dry run and before git.
+    const refuse = body.indexOf('if (locationRefusal) {\n              reply({ ok: false, error: `open-worktree: ${locationRefusal}` })\n              return')
+    expect(refuse).toBeGreaterThan(check)
+    expect(refuse).toBeLessThan(body.indexOf('if (dryRun) {'))
+  })
+
+  it('the New worktree dialog refuses it at submit, before git', () => {
+    const body = between('const createWorktreeAndGroup = useCallback(', 'const bindExistingWorktree = useCallback(')
+    const check = body.indexOf('sharedWorktreeLocationRefusal({')
+    expect(check).toBeGreaterThan(-1)
+    expect(check).toBeLessThan(body.indexOf('createBoundWorktree('))
+    expect(body).toContain('sharedBasePath: sharedBasePathOf(projectLaunchInfoNow(target.projectId)?.resolved.worktree)')
+    const refuse = body.indexOf('if (locationRefusal) {\n        setWorktreeError(locationRefusal)\n        return')
+    expect(refuse).toBeGreaterThan(check)
+    expect(refuse).toBeLessThan(body.indexOf('createBoundWorktree('))
+  })
+
+  it('the issue action hands the planner the shared basePath, the remote branches and only THIS repo\'s frames', () => {
+    const body = between('const startIssueAgentInWorktree = useCallback(', 'const issueWorktreeMenu = useCallback(')
+    expect(body).toContain('sharedBasePath: sharedBasePathOf(pw)')
+    expect(body).toContain('remoteBranches: status?.remoteBranches ?? []')
+    expect(body).toContain('bound: issueWorktreeFrames(nodesRef.current, repoRoot, staleGroupIds)')
+    // The reuse check at the dialog's click filters by repository too.
+    const inRun = body.slice(body.indexOf('run: (choice) => {'))
+    expect(inRun).toContain('issueWorktreeFrames(')
+    expect(inRun).not.toContain('boundGroups(')
+  })
+
+  it('the core backstop runs before every git worktree add', () => {
+    const git = readFileSync(new URL('../../core/git-service.ts', import.meta.url), 'utf8')
+    const add = git.slice(git.indexOf('  worktreeAdd(\n'), git.indexOf('  worktreeMerge('))
+    const check = add.indexOf('const refusal = worktreeTargetRefusal(wtPath, repoPath)')
+    expect(check).toBeGreaterThan(-1)
+    expect(check).toBeLessThan(add.indexOf('worktreeOps.worktreeAdd('))
+  })
+})
+
+describe('the reuse-or-new dialog is a tracked confirm', () => {
+  it('flips its confirmFlags entry at call time, and confirmBusy() reads it', () => {
+    expect(code(src)).toMatch(/confirmFlags = useRef\(\{[^}]*issueWorktree: false/)
+    const busy = between('const confirmBusy = useCallback(', 'const nodeTypes = useMemo(')
+    expect(busy).toContain('f.issueWorktree ||')
+    const setter = between('const setIssueWorktreeAsk = useCallback(', 'const issueWorktreeInFlightRef')
+    expect(setter).toContain('confirmFlags.current.issueWorktree = !!v')
+  })
+
+  it('does not open over another confirm', () => {
+    const body = between('const startIssueAgentInWorktree = useCallback(', 'const issueWorktreeMenu = useCallback(')
+    const busy = body.indexOf('if (confirmBusy()) {')
+    expect(busy).toBeGreaterThan(-1)
+    expect(busy).toBeLessThan(body.indexOf('setIssueWorktreeAsk({'))
   })
 })

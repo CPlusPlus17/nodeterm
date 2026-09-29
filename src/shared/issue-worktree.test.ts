@@ -9,7 +9,7 @@ import {
   planIssueWorktree,
   type IssueWorktreeInput
 } from './issue-worktree'
-import { computeWorktreePath, DEFAULT_WORKTREE_PATH_TEMPLATE, isValidGitRef } from './worktree'
+import { computeWorktreePath, DEFAULT_WORKTREE_PATH_TEMPLATE, effectiveWorktreeTemplate, isValidGitRef } from './worktree'
 
 // Issue titles are writable by anyone on a public repository. Every one of these must come out as
 // a branch in the `[a-z0-9-]` alphabet that git accepts, and never as anything else.
@@ -322,6 +322,42 @@ describe('planIssueWorktree', () => {
       nothingOnDisk
     )
     expect(plan).toMatchObject({ kind: 'create', target: { branch: 'issue-12-fix-login-2' } })
+  })
+
+  it('treats a branch that exists only on a remote as TAKEN — never a diverging local twin', async () => {
+    const plan = await planIssueWorktree(
+      base({ remoteBranches: ['origin/issue-12-fix-login', 'origin/main'] }),
+      nothingOnDisk
+    )
+    expect(plan).toEqual({
+      kind: 'create',
+      target: { branch: 'issue-12-fix-login-2', path: wt('issue-12-fix-login-2') },
+      renamedFrom: 'issue-12-fix-login'
+    })
+    // …on any remote, and for the suffixes too; it is never offered as "check it out".
+    const skipped = await planIssueWorktree(
+      base({ remoteBranches: ['upstream/Issue-12-Fix-Login', 'origin/issue-12-fix-login-2'] }),
+      nothingOnDisk
+    )
+    expect(skipped).toMatchObject({ kind: 'create', target: { branch: 'issue-12-fix-login-3' } })
+  })
+
+  it('refuses a location from the SHARED settings file that leaves the repository\'s folder', async () => {
+    for (const sharedBasePath of ['../../.claude/skills', '/home/u/.codex', '../../../../tmp', '.git/hooks']) {
+      // As in the app: the template IS what the shared basePath expands to.
+      const template = effectiveWorktreeTemplate({ basePath: sharedBasePath }, undefined)
+      const plan = await planIssueWorktree(
+        base({ repoRoot: '/home/u/code/repo', template, sharedBasePath }),
+        nothingOnDisk
+      )
+      expect(plan.kind, sharedBasePath).toBe('refused')
+      if (plan.kind === 'refused') expect(plan.reason).toContain('.nodeterm/settings.json')
+    }
+    // The same shared setting pointing beside the repository is fine.
+    const ok = effectiveWorktreeTemplate({ basePath: '../wt' }, undefined)
+    expect(
+      (await planIssueWorktree(base({ repoRoot: '/home/u/code/repo', template: ok, sharedBasePath: '../wt' }), nothingOnDisk)).kind
+    ).toBe('create')
   })
 
   it('refuses when every suffix is taken, when there is no repository, or no path', async () => {

@@ -143,7 +143,7 @@ describe('Start with agent (issue card)', () => {
     // Exactly one read of the title: the slug input of `planIssueWorktree` (@shared/issue-worktree
     // owns every rule about it — allowlist, cap, check-ref-format; proven there against git).
     expect(body.match(/issue\.title/g) ?? []).toHaveLength(1)
-    expect(body).toMatch(/planIssueWorktree\(\s*\{ number: start\.ref\.number, title: issue\.title,/)
+    expect(body).toMatch(/planIssueWorktree\(\s*\{\s*number: start\.ref\.number,\s*title: issue\.title,/)
     expect(body).not.toMatch(/issue\.body/)
     // The frame is named after the NUMBER, not the title.
     expect(body).toContain('title: `Issue #${start.ref.number}`')

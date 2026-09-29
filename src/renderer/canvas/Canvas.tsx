@@ -480,12 +480,15 @@ import {
   type IssueRef
 } from '@shared/github-issue-ref'
 import { planIssueWorktree } from '@shared/issue-worktree'
+import { sharedBasePathOf, sharedWorktreeLocationRefusal } from '@shared/worktree-location'
 import {
   frameAgentPlacement,
   issueWorktreeChoiceCopy,
+  issueWorktreeFrames,
   issueWorktreeRefusal,
   issueWorktreeRenamedNotice,
   runExclusive,
+  type IssueWorktreeAsk,
   type IssueWorktreeChoice,
   type IssueWorktreeMenuAnswer
 } from '../lib/issueWorktree'
@@ -1839,7 +1842,8 @@ export function Canvas() {
     merge: false,
     peer: false,
     closeProject: false,
-    deleteProject: false
+    deleteProject: false,
+    issueWorktree: false
   })
   // Every confirm setter flips its flag AT CALL TIME. Assigning the mirror during RENDER (what this
   // used to do) is a tick too late: two agent verbs arriving in separate IPC events before React
@@ -1938,6 +1942,7 @@ export function Canvas() {
       f.peer ||
       f.closeProject ||
       f.deleteProject ||
+      f.issueWorktree ||
       removePendingRef.current
     )
   }, [])
@@ -6266,6 +6271,19 @@ export function Canvas() {
     async (v: WorktreeCreateValue) => {
       const target = worktreeDialog
       if (!target) return
+      // The dialog's suggested path can come from the git-shared settings file: a location it
+      // produced must stay beside the repository (@shared/worktree-location). A path the person
+      // typed is theirs — the rule judges only the one the shared setting derives for this branch.
+      const locationRefusal = sharedWorktreeLocationRefusal({
+        path: v.path,
+        repoRoot: v.repoPath,
+        branch: v.branch,
+        sharedBasePath: sharedBasePathOf(projectLaunchInfoNow(target.projectId)?.resolved.worktree)
+      })
+      if (locationRefusal) {
+        setWorktreeError(locationRefusal)
+        return
+      }
       setWorktreeBusy(true)
       setWorktreeError(null)
       // A REJECTED ipc is not the same as a failed op, and both have to land here. The Server
@@ -10234,12 +10252,13 @@ export function Canvas() {
 
   // ---- GitHub issue → agent session in its OWN worktree ("Start with agent in a new worktree ▸") ----
   /** The reuse-or-new question, when the issue already has a worktree (or its branch exists). */
-  const [issueWorktreeAsk, setIssueWorktreeAsk] = useState<{
-    message: string
-    options: { value: IssueWorktreeChoice; label: string }[]
-    value: IssueWorktreeChoice
-    run: (choice: IssueWorktreeChoice) => void
-  } | null>(null)
+  const [issueWorktreeAsk, setIssueWorktreeAskState] = useState<IssueWorktreeAsk | null>(null)
+  // Tracked like every other confirm (`confirmFlags` / `confirmBusy()`): while it is open an agent's
+  // destructive verb is refused rather than stacked over it, and it does not open over another one.
+  const setIssueWorktreeAsk = useCallback((v: IssueWorktreeAsk | null) => {
+    confirmFlags.current.issueWorktree = !!v
+    setIssueWorktreeAskState(v)
+  }, [])
   /** Issues with a start in flight (`runExclusive`) — planning AND a dialog-confirmed create. */
   const issueWorktreeInFlightRef = useRef(new Set<string>())
 
@@ -10414,15 +10433,20 @@ export function Canvas() {
       const ran = await runExclusive(issueWorktreeInFlightRef.current, key, async () => {
         // Local branches, so a taken name is seen before git refuses it. An unreadable list comes
         // back empty: git then has the last word, and its refusal is what the notice shows.
-        const branches = await api.git.status(repoRoot).then(
-          (st) => st.branches ?? null,
-          () => null
-        )
-        const bound = boundGroups(nodesRef.current)
-          .filter((b) => !staleGroupIds.includes(b.groupId))
-          .map((b) => ({ groupId: b.groupId, branch: b.worktree.branch, path: b.worktree.path }))
+        const status = await api.git.status(repoRoot).catch(() => null)
         const plan = await planIssueWorktree(
-          { number: start.ref.number, title: issue.title, repoRoot, template, entries, branches, bound },
+          {
+            number: start.ref.number,
+            title: issue.title,
+            repoRoot,
+            template,
+            entries,
+            branches: status?.branches ?? null,
+            // A name that exists on a remote is taken (→ `-k`), never checked out.
+            remoteBranches: status?.remoteBranches ?? [],
+            bound: issueWorktreeFrames(nodesRef.current, repoRoot, staleGroupIds),
+            sharedBasePath: sharedBasePathOf(pw)
+          },
           (path) => api.fs.exists(path)
         )
         // The canvas may have moved on while git and the filesystem answered: everything below
@@ -10437,6 +10461,13 @@ export function Canvas() {
           return
         }
         const { existing, alternative } = plan
+        if (confirmBusy()) {
+          setNotice({
+            kind: 'info',
+            text: `Another confirmation is open — answer it, then start #${issue.number} again.`
+          })
+          return
+        }
         const copy = issueWorktreeChoiceCopy(start.ref.number, existing, alternative, baseRef)
         setIssueWorktreeAsk({
           ...copy,
@@ -10453,11 +10484,11 @@ export function Canvas() {
             }
             // A frame bound to this worktree now — the one the plan found, or one that adopted the
             // orphan while the dialog was open — takes the agent. Never a second frame on one folder.
-            const live = boundGroups(nodesRef.current).find(
-              (b) =>
-                normWorktreePath(b.worktree.path) === normWorktreePath(existing.path) &&
-                !useWorktrees.getState().staleGroupIds.includes(b.groupId)
-            )
+            const live = issueWorktreeFrames(
+              nodesRef.current,
+              repoRoot,
+              useWorktrees.getState().staleGroupIds
+            ).find((b) => normWorktreePath(b.path) === normWorktreePath(existing.path))
             if (live) {
               openIssueAgentInFrame(live.groupId, issue, start, agentId, accountId)
               return
@@ -13084,6 +13115,19 @@ export function Canvas() {
             })
             if (!wtPath) {
               reply({ ok: false, error: 'open-worktree: could not derive a worktree path — pass --path' })
+              return
+            }
+            // A location the git-shared settings file produced must stay beside the repository
+            // (@shared/worktree-location). An explicit `--path` is the caller's own and not judged.
+            // Before the dry run, which must refuse what the real call refuses.
+            const locationRefusal = sharedWorktreeLocationRefusal({
+              path: wtPath,
+              repoRoot,
+              branch,
+              sharedBasePath: args.path?.trim() ? undefined : sharedBasePathOf(pw)
+            })
+            if (locationRefusal) {
+              reply({ ok: false, error: `open-worktree: ${locationRefusal}` })
               return
             }
             if (dryRun) {
@@ -16890,7 +16934,7 @@ export function Canvas() {
             options: issueWorktreeAsk.options,
             value: issueWorktreeAsk.value,
             onChange: (value) =>
-              setIssueWorktreeAsk((ask) => (ask ? { ...ask, value: value as IssueWorktreeChoice } : ask))
+              setIssueWorktreeAskState((ask) => (ask ? { ...ask, value: value as IssueWorktreeChoice } : ask))
           }}
           confirmLabel="Start agent"
           danger={false}

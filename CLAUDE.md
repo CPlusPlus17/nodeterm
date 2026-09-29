@@ -5282,6 +5282,23 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     and `addAgentNode` parents the node BEFORE `setNodes`, never inside the updater, because the
     updater runs at render time and a zustand-flushed SyncLane render may already have mirrored
     `nodesRef` back to a list without the fresh frame (the `nodesEpoch` lesson).
+  - **Where a worktree may land** (`@shared/worktree-location`) — `worktree.basePath` can come from
+    `.nodeterm/settings.json`, the git-SHARED project settings file, i.e. written by anyone who can
+    commit to the repository, and `git worktree add` writes the whole tree there. Pointed at
+    `../../.claude/skills`, the issue card's one click checked the repo out into
+    `~/.claude/skills/issue-N-…/` and a root `SKILL.md` became a skill in every Claude session. Two
+    layers, both for ALL create paths (dialog, `open-worktree`, issue card):
+    `sharedWorktreeLocationRefusal` (renderer) refuses a location the SHARED file produced unless it
+    stays inside the folder holding the repository — a sibling that is not hidden, or anywhere in
+    the repository but its `.git` — and names the fix (a local override in Project Settings). It
+    judges only the path that setting derives for the branch: a path the person typed in the dialog
+    or passed as `--path` is theirs. `sharedBasePathOf` is the one reading of provenance (`source:
+    'shared'`). `open-worktree` refuses before its dry run. The core backstop
+    (`core/worktree-target.ts`, in `GitService.worktreeAdd`, so relay and browser clients pass it
+    too) works on REAL paths, because a symlink committed into the repository defeats any lexical
+    rule: never inside the repository's `.git`, and never REDIRECTED into a hidden folder directly
+    under the home directory — a location that names such a folder outright (a person's own
+    `/home/me/.worktrees`) is allowed, so the backstop is not a blanket refusal.
   - **A worktree per GitHub issue** (`@shared/issue-worktree`) — "Start with agent in a new
     worktree ▸" on an issue card and its summary modal: branch `issue-<N>-<slug>` at the templated
     path, off the SAME base the New worktree dialog defaults to (`effectiveWorktreeBaseRef`: the
@@ -5308,10 +5325,17 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     match is case-insensitive, git's lookup is not; the new folder is the app's, so `createdByApp`
     is true exactly as the dialog's "Existing branch" mode sets it) — beside the next free `-2` …
     `-20`; a name or folder that is merely taken moves to the next suffix and the notice says why.
-    Never the main checkout, never a prunable registration. Reuse is re-checked at the dialog's click
-    (a frame on that folder now, else a worktree git still lists), and one `runExclusive` key per
-    issue covers the planning AND a dialog-confirmed create, so a second click cannot race the first
-    for the same `-2`. Disabled WITH its reason on a relay tab, an SSH project, a cwd-less
+    Never the main checkout, never a prunable registration, and never a frame bound to ANOTHER
+    repository (`issueWorktreeFrames` filters by `worktree.repoPath`, as the worktree store does — a
+    foreign or hostile frame on an `issue-<N>-…` branch would otherwise be the preselected "Reuse").
+    A branch that exists only on a REMOTE (`status.remoteBranches`, as fresh as the last fetch) is
+    TAKEN, never checked out: a same-named local branch would diverge from it, its push would be
+    rejected, and #1008's branch link could point at someone else's pull request. Reuse is
+    re-checked at the dialog's click (a frame of this repo on that folder now, else a worktree git
+    still lists), and one `runExclusive` key per issue covers the planning AND a dialog-confirmed
+    create, so a second click cannot race the first for the same `-2`. The reuse-or-new dialog is a
+    tracked confirm (`confirmFlags.issueWorktree`, read by `confirmBusy()`): it never opens over
+    another confirm, and an agent's destructive verb is refused while it is up. Disabled WITH its reason on a relay tab, an SSH project, a cwd-less
     project and a folder with no repository (`issueWorktreeRefusal`). **There is no `--worktree`
     flag**: an agent composes `open-worktree --branch issue-<N>-<slug>` then `open-agent --group
     <groupId> --issue #N`, and both agent bodies render that convention from `issueWorktreeBranch`.

@@ -314,6 +314,13 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   against the renderer's dispositions — deliberately cross-layer, because that is the only way
   "every verb" is checked rather than remembered.
 
+- **A location from `.nodeterm/settings.json` is hostile input.** That file is committed to the
+  repository, so anyone who can commit wrote it. A worktree location it produces must pass
+  `sharedWorktreeLocationRefusal` (`src/shared/worktree-location.ts`) on every create path, and
+  every `git worktree add` passes the real-path backstop in `GitService.worktreeAdd`. If you add
+  another setting that names a place on disk the app will WRITE to, give it the same two layers:
+  a lexical rule keyed on `source: 'shared'`, and a check on real paths where the write happens.
+
 - **A node you just created is not in `nodesRef` yet, and a `setNodes` updater is not "now".**
   `nodesRef` mirrors React state at render time, so a frame made this tick is invisible to the next
   line that looks it up — and an updater runs at RENDER time, after any zustand write may already

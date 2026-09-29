@@ -3,6 +3,7 @@ import { createAgentNode, terminalNodeSize } from '../state/workspace'
 import { GROUP_PAD_TOP, GROUP_PAD_X } from './coldOpen'
 import {
   frameAgentPlacement,
+  issueWorktreeFrames,
   runExclusive,
   ISSUE_WORKTREE_LABEL,
   ISSUE_WORKTREE_NO_REPO_HINT,
@@ -106,7 +107,7 @@ describe('issueWorktreeChoiceCopy', () => {
 describe('issueWorktreeRenamedNotice', () => {
   it('says why the new worktree has a suffix', () => {
     expect(issueWorktreeRenamedNotice('issue-12-fix', 'issue-12-fix-2')).toBe(
-      'issue-12-fix was already taken (a branch or folder of that name exists), so the new worktree is issue-12-fix-2.'
+      'issue-12-fix was already taken (a local or remote branch, or a folder, of that name exists), so the new worktree is issue-12-fix-2.'
     )
   })
 })
@@ -158,5 +159,29 @@ describe('runExclusive', () => {
       })
     ).rejects.toThrow('boom')
     expect(inFlight.has('k')).toBe(false)
+  })
+})
+
+describe('issueWorktreeFrames', () => {
+  const frame = (id: string, repoPath: string, branch: string) => ({
+    id,
+    type: 'group',
+    data: { worktree: { repoPath, branch, baseRef: 'main', path: `/wt/${branch}`, createdByApp: true } }
+  })
+
+  it('offers only frames bound to a worktree of THIS repository, and never a stale one', () => {
+    const nodes = [
+      frame('mine', '/work/repo', 'issue-12-fix'),
+      frame('mine-trailing-slash', '/work/repo/', 'issue-12-b'),
+      // Another repository's frame (a pasted or hostile project.json) — never "Reuse".
+      frame('foreign', '/elsewhere/other', 'issue-12-fix'),
+      frame('stale', '/work/repo', 'issue-12-gone'),
+      { id: 'plain', type: 'group', data: {} },
+      { id: 'term', type: 'terminal', data: {} }
+    ]
+    expect(issueWorktreeFrames(nodes, '/work/repo', ['stale']).map((f) => f.groupId)).toEqual([
+      'mine',
+      'mine-trailing-slash'
+    ])
   })
 })

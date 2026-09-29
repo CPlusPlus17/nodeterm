@@ -1,5 +1,6 @@
 import { computeWorktreePath, type WorktreeEntry } from './worktree'
 import { normWorktreePath } from './worktree-reconcile'
+import { sharedWorktreeLocationRefusal } from './worktree-location'
 
 // "Start with agent in a new worktree" on a GitHub issue card: the branch it creates, and what it
 // does when that branch (or its folder) is already taken.
@@ -128,6 +129,18 @@ export interface IssueWorktreeInput {
   entries: readonly WorktreeEntry[]
   /** Local branch names; null or empty when they could not be read (git then has the last word). */
   branches: readonly string[] | null
+  /**
+   * Remote-tracking branches as git lists them (`origin/issue-12-fix`). A name that exists on a
+   * remote is TAKEN: creating a same-named local branch from the base would diverge from it, the
+   * later push would be rejected, and a pull request from that remote branch — someone else's — would
+   * share this session's branch name. The planner moves to `-k` rather than basing on it: starting
+   * an agent on another person's branch is not what "start in a NEW worktree" asks for. Only as
+   * fresh as the last fetch.
+   */
+  remoteBranches?: readonly string[]
+  /** `worktree.basePath` — ONLY when it came from the git-shared settings file (see
+   *  @shared/worktree-location): the location it produces must pass `sharedWorktreeLocationRefusal`. */
+  sharedBasePath?: string
   /** Non-stale worktree-bound group frames on this canvas. */
   bound: readonly IssueWorktreeBoundGroup[]
 }
@@ -157,6 +170,15 @@ export async function planIssueWorktree(
       reason: 'No worktree location could be derived from the worktree path setting. Nothing was created.'
     }
   }
+  // Every candidate (`-k` included) lives in the same folder, so one check on the wanted name
+  // judges them all — before anything else is planned.
+  const location = sharedWorktreeLocationRefusal({
+    path: pathFor(canonical),
+    repoRoot,
+    branch: canonical,
+    sharedBasePath: input.sharedBasePath
+  })
+  if (location) return { kind: 'refused', reason: location }
 
   const known = new Set<string>()
   for (const b of input.branches ?? []) known.add(b.toLowerCase())
@@ -164,6 +186,10 @@ export async function planIssueWorktree(
   // A frame's binding counts too: `entries` may be a failed (empty) read, and a bound branch or
   // folder is taken whatever git managed to list.
   for (const g of input.bound) known.add(g.branch.toLowerCase())
+  for (const r of input.remoteBranches ?? []) {
+    const slash = r.indexOf('/')
+    if (slash > 0 && slash < r.length - 1) known.add(r.slice(slash + 1).toLowerCase())
+  }
   // Every name this module builds is lower-case already; `known` is folded on the way in.
   const branchTaken = (b: string): boolean => known.has(b)
   const entryPaths = new Set(
