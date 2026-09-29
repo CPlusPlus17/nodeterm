@@ -135,6 +135,8 @@ function teammate(code: JoinCode, transport: RelayTransport, keys: KeyPair, pinn
   const frames: Frame[] = []
   const frameWaiters: Array<{ test: (f: Frame) => boolean; resolve: (f: Frame) => void }> = []
   const byteWaiters: Array<{ sessionId: string; resolve: (d: string) => void }> = []
+  /** Every terminal chunk received, in order: "received nothing" is as much a result as a chunk. */
+  const received: Array<[string, string]> = []
   const denied: string[] = []
   let approve!: () => void
   const approved = new Promise<void>((r) => {
@@ -165,6 +167,7 @@ function teammate(code: JoinCode, transport: RelayTransport, keys: KeyPair, pinn
       }
     },
     onPtyData: (sessionId, data) => {
+      received.push([sessionId, data])
       for (const w of [...byteWaiters]) {
         if (w.sessionId !== sessionId) continue
         byteWaiters.splice(byteWaiters.indexOf(w), 1)
@@ -179,6 +182,7 @@ function teammate(code: JoinCode, transport: RelayTransport, keys: KeyPair, pinn
     c,
     approved,
     denied,
+    received,
     /** One RPC round trip over the E2EE tunnel. */
     call(method: string, args: unknown[] = []): Promise<Frame> {
       const id = nextId++
@@ -394,6 +398,18 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
     ])
     expect(owner.denied).toEqual([])
     expect(guest.denied).toEqual([])
+
+    // ---- 7b. `team unshare`: the viewer stays connected, but the terminal it is already watching
+    // goes quiet for it at once (R45); its owner keeps the output. The session's node is looked up
+    // through the real PtyManager on every frame.
+    await admin(dataDir, { cmd: 'share', projectId: SHARED, on: false })
+    const ownerAfterUnshare = owner.bytes(ownerSessionId)
+    spawned[0].onDataCb?.('after the unshare\r\n')
+    expect(await step('owner receives output after the unshare', ownerAfterUnshare)).toContain('after the unshare')
+    // One round trip on the viewer's own tunnel: anything sent to it before this answer has arrived.
+    expect(await guest.call(IPC.relayHostedSelf)).toMatchObject({ ok: true, result: { role: 'viewer' } })
+    expect(guest.received.map(([, d]) => d).join('')).toContain('hello from the owner')
+    expect(guest.received.map(([, d]) => d).join('')).not.toContain('after the unshare')
 
     // ---- 8. The viewer's desktop goes away: its membership stays, its connection does not, and the
     // owner's terminal keeps running for the owner.

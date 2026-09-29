@@ -6190,7 +6190,9 @@ The invariants, each with its reason:
   <ref>:<p>` resolves `<p>` against the repository's top level and `git status`/`log` report the
   whole repository, so from a shared `repo/shared/` a Viewer read `repo/secret/key.txt` (measured,
   C1) — a monorepo subfolder gets no git panel; `pty:create` is cut down to a whitelist, because
-  `sshRemote`'s args run `ssh` on the host during the existence probe. Editors pass untouched
+  `sshRemote`'s args run `ssh` on the host during the existence probe. A non-editor's terminal
+  frames (output, resync, size, exit) are judged per frame by the session's node
+  (`PtyManager.nodeOfSession`), because a subscription outlives `team unshare`. Editors pass untouched
   (Editor is shell access). The UI mirror (`@shared/hosted-access.ts`, `bridge/hosted-gate.ts`) is
   convenience; `access-policy.guard.test.ts` pins it equal and fails on any relay-API channel
   nobody classified.

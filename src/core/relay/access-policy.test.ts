@@ -10,12 +10,15 @@ import {
   type AccessContext
 } from './access-policy'
 import { IPC } from '../../shared/ipc'
+import { encodePtyData } from '../../shared/rpc'
 import type { UiSink } from '../ui-sink-registry'
 
 const ctx = (role: AccessContext['role']): AccessContext => ({
   role,
   sharedProjects: new Set(['P']),
   projectOfNode: (id) => (id === 'n1' ? 'P' : id === 'n2' ? 'Q' : undefined),
+  // Terminal sessions: 's' / 's1' run node n1 (project P, shared), 's2' runs n2 (project Q, not).
+  nodeOfSession: (sid) => (sid === 's' || sid === 's1' ? 'n1' : sid === 's2' ? 'n2' : undefined),
   projectCwds: () => ['/srv/app'],
   realpath: (p) => (p.startsWith('/srv/app/link') ? '/etc/passwd' : p)
 })
@@ -100,6 +103,7 @@ describe('access policy: the fs jail', () => {
         role: 'viewer',
         sharedProjects: new Set(['P']),
         projectOfNode: () => undefined,
+        nodeOfSession: () => undefined,
         projectCwds: () => [path.join(root, 'link')],
         realpath: (p) => {
           try {
@@ -492,6 +496,7 @@ describe('access policy: git needs a shared root that is its own repository (C1)
         role: 'viewer',
         sharedProjects: new Set(['P']),
         projectOfNode: () => undefined,
+        nodeOfSession: () => undefined,
         projectCwds: () => [root],
         realpath: (p) => {
           try {
@@ -517,3 +522,76 @@ describe('access policy: git needs a shared root that is its own repository (C1)
 })
 
 const READ_JAIL_MSG = 'Viewers can only read files inside a shared project.'
+
+// I3 / R45. `team unshare` changes only team.json, and a viewer that already joined a terminal of the
+// project keeps its subscription: before this, pty bytes, size, exit and repaint frames kept
+// streaming to it until it reconnected. The sink now asks, per frame, which node the session runs
+// and whether that node is (still) in a shared project.
+describe('access policy: a terminal stops streaming to a non-editor once its project is unshared (I3)', () => {
+  const ev = (channel: string, ...args: unknown[]) => JSON.stringify({ t: 'ev', channel, args })
+  const unshared = (role: AccessContext['role']): AccessContext => ({ ...ctx(role), sharedProjects: new Set() })
+  const sinkWith = () => {
+    const text: string[] = []
+    const bin: Uint8Array[] = []
+    const sink: UiSink = { sendText: (j) => text.push(j), sendBinary: (b) => bin.push(b), bufferedAmount: () => 0 }
+    return { sink, text, bin }
+  }
+
+  it('terminal bytes reach a viewer only for a session whose node is in a shared project NOW', () => {
+    let c = ctx('viewer')
+    const { sink, bin } = sinkWith()
+    const w = wrapSinkForRole(sink, () => c)
+    w.sendBinary(encodePtyData('s1', 'shared'))
+    w.sendBinary(encodePtyData('s2', 'other project'))
+    w.sendBinary(encodePtyData('nope', 'unknown session'))
+    w.sendBinary(new Uint8Array([9, 9])) // not a pty frame at all
+    expect(bin).toEqual([encodePtyData('s1', 'shared')])
+    c = unshared('viewer') // `team unshare P`
+    w.sendBinary(encodePtyData('s1', 'after unshare'))
+    expect(bin).toHaveLength(1)
+  })
+
+  it('an editor receives every frame, and its context is never asked about the session', () => {
+    const { sink, bin } = sinkWith()
+    const c: AccessContext = {
+      ...unshared('editor'),
+      nodeOfSession: () => {
+        throw new Error('an editor frame must not be judged')
+      }
+    }
+    const w = wrapSinkForRole(sink, () => c)
+    w.sendBinary(encodePtyData('s2', 'x'))
+    w.sendBinary(new Uint8Array([9]))
+    expect(bin).toHaveLength(2)
+  })
+
+  it('a context that cannot be built drops terminal bytes instead of throwing into the registry', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { sink, bin } = sinkWith()
+      const w = wrapSinkForRole(sink, () => {
+        throw new Error('team store unreadable')
+      })
+      expect(() => w.sendBinary(encodePtyData('s1', 'x'))).not.toThrow()
+      expect(bin).toEqual([])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('per-session events: a repaint needs a shared session; the others stop once the node is known and unshared', () => {
+    // pty:resync carries the screen itself, so it is judged like terminal bytes.
+    expect(filterOutboundEvent(ev(IPC.ptyResync('s1'), 'screen'), ctx('viewer'))).toBe(true)
+    expect(filterOutboundEvent(ev(IPC.ptyResync('s1'), 'screen'), unshared('viewer'))).toBe(false)
+    expect(filterOutboundEvent(ev(IPC.ptyResync('nope'), 'screen'), ctx('viewer'))).toBe(false)
+    for (const ch of [IPC.ptyExit, IPC.ptySize, IPC.ptyClosed, IPC.ptyRecycled]) {
+      expect(filterOutboundEvent(ev(ch('s1'), 0), ctx('viewer')), ch('s1')).toBe(true)
+      expect(filterOutboundEvent(ev(ch('s1'), 0), unshared('viewer')), ch('s1')).toBe(false)
+      expect(filterOutboundEvent(ev(ch('s2'), 0), ctx('commenter')), ch('s2')).toBe(false)
+      // A session that is already gone (a recycle is announced after the old session left the
+      // manager) still tells its subscribers it ended: nothing but that fact is in it.
+      expect(filterOutboundEvent(ev(ch('gone'), 0), ctx('viewer')), ch('gone')).toBe(true)
+      expect(filterOutboundEvent(ev(ch('s2'), 0), unshared('editor')), ch('s2')).toBe(true)
+    }
+  })
+})

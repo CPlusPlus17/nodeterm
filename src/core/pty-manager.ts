@@ -4350,6 +4350,16 @@ export class PtyManager {
   }
 
   /**
+   * The canvas node a live session runs (its unconditional `nodeId`, see `Session`), or undefined
+   * when the session is unknown: never created, or already ended. Read-only. The hosted team relay
+   * judges each terminal frame it sends a Viewer by it, so `team unshare` stops a stream the viewer
+   * joined earlier (docs/hosted-team-relay.md).
+   */
+  nodeOfSession(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.nodeId
+  }
+
+  /**
    * The CURRENT screen of a live session, by sessionId — the redraw sent to a client that fell so
    * far behind that its socket backlog was discarded (see ServerPlatform's WS_DROP_WATER). Reuses
    * the existing `tmux capture-pane -e` paths (`captureSnapshot`, which the relay host already

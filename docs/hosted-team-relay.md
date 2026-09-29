@@ -62,7 +62,7 @@ such as hosting not starting), 2 the command line is wrong.
 | `team init` | Creates the host key (once) and `team.json` if absent, then starts hosting. Prints the address and join code when hosting started. An unreadable key is refused, never replaced. |
 | `team add-owner <device-key> [--label <name>]` | Pins that device as an **owner**. An existing member's key is promoted to owner. The key must be the canonical 44-character base64 public key; a typo gets its own message before anything is sent. |
 | `team remove <device-key> [--force]` | Unpins the key and cuts its live sessions (they are told `removed`). Removing the last owner needs `--force`. |
-| `team share <projectId>` / `team unshare <projectId>` | Adds or removes a project in `sharedProjects`. The id is **not** checked against the workspace. |
+| `team share <projectId>` / `team unshare <projectId>` | Adds or removes a project in `sharedProjects`. The id is **not** checked against the workspace. An unshare applies to the next message: a Viewer already watching one of its terminals gets no more output from it. |
 | `team info [--json]` | The team address and join code. The plain form prints the join code only while hosting is on; `--json` returns `{enabled, info, joinCode}`. |
 | `team status [--json]` | Hosting state, members, and pending join requests (see [Status and troubleshooting](#status-and-troubleshooting)). |
 | `team rotate-key` | Replaces the host key. Every bookmark and join code stops working. A hosting service restarts on the new key; one that was not hosting stays off. |
@@ -214,8 +214,14 @@ receives only the events `VIEW_EVENTS` lists: `canvas:mut`, `workspace:external-
 `agent:unread-clear` for shared nodes; `agent:subagent-activity` for subagents a shared node
 started; `context:update`, `presence:sync` and `presence:peer` for everyone (see
 [Limitations](#limitations-v1)); the per-session pty channels, which only a session's subscribers
-receive; and `board-log:changed:<id>` / `project-setup:event:<id>` for shared projects. Terminal
-bytes pass, because they go only to a session's subscribers.
+receive; and `board-log:changed:<id>` / `project-setup:event:<id>` for shared projects.
+
+**A terminal is judged by its node on every frame.** Terminal output and `pty:resync` (a repaint of
+the screen) reach a non-editor only while the session's node is in a shared project. `pty:size`,
+`pty:exit`, `pty:closed` and `pty:recycled` stop once the node is known to be outside every shared
+project; for a session that has already ended they still pass, since all they carry is that fact.
+This is what makes `team unshare` stop a terminal a Viewer is already watching: the subscription
+itself outlives the unshare, but nothing more of that terminal is delivered to it.
 
 The renderer mirrors the two allowlists in `@shared/hosted-access.ts` (`bridge/hosted-gate.ts`
 answers a refused call locally, in the host's words), and the guard test pins the mirror equal to

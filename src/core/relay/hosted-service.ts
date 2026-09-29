@@ -76,6 +76,9 @@ export interface HostedServiceDeps {
   hostLabel: string
   attach: PeerAttach
   projectOfNode(nodeId: string): string | undefined
+  /** The node a live terminal session runs (`PtyManager.nodeOfSession`). A viewer's terminal frames
+   *  are judged by it, so `team unshare` stops a stream the viewer already joined (R45). */
+  nodeOfSession(sessionId: string): string | undefined
   projectCwd(projectId: string): string | undefined
   /** TEST ONLY: an in-process transport per listener. Production opens a real WebSocket. */
   transport?: () => RelayTransport
@@ -217,6 +220,7 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
       role,
       sharedProjects: shared,
       projectOfNode: (nodeId) => deps.projectOfNode(nodeId),
+      nodeOfSession: (sessionId) => deps.nodeOfSession(sessionId),
       projectCwds: () =>
         [...shared].map((p) => deps.projectCwd(p)).filter((cwd): cwd is string => typeof cwd === 'string' && cwd.length > 0),
       realpath

@@ -13,6 +13,7 @@ import { loadHostKey } from './host-key'
 import { genKeyPair, publicKeyToB64, type KeyPair } from './e2ee'
 import { decodeJoinCode } from './join-code'
 import { IPC } from '../../shared/ipc'
+import { encodePtyData } from '../../shared/rpc'
 import type { RelayTransport } from './relay-socket'
 import type { UiSink } from '../ui-sink-registry'
 
@@ -57,7 +58,7 @@ afterEach(() => {
   }
 })
 
-type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectOfNode' | 'killPeer'>> & {
+type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectOfNode' | 'nodeOfSession' | 'killPeer'>> & {
   recordTimers?: boolean
   dataDir?: string
 }
@@ -96,6 +97,8 @@ function world(opts: WorldOpts = {}) {
     dataDir, apiBase: 'https://api', relayUrl: 'ws://127.0.0.1/r', deviceId: 'host-dev', hostLabel: 'box',
     attach,
     projectOfNode: opts.projectOfNode ?? ((id) => (id === 'n-other' ? 'Q' : 'P')),
+    // Terminal sessions: 'sess-shared' runs n-shared (project P), 'sess-other' runs n-other (Q).
+    nodeOfSession: opts.nodeOfSession ?? ((sid) => (sid === 'sess-shared' ? 'n-shared' : sid === 'sess-other' ? 'n-other' : undefined)),
     projectCwd: () => '/srv/app',
     fetch: (async () => { mints++; return new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 }) }) as typeof fetch,
     transport: () => { const { hostT, peerT } = transportPair(); peersT.push(peerT); return hostT },
@@ -107,6 +110,7 @@ function world(opts: WorldOpts = {}) {
   live.push({ svc, dataDir })
   const join = (keys = genKeyPair(), auto = false, humanConfirms = true, onApproved?: (c: RelayClientSession) => void) => {
     const frames: string[] = []
+    const bytes: Array<[string, string]> = []
     const denied: string[] = []
     let approved = false
     let closed = 0
@@ -117,7 +121,7 @@ function world(opts: WorldOpts = {}) {
       // transport runs before the client holds its socket (the client defers that confirm).
       autoApprove: auto, onSas: (s) => { if (humanConfirms) s.confirm() },
       onApproved: (s) => { approved = true; onApproved?.(s) }, onFrame: (j) => frames.push(j),
-      onPtyData: () => {}, onClose: () => { closed++ }, onDenied: (r) => denied.push(r)
+      onPtyData: (sid, d) => bytes.push([sid, d]), onClose: () => { closed++ }, onDenied: (r) => denied.push(r)
     })
     const res = (id: number) => {
       const f = frames.find((x) => { const m = JSON.parse(x); return m.t === 'res' && m.id === id })
@@ -125,7 +129,7 @@ function world(opts: WorldOpts = {}) {
     }
     const events = (channel: string) => frames.map((x) => JSON.parse(x)).filter((m) => m.t === 'ev' && m.channel === channel).map((m) => m.args[0])
     return {
-      c, frames, denied, keys, res, events,
+      c, frames, bytes, denied, keys, res, events,
       isApproved: () => approved,
       closedCount: () => closed,
       req: (id: number, method: string, args: unknown[] = []) => c.send(JSON.stringify({ t: 'req', id, method, args })),
@@ -636,6 +640,41 @@ describe('hosted service — roles', () => {
   })
 })
 
+describe('hosted service — unshare stops a terminal a viewer is already watching (I3, R45)', () => {
+  it('after `team unshare`, output, size and exit of that terminal no longer reach a viewer; an editor keeps them', async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    const viewer = await approvedGuest(w, owner, 'viewer', 5)
+    const vSink = [...w.sinks.values()].at(-1)!
+    const editor = await approvedGuest(w, owner, 'editor', 6)
+    const eSink = [...w.sinks.values()].at(-1)!
+    const size = (n: number) => JSON.stringify({ t: 'ev', channel: IPC.ptySize('sess-shared'), args: [{ cols: n, rows: n }] })
+    const exit = JSON.stringify({ t: 'ev', channel: IPC.ptyExit('sess-shared'), args: [0] })
+    // Both are watching the shared terminal (the PtyManager sends to its subscribers' sinks).
+    for (const s of [vSink, eSink]) {
+      s.sendBinary(encodePtyData('sess-shared', 'before'))
+      s.sendText(size(1))
+    }
+    await vi.waitFor(() => expect(viewer.bytes).toEqual([['sess-shared', 'before']]))
+    expect(viewer.events(IPC.ptySize('sess-shared'))).toEqual([{ cols: 1, rows: 1 }])
+
+    await w.svc.share('P', false)
+    for (const s of [vSink, eSink]) {
+      s.sendBinary(encodePtyData('sess-shared', 'after'))
+      s.sendText(size(2))
+      s.sendText(exit)
+    }
+    await vi.waitFor(() => expect(editor.bytes).toEqual([['sess-shared', 'before'], ['sess-shared', 'after']]))
+    expect(editor.events(IPC.ptyExit('sess-shared'))).toEqual([0])
+    // A round trip on the viewer's own tunnel: anything sent to it before this answer has arrived.
+    viewer.req(1, IPC.relayHostedSelf)
+    await vi.waitFor(() => expect(viewer.res(1)).toBeDefined())
+    expect(viewer.bytes).toEqual([['sess-shared', 'before']])
+    expect(viewer.events(IPC.ptySize('sess-shared'))).toEqual([{ cols: 1, rows: 1 }])
+    expect(viewer.events(IPC.ptyExit('sess-shared'))).toEqual([])
+  })
+})
+
 describe('hosted service — a session with no team entry (R27)', () => {
   it('in the window between a removal’s team write and its kill, the removed peer is served NOTHING', async () => {
     const kills: Array<[string, string]> = []
@@ -719,7 +758,7 @@ describe('hosted service — removal', () => {
     const again = createHostedService({
       dataDir: w.dataDir, apiBase: 'https://api', relayUrl: 'ws://127.0.0.1/r', deviceId: 'd', hostLabel: 'x',
       attach: { attach: () => 1, detach: () => {}, dispatch: async (_i, r) => ({ t: 'res', id: r.id, ok: true, result: null }), cast: () => {} },
-      projectOfNode: () => undefined, projectCwd: () => undefined
+      projectOfNode: () => undefined, nodeOfSession: () => undefined, projectCwd: () => undefined
     })
     expect(await again.remove(pub(keys), false)).toBe('removed')
   })

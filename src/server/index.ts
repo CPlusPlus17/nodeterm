@@ -883,6 +883,9 @@ export async function startServer(
     // persistedCanvases() scan re-parses every local project's file (measured 4.5 ms per call at
     // 20 projects x 100 nodes).
     projectOfNode: (nodeId) => workspaceStore.projectIdForNode(nodeId),
+    // A viewer's terminal frames are judged by the session's node, per frame (`team unshare` must
+    // stop a stream the viewer already joined). One map lookup.
+    nodeOfSession: (sessionId) => ptyManager.nodeOfSession(sessionId),
     projectCwd: (projectId) => workspaceStore.localCwdForProject(projectId),
     // TEST ONLY seams (see ServerConfig): never set by resolveConfig, so production dials the relay
     // and mints against API_BASE with the global fetch.

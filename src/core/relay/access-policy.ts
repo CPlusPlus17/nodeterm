@@ -18,6 +18,7 @@
 // theatre.
 import path from 'node:path'
 import { IPC } from '../../shared/ipc'
+import { decodePtyDataSessionId } from '../../shared/rpc'
 import type { TeamRole } from './team-store'
 import type { AccessDecision } from './relay-host'
 import type { UiSink } from '../ui-sink-registry'
@@ -27,6 +28,9 @@ export interface AccessContext {
   sharedProjects: ReadonlySet<string>
   /** The project a node belongs to, from the persisted canvases. */
   projectOfNode(nodeId: string): string | undefined
+  /** The node (canvas node id) a live terminal session runs, from the pty manager; undefined when
+   *  the session is unknown (never existed, or already ended). */
+  nodeOfSession(sessionId: string): string | undefined
   /** The LOCAL cwds of the shared projects. */
   projectCwds(): string[]
   /** `fs.realpath`; null = the path does not resolve. */
@@ -427,14 +431,34 @@ export const VIEW_EVENTS: Readonly<Record<string, EventCheck>> = Object.freeze({
   [IPC.presencePeer]: always
 })
 
-/** Per-name event channels. The pty ones are sent only to a session's SUBSCRIBERS, and a viewer
- *  subscribes only through the jailed pty:create above. */
+/**
+ * Is this terminal session's node (still) in a shared project? `undefined` = the session is not
+ * known to the pty manager (never existed, or already ended). A viewer subscribes to a session only
+ * through the jailed pty:create above, but `team unshare` does not end that subscription (R45), so
+ * every frame of it is judged again here.
+ */
+function sessionShared(sessionId: string, ctx: AccessContext): boolean | undefined {
+  const nodeId = ctx.nodeOfSession(sessionId)
+  return nodeId === undefined ? undefined : sharedNode(nodeId, ctx)
+}
+
+/** A frame that carries the terminal's CONTENT (bytes, a repaint): only for a known, shared session. */
+const sessionContent = (sessionId: string, ctx: AccessContext): boolean => sessionShared(sessionId, ctx) === true
+
+/** A lifecycle frame (size, exit, closed, recycled) holds no content, only a fact about the session:
+ *  refused once the session's node is known to be outside the shared projects. A session the manager
+ *  no longer knows still tells its subscribers it ended (a recycle is announced after the old
+ *  session left the manager). */
+const sessionLifecycle = (sessionId: string, ctx: AccessContext): boolean => sessionShared(sessionId, ctx) !== false
+
+/** Per-name event channels. The pty ones are sent only to a session's SUBSCRIBERS, and are judged by
+ *  the session's node (see `sessionShared`). */
 const VIEW_EVENT_PREFIXES: ReadonlyArray<readonly [string, (suffix: string, ctx: AccessContext) => boolean]> = [
-  [IPC.ptyExit(''), () => true],
-  [IPC.ptySize(''), () => true],
-  [IPC.ptyClosed(''), () => true],
-  [IPC.ptyRecycled(''), () => true],
-  [IPC.ptyResync(''), () => true],
+  [IPC.ptyExit(''), sessionLifecycle],
+  [IPC.ptySize(''), sessionLifecycle],
+  [IPC.ptyClosed(''), sessionLifecycle],
+  [IPC.ptyRecycled(''), sessionLifecycle],
+  [IPC.ptyResync(''), sessionContent],
   [IPC.boardLogChanged(''), (projectId, ctx) => sharedProject(projectId, ctx)],
   [IPC.projectSetupEvent(''), (projectId, ctx) => sharedProject(projectId, ctx)]
 ]
@@ -479,32 +503,45 @@ export function narrowResponseForRole(method: string, result: unknown, ctx: Acce
 }
 
 /**
+ * true = deliver this binary frame to the peer. Editors and owners get every frame. For anyone else
+ * only a pty data frame of a session whose node is in a shared project NOW: a subscription outlives
+ * `team unshare` (R45), and a frame that cannot be attributed is dropped, never guessed.
+ */
+export function filterOutboundBinary(buf: Uint8Array, ctx: AccessContext): boolean {
+  if (isEditor(ctx.role)) return true
+  const sessionId = decodePtyDataSessionId(buf)
+  return sessionId !== null && sessionContent(sessionId, ctx)
+}
+
+/**
  * The peer's sink, filtered for its role. `ctxFor` is asked per message, so a role or share change
- * applies to the next event. Terminal bytes (`sendBinary`) pass: they go only to a session's
- * subscribers. `bufferedAmount` stays the underlying socket's — Stage 2 backpressure and the 8 MB
- * drop ceiling key on it (see relay-host.ts `open`).
+ * applies to the next event or terminal frame. `bufferedAmount` stays the underlying socket's —
+ * Stage 2 backpressure and the 8 MB drop ceiling key on it (see relay-host.ts `open`).
  */
 export function wrapSinkForRole(sink: UiSink, ctxFor: () => AccessContext): UiSink {
   const owners: SubagentOwners = new Map()
   let warned = false
+  /** Run a delivery decision. Fail closed WITHOUT throwing: the registry reads a throwing sink as a
+   *  dead socket and would tear the peer down while its relay socket stays open. The socket's own
+   *  throws (the send itself) must still propagate, so only the decision is guarded. */
+  const decide = (judge: () => boolean): boolean => {
+    try {
+      return judge()
+    } catch (err) {
+      if (!warned) {
+        warned = true
+        console.warn(`[access-policy] could not build the access context; dropping events: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      return false
+    }
+  }
   return {
     sendText: (json) => {
-      let deliver: boolean
-      try {
-        deliver = filterOutboundEvent(json, ctxFor(), owners)
-      } catch (err) {
-        // Fail closed WITHOUT throwing: the registry reads a throwing sink as a dead socket and would
-        // tear the peer down while its relay socket stays open. The socket's own throws (below) must
-        // still propagate, so only the decision is guarded.
-        if (!warned) {
-          warned = true
-          console.warn(`[access-policy] could not build the access context; dropping events: ${err instanceof Error ? err.message : String(err)}`)
-        }
-        return
-      }
-      if (deliver) sink.sendText(json)
+      if (decide(() => filterOutboundEvent(json, ctxFor(), owners))) sink.sendText(json)
     },
-    sendBinary: (buf) => sink.sendBinary(buf),
+    sendBinary: (buf) => {
+      if (decide(() => filterOutboundBinary(buf, ctxFor()))) sink.sendBinary(buf)
+    },
     bufferedAmount: () => sink.bufferedAmount?.() ?? 0
   }
 }
