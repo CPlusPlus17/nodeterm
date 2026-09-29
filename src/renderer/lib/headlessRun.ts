@@ -117,7 +117,7 @@ export interface HeadlessStartDeps {
 
 export async function startHeadless(
   deps: HeadlessStartDeps,
-  input: { project: Pick<Project, 'id' | 'cwd'>; node: CanvasNodeState }
+  input: { project: Pick<Project, 'id' | 'cwd' | 'ssh'>; node: CanvasNodeState }
 ): Promise<HeadlessStartOutcome> {
   const { node, project } = input
   const id = node.id
@@ -125,8 +125,12 @@ export async function startHeadless(
   if (!original?.command) return { id, started: false, reason: 'nothing-queued' }
   // A remote node is NEVER spawned locally. The launcher only spawns locally, so refuse before
   // touching anything (the primary fence): the untouched pending launch starts on view, over SSH.
-  // `headlessPtyOptions` also sets `requireRemote` for an SSH-project node, core's belt behind this.
-  if (node.ssh || node.sshRemoteTmux) return { id, started: false, reason: 'remote-unsupported' }
+  // The project is asked too, not only the node's flags: a node of an SSH project that carries
+  // neither flag is still remote. `headlessPtyOptions` also sets `requireRemote` for a node with
+  // `sshRemoteTmux`, core's belt behind this.
+  if (project.ssh || node.ssh || node.sshRemoteTmux) {
+    return { id, started: false, reason: 'remote-unsupported' }
+  }
   if (deps.inFlight.has(id)) return { id, started: false, reason: 'already-starting' }
   deps.inFlight.add(id)
   try {

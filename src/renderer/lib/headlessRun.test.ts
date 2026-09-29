@@ -194,6 +194,22 @@ describe('startHeadless', () => {
     expect(d.inFlight.size).toBe(0)
   })
 
+  // The node's own flags are not the only evidence: a node of an SSH project that carries neither
+  // `ssh` nor `sshRemoteTmux` (hand-edited JSON, an older writer) is still remote.
+  it('a node with no SSH flags in an SSH project is refused before any claim, save or launch', async () => {
+    const { d, saved } = deps({ outcome: 'delivered', fresh: true })
+    expect(await startHeadless(d, { project: sshProject, node: node() })).toEqual({
+      id: 'n1',
+      started: false,
+      reason: 'remote-unsupported'
+    })
+    expect(d.savePending).not.toHaveBeenCalled()
+    expect(d.launch).not.toHaveBeenCalled()
+    expect(d.markStarting).not.toHaveBeenCalled()
+    expect(saved).toHaveLength(0)
+    expect(d.inFlight.size).toBe(0)
+  })
+
   it('an SSH node is refused even while the same id is in flight (no inFlight read or mutation)', async () => {
     const { d } = deps({ outcome: 'delivered', fresh: true })
     d.inFlight.add('n1')
