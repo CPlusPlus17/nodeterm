@@ -69,18 +69,40 @@ export function headlessPtyOptions(
   }
 }
 
+export type HeadlessStartReason =
+  | HeadlessLaunchFailure
+  | 'already-starting'
+  | 'claim-not-saved'
+  | 'nothing-queued'
+  | 'remote-unsupported'
+
 export type HeadlessStartOutcome =
   | { id: string; started: true }
-  | {
-      id: string
-      started: false
-      reason:
-        | HeadlessLaunchFailure
-        | 'already-starting'
-        | 'claim-not-saved'
-        | 'nothing-queued'
-        | 'remote-unsupported'
-    }
+  | { id: string; started: false; reason: HeadlessStartReason }
+
+/** One `startNodesHeadless` call: each node's outcome, plus whether the call restored the
+ *  project's tab (`unhidesForHeadlessStart`). The reply needs the second fact: only a restored tab
+ *  makes the cold open's "reopen it from the welcome screen" hint false. */
+export interface HeadlessStartBatch {
+  outcomes: HeadlessStartOutcome[]
+  unhidden: boolean
+}
+
+/**
+ * Whether a headless start restores a CLOSED project's tab (#925 spec §2.5): the tab comes back,
+ * never the focus. The one definition; Canvas acts on it and reports it back in the batch.
+ * - Not while no project is active (the welcome screen): un-closing one there flips `hasProjects`
+ *   and renders a canvas with no active project. The session still starts; the project stays in
+ *   Recently closed.
+ * - Not for an SSH project: `startHeadless` refuses every one of its nodes (`remote-unsupported`)
+ *   before any claim, so nothing would start and no claim write would persist the tab.
+ */
+export function unhidesForHeadlessStart(
+  project: { closed?: boolean; ssh?: Project['ssh'] },
+  activeProjectId: string
+): boolean {
+  return !!project.closed && !project.ssh && activeProjectId !== ''
+}
 
 export interface HeadlessStartDeps {
   launch(req: { ptyOptions: PtyCreateOptions; command: string }): Promise<HeadlessLaunchResult>
@@ -172,21 +194,50 @@ export async function savePendingAnywhere(
 const STARTS_ON_VIEW = / — queued; starts when that project is next viewed/
 const CLOSED_HINT = / \(that project is closed — reopen it from the welcome screen\)/
 
-/** Turn a cold-open reply (`coldOpenMessage` + result) into the `--run-now` reply. */
+/** Failures after which the node's launch is exactly what the cold open left: never claimed
+ *  (`remote-unsupported`), or handed back unchanged (`not-persistent`, `claim-not-saved`). Such a
+ *  launch still starts when its project is next viewed. Every other failure keeps the write-ahead
+ *  claim (manualOnly), so that node waits for Run now instead. */
+const LAUNCH_LEFT_AS_IS: ReadonlySet<HeadlessStartReason> = new Set([
+  'remote-unsupported',
+  'not-persistent',
+  'claim-not-saved'
+])
+
+/**
+ * Turn a cold-open reply (`coldOpenMessage` + result) into the `--run-now` reply. Each clause of
+ * the cold-open sentence is dropped only when this batch made it false:
+ * - "queued; starts when that project is next viewed" goes once a node started, or once a node's
+ *   launch now waits for Run now. It stays when every launch was left as it was.
+ * - The closed-project hint goes only when the tab was actually restored (`batch.unhidden`).
+ * Every queued id is reported with its own reason (`reasons`, grouped in the message); `reason`
+ * is the first one, kept for callers that read a single field.
+ */
 export function mergeRunNow<T extends { ok: true; message: string; result: Record<string, unknown> }>(
   base: T,
-  outcomes: HeadlessStartOutcome[]
+  batch: HeadlessStartBatch
 ): T {
-  const startedIds = outcomes.filter((o) => o.started).map((o) => o.id)
-  const failed = outcomes.filter(
+  const startedIds = batch.outcomes.filter((o) => o.started).map((o) => o.id)
+  const failed = batch.outcomes.filter(
     (o): o is Extract<HeadlessStartOutcome, { started: false }> => !o.started
   )
   const queuedIds = failed.map((o) => o.id)
   const reason = failed[0]?.reason
+  const reasons: Record<string, HeadlessStartReason> = {}
+  const byReason = new Map<HeadlessStartReason, string[]>()
+  for (const o of failed) {
+    reasons[o.id] = o.reason
+    byReason.set(o.reason, [...(byReason.get(o.reason) ?? []), o.id])
+  }
+  const startsOnViewStillTrue =
+    startedIds.length === 0 && failed.every((o) => LAUNCH_LEFT_AS_IS.has(o.reason))
+  let head = base.message
+  if (!startsOnViewStillTrue) head = head.replace(STARTS_ON_VIEW, '')
+  if (batch.unhidden) head = head.replace(CLOSED_HINT, '')
   const message =
-    base.message.replace(STARTS_ON_VIEW, '').replace(CLOSED_HINT, '') +
+    head +
     (startedIds.length ? ` — started: ${startedIds.join(', ')}` : '') +
-    (queuedIds.length ? ` — queued (${reason}): ${queuedIds.join(', ')}` : '')
+    [...byReason].map(([r, ids]) => ` — queued (${r}): ${ids.join(', ')}`).join('')
   return {
     ...base,
     message,
@@ -196,7 +247,8 @@ export function mergeRunNow<T extends { ok: true; message: string; result: Recor
       startedIds,
       queued: queuedIds.length > 0,
       queuedIds,
-      ...(reason ? { reason } : {})
+      ...(reason ? { reason } : {}),
+      reasons
     }
   }
 }

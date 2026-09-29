@@ -586,7 +586,8 @@ import {
   planRunVerb,
   savePendingAnywhere,
   startHeadless,
-  type HeadlessStartOutcome
+  unhidesForHeadlessStart,
+  type HeadlessStartBatch
 } from '../lib/headlessRun'
 import {
   SETTINGS_VERB_KEY_LIST,
@@ -6234,8 +6235,8 @@ export function Canvas() {
   // assignment, for the same reason: the agent-control effect mounts ONCE.
   const headlessInFlightRef = useRef(new Set<string>())
   const startNodesHeadlessRef = useRef<
-    (project: Project, nodes: CanvasNodeState[]) => Promise<HeadlessStartOutcome[]>
-  >(async () => [])
+    (project: Project, nodes: CanvasNodeState[]) => Promise<HeadlessStartBatch>
+  >(async () => ({ outcomes: [], unhidden: false }))
   const runQueuedNodeRef = useRef<(project: Project, nodeId: string) => Promise<ControlReply>>(
     async () => ({ ok: false, error: 'run: canvas not ready' })
   )
@@ -14342,19 +14343,14 @@ export function Canvas() {
         inFlight: headlessInFlightRef.current
       }
       // A closed project gets its tab back, never the focus (#925 spec §2.5): unhide BEFORE the
-      // claim's disk write, so the same write persists it. Not while no project is active (the
-      // welcome screen): un-closing one there would flip `hasProjects` and render a canvas with no
-      // active project. The session still starts; the project stays in Recently closed. Nor for
-      // an SSH project: `startHeadless` refuses every one of its nodes (`remote-unsupported`)
-      // before any claim, so nothing would start and no claim write would persist the tab.
+      // claim's disk write, so the same write persists it. When it does NOT (the welcome screen,
+      // an SSH project) is `unhidesForHeadlessStart`'s to say; the answer rides back in the batch,
+      // because the reply's "reopen it from the welcome screen" hint stays true unless it acted.
       const projectsNow = useProjects.getState()
-      if (
-        projectsNow.getProject(project.id)?.closed &&
-        !project.ssh &&
-        projectsNow.activeProjectId !== ''
-      ) {
-        projectsNow.unhideProject(project.id)
-      }
+      const storedProject = projectsNow.getProject(project.id)
+      const unhidden =
+        !!storedProject && unhidesForHeadlessStart(storedProject, projectsNow.activeProjectId)
+      if (unhidden) projectsNow.unhideProject(project.id)
       const outcomes = await Promise.all(nodes.map((node) => startHeadless(deps, { project, node })))
       const started = outcomes.filter((o) => o.started).map((o) => o.id)
       if (started.length) {
@@ -14365,7 +14361,7 @@ export function Canvas() {
           action: { label: 'Go there', run: () => travelToNodeRef.current(started[0]) }
         })
       }
-      return outcomes
+      return { outcomes, unhidden }
     }
 
     runQueuedNodeRef.current = async (project, nodeId) => {
@@ -14433,7 +14429,9 @@ export function Canvas() {
           // No await between the plan above and this call: the claim lands in the same tick, while
           // the project is still off screen, which is what makes savePendingAnywhere's store+disk
           // branch (not its non-durable live one) the one that records it.
-          const [o] = await startNodesHeadlessRef.current(project, [stored!])
+          const {
+            outcomes: [o]
+          } = await startNodesHeadlessRef.current(project, [stored!])
           return o.started ? one(true) : one(false, o.reason)
         }
       }
