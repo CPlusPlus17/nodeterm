@@ -2502,6 +2502,25 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     the launcher and the prelude, pass `npm run typecheck` and every unit test, and ship INERT.
     `main/codex-identity-record-wiring.test.ts` pins it at source level, the same remedy
     `hook-verified-parity.test.ts` uses for the same class of hole.
+  - Control/context endpoint discovery retains a known node capability. A dead Desktop SSH tunnel
+    must not redirect a command to a local Server Edition that has no matching token for that node:
+    its unsupported-edition response describes the wrong instance. The two shims use
+    `nt_adopt_for_node` and read only the candidate's advertised token directory (or adjacent
+    `node-tokens` for old endpoint files), never borrow a global token for a candidate. Unknown
+    legacy callers retain existing discovery; actual owning-endpoint refusals remain final.
+    Skipped foreign candidates do not consume the three-network-attempt budget. Hook event
+    delivery retains its existing independent failover policy.
+    **Measured on an SSH host (2026-09-28/29):** the desktop slept, the session's tunnel socket
+    stayed on disk with no listener, and the walk reached an unrelated Server Edition whose
+    `control-unsupported-on-this-edition … permanent … do not retry` (and, for context reads,
+    "No linked nodes") was true about that server and false about the session; the tunnel came
+    back minutes later. When a foreign candidate was skipped and no owner answered, the shims now
+    print `FOREIGN_ENDPOINT_HINT` — the owning connection is unreachable, the state is temporary,
+    the usual cause for an SSH project is the tunnel — and all four agent-facing bodies quote its
+    lead via `ownerUnreachableGuidanceLines`, because their other refusal lines rightly say "do not
+    retry". `src/server/control-owner-tunnel-down.test.ts` rebuilds that host under real `/bin/sh`
+    with the real Server Edition handlers as the foreign endpoint; removing the owner guard
+    reproduces the incident's exact refusal line.
   - **Every generated sh client walks the SAME endpoint failover** (`nt_candidates`/`nt_adopt`,
     `core/agents/hook-endpoint-failover-sh.ts`) — issue #445, the endpoint-level twin of #384: a
     session is pinned for life to the endpoint PATH it got at tmux creation, so an app
@@ -3261,7 +3280,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the control handler (`issuePre`), before any open path snapshots the projects store**: the lookup
   is a host round trip (`git remote`, `gh auth`), and an await inside a path let a tab switch in that
   window write the node into the wrong project. A full `owner/repo#N` asks nobody. The same
-  placement puts resolution before every path's dry-run branch.
+  placement puts resolution before every path's dry-run branch. **But not before the gates**:
+  `resolveIssueFlagForCall` first runs the renderer's authorization belt — the same
+  `resolveProjectTarget` call and source-capability rule the paths apply — and answers a caller
+  they would refuse with the path's own refusal, asking nobody (the lookup otherwise ran for a
+  refused caller, and its refusal said whether that project had a GitHub board). Main's
+  `gateProjectTarget` runs before the renderer as ever; the Server Edition already resolved after
+  its identity, source and target gates, now pinned by a test.
   `--prompt` replaces the default task after the reference line; `--prompt-file` stays the whole brief. Both
   generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
   is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on
@@ -4794,7 +4819,14 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     while a board is up and carry neither `allowWhileTyping` nor `allowInTerminal` — that pair of
     refusals is what makes a bare key a command rather than a character stolen from the user, so a
     `board` row must never gain either flag, and no other scope may be given bare letters
-    (`normalizeBindingForCommand`). `board` shares the `global` conflict bucket with app/canvas.
+    (`normalizeBindingForCommand`).
+  - **A conflict bucket is a DISPATCH CONTEXT, not a scope** (`conflictBuckets`): `canvas` resolves
+    only with the board closed, `board` only with it open, `app` in both — so an app command sits in
+    `canvas-view` AND `board-view`, and a canvas command never conflicts with a board one. One
+    shared keyspace for all three reported a collision dispatch cannot produce, and the load-time
+    sanitizer then STRIPPED the user's legitimate override (a bare-arrow canvas command against the
+    board's arrow keys). A test walks every pair of view commands through the real
+    `resolveCommandForKeyEvent`, so a new scope or a dispatch change that forgets the buckets reds.
   - **Never read `settings.speech.shortcut`.** The dictation chord is `dictationBinding()` (the
     first effective `speech.dictation` binding); the legacy field is a **downgrade mirror only**,
     written by `setKeybindingOverride` so an older build still finds the user's chord.
@@ -4806,8 +4838,8 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     warning reads that list and cannot derive it — main is not importable from the renderer. Note
     what the pin cannot cover: a HARDCODED intercept (the `Digit0` branch) has no command id, so it
     swallows its chord app-wide with the recorder reporting no conflict.
-  - **Dictation has its own conflict bucket** (`conflictBucket` — `speech.dictation` is never in
-    `global`), because it never competes at dispatch: the resolver skips it and its own keyed
+  - **Dictation has its own conflict bucket** (`conflictBuckets` — `speech.dictation` is never in
+    a view bucket), because it never competes at dispatch: the resolver skips it and its own keyed
     listener claims the chord FIRST **in plain app focus or the ⌘M composer box** (`isChatComposerTarget`),
     which is precedence, not ambiguity.
     Overlap policy is deliberately asymmetric — the LOAD path PERMITS a shared chord (legacy
@@ -5418,6 +5450,10 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   `snapshot.etags.heartbeat` (a restart does not pay a full read), and a 304 NEVER skips a full
   reconciliation (a deletion or transfer does not move the top item) or an incomplete repository.
   It covers pull requests by construction: same endpoint, same `updated_at` the scan filters on.
+  **Only a completed scan advances the incremental cursor** (`lastSuccessfulRefreshAt`, the next
+  scan's `since`): a board write folds its one confirmed issue into the snapshot and leaves the
+  cursor alone. It used to set it to the write's time, so a third party's change landing between the
+  last scan and our write fell outside the next `since` window until the daily full pass.
   **A 304 still prompts the board to re-read** (an empty delta, served from the local cache, no
   GitHub cost) exactly as every successful refresh always did: a page is not only issues — read
   only, the mapping approval and the completion column are derived by the host at query time, and
@@ -5549,10 +5585,18 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   `mergedSeenAt >= armedAt` → no move (arming never sweeps old merges; `armedAt` is taken from the
   HOST's clock via the pull board's `now`, because `mergedSeenAt` is stamped there and a Server
   Edition browser's clock can be off). Each planned move must then win the host's one-time CLAIM
-  (`githubIssues:claim-pull-auto-move`, persisted in the same memory, keyed by project + card + PR
-  set) — the first ask across every window wins, and a card dragged back is not moved again for the
-  same merges. **The claim is refused unless THIS card was noted waiting on one of those PRs while it
-  was open** (`githubIssues:note-pull-waits`; the host records a note only for a PR it holds as open
+  (`githubIssues:claim-pull-auto-move`, persisted in the same memory) — the first ask across every
+  window wins, and a card dragged back is not moved again for the same merges. **Claims are
+  recorded PER PR (project + card + PR), never per PR set**: the linked set changes on its own (a
+  merged PR ages off the pull board, another PR on the branch joins), and a set-keyed claim read
+  every such change as a new transition and moved a dragged-back card again. A claim is granted only
+  for a PR that has not moved this card yet; set keys an earlier build wrote are read as a claim on
+  each PR they list. The board asks each (card, PR set) ONCE while it is in flight or after it was
+  won, and re-asks a REFUSED one only after `REFUSED_CLAIM_RETRY_MS` (60 s: the host also refuses
+  transiently, before it is bound to the project or while it clears its cache, and remembering that
+  for the board's lifetime lost the move); a failed call is forgotten. It re-plans only when a field
+  the planner reads changes — it used to send a claim per canvas change for a dragged-back card. **The claim is refused unless THIS card was
+  noted waiting on one of those PRs while it was open** (`githubIssues:note-pull-waits`; the host records a note only for a PR it holds as open
   itself): `mergedSeenAt` is a fact about the PR, and without the per-card note a card that first
   appeared after the merge — a follow-up terminal in the same group, a teammate's card by git pull,
   an issue-bound session started later — would win a fresh claim and jump to Done. It is then
@@ -5868,7 +5912,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     the board's first — never on routine moves, and not for needs-you (the existing agent-status
     alert already covers every agent node). Same consent, background-only rule and per-node
     cooldown as the turn-end alert, and a handoff ping arms a one-shot FOLD so the Stop hook that
-    follows seconds later is not a second notification for the same moment. v1 is agent-driven
+    follows seconds later is not a second notification for the same moment. The fold lasts only
+    while the user is away: a window focus in between drops it (`installHandoffFocusReset`), or the
+    next chime — for a turn the user sat and watched — was swallowed. v1 is agent-driven
     moves only: a teammate's move arriving by git, or the phone's relay move, pings nobody.
   **Phone** (nodeterm-ios): must at least not break on `category`, `rank` or `views` (extra JSON
   keys its board decoder ignores). The relay-served move now lands at the top with a rank, while
@@ -6535,10 +6581,46 @@ SSH/scp staging follows the same ownership rule outside direct `fs` calls. Atomi
 writes use `src/main/remote-atomic-write.ts`: a bounded `.nodeterm-<uuid>.tmp` leaf is placed beside
 the target BEFORE both complete paths are quoted, then the shell preserves the write/move status
 while cleaning that exact temp. The temp leaf must stay independent of the target leaf — appending
-`.uuid.tmp` to a valid `NAME_MAX` target makes the write impossible. It currently protects
-filesystem API writes, tmux.conf, the private hook endpoint, node
-tokens, agent status and pending answers; some generated hook scripts/config merges still use direct writes; only the guarded shared
-Claude/Gemini settings transactions stage and rename here. Do not generalize that claim to every installer. Upload directories use UUIDs across app
+`.uuid.tmp` to a valid `NAME_MAX` target makes the write impossible.
+
+**A remote write is only complete if the host checked the byte count, and a rename alone does not
+check it.** `cat` cannot tell "the body ended" from "the ssh channel ended": when the channel dies
+before the body arrives (the ControlMaster killed or rebuilt on a reconnect, the runner's 15 s
+timeout SIGTERMing the child, a dropped link) it reads EOF and EXITS 0. Measured against OpenSSH 9.6
+with the master SIGKILLed and with the child SIGTERMed, both before the body: a bare
+`cat > f && chmod 755 f` left `f` at 0 bytes and flipped 644 → 755, and the temp + `mv` shape
+published the empty temp over a good file just the same. That is how, on 2026-09-28, a host's
+`~/.nodeterm/nodeterm.sh` and `context.sh` were 0 bytes after a reconnect and every agent's canvas
+call exited 0 with no output. So `remoteAtomicWrite(path, body, options)` takes the BODY, checks
+`[ "$(wc -c < temp)" -eq <utf-8 bytes> ]` before the rename (a short temp exits
+`REMOTE_WRITE_SHORT_BODY` = 65 with the target untouched), returns the `stdin` it was built for,
+and refuses an empty body unless `allowEmpty` (only the generic `ssh-fs` write passes it — an editor
+may save an empty file; nothing we GENERATE is ever empty). `runRemoteAtomicWrite` also THROWS on a
+non-zero exit: the runners resolve on failure, and awaiting them and moving on is what made the
+failure silent. Every remote write goes through it — filesystem API writes, tmux.conf, the hook
+endpoint, node tokens, agent status, pending answers, session env files, the Codex relay and
+launcher, every agent hook script, the canvas/context shims and skills, and our own grok/copilot
+hook configs. The USER's files — Claude/Gemini `settings.json`, codex `hooks.json` and
+`config.toml`, and the AGENTS.md / GEMINI.md / copilot-instructions.md instruction blocks — go
+through `updateRemoteTextFile` / `updateRemoteSettingsFile` (`core/agents/hooks/remote-settings-file.ts`)
+instead: the same byte check plus our lock, symlink resolution (a dotfile link stays a link),
+mode preservation, and a compare-before-publish; a read that fails is never treated as an empty
+file (the old `cat f || true` then `cat > f` replaced an unreadable AGENTS.md with our block alone).
+The local installers for the same files use `writeManagedHookFileAtomic` / `mergeInstructionFile`.
+`src/main/remote-ssh/remote-write.guard.test.ts` fails on any new bare `cat > <file>` in
+src/{core,main,server}, and `remote-write-truncation.test.ts` runs every installer under a real
+`/bin/sh` with the body cut off.
+**Never `chmod <mode> -- <file>` in a remote command.** BSD/macOS chmod does not permute: its
+getopt stops at the MODE operand, so the `--` after it is a FILE named `--` ("No such file or
+directory", exit 1) and the `&&` chain never publishes. `mkdir -p --`, `mv -f --` and `rm -f --` are
+fine (their `--` comes before any operand). That spelling shipped from v0.3.3 (fbc65ad8) for the
+hook endpoint and node tokens, so `setup()` returned null on every macOS SSH host — no status
+hooks, canvas control or context link there. The real-shell tests put a non-permuting chmod
+(`POSIXLY_CORRECT=1` GNU chmod) first on PATH for every mode-bearing caller.
+**Canvas control and context link install as ONE chain** (`RemoteHooks.installAgentTools`): they
+merge different blocks into the same AGENTS.md / GEMINI.md, and the transaction lets only one of two
+racing writers publish a snapshot — fired side by side they lost 16–19 of 48 blocks over 8 fresh
+hosts. Upload directories use UUIDs across app
 processes. Downloads and media-cache copies use hidden UUID `.part` names; user-visible downloads
 also hold an exclusive candidate lock until the rename and cleanup finish. Never simplify any of
 those back to `<target>.tmp` / `<target>.part` or a read-only "does the destination exist?" check —
