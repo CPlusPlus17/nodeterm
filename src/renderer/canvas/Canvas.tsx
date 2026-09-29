@@ -534,7 +534,10 @@ import {
   type CreateBoundWorktreeDeps,
   type WorktreeAttachTarget
 } from '../lib/worktreeCreate'
-import { WAIT_LABEL, dropAfterDep, edgeHidden, hiddenEdgeNodeIds, missingDepRopes, ropeInfoOf, ropeVisual } from '../lib/edgeModel'
+import {
+  WAIT_LABEL, dropAfterDep, edgeHidden, hiddenEdgeNodeIds, markLegacyWaitRopes, missingDepRopes, pruneRopes,
+  ropeInfoOf, ropeVisual, waitRopeId
+} from '../lib/edgeModel'
 import { triggerEdges } from '../lib/triggerCard'
 import {
   freeSpot,
@@ -729,6 +732,8 @@ import {
 import type { CodexAccount } from '@shared/codex-account'
 import { useSystemCodexAccount } from '../state/systemCodexAccount'
 import { kanbanSessionsFrom, toKanbanSession } from './toKanbanSession'
+import type { TeamStation } from '../lib/teamProgress'
+import { canvasTeamStations, useTeamStations } from '../state/teamStations'
 import { applyPullAutoMove } from '../lib/pullAutoMove'
 import { useWallpaperBackground, wallpaperLayers } from '../state/wallpaper'
 import { showCanvasDots } from '../lib/canvasDots'
@@ -2794,7 +2799,10 @@ export function Canvas() {
     // A wait with no rope is a wait nothing on screen explains. Ropes for `--after` are written by
     // the verbs that arm a node, so an arming that predates them (persisted `pendingLaunch`, no
     // persisted rope) — or any future path that forgets one — is healed here on the next load.
-    const restoredRopes = (project.ropes ?? []).map((r) => ropeEdge(r.id, r.source, r.target))
+    // `markLegacyWaitRopes` first: a canvas saved before waits carried their own id marks them by
+    // append order, and it must run before the prune below can delete an opener's rope — after
+    // that, nothing left says which rope into a node was its opener (lib/teamProgress reads it).
+    const restoredRopes = markLegacyWaitRopes(project.ropes ?? []).map((r) => ropeEdge(r.id, r.source, r.target))
     setControlEdges([
       ...restoredRopes,
       ...missingDepRopes(flow, restoredRopes).map((r) => ropeEdge(r.id, r.source, r.target))
@@ -3922,10 +3930,7 @@ export function Canvas() {
     // identity), and most canvases have no ropes at all.
     if (!controlEdgesRef.current.length) return
     const ids = new Set(nodes.map((n) => n.id))
-    setControlEdges((es) => {
-      const valid = es.filter((e) => ids.has(e.source) && ids.has(e.target))
-      return valid.length === es.length ? es : valid
-    })
+    setControlEdges((es) => pruneRopes(es, ids))
   }, [nodes])
 
   useContextLinkSync({ projectId: nodesProjectIdRef.current, nodes, edges: linkEdges })
@@ -10081,6 +10086,22 @@ export function Canvas() {
     [nodes, perProjectKanbanOpen, activeProjectSsh]
   )
 
+  // Team progress (lib/teamProgress): the stations each session opened, read off the live control
+  // ropes — the first rope into a node is its opener's; a later one is an `--after` wait. Published
+  // to a small store so a terminal node's header draws the same ring its board card does. The
+  // previous map is threaded back in, so an unchanged team keeps its array identity and a node
+  // header (or card) subscribed to it does not re-render on every drag frame. A canvas without
+  // ropes — most of them — skips the node walk entirely.
+  const teamStationsRef = useRef<ReadonlyMap<string, readonly TeamStation[]>>()
+  const teamStations = useMemo(() => {
+    const next = canvasTeamStations(controlEdges, nodes, teamStationsRef.current)
+    teamStationsRef.current = next
+    return next
+  }, [controlEdges, nodes])
+  useEffect(() => {
+    useTeamStations.getState().set(teamStations)
+  }, [teamStations])
+
   // Create a node from the board's per-column "+ New" menu: it lands on the canvas (view
   // center) and, for a real column, is assigned there. The assignment is written directly —
   // NOT through the board's pruned commit path: the fresh node isn't in the derived session
@@ -12029,7 +12050,7 @@ export function Canvas() {
       const ropeDeps = (ids: string[], after: string[] | undefined): void => {
         if (!after?.length) return
         const ropes = ids.flatMap((nid) =>
-          after.filter((dep) => dep !== sourceNodeId).map((dep) => ropeEdge(`ctrl-${dep}-${nid}`, dep, nid))
+          after.filter((dep) => dep !== sourceNodeId).map((dep) => ropeEdge(waitRopeId(dep, nid), dep, nid))
         )
         if (ropes.length) setControlEdges((es) => [...es, ...ropes])
       }
@@ -16220,6 +16241,7 @@ export function Canvas() {
           onAutoMoveFromPulls={autoMoveCardFromPulls}
           issueAgentMenu={issueAgentMenu}
           issueWorktreeMenu={issueWorktreeMenu}
+          teams={teamStations}
         />
       )}
       <UpdateCard />

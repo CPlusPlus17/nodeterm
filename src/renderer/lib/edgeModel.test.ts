@@ -8,7 +8,11 @@ import {
   ropeInfoOf,
   ropeVisual,
   WAIT_LABEL,
-  type RopeNodeInfo
+  type RopeNodeInfo,
+  isWaitRope,
+  markLegacyWaitRopes,
+  pruneRopes,
+  waitRopeId
 } from './edgeModel'
 
 const infoOf =
@@ -125,7 +129,7 @@ describe('missingDepRopes — a wait with no rope is a wait nothing on screen ex
 
   it('synthesizes dep -> node for an armed node whose rope was never written', () => {
     expect(missingDepRopes([{ id: 'a', data: {} }, armed('b', ['a'])], [])).toEqual([
-      { id: 'ctrl-a-b', source: 'a', target: 'b' }
+      { id: 'ctrl-after-a-b', source: 'a', target: 'b' }
     ])
   })
 
@@ -135,7 +139,7 @@ describe('missingDepRopes — a wait with no rope is a wait nothing on screen ex
 
   it('an OPPOSITE rope is not the same relation — the dep rope is still owed', () => {
     expect(missingDepRopes([{ id: 'a', data: {} }, armed('b', ['a'])], [{ source: 'b', target: 'a' }])).toEqual([
-      { id: 'ctrl-a-b', source: 'a', target: 'b' }
+      { id: 'ctrl-after-a-b', source: 'a', target: 'b' }
     ])
   })
 
@@ -149,7 +153,38 @@ describe('missingDepRopes — a wait with no rope is a wait nothing on screen ex
 
   it('a repeated dep yields ONE rope — two edges with one id would be a React Flow collision', () => {
     expect(missingDepRopes([{ id: 'a', data: {} }, armed('b', ['a', 'a'])], [])).toEqual([
-      { id: 'ctrl-a-b', source: 'a', target: 'b' }
+      { id: 'ctrl-after-a-b', source: 'a', target: 'b' }
     ])
+  })
+})
+
+describe('wait ropes carry their own id', () => {
+  const r = (id: string, source: string, target: string) => ({ id, source, target })
+
+  it('a wait is recognized by its exact id, never by prefix alone', () => {
+    expect(waitRopeId('a', 'b')).toBe('ctrl-after-a-b')
+    expect(isWaitRope(r('ctrl-after-a-b', 'a', 'b'))).toBe(true)
+    expect(isWaitRope(r('ctrl-a-b', 'a', 'b'))).toBe(false)
+    // An opener whose own id starts with `after-`: its rope id begins `ctrl-after-` but is no wait.
+    expect(isWaitRope(r('ctrl-after-x-b', 'after-x', 'b'))).toBe(false)
+  })
+
+  it('marks every legacy rope into a node after the first, by append order', () => {
+    const ropes = [r('ctrl-o-b', 'o', 'b'), r('ctrl-o-c', 'o', 'c'), r('ctrl-b-c', 'b', 'c')]
+    expect(markLegacyWaitRopes(ropes).map((x) => x.id)).toEqual(['ctrl-o-b', 'ctrl-o-c', 'ctrl-after-b-c'])
+  })
+
+  it('leaves a canvas that needs nothing by identity, and never duplicates an id', () => {
+    const clean = [r('ctrl-o-b', 'o', 'b'), r('ctrl-after-b-c', 'b', 'c'), r('ctrl-o-c', 'o', 'c')]
+    expect(markLegacyWaitRopes(clean)).toBe(clean)
+    // The same pair twice, the later one legacy: re-minting it would collide with the marked one.
+    const dup = [r('ctrl-o-c', 'o', 'c'), r('ctrl-after-b-c', 'b', 'c'), r('ctrl-b-c', 'b', 'c')]
+    expect(markLegacyWaitRopes(dup).map((x) => x.id)).toEqual(['ctrl-o-c', 'ctrl-after-b-c'])
+  })
+
+  it('pruneRopes drops a rope with a missing endpoint and keeps identity otherwise', () => {
+    const ropes = [r('ctrl-o-b', 'o', 'b'), r('ctrl-after-b-c', 'b', 'c')]
+    expect(pruneRopes(ropes, new Set(['o', 'b', 'c']))).toBe(ropes)
+    expect(pruneRopes(ropes, new Set(['b', 'c'])).map((x) => x.id)).toEqual(['ctrl-after-b-c'])
   })
 })

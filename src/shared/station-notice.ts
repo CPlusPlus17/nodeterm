@@ -229,7 +229,7 @@ export interface StationStoredNode {
 export interface StationCanvas {
   id: string
   nodes: readonly StationStoredNode[]
-  ropes?: readonly { source: string; target: string }[]
+  ropes?: readonly { id?: string; source: string; target: string }[]
 }
 
 export interface StationRecipient {
@@ -277,7 +277,14 @@ export function stationRecipient(
   const station = canvas.nodes.find((n) => n.id === stationNodeId)
   const opener = station?.openedBy
   if (typeof opener !== 'string' || !isSafeNodeId(opener) || opener === stationNodeId) return undefined
-  if (!(canvas.ropes ?? []).some((r) => r.source === opener && r.target === stationNodeId))
+  // The OPENER's rope — never a wait rope (`ctrl-after-<dep>-<node>`, the renderer's `waitRopeId`),
+  // which says "waits for", not "opened by". Same pair `stationsByOpener` reads for team progress.
+  const waitId = `ctrl-after-${opener}-${stationNodeId}`
+  if (
+    !(canvas.ropes ?? []).some(
+      (r) => r.source === opener && r.target === stationNodeId && r.id !== waitId
+    )
+  )
     return undefined
   const recipient = canvas.nodes.find((n) => n.id === opener)
   if (!isNoticeRecipient(recipient)) return undefined

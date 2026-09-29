@@ -160,6 +160,18 @@ describe('who is told — the opener, and only while its rope still says so', ()
     expect(stationRecipient([unrecorded], 'st1')).toBeUndefined()
   })
 
+  it('a WAIT rope from the recorded opener is not its opener rope', () => {
+    const waitOnly = canvas({ ropes: [{ id: 'ctrl-after-orch-st1', source: 'orch', target: 'st1' }] })
+    expect(stationRecipient([waitOnly], 'st1')).toBeUndefined()
+    const both = canvas({
+      ropes: [
+        { id: 'ctrl-after-orch-st1', source: 'orch', target: 'st1' },
+        { id: 'ctrl-orch-st1', source: 'orch', target: 'st1' }
+      ]
+    })
+    expect(stationRecipient([both], 'st1')?.recipientNodeId).toBe('orch')
+  })
+
   it('never a recipient that is not a canvas-capable agent node', () => {
     const plain = { ...orch, agentId: undefined }
     expect(stationRecipient([canvas({ nodes: [plain, station] })], 'st1')).toBeUndefined()
