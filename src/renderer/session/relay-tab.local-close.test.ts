@@ -82,6 +82,9 @@ describe('openRelayTab — a hosted connection closed from this side while the t
     expect(sessionCount()).toBe(1) // only the local session
     expect(f.disconnect).toHaveBeenCalledWith('conn-self')
     expect(useHostedTeams.getState().bySession).toEqual({})
+    // No session was ever created for it (not created-then-disposed): a dead role question is not
+    // answered with a Viewer guess. The next relay session is the first one.
+    expect(createSession('relay', { marker: 'next' } as unknown as NodeTerminalApi, 'next').id).toBe('relay-1')
   })
 
   it('during the workspace load: the tab rejects and disposes the session it had created (presence too)', async () => {

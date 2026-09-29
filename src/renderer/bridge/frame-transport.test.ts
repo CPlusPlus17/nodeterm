@@ -126,6 +126,15 @@ describe('RelayFrameTransport: a close is a close, whoever made it', () => {
     expect(cb).toHaveBeenCalledTimes(1)
   })
 
+  it('fires once in the other order too (our own close, then main noticing the socket is gone)', () => {
+    const r = relay()
+    const cb = vi.fn()
+    new RelayFrameTransport('conn-rev', r.api).onClose(cb)
+    emitLocalRelayClose('conn-rev')
+    r.mainClose.get('conn-rev')!()
+    expect(cb).toHaveBeenCalledTimes(1)
+  })
+
   it('an RpcClient over it fails its in-flight requests on a local close', async () => {
     const r = relay()
     const client = new RpcClient(new RelayFrameTransport('conn-rpc', r.api))
