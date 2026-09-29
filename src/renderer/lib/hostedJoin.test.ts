@@ -4,6 +4,7 @@ import { JOIN_CODE_PREFIX } from '@shared/relay-join-code'
 import { createHostedJoiner, type HostedJoinerDeps, type HostedMountOutcome, type HostedNotice } from './hostedJoin'
 import type { HostedAttemptRequest } from './hostedAttempts'
 import { RelayApprovalError } from './hostedTeam'
+import { WAITING_NOTICE_DELAY_MS } from './hostedJoin'
 
 const wrap = (m: string) => new Error(`Error invoking remote method 'relay:client:connect': Error: ${m}`)
 const flush = async () => {
@@ -20,8 +21,15 @@ function harness(bookmarks: Bookmark[] = []) {
   const notices: HostedNotice[] = []
   const timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = []
   const open = new Set<string>()
+  const approvedCbs = new Map<string, () => void>()
+  const cleared: string[] = []
   let list = [...bookmarks]
   const deps: HostedJoinerDeps = {
+    onApproved: (id, cb) => {
+      approvedCbs.set(id, cb)
+      return () => approvedCbs.delete(id)
+    },
+    clearNotice: (text) => cleared.push(text),
     connect: (code) => new Promise((resolve, reject) => connects.push({ code, resolve, reject })),
     onClosed: (id, cb) => {
       closeCbs.set(id, cb)
@@ -45,7 +53,7 @@ function harness(bookmarks: Bookmark[] = []) {
       ;(t as { cleared: boolean }).cleared = true
     }
   }
-  return { deps, connects, mounts, closeCbs, notices, timers, open, setList: (l: Bookmark[]) => { list = l } }
+  return { deps, connects, mounts, closeCbs, notices, timers, open, approvedCbs, cleared, setList: (l: Bookmark[]) => { list = l } }
 }
 
 /** Connect + mount one attempt to a live tab. */
@@ -87,6 +95,7 @@ describe('hosted joiner', () => {
 
   it('a code pasted into a greyed tab\'s prompt reconnects THAT tab (never a second one)', async () => {
     const h = harness()
+    h.open.add('proj-7') // the greyed tab the prompt was raised on
     const j = createHostedJoiner(h.deps)
     j.joinWithCode(codeFor('H1'), 'proj-7')
     h.connects[0].resolve('c0')
@@ -270,5 +279,197 @@ describe('hosted joiner', () => {
     await flush()
     j.dispose()
     expect(h.timers.filter((t) => !t.cleared)).toHaveLength(0)
+  })
+
+  // ── R40 ─────────────────────────────────────────────────────────────────────────────────────────
+  it('the waiting-notice delay is none of the retry ladder\'s steps (the helper below tells them apart by it)', () => {
+    expect([1000, 2000, 4000, 8000, 15000, 60000]).not.toContain(WAITING_NOTICE_DELAY_MS)
+  })
+
+  /** Fire the newest armed timer that is not the waiting-notice one. */
+  const fireRetry = (h: ReturnType<typeof harness>) => {
+    const t = h.timers.filter((x) => !x.cleared && x.ms !== WAITING_NOTICE_DELAY_MS).pop()
+    if (!t) throw new Error('no armed retry')
+    t.cleared = true
+    t.fn()
+  }
+
+  it('R40: a dropped tab that cannot come back gives up after 5 quick tries with ONE notice naming the team', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    h.closeCbs.get('c0')!(undefined) // the drop
+    await flush()
+    for (let i = 1; i <= 6; i++) {
+      h.connects[i].resolve(`c${i}`)
+      await flush()
+      h.mounts[i].resolve({ error: new RelayApprovalError('The relay connection closed before it was approved.'), declined: false })
+      await flush()
+      if (i < 6) fireRetry(h)
+    }
+    expect(h.connects).toHaveLength(7) // the drop's reconnect + 5 retries
+    expect(h.notices).toEqual([{ kind: 'error', text: "Couldn't reconnect to box. Click its tab to try again." }])
+    expect(h.timers.filter((t) => !t.cleared && t.ms !== WAITING_NOTICE_DELAY_MS)).toEqual([])
+    // The tab stays greyed and clickable: a click is a fresh try.
+    expect(j.reconnectTab('proj-1')).toBe(true)
+    expect(h.connects).toHaveLength(8)
+  })
+
+  it('R40: a boot reconnect that gives up (no tab yet) says how to try again', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    for (let i = 0; i <= 5; i++) {
+      h.connects[i].resolve(`c${i}`)
+      await flush()
+      h.mounts[i].resolve({ error: new RelayApprovalError('closed'), declined: false })
+      await flush()
+      if (i < 5) fireRetry(h)
+    }
+    expect(h.notices).toEqual([{ kind: 'error', text: "Couldn't reconnect to box. Paste its invite code to try again." }])
+  })
+
+  it('R40: closing the tab while its reconnect backs off stops the loop — no further connect', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    h.closeCbs.get('c0')!(undefined)
+    await flush()
+    h.connects[1].reject(wrap('[E_JOIN_NETWORK] x'))
+    await flush()
+    j.tabClosed('proj-1')
+    h.open.delete('proj-1')
+    expect(h.timers.filter((t) => !t.cleared && t.ms !== WAITING_NOTICE_DELAY_MS)).toEqual([])
+    await flush()
+    expect(h.connects).toHaveLength(2)
+    // The slot is free: a later paste is a fresh join, not "already connected".
+    j.joinWithCode(codeFor('H1'))
+    expect(h.connects).toHaveLength(3)
+    expect(h.notices).toEqual([])
+  })
+
+  it('R40: deleting the tab while its connect is in flight: no mount, the connection closed, the slot released', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    h.closeCbs.get('c0')!(undefined)
+    await flush()
+    expect(h.connects).toHaveLength(2) // the in-place reconnect is connecting
+    j.tabClosed('proj-1')
+    h.open.delete('proj-1')
+    h.connects[1].resolve('c1')
+    await flush()
+    expect(h.mounts).toHaveLength(1) // only the first, long-gone mount
+    expect(h.deps.disconnect).toHaveBeenCalledWith('c1')
+    j.joinWithCode(codeFor('H1'))
+    expect(h.connects).toHaveLength(3)
+  })
+
+  it('R40: a reconnect whose tab closed while it waited for approval ends silently (it was closed for it)', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    h.closeCbs.get('c0')!(undefined)
+    await flush()
+    h.connects[1].resolve('c1')
+    await flush()
+    j.tabClosed('proj-1')
+    h.open.delete('proj-1')
+    expect(h.deps.disconnect).toHaveBeenCalledWith('c1')
+    h.mounts[1].resolve({ error: new Error('The tab this reconnect was for is gone.'), declined: false })
+    await flush()
+    expect(h.notices).toEqual([])
+    expect(j.isHostedTab('proj-1')).toBe(false)
+  })
+
+  it('R40: after "forget", the greyed tab asks for a code instead of rejoining with the stored one', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    ;(h.deps.promptForCode as ReturnType<typeof vi.fn>).mockResolvedValue(codeFor('H1', 'box'))
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    h.setList([]) // no automatic reconnect after the drop
+    h.closeCbs.get('c0')!(undefined)
+    await flush()
+    await j.forget('H1', 'box')
+    expect(j.reconnectTab('proj-1')).toBe(true)
+    expect(h.connects).toHaveLength(1) // nothing re-minted from the stored code
+    await flush()
+    expect(h.deps.promptForCode).toHaveBeenCalledWith('box')
+    // The code the user pasted reconnects THAT tab.
+    expect(h.connects).toHaveLength(2)
+    h.connects[1].resolve('c1')
+    await flush()
+    expect(h.mounts[1].req).toMatchObject({ reconnectProjectId: 'proj-1', manual: true })
+  })
+
+  it('R40: a cancelled "Remove and rejoin" also leaves the tab asking for a code', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    h.setList([])
+    h.closeCbs.get('c0')!(undefined)
+    await flush()
+    j.reconnectTab('proj-1')
+    h.connects[1].reject(wrap("[E_JOIN_REVOKED] revoked"))
+    await flush()
+    h.notices.at(-1)!.action!.run() // promptForCode answers null: cancelled
+    await flush()
+    expect(h.deps.removeBookmark).toHaveBeenCalledWith('H1')
+    ;(h.deps.promptForCode as ReturnType<typeof vi.fn>).mockClear()
+    expect(j.reconnectTab('proj-1')).toBe(true)
+    await flush()
+    expect(h.deps.promptForCode).toHaveBeenCalledWith('box')
+    expect(h.connects).toHaveLength(2)
+  })
+
+  it('R40: a code pasted for a team whose tab is greyed reconnects that tab, never a second one', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    h.setList([])
+    h.closeCbs.get('c0')!(undefined)
+    await flush()
+    j.joinWithCode(codeFor('H1'))
+    h.connects[1].resolve('c1')
+    await flush()
+    expect(h.mounts[1].req.reconnectProjectId).toBe('proj-1')
+  })
+
+  it('R40: every hosted mount still waiting for approval says so after a moment — a bookmarked reconnect too', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    h.connects[0].resolve('c0')
+    await flush()
+    const wait = h.timers.find((t) => t.ms === WAITING_NOTICE_DELAY_MS && !t.cleared)!
+    wait.cleared = true
+    wait.fn()
+    expect(h.notices).toEqual([{ kind: 'info', text: 'Waiting for an owner of box to approve this device…', sticky: true }])
+    h.approvedCbs.get('c0')!()
+    expect(h.cleared).toEqual(['Waiting for an owner of box to approve this device…'])
+    h.mounts[0].resolve({ projectId: 'proj-1' })
+    await flush()
+    expect(h.approvedCbs.has('c0')).toBe(false) // unsubscribed once settled
+  })
+
+  it('R40: an approval that lands quickly never shows the waiting notice', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    h.connects[0].resolve('c0')
+    await flush()
+    h.approvedCbs.get('c0')!()
+    h.mounts[0].resolve({ projectId: 'proj-1' })
+    await flush()
+    expect(h.timers.filter((t) => t.ms === WAITING_NOTICE_DELAY_MS).every((t) => t.cleared)).toBe(true)
+    expect(h.notices).toEqual([])
+    expect(h.cleared).toEqual([])
   })
 })

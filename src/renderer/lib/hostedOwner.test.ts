@@ -84,22 +84,42 @@ describe('attachHostedOwner (R25)', () => {
 
 describe('answerHostedRequest', () => {
   const item = (hosted: HostedSessionApi): QueuedRequest => ({ projectId: 'p1', teamLabel: 'box', pending: P('x'), answerer: hosted })
+  const ledger = () => {
+    const log: string[] = []
+    return { log, begin: (id: string) => log.push(`begin:${id}`), finish: (id: string, landed: boolean) => log.push(`finish:${id}:${landed}`) }
+  }
+
+  it('R40: settles only once the host ANSWERED (true or false); a rejection leaves the request answerable', async () => {
+    const f = fakeHosted()
+    const ok = ledger()
+    await answerHostedRequest(item(f.hosted), { kind: 'approve', role: 'viewer' }, ok)
+    expect(ok.log).toEqual(['begin:x', 'finish:x:true'])
+    ;(f.hosted.deny as ReturnType<typeof vi.fn>).mockResolvedValue(false)
+    const gone = ledger()
+    await answerHostedRequest(item(f.hosted), { kind: 'deny' }, gone)
+    expect(gone.log).toEqual(['begin:x', 'finish:x:true'])
+    ;(f.hosted.approve as ReturnType<typeof vi.fn>).mockRejectedValue(Object.assign(new Error('The connection to the server was lost.'), { code: 'E_DISCONNECTED' }))
+    const dropped = ledger()
+    const line = await answerHostedRequest(item(f.hosted), { kind: 'approve', role: 'viewer' }, dropped)
+    expect(dropped.log).toEqual(['begin:x', 'finish:x:false'])
+    expect(line?.kind).toBe('error')
+  })
 
   it('approves with the chosen role and says nothing when it landed', async () => {
     const f = fakeHosted()
-    expect(await answerHostedRequest(item(f.hosted), { kind: 'approve', role: 'commenter' })).toBeNull()
+    expect(await answerHostedRequest(item(f.hosted), { kind: 'approve', role: 'commenter' }, ledger())).toBeNull()
     expect(f.hosted.approve).toHaveBeenCalledWith('x', 'commenter')
   })
 
   it('a false answer means another owner (or the device leaving) got there first', async () => {
     const f = fakeHosted()
     ;(f.hosted.deny as ReturnType<typeof vi.fn>).mockResolvedValue(false)
-    expect(await answerHostedRequest(item(f.hosted), { kind: 'deny' })).toEqual({ kind: 'info', text: 'That request was already answered or has gone.' })
+    expect(await answerHostedRequest(item(f.hosted), { kind: 'deny' }, ledger())).toEqual({ kind: 'info', text: 'That request was already answered or has gone.' })
   })
 
   it('a refused answer says so, in the host\'s words', async () => {
     const f = fakeHosted()
     ;(f.hosted.approve as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Only an owner can approve.'))
-    expect(await answerHostedRequest(item(f.hosted), { kind: 'approve', role: 'viewer' })).toEqual({ kind: 'error', text: 'Could not answer the request: Only an owner can approve.' })
+    expect(await answerHostedRequest(item(f.hosted), { kind: 'approve', role: 'viewer' }, ledger())).toEqual({ kind: 'error', text: 'Could not answer the request: Only an owner can approve.' })
   })
 })

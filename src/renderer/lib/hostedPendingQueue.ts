@@ -25,9 +25,12 @@ export interface PendingQueue {
   /** Requests already answered here or closed at the host, most recent last: a late replay or pull
    *  of one must not bring its dialog back. */
   settled: readonly string[]
+  /** Requests whose answer is on its way: off the screen, and not re-added by a replay meanwhile.
+   *  Settled only once the host answers; an answer that never landed leaves them answerable. */
+  answering?: readonly string[]
 }
 
-export const EMPTY_PENDING_QUEUE: PendingQueue = Object.freeze({ items: [], settled: [] })
+export const EMPTY_PENDING_QUEUE: PendingQueue = Object.freeze({ items: [], settled: [], answering: [] })
 
 /** How many closed request ids are remembered (4× the host's concurrent cap). */
 export const SETTLED_MEMORY = 64
@@ -54,7 +57,7 @@ const remember = (settled: readonly string[], id: string): string[] =>
 export function addRequest(q: PendingQueue, item: QueuedRequest): PendingQueue {
   if (!wellFormed(item.pending)) return q
   const id = item.pending.pendingId
-  if (q.settled.includes(id) || q.items.some((i) => i.pending.pendingId === id)) return q
+  if (q.settled.includes(id) || (q.answering ?? []).includes(id) || q.items.some((i) => i.pending.pendingId === id)) return q
   const at = q.items.findIndex((i) => i.pending.since > item.pending.since)
   const items = at < 0 ? [...q.items, item] : [...q.items.slice(0, at), item, ...q.items.slice(at)]
   return { ...q, items }
@@ -70,14 +73,37 @@ export function closeRequest(
   const wasHead = headRequest(q)?.pending.pendingId === pendingId
   const queue: PendingQueue = {
     items: q.items.filter((i) => i.pending.pendingId !== pendingId),
-    settled: remember(q.settled, pendingId)
+    settled: remember(q.settled, pendingId),
+    answering: (q.answering ?? []).filter((x) => x !== pendingId)
   }
   return { queue, notice: wasHead ? pendingClosedNotice(reason) : null }
 }
 
-/** This owner answered a request: it leaves the queue now (the host's own close follows). */
+/** Remember a request as answered for good (the host's own close follows). */
 export function settleRequest(q: PendingQueue, pendingId: string): PendingQueue {
-  return { items: q.items.filter((i) => i.pending.pendingId !== pendingId), settled: remember(q.settled, pendingId) }
+  return {
+    items: q.items.filter((i) => i.pending.pendingId !== pendingId),
+    settled: remember(q.settled, pendingId),
+    answering: (q.answering ?? []).filter((x) => x !== pendingId)
+  }
+}
+
+/** This owner answered: the request leaves the screen now, and a replay cannot bring it back while
+ *  the answer is on its way. */
+export function beginAnswer(q: PendingQueue, pendingId: string): PendingQueue {
+  return {
+    ...q,
+    items: q.items.filter((i) => i.pending.pendingId !== pendingId),
+    answering: [...(q.answering ?? []).filter((x) => x !== pendingId), pendingId]
+  }
+}
+
+/** The answer came back. `landed` (the host said true or false) settles it; an answer that never
+ *  landed (the tab dropped, the call failed) leaves it answerable: the reconnect's pull brings the
+ *  request back if it is still pending (R40). */
+export function finishAnswer(q: PendingQueue, pendingId: string, landed: boolean): PendingQueue {
+  if (landed) return settleRequest(q, pendingId)
+  return { ...q, answering: (q.answering ?? []).filter((x) => x !== pendingId) }
 }
 
 /** The owner's tab went away (dropped, closed): its requests leave the queue unanswered — its

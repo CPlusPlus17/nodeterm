@@ -16,7 +16,11 @@ function harness() {
   const stopped: Array<{ req: HostedAttemptRequest; f: JoinFailure }> = []
   const ended: Array<{ req: HostedAttemptRequest; projectId: string; reason?: RelayClosedReason }> = []
   const disconnected: string[] = []
+  const exhausted: HostedAttemptRequest[] = []
+  const wanted = { value: true }
   const deps: HostedAttemptDeps = {
+    exhausted: (req) => exhausted.push(req),
+    wanted: () => wanted.value,
     connect: (code) => new Promise((resolve, reject) => connects.push({ code, resolve, reject })),
     mount: (id, req) => new Promise((resolve) => mounts.push({ id, req, resolve })),
     onClosed: (id, cb) => {
@@ -42,7 +46,7 @@ function harness() {
     t.fn()
   }
   const armed = () => timers.filter((t) => !t.cleared)
-  return { deps, connects, mounts, closeCbs, unsubs, timers, armed, fire, stopped, ended, disconnected }
+  return { deps, connects, mounts, closeCbs, unsubs, timers, armed, fire, stopped, ended, disconnected, exhausted, wanted }
 }
 
 const boot = (over: Partial<HostedAttemptRequest> = {}): HostedAttemptRequest => ({
@@ -303,5 +307,151 @@ describe('hosted attempts: one attempt and one live connection per team (R38/R39
     await flush()
     await flush()
     expect(a.phase('H1')).toBeNull()
+  })
+
+  // ── R40 ─────────────────────────────────────────────────────────────────────────────────────────
+  it('R40: a drop the host did not explain is retried at most 5 times on 1/2/4/8/15 s, then gives up ONCE', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot({ reconnectProjectId: 'proj-1' }))
+    const delays: number[] = []
+    for (let i = 0; i < 6; i++) {
+      h.connects[i].resolve(`c${i}`)
+      await flush()
+      h.mounts[i].resolve({ retry: true })
+      await flush()
+      if (i < 5) {
+        delays.push(h.armed()[0].ms)
+        h.fire()
+      }
+    }
+    expect(delays).toEqual([1000, 2000, 4000, 8000, 15000])
+    expect(h.connects).toHaveLength(6)
+    expect(h.armed()).toEqual([])
+    expect(a.phase('H1')).toBeNull()
+    expect(h.exhausted).toEqual([expect.objectContaining({ hostId: 'H1', reconnectProjectId: 'proj-1' })])
+    expect(h.stopped).toEqual([])
+  })
+
+  it('R40: network failures keep the R35 60 s tail — the bound is for the pre-approval drop only', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot())
+    for (let i = 0; i < 8; i++) {
+      h.connects[i].reject(wrap('[E_JOIN_NETWORK] x'))
+      await flush()
+      h.fire()
+    }
+    expect(h.connects).toHaveLength(9)
+    expect(h.exhausted).toEqual([])
+  })
+
+  it('R40: the drop budget starts over after the connection went live', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot())
+    for (let i = 0; i < 4; i++) {
+      h.connects[i].resolve(`c${i}`)
+      await flush()
+      h.mounts[i].resolve({ retry: true })
+      await flush()
+      h.fire()
+    }
+    h.connects[4].resolve('c4')
+    await flush()
+    h.mounts[4].resolve({ projectId: 'proj-1' })
+    await flush()
+    h.closeCbs.get('c4')!(undefined)
+    a.run(boot())
+    h.connects[5].resolve('c5')
+    await flush()
+    h.mounts[5].resolve({ retry: true })
+    await flush()
+    expect(h.armed()[0].ms).toBe(1000)
+  })
+
+  it('R40: a retry whose tab is gone does not happen', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot({ reconnectProjectId: 'proj-1' }))
+    h.connects[0].reject(wrap('[E_JOIN_NETWORK] x'))
+    await flush()
+    h.wanted.value = false // the tab was closed while the loop backed off
+    h.fire()
+    await flush()
+    expect(h.connects).toHaveLength(1)
+    expect(a.phase('H1')).toBeNull()
+    expect(h.stopped).toEqual([])
+  })
+
+  it('R40: a connection that arrives after its tab is gone is closed, never mounted', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot({ reconnectProjectId: 'proj-1' }))
+    h.wanted.value = false
+    h.connects[0].resolve('c0')
+    await flush()
+    expect(h.mounts).toEqual([])
+    expect(h.disconnected).toEqual(['c0'])
+    expect(a.phase('H1')).toBeNull()
+  })
+
+  it('R40: closing a tab cancels its team\'s attempt in every phase, and releases the slot', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    // waiting
+    a.run(boot({ reconnectProjectId: 'proj-1' }))
+    h.connects[0].reject(wrap('[E_JOIN_NETWORK] x'))
+    await flush()
+    a.cancelProject('proj-1')
+    expect(h.armed()).toEqual([])
+    expect(a.phase('H1')).toBeNull()
+    // connecting: the late connection is closed, not mounted
+    a.run(boot({ reconnectProjectId: 'proj-1' }))
+    a.cancelProject('proj-1')
+    h.connects[1].resolve('c1')
+    await flush()
+    expect(h.mounts).toEqual([])
+    expect(h.disconnected).toContain('c1')
+    // mounting (the approval wait): the connection is closed and the slot is free at once
+    a.run(boot({ reconnectProjectId: 'proj-1' }))
+    h.connects[2].resolve('c2')
+    await flush()
+    expect(a.phase('H1')).toBe('mounting')
+    a.cancelProject('proj-1')
+    expect(h.disconnected).toContain('c2')
+    expect(a.phase('H1')).toBeNull()
+    h.mounts[0].resolve({ projectId: 'proj-1' }) // lands late: ignored
+    await flush()
+    expect(a.phase('H1')).toBeNull()
+    expect(a.run(boot())).toBe('started')
+  })
+
+  it('R40: cancelProject leaves other tabs\' teams alone, and releases a LIVE tab\'s team without reconnecting it', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot({ hostId: 'H2', reconnectProjectId: 'proj-2' }))
+    a.run(boot())
+    h.connects[1].resolve('c1')
+    await flush()
+    h.mounts[0].resolve({ projectId: 'proj-1' })
+    await flush()
+    expect(a.phase('H1')).toBe('live')
+    a.cancelProject('proj-1')
+    expect(a.phase('H1')).toBeNull()
+    expect(a.phase('H2')).toBe('connecting')
+    expect(h.ended).toEqual([]) // a closed tab is not a drop: nothing to reconnect
+  })
+
+  it('R40: a manual hurry that names no tab keeps the tab the waiting loop was reconnecting', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot({ reconnectProjectId: 'proj-1' }))
+    h.connects[0].reject(wrap('[E_JOIN_NETWORK] x'))
+    await flush()
+    expect(a.run(boot({ manual: true, retry: false }))).toBe('started')
+    h.connects[1].resolve('c1')
+    await flush()
+    expect(h.mounts[0].req.reconnectProjectId).toBe('proj-1')
   })
 })

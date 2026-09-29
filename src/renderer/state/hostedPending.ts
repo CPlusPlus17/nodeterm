@@ -3,7 +3,9 @@ import type { HostedPendingClosedReason } from '@shared/types'
 import {
   EMPTY_PENDING_QUEUE,
   addRequest,
+  beginAnswer,
   closeRequest,
+  finishAnswer,
   dropProjectRequests,
   settleRequest,
   type PendingQueue,
@@ -23,6 +25,10 @@ interface HostedPendingStore {
   add: (item: QueuedRequest) => void
   close: (pendingId: string, reason: HostedPendingClosedReason) => void
   settle: (pendingId: string) => void
+  /** An answer is on its way (off the screen, not re-added by a replay). */
+  beginAnswer: (pendingId: string) => void
+  /** It came back; `landed` settles it, otherwise it stays answerable. */
+  finishAnswer: (pendingId: string, landed: boolean) => void
   drop: (projectId: string) => void
 }
 
@@ -39,6 +45,8 @@ export const useHostedPending = create<HostedPendingStore>((set) => ({
       return r.notice ? { queue: r.queue, notice: { seq: (s.notice?.seq ?? 0) + 1, text: r.notice } } : { queue: r.queue }
     }),
   settle: (pendingId) => set((s) => ({ queue: settleRequest(s.queue, pendingId) })),
+  beginAnswer: (pendingId) => set((s) => ({ queue: beginAnswer(s.queue, pendingId) })),
+  finishAnswer: (pendingId, landed) => set((s) => ({ queue: finishAnswer(s.queue, pendingId, landed) })),
   drop: (projectId) => set((s) => {
     const queue = dropProjectRequests(s.queue, projectId)
     return queue === s.queue ? s : { queue }

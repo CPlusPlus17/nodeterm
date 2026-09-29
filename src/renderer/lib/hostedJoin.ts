@@ -3,16 +3,32 @@
 //  - a drop: a live hosted tab whose connection dropped (no host reason) reconnects in place, in the
 //    background, while its team is still bookmarked and approved and the tab is still open;
 //  - a click on the greyed tab: reconnects in place now (no pairing-code prompt — the bookmark is the
-//    credential);
-//  - a pasted join code: joins now, and is told why if it cannot;
-//  - forgetting a team: stops its loop and removes its bookmark (the host is not touched).
-// And what the user is told for each: one sentence per stop, nothing for a retry in progress, a
-// "remove and rejoin" offer after a revocation. Pure over injected deps (no React, no window).
+//    credential) — unless the team was forgotten since, and then it asks for a code;
+//  - a pasted join code: joins now, into the team's own tab when it has one, and is told why if it
+//    cannot;
+//  - forgetting a team: stops its loop and removes its bookmark (the host is not touched);
+//  - closing or deleting a tab: its team's attempt stops, in any phase (R40).
+// And what the user is told for each: one sentence per stop, nothing for a retry in progress, one
+// notice when the quick retries of a drop run out, a "remove and rejoin" offer after a revocation,
+// and "waiting for an owner" whenever a mount is still unapproved after a moment. Pure over
+// injected deps (no React, no window).
 // See docs/hosted-team-relay.md.
 import type { RelayClosedReason, RelayHostedApi } from '@shared/types'
 import { peekJoinCode } from '@shared/relay-join-code'
 import { createHostedAttempts, type HostedAttemptRequest, type HostedMountResult } from './hostedAttempts'
-import { closedReasonMessage, joinStopMessage, mountFailureMessage, mountFailureRetries, stripIpcPrefix } from './hostedTeam'
+import {
+  closedReasonMessage,
+  joinStopMessage,
+  mountFailureMessage,
+  mountFailureRetries,
+  stripIpcPrefix,
+  waitingForOwnerText
+} from './hostedTeam'
+
+/** How long a hosted mount waits for approval before it says it is waiting for an owner. A
+ *  bookmarked reconnect is normally approved well inside this, so it never flashes the notice; one
+ *  whose device the host no longer knows waits for an owner like a first join (R40). */
+export const WAITING_NOTICE_DELAY_MS = 2500
 
 /** How a mount ended, as the canvas reports it: a live tab, or the error it failed with. `declined`
  *  = this user declined the SAS themselves (nothing to tell them). */
@@ -21,6 +37,8 @@ export type HostedMountOutcome = { projectId: string } | { error: unknown; decli
 export interface HostedNotice {
   kind: 'info' | 'error'
   text: string
+  /** Stays until cleared (the waiting-for-an-owner notice). */
+  sticky?: boolean
   action?: { label: string; run: () => void }
 }
 
@@ -28,6 +46,9 @@ export interface HostedJoinerDeps {
   /** `relayClient.connect` — a join code in, a connection id out (or main's `[E_JOIN_…]` refusal). */
   connect(code: string): Promise<string>
   onClosed(connectionId: string, listener: (reason?: RelayClosedReason) => void): () => void
+  /** Both humans approved this connection (`relayClient.onApproved`). */
+  onApproved(connectionId: string, listener: () => void): () => void
+  /** Close a connection this joiner no longer wants (it must also count as closed locally). */
   disconnect(connectionId: string): void
   bookmarks: RelayHostedApi['bookmarks']
   removeBookmark: RelayHostedApi['removeBookmark']
@@ -37,6 +58,8 @@ export interface HostedJoinerDeps {
   /** Is this project still an open tab (not closed, not deleted)? */
   tabOpen(projectId: string): boolean
   notify(notice: HostedNotice): void
+  /** Take down the notice with this text, if it is still the one showing. */
+  clearNotice(text: string): void
   /** Ask the user for a fresh invite code for `teamLabel`; null = cancelled. */
   promptForCode(teamLabel: string): Promise<string | null>
   setTimer(fn: () => void, ms: number): unknown
@@ -51,6 +74,8 @@ export interface HostedJoiner {
    *  takes its pairing-code path). */
   reconnectTab(projectId: string): boolean
   isHostedTab(projectId: string): boolean
+  /** The user closed or deleted this tab: its team's attempt stops now, in any phase (R40). */
+  tabClosed(projectId: string): void
   /** Reconnect every approved bookmark (once, at boot). */
   bootReconnect(): Promise<void>
   /** Forget a team: its loop stops and its bookmark goes. Refused while it is connecting. */
@@ -63,9 +88,24 @@ export interface HostedJoiner {
 const team = (label: string): string => label.trim() || 'the team'
 
 export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
-  /** The team each hosted tab this joiner opened belongs to, by project id. */
-  const tabs = new Map<string, { hostId: string; code: string; label: string }>()
+  /** The team each hosted tab this joiner opened belongs to, by project id. `forgotten` = the user
+   *  forgot that team since: the tab asks for a code rather than rejoin with the stored one (which
+   *  would mint a fresh device token and bring the bookmark back). */
+  const tabs = new Map<string, { hostId: string; code: string; label: string; forgotten?: boolean }>()
   let run: (req: HostedAttemptRequest) => 'started' | 'busy' = () => 'busy'
+
+  /** A reconnect is wanted only while the tab it reconnects is still open (R40). */
+  const tabWanted = (req: HostedAttemptRequest): boolean => !req.reconnectProjectId || deps.tabOpen(req.reconnectProjectId)
+
+  /** An open tab this joiner opened for `hostId`, if any. */
+  const tabFor = (hostId: string): string | undefined => {
+    for (const [projectId, t] of tabs) if (t.hostId === hostId && deps.tabOpen(projectId)) return projectId
+    return undefined
+  }
+
+  const markForgotten = (hostId: string): void => {
+    for (const [projectId, t] of tabs) if (t.hostId === hostId) tabs.set(projectId, { ...t, forgotten: true })
+  }
 
   const attempts = createHostedAttempts({
     connect: deps.connect,
@@ -73,18 +113,49 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
     disconnect: deps.disconnect,
     setTimer: deps.setTimer,
     clearTimer: deps.clearTimer,
+    wanted: tabWanted,
+    exhausted(req) {
+      deps.notify({
+        kind: 'error',
+        text: req.reconnectProjectId
+          ? `Couldn't reconnect to ${team(req.label)}. Click its tab to try again.`
+          : `Couldn't reconnect to ${team(req.label)}. Paste its invite code to try again.`
+      })
+    },
     async mount(connectionId, req): Promise<HostedMountResult> {
+      // Any hosted mount still waiting for approval after a moment says so — a first join and a
+      // bookmarked reconnect alike (the host may no longer know this device and ask an owner).
+      const waiting = waitingForOwnerText(req.label)
+      let approved = false
+      let shown = false
+      const unApproved = deps.onApproved(connectionId, () => {
+        approved = true
+        if (shown) {
+          shown = false
+          deps.clearNotice(waiting)
+        }
+      })
+      const waitTimer = deps.setTimer(() => {
+        if (approved) return
+        shown = true
+        deps.notify({ kind: 'info', text: waiting, sticky: true })
+      }, WAITING_NOTICE_DELAY_MS)
       let outcome: HostedMountOutcome
       try {
         outcome = await deps.mount(connectionId, req)
       } catch (error) {
         outcome = { error, declined: false }
+      } finally {
+        deps.clearTimer(waitTimer)
+        unApproved()
+        if (shown) deps.clearNotice(waiting)
       }
       if ('projectId' in outcome) {
         tabs.set(outcome.projectId, { hostId: req.hostId, code: req.code, label: req.label })
         return { projectId: outcome.projectId }
       }
-      if (outcome.declined) return { retry: false }
+      // Declined by this user, or its tab was closed meanwhile (closed for it): nothing to say.
+      if (outcome.declined || !tabWanted(req)) return { retry: false }
       const retry = mountFailureRetries(outcome.error)
       // An unattended attempt that will try again says nothing; the next one may well work.
       if (retry && req.retry) return { retry: true }
@@ -133,8 +204,10 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
       deps.notify({ kind: 'error', text: `Could not forget ${team(req.label)}: ${stripIpcPrefix(err instanceof Error ? err.message : String(err))}` })
       return
     }
+    // Gone from this device now, whether or not a fresh code follows: its tab asks for one.
+    markForgotten(req.hostId)
     const code = (await deps.promptForCode(req.label))?.trim()
-    if (code) joiner.joinWithCode(code)
+    if (code) joiner.joinWithCode(code, req.reconnectProjectId)
   }
 
   const joiner: HostedJoiner = {
@@ -145,7 +218,10 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
       // this one; its key is the text itself, so a double paste of it is still one attempt.
       const hostId = peek?.hostId ?? `unreadable:${code}`
       const label = peek?.label ?? ''
-      const req: HostedAttemptRequest = { hostId, code, label, manual: true, retry: false, ...(reconnectProjectId ? { reconnectProjectId } : {}) }
+      // The team's own tab, when it has one open (greyed or not), is the one this code is for: a
+      // greyed tab reconnects in place, a live one answers "already connected" — never a second tab.
+      const target = reconnectProjectId ?? tabFor(hostId)
+      const req: HostedAttemptRequest = { hostId, code, label, manual: true, retry: false, ...(target ? { reconnectProjectId: target } : {}) }
       if (run(req) === 'busy') {
         deps.notify({ kind: 'info', text: busyText(hostId, label) })
       }
@@ -153,13 +229,28 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
     reconnectTab(projectId) {
       const t = tabs.get(projectId)
       if (!t) return false
-      if (run({ ...t, manual: true, retry: true, reconnectProjectId: projectId }) === 'busy') {
+      if (t.forgotten) {
+        // Forgotten: no stored code to rejoin with — ask, as the forget dialog promised.
+        void deps.promptForCode(t.label).then(
+          (code) => {
+            const c = code?.trim()
+            if (c) joiner.joinWithCode(c, projectId)
+          },
+          () => {}
+        )
+        return true
+      }
+      if (run({ hostId: t.hostId, code: t.code, label: t.label, manual: true, retry: true, reconnectProjectId: projectId }) === 'busy') {
         deps.notify({ kind: 'info', text: `Already reconnecting to ${team(t.label)}…` })
       }
       return true
     },
     isHostedTab(projectId) {
       return tabs.has(projectId)
+    },
+    tabClosed(projectId) {
+      tabs.delete(projectId)
+      attempts.cancelProject(projectId)
     },
     async bootReconnect() {
       const list = await deps.bookmarks().catch(() => [])
@@ -179,6 +270,7 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
         deps.notify({ kind: 'error', text: `Could not forget ${team(label)}: ${stripIpcPrefix(err instanceof Error ? err.message : String(err))}` })
         return
       }
+      markForgotten(hostId)
       deps.notify({ kind: 'info', text: `Forgot ${team(label)}. This device will not reconnect to it.` })
     },
     connecting(hostId) {

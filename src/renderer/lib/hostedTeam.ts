@@ -11,6 +11,12 @@ export function reconnectDelayMs(attempt: number): number {
   return attempt < BACKOFF.length ? BACKOFF[attempt] : 60_000
 }
 
+/** How many times an unattended attempt retries a connection that dropped before the host answered
+ *  (a host restarting): the short steps of the ladder, 1/2/4/8/15 s, and then it stops and says so
+ *  (R40). Each try mints a join token and opens a relay socket, so this one is bounded — unlike a
+ *  network failure, which keeps the 60 s tail (R35). */
+export const DROP_RETRY_MAX = 5
+
 /** The sentence for a close the HOST explained (it refused this device), or null for a close it did
  *  not — only reasons the host actually sent are named, never a guessed cause. */
 export function closedReasonMessage(reason?: string): string | null {

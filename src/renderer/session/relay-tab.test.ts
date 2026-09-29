@@ -475,6 +475,22 @@ describe('openRelayTab — hosted team tabs', () => {
     await expect(bootstrap).rejects.toThrow(/^The relay connection closed before it was approved\.$/)
   })
 
+  it('R40: a hosted reconnect whose tab closed meanwhile never binds to it: no owner subscription, no role, closed', async () => {
+    const h = fakeHostedApi({ role: 'owner', label: 'me', hostLabel: 'box' }, [])
+    const close = vi.fn()
+    const handle: RelayApiHandle = { api: h.api, ready: () => Promise.resolve(), close, setHostedRole: vi.fn() }
+    const { deps } = makeDeps({ handle })
+    const gone = () => {
+      throw new Error('The tab this reconnect was for is closed.')
+    }
+    await expect(openRelayTab('conn-gone', 'box', { ...deps, addProject: gone, adoptProject: undefined })).rejects.toThrow(/closed/)
+    expect(h.log).not.toContain('sub:pending')
+    expect(h.log).not.toContain('pending')
+    expect(useHostedTeams.getState().bySession).toEqual({})
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(sessionCount()).toBe(1) // only the local session
+  })
+
   it('a background reconnect binds the tab without switching to it (activate: false)', async () => {
     const h = fakeHostedApi({ role: 'editor', label: '', hostLabel: 'box' })
     const handle: RelayApiHandle = { api: h.api, ready: () => Promise.resolve(), close: vi.fn(), setHostedRole: vi.fn() }

@@ -48,17 +48,30 @@ export function attachHostedOwner(
 
 export type HostedAnswer = { kind: 'approve'; role: HostedRole } | { kind: 'deny' }
 
-/** Send an owner's answer. Resolves with the line to show the owner, or null when it landed. */
+/** Where an answer's progress is recorded (the queue store's `beginAnswer` / `finishAnswer`). */
+export interface AnswerLedger {
+  begin(pendingId: string): void
+  /** `landed` = the host answered (true or false); false = it never did. */
+  finish(pendingId: string, landed: boolean): void
+}
+
+/** Send an owner's answer. The request leaves the screen at once, and is settled only if the host
+ *  ANSWERED (true or false) — an answer that never landed leaves it answerable (R40). Resolves with
+ *  the line to show the owner, or null when it landed. */
 export async function answerHostedRequest(
   item: QueuedRequest,
-  answer: HostedAnswer
+  answer: HostedAnswer,
+  ledger: AnswerLedger
 ): Promise<{ kind: 'info' | 'error'; text: string } | null> {
   const id = item.pending.pendingId
+  ledger.begin(id)
   try {
     const ok = answer.kind === 'approve' ? await item.answerer.approve(id, answer.role) : await item.answerer.deny(id)
+    ledger.finish(id, true)
     // False is an answer, not a failure: another owner got there first, or the device left.
     return ok ? null : { kind: 'info', text: 'That request was already answered or has gone.' }
   } catch (err) {
+    ledger.finish(id, false)
     return { kind: 'error', text: `Could not answer the request: ${stripIpcPrefix(err instanceof Error ? err.message : String(err))}` }
   }
 }

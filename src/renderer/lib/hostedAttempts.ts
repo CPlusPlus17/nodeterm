@@ -11,10 +11,14 @@
 //
 // Why only network failures retry (R35): every other code needs a person (a fresh code, an unlocked
 // keyring, an owner) or a new day, and a loop on one of them spends the team's damped device mints.
+// A connection that drops before the host answered (a host restarting) is the one other retry, and
+// it is BOUNDED (R40): the 1/2/4/8/15 s steps, then it stops and says so once — every try mints a
+// join token and opens a relay socket. And no attempt outlives its tab: `wanted` is asked before
+// every retry and before every mount, and closing the tab cancels the attempt in any phase.
 // Pure orchestration over injected deps, so every rule is testable without React or a relay.
 // See docs/hosted-team-relay.md.
 import type { RelayClosedReason } from '@shared/types'
-import { classifyJoinFailure, reconnectDelayMs, type JoinFailure } from './hostedTeam'
+import { classifyJoinFailure, DROP_RETRY_MAX, reconnectDelayMs, type JoinFailure } from './hostedTeam'
 
 export interface HostedAttemptRequest {
   hostId: string
@@ -52,6 +56,12 @@ export interface HostedAttemptDeps {
   stopped(req: HostedAttemptRequest, failure: JoinFailure): void
   /** A live connection ended; `reason` is set only when the host refused this device. */
   ended(req: HostedAttemptRequest, projectId: string, reason?: RelayClosedReason): void
+  /** An unattended attempt used up its retries for a drop the host did not explain (R40). Called
+   *  once; the team is released, and the next try is the user's. */
+  exhausted(req: HostedAttemptRequest): void
+  /** Is this attempt still wanted? Asked before every retry and before every mount — an attempt
+   *  reconnecting a tab that has since been closed or deleted must stop (R40). Default: yes. */
+  wanted?(req: HostedAttemptRequest): boolean
   setTimer(fn: () => void, ms: number): unknown
   clearTimer(handle: unknown): void
 }
@@ -64,6 +74,10 @@ export interface HostedAttempts {
   /** Stop a pending backoff or an in-flight connect for good. A connection already past its
    *  connect (approval wait, live tab) is the user's and is left alone. */
   cancel(hostId: string): void
+  /** The tab `projectId` was closed or deleted: every attempt for it stops in whatever phase it is
+   *  in, and its team's slot is free at once. A connection waiting for approval is closed; a live
+   *  one is the tab's own to close (its session teardown does), and is not reported as a drop. */
+  cancelProject(projectId: string): void
   /** Stop everything (the canvas is going away). */
   dispose(): void
 }
@@ -72,6 +86,8 @@ interface Entry {
   req: HostedAttemptRequest
   phase: HostedAttemptPhase
   attempt: number
+  /** Retries spent on drops the host did not explain (bounded by DROP_RETRY_MAX). */
+  drops: number
   timer: unknown
   connectionId: string | null
   projectId: string | null
@@ -100,13 +116,25 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
     if (projectId) deps.ended(e.req, projectId, reason)
   }
 
-  /** Back off, then try again (the 1/2/4/8/15/60 s ladder). */
-  const backOff = (e: Entry): void => {
+  const wanted = (e: Entry): boolean => (deps.wanted ? deps.wanted(e.req) : true)
+
+  /** Wait `ms`, then try again — unless the attempt was cancelled or is no longer wanted. */
+  const retryAfter = (e: Entry, ms: number): void => {
     e.phase = 'waiting'
     e.timer = deps.setTimer(() => {
       e.timer = null
-      if (current(e)) attempt(e)
-    }, reconnectDelayMs(e.attempt))
+      if (!current(e)) return
+      if (!wanted(e)) {
+        release(e)
+        return
+      }
+      attempt(e)
+    }, ms)
+  }
+
+  /** A network failure: the 1/2/4/8/15 s steps, then every 60 s (R35). */
+  const backOff = (e: Entry): void => {
+    retryAfter(e, reconnectDelayMs(e.attempt))
     e.attempt += 1
   }
 
@@ -123,6 +151,12 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
         if (!current(e)) {
           // Cancelled (or disposed) while connecting: nobody wants this connection.
           deps.disconnect(connectionId)
+          return
+        }
+        if (!wanted(e)) {
+          // Its tab went away while it connected: never bind this connection to it.
+          deps.disconnect(connectionId)
+          release(e)
           return
         }
         e.phase = 'mounting'
@@ -147,13 +181,25 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
               e.unClose = null
               e.connectionId = null
               e.closedEarly = null
-              if ('retry' in result && result.retry && e.req.retry) backOff(e)
-              else release(e)
+              if (!('retry' in result && result.retry && e.req.retry)) {
+                release(e)
+                return
+              }
+              // A drop before the host answered: worth a few quick tries (a host restarting), never
+              // an open-ended loop — each try mints a join token and opens a socket (R40).
+              if (e.drops >= DROP_RETRY_MAX) {
+                release(e)
+                deps.exhausted(e.req)
+                return
+              }
+              retryAfter(e, reconnectDelayMs(e.drops))
+              e.drops += 1
               return
             }
             const projectId = result.projectId
             e.projectId = projectId
             e.attempt = 0
+            e.drops = 0
             if (e.closedEarly) {
               endLive(e, e.closedEarly.reason)
               return
@@ -184,11 +230,16 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
         // now, with the manual request's terms (it may name the tab to reconnect in place).
         deps.clearTimer(existing.timer)
         existing.timer = null
-        existing.req = req
+        // A request that names no tab keeps the tab the loop was reconnecting: a pasted code must
+        // not drop a greyed tab's binding and open a second one.
+        existing.req =
+          req.reconnectProjectId || !existing.req.reconnectProjectId
+            ? req
+            : { ...req, reconnectProjectId: existing.req.reconnectProjectId }
         attempt(existing)
         return 'started'
       }
-      const e: Entry = { req, phase: 'connecting', attempt: 0, timer: null, connectionId: null, projectId: null, unClose: null, closedEarly: null }
+      const e: Entry = { req, phase: 'connecting', attempt: 0, drops: 0, timer: null, connectionId: null, projectId: null, unClose: null, closedEarly: null }
       entries.set(req.hostId, e)
       attempt(e)
       return 'started'
@@ -202,6 +253,16 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
       if (e.timer !== null) deps.clearTimer(e.timer)
       e.timer = null
       release(e)
+    },
+    cancelProject(projectId) {
+      for (const e of [...entries.values()]) {
+        if (e.req.reconnectProjectId !== projectId && e.projectId !== projectId) continue
+        if (e.timer !== null) deps.clearTimer(e.timer)
+        e.timer = null
+        // Waiting for approval: nobody will ever look at that tab, so the connection goes too.
+        if (e.phase === 'mounting' && e.connectionId) deps.disconnect(e.connectionId)
+        release(e)
+      }
     },
     dispose() {
       disposed = true

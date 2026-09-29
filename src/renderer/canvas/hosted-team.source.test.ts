@@ -51,7 +51,7 @@ describe('hosted team glue in Canvas', () => {
   })
 
   it('the joiner is created once and reconnects the approved bookmarks at boot', () => {
-    const body = between('const hostedJoinerRef = useRef<HostedJoiner | null>(null)', '}, [confirmAndMount])')
+    const body = between('const joiner = createHostedJoiner({', '}, [confirmAndMount])')
     expect(body).toContain('createHostedJoiner({')
     expect(body).toContain('void joiner.bootReconnect()')
     expect(body).toContain('joiner.dispose()')
@@ -71,5 +71,30 @@ describe('hosted team glue in Canvas', () => {
     const body = between('{hostedHead && (', '{pendingPeer && (')
     expect(body).toContain('<HostedApprovalDialog')
     expect(body).toContain('key={hostedHead.pending.pendingId}')
+  })
+
+  it('R40: closing or deleting a tab stops its team\'s attempt (the one disposal both paths share)', () => {
+    const body = between('const disposeRelayTabForProject = useCallback(', '}, [])')
+    expect(body).toContain('hostedJoinerRef.current?.tabClosed(projectId)')
+    expect(src).toContain('disposeRelayTabForProject(id)\n      store.closeProject(id)')
+    expect(src).toContain('disposeRelayTabForProject(id)\n      store.deleteProject(id)')
+  })
+
+  it('R40: a hosted reconnect refuses to bind to a tab that is no longer open; a Team Access one is unchanged', () => {
+    const body = between('const mountRemoteMirror = useCallback(', 'const confirmAndMount = useCallback(')
+    expect(body).toContain('if (hosted && !isOpenTab(reconnectProjectId)) {')
+    expect(body).toContain('return { id: reconnectProjectId } // reconnect: reuse the existing tab')
+  })
+
+  it('R40: the waiting notice is the joiner\'s (every hosted mount), not tied to the SAS dialog', () => {
+    const body = between('const confirmAndMount = useCallback(', 'return mountRemoteMirror(')
+    expect(body).not.toContain('waitingForOwnerText')
+    expect(between('const joiner = createHostedJoiner({', '}, [confirmAndMount])')).toContain('clearNotice:')
+  })
+
+  it('R40: an owner\'s answer is settled only once the host answered', () => {
+    const body = between('const answerHosted = useCallback(', '}, [])')
+    expect(body).toContain('{ begin: q.beginAnswer, finish: q.finishAnswer }')
+    expect(body).not.toContain('.settle(')
   })
 })

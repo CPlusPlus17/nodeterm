@@ -484,7 +484,7 @@ import { HostedApprovalDialog } from '../components/HostedApprovalDialog'
 import { emitLocalRelayClose, onLocalRelayClose } from '../bridge/relay-local-close'
 import { isJoinCode } from '@shared/relay-join-code'
 import { createHostedJoiner, type HostedJoiner, type HostedMountOutcome } from '../lib/hostedJoin'
-import { HOSTED_APPROVAL_WAIT_MS, isReadOnlyRole, stripIpcPrefix, viewerBannerText, waitingForOwnerText } from '../lib/hostedTeam'
+import { HOSTED_APPROVAL_WAIT_MS, isReadOnlyRole, stripIpcPrefix, viewerBannerText } from '../lib/hostedTeam'
 import { answerHostedRequest, type HostedAnswer } from '../lib/hostedOwner'
 import { headRequest, type QueuedRequest } from '../lib/hostedPendingQueue'
 import { useHostedPending } from '../state/hostedPending'
@@ -712,6 +712,12 @@ function noticeDwellMs(text: string): number {
 
 /** React Flow props for a hosted team tab whose role is below Editor. */
 const HOSTED_READ_ONLY_FLOW = { nodesDraggable: false, nodesConnectable: false } as const
+
+/** Is this project an open tab (not closed, not deleted)? What a hosted reconnect is for (R40). */
+function isOpenTab(projectId: string): boolean {
+  const p = useProjects.getState().getProject(projectId)
+  return !!p && !p.closed
+}
 
 /** The confirm dialogs, named so their setters can be wrapped in a synchronous open-guard (see
  *  `confirmFlags`): ONE confirm at a time, decided at call time rather than at the next render. */
@@ -1317,6 +1323,9 @@ export function Canvas() {
   // Live relay tabs, keyed by relay connectionId, so a host/relay drop can dispose the right one
   // (a remote connection is now a project TAB, not a full-surface overlay — Stage 4 Task 6).
   const relayTabsRef = useRef<Map<string, RelayTab>>(new Map())
+  // The hosted-team joiner (created below, with the relay mount it drives): here so the tab disposal
+  // can stop a closed tab's reconnect.
+  const hostedJoinerRef = useRef<HostedJoiner | null>(null)
   // A relay tab is a live client of a remote core — closing/deleting its project must tear the
   // relay session down (held presence teardown + socket close), or the peer lingers in the host's
   // facepile and the socket leaks until quit. Runs on BOTH close and delete (unlike a local tmux
@@ -1329,6 +1338,8 @@ export function Canvas() {
   // a still-live tab, no-ops them for an already-offline one, and unbinds + drops the entry either
   // way. We also sweep any live relayTabsRef entry for the project so a dead connectionId can't linger.
   const disposeRelayTabForProject = useCallback((projectId: string) => {
+    // A hosted tab's team stops trying to come back into it, in any phase (R40). A no-op otherwise.
+    hostedJoinerRef.current?.tabClosed(projectId)
     for (const [connectionId, tab] of relayTabsRef.current) {
       if (tab.projectId === projectId) relayTabsRef.current.delete(connectionId)
     }
@@ -1369,10 +1380,9 @@ export function Canvas() {
     if (hostedPendingNotice) setNotice({ kind: 'info', text: hostedPendingNotice.text })
   }, [hostedPendingNotice])
   const answerHosted = useCallback((item: QueuedRequest, answer: HostedAnswer) => {
-    // Off the queue at once (the dialog closes; the host's own close follows), then say only what
-    // did not land.
-    useHostedPending.getState().settle(item.pending.pendingId)
-    void answerHostedRequest(item, answer).then((line) => {
+    // Off the screen at once; settled only once the host answers (R40), then say what did not land.
+    const q = useHostedPending.getState()
+    void answerHostedRequest(item, answer, { begin: q.beginAnswer, finish: q.finishAnswer }).then((line) => {
       if (line) setNotice(line)
     })
   }, [])
@@ -4192,7 +4202,14 @@ export function Canvas() {
       return openRelayTab(connectionId, label, {
         relayClient: window.nodeTerminal.relayClient,
         addProject: reconnectProjectId
-          ? () => ({ id: reconnectProjectId }) // reconnect: reuse the existing tab, don't spawn one
+          ? () => {
+              // A hosted reconnect whose tab was closed or deleted while it connected must never
+              // bind to it (or un-grey it): refused here, the new session is disposed (R40).
+              if (hosted && !isOpenTab(reconnectProjectId)) {
+                throw new Error('The tab this reconnect was for is closed.')
+              }
+              return { id: reconnectProjectId } // reconnect: reuse the existing tab, don't spawn one
+            }
           : (name) => useProjects.getState().addProject(name),
         // First connect adopts the host's shared project (its nodes, fresh id). On reconnect the
         // existing tab (with its nodes) is reused via addProject above, so no adopt lever is passed.
@@ -4267,8 +4284,6 @@ export function Canvas() {
           : `Verify this code matches the one shown on the host:\n\n${sas}`
         if (sas && window.confirm(question)) {
           window.nodeTerminal.relayClient.confirm(connectionId)
-          // A first join waits for an owner — up to ten minutes. Say so rather than hang silently.
-          if (hosted) setNotice({ kind: 'info', text: waitingForOwnerText(label), sticky: true })
         } else {
           // Deliberate decline: mark it so the bootstrap's close-reject isn't surfaced as an error.
           cancelledConnsRef.current.add(connectionId)
@@ -4284,10 +4299,9 @@ export function Canvas() {
 
   // Hosted teams (a Server Edition hosting over the relay, joined by a `nodeterm://join` code): the
   // ONE owner of every (re)join — boot, a dropped tab, a click on a greyed tab, a pasted code — so a
-  // team never has two attempts or two connections at once (lib/hostedJoin.ts). Created once; it
-  // reconnects every approved bookmark at boot. The Server Edition's `relayHosted` answers no
-  // bookmarks, so there it does nothing.
-  const hostedJoinerRef = useRef<HostedJoiner | null>(null)
+  // team never has two attempts or two connections at once (lib/hostedJoin.ts). Created once
+  // (`hostedJoinerRef` is declared beside relayTabsRef); it reconnects every approved bookmark at
+  // boot. The Server Edition's `relayHosted` answers no bookmarks, so there it does nothing.
   useEffect(() => {
     const joiner = createHostedJoiner({
       connect: (code) => window.nodeTerminal.relayClient.connect(code),
@@ -4301,7 +4315,13 @@ export function Canvas() {
           unLocal()
         }
       },
-      disconnect: (id) => window.nodeTerminal.relayClient.disconnect(id),
+      onApproved: (id, listener) => window.nodeTerminal.relayClient.onApproved(id, listener),
+      // A connection the joiner gives up on (its tab closed mid-approval, a cancelled late connect):
+      // main never reports a close it was asked for, so it is announced here too.
+      disconnect: (id) => {
+        window.nodeTerminal.relayClient.disconnect(id)
+        emitLocalRelayClose(id)
+      },
       bookmarks: async () => (await window.nodeTerminal.relayHosted?.bookmarks()) ?? [],
       removeBookmark: (hostId) => window.nodeTerminal.relayHosted.removeBookmark(hostId),
       mount: (connectionId, req) => {
@@ -4313,16 +4333,12 @@ export function Canvas() {
           bound?.source === 'relay' ? bound.id : undefined,
           // Only a reconnect the user asked for takes the screen (or one with nothing on it).
           { activate: req.manual || !useProjects.getState().activeProjectId }
-        )
-          .then((o): HostedMountOutcome => o ?? { error: new Error('That connection is already open.'), declined: true })
-          .finally(() => setNotice((n) => (n?.text === waitingForOwnerText(req.label || 'Hosted team') ? null : n)))
+        ).then((o): HostedMountOutcome => o ?? { error: new Error('That connection is already open.'), declined: true })
       },
-      tabOpen: (projectId) => {
-        const p = useProjects.getState().getProject(projectId)
-        return !!p && !p.closed
-      },
+      tabOpen: isOpenTab,
       notify: (n) => setNotice(n),
-      promptForCode: (label) => promptDialog({ message: `Paste a fresh invite code for ${label || 'the team'}:` }),
+      clearNotice: (text) => setNotice((n) => (n?.text === text ? null : n)),
+      promptForCode: (label) => promptDialog({ message: `Paste an invite code for ${label || 'the team'}:` }),
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>)
     })

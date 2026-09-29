@@ -156,6 +156,7 @@ export async function openRelayTab(
     }
   } catch (err) {
     disposeSession(session.id)
+    if (hostedInfo) useHostedTeams.getState().forget(session.id)
     throw err
   }
 }

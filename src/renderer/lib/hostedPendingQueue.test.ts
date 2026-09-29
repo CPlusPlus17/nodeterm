@@ -6,6 +6,8 @@ import {
   settleRequest,
   dropProjectRequests,
   headRequest,
+  beginAnswer,
+  finishAnswer,
   SETTLED_MEMORY,
   type QueuedRequest
 } from './hostedPendingQueue'
@@ -88,5 +90,22 @@ describe('hosted pending queue (R37)', () => {
     ]) {
       expect(addRequest(EMPTY_PENDING_QUEUE, { ...req('a', 1), pending: bad as never }).items).toEqual([])
     }
+  })
+
+  it('R40: an answer in flight leaves the screen and cannot be re-added; one that LANDED is settled for good', () => {
+    let q = addRequest(addRequest(EMPTY_PENDING_QUEUE, req('a', 10)), req('b', 20))
+    q = beginAnswer(q, 'a')
+    expect(headRequest(q)?.pending.pendingId).toBe('b')
+    expect(addRequest(q, req('a', 10)).items.map((i) => i.pending.pendingId)).toEqual(['b']) // a replay mid-flight
+    q = finishAnswer(q, 'a', true)
+    expect(addRequest(q, req('a', 10)).items.map((i) => i.pending.pendingId)).toEqual(['b'])
+  })
+
+  it('R40: an answer that never landed (the tab dropped) stays answerable — the reconnect\'s pull brings it back', () => {
+    let q = addRequest(EMPTY_PENDING_QUEUE, req('a', 10))
+    q = beginAnswer(q, 'a')
+    q = finishAnswer(q, 'a', false)
+    expect(q.settled).not.toContain('a')
+    expect(addRequest(q, req('a', 10)).items.map((i) => i.pending.pendingId)).toEqual(['a'])
   })
 })
