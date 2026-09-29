@@ -17,9 +17,13 @@ import { keyFingerprint } from '../lib/hostedTeam'
 import { CONFIRM_ARM_MS } from './confirm-key'
 import { useDialogStack } from './dialog-stack'
 
+// What each role can reach, stated at its fullest: an owner decides from this line alone. A Viewer
+// reads every file in the shared folder (the access policy jails reads to the folder, not to what
+// is safe in it) and sees git only for a folder that is its own repository (access-policy.ts).
 const ROLE_COPY: Record<HostedRole, string> = {
-  viewer: 'Can watch the shared project and its terminals, including anything printed in them.',
-  commenter: 'Can watch, and comment on cards and in cursor chat.',
+  viewer:
+    "Can read every file in the shared project's folder, .env files included, and watch its terminals and anything printed in them. Its git history too, when the folder is a repository of its own.",
+  commenter: 'Viewer access, and can comment on cards and in cursor chat.',
   editor: 'Can type into terminals, edit files and run git — the same as SSH access',
   owner: 'Editor access, plus approving, removing and changing roles'
 }

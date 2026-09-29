@@ -72,7 +72,7 @@ describe('HostedApprovalDialog', () => {
 
   it('says what each role grants; the least role never mentions running commands', () => {
     mount()
-    expect(text()).toMatch(/Can watch the shared project and its terminals/)
+    expect(text()).toMatch(/watch its terminals/)
     expect(text()).not.toMatch(/run commands/i)
     for (const [role, re] of [['commenter', /comment on cards/], ['owner', /approving, removing and changing roles.*run commands on box/]] as const) {
       act(() => {
@@ -81,6 +81,17 @@ describe('HostedApprovalDialog', () => {
       })
       expect(text()).toMatch(re)
     }
+  })
+
+  it('M2: the Viewer copy does not understate it: every file (.env included), the terminals, and git only for its own repository', () => {
+    mount()
+    expect(text()).toMatch(/Can read every file in the shared project's folder, \.env files included, and watch its terminals and anything printed in them\./)
+    expect(text()).toMatch(/Its git history too, when the folder is a repository of its own\./)
+    act(() => {
+      roleSelect().value = 'commenter'
+      roleSelect().dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(text()).toMatch(/Viewer access, and can comment on cards and in cursor chat\./)
   })
 
   it('Enter does not approve (a remote device raised this dialog)', () => {

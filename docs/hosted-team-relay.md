@@ -414,8 +414,10 @@ The human `team status` reads `state`, `idle` and `lastError` together:
 - **Editor means shell access** as the core's unix user, and so, in practice, owner: an Editor's
   terminal runs as that user and can run `team add-owner`. The approval dialog says Editor is "the
   same as SSH access".
-- **A Viewer sees terminal output** (the dialog says "including anything printed in them") and can
-  read **every file** under a shared project's folder, including `.env` files and `.git`.
+- **A Viewer sees terminal output** and can read **every file** under a shared project's folder,
+  including `.env` files and `.git`. The approval dialog says so for the Viewer role: "Can read every
+  file in the shared project's folder, .env files included, and watch its terminals and anything
+  printed in them. Its git history too, when the folder is a repository of its own."
 - **Sharing a repository shares its whole history.** When a shared project is the top folder of its
   own repository, `git:show-file` takes any revision, so a Viewer can read every branch, tag, stash
   and past commit of it, including files deleted since. A worktree shares its main repository's
