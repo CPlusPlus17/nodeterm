@@ -63,6 +63,7 @@ import {
 } from './canvas-image-import'
 import {
   SharedGlyphLayer,
+  createPixelRatioWatcher,
   flushOpaqueNodeIds,
   gestureTerminalIds,
   hasActiveGesture,
@@ -84,6 +85,7 @@ import { terminalKey } from '../terminal/terminal-config'
 import {
   setWebglGesture,
   setWebglZoom,
+  setWebglDevicePixelRatio,
   releaseAllHiddenGrants,
   WEBGL_GESTURE_SETTLE_MS
 } from '../terminal/webgl-budget'
@@ -272,7 +274,7 @@ import {
   terminalShortcutPolicy
 } from '../lib/keybindingOverrides'
 import { CanvasPills } from '../components/CanvasPills'
-import { UsageIndicator } from '../components/UsageIndicator'
+import { UsageIndicator, type AccountMoveProgress } from '../components/UsageIndicator'
 import { SystemResourcePill } from '../components/SystemResourcePill'
 import { PresenceLayer } from '../components/PresenceLayer'
 import { Facepile } from '../components/Facepile'
@@ -745,6 +747,7 @@ import {
   claudeSwitchHostKey,
   claudeSwitchTargets,
   planClaudeAccountSwitch,
+  startBulkSwitch,
   summarizeBulkSwitch,
   switchOutcomeNotice,
   type ClaudeSwitchOutcome
@@ -7473,20 +7476,24 @@ export function Canvas() {
 
   /**
    * The usage popover's bulk move: every Claude session on this canvas that runs on `from` (and on
-   * the popover's machine) is moved to `to`, ONE AT A TIME — each is the same quit → copy → recycle
-   * as the single switch, and running them in parallel would put N transcript copies and N pane
-   * recycles on one host at once. Busy sessions are skipped, never interrupted. One summary line.
+   * the popover's machine) is moved to `to`, ALL AT ONCE — each is the same quit → copy → recycle
+   * as the single switch (`startBulkSwitch` says why they are not serialized, and where an SSH
+   * host's load is paced instead). Busy sessions are skipped, never interrupted. One summary line.
    */
   const bulkSwitchRunning = useRef(false)
+  // The same move, as the popover sees it: its sessions keep their OLD account until each lands, so
+  // without this the source row re-offers them mid-move (see `MoveSessionsControl`).
+  const [accountMove, setAccountMove] = useState<AccountMoveProgress | null>(null)
   const moveAccountSessions = useCallback(
     async (from: string | undefined, to: string | undefined, toLabel: string) => {
       if (bulkSwitchRunning.current) return
       bulkSwitchRunning.current = true
       try {
         const byId = useAgentStatus.getState().byId
-        const scope = scopeFromKey(
-          usageScopeKey(useProjects.getState().getProject(useProjects.getState().activeProjectId))
+        const scopeKey = usageScopeKey(
+          useProjects.getState().getProject(useProjects.getState().activeProjectId)
         )
+        const scope = scopeFromKey(scopeKey)
         const { ready, busy } = bulkSwitchCandidates(
           nodesRef.current
             .filter((n) => n.type === 'terminal')
@@ -7501,15 +7508,22 @@ export function Canvas() {
           scope.kind === 'ssh' ? scope.hostKey : undefined
         )
         if (ready.length + busy.length === 0) return
+        setAccountMove({ from, count: ready.length, scopeKey })
         setNotice({
           kind: 'info',
           text: `Moving ${ready.length} ${ready.length === 1 ? 'session' : 'sessions'} to ${toLabel}…`
         })
-        const outcomes: ClaudeSwitchOutcome[] = []
-        for (const n of ready) outcomes.push(await runClaudeAccountSwitch(n.id, to))
+        // All at once, not one after another — see `startBulkSwitch`.
+        const outcomes = (
+          await startBulkSwitch(
+            ready.map((n) => n.id),
+            (id) => runClaudeAccountSwitch(id, to)
+          )
+        ).map((o): ClaudeSwitchOutcome => o ?? { kind: 'not-restarted', outcome: 'exit-timeout' })
         setNotice(summarizeBulkSwitch(outcomes, busy.length, toLabel))
       } finally {
         bulkSwitchRunning.current = false
+        setAccountMove(null)
       }
     },
     [runClaudeAccountSwitch]
@@ -10179,9 +10193,10 @@ export function Canvas() {
           zoomRafRef.current = null
           setZoomPct(Math.round(viewportRef.current.zoom * 100))
           setGroupLabelBoost(viewportRef.current.zoom)
-          // Feed the crisp gate (GPU text is a magnified bitmap past ~175%; the DOM renderer
-          // re-rasters and stays sharp). Idempotent + hysteresis inside, and the swaps it queues
-          // only run once the gesture settles — per-frame cost here is a float compare.
+          // Feed the crisp gate (GPU text is a magnified bitmap past ~175%, or past 100% on a
+          // low-DPI display; the DOM renderer re-rasters and stays sharp). Idempotent + hysteresis
+          // inside, and the swaps it queues only run once the gesture settles — per-frame cost
+          // here is a float compare.
           setWebglZoom(viewportRef.current.zoom)
         })
       }
@@ -15094,6 +15109,27 @@ export function Canvas() {
     })
   }, [])
 
+  // The crisp gate's zoom threshold depends on the display (issue #986): report the device-pixel
+  // ratio now and whenever it changes. Same two triggers as the shared glyph layer: the re-arming
+  // media-query watcher, plus `resize` for ratios an exact `dppx` query can miss (fractional
+  // browser-zoom steps in the Server Edition).
+  useEffect(() => {
+    const report = (): void => setWebglDevicePixelRatio(window.devicePixelRatio)
+    report()
+    const watch = createPixelRatioWatcher(
+      {
+        dpr: () => window.devicePixelRatio || 1,
+        match: (query) => (typeof window.matchMedia === 'function' ? window.matchMedia(query) : null)
+      },
+      report
+    )
+    window.addEventListener('resize', report)
+    return () => {
+      watch.stop()
+      window.removeEventListener('resize', report)
+    }
+  }, [])
+
   // Safety net for a lost Stop POST / crashed CLI: decay working entries that saw no hook
   // event at all for STALE_WORKING_MS (the sweep itself is cheap; see agentStatus.ts).
   //
@@ -16925,6 +16961,7 @@ export function Canvas() {
             onSetDefaultAccount={setProjectDefaultAccount}
             countAccountSessions={countAccountSessions}
             onMoveSessions={(from, to, label) => void moveAccountSessions(from, to, label)}
+            accountMove={accountMove}
           />
         </CanvasPills>
 

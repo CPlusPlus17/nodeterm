@@ -20,10 +20,11 @@
 //
 // ── Two gotchas that make or break the tab ───────────────────────────────────────────────────────
 // 1. `pty.onData` is the ONE core-bound member that does NOT go through the RpcClient. Relay pty
-//    output is decoded in the main process and re-emitted on the LOCAL per-session `pty:data`
-//    channel (`src/main/index.ts` `onPtyData` → `IPC.ptyData(sessionId)` → preload), NOT over the
+//    output is decoded in the main process and re-emitted on a NAMESPACED local `pty:data` channel
+//    (`src/main/index.ts` `onPtyData` → `IPC.ptyData(relayPtyDataKey(connectionId, sessionId))` →
+//    preload — never the bare host id, which a local pty shares), NOT over the
 //    RpcClient frame stream (`RelayFrameTransport.onMessage` only carries JSON frames). So it
-//    delegates to the LOCAL preload's `pty.onData` — the exact same channel a local pty uses. Wire
+//    delegates to the LOCAL preload's `pty.onData` — the same preload member a local pty uses, on the namespaced key. Wire
 //    it to the RpcClient instead and the remote terminal is blank.
 // 2. `RelayFrameTransport.ready()` resolves on `onApproved`, which fires exactly ONCE. The transport
 //    must be constructed (registering that listener) BEFORE the humans confirm the SAS — i.e. Task 6
@@ -46,6 +47,7 @@ import {
   buildGitHubApi
 } from './ws-bridge'
 import { buildStubApi } from './stubs'
+import { relayPtyDataKey } from '../../shared/relay-pty-channel'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 
 /** What Task 6 consumes: the bridged api for `createSession`, an approval gate to await, and a
@@ -122,7 +124,9 @@ export function buildRelayApi(
     // channel, so subscribe on the local preload, same shape as a local pty.
     pty: {
       ...real.pty,
-      onData: (sessionId, listener) => local.pty.onData(sessionId, listener)
+      // On the NAMESPACED key main delivers relay output on — never the bare host id, which is a
+      // LOCAL terminal's channel too (shared/relay-pty-channel.ts).
+      onData: (sessionId, listener) => local.pty.onData(relayPtyDataKey(connectionId, sessionId), listener)
     },
 
     // boardLog is CORE-BOUND: a relay guest reads and writes the HOST project's board comments/activity

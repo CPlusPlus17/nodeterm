@@ -443,6 +443,11 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   the relay, so a key that works locks it onto a path that cannot work. CLAUDE.md, "Remote access",
   has the details.
 
+- **Relay pins are per role, and a revoke is one call.** Pin a peer only through its role's store
+  in `src/main/remote/approved-devices.ts` (`phonePins` is the only one anything auto-admits from —
+  never write a desktop peer there), and revoke only through `src/main/remote/peer-revoke.ts`, which
+  unpins AND closes every live session on every host. A new host that serves relay peers must
+  `registerPeerSessionKiller`, or revoking a device leaves its shell open. CLAUDE.md, "Remote access".
 - **A relay channel that names a project needs a row in `relay-project-scope.ts`.** A relay guest
   bound to one shared project must never reach another, and the jail is keyed on channel class:
   anything named `githubIssues:*`, `board-log:*` or `projects.*` is refused on a scoped session
@@ -488,6 +493,15 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   to the user (settings, config.toml, AGENTS.md) use `updateRemoteTextFile`, which also keeps its
   symlink and mode. A guard test fails on a new bare `cat >`. A remote runner RESOLVES on a
   non-zero exit, so check the result or use the helper that does.
+
+- **A new agent-facing doc on an SSH host goes into the agent-tools plan.** The canvas/context
+  shims, their skills and our instruction-file blocks are listed once in `remote-hooks.ts`
+  (`canvasControlArtifacts` and its siblings); the installers AND the connect-time freshness check
+  (`RemoteHooks.refreshAgentTools`) read that list, so a host is brought up to your build's bytes
+  on the next connect. A shim, skill or block written from anywhere else is written once and never
+  checked again — hosts then keep the old text across app updates. This is ONLY for those docs:
+  hook scripts and hook config stay in `setup()`'s ordered chain, and the endpoint file and node
+  tokens carry credentials — never put them on a freshness cadence.
 
 - **Never write `chmod <mode> -- <file>` into a remote command.** macOS (BSD) chmod stops parsing
   options at the mode, so the `--` becomes a file operand and the command fails there while passing

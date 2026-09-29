@@ -699,12 +699,27 @@ export function parseControlRequest(
 const CC_START = '<!-- nodeterm:manage-canvas:start -->'
 const CC_END = '<!-- nodeterm:manage-canvas:end -->'
 
+/** The two markers, for the SSH freshness probe, which must find the block exactly where the
+ *  merge below would. */
+export const CANVAS_CONTROL_MARKERS = { start: CC_START, end: CC_END } as const
+
+/** The exact bytes the merge below writes from the start marker through the end marker. ONE
+ *  definition: the SSH freshness probe compares a host's copy against this, so a second spelling
+ *  would make every host look stale (or, worse, current). */
+export function frameCanvasControlBlock(block: string): string {
+  return `${CC_START}\n${block.trim()}\n${CC_END}`
+}
+
 /** Idempotently merge the canvas-control block into a global instructions file.
- *  Everything outside the markers is preserved; an existing block is replaced. */
+ *  Everything outside the markers is preserved; an existing block is replaced.
+ *
+ *  The end marker is searched AFTER the start marker. Taking the first one anywhere read a stray
+ *  end line (a block the user deleted by hand, end line kept) as "no block", so every merge
+ *  appended another copy — on the desktop at every launch, and on an SSH host at every check. */
 export function mergeCanvasControlBlock(existing: string, block: string): string {
-  const full = `${CC_START}\n${block.trim()}\n${CC_END}`
+  const full = frameCanvasControlBlock(block)
   const start = existing.indexOf(CC_START)
-  const end = existing.indexOf(CC_END)
+  const end = existing.indexOf(CC_END, start)
   if (start >= 0 && end > start) {
     return existing.slice(0, start) + full + existing.slice(end + CC_END.length)
   }
@@ -980,10 +995,10 @@ export function buildCanvasControlInstructions(shimPath: string): string {
 // could not be made safe.
 //
 // INSTALL LIFECYCLE, and why a verb must not depend on this parser's fixes: the shim is rewritten
-// locally at every app boot, but onto an SSH host ONLY inside RemoteHooks.setup(), i.e. on connect.
-// An already-connected SSH project keeps the shim it was handed. So a parsing improvement reaches
-// remote agent nodes only after a reconnect, with no signal on the wire — the same shape as the
-// managed hook script's stale window. Verbs are therefore designed to parse identically under both
+// locally at every app boot, and an SSH host's copy is checked on every connect and brought to this
+// build's bytes (RemoteHooks.refreshAgentTools). A host can still run an older loop for a while —
+// its tunnel is down, the file is unreadable, or a second desktop on an older build shares the host
+// account — with no signal on the wire. Verbs are therefore designed to parse identically under both
 // the old and the new loop: give every flag a value, and the two loops agree.
 /** The shim's generic transport-failure sentence — exported so the agent-facing docs can quote it
  *  verbatim and the parity test holds the two ends together (issue #367). */

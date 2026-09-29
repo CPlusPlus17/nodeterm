@@ -201,8 +201,15 @@ const live = new Set<RelayHostSession>()
 /** Cut every live session with this peer key. The revoker's `onRevoke` (src/main/index.ts). With a
  *  reason, the peer is told why over the encrypted tunnel first (`deny`); without one it is closed. */
 export function killRelayHostsByPeerKey(peerKeyB64: string, reason?: TrustDeniedReason): void {
+  killRelayHostsWhere((key) => key === peerKeyB64, reason)
+}
+
+/** Cut every live session (bridged or still awaiting mutual approval) whose peer key satisfies
+ *  `match`. A session whose key is not known yet is never matched. */
+export function killRelayHostsWhere(match: (peerKeyB64: string) => boolean, reason?: TrustDeniedReason): void {
   for (const session of [...live]) {
-    if (session.peerKeyB64() !== peerKeyB64) continue
+    const key = session.peerKeyB64()
+    if (!key || !match(key)) continue
     if (reason) session.deny(reason)
     else session.close()
   }

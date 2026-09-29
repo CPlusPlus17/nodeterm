@@ -358,6 +358,16 @@ describe('parseControlRequest', () => {
     expect(second).toContain('# My own notes')
   })
 
+  it('a stray end marker BEFORE the block does not make every merge append another copy', () => {
+    // The end marker is searched AFTER the start marker; taking the first one anywhere read a
+    // hand-deleted block's leftover end line as "no block" and appended on every connect.
+    const block = buildCanvasControlInstructions('/tmp/nodeterm.sh')
+    const stray = '# mine\n<!-- nodeterm:manage-canvas:end -->\n'
+    const once = mergeCanvasControlBlock(stray, block)
+    expect(mergeCanvasControlBlock(once, block)).toBe(once)
+    expect(once.match(/manage-canvas:start/g)).toHaveLength(1)
+  })
+
   it('instructions cover the verb set and the confirm caveat', () => {
     const body = buildCanvasControlInstructions('/tmp/nodeterm.sh')
     for (const verb of ['list', 'open-agent', 'spawn-team', 'group', 'ungroup', 'move', 'arrange', 'rename', 'color', 'write', 'close', 'board', 'assign']) {

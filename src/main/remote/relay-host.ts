@@ -27,10 +27,11 @@
 // handshake, the trust gate, the tunnel dispatch and every SECURITY obligation above. This file is
 // the desktop's side of its seam — the `PeerAttach` that mints a ClientId, registers the peer sink
 // and joins presence, the electronPlatform dispatch/cast, and where a mutual approval is pinned
-// (approved-devices). It passes no hooks and no autoApprove, so the desktop takes the unhooked path.
+// (the guest pin store). It passes no hooks and no autoApprove, so the desktop takes the unhooked path.
 import {
   connectRelayHost as connectCoreRelayHost,
   killRelayHostsByPeerKey,
+  killRelayHostsWhere,
   type RelayHostSession as CoreRelayHostSession,
   type ConnectRelayHostOptions as CoreOptions,
   type PeerAttach
@@ -40,9 +41,14 @@ import { recordApproval } from '../../core/relay/mutual-approval-core'
 import type { ElectronPlatform } from '../platform-electron'
 import { registerPeerSink, unregisterPeerSink } from '../peer-registry'
 import { allocateRelayClientId, presenceHub } from '../../core/presence/hub'
-import { updateApprovedDevices } from './approved-devices'
+import { guestPins } from './approved-devices'
+import { registerPeerSessionKiller } from './peer-revoke'
 
 export { killRelayHostsByPeerKey }
+
+// Every live Team Access session is reachable by the one revoke primitive (peer-revoke.ts). The
+// `live` set is module-level in core, so one registration at import covers every session.
+registerPeerSessionKiller('desktop', (match) => killRelayHostsWhere(match))
 
 /** The desktop's view of a hosting session: the core session minus `deny`. Team Access never refuses
  *  a peer with a reason (a revoke closes it), so the desktop surface stays exactly what it was. */
@@ -71,11 +77,12 @@ function desktopAttach(platform: ElectronPlatform): PeerAttach {
   }
 }
 
-/** Desktop pins: the phone/desktop approved-devices store, exactly as before the gate moved to core.
- *  recordApproval refuses unless BOTH confirmed and pins only the key carried by the state; the
- *  serialized updateApprovedDevices queue keeps concurrent approvals and a racing revoke intact. */
+/** Desktop pins: a guest WE hosted goes to the GUEST store — never the phone store, which the
+ *  standing host auto-admits from (approved-devices.ts). recordApproval refuses unless BOTH confirmed
+ *  and pins only the key carried by the state; the serialized update queue keeps concurrent
+ *  approvals and a racing revoke intact. */
 function desktopPins(): PinStore {
-  return { record: (pinned) => updateApprovedDevices((store) => recordApproval(store, pinned)) }
+  return { record: (pinned) => guestPins.update((store) => recordApproval(store, pinned)) }
 }
 
 export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSession {

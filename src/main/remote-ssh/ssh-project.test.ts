@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SshProjectManager, lastSshErrorLine } from './ssh-project'
 import { AskpassServer } from './ssh-askpass'
 import { AppSshAgent } from './ssh-agent'
+import { RemoteHooks } from './remote-hooks'
 import { controlPathFor } from '../../core/remote-ssh/control-master'
 import { remoteCodexSocket } from '../../core/codex-accounts-core'
 import type { SshConnection } from '@shared/ssh'
@@ -1608,6 +1609,95 @@ describe('SshProjectManager', () => {
       // Everything AFTER the hook still ran: the connect result is complete, not truncated.
       expect(res.hookEndpointPath).toMatch(/^\/home\/u\/\.nodeterm\/hook-endpoint-p1-[a-f0-9]{16}\.env$/)
       expect(res.remoteHome).toBe('/home/u')
+    })
+  })
+
+  // --- the host's agent tools (shims, skills, instruction blocks) --------------------------------
+  //
+  // They used to be written only by the establish path, blind, and never looked at again: a
+  // tunnel repaired later on the reuse branch never got them, a fire-and-forget install that
+  // failed was never retried, and a managed account's skill was written only when the account was
+  // added. These pin WHO asks for the check and with which trigger; the check itself (one probe,
+  // rewrite only what differs, the cadence) is pinned in agent-tools-refresh.test.ts.
+  describe('agent tools on the host', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    function agentToolsMgr(opts: { httpCode?: () => string; leftoverSocket?: boolean; accounts?: string[] } = {}) {
+      const refresh = vi.spyOn(RemoteHooks.prototype, 'refreshAgentTools').mockResolvedValue('current')
+      const install = vi.spyOn(RemoteHooks.prototype, 'installAgentTools')
+      vi.spyOn(fs, 'mkdir').mockResolvedValue(undefined as never)
+      if (opts.leftoverSocket) vi.spyOn(fs, 'stat').mockResolvedValue({ isSocket: () => true } as never)
+      else vi.spyOn(fs, 'stat').mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+      const spawnMaster = vi.fn(() => ({ kill: vi.fn(), on: vi.fn() }))
+      const hostKeys: string[] = []
+      const run = vi.fn(async (args: string[]) => {
+        const j = args.join(' ')
+        if (j.includes('$HOME')) return { code: 0, stdout: '/home/u' }
+        if (j.includes('%{http_code}')) return { code: 0, stdout: opts.httpCode?.() ?? '204' }
+        return { code: 0, stdout: '' }
+      })
+      const mgr = new SshProjectManager({
+        userDataDir: '/ud',
+        spawnMaster,
+        run,
+        runScp: vi.fn(async () => ({ code: 0 })),
+        getHook: () => ({ port: 1, token: 't', version: '1' }),
+        onStatus: vi.fn(),
+        claudeAccountIdsForHost: (hostKey: string) => {
+          hostKeys.push(hostKey)
+          return opts.accounts ?? []
+        }
+      })
+      return { mgr, refresh, install, spawnMaster, hostKeys }
+    }
+    const triggers = (refresh: { mock: { calls: unknown[][] } }) => refresh.mock.calls.map((c) => c[4])
+
+    it('a genuine establish CHECKS the host — with this host\'s managed accounts — instead of rewriting it blind', async () => {
+      const { mgr, refresh, install, hostKeys } = agentToolsMgr({ accounts: ['acc-1', 'acc-2'] })
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(refresh).toHaveBeenCalledTimes(1)
+      expect(refresh).toHaveBeenCalledWith(conn, controlPathFor('p1'), '/home/u', ['acc-1', 'acc-2'], 'connect')
+      expect(hostKeys).toEqual(['u@h'])
+      expect(install).not.toHaveBeenCalled()
+    })
+
+    it('the first connect after an app restart adopts the surviving master AND checks the host', async () => {
+      // The trigger an update actually takes: `conns` is in memory, so a relaunch never lands on the
+      // reuse branch — it adopts the ControlPersist orphan on the establish path. This pins that
+      // the check runs there too, so an update's new docs reach the host on its first connect.
+      const { mgr, refresh, spawnMaster } = agentToolsMgr({ leftoverSocket: true })
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(spawnMaster).not.toHaveBeenCalled() // adopted
+      expect(triggers(refresh)).toEqual(['connect'])
+    })
+
+    it('the reuse branch asks too (the check decides whether that costs anything)', async () => {
+      const { mgr, refresh } = agentToolsMgr()
+      await mgr.connect('p1', conn, '/remote/cwd')
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(triggers(refresh)).toEqual(['connect', 'reuse'])
+    })
+
+    it('a tunnel repaired on the reuse branch gets its agent tools — it never did before', async () => {
+      // An establish whose tunnel failed verification installs nothing (a skill pointing at a dead
+      // socket is worse than none); the watchdog's later repair used to rebuild the tunnel and stop
+      // there, leaving the host with no shim, or another build's, for the rest of the run.
+      let dead = true
+      const { mgr, refresh } = agentToolsMgr({ httpCode: () => (dead ? '000' : '204') })
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(refresh).not.toHaveBeenCalled()
+      dead = false
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(triggers(refresh)).toEqual(['repair'])
+    })
+
+    it('a reuse whose tunnel is still dead asks nothing', async () => {
+      const { mgr, refresh } = agentToolsMgr({ httpCode: () => '000' })
+      await mgr.connect('p1', conn, '/remote/cwd')
+      await mgr.connect('p1', conn, '/remote/cwd')
+      expect(refresh).not.toHaveBeenCalled()
     })
   })
 

@@ -158,6 +158,18 @@ interface ProjectsState {
   renameNode(projectId: string, nodeId: string, title: string): void
   /** Recolors a node within a project. */
   recolorNode(projectId: string, nodeId: string, color: string): void
+  /**
+   * Writes an in-place agent restart's rebind (which agent, which account) into a project's
+   * serialized node — for a restart that finished after its project stopped being the active one
+   * (the user switched away while the CLI was quitting), when React Flow no longer holds the node.
+   * A key that is PRESENT is written, even as `undefined` (= the system account); an absent key is
+   * left alone.
+   */
+  rebindNode(
+    projectId: string,
+    nodeId: string,
+    patch: Pick<CanvasNodeState, 'agentId'> & Partial<Pick<CanvasNodeState, 'accountId'>>
+  ): void
   /** Removes a node from a project. */
   removeNode(projectId: string, nodeId: string): void
   /** Duplicates a node within a project (fresh id, offset position). */
@@ -604,6 +616,14 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     set((s) => ({
       projects: mapProjectNodes(s.projects, projectId, (nodes) =>
         nodes.map((n) => (n.id === nodeId ? { ...n, color } : n))
+      )
+    }))
+  },
+
+  rebindNode(projectId, nodeId, patch) {
+    set((s) => ({
+      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+        nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n))
       )
     }))
   },
