@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import type { PendingLaunch } from '@shared/types'
 import {
   launchesToFire,
   queueControlLaunch,
@@ -7,6 +8,9 @@ import {
   launchTooltip,
   unmetDeps,
   LAUNCH_STALL_MS,
+  withPrHold,
+  withLaunchBrief,
+  launchBriefPresent,
   type ArmedNode,
   type StatusById
 } from './pendingLaunch'
@@ -336,4 +340,159 @@ it('a refused relay launch explains host recovery rather than promising a workin
   expect(text).toContain('Open the host to run this command')
   expect(text).toContain('claude brief')
   expect(text).not.toContain('press ▶')
+})
+
+describe('--after-pr: a PR wait is a third gate, ANDed with the deps and the setup script', () => {
+  const NOW = 5_000_000
+  const hold = (deadlineAt = NOW + 60_000) => ({
+    repository: 'o/r',
+    waits: [{ number: 7, until: 'merged' as const }],
+    deadlineAt,
+    armedAt: 0
+  })
+  const prNode = (after: string[], deadlineAt?: number): ArmedNode => ({
+    id: 'c',
+    data: { pendingLaunch: { after, command: 'echo c', afterPr: hold(deadlineAt) } }
+  })
+  const pull = (lifecycle: 'open' | 'merged') => ({
+    number: 7, lifecycle, headRefName: 'b', closes: [] as number[]
+  })
+  const board = (lifecycle: 'open' | 'merged') => ({
+    repository: 'o/r',
+    pulls: [pull(lifecycle)],
+    stale: false,
+    access: { ci: true, merge: true },
+    undecided: false,
+    truncated: false
+  })
+  const live = new Set(['a', 'c'])
+  const done: StatusById = { a: { state: 'done' } }
+
+  it('fires once the deps are done AND the PR has merged', () => {
+    expect(launchesToFire([prNode(['a'])], done, live, undefined, undefined, { board: board('merged'), now: NOW })).toEqual([
+      { id: 'c', command: 'echo c' }
+    ])
+  })
+
+  it('holds while the PR is open, however done the deps are', () => {
+    expect(launchesToFire([prNode(['a'])], done, live, undefined, undefined, { board: board('open'), now: NOW })).toEqual([])
+  })
+
+  it('holds while the deps are working, however merged the PR is', () => {
+    expect(
+      launchesToFire([prNode(['a'])], { a: { state: 'working' } }, live, undefined, undefined, { board: board('merged'), now: NOW })
+    ).toEqual([])
+  })
+
+  it('a caller that passes no PR context never releases a PR hold — unknown is not satisfied', () => {
+    expect(launchesToFire([prNode([])], {}, live)).toEqual([])
+  })
+
+  it('never fires past the deadline', () => {
+    expect(
+      launchesToFire([prNode([], NOW)], {}, live, undefined, undefined, { board: board('merged'), now: NOW })
+    ).toEqual([])
+  })
+
+  it('a node with no PR wait is unaffected by the PR context', () => {
+    expect(launchesToFire([armed('c', ['a'])], done, live, undefined, undefined, { board: undefined, now: NOW })).toEqual([
+      { id: 'c', command: 'echo c' }
+    ])
+  })
+
+  it('the list row says EXPIRED once the deadline passes (a delivery record still wins)', () => {
+    expect(controlLaunchState(true, undefined, undefined, true)).toBe('expired')
+    expect(controlLaunchState(true, undefined, undefined, false)).toBe('queued')
+    expect(controlLaunchState(true, { kind: 'failed', attempts: 1, at: 0 }, undefined, true)).toBe('failed')
+  })
+
+  it('the tooltip names the PR it waits on, beside any station', () => {
+    const pr = { expired: false, summary: 'PR #7 merged (open, not merged)', deadline: '18:00' }
+    expect(launchTooltip(undefined, 'Builder', 'claude', undefined, false, pr)).toBe(
+      'Waiting for Builder to finish and for PR #7 merged (open, not merged), until 18:00, then runs:\nclaude'
+    )
+    expect(launchTooltip(undefined, '', 'claude', undefined, false, pr)).toBe(
+      'Waiting for PR #7 merged (open, not merged), until 18:00, then runs:\nclaude'
+    )
+  })
+
+  it('an expired wait says it will not start on its own and offers ▶', () => {
+    const t = launchTooltip(undefined, 'Builder', 'claude', undefined, false, {
+      expired: true,
+      summary: 'PR #7 merged (open, not merged)',
+      deadline: '18:00'
+    })
+    expect(t).toMatch(/passed its deadline/)
+    expect(t).toMatch(/will not start on its own/)
+    expect(t).toMatch(/▶/)
+  })
+
+  it('without a PR wait the existing sentences are byte-identical', () => {
+    expect(launchTooltip(undefined, 'Builder', 'claude')).toBe('Waiting for Builder to finish, then runs:\nclaude')
+  })
+})
+
+describe('withPrHold — one way every open path attaches a PR wait', () => {
+  const hold = { repository: 'o/r', waits: [{ number: 7, until: 'merged' as const }], deadlineAt: 9, armedAt: 0 }
+  it('adds the hold to a node that already holds its launch', () => {
+    const node = { id: 'n', data: { pendingLaunch: { after: ['a'], command: 'c', attempted: false } } }
+    expect(withPrHold(node, hold).data.pendingLaunch).toEqual({ after: ['a'], command: 'c', attempted: false, afterPr: hold })
+  })
+  it('leaves a node alone when there is no hold, or nothing is held to attach it to', () => {
+    const held = { id: 'n', data: { pendingLaunch: { after: [], command: 'c' } } }
+    expect(withPrHold(held, undefined)).toBe(held)
+    const bare = { id: 'n', data: {} as { pendingLaunch?: PendingLaunch } }
+    expect(withPrHold(bare, hold)).toBe(bare)
+  })
+})
+
+describe('the launch brief file is verified at DELIVERY, not only at open (#1014 review)', () => {
+  const node = { id: 'n', data: { pendingLaunch: { after: [], command: 'claude "$(cat \'/x/p.txt\')"' } } }
+
+  it('withLaunchBrief records the file the command reads; nothing held, nothing recorded', () => {
+    expect(withLaunchBrief(node, '/x/p.txt').data.pendingLaunch).toMatchObject({ promptFile: '/x/p.txt' })
+    expect(withLaunchBrief(node, undefined)).toBe(node)
+    const bare = { id: 'b', data: {} as { pendingLaunch?: { after: string[]; command: string } } }
+    expect(withLaunchBrief(bare, '/x/p.txt')).toBe(bare)
+  })
+
+  it('launchesToFire hands the file to the loop, which checks it before typing', () => {
+    const armedWithBrief = withLaunchBrief(node, '/x/p.txt')
+    expect(launchesToFire([armedWithBrief], {}, new Set(['n']))).toEqual([
+      { id: 'n', command: armedWithBrief.data.pendingLaunch.command, briefFile: '/x/p.txt' }
+    ])
+  })
+
+  it('a missing brief is a named, manual hold — never an agent started with no brief', () => {
+    const t = launchTooltip({ kind: 'brief-missing', path: '/x/p.txt', at: 1 }, '', 'claude')
+    expect(t).toContain('/x/p.txt')
+    expect(t).toMatch(/no longer exists/)
+    expect(t).toMatch(/no brief/)
+    expect(t).toMatch(/▶/)
+    expect(controlLaunchState(true, { kind: 'brief-missing', path: '/x/p.txt', at: 1 })).toBe('brief-missing')
+  })
+})
+
+describe('launchBriefPresent — only a definite "not there" holds a launch', () => {
+  const local = { id: 'p' }
+  it('no file to check is present', async () => {
+    const exists = vi.fn(async () => false)
+    expect(await launchBriefPresent(undefined, local, exists)).toBe(true)
+    expect(exists).not.toHaveBeenCalled()
+  })
+  it('a local file that is gone is absent; one that is there is present', async () => {
+    expect(await launchBriefPresent('/x', local, async () => false)).toBe(false)
+    expect(await launchBriefPresent('/x', local, async () => true)).toBe(true)
+  })
+  it('a check that fails answers present — the open-time check fails open the same way', async () => {
+    expect(await launchBriefPresent('/x', local, async () => { throw new Error('EIO') })).toBe(true)
+    expect(await launchBriefPresent('/x', local, () => { throw new Error('sync') })).toBe(true)
+  })
+  it('an SSH or relay project is never judged from here (a false there is not evidence of absence)', async () => {
+    const exists = vi.fn(async () => false)
+    expect(await launchBriefPresent('/x', { id: 'p', ssh: {} }, exists)).toBe(true)
+    expect(await launchBriefPresent('/x', { id: 'p', remote: true }, exists)).toBe(true)
+    expect(await launchBriefPresent('/x', undefined, exists)).toBe(true)
+    expect(exists).not.toHaveBeenCalled()
+  })
 })

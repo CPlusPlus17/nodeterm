@@ -29,6 +29,7 @@ import {
   STATION_TRIGGERS
 } from '../shared/station-notice'
 import { STATION_NOTICE_FROM } from '../shared/agents/agent-messaging'
+import { PR_DEADLINE_DEFAULT_MS, PR_DEADLINE_MAX_MS, PR_WAIT_MAX, afterPrFlagRefusal } from '../shared/pr-wait'
 import { ISSUE_BRANCH_SLUG_MAX, issueWorktreeBranch } from '../shared/issue-worktree'
 
 /**
@@ -140,6 +141,38 @@ function issueBindingDocLines(): string[] {
     '    the user asked for it in this session; otherwise end with a proposed comment the user can post.',
     '  - The end of a turn moves nothing: your card moves only when you `assign` it or the user drags it.',
     '  - The Server Edition has no `assign` verb — skip the card moves there.'
+  ]
+}
+
+/** The `--after-pr` paragraph both agent-facing bodies share. Its limits come from the one module
+ *  that enforces them (`@shared/pr-wait`), so the text cannot promise a deadline the gate refuses. */
+function afterPrDocLines(): string[] {
+  const hours = PR_DEADLINE_DEFAULT_MS / 3_600_000
+  const days = PR_DEADLINE_MAX_MS / 86_400_000
+  return [
+    'Pull request waits (`--after-pr`, on `open-terminal` / `open-claude` / `open-agent`):',
+    '- `--after-pr <N:checks|N:merged>[,<N:cond>…]` also holds the launch until pull requests of this',
+    '  project\'s repository are ready. `checks` = the PR\'s checks passed at its CURRENT head commit, on a',
+    '  status read taken after you armed the wait (a new push starts the wait over, and a PR that reports',
+    '  no checks never passes); `merged` = the PR is merged.',
+    '  It is ANDed with `--after` (and a worktree\'s setup wait), so "start the reviewer once CI is green',
+    '  AND the builder is done" is one open. Write the number bare (`1008:merged`): an unquoted leading',
+    '  `#` starts a shell comment and drops the rest of your line (`owner/repo#N:merged` works when quoted).',
+    `  At most ${PR_WAIT_MAX} pull requests, each named once.`,
+    `- \`--pr-deadline <90m|12h|3d>\` bounds the wait (default ${hours}h, at most ${days}d). Past it the node`,
+    '  never starts on its own: `list` marks it EXPIRED, and you start it with the `run` verb (the user can',
+    '  press ▶ on the node). Before it, a closed PR or failing checks keep it waiting, never fire it.',
+    '- Refused, with the reason: the pull request must exist in the repository this project\'s kanban board',
+    '  syncs with (not another repository; a PR closed without merging and `:checks` on a merged PR are',
+    '  refused, and a `:merged` wait on an already-merged PR is simply met). A PR opened a moment ago is',
+    '  looked up again after one refresh; `after-pr-unconfirmed` means it still could not be confirmed',
+    '  (retry in a minute, unless the reply says the list is truncated). Also refused: a project whose board is not',
+    '  connected to GitHub, or whose GitHub sync is not approved on this machine; a relay tab.',
+    '  `--run-now` cannot be combined with `--after-pr`, and `open-terminal` needs `--cmd` for it.',
+    '- The status is the board\'s own GitHub sync, read on this machine: a merge is noticed on its next',
+    '  sync (about a minute while the app runs), finished checks are re-read on a backoff while the window',
+    '  is visible, and a node in a project that is not on screen starts once that project is next viewed.',
+    '  The Server Edition refuses `--after-pr`.'
   ]
 }
 
@@ -443,6 +476,10 @@ export function parseControlRequest(
   if (v === 'open-agent' && !args.agent) return { error: 'open-agent requires --agent <id>' }
   const issueRefusal = issueFlagRefusal(v, args)
   if (issueRefusal) return { error: issueRefusal }
+  // `--after-pr`: the same shape gate desktop main runs before forwarding. The Server Edition then
+  // refuses the well-formed flag as unsupported (its open allowlist), since it keeps no PR watch.
+  const afterPrRefusal = afterPrFlagRefusal(v, args)
+  if (afterPrRefusal) return { error: afterPrRefusal }
   if ((v === 'group' || v === 'arrange') && !args.nodes) return { error: `${v} requires --nodes <id,id>` }
   if (v === 'ungroup' && !args.group) return { error: 'ungroup requires --group <id>' }
   if (v === 'move' && !args.nodes) return { error: 'move requires --nodes <id,id>' }
@@ -553,9 +590,9 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     'Verbs:',
     '- `list` — current nodes (id, kind, title). Start here when you need a node id.',
     '- `help` — print the verb list. Answered by the shim itself, so it works even if the app is down.',
-    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>] [--run-now]` — open N plain terminals. `--cmd` requires verified node identity.',
-    '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]` — open N Claude sessions.',
-    `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open`,
+    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]` — open N plain terminals. `--cmd` requires verified node identity.',
+    '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]` — open N Claude sessions.',
+    `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open`,
     '  any agent CLI. `--group` parents the node(s) into a group frame; a worktree-bound group also',
     '  hands its worktree path down as the cwd. `--after <id,id>` opens the node ARMED: it does not',
     '  start until every listed station has finished a turn SUCCESSFULLY. It is',
@@ -597,15 +634,16 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  then reports through the ordinary status hooks — there is nothing to poll.',
     '  With `--run-now` a started node is listed in `startedIds`, not `queuedIds`.',
     '  `queued: false` is not proof the agent is running. `deliveredIds` confirms command delivery only.',
-    '  `list` names QUEUED, STARTING, LAUNCH FAILED, DROPPED and AGENT STATUS UNCONFIRMED where',
-    '  observed. STARTING means a background start is in flight: do not `run` that node again.',
+    '  `list` names QUEUED, STARTING, LAUNCH FAILED, EXPIRED, DROPPED and AGENT STATUS UNCONFIRMED',
+    '  where observed. STARTING means a background start is in flight: do not `run` that node again.',
     '  `--prompt` arrives on ONE LINE: every run of whitespace in it, newlines included, is',
     '  collapsed to a single space before the session starts (the prompt rides the launch command',
     '  line typed into the pane). For a structured or multi-line brief use `--prompt-file <abs',
     '  path>` instead: write the brief to a file, pass the absolute path, and the session starts',
     '  with the file\'s exact contents — newlines, numbered lists and headings preserved. The file',
     '  is read when the session LAUNCHES (later than the call for an `--after`-armed node), so',
-    '  leave it in place until the station has started. A long `--prompt` is SAFE on a local',
+    '  leave it in place until the station has started: a local node whose file is gone by then is',
+    '  not started, `list` marks it HELD and it waits for `run`. A long `--prompt` is SAFE on a local',
     '  project (nodeterm spills it to a file itself), but on an SSH project pass `--prompt-file`:',
     '  a terminal line caps at 1024 bytes on macOS, and a launch line that cannot be delivered is',
     '  refused with a message on the node rather than half-run. Never begin a prompt with `/`: once',
@@ -619,6 +657,7 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  exactly as it would without the flag. The id is passed to the CLI as-is, so a name that',
     '  agent does not recognise fails inside the session, not at open time — name a model you know.',
     ...issueBindingDocLines(),
+    ...afterPrDocLines(),
     '- `open-project --cwd </abs/path> [--name N] [--color C]` — register (or find) the project for a',
     '  local directory; the reply carries `{ projectId, name, cwd, created }`. Idempotent: the same',
     '  cwd always returns the same project, never a duplicate. Creating/adding asks the user to',
@@ -1056,9 +1095,9 @@ Verbs:
   not seven. It clears itself the moment that station completes another turn.
 - \`help\` — print the verb list. The shim answers this itself, without reaching the app, so it
   is also what to run when you are unsure whether the control endpoint is alive.
-- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>] [--run-now]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
-- \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N Claude sessions (default 1).
-- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N sessions of any agent CLI.
+- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
+- \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N Claude sessions (default 1).
+- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N sessions of any agent CLI.
   \`--group\` parents the node(s) into an existing group frame; a worktree-bound group also
   hands its worktree path down as the cwd.
   \`--after <id,id>\` opens the node **armed**: it does NOT start yet, and launches itself once
@@ -1105,8 +1144,8 @@ Verbs:
   to it, do not \`send\` to it and do not report it as started. It launches itself when its wait
   ends and then reports through the ordinary status hooks, so there is nothing to poll.
   \`queued: false\` does not prove the agent is running. \`deliveredIds\` confirms command delivery only.
-  \`list\` names QUEUED, STARTING, LAUNCH FAILED, DROPPED and AGENT STATUS UNCONFIRMED where
-  observed. STARTING means a background start is in flight: do not \`run\` that node again.
+  \`list\` names QUEUED, STARTING, LAUNCH FAILED, EXPIRED, DROPPED and AGENT STATUS UNCONFIRMED
+  where observed. STARTING means a background start is in flight: do not \`run\` that node again.
   \`--prompt\` arrives on ONE LINE. Every run of whitespace in it — newlines included — is
   collapsed to a single space before the session starts, because the prompt is passed as an
   argument on the agent CLI's launch command line and that line is typed into the pane. Two
@@ -1123,7 +1162,9 @@ Verbs:
     absolute path, and the session starts with the file's exact contents: the launch line stays
     one line and the pane's shell reads the file at execution. The file is read when the session
     LAUNCHES — for an \`--after\`-armed node that is later than your call — so leave it in place
-    until the station has started. On an SSH project the path is on the host (where you run).
+    until the station has started. On a local project a node whose file is gone by then is not
+    started with an empty brief: \`list\` marks it HELD and it waits for \`run\`. On an SSH project
+    the path is on the host (where you run).
     Pass either \`--prompt\` or \`--prompt-file\`, not both.
   - **Never start a prompt with \`/\`.** Flattened, \`/model sonnet\` followed by your task reads
     to the agent as one slash command whose argument is the entire rest of the prompt. The
@@ -1140,6 +1181,7 @@ Verbs:
   id goes to the CLI verbatim: an unknown name fails inside the session on its first turn, not at
   open time, so name a model you know that CLI accepts rather than guessing.
 ${issueBindingDocLines().join('\n')}
+${afterPrDocLines().join('\n')}
 - \`open-project --cwd </abs/path> [--name N] [--color C]\` — register (or find) the project for a
   local directory; the reply carries \`{ projectId, name, cwd, created }\`. Idempotent: the same
   cwd always returns the same project, never a duplicate — and \`--name\`/\`--color\` apply only

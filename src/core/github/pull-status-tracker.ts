@@ -45,6 +45,8 @@ export type PullReadReason = 'heartbeat' | 'foreground' | 'chase'
 type PullRepositoryState = {
   pulls: GitHubPullStatus[]
   observedAt?: number
+  /** When the read behind `pulls` STARTED (host clock). A PR wait armed after it cannot trust it. */
+  readStartedAt?: number
   stale: boolean
   access: { ci: boolean; merge: boolean }
   truncated: boolean
@@ -107,6 +109,7 @@ export class GitHubPullStatusTracker {
       now,
       pulls: state.pulls.map((pull) => ({ ...pull, closes: [...pull.closes] })),
       ...(state.observedAt !== undefined ? { observedAt: state.observedAt } : {}),
+      ...(state.readStartedAt !== undefined ? { readStartedAt: state.readStartedAt } : {}),
       stale: state.stale,
       access: { ...state.access },
       undecided: !!state.chase && state.chase.attempts < PULL_CHASE_MAX,
@@ -214,7 +217,7 @@ export class GitHubPullStatusTracker {
       return Promise.resolve()
     }
     const generation = state.generation
-    const work = this.perform(key, state, generation, userId, run)
+    const work = this.perform(key, state, generation, userId, run, reason)
     state.inFlight = work
     void work.finally(() => { if (state.inFlight === work) delete state.inFlight })
     return work
@@ -225,8 +228,10 @@ export class GitHubPullStatusTracker {
     state: PullRepositoryState,
     generation: number,
     userId: string,
-    run: () => Promise<PullStatusRead>
+    run: () => Promise<PullStatusRead>,
+    reason: PullReadReason
   ): Promise<void> {
+    const startedAt = this.now()
     let result: PullStatusRead
     try {
       result = await run()
@@ -242,7 +247,7 @@ export class GitHubPullStatusTracker {
       if (code === 'insufficient-permission') {
         await this.publish(key, state, generation, {
           open: [], recent: [], access: { ci: false, merge: false }, truncated: false
-        }, userId)
+        }, userId, startedAt, reason)
         return
       }
       const wasStale = state.stale
@@ -253,7 +258,7 @@ export class GitHubPullStatusTracker {
       return
     }
     if (generation !== state.generation) return
-    await this.publish(key, state, generation, result, userId)
+    await this.publish(key, state, generation, result, userId, startedAt, reason)
   }
 
   private async publish(
@@ -261,7 +266,9 @@ export class GitHubPullStatusTracker {
     state: PullRepositoryState,
     generation: number,
     result: PullStatusRead,
-    userId: string
+    userId: string,
+    startedAt: number,
+    reason: PullReadReason
   ): Promise<void> {
     const memory = await this.memoryFor(key, state)
     if (generation !== state.generation) return
@@ -309,13 +316,18 @@ export class GitHubPullStatusTracker {
     const chaseBefore = state.chase
     state.pulls = pulls
     state.observedAt = now
+    state.readStartedAt = startedAt
     state.stale = false
     state.owed = false
     state.access = { ...result.access }
     state.truncated = result.truncated
     state.chase = nextPullChase(state.chase, open, now)
     const chaseChanged = !!chaseBefore !== !!state.chase
-    if (changed.length || accessChanged || wasStale || chaseChanged) this.options.onChanged(key, changed)
+    // A FOREGROUND read was asked for (the board's refresh, or a pull request wait that needs a read
+    // taken after it was armed): its answer is news even when nothing in it changed.
+    if (changed.length || accessChanged || wasStale || chaseChanged || reason === 'foreground') {
+      this.options.onChanged(key, changed)
+    }
   }
 
   private memoryFor(key: string, state: PullRepositoryState): Promise<PullMemory> {
