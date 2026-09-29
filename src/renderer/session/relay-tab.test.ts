@@ -17,6 +17,10 @@ import {
 import { LocalTransport } from '../terminal/local-transport'
 import type { NodeTerminalApi, Project, Workspace } from '@shared/types'
 import type { RelayApiHandle } from '../bridge/relay-api'
+import { useHostedTeams } from '../state/hostedTeams'
+import { useHostedPending } from '../state/hostedPending'
+import { EMPTY_PENDING_QUEUE } from '../lib/hostedPendingQueue'
+import type { HostedPending, HostedSelf, RelayClosedReason } from '@shared/types'
 
 /** A fake relayClient.onClosed sink: keeps the callback so the test can fire a socket drop. */
 function fakeRelayClient() {
@@ -306,5 +310,148 @@ describe('tabClickAction (which behavior a tab click gets)', () => {
   })
   it('an unavailable LOCAL tab is inert (a missing folder, not clickable-to-reconnect)', () => {
     expect(tabClickAction(true, 'local')).toBe('ignore')
+  })
+})
+
+// ── Hosted team tabs (joined by a `nodeterm://join` code) ─────────────────────────────────────────
+
+function fakeHostedApi(self: HostedSelf | Error, pulled: HostedPending[] = []) {
+  const log: string[] = []
+  const base = fakeBridgedApi()
+  const unPending = vi.fn()
+  const unClosed = vi.fn()
+  let pushPending: ((p: HostedPending) => void) | null = null
+  const api = {
+    ...base.api,
+    workspace: {
+      load: vi.fn(async () => {
+        log.push('workspace.load')
+        return { version: 2, activeProjectId: '', projects: [] }
+      })
+    },
+    hosted: {
+      self: vi.fn(async () => {
+        log.push('self')
+        if (self instanceof Error) throw self
+        return self
+      }),
+      pending: vi.fn(async () => {
+        log.push('pending')
+        return pulled
+      }),
+      inviteCode: vi.fn(),
+      approve: vi.fn(),
+      deny: vi.fn(),
+      onPeerPending: vi.fn((l: (p: HostedPending) => void) => {
+        log.push('sub:pending')
+        pushPending = l
+        return unPending
+      }),
+      onPendingClosed: vi.fn(() => {
+        log.push('sub:closed')
+        return unClosed
+      })
+    }
+  } as unknown as NodeTerminalApi
+  return { api, log, unPending, unClosed, push: (p: HostedPending) => pushPending?.(p) }
+}
+
+function reasonRelayClient() {
+  const cbs: Array<(reason?: RelayClosedReason) => void> = []
+  return {
+    onClosed: vi.fn((_id: string, cb: (reason?: RelayClosedReason) => void) => {
+      cbs.push(cb)
+      return () => {}
+    }),
+    fire: (reason?: RelayClosedReason) => cbs.forEach((cb) => cb(reason))
+  }
+}
+
+describe('openRelayTab — hosted team tabs', () => {
+  beforeEach(() => {
+    useHostedTeams.setState({ bySession: {} })
+    useHostedPending.setState({ queue: EMPTY_PENDING_QUEUE, notice: null })
+  })
+
+  it('learns its role BEFORE anything mounts, gates the api on it, and records it for the UI', async () => {
+    const h = fakeHostedApi({ role: 'viewer', label: 'laptop', hostLabel: 'box' })
+    const setHostedRole = vi.fn()
+    const handle: RelayApiHandle = { api: h.api, ready: () => Promise.resolve(), close: vi.fn(), setHostedRole }
+    const { deps } = makeDeps({ handle })
+    const tab = await openRelayTab('conn-h', 'from code', deps)
+    expect(h.log[0]).toBe('self')
+    expect(h.log.indexOf('self')).toBeLessThan(h.log.indexOf('workspace.load'))
+    expect(setHostedRole).toHaveBeenCalledWith('viewer')
+    expect(tab.hosted).toEqual({ role: 'viewer', teamLabel: 'box' })
+    expect(useHostedTeams.getState().bySession[tab.sessionId]).toEqual({ role: 'viewer', teamLabel: 'box' })
+    // A viewer is not an owner: it never subscribes to join requests, and never pulls them.
+    expect(h.log).not.toContain('pending')
+    expect(h.log).not.toContain('sub:pending')
+  })
+
+  it('an unreadable role is the LOWEST role (fail closed), and the tab still opens', async () => {
+    const h = fakeHostedApi(new Error('You are not a member of this team.'))
+    const setHostedRole = vi.fn()
+    const handle: RelayApiHandle = { api: h.api, ready: () => Promise.resolve(), close: vi.fn(), setHostedRole }
+    const tab = await openRelayTab('conn-h', 'box', makeDeps({ handle }).deps)
+    expect(setHostedRole).toHaveBeenCalledWith('viewer')
+    expect(tab.hosted).toEqual({ role: 'viewer', teamLabel: 'box' })
+  })
+
+  it('an OWNER subscribes first, then pulls the open requests into the queue (R25/R37)', async () => {
+    const waiting: HostedPending = { pendingId: 'p1', sas: '123 456', peerKeyB64: 'KEY', since: 1 }
+    const h = fakeHostedApi({ role: 'owner', label: 'me', hostLabel: 'box' }, [waiting])
+    const handle: RelayApiHandle = { api: h.api, ready: () => Promise.resolve(), close: vi.fn(), setHostedRole: vi.fn() }
+    const tab = await openRelayTab('conn-h', 'box', makeDeps({ handle }).deps)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.log.indexOf('sub:pending')).toBeLessThan(h.log.indexOf('pending'))
+    expect(useHostedPending.getState().queue.items.map((i) => i.pending.pendingId)).toEqual(['p1'])
+    expect(useHostedPending.getState().queue.items[0]).toMatchObject({ projectId: tab.projectId, teamLabel: 'box' })
+    // A second request is queued, not dropped.
+    h.push({ pendingId: 'p2', sas: '9', peerKeyB64: 'K2', since: 2 })
+    expect(useHostedPending.getState().queue.items).toHaveLength(2)
+    // The tab dropping takes its requests (and its subscriptions) with it.
+    handleRelayDrop(tab, { setProjectUnavailable: () => {} })
+    expect(h.unPending).toHaveBeenCalled()
+    expect(h.unClosed).toHaveBeenCalled()
+    expect(useHostedPending.getState().queue.items).toEqual([])
+  })
+
+  it('a Team Access relay tab (no hosted api) takes the old path: no role, no store entry', async () => {
+    const { api } = fakeBridgedApi()
+    const handle: RelayApiHandle = { api, ready: () => Promise.resolve(), close: vi.fn() }
+    const tab = await openRelayTab('conn-legacy', 'Mac', makeDeps({ handle }).deps)
+    expect(tab.hosted).toBeUndefined()
+    expect(useHostedTeams.getState().bySession).toEqual({})
+    expect(useHostedPending.getState().queue).toBe(EMPTY_PENDING_QUEUE)
+  })
+
+  it('a hosted refusal before approval rejects in the host\'s words and carries the reason', async () => {
+    const h = fakeHostedApi({ role: 'viewer', label: '', hostLabel: 'box' })
+    const handle: RelayApiHandle = { api: h.api, ready: () => new Promise<void>(() => {}), close: vi.fn(), setHostedRole: vi.fn() }
+    const relayClient = reasonRelayClient()
+    const bootstrap = openRelayTab('conn-h', 'box', makeDeps({ handle, relayClient }).deps)
+    relayClient.fire('denied')
+    const err = await bootstrap.catch((e: Error & { reason?: string }) => e)
+    expect((err as Error).message).toBe('An owner declined the request.')
+    expect((err as { reason?: string }).reason).toBe('denied')
+  })
+
+  it('a legacy close before approval keeps its old message exactly', async () => {
+    const { api } = fakeBridgedApi()
+    const handle: RelayApiHandle = { api, ready: () => new Promise<void>(() => {}), close: vi.fn() }
+    const relayClient = reasonRelayClient()
+    const bootstrap = openRelayTab('conn-l', 'Mac', makeDeps({ handle, relayClient }).deps)
+    relayClient.fire(undefined)
+    await expect(bootstrap).rejects.toThrow(/^The relay connection closed before it was approved\.$/)
+  })
+
+  it('a background reconnect binds the tab without switching to it (activate: false)', async () => {
+    const h = fakeHostedApi({ role: 'editor', label: '', hostLabel: 'box' })
+    const handle: RelayApiHandle = { api: h.api, ready: () => Promise.resolve(), close: vi.fn(), setHostedRole: vi.fn() }
+    const { deps, setActiveProject } = makeDeps({ handle })
+    const tab = await openRelayTab('conn-h', 'box', { ...deps, activate: false })
+    expect(setActiveProject).not.toHaveBeenCalled()
+    expect(sessionForProject(tab.projectId).id).toBe(tab.sessionId) // still bound
   })
 })

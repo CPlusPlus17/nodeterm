@@ -5,10 +5,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { IPC } from '../../shared/ipc'
 import { VIEW, COMMENT, EDITOR_ONLY, VIEW_EVENTS } from './access-policy'
+import { HOSTED_VIEW_METHODS, HOSTED_COMMENT_METHODS } from '../../shared/hosted-access'
+import type { HostedRole } from '../../shared/types'
+import type { TeamRole } from './team-store'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\r\n/g, '\n')
-const BUILDERS = ['buildRealApi', 'buildFilesApi', 'buildGitHubApi', 'buildAgentApi', 'buildCanvasApi', 'buildPresenceApi', 'buildClaudeApi']
+const BUILDERS = ['buildRealApi', 'buildFilesApi', 'buildGitHubApi', 'buildAgentApi', 'buildCanvasApi', 'buildPresenceApi', 'buildClaudeApi', 'buildHostedApi']
 
 function body(src: string, fn: string): string {
   const start = src.indexOf(`export function ${fn}(`)
@@ -45,5 +48,16 @@ describe('access-policy guard', () => {
       .filter((v): v is string => typeof v === 'string')
       .filter((v) => !Object.hasOwn(VIEW, v) && !Object.hasOwn(COMMENT, v) && !EDITOR_ONLY.has(v))
     expect(undecided, `classify these in access-policy.ts: ${undecided.join(', ')}`).toEqual([])
+  })
+  it('the renderer\'s mirror names exactly the host\'s viewer and commenter channels', () => {
+    // A channel the host opens to viewers that the mirror does not name silently disappears from a
+    // viewer's tab (refused locally); one the mirror names that the host does not is refused anyway.
+    expect([...HOSTED_VIEW_METHODS].sort()).toEqual(Object.keys(VIEW).sort())
+    expect([...HOSTED_COMMENT_METHODS].sort()).toEqual(Object.keys(COMMENT).sort())
+  })
+  it('the renderer\'s role names are the team store\'s', () => {
+    const toShared = (r: TeamRole): HostedRole => r
+    const toCore = (r: HostedRole): TeamRole => r
+    expect([toShared('viewer'), toCore('owner')]).toEqual(['viewer', 'owner'])
   })
 })

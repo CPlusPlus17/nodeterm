@@ -3535,8 +3535,53 @@ export interface RelayHostedApi {
   /** The bookmarks, never their device tokens. `approved` = both humans approved this device on
    *  that host, so a reconnect needs no SAS comparison on this side. */
   bookmarks(): Promise<Array<{ hostId: string; label: string; approved: boolean; code: string }>>
-  /** Forget a bookmark (its device token and its approval). */
+  /** Forget a bookmark (its device token and its approval). Rejects while a join for that team is
+   *  still minting or joining: that join would write the bookmark straight back. */
   removeBookmark(hostId: string): Promise<void>
+}
+
+/** A hosted team member's role (the core team store's `TeamRole`). */
+export type HostedRole = 'owner' | 'editor' | 'commenter' | 'viewer'
+
+/** A device waiting for an owner to approve it (core hosted-service's `HostedPending`). */
+export interface HostedPending {
+  pendingId: string
+  /** The code both people compare out of band. */
+  sas: string
+  peerKeyB64: string
+  /** Host wall-clock ms the request arrived. */
+  since: number
+}
+
+/** Why a pending request stopped being pending. `approved` / `denied` may be ANOTHER owner's answer;
+ *  `replaced` = the same device asked again (its newer request arrives on its own). */
+export type HostedPendingClosedReason = 'approved' | 'denied' | 'expired' | 'replaced' | 'gone'
+
+/** What `relay:hosted:self` answers: this device's role, its label on the team, the host's label. */
+export interface HostedSelf {
+  role: HostedRole
+  label: string
+  hostLabel: string
+}
+
+/**
+ * The hosted team verbs of ONE relay session. Only a relay tab joined by a `nodeterm://join` code has
+ * it (`NodeTerminalApi.hosted`); a local session, a Server Edition browser and a Team Access relay
+ * tab (desktop to desktop) never do. The host answers every one of these itself and judges the
+ * caller's role: `self` is open to any member, the rest are owner-only.
+ */
+export interface HostedSessionApi {
+  self(): Promise<HostedSelf>
+  /** The requests still waiting (owner-only). Pulled once on open; the events below are deltas. */
+  pending(): Promise<HostedPending[]>
+  /** The team's join code, or null when the host has none to hand out. */
+  inviteCode(): Promise<string | null>
+  /** Admit a waiting device with `role`. False when it is gone or another owner answered first. */
+  approve(pendingId: string, role: HostedRole): Promise<boolean>
+  /** Refuse a waiting device. False when it is already gone. */
+  deny(pendingId: string): Promise<boolean>
+  onPeerPending(listener: (p: HostedPending) => void): () => void
+  onPendingClosed(listener: (p: { pendingId: string; reason: HostedPendingClosedReason }) => void): () => void
 }
 
 /** A paired device as exposed to the renderer — the bearer token is never included. */
@@ -3736,6 +3781,9 @@ export interface NodeTerminalApi {
   relayHost: RelayHostApi
   relayClient: RelayClientApi
   relayHosted: RelayHostedApi
+  /** The hosted team verbs of THIS session's host — present only on a relay tab joined by a hosted
+   *  team's join code; absent everywhere else (local, Server Edition, Team Access relay tabs). */
+  hosted?: HostedSessionApi
   handoff: HandoffApi
   pairing: PairingApi
   presence: PresenceApi

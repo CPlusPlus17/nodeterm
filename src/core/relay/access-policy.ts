@@ -288,6 +288,17 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   // Canvas edits and the one presence cast VIEW does not list.
   IPC.canvasMut,
   IPC.presenceDino,
+  // The hosted team verbs (renderer `buildHostedApi`). INTERCEPTED by hosted-service.ts before this
+  // table is ever consulted, which judges each caller itself (`self`: any member; the rest: owners
+  // only) — so this table never decides them. Listed so the guard sees a decision, not a gap. Their
+  // events reach owners only (hosted-service `tellOwners`), never through VIEW_EVENTS.
+  IPC.relayHostedSelf,
+  IPC.relayHostedPending,
+  IPC.relayHostedInviteCode,
+  IPC.relayHostedApprove,
+  IPC.relayHostedDeny,
+  IPC.relayHostedPeerPending,
+  IPC.relayHostedPendingClosed,
   // Server→client events (see the doc comment): what a non-editor receives is VIEW_EVENTS.
   IPC.workspaceMigrated,
   IPC.workspaceCorruptRecovered,

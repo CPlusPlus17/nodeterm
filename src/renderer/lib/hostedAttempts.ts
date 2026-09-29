@@ -1,0 +1,215 @@
+// The one owner of a hosted team's connection attempts in the renderer: AT MOST ONE attempt and one
+// live connection per team (hostId), shared by the boot reconnect, a dropped tab's reconnect and a
+// manual "join with code" (R38/R39).
+//
+// Why one: a second connect for a team whose first is still in flight opens a second pending request
+// at the host, which REPLACES the first and closes its socket — the user would see a refusal for an
+// attempt nobody declined. Main refuses a duplicate while it is minting and joining
+// (`[E_JOIN_BUSY]`), but its lock releases once the relay client exists, which is before the SAS
+// dialog and the owner's approval. This owner holds the team through all of it: connecting → the
+// approval wait / tab mount → live, until that connection closes.
+//
+// Why only network failures retry (R35): every other code needs a person (a fresh code, an unlocked
+// keyring, an owner) or a new day, and a loop on one of them spends the team's damped device mints.
+// Pure orchestration over injected deps, so every rule is testable without React or a relay.
+// See docs/hosted-team-relay.md.
+import type { RelayClosedReason } from '@shared/types'
+import { classifyJoinFailure, reconnectDelayMs, type JoinFailure } from './hostedTeam'
+
+export interface HostedAttemptRequest {
+  hostId: string
+  /** The team's join code (a bookmark's, or the one the user pasted). */
+  code: string
+  /** The team's name, for what the user is told. */
+  label: string
+  /** The user asked for this now: it cancels a pending backoff wait and runs at once. */
+  manual: boolean
+  /** A network failure backs off and tries again (an unattended reconnect, a tab click); off for
+   *  a pasted code, whose user is watching and is told instead. */
+  retry: boolean
+  /** Reconnect onto this existing tab instead of opening a new one. */
+  reconnectProjectId?: string
+}
+
+export type HostedAttemptPhase = 'connecting' | 'waiting' | 'mounting' | 'live'
+
+/** How a mount ended: a live tab, or not — and then whether trying again could help. `retry` is for
+ *  a connection that dropped before the host answered (a host restarting, a relay blip): the relay
+ *  client exists before the host is reached, so that failure arrives here rather than as a code. */
+export type HostedMountResult = { projectId: string } | { retry: boolean }
+
+export interface HostedAttemptDeps {
+  /** `relayClient.connect(code)` → a connection id; rejects with main's `[E_JOIN_…]` message. */
+  connect(code: string): Promise<string>
+  /** Turn a fresh connection into a tab (the SAS, the owner's approval, the load). A failure it
+   *  resolves with is one it has already handled; `retry` asks for another attempt. Never rejects
+   *  (a rejection is read as `{ retry: false }`). */
+  mount(connectionId: string, req: HostedAttemptRequest): Promise<HostedMountResult>
+  onClosed(connectionId: string, listener: (reason?: RelayClosedReason) => void): () => void
+  disconnect(connectionId: string): void
+  /** A connect failed and this team's attempts stopped. Called once per stop, BUSY included (the
+   *  caller decides what, if anything, to say — see `joinStopMessage`). */
+  stopped(req: HostedAttemptRequest, failure: JoinFailure): void
+  /** A live connection ended; `reason` is set only when the host refused this device. */
+  ended(req: HostedAttemptRequest, projectId: string, reason?: RelayClosedReason): void
+  setTimer(fn: () => void, ms: number): unknown
+  clearTimer(handle: unknown): void
+}
+
+export interface HostedAttempts {
+  /** Start (or, for a manual request, hurry) this team's attempt. `busy` = this team already has
+   *  an attempt connecting, waiting for approval or live, and nothing was started. */
+  run(req: HostedAttemptRequest): 'started' | 'busy'
+  phase(hostId: string): HostedAttemptPhase | null
+  /** Stop a pending backoff or an in-flight connect for good. A connection already past its
+   *  connect (approval wait, live tab) is the user's and is left alone. */
+  cancel(hostId: string): void
+  /** Stop everything (the canvas is going away). */
+  dispose(): void
+}
+
+interface Entry {
+  req: HostedAttemptRequest
+  phase: HostedAttemptPhase
+  attempt: number
+  timer: unknown
+  connectionId: string | null
+  projectId: string | null
+  unClose: (() => void) | null
+  /** The connection closed while its tab was still mounting: set to the close's reason holder. */
+  closedEarly: { reason?: RelayClosedReason } | null
+}
+
+export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
+  const entries = new Map<string, Entry>()
+  let disposed = false
+
+  /** The entry for `hostId` is still `e` — async continuations of a cancelled or replaced attempt
+   *  must do nothing. */
+  const current = (e: Entry): boolean => !disposed && entries.get(e.req.hostId) === e
+
+  const release = (e: Entry): void => {
+    e.unClose?.()
+    e.unClose = null
+    if (entries.get(e.req.hostId) === e) entries.delete(e.req.hostId)
+  }
+
+  const endLive = (e: Entry, reason?: RelayClosedReason): void => {
+    const projectId = e.projectId
+    release(e)
+    if (projectId) deps.ended(e.req, projectId, reason)
+  }
+
+  /** Back off, then try again (the 1/2/4/8/15/60 s ladder). */
+  const backOff = (e: Entry): void => {
+    e.phase = 'waiting'
+    e.timer = deps.setTimer(() => {
+      e.timer = null
+      if (current(e)) attempt(e)
+    }, reconnectDelayMs(e.attempt))
+    e.attempt += 1
+  }
+
+  const attempt = (e: Entry): void => {
+    e.phase = 'connecting'
+    let connection: Promise<string>
+    try {
+      connection = deps.connect(e.req.code)
+    } catch (err) {
+      connection = Promise.reject(err)
+    }
+    connection.then(
+      (connectionId) => {
+        if (!current(e)) {
+          // Cancelled (or disposed) while connecting: nobody wants this connection.
+          deps.disconnect(connectionId)
+          return
+        }
+        e.phase = 'mounting'
+        e.connectionId = connectionId
+        e.unClose = deps.onClosed(connectionId, (reason) => {
+          if (!current(e)) return
+          if (e.phase === 'live') endLive(e, reason)
+          else e.closedEarly = { reason } // the mount rejects on it too; its settle decides
+        })
+        let mounted: Promise<HostedMountResult>
+        try {
+          mounted = deps.mount(connectionId, e.req)
+        } catch (err) {
+          mounted = Promise.reject(err)
+        }
+        mounted
+          .catch((): HostedMountResult => ({ retry: false }))
+          .then((result) => {
+            if (!current(e)) return
+            if (!('projectId' in result) || !result.projectId) {
+              e.unClose?.()
+              e.unClose = null
+              e.connectionId = null
+              e.closedEarly = null
+              if ('retry' in result && result.retry && e.req.retry) backOff(e)
+              else release(e)
+              return
+            }
+            const projectId = result.projectId
+            e.projectId = projectId
+            e.attempt = 0
+            if (e.closedEarly) {
+              endLive(e, e.closedEarly.reason)
+              return
+            }
+            e.phase = 'live'
+          })
+      },
+      (err) => {
+        if (!current(e)) return
+        const failure = classifyJoinFailure(err instanceof Error ? err.message : String(err))
+        if (failure.retry && e.req.retry) {
+          backOff(e)
+          return
+        }
+        release(e)
+        deps.stopped(e.req, failure)
+      }
+    )
+  }
+
+  return {
+    run(req) {
+      if (disposed) return 'busy'
+      const existing = entries.get(req.hostId)
+      if (existing) {
+        if (existing.phase !== 'waiting' || !req.manual) return 'busy'
+        // A manual attempt hurries a waiting loop: its backoff timer goes, and the ONE attempt runs
+        // now, with the manual request's terms (it may name the tab to reconnect in place).
+        deps.clearTimer(existing.timer)
+        existing.timer = null
+        existing.req = req
+        attempt(existing)
+        return 'started'
+      }
+      const e: Entry = { req, phase: 'connecting', attempt: 0, timer: null, connectionId: null, projectId: null, unClose: null, closedEarly: null }
+      entries.set(req.hostId, e)
+      attempt(e)
+      return 'started'
+    },
+    phase(hostId) {
+      return entries.get(hostId)?.phase ?? null
+    },
+    cancel(hostId) {
+      const e = entries.get(hostId)
+      if (!e || e.phase === 'mounting' || e.phase === 'live') return
+      if (e.timer !== null) deps.clearTimer(e.timer)
+      e.timer = null
+      release(e)
+    },
+    dispose() {
+      disposed = true
+      for (const e of entries.values()) {
+        if (e.timer !== null) deps.clearTimer(e.timer)
+        e.unClose?.()
+      }
+      entries.clear()
+    }
+  }
+}

@@ -39,6 +39,7 @@ import { createHostedScheduler, type Listener, type SchedulerStatus } from './ho
 import { encodeJoinCode } from './join-code'
 import type { KeyPair } from './e2ee'
 import type { UiSink } from '../ui-sink-registry'
+import type { HostedPending as SharedHostedPending, HostedPendingClosedReason } from '../../shared/types'
 
 /** An unanswered join request is refused after ten minutes. */
 export const PENDING_TTL_MS = 600_000
@@ -56,10 +57,12 @@ const JOIN_LABEL_MAX = 60
 
 const NOT_A_MEMBER = 'You are not a member of this team.'
 
-export interface HostedPending { pendingId: string; sas: string; peerKeyB64: string; since: number }
+/** A device waiting for an owner. The renderer's type IS this one (one definition, in shared). */
+export type HostedPending = SharedHostedPending
 /** Why a pending request stopped being pending, as told to owners on `relay:hosted:pending-closed`.
- *  `replaced`: the same device connected again, and its newer request took this one's place. */
-export type PendingClosedReason = 'approved' | 'denied' | 'expired' | 'replaced' | 'gone'
+ *  `replaced`: the same device connected again, and its newer request took this one's place. Shared
+ *  with the renderer, so a reason added here without its owner-dialog handling fails to compile there. */
+export type PendingClosedReason = HostedPendingClosedReason
 /** `stopped`: a `stop()` landed after this `start()` was called and before it finished; it wins. */
 export type HostedStartResult = 'started' | 'no-team' | 'host-key-unreadable' | 'stopped'
 /** `not-running`: the key was rotated on a service that was not hosting, and hosting stays off. */

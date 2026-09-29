@@ -3,9 +3,12 @@
 // The host key inside is what authenticates the host to the joiner, and the hostId must derive
 // from it, so a code cannot point a teammate at a different room than the key it carries.
 import { hostIdFromPublicKeyB64 } from './relay-id'
+// The prefix is shared with the renderer (which cannot import this file); one definition.
+import { JOIN_CODE_PREFIX as PREFIX, isJoinCode } from '../../shared/relay-join-code'
+
+export { isJoinCode }
 
 export interface JoinCode { v: 1; relayEndpoint: string; hostId: string; hostPublicKeyB64: string; hostDeviceId: string; label: string }
-const PREFIX = 'nodeterm://join?code='
 
 /** A relay endpoint we will dial: `wss:` anywhere, plaintext `ws:` only to loopback. Applied to a
  *  code's endpoint AND to the one the join API hands back, so neither can send a client token over
@@ -20,10 +23,6 @@ export function allowedEndpoint(endpoint: string): boolean {
 
 export function encodeJoinCode(c: JoinCode): string {
   return PREFIX + Buffer.from(JSON.stringify(c), 'utf-8').toString('base64url')
-}
-
-export function isJoinCode(s: string): boolean {
-  return s.trim().startsWith(PREFIX)
 }
 
 export function decodeJoinCode(s: string): JoinCode | null {
