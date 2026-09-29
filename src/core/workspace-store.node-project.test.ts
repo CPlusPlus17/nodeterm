@@ -131,3 +131,35 @@ describe('WorkspaceStore.projectIdsForNode — an id in more than one project (M
     expect(store.projectIdsForNode('n1')).toEqual(['pa'])
   })
 })
+
+describe('WorkspaceStore.projectIdsForNode — the memo keys (D1)', () => {
+  // The memo is keyed on the IDENTITY of every input persistedCanvases reads. The node array itself
+  // is one of them: a writer that replaces `entry.project.nodes` / `entry.cache.nodes` on the SAME
+  // entry and project/cache object must still be seen, and so must an in-place re-key of an inline
+  // project's id.
+  type Entry = { id: string; project?: { id: string; nodes: CanvasNodeState[] }; cache?: { nodes: CanvasNodeState[] } }
+  const entriesOf = (store: WorkspaceStore): Entry[] => (store as unknown as { index: { entries: Entry[] } }).index.entries
+
+  it('an inline project whose node array is replaced in place, or whose id is re-keyed in place', async () => {
+    const store = new WorkspaceStore()
+    await store.save(ws([project('inline', undefined, ['n1'])]))
+    expect(store.projectIdsForNode('n1')).toEqual(['inline'])
+    const e = entriesOf(store)[0]
+    e.project!.nodes = [node('n2')]
+    expect(store.projectIdsForNode('n2')).toEqual(['inline'])
+    expect(store.projectIdsForNode('n1')).toEqual([])
+    e.project!.id = 'renamed'
+    expect(store.projectIdsForNode('n2')).toEqual(['renamed'])
+  })
+
+  it('an SSH entry whose cached node array is replaced in place', async () => {
+    const store = new WorkspaceStore()
+    await store.save(ws([project('inline', undefined, ['n1'])]))
+    entriesOf(store).push({ id: 'ssh1', cache: { nodes: [node('s1')] } })
+    expect(store.projectIdsForNode('s1')).toEqual(['ssh1'])
+    const e = entriesOf(store)[1]
+    e.cache!.nodes = [node('s2')]
+    expect(store.projectIdsForNode('s2')).toEqual(['ssh1'])
+    expect(store.projectIdsForNode('s1')).toEqual([])
+  })
+})

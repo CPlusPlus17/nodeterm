@@ -1524,8 +1524,11 @@ export class WorkspaceStore {
    * to bump it, and this class changes those inputs from a dozen places — `lastWritten.set`, index
    * reassignment, and in-place entry updates (`e.cache = …`, `e.project = …`, `e.id = …` on a
    * re-key). Every one of them replaces a reference, so a snapshot comparison sees all of them,
-   * including writers added later. It rests on one rule this file already keeps: a project's node
-   * array is replaced, never mutated in place.
+   * including writers added later. The snapshot goes down to the node arrays themselves
+   * (`e.project.nodes`, `e.cache.nodes`) and the inline project's own id, so a writer that swaps
+   * `.nodes` or re-keys `.id` on the SAME entry and project/cache object is seen too. What it cannot
+   * see is an array MUTATED in place (a push into `nodes`): the rule this file keeps is that a
+   * project's node array is replaced, never mutated.
    */
   projectIdsForNode(nodeId: string): readonly string[] {
     const inputs = this.canvasInputs()
@@ -1547,12 +1550,23 @@ export class WorkspaceStore {
   }
 
   /** Every input `persistedCanvases` reads, by identity: the index object, and per entry the entry,
-   *  its id, its inline project, its ssh cache, its cwd and the text last written/read for that
-   *  cwd's project file. */
+   *  its id, its inline project with that project's id and node array, its ssh cache with its node
+   *  array, its cwd and the text last written/read for that cwd's project file. A node array is
+   *  compared by reference: it must be replaced, never mutated in place (see `projectIdsForNode`). */
   private canvasInputs(): unknown[] {
     const out: unknown[] = [this.index]
     for (const e of this.index?.entries ?? []) {
-      out.push(e, e.id, e.project, e.cache, e.cwd, e.cwd ? this.lastWritten.get(projectFilePath(e.cwd)) : undefined)
+      out.push(
+        e,
+        e.id,
+        e.project,
+        e.project?.id,
+        e.project?.nodes,
+        e.cache,
+        e.cache?.nodes,
+        e.cwd,
+        e.cwd ? this.lastWritten.get(projectFilePath(e.cwd)) : undefined
+      )
     }
     return out
   }
