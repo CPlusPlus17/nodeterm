@@ -1375,7 +1375,15 @@ session.
   agent prints paths relative to where IT runs; the launch cwd wins a tie so a link never changes
   meaning when the pane moves. A Cmd/Ctrl+click on a path that exists under neither raises a
   `File not found: …` toast naming where it looked — the click is swallowed before the async
-  lookup, so without it the gesture silently did nothing. The path
+  lookup, so without it the gesture silently did nothing. **"Could not check" is never "not
+  found"**: a lookup has three outcomes (`PathLookup.unverified`, `PathResolution.unverified`), and
+  `makeDirListingLookup` treats a REJECTED listing and an EMPTY one as unverified — `FsApi` is
+  fail-open (`listDir` ends `catch { return [] }`, and a dead ControlMaster lists `[]`), so only a
+  listing WITH entries can prove absence (same rule as `classifyEmptyListing`); `.git` is unverified
+  too (both listing legs strip it). A failure is cached as a failure for ~1 s, never as an empty
+  directory for the 3 s TTL. An unchecked launch-cwd candidate still lets the live cwd be tried (a
+  hit there is proof). The toast then reads `Couldn't check <path>: <reason>` (`fileMissMessage`),
+  and the link menu shows `Couldn't check: <reason>` instead of `Not found`. The path
   dialect follows the FILESYSTEM-OWNING CORE, not the viewer: desktop-local may use its own
   platform, Server Edition and relay tabs use the core's reported `process.platform`, and SSH
   projects are POSIX. A failed host-platform read disables file links for that connection — it
@@ -1392,7 +1400,8 @@ session.
   right PRESS, not on `contextmenu`:** tmux 3.x binds `MouseDown3Pane` to its own `display-menu`, so
   the press is what must be swallowed; a right-click OFF a link stays byte-identical (tmux menu,
   agent TUI, node menu). A path-shaped token that turns out not to exist still gets a menu ("Not
-  found" + Copy path) — its press was already swallowed, and a silent swallow reads as broken.
+  found" + Copy path; "Couldn't check: <reason>" when its existence could not be checked) — its
+  press was already swallowed, and a silent swallow reads as broken.
   Downloads report in a `DownloadStrip` floated over the terminal, not in a drawer that may be
   shut. The kanban card modal gets URL rows only (no file links there) and no "Open in canvas
   browser" (the node would land under the board).
