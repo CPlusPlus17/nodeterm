@@ -16,6 +16,12 @@ import { nodeColorChoices } from '@shared/node-colors'
 import { offScreenGuidanceLines } from '@shared/control-off-screen'
 import { codexThreadIdentityResolverSh } from './codex-thread-identity-sh'
 import { ISSUE_SESSION_COLUMNS, issueLaunchPrompt, parseIssueArg } from '../shared/github-issue-ref'
+import {
+  STATION_BLOCKED_NOTICE_MS,
+  STATION_NOTICE_COMMON_OPTIONS,
+  STATION_TRIGGERS
+} from '../shared/station-notice'
+import { STATION_NOTICE_FROM } from '../shared/agents/agent-messaging'
 
 /**
  * The messaging verbs' retry guidance, RENDERED from `RETRYABLE` — the table is the source, and
@@ -34,6 +40,42 @@ function messagingGuidanceLines(): string[] {
     `- NOT worth retrying — the cause will not clear on its own: ${no.join(', ')}.`,
     `Budgets: one message per sender→target pair per ${Math.round(PAIR_MIN_INTERVAL_MS / 1000)}s, and at`,
     `most ${FANOUT_PER_TURN} deliveries per turn.`
+  ]
+}
+
+/**
+ * What a station-failure notice is and what to do with one — RENDERED from the trigger table
+ * (@shared/station-notice), the same derive-don't-retype rule as `messagingGuidanceLines`: a reason
+ * added to the table, or a retry sentence changed, lands in both agent-facing bodies the day it
+ * changes. `canvas-control-core.test.ts` walks the real table against both.
+ */
+function stationNoticeDocLines(): string[] {
+  const minutes = Math.round(STATION_BLOCKED_NOTICE_MS / 60_000)
+  return [
+    'Station notices — when a station YOU opened stops:',
+    '- nodeterm tells the agent that OPENED a station (the node its rope comes from) when that station',
+    '  stops, so you do not have to poll `list` to find out. You are told ONCE per station, and not',
+    '  again until that station completes a turn successfully — a station that fails again right after',
+    '  a retry stays silent, so decide what to do the first time.',
+    '- A station counts as stopped in exactly these cases:',
+    ...STATION_TRIGGERS.map((row) => `  - \`${row.reason}\`: ${row.label}.`),
+    `  (\`blocked-unanswered\` is sent only while YOU are idle: the user sees NEEDS YOU the moment the`,
+    `  station blocks, and you hear after ${minutes} minutes if nobody has answered.)`,
+    '- Where it shows up: always as a STATION FAILED chip on your node and a line in your card\'s',
+    '  activity. It is typed into YOUR session only when the project\'s agent-messaging switch is on',
+    '  (off by default), as a framed message whose `from:` line reads',
+    `  \`${STATION_NOTICE_FROM} (<station id>)\`, delivered when you are idle.`,
+    '  nodeterm writes all of it and quotes nothing the station produced; the quoted title is data.',
+    '- What to do — pick one and act on it:',
+    ...STATION_TRIGGERS.map(
+      (row) => `  - \`${row.reason}\` → ${row.option}: ${row.retry.replace(/<station>/g, '<station id>')}`
+    ),
+    ...STATION_NOTICE_COMMON_OPTIONS.map(
+      ([name, text]) => `  - ${name}: ${text.replace(/<station>/g, '<station id>')}`
+    ),
+    '- Nobody opened the station through you? You are not told about it. On the Server Edition you are',
+    '  told only about stations you opened during this server run, and a dead CLI (DROPPED) is noticed',
+    '  only while a browser tab shows that station. `list` still marks LAST TURN ERRORED and DROPPED.'
   ]
 }
 
@@ -670,6 +712,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '',
     ...messagingGuidanceLines(),
     '',
+    ...stationNoticeDocLines(),
+    '',
     ...browserGuidanceLines(),
     '',
     ...codexSandboxGuidanceLines(CONTROL_UNREACHABLE_MSG),
@@ -1221,6 +1265,8 @@ ${browserVerbDocLines().join('\n')}
 ${offScreenGuidanceLines().join('\n')}
 
 ${messagingGuidanceLines().join('\n')}
+
+${stationNoticeDocLines().join('\n')}
 
 ${browserGuidanceLines().join('\n')}
 

@@ -311,6 +311,16 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   against the renderer's dispositions — deliberately cross-layer, because that is the only way
   "every verb" is checked rather than remembered.
 
+- **A new canvas-control open path must record who opened the node.** When a station stops, the
+  agent that opened it is told (`src/core/agents/station-notice.ts`) — and a rope alone cannot say
+  who that is, because an `--after` node is roped to the stations it waited on too, with the same id
+  shape. So every open verb stamps `data.openedBy` where it draws the opener's rope
+  (`lib/stationOpener.ts`; the live paths get it from `connect`, the off-canvas and cold-open writes
+  call `withOpenedBy` themselves). An open path that ropes without stamping compiles and passes, and
+  its stations fail in silence; `src/main/station-notice-wiring.test.ts` pins the sites that exist.
+  The notice text is app-authored and fixed — never add anything the STATION wrote to it (its
+  output is exactly where an injection aimed at the orchestrator would come from).
+
 - **A dialog raised on someone else's behalf must know that request's lifetime.** Main abandons a
   canvas-control request after 120 s and tells the renderer nothing, so an unanswered dialog sat
   there forever AND held the one-confirm-at-a-time guard, which refused every later destructive

@@ -22,9 +22,15 @@ import { binariesFor, type PaneOwner } from '../../shared/agents/pane-owner-pred
 import type { BoardLogEntry } from '../../shared/types'
 import type {
   AgentMessageDeliverRequest,
+  AgentMessageDeliveryInput,
   AgentMessageReply
 } from '../../shared/agents/agent-messaging'
-import { AGENT_MESSAGE_VERBS, NOTIFY_BODY } from '../../shared/agents/agent-messaging'
+import {
+  AGENT_MESSAGE_VERBS,
+  NOTIFY_BODY,
+  STATION_NOTICE_FROM,
+  STATION_NOTICE_VERB
+} from '../../shared/agents/agent-messaging'
 import {
   deliverAgentMessage,
   type DeliveryDeps,
@@ -235,7 +241,9 @@ export function createDeliveryQueue(
       deliver: (qreq) =>
         runDelivery(
           {
-            verb: qreq.verb as AgentMessageDeliverRequest['verb'],
+            // A queued station notice flushes as a station notice: the verb rides the queue, so
+            // its app-authored body and its reversed ownership check survive the wait.
+            verb: qreq.verb as AgentMessageDeliveryInput['verb'],
             sourceNodeId: qreq.sourceNodeId,
             targetNodeId: qreq.targetNodeId,
             body: qreq.body
@@ -496,10 +504,18 @@ const WROTE: ReadonlySet<AgentMessageOutcome['kind']> = new Set([
  * comes back `notPermitted` here and the queue drops it.
  */
 export async function runDelivery(
-  req: AgentMessageDeliverRequest,
+  req: AgentMessageDeliveryInput,
   deps: AgentMessagingDeps
 ): Promise<AgentMessageOutcome> {
   const now = deps.now ?? ((): number => Date.now())
+  // The app's own station-failure notice (station-notice.ts): the SOURCE is the station the notice
+  // is about and the TARGET is the agent that opened it. It runs every gate below — scope, the
+  // per-project switch, runtime pane ownership, flow limits, the pane probes, the receipt — with
+  // two differences, both because the app, not the station, is the author: the body was composed
+  // in core from a closed table, and the creator check runs the OTHER way round (the recipient must
+  // have opened the station, which is how the recipient was chosen; re-asked here so a queued
+  // notice is re-validated at flush time like every other delivery).
+  const stationNotice = req.verb === STATION_NOTICE_VERB
 
   const projects = deps.projects()
   // WHO MAY BE ADDRESSED — the serialized store, never a live canvas (there is nothing to travel
@@ -509,7 +525,9 @@ export async function runDelivery(
   let notPermitted = scopeRefusal(scope)
   const projectId = scope.kind === 'same-project' ? scope.projectId : undefined
   if (!notPermitted && deps.callerOwnsTarget &&
-      !deps.callerOwnsTarget(req.sourceNodeId, req.targetNodeId)) {
+      !(stationNotice
+        ? deps.callerOwnsTarget(req.targetNodeId, req.sourceNodeId)
+        : deps.callerOwnsTarget(req.sourceNodeId, req.targetNodeId))) {
     notPermitted = 'caller-not-owner'
   }
   if (!notPermitted) {
@@ -584,7 +602,7 @@ export async function runDelivery(
         sourceNodeId: req.sourceNodeId,
         // The from-line is composed HERE from the store's title (oneLine'd inside buildEnvelope);
         // the renderer never supplies a string that ends up inside the frame.
-        sourceTitle: sourceNode?.title || req.sourceNodeId,
+        sourceTitle: stationNotice ? STATION_NOTICE_FROM : sourceNode?.title || req.sourceNodeId,
         // notify's body is APP-OWNED (#98): substituted here, in main, whatever the request
         // carried — the renderer's `--text` refusal is UX, this line is the boundary. The test
         // sends a hostile body over the IPC shape and asserts it never reaches the envelope.
@@ -630,7 +648,7 @@ const QUEUE_ON_BUSY: ReadonlySet<AgentMessageOutcome['kind']> = new Set([
  * once the flush delivers them.
  */
 export async function deliverFromControl(
-  req: AgentMessageDeliverRequest,
+  req: AgentMessageDeliveryInput,
   deps: AgentMessagingDeps
 ): Promise<{ outcome: AgentMessageOutcome; reply: AgentMessageReply }> {
   const answer = (
@@ -664,7 +682,32 @@ export async function deliverFromControl(
   return answer(outcome)
 }
 
-/** Guard for the IPC boundary: the request came over a channel, so its shape is asserted here. */
+/**
+ * Deliver a station-failure notice into the pane of the agent that opened the station — the pane
+ * leg of `station-notice.ts`. The same gate chain and the same deliver-on-idle queue as `send`
+ * (a busy orchestrator is not interrupted; the notice waits for its next idle moment), with the
+ * app as the author. `body` must come from `stationNoticeBody`; nothing outside core can reach
+ * this function with a body of its own, because `STATION_NOTICE_VERB` is not an IPC verb.
+ */
+export async function deliverStationNotice(
+  notice: { stationNodeId: string; recipientNodeId: string; body: string },
+  deps: AgentMessagingDeps
+): Promise<AgentMessageOutcome> {
+  const { outcome } = await deliverFromControl(
+    {
+      verb: STATION_NOTICE_VERB,
+      sourceNodeId: notice.stationNodeId,
+      targetNodeId: notice.recipientNodeId,
+      body: notice.body
+    },
+    deps
+  )
+  return outcome
+}
+
+/** Guard for the IPC boundary: the request came over a channel, so its shape is asserted here.
+ *  `AGENT_MESSAGE_VERBS` does not contain `STATION_NOTICE_VERB`, so a notice with a body of the
+ *  caller's choosing is refused here — the one door a renderer has into this service. */
 export function isDeliverRequest(x: unknown): x is AgentMessageDeliverRequest {
   const r = x as AgentMessageDeliverRequest | null
   return (

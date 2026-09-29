@@ -307,6 +307,8 @@ import {
   storedAgentIdOf,
   type ColdNode
 } from '../lib/coldOpen'
+import { stampOpenedBy, withOpenedBy } from '../lib/stationOpener'
+import { installStationNoticeWiring } from '../lib/stationNoticeWiring'
 import { applyStickyWrite, parseStickyArgs, resolveStickyRef } from '@shared/sticky-write'
 import {
   unavailableRecovery,
@@ -9929,6 +9931,12 @@ export function Canvas() {
     return () => window.removeEventListener('nodeterm:focus-node' as never, handler as never)
   }, [focusNodeById])
 
+  // Station-failure notices: mirror core's list (the orchestrator's STATION FAILED chip) and report
+  // this renderer's DROPPED verdicts, the one trigger fact core cannot measure. On the APP's api,
+  // never a session's: the default agent-status store and the stations core reports on are both
+  // this machine's (lib/stationNoticeWiring).
+  useEffect(() => installStationNoticeWiring(window.nodeTerminal), [])
+
   // Session board cards are derived LIVE from the canvas nodes; the board stores only assignments.
   // Only while the board is OPEN: `nodes` gets a fresh identity on every drag frame, so a closed
   // board was rebuilding a card object per node ~60×/s for a surface that is not mounted. The
@@ -11275,13 +11283,17 @@ export function Canvas() {
               // is vacuously ready, so a node with no deps fires on that project's first view.
               const armed = armForColdOpen(built)
               const held = armed.data.pendingLaunch as PendingLaunch | undefined
-              const node =
+              // The cold twin of `connect`: this node's opener rope is appended below, so the
+              // opener's name goes on the node now (lib/stationOpener).
+              const node = withOpenedBy(
                 held && coldAfterIds.length
                   ? {
                       ...armed,
                       data: { ...armed.data, pendingLaunch: { ...held, after: coldAfterIds } }
                     }
-                  : armed
+                  : armed,
+                sourceNodeId
+              )
               if (coldGroup.groupId) {
                 const w = (node.width as number) ?? 600
                 const h = (node.height as number) ?? 400
@@ -11551,8 +11563,13 @@ export function Canvas() {
       }
       const belowY = srcAbs.y + srcH + 80
       const placeBelow = (i = 0) => ({ x: srcAbs.x + srcW / 2 + i * 460, y: belowY + 210 })
-      const connect = (newId: string) =>
+      // The opener's rope, and — in the same breath — the opener's name on the node. The two are
+      // what the station-failure notice asks before it tells anyone anything (lib/stationOpener).
+      // Every live open path (addAndConnect, verify, spawn-team) funnels through here.
+      const connect = (newId: string) => {
+        setNodes((ns) => stampOpenedBy(ns, newId, sourceNodeId))
         setControlEdges((es) => [...es, ropeEdge(`ctrl-${sourceNodeId}-${newId}`, sourceNodeId, newId)])
+      }
       // `--after` is a rope too: dep → armed node, drawn dashed while the node waits and solid once
       // it has launched (displayEdges derives that from pendingLaunch). The opener's own rope is
       // skipped here — it already exists, and ropeVisual renders it waiting when the node waits on
@@ -11632,7 +11649,7 @@ export function Canvas() {
           const ocStore = useProjects.getState()
           ocStore.applyNodeMutation(offCanvas.project.id, {
             op: 'upsert',
-            node: flowToNodeStates([placed])[0]
+            node: flowToNodeStates([withOpenedBy(placed, sourceNodeId)])[0]
           })
           ocStore.appendCanvasLinks(offCanvas.project.id, {
             ropes: [ropeEdge(`ctrl-${sourceNodeId}-${placed.id}`, sourceNodeId, placed.id)]

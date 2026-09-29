@@ -228,6 +228,14 @@ export const IPC = {
   agentControl: 'agent:control',
   agentControlResult: 'agent:control-result',
   agentMessageDeliver: 'agent:message-deliver',
+  /** Station-failure notices (src/core/agents/station-notice.ts). invoke: the current list
+   *  (StationNoticeView[]) for a renderer that booted after the last push. */
+  stationNoticeList: 'station-notice:list',
+  /** renderer → core: the renderer's DROPPED verdict for one node (`nodeId, dropped`) — the one
+   *  trigger fact core cannot measure itself (it needs the renderer's hibernated/paused flags). */
+  stationNoticeDropped: 'station-notice:dropped',
+  /** core → every renderer: the FULL current notice list on each change, never a delta. */
+  stationNoticeChanged: 'station-notice:changed',
   /** Canvas sync: a client casts its local node mutations here; the core reflector
    *  (src/core/canvas-sync.ts) stamps each with the total order (`seq`) and sends it back out on the
    *  SAME channel to EVERY attached client — the sender included, whose copy is its ack (see

@@ -1628,13 +1628,28 @@ export class WorkspaceStore {
    * project.json, so a project whose file has never been read this run is simply absent (it
    * appears after the next load/save, which is also what re-derives the map).
    */
-  persistedCanvases(): Array<{ id: string; nodes: CanvasNodeState[]; bridges?: BridgeLink[] }> {
-    const out: Array<{ id: string; nodes: CanvasNodeState[]; bridges?: BridgeLink[] }> = []
+  persistedCanvases(): Array<{
+    id: string
+    nodes: CanvasNodeState[]
+    bridges?: BridgeLink[]
+    ropes?: BridgeLink[]
+  }> {
+    const out: Array<{
+      id: string
+      nodes: CanvasNodeState[]
+      bridges?: BridgeLink[]
+      ropes?: BridgeLink[]
+    }> = []
     for (const e of this.index?.entries ?? []) {
       if (e.project) {
-        out.push({ id: e.project.id, nodes: e.project.nodes, bridges: e.project.bridges })
+        out.push({
+          id: e.project.id,
+          nodes: e.project.nodes,
+          bridges: e.project.bridges,
+          ropes: e.project.ropes
+        })
       } else if (e.cache) {
-        out.push({ id: e.id, nodes: e.cache.nodes, bridges: e.cache.bridges })
+        out.push({ id: e.id, nodes: e.cache.nodes, bridges: e.cache.bridges, ropes: e.cache.ropes })
       } else if (e.cwd) {
         const raw = this.lastWritten.get(projectFilePath(e.cwd))
         if (!raw) continue
@@ -1644,7 +1659,7 @@ export class WorkspaceStore {
           // a caller sees the same absolute paths the desktop's renderer would have handed it.
           // Keyed by the ENTRY id — the map's consumers look projects up by the id the renderer
           // knows, which is never the git-shared file's (it no longer has one).
-          out.push({ id: e.id, nodes: resolveNodes(f.nodes, e.cwd), bridges: f.bridges })
+          out.push({ id: e.id, nodes: resolveNodes(f.nodes, e.cwd), bridges: f.bridges, ropes: f.ropes })
         } catch {
           // Corrupt cached content: skip this entry, keep scanning the others.
         }

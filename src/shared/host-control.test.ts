@@ -34,6 +34,12 @@ describe('isHostOnlyChannel', () => {
     expect(isHostOnlyChannel(IPC.ptyLaunchHeadless)).toBe(true)
   })
 
+  it('covers station-notice:dropped — a guest may not report a pane verdict about the host\'s nodes', () => {
+    expect(isHostOnlyChannel(IPC.stationNoticeDropped)).toBe(true)
+    // Reading the list acts on nothing.
+    expect(isHostOnlyChannel(IPC.stationNoticeList)).toBe(false)
+  })
+
   it('leaves the read-only/lifecycle channels alone — the gate is on ACTION, not on the namespace', () => {
     // Subscribing and receiving events costs a guest nothing the canvas does not already show;
     // running host code, and answering the host's own trust prompt, are the two acts being gated.

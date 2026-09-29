@@ -574,6 +574,13 @@ export function buildStubApi(): Omit<
         ok: false as const,
         error: 'Agent messaging is only available in the desktop app. Do not retry.'
       })
+    },
+    // Inert by default: the Server Edition overrides it with the real bridge
+    // (`buildStationNoticeApi`), and a relay tab keeps this — its stations belong to the host's core.
+    stationNotice: {
+      list: async () => [],
+      onChanged: noopUnsub,
+      reportDropped: noop
     }
   } satisfies Omit<
     NodeTerminalApi,

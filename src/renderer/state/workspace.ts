@@ -33,6 +33,7 @@ import { folderTitle } from '../lib/explorerCreate'
 import { sshHostKey } from '@shared/ssh'
 import { normalizeNodeIcon } from '@shared/node-icon'
 import { normalizeIssueRef, type IssueRef } from '@shared/github-issue-ref'
+import { isSafeNodeId } from '@shared/safe-id'
 import { useSettings } from './settings'
 
 // Re-exported so Canvas (and anything else in the renderer) keeps importing it from here, while the
@@ -150,6 +151,9 @@ export interface NodeData {
   /** The GitHub issue this agent session was started on (see `CanvasNodeState.issueRef`).
    *  Display + run history only — never read back into a launch line. */
   issueRef?: IssueRef
+  /** The agent that opened this node through a canvas-control open verb (see
+   *  `CanvasNodeState.openedBy`). Who is told when this station stops — never read as authority. */
+  openedBy?: string
   /**
    * Claude nodes only: the managed Claude account (config-dir isolated) this node runs under.
    * Persisted so cold-restore resume reads the transcript from the right account dir.
@@ -1690,8 +1694,9 @@ export function duplicateNode(node: CanvasNode, offset = 28): CanvasNode {
     extent: undefined,
     // `issueRef` is not copied: a duplicate is a NEW session nobody started on the issue — carrying
     // the binding would put a phantom run on the issue card (a chip and `#N` with no run-started,
-    // then a run-ended when it closes).
-    data: { ...node.data, initialCommand: undefined, issueRef: undefined }
+    // then a run-ended when it closes). `openedBy` likewise: nobody's open verb made the copy, and
+    // an orchestrator told about it would be told about a station it never opened.
+    data: { ...node.data, initialCommand: undefined, issueRef: undefined, openedBy: undefined }
   }
 }
 
@@ -1894,6 +1899,13 @@ export function reorderNodeBefore(
   return groupsFirst(result)
 }
 
+/** `openedBy` as a serializer may carry it: a node id we would address, or nothing. Checked at
+ *  BOTH seams — the file is git-shared and hand-editable, and whatever we write is what the next
+ *  reader trusts (the same two-seam rule as the icon and the issue reference). */
+export function safeOpenedBy(raw: unknown): string | undefined {
+  return typeof raw === 'string' && isSafeNodeId(raw) ? raw : undefined
+}
+
 /** Converts persisted node states into live React Flow nodes (parents first). */
 export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
   // React Flow requires a parent node to appear before its children. With nested frames a flat
@@ -1972,6 +1984,8 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         // Same seam rule as the icon: a git-shared file becoming live data. A malformed or hostile
         // reference becomes no binding (the node is kept — only the chip and history go).
         issueRef: normalizeIssueRef(n.issueRef),
+        // Same seam rule: a hostile value becomes no lineage (the node is kept).
+        openedBy: safeOpenedBy(n.openedBy),
         accountId: n.accountId,
         agentSessionId: n.agentSessionId,
         pendingLaunch: n.pendingLaunch,
@@ -2054,6 +2068,7 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         agentModel: n.data.agentModel,
         // Re-validated on the way OUT as well — the file is only as trustworthy as its last writer.
         issueRef: normalizeIssueRef(n.data.issueRef),
+        openedBy: safeOpenedBy(n.data.openedBy),
         accountId: n.data.accountId,
         agentSessionId: n.data.agentSessionId,
         // Owning-core UI intent is durable. Relay snapshots opt out: their new UI command

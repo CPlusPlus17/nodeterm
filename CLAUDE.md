@@ -3539,6 +3539,65 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   caller's. The judge is armed on ids that exist only in that tick, which is why `armAfter` takes
   `extraLive` — without it the reviewers would look *deleted*, deletion counts as satisfied, and
   the judge would fire before a single review existed.
+  **Station-failure notices (2026-09, `src/core/agents/station-notice.ts` + the pure
+  `@shared/station-notice`):** when a station an agent OPENED stops, that agent is told ONCE,
+  with its options (retry or wait / reassign / skip / stop), instead of having to poll `list`.
+  Load-bearing rules:
+  - **The trigger is a closed table (`STATION_TRIGGERS`), first match wins:** `dropped` (the
+    renderer's DROPPED verdict), `turn-errored` (a verified `done` carrying `errored` — the
+    `lastTurnError` rule recomputed over the hook stream), `blocked-unanswered` (blocked/waiting
+    continuously for `STATION_BLOCKED_NOTICE_MS` = 15 min, measured from the TRANSITION, AND the
+    recipient's own verified state is `done`). An unknown never triggers, and only VERIFIED events
+    move a station: a notice leads an orchestrator to retry, reassign or END a workflow, so a
+    forgeable event is not evidence. Blocked is 15 min because the human already got NEEDS YOU + a
+    notification; an orchestrator reassigning seconds before the user approves doubles the work.
+  - **Once per episode, re-armed ONLY by a successful turn** — a turn that started after the notice
+    and ended `done` with no error, no interruption and not the idle-prompt rescue. The condition
+    merely clearing does not re-arm: a usage-limited station fails again on every retry, and
+    re-notifying each time would be a loop that burns the orchestrator's turns all night. The
+    notice says so in its own text.
+  - **The recipient is the OPENER, and a rope alone cannot name it.** An `--after` station is roped
+    to every station it waited on as well as to its opener, with the same `ctrl-<src>-<dst>` id, so
+    "the other end of the rope" can be a sibling that opened nothing. The open verbs therefore
+    STAMP `data.openedBy` where they draw the opener's rope (`connect` for the live paths —
+    addAndConnect, verify, spawn-team — plus the off-canvas and cold-open writes; pure helper
+    `lib/stationOpener.ts`), and `stationRecipient` requires BOTH: `openedBy` names a canvas-capable
+    agent node in the same (single) project, AND that node's rope to the station still exists
+    (deleting the rope detaches the station). Never a bridge-linked node. `openedBy` is git-shared,
+    so `safeOpenedBy` (`isSafeNodeId`) runs at both serializer seams, and a duplicate drops it. A
+    node opened before this build has no `openedBy` and is never attributed (no guessing).
+  - **Server Edition: the creator LEDGER is the recipient rule** (`stationRecipientFromOwner` over
+    `factory.openerOf`) — only stations opened during the current server run, the same creator rule
+    as every other verb there; a restart clears it.
+  - **Two legs.** The canvas leg needs no switch: a `station-failed` board-log line on the
+    RECIPIENT's card (`from` = station id, `to` = reason code, `title` = the capped one-line
+    title; in `NEVER_COLLAPSE`) and a STATION FAILED chip (`components/StationFailedChip.tsx`, one
+    component on the node header and the card modal; the tooltip says whether the pane leg landed,
+    so "stayed on the canvas because messaging is off" is visible). The pane leg is
+    `deliverStationNotice` = the messaging service's WHOLE gate chain (scope, the per-project
+    `agentMessaging` switch — off by default ⇒ canvas only — runtime pane ownership, flow limits,
+    idle gate + deliver-on-idle queue, receipt, trace) under an internal verb
+    `STATION_NOTICE_VERB` that is deliberately NOT in `AGENT_MESSAGE_VERBS`, so neither the IPC
+    guard nor the shim can ask for a notice with a body of its choosing. Two differences from
+    `send`, both because the APP is the author: the body is `stationNoticeBody` (fixed text from
+    the table; the only station-influenced string is the title, `oneLine`d, capped at 80, quoted,
+    and labelled data — NO station output is ever quoted), and the Server Edition's creator check
+    runs reversed (`callerOwnsTarget(recipient, station)`). The pane leg honouring the switch is
+    deliberate: the app typing into an agent's session is the capability that switch grants.
+  - **DROPPED is the renderer's fact** (it needs `hibernated`/`paused`), forwarded as EDGES by
+    `lib/stationNoticeWiring.ts` over `stationNotice.reportDropped`; the monitor never measures a
+    pane. That channel is in `HOST_ONLY_CHANNELS`: a relay guest never measured the host's panes
+    (its tab takes the inert stub), so a raw report from one is a spoofed verdict. It is therefore only as available as the liveness check, which asks for WATCHED nodes:
+    a station that dies off screen is noticed when it next comes into view, and a Server Edition
+    with no browser tab attached reports no DROPPED at all. Widening the check to unwatched
+    stations costs one pane read per finished station per 30 s (an ssh exec on SSH projects) and
+    is a deliberate follow-up, not an oversight.
+  - **Both shells wire it and nothing type-checks that:** desktop main feeds
+    `stationNotices.onAgentEvent(enriched)` from `emitAgentStatus`; the server's canvas-control
+    `onAgentEvent` feeds its own monitor; both call `registerStationNoticeIpc`. Pinned at source
+    level by `main/station-notice-wiring.test.ts`, along with every stamping site. Relay tabs take
+    the inert stub (a relay tab's stations are the host's). Mobile: N/A — the notice reaches the
+    orchestrator's pane, which the phone's chat view already shows.
 - **Context Link** — a node action gated by `CONTEXT_LINK_CAPABLE` (claude/codex/gemini/opencode/grok;
   custom agents + plain terminals excluded). **grok joined in 2026-09, and the file matters:** its
   readable conversation is `chat_history.jsonl`, NOT the `updates.jsonl` its own hook payloads

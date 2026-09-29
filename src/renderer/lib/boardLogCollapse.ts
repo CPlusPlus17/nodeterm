@@ -26,7 +26,9 @@ export const NEVER_COLLAPSE: ReadonlySet<BoardLogEvent['type']> = new Set<BoardL
   'agent-message',
   'agent-read-cookies',
   'run-started',
-  'run-ended'
+  'run-ended',
+  // Each names a different station — a "×N" would hide exactly which stations stopped.
+  'station-failed'
 ])
 
 export type FeedItem =
