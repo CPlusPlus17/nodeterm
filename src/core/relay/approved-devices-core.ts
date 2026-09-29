@@ -7,7 +7,7 @@
 // Kept pure (no I/O) so it can be unit-tested; the disk read/write wrapper lives in
 // `approved-devices.ts`.
 
-/** The persisted shape of <userData>/remote-approved-devices.json. */
+/** The persisted shape of every relay pin store (<userData>/remote-approved-{phones,guests,hosts}.json). */
 export interface ApprovedDevices {
   /** Base64 NaCl box public keys of phones the host has approved at least once. */
   pubkeys: string[]

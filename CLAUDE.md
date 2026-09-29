@@ -6922,6 +6922,20 @@ to the class, and no bare `.react-flow__viewport` rule carries `will-change`).
   inert ("not served"); `host-chat-wiring.test.ts` pins the chain at source level. Served only to an
   approved phone; Team-access relay guests never reach them (`relay-host.ts` serves no phone
   dialect). Server Edition: N/A (no phone relay; the bridge subscription is inert).
+- **One relay pin store per ROLE, and only the phone store admits anyone** (`main/remote/approved-devices.ts`).
+  `phonePins` (`remote-approved-phones.json`) is what the standing host auto-approves from, silently,
+  with the full phone vocabulary; `guestPins` (Team Access desktops we host) and `joinedHostPins`
+  (hosts we joined) are records that nothing reads to admit. They used to be ONE file, so a host you
+  once joined, or a guest whose seat you revoked, was auto-admitted as a phone. The pre-split
+  `remote-approved-devices.json` is deleted at boot and NOTHING in it is carried over: nothing on
+  this machine can tell its roles apart (the phone's relay box key is never sent at pairing, so
+  agent.json cannot vouch for one), so every phone re-approves by SAS once. **Every revoke goes
+  through `main/remote/peer-revoke.ts`**: unpin from the named role stores, then run every
+  registered host killer (standing host pool incl. pending consent, the interactive `initRemoteHost`
+  session, the Team Access `live` set). A revoke that knows only one host leaves the others serving.
+  Phone "Remove" (`pairing-service.revokeDevice`) revokes ALL phone pins and cuts ALL phone relay
+  sessions, before the SSH key and the device entry go — all-phones because no box key maps to a
+  device; a failure reports `local:false` and keeps the device listed to retry.
 - **A Windows desktop pairs relay-only — no SSH key, and do not "fix" that by writing one.** The
   phone's direct-SSH path is POSIX sh + tmux end to end (nodeterm-ios `HostCommands`, `TmuxBinary`,
   the typed `tmux new-session -A` attach, workspace paths with no `%APPDATA%` candidate). Windows
@@ -6983,7 +6997,7 @@ The invariants, each with its reason:
   first-join approval. Unreadable ⇒ hosting stays off with `host-key-unreadable`; only
   `team rotate-key` replaces it.
 - **`team.json` is not the phone's pin file.** Push's `hasPairedPhone` counts the entries of
-  `remote-approved-devices.json`, so a teammate pinned there would read as a paired phone. The same
+  `remote-approved-phones.json`, so a teammate pinned there would read as a paired phone. The same
   rule on the joiner: `hosted-join.ts` runs the core relay client with NO pin store, and the
   joiner-side pin is the bookmark's `approvedAt` (valid only for the exact host key it was recorded
   with).

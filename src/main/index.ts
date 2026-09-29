@@ -340,10 +340,9 @@ import {
   RELAY_URL
 } from './remote/host-service'
 import { initStandingHost } from './remote/standing-host'
-import { killRelayHostsByPeerKey } from './remote/relay-host'
 import { initRelayHost } from './remote/relay-host-service'
-import { createRevoker } from './remote/revocation'
-import { loadApprovedDevices, saveApprovedDevices, updateApprovedDevices } from './remote/approved-devices'
+import { PIN_ROLES, phonePins, retireLegacyPinFile } from './remote/approved-devices'
+import { revokeAllPhones, revokePeerKey } from './remote/peer-revoke'
 import { publicKeyToB64 } from './remote/e2ee'
 import { connectRelayClient, type RelayClientSession } from './remote/relay-client'
 import { relayPtyDataKey } from '../shared/relay-pty-channel'
@@ -1711,6 +1710,10 @@ app.whenReady().then(async () => {
     relayEndpoint: RELAY_URL,
     apiBase: RELAY_API_BASE,
     relayAllowed
+  }, {
+    // A phone "Remove" must also revoke its RELAY trust: unpin and cut its live relay sessions.
+    // Which pin is that phone's is unknowable here, so every phone pin goes (peer-revoke.ts).
+    revokePhoneRelayTrust: revokeAllPhones
   })
   ipcMain.handle(IPC.pairingStart, () =>
     pairingService.start((result) => {
@@ -1735,18 +1738,12 @@ app.whenReady().then(async () => {
 
   // Revoking a bridged PEER must CUT THE LIVE SESSION, not just unpin it (revocation.ts): unpinning
   // refuses only the NEXT handshake, while the open relay socket keeps full shell access — "the
-  // person I just removed is still sitting in my terminal, typing". `killByPeerKey` closes every
-  // live session with that key, and each close runs the peer teardown (presence leave →
-  // PtyManager.dropClient → sink prune). Host-security control plane, so it stays on raw ipcMain:
-  // a remote peer must never be able to revoke anyone.
-  const peerRevoker = createRevoker({
-    load: loadApprovedDevices,
-    save: saveApprovedDevices,
-    update: updateApprovedDevices,
-    onRevoke: (peerKeyB64) => killRelayHostsByPeerKey(peerKeyB64)
-  })
+  // person I just removed is still sitting in my terminal, typing". `revokePeerKey` (peer-revoke.ts)
+  // is the one primitive: it unpins the key from every role store and closes every live session it
+  // holds on every host surface (standing phone host, interactive phone host, Team Access). Host-
+  // security control plane, so it stays on raw ipcMain: a remote peer must never be able to revoke.
   ipcMain.handle(IPC.remoteRevokePeer, (_e, peerKeyB64: string) =>
-    peerRevoker.revoke(String(peerKeyB64))
+    revokePeerKey(String(peerKeyB64), PIN_ROLES)
   )
 
   ipcMain.on(IPC.shellReveal, (_e, p: string) => {
@@ -2232,7 +2229,7 @@ app.whenReady().then(async () => {
   // phone silenced every SSH-only phone on this Mac: host mode fans out over the backend's
   // `relay_devices` rows, where an SSH-only phone has no row at all. The per-device exclusion that
   // would prevent the reverse cost (a phone that is paired AND granted gets two pushes) is not
-  // expressible here — a grant is keyed by the phone's deviceId, `loadApprovedDevices` stores only
+  // expressible here — a grant is keyed by the phone's deviceId, `phonePins` stores only
   // NaCl box pubkeys, and nothing on this machine maps one to the other. See the long note on
   // `resolveSendTarget` in core/push-notify.ts.
   const pushGrants = createGrantsAccessor()
@@ -2270,7 +2267,11 @@ app.whenReady().then(async () => {
   let pushHasPairedPhone = false
   const refreshPushIdentity = async (): Promise<void> => {
     try {
-      pushHasPairedPhone = (await loadApprovedDevices()).pubkeys.length > 0
+      // A relay-approved phone pin, OR a paired phone that has not re-approved over the relay since
+      // the pin stores were split (approved-devices.ts retires the old mixed file, so every phone
+      // re-prompts SAS once — push must not go silent in the meantime).
+      pushHasPairedPhone =
+        (await phonePins.load()).pubkeys.length > 0 || (await pairingService.listDevices()).length > 0
     } catch {
       pushHasPairedPhone = false
     }
@@ -4299,11 +4300,18 @@ app.whenReady().then(async () => {
   ipcMain.on(IPC.agentSeedIdentity, (_e, entries: unknown) => {
     seedNodeIdentities(entries)
   })
+  // Retire the pre-split mixed pin file BEFORE the standing host can read anything (approved-devices.ts
+  // explains why nothing in it is carried over). The standing host reads only the phone store, so
+  // even a failed retire cannot auto-admit a legacy key — this is for downgrade safety and tidiness.
+  void retireLegacyPinFile().then(
+    (n) => { if (n > 0) console.info(`[relay] retired ${n} legacy pin(s); phones re-approve by SAS once`) },
+    (err) => console.warn('[relay] could not retire the legacy pin file:', (err as Error)?.message)
+  )
   initRemoteHost(win, ptyManager, listProjectsOutput, hostBridge)
   // NEW interactive relay host (Stage 4): a connecting peer desktop becomes a first-class
   // CorePlatform client of this desktop after mutual SAS approval. Runs BESIDE initRemoteHost (the
   // phone still uses the legacy flow). Inert until `relay:host:start` — a solo user pays nothing.
-  // Revocation reaches its sessions via `killRelayHostsByPeerKey` (peerRevoker, above).
+  // Revocation reaches its sessions via the peer-revoke.ts registry (relay-host.ts registers).
   initRelayHost(win, corePlatform, {})
   // Standing (phone) relay host: keep a host connection registered so a paired phone can reach
   // this Mac from anywhere. Honors settings.phoneAccessEnabled internally.

@@ -1,7 +1,7 @@
 // The hosted team's membership: which device keys may auto-reconnect, with what role, and which
 // projects non-editors may see. Pure transforms + a single-writer store.
 //
-// SEPARATE from the phone's remote-approved-devices.json on purpose: push's `hasPairedPhone` counts
+// SEPARATE from the phone's remote-approved-phones.json on purpose: push's `hasPairedPhone` counts
 // that file's entries, so a teammate's pin there would read as a paired phone.
 //
 // Corrupt ⇒ CLOSED: the file is set aside and the store starts with no peers, so nobody

@@ -3767,7 +3767,8 @@ export type DeviceRevokeServerOutcome = 'ok' | 'failed' | 'skipped'
  * as a clean one (the same discipline as remote/revocation.ts's persisted/killed).
  */
 export interface DeviceRevokeResult {
-  /** The agent.json entry + authorized_keys line were removed from this machine. */
+  /** The phone's relay trust (every phone relay pin + live relay session), its authorized_keys line
+   *  and its agent.json entry were all removed from this machine. */
   local: boolean
   /** Whether the phone's Pro entitlement was taken back on the relay backend. */
   server: DeviceRevokeServerOutcome
