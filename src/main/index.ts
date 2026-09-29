@@ -2802,7 +2802,7 @@ app.whenReady().then(async () => {
       if (!rt || !sshProjectManager) return false
       try {
         const { code } = await sshProjectManager.sshRun(
-          sshWriteArgs(rt.conn, rt.controlPath, filePath),
+          sshWriteArgs(rt.conn, rt.controlPath, filePath, content),
           content
         )
         return code === 0
