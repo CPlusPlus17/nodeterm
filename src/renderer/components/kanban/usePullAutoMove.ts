@@ -17,6 +17,11 @@ import { documentChaseDeps, startPullChase } from '../../lib/pullChase'
  * writes settings: a background settings write from one Server Edition tab would overwrite whatever
  * the user just changed in another.
  */
+/** How long a refused move claim is remembered before the board may ask again (one pull-board read
+ *  interval): long enough that a dragged-back card is not chatty, short enough that a transient
+ *  refusal does not cost the move. */
+export const REFUSED_CLAIM_RETRY_MS = 60_000
+
 export function usePullAutoMove(input: {
   api: Pick<GitHubIssuesApi, 'claimPullAutoMove' | 'notePullWaits'>
   projectId: string
@@ -53,11 +58,14 @@ export function usePullAutoMove(input: {
   // Wait notes already sent from this board, so a re-render does not re-send them (the host dedupes
   // too; this only saves the calls).
   const noted = useRef(new Set<string>())
-  // Claims already asked from this board, keyed by (project, card, PR set). The host answers each
-  // exactly once for good — a won claim is spent, a refused one (already moved, never seen waiting)
-  // stays refused — so a dragged-back card asks once, not on every pull-board read or board edit, and
-  // a claim still in flight is not sent twice. Only a call that FAILED is forgotten and asked again.
-  const asked = useRef(new Set<string>())
+  // Claims already asked from this board, keyed by (project, card, PR set), so a dragged-back card
+  // does not ask on every canvas change, pull-board read or board edit. In flight or WON: never
+  // asked again (a won claim is spent). REFUSED: asked again only after `REFUSED_CLAIM_RETRY_MS` —
+  // usually a refusal is final (already moved, never seen waiting), but the host also refuses while
+  // it is not bound to the project yet or is clearing its cache, and remembering THAT for the
+  // board's lifetime lost the move until the board was reopened. FAILED (a rejected call): forgotten.
+  // The value is when the refusal arrived; `Infinity` = in flight or won.
+  const asked = useRef(new Map<string, number>())
   useEffect(() => {
     if (!entry || !onAutoMove) return
     const plan = planPullAutoMoves({ cards, board, pullBoard, entry })
@@ -74,10 +82,12 @@ export function usePullAutoMove(input: {
     }
     for (const move of plan.moves) {
       const claimKey = JSON.stringify([projectId, move.cardId, move.pulls])
-      if (asked.current.has(claimKey)) continue
-      asked.current.add(claimKey)
+      const refusedAt = asked.current.get(claimKey)
+      if (refusedAt !== undefined && Date.now() - refusedAt < REFUSED_CLAIM_RETRY_MS) continue
+      asked.current.set(claimKey, Infinity)
       void api.claimPullAutoMove({ projectId, cardId: move.cardId, pulls: move.pulls })
         .then((claimed) => {
+          if (!claimed) asked.current.set(claimKey, Date.now())
           // A claim that lands after this board closed is spent, not applied: the card stays where it
           // is, which is the safe side of a lost move. The move itself is a compare-and-set against
           // the latest board, so a late answer cannot undo a drag made meanwhile.
