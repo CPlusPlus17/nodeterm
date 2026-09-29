@@ -1915,6 +1915,9 @@ app.whenReady().then(async () => {
   const stationNotices = new StationNoticeMonitor({
     now: () => Date.now(),
     recipientFor: (id) => stationRecipient(workspaceStore.persistedCanvases(), id),
+    // The mirror's correlated, unanswered question — the one fact that says a station is really
+    // waiting on a human (station-notice.ts: permission prompts are not a trigger).
+    pendingQuestionOf: (id) => mirrorEntry(id)?.pendingQuestion?.toolUseId,
     appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry),
     deliver: (notice) => deliverStationNotice(notice, messagingDeps),
     publish: (views) => sendToMain(IPC.stationNoticeChanged, views),
@@ -1923,6 +1926,9 @@ app.whenReady().then(async () => {
     exists: (id) => workspaceStore.projectIdsForNode(id).length > 0
   })
   stationNotices.start()
+  // A queued notice's final outcome (flushed or expired) comes back here, so its chip never says
+  // "queued" about a message that has since landed or lapsed.
+  messagingDeps.onQueuedResult = (req, outcome) => stationNotices.onQueuedResult(req, outcome)
   registerStationNoticeIpc(corePlatform, () => stationNotices)
 
   ipcMain.handle(IPC.dialogSelectFolder, async () => {

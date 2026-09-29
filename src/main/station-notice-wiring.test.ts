@@ -32,6 +32,12 @@ describe('both shells feed the station-failure monitor', () => {
     expect(src).toContain('stationRecipient(workspaceStore.persistedCanvases(), id)')
     // …and the pane leg is the messaging service with every gate, not a raw write.
     expect(src).toContain('deliverStationNotice(notice, messagingDeps)')
+    // The question row's one fact, and the queued notice's final outcome — both optional-looking
+    // hookups a shell can drop and still compile.
+    expect(src).toContain('pendingQuestionOf: (id) => mirrorEntry(id)?.pendingQuestion?.toolUseId')
+    expect(src).toContain(
+      'messagingDeps.onQueuedResult = (req, outcome) => stationNotices.onQueuedResult(req, outcome)'
+    )
   })
 
   it('Server Edition: the canvas-control runtime feeds it and asks its creator ledger', () => {
@@ -41,6 +47,10 @@ describe('both shells feed the station-failure monitor', () => {
     )
     expect(cc).toContain('factory.openerOf(stationNodeId)')
     expect(cc).toContain('deliverStationNotice(notice, messaging)')
+    expect(cc).toContain('pendingQuestionOf: (nodeId) => mirrorEntry(nodeId)?.pendingQuestion?.toolUseId')
+    expect(cc).toContain(
+      'messaging.onQueuedResult = (req, outcome) => stationNotices.onQueuedResult(req, outcome)'
+    )
     const idx = read('server/index.ts')
     expect(idx).toContain('registerStationNoticeIpc(platform, () => canvasControl?.stationNotices ?? null)')
   })

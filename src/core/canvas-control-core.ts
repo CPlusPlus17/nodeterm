@@ -23,8 +23,8 @@ import { offScreenGuidanceLines } from '@shared/control-off-screen'
 import { codexThreadIdentityResolverSh } from './codex-thread-identity-sh'
 import { ISSUE_SESSION_COLUMNS, issueLaunchPrompt, parseIssueArg } from '../shared/github-issue-ref'
 import {
-  STATION_BLOCKED_NOTICE_MS,
   STATION_NOTICE_COMMON_OPTIONS,
+  STATION_QUESTION_NOTICE_MS,
   STATION_TRIGGERS
 } from '../shared/station-notice'
 import { STATION_NOTICE_FROM } from '../shared/agents/agent-messaging'
@@ -56,7 +56,7 @@ function messagingGuidanceLines(): string[] {
  * changes. `canvas-control-core.test.ts` walks the real table against both.
  */
 function stationNoticeDocLines(): string[] {
-  const minutes = Math.round(STATION_BLOCKED_NOTICE_MS / 60_000)
+  const minutes = Math.round(STATION_QUESTION_NOTICE_MS / 60_000)
   return [
     'Station notices — when a station YOU opened stops:',
     '- nodeterm tells the agent that OPENED a station (the node its rope comes from) when that station',
@@ -65,8 +65,10 @@ function stationNoticeDocLines(): string[] {
     '  a retry stays silent, so decide what to do the first time.',
     '- A station counts as stopped in exactly these cases:',
     ...STATION_TRIGGERS.map((row) => `  - \`${row.reason}\`: ${row.label}.`),
-    `  (\`blocked-unanswered\` is sent only while YOU are idle: the user sees NEEDS YOU the moment the`,
-    `  station blocks, and you hear after ${minutes} minutes if nobody has answered.)`,
+    `  (\`question-unanswered\` is sent only while YOU are idle: the user sees NEEDS YOU the moment the`,
+    `  station asks, and you hear after ${minutes} minutes if nobody has answered. A PERMISSION prompt`,
+    '  is never a notice: an approval given in the station\'s own pane is invisible until the approved',
+    '  tool finishes, so a long approved tool would look exactly like a prompt nobody answered.)',
     '- Where it shows up: always as a STATION FAILED chip on your node and a line in your card\'s',
     '  activity. It is typed into YOUR session only when the project\'s agent-messaging switch is on',
     '  (off by default), as a framed message whose `from:` line reads',

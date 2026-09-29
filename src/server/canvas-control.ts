@@ -244,12 +244,14 @@ export async function initServerCanvasControl(
         stationNodeId,
         factory.openerOf(stationNodeId)
       ),
+    pendingQuestionOf: (nodeId) => mirrorEntry(nodeId)?.pendingQuestion?.toolUseId,
     appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry),
     deliver: (notice) => deliverStationNotice(notice, messaging),
     publish: (views) => platform().broadcast(IPC.stationNoticeChanged, views),
     exists: (nodeId) => deps.workspaceStore.projectIdsForNode(nodeId).length > 0
   })
   stationNotices.start()
+  messaging.onQueuedResult = (req, outcome) => stationNotices.onQueuedResult(req, outcome)
 
   const actions: ServerEditionControlActions = {
     openProject: (sourceNodeId, args, verified) =>

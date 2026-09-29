@@ -34,10 +34,11 @@ describe('isHostOnlyChannel', () => {
     expect(isHostOnlyChannel(IPC.ptyLaunchHeadless)).toBe(true)
   })
 
-  it('covers station-notice:dropped — a guest may not report a pane verdict about the host\'s nodes', () => {
+  it('covers both station-notice request channels', () => {
+    // A guest may not report a pane verdict about the host's nodes…
     expect(isHostOnlyChannel(IPC.stationNoticeDropped)).toBe(true)
-    // Reading the list acts on nothing.
-    expect(isHostOnlyChannel(IPC.stationNoticeList)).toBe(false)
+    // …nor list every project's failed stations: a guest scoped to one project must not read the rest.
+    expect(isHostOnlyChannel(IPC.stationNoticeList)).toBe(true)
   })
 
   it('leaves the read-only/lifecycle channels alone — the gate is on ACTION, not on the namespace', () => {

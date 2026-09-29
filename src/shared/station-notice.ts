@@ -28,29 +28,38 @@ import { oneLine } from './one-line'
 import { isSafeNodeId } from './safe-id'
 
 /** The closed set of reasons. A reason that is not in this union cannot produce a notice. */
-export type StationFailureReason = 'turn-errored' | 'dropped' | 'blocked-unanswered'
+export type StationFailureReason = 'turn-errored' | 'dropped' | 'question-unanswered'
 
 /**
- * How long a station must sit on a question or a permission prompt — continuously, measured from
- * the TRANSITION into needs-you — before its orchestrator is told, and only while that orchestrator
- * is itself idle.
+ * How long a station's QUESTION must stay unanswered — measured from the moment it was asked —
+ * before its orchestrator is told, and only while that orchestrator is itself idle.
  *
- * Why this trigger exists at all: a blocked station is not a failure the orchestrator can fix (it
- * has no verb that answers a permission prompt, and `write` is confirm-gated), but an orchestrator
- * that is idle and waiting on it will wait forever, which is the exact overnight stall this feature
- * is for. Told, it can reassign the work, skip the station, or stop and tell the user — and the
- * notice says which station is waiting, which is the thing the user needs when they come back.
+ * Why this trigger exists at all: a station waiting on a question is not a failure the orchestrator
+ * can fix (it has no verb that answers one, and `write` is confirm-gated), but an orchestrator that
+ * is idle and waiting on the station will wait forever, which is the exact overnight stall this
+ * feature is for. Told, it can reassign the work, skip the station, or stop and tell the user — and
+ * the notice says which station is waiting, which is the thing the user needs when they come back.
+ *
+ * Why a QUESTION and not a permission prompt. A question (Claude's `AskUserQuestion`) is answered
+ * by a tool result the moment the user picks an option, so the status mirror's `pendingQuestion` —
+ * correlated by session and tool-use id, and held across unrelated hook traffic — is a fact about
+ * whether it is still unanswered. A permission prompt has no such fact: on the main thread Claude
+ * paints its dialog CONCURRENTLY with our held hook (docs/hook-reply-approvals.md), and an approval
+ * given in the pane fires nothing until the approved tool FINISHES. A twenty-minute build approved
+ * in the pane reads exactly like a prompt nobody answered, and a notice there would invite the
+ * orchestrator to reassign or close a station that is working. So permission prompts are not a
+ * trigger at all — a false "your station is stuck" is worse than none.
  *
  * Why 15 minutes: the human already gets NEEDS YOU, an unread dot and (in the background) an OS
- * notification the moment the station blocks. A person at the desk answers inside a few minutes;
+ * notification the moment the station asks. A person at the desk answers inside a few minutes;
  * waking the orchestrator sooner would only race them — an orchestrator that reassigns a task
- * seconds before the user approves the prompt has doubled the work. Fifteen minutes is past any
- * "I was reading the diff" pause and short of "the user went home".
+ * seconds before the user answers has doubled the work. Fifteen minutes is past any "I was reading
+ * the diff" pause and short of "the user went home".
  *
  * Why only while the orchestrator is idle: a WORKING orchestrator is not stalled on anything, will
  * `list` again on its own, and a notice would only land in its queue behind whatever it is doing.
  */
-export const STATION_BLOCKED_NOTICE_MS = 15 * 60_000
+export const STATION_QUESTION_NOTICE_MS = 15 * 60_000
 
 /** What core knows about a station when it asks the table. Every field is optional because every
  *  one of them can be unknown, and an unknown MUST NOT trigger (the table below never reads an
@@ -65,9 +74,9 @@ export interface StationObservation {
   /** The DROPPED verdict: the CLI left the pane and nothing accounted for it (the renderer's
    *  pane measurement, `terminal/agent-liveness.ts`). */
   dropped?: boolean
-  /** When the station ENTERED blocked/waiting (the transition time, not the latest same-state
-   *  event). `undefined` when it is not in a needs-you state, or when that moment is unknown. */
-  needsYouSince?: number
+  /** When the station asked the question the status mirror still holds unanswered
+   *  (`pendingQuestion`). `undefined` when there is none, or when the ask was not observed. */
+  questionSince?: number
 }
 
 export interface StationFailureContext {
@@ -97,13 +106,15 @@ export interface StationTrigger {
  * First matching row wins. DROPPED is first because it is the strongest fact (nothing is running
  * at all) and a station that errored and was then killed should be reported as the thing the
  * orchestrator can least recover from by itself. Everything else — a `working` station, a `done`
- * station whose turn succeeded, a station whose state is unknown, a station that is blocked for
- * less than the threshold or blocked while its orchestrator is busy — matches no row and triggers
- * nothing.
+ * station whose turn succeeded, a station whose state is unknown, a question younger than the
+ * threshold or one asked while the orchestrator is busy, a permission prompt of any age — matches
+ * no row and triggers nothing.
  *
  * Deliberately NOT a row: a station that exited cleanly (`/exit`, SessionEnd), one we exited
  * ourselves (Eco hibernation, Pause), a launch that is still queued. Those are decisions somebody
- * made, not failures, and the DROPPED verdict already refuses hibernated and paused nodes.
+ * made, not failures, and the DROPPED verdict already refuses hibernated and paused nodes. Nor a
+ * permission prompt — see `STATION_QUESTION_NOTICE_MS` for why "unanswered" cannot be told from
+ * "approved and running" there.
  */
 export const STATION_TRIGGERS: readonly StationTrigger[] = [
   {
@@ -113,7 +124,13 @@ export const STATION_TRIGGERS: readonly StationTrigger[] = [
     retry:
       '`send` cannot reach it — nothing is running in its pane. Ask the user to click the ' +
       "station's DROPPED chip, which resumes the conversation, then retry.",
-    fires: (obs) => obs.dropped === true
+    // The verdict is only ever raised about a `done` station; a station core KNOWS to be mid-turn
+    // or asking is alive, whatever a stale report says.
+    fires: (obs) =>
+      obs.dropped === true &&
+      obs.state !== 'working' &&
+      obs.state !== 'blocked' &&
+      obs.state !== 'waiting'
   },
   {
     reason: 'turn-errored',
@@ -125,16 +142,15 @@ export const STATION_TRIGGERS: readonly StationTrigger[] = [
     fires: (obs) => obs.state === 'done' && obs.lastTurnErrored === true
   },
   {
-    reason: 'blocked-unanswered',
-    label: `it has been waiting for a human answer (a question or a permission prompt) for over ${Math.round(STATION_BLOCKED_NOTICE_MS / 60_000)} minutes`,
+    reason: 'question-unanswered',
+    label: `it asked the user a question over ${Math.round(STATION_QUESTION_NOTICE_MS / 60_000)} minutes ago and it is still unanswered`,
     option: 'wait',
     retry:
-      'you cannot answer its prompt from here. Tell the user which station is waiting and what ' +
-      'for; it continues on its own once they answer.',
+      'you cannot answer its question from here. Tell the user which station is waiting on an ' +
+      'answer; it continues on its own once they answer.',
     fires: (obs, ctx) =>
-      (obs.state === 'blocked' || obs.state === 'waiting') &&
-      typeof obs.needsYouSince === 'number' &&
-      ctx.now - obs.needsYouSince >= STATION_BLOCKED_NOTICE_MS &&
+      typeof obs.questionSince === 'number' &&
+      ctx.now - obs.questionSince >= STATION_QUESTION_NOTICE_MS &&
       ctx.recipientState === 'done'
   }
 ]
@@ -323,9 +339,11 @@ export function stationNoticePaneText(view: Pick<StationNoticeView, 'pane' | 'pa
     case 'queued':
       return "Queued for the orchestrator's session; it is typed in when that session next goes idle."
     case 'not-sent':
-      return view.paneDetail === 'notPermitted:switch-off' || view.paneDetail === 'messaging-off'
-        ? 'Not typed into the orchestrator\'s session: agent messaging is off for this project (Settings → Agents). Shown on the canvas only.'
-        : `Not typed into the orchestrator's session (${view.paneDetail ?? 'refused'}). Shown on the canvas only.`
+      if (view.paneDetail === 'notPermitted:switch-off' || view.paneDetail === 'messaging-off')
+        return 'Not typed into the orchestrator\'s session: agent messaging is off for this project (Settings → Agents). Shown on the canvas only.'
+      if (view.paneDetail === 'expired:will-retry')
+        return "Not typed in yet: the orchestrator stayed busy longer than a message may wait. It is offered once more when that session next goes idle."
+      return `Not typed into the orchestrator's session (${view.paneDetail ?? 'refused'}). Shown on the canvas only.`
     default:
       return 'Telling the orchestrator…'
   }

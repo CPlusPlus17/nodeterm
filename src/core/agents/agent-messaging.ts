@@ -134,6 +134,13 @@ export interface AgentMessagingDeps {
    * injected. Absent ⇒ never hibernated, and only a `targetBusy` refusal queues.
    */
   isHibernated?(nodeId: string): boolean
+  /**
+   * How a QUEUED delivery finally ended: its flush outcome, or `expired`. Absent ⇒ nobody asks. The
+   * station-failure monitor uses it so a queued notice's chip reports what actually happened rather
+   * than "queued" forever (station-notice.ts); read at call time, so a shell may assign it after
+   * `createDeliveryQueue` has run.
+   */
+  onQueuedResult?(req: QueuedDeliveryRequest, outcome: AgentMessageOutcome): void
 }
 
 /**
@@ -260,8 +267,18 @@ export function createDeliveryQueue(
           now
         }),
       // The sender leg: a durable line where the sender's operator will see it.
-      onExpired: (req) => senderBoardLog(req, 'expired'),
-      onFlushed: (req, outcome) => senderBoardLog(req, outcome.kind),
+      onExpired: (req, info) => {
+        senderBoardLog(req, 'expired')
+        deps.onQueuedResult?.(req, {
+          kind: 'expired',
+          traceId: info.traceId,
+          queuedForMs: info.queuedForMs
+        })
+      },
+      onFlushed: (req, outcome) => {
+        senderBoardLog(req, outcome.kind)
+        deps.onQueuedResult?.(req, outcome)
+      },
       // Injected so a test pins TTL expiry deterministically; production uses the default setTimeout.
       ...(opts.schedule ? { schedule: opts.schedule } : {})
     },

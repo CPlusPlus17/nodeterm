@@ -14,8 +14,8 @@ import {
 } from '../core/agents/hook-sandbox-hint-sh'
 import { RETRYABLE } from '../core/agents/agent-message-decide'
 import {
-  STATION_BLOCKED_NOTICE_MS,
   STATION_NOTICE_COMMON_OPTIONS,
+  STATION_QUESTION_NOTICE_MS,
   STATION_TRIGGERS
 } from '../shared/station-notice'
 import { STATION_NOTICE_FROM } from '../shared/agents/agent-messaging'
@@ -695,7 +695,9 @@ describe('parseControlRequest', () => {
       expect(section).toMatch(/agent-messaging switch is on[\s\S]*off by default/)
       expect(section).toContain(`\`${STATION_NOTICE_FROM} (<station id>)\``)
       expect(section).toMatch(/quotes nothing the station produced/)
-      expect(section).toContain(`you hear after ${Math.round(STATION_BLOCKED_NOTICE_MS / 60_000)} minutes`)
+      expect(section).toContain(`you hear after ${Math.round(STATION_QUESTION_NOTICE_MS / 60_000)} minutes`)
+      // …and the honest limit: a permission prompt is never a notice.
+      expect(section).toMatch(/A PERMISSION prompt[\s\S]*is never a notice/)
       // The Server Edition's ownership rule, in the same words it keeps for every verb.
       expect(section).toMatch(/stations you opened during this server run/)
     }

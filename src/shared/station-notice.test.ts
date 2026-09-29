@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  STATION_BLOCKED_NOTICE_MS,
   STATION_NOTICE_COMMON_OPTIONS,
+  STATION_QUESTION_NOTICE_MS,
   STATION_NOTICE_TITLE_MAX,
   STATION_TRIGGERS,
   sanitizeStationNotices,
@@ -21,33 +21,40 @@ describe('the trigger table — closed, and an unknown never triggers', () => {
     expect(stationFailure({ state: 'done', lastTurnErrored: true }, { now: T0 })).toBe('turn-errored')
   })
 
-  it('dropped: the renderer verdict alone', () => {
+  it('dropped: the renderer verdict, about a station core does not know to be alive', () => {
     expect(stationFailure({ dropped: true }, { now: T0 })).toBe('dropped')
+    expect(stationFailure({ dropped: true, state: 'done' }, { now: T0 })).toBe('dropped')
+    // A stale verdict about a station core KNOWS is mid-turn or asking says nothing.
+    for (const state of ['working', 'blocked', 'waiting'] as const)
+      expect(stationFailure({ dropped: true, state }, { now: T0 })).toBeNull()
     // …and it outranks an errored turn: nothing is running at all.
     expect(stationFailure({ state: 'done', lastTurnErrored: true, dropped: true }, { now: T0 })).toBe(
       'dropped'
     )
   })
 
-  it('blocked-unanswered: past the threshold AND the recipient idle — all three required', () => {
-    const since = T0 - STATION_BLOCKED_NOTICE_MS
-    for (const state of ['blocked', 'waiting'] as const) {
-      expect(
-        stationFailure({ state, needsYouSince: since }, { now: T0, recipientState: 'done' })
-      ).toBe('blocked-unanswered')
-      // One millisecond short of the threshold.
-      expect(
-        stationFailure({ state, needsYouSince: since + 1 }, { now: T0, recipientState: 'done' })
-      ).toBeNull()
-      // A working orchestrator is not stalled on anything.
-      expect(
-        stationFailure({ state, needsYouSince: since }, { now: T0, recipientState: 'working' })
-      ).toBeNull()
-      // An orchestrator whose state is unknown is NOT idle.
-      expect(stationFailure({ state, needsYouSince: since }, { now: T0 })).toBeNull()
-      // A needs-you station whose entry moment is unknown never crosses a threshold.
-      expect(stationFailure({ state }, { now: T0, recipientState: 'done' })).toBeNull()
-    }
+  it('question-unanswered: an old enough question AND the recipient idle — both required', () => {
+    const since = T0 - STATION_QUESTION_NOTICE_MS
+    expect(
+      stationFailure({ state: 'waiting', questionSince: since }, { now: T0, recipientState: 'done' })
+    ).toBe('question-unanswered')
+    // One millisecond short of the threshold.
+    expect(
+      stationFailure({ state: 'waiting', questionSince: since + 1 }, { now: T0, recipientState: 'done' })
+    ).toBeNull()
+    // A working orchestrator is not stalled on anything.
+    expect(
+      stationFailure({ state: 'waiting', questionSince: since }, { now: T0, recipientState: 'working' })
+    ).toBeNull()
+    // An orchestrator whose state is unknown is NOT idle.
+    expect(stationFailure({ state: 'waiting', questionSince: since }, { now: T0 })).toBeNull()
+  })
+
+  it('a permission prompt is never a trigger, however long it has stood', () => {
+    // An approval given in the pane fires nothing until the approved tool finishes, so "blocked"
+    // cannot be told from "approved and running" — there is no row that reads it.
+    for (const state of ['blocked', 'waiting'] as const)
+      expect(stationFailure({ state }, { now: T0 * 10, recipientState: 'done' })).toBeNull()
   })
 
   it('nothing else is a failure — unknown, working, a successful done, a short wait', () => {
@@ -61,7 +68,7 @@ describe('the trigger table — closed, and an unknown never triggers', () => {
   })
 
   it('the table is exactly three reasons', () => {
-    expect(STATION_TRIGGERS.map((r) => r.reason)).toEqual(['dropped', 'turn-errored', 'blocked-unanswered'])
+    expect(STATION_TRIGGERS.map((r) => r.reason)).toEqual(['dropped', 'turn-errored', 'question-unanswered'])
   })
 })
 
@@ -227,6 +234,9 @@ describe('the wire and the chip text', () => {
       /agent messaging is off for this project/
     )
     expect(stationNoticePaneText({ pane: 'told' })).toMatch(/told in its session/)
+    expect(stationNoticePaneText({ pane: 'not-sent', paneDetail: 'expired:will-retry' })).toMatch(
+      /offered once more when that session next goes idle/
+    )
     expect(stationNoticePaneText({ pane: 'queued' })).toMatch(/next goes idle/)
     expect(stationNoticePaneText({})).toMatch(/Telling/)
   })

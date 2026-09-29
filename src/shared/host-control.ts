@@ -29,6 +29,8 @@ import { IPC } from './ipc'
  *    its own session, that one of its stations died. It is a pane measurement only the HOST's
  *    renderer makes (a relay tab takes the inert stub), so a guest sending it is claiming a fact
  *    about the host's panes it never measured.
+ *  - `station-notice:list` — every project's failed-station ids and titles, unscoped. A relay tab
+ *    never asks (it takes the inert stub), and a guest bound to ONE project must not read the rest.
  *
  * DELIBERATELY NOT LISTED: `project-setup:subscribe`/`unsubscribe` and the `project-setup:event:*`
  * push. They neither start nor authorize anything, and a peer that can see the canvas can already
@@ -46,7 +48,8 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.projectSetupConsentSubmit,
   IPC.projectSetupRequestTrust,
   IPC.ptyLaunchHeadless,
-  IPC.stationNoticeDropped
+  IPC.stationNoticeDropped,
+  IPC.stationNoticeList
 ])
 
 /** What a refused peer is told. One wording, so the two shells answer identically. */

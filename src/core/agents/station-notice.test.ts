@@ -12,7 +12,7 @@ import {
   type StationNoticeEvent
 } from './station-notice'
 import {
-  STATION_BLOCKED_NOTICE_MS,
+  STATION_QUESTION_NOTICE_MS,
   stationNoticeBody,
   stationRecipient,
   type StationCanvas,
@@ -20,8 +20,10 @@ import {
 } from '../../shared/station-notice'
 import type { BoardLogEntry } from '../../shared/types'
 import {
+  createDeliveryQueue,
   deliverStationNotice,
   isDeliverRequest,
+  onMessagingAgentEvent,
   type AgentMessagingDeps
 } from './agent-messaging'
 import { resetMessageFlow } from './agent-message-flow'
@@ -55,29 +57,40 @@ interface Harness {
   published: StationNoticeView[][]
   delivered: { stationNodeId: string; recipientNodeId: string; body: string }[]
   clock: { now: number }
+  /** What the status mirror holds unanswered, per node (`pendingQuestion.toolUseId`). */
+  questions: Map<string, string>
+  /** Timers the monitor scheduled, run by hand. */
+  timers: { ms: number; fn: () => void }[]
 }
 
-function harness(over: Partial<StationNoticeDeps> = {}, outcome?: AgentMessageOutcome): Harness {
+const QUEUED: AgentMessageOutcome = { kind: 'queued', position: 1, ttlMs: 1, traceId: 't' }
+
+/** `outcomes` are answered in order (the last one repeats); default: always queued. */
+function harness(over: Partial<StationNoticeDeps> = {}, outcomes: AgentMessageOutcome[] = [QUEUED]): Harness {
   const clock = { now: 1_000_000 }
   const logs: Harness['logs'] = []
   const published: Harness['published'] = []
   const delivered: Harness['delivered'] = []
+  const questions = new Map<string, string>()
+  const timers: Harness['timers'] = []
   const monitor = new StationNoticeMonitor({
     now: () => clock.now,
     recipientFor: (id) => stationRecipient(canvases(), id),
+    pendingQuestionOf: (id) => questions.get(id),
     appendBoardLog: async (projectId, entry) => {
       logs.push({ projectId, entry })
       return true
     },
     deliver: async (n) => {
       delivered.push(n)
-      return outcome ?? { kind: 'queued', position: 1, ttlMs: 1, traceId: 't', traced: 'memory' }
+      return outcomes[Math.min(delivered.length - 1, outcomes.length - 1)]
     },
     publish: (views) => published.push(views),
     exists: () => true,
+    schedule: (ms, fn) => void timers.push({ ms, fn }),
     ...over
   })
-  return { monitor, logs, published, delivered, clock }
+  return { monitor, logs, published, delivered, clock, questions, timers }
 }
 
 const ev = (nodeId: string, over: Partial<StationNoticeEvent> = {}): StationNoticeEvent => ({
@@ -120,11 +133,16 @@ describe('each trigger tells the opener', () => {
     ])
   })
 
-  it('blocked-unanswered: past the threshold, and only once the orchestrator is idle', async () => {
+  const ask = (h: Harness, id = 'q1'): void => {
+    h.questions.set('st1', id) // the mirror records the question first (recordAgentEvent)…
+    h.monitor.onAgentEvent(ev('st1', { state: 'waiting', questionId: id })) // …then the monitor sees it
+  }
+
+  it('question-unanswered: past the threshold, and only once the orchestrator is idle', async () => {
     const h = harness()
     h.monitor.onAgentEvent(ev('orch', { state: 'working' }))
-    h.monitor.onAgentEvent(ev('st1', { state: 'blocked' }))
-    h.clock.now += STATION_BLOCKED_NOTICE_MS - 1
+    ask(h)
+    h.clock.now += STATION_QUESTION_NOTICE_MS - 1
     h.monitor.sweep()
     expect(h.delivered).toEqual([])
     h.clock.now += 1
@@ -135,20 +153,43 @@ describe('each trigger tells the opener', () => {
     h.monitor.sweep()
     await flush()
     expect(h.delivered.map((d) => d.body)).toEqual([
-      stationNoticeBody({ id: 'st1', title: 'Worker' }, 'blocked-unanswered')
+      stationNoticeBody({ id: 'st1', title: 'Worker' }, 'question-unanswered')
     ])
   })
 
-  it('a same-state event does not restart the needs-you clock', async () => {
+  it('unrelated traffic while the question stands does not restart its clock', async () => {
     const h = harness()
     h.monitor.onAgentEvent(ev('orch', { state: 'done' }))
-    h.monitor.onAgentEvent(ev('st1', { state: 'waiting' }))
-    h.clock.now += STATION_BLOCKED_NOTICE_MS / 2
-    h.monitor.onAgentEvent(ev('st1', { state: 'blocked' })) // still needs-you: same episode of waiting
-    h.clock.now += STATION_BLOCKED_NOTICE_MS / 2
+    ask(h)
+    h.clock.now += STATION_QUESTION_NOTICE_MS / 2
+    // A child's permission request lands on the parent node; the mirror still holds the question.
+    h.monitor.onAgentEvent(ev('st1', { state: 'blocked' }))
+    h.clock.now += STATION_QUESTION_NOTICE_MS / 2
     h.monitor.sweep()
     await flush()
     expect(h.delivered).toHaveLength(1)
+  })
+
+  it('an answered question (the mirror dropped it) is never reported', async () => {
+    const h = harness()
+    h.monitor.onAgentEvent(ev('orch', { state: 'done' }))
+    ask(h)
+    h.questions.delete('st1') // the tool result arrived; the node then idles without a new event here
+    h.clock.now += STATION_QUESTION_NOTICE_MS * 2
+    h.monitor.sweep()
+    await flush()
+    expect(h.delivered).toEqual([])
+  })
+
+  it('a PERMISSION prompt is never reported, however long it stands (approved in-pane looks the same)', async () => {
+    const h = harness()
+    h.monitor.onAgentEvent(ev('orch', { state: 'done' }))
+    h.monitor.onAgentEvent(ev('st1', { state: 'blocked' }))
+    h.monitor.onAgentEvent(ev('st1', { state: 'waiting' })) // an elicitation: no question id either
+    h.clock.now += STATION_QUESTION_NOTICE_MS * 4
+    h.monitor.sweep()
+    await flush()
+    expect(h.delivered).toEqual([])
   })
 })
 
@@ -164,9 +205,26 @@ describe('unknown never triggers', () => {
 
   it('an orchestrator with no verified state never counts as idle', async () => {
     const h = harness()
-    h.monitor.onAgentEvent(ev('st1', { state: 'blocked' }))
-    h.clock.now += STATION_BLOCKED_NOTICE_MS * 2
+    h.questions.set('st1', 'q1')
+    h.monitor.onAgentEvent(ev('st1', { state: 'waiting', questionId: 'q1' }))
+    h.clock.now += STATION_QUESTION_NOTICE_MS * 2
     h.monitor.sweep()
+    expect(h.delivered).toEqual([])
+  })
+
+  it('a DROPPED report about a station core knows is mid-turn is not believed — then or later', async () => {
+    const h = harness()
+    h.monitor.onAgentEvent(ev('st1', { state: 'working', newTurn: true }))
+    h.monitor.reportDropped('st1', true)
+    h.monitor.sweep()
+    await flush()
+    expect(h.delivered).toEqual([])
+    // The turn ends cleanly: that `done` is the CLI speaking, so the stale verdict is gone with it
+    // — it must not fire now that the station is no longer mid-turn, nor on any later sweep.
+    h.monitor.onAgentEvent(ev('st1', { state: 'done' }))
+    h.clock.now += 30_000
+    h.monitor.sweep()
+    await flush()
     expect(h.delivered).toEqual([])
   })
 
@@ -217,6 +275,45 @@ describe('once per episode — re-armed only by a successful turn', () => {
     h.monitor.onAgentEvent(ev('st1', { state: 'done', idle: true }))
     expect(h.monitor.list()).toHaveLength(1)
     h.monitor.onAgentEvent(ev('st1', { state: 'done', errored: true }))
+    await flush()
+    expect(h.delivered).toHaveLength(1)
+  })
+
+  it('a stale DROPPED verdict never re-fires: any verified event withdraws it (review blocker)', async () => {
+    const h = harness()
+    h.monitor.onAgentEvent(ev('st1', { state: 'done' }))
+    h.monitor.reportDropped('st1', true)
+    await flush()
+    expect(h.delivered).toHaveLength(1)
+    // The renderer reloads here: its record of the report and its transient flag are gone, so
+    // nobody will ever send `reportDropped(false)`. The user resumes the station by hand…
+    h.monitor.onAgentEvent(ev('st1', { kind: 'session', sessionPhase: 'start' }))
+    // …and it completes a turn: the episode re-arms.
+    h.monitor.onAgentEvent(ev('st1', { state: 'working', newTurn: true }))
+    h.monitor.onAgentEvent(ev('st1', { state: 'done' }))
+    expect(h.monitor.list()).toEqual([])
+    for (let i = 0; i < 3; i++) {
+      h.clock.now += 30_000
+      h.monitor.sweep()
+    }
+    await flush()
+    expect(h.delivered).toHaveLength(1)
+    expect(h.monitor.list()).toEqual([])
+  })
+
+  it('an error retired by a successful turn that had no newTurn does not re-fire (review blocker)', async () => {
+    const h = harness()
+    h.monitor.onAgentEvent(ev('st1', { state: 'working', newTurn: true }))
+    h.monitor.onAgentEvent(ev('st1', { state: 'done', errored: true }))
+    await flush()
+    expect(h.delivered).toHaveLength(1)
+    // A task-notification prompt starts a turn WITHOUT `newTurn`; it succeeds.
+    h.monitor.onAgentEvent(ev('st1', { state: 'working' }))
+    h.monitor.onAgentEvent(ev('st1', { state: 'done' }))
+    expect(h.monitor.list()).toEqual([])
+    h.clock.now += 30_000
+    h.monitor.sweep()
+    h.monitor.onAgentEvent(ev('st1', { state: 'done', idle: true }))
     await flush()
     expect(h.delivered).toHaveLength(1)
   })
@@ -282,14 +379,15 @@ describe('who is told', () => {
     expect(g.delivered).toEqual([])
   })
 
-  it('a long-blocked station nobody opened does not re-read the canvases on every sweep', () => {
+  it('a long-waiting station nobody opened does not re-read the canvases on every sweep', () => {
     const recipientFor = vi.fn(() => undefined)
     const h = harness({ recipientFor })
-    h.monitor.onAgentEvent(ev('loner', { state: 'blocked' }))
+    h.questions.set('loner', 'q1')
+    h.monitor.onAgentEvent(ev('loner', { state: 'waiting', questionId: 'q1' }))
     // Before the threshold nothing is resolved at all.
     h.monitor.sweep()
     expect(recipientFor).not.toHaveBeenCalled()
-    h.clock.now += STATION_BLOCKED_NOTICE_MS
+    h.clock.now += STATION_QUESTION_NOTICE_MS
     for (let i = 0; i < 4; i++) {
       h.monitor.sweep()
       h.clock.now += 30_000
@@ -368,6 +466,72 @@ function messagingDeps(over: Partial<AgentMessagingDeps> = {}) {
   return { deps, sent, paneReads }
 }
 
+describe('the pane leg is followed to its end', () => {
+  const told: AgentMessageOutcome = {
+    kind: 'delivered',
+    traceId: 't2',
+    traced: 'memory',
+    receipt: 'observed',
+    signal: 'newTurn'
+  }
+  const notice = { verb: STATION_NOTICE_VERB, sourceNodeId: 'st1', targetNodeId: 'orch' }
+
+  it('a queued notice reports how it finally ended — never "queued" forever', async () => {
+    const h = harness()
+    h.monitor.onAgentEvent(ev('st1', { state: 'done', errored: true }))
+    await flush()
+    expect(h.monitor.list()[0].pane).toBe('queued')
+    // Someone else's queued message, and a plain `send`, are not this notice.
+    h.monitor.onQueuedResult({ ...notice, sourceNodeId: 'reader' }, told)
+    h.monitor.onQueuedResult({ ...notice, verb: 'send' }, told)
+    expect(h.monitor.list()[0].pane).toBe('queued')
+    h.monitor.onQueuedResult(notice, told)
+    expect(h.monitor.list()[0]).toMatchObject({ pane: 'told', paneDetail: 'delivered' })
+  })
+
+  it('an expired notice is offered ONCE more, on the orchestrator\'s next verified idle', async () => {
+    const h = harness({}, [QUEUED, QUEUED, told])
+    h.monitor.onAgentEvent(ev('st1', { state: 'done', errored: true }))
+    await flush()
+    h.monitor.onQueuedResult(notice, { kind: 'expired', traceId: 'x', queuedForMs: 300_000 })
+    expect(h.monitor.list()[0]).toMatchObject({ pane: 'not-sent', paneDetail: 'expired:will-retry' })
+    h.monitor.onAgentEvent(ev('orch', { state: 'done', verified: false })) // not evidence
+    await flush()
+    expect(h.delivered).toHaveLength(1)
+    h.monitor.onAgentEvent(ev('orch', { state: 'done' }))
+    await flush()
+    expect(h.delivered).toHaveLength(2)
+    // The second attempt queued again and expired again: that is the end of it.
+    h.monitor.onQueuedResult(notice, { kind: 'expired', traceId: 'y', queuedForMs: 300_000 })
+    h.monitor.onAgentEvent(ev('orch', { state: 'done' }))
+    await flush()
+    expect(h.delivered).toHaveLength(2)
+    expect(h.monitor.list()[0]).toMatchObject({ pane: 'not-sent', paneDetail: 'expired' })
+  })
+
+  it('a rate-limited notice is retried once, after the wait the limiter names', async () => {
+    const limited: AgentMessageOutcome = { kind: 'rateLimited', retryAfterMs: 7000 }
+    const h = harness({}, [limited, told])
+    h.monitor.onAgentEvent(ev('st1', { state: 'done', errored: true }))
+    await flush()
+    expect(h.timers.map((t) => t.ms)).toEqual([7250])
+    expect(h.monitor.list()[0].pane).toBeUndefined() // still being told
+    h.timers[0].fn()
+    await flush()
+    expect(h.delivered).toHaveLength(2)
+    expect(h.monitor.list()[0]).toMatchObject({ pane: 'told' })
+
+    const g = harness({}, [limited])
+    g.monitor.onAgentEvent(ev('st1', { state: 'done', errored: true }))
+    await flush()
+    g.timers[0].fn()
+    await flush()
+    expect(g.delivered).toHaveLength(2)
+    expect(g.timers).toHaveLength(1) // once
+    expect(g.monitor.list()[0]).toMatchObject({ pane: 'not-sent', paneDetail: 'rateLimited' })
+  })
+})
+
 describe('the pane leg is the messaging service, with every gate', () => {
   beforeEach(() => {
     resetMessageFlow()
@@ -424,6 +588,23 @@ describe('the pane leg is the messaging service, with every gate', () => {
     )
     expect(refused).toEqual({ kind: 'notPermitted', reason: 'caller-not-owner' })
     expect(m2.paneReads).toEqual([])
+  })
+
+  it('a busy orchestrator: queued, flushed on its next idle, and the chip follows (real queue)', async () => {
+    let orchState: MirrorEntry = { ...idle, state: 'working' }
+    const m = messagingDeps({ mirrorEntry: (id) => (id === 'orch' ? orchState : idle) })
+    const queue = createDeliveryQueue(m.deps)
+    m.deps.queue = queue
+    const h = harness({ deliver: (n) => deliverStationNotice(n, m.deps) })
+    m.deps.onQueuedResult = (req, outcome) => h.monitor.onQueuedResult(req, outcome)
+    h.monitor.onAgentEvent(ev('st1', { state: 'done', errored: true }))
+    await vi.waitFor(() => expect(h.monitor.list()[0]?.pane).toBe('queued'))
+    expect(m.sent).toEqual([])
+    orchState = idle
+    await onMessagingAgentEvent({ nodeId: 'orch', state: 'done', verified: true }, queue)
+    await vi.waitFor(() => expect(h.monitor.list()[0]?.pane).toBe('told'))
+    expect(m.sent).toHaveLength(1)
+    queue.resetForTests()
   })
 
   it('a renderer cannot ask for a notice with a body of its choosing', () => {
