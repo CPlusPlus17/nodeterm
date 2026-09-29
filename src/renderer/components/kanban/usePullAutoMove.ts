@@ -62,16 +62,18 @@ export function usePullAutoMove(input: {
     if (!entry || !onAutoMove) return
     const plan = planPullAutoMoves({ cards, board, pullBoard, entry })
     for (const wait of plan.waits) {
-      const fresh = wait.pulls.filter((pull) => !noted.current.has(`${projectId}\0${wait.cardId}\0${pull}`))
+      // Keys carry card ids, which come from a git-shared file: JSON, never a separator join.
+      const waitKey = (pull: number): string => JSON.stringify([projectId, wait.cardId, pull])
+      const fresh = wait.pulls.filter((pull) => !noted.current.has(waitKey(pull)))
       if (!fresh.length) continue
-      for (const pull of fresh) noted.current.add(`${projectId}\0${wait.cardId}\0${pull}`)
+      for (const pull of fresh) noted.current.add(waitKey(pull))
       void api.notePullWaits({ projectId, cardId: wait.cardId, pulls: fresh }).catch(() => {
         // Not recorded: let a later pass try again.
-        for (const pull of fresh) noted.current.delete(`${projectId}\0${wait.cardId}\0${pull}`)
+        for (const pull of fresh) noted.current.delete(waitKey(pull))
       })
     }
     for (const move of plan.moves) {
-      const claimKey = `${projectId}\0${move.cardId}\0${move.pulls.join(',')}`
+      const claimKey = JSON.stringify([projectId, move.cardId, move.pulls])
       if (asked.current.has(claimKey)) continue
       asked.current.add(claimKey)
       void api.claimPullAutoMove({ projectId, cardId: move.cardId, pulls: move.pulls })
