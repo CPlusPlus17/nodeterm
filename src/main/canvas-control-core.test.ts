@@ -1518,6 +1518,22 @@ describe('--after-success + report-outcome: a dependent that waits for a reporte
     expect(flat).toContain('The Server Edition accepts both the flag and the verb')
   })
 
+  // Plain `--after` and new work (core/station-handover.ts): the rule an orchestrator reusing a
+  // station must know, in both bodies, in the words core implements.
+  it.each(bodies)('%s states that new work resets a plain --after wait, and how to reuse a station', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('Reusing a station with `--after` (new work resets the wait)')
+    expect(flat).toContain(
+      'a `send` / `reply` aimed at it (queued or delivered), or a `write` / `run` into it — does not count as finished for `--after` until a turn that STARTED after that work arrived has ended'
+    )
+    expect(flat).toContain("Its earlier `done` (the previous task) releases nothing")
+    expect(flat).toContain('while a `send` / `reply` is still QUEUED for it nothing releases at all')
+    expect(flat).toContain('A queued message that expires unread still holds')
+    expect(flat).toContain('hand it the next task FIRST, then open the dependent `--after` it')
+    expect(flat).toContain('"waiting for <station> to finish the work handed to it"')
+    expect(flat).toContain("A person typing in the station's pane is not a hand-over")
+  })
+
   it.each(bodies)('%s teaches stations to report, honestly, about themselves only', (_name, body) => {
     const flat = body.replace(/\s+/g, ' ')
     expect(flat).toContain(`\`${REPORT_OUTCOME_VERB} --outcome succeeded|failed [--note "<one line>"]\``)

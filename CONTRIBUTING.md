@@ -349,6 +349,13 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   runs only on time. Do not move the ledger into one shell's handler: the other shell silently loses
   it.
 
+- **A new way to hand a station work must feed `src/core/station-handover.ts`.** Plain `--after`
+  would otherwise release a dependent on the station's `done` from its PREVIOUS task. Today the
+  hand-overs are `send` / `reply` (through the messaging layer's `onHandover`) and `write` / `run`
+  (`noteControlAnswer` in each shell's control handler — desktop main's `finishAnswer` and the
+  Server Edition wrapper). A new verb that types a task into another node's pane joins that set in
+  the same PR, on BOTH shells; `src/main/station-handover-wiring.test.ts` pins the sites that exist.
+
 - **A new canvas-control open path must record who opened the node.** When a station stops, the
   agent that opened it is told (`src/core/agents/station-notice.ts`) — and a rope alone cannot say
   who that is, because an `--after` node is roped to the stations it waited on too, with the same id

@@ -53,6 +53,7 @@ import { serverEditionControlHandler } from './control-unsupported'
 import { initServerCanvasControl, type ServerCanvasControl } from './canvas-control'
 import { registerStationNoticeIpc } from '../core/agents/station-notice'
 import { registerStationOutcomeIpc } from '../core/station-outcome-store'
+import { registerStationHandoverIpc } from '../core/station-handover'
 import { refreshNodeTokens } from '../core/agents/node-token-service'
 import { armServerNodeIdentity } from './node-identity-arm'
 import { wireServerCodexSharedIdentity } from './codex-shared-identity'
@@ -497,6 +498,7 @@ export async function startServer(
   // Station task outcomes: registered for the same reason — a browser tab's `list` gets "none"
   // rather than an unknown channel when canvas control is off.
   registerStationOutcomeIpc(platform, () => canvasControl?.stationOutcomes ?? null)
+  registerStationHandoverIpc(platform, () => canvasControl?.stationHandovers ?? null)
   const { contextTail, geminiContextTail, codexContextTail } = wireAgentStatus(platform, {
     onEvent: (event) => canvasControl?.onAgentEvent(event)
   })

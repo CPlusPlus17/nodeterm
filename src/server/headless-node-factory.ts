@@ -124,6 +124,11 @@ export interface HeadlessNodeFactoryDeps {
   /** A station's latest task report (`report-outcome`, core's store) — what `--after-success` waits
    *  on. Absent = no report is ever known, so a success wait never releases on its own. */
   outcomeOf?(nodeId: string): StationOutcomeRecord | undefined
+  /** Has this station been handed new work (a `send` / `reply` queued or landed, a `run`) that no
+   *  turn since has finished? core/station-handover.ts — while it has, plain `--after` on it is not
+   *  satisfied, whatever its state reads: its `done` is the PREVIOUS task's. Absent = nothing is
+   *  ever handed over (the pre-tracker behaviour). */
+  handedOver?(nodeId: string): boolean
   env?: Record<string, string | undefined>
   now?: () => number
   publishNode?: (projectId: string, node: CanvasNodeState) => void
@@ -734,6 +739,10 @@ export class HeadlessNodeFactory {
     return this.deps.now?.() ?? Date.now()
   }
 
+  private handedOver(depId: string): boolean {
+    return this.deps.handedOver?.(depId) === true
+  }
+
   /** What a success wait knows about one station, from the same facts this edition's `--after`
    *  reads (the mirror's `done`, the `awaitWorking` fresh-spawn rule), the errored-turn rule (#521,
    *  `lastTurnErrored`, which this edition's plain `--after` does not apply), and its report. */
@@ -751,6 +760,7 @@ export class HeadlessNodeFactory {
         exists &&
         !this.awaitingFirstWorking.has(depId) &&
         !this.lastTurnErrored.has(depId) &&
+        !this.handedOver(depId) &&
         state === 'done',
       ...(reported ? { outcome: reported } : {})
     }
@@ -1407,7 +1417,9 @@ export class HeadlessNodeFactory {
         if (state === 'working') this.awaitingFirstWorking.delete(depId)
       }
       const mustWait =
-        after.some((depId) => afterStates.get(depId) !== 'done') ||
+        // A `done` from before new work was handed over is not this wait's `done`
+        // (core/station-handover.ts): the creation shortcut must not start the node on it.
+        after.some((depId) => afterStates.get(depId) !== 'done' || this.handedOver(depId)) ||
         (!!successHold &&
           !successWaitSatisfied(successHold, (d) => this.successFacts(target, d), this.now()))
       const awaitWorking = after.filter((depId) =>
@@ -1717,6 +1729,7 @@ export class HeadlessNodeFactory {
             const stillExists = project.nodes.some((candidate) => candidate.id === depId)
             if (!stillExists) return true
             if (pending.awaitWorking?.includes(depId)) return false
+            if (this.handedOver(depId)) return false
             return observed?.nodeId === depId
               ? observed.state === 'done'
               : this.deps.stateOf(depId) === 'done'

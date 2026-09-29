@@ -255,6 +255,25 @@ function afterSuccessDocLines(): string[] {
   ]
 }
 
+/**
+ * The plain `--after` "new work" rule — core/station-handover.ts. Both agent-facing bodies share
+ * these lines; `canvas-control-core.test.ts` pins them against both.
+ */
+function afterHandoverDocLines(): string[] {
+  return [
+    'Reusing a station with `--after` (new work resets the wait):',
+    '- A station handed new work through canvas control — a `send` / `reply` aimed at it (queued or',
+    '  delivered), or a `write` / `run` into it — does not count as finished for `--after` until a turn',
+    '  that STARTED after that work arrived has ended. Its earlier `done` (the previous task) releases',
+    '  nothing, and while a `send` / `reply` is still QUEUED for it nothing releases at all. A queued',
+    '  message that expires unread still holds: the next turn the station finishes ends it.',
+    '- So to reuse a station, hand it the next task FIRST, then open the dependent `--after` it — opened',
+    '  first, the dependent would start at once on the previous task\'s output. `list` marks such a',
+    '  dependent "waiting for <station> to finish the work handed to it". A person typing in the',
+    "  station's pane is not a hand-over. `run` (or the user's ▶) always starts a held node anyway."
+  ]
+}
+
 function reportOutcomeDocLines(): string[] {
   return [
     `- \`${REPORT_OUTCOME_VERB} --outcome succeeded|failed [--note "<one line>"]\` — say how YOUR task went.`,
@@ -833,6 +852,7 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  agent does not recognise fails inside the session, not at open time — name a model you know.',
     ...issueBindingDocLines(),
     ...afterPrDocLines(),
+    ...afterHandoverDocLines(),
     ...afterSuccessDocLines(),
     ...reportOutcomeDocLines(),
     '- `open-project --cwd </abs/path> [--name N] [--color C]` — register (or find) the project for a',
@@ -1399,6 +1419,8 @@ Verbs:
   open time, so name a model you know that CLI accepts rather than guessing.
 ${issueBindingDocLines().join('\n')}
 ${afterPrDocLines().join('\n')}
+${afterHandoverDocLines().join('\n')}
+
 ${afterSuccessDocLines().join('\n')}
 ${reportOutcomeDocLines().join('\n')}
 - \`open-project --cwd </abs/path> [--name N] [--color C]\` — register (or find) the project for a

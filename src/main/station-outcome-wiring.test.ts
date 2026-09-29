@@ -46,7 +46,7 @@ describe('desktop main', () => {
   })
 
   it('wires the messaging layer\'s hand-over events — send / reply are decided by when they LAND', () => {
-    expect(main).toContain('messagingDeps.onHandover = (ev) => stationOutcomes.onHandover(ev)')
+    expect(main).toMatch(/messagingDeps\.onHandover = \(ev\) => \{\s*stationOutcomes\.onHandover\(ev\)/)
   })
 
   it('registers the read channel and pushes every change to the window', () => {
@@ -65,7 +65,7 @@ describe('Server Edition', () => {
   })
 
   it('wires the same hand-over events into its messaging deps', () => {
-    expect(serverControl).toContain('onHandover: (ev) => stationOutcomes.onHandover(ev)')
+    expect(serverControl).toMatch(/onHandover: \(ev\) => \{\s*stationOutcomes\.onHandover\(ev\)/)
   })
 
   it('hands the factory the outcome store, so --after-success is honoured headlessly', () => {
@@ -124,7 +124,7 @@ describe('the desktop renderer', () => {
   })
 
   it('list reads the outcomes on both the live and the stored path', () => {
-    const hits = canvas.split('useStationOutcomes.getState().byId)').length - 1
+    const hits = canvas.split('useStationOutcomes.getState().byId, useStationHandovers.getState().byId)').length - 1
     expect(hits).toBeGreaterThanOrEqual(2)
   })
 })

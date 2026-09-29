@@ -23,6 +23,7 @@ import {
 } from '@shared/station-outcome'
 import { useAgentStatus } from '../state/agentStatus'
 import { useStationOutcomes } from '../state/stationOutcomes'
+import { useStationHandovers } from '../state/stationHandovers'
 import { successDepFacts } from './pendingLaunch'
 
 export interface SuccessWaitView {
@@ -54,6 +55,8 @@ export function useSuccessWait(
   const stateSig = useAgentStatus((s) =>
     depIds.map((d) => `${d}:${s.byId[d]?.state ?? '-'}:${s.byId[d]?.lastTurnError ? 'e' : ''}`).join('|')
   )
+  // Handed-over work holds a station's turn open (core/station-handover.ts), like the launch loop.
+  const handoverSig = useStationHandovers((s) => depIds.map((d) => (s.byId[d] ? '1' : '0')).join(''))
   // Which stations are still on the canvas, read each render: a closed station changes the verdict.
   const existSig = depIds.map((d) => (titleOf(d) !== undefined ? '1' : '0')).join('')
   // The deadline tick. Its VALUE is a memo input — see the header.
@@ -70,7 +73,13 @@ export function useSuccessWait(
     if (!hold) return undefined
     const live = new Set(depIds.filter((d) => titleOf(d) !== undefined))
     const facts = (d: string) =>
-      successDepFacts(d, useAgentStatus.getState().byId, live, useStationOutcomes.getState().byId)
+      successDepFacts(
+        d,
+        useAgentStatus.getState().byId,
+        live,
+        useStationOutcomes.getState().byId,
+        useStationHandovers.getState().byId
+      )
     const name = (d: string) => titleOf(d) || d
     return {
       status: successWaitStatus(hold, facts, Date.now()),
@@ -80,6 +89,6 @@ export function useSuccessWait(
         : new Date(hold.deadlineAt).toLocaleString()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the signatures and the clock are the triggers
-  }, [hold, outcomeSig, stateSig, existSig, clock])
+  }, [hold, outcomeSig, stateSig, handoverSig, existSig, clock])
   return { hold, depIds, tooltip }
 }

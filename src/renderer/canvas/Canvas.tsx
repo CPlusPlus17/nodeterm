@@ -551,6 +551,8 @@ import {
 } from '@shared/station-outcome'
 import { useStationOutcomes } from '../state/stationOutcomes'
 import { installStationOutcomeWiring } from '../lib/stationOutcomeWiring'
+import { useStationHandovers } from '../state/stationHandovers'
+import { installStationHandoverWiring } from '../lib/stationHandoverWiring'
 import { lookupPullRequests, pullBoardFor, useGitHubIssues } from '../state/githubIssues'
 import { usePullChase } from '../components/kanban/usePullAutoMove'
 import {
@@ -2040,6 +2042,21 @@ export function Canvas() {
     }
     return sig
   })
+  // ---- work handed to the stations an armed node waits on (plain `--after`) ----
+  // A station handed new work it has not finished (core/station-handover.ts) is never a satisfied
+  // dep, whatever its state reads. A PRIMITIVE signature over the armed nodes' deps only — the
+  // `armedDepSig` discipline — so the launch effect re-runs when one of THOSE stations finishes its
+  // new work, and nothing re-renders on another station's hand-over.
+  const armedHandoverSig = useStationHandovers((s) => {
+    let sig = ''
+    for (const n of nodesRef.current) {
+      const p = n.data.pendingLaunch
+      if (!p) continue
+      for (const d of p.after) if (s.byId[d]) sig += `${d},`
+      sig += '|'
+    }
+    return sig
+  })
   // ---- the setup gate an armed node waits on ----
   // The runs are launched from the worktree-lifecycle block far below; the gate itself lives up
   // here, beside the launch effect that reads it.
@@ -2251,7 +2268,9 @@ export function Canvas() {
       // The `--after-pr` gate: this canvas's pull request status and the clock its deadlines are on.
       { board: pullBoardFor(useGitHubIssues.getState(), nodesProjectIdRef.current ?? ''), now: Date.now() },
       // The `--after-success` gate: every station's latest task report (core's store, mirrored).
-      { outcomes: useStationOutcomes.getState().byId, now: Date.now() }
+      { outcomes: useStationOutcomes.getState().byId, now: Date.now() },
+      // Stations handed new work they have not finished: their `done` is the previous task's.
+      useStationHandovers.getState().byId
     ).filter((f) => !launchInFlight.current.has(f.id))
     // Anything we were reporting on that is no longer an armed node — delivered, run by hand with
     // ▶, or deleted — stops being reported. Timers go with it: a stall warning for a node that has
@@ -2342,8 +2361,8 @@ export function Canvas() {
         return deliverHeld()
       })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- armedDepSig/armedSetupSig/armedPrSig/armedSuccessSig/launchNudge are the triggers
-  }, [nodes, armedDepSig, armedSetupSig, armedPrSig, armedSuccessSig, launchNudge])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- armedDepSig/armedHandoverSig/armedSetupSig/armedPrSig/armedSuccessSig/launchNudge are the triggers
+  }, [nodes, armedDepSig, armedHandoverSig, armedSetupSig, armedPrSig, armedSuccessSig, launchNudge])
 
   // Selection state for ephemeral nodes (they live outside React Flow's managed nodes), owned by
   // the agent-nodes store so the cards themselves can set it — see `selectable: false` below.
@@ -10279,6 +10298,7 @@ export function Canvas() {
   useEffect(() => installStationNoticeWiring(window.nodeTerminal), [])
   // Station task outcomes (`report-outcome`): core's store mirrored for the `--after-success` gate.
   useEffect(() => installStationOutcomeWiring(window.nodeTerminal), [])
+  useEffect(() => installStationHandoverWiring(window.nodeTerminal), [])
 
   // Session board cards are derived LIVE from the canvas nodes; the board stores only assignments.
   // Only while the board is OPEN: `nodes` gets a fresh identity on every drag frame, so a closed
@@ -11962,7 +11982,7 @@ export function Canvas() {
             return
           }
           if (!needsLiveCanvas(verb)) {
-            const rows = storedNodeListing(projects.find((p) => p.id === route.projectId)?.nodes ?? [], useAgentStatus.getState().byId, useLaunchDelivery.getState().byId, Date.now(), useStationOutcomes.getState().byId)
+            const rows = storedNodeListing(projects.find((p) => p.id === route.projectId)?.nodes ?? [], useAgentStatus.getState().byId, useLaunchDelivery.getState().byId, Date.now(), useStationOutcomes.getState().byId, useStationHandovers.getState().byId)
             reply({
               ok: true,
               result: rows,
@@ -12675,7 +12695,7 @@ export function Canvas() {
               id: n.id, kind: n.type, title: n.data.title as string,
               pendingLaunch: n.data.pendingLaunch, agentId: n.data.agentId as string | undefined,
               issueRef: n.data.issueRef
-            })), st, useLaunchDelivery.getState().byId, Date.now(), useStationOutcomes.getState().byId)
+            })), st, useLaunchDelivery.getState().byId, Date.now(), useStationOutcomes.getState().byId, useStationHandovers.getState().byId)
             reply({ ok: true, result: list, message: controlListingText(list) })
             return
           }

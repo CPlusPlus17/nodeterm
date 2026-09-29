@@ -165,6 +165,8 @@ describe('HeadlessNodeFactory', () => {
   let codexSharedIdentity: boolean
   let codexApprovalValues: { approvalValues: string[] | null }
   let outcomes: Record<string, StationOutcomeRecord>
+  /** Stations with unfinished handed-over work (core/station-handover.ts), as the tracker answers. */
+  let handedOver: Set<string>
 
   const settings = (): Settings => ({
     ...DEFAULT_SETTINGS,
@@ -182,6 +184,7 @@ describe('HeadlessNodeFactory', () => {
     pty = new FakePty()
     states = {}
     outcomes = {}
+    handedOver = new Set()
     published = []
     removed = []
     publishedProjects = []
@@ -239,6 +242,7 @@ describe('HeadlessNodeFactory', () => {
       ownership,
       stateOf: (id) => states[id],
       outcomeOf: (id) => outcomes[id],
+      handedOver: (id) => handedOver.has(id),
       launchTiming: { quietMs: 0, capMs: 0 },
       publishNode: (_projectId, node) => published.push(node),
       publishRemoval: (_projectId, nodeId) => removed.push(nodeId),
@@ -1213,6 +1217,64 @@ describe('HeadlessNodeFactory', () => {
     expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'consume result'" }])
     workspace = await store.load({ sideline: false })
     expect(workspace.projects[0].nodes.find((node) => node.id === id)?.pendingLaunch).toBeUndefined()
+  })
+
+  describe('plain --after on a station handed new work (core/station-handover.ts)', () => {
+    it('does NOT take the creation shortcut on a done from before the hand-over', async () => {
+      // The station reads `done` — from its PREVIOUS task — and was just handed the next one.
+      states['term-upstream'] = 'done'
+      handedOver.add('term-upstream')
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'consume result', after: 'term-upstream' },
+        true
+      )
+      expect(reply.ok).toBe(true)
+      const id = (reply.result as { id: string }).id
+      expect(pty.sends).toEqual([])
+      expect(reply.result).toMatchObject({ queued: true, queuedIds: [id] })
+      // refreshArmed on the same old `done` still holds.
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      // The new work's turn ends: the tracker drops the station, and the next done releases D once.
+      handedOver.delete('term-upstream')
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'done' })
+      await factory.refreshArmed()
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'consume result'" }])
+    })
+
+    it('an already-armed dependent is held by a hand-over that arrives before the station idles', async () => {
+      states['term-upstream'] = 'working'
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'consume result', after: 'term-upstream' },
+        true
+      )
+      const id = (reply.result as { id: string }).id
+      handedOver.add('term-upstream')
+      states['term-upstream'] = 'done'
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'done' })
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      handedOver.delete('term-upstream')
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'consume result'" }])
+    })
+
+    it('a success wait holds too: its turn is not over while handed-over work is unfinished', async () => {
+      states['term-upstream'] = 'done'
+      outcomes['term-upstream'] = { nodeId: 'term-upstream', outcome: 'succeeded', at: Date.now() }
+      handedOver.add('term-upstream')
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'ship it', 'after-success': 'term-upstream' },
+        true
+      )
+      expect(reply.ok).toBe(true)
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+    })
   })
 
   describe('--after-success: the dependent waits for a REPORTED success, not a turn ending', () => {

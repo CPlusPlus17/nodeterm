@@ -3817,6 +3817,51 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   so reporting it as "the error" would be a confident wrong fact. Reading the text, and the
   *failed-to-start* watchdog (a station that never emits ANY hook event — the opposite failure,
   which hangs dependents honestly rather than firing them wrongly), stay open.
+  **(10) A `done` from BEFORE new work was handed over does not release anything**
+  (`core/station-handover.ts`, `@shared/station-handover`, 2026-09-30). A station is reused: an
+  orchestrator hands it task B (`send` → `queued` because it is busy, or delivered to an idle pane
+  it has not started on yet, or a `write` / `run`) and then opens D `--after <station>`. Until the
+  station STARTS B its state is still task A's `done`, so D fired at once — on A's output, and a
+  launched dependent cannot un-launch. #1042 closed the same hole for `--after-success` (reports);
+  this is the plain-turn half. Rules a refactor must not undo:
+  - **The fact is core's, per station, fed by the SAME hand-over moments #1042 uses**: the
+    messaging layer's `onHandover` (`queued` = held from that instant; `landed` at the time the
+    delivery attempt STARTED; a queued entry that `settled` without landing holds too, from the
+    settle — the orchestrator armed D believing the task was handed), and each shell's control
+    answer for `write` / `run` (`noteControlAnswer`, on success only, never the caller naming itself,
+    stamped with the time the REQUEST ARRIVED — before any byte was typed). Board comments, station
+    notices and a person typing are not hand-overs (the #1042 set).
+  - **It ends with a turn that STARTED at or after the newest hand-over and has ENDED, with nothing
+    still queued.** The tracker stamps turn starts itself (first working/waiting/blocked after an
+    idle state, on its own clock) for EVERY station, because a delivered prompt can start — and
+    even finish — its turn before the delivery's `landed` event is emitted; a hand-over that finds
+    its answering turn already over clears at once. Timestamps never cross a process: the renderer
+    only reads a membership list, so the Server Edition browser's clock never enters it. A turn
+    already running when the work landed does not end it (the typed text is answered by a LATER
+    turn); if a CLI folds typed input into the running turn instead, the hold lasts until its next
+    turn — the holding direction, with ▶ / `run` as the way out. An idle-prompt `done` with no turn
+    in between ends nothing.
+  - **The tracker is fed every agent event BEFORE the messaging queue** (desktop `emitAgentStatus`,
+    the Server Edition's `onAgentEvent`): the queue flushes new work on the very `done` the tracker
+    must stamp, and the server's `refreshArmed` reads the tracker on that same event. Pinned at
+    source level by `main/station-handover-wiring.test.ts`.
+  - **The renderer reads it through a derived primitive signature** (`armedHandoverSig`, only the
+    armed nodes' deps — the `armedDepSig` rule), and `launchesToFire` / `depSatisfied` take it as a
+    trailing argument: a handed-over station is never a satisfied dep, a DELETED one still is.
+    `successDepFacts.turnDone` applies it too, so a success wait never releases where plain
+    `--after` would hold. The Server Edition's factory asks `handedOver` in `refreshArmed` AND in the
+    creation shortcut (`mustWait`): "already satisfied at creation" must mean satisfied under this
+    rule, or the node is launched immediately by the shortcut.
+  - **Eviction never drops a held station** (the bound is 2000 tracked stations; the oldest with
+    nothing handed over goes first) — dropping one would release its dependents.
+  - Surfaces: `list` says `waiting for <station> to finish the work handed to it`; the QUEUED tooltip
+    names it; both agent bodies render `afterHandoverDocLines` ("hand it the next task FIRST, then
+    open the dependent"). TRANSIENT: after a restart nothing has been handed over in this run.
+    Relay tabs take the inert stub; the list channel is HOST_ONLY
+    (unscoped: every project's stations). Mobile: N/A (the phone never sees `pendingLaunch`).
+    Tests: `core/station-handover.test.ts`, `test/acceptance/after-handover.test.ts` (the REAL
+    queue → tracker → the renderer's real `launchesToFire`, red on the old code) and the server
+    factory's own cases.
   **Pull request waits (`--after-pr`, 2026-09-29).** `open-terminal --cmd …` / `open-claude` /
   `open-agent` take `--after-pr <N:checks|N:merged>[,…]` (N may be `#N` or `owner/repo#N`) and
   `--pr-deadline <90m|12h|3d>`: the held launch ALSO waits for pull requests of the project's

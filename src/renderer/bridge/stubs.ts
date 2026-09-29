@@ -594,6 +594,11 @@ export function buildStubApi(): Omit<
     stationOutcome: {
       list: async () => [],
       onChanged: noopUnsub
+    },
+    // Same split again: the Server Edition overrides it (`buildStationHandoverApi`).
+    stationHandover: {
+      list: async () => [],
+      onChanged: noopUnsub
     }
   } satisfies Omit<
     NodeTerminalApi,

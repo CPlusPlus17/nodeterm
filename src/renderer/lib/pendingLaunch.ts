@@ -15,6 +15,7 @@ import {
   type SuccessWaitHold
 } from '@shared/station-outcome'
 import type { PendingLaunch } from '@shared/types'
+import type { StationHandoverRecord } from '@shared/station-handover'
 import { prHoldSatisfied } from './prWait'
 
 /** The subset of a canvas node this module reads. */
@@ -57,6 +58,17 @@ export interface PrGateContext {
   now: number
 }
 
+/**
+ * Stations with unfinished HANDED-OVER work (core/station-handover.ts, mirrored): a station here is
+ * never a satisfied `--after` dep, whatever its state reads — its `done` is from before the work it
+ * was just handed. Absent = nothing handed over.
+ */
+export type HandoverById = Readonly<Record<string, StationHandoverRecord | undefined>>
+
+function handedOver(handovers: HandoverById | undefined, depId: string): boolean {
+  return !!handovers && Object.prototype.hasOwnProperty.call(handovers, depId) && !!handovers[depId]
+}
+
 /** What `launchesToFire` needs to judge a `--after-success` wait: every station's latest task
  *  report in this app run (core's store, mirrored) and the clock deadlines are on. */
 export interface SuccessGateContext {
@@ -73,13 +85,14 @@ export function successDepFacts(
   depId: string,
   status: StatusById,
   live: ReadonlySet<string>,
-  outcomes: Readonly<Record<string, StationOutcomeRecord>>
+  outcomes: Readonly<Record<string, StationOutcomeRecord>>,
+  handovers?: HandoverById
 ): SuccessDepFacts {
   const exists = live.has(depId)
   const reported = outcomeOf(outcomes, depId)
   return {
     exists,
-    turnDone: exists && depSatisfied(depId, status, live),
+    turnDone: exists && depSatisfied(depId, status, live, handovers),
     ...(reported ? { outcome: reported } : {})
   }
 }
@@ -212,11 +225,34 @@ export function controlLaunchState(
  *
  * The refusal ends by itself: `lastTurnError` is cleared by the upstream's next genuine new turn,
  * so a station that is nudged and answers successfully satisfies its dependents on that turn.
+ *
+ * A dep that has been HANDED NEW WORK it has not finished (`handovers`, core/station-handover.ts)
+ * is refused too. A station is reused: an orchestrator hands it its next task and then arms a
+ * dependent on it, and until the station starts that task its state is still the PREVIOUS task's
+ * `done` — the dependent would start at once, on the old output. Core decides when the hand-over
+ * is answered (a turn that started after it has ended); here it is only a membership test, so the
+ * renderer and the Server Edition's factory cannot disagree.
  */
-function depSatisfied(depId: string, status: StatusById, live: ReadonlySet<string>): boolean {
+function depSatisfied(
+  depId: string,
+  status: StatusById,
+  live: ReadonlySet<string>,
+  handovers?: HandoverById
+): boolean {
   if (!live.has(depId)) return true
+  if (handedOver(handovers, depId)) return false
   const st = status[depId]
   return st?.state === 'done' && !st.lastTurnError
+}
+
+/** Of the deps this node is still waiting on, which are held because they were handed new work
+ *  they have not finished — what the QUEUED tooltip and `list` name. */
+export function handedOverDeps(
+  node: ArmedNode,
+  live: ReadonlySet<string>,
+  handovers: HandoverById | undefined
+): string[] {
+  return (node.data.pendingLaunch?.after ?? []).filter((d) => live.has(d) && handedOver(handovers, d))
 }
 
 /** Of the deps this node is still waiting on, which are held because they ERRORED rather than
@@ -254,7 +290,9 @@ export function launchesToFire(
   setupDone?: (groupId: string) => boolean,
   deliveries?: Record<string, LaunchDelivery | undefined>,
   pr?: PrGateContext,
-  success?: SuccessGateContext
+  success?: SuccessGateContext,
+  /** Stations with unfinished handed-over work — never a satisfied dep (see `depSatisfied`). */
+  handovers?: HandoverById
 ): LaunchToFire[] {
   const out: LaunchToFire[] = []
   for (const n of nodes) {
@@ -281,13 +319,13 @@ export function launchesToFire(
         success &&
         successWaitSatisfied(
           successHold,
-          (d) => successDepFacts(d, status, live, success.outcomes),
+          (d) => successDepFacts(d, status, live, success.outcomes, handovers),
           success.now
         )
       )
     )
       continue
-    if (p.after.every((d) => depSatisfied(d, status, live))) {
+    if (p.after.every((d) => depSatisfied(d, status, live, handovers))) {
       out.push({ id: n.id, command: p.command, ...(p.promptFile ? { briefFile: p.promptFile } : {}) })
     }
   }
@@ -298,11 +336,12 @@ export function launchesToFire(
 export function unmetDeps(
   node: ArmedNode,
   status: StatusById,
-  live: ReadonlySet<string>
+  live: ReadonlySet<string>,
+  handovers?: HandoverById
 ): string[] {
   const p = node.data.pendingLaunch
   if (!p) return []
-  return p.after.filter((d) => !depSatisfied(d, status, live))
+  return p.after.filter((d) => !depSatisfied(d, status, live, handovers))
 }
 
 /**
@@ -367,7 +406,9 @@ export function launchTooltip(
   pr?: { expired: boolean; summary: string; deadline: string },
   /** The node's `--after-success` wait: where it stands (`successWaitStatus`), the unmet stations
    *  (`successWaitSummary`), and its deadline as the caller formats it. */
-  success?: { status: 'met' | 'waiting' | 'blocked' | 'expired'; summary: string; deadline: string }
+  success?: { status: 'met' | 'waiting' | 'blocked' | 'expired'; summary: string; deadline: string },
+  /** The deps that were handed new work they have not finished (core/station-handover.ts), named. */
+  handedOverOn?: string
 ): string {
   if (delivery?.kind === 'starting') return 'Starting in the background — an agent asked for this session to run now.'
   const runs = `Runs:\n${command}`
@@ -421,6 +462,13 @@ export function launchTooltip(
       'Ready to run, but this terminal has not started yet — the launch is still held and ' +
       'fires as soon as it does.\n' +
       `Press \u25b6 to try it now.\n${runs}`
+    )
+  // A station that just got new work still reads `done` from its previous task; saying "waiting for
+  // X to finish" alone would read as a wait that should already be over.
+  if (handedOverOn)
+    return (
+      `Waiting for ${handedOverOn} to finish the work just handed to it — its earlier turn does not ` +
+      `count${waitingOn ? ` (all waits: ${waitingOn})` : ''}, then runs:\n${command}`
     )
   if (success?.status === 'waiting') {
     // `waitingOn` here is the caller's list of the OTHER stations (plain `--after`), if any.
