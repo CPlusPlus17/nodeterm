@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { CONTROL_SHIM_SCRIPT } from '../core/canvas-control-core'
+import { runNowRequested } from '../shared/control-verbs'
 
 let dir = ''
 
@@ -101,6 +102,53 @@ describe('the control shim translates flags', () => {
       'arg.run-now=1',
       'arg.agent=claude'
     ])
+  })
+
+  // The agent docs say "put --run-now LAST on the line (either form)", and this is the measurement
+  // behind it. The loop below is the shim's `--*` branch as it shipped BEFORE b7f19f64
+  // (2026-08-15), copied verbatim: it took the token after any `--flag` as that flag's value and
+  // had no `--*=*` branch. An SSH host keeps whatever shim it got at its last connect, so this
+  // loop can still be what an agent there runs. Executed under real `sh`, not modelled.
+  it('on the pre-2026-08-15 shim loop --run-now survives only LAST on the line, in either form (#925)', () => {
+    const oldLoop = [
+      'nt_count=$#',
+      'nt_i=0',
+      'while [ "$nt_i" -lt "$nt_count" ]; do',
+      '  nt_a="$1"; shift; nt_i=$((nt_i + 1))',
+      '  case "$nt_a" in',
+      '    --*)',
+      '      nt_k=${nt_a#--}',
+      '      nt_v=""',
+      '      if [ "$nt_i" -lt "$nt_count" ]; then nt_v="$1"; shift; nt_i=$((nt_i + 1)); fi',
+      '      set -- "$@" --data-urlencode "arg.$nt_k=$nt_v"',
+      '      ;;',
+      '  esac',
+      'done',
+      'for a in "$@"; do case "$a" in arg.*) printf \'%s\\n\' "$a" ;; esac; done'
+    ].join('\n')
+    // What the server reads: curl's `--data-urlencode name=content` splits on the FIRST `=`.
+    const oldShim = (flags: string[]): Record<string, string> =>
+      Object.fromEntries(
+        execFileSync('sh', ['-c', oldLoop, 'sh', ...flags], { encoding: 'utf8' })
+          .split('\n')
+          .filter(Boolean)
+          .map((pair) => {
+            const at = pair.indexOf('=')
+            return [pair.slice('arg.'.length, at), pair.slice(at + 1)]
+          })
+      )
+    // Last on the line: both forms are on, and nothing is lost.
+    for (const last of ['--run-now', '--run-now=1']) {
+      const args = oldShim(['--agent', 'claude', '--project', 'p2', last])
+      expect(runNowRequested(args), last).toBe(true)
+      expect(args.agent, last).toBe('claude')
+      expect(args.project, last).toBe('p2')
+    }
+    // Mid-line: either form swallows the next flag, and its value is dropped as a stray positional.
+    for (const mid of ['--run-now', '--run-now=1']) {
+      const args = oldShim([mid, '--agent', 'claude'])
+      expect(args.agent, mid).toBeUndefined()
+    }
   })
 
   it('run takes its node positionally, like rename (#925)', () => {

@@ -112,6 +112,40 @@ describe('parseControlRequest', () => {
     }
   })
 
+  // The `=1` form is NOT position-free: the pre-2026-08-15 shim loop (still on an SSH host that has
+  // not reconnected) takes the token after any `--flag` as its value, so `--run-now=1 --agent claude`
+  // becomes `arg.run-now=1=--agent` and loses `--agent`. Last on the line works in either form
+  // there (control-shim-parse.test.ts runs that old loop). The old text offered `=1` as an
+  // alternative to "last", which is the claim that broke.
+  it('both bodies say --run-now goes LAST in either form, and why (#925 final review)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      expect(body, name).toMatch(/Put it LAST on the line,\s+in either form \(`--run-now` or `--run-now=1`\)/)
+      expect(body, name).toMatch(/older shim can still sit on an SSH host/)
+      expect(body, name).toMatch(/mid-line either form\s+swallows the flag after it/)
+      expect(body, name).not.toMatch(/or write `--run-now=1`/)
+    }
+  })
+
+  it('both bodies list [--run-now] on every open verb and say run needs verified identity (#925 final review)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      for (const verb of ['open-terminal', 'open-claude', 'open-agent']) {
+        // The verb's signature line: the first line naming it, the same finder the --project
+        // walker below uses.
+        const line = body.split('\n').find((l) => l.includes(`\`${verb} `))
+        expect(line, `${name}: ${verb} signature`).toContain('[--run-now]')
+      }
+      // `run` joined requiresVerified: a legacy-token caller is refused ('Run refused.').
+      const entry = body.slice(body.indexOf('- `run --node'), body.indexOf('- `color --node'))
+      expect(entry, name).toMatch(/`run` requires verified node\s+identity/)
+    }
+  })
+
   it('both bodies state the run / --run-now edges the implementation actually has (#925)', () => {
     for (const [name, body] of [
       ['skill', buildCanvasSkillBody('/x/shim.sh')],

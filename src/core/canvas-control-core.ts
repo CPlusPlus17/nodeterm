@@ -433,9 +433,9 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     'Verbs:',
     '- `list` — current nodes (id, kind, title). Start here when you need a node id.',
     '- `help` — print the verb list. Answered by the shim itself, so it works even if the app is down.',
-    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>]` — open N plain terminals. `--cmd` requires verified node identity.',
-    '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>]` — open N Claude sessions.',
-    `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>]\` — open`,
+    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>] [--run-now]` — open N plain terminals. `--cmd` requires verified node identity.',
+    '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--run-now]` — open N Claude sessions.',
+    `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--run-now]\` — open`,
     '  any agent CLI. `--group` parents the node(s) into a group frame; a worktree-bound group also',
     '  hands its worktree path down as the cwd. `--after <id,id>` opens the node ARMED: it does not',
     '  start until every listed station has finished a turn SUCCESSFULLY. It is',
@@ -452,10 +452,13 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  and do not report the session as started. `--cwd`/`--count`/`--group`/`--after`/`--prompt`',
     '  all still apply. If your project is CLOSED the node is still saved into it and the reply',
     '  says the project is closed; the tab is not reopened for you.',
-    '  Add `--run-now` (put it LAST on the line, or write `--run-now=1`) to start a cold-opened',
-    '  session immediately instead: it starts headless while the user stays where they are, the',
-    '  reply reports `started: true` with `startedIds`, and a closed project gets its tab restored',
-    '  (not switched to), except for an SSH project or when no project is open.',
+    '  Add `--run-now` to start a cold-opened session immediately instead. Put it LAST on the line,',
+    '  in either form (`--run-now` or `--run-now=1`): an older shim can still sit on an SSH host (it',
+    '  is rewritten only on connect), and it takes the token after any flag as that flag\'s value,',
+    '  so mid-line either form swallows the flag after it. The session starts headless while the',
+    '  user stays where they are, the reply reports `started: true` with `startedIds`, and a closed',
+    '  project gets its tab restored (not switched to), except for an SSH project or when no',
+    '  project is open.',
     '  `--run-now` cannot be combined with `--after`. A start that could not be delivered still',
     '  reports `queued` with a `reason`, and the node keeps its Run now button.',
     '  `--project <id>` opens the node(s) in another',
@@ -561,7 +564,7 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  `reason`. `remote-unsupported` is an SSH project\'s node while that project is not on screen:',
     '  its launch is left exactly as it was, so a plain queued launch starts when the user views the',
     '  project, and an armed or failed one still needs its wait or Run now.',
-    '  A node with nothing queued is refused.',
+    '  A node with nothing queued is refused. `run` requires verified node identity.',
     `- \`color --node <id,id> --color C\` — recolor nodes, frames, or stickies. C is a palette NAME`,
     `  or its hex: ${nodeColorChoices()}. The agent names paint a node its CLI's own brand color.`,
     '- `write --node <id> --text "..."` / `close --node <id,id>` — type into / close nodes.',
@@ -914,9 +917,9 @@ Verbs:
   not seven. It clears itself the moment that station completes another turn.
 - \`help\` — print the verb list. The shim answers this itself, without reaching the app, so it
   is also what to run when you are unsure whether the control endpoint is alive.
-- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
-- \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>]\` — open N Claude sessions (default 1).
-- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>]\` — open N sessions of any agent CLI.
+- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>] [--run-now]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
+- \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--run-now]\` — open N Claude sessions (default 1).
+- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--run-now]\` — open N sessions of any agent CLI.
   \`--group\` parents the node(s) into an existing group frame; a worktree-bound group also
   hands its worktree path down as the cwd.
   \`--after <id,id>\` opens the node **armed**: it does NOT start yet, and launches itself once
@@ -947,12 +950,14 @@ Verbs:
   **closed**, the node is still saved into it and the reply says so; the tab is not reopened for
   you. So: opening a station is safe to do at any time, but a station you opened while the user was
   elsewhere is not running yet — read \`queued\` before you route work to it.
-  Add \`--run-now\` (put it LAST on the line, or write \`--run-now=1\`) to start a cold-opened
-  session immediately instead: it starts headless while the user stays where they are, the reply
-  reports \`started: true\` with \`startedIds\`, and a closed project gets its tab restored (not
-  switched to), except for an SSH project or when no project is open. \`--run-now\` cannot be
-  combined with \`--after\`. A start that could not be delivered still reports \`queued\` with a
-  \`reason\`, and the node keeps its Run now button.
+  Add \`--run-now\` to start a cold-opened session immediately instead. Put it LAST on the line,
+  in either form (\`--run-now\` or \`--run-now=1\`): an older shim can still sit on an SSH host (it
+  is rewritten only on connect), and it takes the token after any flag as that flag's value, so
+  mid-line either form swallows the flag after it. The session starts headless while the user
+  stays where they are, the reply reports \`started: true\` with \`startedIds\`, and a closed
+  project gets its tab restored (not switched to), except for an SSH project or when no
+  project is open. \`--run-now\` cannot be combined with \`--after\`. A start that could not be
+  delivered still reports \`queued\` with a \`reason\`, and the node keeps its Run now button.
   **The reply reports launch delivery, not agent health.** \`queued\` is true — and
   \`queuedIds\` names which of the returned ids — while launch delivery is pending: waiting for its PTY, or on
   \`--after\`, on a worktree's setup script, or on a project the user has not viewed yet (a
@@ -1093,6 +1098,7 @@ Verbs:
   \`remote-unsupported\` is an SSH project's node while that project is not on screen: its launch
   is left exactly as it was, so a plain queued launch starts when the user views the project, and
   an armed or failed one still needs its wait or Run now. A node with nothing queued is refused.
+  \`run\` requires verified node identity.
 - \`color --node <id,id> --color C\` — recolor nodes, frames, or stickies. C is a palette NAME or
   its hex (either is accepted, and the hex is case-insensitive): ${nodeColorChoices()}.
   The agent names are that CLI's own brand color — \`--color claude\` paints a node the color a
