@@ -258,6 +258,7 @@ async function admin<T>(dataDir: string, req: Parameters<typeof callTeamAdmin>[1
 
 // Torn down whatever happened, a hang included: a test that times out never reaches its own finally.
 const teardown: Array<() => void | Promise<void>> = []
+// The hook outlives one step deadline, so a teardown that runs into it still lets the rest run.
 afterEach(async () => {
   for (const f of teardown.splice(0).reverse()) {
     try {
@@ -266,7 +267,7 @@ afterEach(async () => {
       console.warn('[hosted-e2e] teardown step failed', err)
     }
   }
-})
+}, 2 * STEP_MS)
 afterAll(() => {
   vi.unstubAllGlobals()
   if (env.prev === undefined) delete process.env.NODETERM_RELAY_URL
@@ -327,11 +328,10 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       relayTestFetch
     })
     // Registered BEFORE the boot is awaited: a boot that outlives its step deadline is still closed
-    // once it lands, instead of leaking a server (and its admin socket) into the next test.
-    teardown.push(async () => {
-      const s = await booting.catch(() => null)
-      await s?.close()
-    })
+    // once it lands, instead of leaking a server (and its admin socket) into the next test. The wait
+    // is itself a step: a boot that never settles must not hang afterEach, or the teardowns
+    // registered before this one (the repository and data dirs) would never run.
+    teardown.push(() => step('server teardown', booting.catch(() => null).then((s) => s?.close())))
     const srv = await step('server boot', booting)
     // After the boot, so the log sink the server installs is what this spy calls through to.
     const warn = vi.spyOn(console, 'warn')
