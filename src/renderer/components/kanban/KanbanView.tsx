@@ -50,6 +50,9 @@ import {
   type GitHubMoveConfirmation
 } from '../../lib/githubIssueMove'
 import { GITHUB_MAPPING_NOT_APPROVED, githubThrottleSentence } from '../../lib/githubSyncStatus'
+import { pullStatusFreshness, type GitHubPullStatus } from '@shared/github-pull-status'
+import { pullsClosingIssue, pullsForCard, pullStatusByNumber } from '../../lib/pullLinks'
+import { usePullAutoMove, usePullChase } from './usePullAutoMove'
 
 /** One session node shown as a board card — derived LIVE from the canvas nodes; the board
  *  itself stores only column assignments. */
@@ -81,6 +84,9 @@ export interface KanbanSession {
   /** The subset of the node's `data` the card modal's co-attach terminal needs to spawn/join the
    *  same session (kind 'terminal' only; sticky passes `{}`). */
   spawn: ModalSpawn
+  /** The branch of the worktree the node's enclosing group is bound to (`data.worktree.branch`,
+   *  nearest bound ancestor). A pull request whose head is this branch links to the card. */
+  worktreeBranch?: string
 }
 
 /** What the per-column "+ New" menu can create. */
@@ -125,6 +131,11 @@ export interface KanbanViewProps {
    * with no canvas behind it (a test, a future read-only view) simply shows no rows.
    */
   accountMenuItems?: (nodeId: string) => MenuItem[]
+  /** The board moving a session card itself because its linked pull requests merged (Canvas owns
+   *  the compare-and-set + board-log line). Optional: without it nothing ever auto-moves. */
+  onAutoMoveFromPulls?: (
+    projectId: string, cardId: string, fromColumnId: string | null, toColumnId: string, note: string
+  ) => void
   /**
    * "Start with agent ▸" rows for a GitHub issue card — the canvas's own agent + account picker
    * (`agentCreationEntries`), pointed at starting a bound session on that issue. Optional for the
@@ -150,6 +161,19 @@ const isProviderDrag = (drag: CardDrag): drag is Extract<CardDrag, { sourceId: '
 /** Shared empty results — stable identities so memoized cards/columns see "no change". */
 const NO_LABELS: KanbanLabel[] = []
 const NO_CARDS: KanbanSession[] = []
+const NO_PULLS: GitHubPullStatus[] = []
+
+/** Re-renders once a minute while `active`, so a stale pull status greys on time even when nothing
+ *  else changes (a failing read that stays failing announces nothing new). */
+function useMinuteTick(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    const timer = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [active])
+  return now
+}
 
 /** The card the board's keys act FROM: the focused card, else the one under the pointer. */
 function currentBoardCard(active: Element | null): string | null {
@@ -187,7 +211,7 @@ function useCanvasCovered(): void {
 
 export const KanbanView = memo(function KanbanView({
   board, sessions, onChange, onOpenNode, onCreateNode, onRenameNode, onEditSticky, onDeleteNode,
-  onModalNodeChange, onBrowserNav, onSetIcon, accountMenuItems, issueAgentMenu
+  onModalNodeChange, onBrowserNav, onSetIcon, accountMenuItems, onAutoMoveFromPulls, issueAgentMenu
 }: KanbanViewProps) {
   useCanvasCovered()
   const { api } = useSession()
@@ -251,6 +275,18 @@ export const KanbanView = memo(function KanbanView({
   // Pull requests are evicted first when a repository outgrows the cache bounds, so the lane can
   // legitimately be a subset. Say so — a silently short list reads as "this repo has few PRs".
   const pullsTruncated = Object.values(github?.pullPages ?? {}).some((page) => page.partial)
+  // Pull request CI/mergeability + the PR ↔ issue / PR ↔ session links.
+  const pullBoard = github?.pullBoard
+  const pullNow = useMinuteTick(!!pullBoard?.stale)
+  const pullFreshness = pullBoard ? pullStatusFreshness(pullBoard, pullNow) : 'fresh'
+  const pullByNumber = useMemo(() => pullStatusByNumber(pullBoard), [pullBoard])
+  const pullsByIssue = useMemo(() => {
+    const byIssue = new Map<number, GitHubPullStatus[]>()
+    for (const pull of pullBoard?.pulls ?? []) {
+      for (const issue of pull.closes) byIssue.set(issue, pullsClosingIssue(issue, pullBoard))
+    }
+    return byIssue
+  }, [pullBoard])
   const connectGitHub = useGitHubIssues((state) => state.connect)
   const moveGitHubState = useGitHubIssues((state) => state.move)
   const loadMoreGitHub = useGitHubIssues((state) => state.loadMore)
@@ -425,6 +461,33 @@ export const KanbanView = memo(function KanbanView({
     useViewMode.getState().requestIssue(ref)
   }, [])
   const sessionIds = useMemo(() => sessions.map((s) => s.id), [sessions])
+  // Stable per-card PR arrays (SessionCard is memoized): rebuilt only when the pull board, the
+  // cards or the board's own link tombstones change.
+  const pullLinksKey = JSON.stringify(board.pullLinks ?? null)
+  const pullsByCard = useMemo(() => {
+    const byCard = new Map<string, GitHubPullStatus[]>()
+    if (!board.github) return byCard
+    for (const session of sessions) {
+      const linked = pullsForCard(session, pullBoard, board).linked
+      if (linked.length) byCard.set(session.id, linked)
+    }
+    return byCard
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, pullBoard, pullLinksKey, !!board.github])
+  usePullChase(api.githubIssues, projectId, !!board.github && !!pullBoard?.undecided)
+  const autoMove = useCallback(
+    (cardId: string, fromColumnId: string | null, toColumnId: string, note: string) =>
+      onAutoMoveFromPulls?.(projectId, cardId, fromColumnId, toColumnId, note),
+    [onAutoMoveFromPulls, projectId]
+  )
+  usePullAutoMove({
+    api: api.githubIssues,
+    projectId,
+    cards: sessions,
+    board,
+    pullBoard: board.github ? pullBoard : undefined,
+    ...(onAutoMoveFromPulls ? { onAutoMove: autoMove } : {})
+  })
   // The chips' facts through a DERIVED SIGNATURE (a primitive that changes only when a card's
   // running / needs-you / unread fact does) — never `byId`, which changes on every hook event of
   // every node and would re-render the whole board each time.
@@ -802,6 +865,8 @@ export const KanbanView = memo(function KanbanView({
             onDragStart={handleCardDragStart}
             onDragEnd={handleDragEnd}
             onDropAt={onDropAt}
+            pulls={pullsByCard.get(s.id) ?? NO_PULLS}
+            pullFreshness={pullFreshness}
           />
         ))
       })
@@ -820,6 +885,8 @@ export const KanbanView = memo(function KanbanView({
             moving={!!github?.moving[issue.number]}
             readOnly={githubReadOnly}
             status={github?.issueStatus[issue.number]}
+            pulls={pullsByIssue.get(issue.number) ?? NO_PULLS}
+            pullFreshness={pullFreshness}
             onOpen={openIssueModal}
             onMove={handleMoveGitHub}
             onDragStart={handleGitHubDragStart}
@@ -847,7 +914,14 @@ export const KanbanView = memo(function KanbanView({
         sourceId: 'pulls',
         count: (columnId === null ? page?.counts.ungrouped : page?.counts[columnId]) ?? 0,
         cards: (page?.items ?? []).map((pull) => (
-          <GitHubPullCard key={`pull:${pull.id}`} pull={pull} onOpen={openPullModal} />
+          <GitHubPullCard
+            key={`pull:${pull.id}`}
+            pull={pull}
+            status={pullByNumber.get(pull.number)}
+            freshness={pullFreshness}
+            observedAt={pullBoard?.observedAt}
+            onOpen={openPullModal}
+          />
         )),
         footer: page?.nextCursor
           ? (
@@ -1150,6 +1224,11 @@ export const KanbanView = memo(function KanbanView({
           status={github?.issueStatus[modalIssue.item.number]}
           onMove={(columnId) => handleMoveGitHub(modalIssue.item, columnId)}
           onClose={() => setModalIssue(null)}
+          projectId={projectId}
+          pullStatus={modalIssue.kind === 'pull' ? pullByNumber.get(modalIssue.item.number) : undefined}
+          closingPulls={modalIssue.kind === 'issue' ? pullsByIssue.get(modalIssue.item.number) : undefined}
+          pullFreshness={pullFreshness}
+          pullObservedAt={pullBoard?.observedAt}
           startMenu={modalIssue.kind === 'issue' && issueAgentMenu
             ? () => issueAgentMenu(modalIssue.item)
             : undefined}

@@ -1,7 +1,9 @@
 import { memo, useState } from 'react'
 import type { GitHubIssueCardView } from '@shared/github-issues'
+import type { GitHubPullStatus, PullStatusFreshness } from '@shared/github-pull-status'
 import type { KanbanColumn } from '@shared/types'
 import { updatedRelative } from '../../lib/relativeTime'
+import { PullRefChip } from './PullStatusBadges'
 import { NO_ISSUE_RUNS, type IssueRun } from '../../lib/issueRuns'
 import { IssueRunChips } from './IssueRunChips'
 
@@ -11,6 +13,8 @@ export const GitHubIssueCard = memo(function GitHubIssueCard({
   moving,
   readOnly,
   status,
+  pulls,
+  pullFreshness = 'fresh',
   onOpen,
   onMove,
   onDragStart,
@@ -24,6 +28,9 @@ export const GitHubIssueCard = memo(function GitHubIssueCard({
   moving: boolean
   readOnly: boolean
   status?: string
+  /** Open PRs that close this issue on merge (GitHub's own link). */
+  pulls?: GitHubPullStatus[]
+  pullFreshness?: PullStatusFreshness
   onOpen: (issue: GitHubIssueCardView) => void
   onMove: (issue: GitHubIssueCardView, columnId: string | null) => void
   onDragStart: (issue: GitHubIssueCardView) => void
@@ -71,6 +78,13 @@ export const GitHubIssueCard = memo(function GitHubIssueCard({
         <span className="github-issue-source" title="GitHub issue">GH</span>
       </div>
       <div className="github-issue-card__number">#{issue.number}</div>
+      {pulls && pulls.length > 0 && (
+        <div className="pull-refs">
+          {pulls.slice(0, 3).map((pull) => (
+            <PullRefChip key={pull.number} status={pull} freshness={pullFreshness} />
+          ))}
+        </div>
+      )}
       {issue.labels.length > 0 && (
         <div className="github-issue-card__labels">
           {issue.labels.slice(0, 5).map((label) => (

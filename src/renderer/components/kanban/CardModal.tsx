@@ -43,6 +43,7 @@ import type { ProjectKanban } from '@shared/types'
 import type { KanbanSession } from './KanbanView'
 import { BoardLogPanel } from './BoardLogPanel'
 import { CardMetaBar } from './CardMetaBar'
+import { CardPullRequests } from './CardPullRequests'
 import { ModalTerminal } from './ModalTerminal'
 import { BrowserSurface } from '../../nodes/BrowserSurface'
 import { BrowserDrivingIndicator } from '../../nodes/BrowserDrivingChip'
@@ -468,6 +469,7 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
           </button>
         </div>
         <CardMetaBar nodeId={session.id} board={board} onChange={onChangeBoard} />
+        <CardPullRequests session={session} board={board} onChangeBoard={onChangeBoard} />
         <div className="kanban-modal__body">
           {/* Body is a flex row: the card's own pane (2/3) + the board-log panel (1/3, all kinds). */}
           <div className="kanban-modal__main">

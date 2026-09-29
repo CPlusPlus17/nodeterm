@@ -6,6 +6,7 @@ import { columnOrder, placeAssignment, type CardAnchor } from '@shared/kanban-or
 import { SYSTEM_NODE_COLORS } from '../state/workspace'
 import { defaultBoardColumns } from '@shared/kanban-default-board'
 import { autoLabelColor, boardLabels, cardMeta, createLabel, metaList, setCardLabels } from '@shared/kanban-labels'
+import { prunePullLinks } from '@shared/kanban-pull-links'
 
 // The card-meta + label transforms live in `@shared/kanban-labels` (the host core applies the
 // same ones for the phone's label verb); re-exported so every renderer import stays as it was.
@@ -195,8 +196,10 @@ export function pruneAssignments(k: ProjectKanban, liveIds: string[]): ProjectKa
   const meta = metaList(k).filter((m) => m && live.has(m.nodeId))
   const sameAssignments = assignments.length === k.assignments.length
   const sameMeta = meta.length === metaList(k).length
-  if (sameAssignments && sameMeta) return k
-  const next: ProjectKanban = { ...k, assignments }
+  // Pull request tombstones/opt-outs name cards too, and prune with them.
+  const pruned = prunePullLinks(k, live)
+  if (sameAssignments && sameMeta) return pruned
+  const next: ProjectKanban = { ...pruned, assignments }
   if (Array.isArray(k.meta)) {
     if (meta.length) next.meta = meta
     else delete next.meta

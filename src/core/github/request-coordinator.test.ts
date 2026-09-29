@@ -200,4 +200,37 @@ describe('GitHubRequestCoordinator rate budget', () => {
     await expect(coordinator.runRead('user-1', async () => 'ok')).rejects.toMatchObject({ code: 'rate-limited' })
     expect(sleeps.reduce((total, value) => total + value, 0)).toBeLessThanOrEqual(MAX_RATE_WAIT_MS)
   })
+
+  describe('the graphql budget', () => {
+    it('a graphql primary limit holds GraphQL reads but not REST issue sync', async () => {
+      const coordinator = new GitHubRequestCoordinator({ now: () => 1_000 })
+      await expect(coordinator.runRead('user-1', async () => {
+        throw Object.assign(new Error('rate-limited'), {
+          code: 'rate-limited', retryAt: 3_600_000, resource: 'graphql'
+        })
+      })).rejects.toMatchObject({ code: 'rate-limited' })
+      expect(coordinator.throttle('user-1', 1_000, 'graphql')).toEqual({ until: 3_600_000, kind: 'rate-limited' })
+      expect(coordinator.throttle('user-1', 1_000)).toBeUndefined()
+      expect(coordinator.canStart('user-1', 1_000)).toBe(true)
+    })
+
+    it('an untagged (secondary) limit still holds the whole identity, graphql included', async () => {
+      const coordinator = new GitHubRequestCoordinator({ now: () => 1_000 })
+      await expect(coordinator.runRead('user-1', async () => {
+        throw Object.assign(new Error('rate-limited'), { code: 'rate-limited', retryAt: 9_000 })
+      })).rejects.toMatchObject({ code: 'rate-limited' })
+      expect(coordinator.throttle('user-1', 1_000, 'graphql')).toEqual({ until: 9_000, kind: 'rate-limited' })
+      expect(coordinator.throttle('user-1', 1_000)).toEqual({ until: 9_000, kind: 'rate-limited' })
+    })
+
+    it('meters the graphql budget on its own floor', () => {
+      const coordinator = new GitHubRequestCoordinator({ now: () => 1_000 })
+      coordinator.noteRateSample('user-1', { resource: 'graphql', limit: 5_000, remaining: 99, resetAt: 60_000 })
+      expect(coordinator.throttle('user-1', 1_000, 'graphql')).toEqual({ until: 60_000, kind: 'low-budget' })
+      expect(coordinator.throttle('user-1', 1_000)).toBeUndefined()
+      coordinator.noteRateSample('user-1', { resource: 'graphql', limit: 5_000, remaining: 0, resetAt: 60_000 })
+      expect(coordinator.throttle('user-1', 1_000, 'graphql')).toEqual({ until: 60_000, kind: 'rate-limited' })
+      expect(coordinator.canStart('user-1', 1_000)).toBe(true)
+    })
+  })
 })

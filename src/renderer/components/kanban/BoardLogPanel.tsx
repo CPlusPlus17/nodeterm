@@ -29,7 +29,8 @@ export function eventBody(e: BoardLogEvent): string {
     case 'card-created':
       return `created this card in ${e.to ?? 'Ungrouped'}`
     case 'card-moved':
-      return `moved this card ${e.from ?? 'Ungrouped'} → ${e.to ?? 'Ungrouped'}`
+      // `title` is the reason when the board moved the card itself ("PR #12 merged").
+      return `moved this card ${e.from ?? 'Ungrouped'} → ${e.to ?? 'Ungrouped'}${e.title ? ` (${e.title})` : ''}`
     case 'column-added':
       return `added column ${e.title ?? ''}`.trimEnd()
     case 'column-renamed':

@@ -156,6 +156,15 @@ Three rules for any new GitHub call (CLAUDE.md's kanban section, "Sync foundatio
   (`If-None-Match`) for anything you poll: a 304 is free.
 - **A write whose meaning comes from the project file needs `context.mappingApproved`.** The column
   mapping is git-shared; approval covers it, and reads do not need it.
+- **GraphQL spends a different budget.** GitHub meters `graphql` apart from `core`; ask the
+  coordinator with the resource (`throttle(identity, now, 'graphql')`) and let a primary limit carry
+  its `resource`, or a spent GraphQL budget stalls REST issue sync. A GraphQL field the token may
+  not read comes back `null` plus a FORBIDDEN error — decode that as "hidden", never as its empty
+  value (a null check rollup alone means "no checks").
+
+Do not add a field inside `ProjectKanban.meta[]` entries: every card-meta setter (assignees, due,
+priority, labels, the phone's label verb) rebuilds the entry from a fixed list and silently drops
+anything else. Board-level fields survive every transform — `pullLinks` is one.
 
 ## House rules
 

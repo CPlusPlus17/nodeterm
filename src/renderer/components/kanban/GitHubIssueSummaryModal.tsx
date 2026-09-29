@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { GitHubIssueCardView } from '@shared/github-issues'
+import type {
+  GitHubPullChecksResult,
+  GitHubPullStatus,
+  PullStatusFreshness
+} from '@shared/github-pull-status'
+import { PullRefChip, PullStatusLine } from './PullStatusBadges'
 import type { KanbanColumn } from '@shared/types'
 import { issueLogId, issueRefFromHtmlUrl } from '@shared/github-issue-ref'
 import { useSession } from '../../session/session'
@@ -19,6 +25,11 @@ export function GitHubIssueSummaryModal({
   kind = 'issue',
   onMove,
   onClose,
+  projectId,
+  pullStatus,
+  closingPulls = [],
+  pullFreshness = 'fresh',
+  pullObservedAt,
   startMenu,
   runs = NO_ISSUE_RUNS,
   onOpenRun,
@@ -34,6 +45,14 @@ export function GitHubIssueSummaryModal({
   kind?: 'issue' | 'pull'
   onMove: (columnId: string | null) => void
   onClose: () => void
+  /** Needed to fetch a PR's check detail; absent = no detail section. */
+  projectId?: string
+  /** Pull kind: the PR's CI/merge state. Issue kind: unused. */
+  pullStatus?: GitHubPullStatus
+  /** Issue kind: open PRs that close this issue on merge. */
+  closingPulls?: GitHubPullStatus[]
+  pullFreshness?: PullStatusFreshness
+  pullObservedAt?: number
   /** The "Start with agent ▸" rows (the canvas's own agent + account picker, pointed at this
    *  issue). Absent = no button — a pull request, or a board with no canvas behind it. */
   startMenu?: () => MenuItem[]
@@ -51,6 +70,9 @@ export function GitHubIssueSummaryModal({
   const logId = !isPull && showRunHistory
     ? issueLogId(issueRefFromHtmlUrl(issue.htmlUrl, issue.number))
     : undefined
+  const pullOpen = isPull && issue.state === 'open'
+  const checks = usePullChecks(api.githubIssues, pullOpen ? projectId : undefined, issue.number,
+    pullStatus?.headRefOid)
   const close = useRef<HTMLButtonElement>(null)
   const dialog = useRef<HTMLElement>(null)
   const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null)
@@ -138,6 +160,24 @@ export function GitHubIssueSummaryModal({
           </p>
         )}
         {status && <p className="github-issue-modal__warning" role="status">{status}</p>}
+        {isPull && pullOpen && (
+          <PullStatusLine status={pullStatus} freshness={pullFreshness} observedAt={pullObservedAt} />
+        )}
+        {isPull && pullStatus && pullStatus.closes.length > 0 && (
+          <p className="pull-closes">Closes {pullStatus.closes.map((number) => `#${number}`).join(', ')}</p>
+        )}
+        {!isPull && closingPulls.length > 0 && (
+          <div className="pull-refs">
+            {closingPulls.map((pull) => <PullRefChip key={pull.number} status={pull} freshness={pullFreshness} />)}
+          </div>
+        )}
+        {isPull && pullOpen && (
+          <PullChecks
+            result={checks}
+            expectedHead={pullStatus?.headRefOid}
+            onOpen={(url) => void api.shell.openExternal(url)}
+          />
+        )}
         <div className="github-issue-modal__body">
           {issue.body.trim() || 'No description provided.'}
         </div>
@@ -162,5 +202,64 @@ export function GitHubIssueSummaryModal({
         )}
       </section>
     </div>
+  )
+}
+
+/** Per-check detail for an open PR, read once when its modal opens (and again if its head moves). */
+function usePullChecks(
+  api: { pullChecks: (projectId: string, pullNumber: number) => Promise<GitHubPullChecksResult> },
+  projectId: string | undefined,
+  pullNumber: number,
+  headRefOid: string | undefined
+): GitHubPullChecksResult | 'loading' | null {
+  const [result, setResult] = useState<GitHubPullChecksResult | 'loading' | null>(null)
+  useEffect(() => {
+    if (!projectId) {
+      setResult(null)
+      return
+    }
+    let live = true
+    setResult('loading')
+    api.pullChecks(projectId, pullNumber)
+      .then((value) => { if (live) setResult(value) })
+      .catch(() => { if (live) setResult({ status: 'unavailable' }) })
+    return () => { live = false }
+  }, [api, projectId, pullNumber, headRefOid])
+  return result
+}
+
+const CHECK_GLYPH = { passed: '✓', failed: '✗', pending: '●', skipped: '–', neutral: '○' } as const
+
+/** The checks list. A token that may not read checks (`hidden`) shows NOTHING, and a commit with no
+ *  checks says so in words — never a green tick for checks that do not exist. */
+export function PullChecks({
+  result,
+  expectedHead,
+  onOpen
+}: {
+  result: GitHubPullChecksResult | 'loading' | null
+  /** The head the status line above describes. Checks read at another commit are not shown under
+   *  it (the host may answer from a read taken a few seconds before a push). */
+  expectedHead?: string
+  onOpen: (url: string) => void
+}): React.JSX.Element | null {
+  if (result === null || (result !== 'loading' && result.status === 'hidden')) return null
+  if (result === 'loading') return <p className="pull-checks__note">Loading checks…</p>
+  if (result.status === 'no-checks') return <p className="pull-checks__note">No checks on the head commit.</p>
+  if (result.status === 'moved' || (result.status === 'ok' && expectedHead && result.headRefOid !== expectedHead)) return <p className="pull-checks__note">The branch moved while reading its checks. Reopen to see the new commit's.</p>
+  if (result.status === 'unavailable') return <p className="pull-checks__note">Checks could not be read from GitHub.</p>
+  return (
+    <ul className="pull-checks" aria-label="Checks">
+      {result.checks.map((check, index) => (
+        <li key={`${check.name}:${index}`} className={`pull-checks__row pull-checks__row--${check.state}`}>
+          <span className={`pull-status__ci--${check.state}`} aria-hidden="true">{CHECK_GLYPH[check.state]}</span>
+          {check.url
+            ? <button className="pull-checks__name" onClick={() => onOpen(check.url!)}>{check.name}</button>
+            : <span className="pull-checks__name">{check.name}</span>}
+          <span className="pull-checks__state">{check.state}</span>
+        </li>
+      ))}
+      {result.truncated && <li className="pull-checks__note">More checks on GitHub.</li>}
+    </ul>
   )
 }

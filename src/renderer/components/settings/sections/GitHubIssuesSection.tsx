@@ -8,6 +8,8 @@ import type {
 import type { KanbanColumn } from '@shared/types'
 import { defaultCompletionColumnId } from '@shared/kanban-category'
 import { useProjects } from '../../../state/projects'
+import { useSettings } from '../../../state/settings'
+import { prunePullAutoMove, sanitizeKanbanPullAutoMove } from '@shared/kanban-pull-links'
 import { markWorkspaceDirty } from '../../../state/workspaceDirty'
 import { SAVE_DEBOUNCE_MS } from '../../../lib/savePersistence'
 import { SettingsSection } from '../SettingsSection'
@@ -42,6 +44,11 @@ const ROWS = {
   mapping: {
     title: 'Column labels',
     keywords: ['github', 'labels', 'columns', 'mapping', 'workflow', 'completion']
+  },
+  pullAutoMove: {
+    title: 'Move merged session cards',
+    description: 'When every pull request linked to a session card has merged, move the card to this column.',
+    keywords: ['github', 'pull request', 'merged', 'move', 'automation', 'worktree', 'session']
   },
   data: {
     title: 'Sync and local data',
@@ -115,6 +122,38 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
   const [noticeRow, setNoticeRow] = useState<NoticeRow>('data')
   const [confirmation, setConfirmation] = useState<Confirmation>(null)
   const searchQuery = useSettingsSearch()
+  const autoMoveRaw = useSettings((state) => state.settings.kanbanPullAutoMove)
+  const updateSettings = useSettings((state) => state.update)
+  const autoMoveColumn = projectId
+    ? sanitizeKanbanPullAutoMove(autoMoveRaw).projects[projectId]?.columnId ?? ''
+    : ''
+  /** Machine-local on purpose (see @shared/kanban-pull-links): switching it on here never changes
+   *  what a teammate's app does. Every write prunes projects this machine no longer has. */
+  const setAutoMoveColumn = async (columnId: string): Promise<void> => {
+    if (!projectId) return
+    const previous = sanitizeKanbanPullAutoMove(autoMoveRaw).projects[projectId]
+    // Switching it ON starts the clock: only merges observed from now on move a card. Changing only
+    // the target column keeps the original time — the switch never went off. The time is the HOST's
+    // (from the pull board, which it answers from memory): `mergedSeenAt` is stamped on the host, and
+    // a Server Edition browser's clock can be minutes off it.
+    let armedAt = previous?.armedAt
+    if (columnId && armedAt === undefined) {
+      const hostNow = await window.nodeTerminal.githubIssues.pullStatus(projectId)
+        .then((board) => board.now)
+        .catch(() => undefined)
+      armedAt = typeof hostNow === 'number' && Number.isSafeInteger(hostNow) ? hostNow : Date.now()
+    }
+    // Re-read after the await: another setting may have changed meanwhile.
+    const live = new Set(useProjects.getState().projects.map((item) => item.id))
+    const current = prunePullAutoMove(
+      sanitizeKanbanPullAutoMove(useSettings.getState().settings.kanbanPullAutoMove), live)
+    const { [projectId]: _previous, ...others } = current.projects
+    updateSettings({
+      kanbanPullAutoMove: {
+        projects: columnId && armedAt !== undefined ? { ...others, [projectId]: { columnId, armedAt } } : others
+      }
+    })
+  }
 
   /** `GitHubHostController.status(projectId)` MASKS the auth block for a project that is not
    *  approved on this machine (`ghAuthenticated: false, activeProvider: null, tokenPresent: false`)
@@ -588,6 +627,26 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                 }
               />
             </div>
+          </SearchableRow>
+
+          <SearchableRow {...ROWS.pullAutoMove}>
+            <FieldRow
+              label={ROWS.pullAutoMove.title}
+              htmlFor="github-pull-auto-move"
+              description={`${ROWS.pullAutoMove.description} Session cards move — those in a worktree group, and those started on an issue — never GitHub issue cards, which GitHub closes itself. A card moves only if this machine saw it waiting on the pull request while it was open, only for merges seen after you turn this on, and never while one of its pull requests closed without merging. This setting is for this machine only.`}
+              control={
+                <Select
+                  id="github-pull-auto-move"
+                  value={board.columns.some((column) => column.id === autoMoveColumn) ? autoMoveColumn : ''}
+                  onChange={(event) => void setAutoMoveColumn(event.target.value)}
+                >
+                  <option value="">Off</option>
+                  {board.columns.map((column) => (
+                    <option key={column.id} value={column.id}>{column.title}</option>
+                  ))}
+                </Select>
+              }
+            />
           </SearchableRow>
 
           <SearchableRow {...ROWS.data}>

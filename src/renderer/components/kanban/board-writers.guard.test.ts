@@ -10,7 +10,8 @@ import path from 'node:path'
  * this enumerates EVERY call site that writes a board: each one is listed with the human or agent
  * ACTION that triggers it. A new writer fails this test until someone adds it here and signs for
  * its trigger — and "an agent's turn ended" is not an acceptable one. `done` means a turn ended,
- * not that the work did: cards move when a person drags them or a session `assign`s itself.
+ * not that the work did: cards move when a person drags them, a session `assign`s itself, or — only
+ * where a person switched it on — every pull request linked to a session card has merged.
  *
  * Scope: the renderer, where the agent-status store and every board surface live. The core's relay
  * verbs (`projects.setCardColumn`) are phone-initiated and are not reachable from a hook.
@@ -23,7 +24,10 @@ const BOARD_WRITERS: Record<string, string[]> = {
     'onKanbanChange — the per-project board committing a person\'s drag/edit',
     'createNodeInColumn — a person\'s "+ New" in a column',
     'startIssueAgent — a person\'s "Start with agent" filing the new session under the issue card\'s column',
-    'the `assign` control verb — a session moving its OWN card (the issue-bound contract)'
+    'the `assign` control verb — a session moving its OWN card (the issue-bound contract)',
+    'autoMoveCardFromPulls — the merge-driven move: a person switched it on for this machine in ' +
+      'Settings, and it fires only on a pull request MERGE this machine observed after that (never on ' +
+      'agent status), after winning the host\'s one-time claim; session cards only'
   ],
   'components/kanban/GlobalKanbanView.tsx': ['onChangeBoard — the Omni board committing a person\'s drag/edit'],
   'components/kanban/NodeLabels.tsx': ['a person editing a node\'s labels'],

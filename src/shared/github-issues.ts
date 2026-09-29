@@ -1,3 +1,5 @@
+import type { GitHubPullBoard, GitHubPullChecksResult } from './github-pull-status'
+
 export interface ProjectKanbanGitHub {
   repository?: string
   columnMappings: Array<{
@@ -278,6 +280,19 @@ export interface GitHubIssuesApi {
   }): Promise<GitHubMutationResult>
   createMissingLabels(projectId: string): Promise<CreateMappedLabelsResult>
   clearCache(projectId: string): Promise<void>
+  /** Pull request CI + mergeability, from memory (no request). */
+  pullStatus(projectId: string): Promise<GitHubPullBoard>
+  /** A VISIBLE board asks while some PR is undecided; the host decides whether a read is due (30 s,
+   *  1 min, 2 min, then 5 min, at most 12 per episode) and answers whether it read. */
+  chasePulls(projectId: string): Promise<boolean>
+  /** Per-check detail for one PR — read only when its modal opens. */
+  pullChecks(projectId: string, pullNumber: number): Promise<GitHubPullChecksResult>
+  /** The one-time permission to move a session card because its linked PRs merged. The first ask
+   *  across every window wins; the host remembers it. */
+  claimPullAutoMove(request: { projectId: string; cardId: string; pulls: number[] }): Promise<boolean>
+  /** "This card is waiting on these still-open PRs." The host keeps a note only for PRs it holds as
+   *  open; a later claim for this card requires one. Answers how many notes were new. */
+  notePullWaits(request: { projectId: string; cardId: string; pulls: number[] }): Promise<number>
   onChanged(projectId: string, listener: (changedIssueNumbers: number[]) => void): () => void
   /** Resolve the project's GitHub org/user avatar (owner derived host-side from the project's own
    *  origin — never a caller-supplied slug). Null when the project has no GitHub origin or the

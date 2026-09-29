@@ -19,6 +19,7 @@ import type { GroupWorktree } from './worktree'
 import type { ClientId, DinoSnapshot, PeerDiff, PeerIdentity, PeerState } from './presence'
 import type { WhisperModelInfo } from './speech'
 import type { ProjectKanbanGitHub } from './github-issues'
+import type { KanbanPullAutoMove, KanbanPullLinks } from './kanban-pull-links'
 import type { CodexAccount } from './codex-account'
 import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
@@ -728,6 +729,9 @@ export interface ProjectKanban {
   labels?: KanbanLabel[]
   /** Shared, non-secret GitHub issue label mapping. Local approval and credentials live elsewhere. */
   github?: ProjectKanbanGitHub
+  /** Card ↔ pull request link tombstones and per-card auto-move opt-outs (@shared/kanban-pull-links).
+   *  Hostile input: read only through `readPullLinks`. */
+  pullLinks?: KanbanPullLinks
 }
 
 /** Who produced a board-log entry (a teammate on a shared board, or this user). */
@@ -771,7 +775,8 @@ export interface BoardLogEvent {
     | 'run-ended'
   from?: string
   to?: string
-  /** Column title for column-added/deleted; card title for card-created; outcome for agent-message. */
+  /** Column title for column-added/deleted; card title for card-created; outcome for agent-message;
+   *  for card-moved, the reason when the board moved the card itself ("PR #12 merged"). */
   title?: string
   /** run-started / run-ended only. No cost or token figure: nodeterm has no cumulative number for
    *  a session, and a context-window reading is not one. */
@@ -1960,6 +1965,11 @@ export interface Settings {
    *  be turned off for a user by a repository they cloned. A waiver is a statement about this
    *  machine's trust in its own agents, so it lives here and NEVER in a project file. */
   controlConfirmWaivers?: ControlConfirmWaivers
+  /** Machine-local: move a session card to a column once every pull request linked to it has
+   *  merged (@shared/kanban-pull-links — why this is here and never in the project file). Absent —
+   *  and absent from DEFAULT_SETTINGS — means off everywhere. Read through
+   *  `sanitizeKanbanPullAutoMove`: settings.json is hand-editable. */
+  kanbanPullAutoMove?: KanbanPullAutoMove
 }
 
 export const DEFAULT_SETTINGS: Settings = {
