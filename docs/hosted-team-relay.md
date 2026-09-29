@@ -223,9 +223,10 @@ started; `context:update`, `presence:sync` and `presence:peer` for everyone (see
 receive; and `board-log:changed:<id>` / `project-setup:event:<id>` for shared projects.
 
 **A terminal is judged by its node on every frame.** Terminal output and `pty:resync` (a repaint of
-the screen) reach a non-editor only while the session's node is in a shared project. `pty:size`,
-`pty:exit`, `pty:closed` and `pty:recycled` stop once the node is known to be outside every shared
-project; for a session that has already ended they still pass, since all they carry is that fact.
+the screen) reach a non-editor only while **every** project holding the session's node is shared.
+`pty:size`, `pty:exit`, `pty:closed` and `pty:recycled` are refused once the node is held by any
+project that is not shared (or by no project at all); for a session that has already ended they
+still pass, since all they carry is that fact.
 This is what makes `team unshare` stop a terminal a Viewer is already watching: the subscription
 itself outlives the unshare, but nothing more of that terminal is delivered to it.
 
@@ -495,6 +496,9 @@ The human `team status` reads `state`, `idle` and `lastError` together:
 - **No git for Viewers in a subfolder of a larger repository.** Viewers and Commenters get the git
   panel only for a project that is the top folder of its own repository (or a worktree's). A
   monorepo subfolder shows its files but refuses every git read (see [Roles](#roles)).
+- **A Viewer's git status can name files in the server's data folder.** When the shared root is a
+  repository that contains the data folder, untracked and not ignored (a dotfiles repository at
+  `$HOME`, for example), `git:status` lists the FILE NAMES inside it. Their contents stay refused.
 - **One shared project per tab.** A joiner's tab adopts the first shared project; other shared
   projects are allowed by the policy but not reachable from the UI.
 - **Viewers watch only what is already running.** A terminal must be live on the host (a tmux
