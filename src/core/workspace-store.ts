@@ -13,7 +13,7 @@ import {
   PROJECT_DIR, PROJECT_FILE, fileToProject, inlineProjectFileRelPath, isInlineProjectFileId,
   projectToFile, resolveNodes, sameProjectContent,
   sanitizeLoadedClosedSessions, sanitizeNodeTriggers, serializeProjectFile, splitWorkspace,
-  validKanban,
+  sanitizeKanban,
   type IndexEntryV3, type ProjectFileV1, type WorkspaceIndexV3
 } from './workspace-files'
 import { readProjectSettingsFile, writeProjectSettingsFile } from './project-settings-files'
@@ -333,7 +333,8 @@ export class WorkspaceStore {
         // and the same trigger shape rule (workspace.json is hand-editable input too).
         // `rest` drops BOTH guarded fields; each is added back below only if it passes its guard.
         const { kanban, closedSessions, layouts, layoutViewports, ...rest } = e.project
-        const base = validKanban(kanban) ? { ...rest, kanban } : rest
+        const admittedKanban = sanitizeKanban(kanban)
+        const base = admittedKanban ? { ...rest, kanban: admittedKanban } : rest
         // An inline project's embedded layouts are hand-editable input exactly like a git-shared
         // file's, and they never pass through `fileToProject` on this branch, so they are
         // sanitized (and their cameras pruned against them) here instead.

@@ -181,11 +181,11 @@ describe('ShortcutsSection rows', () => {
 
   it('renders every group as its own divided block, rows packed inside it', () => {
     render()
-    expect(host.querySelectorAll('h3')).toHaveLength(6)
+    expect(host.querySelectorAll('h3')).toHaveLength(7)
     expect(ids()).toHaveLength(COMMAND_DEFINITIONS.length)
     // The rows now live INSIDE their group's wrapper, so the shell's `divide-y` separates
     // GROUPS: the policy row + the filter rail + one block per group.
-    expect(body().children).toHaveLength(2 + 6)
+    expect(body().children).toHaveLength(2 + 7)
   })
 
   // `settings.keybindings` is hand-editable JSON and `mergeSettings` passes it through with NO

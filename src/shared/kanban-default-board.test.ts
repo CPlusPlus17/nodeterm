@@ -20,6 +20,13 @@ describe('DEFAULT_BOARD_COLUMNS', () => {
     ])
     expect(DEFAULT_BOARD_COLUMNS.map((c) => c.color)).toEqual(['#0a84ff', '#ffd60a', '#32d74b'])
   })
+
+  // The lifecycle category is ADDITIVE to the cross-surface contract: the phone's copy may lack it
+  // (a board it seeds simply has uncategorized columns, which every reader tolerates), but a board
+  // born on the desktop or through the relay knows which column holds finished work.
+  it('maps them onto the lifecycle: unstarted / started / done', () => {
+    expect(DEFAULT_BOARD_COLUMNS.map((c) => c.category)).toEqual(['unstarted', 'started', 'done'])
+  })
 })
 
 describe('makeColumnId', () => {
