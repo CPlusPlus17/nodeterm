@@ -389,6 +389,35 @@ body,
   -webkit-app-region: no-drag;
 }
 
+/* Title-bar "Update" button (Figma-style): right after the traffic lights, deliberately loud and
+   not dismissible, shown only while an update is staged / owed (state/pendingUpdate.ts). */
+.tabbar__update {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 12px 0 10px;
+  background: var(--accent);
+  border: none;
+  border-radius: 7px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tabbar__update:hover {
+  background: var(--accent-hover);
+}
+
+.tabbar__update svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2.2;
+}
+
 /* Brand: gradient app-tile + wordmark */
 .brand {
   display: flex;
