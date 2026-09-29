@@ -237,6 +237,22 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
     joinWithCode(raw, reconnectProjectId) {
       const code = raw.trim()
       const peek = peekJoinCode(code)
+      // A code pasted into a hosted tab's own reconnect prompt reconnects THAT team only. A code for
+      // another team would mount that team inside this tab, under this tab's name: refuse, and say
+      // where it goes instead. (An unreadable code is main's to answer, below.)
+      const tab = reconnectProjectId ? tabs.get(reconnectProjectId) : undefined
+      if (tab && peek && peek.hostId !== tab.hostId) {
+        const mine = team(tab.label)
+        const theirs = peek.label.trim()
+        deps.notify({
+          kind: 'error',
+          text:
+            theirs && theirs !== tab.label.trim()
+              ? `That invite code is for ${theirs}, not ${mine}. To join ${theirs}, paste the code in New Remote Connection.`
+              : `That invite code is for a different team than ${mine}. To join it, paste the code in New Remote Connection.`
+        })
+        return
+      }
       // A code the renderer cannot read still goes to main, which verifies codes and answers for
       // this one; its key is the text itself, so a double paste of it is still one attempt.
       const hostId = peek?.hostId ?? `unreadable:${code}`

@@ -441,6 +441,53 @@ describe('hosted joiner', () => {
     expect(h.connects).toHaveLength(2)
   })
 
+  it('M8: a code for ANOTHER team pasted into a greyed tab\'s prompt never rebinds that tab — refused, and said why', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    ;(h.deps.promptForCode as ReturnType<typeof vi.fn>).mockResolvedValue(codeFor('H2', 'lab'))
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    h.setList([])
+    h.closeCbs.get('c0')!(undefined)
+    await flush()
+    await j.forget('H1', 'box')
+    // The greyed tab asks for a code, and the user pastes one for a different team.
+    expect(j.reconnectTab('proj-1')).toBe(true)
+    await flush()
+    expect(h.connects).toHaveLength(1) // nothing connected: no second team inside box's tab
+    expect(h.notices.at(-1)).toMatchObject({
+      kind: 'error',
+      text: 'That invite code is for lab, not box. To join lab, paste the code in New Remote Connection.'
+    })
+    // The same team's code still reconnects the tab in place.
+    j.joinWithCode(codeFor('H1', 'box'), 'proj-1')
+    h.connects[1].resolve('c1')
+    await flush()
+    expect(h.mounts.at(-1)!.req).toMatchObject({ hostId: 'H1', reconnectProjectId: 'proj-1' })
+  })
+
+  it('M8: two teams with the same name are told apart without naming the other one twice', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    j.joinWithCode(codeFor('H2', 'box'), 'proj-1')
+    expect(h.connects).toHaveLength(1)
+    expect(h.notices.at(-1)).toMatchObject({
+      kind: 'error',
+      text: 'That invite code is for a different team than box. To join it, paste the code in New Remote Connection.'
+    })
+  })
+
+  it('M8: an unreadable code pasted into that prompt still goes to main, which answers for it', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    j.joinWithCode(`${JOIN_CODE_PREFIX}%%%`, 'proj-1')
+    expect(h.connects).toHaveLength(2)
+  })
+
   it('R40: a code pasted for a team whose tab is greyed reconnects that tab, never a second one', async () => {
     const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
     const j = createHostedJoiner(h.deps)

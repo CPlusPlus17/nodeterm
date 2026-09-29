@@ -272,6 +272,9 @@ joining answers `E_JOIN_BUSY`.
   streak. Nothing else retries, and a pasted code never retries: it is told once.
 - Closing or deleting the tab cancels its team's attempt in any phase. At most one attempt and one
   live connection exist per team.
+- A code pasted into a greyed tab's prompt must be for that tab's team. A code for another team is
+  refused there ("That invite code is for Y, not X. To join Y, paste the code in New Remote
+  Connection."), so one team is never mounted inside another team's tab.
 - **Forget hosted team: <name>** in the palette removes the bookmark and stops the reconnect. It
   changes nothing on the host; the device stays a member until `team remove`.
 - A reconnect in place keeps the tab's last-seen nodes (the pre-existing re-fetch follow-up in
