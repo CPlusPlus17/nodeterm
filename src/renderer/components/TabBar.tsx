@@ -350,7 +350,9 @@ export function TabBar({
                       : `${p.name} disconnected, click to reconnect`
                     : p.ssh
                       ? `${p.ssh.server.user}@${p.ssh.server.host}:${p.ssh.remoteCwd}`
-                      : p.cwd || undefined
+                      : p.relaySsh
+                        ? `${p.relaySsh.user}@${p.relaySsh.host}:${p.relaySsh.remoteCwd}`
+                        : p.cwd || undefined
                 }
               >
                 <ProjectGlyph
@@ -367,6 +369,12 @@ export function TabBar({
                     machine. The chip says so at a glance; the tab title carries user@host. */}
                 {p.ssh && (
                   <span className="tab__ssh" title={`${p.ssh.server.user}@${p.ssh.server.host}`}>
+                    SSH
+                  </span>
+                )}
+                {/* A relay tab of the host's SSH project: display strings only (relay-ssh.ts). */}
+                {!p.ssh && p.relaySsh && (
+                  <span className="tab__ssh" title={`${p.relaySsh.user}@${p.relaySsh.host}`}>
                     SSH
                   </span>
                 )}
