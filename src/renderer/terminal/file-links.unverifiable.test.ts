@@ -4,11 +4,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   fileMissMessage,
+  findExistingForHit,
   findExistingPath,
   makeDirListingLookup,
   missingFileMessage,
   unverifiableFileMessage,
-  type PathLookup
+  type PathLookup,
+  type PathResolution
 } from './file-links'
 
 type Entry = { name: string; dir: boolean }
@@ -165,5 +167,24 @@ describe('the Cmd/Ctrl+click toast', () => {
     expect(fileMissMessage('a/b', { tried: ['/one/a/b'], unverified: [{ abs: '/one/a/b', reason: 'x' }] })).toBe(
       "Couldn't check /one/a/b: x"
     )
+  })
+})
+
+describe('findExistingForHit keeps an unchecked alternative unverified', () => {
+  it('a miss where one reading could not be looked at is not a plain "not found"', async () => {
+    const find = async (token: string): Promise<PathResolution> =>
+      token === 'a b/c.ts'
+        ? { found: false, tried: ['/p/a b/c.ts'], unverified: [{ abs: '/p/a b/c.ts', reason: 'ssh down' }] }
+        : { found: false, tried: ['/p/' + token] }
+    expect(await findExistingForHit(['a b/c.ts', 'b/c.ts'], find)).toEqual({
+      found: false,
+      tried: ['/p/a b/c.ts', '/p/b/c.ts'],
+      unverified: [{ abs: '/p/a b/c.ts', reason: 'ssh down' }]
+    })
+  })
+
+  it('a verified miss on every reading stays a plain miss', async () => {
+    const find = async (token: string): Promise<PathResolution> => ({ found: false, tried: ['/p/' + token] })
+    expect(await findExistingForHit(['x', 'y'], find)).toEqual({ found: false, tried: ['/p/x', '/p/y'] })
   })
 })

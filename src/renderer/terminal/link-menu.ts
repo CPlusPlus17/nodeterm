@@ -15,7 +15,7 @@ import type { MenuItem } from '../components/ContextMenu'
 import type { DownloadRoute } from '../lib/download'
 import { downloadMenuEntries } from '../lib/filesNode'
 import { tidySeparators } from '../lib/tidySeparators'
-import type { LinkHit, PathResolution } from './file-links'
+import { findExistingForHit, type LinkHit, type PathResolution } from './file-links'
 
 /** What a right-click resolved to, once a path's existence is known. */
 export type LinkMenuTarget =
@@ -82,7 +82,7 @@ export async function resolveLinkTarget(
   if (hit.kind === 'url') return { kind: 'url', url: hit.url }
   const missing: LinkMenuTarget = { kind: 'missing', abs: hit.abs ?? hit.token }
   try {
-    const r = await find(hit.token)
+    const r = await findExistingForHit([hit.token, ...(hit.alternatives ?? [])], find)
     if (r.found) return { kind: 'file', abs: r.abs, dir: r.dir }
     const u = r.unverified?.[0]
     return u ? { kind: 'unverified', abs: u.abs, reason: u.reason } : missing

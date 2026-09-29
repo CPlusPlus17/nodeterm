@@ -1,7 +1,7 @@
 // Cmd/Ctrl+click links in terminal output. `createUrlLinkProvider` handles http(s) URLs;
-// `createFileLinkProvider` handles path-like tokens: absolute (`/x/y`), dot-relative
-// (`./x`, `../x`) and bare relatives with at least one slash (`src/a.ts`), with optional
-// `:line[:col]` suffixes (compiler/grep output), and home-relative `~/x` paths. A `~` path stays
+// `createFileLinkProvider` handles path-like tokens — what counts as one (separator paths with
+// Unicode, bracketed and spaced segments, bare filenames, `file://` URIs, `:line[:col]` suffixes,
+// home-relative `~/x`) is file-link-tokens.ts. A `~` path stays
 // `~`-rooted all the way to the filesystem call: the core that owns the filesystem expands it
 // against ITS home (`expandHomePath` in core/fs-handlers.ts; an SSH project's remote shell does it
 // for `sshFs`) — the renderer does not know that home, and on the Server Edition it is another
@@ -36,132 +36,19 @@ export interface LinkHoverSink {
   leave(): void
 }
 
-export interface FileToken {
-  /** The raw matched span (drives the underline range), incl. any :line:col suffix. */
-  text: string
-  /** 0-based index of `text` within the logical line. */
-  startIndex: number
-  /** The cleaned path portion. */
-  path: string
-  line?: number
-}
+import {
+  matchFileTokens,
+  type FileToken,
+  type PathConventionOpts
+} from './file-link-tokens'
 
-// Path-ish token: an optional ./ ../ / prefix, then segments of path-safe chars with at
-// least one internal slash — OR a prefixed single-segment (/tmp, ./x) — with an optional
-// trailing :line[:col]. Trailing punctuation is cleaned afterwards, not in the regex.
-const TOKEN_RE =
-  /(?:(?:\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+~-]+)+|(?:\.{1,2}\/|\/)[\w.@+-]+)(?::\d+(?::\d+)?)?/g
+// The matcher (what counts as a path in a line of output) lives in file-link-tokens.ts.
+export { looksLikeBareFilename, matchFileTokens } from './file-link-tokens'
+export type { FileToken, PathConventionOpts } from './file-link-tokens'
 
-/**
- * The same shape with Windows separators, plus drive and UNC prefixes. Used ONLY when the
- * filesystem-owning core reports Windows — never just because the viewing browser is on Windows,
- * and never for an SSH project, whose paths are POSIX however the viewer is spelled.
- *
- * A SEPARATE regex rather than widening TOKEN_RE's separator class, deliberately: the POSIX path
- * is what every existing user runs, and it stays byte-identical. Widening it would also start
- * matching Windows-shaped text inside a POSIX session, where it can only ever be wrong.
- *
- * Four alternatives, in order: a UNC path (consumed whole so it can be refused), a drive-absolute
- * path, a dot-prefixed relative, or a plain multi-segment relative. Both separators are accepted,
- * because Windows tools emit both. A bare single word is deliberately not a token — `readme` in a
- * sentence is not a path, and TOKEN_RE takes the same position for POSIX.
- *
- * SPACES ARE NOT PART OF A SEGMENT, even though `C:\Program Files\…` is everywhere on Windows.
- * An unquoted path in terminal output gives no way to tell where it ends, so allowing spaces made
- * `C:\Users\me\src\a.ts for detail` match as one token — it swallowed the rest of the sentence.
- * The existence check would have rejected that, which means a path with a space would simply never
- * have linked while quietly breaking the ones around it. The POSIX matcher takes the same
- * position, so this is parity rather than a Windows-specific shortfall.
- */
-const WIN_TOKEN_RE =
-  /(?:(?:\\\\|\/\/)[\w.@+~-]+[\\/][\w.@+~-]+(?:[\\/][\w.@+~-]+)*|[A-Za-z]:[\\/][\w.@+~-]*(?:[\\/][\w.@+~-]+)*|\.{1,2}[\\/][\w.@+~-]+(?:[\\/][\w.@+~-]+)*|[\w.@+-]+(?:[\\/][\w.@+~-]+)+)(?::\d+(?::\d+)?)?/g
-const SUFFIX_RE = /^(.*?):(\d+)(?::\d+)?$/
 const TRAILING_PUNCT = /[.,;:!?'")\]}>]+$/
 /** `C:\…`, `C:/…`, or a UNC `\\host\share` / `//host/share`. */
 const WIN_ABSOLUTE_RE = /^(?:[A-Za-z]:[\\/]|\\\\|\/\/)/
-
-export interface PathConventionOpts {
-  /** Match and resolve Windows-shaped paths. Off by default, so POSIX behaviour is unchanged. */
-  windows?: boolean
-}
-
-/** Characters that, right before a `~`, mean it is not the start of a home path (`a~/x`). */
-const HOME_LEAD_BLOCK_RE = /[\w.@+~\/-]/
-
-export function matchFileTokens(lineText: string, opts: PathConventionOpts = {}): FileToken[] {
-  const out: FileToken[] = []
-  if (opts.windows) return matchWindowsFileTokens(lineText)
-  for (const m of lineText.matchAll(TOKEN_RE)) {
-    let text = m[0]
-    let start = m.index
-    // URLs (and protocol-ish tokens) belong to the web-links addon.
-    const before = lineText.slice(Math.max(0, m.index - 8), m.index)
-    // `\w+:\/{1,2}$` (not just `://`): the optional leading-`/` in TOKEN_RE can swallow the
-    // second slash of `://`, so a URL's token starts at that slash and `before` ends `https:/`.
-    if (/\w+:\/{1,2}$/.test(before) || text.includes('//')) continue
-    // A token preceded by `~` is a home-relative path minus its tilde. Re-attach the tilde when it
-    // stands at a word start (`~/x`, ` ~/x`, `(~/x`) so it never mis-resolves as the absolute `/x`.
-    // Anything else before the `~` (`a~/x`, `~user/x`) is not a home path — skip it, as before.
-    if (m.index > 0 && lineText[m.index - 1] === '~') {
-      const lead = m.index > 1 ? lineText[m.index - 2] : ''
-      if (!text.startsWith('/') || HOME_LEAD_BLOCK_RE.test(lead)) continue
-      text = '~' + text
-      start = m.index - 1
-    }
-    text = text.replace(TRAILING_PUNCT, '')
-    if (text.length < 3) continue
-    let path = text
-    let line: number | undefined
-    const suffix = SUFFIX_RE.exec(text)
-    if (suffix) {
-      path = suffix[1]
-      line = parseInt(suffix[2], 10)
-    }
-    if (!path || !path.includes('/')) continue
-    out.push({ text, startIndex: start, path, line })
-  }
-  return out
-}
-
-/**
- * The Windows half of `matchFileTokens`. Kept separate so the POSIX path above is untouched.
- *
- * The existence check downstream (`makeDirListingLookup`) is what makes a slightly generous
- * matcher safe: a token that is not a real file simply never becomes a link. So this errs toward
- * matching, and lets the filesystem decide — the opposite trade from the traversal guards
- * elsewhere in this codebase, where guessing wrong has a cost.
- */
-function matchWindowsFileTokens(lineText: string): FileToken[] {
-  const out: FileToken[] = []
-  for (const m of lineText.matchAll(WIN_TOKEN_RE)) {
-    let text = m[0]
-    const before = lineText.slice(Math.max(0, m.index - 8), m.index)
-    // A URL's token can begin at the second slash of `://` — same guard as the POSIX branch.
-    if (/\w+:\/{1,2}$/.test(before) || text.includes('//')) continue
-    text = text.replace(TRAILING_PUNCT, '')
-    if (text.length < 3) continue
-    let path = text
-    // Refuse the WHOLE UNC token here. Without the explicit UNC alternative in WIN_TOKEN_RE the
-    // matcher started two characters in (`server\share\a.ts`), turning the network path into a
-    // relative path under cwd and bypassing resolveWindowsFileToken's UNC refusal.
-    if (/^(?:\\\\|\/\/)/.test(path)) continue
-    let line: number | undefined
-    const suffix = SUFFIX_RE.exec(text)
-    // `C:\src\a.ts:12` splits correctly because SUFFIX_RE anchors the digits at the END — the
-    // drive's own colon is not followed by digits-then-end. `C:12` would split into path `C`,
-    // which the separator requirement below then rejects.
-    if (suffix) {
-      path = suffix[1]
-      line = parseInt(suffix[2], 10)
-    }
-    if (!path) continue
-    // Must look like a path, not a bare word: either drive/UNC-qualified, or containing a
-    // separator. Without this a `:line` suffix on any word would produce a token.
-    if (!WIN_ABSOLUTE_RE.test(path) && !/[\\/]/.test(path)) continue
-    out.push({ text, startIndex: m.index, path, line })
-  }
-  return out
-}
 
 // http(s) URLs. Shared by createUrlLinkProvider (hover underline + click outside tmux) and
 // the mouse-up click fallback (below), which hit-tests URLs and file paths in one pass —
@@ -487,22 +374,54 @@ export interface FileLinkDeps extends CwdSources {
 }
 
 /** The minimal buffer slice paragraph joining needs — unit tests drive a fake. */
+/** One buffer cell: its text (`''` for a never-written cell) and its width — 2 for a wide (CJK,
+ *  emoji) glyph, 0 for the placeholder cell that follows one. */
+export interface BufferCell {
+  chars: string
+  width: number
+}
+
 export interface BufferView {
   cols: number
   length: number
-  line(row: number): { isWrapped: boolean; text(trimRight: boolean): string } | undefined
+  line(
+    row: number
+  ):
+    | {
+        isWrapped: boolean
+        text(trimRight: boolean): string
+        /** Per-cell content, when the buffer can say. Without it every UTF-16 unit is taken to be
+         *  one cell — true for ASCII, wrong after a wide glyph. */
+        cells?(): BufferCell[] | undefined
+      }
+    | undefined
 }
 
 export function bufferView(term: Terminal): BufferView {
   const buf = term.buffer.active
+  const cols = term.cols
   return {
-    cols: term.cols,
+    cols,
     length: buf.length,
     line: (row) => {
       const l = buf.getLine(row)
-      return l
-        ? { isWrapped: l.isWrapped, text: (trim: boolean) => l.translateToString(trim) }
-        : undefined
+      if (!l) return undefined
+      return {
+        isWrapped: l.isWrapped,
+        text: (trim: boolean) => l.translateToString(trim),
+        cells: () => {
+          const out: BufferCell[] = []
+          let cell = l.getCell?.(0)
+          if (!cell || typeof cell.getChars !== 'function') return undefined
+          const n = Math.min(l.length ?? cols, cols)
+          for (let x = 0; x < n; x++) {
+            cell = l.getCell(x, cell)
+            if (!cell) break
+            out.push({ chars: cell.getChars(), width: cell.getWidth() })
+          }
+          return out
+        }
+      }
     }
   }
 }
@@ -511,59 +430,134 @@ export function bufferView(term: Terminal): BufferView {
  *  full-width walls of text; a wrapped OAuth URL is ~7 rows at 80 cols. */
 const MAX_JOIN_ROWS = 32
 
+/** A row as cells: from the buffer when it can say, else one cell per UTF-16 unit of its text. */
+function rowCells(view: BufferView, row: number): BufferCell[] | null {
+  const l = view.line(row)
+  if (!l) return null
+  const cells = l.cells?.()
+  if (cells) return cells
+  return [...l.text(false).padEnd(view.cols)].slice(0, view.cols).map((chars) => ({ chars, width: 1 }))
+}
+
+const isBlank = (c: BufferCell | undefined): boolean => !c || c.chars === '' || c.chars === ' '
+
 // Whether `row` runs into `row + 1`: the successor carries xterm's soft-wrap flag, OR the
-// hard-wrap heuristic holds — `row` is full to its last column (untrimmed non-space in the
-// final cell) and the successor starts at column 0 with a non-space. See the header comment.
+// hard-wrap heuristic holds — `row` is full to its last column (a non-space in the final cell, or
+// the placeholder half of a wide glyph there) and the successor starts at column 0 with a
+// non-space. See the header comment.
 function continuesOnNextRow(view: BufferView, row: number): boolean {
   const next = view.line(row + 1)
   if (!next) return false
   if (next.isWrapped) return true
   const cur = view.line(row)
   if (!cur) return false
-  const raw = cur.text(false)
-  if (raw.length < view.cols || raw[view.cols - 1] === ' ') return false
-  const nextRaw = next.text(false)
-  return nextRaw.length > 0 && nextRaw[0] !== ' '
+  const cells = cur.cells?.()
+  if (!cells) {
+    // Text-only view: the original check, unit for unit.
+    const raw = cur.text(false)
+    if (raw.length < view.cols || raw[view.cols - 1] === ' ') return false
+    const nextRaw = next.text(false)
+    return nextRaw.length > 0 && nextRaw[0] !== ' '
+  }
+  const last = cells[view.cols - 1]
+  const full = last && (last.width === 0 ? !isBlank(cells[view.cols - 2]) : !isBlank(last))
+  if (!full) return false
+  return !isBlank(rowCells(view, row + 1)?.[0])
+}
+
+/** A logical paragraph, with the buffer cell of every UTF-16 unit of its text. */
+export interface Paragraph {
+  text: string
+  startRow: number
+  rows: number
+  /** Paragraph-relative cell index (`rowOffset * cols + col`) where each unit of `text` starts. */
+  cellStart: number[]
+  /** …and the last cell it occupies (one further for a wide glyph). */
+  cellEnd: number[]
 }
 
 /**
  * The logical paragraph containing `row` (0-based): walks up to the paragraph's first row,
- * then joins downward across soft AND hard wraps. Every row that continues contributes
- * EXACTLY `cols` characters (padded/truncated untrimmed read), so an index into `text` maps
- * back to the buffer as `(startRow + idx / cols, idx % cols)`; the final row is right-trimmed.
+ * then joins downward across soft AND hard wraps. Every row that continues contributes all its
+ * cells (untrimmed); the final row is right-trimmed. Text and cells are NOT one-to-one — a wide
+ * glyph is one character over two cells, an astral one two units in one cell — so `cellStart` /
+ * `cellEnd` carry the mapping, and every hit-test and underline range goes through them.
  */
-export function paragraphContaining(
-  view: BufferView,
-  row: number
-): { text: string; startRow: number; rows: number } | null {
+export function paragraphContaining(view: BufferView, row: number): Paragraph | null {
   if (!view.line(row)) return null
   let start = row
   while (start > 0 && row - start < MAX_JOIN_ROWS && continuesOnNextRow(view, start - 1)) start--
   let text = ''
+  const cellStart: number[] = []
+  const cellEnd: number[] = []
   let r = start
   for (;;) {
     const joins = r - start + 1 < MAX_JOIN_ROWS && continuesOnNextRow(view, r)
-    const lineText = view.line(r)!.text(!joins)
-    // Continuing rows must contribute exactly `cols` chars so the index math above holds.
-    text += joins ? lineText.padEnd(view.cols).slice(0, view.cols) : lineText
-    if (!joins) break
+    const base = (r - start) * view.cols
+    const cells = rowCells(view, r)!
+    let n = Math.min(cells.length, view.cols)
+    // A wide glyph that did not fit leaves the last cell of a soft-wrapped row empty; it is not
+    // a space in the text, or it would split a token across the seam.
+    if (joins && view.line(r + 1)?.isWrapped && cells[n - 1]?.chars === '' && cells[n - 1]?.width === 1)
+      n--
+    const rowStartLen = text.length
+    for (let x = 0; x < n; x++) {
+      const c = cells[x]
+      if (c.width === 0) continue
+      const chars = c.chars || ' '
+      for (let u = 0; u < chars.length; u++) {
+        cellStart.push(base + x)
+        cellEnd.push(base + x + Math.max(c.width, 1) - 1)
+      }
+      text += chars
+    }
+    if (!joins) {
+      // Right-trim the final row only.
+      let end = text.length
+      while (end > rowStartLen && text[end - 1] === ' ') end--
+      text = text.slice(0, end)
+      cellStart.length = end
+      cellEnd.length = end
+      break
+    }
     r++
   }
-  return { text, startRow: start, rows: r - start + 1 }
+  return { text, startRow: start, rows: r - start + 1, cellStart, cellEnd }
 }
 
 /** ILink range (1-based, inclusive) for a token at `startIndex..+len` of a paragraph. */
 function tokenRange(
-  startRow: number,
+  p: Paragraph,
   cols: number,
   startIndex: number,
   len: number
 ): ILink['range'] {
-  const endIndex = startIndex + len - 1
+  const first = p.cellStart[startIndex]
+  const last = p.cellEnd[startIndex + len - 1]
   return {
-    start: { x: (startIndex % cols) + 1, y: startRow + Math.floor(startIndex / cols) + 1 },
-    end: { x: (endIndex % cols) + 1, y: startRow + Math.floor(endIndex / cols) + 1 }
+    start: { x: (first % cols) + 1, y: p.startRow + Math.floor(first / cols) + 1 },
+    end: { x: (last % cols) + 1, y: p.startRow + Math.floor(last / cols) + 1 }
   }
+}
+
+/** Does paragraph cell `cell` fall inside the token at `startIndex..+len`? */
+function tokenCovers(p: Paragraph, startIndex: number, len: number, cell: number): boolean {
+  return len > 0 && cell >= p.cellStart[startIndex] && cell <= p.cellEnd[startIndex + len - 1]
+}
+
+/**
+ * Among links resolved from OVERLAPPING candidates (a spaced path and its pieces), keep the first
+ * in preference order and drop any later one that overlaps a kept one. Candidates arrive sorted by
+ * start, longer first, so a spaced path that exists wins over its fragments.
+ */
+function dropShadowed<T extends { startIndex: number; len: number }>(found: T[]): T[] {
+  const kept: T[] = []
+  for (const f of found) {
+    if (kept.some((k) => f.startIndex < k.startIndex + k.len && k.startIndex < f.startIndex + f.len))
+      continue
+    kept.push(f)
+  }
+  return kept
 }
 
 /** xterm link provider for file paths. Register once per terminal with a reachable filesystem. */
@@ -589,14 +583,16 @@ export function createFileLinkProvider(term: Terminal, deps: FileLinkDeps): ILin
       }
       const cols = term.cols
       void Promise.all(
-        tokens.map(async (t): Promise<ILink | null> => {
+        tokens.map(async (t): Promise<(ILink & { startIndex: number; len: number }) | null> => {
           const found = await findExistingPath(t.path, convention, deps)
           if (!found.found) return null
           const { abs, dir } = found
           const sink = deps.hoverSink
           return {
+            startIndex: t.startIndex,
+            len: t.text.length,
             text: t.text,
-            range: tokenRange(logical.startRow, cols, t.startIndex, t.text.length),
+            range: tokenRange(logical, cols, t.startIndex, t.text.length),
             activate: (event: MouseEvent) => {
               const intent = linkOpenIntent(event)
               if (intent === 'none') return
@@ -619,7 +615,9 @@ export function createFileLinkProvider(term: Terminal, deps: FileLinkDeps): ILin
           }
         })
       ).then((links) => {
-        const real = links.filter((l): l is ILink => !!l)
+        const real = dropShadowed(links.filter((l) => !!l)).map(
+          ({ startIndex: _s, len: _l, ...link }): ILink => link
+        )
         callback(real.length ? real : undefined)
       })
     }
@@ -647,7 +645,7 @@ export function createUrlLinkProvider(
       const links = matchUrlTokens(logical.text).map(
         (u): ILink => ({
           text: u.text,
-          range: tokenRange(logical.startRow, term.cols, u.startIndex, u.text.length),
+          range: tokenRange(logical, term.cols, u.startIndex, u.text.length),
           activate: (event: MouseEvent) => {
             if (!(event.metaKey || event.ctrlKey)) return
             hoverSink?.leave()
@@ -763,7 +761,17 @@ export type LinkHit =
   | { kind: 'url'; url: string }
   /** `token` is the path as printed; `abs` its resolution against the LAUNCH cwd (null when that
    *  cannot anchor it — a relative token on a cwd-less node — which the live cwd may still). */
-  | { kind: 'path'; token: string; abs: string | null }
+  | {
+      kind: 'path'
+      token: string
+      abs: string | null
+      /** Shorter readings of the same span, to try in order when `token` does not exist — a spaced
+       *  path's pieces (`/usr/bin/env node` → `/usr/bin/env`). Absent when there are none. */
+      alternatives?: string[]
+      /** `token` is a bare filename (`foo.ts`): Cmd+click tries it, a right-click does not claim
+       *  it, since prose is full of words shaped like a filename. */
+      bare?: true
+    }
 
 /** What `linkAtCell` needs to turn text into a path: the cwd and dialect the file providers use. */
 export interface LinkHitDeps extends CwdSources {
@@ -793,7 +801,7 @@ export function linkAtCell(
   if (!logical) return null
   const idx = (row - logical.startRow) * term.cols + col
   const inRange = (startIndex: number, len: number): boolean =>
-    idx >= startIndex && idx < startIndex + len
+    tokenCovers(logical, startIndex, len, idx)
 
   for (const u of matchUrlTokens(logical.text)) {
     if (inRange(u.startIndex, u.text.length)) return { kind: 'url', url: u.url }
@@ -801,14 +809,39 @@ export function linkAtCell(
   if (!deps.fileEnabled()) return null
   const convention = deps.convention ? deps.convention() : { windows: deps.windows }
   if (!convention) return null
-  for (const t of matchFileTokens(logical.text, convention)) {
-    if (inRange(t.startIndex, t.text.length)) {
-      const abs = resolveFileToken(t.path, deps.getCwd(), convention)
-      // Unanchorable against the launch cwd is still a hit when a live cwd can be asked.
-      return abs || deps.getLiveCwd ? { kind: 'path', token: t.path, abs } : null
-    }
+  // Every candidate under the cell, in preference order: the first is the hit, the rest its
+  // fallbacks (the pieces of a spaced path that may not exist).
+  const under = matchFileTokens(logical.text, convention).filter((t) =>
+    inRange(t.startIndex, t.text.length)
+  )
+  const [t, ...others] = under
+  if (!t) return null
+  const abs = resolveFileToken(t.path, deps.getCwd(), convention)
+  // Unanchorable against the launch cwd is still a hit when a live cwd can be asked.
+  if (!abs && !deps.getLiveCwd) return null
+  const hit: LinkHit = { kind: 'path', token: t.path, abs }
+  if (others.length) hit.alternatives = others.map((o) => o.path)
+  if (t.bare) hit.bare = true
+  return hit
+}
+
+/** Try a hit's token, then its alternatives; the first that exists wins. `tried` accumulates
+ *  every absolute path looked at, for the not-found toast. */
+export async function findExistingForHit(
+  tokens: string[],
+  find: (token: string) => Promise<PathResolution>
+): Promise<PathResolution> {
+  const tried: string[] = []
+  const unverified: UnverifiedPath[] = []
+  for (const token of tokens) {
+    const r = await find(token)
+    if (r.found) return r
+    for (const p of r.tried) if (!tried.includes(p)) tried.push(p)
+    // An unchecked reading of ANY alternative keeps the whole miss unverified: the host must not
+    // say "not found" about a token one of whose readings could not be looked at.
+    for (const u of r.unverified ?? []) if (!unverified.some((x) => x.abs === u.abs)) unverified.push(u)
   }
-  return null
+  return unverified.length ? { found: false, tried, unverified } : { found: false, tried }
 }
 
 export interface LinkClickDeps extends LinkHitDeps {
@@ -878,7 +911,9 @@ export function installLinkClickFallback(
     const convention = (deps.convention ? deps.convention() : { windows: deps.windows }) ?? {}
     const open =
       intent === 'system' ? (deps.openFileWithSystem ?? deps.activateFile) : deps.activateFile
-    void findExistingPath(hit.token, convention, deps).then((r) => {
+    void findExistingForHit([hit.token, ...(hit.alternatives ?? [])], (token) =>
+      findExistingPath(token, convention, deps)
+    ).then((r) => {
       if (r.found) open(r.abs, r.dir)
       else deps.onMissing?.(hit.token, r)
     })
@@ -929,6 +964,9 @@ export function installLinkContextMenu(
     if (ev.button !== 2) return
     const pos = bufferPosFromEvent(term, ev)
     pending = pos ? linkAtCell(term, pos.row, pos.col, deps) : null
+    // A bare filename is not claimed: the press would be taken from tmux for a word that is most
+    // likely prose, and the menu could only say "Not found".
+    if (pending?.kind === 'path' && pending.bare) pending = null
     if (pending) swallow(ev)
   }
   const onMouseUp = (ev: MouseEvent): void => {
