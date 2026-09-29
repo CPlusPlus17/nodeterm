@@ -26,8 +26,9 @@ import type { UiSink } from '../ui-sink-registry'
 export interface AccessContext {
   role: TeamRole
   sharedProjects: ReadonlySet<string>
-  /** The project a node belongs to, from the persisted canvases. */
-  projectOfNode(nodeId: string): string | undefined
+  /** EVERY project that holds this node id, from the persisted canvases ([] = none). Node ids travel
+   *  in git-shared project files, so one id can sit in several projects; see `sharedNode`. */
+  projectsOfNode(nodeId: string): readonly string[]
   /** The node (canvas node id) a live terminal session runs, from the pty manager; undefined when
    *  the session is unknown (never existed, or already ended). */
   nodeOfSession(sessionId: string): string | undefined
@@ -47,10 +48,13 @@ const isEditor = (role: unknown): boolean => role === 'owner' || role === 'edito
 const sharedProject = (id: unknown, ctx: AccessContext): boolean =>
   typeof id === 'string' && ctx.sharedProjects.has(id)
 
+/** A node is shared only when EVERY project holding its id is shared (M4). Answering from the first
+ *  project that has it would make the verdict depend on index order: an id copied into an unshared
+ *  project (a git-shared file, a clone) would be readable whenever the shared copy came first. */
 const sharedNode = (id: unknown, ctx: AccessContext): boolean => {
   if (typeof id !== 'string') return false
-  const project = ctx.projectOfNode(id)
-  return project !== undefined && ctx.sharedProjects.has(project)
+  const projects = ctx.projectsOfNode(id)
+  return projects.length > 0 && projects.every((p) => ctx.sharedProjects.has(p))
 }
 
 /** One property of an object payload (our own fixed key names only), else undefined. */
@@ -439,7 +443,7 @@ export const VIEW_EVENTS: Readonly<Record<string, EventCheck>> = Object.freeze({
 })
 
 /**
- * Is this terminal session's node (still) in a shared project? `undefined` = the session is not
+ * Is this terminal session's node (still) shared (`sharedNode`)? `undefined` = the session is not
  * known to the pty manager (never existed, or already ended). A viewer subscribes to a session only
  * through the jailed pty:create above, but `team unshare` does not end that subscription (R45), so
  * every frame of it is judged again here.

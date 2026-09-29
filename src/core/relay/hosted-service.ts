@@ -76,7 +76,8 @@ export interface HostedServiceDeps {
   deviceId: string
   hostLabel: string
   attach: PeerAttach
-  projectOfNode(nodeId: string): string | undefined
+  /** Every project holding this node id (`WorkspaceStore.projectIdsForNode`); [] = none. */
+  projectsOfNode(nodeId: string): readonly string[]
   /** The node a live terminal session runs (`PtyManager.nodeOfSession`). A viewer's terminal frames
    *  are judged by it, so `team unshare` stops a stream the viewer already joined (R45). */
   nodeOfSession(sessionId: string): string | undefined
@@ -220,7 +221,7 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
     return {
       role,
       sharedProjects: shared,
-      projectOfNode: (nodeId) => deps.projectOfNode(nodeId),
+      projectsOfNode: (nodeId) => deps.projectsOfNode(nodeId),
       nodeOfSession: (sessionId) => deps.nodeOfSession(sessionId),
       projectCwds: () =>
         [...shared].map((p) => deps.projectCwd(p)).filter((cwd): cwd is string => typeof cwd === 'string' && cwd.length > 0),

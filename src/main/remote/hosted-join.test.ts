@@ -671,7 +671,7 @@ function hostedWorld() {
   }
   const svc = createHostedService({
     dataDir: dir, apiBase: 'https://api', relayUrl: 'ws://127.0.0.1/r', deviceId: 'host-dev', hostLabel: 'box',
-    attach, projectOfNode: () => 'P', nodeOfSession: () => undefined, projectCwd: () => '/srv/app',
+    attach, projectsOfNode: () => ['P'], nodeOfSession: () => undefined, projectCwd: () => '/srv/app',
     fetch: (async () => new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 })) as typeof fetch,
     transport: () => { const { hostT, peerT } = transportPair(); peersT.push(peerT); return hostT }
   })

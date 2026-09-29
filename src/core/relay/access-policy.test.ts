@@ -16,7 +16,7 @@ import type { UiSink } from '../ui-sink-registry'
 const ctx = (role: AccessContext['role']): AccessContext => ({
   role,
   sharedProjects: new Set(['P']),
-  projectOfNode: (id) => (id === 'n1' ? 'P' : id === 'n2' ? 'Q' : undefined),
+  projectsOfNode: (id) => (id === 'n1' ? ['P'] : id === 'n2' ? ['Q'] : []),
   // Terminal sessions: 's' / 's1' run node n1 (project P, shared), 's2' runs n2 (project Q, not).
   nodeOfSession: (sid) => (sid === 's' || sid === 's1' ? 'n1' : sid === 's2' ? 'n2' : undefined),
   projectCwds: () => ['/srv/app'],
@@ -113,7 +113,7 @@ describe('access policy: the fs jail', () => {
       const c: AccessContext = {
         role: 'viewer',
         sharedProjects: new Set(['P']),
-        projectOfNode: () => undefined,
+        projectsOfNode: () => [],
         nodeOfSession: () => undefined,
         projectCwds: () => [path.join(root, 'link')],
         realpath: (p) => {
@@ -506,7 +506,7 @@ describe('access policy: git needs a shared root that is its own repository (C1)
       const onDisk = (root: string): AccessContext => ({
         role: 'viewer',
         sharedProjects: new Set(['P']),
-        projectOfNode: () => undefined,
+        projectsOfNode: () => [],
         nodeOfSession: () => undefined,
         projectCwds: () => [root],
         realpath: (p) => {
@@ -604,5 +604,46 @@ describe('access policy: a terminal stops streaming to a non-editor once its pro
       expect(filterOutboundEvent(ev(ch('gone'), 0), ctx('viewer')), ch('gone')).toBe(true)
       expect(filterOutboundEvent(ev(ch('s2'), 0), unshared('editor')), ch('s2')).toBe(true)
     }
+  })
+})
+
+// M4. Node ids travel in git-shared project files, so one id can sit in a shared project AND an
+// unshared one. Resolving it to "the first project that has it" made the verdict depend on index
+// order. It is shared only when EVERY project holding it is shared.
+describe('access policy: a node id held by more than one project (M4)', () => {
+  const holders = (map: Record<string, string[]>) => (id: string) => map[id] ?? []
+  const dup = (role: AccessContext['role'], shared: string[]): AccessContext => ({
+    ...ctx(role),
+    sharedProjects: new Set(shared),
+    projectsOfNode: holders({ both: ['P', 'Q'], twoShared: ['P', 'P2'], solo: ['P'] }),
+    nodeOfSession: (sid) => (sid === 'sBoth' ? 'both' : undefined)
+  })
+  const status = (nodeId: string) => JSON.stringify({ t: 'ev', channel: IPC.agentStatus, args: [{ nodeId }] })
+
+  it('an id in a shared and an unshared project is NOT shared, whichever comes first', () => {
+    for (const order of [['P', 'Q'], ['Q', 'P']]) {
+      const c: AccessContext = { ...dup('viewer', ['P']), projectsOfNode: (id) => (id === 'both' ? order : []) }
+      expect(decideAccess('req', IPC.ptyCreate, [{ persistKey: 'both' }], c).allow, order.join()).toBe(false)
+      expect(decideAccess('req', IPC.ptyCapture, ['both'], c).allow, order.join()).toBe(false)
+      expect(filterOutboundEvent(status('both'), c), order.join()).toBe(false)
+    }
+  })
+
+  it('an id every one of whose projects is shared is shared; an unknown id is not', () => {
+    const c = dup('viewer', ['P', 'P2'])
+    expect(decideAccess('req', IPC.ptyCapture, ['twoShared'], c).allow).toBe(true)
+    expect(decideAccess('req', IPC.ptyCapture, ['solo'], c).allow).toBe(true)
+    expect(decideAccess('req', IPC.ptyCapture, ['nobody'], c).allow).toBe(false)
+  })
+
+  it('a terminal session of an ambiguous node does not stream to a viewer', () => {
+    const bin: Uint8Array[] = []
+    const w = wrapSinkForRole({ sendText: () => {}, sendBinary: (b) => bin.push(b), bufferedAmount: () => 0 }, () => dup('viewer', ['P']))
+    w.sendBinary(encodePtyData('sBoth', 'x'))
+    expect(bin).toEqual([])
+  })
+
+  it('editors are unaffected', () => {
+    expect(decideAccess('req', IPC.ptyCapture, ['both'], dup('editor', ['P'])).allow).toBe(true)
   })
 })

@@ -64,6 +64,9 @@ const inlineFilePath = (projectId: string): string =>
  *  small enough that a server-side revert to genuinely old content still reads as external. */
 const RECENT_MIRROR_CAP = 8
 
+/** `projectIdsForNode`'s answer for an id no project holds (shared, frozen: callers only read it). */
+const NO_PROJECTS: readonly string[] = Object.freeze([])
+
 const contentHash = (content: string): string => createHash('sha256').update(content).digest('hex')
 
 /** Alias of the shared `ProjectSettingsSnapshot` (moved to `shared/project-settings.ts` so the
@@ -134,8 +137,8 @@ export class WorkspaceStore {
    *  its last write on EVERY autosave; re-parsing each file each time was pure waste. Keyed by the
    *  raw string, so any `lastWritten.set` elsewhere invalidates it by construction. */
   private lastWrittenParsed = new Map<string, { raw: string; parsed: ProjectFileV1 }>()
-  /** `projectIdForNode`'s node → project map, and the `canvasInputs` snapshot it was built from. */
-  private nodeProjectMemo: { inputs: unknown[]; map: Map<string, string> } | null = null
+  /** `projectIdsForNode`'s node → projects map, and the `canvasInputs` snapshot it was built from. */
+  private nodeProjectMemo: { inputs: unknown[]; map: Map<string, readonly string[]> } | null = null
   /** The index bytes we last wrote and the file's size/mtime/inode right after, so an unchanged
    *  index is not rewritten on every autosave — but one another writer changed on disk still is.
    *  The inode is what catches a same-size rewrite on a coarse-mtime filesystem: every writer
@@ -1508,9 +1511,12 @@ export class WorkspaceStore {
   }
 
   /**
-   * The project a node belongs to — the first project that has it, exactly as a `persistedCanvases`
-   * scan answers. Memoized, because a hosted-team relay asks it once per access decision for every
-   * viewer (each agent:status event, subagent-activity chunk, unread-clear, snapshot element) and a
+   * EVERY project that holds this node id, in index order ([] = none) — exactly what a
+   * `persistedCanvases` scan answers. All of them, never the first: node ids travel in git-shared
+   * project files, so one id can sit in two projects, and the hosted team's access policy treats a
+   * node as shared only when every project holding it is shared. Memoized, because a hosted-team
+   * relay asks it once per access decision for every viewer (each agent:status event,
+   * subagent-activity chunk, unread-clear, snapshot element, terminal frame) and a
    * `persistedCanvases()` call re-parses every local project's cached file.
    *
    * The memo is validated against the IDENTITY of every input `persistedCanvases` reads
@@ -1521,18 +1527,23 @@ export class WorkspaceStore {
    * including writers added later. It rests on one rule this file already keeps: a project's node
    * array is replaced, never mutated in place.
    */
-  projectIdForNode(nodeId: string): string | undefined {
+  projectIdsForNode(nodeId: string): readonly string[] {
     const inputs = this.canvasInputs()
     const memo = this.nodeProjectMemo
     const fresh =
       memo !== null && memo.inputs.length === inputs.length && memo.inputs.every((v, i) => v === inputs[i])
-    if (fresh) return memo.map.get(nodeId)
-    const map = new Map<string, string>()
+    if (fresh) return memo.map.get(nodeId) ?? NO_PROJECTS
+    const map = new Map<string, string[]>()
     for (const c of this.persistedCanvases()) {
-      for (const n of c.nodes) if (!map.has(n.id)) map.set(n.id, c.id)
+      for (const n of c.nodes) {
+        const held = map.get(n.id)
+        if (!held) map.set(n.id, [c.id])
+        else if (!held.includes(c.id)) held.push(c.id)
+      }
     }
+    for (const held of map.values()) Object.freeze(held)
     this.nodeProjectMemo = { inputs, map }
-    return map.get(nodeId)
+    return map.get(nodeId) ?? NO_PROJECTS
   }
 
   /** Every input `persistedCanvases` reads, by identity: the index object, and per entry the entry,

@@ -58,7 +58,7 @@ afterEach(() => {
   }
 })
 
-type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectOfNode' | 'nodeOfSession' | 'killPeer'>> & {
+type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectsOfNode' | 'nodeOfSession' | 'killPeer'>> & {
   recordTimers?: boolean
   dataDir?: string
 }
@@ -96,7 +96,7 @@ function world(opts: WorldOpts = {}) {
   const svc = createHostedService({
     dataDir, apiBase: 'https://api', relayUrl: 'ws://127.0.0.1/r', deviceId: 'host-dev', hostLabel: 'box',
     attach,
-    projectOfNode: opts.projectOfNode ?? ((id) => (id === 'n-other' ? 'Q' : 'P')),
+    projectsOfNode: opts.projectsOfNode ?? ((id) => (id === 'n-other' ? ['Q'] : ['P'])),
     // Terminal sessions: 'sess-shared' runs n-shared (project P), 'sess-other' runs n-other (Q).
     nodeOfSession: opts.nodeOfSession ?? ((sid) => (sid === 'sess-shared' ? 'n-shared' : sid === 'sess-other' ? 'n-other' : undefined)),
     projectCwd: () => '/srv/app',
@@ -783,7 +783,7 @@ describe('hosted service — removal', () => {
     const again = createHostedService({
       dataDir: w.dataDir, apiBase: 'https://api', relayUrl: 'ws://127.0.0.1/r', deviceId: 'd', hostLabel: 'x',
       attach: { attach: () => 1, detach: () => {}, dispatch: async (_i, r) => ({ t: 'res', id: r.id, ok: true, result: null }), cast: () => {} },
-      projectOfNode: () => undefined, nodeOfSession: () => undefined, projectCwd: () => undefined
+      projectsOfNode: () => [], nodeOfSession: () => undefined, projectCwd: () => undefined
     })
     expect(await again.remove(pub(keys), false)).toBe('removed')
   })

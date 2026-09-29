@@ -43,8 +43,8 @@ describe('hosted team boot wiring (source)', () => {
     expect(main).not.toMatch(/argv\[0\] === 'team'/)
   })
 
-  it('projectOfNode uses the store\'s memoized lookup, not a persistedCanvases scan per call', () => {
-    expect(src).toMatch(/projectOfNode: \(nodeId\) => workspaceStore\.projectIdForNode\(nodeId\)/)
+  it('projectsOfNode uses the store\'s memoized lookup, not a persistedCanvases scan per call', () => {
+    expect(src).toMatch(/projectsOfNode: \(nodeId\) => workspaceStore\.projectIdsForNode\(nodeId\)/)
   })
 
   it('boots after the workspace index is loaded (the access policy reads it)', () => {

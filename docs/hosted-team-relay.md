@@ -210,6 +210,10 @@ session key** in the team store.
 | `agent:subagent-snapshot` | The response is trimmed to shared nodes. |
 | `board-log:read/subscribe/unsubscribe` (+ `append` for Commenters) | Shared projects only. A Commenter's `append` must be a comment (`kind: 'comment'`): an activity entry ("moved a card to Done") is Editor-only. |
 
+**Which project a node is in** is read from the saved canvases (`WorkspaceStore.projectIdsForNode`).
+Node ids travel in git-shared project files, so one id can sit in several projects; it counts as
+shared only when **every** project holding it is shared, never by whichever comes first.
+
 **Outbound is deny-by-default too.** The core broadcasts to every attached client, so a non-editor
 receives only the events `VIEW_EVENTS` lists: `canvas:mut`, `workspace:external-change` /
 `server-change` and `project-trust:changed` for shared projects; `agent:status` and
