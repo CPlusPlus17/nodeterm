@@ -381,6 +381,31 @@ describe('outbound filter: deny by default for non-editors', () => {
   })
 })
 
+describe('wrapSinkForRole — project documents lose their exec fields for non-editors', () => {
+  const doc = JSON.stringify({
+    t: 'ev',
+    channel: IPC.workspaceServerChange,
+    args: [{ id: 'P', nodes: [{ id: 'n1', kind: 'terminal', position: { x: 0, y: 0 }, shell: '/usr/bin/evil' }] }]
+  })
+  const run = (role: AccessContext['role']) => {
+    const text: string[] = []
+    wrapSinkForRole({ sendText: (j) => text.push(j), sendBinary: () => {} }, () => ctx(role)).sendText(doc)
+    return text
+  }
+  it('a viewer gets the shared project without the exec field; an editor gets it verbatim', () => {
+    const v = run('viewer')
+    expect(v).toHaveLength(1)
+    expect(JSON.parse(v[0]).args[0].nodes[0].shell).toBeUndefined()
+    expect(run('editor')).toEqual([doc])
+  })
+  it('a viewer\'s workspace:load is stripped too', () => {
+    const out = narrowResponseForRole(IPC.workspaceLoad, { projects: [JSON.parse(doc).args[0]] }, ctx('viewer')) as {
+      projects: Array<{ nodes: Array<{ shell?: string }> }>
+    }
+    expect(out.projects[0].nodes[0].shell).toBeUndefined()
+  })
+})
+
 describe('wrapSinkForRole', () => {
   const sinkWith = (buffered: () => number) => {
     const text: string[] = []

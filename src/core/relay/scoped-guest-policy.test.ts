@@ -258,3 +258,37 @@ describe('relay host — host-only channels refused to every peer', () => {
     await vi.waitFor(() => expect(t.dispatched.map((r) => r.method)).toEqual([IPC.relayHostedSelf]))
   })
 })
+
+describe('project documents reach peers without exec fields', () => {
+  // `shell` is an exec field stripSharedNodeExec removes today; a held `pendingLaunch` joins it with
+  // the held-launch work (#1038), through the same helper, with no change here.
+  const project = (id: string) => ({
+    id,
+    name: id,
+    nodes: [{ id: 'a1', kind: 'terminal', position: { x: 0, y: 0 }, shell: '/usr/bin/evil' }]
+  })
+  const ev = (channel: string, ...args: unknown[]) => JSON.stringify({ t: 'ev', channel, args })
+
+  it('scoped guest: workspace:server-change for the shared project arrives stripped; other projects never', () => {
+    const hooks = scopedGuestHooks('alpha', deps())
+    const got: string[] = []
+    const sink = hooks.wrapSink!(null as never, { sendText: (j) => got.push(j), sendBinary: () => {} })
+    sink.sendText(ev(IPC.workspaceServerChange, project('beta')))
+    sink.sendText(ev(IPC.workspaceServerChange, project('alpha')))
+    sink.sendText(ev(IPC.workspaceExternalChange, project('alpha')))
+    expect(got).toHaveLength(2)
+    for (const j of got) {
+      const node = JSON.parse(j).args[0].nodes[0]
+      expect(node.id).toBe('a1')
+      expect(node.shell).toBeUndefined()
+    }
+  })
+
+  it('scoped guest: workspace:load response is stripped', () => {
+    const hooks = scopedGuestHooks('alpha', deps())
+    const out = hooks.narrowResponse!(null as never, IPC.workspaceLoad, { projects: [project('alpha')] }) as {
+      projects: Array<{ nodes: Array<{ shell?: string }> }>
+    }
+    expect(out.projects[0].nodes[0].shell).toBeUndefined()
+  })
+})

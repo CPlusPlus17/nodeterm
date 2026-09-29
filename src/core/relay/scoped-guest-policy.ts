@@ -35,6 +35,7 @@ import {
   filterOutboundBinary,
   filterOutboundEvent,
   narrowResponseForRole,
+  redactOutboundEvent,
   within,
   type AccessContext,
   type SubagentOwners
@@ -566,7 +567,10 @@ export function scopedGuestHooks(projectId: string, deps: ScopedGuestDeps): Rela
       }
       return {
         sendText: (json) => {
-          if (safe(() => filterScopedEvent(json, s, owners))) sink.sendText(json)
+          // Admitted events are sent with project documents' exec fields removed (held launch
+          // commands, session programs, ssh options): the guest reads the shared project's canvas,
+          // not the command lines this machine holds for it.
+          if (safe(() => filterScopedEvent(json, s, owners))) sink.sendText(redactOutboundEvent(json))
         },
         sendBinary: (buf) => {
           if (safe(() => filterOutboundBinary(buf, viewCtx(s)))) sink.sendBinary(buf)
