@@ -424,14 +424,16 @@ They are in the vocabulary now, and everything around them is the node machinery
 
 - **Vocabulary** — `CanvasMutation` gains `edge-upsert` / `edge-remove`, each carrying a
   `kind: 'bridge' | 'rope'` (which persisted list to write) and the edge's three ids. **Only the ids
-  travel.** Colour, markers and handles are re-derived on each client from its own copy of the
-  source node — a rope's colour comes from the source agent, so sending it would ship one client's
-  palette to another.
+  travel.** A rope's colour and its waiting look are derived at render time from each client's own
+  nodes (`displayEdges` / `ropeVisual`), so sending them would ship one client's palette to another.
 - **Ordering** — the same `CanvasOrder`, keyed by `mutationKey`: `n:<id>` for nodes, `e:<id>` for
   edges, one key space with a prefix (a node id and an edge id are generated independently and could
   collide). The `kind` is deliberately **not** in the key: one id is one edge, and a bridge and a
   rope claiming the same id must be resolved to one thing rather than held as two. Rule 4 (the
-  causal delete) therefore covers an edge exactly as it covers a node.
+  causal delete) therefore covers an edge exactly as it covers a node. The apply and the diff agree:
+  `applyEdgeMutationToScene` takes an upserted id out of the other list and a remove drops it from
+  both, and `diffToMutations` casts no remove for an id that only moved between the lists (a trailing
+  remove would delete it from both).
 - **Publisher** — the snapshot became a `CanvasScene` (`{nodes, bridges, ropes}`), so one diff, one
   throttle and one baseline cover both. The Canvas publish effect has the edge arrays in its deps:
   drawing a link never touches `nodes`, so without that the edit would never be published. React
@@ -447,9 +449,36 @@ They are in the vocabulary now, and everything around them is the node machinery
   moment we do not control and re-published back at us.
 - **Background projects** get `useProjects.applyEdgeMutation`, for the same reason nodes do: that
   project's serialized edges are what our next whole-file save writes.
+- **The snapshot thunk captures the edge arrays when it is CREATED** (`publishableLater`). The
+  publisher keeps an `adopt` baseline unresolved until the next publish, so a thunk that read the
+  edge refs when it RAN saw the link the user had drawn since the last peer op or project load: the
+  diff was empty, nothing was cast, and the teammate's next save deleted the link. Only the `.map`
+  is deferred (React state arrays are never mutated in place), so the solo gate still skips the cost.
+- **The edge refs move synchronously** with their setters on a project load and a server change,
+  and the render-time mirror copies the state only when it CHANGED. A zustand write re-renders on
+  the SyncLane and skips the pending DefaultLane setter (see `nodesEpoch.ts`), so an unconditional
+  mirror put the previous project's edges back into the ref — and a peer's edge op arriving before
+  the next render was applied to them and overwrote the load.
+- **An edge whose endpoint the peer does not have is held, not cast.** A node the size guard refuses
+  (an oversized sticky) never reaches the peer; an edge to it that did would be pruned there, and the
+  peer's `edge-remove` would delete the link on our canvas too. The publisher holds such an
+  `edge-upsert` inside the emit that refused the node (and on every later one while the node's last
+  cast stays refused, across adopts — `refusedNodeIds()`), keeps it owed, and casts it in the same
+  batch as the node once the node goes through. The hold is in the publisher, not a filter on the
+  scene: dropping an edge the baseline already holds would diff as an `edge-remove` — the same delete,
+  cast by us. It is conservative: an edge to a node whose EARLIER version the peer has also waits.
+- **"This note is too large" is said only for a node upsert.** An edge op is refused only for a
+  malformed or over-long id, so the sentence would name a cause nobody measured; the refusal is
+  logged instead.
 
 What this does **not** change: an edge is still pruned locally when an endpoint disappears, so a
-peer's node delete can leave one drawn against nothing for a tick (see Known risks).
+peer's node delete can leave one drawn against nothing for a tick (see Known risks). Also still
+open: a peer edge op applied in the same task as a local functional edge update overwrites that
+update (the node path has the same hazard); a local node delete publishes its `remove` first and the
+pruned edges' `edge-remove`s one render later, and every peer prunes the same dangling edge itself
+(converges, with redundant casts); canvas-control writes into a project that is not on screen, and
+the Server Edition's headless edge writes, are not cast as edge ops (the latter reach browsers
+through `workspace:server-change`, which every tab with peers then re-casts).
 
 ## UI
 

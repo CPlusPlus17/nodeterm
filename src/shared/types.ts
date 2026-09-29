@@ -675,7 +675,9 @@ export type CanvasMutation =
  * actually READ through) or `ropes` (display-only "spawned by" lineage). They are two arrays on
  * the project with two different meanings, so the kind travels with the mutation; the ORDER,
  * however, is keyed on the edge id alone (canvas-order's `e:<id>`), because one id is one edge and
- * two clients must never end up holding it as both a bridge and a rope.
+ * two clients must never end up holding it as both a bridge and a rope. The apply agrees
+ * (`applyEdgeMutationToScene`: an upsert takes the id out of the other list, a remove drops it from
+ * both), and so does the diff (an id that moved lists casts its upsert and no remove).
  */
 export type CanvasEdgeKind = 'bridge' | 'rope'
 

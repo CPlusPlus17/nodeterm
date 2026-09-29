@@ -632,7 +632,7 @@ import {
 } from '@shared/canvas-publish'
 import { createCanvasOrder, createReconnectWatch, type CanvasOrder } from '@shared/canvas-order'
 import {
-  applyEdgeMutation,
+  applyEdgeMutationToScene,
   createMutationGuard,
   isEdgeMutation,
   type CanvasScene
@@ -1165,15 +1165,31 @@ export function Canvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>([])
   // Persistent context links between Claude nodes (separate from ephemeral subagent/loop edges).
   const [linkEdges, setLinkEdges, onLinkEdgesChange] = useEdgesState<Edge>([])
-  const linkEdgesRef = useRef<Edge[]>([])
-  linkEdgesRef.current = linkEdges
+  // The edge refs are the LATEST edges, which is not always the rendered state. Three writers — the
+  // project load, a server change, a peer's edge op (canvas sync) — assign a ref synchronously
+  // beside its setter, because the setter lands on a later render and the next event must build on
+  // the new edges. A render can come FIRST that skips that pending update: a zustand write is a
+  // SyncLane re-render and the setter a DefaultLane one (see nodesEpoch.ts). So the render-time
+  // mirror only copies the state when the STATE changed; an unconditional copy put the previous
+  // project's edges back into the ref in exactly the window the synchronous write closes.
+  const linkEdgesRef = useRef<Edge[]>(linkEdges)
+  const linkEdgesMirroredRef = useRef<Edge[]>(linkEdges)
+  if (linkEdgesMirroredRef.current !== linkEdges) {
+    linkEdgesMirroredRef.current = linkEdges
+    linkEdgesRef.current = linkEdges
+  }
   // "Spawned by" ropes drawn from a control-capable agent to the nodes it opens via the
   // `nodeterm` CLI (see the onAgentControl effect) and from browser popups to their opener.
   // Merged only at the <ReactFlow> prop and never turned into context links, but PERSISTED
   // per project (`ropes`) so the lineage survives restarts; deletable like a context link.
   const [controlEdges, setControlEdges] = useState<Edge[]>([])
-  const controlEdgesRef = useRef<Edge[]>([])
-  controlEdgesRef.current = controlEdges
+  // Same latest-not-rendered mirror as linkEdgesRef above, for the same three writers.
+  const controlEdgesRef = useRef<Edge[]>(controlEdges)
+  const controlEdgesMirroredRef = useRef<Edge[]>(controlEdges)
+  if (controlEdgesMirroredRef.current !== controlEdges) {
+    controlEdgesMirroredRef.current = controlEdges
+    controlEdgesRef.current = controlEdges
+  }
   const [dirty, setDirty] = useState(false)
   // Bumped only when a save finished with `dirty` still set (an edit raced it). It exists purely to
   // give the debounced-autosave effect a dependency that CHANGES in that case — `dirty` stays true
@@ -2919,7 +2935,13 @@ export function Canvas() {
     if (project.cwd && !project.ssh) {
       void useWorktrees.getState().refresh(project.cwd, boundGroups(flow))
     }
-    setLinkEdges((project.bridges ?? []).map((b) => ({ id: b.id, source: b.source, target: b.target })))
+    // The edge refs are assigned HERE, synchronously, beside their setters — the same reason
+    // installEpoch assigns nodesRef: the setters land on a later render, and a peer's edge op
+    // arriving in between would otherwise be built from the PREVIOUS project's edges and then
+    // overwrite this load's queued value (see the ref declarations for the render-time half).
+    const loadedBridges: Edge[] = (project.bridges ?? []).map((b) => ({ id: b.id, source: b.source, target: b.target }))
+    linkEdgesRef.current = loadedBridges
+    setLinkEdges(loadedBridges)
     // A wait with no rope is a wait nothing on screen explains. Ropes for `--after` are written by
     // the verbs that arm a node, so an arming that predates them (persisted `pendingLaunch`, no
     // persisted rope) — or any future path that forgets one — is healed here on the next load.
@@ -2927,10 +2949,12 @@ export function Canvas() {
     // append order, and it must run before the prune below can delete an opener's rope — after
     // that, nothing left says which rope into a node was its opener (lib/teamProgress reads it).
     const restoredRopes = markLegacyWaitRopes(project.ropes ?? []).map((r) => ropeEdge(r.id, r.source, r.target))
-    setControlEdges([
+    const loadedRopes = [
       ...restoredRopes,
       ...missingDepRopes(flow, restoredRopes).map((r) => ropeEdge(r.id, r.source, r.target))
-    ])
+    ]
+    controlEdgesRef.current = loadedRopes
+    setControlEdges(loadedRopes)
     // Reset history for the newly loaded project.
     committedRef.current = flow
     pastRef.current = []
@@ -3449,10 +3473,18 @@ export function Canvas() {
       // Only when the merge actually moved something: a fresh array of identical edges re-renders
       // every edge on the canvas (displayEdges recomputes colour and the waiting look per edge)
       // for no change at all, and these arrive in bursts.
-      if (plan.ropesChanged)
-        setControlEdges(plan.ropes.map((r) => ropeEdge(r.id, r.source, r.target)))
-      if (plan.bridgesChanged)
-        setLinkEdges(plan.bridges.map((b) => ({ id: b.id, source: b.source, target: b.target })))
+      // The refs move synchronously with their setters, as on a load: a peer's edge op landing
+      // before the re-render must build on the MERGED edges, not overwrite them with the old ones.
+      if (plan.ropesChanged) {
+        const ropes = plan.ropes.map((r) => ropeEdge(r.id, r.source, r.target))
+        controlEdgesRef.current = ropes
+        setControlEdges(ropes)
+      }
+      if (plan.bridgesChanged) {
+        const bridges: Edge[] = plan.bridges.map((b) => ({ id: b.id, source: b.source, target: b.target }))
+        linkEdgesRef.current = bridges
+        setLinkEdges(bridges)
+      }
       // The store copy is our disk baseline, and the server has already written this file — so it
       // moves to the incoming version exactly as the 'merge' branch above does.
       useProjects.getState().replaceProject(project)
@@ -3690,12 +3722,15 @@ export function Canvas() {
         // peer's delete landing in that window would be lost, and our next whole-file save would
         // resurrect their node) nor the retry (the publisher keeps the node in its baseline). The
         // only thing that can legitimately blow the cap is free text, i.e. a sticky's body — so say
-        // so, instead of letting the note silently never sync.
+        // so, instead of letting the note silently never sync. ONLY for a node upsert, though: an
+        // edge op (or a remove) is refused only for a malformed / over-long id, and "this note is
+        // too large" would name a cause nobody measured.
         if (!guard(stamped)) {
-          setSyncNote(
+          if (stamped.op === 'upsert') setSyncNote(
             'This note is too large to share with your teammates (over 250 KB). It stays on your ' +
               'canvas, but they will not see it until you shorten it.'
           )
+          else console.warn('[canvas-sync] refused an unsendable mutation', stamped.op)
           return false
         }
         order.onLocal(stamped)
@@ -3785,6 +3820,16 @@ export function Canvas() {
           if (useProjects.getState().applyEdgeMutation(projectId, mutation)) markDirty()
           return
         }
+        // One id is one edge (`applyEdgeMutationToScene`): an upsert of one kind also takes that id
+        // out of the other list, and a remove drops it from both — the same identity the ordering
+        // gate above keys on (`mutationKey` leaves the kind out).
+        const prevBridges = linkEdgesRef.current
+        const prevRopes = controlEdgesRef.current
+        const base = { bridges: prevBridges.map(toBridgeLink), ropes: prevRopes.map(toBridgeLink) }
+        const next = applyEdgeMutationToScene(base, mutation)
+        // Nothing to do — a remove for an edge we do not have, or the edge we already hold (every
+        // Server Edition tab re-casts a server-written edge): no setState, no markDirty, no save.
+        if (next.bridges === base.bridges && next.ropes === base.ropes) return
         // Rebuilt EDGE-BY-EDGE, reusing the existing object whenever its three ids are unchanged —
         // the same discipline `applyMutationToFlow` follows for nodes, and for the same reason: a
         // freshly built object loses `selected`, so re-creating the whole list would wipe the
@@ -3793,26 +3838,23 @@ export function Canvas() {
           const e = prev.find((x) => x.id === link.id)
           return e && e.source === link.source && e.target === link.target ? e : undefined
         }
-        if (mutation.kind === 'bridge') {
-          const next = applyEdgeMutation(linkEdgesRef.current.map(toBridgeLink), 'bridge', mutation)
+        if (next.bridges !== base.bridges) {
           // No `type`: a bridge carries none in state — `displayEdges` makes every link `floating`.
-          const edges = next.map(
-            (b) => keep(linkEdgesRef.current, b) ?? { id: b.id, source: b.source, target: b.target }
+          const edges = next.bridges.map(
+            (b) => keep(prevBridges, b) ?? { id: b.id, source: b.source, target: b.target }
           )
           linkEdgesRef.current = edges
           setLinkEdges(edges)
-          publisherRef.current?.adopt(publishableLater(nodesRef.current))
-        } else {
-          const next = applyEdgeMutation(controlEdgesRef.current.map(toBridgeLink), 'rope', mutation)
+        }
+        if (next.ropes !== base.ropes) {
           // Nothing but the three ids travels: a rope's colour and its waiting look are derived at
           // render time from this client's own nodes (`displayEdges` / `ropeVisual`).
-          const edges = next.map(
-            (r) => keep(controlEdgesRef.current, r) ?? ropeEdge(r.id, r.source, r.target)
-          )
+          const edges = next.ropes.map((r) => keep(prevRopes, r) ?? ropeEdge(r.id, r.source, r.target))
           controlEdgesRef.current = edges
           setControlEdges(edges)
-          publisherRef.current?.adopt(publishableLater(nodesRef.current))
         }
+        // The loop guard, AFTER both refs moved: publishableLater captures them as of this call.
+        publisherRef.current?.adopt(publishableLater(nodesRef.current))
         markDirty()
         return
       }

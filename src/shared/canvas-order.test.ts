@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   createCanvasOrder,
   createReconnectWatch,
+  mutationKey,
   mutationNodeId,
   PENDING_TTL_MS
 } from './canvas-order'
@@ -39,6 +40,46 @@ describe('mutationNodeId', () => {
   it('is the node a mutation addresses, whichever op', () => {
     expect(mutationNodeId(up('n1', 0, 'x', 1))).toBe('n1')
     expect(mutationNodeId(rm('n2', 'x', 1))).toBe('n2')
+  })
+
+  it('is null for an edge op (an edge addresses no node)', () => {
+    expect(mutationNodeId({ op: 'edge-remove', kind: 'bridge', id: 'e1' })).toBeNull()
+    expect(mutationNodeId({ op: 'edge-upsert', kind: 'rope', edge: { id: 'e1', source: 'a', target: 'b' } })).toBeNull()
+  })
+})
+
+// One key space for nodes and edges, with a prefix: a node id and an edge id are generated
+// independently and could be equal. The kind is NOT in the key — one id is one edge.
+describe('mutationKey', () => {
+  const edgeUp = (id: string, kind: 'bridge' | 'rope'): CanvasMutation => ({
+    op: 'edge-upsert',
+    kind,
+    edge: { id, source: 'a', target: 'b' }
+  })
+
+  it('prefixes nodes with n: and edges with e:, so equal ids do not collide', () => {
+    expect(mutationKey(up('x', 0, 'a', 1))).toBe('n:x')
+    expect(mutationKey(rm('x', 'a', 1))).toBe('n:x')
+    expect(mutationKey(edgeUp('x', 'bridge'))).toBe('e:x')
+    expect(mutationKey({ op: 'edge-remove', kind: 'bridge', id: 'x' })).toBe('e:x')
+  })
+
+  it('leaves the kind out of the key', () => {
+    expect(mutationKey(edgeUp('x', 'bridge'))).toBe(mutationKey(edgeUp('x', 'rope')))
+  })
+
+  it('an edge op and a node op with the same id are ordered independently', () => {
+    const o = createCanvasOrder('me')
+    o.onLocal(o.stamp(up('x', 1, 'me', 0))) // our own unacked NODE edit suppresses peers' n:x…
+    expect(o.accept(up('x', 5, 'peer', 7))).toBe(false)
+    expect(o.accept({ ...edgeUp('x', 'bridge'), src: 'peer', seq: 8 })).toBe(true) // …not e:x
+  })
+
+  it('rule 4 covers an edge key: a stale edge-upsert cannot resurrect a removed edge', () => {
+    const o = createCanvasOrder('me')
+    expect(o.accept({ op: 'edge-remove', kind: 'bridge', id: 'e1', src: 'a', seq: 10 })).toBe(true)
+    expect(o.accept({ ...edgeUp('e1', 'bridge'), src: 'b', seq: 11, seen: 9 })).toBe(false)
+    expect(o.accept({ ...edgeUp('e1', 'bridge'), src: 'b', seq: 12, seen: 11 })).toBe(true)
   })
 })
 

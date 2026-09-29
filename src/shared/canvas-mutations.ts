@@ -211,9 +211,11 @@ export function applyCanvasMutation(
 }
 
 /**
- * Apply one EDGE mutation to one of a project's edge lists, returning a NEW array (the input is
- * never mutated). A mutation for the other kind — or for a node — leaves the list untouched, by
- * reference, so the caller's `next === prev` check still short-circuits.
+ * Apply one EDGE mutation to one of a project's edge lists, returning a NEW array when it changes
+ * anything (the input is never mutated). A mutation for the other kind — or for a node — and one
+ * that changes nothing (a remove of an edge we lack, an upsert of the edge we hold) leave the list
+ * untouched, by reference, so the caller's `next === prev` check still short-circuits. For the
+ * whole scene (one id is one edge, across both lists) use `applyEdgeMutationToScene`.
  *
  * There is nothing to sanitize here the way `sanitizeInboundNode` sanitizes a node: an edge is
  * three ids and carries no exec-enabling field, and `isCanvasMutation` has already bounded all
@@ -235,9 +237,36 @@ export function applyEdgeMutation(
   const edge: BridgeLink = { id: m.edge.id, source: m.edge.source, target: m.edge.target }
   const idx = edges.findIndex((e) => e.id === edge.id)
   if (idx === -1) return [...edges, edge]
+  // The edge we already hold, unchanged: same reference, so a duplicate cast (every Server Edition
+  // tab re-casts a server-written edge) costs a receiver no setState, no markDirty, no save.
+  const held = edges[idx]
+  if (held.source === edge.source && held.target === edge.target) return edges
   const next = edges.slice()
   next[idx] = edge
   return next
+}
+
+/** Apply an edge op to BOTH lists: one id is one edge, so an upsert of kind K removes that id from
+ *  the other kind's list, and a remove drops it from both.
+ *
+ *  `mutationKey` leaves `kind` out of the key for the same reason, so the ordering already treats a
+ *  bridge and a rope with one id as one thing; applying per kind (`applyEdgeMutation` alone) would
+ *  let the two lists each hold that id. A list the op does not change is returned BY REFERENCE, so
+ *  a caller can tell a no-op (`out.bridges === scene.bridges && out.ropes === scene.ropes`). */
+export function applyEdgeMutationToScene(
+  scene: { bridges: BridgeLink[]; ropes: BridgeLink[] },
+  m: CanvasMutation
+): { bridges: BridgeLink[]; ropes: BridgeLink[] } {
+  if (!isEdgeMutation(m)) return scene
+  const id = m.op === 'edge-remove' ? m.id : m.edge.id
+  const drop = (list: BridgeLink[]) => {
+    const next = list.filter((e) => e.id !== id)
+    return next.length === list.length ? list : next
+  }
+  if (m.op === 'edge-remove') return { bridges: drop(scene.bridges), ropes: drop(scene.ropes) }
+  return m.kind === 'bridge'
+    ? { bridges: applyEdgeMutation(scene.bridges, 'bridge', m), ropes: drop(scene.ropes) }
+    : { bridges: drop(scene.bridges), ropes: applyEdgeMutation(scene.ropes, 'rope', m) }
 }
 
 /** Stable JSON stringify (keys sorted) so deep-equality is order-independent. */
@@ -256,16 +285,20 @@ function stableStringify(value: unknown): string {
 
 /** The edge half of `diffToMutations`, for one kind. Same shape: changed/added → upsert (in
  *  next-array order), dropped → remove (in prev-array order). An edge is three short ids, so the
- *  compare is a plain field compare rather than a stringify. */
+ *  compare is a plain field compare rather than a stringify.
+ *
+ *  "Dropped" means gone from the WHOLE next scene (`liveIds` = both lists), not just from this
+ *  kind's list: one id is one edge (applyEdgeMutationToScene), so an id that moved to the other list
+ *  is covered by that list's upsert — and a remove cast after it would delete it from both. */
 function diffEdges(
   prev: BridgeLink[],
   next: BridgeLink[],
   kind: CanvasEdgeKind,
+  liveIds: ReadonlySet<string>,
   upserts: CanvasMutation[],
   removes: CanvasMutation[]
 ): void {
   const prevById = new Map(prev.map((e) => [e.id, e]))
-  const nextIds = new Set(next.map((e) => e.id))
   for (const edge of next) {
     const before = prevById.get(edge.id)
     if (!before || before.source !== edge.source || before.target !== edge.target) {
@@ -273,7 +306,7 @@ function diffEdges(
     }
   }
   for (const edge of prev) {
-    if (!nextIds.has(edge.id)) removes.push({ op: 'edge-remove', kind, id: edge.id })
+    if (!liveIds.has(edge.id)) removes.push({ op: 'edge-remove', kind, id: edge.id })
   }
 }
 
@@ -316,8 +349,9 @@ export function diffToMutations(
 
   const edgeUpserts: CanvasMutation[] = []
   const edgeRemoves: CanvasMutation[] = []
-  diffEdges(a.bridges, b.bridges, 'bridge', edgeUpserts, edgeRemoves)
-  diffEdges(a.ropes, b.ropes, 'rope', edgeUpserts, edgeRemoves)
+  const liveEdgeIds = new Set([...b.bridges, ...b.ropes].map((e) => e.id))
+  diffEdges(a.bridges, b.bridges, 'bridge', liveEdgeIds, edgeUpserts, edgeRemoves)
+  diffEdges(a.ropes, b.ropes, 'rope', liveEdgeIds, edgeUpserts, edgeRemoves)
 
   return [...upserts, ...edgeUpserts, ...edgeRemoves, ...removes]
 }

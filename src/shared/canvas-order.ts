@@ -107,7 +107,8 @@ export const REMOVED_MAX = 512
  *
  * Edges key on the id ALONE — the `kind` is deliberately not in the key. One id is one edge; a
  * bridge and a rope claiming the same id must fight in the total order and be resolved to one
- * thing, not held as two independent entities on different clients.
+ * thing, not held as two independent entities on different clients. The apply side enforces the
+ * same identity (`applyEdgeMutationToScene` in canvas-mutations).
  */
 export function mutationKey(m: CanvasMutation): string {
   if (m.op === 'edge-remove') return `e:${m.id}`

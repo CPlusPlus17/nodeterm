@@ -22,7 +22,7 @@ import { initPlatform, resetPlatformForTests, type CorePlatform } from './platfo
 import { initCanvasSync, MUTATION_MAX_BYTES } from './canvas-sync'
 import {
   applyCanvasMutation,
-  applyEdgeMutation,
+  applyEdgeMutationToScene,
   isCanvasMutation,
   type CanvasScene
 } from '../shared/canvas-mutations'
@@ -194,8 +194,10 @@ class Client {
       if (!this.order.accept(m)) return
       this.applied++
       this.states = applyCanvasMutation(this.states, m)
-      this.bridges = applyEdgeMutation(this.bridges, 'bridge', m)
-      this.ropes = applyEdgeMutation(this.ropes, 'rope', m)
+      // One id is one edge across both lists — what Canvas and the projects store apply.
+      const edges = applyEdgeMutationToScene({ bridges: this.bridges, ropes: this.ropes }, m)
+      this.bridges = edges.bridges
+      this.ropes = edges.ropes
       this.pub.adopt(this.publishable()) // loop guard — never re-publish someone else's change
     })
   }

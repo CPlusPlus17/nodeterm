@@ -22,7 +22,7 @@ import {
   pruneLayoutViewports,
   type CanvasLayout
 } from '@shared/canvas-layout'
-import { applyEdgeMutation } from '@shared/canvas-mutations'
+import { applyEdgeMutationToScene } from '@shared/canvas-mutations'
 import { applyCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
 import { markWorkspaceDirty } from './workspaceDirty'
 import { folderName } from '../lib/projectOpen'
@@ -606,14 +606,17 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     set((s) => ({
       projects: s.projects.map((p) => {
         if (p.id !== projectId) return p
-        const bridges = applyEdgeMutation(p.bridges ?? [], 'bridge', mutation)
-        const ropes = applyEdgeMutation(p.ropes ?? [], 'rope', mutation)
-        // `applyEdgeMutation` returns the SAME array when the mutation is not about that list, so
-        // the untouched kind keeps its identity — and a project whose stored list was `undefined`
-        // stays `undefined` rather than being materialized as an empty array on every peer edge
-        // (which would dirty the file with `"bridges": []` on projects that have never had one).
-        const nextBridges = bridges === (p.bridges ?? []) ? p.bridges : bridges
-        const nextRopes = ropes === (p.ropes ?? []) ? p.ropes : ropes
+        // One id is one edge across BOTH lists (applyEdgeMutationToScene), which returns the SAME
+        // array for a list the mutation does not change — so the untouched kind keeps its identity,
+        // and a project whose stored list was `undefined` stays `undefined` rather than being
+        // materialized as an empty array on every peer edge (which would dirty the file with
+        // `"bridges": []` on projects that have never had one). The base is built ONCE for that
+        // compare: two separate `?? []` literals are never the same array, which is how the branch
+        // this was ported from wrote `[]` anyway.
+        const base = { bridges: p.bridges ?? [], ropes: p.ropes ?? [] }
+        const next = applyEdgeMutationToScene(base, mutation)
+        const nextBridges = next.bridges === base.bridges ? p.bridges : next.bridges
+        const nextRopes = next.ropes === base.ropes ? p.ropes : next.ropes
         if (nextBridges === p.bridges && nextRopes === p.ropes) return p
         return { ...p, bridges: nextBridges, ropes: nextRopes }
       })

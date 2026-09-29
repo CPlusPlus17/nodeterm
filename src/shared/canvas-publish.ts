@@ -23,7 +23,7 @@
 
 import { stripSharedNodeExec } from './node-exec'
 import { asScene, diffToMutations, type CanvasScene } from './canvas-mutations'
-import { mutationKey } from './canvas-order'
+import { mutationKey, mutationNodeId } from './canvas-order'
 import type { BridgeLink, CanvasMutation, CanvasNodeState } from './types'
 
 /** ~20 Hz while dragging — the same budget the presence cursor stream uses. */
@@ -59,6 +59,10 @@ export interface CanvasPublisher {
   /** Send any coalesced drag frame immediately (drag settle / unmount). */
   flush(): void
   dispose(): void
+  /** The node ids whose most recent cast was REFUSED (`send` → false: the size guard, no active
+   *  project) and is still owed — the node half of the refusal rebase. An `edge-upsert` naming one
+   *  of them is held back (see `emit`), because the peer does not have that node. A copy. */
+  refusedNodeIds(): ReadonlySet<string>
 }
 
 /**
@@ -141,6 +145,10 @@ export function createCanvasPublisher(
   let lastLazy: (() => CanvasScene) | null = null
   let pending: CanvasSnapshot | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
+  /** Node ids whose latest cast was refused and not yet made good (`refusedNodeIds`). Kept ACROSS
+   *  emits and adopts: an adopt takes the refused node into the baseline (so it is no longer
+   *  re-diffed) but the peer still does not have it — which is exactly when an edge to it must wait. */
+  const owedNodes = new Set<string>()
 
   const resolve = (s: CanvasSnapshot): CanvasScene =>
     asScene(typeof s === 'function' ? s() : s)
@@ -174,8 +182,32 @@ export function createCanvasPublisher(
     const next = resolve(snapshot)
     const mutations = diffToMutations(prev, next)
     const refused = new Set<string>()
+    const refusedNow = new Set<string>()
     for (const m of mutations) {
-      if (send(opts.src ? { ...m, src: opts.src } : m) === false) refused.add(mutationKey(m))
+      // An edge whose endpoint the peer does not have is HELD, not cast: the peer's link prune would
+      // drop it and cast an `edge-remove`, deleting the link on our canvas too. Held = refused, so
+      // the rebase keeps it owed and it re-diffs until its endpoint casts. The batch order (node
+      // upserts first — diffToMutations) means this emit's node verdicts are already in, so an
+      // endpoint that finally casts takes its edges with it in the SAME batch, after it.
+      if (m.op === 'edge-upsert' && (owedNodes.has(m.edge.source) || owedNodes.has(m.edge.target))) {
+        refused.add(mutationKey(m))
+        continue
+      }
+      const cast = send(opts.src ? { ...m, src: opts.src } : m) !== false
+      if (!cast) refused.add(mutationKey(m))
+      const nodeId = mutationNodeId(m)
+      if (nodeId === null) continue
+      if (cast) owedNodes.delete(nodeId)
+      else {
+        owedNodes.add(nodeId)
+        refusedNow.add(nodeId)
+      }
+    }
+    // A refused node that has since left the canvas owes nothing — unless it is its REMOVE that was
+    // just refused (that one is still owed, and the rebase keeps it).
+    if (owedNodes.size) {
+      const live = new Set(next.nodes.map((n) => n.id))
+      for (const id of owedNodes) if (!live.has(id) && !refusedNow.has(id)) owedNodes.delete(id)
     }
     last = refused.size ? rebaseRefused(prev, next, refused) : next
     lastLazy = null
@@ -235,6 +267,9 @@ export function createCanvasPublisher(
       if (timer) clearTimeout(timer)
       timer = null
       pending = null
+    },
+    refusedNodeIds() {
+      return new Set(owedNodes)
     }
   }
 }

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   applyCanvasMutation,
   applyEdgeMutation,
+  applyEdgeMutationToScene,
   createMutationGuard,
   diffToMutations,
   isCanvasMutation,
@@ -186,6 +187,15 @@ describe('applyEdgeMutation', () => {
     expect(applyEdgeMutation(list, 'bridge', { op: 'remove', id: 'x' })).toBe(list)
   })
 
+  // A duplicate cast (every Server Edition tab re-casts a server-written edge) must not cost a
+  // setState + markDirty + save on every receiver.
+  it('keeps identity when an upsert carries the edge we already hold', () => {
+    const list = [e('x')]
+    expect(applyEdgeMutation(list, 'bridge', { op: 'edge-upsert', kind: 'bridge', edge: e('x') })).toBe(
+      list
+    )
+  })
+
   it('keeps identity when a remove names an edge we do not have', () => {
     const list = [e('x')]
     expect(applyEdgeMutation(list, 'bridge', { op: 'edge-remove', kind: 'bridge', id: 'q' })).toBe(
@@ -197,6 +207,36 @@ describe('applyEdgeMutation', () => {
     const fat = { ...e('x'), style: { stroke: 'red' } } as unknown as BridgeLink
     const [out] = applyEdgeMutation([], 'bridge', { op: 'edge-upsert', kind: 'bridge', edge: fat })
     expect(Object.keys(out).sort()).toEqual(['id', 'source', 'target'])
+  })
+})
+
+// `mutationKey` leaves `kind` out (`e:<id>`): one id is one edge. The apply has to agree, or a
+// rope upsert for an id the bridge list already holds leaves that id in BOTH lists.
+describe('applyEdgeMutationToScene — one id is one edge', () => {
+  it('an edge id lives in one list', () => {
+    const s0 = { bridges: [{ id: 'x', source: 'a', target: 'b' }], ropes: [] }
+    const s1 = applyEdgeMutationToScene(s0, { op: 'edge-upsert', kind: 'rope', edge: { id: 'x', source: 'a', target: 'b' } })
+    expect(s1).toEqual({ bridges: [], ropes: [{ id: 'x', source: 'a', target: 'b' }] })
+    expect(applyEdgeMutationToScene(s1, { op: 'edge-remove', kind: 'bridge', id: 'x' })).toEqual({ bridges: [], ropes: [] })
+  })
+
+  it('keeps both lists by reference when nothing changes (the caller short-circuit fires)', () => {
+    const s = { bridges: [e('x')], ropes: [e('r')] }
+    const same = (m: Parameters<typeof applyEdgeMutationToScene>[1]) => {
+      const out = applyEdgeMutationToScene(s, m)
+      expect(out.bridges).toBe(s.bridges)
+      expect(out.ropes).toBe(s.ropes)
+    }
+    same({ op: 'edge-remove', kind: 'bridge', id: 'q' }) // an edge we do not have
+    same({ op: 'edge-upsert', kind: 'bridge', edge: e('x') }) // one we already hold, unchanged
+    same({ op: 'remove', id: 'x' }) // a NODE op
+  })
+
+  it('leaves the list it does not touch by reference', () => {
+    const s = { bridges: [e('x')], ropes: [e('r')] }
+    const out = applyEdgeMutationToScene(s, { op: 'edge-upsert', kind: 'bridge', edge: e('y') })
+    expect(out.bridges.map((b) => b.id)).toEqual(['x', 'y'])
+    expect(out.ropes).toBe(s.ropes)
   })
 })
 
@@ -267,6 +307,15 @@ describe('diffToMutations — scenes', () => {
   it('re-emits an edge whose endpoint was re-pointed', () => {
     expect(diffToMutations(scene([], [e('x', 'a', 'b')]), scene([], [e('x', 'a', 'c')]))).toEqual([
       { op: 'edge-upsert', kind: 'bridge', edge: e('x', 'a', 'c') }
+    ])
+  })
+
+  // One id is one edge (see applyEdgeMutationToScene): an id that moves from one list to the other
+  // is still on the canvas, so it is an upsert of its new kind and NOT also a remove of its old one.
+  // A receiver applies the batch in order, and a trailing `edge-remove` would delete it from both.
+  it('an edge moving between the lists casts its upsert and no remove', () => {
+    expect(diffToMutations(scene([], [e('x')]), scene([], [], [e('x')]))).toEqual([
+      { op: 'edge-upsert', kind: 'rope', edge: e('x') }
     ])
   })
 

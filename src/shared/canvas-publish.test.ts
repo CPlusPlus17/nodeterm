@@ -7,7 +7,7 @@ import {
   publishableScene
 } from './canvas-publish'
 import { mutationNodeId } from './canvas-order'
-import type { CanvasMutation, CanvasNodeState } from './types'
+import type { BridgeLink, CanvasMutation, CanvasNodeState } from './types'
 
 const node = (id: string, x = 0): CanvasNodeState =>
   ({
@@ -374,5 +374,110 @@ describe('publishableScene', () => {
       new Set()
     )
     expect(out.bridges).toEqual([])
+  })
+})
+
+// ── Edges and the lazy baseline ──────────────────────────────────────────────────────────────────
+// `adopt` keeps a thunk UNRESOLVED until the next emit. Canvas's thunk used to read the edge refs
+// when it RAN — so after a peer op (or a project load) the baseline, resolved at the next publish,
+// already held the link the user had just drawn: the diff was empty, nothing was cast, and the
+// teammate's next whole-file save deleted the link. The thunk must close over the edges AS OF THE
+// CALL (CanvasSnapshot's contract); this pins the publisher side of that contract.
+describe('edges in a lazy baseline', () => {
+  it('a link drawn right after an adopt is cast (the baseline thunk captured the edges eagerly)', () => {
+    const sent: CanvasMutation[] = []
+    const pub = createCanvasPublisher((m) => { sent.push(m) }, { src: 'a' })
+    const n1 = { id: 'n1', kind: 'terminal', position: { x: 0, y: 0 } } as CanvasNodeState
+    const n2 = { id: 'n2', kind: 'terminal', position: { x: 1, y: 0 } } as CanvasNodeState
+    let bridges: BridgeLink[] = []
+    // What Canvas does: a snapshot thunk that closes over the arrays AS OF THE CALL.
+    const snapshot = () => {
+      const b = bridges
+      return () => ({ nodes: [n1, n2], bridges: b, ropes: [] })
+    }
+    pub.adopt(snapshot())                  // a peer op landed → lazy baseline
+    bridges = [{ id: 'bridge-n1-n2', source: 'n1', target: 'n2' }]
+    pub.publish(snapshot())
+    expect(sent).toEqual([
+      expect.objectContaining({ op: 'edge-upsert', kind: 'bridge', edge: { id: 'bridge-n1-n2', source: 'n1', target: 'n2' } })
+    ])
+  })
+})
+
+// A node the guard refuses (an oversized sticky) never reaches the peer. An edge to it that DID go
+// out would name a node the peer does not have; the peer's link-prune effect then drops it and casts
+// an `edge-remove` — deleting the link on OUR canvas too. So an edge-upsert waits for its endpoints.
+describe('an edge to a refused node', () => {
+  const link = (id: string, source: string, target: string): BridgeLink => ({ id, source, target })
+  const scene = (nodes: CanvasNodeState[], bridges: BridgeLink[] = [], ropes: BridgeLink[] = []) => ({
+    nodes,
+    bridges,
+    ropes
+  })
+  /** Refuses every node op for the ids in `bad`; records what was actually cast. */
+  function refusing(bad: Set<string>) {
+    const sent: CanvasMutation[] = []
+    const send = (m: CanvasMutation): boolean => {
+      const id = mutationNodeId(m)
+      if (id !== null && bad.has(id)) return false
+      sent.push(m)
+      return true
+    }
+    return { sent, send }
+  }
+
+  it('is not cast in the same emit that refused its endpoint', () => {
+    const c = refusing(new Set(['big']))
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('big'), node('t')], [link('b1', 'big', 't')], [link('ctrl-1', 't', 'big')]))
+    expect(c.sent).toEqual([{ op: 'upsert', node: node('t') }])
+    expect(p.refusedNodeIds()).toEqual(new Set(['big']))
+  })
+
+  it('follows its endpoint the moment the endpoint casts — in the same batch, after it', () => {
+    const bad = new Set(['big'])
+    const c = refusing(bad)
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('big'), node('t')], [link('b1', 'big', 't')]))
+    bad.clear() // the user trimmed the sticky
+    p.publish(scene([node('big', 1), node('t')], [link('b1', 'big', 't')]))
+    expect(c.sent.slice(1)).toEqual([
+      { op: 'upsert', node: node('big', 1) },
+      { op: 'edge-upsert', kind: 'bridge', edge: link('b1', 'big', 't') }
+    ])
+    expect(p.refusedNodeIds().size).toBe(0)
+  })
+
+  // Why the hold lives INSIDE the publisher rather than as a filter on the scene it is handed: a
+  // filtered-out edge that the baseline already holds diffs as an `edge-remove` — the exact delete
+  // this exists to prevent, cast by us instead of by the peer.
+  it('never removes an edge the peer already has when its endpoint later becomes unsendable', () => {
+    const bad = new Set<string>()
+    const c = refusing(bad)
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('n'), node('t')], [link('b1', 'n', 't')]))
+    const cast = c.sent.length
+    bad.add('n') // n's next edit is too large
+    p.publish(scene([node('n', 9), node('t')], [link('b1', 'n', 't')]))
+    p.publish(scene([node('n', 9), node('t')], [link('b1', 'n', 't')]))
+    expect(c.sent.slice(cast)).toEqual([])
+  })
+
+  it('stays held across an adopt that took the refused node into the baseline', () => {
+    const c = refusing(new Set(['big']))
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('big'), node('t')]))
+    p.adopt(scene([node('big'), node('t')])) // a peer op landed: the baseline now holds `big`
+    p.publish(scene([node('big'), node('t')], [link('b1', 'big', 't')]))
+    expect(c.sent.filter((m) => m.op === 'edge-upsert')).toEqual([])
+    expect(p.refusedNodeIds()).toEqual(new Set(['big']))
+  })
+
+  it('forgets a refused node once it is gone from the canvas', () => {
+    const c = refusing(new Set(['big']))
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('big'), node('t')]))
+    p.publish(scene([node('t')])) // the user deleted it before it ever synced
+    expect(p.refusedNodeIds().size).toBe(0)
   })
 })
