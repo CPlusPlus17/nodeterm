@@ -42,6 +42,10 @@ export interface PrWaitHold {
   waits: PrWait[]
   /** Epoch ms on this machine's clock. Past it the node never starts on its own (▶ still runs it). */
   deadlineAt: number
+  /** Epoch ms on the HOST clock (the one GitHub status reads are stamped with) when the wait was
+   *  armed. `checks` is judged only on a read that started at or after it: the host may still
+   *  remember "passed" for the head before a push made just before arming. */
+  armedAt: number
   /** A hold read from a project file that did not survive validation. Never satisfied. */
   invalid?: true
 }
@@ -58,6 +62,7 @@ export const INVALID_PR_WAIT_HOLD: PrWaitHold = Object.freeze({
   repository: '',
   waits: [],
   deadlineAt: 0,
+  armedAt: 0,
   invalid: true
 }) as PrWaitHold
 
@@ -200,7 +205,8 @@ export function normalizePrWaitHold(value: unknown): PrWaitHold | undefined {
     waits.push({ number, until: until as PrWaitUntil })
   }
   if (typeof v.deadlineAt !== 'number' || !Number.isFinite(v.deadlineAt)) return INVALID_PR_WAIT_HOLD
-  return { repository: `${repo.owner}/${repo.repo}`, waits, deadlineAt: v.deadlineAt }
+  if (typeof v.armedAt !== 'number' || !Number.isFinite(v.armedAt)) return INVALID_PR_WAIT_HOLD
+  return { repository: `${repo.owner}/${repo.repo}`, waits, deadlineAt: v.deadlineAt, armedAt: v.armedAt }
 }
 
 /** "PR #12 checks, PR #13 merged" — the one wording for replies, the badge and `list`. */

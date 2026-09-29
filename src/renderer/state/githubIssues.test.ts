@@ -289,47 +289,89 @@ describe('lookupPullRequests — does the board repository have these pull reque
     ...pullPage(number, null).items[0],
     ...patch
   })
-  const pg = (items: unknown[], extra: Record<string, unknown> = {}) => ({
-    items, counts: {}, partial: false, readOnly: true, lastSuccessfulRefreshAt: 1, ...extra
+  /** A fake host: one harvested list, its last refresh stamp and whether it is truncated. `refresh`
+   *  can land new items (a PR opened a minute ago) and move the stamp, or do nothing (the floor). */
+  function host(init: { items: ReturnType<typeof item>[]; refreshedAt?: number; partial?: boolean }) {
+    const state = { ...init, now: 1_000 }
+    const client = api()
+    vi.mocked(client.pullStatus).mockImplementation(async () => ({
+      repository: 'o/r', now: state.now, pulls: [], stale: false, access: { ci: true, merge: true },
+      undecided: false, truncated: false
+    }))
+    vi.mocked(client.query).mockImplementation(async (request) => {
+      const hits = state.items.filter((i) => String(i.number).includes(request.search ?? ''))
+      const counts: Record<string, number> = {}
+      for (const i of hits) counts[(i.columnId as string | null) ?? 'ungrouped'] = (counts[(i.columnId as string | null) ?? 'ungrouped'] ?? 0) + 1
+      return {
+        items: hits.filter((i) => i.columnId === request.columnId), counts, partial: !!state.partial, readOnly: true,
+        ...(state.refreshedAt !== undefined ? { lastSuccessfulRefreshAt: state.refreshedAt } : {})
+      } as never
+    })
+    return { client, state }
+  }
+
+  it('finds a PR in a column the board no longer has — the counts name every column that holds a match', async () => {
+    const { client } = host({ items: [item(7, { columnId: 'deleted-col' })], refreshedAt: 5 })
+    const found = await lookupPullRequests(client, 'p1', ['todo'], [7])
+    expect(found.get(7)).toEqual({ found: true, lifecycle: 'open' })
+    expect(client.refresh).not.toHaveBeenCalled()
   })
 
-  it('finds a PR in any column, following pages, and reads its lifecycle', async () => {
-    const client = api()
-    vi.mocked(client.query).mockImplementation(async (request) => {
-      if (request.columnId === 'done' && !request.cursor) return pg([item(17)], { nextCursor: '50' }) as never
-      if (request.columnId === 'done' && request.cursor === '50') {
-        return pg([item(7, { state: 'closed', pull: { draft: false, mergedAt: '2026-09-01T00:00:00Z' } })]) as never
-      }
-      return pg([]) as never
+  it('follows pages and reads every lifecycle', async () => {
+    const { client } = host({
+      items: [
+        item(1),
+        item(2, { pull: { draft: true, mergedAt: null } }),
+        item(3, { state: 'closed', pull: { draft: false, mergedAt: null } }),
+        item(4, { state: 'closed', pull: { draft: false, mergedAt: '2026-09-01T00:00:00Z' } })
+      ],
+      refreshedAt: 5
     })
-    const found = await lookupPullRequests(client, 'p1', ['todo', 'done'], [7])
-    expect(found.get(7)).toEqual({ found: true, lifecycle: 'merged' })
+    const found = await lookupPullRequests(client, 'p1', [], [1, 2, 3, 4])
+    expect([1, 2, 3, 4].map((n) => found.get(n))).toEqual([
+      { found: true, lifecycle: 'open' },
+      { found: true, lifecycle: 'draft' },
+      { found: true, lifecycle: 'closed' },
+      { found: true, lifecycle: 'merged' }
+    ])
     expect(client.subscribe).toHaveBeenCalledTimes(1)
     expect(client.unsubscribe).toHaveBeenCalledTimes(1)
   })
 
-  it('reads open, draft and closed-unmerged too', async () => {
-    const client = api()
-    vi.mocked(client.query).mockResolvedValue(pg([
-      item(1),
-      item(2, { pull: { draft: true, mergedAt: null } }),
-      item(3, { state: 'closed', pull: { draft: false, mergedAt: null } })
-    ]) as never)
-    const found = await lookupPullRequests(client, 'p1', [], [1, 2, 3])
-    expect([1, 2, 3].map((n) => found.get(n))).toEqual([
-      { found: true, lifecycle: 'open' },
-      { found: true, lifecycle: 'draft' },
-      { found: true, lifecycle: 'closed' }
-    ])
+  it('B1: a PR opened after the last refresh is found by one refresh on the miss, not refused', async () => {
+    // `gh pr create` → `open-claude --after-pr N:checks`: the board's snapshot predates the PR.
+    const { client, state } = host({ items: [], refreshedAt: 5 })
+    vi.mocked(client.refresh).mockImplementation(async () => {
+      state.items = [item(1019)]
+      state.refreshedAt = state.now
+    })
+    const found = await lookupPullRequests(client, 'p1', [], [1019])
+    expect(found.get(1019)).toEqual({ found: true, lifecycle: 'open' })
+    expect(client.refresh).toHaveBeenCalledTimes(1)
   })
 
-  it('only a whole, refreshed snapshot makes "not found" an answer', async () => {
-    const client = api()
-    vi.mocked(client.query).mockResolvedValue(pg([]) as never)
+  it('"not found" is an answer only from a refresh that started after this call', async () => {
+    const { client, state } = host({ items: [], refreshedAt: 5 })
+    vi.mocked(client.refresh).mockImplementation(async () => { state.refreshedAt = state.now })
     expect((await lookupPullRequests(client, 'p1', [], [9])).get(9)).toEqual({ found: false, complete: true })
-    vi.mocked(client.query).mockResolvedValue(pg([], { partial: true }) as never)
-    expect((await lookupPullRequests(client, 'p1', [], [9])).get(9)).toEqual({ found: false, complete: false })
-    vi.mocked(client.query).mockResolvedValue(pg([], { lastSuccessfulRefreshAt: undefined }) as never)
-    expect((await lookupPullRequests(client, 'p1', [], [9])).get(9)).toEqual({ found: false, complete: false })
+  })
+
+  it('an OLD snapshot proves nothing: no refresh landed (the floor), an older one landed, or it failed', async () => {
+    const floored = host({ items: [], refreshedAt: 5 })
+    expect((await lookupPullRequests(floored.client, 'p1', [], [9])).get(9)).toEqual({ found: false, complete: false })
+    const inFlight = host({ items: [], refreshedAt: 5 })
+    vi.mocked(inFlight.client.refresh).mockImplementation(async () => { inFlight.state.refreshedAt = 900 })
+    expect((await lookupPullRequests(inFlight.client, 'p1', [], [9])).get(9)).toEqual({ found: false, complete: false })
+    const failed = host({ items: [], refreshedAt: 5 })
+    vi.mocked(failed.client.refresh).mockRejectedValue(new Error('offline'))
+    expect((await lookupPullRequests(failed.client, 'p1', [], [9])).get(9)).toEqual({ found: false, complete: false })
+  })
+
+  it('a truncated harvest says so: an old PR it dropped will never be confirmed by waiting', async () => {
+    const { client, state } = host({ items: [], refreshedAt: 5, partial: true })
+    vi.mocked(client.refresh).mockImplementation(async () => { state.refreshedAt = state.now })
+    expect((await lookupPullRequests(client, 'p1', [], [9])).get(9)).toEqual({
+      found: false, complete: false, truncated: true
+    })
   })
 })

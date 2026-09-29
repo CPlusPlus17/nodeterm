@@ -78,6 +78,12 @@ describe('every open path attaches the wait through withPrHold', () => {
     expect(armAfter).toMatch(/withPrHold\(withLaunchBrief\(queueControlLaunch\(node, after, awaitSetupGroup\), promptFile\), prHoldPre\)/)
   })
 
+  it('every dry run reports the wait in its result, the cold one included', () => {
+    const cold = slice('if (canColdOpen(verb)) {', 'if (answersOffCanvas(verb) || answersFromStoredNodes(verb)) {')
+    const dry = cold.slice(cold.indexOf('if (dryRun) {'), cold.indexOf('if (dryRun) {') + 3000)
+    expect(dry).toMatch(/projectId: owner\.id,[\s\S]*\.\.\.prResult/)
+  })
+
   it('the cold open', () => {
     const cold = slice('if (canColdOpen(verb)) {', 'if (answersOffCanvas(verb) || answersFromStoredNodes(verb)) {')
     expect(cold).toMatch(/withPrHold\(/)
@@ -103,6 +109,14 @@ describe('the launch loop judges the wait on the ACTIVE project’s pull request
     const sig = slice('const armedPrSig = useGitHubIssues((s) => {', '})')
     expect(sig).toContain('prHoldReports(')
     expect(sig).toContain("sig +=")
+  })
+
+  it('asks for a read taken after arming while a checks wait lacks one (B2), bounded', () => {
+    const fresh = slice('const prFreshReadWanted = useGitHubIssues((s) => {', '// Bumped to re-run the launch effect')
+    expect(fresh).toContain('board.readStartedAt < hold.armedAt')
+    expect(fresh).toContain('startFreshReadAsks({')
+    expect(fresh).toContain('api.githubIssues.refresh(prWatchProjectId)')
+    expect(fresh).toMatch(/if \(!prWatchProjectId \|\| !prFreshReadWanted\) return/)
   })
 
   it('keeps the host watch (and the checks chase) only while some node holds a PR wait', () => {

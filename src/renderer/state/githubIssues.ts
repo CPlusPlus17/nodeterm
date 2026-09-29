@@ -167,10 +167,19 @@ function lifecycleOf(item: GitHubIssuePage['items'][number]): PullLifecycle {
 
 /**
  * Does the board's repository have these pull requests, and where are they in their life? Read
- * from the host's harvested issue list (#1008: pull requests ride the same REST snapshot), every
- * column, following pages. Holding the host subscription for the duration makes the host read the
- * repository first when nothing has yet in this app run. "Not found" is an ANSWER only from a whole,
- * refreshed snapshot; anything less is `complete: false`, which a caller must not read as absence.
+ * from the host's harvested issue list (#1008: pull requests ride the same REST snapshot). Holding
+ * the host subscription for the duration makes the host read the repository first when nothing has
+ * yet in this app run.
+ *
+ * Which columns: the first page's `counts` name every column that holds a match, so a PR the
+ * mapping files under a column the board has since deleted is still found.
+ *
+ * "Not found" is an ANSWER only from a snapshot a refresh STARTED after this call produced (B1). A
+ * snapshot from before it proves nothing — the headline flow is `gh pr create` then `open-* --after-pr`,
+ * and the board's last refresh can be a minute old — so a miss asks for one refresh and looks again.
+ * A refresh the floor swallowed, one already in flight from before the call, or one that failed
+ * leaves `complete: false`, which a caller must not read as absence. A truncated harvest is named:
+ * a PR it dropped is never listed however long one waits.
  */
 export async function lookupPullRequests(
   api: GitHubIssuesApi,
@@ -180,25 +189,58 @@ export async function lookupPullRequests(
 ): Promise<Map<number, PrLookup>> {
   const release = await acquireHostSubscription(api, projectId)
   try {
-    const out = new Map<number, PrLookup>()
-    await Promise.all(numbers.map(async (number) => {
-      let complete = true
-      for (const columnId of [null, ...columns]) {
+    type Search = { item?: GitHubIssuePage['items'][number]; synced: boolean; partial: boolean; refreshedAt?: number }
+    const search = async (number: number): Promise<Search> => {
+      const pageOf = (columnId: string | null, cursor?: string) => api.query({
+        projectId, columnId, kind: 'pull', pageSize: 50, search: String(number), ...(cursor ? { cursor } : {})
+      })
+      const first = await pageOf(null)
+      const found: Search = {
+        synced: first.lastSuccessfulRefreshAt !== undefined,
+        partial: first.partial,
+        refreshedAt: first.lastSuccessfulRefreshAt
+      }
+      const fromCounts = Object.keys(first.counts).map((key) => (key === 'ungrouped' ? null : key))
+      const columnIds = [...new Set<string | null>([null, ...columns, ...fromCounts])]
+      for (const columnId of columnIds) {
+        let page: GitHubIssuePage | undefined = columnId === null ? first : undefined
         let cursor: string | undefined
         do {
-          const page = await api.query({
-            projectId, columnId, kind: 'pull', pageSize: 50, search: String(number), ...(cursor ? { cursor } : {})
-          })
-          if (page.partial || page.lastSuccessfulRefreshAt === undefined) complete = false
+          page = page ?? await pageOf(columnId, cursor)
+          if (page.partial) found.partial = true
+          if (page.lastSuccessfulRefreshAt === undefined) found.synced = false
           const item = page.items.find((candidate) => candidate.number === number)
-          if (item) {
-            out.set(number, { found: true, lifecycle: lifecycleOf(item) })
-            return
-          }
+          if (item) return { ...found, item }
           cursor = page.nextCursor
+          page = undefined
         } while (cursor)
       }
-      out.set(number, { found: false, complete })
+      return found
+    }
+    const out = new Map<number, PrLookup>()
+    const first = await Promise.all(numbers.map(async (number) => [number, await search(number)] as const))
+    const missed: number[] = []
+    for (const [number, result] of first) {
+      if (result.item) out.set(number, { found: true, lifecycle: lifecycleOf(result.item) })
+      else missed.push(number)
+    }
+    if (!missed.length) return out
+    // One refresh for every miss, then look again. The host's clock is read BEFORE it, so a snapshot
+    // proves absence only if its refresh started at or after that moment.
+    const since = await api.pullStatus(projectId).then((board) => board.now, () => undefined)
+    const refreshed = await api.refresh(projectId).then(() => true, () => false)
+    await Promise.all(missed.map(async (number) => {
+      const result = await search(number)
+      if (result.item) {
+        out.set(number, { found: true, lifecycle: lifecycleOf(result.item) })
+        return
+      }
+      const fresh = refreshed && since !== undefined && result.refreshedAt !== undefined &&
+        result.refreshedAt >= since
+      const truncated = result.synced && result.partial
+      out.set(number, fresh && result.synced && !result.partial
+        ? { found: false, complete: true }
+        : { found: false, complete: false, ...(truncated ? { truncated: true as const } : {}) })
     }))
     return out
   } finally {

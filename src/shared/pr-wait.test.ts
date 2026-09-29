@@ -11,6 +11,7 @@ import {
   parseAfterPrArg,
   parsePrDeadlineArg
 } from './pr-wait'
+import { LAUNCH_PROMPT_TTL_MS } from './launch-prompt'
 
 describe('parseAfterPrArg — the --after-pr grammar', () => {
   it('reads N:checks and N:merged', () => {
@@ -148,7 +149,8 @@ describe('normalizePrWaitHold — a git-shared, hand-editable project file is ho
   const good = {
     repository: 'eneskirca/nodeterm',
     waits: [{ number: 12, until: 'checks' }],
-    deadlineAt: 1_900_000_000_000
+    deadlineAt: 1_900_000_000_000,
+    armedAt: 1_800_000_000_000
   }
 
   it('absent stays absent', () => {
@@ -172,6 +174,10 @@ describe('normalizePrWaitHold — a git-shared, hand-editable project file is ho
     ['too many', { ...good, waits: Array.from({ length: PR_WAIT_MAX + 1 }, (_, i) => ({ number: i + 1, until: 'merged' })) }],
     ['a NaN deadline', { ...good, deadlineAt: Number.NaN }],
     ['a string deadline', { ...good, deadlineAt: '2030' }],
+    // `checks` is judged against reads that started after this moment: without it a stale
+    // "passed at the previous head" would count, so a hold that lacks it cannot be judged.
+    ['no arming time', { ...good, armedAt: undefined }],
+    ['a NaN arming time', { ...good, armedAt: Number.NaN }],
     ['a hold already marked invalid', { ...good, invalid: true }]
   ])('%s becomes the INVALID hold — present, never satisfied, never throws', (_label, value) => {
     // Dropping a malformed hold would let the node start on its `--after` deps alone, i.e. EARLY:
@@ -185,7 +191,7 @@ describe('owner names GitHub really issued (a stored value is never narrower tha
   // and `foo--bar` (org) exist; `-foo` does not. A validator narrower than that would turn every
   // stored hold on such a repository invalid on load, and the next save would write it out that way.
   it.each(['john-/repo', 'Test-/x', 'hello--world/nodeterm', 'foo--bar/a.b_c-d'])('keeps a hold on %s', (repository) => {
-    const hold = { repository, waits: [{ number: 3, until: 'merged' }], deadlineAt: 5 }
+    const hold = { repository, waits: [{ number: 3, until: 'merged' }], deadlineAt: 5, armedAt: 1 }
     expect(normalizePrWaitHold(hold)).toEqual(hold)
     expect(parseAfterPrArg(`${repository}#3:merged`)).toEqual({
       ok: true,
@@ -194,9 +200,17 @@ describe('owner names GitHub really issued (a stored value is never narrower tha
   })
 
   it.each(['-foo/repo', 'o/-repo', 'o/..', 'o/.', 'a'.repeat(40) + '/r', 'o/r;x', 'o/r x'])('still refuses %s', (repository) => {
-    expect(normalizePrWaitHold({ repository, waits: [{ number: 3, until: 'merged' }], deadlineAt: 5 })).toEqual(
+    expect(normalizePrWaitHold({ repository, waits: [{ number: 3, until: 'merged' }], deadlineAt: 5, armedAt: 1 })).toEqual(
       INVALID_PR_WAIT_HOLD
     )
+  })
+})
+
+describe('the deadline never outlives the prompt file a held launch reads (B3)', () => {
+  it('a spilled prompt is kept longer than the longest --pr-deadline', () => {
+    // A PR wait may hold a cold-opened node for up to 14 days; its spilled prompt must still be
+    // there when it fires (and the delivery loop checks, for waits longer than any TTL).
+    expect(LAUNCH_PROMPT_TTL_MS).toBeGreaterThan(PR_DEADLINE_MAX_MS + 7 * 86_400_000)
   })
 })
 

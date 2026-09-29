@@ -474,7 +474,8 @@ it('lists a PR wait on the row, and EXPIRED once its deadline has passed (--afte
   const hold = (deadlineAt: number) => ({
     repository: 'o/r',
     waits: [{ number: 7, until: 'checks' }, { number: 9, until: 'merged' }],
-    deadlineAt
+    deadlineAt,
+    armedAt: 0
   })
   const rows = storedNodeListing(
     [

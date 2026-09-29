@@ -1281,7 +1281,8 @@ describe('--after-pr: open a node that waits on a pull request', () => {
   it.each(bodies)('%s states what each condition means, the deadline and the refusals', (_name, body) => {
     const flat = body.replace(/\s+/g, ' ')
     // The two conditions, with #1008's own rules.
-    expect(flat).toContain('`checks` = the PR\'s checks passed at its CURRENT head commit')
+    expect(flat).toContain('`checks` = the PR\'s checks passed at its CURRENT head commit, on a status read taken after you armed the wait')
+    expect(flat).toContain('A PR opened a moment ago is looked up again after one refresh')
     expect(flat).toContain('a PR that reports no checks never passes')
     expect(flat).toContain('`merged` = the PR is merged')
     expect(flat).toContain('ANDed with `--after`')

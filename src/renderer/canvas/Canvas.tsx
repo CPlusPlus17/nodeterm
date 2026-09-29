@@ -513,7 +513,7 @@ import {
   LAUNCH_STALL_MS,
   type ArmedNode
 } from '../lib/pendingLaunch'
-import { prHoldReports, prWaitReplyLine, resolvePrWaitFor, type PrWaitArmResult } from '../lib/prWait'
+import { prHoldReports, prWaitReplyLine, resolvePrWaitFor, startFreshReadAsks, type PrWaitArmResult } from '../lib/prWait'
 import { RUN_NOW_AFTER_PR_REFUSAL } from '@shared/pr-wait'
 import { lookupPullRequests, pullBoardFor, useGitHubIssues } from '../state/githubIssues'
 import { usePullChase } from '../components/kanban/usePullAutoMove'
@@ -2064,6 +2064,32 @@ export function Canvas() {
   )
   const prChaseNeeded = prChecksWaited && prBoardUndecided
   usePullChase(api.githubIssues, prWatchProjectId, prChaseNeeded)
+  // B2: a `checks` wait is judged only on a read that STARTED after it was armed — the host may still
+  // remember "passed" for the head before a push made just before arming. While some wait lacks such
+  // a read, ask the host for a foreground one (which answers even when nothing changed), a bounded
+  // number of times: the refresh floor, or a read already in flight from before the arming, can
+  // swallow a single ask.
+  const prFreshReadWanted = useGitHubIssues((s) => {
+    if (!prWatchProjectId) return false
+    const board = pullBoardFor(s, prWatchProjectId)
+    return nodesRef.current.some((n) => {
+      const hold = (n.data.pendingLaunch as PendingLaunch | undefined)?.afterPr
+      return (
+        !!hold &&
+        !hold.invalid &&
+        hold.waits.some((w) => w.until === 'checks') &&
+        (board?.readStartedAt === undefined || board.readStartedAt < hold.armedAt)
+      )
+    })
+  })
+  useEffect(() => {
+    if (!prWatchProjectId || !prFreshReadWanted) return
+    return startFreshReadAsks({
+      ask: () => void api.githubIssues.refresh(prWatchProjectId).catch(() => undefined),
+      setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimeout: (timer) => window.clearTimeout(timer as number)
+    })
+  }, [api, prWatchProjectId, prFreshReadWanted])
   // Bumped to re-run the launch effect: after a refused delivery's backoff, and when a node
   // reports its session ready (`subscribeSessionReady` below).
   const [launchNudge, setLaunchNudge] = useState(0)
@@ -10660,6 +10686,7 @@ export function Canvas() {
                   (openProjectPre?.kanban?.columns ?? []).map((c) => c.id),
                   numbers
                 ),
+              hostNow: (id) => api.githubIssues.pullStatus(id).then((b) => b.now),
               now: () => Date.now()
             })
       if (!prWaitPre.ok) {
@@ -11444,7 +11471,8 @@ export function Canvas() {
                   cwd: coldCwd ?? null,
                   after: coldAfterIds,
                   projectId: owner.id,
-                  ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {})
+                  ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {}),
+                  ...prResult
                 }
               })
               return

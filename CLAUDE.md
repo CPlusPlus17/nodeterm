@@ -3500,6 +3500,21 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     a STALE board never passes `checks` (a push since the last read carries other checks) but may
     pass `merged` (irreversible). A board whose repository differs from the hold's is `blocked`,
     which holds rather than fires — that is also what makes a mid-switch board harmless.
+  - **`checks` needs a read that STARTED after arming.** The host remembers "passed at head A"
+    across a closed board, so pushing B and arming at once would otherwise fire on A. The hold
+    stores `armedAt` on the HOST clock (`pullStatus().now`), the tracker publishes `readStartedAt`,
+    and `checks` is `unknown` until `readStartedAt >= armedAt`. Two host changes carry it: a
+    FOREGROUND read now notifies even when nothing changed (else an already-green PR's fresh read
+    would never reach the renderer), and Canvas asks for one (`startFreshReadAsks`: at once, then at
+    most 3 more, 35 s apart — the 30 s refresh floor or a read already in flight can swallow one).
+  - **"No such PR" needs a snapshot refreshed after the question** (`lookupPullRequests`). A board's
+    snapshot can be a minute old and `subscribe` starts no refresh when a board already holds it,
+    so `gh pr create` then `open-* --after-pr` used to be told "does not exist — do not retry". A
+    miss now asks for one refresh and looks again; absence is proven only when the snapshot's
+    `lastSuccessfulRefreshAt` is at or after the host time read before that refresh. Columns come
+    from the first page's `counts`, so a PR filed under a deleted column is still found, and a
+    truncated harvest says so instead of "retry in a minute" forever. The spilled-prompt TTL
+    (30 days) outlives the longest `--pr-deadline` (14 days), pinned by a test.
   - **Unknown is never satisfied, in both directions.** `launchesToFire` treats a caller that passes
     no PR context as CLOSED for a PR hold (the opposite of the setup gate, whose absent probe is
     open for a restart reason that does not apply here), and a malformed persisted hold becomes

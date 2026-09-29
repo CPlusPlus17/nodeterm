@@ -20,7 +20,7 @@ describe('normalizePendingLaunch — the held launch as a hostile project file c
       command: 'claude "go"',
       attempted: false,
       awaitSetupGroup: 'g1',
-      afterPr: { repository: 'o/r', waits: [{ number: 3, until: 'merged' as const }], deadlineAt: 99 }
+      afterPr: { repository: 'o/r', waits: [{ number: 3, until: 'merged' as const }], deadlineAt: 99, armedAt: 1 }
     }
     expect(normalizePendingLaunch(hold)).toEqual(hold)
   })

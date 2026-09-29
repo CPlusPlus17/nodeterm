@@ -7,15 +7,19 @@ import {
   prHoldSatisfied,
   prHoldSummary,
   resolvePrWaitFor,
+  startFreshReadAsks,
+  PR_FRESH_READ_ASKS,
   type PrLookup,
   type PrWaitArmDeps
 } from './prWait'
 
 const NOW = 1_000_000
+const ARMED = NOW - 5_000
 const hold = (waits: PrWaitHold['waits'], deadlineAt = NOW + 3_600_000): PrWaitHold => ({
   repository: 'o/r',
   waits,
-  deadlineAt
+  deadlineAt,
+  armedAt: ARMED
 })
 const pull = (number: number, patch: Partial<GitHubPullStatus> = {}): GitHubPullStatus => ({
   number,
@@ -30,11 +34,17 @@ const board = (pulls: GitHubPullStatus[], patch: Partial<GitHubPullBoard> = {}):
   repository: 'o/r',
   pulls,
   observedAt: NOW - 1000,
+  readStartedAt: NOW - 2000,
   ...patch
 })
 
 describe('evaluatePrWait — merged', () => {
   const w = { number: 7, until: 'merged' as const }
+  it('a merge needs no fresh read: it cannot be undone, so an early read that says so is true', () => {
+    const early = board([pull(7, { lifecycle: 'merged' })], { readStartedAt: ARMED - 60_000 })
+    expect(evaluatePrWait(w, hold([w]), early).state).toBe('met')
+  })
+
   it('is met by a merged PR, even from a stale snapshot (a merge cannot be undone)', () => {
     expect(evaluatePrWait(w, hold([w]), board([pull(7, { lifecycle: 'merged' })])).state).toBe('met')
     expect(evaluatePrWait(w, hold([w]), board([pull(7, { lifecycle: 'merged' })], { stale: true })).state).toBe('met')
@@ -57,6 +67,17 @@ describe('evaluatePrWait — checks (SUCCESS at the PR’s current head)', () =>
     expect(evaluatePrWait(w, h, board([pull(7, { ci: 'passed' })])).state).toBe('met')
     expect(evaluatePrWait(w, h, board([pull(7, { ci: 'passed', lifecycle: 'draft' })])).state).toBe('met')
   })
+  it('does NOT trust a read that started before the wait was armed (B2): a push in between carries other checks', () => {
+    // Board closed → author pushes head B → arm `N:checks` → the host still remembers "passed at A".
+    const early = board([pull(7, { ci: 'passed' })], { readStartedAt: ARMED - 1 })
+    const r = evaluatePrWait(w, h, early)
+    expect(r.state).toBe('unknown')
+    expect(r.detail).toMatch(/read taken after this wait was armed/)
+    expect(evaluatePrWait(w, h, board([pull(7, { ci: 'passed' })], { readStartedAt: undefined })).state).toBe('unknown')
+    // A read that started at or after arming is an answer.
+    expect(evaluatePrWait(w, h, board([pull(7, { ci: 'passed' })], { readStartedAt: ARMED })).state).toBe('met')
+  })
+
   it('does NOT trust a stale snapshot: a push since the last read would carry other checks', () => {
     expect(evaluatePrWait(w, h, board([pull(7, { ci: 'passed' })], { stale: true })).state).toBe('unknown')
   })
@@ -141,6 +162,7 @@ function deps(patch: Partial<PrWaitArmDeps> = {}): PrWaitArmDeps {
       new Map<number, PrLookup>(numbers.map((n) => [n, { found: true, lifecycle: 'open' }]))
     ),
     now: () => NOW,
+    hostNow: vi.fn(async () => 777),
     ...patch
   }
 }
@@ -156,9 +178,16 @@ describe('resolvePrWaitFor — the refusal matrix', () => {
     const r = await resolvePrWaitFor('7:checks', '2h', 'open-agent', deps())
     expect(r).toEqual({
       ok: true,
-      hold: { repository: 'o/r', waits: [{ number: 7, until: 'checks' }], deadlineAt: NOW + 2 * 3_600_000 },
+      hold: { repository: 'o/r', waits: [{ number: 7, until: 'checks' }], deadlineAt: NOW + 2 * 3_600_000, armedAt: 777 },
       alreadyMerged: []
     })
+  })
+
+  it('records the arming time on the HOST clock, falling back to this one when the host cannot say', async () => {
+    const r = await resolvePrWaitFor('7:checks', undefined, 'open-agent', deps({ hostNow: vi.fn(async () => undefined) }))
+    expect(r.ok && r.hold?.armedAt).toBe(NOW)
+    const t = await resolvePrWaitFor('7:checks', undefined, 'open-agent', deps({ hostNow: vi.fn(async () => { throw new Error('x') }) }))
+    expect(t.ok && t.hold?.armedAt).toBe(NOW)
   })
 
   it('a relay tab is refused by name', async () => {
@@ -224,6 +253,16 @@ describe('resolvePrWaitFor — the refusal matrix', () => {
     expect(!threw.ok && threw.error).toMatch(/^after-pr-unconfirmed:/)
   })
 
+  it('a truncated harvest is named, and not told to retry — waiting never lists a PR it dropped', async () => {
+    const r = await resolvePrWaitFor('7:merged', undefined, 'open-agent', deps({
+      lookupPulls: vi.fn(async () => new Map<number, PrLookup>([[7, { found: false, complete: false, truncated: true }]]))
+    }))
+    expect(!r.ok && r.error).toMatch(/^after-pr-unconfirmed:/)
+    expect(!r.ok && r.error).toMatch(/keeps fewer pull requests than o\/r has/)
+    expect(!r.ok && r.error).toMatch(/do not retry/)
+    expect(!r.ok && r.error).not.toMatch(/retry in a minute/)
+  })
+
   it('refuses a closed-unmerged PR, and checks on a merged one', async () => {
     const closed = await resolvePrWaitFor('7:merged', undefined, 'open-agent', deps({
       lookupPulls: vi.fn(async () => new Map<number, PrLookup>([[7, { found: true, lifecycle: 'closed' }]]))
@@ -252,5 +291,45 @@ describe('resolvePrWaitFor — the refusal matrix', () => {
   it('re-parses the flag: the renderer never trusts that main’s gate ran', async () => {
     const r = await resolvePrWaitFor('7', undefined, 'open-agent', deps())
     expect(!r.ok && r.error).toMatch(/^open-agent: --after-pr must be/)
+  })
+})
+
+describe('startFreshReadAsks — one fresh read for a checks wait, asked a bounded number of times', () => {
+  it('asks at once, then re-asks on the retry interval, and stops at the cap', () => {
+    const timers: { fn: () => void; ms: number }[] = []
+    const ask = vi.fn()
+    const stop = startFreshReadAsks({
+      ask,
+      setTimeout: (fn, ms) => {
+        timers.push({ fn, ms })
+        return timers.length
+      },
+      clearTimeout: () => undefined
+    })
+    expect(ask).toHaveBeenCalledTimes(1)
+    // The host's refresh floor is 30 s: a re-ask inside it would be swallowed.
+    expect(timers[0].ms).toBeGreaterThan(30_000)
+    // Fire every timer the helper arms, once each, until it stops arming new ones.
+    for (let i = 0; i < timers.length && i < 20; i++) timers[i].fn()
+    expect(ask).toHaveBeenCalledTimes(PR_FRESH_READ_ASKS)
+    stop()
+  })
+
+  it('stop() cancels the pending re-ask', () => {
+    let pending: (() => void) | undefined
+    const cleared: unknown[] = []
+    const ask = vi.fn()
+    const stop = startFreshReadAsks({
+      ask,
+      setTimeout: (fn) => {
+        pending = fn
+        return 'timer'
+      },
+      clearTimeout: (t) => cleared.push(t)
+    })
+    stop()
+    expect(cleared).toEqual(['timer'])
+    expect(ask).toHaveBeenCalledTimes(1)
+    void pending
   })
 })

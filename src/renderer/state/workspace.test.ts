@@ -1205,7 +1205,7 @@ describe('pendingLaunch at the serializer seams (a held launch is hostile input 
       after: ['b1'],
       command: 'claude',
       attempted: false,
-      afterPr: { repository: 'o/r', waits: [{ number: 7, until: 'checks' }], deadlineAt: 5 }
+      afterPr: { repository: 'o/r', waits: [{ number: 7, until: 'checks' }], deadlineAt: 5, armedAt: 1 }
     }
     const flow = nodeStatesToFlow([state(hold)])
     expect(flow[0].data.pendingLaunch).toEqual(hold)

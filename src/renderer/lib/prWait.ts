@@ -73,6 +73,11 @@ export function evaluatePrWait(
   if (!board.access.ci) return report('blocked', "this machine's GitHub token cannot read checks")
   switch (pull.ci) {
     case 'passed':
+      // B2: the host may still remember "passed" for the head BEFORE a push made just before this
+      // wait was armed. Only a read that STARTED at or after arming can speak for the current head.
+      if (board.readStartedAt === undefined || board.readStartedAt < hold.armedAt) {
+        return report('unknown', 'passed at an earlier read; waiting for a read taken after this wait was armed')
+      }
       return board.stale
         ? report('unknown', 'passed at the last read, but the latest status read failed')
         : report('met', 'checks passed')
@@ -119,8 +124,10 @@ export function prHoldSummary(hold: PrWaitHold, board: GitHubPullBoard | undefin
 /** What the harvested issue list (the board's REST snapshot, #1008) knows about one number. */
 export type PrLookup =
   | { found: true; lifecycle: PullLifecycle }
-  /** `complete` = the snapshot is whole, so "not found" is an answer, not a gap. */
-  | { found: false; complete: boolean }
+  /** `complete` = a whole snapshot refreshed after the question was asked, so "not found" is an
+   *  answer, not a gap. `truncated` = the harvest keeps fewer pull requests than the repository
+   *  has, so an old one it dropped will never be confirmed. */
+  | { found: false; complete: boolean; truncated?: true }
 
 export interface PrWaitArmDeps {
   /** The project the node OPENS in (the one `issuePre` resolves against). */
@@ -130,6 +137,8 @@ export interface PrWaitArmDeps {
   /** The GitHub host controller's answer for that project (configured, else detected). */
   controlStatus(projectId: string): Promise<{ repository?: string; approved: boolean } | null>
   lookupPulls(projectId: string, numbers: number[]): Promise<Map<number, PrLookup>>
+  /** The host's clock (the one its pull request reads are stamped with); undefined = cannot say. */
+  hostNow(projectId: string): Promise<number | undefined>
   now(): number
 }
 
@@ -208,6 +217,15 @@ export async function resolvePrWaitFor(
       if (found && found.complete) {
         return { ok: false, error: `after-pr-unknown: ${repository} has no pull request #${spec.number} — do not retry` }
       }
+      if (found && found.truncated) {
+        return {
+          ok: false,
+          error:
+            `after-pr-unconfirmed: pull request #${spec.number} is not in the list this machine keeps, and ` +
+            `that list keeps fewer pull requests than ${repository} has, so an older one is never confirmed — ` +
+            'do not retry: wait on a recent pull request, or open without --after-pr'
+        }
+      }
       return {
         ok: false,
         error:
@@ -233,9 +251,12 @@ export async function resolvePrWaitFor(
     waits.push({ number: spec.number, until: spec.until })
   }
   if (!waits.length) return { ok: true, alreadyMerged }
+  // On the desktop the host IS this machine, so the fallback is the same clock; it only differs on
+  // a surface that does not arm PR waits anyway.
+  const armedAt = await deps.hostNow(project.id).catch(() => undefined) ?? deps.now()
   return {
     ok: true,
-    hold: { repository, waits, deadlineAt: deps.now() + deadline.ms },
+    hold: { repository, waits, deadlineAt: deps.now() + deadline.ms, armedAt },
     alreadyMerged
   }
 }
@@ -243,4 +264,36 @@ export async function resolvePrWaitFor(
 /** The reply line for an armed PR wait. */
 export function prWaitReplyLine(hold: PrWaitHold): string {
   return `waiting for ${formatPrWaits(hold)} in ${hold.repository} (until ${new Date(hold.deadlineAt).toISOString()})`
+}
+
+/** How many times a `checks` wait asks for a read taken after it was armed, and how far apart:
+ *  just past the host's 30 s refresh floor, which silently swallows a request made inside it. */
+export const PR_FRESH_READ_ASKS = 4
+export const PR_FRESH_READ_RETRY_MS = 35_000
+
+/**
+ * Ask the host for one FOREGROUND read (`githubIssues.refresh`) while a `checks` wait has none taken
+ * after it was armed (B2). Bounded: asked at once, then re-asked at most `PR_FRESH_READ_ASKS - 1`
+ * times — a refresh inside the floor, or one that joined a read already in flight from before the
+ * arming, does not produce the read this needs. The caller stops it as soon as a qualifying read
+ * lands. Past the cap the wait keeps waiting on the ordinary heartbeat and chase; its deadline is
+ * the way out, never a loop of our own.
+ */
+export function startFreshReadAsks(deps: {
+  ask: () => void
+  setTimeout: (fn: () => void, ms: number) => unknown
+  clearTimeout: (timer: unknown) => void
+}): () => void {
+  let asked = 0
+  let timer: unknown
+  const next = (): void => {
+    asked += 1
+    deps.ask()
+    timer = asked < PR_FRESH_READ_ASKS ? deps.setTimeout(next, PR_FRESH_READ_RETRY_MS) : undefined
+  }
+  next()
+  return () => {
+    if (timer !== undefined) deps.clearTimeout(timer)
+    timer = undefined
+  }
 }

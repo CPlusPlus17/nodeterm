@@ -347,7 +347,8 @@ describe('--after-pr: a PR wait is a third gate, ANDed with the deps and the set
   const hold = (deadlineAt = NOW + 60_000) => ({
     repository: 'o/r',
     waits: [{ number: 7, until: 'merged' as const }],
-    deadlineAt
+    deadlineAt,
+    armedAt: 0
   })
   const prNode = (after: string[], deadlineAt?: number): ArmedNode => ({
     id: 'c',
@@ -432,7 +433,7 @@ describe('--after-pr: a PR wait is a third gate, ANDed with the deps and the set
 })
 
 describe('withPrHold — one way every open path attaches a PR wait', () => {
-  const hold = { repository: 'o/r', waits: [{ number: 7, until: 'merged' as const }], deadlineAt: 9 }
+  const hold = { repository: 'o/r', waits: [{ number: 7, until: 'merged' as const }], deadlineAt: 9, armedAt: 0 }
   it('adds the hold to a node that already holds its launch', () => {
     const node = { id: 'n', data: { pendingLaunch: { after: ['a'], command: 'c', attempted: false } } }
     expect(withPrHold(node, hold).data.pendingLaunch).toEqual({ after: ['a'], command: 'c', attempted: false, afterPr: hold })
