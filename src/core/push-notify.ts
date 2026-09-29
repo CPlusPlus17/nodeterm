@@ -148,7 +148,7 @@ function groupByGrantHost<T extends { nodeId: string }>(
  *
  * The correct exclusion is per DEVICE, and this process cannot express it: a `PushGrant` is keyed by
  * the phone's `deviceId` (the grant filename), while the relay-paired registry
- * (`remote-approved-devices.json`, read by `loadApprovedDevices`) stores nothing but base64 NaCl box
+ * (`remote-approved-phones.json`, read by `phonePins.load`) stores nothing but base64 NaCl box
  * PUBLIC KEYS — and this service is only told `hasPairedPhone: boolean` in the first place. The two
  * identifiers never meet on the desktop: the phone's own deviceId is seen exactly once, transiently,
  * during a LAN QR pair (`pairing-service.ts`'s `phoneDeviceId`, spent on the `/v1/relay/device` mint

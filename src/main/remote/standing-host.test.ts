@@ -40,11 +40,33 @@ vi.mock('./host-canvas-hub', () => ({
 let disk: ApprovedDevices = { pubkeys: [] }
 const persist = vi.fn(async (update: (s: ApprovedDevices) => ApprovedDevices) => { disk = update(disk) })
 vi.mock('./relay-advertise', () => ({ writeRelayAdvertisement: async () => {}, removeRelayAdvertisement: async () => {} }))
-vi.mock('./approved-devices', () => ({
-  updateApprovedDevices: (update: (s: ApprovedDevices) => ApprovedDevices) => persist(update),
-  loadApprovedDevices: async () => disk,
-  saveApprovedDevices: async () => {}
-}))
+// Per-role pin stores (approved-devices.ts), in memory. The 'phone' store — the one this module
+// must write — is `disk`; every other role lives in `otherPins`, so a pin landing in the WRONG
+// store is visible to the assertions instead of indistinguishable from the right one.
+const otherPins: Record<string, ApprovedDevices> = {}
+vi.mock('./approved-devices', () => {
+  const mem = (role: string) => {
+    const get = (): ApprovedDevices => (role === 'phone' ? disk : (otherPins[role] ??= { pubkeys: [] }))
+    const set = (s: ApprovedDevices): void => {
+      if (role === 'phone') disk = s
+      else otherPins[role] = s
+    }
+    return {
+      load: async () => get(),
+      save: async (s: ApprovedDevices) => set(s),
+      update: role === 'phone' ? (u: (s: ApprovedDevices) => ApprovedDevices) => persist(u) : async (u: (s: ApprovedDevices) => ApprovedDevices) => set(u(get()))
+    }
+  }
+  const stores: Record<string, ReturnType<typeof mem>> = { phone: mem('phone'), guest: mem('guest'), joinedHost: mem('joinedHost') }
+  return {
+    PIN_ROLES: ['phone', 'guest', 'joinedHost'],
+    phonePins: stores.phone,
+    guestPins: stores.guest,
+    joinedHostPins: stores.joinedHost,
+    pinStore: (r: string) => stores[r],
+    retireLegacyPinFile: async () => 0
+  }
+})
 vi.mock('./e2ee', () => ({ publicKeyToB64: () => 'host-pub' }))
 
 const sessions: Array<{ opts: HostSessionOptions; session: HostSession; closed: number }> = []
@@ -79,6 +101,7 @@ vi.mock('./host-service', () => ({
 }))
 
 import { initStandingHost, tokenTtlMs } from './standing-host'
+import { revokeAllPhones, revokePeerKey } from './peer-revoke'
 import { IPC } from '../../shared/ipc'
 
 /** Let the async connectOne() chain (token mint, keypair) settle. */
@@ -117,6 +140,7 @@ beforeEach(() => {
   errorBoxes.length = 0
   persist.mockReset()
   disk = { pubkeys: [] }
+  for (const k of Object.keys(otherPins)) delete otherPins[k]
   persist.mockImplementation(async (update) => { disk = update(disk) })
   keyError = null
   for (const key of Object.keys(ipc)) delete ipc[key]
@@ -290,6 +314,72 @@ describe('standing phone approval lifecycle (#819)', () => {
     release()
     expect(await approval).toEqual({ status: 'saved-disconnected' })
     expect(sessions[0].session.approve).not.toHaveBeenCalled()
+  })
+})
+
+describe('standing host: revocation and pin-store roles', () => {
+  const pendingCount = (): number => sentToWin.filter((x) => x.channel === IPC.remoteHostPeerPending).length
+
+  it('a removed phone\'s live session is closed, and its reconnect is NOT auto-approved', async () => {
+    disk = { pubkeys: ['phone-pub'] }
+    const host = makeHost()
+    host.setEnabled(true)
+    await settle()
+    sessions[0].opts.onPeerReady(sessions[0].session)
+    await settle()
+    expect(sessions[0].session.approve).toHaveBeenCalledOnce() // pinned → silent auto-approve
+    expect(phones()).toBe(1)
+
+    // Phone "Remove" (pairing-service → revokeAllPhones): unpin AND cut.
+    expect(await revokeAllPhones()).toEqual({ persisted: true, killed: true })
+    expect(disk.pubkeys).toEqual([])
+    expect(sessions[0].closed).toBe(1)
+    expect(phones()).toBe(0)
+
+    // The same phone reconnects on a fresh listener: it must face the SAS prompt again.
+    const before = pendingCount()
+    await settle()
+    const next = sessions.at(-1)!
+    expect(next).not.toBe(sessions[0])
+    next.opts.onPeerReady(next.session)
+    await settle()
+    expect(next.session.approve).not.toHaveBeenCalled()
+    expect(pendingCount()).toBe(before + 1)
+    host.stop()
+  })
+
+  it('a key pinned as a joined host or a hosted guest is never auto-admitted as a phone', async () => {
+    otherPins.joinedHost = { pubkeys: ['phone-pub'] }
+    otherPins.guest = { pubkeys: ['phone-pub'] }
+    try {
+      const host = makeHost()
+      host.setEnabled(true)
+      await settle()
+      sessions[0].opts.onPeerReady(sessions[0].session)
+      await settle()
+      expect(sessions[0].session.approve).not.toHaveBeenCalled()
+      expect(pendingCount()).toBe(1) // the human is asked, exactly like any unknown phone
+      host.stop()
+    } finally {
+      delete otherPins.joinedHost
+      delete otherPins.guest
+    }
+  })
+
+  it('a revoke drops a pending consent even after its socket closed, so the dialog cannot re-pin it', async () => {
+    const host = makeHost()
+    host.setEnabled(true)
+    await settle()
+    sessions[0].opts.onPeerReady(sessions[0].session)
+    await settle()
+    const msg = { id: pendingApprovalId(), pub: 'phone-pub' }
+    sessions[0].opts.onClose() // #819: consent outlives the socket…
+    await revokePeerKey('phone-pub', ['phone'])
+    // …but not a revoke.
+    expect(await ipc[IPC.remotePhoneApprove]({ sender }, msg)).toEqual({ status: 'stale' })
+    expect(persist).not.toHaveBeenCalledWith(expect.anything(), expect.anything())
+    expect(disk.pubkeys).toEqual([])
+    host.stop()
   })
 })
 
