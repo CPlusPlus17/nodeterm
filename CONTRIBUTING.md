@@ -1066,6 +1066,16 @@ runs failed with ENOSPC. If you `mkdtemp` in a test yourself, remove it in `afte
 — or, for the `userDataDir` of a `CorePlatform` you build by hand, call `makeFakeUserDataDir()`,
 which lands under the same root.
 
+**Beyond `fakePlatform()`, a test cleans up every temp directory it creates.** The suite once left ~1,500 directories in
+`/tmp` per full run, and on a shared box that exhausted the filesystem's inodes and broke every
+other session's builds. Use `testTmpDir(prefix)` from `src/core/test-tmp.ts` (removed when the file
+ends, even when a test failed), or `rmSync(dir, { recursive: true, force: true })` in
+`afterEach`/`afterAll`/`finally`; stop servers and children writing there first. Every run points
+`os.tmpdir()` at a private sandbox (`test/setup/tmp-sandbox.ts`), and the run exits non-zero naming
+each prefix still in it — `NODETERM_TEST_KEEP_TMP=1` keeps the sandbox so you can see what wrote
+there. A module-level cache of `platform().userDataDir` is the other way a dir comes back: a suite
+that boots two cores keeps writing into the first one's removed directory.
+
 **An `infinite` CSS animation is a frame loop, and it runs whether or not anyone is looking.** A
 running animation makes the compositor produce a frame every vsync — 120/s on a ProMotion display —
 and re-raster the window each time; measured on a 40-terminal canvas, ONE visible pulsing node took

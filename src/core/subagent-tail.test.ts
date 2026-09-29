@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 import fs from 'fs'
-import os from 'os'
 import path from 'path'
 import {
   createSubagentTail,
@@ -8,6 +7,7 @@ import {
   splitCompleteLines,
   SUBAGENT_READ_CAP
 } from './subagent-tail'
+import { testTmpDir } from './test-tmp'
 
 const assistant = (text: string): string =>
   JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
@@ -63,7 +63,7 @@ describe('splitCompleteLines', () => {
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 function setup(): { transcriptPath: string; subDir: string } {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'subtail-'))
+  const dir = testTmpDir('subtail-')
   const transcriptPath = path.join(dir, 'sess.jsonl')
   const subDir = path.join(dir, 'sess', 'subagents')
   fs.mkdirSync(subDir, { recursive: true })
@@ -121,7 +121,7 @@ describe('createSubagentTail', () => {
 
 describe('trackFile (codex leg: pre-resolved file + per-entry formatter)', () => {
   it('tails the given file directly with the injected stateful formatter', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'subtail-file-'))
+    const dir = testTmpDir('subtail-file-')
     const file = path.join(dir, 'rollout-child.jsonl')
     // A stateful formatter (mirrors the codex fork-replay gate): suppress until 'GATE'.
     const newFormatter = () => {
@@ -155,7 +155,7 @@ describe('trackFile (codex leg: pre-resolved file + per-entry formatter)', () =>
   })
 
   it('two trackFile entries do not share formatter state', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'subtail-file2-'))
+    const dir = testTmpDir('subtail-file2-')
     const a = path.join(dir, 'a.jsonl')
     const b = path.join(dir, 'b.jsonl')
     const newFormatter = () => {
@@ -229,7 +229,7 @@ describe('subagent-tail read cap', () => {
 // its tail at every stop and start it again at every start; the second start must continue.
 describe('a resumed subagent (same id tracked again)', () => {
   it('continues from where the finished tail stopped instead of re-streaming the file', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'subtail-resume-'))
+    const dir = testTmpDir('subtail-resume-')
     const file = path.join(dir, 'agent-a1.jsonl')
     fs.writeFileSync(file, assistant('first turn') + '\n')
     const send = vi.fn()
@@ -248,7 +248,7 @@ describe('a resumed subagent (same id tracked again)', () => {
   })
 
   it('a resume inside the finish grace window keeps the tail alive', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'subtail-revive-'))
+    const dir = testTmpDir('subtail-revive-')
     const file = path.join(dir, 'agent-a1.jsonl')
     fs.writeFileSync(file, assistant('before') + '\n')
     const send = vi.fn()
@@ -267,7 +267,7 @@ describe('a resumed subagent (same id tracked again)', () => {
   })
 
   it('a different file under the same id starts from its beginning', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'subtail-other-'))
+    const dir = testTmpDir('subtail-other-')
     const a = path.join(dir, 'a.jsonl')
     const b = path.join(dir, 'b.jsonl')
     fs.writeFileSync(a, assistant('in a') + '\n')

@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync } from 'fs'
-import os from 'os'
-import path from 'path'
+import { testTmpDir } from './test-tmp'
 import { initPlatform, resetPlatformForTests, type CorePlatform } from './platform'
 import { initCanvasSync, publishCanvasMutation, stampMutation } from './canvas-sync'
 import { IPC } from '../shared/ipc'
@@ -31,7 +29,7 @@ function testPlatform(owners: number[]) {
   let listener: ((senderId: number, ...args: unknown[]) => void) | undefined
   let clients: number[] = []
   const p: CorePlatform = {
-    userDataDir: mkdtempSync(path.join(os.tmpdir(), 'nodeterm-canvas-launch-')),
+    userDataDir: testTmpDir('nodeterm-canvas-launch-'),
     appVersion: '0.0.0-test',
     isPackaged: false,
     handle: () => {},

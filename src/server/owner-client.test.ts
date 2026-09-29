@@ -39,6 +39,6 @@ describe('wiring', () => {
   it('a relay tab drops the remote core\'s origin before applying its mutations', () => {
     const canvas = src('src/renderer/canvas/Canvas.tsx')
     expect(canvas).toContain("const relay = activeSession.source === 'relay'")
-    expect(canvas).toContain('const mutation = relay ? withoutCoreOrigin(received) : received')
+    expect(canvas).toContain('const mutation = relay ? sanitizeRelayMutation(withoutCoreOrigin(received)) : received')
   })
 })
