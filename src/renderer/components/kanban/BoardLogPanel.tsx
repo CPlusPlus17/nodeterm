@@ -1,10 +1,32 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { BoardLogEntry, BoardLogEvent } from '@shared/types'
+import {
+  BOARD_COMMENT_MENTION_MAX,
+  boardCommentOutcomeText,
+  commentIdOfSource,
+  commentSegments,
+  parseMentions
+} from '@shared/board-comment'
 import { formatTimeAgo } from '../../lib/usageFormat'
 import { useSession } from '../../session/session'
 import { useProjects } from '../../state/projects'
 import { useBoardLog } from '../../state/boardLog'
+import { useBoardCommentDelivery } from '../../state/boardCommentDelivery'
 import { collapseFeed } from '../../lib/boardLogCollapse'
+import {
+  boardCommentTraces,
+  isBoardCommentTrace,
+  mentionStatuses,
+  type MentionStatus
+} from '../../lib/boardCommentStatus'
+import { canDeliverBoardComments, deliverCommentMentions } from '../../lib/boardCommentDelivery'
+import {
+  insertMention,
+  mentionOptions,
+  mentionQueryAt,
+  type MentionCandidate
+} from '../../lib/boardMentions'
+import { isBrowserRuntime } from '../../bridge/runtime'
 import type { KanbanSession } from './KanbanView'
 
 interface BoardLogPanelProps {
@@ -19,6 +41,9 @@ interface BoardLogPanelProps {
   readOnly?: boolean
   /** Shown when the feed is empty (defaults to nothing). */
   emptyText?: string
+  /** The agent sessions on this board a comment may @mention (`mentionCandidatesFrom`). Also what a
+   *  mention renders as — the node's CURRENT title. Absent ⇒ no @ picker. */
+  mentionables?: readonly MentionCandidate[]
 }
 
 /** The activity sentence WITHOUT the leading author name — the name is rendered separately in
@@ -50,6 +75,11 @@ export function eventBody(e: BoardLogEvent): string {
     case 'priority-cleared':
       return `removed the priority`
     case 'agent-message':
+      // A board comment's delivery line: normally shown ON its comment's row (and hidden as a row of
+      // its own); it stands alone only where the comment itself is not — a comment written on
+      // another card that mentioned this session.
+      if (commentIdOfSource(e.from))
+        return `routed a board comment here: ${boardCommentOutcomeText(String(e.title ?? ''), e.reason).text}`
       return `sent a message to ${e.to ?? 'another node'} (${e.title ?? 'unknown outcome'})`
     case 'agent-read-cookies':
       // A loud, human-visible line for a cookie read (the whole point of the trace). `from` names the
@@ -90,14 +120,27 @@ function formatStamp(ts: number): string {
 /** Right panel of the card modal (all card kinds): a composer on top and the card's own
  *  comments + activity feed newest-first. Reads/writes the board log for the ACTIVE project via
  *  its session api — resolved here (not threaded from Canvas). Subscribes on mount, so a teammate's
- *  comment or a board change lands live; unsubscribes on unmount / card swap. */
-export function BoardLogPanel({ card, title, readOnly, emptyText }: BoardLogPanelProps) {
-  const { api } = useSession()
+ *  comment or a board change lands live; unsubscribes on unmount / card swap.
+ *
+ *  A comment that @mentions a session (the composer's @ picker) is also delivered to that agent —
+ *  ONLY from this composer's send, with the text just typed, and only in the desktop app's own
+ *  window (`canDeliverBoardComments`). A comment that arrives in the log (git pull, another
+ *  instance, a relay peer, a team-presence guest) renders its mentions and types nowhere. */
+export function BoardLogPanel({ card, title, readOnly, emptyText, mentionables }: BoardLogPanelProps) {
+  const { api, source } = useSession()
   const projectId = useProjects((s) => s.activeProjectId)
   const entries = useBoardLog((s) => s.entriesFor(projectId))
   const unsupported = useBoardLog((s) => !!s.unsupportedByProject[projectId])
   const error = useBoardLog((s) => !!s.errorByProject[projectId])
+  const deliveries = useBoardCommentDelivery((s) => s.byComment)
   const [draft, setDraft] = useState('')
+  const [composeError, setComposeError] = useState<string | null>(null)
+  const [picker, setPicker] = useState<{ start: number; caret: number; query: string } | null>(null)
+  const [pick, setPick] = useState(0)
+  const composerRef = useRef<HTMLTextAreaElement>(null)
+  const canDeliver = canDeliverBoardComments(source, isBrowserRuntime())
+  const candidates = canDeliver ? (mentionables ?? []) : []
+  const options = picker ? mentionOptions(candidates, picker.query) : []
 
   useEffect(() => {
     if (!projectId) return
@@ -109,12 +152,59 @@ export function BoardLogPanel({ card, title, readOnly, emptyText }: BoardLogPane
   const send = () => {
     const text = draft.trim()
     if (!text) return
-    useBoardLog.getState().append(api, projectId, { kind: 'comment', nodeId: card.id, text })
+    const mentions = canDeliver ? parseMentions(text) : []
+    if (mentions.length > BOARD_COMMENT_MENTION_MAX) {
+      setComposeError(`A comment can mention at most ${BOARD_COMMENT_MENTION_MAX} sessions.`)
+      return
+    }
+    const entry = useBoardLog.getState().append(api, projectId, { kind: 'comment', nodeId: card.id, text })
     setDraft('')
+    setPicker(null)
+    setComposeError(null)
+    // The one place a delivery starts: this send, this text. Mentions are re-parsed from the text
+    // as it was stored (clamped), which is exactly what main will parse them from.
+    if (mentions.length && entry.text)
+      void deliverCommentMentions(
+        { projectId, commentId: entry.id, author: entry.author.name, text: entry.text },
+        parseMentions(entry.text)
+      )
   }
 
-  // Card-scoped: this card's comments + its own events. Column events (no nodeId) never match.
-  const feed = (entries ?? []).filter((e) => e.nodeId === card.id)
+  const choose = (c: MentionCandidate): void => {
+    if (!picker) return
+    const next = insertMention(draft, picker.start, picker.caret, c)
+    setDraft(next.text)
+    setPicker(null)
+    requestAnimationFrame(() => {
+      const el = composerRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(next.caret, next.caret)
+    })
+  }
+
+  const onDraftChange = (value: string, caret: number): void => {
+    setDraft(value)
+    setComposeError(null)
+    const q = candidates.length ? mentionQueryAt(value, caret) : null
+    setPicker(q ? { ...q, caret } : null)
+    setPick(0)
+  }
+
+  // Card-scoped: this card's comments + its own events. Column events (no nodeId) never match. A
+  // board comment's delivery line is shown on its comment's row, so it is not a row of its own when
+  // that comment is in the log; `traces` reads the WHOLE log, because the line is filed under the
+  // session it was delivered to, which is not necessarily this card.
+  const all = entries ?? []
+  const commentIds = useMemo(() => new Set(all.filter((e) => e.kind === 'comment').map((e) => e.id)), [all])
+  const traces = useMemo(() => boardCommentTraces(all), [all])
+  const feed = all.filter(
+    (e) =>
+      e.nodeId === card.id &&
+      !(isBoardCommentTrace(e) && commentIds.has(commentIdOfSource(e.event?.from) ?? ''))
+  )
+  const titles = useMemo(() => new Map((mentionables ?? []).map((m) => [m.id, m.title])), [mentionables])
+  const pending = canDeliver ? parseMentions(draft) : []
 
   return (
     <div className="board-log">
@@ -122,20 +212,70 @@ export function BoardLogPanel({ card, title, readOnly, emptyText }: BoardLogPane
       {unsupported ? (
         <div className="board-log__hint">Board history needs a project folder</div>
       ) : readOnly ? null : (
-        <textarea
-          className="board-log__composer"
-          value={draft}
-          placeholder="Write a comment…"
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter sends; Shift+Enter inserts a newline (default textarea behavior).
-            // Never submit mid-IME-composition (e.g. selecting a kanji candidate with Enter).
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault()
-              send()
-            }
-          }}
-        />
+        <div className="board-log__compose">
+          <textarea
+            ref={composerRef}
+            className="board-log__composer"
+            value={draft}
+            placeholder={candidates.length ? 'Write a comment… (@ to mention a session)' : 'Write a comment…'}
+            aria-autocomplete={candidates.length ? 'list' : undefined}
+            aria-expanded={options.length > 0 ? true : undefined}
+            onChange={(e) => onDraftChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+            onKeyDown={(e) => {
+              // Never act mid-IME-composition (e.g. selecting a kanji candidate with Enter).
+              if (e.nativeEvent.isComposing) return
+              if (picker && options.length) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  const d = e.key === 'ArrowDown' ? 1 : -1
+                  setPick((i) => (i + d + options.length) % options.length)
+                  return
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault()
+                  choose(options[Math.min(pick, options.length - 1)])
+                  return
+                }
+              }
+              if (picker && e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
+                setPicker(null)
+                return
+              }
+              // Enter sends; Shift+Enter inserts a newline (default textarea behavior).
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                send()
+              }
+            }}
+          />
+          {options.length > 0 && (
+            <div className="board-log__mention-picker" role="listbox" aria-label="Mention a session">
+              {options.map((c, i) => (
+                <div
+                  key={c.id}
+                  role="option"
+                  aria-selected={i === pick}
+                  className={`board-log__mention-option${i === pick ? ' is-active' : ''}`}
+                  onMouseDown={(e) => {
+                    e.preventDefault() // keep the caret in the composer
+                    choose(c)
+                  }}
+                >
+                  {c.title}
+                </div>
+              ))}
+            </div>
+          )}
+          {pending.length > 0 && (
+            <div className="board-log__deliver-note">
+              Delivers to {pending.map((id) => `@${titles.get(id) ?? id}`).join(', ')} when you send —
+              through agent messaging, when the session is idle.
+            </div>
+          )}
+          {composeError && <div className="board-log__error">{composeError}</div>}
+        </div>
       )}
       {!unsupported && error && (
         <div className="board-log__error">Some board history couldn’t be saved.</div>
@@ -143,7 +283,11 @@ export function BoardLogPanel({ card, title, readOnly, emptyText }: BoardLogPane
       {!unsupported && feed.length === 0 && emptyText && (
         <div className="board-log__hint">{emptyText}</div>
       )}
-      <BoardLogFeed feed={feed} />
+      <BoardLogFeed
+        feed={feed}
+        titles={titles}
+        statusesFor={(entry) => mentionStatuses(entry, traces, deliveries[entry.id])}
+      />
     </div>
   )
 }
@@ -151,8 +295,18 @@ export function BoardLogPanel({ card, title, readOnly, emptyText }: BoardLogPane
 /** The feed itself, newest first. Runs of like events render folded as one "×N" row that expands
  *  in place (lib/boardLogCollapse — a VIEW; the log is never rewritten). Comments and the audit
  *  types are always one row each. Which groups are open is component state keyed by the group's
- *  newest entry id, so a new entry landing on top does not collapse a row the user just opened. */
-export function BoardLogFeed({ feed }: { feed: readonly BoardLogEntry[] }) {
+ *  newest entry id, so a new entry landing on top does not collapse a row the user just opened.
+ *  `titles` renders a mention as its session's current title; `statusesFor` puts a comment's
+ *  delivery outcomes on its own row. */
+export function BoardLogFeed({
+  feed,
+  titles,
+  statusesFor
+}: {
+  feed: readonly BoardLogEntry[]
+  titles?: ReadonlyMap<string, string>
+  statusesFor?: (entry: BoardLogEntry) => MentionStatus[]
+}) {
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
   const items = useMemo(() => collapseFeed(feed), [feed])
   const toggle = (key: string): void =>
@@ -162,10 +316,19 @@ export function BoardLogFeed({ feed }: { feed: readonly BoardLogEntry[] }) {
       else next.add(key)
       return next
     })
+  const row = (entry: BoardLogEntry, fold?: React.ReactNode, key?: string) => (
+    <FeedRow
+      key={key ?? entry.id}
+      entry={entry}
+      fold={fold}
+      titles={titles}
+      statuses={entry.kind === 'comment' ? statusesFor?.(entry) : undefined}
+    />
+  )
   return (
     <div className="board-log__feed">
       {items.map((item) => {
-        if (item.kind === 'single') return <FeedRow key={item.entry.id} entry={item.entry} />
+        if (item.kind === 'single') return row(item.entry)
         const expanded = open.has(item.key)
         const fold = (
           <button
@@ -179,21 +342,55 @@ export function BoardLogFeed({ feed }: { feed: readonly BoardLogEntry[] }) {
         )
         return expanded ? (
           <div key={item.key} className="board-log__group board-log__group--open">
-            {item.entries.map((entry, i) => (
-              <FeedRow key={entry.id} entry={entry} fold={i === 0 ? fold : undefined} />
-            ))}
+            {item.entries.map((entry, i) => row(entry, i === 0 ? fold : undefined))}
           </div>
         ) : (
-          <FeedRow key={item.key} entry={item.entries[0]} fold={fold} />
+          row(item.entries[0], fold, item.key)
         )
       })}
     </div>
   )
 }
 
-function FeedRow({ entry, fold }: { entry: BoardLogEntry; fold?: React.ReactNode }) {
+/** A comment's text with each mention token drawn as its session's name — the CURRENT title when
+ *  the session is on this board, else the name the token was written with. Text only: React escapes
+ *  it, and nothing here is ever turned into an action. */
+function CommentText({ text, titles }: { text: string; titles?: ReadonlyMap<string, string> }) {
+  return (
+    <>
+      {commentSegments(text).map((s, i) =>
+        s.kind === 'text' ? (
+          s.text
+        ) : (
+          <span key={i} className="board-log__mention" title={s.nodeId}>
+            @{titles?.get(s.nodeId) || s.label || s.nodeId}
+          </span>
+        )
+      )}
+    </>
+  )
+}
+
+function FeedRow({
+  entry,
+  fold,
+  titles,
+  statuses
+}: {
+  entry: BoardLogEntry
+  fold?: React.ReactNode
+  titles?: ReadonlyMap<string, string>
+  statuses?: MentionStatus[]
+}) {
   const when = formatStamp(entry.ts)
   const whenAgo = formatTimeAgo(entry.ts)
+  const nameOf = (nodeId: string): string => {
+    const current = titles?.get(nodeId)
+    if (current) return current
+    for (const s of commentSegments(entry.text ?? ''))
+      if (s.kind === 'mention' && s.nodeId === nodeId && s.label) return s.label
+    return nodeId
+  }
   if (entry.kind === 'event' && entry.event) {
     return (
       <div className="board-log__event" title={whenAgo}>
@@ -216,7 +413,19 @@ function FeedRow({ entry, fold }: { entry: BoardLogEntry; fold?: React.ReactNode
         </span>
         <span className="board-log__time" title={whenAgo}>{when}</span>
       </div>
-      <div className="board-log__text">{entry.text}</div>
+      <div className="board-log__text">
+        <CommentText text={entry.text ?? ''} titles={titles} />
+      </div>
+      {statuses && statuses.length > 0 && (
+        <ul className="board-log__deliveries" aria-label="Delivery to mentioned sessions">
+          {statuses.map((m) => (
+            <li key={m.nodeId} className={`board-log__delivery board-log__delivery--${m.view.tone}`}>
+              <span className="board-log__mention">@{nameOf(m.nodeId)}</span>{' '}
+              {m.view.text}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

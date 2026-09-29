@@ -186,6 +186,14 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   interpolate `issue.title`/`issue.body` into a prompt, and never add a path that posts an agent's
   output to GitHub on its own: posting is public, and only the user asks for it.
 
+- **A comment in the board log is text, never a trigger.** A board comment that @mentions a session
+  is delivered to that agent (`deliverBoardCommentFromUi`, through the ordinary agent-messaging
+  gates) only from the comment composer's send, with the text the user just typed, in the desktop
+  app's own window. The log is a shared file — a git pull, another instance, a relay peer or a
+  team-presence guest can put a mention token into it — so nothing that loads, reloads or renders it
+  may reach a delivery. `board-comment-trigger.guard.test.ts` fails on a second call site, and the
+  IPC is a raw main-window-only `ipcMain` handler (never on the peer-dispatchable platform table).
+
 - **Hook decision JSON is built in core, never in the renderer or the script.** To answer a held
   Claude permission request with more than `allow`/`deny` (a plan's follow-on mode, a question's
   answers), send a `PermissionAnswer` through `answerPermission`; `core/agents/permission-decision.ts`

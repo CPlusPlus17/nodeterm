@@ -53,6 +53,7 @@ import { GITHUB_MAPPING_NOT_APPROVED, githubThrottleSentence } from '../../lib/g
 import { pullStatusFreshness, type GitHubPullStatus } from '@shared/github-pull-status'
 import { pullsClosingIssue, pullsForCard, pullStatusByNumber } from '../../lib/pullLinks'
 import { usePullAutoMove, usePullChase } from './usePullAutoMove'
+import { mentionCandidatesFrom } from '../../lib/boardMentions'
 
 /** One session node shown as a board card — derived LIVE from the canvas nodes; the board
  *  itself stores only column assignments. */
@@ -441,6 +442,9 @@ export const KanbanView = memo(function KanbanView({
     [customAgents, disabledAgents]
   )
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s])), [sessions])
+  // Who a comment in the card modal may @mention — built exactly as the canvas node's flyout
+  // builds it (lib/boardMentions), so the two views of a node offer the same sessions.
+  const mentionables = useMemo(() => mentionCandidatesFrom(sessions), [sessions])
   // Sessions bound to each GitHub issue, keyed case-insensitively. The previous map is handed back
   // in so an unchanged group keeps its array — `sessions` is re-derived on every canvas change, and
   // a fresh array per render would re-render every bound issue card.
@@ -1194,6 +1198,7 @@ export const KanbanView = memo(function KanbanView({
       {modalNodeId && byId.has(modalNodeId) && (
         <CardModal
           session={byId.get(modalNodeId)!}
+          mentionables={mentionables}
           columnTitle={columnForNode(board, modalNodeId)?.title ?? null}
           board={board}
           onChangeBoard={commit}

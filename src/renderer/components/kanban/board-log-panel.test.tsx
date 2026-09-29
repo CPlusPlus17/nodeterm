@@ -21,6 +21,15 @@ describe('eventBody — the activity sentence', () => {
     )
   })
 
+  it('a board comment\'s delivery line (shown alone only off its comment\'s card) says what happened', () => {
+    expect(
+      eventBody({ type: 'agent-message', from: 'board-comment:c-1', to: 'b1', title: 'notPermitted', reason: 'switch-off' })
+    ).toBe('routed a board comment here: not delivered — agent messaging is off for this project (Settings → Agents)')
+    expect(eventBody({ type: 'agent-message', from: 'board-comment:c-1', to: 'b1', title: 'delivered' })).toBe(
+      'routed a board comment here: delivered'
+    )
+  })
+
   it('an unknown future type falls back neutrally', () => {
     expect(eventBody({ type: 'something-new' as BoardLogEvent['type'] })).toBe('updated this card')
   })

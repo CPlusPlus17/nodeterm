@@ -276,7 +276,7 @@ import {
 import { matchesShortcut } from '@shared/shortcut'
 import { hintLabel, isWindowsPlatform, isMacPlatform } from '@shared/platform-utils'
 import { ColumnPill } from '../components/kanban/ColumnPill'
-import { BoardLogPanel } from '../components/kanban/BoardLogPanel'
+import { NodeCommentsPanel } from '../components/kanban/NodeCommentsPanel'
 import { AgentMascot } from './AgentMascot'
 import { MaximizeButton } from './MaximizeButton'
 import { NodeIconView } from '../components/NodeIcon'
@@ -6357,7 +6357,7 @@ export function TerminalNode({
         expanding to the node's right. Same feed/composer as the card modal's panel. */}
     {commentsOpen && !collapsed && (
       <div className="term-node__comments nodrag nowheel" onMouseDown={(e) => e.stopPropagation()}>
-        <BoardLogPanel card={{ id }} />
+        <NodeCommentsPanel id={id} />
       </div>
     )}
     </>
