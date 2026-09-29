@@ -331,7 +331,8 @@ export class WorkspaceStore {
   constructor(private remoteIO?: RemoteWorkspaceIO) {}
 
   /** Attach (or, with null, detach) the content authority whose overlays every later save and load
-   *  pass through. Set once at boot, before the first load. */
+   *  pass through. Set once at boot; the Server Edition sets it after its first index load (the
+   *  authority adopts every shared project itself) and clears it on close. */
   setContentAuthority(hooks: ContentAuthorityHooks | null): void {
     this.contentAuthority = hooks
   }

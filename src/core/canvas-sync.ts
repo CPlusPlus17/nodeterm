@@ -22,7 +22,9 @@
 //
 // Beyond `seq` it is a pipe, not a store: it holds NO canvas state, applies no policy, and persists
 // nothing. The canvas itself stays where it has always been — React Flow in each renderer — and the
-// disk write stays with WorkspaceStore.
+// disk write stays with WorkspaceStore. On a Server Edition hosting a team, the canvas authority
+// hears every stamped op through `setReflectedListener` and writes shared projects' content from
+// them (docs/hosted-team-relay.md); that is the authority's state, never this module's.
 //
 // NOT RATE-LIMITED, deliberately — unlike presence (see PRESENCE_RATE_BUDGETS). A presence cast is
 // a SAMPLED signal whose loss is self-correcting: the next cursor frame carries the current
@@ -106,6 +108,35 @@ let registeredOn: CorePlatform | null = null
 let seq = 0
 
 /**
+ * The one in-process listener of the total order: the Server Edition canvas authority
+ * (core/canvas-authority.ts, docs/hosted-team-relay.md), which writes shared projects' content from
+ * the ops it hears here. Module-level, like `seq`, and deliberately NOT cleared by `initCanvasSync`:
+ * the shell that sets it owns it, and clears it on close.
+ */
+let reflectedListener: ((projectId: string, m: CanvasMutation) => void) | null = null
+
+/**
+ * Set (or, with null, clear) the listener every reflected op reaches. It is called SYNCHRONOUSLY,
+ * right after the stamp, in both ingest paths (a client cast and `publishCanvasMutation`), so call
+ * order is seq order. The authority depends on that: its own published diff echoes back through
+ * here while it is still publishing. A refused op never reaches it.
+ */
+export function setReflectedListener(fn: ((projectId: string, m: CanvasMutation) => void) | null): void {
+  reflectedListener = fn
+}
+
+/** Hand one stamped op to the listener. A throw is logged, never let into the fan-out: every client
+ *  must still get the op, whatever the authority made of it. */
+function tellListener(projectId: string, stamped: CanvasMutation): void {
+  if (!reflectedListener) return
+  try {
+    reflectedListener(projectId, stamped)
+  } catch (err) {
+    console.warn('[canvas-sync] the reflected-op listener threw', err)
+  }
+}
+
+/**
  * Publish a mutation originated by the core itself (for example a headless Server Edition
  * control request). It takes the same validation, execution-field sanitization and total-order
  * stamp as a browser cast, then fans out to every connected canvas. Disk persistence remains the
@@ -117,6 +148,7 @@ export function publishCanvasMutation(projectId: string, mutation: CanvasMutatio
   if (!clean) return false
   const p = platform()
   const stamped = stampMutation(clean, ++seq)
+  tellListener(projectId, stamped)
   for (const id of p.clientIds()) p.sendTo(id, IPC.canvasMut, projectId, stamped)
   return true
 }
@@ -146,6 +178,7 @@ export function initCanvasSync(): void {
     const clean = sanitizeCanvasMutation(mutation)
     if (!clean) return
     const stamped = stampMutation(clean, ++seq)
+    tellListener(projectId, stamped)
     for (const id of reflectTargets(p.clientIds(), senderId)) {
       p.sendTo(id, IPC.canvasMut, projectId, stamped)
     }

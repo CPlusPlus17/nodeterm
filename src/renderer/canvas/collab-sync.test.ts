@@ -7,7 +7,7 @@ import {
   sessionForProject,
   resetSessionsForTest,
 } from '../session/session'
-import { canvasSyncTarget } from './collab-sync'
+import { canvasSyncTarget, followGoverned, shouldPublish } from './collab-sync'
 
 const localApi = { marker: 'local' } as unknown as NodeTerminalApi
 const relayApi = { marker: 'relay' } as unknown as NodeTerminalApi
@@ -50,5 +50,86 @@ describe('canvasSyncTarget (Task 4 — publisher/onMutation follow the ACTIVE se
     const local = createSession('local', localApi, 'This Mac')
     setActiveSession(local.id)
     expect(canvasSyncTarget(local, { peers: {} }).hasPeers).toBe(false)
+  })
+})
+
+describe('shouldPublish (the solo gate, and the canvas authority that overrides it)', () => {
+  it('a governed project publishes even when nobody else is attached; neither = nothing is cast', () => {
+    expect(shouldPublish({ hasPeers: false, governed: true })).toBe(true)
+    expect(shouldPublish({ hasPeers: true, governed: false })).toBe(true)
+    expect(shouldPublish({ hasPeers: true, governed: true })).toBe(true)
+    expect(shouldPublish({ hasPeers: false, governed: false })).toBe(false)
+  })
+
+  it('canvasSyncTarget carries the governed input into its verdict', () => {
+    const local = createSession('local', localApi, 'This Mac')
+    setActiveSession(local.id)
+    expect(canvasSyncTarget(local, { peers: { me: {} } }, true).shouldPublish).toBe(true)
+    expect(canvasSyncTarget(local, { peers: { me: {} } }, false).shouldPublish).toBe(false)
+    expect(canvasSyncTarget(local, { peers: { me: {} } }).shouldPublish).toBe(false)
+    expect(canvasSyncTarget(local, { peers: { me: {}, other: {} } }).shouldPublish).toBe(true)
+  })
+})
+
+describe('followGoverned (the governed set Canvas gates on, per core)', () => {
+  const authority = () => {
+    let answer!: (ids: string[]) => void
+    let listener: ((ids: string[]) => void) | null = null
+    return {
+      api: {
+        canvasAuthority: {
+          governed: () => new Promise<string[]>((r) => (answer = r)),
+          onChanged: (l: (ids: string[]) => void) => {
+            listener = l
+            return () => (listener = null)
+          }
+        }
+      } as unknown as Pick<NodeTerminalApi, 'canvasAuthority'>,
+      answer: (ids: string[]) => answer(ids),
+      change: (ids: string[]) => listener?.(ids),
+      subscribed: () => listener !== null
+    }
+  }
+  const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
+  it('takes the core\'s answer, then every change', async () => {
+    const a = authority()
+    const seen: string[][] = []
+    followGoverned(a.api, (ids) => seen.push([...ids]))
+    a.answer(['p1'])
+    await flush()
+    a.change(['p1', 'p2'])
+    expect(seen).toEqual([['p1'], ['p1', 'p2']])
+  })
+
+  it('a change that lands before the first answer wins over that (older) answer', async () => {
+    const a = authority()
+    const seen: string[][] = []
+    followGoverned(a.api, (ids) => seen.push([...ids]))
+    a.change(['p2'])
+    a.answer(['p1'])
+    await flush()
+    expect(seen).toEqual([['p2']])
+  })
+
+  it('after release nothing more is applied, and the subscription is gone', async () => {
+    const a = authority()
+    const seen: string[][] = []
+    const off = followGoverned(a.api, (ids) => seen.push([...ids]))
+    off()
+    a.answer(['p1'])
+    await flush()
+    expect(seen).toEqual([])
+    expect(a.subscribed()).toBe(false)
+  })
+
+  it('a failed answer changes nothing (the solo gate stays as it was)', async () => {
+    const seen: string[][] = []
+    followGoverned(
+      { canvasAuthority: { governed: () => Promise.reject(new Error('x')), onChanged: () => () => {} } } as unknown as Pick<NodeTerminalApi, 'canvasAuthority'>,
+      (ids) => seen.push([...ids])
+    )
+    await flush()
+    expect(seen).toEqual([])
   })
 })

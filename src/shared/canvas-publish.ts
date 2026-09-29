@@ -140,6 +140,16 @@ const EMPTY_SCENE: CanvasScene = { nodes: [], bridges: [], ropes: [] }
  *   resolves it to diff against. Same baseline, same mutations — the work is merely deferred to the
  *   moment something reads it, which for a solo user is never.
  */
+/**
+ * THE publish rule, one definition (the renderer's gate applies it through collab-sync's
+ * `shouldPublish`): publish when a teammate is attached, OR when the project is governed by a canvas
+ * authority. A governed project's content is written only from the ops the authority hears
+ * (docs/hosted-team-relay.md), so a solo edit there that is not published is never saved.
+ */
+export function shouldPublishCanvas(gate: { hasPeers: boolean; governed: boolean }): boolean {
+  return gate.hasPeers || gate.governed
+}
+
 export function createCanvasPublisher(
   send: (m: CanvasMutation) => void | boolean,
   opts: { intervalMs?: number; src?: string; shouldPublish?: () => boolean } = {}

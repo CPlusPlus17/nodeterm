@@ -1,4 +1,5 @@
 import type { NodeTerminalApi } from '@shared/types'
+import { shouldPublishCanvas } from '@shared/canvas-publish'
 import type { WorkspaceSession } from '../session/session'
 
 /**
@@ -15,7 +16,46 @@ import type { WorkspaceSession } from '../session/session'
  */
 export function canvasSyncTarget(
   session: WorkspaceSession,
-  presenceState: { peers: Record<string, unknown> }
-): { api: NodeTerminalApi; hasPeers: boolean } {
-  return { api: session.api, hasPeers: Object.keys(presenceState.peers).length > 1 }
+  presenceState: { peers: Record<string, unknown> },
+  governed = false
+): { api: NodeTerminalApi; hasPeers: boolean; shouldPublish: boolean } {
+  const hasPeers = Object.keys(presenceState.peers).length > 1
+  return { api: session.api, hasPeers, shouldPublish: shouldPublish({ hasPeers, governed }) }
+}
+
+/**
+ * The publish rule (Canvas's `shouldPublishFor` applies it inline, beside the same-core and role
+ * checks): publish when a teammate is attached, OR when the project is governed by a canvas
+ * authority. A governed project's content is written only from the ops the authority hears
+ * (docs/hosted-team-relay.md), so a solo edit that is not published is never saved. One definition,
+ * in shared, so the core's end-to-end test drives the same rule.
+ */
+export const shouldPublish = shouldPublishCanvas
+
+/**
+ * Follow which projects a core's canvas authority governs: ask once, then take every change.
+ * `apply` gets the new set each time. A change that lands before the first answer wins over that
+ * answer, which it may postdate; a failed answer changes nothing. Returns the release: after it,
+ * nothing more is applied and the change subscription is gone.
+ */
+export function followGoverned(
+  api: Pick<NodeTerminalApi, 'canvasAuthority'>,
+  apply: (ids: ReadonlySet<string>) => void
+): () => void {
+  let live = true
+  let changed = false
+  void api.canvasAuthority.governed().then(
+    (ids) => {
+      if (live && !changed) apply(new Set(ids))
+    },
+    () => {}
+  )
+  const off = api.canvasAuthority.onChanged((ids) => {
+    changed = true
+    if (live) apply(new Set(ids))
+  })
+  return () => {
+    live = false
+    off()
+  }
 }

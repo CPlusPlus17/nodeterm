@@ -7,11 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakePlatform } from '../core/platform-fake'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { WorkspaceStore } from '../core/workspace-store'
+import { createCanvasAuthority } from '../core/canvas-authority'
+import { initCanvasSync, publishCanvasMutation, setReflectedListener } from '../core/canvas-sync'
 import type { AgentState } from '../shared/agents/normalize'
 import { MAX_LAUNCH_LINE_BYTES } from '../shared/canonical-line'
 import { RUN_NOW_AFTER_REFUSAL } from '../shared/control-verbs'
 import {
   DEFAULT_SETTINGS,
+  type CanvasMutation,
   type CanvasNodeState,
   type PtyCreateOptions,
   type PtyCreateResult,
@@ -22,8 +25,10 @@ import {
   createHeadlessNodeOwnership,
   HeadlessNodeFactory,
   launchFailedError,
+  type HeadlessNodeFactoryDeps,
   type HeadlessNodeOwnership,
-  type HeadlessPty
+  type HeadlessPty,
+  type HeadlessWorkspace
 } from './headless-node-factory'
 
 class FakePty implements HeadlessPty {
@@ -236,8 +241,12 @@ describe('HeadlessNodeFactory', () => {
       ownership,
       stateOf: (id) => states[id],
       launchTiming: { quietMs: 0, capMs: 0 },
-      publishNode: (_projectId, node) => published.push(node),
-      publishRemoval: (_projectId, nodeId) => removed.push(nodeId),
+      // Every content op the factory casts; `published` / `removed` keep the node halves these
+      // tests assert on (edges and board ops are cast too — see the cast-before-save suite).
+      publishMutation: (_projectId, m) => {
+        if (m.op === 'upsert') published.push(m.node)
+        else if (m.op === 'remove') removed.push(m.id)
+      },
       publishProject: (project) => publishedProjects.push(structuredClone(project))
     })
   })
@@ -791,11 +800,10 @@ describe('HeadlessNodeFactory', () => {
     for (const id of ['term-upstream', groupId, 'sticky-color']) {
       expect(project.nodes.find((node) => node.id === id)?.color, id).toBe('#32d74b')
     }
-    expect(published.map((node) => node.id)).toEqual([
-      'term-upstream',
-      groupId,
-      'sticky-color'
-    ])
+    // Cast in the project's node order (frames first), one upsert each.
+    expect(published.map((node) => node.id).sort()).toEqual(
+      ['term-upstream', groupId, 'sticky-color'].sort()
+    )
     expect(publishedProjects).toHaveLength(1)
     expect(pty.sends).toEqual([])
     expect(pty.destroys).toEqual([])
@@ -1633,5 +1641,188 @@ describe('HeadlessNodeFactory', () => {
     expect(pty.sends).toEqual([])
     const node = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === 'term-remote')
     expect(node?.pendingLaunch).toEqual(held)
+  })
+})
+
+// Every content change this factory makes is CAST before it is SAVED (docs/hosted-team-relay.md):
+// on a project a canvas authority governs, the save is overlaid with the authority's content, which
+// holds only what it heard as ops — so a change that is not cast first is dropped from disk.
+describe('HeadlessNodeFactory — casts every content change before it saves', () => {
+  let dataDir = ''
+  let projectDir = ''
+  let store: WorkspaceStore
+  let pty: FakePty
+  let ownership: HeadlessNodeOwnership
+
+  const deps = (over: Partial<HeadlessNodeFactoryDeps>): HeadlessNodeFactoryDeps => ({
+    workspaceStore: store,
+    ptyManager: pty,
+    settings: () => ({ ...DEFAULT_SETTINGS, claudePermissionMode: 'manual' }),
+    cliCaps: async () => ({ version: null, autoPermissionMode: false, fullscreenTui: false, sessionIdFlag: false }),
+    grokCaps: async () => ({ sessionIdFlag: false, models: [] }),
+    codexCaps: async () => ({ approvalValues: ['on-request', 'never'] }),
+    codexSharedIdentity: async () => false,
+    ownership,
+    stateOf: () => undefined,
+    launchTiming: { quietMs: 0, capMs: 0 },
+    ...over
+  })
+
+  beforeEach(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nodeterm-headless-cast-'))
+    projectDir = path.join(dataDir, 'project')
+    fs.mkdirSync(projectDir, { recursive: true })
+    resetPlatformForTests()
+    initPlatform(fakePlatform({ userDataDir: dataDir }))
+    store = new WorkspaceStore()
+    pty = new FakePty()
+    ownership = createHeadlessNodeOwnership()
+    ownership.record('term-owned', { sourceNodeId: 'term-source', projectId: 'project-1' })
+    await store.save({
+      version: 2,
+      activeProjectId: 'project-1',
+      projects: [
+        {
+          id: 'project-1',
+          name: 'Test',
+          color: '#0a84ff',
+          cwd: projectDir,
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [terminal('term-source', 'Director'), terminal('term-owned', 'Owned', 'gemini', 900)],
+          bridges: [],
+          ropes: []
+        }
+      ]
+    })
+  })
+
+  afterEach(() => {
+    setReflectedListener(null)
+    resetPlatformForTests()
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  const label = (m: CanvasMutation): string =>
+    m.op === 'upsert'
+      ? `upsert ${m.node.id}`
+      : m.op === 'remove'
+        ? `remove ${m.id}`
+        : m.op === 'edge-upsert'
+          ? `edge-upsert ${m.kind} ${m.edge.source}->${m.edge.target}`
+          : m.op === 'edge-remove'
+            ? `edge-remove ${m.id}`
+            : m.op
+
+  it('an open-agent that draws a rope and a bridge casts the node and BOTH edges, all before the save', async () => {
+    const log: string[] = []
+    const recording: HeadlessWorkspace = {
+      load: (o) => store.load(o),
+      save: async (ws) => {
+        log.push('save')
+        return store.save(ws)
+      }
+    }
+    const factory = new HeadlessNodeFactory(
+      deps({ workspaceStore: recording, publishMutation: (_p, m) => log.push(label(m)) })
+    )
+    const reply = await factory.openAgent('term-source', { agent: 'claude', prompt: 'hello' }, true)
+    factory.stop()
+    expect(reply).toMatchObject({ ok: true })
+    const id = (reply.result as { id: string }).id
+    // The first save persists the node, its hold, the rope and the bridge: every one of them was
+    // cast BEFORE it, node first (an edge naming a node a peer does not have yet would be dropped).
+    const firstSave = log.indexOf('save')
+    expect(log.slice(0, firstSave)).toEqual([
+      `upsert ${id}`,
+      `edge-upsert bridge term-source->${id}`,
+      `edge-upsert rope term-source->${id}`
+    ])
+    // The delivery's own save (the hold cleared) is cast before it too.
+    expect(log.slice(firstSave + 1)).toEqual([`upsert ${id}`, 'save'])
+  })
+
+  it('a close casts the node removal and the edges it takes with it, before the save', async () => {
+    const workspace = await store.load({ sideline: false })
+    workspace.projects[0].ropes = [{ id: 'rope-1', source: 'term-source', target: 'term-owned' }]
+    workspace.projects[0].bridges = [{ id: 'bridge-1', source: 'term-source', target: 'term-owned' }]
+    await store.save(workspace)
+    const log: string[] = []
+    const recording: HeadlessWorkspace = {
+      load: (o) => store.load(o),
+      save: async (ws) => {
+        log.push('save')
+        return store.save(ws)
+      }
+    }
+    const factory = new HeadlessNodeFactory(
+      deps({ workspaceStore: recording, publishMutation: (_p, m) => log.push(label(m)) })
+    )
+    expect(await factory.close('term-source', { node: 'term-owned' }, true)).toMatchObject({ ok: true })
+    factory.stop()
+    expect(log).toEqual(['edge-remove bridge-1', 'edge-remove rope-1', 'remove term-owned', 'save'])
+  })
+
+  it('a verb that changes nothing casts nothing', async () => {
+    const cast: CanvasMutation[] = []
+    const factory = new HeadlessNodeFactory(deps({ publishMutation: (_p, m) => cast.push(m) }))
+    // A refusal (unowned target) saves nothing and casts nothing.
+    expect(await factory.rename('term-source', { node: 'term-source', title: 'x' })).toMatchObject({ ok: false })
+    factory.stop()
+    expect(cast).toEqual([])
+  })
+
+  it('on a GOVERNED project the new node and its rope survive the overlaid save (a real authority)', async () => {
+    initCanvasSync()
+    // No flush timer ever fires: what is on disk after the verb is exactly what its own save wrote.
+    const authority = createCanvasAuthority({
+      sharedProjectIds: () => new Set(['project-1']),
+      readContent: (id) => store.readProjectContent(id),
+      writeContent: (id, c) => store.writeProjectContent(id, c),
+      publish: (id, m) => {
+        publishCanvasMutation(id, m)
+      },
+      setTimer: () => null,
+      clearTimer: () => {},
+      log: () => {}
+    })
+    store.setContentAuthority(authority)
+    setReflectedListener((id, m) => authority.onReflected(id, m))
+    // The production default: casts go through the real reflector.
+    const factory = new HeadlessNodeFactory(deps({}))
+    const reply = await factory.openTerminal('term-source', {}, true)
+    expect(reply).toMatchObject({ ok: true })
+    const id = (reply.result as { id: string }).id
+    const file = JSON.parse(fs.readFileSync(path.join(projectDir, '.nodeterm', 'project.json'), 'utf8')) as {
+      nodes: CanvasNodeState[]
+      ropes?: Array<{ source: string; target: string }>
+    }
+    expect(file.nodes.map((n) => n.id)).toContain(id)
+    expect(file.ropes).toEqual([expect.objectContaining({ source: 'term-source', target: id })])
+
+    // A verb with ONE save (the open above saves twice, so its second save would carry what the
+    // first one's cast delivered late): the rename is on disk the moment the verb returns.
+    const renamed = await factory.rename('term-source', { node: 'term-owned', title: 'Renamed' })
+    factory.stop()
+    expect(renamed).toMatchObject({ ok: true })
+    const after = JSON.parse(fs.readFileSync(path.join(projectDir, '.nodeterm', 'project.json'), 'utf8')) as {
+      nodes: CanvasNodeState[]
+    }
+    expect(after.nodes.find((n) => n.id === 'term-owned')?.title).toBe('Renamed')
+    await authority.stop()
+    store.setContentAuthority(null)
+  })
+})
+
+describe('HeadlessNodeFactory — one load and one save, both through the cast helper (source)', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'headless-node-factory.ts'), 'utf8').replace(/\r\n/g, '\n')
+  it('every verb loads through loadForEdit and saves through castAndSave', () => {
+    // A second `workspaceStore.save(` is a save site that casts nothing: on a governed project the
+    // authority's overlay would drop whatever it changed.
+    expect(src.match(/workspaceStore\.save\(/g)?.length).toBe(1)
+    expect(src.match(/workspaceStore\.load\(/g)?.length).toBe(1)
+    const saveAt = src.indexOf('workspaceStore.save(')
+    const helper = src.lastIndexOf('private async castAndSave(', saveAt)
+    expect(helper).toBeGreaterThan(0)
+    expect(src.slice(helper, saveAt)).toContain('diffContent(')
   })
 })

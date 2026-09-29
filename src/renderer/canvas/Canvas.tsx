@@ -687,7 +687,7 @@ import {
   parseCloseTargets,
   CLOSE_BULK_MAX
 } from '../lib/closeTargets'
-import { canvasSyncTarget } from './collab-sync'
+import { canvasSyncTarget, followGoverned } from './collab-sync'
 import {
   applyCanvasMutation,
   applyMutationToFlow,
@@ -1742,6 +1742,13 @@ export function Canvas() {
    * Sticky once a peer mutation actually arrives: proof of a peer that outranks any table.
    */
   const hasPeersRef = useRef(false)
+  /**
+   * The projects the ACTIVE core's canvas authority governs (docs/hosted-team-relay.md): their
+   * content is written only from the ops the authority hears, so the gate publishes for them even
+   * when nobody else is attached. Per core, like `hasPeersRef`, and a ref for the same reason (the
+   * gate is asked at ~20 Hz while a node is dragged). Empty on the desktop, which governs nothing.
+   */
+  const governedRef = useRef<ReadonlySet<string>>(new Set())
   const [, bumpHist] = useState(0)
   // Same trick as bumpHist, for the breadcrumb cursor: the Dock's back/forward buttons read
   // navRef during render, and a ref mutation is invisible to React — so every write to
@@ -3754,6 +3761,13 @@ export function Canvas() {
     }
     readPresence()
     const unsub = activePresence.store.subscribe(readPresence)
+    // The governed set, per core like the peer gate: start clean on every (re-)bind, ask this core,
+    // then follow its changes (collab-sync `followGoverned`). Until the first answer the set is
+    // empty, so an edit made in that one round trip is not cast.
+    governedRef.current = new Set()
+    const offGoverned = followGoverned(activeSession.api, (ids) => {
+      governedRef.current = ids
+    })
     // `isCanvasMutation`, with a refusal remembered per node: a refused node is re-emitted on every
     // publish (that is what makes it sync the moment the sticky is trimmed) and a drag publishes at
     // ~20 Hz, so the size check re-serialized the one oversized node 20×/s, at a cost proportional to
@@ -3829,13 +3843,16 @@ export function Canvas() {
     /**
      * THE ONE PUBLISH GATE, asked by the node publisher (for the active project) and the kanban
      * publisher (for the project a board write touched). Someone else must be attached (the solo
-     * gate), the project must be on the core this effect casts to (see `castFor`), and a hosted
+     * gate) OR the project must be governed by a canvas authority, which writes a shared project's
+     * content only from the ops it hears (collab-sync `shouldPublish`, docs/hosted-team-relay.md);
+     * the project must be on the core this effect casts to (see `castFor`); and a hosted
      * Viewer/Commenter publishes nothing: the host refuses canvas:mut for them (R5).
      */
     const shouldPublishFor = (projectId: string): boolean =>
       // The peer check FIRST: the node publisher asks this at ~20 Hz while a node is dragged, and a
-      // solo canvas must pay for nothing more than it did before the board shared this gate.
-      hasPeersRef.current &&
+      // solo canvas must pay for nothing more than it did before the board shared this gate (one
+      // Set lookup when it is alone; the desktop's governed set is always empty).
+      (hasPeersRef.current || governedRef.current.has(projectId)) &&
       sessionForProject(projectId).api === activeSession.api &&
       !isHostedReadOnly(activeSession.id)
     const pub = createCanvasPublisher(
@@ -3862,6 +3879,7 @@ export function Canvas() {
     return () => {
       setKanbanPublishHook(null)
       unsub()
+      offGoverned()
       pub.dispose()
       publisherRef.current = null
       orderRef.current = null

@@ -3000,6 +3000,19 @@ export interface CanvasApi {
   onMutation(listener: (projectId: string, mutation: CanvasMutation) => void): () => void
 }
 
+/**
+ * Which of this core's projects a canvas authority governs (the Server Edition hosting a team,
+ * docs/hosted-team-relay.md). The authority writes a governed project's content only from the ops it
+ * hears, so a client must publish its canvas ops for such a project even when nobody else is
+ * attached — the solo gate is overridden for it. The desktop runs no authority and governs nothing.
+ */
+export interface CanvasAuthorityApi {
+  /** The governed project ids right now. Never rejects: "unknown" is the empty list. */
+  governed(): Promise<string[]>
+  /** Fires with the NEW governed set whenever it changes (a share or unshare). Returns unsubscribe. */
+  onChanged(listener: (ids: string[]) => void): () => void
+}
+
 /** One searchable line extracted from a Claude session transcript. */
 export interface TranscriptLine {
   role: 'user' | 'assistant' | 'tool'
@@ -3966,6 +3979,8 @@ export interface NodeTerminalApi {
   triggers: TriggersApi
   context: ContextApi
   canvas: CanvasApi
+  /** Which projects publish their canvas ops even when alone (see CanvasAuthorityApi). */
+  canvasAuthority: CanvasAuthorityApi
   codex: CodexApi
   claude: ClaudeApi
   grok: GrokApi

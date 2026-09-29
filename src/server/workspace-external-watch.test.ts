@@ -7,9 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakePlatform, type FakePlatform } from '../core/platform-fake'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { WorkspaceStore } from '../core/workspace-store'
+import { createCanvasAuthority } from '../core/canvas-authority'
+import { initCanvasSync, publishCanvasMutation, setReflectedListener } from '../core/canvas-sync'
 import { IPC } from '../shared/ipc'
-import type { CanvasNodeState, Project, Workspace } from '../shared/types'
-import { createServerWorkspaceWatcher } from './workspace-external-watch'
+import type { CanvasMutation, CanvasNodeState, Project, Workspace } from '../shared/types'
+import { createServerWorkspaceWatcher, outsideEditPublisher } from './workspace-external-watch'
 
 const node = (id: string, x: number): CanvasNodeState => ({
   id,
@@ -104,5 +106,103 @@ describe('Server Edition external workspace watcher', () => {
     // renderer answers with the conflict bar, and must never be swapped onto the server-write
     // channel a later refactor might mistake it for (that one merges silently, no question asked).
     expect(fake.sent.filter((entry) => entry.channel === IPC.workspaceServerChange)).toEqual([])
+  })
+
+  it('routes a GOVERNED project\'s outside edit through the canvas authority: ops, never the conflict bar', async () => {
+    const otherDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nodeterm-server-watch-other-'))
+    try {
+      const a = node('term-a', 0)
+      const b = node('term-b', 720)
+      const governedProject: Project = {
+        id: 'project-g',
+        name: 'Governed',
+        color: '#0a84ff',
+        cwd: projectDir,
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [a, b],
+        bridges: [{ id: 'bridge-ab', source: a.id, target: b.id }],
+        ropes: []
+      }
+      const plainProject: Project = {
+        id: 'project-u',
+        name: 'Ungoverned',
+        color: '#0a84ff',
+        cwd: otherDir,
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [node('term-u', 0)],
+        bridges: [],
+        ropes: []
+      }
+      const store = new WorkspaceStore()
+      await store.save({ version: 2, activeProjectId: governedProject.id, projects: [governedProject, plainProject] })
+      initCanvasSync()
+      fake.clients.push(1)
+      const authority = createCanvasAuthority({
+        sharedProjectIds: () => new Set([governedProject.id]),
+        readContent: (id) => store.readProjectContent(id),
+        writeContent: (id, c) => store.writeProjectContent(id, c),
+        publish: (id, m) => {
+          publishCanvasMutation(id, m)
+        },
+        setTimer: () => null,
+        clearTimer: () => {},
+        log: () => {}
+      })
+      store.setContentAuthority(authority)
+      setReflectedListener((id, m) => authority.onReflected(id, m))
+      // Boot adopts every shared project eagerly, BEFORE any outside edit can arrive: a lazy adoption
+      // after the edit would read the edited file as its baseline and publish no diff at all.
+      authority.sharedChanged()
+      await authority.flushAll()
+      fake.sent.length = 0
+      watcher = createServerWorkspaceWatcher(store, {
+        debounceMs: 20,
+        publish: outsideEditPublisher(
+          () => authority,
+          (p) => fake.broadcast(IPC.workspaceExternalChange, p)
+        )
+      })
+
+      // A git pull removes the bridge from the governed project.
+      const file = path.join(projectDir, '.nodeterm', 'project.json')
+      const edited = JSON.parse(await fs.readFile(file, 'utf8')) as { rev: number; updatedAt: string; bridges: unknown[] }
+      edited.rev += 1
+      edited.updatedAt = new Date(Date.now() + 1_000).toISOString()
+      edited.bridges = []
+      await fs.writeFile(file, JSON.stringify(edited), 'utf8')
+      const muts = (): CanvasMutation[] =>
+        fake.sent.filter((e) => e.channel === IPC.canvasMut && e.args[0] === governedProject.id).map((e) => e.args[1] as CanvasMutation)
+      await vi.waitFor(() => {
+        expect(muts().map((m) => m.op)).toEqual(['edge-remove'])
+      }, { timeout: 3_000, interval: 20 })
+      expect(muts()[0]).toMatchObject({ op: 'edge-remove', id: 'bridge-ab', seq: expect.any(Number) })
+      expect(fake.sent.filter((e) => e.channel === IPC.workspaceExternalChange)).toEqual([])
+
+      // The ungoverned project keeps the whole-project broadcast.
+      const otherFile = path.join(otherDir, '.nodeterm', 'project.json')
+      const other = JSON.parse(await fs.readFile(otherFile, 'utf8')) as { rev: number; updatedAt: string; nodes: CanvasNodeState[] }
+      other.rev += 1
+      other.updatedAt = new Date(Date.now() + 2_000).toISOString()
+      other.nodes = []
+      await fs.writeFile(otherFile, JSON.stringify(other), 'utf8')
+      await vi.waitFor(() => {
+        expect(fake.sent.some((e) => e.channel === IPC.workspaceExternalChange)).toBe(true)
+      }, { timeout: 3_000, interval: 20 })
+      const broadcast = fake.sent.filter((e) => e.channel === IPC.workspaceExternalChange)
+      expect(broadcast.map((e) => (e.args[0] as Project).id)).toEqual([plainProject.id])
+      expect(fake.sent.filter((e) => e.channel === IPC.canvasMut && e.args[0] === plainProject.id)).toEqual([])
+      await authority.stop()
+    } finally {
+      setReflectedListener(null)
+      await fs.rm(otherDir, { recursive: true, force: true })
+    }
+  })
+
+  it('with no authority (another server owns this data dir), every outside edit is broadcast', () => {
+    const sent: Project[] = []
+    const route = outsideEditPublisher(() => null, (p) => sent.push(p))
+    const p = { id: 'x', name: 'x', color: '#000', viewport: { x: 0, y: 0, zoom: 1 }, nodes: [] } as Project
+    route(p)
+    expect(sent).toEqual([p])
   })
 })

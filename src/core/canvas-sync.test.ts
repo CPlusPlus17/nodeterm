@@ -8,6 +8,7 @@ import {
   initCanvasSync,
   publishCanvasMutation,
   reflectTargets,
+  setReflectedListener,
   stampMutation,
   isCanvasMutation,
   MUTATION_MAX_BYTES
@@ -70,6 +71,7 @@ beforeEach(() => {
   initCanvasSync()
 })
 afterEach(() => {
+  setReflectedListener(null)
   resetPlatformForTests()
   // Every test mints a fresh mkdtemp dir above; nothing removed them, so each run leaked one per
   // test into the shared temp dir (see src/core/platform-fake-dirs.ts for what that did to /tmp).
@@ -318,5 +320,80 @@ describe('initCanvasSync (reflector) — kanban ops', () => {
     t.setClients([1])
     expect(publishCanvasMutation('p1', { op: 'kb-card-remove', nodeId: '' } as CanvasMutation)).toBe(false)
     expect(t.sent).toEqual([])
+  })
+})
+
+describe('setReflectedListener (the Server Edition canvas authority hears the total order)', () => {
+  // The authority (core/canvas-authority.ts) applies ops in the reflector's order and must see each
+  // one synchronously, right after its stamp: its own published diff echoes back through here while
+  // it is still publishing, and a later op for the same key must never overtake an earlier one.
+  it('sees every reflected op of BOTH ingest paths, in seq order, with its seq', () => {
+    t.setClients([1])
+    const heard: Array<[string, CanvasMutation]> = []
+    setReflectedListener((projectId, m) => heard.push([projectId, m]))
+    t.cast(1, 'p1', { op: 'upsert', node: node('a', 1), src: 'c1' })
+    expect(publishCanvasMutation('p2', { op: 'remove', id: 'b' })).toBe(true)
+    t.cast(1, 'p1', { op: 'edge-upsert', kind: 'bridge', edge: { id: 'e1', source: 'a', target: 'b' } })
+    expect(heard.map(([p, m]) => [p, m.op, m.seq])).toEqual([
+      ['p1', 'upsert', 1],
+      ['p2', 'remove', 2],
+      ['p1', 'edge-upsert', 3]
+    ])
+    // What it hears is exactly what the clients were sent.
+    expect(heard.map(([, m]) => m)).toEqual(t.sent.map((s) => s.args[1]))
+  })
+
+  it('is called synchronously, before the ingest returns', () => {
+    t.setClients([1])
+    let heard = 0
+    setReflectedListener(() => heard++)
+    publishCanvasMutation('p1', { op: 'remove', id: 'a' })
+    expect(heard).toBe(1)
+    t.cast(1, 'p1', { op: 'remove', id: 'b' })
+    expect(heard).toBe(2)
+  })
+
+  it('hears nothing for a refused op, on either path', () => {
+    t.setClients([1])
+    const heard: CanvasMutation[] = []
+    setReflectedListener((_p, m) => heard.push(m))
+    t.cast(1, 'p1', { op: 'upsert', node: { id: 'bad' } })
+    t.cast(1, '', { op: 'remove', id: 'a' })
+    expect(publishCanvasMutation('p1', { op: 'kb-card-remove', nodeId: '' } as CanvasMutation)).toBe(false)
+    expect(publishCanvasMutation('', { op: 'remove', id: 'a' })).toBe(false)
+    expect(heard).toEqual([])
+  })
+
+  it('hears ops even with no client attached (a headless core still persists them)', () => {
+    const heard: CanvasMutation[] = []
+    setReflectedListener((_p, m) => heard.push(m))
+    expect(publishCanvasMutation('p1', { op: 'remove', id: 'a' })).toBe(true)
+    expect(heard).toHaveLength(1)
+  })
+
+  it('a throwing listener never stops the fan-out', () => {
+    t.setClients([1, 2])
+    setReflectedListener(() => {
+      throw new Error('boom')
+    })
+    t.cast(1, 'p1', { op: 'remove', id: 'a' })
+    expect(t.sent.map((s) => s.to)).toEqual([1, 2])
+  })
+
+  it('null detaches it, and a re-init of the reflector does not', () => {
+    t.setClients([1])
+    const heard: CanvasMutation[] = []
+    setReflectedListener((_p, m) => heard.push(m))
+    resetPlatformForTests()
+    const again = testPlatform()
+    initPlatform(again.p)
+    initCanvasSync()
+    again.setClients([1])
+    again.cast(1, 'p1', { op: 'remove', id: 'a' })
+    expect(heard).toHaveLength(1)
+    setReflectedListener(null)
+    again.cast(1, 'p1', { op: 'remove', id: 'b' })
+    expect(heard).toHaveLength(1)
+    rmSync(again.p.userDataDir, { recursive: true, force: true })
   })
 })

@@ -4,7 +4,8 @@
 // verbs drive the same service the relay listeners belong to, the access policy sees the node and
 // project ids the real workspace store answers, the relay peer's requests reach the real platform
 // handlers, and a viewer's terminal is the owner's live one. The flow:
-//   team init → add-owner → share → the owner joins (auto-approved) and opens a terminal → a guest
+//   (the canvas is seeded through a WorkspaceStore before boot: a relay peer cannot save the host's
+//   workspace) team init → add-owner → share → the owner joins (auto-approved) and opens a terminal → a guest
 //   knocks and waits → the owner approves it as a viewer → the viewer joins the owner's live
 //   session, cannot start one, cannot write a file, cannot read the enclosing repository through git
 //   → `team status` lists it as a connected viewer → `team unshare` silences its terminal.
@@ -32,6 +33,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { startServer } from './index'
+import { initPlatform, resetPlatformForTests } from '../core/platform'
+import { fakePlatform } from '../core/platform-fake'
+import { WorkspaceStore } from '../core/workspace-store'
 import { callTeamAdmin, type AdminInitResult, type AdminReply, type AdminStatusResult } from '../core/relay/team-admin'
 import { transportPair } from '../core/relay/transport-pair'
 import { connectRelayClient, type RelayClientSession } from '../core/relay/relay-client'
@@ -315,6 +319,16 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
     teardown.push(() => fs.rmSync(repoBase, { recursive: true, force: true }))
     const { shared: sharedCwd } = repoWithSecret(repoBase)
 
+    // The canvas is on this core before it boots: written through a WorkspaceStore on the SAME data
+    // dir (the index, and the shared project's own .nodeterm/project.json). A relay peer can no longer
+    // put it there — a hosted team never saves the host's workspace (step 2 checks the refusal).
+    initPlatform(fakePlatform({ userDataDir: dataDir }))
+    try {
+      await step('seed the workspace', new WorkspaceStore().save(workspaceWith(sharedCwd)))
+    } finally {
+      resetPlatformForTests()
+    }
+
     const booting = startServer({
       port: 0,
       host: '127.0.0.1',
@@ -360,8 +374,13 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       body: { hostPublicKeyB64: code.hostPublicKeyB64, deviceId: code.hostDeviceId }
     })
 
-    // The owner puts the canvas on this core and opens one terminal: that session is now live.
-    expect(await owner.call(IPC.workspaceSave, [workspaceWith(sharedCwd)])).toMatchObject({ ok: true })
+    // Even the owner cannot save the host's workspace over the relay: shared content travels as
+    // canvas ops, which the host's canvas authority writes (docs/hosted-team-relay.md).
+    expect(await owner.call(IPC.workspaceSave, [workspaceWith(sharedCwd)])).toMatchObject({
+      ok: false,
+      error: { code: 'E_ROLE', message: expect.stringMatching(/cannot save the host's workspace over the relay/) }
+    })
+    // The owner opens one terminal of the seeded canvas: that session is now live.
     const opened = await owner.call(IPC.ptyCreate, [{ cols: 120, rows: 40, persistKey: LIVE }])
     expect(opened).toMatchObject({ ok: true, result: { fresh: true } })
     const ownerSessionId = (opened.result as PtyCreateResult).sessionId

@@ -55,6 +55,14 @@ describe('access-policy guard', () => {
     expect([...HOSTED_VIEW_METHODS].sort()).toEqual(Object.keys(VIEW).sort())
     expect([...HOSTED_COMMENT_METHODS].sort()).toEqual(Object.keys(COMMENT).sort())
   })
+  it('canvas:authority is left Editor-only by omission: a relay tab answers it locally, never over the wire', () => {
+    // A hosted tab's governed set is every project bound to its own connection (relay-api.ts), so
+    // no relay builder names the channel and the guard above never forces a decision. Recorded
+    // here instead: a non-editor may neither ask it nor receive its change event.
+    expect(Object.hasOwn(VIEW, IPC.canvasAuthority) || Object.hasOwn(COMMENT, IPC.canvasAuthority)).toBe(false)
+    expect(Object.hasOwn(VIEW_EVENTS, IPC.canvasAuthorityChanged)).toBe(false)
+    expect(read('src/renderer/bridge/relay-api.ts')).not.toMatch(/IPC\.canvasAuthority/)
+  })
   it('the renderer\'s role names are the team store\'s', () => {
     const toShared = (r: TeamRole): HostedRole => r
     const toCore = (r: HostedRole): TeamRole => r

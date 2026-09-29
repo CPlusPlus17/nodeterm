@@ -68,7 +68,8 @@ describe('hosted team glue in Canvas', () => {
     const start = src.indexOf('const shouldPublishFor = (projectId: string): boolean =>')
     expect(start).toBeGreaterThan(-1)
     const gate = src.slice(start, src.indexOf('const pub = createCanvasPublisher(', start))
-    expect(gate).toContain('hasPeersRef.current &&')
+    // The peer check, OR a project the host's canvas authority governs (authority-gate-wiring.test.ts).
+    expect(gate).toContain('(hasPeersRef.current || governedRef.current.has(projectId)) &&')
     expect(gate).toContain('!isHostedReadOnly(activeSession.id)')
     expect(src).toContain('shouldPublish: () => shouldPublishFor(useProjects.getState().activeProjectId)')
     expect(src).toContain('shouldPublish: (projectId) => shouldPublishFor(projectId)')

@@ -64,7 +64,51 @@ describe('hosted team boot wiring (source)', () => {
       expect(body).toContain('await teamAdmin.close()')
       // Admin first: once it is closing, an in-flight `team init` can no longer start hosting.
       expect(body.indexOf('await teamAdmin.close()')).toBeLessThan(body.indexOf('hosted.stop()'))
+      // The canvas authority writes what it still owes BEFORE the pty layer goes, after hosting and
+      // canvas control stopped feeding it; then it is detached from the reflector and the store.
+      const stop = body.indexOf('await canvasAuthority?.stop()')
+      expect(stop, 'await canvasAuthority?.stop()').toBeGreaterThan(body.indexOf('hosted.stop()'))
+      expect(stop).toBeGreaterThan(body.indexOf('canvasControl?.stop()'))
+      expect(body.indexOf('setReflectedListener(null)')).toBeGreaterThan(stop)
+      expect(body.indexOf('workspaceStore.setContentAuthority(null)')).toBeGreaterThan(stop)
     }
+    expect(src.match(/canvasAuthority\?\.stop\(\)/g)?.length).toBe(2)
+  })
+
+  it('the canvas authority exists only where this process owns the team, and adopts at boot (R12a)', () => {
+    const create = src.indexOf('createCanvasAuthority(')
+    expect(create).toBeGreaterThan(0)
+    expect(src.match(/createCanvasAuthority\(/g)?.length).toBe(1)
+    // Never on the path where another server holds this data dir: that server is the one writer.
+    const busy = src.indexOf('if (otherServerHere) {')
+    const elseAt = src.indexOf('} else {', busy)
+    expect(busy).toBeGreaterThan(0)
+    expect(create).toBeGreaterThan(elseAt)
+    expect(create).toBeLessThan(headlessAt)
+    // Late-bound to the team store, fed by the reflector, and overlaid on every save and load.
+    const block = src.slice(create, src.indexOf('hosted.start()', create))
+    expect(block).toContain('sharedProjectIds: () => hosted.sharedProjectIds()')
+    expect(block).toContain('workspaceStore.setContentAuthority(')
+    expect(block).toContain('setReflectedListener(')
+    // Every shared project is adopted ONCE at boot, after the index load and after hosting started
+    // (start() loads the team file), before any outside edit could be adopted lazily: a lazy adoption
+    // after a git pull reads the pulled file as its baseline and publishes no diff at all.
+    const adopt = src.indexOf('authority.sharedChanged()')
+    expect(adopt).toBeGreaterThan(src.indexOf('hosted.start()', create))
+    expect(adopt).toBeGreaterThan(src.indexOf('await workspaceStore.load('))
+    expect(adopt).toBeLessThan(headlessAt)
+    expect(src.match(/authority\.sharedChanged\(\)/g)?.length).toBe(1)
+  })
+
+  it('outside edits are routed through the authority, and a share change re-announces the governed set', () => {
+    expect(src).toMatch(/createServerWorkspaceWatcher\(workspaceStore, \{\s*publish: outsideEditPublisher\(/)
+    const at = src.indexOf('onSharedChange:')
+    expect(at).toBeGreaterThan(0)
+    const body = src.slice(at, src.indexOf('\n    },', at))
+    expect(body).toContain('canvasAuthority?.sharedChanged()')
+    expect(body).toContain('IPC.canvasAuthorityChanged')
+    expect(body.indexOf('canvasAuthority?.sharedChanged()')).toBeLessThan(body.indexOf('IPC.canvasAuthorityChanged'))
+    expect(src).toMatch(/platform\.handle\(IPC\.canvasAuthority, \(\) => canvasAuthority\?\.governedIds\(\) \?\? \[\]\)/)
   })
 
   it('relay peers share one teardown, in the order ws.ts uses', () => {

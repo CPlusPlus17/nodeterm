@@ -97,10 +97,11 @@ import { codexCliCaps } from '../core/codex-cli'
 import type { CodexCliCaps } from '../shared/types'
 import { claudeConfigDirFor, registerClaudeAccountsSource } from '../core/claude-config-dir'
 import { presenceHub } from '../core/presence/hub'
-import { initCanvasSync } from '../core/canvas-sync'
+import { initCanvasSync, publishCanvasMutation, setReflectedListener } from '../core/canvas-sync'
+import { createCanvasAuthority, type CanvasAuthority } from '../core/canvas-authority'
 import { wireAgentStatus } from './agent-status'
 import { initServerContextLink } from './context-link'
-import { createServerWorkspaceWatcher } from './workspace-external-watch'
+import { createServerWorkspaceWatcher, outsideEditPublisher } from './workspace-external-watch'
 import { registerTranscriptIpc } from '../core/transcript-ipc'
 import { registerContextEnsureIpc } from '../core/context-ensure'
 import { IPC } from '@shared/ipc'
@@ -276,6 +277,13 @@ export async function startServer(
   // Canvas sync: reflect each browser tab's node mutations to the other attached tabs, so every
   // client converges on the same node set (and no tab writes back a node another tab deleted).
   initCanvasSync()
+  // The canvas authority (docs/hosted-team-relay.md): the one writer of the content of every project
+  // shared with a hosted team. Created further down, and only where this process owns the team (not
+  // when another server holds this data dir); read late by everything below that needs it. Until
+  // then — and forever on a server that does not own the team — nothing is governed.
+  let canvasAuthority: CanvasAuthority | null = null
+  // A client asks which projects are governed, to publish its ops for them even when it is alone.
+  platform.handle(IPC.canvasAuthority, () => canvasAuthority?.governedIds() ?? [])
   // Team presence (hello / cursor / focus / chat). The hub itself is joined per WebSocket in
   // ws.ts; this only registers the RPC surface. Presence is transient — nothing is persisted.
   presenceHub.registerIpc()
@@ -696,7 +704,14 @@ export async function startServer(
     canvases: () => workspaceStore.persistedCanvases(),
     installAgentIntegrations: config.installHooks !== false
   })
-  const workspaceWatcher = createServerWorkspaceWatcher(workspaceStore)
+  // A governed project's outside edit goes to the canvas authority, which publishes the difference
+  // as canvas ops; every other project keeps the whole-project `workspace:external-change`.
+  const workspaceWatcher = createServerWorkspaceWatcher(workspaceStore, {
+    publish: outsideEditPublisher(
+      () => canvasAuthority,
+      (project) => platform.broadcast(IPC.workspaceExternalChange, project)
+    )
+  })
   // Every load()/save() is a canvas change as far as links are concerned: a browser drawing a
   // bridge edge reaches us as the workspace save it triggers. It also refreshes the local-ref
   // watcher set, so projects added or removed while the server runs get the same hand-edit path.
@@ -895,6 +910,12 @@ export async function startServer(
     // stop a stream the viewer already joined). One map lookup.
     nodeOfSession: (sessionId) => ptyManager.nodeOfSession(sessionId),
     projectCwd: (projectId) => workspaceStore.localCwdForProject(projectId),
+    // A share or unshare: the authority adopts what joined and writes + releases what left, then every
+    // client hears the new governed set (a client alone on a newly shared canvas must start publishing).
+    onSharedChange: () => {
+      canvasAuthority?.sharedChanged()
+      platform.broadcast(IPC.canvasAuthorityChanged, canvasAuthority?.governedIds() ?? [])
+    },
     // TEST ONLY seams (see ServerConfig): never set by resolveConfig, so production dials the relay
     // and mints against API_BASE with the global fetch.
     ...(config.relayTestTransport ? { transport: config.relayTestTransport } : {}),
@@ -918,6 +939,23 @@ export async function startServer(
         `directory (${config.dataDir}). Stop it, or give this server its own --data-dir.`
     )
   } else {
+    // This process owns the team, so it owns the shared projects' content. Wired BEFORE hosting
+    // starts, so no relay peer's op can reach the reflector before the authority listens to it.
+    // `sharedProjectIds` is read on every call (the team store is the one source).
+    const authority = createCanvasAuthority({
+      sharedProjectIds: () => hosted.sharedProjectIds(),
+      readContent: (id) => workspaceStore.readProjectContent(id),
+      writeContent: (id, content) => workspaceStore.writeProjectContent(id, content),
+      publish: (id, m) => {
+        publishCanvasMutation(id, m)
+      },
+      log: (message) => console.warn(`[canvas-authority] ${message}`)
+    })
+    canvasAuthority = authority
+    workspaceStore.setContentAuthority(authority)
+    // Synchronous and in seq order (canvas-sync.ts): the authority's own published diff echoes back
+    // through here while it is still publishing.
+    setReflectedListener((id, m) => authority.onReflected(id, m))
     const hostedStart = await hosted.start().catch((err: unknown) => {
       console.error('[hosted-team] start failed:', err)
       return null
@@ -926,6 +964,11 @@ export async function startServer(
     else if (hostedStart === 'host-key-unreadable') {
       console.error('Hosted team relay: OFF — the host key could not be read (see above; `team status`).')
     }
+    // Adopt every shared project NOW, once: `start()` has loaded the team file (the shared set is not
+    // known before it), and the index load above has run. An outside edit adopted lazily would read
+    // the edited file as its own baseline and publish no difference at all, so every shared project
+    // needs its baseline before the watcher can hand one over.
+    authority.sharedChanged()
   }
 
   // Headless notification host: every core service above (incl. the loopback hook server, which
@@ -951,6 +994,10 @@ export async function startServer(
         canvasControl?.stop()
         workspaceWatcher.dispose()
         await contextLink.stop()
+        // Write what the canvas authority still owes, then detach it from the reflector and the store.
+        await canvasAuthority?.stop()
+        setReflectedListener(null)
+        workspaceStore.setContentAuthority(null)
         await ptyManager.killAll()
         // Same native hazard as the desktop app: a whisper transcribe still running when the
         // node env is torn down aborts the process. See SpeechService.shutdown.
@@ -1009,6 +1056,10 @@ export async function startServer(
       canvasControl?.stop()
       workspaceWatcher.dispose()
       await contextLink.stop()
+      // Write what the canvas authority still owes (see the headless close() above).
+      await canvasAuthority?.stop()
+      setReflectedListener(null)
+      workspaceStore.setContentAuthority(null)
       await ptyManager.killAll()
       // Same native hazard as the desktop app: a whisper transcribe still running when the node
       // env is torn down aborts the process. See SpeechService.shutdown.

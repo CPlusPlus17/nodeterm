@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { publishCanvasMutation } from '../core/canvas-sync'
+import { contentOf, diffContent, type CanvasContent } from '../shared/canvas-content'
 import { launchHeadless } from '../core/headless-launch'
 import { gateProjectTarget, GRANT_CAP } from '../core/project-grants'
 import {
@@ -44,6 +45,7 @@ import type { BoardLogEntry } from '../shared/types'
 import { UNKNOWN_CODEX_CLI_CAPS } from '../shared/types'
 import type {
   BridgeLink,
+  CanvasMutation,
   CanvasNodeState,
   ClaudeCliCaps,
   CodexCliCaps,
@@ -112,8 +114,14 @@ export interface HeadlessNodeFactoryDeps {
   agentIdOf?(nodeId: string): string | undefined
   env?: Record<string, string | undefined>
   now?: () => number
-  publishNode?: (projectId: string, node: CanvasNodeState) => void
-  publishRemoval?: (projectId: string, nodeId: string) => void
+  /**
+   * Cast one content op (node, edge or board) to every client. Default: the reflector
+   * (`publishCanvasMutation`), whose listener is the canvas authority. Every op is cast BEFORE the
+   * save that persists it (`castAndSave`): on a governed project the save is overlaid with the
+   * authority's content, which holds only what it heard as ops.
+   */
+  publishMutation?: (projectId: string, m: CanvasMutation) => void
+  /** The whole project, to browsers, on `workspace:server-change` (merged, never a conflict bar). */
   publishProject?: (project: Project) => void
   /** Injectable only so tests can seed creator facts; production uses a fresh process-local ledger. */
   ownership?: HeadlessNodeOwnership
@@ -335,6 +343,15 @@ function addEdge(list: BridgeLink[], source: string, target: string, prefix: str
     (edge.source === source && edge.target === target) ||
     (edge.source === target && edge.target === source))) return
   list.push({ id: edgeId(prefix, source, target), source, target })
+}
+
+/** A project absent from a baseline: all of its content is new. */
+const EMPTY_CONTENT: CanvasContent = { nodes: [], bridges: [], ropes: [] }
+
+/** Every project's content, deep-copied: a verb edits its workspace in place (`node.pendingLaunch =
+ *  …`), so a baseline that shared those objects would diff as unchanged. */
+function snapshotContent(workspace: Workspace): Map<string, CanvasContent> {
+  return new Map(workspace.projects.map((p) => [p.id, structuredClone(contentOf(p))]))
 }
 
 function nodeProjects(workspace: Workspace, nodeId: string): Project[] {
@@ -576,6 +593,8 @@ export class HeadlessNodeFactory {
    */
   private projectGrants = new Map<string, Set<string>>()
   private stopped = false
+  /** Per loaded workspace copy: every project's content as last loaded or saved (`castAndSave`). */
+  private baselines = new WeakMap<Workspace, Map<string, CanvasContent>>()
 
   constructor(private readonly deps: HeadlessNodeFactoryDeps) {
     this.ownership = deps.ownership ?? createHeadlessNodeOwnership()
@@ -590,24 +609,47 @@ export class HeadlessNodeFactory {
     return run
   }
 
-  private publishChangeSet(
-    project: Project,
-    nodes: readonly CanvasNodeState[],
-    removedIds: readonly string[]
-  ): void {
-    this.deps.publishProject?.(project)
-    const publishNode = this.deps.publishNode ?? ((projectId: string, node: CanvasNodeState) => {
-      publishCanvasMutation(projectId, { op: 'upsert', node })
-    })
-    const publishRemoval = this.deps.publishRemoval ?? ((projectId: string, nodeId: string) => {
-      publishCanvasMutation(projectId, { op: 'remove', id: nodeId })
-    })
-    for (const node of nodes) publishNode(project.id, node)
-    for (const nodeId of removedIds) publishRemoval(project.id, nodeId)
+  /**
+   * THE ONE LOAD. A private copy of the workspace, so no verb ever edits an object the store or the
+   * canvas authority still holds (a governed project's nodes come from the authority's own state),
+   * and the content of every project as loaded: `castAndSave` diffs against it.
+   */
+  private async loadForEdit(): Promise<Workspace> {
+    const workspace = structuredClone(await this.deps.workspaceStore.load({ sideline: false }))
+    this.baselines.set(workspace, snapshotContent(workspace))
+    return workspace
   }
 
-  private publish(project: Project, nodes: readonly CanvasNodeState[]): void {
-    this.publishChangeSet(project, nodes, [])
+  /**
+   * THE ONE SAVE. Diff every project's whole content against what was last loaded or saved, cast
+   * every op, THEN save. Nothing is hand-listed per verb, and that is the point: on a project the
+   * canvas authority governs, the save is overlaid with the authority's content, which holds only
+   * what it heard as ops, so any change a verb made that is not cast here is dropped from disk
+   * (docs/hosted-team-relay.md). The reflector hands each op to the authority synchronously, so
+   * every one is in its state before the overlay reads it. The ops are cast from a copy, never from
+   * the workspace a verb keeps editing, so nobody downstream holds an object that changes later.
+   */
+  private async castAndSave(workspace: Workspace): Promise<void> {
+    const before = this.baselines.get(workspace)
+    const after = snapshotContent(workspace)
+    const cast = this.deps.publishMutation ?? ((projectId: string, m: CanvasMutation) => {
+      publishCanvasMutation(projectId, m)
+    })
+    for (const project of workspace.projects) {
+      const next = after.get(project.id)
+      if (!next) continue
+      for (const m of diffContent(before?.get(project.id) ?? EMPTY_CONTENT, next, project.id)) {
+        cast(project.id, m)
+      }
+    }
+    this.baselines.set(workspace, after)
+    await this.deps.workspaceStore.save(workspace)
+  }
+
+  /** The whole project to browsers (`workspace:server-change`), after its save. Its content already
+   *  travelled as ops in `castAndSave`. */
+  private publish(project: Project): void {
+    this.deps.publishProject?.(project)
   }
 
   /** Who opened `nodeId` during THIS server run (and into which project), or undefined — the
@@ -763,7 +805,7 @@ export class HeadlessNodeFactory {
         }
       }
 
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -856,7 +898,7 @@ export class HeadlessNodeFactory {
         }
       }
 
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -898,8 +940,9 @@ export class HeadlessNodeFactory {
           .map((id) => this.deps.ptyManager.destroySession(null, id, { everySocket: true }))
       )
 
-      const removedByProject = new Map<Project, string[]>()
-      const changedByProject = new Map<Project, Map<string, CanvasNodeState>>()
+      // The projects this close touched. What changed in them (removals, promoted frame members,
+      // pruned edges) is cast by `castAndSave`, which diffs the whole content.
+      const touched = new Set<Project>()
       for (const id of ids) {
         const projectId = this.ownership.ownerOf(id)!.projectId
         const project = workspace.projects.find((candidate) => candidate.id === projectId)
@@ -915,11 +958,7 @@ export class HeadlessNodeFactory {
           }, { state: this.deps.stateOf(target.id) }))
         }
         if (target.kind === 'group') {
-          const ungrouped = ungroupPersistedNodes(project.nodes, id)
-          project.nodes = ungrouped.nodes
-          const changed = changedByProject.get(project) ?? new Map<string, CanvasNodeState>()
-          for (const node of ungrouped.promoted) changed.set(node.id, node)
-          changedByProject.set(project, changed)
+          project.nodes = ungroupPersistedNodes(project.nodes, id).nodes
         } else {
           project.nodes = project.nodes.filter((node) => node.id !== id)
         }
@@ -929,20 +968,12 @@ export class HeadlessNodeFactory {
         if (project.bridges) {
           project.bridges = project.bridges.filter((edge) => edge.source !== id && edge.target !== id)
         }
-        const removed = removedByProject.get(project) ?? []
-        removed.push(id)
-        removedByProject.set(project, removed)
+        touched.add(project)
       }
 
-      if (removedByProject.size) {
-        await this.deps.workspaceStore.save(workspace)
-        for (const [project, removed] of removedByProject) {
-          const surviving = project.nodes.map((node) => node.id)
-          const changed = [...(changedByProject.get(project)?.values() ?? [])].filter((node) =>
-            surviving.includes(node.id)
-          )
-          this.publishChangeSet(project, changed, removed)
-        }
+      if (touched.size) {
+        await this.castAndSave(workspace)
+        for (const project of touched) this.publish(project)
       }
 
       for (const id of ids) {
@@ -973,7 +1004,7 @@ export class HeadlessNodeFactory {
         }
       }
 
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1023,9 +1054,8 @@ export class HeadlessNodeFactory {
       }
 
       source.project.bridges = [...existing, ...plan.edges]
-      await this.deps.workspaceStore.save(workspace)
-      // An edge-only change has no node mutation to publish; the full-project event is the fanout.
-      this.publish(source.project, [])
+      await this.castAndSave(workspace)
+      this.publish(source.project)
       const note = plan.skipped.length
         ? ` (skipped ${plan.skipped.map((skipped) => `${skipped.id}: ${skipped.why}`).join('; ')})`
         : ''
@@ -1048,7 +1078,7 @@ export class HeadlessNodeFactory {
         color = resolveNodeColor(args.color)
         if (color === undefined) return { ok: false, error: invalidNodeColorMessage() }
       }
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1078,12 +1108,12 @@ export class HeadlessNodeFactory {
       }
 
       source.project.nodes = grouped.nodes
-      await this.deps.workspaceStore.save(workspace)
+      await this.castAndSave(workspace)
       this.ownership.record(grouped.groupId, {
         sourceNodeId,
         projectId: source.project.id
       })
-      this.publish(source.project, grouped.changed)
+      this.publish(source.project)
       const skipped = ids.length - resolvable.length
       const note = skipped ? ` (${skipped} unknown id(s) skipped)` : ''
       return {
@@ -1098,7 +1128,7 @@ export class HeadlessNodeFactory {
     return this.runExclusive(async () => {
       const flagError = unsupportedFlags(args, new Set(['node', 'title']))
       if (flagError) return { ok: false, error: `rename: ${flagError}` }
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1124,9 +1154,9 @@ export class HeadlessNodeFactory {
       source.project.nodes = source.project.nodes.map((node) =>
         node.id === id ? renamed : node
       )
-      await this.deps.workspaceStore.save(workspace)
+      await this.castAndSave(workspace)
       // Metadata only. In particular, Server Edition never mirrors `/rename` into the pane.
-      this.publish(source.project, [renamed])
+      this.publish(source.project)
       return { ok: true, message: `renamed ${id} to "${title}"` }
     })
   }
@@ -1150,7 +1180,7 @@ export class HeadlessNodeFactory {
       const owner = this.ownership.ownerOf(id)!
       const noNode: ServerControlReply = { ok: false, error: `run: no node with id ${id}` }
       if (args.project !== undefined && args.project !== owner.projectId) return noNode
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const project = workspace.projects.find((p) => p.id === owner.projectId)
       const node = project?.nodes.find((n) => n.id === id)
       if (!project || !node) return noNode
@@ -1166,14 +1196,14 @@ export class HeadlessNodeFactory {
       }
       // Write-ahead, exactly as open() does before its own delivery.
       node.pendingLaunch = { ...held, attempted: true, manualOnly: true }
-      await this.deps.workspaceStore.save(workspace)
+      await this.castAndSave(workspace)
       const launched = await this.launch(project, node, held.command)
       // As open() does: an agent this spawned fresh has not had its first real turn yet, so a
       // later `--after` on it must not be released by the CLI's boot `done` blip.
       if (node.agentId && launched.fresh) this.awaitingFirstWorking.add(id)
       if (launched.outcome === 'delivered') node.pendingLaunch = undefined
-      await this.deps.workspaceStore.save(workspace)
-      this.publish(project, [node])
+      await this.castAndSave(workspace)
+      this.publish(project)
       return launched.outcome === 'delivered'
         ? {
             ok: true,
@@ -1195,7 +1225,7 @@ export class HeadlessNodeFactory {
       const color = resolveNodeColor(args.color)
       if (color === undefined) return { ok: false, error: invalidNodeColorMessage() }
 
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1214,8 +1244,8 @@ export class HeadlessNodeFactory {
       }
       const byId = new Map(changed.map((node) => [node.id, node]))
       source.project.nodes = source.project.nodes.map((node) => byId.get(node.id) ?? node)
-      await this.deps.workspaceStore.save(workspace)
-      this.publish(source.project, changed)
+      await this.castAndSave(workspace)
+      this.publish(source.project)
       const skipped = ids.length - changed.length
       const note = skipped ? ` (${skipped} unknown id(s) skipped)` : ''
       return {
@@ -1252,7 +1282,7 @@ export class HeadlessNodeFactory {
         }
       }
 
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1417,11 +1447,11 @@ export class HeadlessNodeFactory {
       target.nodes.push(...created)
       target.ropes = ropes
       target.bridges = bridges
-      await this.deps.workspaceStore.save(workspace)
+      await this.castAndSave(workspace)
       for (const node of created) {
         this.ownership.record(node.id, { sourceNodeId, projectId: target.id })
       }
-      this.publish(target, created)
+      this.publish(target)
       if (issueRef) {
         for (const node of created) {
           await this.logRun(target.id, runStartedEvent(issueRef, {
@@ -1466,8 +1496,8 @@ export class HeadlessNodeFactory {
       for (const node of created) {
         if (failed.includes(node.id) && node.pendingLaunch) node.pendingLaunch.manualOnly = true
       }
-      await this.deps.workspaceStore.save(workspace)
-      this.publish(target, created)
+      await this.castAndSave(workspace)
+      this.publish(target)
       const ids = created.map((node) => node.id)
       const queuedIds = created
         .filter((node) => node.pendingLaunch && !failed.includes(node.id))
@@ -1504,7 +1534,7 @@ export class HeadlessNodeFactory {
     return this.runExclusive(async () => {
       const parsed = parseStickyArgs(args)
       if ('error' in parsed) return { ok: false, error: `sticky: ${parsed.error}` }
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
       if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1554,11 +1584,11 @@ export class HeadlessNodeFactory {
       node.text = write.text
       node.textUpdatedAt = (this.deps.now ?? Date.now)()
       node.textUpdatedBy = source.node.title || source.node.id
-      await this.deps.workspaceStore.save(workspace)
+      await this.castAndSave(workspace)
       if (created) {
         this.ownership.record(node.id, { sourceNodeId, projectId: source.project.id })
       }
-      this.publish(source.project, [node])
+      this.publish(source.project)
       return {
         ok: true,
         message: `${created ? 'created' : 'updated'} sticky ${node.id} (${write.mode})`,
@@ -1585,8 +1615,9 @@ export class HeadlessNodeFactory {
   refreshArmed(observed?: Pick<NormalizedAgentEvent, 'nodeId' | 'state'>): Promise<void> {
     return this.runExclusive(async () => {
       if (this.stopped) return
-      const workspace = await this.deps.workspaceStore.load({ sideline: false })
-      const changedByProject = new Map<Project, CanvasNodeState[]>()
+      const workspace = await this.loadForEdit()
+      // The projects whose arms moved. Their content is cast whole by `castAndSave`.
+      const changedProjects = new Set<Project>()
 
       for (const project of workspace.projects) {
         for (const node of project.nodes) {
@@ -1596,9 +1627,7 @@ export class HeadlessNodeFactory {
           // spawned for this caller during the current run may receive automatic input.
           if (!this.ownership.ownerOf(node.id)) continue
           const markChanged = (): void => {
-            const list = changedByProject.get(project) ?? []
-            if (!list.includes(node)) list.push(node)
-            changedByProject.set(project, list)
+            changedProjects.add(project)
           }
           if (observed?.state === 'working' && pending.awaitWorking?.includes(observed.nodeId)) {
             const remaining = pending.awaitWorking.filter((depId) => depId !== observed.nodeId)
@@ -1631,7 +1660,7 @@ export class HeadlessNodeFactory {
           // acknowledgement save) must never be replayed by an unrelated hook.
           pending.manualOnly = true
           pending.attempted = true
-          await this.deps.workspaceStore.save(workspace)
+          await this.castAndSave(workspace)
           markChanged()
           if (!isLaunchShell(await this.deps.ptyManager.paneCommand(node.id).catch(() => null))) continue
           if ((await this.deps.ptyManager.sendText(node.id, pending.command).catch(() => false)) !== true) continue
@@ -1644,9 +1673,9 @@ export class HeadlessNodeFactory {
       // process-local fresh-spawn index aligned even when several arms named the same dependency.
       if (observed?.state === 'working') this.awaitingFirstWorking.delete(observed.nodeId)
 
-      if (changedByProject.size) {
-        await this.deps.workspaceStore.save(workspace)
-        for (const [project, nodes] of changedByProject) this.publish(project, nodes)
+      if (changedProjects.size) {
+        await this.castAndSave(workspace)
+        for (const project of changedProjects) this.publish(project)
       }
     })
   }

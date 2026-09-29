@@ -19,7 +19,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { initPlatform, resetPlatformForTests, type CorePlatform } from './platform'
-import { initCanvasSync, MUTATION_MAX_BYTES } from './canvas-sync'
+import { initCanvasSync, MUTATION_MAX_BYTES, setReflectedListener } from './canvas-sync'
+import { createCanvasAuthority } from './canvas-authority'
 import {
   applyCanvasMutation,
   applyEdgeMutationToScene,
@@ -33,7 +34,7 @@ import {
   mutationKey,
   PENDING_TTL_MS
 } from '../shared/canvas-order'
-import { createCanvasPublisher, publishableScene } from '../shared/canvas-publish'
+import { createCanvasPublisher, publishableScene, shouldPublishCanvas } from '../shared/canvas-publish'
 import { applyCanvasOp, type CanvasContent } from '../shared/canvas-content'
 import { defaultKanbanFor } from '../shared/kanban-default-board'
 import { applyKanbanOp, diffKanbanOps, isKanbanOp, sanitizeKanbanOp } from '../shared/kanban-ops'
@@ -177,7 +178,9 @@ class Client {
 
   constructor(
     readonly id: number,
-    private readonly bus: Bus
+    private readonly bus: Bus,
+    /** Canvas's publish gate. Absent = always publish (every other test here has a peer attached). */
+    gate?: () => boolean
   ) {
     // Built here, not as field initializers: a field initializer runs BEFORE the parameter
     // properties are assigned, so `this.id` would still be undefined and both clients would stamp
@@ -189,7 +192,7 @@ class Client {
     this.order = createCanvasOrder(src, { now: () => clock })
     // Mirrors Canvas: the node/edge publisher and the board publisher cast through ONE send
     // (`castFor`), so both families are stamped, gated and recorded by the same order.
-    this.pub = createCanvasPublisher((m) => this.send(m), { src })
+    this.pub = createCanvasPublisher((m) => this.send(m), { src, ...(gate ? { shouldPublish: gate } : {}) })
     bus.deliver.set(id, (projectId, m) => {
       if (projectId !== PROJECT) return
       // Mirrors Canvas: our own remove coming back RELEASES a re-creation the gate held — cast it now,
@@ -1151,5 +1154,58 @@ describe('boards converge like nodes (kanban ops)', () => {
     expect(a.board?.labels).toEqual([{ id: 'lab-1', name: 'x'.repeat(60), color: 'red' }])
     expect(b.board?.labels).toEqual(a.board?.labels)
     expect(a.cast.filter((m) => m.op === 'kb-label')).toHaveLength(1) // repaired locally, not re-cast
+  })
+})
+
+// A browser alone on a project the hosted team shares (docs/hosted-team-relay.md). The canvas
+// authority is the one writer of that project's content and writes ONLY what it hears as ops, so a
+// solo client that kept the old solo gate (publish only with a peer) would edit a canvas that is
+// never saved: its whole-workspace save is overlaid with the authority's content.
+describe('a solo client on a governed project (the canvas authority)', () => {
+  afterEach(() => setReflectedListener(null))
+
+  const soloWithAuthority = (gate: () => boolean) => {
+    bus = new Bus()
+    initPlatform(bus.platform)
+    initCanvasSync()
+    const solo = new Client(1, bus, gate)
+    bus.clients = [1]
+    const writes: CanvasContent[] = []
+    const authority = createCanvasAuthority({
+      sharedProjectIds: () => new Set([PROJECT]),
+      readContent: async () => ({ nodes: [], bridges: [], ropes: [] }),
+      writeContent: async (_id, c) => {
+        writes.push(c)
+        return true
+      },
+      publish: () => {},
+      setTimer: () => null,
+      clearTimer: () => {},
+      log: () => {}
+    })
+    setReflectedListener((id, m) => authority.onReflected(id, m))
+    return { solo, writes, authority }
+  }
+
+  it('with the project governed, the solo edit reaches the authority and is written', async () => {
+    const { solo, writes, authority } = soloWithAuthority(() => shouldPublishCanvas({ hasPeers: false, governed: true }))
+    solo.edit([node('n1', 42)])
+    solo.editEdges({ bridges: [{ id: 'e1', source: 'n1', target: 'n1' }] })
+    bus.settle()
+    await authority.flushAll()
+    expect(writes).toHaveLength(1)
+    expect(writes[0].nodes.map((n) => [n.id, n.position.x])).toEqual([['n1', 42]])
+    expect(writes[0].bridges.map((e) => e.id)).toEqual(['e1'])
+    await authority.stop()
+  })
+
+  it('with the pre-authority gate (a peer only), nothing is cast and nothing is written', async () => {
+    const { solo, writes, authority } = soloWithAuthority(() => shouldPublishCanvas({ hasPeers: false, governed: false }))
+    solo.edit([node('n1', 42)])
+    bus.settle()
+    await authority.flushAll()
+    expect(bus.castCount).toBe(0)
+    expect(writes).toEqual([])
+    await authority.stop()
   })
 })
