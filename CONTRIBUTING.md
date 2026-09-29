@@ -1059,3 +1059,10 @@ paste mode immediately before Enter, not just the surviving PTY root. A missing 
 a transmitted text request is uncertain delivery, never a pre-paste refusal; show the no-resend
 warning. SessionStart idle rescue is scoped to that same nonempty session and agent identity,
 and a foreign idle must not broadcast fresh state proof to the renderer.
+
+Control and linked-context fallback must keep a known node identity on its owning nodeterm
+instance. A foreign server being reachable is not evidence that it owns the canvas. Match the
+candidate's own advertised node token before sending; never borrow a token from a global directory
+for that check. Keep real owning-endpoint refusals final and legacy hook delivery unchanged.
+When no owner answers, say so as a temporary state (`FOREIGN_ENDPOINT_HINT`); never let another
+instance's "permanent, do not retry" stand in for a dropped tunnel.
