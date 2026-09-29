@@ -343,8 +343,11 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   (`src/core/control-request-ledger.ts`). A new verb that opens a node, a team, a worktree or a frame
   joins `REQUEST_ID_VERBS` in the same PR; the agent-facing text renders from that set. A handler
   that gives up before it knows whether its effect happened answers `indeterminate: true`, never a
-  plain failure that says "safe to retry" — the retry would then open a second one. Do not move the
-  ledger into one shell's handler: the other shell silently loses it.
+  plain failure that says "safe to retry" — the retry would then open a second one. Anything desktop
+  main does with a renderer answer belongs in its `finishAnswer` step, which the forwarder also runs
+  on a LATE answer (the one a retry is replayed): post-processing written after the `await` instead
+  runs only on time. Do not move the ledger into one shell's handler: the other shell silently loses
+  it.
 
 - **A new canvas-control open path must record who opened the node.** When a station stops, the
   agent that opened it is told (`src/core/agents/station-notice.ts`) — and a rope alone cannot say

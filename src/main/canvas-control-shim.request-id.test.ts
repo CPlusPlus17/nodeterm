@@ -7,7 +7,7 @@
 // the shim walk to another endpoint of the same app and POST again (issue #445's failover). Before
 // the per-run request id, that re-post was a second call and opened a second node.
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
@@ -16,7 +16,7 @@ import { promisify } from 'node:util'
 import { CONTROL_SHIM_SCRIPT } from '../core/canvas-control-core'
 import { hookServer } from '../core/agents/hook-server'
 import { nodeAuthToken } from '../core/agents/node-auth-token'
-import { REQUEST_ID_REPLAYED_LEAD } from '../core/control-request-ledger'
+import { REQUEST_ID_REPLAYED_LEAD, requestIdAnnounceLine } from '../core/control-request-ledger'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { fakePlatform } from '../core/platform-fake'
 
@@ -32,6 +32,12 @@ let home = ''
 let proxy: net.Server
 let proxied = 0
 let handled: { verb: string; args: Record<string, string> }[] = []
+/** When set, the handler answers like desktop main after its 120 s wait: indeterminate, with the
+ *  real answer handed back later through `onLateAnswer`. */
+let timeOutNext = false
+let lateAnswer: ((r: { ok: boolean; message?: string }) => void) | undefined
+/** When set, the handler parks until the test releases it — a call still in flight. */
+let parkNext: Promise<void> | undefined
 
 beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nodeterm-shim-rid-'))
@@ -43,6 +49,16 @@ beforeAll(async () => {
   hookServer.setNodeAuthSecret(SECRET)
   hookServer.setControlHandler(async (cmd) => {
     handled.push({ verb: cmd.verb, args: cmd.args })
+    if (parkNext) {
+      const parked = parkNext
+      parkNext = undefined
+      await parked
+    }
+    if (timeOutNext) {
+      timeOutNext = false
+      lateAnswer = cmd.onLateAnswer
+      return { ok: false, error: 'no answer within 120s — the request may still complete', indeterminate: true }
+    }
     return { ok: true, message: `opened node #${handled.length}` }
   })
 
@@ -86,6 +102,9 @@ beforeAll(async () => {
 beforeEach(() => {
   handled = []
   proxied = 0
+  timeOutNext = false
+  lateAnswer = undefined
+  parkNext = undefined
 })
 
 afterAll(async () => {
@@ -141,6 +160,62 @@ describe('canvas-control shim: a retried open does not open a second node', () =
     )
     expect(err?.code).toBe(1)
     expect(err?.stderr).toMatch(/request-id-conflict/)
+    expect(handled).toHaveLength(1)
+  })
+
+  // Review follow-up to #1027. The per-run id is invisible to the agent — until a call times out,
+  // when it is the only handle on a call that may still complete. The reply prints it; passing it
+  // back as --request-id turns the retry into the SAME call, which answers with what really happened.
+  it('a timed-out run prints its per-run id, and passing it back recovers the late answer — one node', async () => {
+    timeOutNext = true
+    const err = await callShim('node-b', liveEndpoint, ['open-agent', '--agent', 'claude']).then(
+      () => null,
+      (e: { code: number; stderr: string }) => e
+    )
+    expect(err?.code).toBe(1)
+    const id = /--request-id (cli-[0-9a-f]+)/.exec(err?.stderr ?? '')?.[1]
+    expect(id, err?.stderr).toBeDefined()
+    lateAnswer?.({ ok: true, message: 'opened node #1 (late)' })
+    const retry = await callShim('node-b', liveEndpoint, ['open-agent', '--agent', 'claude', '--request-id', id!])
+    expect(retry.stdout).toContain(REQUEST_ID_REPLAYED_LEAD)
+    expect(retry.stdout).toContain('opened node #1 (late)')
+    expect(handled).toHaveLength(1)
+  })
+
+  // Review follow-up to #1033. The `request id:` line on a timed-out reply only helps a caller that
+  // SEES the reply, and an agent's tool call is usually killed at 120 s — the same instant the app
+  // gives up. So the id is on stderr BEFORE the POST: here while the call is still in flight, with no
+  // reply anywhere, and it is the id the ledger holds (passing it back replays, never re-runs).
+  it('announces the per-run id on stderr before any reply exists, and that id is the one the ledger holds', async () => {
+    let release!: () => void
+    parkNext = new Promise<void>((resolve) => (release = resolve))
+    const child = spawn('/bin/sh', [shim, 'open-worktree', '--branch', 'feat-slow'], {
+      env: {
+        PATH: process.env.PATH ?? '',
+        NODETERM_CANVAS_CONTROL: '1',
+        NODETERM_NODE_ID: 'node-c',
+        NODETERM_HOOK_ENDPOINT: liveEndpoint,
+        HOME: home
+      }
+    })
+    let stderr = ''
+    let stdout = ''
+    child.stderr.on('data', (c: Buffer) => (stderr += c.toString()))
+    child.stdout.on('data', (c: Buffer) => (stdout += c.toString()))
+    const exited = new Promise<number | null>((resolve) => child.on('exit', resolve))
+    for (let i = 0; i < 400 && !(handled.length === 1 && /request id: /.test(stderr)); i++) {
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    // In flight: the server is holding the call and has answered nothing, yet the id is on screen.
+    expect(handled).toHaveLength(1)
+    expect(stdout).toBe('')
+    const id = /request id: (cli-[0-9a-f]+) /.exec(stderr)?.[1]
+    expect(id, stderr).toBeDefined()
+    expect(stderr).toContain(requestIdAnnounceLine(id!))
+    release()
+    expect(await exited).toBe(0)
+    const retry = await callShim('node-c', liveEndpoint, ['open-worktree', '--branch', 'feat-slow', '--request-id', id!])
+    expect(retry.stdout).toContain(REQUEST_ID_REPLAYED_LEAD)
     expect(handled).toHaveLength(1)
   })
 

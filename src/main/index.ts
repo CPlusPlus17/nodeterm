@@ -278,7 +278,8 @@ import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control
 import { issueFlagRefusal } from '../core/canvas-control-core'
 import { afterPrFlagRefusal } from '../shared/pr-wait'
 import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
-import { createControlForwarder } from './control-forward'
+import { createControlForwarder, type ControlForwardReply } from './control-forward'
+import { claimOpenedBrowser } from './browser-open-claim'
 import { initTranscriptIndex, searchTranscripts } from '../core/transcript-index'
 import { initTelemetry } from './telemetry'
 import { initClaudeUsage } from './claude-usage'
@@ -3889,66 +3890,60 @@ app.whenReady().then(async () => {
     }
     const target = getMainWindow()
     if (!target) return { ok: false, error: 'window unavailable' }
-    // The timeout is NAMED, and what it says depends on the verb (`controlTimeoutError`): a DENIAL
-    // is a different answer (`denied by user`, final), and only a confirm-gated verb, whose dialog
-    // dismisses itself at the same deadline (ConfirmState.expiresAt), may be called safe to retry.
-    // An open is not cancelled by main giving up, so its timeout is indeterminate and its late
-    // answer goes back to the request ledger through `onLateAnswer`.
-    const result = await controlForwarder.forward(
-      verb,
-      (requestId) =>
-        target.webContents.send(IPC.agentControl, { requestId, sourceNodeId: nodeId, verb, args }),
-      onLateAnswer
-    )
-    // Record browser ownership the moment an open-browser succeeds — and ONLY when the caller's
-    // identity verdict for THIS request was `verified` (main's own verdict, not anything off the
-    // wire or project.json). A `legacy`/warned caller may open a browser but owns nothing, so it
-    // can drive nothing. The owner is the verified caller (`nodeId`); the project id + partition
-    // ride along from the renderer's reply for release-by-project and the indicator. This is the
-    // browser sibling of pane-ownership's record-at-fresh-spawn. See browser-control-ledger.ts and
-    // browser-ownership-source.test.ts (ownership is NEVER read from Project.ropes).
-    if (verb === 'open-browser' && verified && result.ok) {
-      const opened = result.result as { id?: string; projectId?: string; partition?: string } | undefined
-      // Refuse to record an entry with no owning project: `releaseByProject('')` would match it, and
-      // a project-less ownership record is meaningless. Fail-closed against future reply-shape drift
-      // — today `partition` is present only when agentBrowserPartition(projectId) succeeded, so a
-      // non-empty safe projectId always rides with it.
-      if (opened?.id && opened.partition && opened.projectId) {
-        browserLedger.claim(opened.id, {
-          ownerNodeId: nodeId,
-          projectId: opened.projectId,
-          partition: opened.partition,
-          navGeneration: 0,
-          leaseActiveUntil: 0,
-          openedAt: Date.now()
-        })
+    // What main does with the renderer's answer, as ONE step the forwarder runs on whichever answer
+    // arrives: on time, or LATE — after the 120 s wait below gave up — before the request ledger
+    // stores it for a retry to replay. A late answer is the same answer, only later: the node exists
+    // and this caller opened it, so it owes exactly what an on-time answer owes. Keeping it off this
+    // path replayed "opened browser b1" for a browser its opener could never drive.
+    const finishAnswer = (answer: ControlForwardReply): ControlForwardReply => {
+      // Record browser ownership the moment an open-browser succeeds — and ONLY when the caller's
+      // identity verdict for THIS request was `verified` (main's own verdict, not anything off the
+      // wire or project.json). A `legacy`/warned caller may open a browser but owns nothing, so it
+      // can drive nothing. The owner is the verified caller (`nodeId`); the project id + partition
+      // ride along from the renderer's reply for release-by-project and the indicator. This is the
+      // browser sibling of pane-ownership's record-at-fresh-spawn. See browser-open-claim.ts,
+      // browser-control-ledger.ts and browser-ownership-source.test.ts (ownership is NEVER read
+      // from Project.ropes).
+      if (claimOpenedBrowser(browserLedger, { verb, ownerNodeId: nodeId, verified }, answer, Date.now())) {
         // A claim carries no live lease (a verb sets that in PR 7), so this does not light the chip;
         // it keeps the renderer's view consistent from the moment ownership exists.
         pushBrowserLeases()
       }
-    }
-    // Record a project grant the moment an open-project succeeds — the open-browser ledger
-    // pattern above, same conditions: ONLY when the caller's identity verdict for THIS request
-    // was `verified` (main's own verdict, never anything off the wire) AND the renderer's reply
-    // carries a non-empty projectId. Inert until PR 2: today the renderer's `default:` case
-    // answers `unknown verb: open-project` with ok: false, so nothing is ever recorded — but the
-    // record path ships fail-closed and finished, not stubbed.
-    if (verb === 'open-project') {
-      // The whole decision (verified && ok && string projectId → grant; cap race detection) is
-      // the PURE recordOpenProjectGrant — proven branch by branch in project-grants.test.ts.
-      // 'cap' = the pre-forward atCap() check passed but a concurrent open-project from the same
-      // caller filled the last slot while this one was in flight (PR #362 review, M1): the
-      // caller must NOT hear ok while holding no targeting right, so the named refusal replaces
-      // the success reply. Nothing is lost — open-project is idempotent (B1), so a re-run once
-      // grants have cleared returns the same project id and records the grant.
-      if (recordOpenProjectGrant(nodeId, result, verified) === 'cap') {
-        console.warn(
-          `[project-grants] grant cap raced for caller ${nodeId}: open-project succeeded but ` +
-            'the grant was not recorded; replying open-project-grant-cap'
-        )
-        return { ok: false, error: OPEN_PROJECT_GRANT_CAP, message: OPEN_PROJECT_GRANT_CAP }
+      // Record a project grant the moment an open-project succeeds — the open-browser ledger
+      // pattern above, same conditions: ONLY when the caller's identity verdict for THIS request
+      // was `verified` (main's own verdict, never anything off the wire) AND the renderer's reply
+      // carries a non-empty projectId. (open-project never claims a request-ledger row, so it never
+      // gets a late answer; it is here so no finishing step can be left off one path.)
+      if (verb === 'open-project') {
+        // The whole decision (verified && ok && string projectId → grant; cap race detection) is
+        // the PURE recordOpenProjectGrant — proven branch by branch in project-grants.test.ts.
+        // 'cap' = the pre-forward atCap() check passed but a concurrent open-project from the same
+        // caller filled the last slot while this one was in flight (PR #362 review, M1): the
+        // caller must NOT hear ok while holding no targeting right, so the named refusal replaces
+        // the success reply. Nothing is lost — open-project is idempotent (B1), so a re-run once
+        // grants have cleared returns the same project id and records the grant.
+        if (recordOpenProjectGrant(nodeId, answer, verified) === 'cap') {
+          console.warn(
+            `[project-grants] grant cap raced for caller ${nodeId}: open-project succeeded but ` +
+              'the grant was not recorded; replying open-project-grant-cap'
+          )
+          return { ok: false, error: OPEN_PROJECT_GRANT_CAP, message: OPEN_PROJECT_GRANT_CAP }
+        }
       }
+      return answer
     }
+    // The timeout is NAMED, and what it says depends on the verb and on whether the request ledger
+    // holds a row for this call (`controlTimeoutError`): a DENIAL is a different answer (`denied by
+    // user`, final), and only a confirm-gated verb, whose dialog dismisses itself at the same
+    // deadline (ConfirmState.expiresAt), may be called safe to retry. An open is not cancelled by
+    // main giving up, so its timeout is indeterminate and its late answer goes back to the request
+    // ledger through `onLateAnswer` — finished first.
+    const result = await controlForwarder.forward(
+      verb,
+      (requestId) =>
+        target.webContents.send(IPC.agentControl, { requestId, sourceNodeId: nodeId, verb, args }),
+      { onLate: onLateAnswer, finish: finishAnswer }
+    )
     return result
   })
   initMediaProtocol()
