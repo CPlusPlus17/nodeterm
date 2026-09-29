@@ -115,19 +115,49 @@ describe('run history in the node-removal funnels', () => {
 })
 
 describe('Start with agent (issue card)', () => {
+  it('both issue starts compose the prompt from the reference alone — never the issue title or body', () => {
+    // ONE composer for both "Start with agent" and "Start with agent in a new worktree".
+    const prompt = code(between('const issueStartPrompt = useCallback(', 'const startIssueAgent = useCallback('))
+    expect(prompt).toContain('issueRefFromHtmlUrl(issue.htmlUrl, issue.number)')
+    expect(prompt).toContain('issueLaunchPrompt(ref)')
+    expect(prompt).not.toMatch(/issue\.title|issue\.body/)
+    expect(code(src).match(/issueLaunchPrompt\(ref\)/g) ?? []).toHaveLength(1)
+  })
+
   it('launches with the reference prompt and binds the node — never the issue title or body', () => {
     const body = code(between('const startIssueAgent = useCallback(', 'const issueAgentMenu = useCallback('))
-    expect(body).toContain('issueRefFromHtmlUrl(issue.htmlUrl, issue.number)')
-    expect(body).toContain('issueLaunchPrompt(ref)')
-    expect(body).toContain('{ issueRef: ref }')
+    expect(body).toContain('issueStartPrompt(issue)')
+    expect(body).toContain('start.prompt, {\n        issueRef: start.ref\n      }')
+    expect(body).toContain('fileIssueSession(issue, start.ref, created, agentId)')
     // The attacker-writable fields of the issue never reach this function's launch.
     expect(body).not.toMatch(/issue\.title|issue\.body/)
   })
 
+  it('in a new worktree: the title reaches ONLY the branch planner, never a prompt or a launch line', () => {
+    const open = code(between('const openIssueAgentInFrame = useCallback(', 'const startIssueAgentInWorktree = useCallback('))
+    expect(open).toContain('start.prompt,')
+    expect(open).toContain('{ issueRef: start.ref, awaitSetupGroup: setupHoldGroup(groupId) }')
+    expect(open).not.toMatch(/issue\.title|issue\.body/)
+    const body = code(between('const startIssueAgentInWorktree = useCallback(', 'const issueWorktreeMenu = useCallback('))
+    expect(body).toContain('issueStartPrompt(issue)')
+    // Exactly one read of the title: the slug input of `planIssueWorktree` (@shared/issue-worktree
+    // owns every rule about it — allowlist, cap, check-ref-format; proven there against git).
+    expect(body.match(/issue\.title/g) ?? []).toHaveLength(1)
+    expect(body).toMatch(/planIssueWorktree\(\s*\{\s*number: start\.ref\.number,\s*title: issue\.title,/)
+    expect(body).not.toMatch(/issue\.body/)
+    // The frame is named after the NUMBER, not the title.
+    expect(body).toContain('title: `Issue #${start.ref.number}`')
+  })
+
   it('the menu reuses the canvas agent + account picker instead of a fourth copy', () => {
-    const body = code(between('const issueAgentMenu = useCallback(', '// Global kanban swimlane'))
+    const body = code(between('const issueAgentMenu = useCallback(', '// ---- GitHub issue → agent session in its OWN worktree'))
     expect(body).toContain('agentCreationEntries(undefined, undefined, {')
     expect(body).toContain('startIssueAgent(issue, aid, acct)')
+    const wt = code(between('const issueWorktreeMenu = useCallback(', '// Global kanban swimlane'))
+    expect(wt).toContain('agentCreationEntries(undefined, undefined, {')
+    expect(wt).toContain('startIssueAgentInWorktree(issue, aid, acct)')
+    // Refused projects answer with the reason (rendered DISABLED), never an empty or missing row.
+    expect(wt).toContain('if (refusal) return { refusal }')
   })
 })
 

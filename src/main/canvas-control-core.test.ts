@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { ISSUE_BRANCH_SLUG_MAX } from '../shared/issue-worktree'
 import {
   parseControlRequest,
   isDestructiveVerb,
@@ -1252,6 +1253,18 @@ describe('--issue: GitHub issue-bound sessions', () => {
     expect(flat).toContain('ONLY when the user asked for it in this session')
     expect(flat).toContain('otherwise end with a proposed comment the user can post')
     expect(flat).toContain('The end of a turn moves nothing')
+  })
+
+  it.each(bodies)('%s documents a worktree per issue as the two-call composition, with the board\'s own branch rule', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    // Rendered from `issueWorktreeBranch`, the function the board's button names its branch with.
+    expect(flat).toContain('`open-worktree --branch issue-123-fix-login-crash-on-safari`')
+    expect(flat).toContain(`at most ${ISSUE_BRANCH_SLUG_MAX} characters`)
+    expect(flat).toContain('`open-agent --agent <id> --group <groupId> --issue #N`')
+    expect(flat).toContain('Check `list` first: a frame titled `Issue #N` or `issue-<N>-…` already holds')
+    expect(flat).toContain('`open-worktree` never overwrites')
+    // No `--worktree` flag exists; the docs must not invent one.
+    expect(body).not.toMatch(/--issue[^\n]*--worktree|--worktree[^\n]*--issue/)
   })
 
   it.each(bodies)('%s never promises an automatic post to GitHub', (_name, body) => {

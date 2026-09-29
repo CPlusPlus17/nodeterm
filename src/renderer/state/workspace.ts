@@ -275,7 +275,7 @@ function placeNode(
  * to sane canvas bounds — settings.json is hand-editable, and a 0×0 or NaN node would be
  * unclickable/ungrabbable forever. Falls back to the historical 600×400.
  */
-function terminalNodeSize(): { width: number; height: number } {
+export function terminalNodeSize(): { width: number; height: number } {
   const s = useSettings.getState().settings
   const clamp = (v: unknown, lo: number, hi: number, dflt: number): number => {
     const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : dflt
