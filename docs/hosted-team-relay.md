@@ -162,7 +162,9 @@ later connect opens without a prompt.
 
 An owner's hosted tab has **Copy team invite code** in the command palette; `team info` prints the
 same code. A join code carries public material only (relay endpoint, host id, host public key, host
-device id, label). A leaked code lets someone **ask** to join; an owner still approves each device.
+device id, label). A leaked code cannot get anyone in, because an owner still approves each device.
+It **can** take hosting offline, though, and removing the member who leaked it does not stop that:
+see [Threat notes](#threat-notes).
 
 The teammate pastes it into New Remote Connection and reads the SAS it shows to an owner (a call
 or a chat). The owner's desktop shows "A device wants to join" with the same SAS, a device-key
@@ -376,6 +378,27 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   and restarts the service: live tabs drop and reconnect, and pending requests are lost.
 - **Windows:** the admin channel is a unix socket, so both ends refuse by name. A team cannot be
   created on a Windows Server Edition in v1.
+- **Hosting knocked offline by a join code** (see [Threat notes](#threat-notes)). `team status`
+  shows `rate-limited (429)` as the last error, or teammates read "Too many join attempts … today".
+  Give the host a new device id **and** a new key, then new codes:
+
+  ```bash
+  systemctl --user stop nodeterm-server        # `systemctl stop …` for a root install
+  mv ~/.nodeterm-server/device-id ~/.nodeterm-server/device-id.old   # <dataDir>/device-id
+  systemctl --user start nodeterm-server
+  node $APP team rotate-key
+  node $APP team info                          # the new join code
+  ```
+
+  The device id is a random id in `<dataDir>/device-id`; the service reads it on first use and keeps
+  it for the life of the process, so replace it while the service is stopped. Hosting creates a new
+  one when it next mints. The only other thing on the server that depends on that file is a stored
+  Pro license (`<dataDir>/license.json`), which is bound to the id it was minted for and stops
+  validating. `team rotate-key` gives the team a new address, so every bookmark and old code stops
+  working. Members stay in `team.json`: each teammate pastes the new code once and presses OK on
+  its prompt (the host approves a known key on its own), and each such rejoin spends one of the new
+  device id's 10 daily device mints. Remove the member who leaked the code (`team remove`) if you
+  have not.
 - **Removing a teammate.** Approved devices are pinned with an **empty label**, and `team status`
   shows no keys. Find the key in `<dataDir>/relay/team.json` (match `addedAt`, or the 8-character
   fingerprint the approval dialog showed), then `team remove <key>`.
@@ -402,8 +425,26 @@ The human `team status` reads `state`, `idle` and `lastError` together:
 - **Nothing is served before mutual approval.** A pre-approval request answers `E_UNAUTHORIZED`
   and never reaches a handler. Frames that arrive between approval and open (while the pin is
   written) are held (at most 256), then served through the same checks.
-- **A leaked join code** lets a stranger ask, never enter. At most 16 requests wait at once, one per
-  device key, each for 10 minutes; the 17th is refused.
+- **A leaked join code cannot let anyone in**: every device still needs an owner's approval. At most
+  16 requests wait at once, one per device key, each for 10 minutes; the 17th is refused.
+- **A join code is enough to take hosting offline** (ruling R44). The code carries the host's device
+  id and public key (`hosted-service.ts` `info()`), and those are exactly what the backend's
+  `POST /v1/relay/host-token` takes: `{deviceId, hostPublicKeyB64}` (`host-token.ts`), with no proof
+  that the caller holds the host's secret key. Its free-tier limit (240 host tokens an hour, a fixed
+  window) is keyed by the `deviceId` sent, and the team's device mints (`POST /v1/relay/device`, 10 a
+  day) by the host device id. So anyone holding a code, a teammate you removed included, can:
+  - spend the host's hourly host-token budget, so the host's own mints are refused with 429 and
+    hosting stays down until the window resets;
+  - register listeners under the team's address. A joiner paired with one of them fails its
+    handshake (only the real host has the secret key), so nothing is exposed, but that join fails;
+  - open join requests with throwaway device keys until the 16 pending slots are full;
+  - spend the team's 10 daily device mints, so a new teammate reads "Too many join attempts … today".
+
+  `team remove` does not stop this, and neither does `team rotate-key` on its own: it changes the
+  address, not the device id the budgets are keyed by. Recovery: "Hosting knocked offline by a join
+  code" under [Status and troubleshooting](#status-and-troubleshooting). The real fix is on the
+  backend (proof that the caller holds the host key before `/v1/relay/host-token` mints), a
+  follow-up in `nodeterm-server`.
 - **A pinned device key is a long-lived credential**, like an SSH key: a stolen laptop gets in
   until `team remove`. A removed key's live sessions are cut and told `removed`, and until the kill
   lands a session with no team entry is served nothing.

@@ -6239,6 +6239,13 @@ The invariants, each with its reason:
   the API up and the relay down every mint succeeds and every socket dies, and a reset-on-mint
   re-minted at round-trip speed (relay log, 2026-09-27). Successful mints are also capped at 200
   per rolling hour, whatever asks for them (the backend's free limit is 240).
+- **A join code is enough to take hosting offline (R44), and only the backend can close that.**
+  `POST /v1/relay/host-token` takes the code's `hostDeviceId` + `hostPublicKeyB64` with no proof of
+  the host's secret key, and the backend damps host tokens and device mints per that device id. So a
+  code holder, a removed teammate included, can spend the host's hourly mints, the team's daily
+  device mints and the 16 pending slots. `team rotate-key` alone does not help (it keeps the device
+  id); recovery is a fresh `<dataDir>/device-id` + `team rotate-key` + fresh codes (the doc's
+  troubleshooting list). Proof-of-possession on that endpoint is a `nodeterm-server` follow-up.
 - **The joiner never mints a device token it cannot keep.** Device mints are damped per HOST device
   id, so one team shares 10 a day. It probes the bookmarks file before minting and sends a PER-TEAM
   device id (`<machine id>:<hostId>`), because the backend will not re-register one id for a second
