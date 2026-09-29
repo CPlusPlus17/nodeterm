@@ -9,7 +9,8 @@ import {
   isRemoveOp,
   mutationKey,
   mutationNodeId,
-  PENDING_TTL_MS
+  PENDING_TTL_MS,
+  REMOVED_MAX
 } from './canvas-order'
 import type { CanvasMutation, CanvasNodeState } from './types'
 
@@ -277,6 +278,21 @@ describe('createCanvasOrder', () => {
       const o = createCanvasOrder('me')
       o.stamp(up('n1', 1, 'me', 0)) // …the size guard then refuses it: onLocal is never called
       expect(o.accept(up('n1', 5, 'peer', 3))).toBe(true) // so the node is NOT deafened to peers
+    })
+
+    // The tombstone set is capped (a session's whole delete history), and the eviction is a plain
+    // LRU whose cost is spelled out in REMOVED_MAX's comment: the OLDEST entry degrades to the
+    // pre-rule-4 verdict (a stale upsert is applied again), and nothing else changes.
+    it(`evicts the oldest tombstone past REMOVED_MAX (${REMOVED_MAX}): only that id degrades`, () => {
+      const o = createCanvasOrder('me')
+      for (let i = 0; i <= REMOVED_MAX; i++) expect(o.accept(rm(`d${i}`, 'a', i + 1))).toBe(true)
+      // 513 removes: d0 (seq 1) is the one evicted, d1 (seq 2) the oldest retained.
+      const next = REMOVED_MAX + 2
+      // A stale frame for the evicted id is judged as before rule 4 existed — applied.
+      expect(o.accept({ ...up('d0', 5, 'b', next), seen: 0 })).toBe(true)
+      // …while one for a retained id is still dropped, the newest included.
+      expect(o.accept({ ...up('d1', 5, 'b', next + 1), seen: 0 })).toBe(false)
+      expect(o.accept({ ...up(`d${REMOVED_MAX}`, 5, 'b', next + 2), seen: REMOVED_MAX })).toBe(false)
     })
 
     it('reset clears the removed set (a fresh core restarts its seq at 0)', () => {
