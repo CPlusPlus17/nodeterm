@@ -31,7 +31,8 @@ export default defineConfig({
     // it inside each worker (and refuses if it is missing). See test/setup/tmux-sandbox.ts.
     // `fake-platform-root.ts` gives the run one parent directory for every `fakePlatform()`
     // userDataDir and removes it at the end — before it, each call leaked a directory in /tmp.
-    globalSetup: ['test/setup/tmux-sandbox.ts', 'test/setup/fake-platform-root.ts'],
+    // Listed FIRST: teardowns run in reverse, so it tears down after the tmux sandbox.
+    globalSetup: ['test/setup/fake-platform-root.ts', 'test/setup/tmux-sandbox.ts'],
     setupFiles: ['test/setup/tmux-worker-env.ts'],
     // Issue #160: with the default (one worker per core), a 10-core Mac runs ~10 fs-heavy suites
     // at once and transient fd exhaustion (EMFILE) turns into silent test flakiness — probes like

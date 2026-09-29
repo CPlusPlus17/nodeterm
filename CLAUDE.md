@@ -7277,9 +7277,14 @@ collected ~395,000 `nodeterm-fake-*` directories, `/tmp` ran out of inodes while
 free, and full runs failed in 1,201 of 1,207 files with ENOSPC. Measured on 40 suites that use it:
 271 directories left behind before, 0 after. Two halves, both needed: the directory is made on first
 READ of `userDataDir` (a test that passes its own, or never reads it, makes none), and it is made
-under a run root that teardown removes once every worker is gone. **Per run, not per file**: a
-per-file `afterAll` would sweep a directory while a store's debounced write could still land in it,
-turning a leak into an ENOENT thrown from a timer. A run killed before teardown leaves ONE directory.
+under a run root that teardown removes once every test file has finished (vitest tears global setup
+down BEFORE it waits for its workers to exit, so a late timer is not ruled out — a per-file
+`afterAll` would be strictly worse, sweeping while that file's debounced writes are still due). The
+teardown never throws and is listed first so it runs last: vitest's teardown loop has no catch per
+file, and a throw there would silently skip the tmux sandbox's teardown. The leaf under the root is a
+bare `u-`, because every byte added is closer to the macOS unix-socket path budget
+(`hook-sock-path.ts`) for anything a test binds under `userDataDir`. A run killed before teardown
+leaves ONE directory.
 `platform-fake.test.ts` fails if the root is not in effect, so dropping the `globalSetup` entry is loud.
 
 ## Conventions

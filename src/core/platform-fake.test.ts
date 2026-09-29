@@ -35,7 +35,7 @@ describe('fakePlatform userDataDir', () => {
     const p = fakePlatform()
     const dir = p.userDataDir
     expect(path.dirname(dir)).toBe(root)
-    expect(path.basename(dir)).toMatch(/^nodeterm-fake-/)
+    expect(path.basename(dir)).toMatch(/^u-/)
     expect(fs.statSync(dir).isDirectory()).toBe(true)
     expect(p.userDataDir).toBe(dir)
     expect(fakePlatform().userDataDir).not.toBe(dir)

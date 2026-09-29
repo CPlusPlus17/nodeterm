@@ -1045,7 +1045,7 @@ production socket on purpose; adding a third is a review conversation, not a che
 
 **A test's temp directory must go away when the run does.** `fakePlatform()`'s `userDataDir` is made
 on first read under one per-run root (`test/setup/fake-platform-root.ts`), and that root is removed
-after the last worker exits. It used to be one `mkdtemp` in the system temp dir per call, never
+after the last test file finishes. It used to be one `mkdtemp` in the system temp dir per call, never
 removed, and a development server collected ~395,000 of them until `/tmp` ran out of inodes and whole
 runs failed with ENOSPC. If you `mkdtemp` in a test yourself, remove it in `afterEach`/`afterAll`.
 
