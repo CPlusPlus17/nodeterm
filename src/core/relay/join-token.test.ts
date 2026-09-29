@@ -47,10 +47,15 @@ describe('joiner tokens', () => {
     expect(await mintJoinToken({ apiBase: 'a', deviceToken: 'x', fetch: fake(403, {}).f })).toEqual({ ok: false, kind: 'revoked' })
   })
 
+  it('join: 429 is a rate limit (R40) — never retried as a network failure, never a token verdict', async () => {
+    const join = (f: typeof fetch) => mintJoinToken({ apiBase: 'a', deviceToken: 'x', fetch: f })
+    expect(await join(fake(429, {}).f)).toEqual({ ok: false, kind: 'rate-limited' })
+  })
+
   it('join: any other failure is network, never a token verdict', async () => {
     const join = (f: typeof fetch) => mintJoinToken({ apiBase: 'a', deviceToken: 'x', fetch: f })
     expect(await join(fake(500, {}).f)).toEqual({ ok: false, kind: 'network' })
-    expect(await join(fake(429, {}).f)).toEqual({ ok: false, kind: 'network' })
+    expect(await join(fake(503, {}).f)).toEqual({ ok: false, kind: 'network' })
     expect(await join(throwing)).toEqual({ ok: false, kind: 'network' })
     expect(await join(fake(200, 'nope').f)).toEqual({ ok: false, kind: 'network' })
     expect(await join(fake(200, { pairingToken: 'P' }).f)).toEqual({ ok: false, kind: 'network' })

@@ -426,6 +426,16 @@ describe('connectHostedTeam (the relay:client:connect leg for a join code)', () 
     expect(x.sessions.size).toBe(0)
   })
 
+  it('R40: a rate-limited /v1/relay/join is E_JOIN_RATE (never retried), and the device token is kept', async () => {
+    const s = setup({ routes: { device: [DEVICE_OK('KEEP')], join: [[429, {}], JOIN_OK] } })
+    const err = await connectHostedTeam(codeText, s.deps, io().io).catch((e: Error) => e)
+    expect(joinErrorCode((err as Error).message)).toBe('E_JOIN_RATE')
+    // A later attempt (a person's, the next day) presents the SAME token: a rate limit costs no mint.
+    await connectHostedTeam(codeText, s.deps, io().io)
+    expect(s.api.count('device')).toBe(1)
+    expect(s.api.calls.filter((c) => c.route === 'join').map((c) => c.body.deviceToken)).toEqual(['KEEP', 'KEEP'])
+  })
+
   it('a failed join registers nothing and rejects with the human message', async () => {
     const s = setup({ routes: { device: [[429, {}]] } })
     const x = io()

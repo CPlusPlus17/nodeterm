@@ -15,7 +15,7 @@ const TIMEOUT_MS = 8000
 export type DeviceMintResult = { ok: true; deviceToken: string } | { ok: false; kind: 'network' | 'refused' | 'rate-limited' }
 export type JoinMintResult =
   | { ok: true; pairingToken: string; relayEndpoint: string }
-  | { ok: false; kind: 'bad-token' | 'revoked' | 'network' }
+  | { ok: false; kind: 'bad-token' | 'revoked' | 'rate-limited' | 'network' }
 
 /** A reply: its status and its parsed JSON body (`null` when the body is not JSON). */
 interface Reply { status: number; ok: boolean; body: unknown }
@@ -84,6 +84,9 @@ export async function mintJoinToken(d: {
   // Everything else says nothing about the token, so it must not cost a device mint.
   if (res.status === 401) return { ok: false, kind: 'bad-token' }
   if (res.status === 403) return { ok: false, kind: 'revoked' }
+  // A rate limit is a verdict about WHEN, not a network blip: read as `network`, an unattended
+  // reconnect would ask again every minute for as long as the limit holds (R40).
+  if (res.status === 429) return { ok: false, kind: 'rate-limited' }
   if (!res.ok) return { ok: false, kind: 'network' }
   const j = res.body as { pairingToken?: unknown; relayEndpoint?: unknown } | null
   if (typeof j?.pairingToken !== 'string' || !j.pairingToken || typeof j.relayEndpoint !== 'string' || !j.relayEndpoint) {
