@@ -87,7 +87,7 @@ function sharedRoots(ctx: AccessContext): string[] {
 
 /** `p` is `root` or below it. Relative-path based, so a sibling like `/srv/app2` is not inside
  *  `/srv/app`, a root of `/` contains everything, and a path on another Windows drive is outside. */
-function within(root: string, p: string): boolean {
+export function within(root: string, p: string): boolean {
   const rel = path.relative(root, p)
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel))
 }

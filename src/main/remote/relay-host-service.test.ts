@@ -139,7 +139,14 @@ function wireHost(): {
     isPremium: () => true,
     relayAllowed: () => true,
     getEntitlement: () => 'ent-abc',
-    licensedSeats: () => 3
+    licensedSeats: () => 3,
+    // A scoped seat needs its policy deps; every node here belongs to whichever project is shared.
+    scope: {
+      projectsOfNode: () => [],
+      nodeOfSession: () => undefined,
+      projectCwd: () => undefined,
+      hostDataDir: '/nonexistent-app-data'
+    }
   })
 
   let peerGate: TrustGate | null = null

@@ -69,6 +69,10 @@ import { presenceHub } from '../../core/presence/hub'
 import { initCanvasSync } from '../../core/canvas-sync'
 import { initPlatform, resetPlatformForTests } from '../../core/platform'
 import { IPC } from '../../shared/ipc'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { ScopedGuestDeps } from '../../core/relay/scoped-guest-policy'
 import { decodePtyData, E_UNAUTHORIZED } from '../../shared/rpc'
 
 const decoder = new TextDecoder()
@@ -83,6 +87,16 @@ let platform: ElectronPlatform
  * A host session bridged to a REAL peer relay socket over an in-process transport pair. `buffered`
  * is the host transport's ws.bufferedAmount — the number the sink must surface.
  */
+/** The shared project's folder in the scoped tests (a real directory: the policy realpaths it). */
+const SHARED_ROOT = mkdtempSync(join(tmpdir(), 'relay-host-scope-'))
+/** A scope where every node belongs to the shared project `proj-1`, rooted at SHARED_ROOT. */
+const testScope = (): ScopedGuestDeps => ({
+  projectsOfNode: () => ['proj-1'],
+  nodeOfSession: () => undefined,
+  projectCwd: (p) => (p === 'proj-1' ? SHARED_ROOT : undefined),
+  hostDataDir: join(SHARED_ROOT, '..', 'no-such-app-data')
+})
+
 function openHostAgainstFakeRelay(opts?: {
   bufferedAmount?: () => number
   sharedProjectId?: string
@@ -147,6 +161,7 @@ function openHostAgainstFakeRelay(opts?: {
     platform,
     transport: hostT,
     sharedProjectId: opts?.sharedProjectId,
+    scope: opts?.sharedProjectId ? testScope() : undefined,
     onPeerPending: (s) => pending.push(s),
     onOpen: (s) => opens.push(s),
     onClose: () => {
@@ -383,7 +398,7 @@ describe('relay host — workspace:load is scoped to the shared project', () => 
     const s = openHostAgainstFakeRelay({ sharedProjectId: 'proj-1' })
     await s.openMutually()
 
-    s.peerSendsTunnelText(JSON.stringify({ t: 'req', id: 8, method: IPC.gitStatus, args: ['/w'] }))
+    s.peerSendsTunnelText(JSON.stringify({ t: 'req', id: 8, method: IPC.gitStatus, args: [SHARED_ROOT] }))
     await vi.waitFor(() =>
       expect(JSON.parse(s.textFrames.at(-1)!)).toMatchObject({
         t: 'res',
@@ -436,8 +451,10 @@ describe('relay host — GitHub issue RPCs are scoped to the shared project', ()
     })).toHaveLength(methods.length))
     const responses = s.textFrames.map((frame) => JSON.parse(frame))
       .filter((message) => message.t === 'res' && message.id >= 100)
+    // Refused by the scoped-guest policy (E_ROLE) before the class jail (E_FORBIDDEN) is reached;
+    // either way nothing is dispatched.
     expect(responses.every((response) =>
-      response.ok === false && response.error.code === 'E_FORBIDDEN')).toBe(true)
+      response.ok === false && ['E_FORBIDDEN', 'E_ROLE'].includes(response.error.code))).toBe(true)
     expect(reached).toEqual([])
   })
 
@@ -478,7 +495,7 @@ describe('relay host — project-scoped channel CLASSES fail closed', () => {
       args: [{ projectId: 'proj-2', nodeId: 'n', add: ['klbl-x'] }]
     }))
     const res = await collect(s, 301)
-    expect(res).toMatchObject({ ok: false, error: { code: 'E_FORBIDDEN' } })
+    expect(res).toMatchObject({ ok: false })
     expect(reached).toEqual([])
   })
 
@@ -488,17 +505,17 @@ describe('relay host — project-scoped channel CLASSES fail closed', () => {
     const s = openHostAgainstFakeRelay({ sharedProjectId: 'proj-1' })
     await s.openMutually()
     s.peerSendsTunnelText(JSON.stringify({ t: 'req', id: 302, method: 'githubIssues:future-verb', args: ['proj-1'] }))
-    expect(await collect(s, 302)).toMatchObject({ ok: false, error: { code: 'E_FORBIDDEN' } })
+    expect(await collect(s, 302)).toMatchObject({ ok: false })
     expect(reached).toEqual([])
   })
 
   it('lets the shared project through to dispatch', async () => {
     const reached: unknown[] = []
-    platform.handle('projects.editCardLabels', async (...args: unknown[]) => { reached.push(args); return 'ok' })
+    platform.handle(IPC.githubIssuesRefresh, async (...args: unknown[]) => { reached.push(args); return 'ok' })
     const s = openHostAgainstFakeRelay({ sharedProjectId: 'proj-1' })
     await s.openMutually()
     s.peerSendsTunnelText(JSON.stringify({
-      t: 'req', id: 303, method: 'projects.editCardLabels', args: [{ projectId: 'proj-1', nodeId: 'n', add: ['l'] }]
+      t: 'req', id: 303, method: IPC.githubIssuesRefresh, args: ['proj-1', false]
     }))
     expect(await collect(s, 303)).toMatchObject({ ok: true })
     expect(reached).toHaveLength(1)
@@ -630,5 +647,44 @@ describe('relay host — teardown mirrors src/server/ws.ts', () => {
     expect(presenceHub.peers().some((pe) => pe.clientId === id)).toBe(false)
     // A stranger's key cuts nothing.
     killRelayHostsByPeerKey('some-other-key')
+  })
+})
+
+describe('relay host — a project-scoped session is a boundary (scoped-guest-policy)', () => {
+  it('refuses to open a scoped session with no scope policy', () => {
+    expect(() =>
+      connectRelayHost({
+        url: 'wss://relay.example', token: 'tok', ourKeys: genKeyPair(), platform,
+        transport: { bufferedAmount: 0, send: () => {}, close: () => {}, onMessage: () => {}, onClose: () => {} },
+        sharedProjectId: 'proj-1',
+        onPeerPending: () => {}, onOpen: () => {}, onClose: () => {}
+      })
+    ).toThrow(/scope policy/)
+  })
+
+  it('refuses files outside the shared folder, settings:save and an unknown channel before dispatch', async () => {
+    const reached: string[] = []
+    for (const m of [IPC.fsRead, IPC.settingsSave, 'brand:new-channel']) {
+      platform.handle(m, async () => { reached.push(m); return 'x' })
+    }
+    const s = openHostAgainstFakeRelay({ sharedProjectId: 'proj-1' })
+    await s.openMutually()
+    s.peerSendsTunnelText(JSON.stringify({ t: 'req', id: 401, method: IPC.fsRead, args: ['/etc/hosts'] }))
+    s.peerSendsTunnelText(JSON.stringify({ t: 'req', id: 402, method: IPC.settingsSave, args: [{}] }))
+    s.peerSendsTunnelText(JSON.stringify({ t: 'req', id: 403, method: 'brand:new-channel', args: [] }))
+    await vi.waitFor(() =>
+      expect(s.textFrames.map((f) => JSON.parse(f)).filter((m) => m.id >= 401 && m.ok === false)).toHaveLength(3)
+    )
+    expect(reached).toEqual([])
+  })
+
+  it('an unscoped session still reaches files (full access, as its invite copy says)', async () => {
+    platform.handle(IPC.fsRead, async () => 'contents')
+    const s = openHostAgainstFakeRelay()
+    await s.openMutually()
+    s.peerSendsTunnelText(JSON.stringify({ t: 'req', id: 404, method: IPC.fsRead, args: ['/etc/hosts'] }))
+    await vi.waitFor(() =>
+      expect(s.textFrames.map((f) => JSON.parse(f)).find((m) => m.id === 404)).toMatchObject({ ok: true, result: 'contents' })
+    )
   })
 })

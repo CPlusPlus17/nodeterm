@@ -4268,7 +4268,17 @@ app.whenReady().then(async () => {
   // CorePlatform client of this desktop after mutual SAS approval. Runs BESIDE initRemoteHost (the
   // phone still uses the legacy flow). Inert until `relay:host:start` — a solo user pays nothing.
   // Revocation reaches its sessions via `killRelayHostsByPeerKey` (peerRevoker, above).
-  initRelayHost(win, corePlatform, {})
+  initRelayHost(win, corePlatform, {
+    // A project-scoped seat is judged message by message against THIS core's own records: which
+    // projects hold a node (persisted canvases), which node a live session runs, and the project's
+    // local folder. Never anything the peer sends. See core/relay/scoped-guest-policy.ts.
+    scope: {
+      projectsOfNode: (nodeId) => workspaceStore.projectIdsForNode(nodeId),
+      nodeOfSession: (sessionId) => ptyManager.nodeOfSession(sessionId),
+      projectCwd: (projectId) => workspaceStore.localCwdForProject(projectId),
+      hostDataDir: app.getPath('userData')
+    }
+  })
   // Standing (phone) relay host: keep a host connection registered so a paired phone can reach
   // this Mac from anywhere. Honors settings.phoneAccessEnabled internally.
   const standingHost = initStandingHost(win, ptyManager, () => settingsStore.get(), listProjectsOutput, hostBridge)
