@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { parseViewMap, useViewMode, isKanbanOpen, viewFor } from './viewMode'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { parseViewMap, useViewMode, isKanbanOpen, viewFor, openIssueOnBoard } from './viewMode'
 
 describe('parseViewMap', () => {
   it('keeps canvas/kanban entries, tolerates garbage', () => {
@@ -53,5 +53,35 @@ describe('card requests (board-aware "go to node")', () => {
     useViewMode.getState().toggle('p9')
     expect(isKanbanOpen('p9')).toBe(false)
     expect(useViewMode.getState().requestedCardNodeId).toBeNull()
+  })
+})
+
+describe('openIssueOnBoard (a node\'s #N chip)', () => {
+  const ref = { owner: 'o', repo: 'r', number: 5 }
+  beforeEach(() =>
+    useViewMode.setState({ viewByProject: {}, defaultView: 'canvas', requestedIssue: null, requestedCardNodeId: null })
+  )
+
+  it('brings up a board that can show the issue, then asks it to open the issue', () => {
+    const open = vi.fn()
+    openIssueOnBoard('p1', ref, true, open)
+    expect(isKanbanOpen('p1')).toBe(true)
+    // Requested AFTER the toggle — a toggle drops any unconsumed request.
+    expect(useViewMode.getState().requestedIssue).toEqual(ref)
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('does NOT flip the saved view of a board that cannot show issues — it opens GitHub instead', () => {
+    const open = vi.fn()
+    openIssueOnBoard('p1', ref, false, open)
+    expect(open).toHaveBeenCalledWith('https://github.com/o/r/issues/5')
+    expect(useViewMode.getState().viewByProject.p1).toBeUndefined()
+    expect(useViewMode.getState().requestedIssue).toBeNull()
+  })
+
+  it('opens nothing for a reference that is not valid', () => {
+    const open = vi.fn()
+    openIssueOnBoard('p1', { owner: 'o', repo: 'r;x', number: 5 }, false, open)
+    expect(open).not.toHaveBeenCalled()
   })
 })

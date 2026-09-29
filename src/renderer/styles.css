@@ -7514,6 +7514,93 @@ button.group-node__setup:disabled {
   box-shadow: 0 8px 28px rgba(0, 0, 0, calc(0.4 * var(--shadow-k)));
 }
 
+/* Minimize control (canvas/MinimapDock.tsx). The dock takes over the placement React Flow's Panel
+   gave the map — one --float-gap in from the bottom-right — and turns the map's own Panel into an
+   in-flow child, so the dock's box, and with it the hover area, is exactly the map: no dead band
+   of margin over the canvas. */
+.minimap-dock {
+  position: absolute;
+  right: var(--float-gap);
+  bottom: var(--float-gap);
+  z-index: 5;
+}
+.minimap-dock > .react-flow__minimap.minimap {
+  position: relative;
+  margin: 0 !important;
+}
+/* The "−" sits inside the map's top-left corner and shows only while the map is hovered or the
+   button has keyboard focus. A solid panel fill in every appearance: it lies over the map's node
+   rectangles, and a translucent one there would be a button over noise. */
+.minimap-dock > .tooltip-trigger {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 6;
+}
+.minimap-dock__minimize {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.minimap-dock__minimize svg {
+  width: 12px;
+  height: 12px;
+}
+.minimap-dock:hover .minimap-dock__minimize,
+.minimap-dock__minimize:focus-visible {
+  opacity: 1;
+}
+.minimap-dock__minimize:hover {
+  background: var(--panel-header);
+}
+/* No hover on a touch screen (the Server Edition on a tablet): keep the control visible there, or
+   the map could never be minimized. */
+@media (hover: none) {
+  .minimap-dock__minimize {
+    opacity: 1;
+  }
+}
+
+/* The minimized map: one button in the corner the map occupied, on the same plate as the other
+   floating controls. */
+.minimap-restore {
+  position: absolute;
+  right: var(--float-gap);
+  bottom: var(--float-gap);
+  z-index: 5;
+}
+.minimap-restore button {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(var(--menu-rgb), 0.92);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, calc(0.3 * var(--shadow-k)));
+}
+.minimap-restore button:hover {
+  background: var(--panel-header);
+}
+.minimap-restore button svg {
+  width: 18px;
+  height: 18px;
+}
+
 /* Minimap-scale status glow (amber working / red needs-you / clay unread in the default look; the
    state roles under Liquid Glass — see the --mm-* tokens). A static drop-shadow provides the halo; only
    stroke-opacity animates (cheap on tiny svg rects), cadence matching each canvas glow. */
@@ -7942,6 +8029,8 @@ button.group-node__setup:disabled {
 .usage-popover__title { display: block; font-size: 15px; font-weight: 600; }
 .usage-popover__ago { font-size: 12px; color: rgba(var(--tint-rgb), 0.5); }
 .usage-popover__empty { font-size: 13px; color: rgba(var(--tint-rgb), 0.5); }
+/* Under bars kept through a failed read (holdLastGood): why they are old, and how old. */
+.usage-popover__held { font-size: 12px; margin-top: 10px; color: rgba(var(--tint-rgb), 0.5); }
 .usage-row { margin-top: 14px; }
 .usage-row__title { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
 /* Marks the limit the server says is currently gating the account. */
@@ -10260,7 +10349,8 @@ button.group-node__setup:disabled {
   gap: 10px;
   height: 46px;
   padding: 0 18px;
-  padding-right: 300px; /* keep a long project name from running under the cluster icons */
+  /* Keep the strip's content out from under the controls cluster (~320px incl. its margin). */
+  padding-right: 330px;
   border-bottom: 1px solid rgba(var(--tint-rgb), 0.08);
 }
 .kanban-header__dot {
@@ -10407,6 +10497,55 @@ button.group-node__setup:disabled {
 .kanban-col__close:hover {
   color: var(--danger);
 }
+/* Lifecycle category marker (@shared/kanban-category): a quiet word beside the title, never a
+   second colour language — the column's own dot already carries its identity. */
+.kanban-col__category {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(var(--tint-rgb), 0.5);
+  border: 1px solid rgba(var(--tint-rgb), 0.14);
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+.kanban-col__menu {
+  background: none;
+  border: none;
+  color: rgba(var(--tint-rgb), 0.35);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.kanban-col__menu:hover {
+  color: var(--text-strong);
+}
+/* Board progress (cards in done+closed columns over every card) in the title strip. */
+.kanban-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  font-size: 11px;
+  color: rgba(var(--tint-rgb), 0.55);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.kanban-progress__bar {
+  width: 56px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(var(--tint-rgb), 0.1);
+  overflow: hidden;
+}
+.kanban-progress__fill {
+  display: block;
+  height: 100%;
+  background: var(--state-success);
+}
 .kanban-col__swatches {
   display: flex;
   gap: 6px;
@@ -10552,6 +10691,169 @@ button.group-node__setup:disabled {
 }
 .github-pull-badge--closed {
   color: var(--danger);
+}
+/* Pull request CI + mergeability (PullStatusBadges.tsx). Hues are the text-safe status tokens:
+   the text sits on the card. A stale snapshot is dashed; one stale past the threshold greys. */
+.pull-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 4px 0 0 17px;
+  font-size: 10px;
+}
+.github-issue-modal .pull-status {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+.pull-status__ci--passed { color: var(--success); }
+.pull-status__ci--failed { color: var(--danger); }
+.pull-status__ci--pending { color: var(--caution); }
+.pull-status__ci--skipped,
+.pull-status__ci--neutral { color: rgba(var(--tint-rgb), 0.5); }
+.pull-status__merge--ready { color: var(--success); }
+.pull-status__merge--conflict { color: var(--danger); }
+.pull-status__merge--blocked,
+.pull-status__merge--behind { color: var(--warn); }
+.pull-status__merge--undecided { color: rgba(var(--tint-rgb), 0.5); }
+.pull-status__stale {
+  color: rgba(var(--tint-rgb), 0.45);
+  font-style: italic;
+}
+.pull-status--stale {
+  text-decoration: underline dashed rgba(var(--tint-rgb), 0.35);
+}
+.pull-status--expired,
+.pull-status--expired * {
+  color: rgba(var(--tint-rgb), 0.35) !important;
+}
+.pull-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 0 17px;
+}
+.pull-refs--session {
+  margin: 6px 0 0;
+}
+.github-issue-modal .pull-refs {
+  margin: 8px 0 0;
+}
+.pull-ref {
+  border: 1px solid rgba(var(--tint-rgb), 0.15);
+  border-radius: 999px;
+  padding: 0 6px;
+  color: rgba(var(--tint-rgb), 0.7);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.pull-ref--merged { color: #a371f7; }
+.pull-ref--closed { color: rgba(var(--tint-rgb), 0.45); }
+.pull-ref__ready { color: var(--success); }
+.pull-ref__conflict { color: var(--danger); }
+.pull-closes {
+  margin: 4px 0 0 17px;
+  color: rgba(var(--tint-rgb), 0.5);
+  font-size: 10px;
+}
+.github-issue-modal .pull-closes {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+.pull-checks {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.pull-checks__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.pull-checks__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  color: var(--text);
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+}
+button.pull-checks__name {
+  cursor: pointer;
+  text-decoration: underline dotted rgba(var(--tint-rgb), 0.35);
+}
+.pull-checks__state,
+.pull-checks__note {
+  color: rgba(var(--tint-rgb), 0.5);
+  font-size: 11px;
+}
+.pull-checks__note {
+  margin: 8px 0 0;
+}
+/* The card modal's "Pull requests" section (CardPullRequests.tsx). */
+.card-pulls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 16px 8px;
+  border-bottom: 1px solid rgba(var(--tint-rgb), 0.08);
+  font-size: 12px;
+}
+.card-pulls__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.card-pulls__title {
+  color: rgba(var(--tint-rgb), 0.6);
+  font-size: 11px;
+  font-weight: 600;
+}
+.card-pulls__branch {
+  color: rgba(var(--tint-rgb), 0.45);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+}
+.card-pulls__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card-pulls__row--unlinked .pull-ref {
+  opacity: 0.6;
+}
+.card-pulls__action {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: rgba(var(--tint-rgb), 0.55);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.card-pulls__action:hover {
+  color: var(--text);
+}
+.card-pulls__note {
+  margin: 0;
+  color: rgba(var(--tint-rgb), 0.5);
+  font-size: 11px;
+}
+.card-pulls__note--warn {
+  color: var(--warn);
+}
+.card-pulls__optout {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: rgba(var(--tint-rgb), 0.65);
+  font-size: 11px;
 }
 .github-issue-source {
   flex: 0 0 auto;
@@ -10712,6 +11014,83 @@ button.group-node__setup:disabled {
   overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.6;
+}
+/* GitHub issue ↔ agent session binding. The issue card lists every session started on it as a
+   live chip (state from the agent-status store — static, no animation: a card can carry several,
+   and the RUNNING pulse already lives on the session's own card). */
+.issue-run-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.issue-run-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 1px 6px;
+  border: 1px solid rgba(var(--tint-rgb), 0.14);
+  border-radius: 999px;
+  background: rgba(var(--tint-rgb), 0.05);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.issue-run-chip:hover {
+  background: rgba(var(--tint-rgb), 0.1);
+}
+.issue-run-chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.issue-run-chip__state {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.issue-run-chip--running .issue-run-chip__state {
+  color: var(--success);
+}
+.issue-run-chip--needs .issue-run-chip__state {
+  color: var(--attention-text);
+}
+.issue-run-chip--failed .issue-run-chip__state,
+.issue-run-chip--dropped .issue-run-chip__state {
+  color: var(--warn);
+}
+.issue-run-chip--paused .issue-run-chip__state,
+.issue-run-chip--sleeping .issue-run-chip__state {
+  color: var(--muted);
+}
+.github-issue-modal__runs {
+  padding: 10px 22px 0;
+}
+.github-issue-modal__history {
+  border-top: 1px solid rgba(var(--tint-rgb), 0.08);
+  padding: 12px 22px 18px;
+}
+/* `#N` on a session started on a GitHub issue — canvas node header and its board card alike. */
+.issue-ref-chip {
+  margin-left: 6px;
+  padding: 0 6px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(var(--tint-rgb), 0.16);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.issue-ref-chip:hover {
+  color: var(--text);
+  background: rgba(var(--tint-rgb), 0.08);
 }
 @media (max-width: 520px) {
   .kanban-header {
@@ -11391,6 +11770,29 @@ button.group-node__setup:disabled {
   font-size: 10px;
   color: rgba(var(--tint-rgb), 0.35);
 }
+/* A run of like events folded at render time (lib/boardLogCollapse) — the ×N toggle. */
+.board-log__fold {
+  background: rgba(var(--tint-rgb), 0.07);
+  border: 1px solid rgba(var(--tint-rgb), 0.12);
+  border-radius: 999px;
+  color: rgba(var(--tint-rgb), 0.65);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.board-log__fold:hover,
+.board-log__fold[aria-expanded='true'] {
+  color: var(--text-strong);
+  border-color: rgba(var(--tint-rgb), 0.25);
+}
+.board-log__group--open {
+  display: flex;
+  flex-direction: column;
+  gap: inherit;
+  border-left: 2px solid rgba(var(--tint-rgb), 0.1);
+  padding-left: 6px;
+}
 .board-log__text {
   font-size: 12px;
   line-height: 1.45;
@@ -11836,6 +12238,103 @@ button.group-node__setup:disabled {
 .label-picker__check {
   margin-left: auto;
   color: var(--accent);
+}
+
+/* A card the board's keyboard is on (J/K/arrows move it, Space opens it). */
+.kanban-card:focus {
+  outline: none;
+}
+.kanban-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── Board status chips (header) — transient filters on live agent state ── */
+.kanban-status-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+}
+.kanban-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 1px solid rgba(var(--tint-rgb), 0.12);
+  border-radius: 999px;
+  color: rgba(var(--tint-rgb), 0.65);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.kanban-status-chip:hover {
+  color: var(--text-strong);
+  background: rgba(var(--tint-rgb), 0.06);
+}
+.kanban-status-chip__count {
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--tint-rgb), 0.45);
+}
+.kanban-status-chip--on {
+  border-color: var(--accent);
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.kanban-status-chip--running.kanban-status-chip--on {
+  border-color: var(--state-working);
+  background: color-mix(in srgb, var(--state-working) 14%, transparent);
+}
+.kanban-status-chip--needs.kanban-status-chip--on {
+  border-color: var(--state-attention);
+  background: color-mix(in srgb, var(--state-attention) 14%, transparent);
+}
+.kanban-status-chip--unread.kanban-status-chip--on {
+  border-color: var(--state-unread);
+  background: color-mix(in srgb, var(--state-unread) 14%, transparent);
+}
+
+/* ── Saved views (header) — the views are shared, the active one is this user's ── */
+.kanban-views-btn {
+  margin-left: 6px;
+  max-width: 220px;
+  min-width: 64px;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kanban-filter-member {
+  font-size: 12px;
+  color: rgba(var(--tint-rgb), 0.85);
+}
+/* The title strip carries progress, the closed toggle, three chips, Filter and Views. None of them
+   may wrap (a wrapped button grows the fixed-height strip into the columns); the project name and
+   the Views label are what give way, and the progress BAR drops before its "n/m done" text. */
+.kanban-header .kanban-filter-btn:not(.kanban-views-btn),
+.kanban-status-chips,
+.kanban-progress,
+.kanban-header__filter {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.kanban-header__name {
+  min-width: 48px;
+  flex-shrink: 1;
+}
+@media (max-width: 1100px) {
+  .kanban-progress__bar {
+    display: none;
+  }
+}
+@media (max-width: 1000px) {
+  .kanban-header {
+    gap: 6px;
+  }
+  .kanban-status-chip {
+    padding: 2px 6px;
+  }
 }
 
 /* ── Board label filter (header) ── */
@@ -14099,10 +14598,17 @@ body.focus-mode .dock:hover {
 }
 
 .files-node__list {
+  /* The offsetParent of its rows — keyboard scrolling reads row.offsetTop against it. */
+  position: relative;
   flex: 1;
   overflow-y: auto;
   padding: 0 4px 6px;
   min-height: 0;
+}
+/* Focusable so it can take the keyboard (arrows, Enter, type-ahead). The selected row is the
+   focus indicator, as in a desktop file manager, so the box itself draws no ring. */
+.files-node__list:focus {
+  outline: none;
 }
 
 .files-node__row {
@@ -14117,6 +14623,14 @@ body.focus-mode .dock:hover {
 }
 .files-node__row:hover {
   background: rgba(var(--tint-rgb), 0.08);
+}
+/* Selection reads like the Explorer drawer's, and like an OS list: full strength while the list
+   has the keyboard, muted once focus is elsewhere — so it is clear where a typed letter will go. */
+.files-node__row.is-selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.files-node__list:focus .files-node__row.is-selected {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 /* Dimmed exactly like the Explorer drawer dims them — same fact (`DirEntry.ignored`), so it must
    read the same way in both places. */
@@ -14289,6 +14803,7 @@ body.focus-mode .dock:hover {
     .controls-cluster > button,
     .react-flow__controls,
     .react-flow__minimap.minimap,
+    .minimap-restore button,
     .sysres-pill,
     .usage-pill,
     .usage-refresh,

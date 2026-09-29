@@ -14,6 +14,7 @@
 // that reads and changes nothing, answer straight out of its serialized nodes).
 
 import { canControlCanvas, type AgentId } from '@shared/agents/config'
+import { formatIssueRef } from '@shared/github-issue-ref'
 import { controlLaunchState, type LaunchDelivery, type StatusById } from './pendingLaunch'
 import { projectTravel } from './presenceTravel'
 import {
@@ -36,6 +37,8 @@ export interface StoredNode {
   title?: string
   pendingLaunch?: unknown
   agentId?: string
+  /** The GitHub issue the session was started on — hostile until `formatIssueRef` says otherwise. */
+  issueRef?: unknown
 }
 
 /**
@@ -178,8 +181,12 @@ export function storedNodeListing(
     const status = statuses[n.id]
     const launchState = controlLaunchState(!!n.pendingLaunch, deliveries[n.id] ?? ((n.pendingLaunch as { manualOnly?: boolean } | undefined)?.manualOnly ? { kind: 'failed', attempts: 1, at: 0 } : undefined), status) ??
       (n.agentId && !status?.state ? 'unconfirmed' as const : undefined)
+    // A session started on an issue is told so on its OWN row, so `list` is enough for an agent to
+    // learn it is bound (and which card to move). Only a reference `formatIssueRef` vouches for.
+    const issue = formatIssueRef(n.issueRef)
     return {
       id: n.id, kind: n.kind ?? 'terminal', title: n.title ?? '',
+      ...(issue ? { issue } : {}),
       ...(status?.lastTurnError ? { lastTurnErrored: true } : {}),
       ...(launchState ? { launchState } : {})
     }
@@ -198,6 +205,7 @@ const launchLabels = {
 
 export function controlListingText(rows: ReturnType<typeof storedNodeListing>): string {
   return rows.map((n) => `${n.id} [${n.kind}] ${n.title}` +
+    (n.issue ? ` — issue ${n.issue}` : '') +
     (n.launchState ? ` — ${launchLabels[n.launchState]}` : '') +
     (n.lastTurnErrored ? ' — LAST TURN ERRORED' : '')
   ).join('\n')

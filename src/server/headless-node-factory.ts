@@ -38,6 +38,9 @@ import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normaliz
 import { oneLine } from '../shared/one-line'
 import { RUN_NOW_AFTER_REFUSAL, runNowRequested } from '../shared/control-verbs'
 import { isRemoteSessionNode } from '../shared/worktree'
+import { issueLaunchPrompt, resolveIssueArg, type IssueRef } from '../shared/github-issue-ref'
+import { runEndedEvent, runStartedEvent } from '../shared/issue-runs'
+import type { BoardLogEntry } from '../shared/types'
 import { UNKNOWN_CODEX_CLI_CAPS } from '../shared/types'
 import type {
   BridgeLink,
@@ -116,7 +119,20 @@ export interface HeadlessNodeFactoryDeps {
   ownership?: HeadlessNodeOwnership
   /** Test seam for the launch settle; production uses core's SETTLE_* defaults. */
   launchTiming?: { quietMs: number; capMs: number }
+  /**
+   * The `owner/repo` a project's kanban board syncs with — what `open-agent --issue #N` means. The
+   * GitHub host controller's answer (configured, else detected from the project's git remote), the
+   * same one the issue lane uses. Absent/throwing/null = only the board's explicitly configured
+   * repository counts, and a `#N` against a board with none is refused — never guessed.
+   */
+  issueRepository?: (projectId: string) => Promise<string | null>
+  /** Append to a project's board log (the issue card's run history). Absent = no history is
+   *  written; the session still opens. */
+  appendBoardLog?: (projectId: string, entry: BoardLogEntry) => Promise<boolean>
 }
+
+/** The author of a run-history line this factory writes: the app acting on an agent's request. */
+const RUN_LOG_AUTHOR = { name: 'nodeterm', color: '#8b8b8b' } as const
 
 export interface HeadlessNodeOwner {
   sourceNodeId: string
@@ -802,6 +818,23 @@ export class HeadlessNodeFactory {
     return this.open(sourceNodeId, 'open-agent', args, verified)
   }
 
+  /** File one run-history line under the issue card. Never throws: history is a record of work,
+   *  and a failed append must not fail the open or close it describes. */
+  private async logRun(
+    projectId: string,
+    run: { nodeId: string; event: BoardLogEntry['event'] } | null
+  ): Promise<void> {
+    if (!run || !this.deps.appendBoardLog) return
+    await this.deps.appendBoardLog(projectId, {
+      id: randomUUID(),
+      ts: (this.deps.now ?? Date.now)(),
+      author: RUN_LOG_AUTHOR,
+      nodeId: run.nodeId,
+      kind: 'event',
+      event: run.event
+    }).catch(() => false)
+  }
+
   close(
     sourceNodeId: string,
     args: Record<string, string>,
@@ -866,6 +899,15 @@ export class HeadlessNodeFactory {
         const project = workspace.projects.find((candidate) => candidate.id === projectId)
         const target = project?.nodes.find((node) => node.id === id)
         if (!project || !target) continue
+        if (target.issueRef) {
+          // A run ends when its node is CLOSED — never when a turn ends.
+          await this.logRun(project.id, runEndedEvent(target.issueRef, {
+            id: target.id,
+            title: target.title,
+            agentId: target.agentId,
+            agentSessionId: target.agentSessionId
+          }, { state: this.deps.stateOf(target.id) }))
+        }
         if (target.kind === 'group') {
           const ungrouped = ungroupPersistedNodes(project.nodes, id)
           project.nodes = ungrouped.nodes
@@ -1191,7 +1233,7 @@ export class HeadlessNodeFactory {
         // pairing with `--after` is refused, just below.
         verb === 'open-terminal'
           ? new Set(['count', 'cwd', 'cmd', 'after', 'project', 'run-now'])
-          : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model', 'run-now'])
+          : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model', 'issue', 'run-now'])
       )
       if (flagError) return { ok: false, error: `${verb}: ${flagError}` }
       // "Start now" and "start when X is done" contradict each other: refused in the desktop's
@@ -1216,6 +1258,18 @@ export class HeadlessNodeFactory {
       if (!Array.isArray(after)) return after
       const unownedAfter = this.unownedMutation(sourceNodeId, after)
       if (unownedAfter) return this.ownershipRefusal(verb, sourceNodeId, unownedAfter)
+      // `--issue`: resolved against the project the node OPENS IN, before anything is written. The
+      // shape gate already ran in `parseControlRequest`; this re-parses with the same grammar.
+      let issueRef: IssueRef | undefined
+      if (verb === 'open-agent' && args.issue !== undefined) {
+        const board = target.kanban?.github
+        const repository = board
+          ? (await this.deps.issueRepository?.(target.id).catch(() => null)) ?? board.repository ?? null
+          : null
+        const issue = resolveIssueArg(args.issue, repository)
+        if (!issue.ok) return { ok: false, error: `open-agent: ${issue.error}` }
+        issueRef = issue.ref
+      }
 
       const settings = this.deps.settings()
       const nodeSize = terminalSize(settings)
@@ -1288,7 +1342,8 @@ export class HeadlessNodeFactory {
           command = assembleLaunchCommand(
             {
               agentId: agentId as AgentId,
-              initialPrompt: args.prompt,
+              // An issue-bound session's first prompt is the REFERENCE line, never the issue's text.
+              initialPrompt: issueRef ? issueLaunchPrompt(issueRef, args.prompt) : args.prompt,
               permissionMode,
               sessionId: mintedSessionId,
               sessionIdFlagSupported,
@@ -1327,6 +1382,7 @@ export class HeadlessNodeFactory {
           cwd,
           ...(verb === 'open-agent' ? { agentId: agentId as AgentId } : {}),
           ...(args.model && verb === 'open-agent' ? { agentModel: args.model } : {}),
+          ...(issueRef && verb === 'open-agent' ? { issueRef } : {}),
           ...(mintedSessionId ? { agentSessionId: mintedSessionId } : {}),
           ...(source.node.accountId && verb === 'open-agent' &&
           (agentId === 'claude' || agentId === 'codex')
@@ -1360,6 +1416,16 @@ export class HeadlessNodeFactory {
         this.ownership.record(node.id, { sourceNodeId, projectId: target.id })
       }
       this.publish(target, created)
+      if (issueRef) {
+        for (const node of created) {
+          await this.logRun(target.id, runStartedEvent(issueRef, {
+            id: node.id,
+            title: node.title,
+            agentId: node.agentId,
+            agentSessionId: node.agentSessionId
+          }))
+        }
+      }
 
       const failed: string[] = []
       // Why each one failed, reported per id (#925): a reply that says only "retained for Run now"
@@ -1423,7 +1489,7 @@ export class HeadlessNodeFactory {
           ids.join(', ') +
           (queuedIds.length ? `; queued: ${queuedIds.join(', ')}` : '') +
           (deliveredIds.length ? '; launch delivered; agent startup is not confirmed' : ''),
-        result: { ids, id: ids[0], after, ...launchResult }
+        result: { ids, id: ids[0], after, ...launchResult, ...(issueRef ? { issue: `${issueRef.owner}/${issueRef.repo}#${issueRef.number}` } : {}) }
       }
     })
   }
