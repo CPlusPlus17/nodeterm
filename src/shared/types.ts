@@ -1,5 +1,6 @@
 import type { TextDeliveryResult } from './text-delivery'
 import type { IdentitySeedEntry } from './agent-identity-seed'
+import type { PrWaitHold } from './pr-wait'
 // Types shared across the main, preload, and renderer processes.
 
 import { TABBAR_HEIGHT_PX } from './window-chrome-metrics'
@@ -431,6 +432,13 @@ export interface PendingLaunch {
    * outlives the run's event stream — an app restart — releases rather than strands the node.
    */
   awaitSetupGroup?: string
+  /**
+   * Also wait on GitHub pull requests of the project's board repository (`--after-pr`, see
+   * @shared/pr-wait). ANDed with `after` and the setup gate. Validated at both serializer seams
+   * (`normalizePendingLaunch`): a malformed value becomes a hold that never fires on its own.
+   * A build older than this one does not know the field and releases the node on `after` alone.
+   */
+  afterPr?: PrWaitHold
 }
 
 export interface CanvasNodeState {

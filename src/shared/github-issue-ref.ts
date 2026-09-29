@@ -90,7 +90,7 @@ export function normalizeIssueRef(value: unknown): IssueRef | undefined {
 }
 
 /** `owner/repo` split into its halves, validated. Used for a project's configured repository. */
-function parseRepository(repository: unknown): { owner: string; repo: string } | undefined {
+export function parseRepository(repository: unknown): { owner: string; repo: string } | undefined {
   if (typeof repository !== 'string') return undefined
   const slash = repository.indexOf('/')
   if (slash < 0 || repository.indexOf('/', slash + 1) >= 0) return undefined

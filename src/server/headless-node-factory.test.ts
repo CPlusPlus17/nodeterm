@@ -1442,6 +1442,21 @@ describe('HeadlessNodeFactory', () => {
     expect(pty.sends).toEqual([])
   })
 
+  it('refuses --after-pr by name: the Server Edition keeps no pull request watch', async () => {
+    // A silent drop would open the node and start it at once — before the PR the caller named.
+    const save = vi.spyOn(store, 'save')
+    for (const reply of [
+      await factory.openAgent('term-source', { agent: 'claude', prompt: 'brief', 'after-pr': '7:merged' }, true),
+      await factory.openTerminal('term-source', { cwd: projectDir, cmd: 'make', 'after-pr': '7:merged' }, true)
+    ]) {
+      expect(reply).toMatchObject({ ok: false })
+      expect((reply as { error: string }).error).toMatch(/--after-pr is not supported by Server Edition canvas control/)
+    }
+    expect(save).not.toHaveBeenCalled()
+    expect(pty.creates).toEqual([])
+    expect(pty.sends).toEqual([])
+  })
+
   it('an explicit --run-now 0 is off, so --after still arms (#925)', async () => {
     states['term-upstream'] = 'working'
     const reply = await factory.openAgent(

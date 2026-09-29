@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GitHubIssuesApi } from '@shared/github-issues'
-import { useGitHubIssues } from './githubIssues'
+import { lookupPullRequests, pullBoardFor, useGitHubIssues } from './githubIssues'
 
 const page = (number: number, columnId: string | null, nextCursor?: string) => ({
   items: [{
@@ -44,7 +44,7 @@ function api(): GitHubIssuesApi {
   }
 }
 
-beforeEach(() => useGitHubIssues.setState({ projects: {} }))
+beforeEach(() => useGitHubIssues.setState({ projects: {}, pullWatch: {} }))
 
 describe('GitHub issue renderer state', () => {
   it('lets only the newest overlapping connection publish or tear down project state', async () => {
@@ -240,5 +240,96 @@ describe('GitHub issue renderer state', () => {
     expect(project.pages.todo.items).toHaveLength(1)
     expect(project.pullBoard).toEqual(board)
     disconnect()
+  })
+})
+
+describe('the PR watch an armed --after-pr node keeps (no board open)', () => {
+  const pullBoard = (n: number) => ({
+    repository: 'o/r', now: n, pulls: [], stale: false, access: { ci: true, merge: true }, undecided: false, truncated: false
+  })
+
+  it('reads the host board, re-reads on every change, and shares the board’s host subscription', async () => {
+    const client = api()
+    let fire: (() => void) | undefined
+    vi.mocked(client.onChanged).mockImplementation((_p, listener) => {
+      fire = () => listener([])
+      return () => { fire = undefined }
+    })
+    vi.mocked(client.pullStatus).mockResolvedValueOnce(pullBoard(1)).mockResolvedValueOnce(pullBoard(2))
+    useGitHubIssues.setState({ projects: {}, pullWatch: {} })
+    const release = await useGitHubIssues.getState().watchPulls(client, 'p1')
+    expect(pullBoardFor(useGitHubIssues.getState(), 'p1')?.now).toBe(1)
+    fire?.()
+    await vi.waitFor(() => expect(pullBoardFor(useGitHubIssues.getState(), 'p1')?.now).toBe(2))
+    // A second watcher and a board connection ride the SAME host subscription.
+    const again = await useGitHubIssues.getState().watchPulls(client, 'p1')
+    const disconnect = await useGitHubIssues.getState().connect(client, 'p1', ['todo'])
+    expect(client.subscribe).toHaveBeenCalledTimes(1)
+    release()
+    again()
+    expect(client.unsubscribe).not.toHaveBeenCalled()
+    expect(useGitHubIssues.getState().pullWatch.p1).toBeUndefined()
+    disconnect()
+    expect(client.unsubscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('pullBoardFor prefers the newer of the watch and the open board', () => {
+    const state = {
+      projects: { p1: { pullBoard: pullBoard(5) } },
+      pullWatch: { p1: pullBoard(3) }
+    } as never
+    expect(pullBoardFor(state, 'p1')?.now).toBe(5)
+    expect(pullBoardFor({ projects: {}, pullWatch: { p1: pullBoard(3) } } as never, 'p1')?.now).toBe(3)
+    expect(pullBoardFor({ projects: {}, pullWatch: {} } as never, 'p1')).toBeUndefined()
+  })
+})
+
+describe('lookupPullRequests — does the board repository have these pull requests?', () => {
+  const item = (number: number, patch: Record<string, unknown> = {}) => ({
+    ...pullPage(number, null).items[0],
+    ...patch
+  })
+  const pg = (items: unknown[], extra: Record<string, unknown> = {}) => ({
+    items, counts: {}, partial: false, readOnly: true, lastSuccessfulRefreshAt: 1, ...extra
+  })
+
+  it('finds a PR in any column, following pages, and reads its lifecycle', async () => {
+    const client = api()
+    vi.mocked(client.query).mockImplementation(async (request) => {
+      if (request.columnId === 'done' && !request.cursor) return pg([item(17)], { nextCursor: '50' }) as never
+      if (request.columnId === 'done' && request.cursor === '50') {
+        return pg([item(7, { state: 'closed', pull: { draft: false, mergedAt: '2026-09-01T00:00:00Z' } })]) as never
+      }
+      return pg([]) as never
+    })
+    const found = await lookupPullRequests(client, 'p1', ['todo', 'done'], [7])
+    expect(found.get(7)).toEqual({ found: true, lifecycle: 'merged' })
+    expect(client.subscribe).toHaveBeenCalledTimes(1)
+    expect(client.unsubscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('reads open, draft and closed-unmerged too', async () => {
+    const client = api()
+    vi.mocked(client.query).mockResolvedValue(pg([
+      item(1),
+      item(2, { pull: { draft: true, mergedAt: null } }),
+      item(3, { state: 'closed', pull: { draft: false, mergedAt: null } })
+    ]) as never)
+    const found = await lookupPullRequests(client, 'p1', [], [1, 2, 3])
+    expect([1, 2, 3].map((n) => found.get(n))).toEqual([
+      { found: true, lifecycle: 'open' },
+      { found: true, lifecycle: 'draft' },
+      { found: true, lifecycle: 'closed' }
+    ])
+  })
+
+  it('only a whole, refreshed snapshot makes "not found" an answer', async () => {
+    const client = api()
+    vi.mocked(client.query).mockResolvedValue(pg([]) as never)
+    expect((await lookupPullRequests(client, 'p1', [], [9])).get(9)).toEqual({ found: false, complete: true })
+    vi.mocked(client.query).mockResolvedValue(pg([], { partial: true }) as never)
+    expect((await lookupPullRequests(client, 'p1', [], [9])).get(9)).toEqual({ found: false, complete: false })
+    vi.mocked(client.query).mockResolvedValue(pg([], { lastSuccessfulRefreshAt: undefined }) as never)
+    expect((await lookupPullRequests(client, 'p1', [], [9])).get(9)).toEqual({ found: false, complete: false })
   })
 })

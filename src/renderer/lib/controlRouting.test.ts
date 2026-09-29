@@ -469,3 +469,26 @@ it('lists a background start as STARTING, not as the failed launch its manualOnl
   expect(rows[0].launchState).toBe('starting')
   expect(controlListingText(rows)).toBe('bg [terminal]  — STARTING')
 })
+
+it('lists a PR wait on the row, and EXPIRED once its deadline has passed (--after-pr)', () => {
+  const hold = (deadlineAt: number) => ({
+    repository: 'o/r',
+    waits: [{ number: 7, until: 'checks' }, { number: 9, until: 'merged' }],
+    deadlineAt
+  })
+  const rows = storedNodeListing(
+    [
+      { id: 'waits', pendingLaunch: { after: [], command: 'claude', afterPr: hold(2_000) } },
+      { id: 'late', pendingLaunch: { after: [], command: 'claude', afterPr: hold(1_000) } },
+      { id: 'bad', pendingLaunch: { after: [], command: 'claude', afterPr: { invalid: true, waits: [] } } }
+    ],
+    {},
+    {},
+    1_000
+  )
+  expect(rows.map((r) => r.launchState)).toEqual(['queued', 'expired', 'expired'])
+  const text = controlListingText(rows)
+  expect(text).toContain('waits [terminal]  — QUEUED — waits on PR #7 checks, PR #9 merged')
+  expect(text).toContain('late [terminal]  — EXPIRED (PR wait deadline passed; run it with `run`)')
+  expect(text).toContain('bad [terminal]  — EXPIRED')
+})

@@ -72,7 +72,7 @@ describe('the open prompt is resolved ONCE, before any path reads the store', ()
   it('asks the SAME authorization belt as `#N` which project that is — a refused caller spills nothing', () => {
     const decided = src.indexOf('const openPrompt:')
     const before = src.slice(src.indexOf('const issuePre: IssueFlagResult'), decided)
-    expect(before).toMatch(/const openScopePre = issueOpen\s*\?\s*issueFlagScope\(/)
+    expect(before).toMatch(/const openScopePre = (issueOpen|openVerb)\s*\?\s*issueFlagScope\(/)
     expect(src.slice(decided, decided + 400)).toContain('openScopePre?.ok')
   })
 

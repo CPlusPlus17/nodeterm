@@ -33,6 +33,7 @@ import { folderTitle } from '../lib/explorerCreate'
 import { sshHostKey } from '@shared/ssh'
 import { normalizeNodeIcon } from '@shared/node-icon'
 import { normalizeIssueRef, type IssueRef } from '@shared/github-issue-ref'
+import { normalizePendingLaunch } from '@shared/pending-launch-shape'
 import { useSettings } from './settings'
 
 // Re-exported so Canvas (and anything else in the renderer) keeps importing it from here, while the
@@ -1974,7 +1975,9 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         issueRef: normalizeIssueRef(n.issueRef),
         accountId: n.accountId,
         agentSessionId: n.agentSessionId,
-        pendingLaunch: n.pendingLaunch,
+        // Same seam rule again: the launch loop iterates `after`, and a PR wait decides when a
+        // command is typed into a pane. An unreadable hold becomes one that waits for ▶.
+        pendingLaunch: normalizePendingLaunch(n.pendingLaunch),
         ssh: n.ssh,
         sshRemoteTmux: n.sshRemoteTmux,
         sshFs: n.sshFs,
@@ -2058,7 +2061,7 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         agentSessionId: n.data.agentSessionId,
         // Owning-core UI intent is durable. Relay snapshots opt out: their new UI command
         // uses a transient one-shot writer, never a whole-workspace persistence claim.
-        pendingLaunch: n.data.pendingLaunch ?? (retainInitialCommand && n.data.initialCommand
+        pendingLaunch: normalizePendingLaunch(n.data.pendingLaunch) ?? (retainInitialCommand && n.data.initialCommand
           ? { after: [], command: n.data.initialCommand, attempted: false }
           : undefined),
         ssh: n.data.ssh,

@@ -1176,3 +1176,51 @@ describe('createAgentNode prompt injection', () => {
     expect(createAgentNode('gemini', 0, undefined, undefined, 'do X').data.initialCommand).toBe("gemini 'do X'")
   })
 })
+
+describe('pendingLaunch at the serializer seams (a held launch is hostile input too)', () => {
+  const state = (pendingLaunch: unknown) =>
+    ({
+      id: 'a1',
+      kind: 'terminal' as const,
+      position: { x: 0, y: 0 },
+      size: { width: 320, height: 240 },
+      title: 'A',
+      color: '#888',
+      group: null,
+      agentId: 'claude',
+      pendingLaunch
+    }) as never
+  const live = (pendingLaunch: unknown): CanvasNode =>
+    ({
+      id: 'a1',
+      type: 'terminal',
+      position: { x: 0, y: 0 },
+      width: 320,
+      height: 240,
+      data: { title: 'A', color: '#888', group: null, agentId: 'claude', pendingLaunch }
+    }) as unknown as CanvasNode
+
+  it('round-trips a PR-held launch', () => {
+    const hold = {
+      after: ['b1'],
+      command: 'claude',
+      attempted: false,
+      afterPr: { repository: 'o/r', waits: [{ number: 7, until: 'checks' }], deadlineAt: 5 }
+    }
+    const flow = nodeStatesToFlow([state(hold)])
+    expect(flow[0].data.pendingLaunch).toEqual(hold)
+    expect(flowToNodeStates(flow)[0].pendingLaunch).toEqual(hold)
+  })
+
+  it('an `after` that is not a list loads as a MANUAL hold — the launch loop would throw on it', () => {
+    const flow = nodeStatesToFlow([state({ after: 'b1', command: 'claude' })])
+    expect(flow[0].data.pendingLaunch).toMatchObject({ after: [], manualOnly: true })
+  })
+
+  it('a malformed PR wait loads as the invalid hold, on the way in and on the way out', () => {
+    const flow = nodeStatesToFlow([state({ after: [], command: 'c', afterPr: { waits: 'all' } })])
+    expect((flow[0].data.pendingLaunch as { afterPr?: { invalid?: true } }).afterPr?.invalid).toBe(true)
+    const out = flowToNodeStates([live({ after: [], command: 'c', afterPr: 'soon' })])
+    expect(out[0].pendingLaunch?.afterPr?.invalid).toBe(true)
+  })
+})

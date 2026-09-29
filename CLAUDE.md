@@ -3440,6 +3440,55 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   so reporting it as "the error" would be a confident wrong fact. Reading the text, and the
   *failed-to-start* watchdog (a station that never emits ANY hook event — the opposite failure,
   which hangs dependents honestly rather than firing them wrongly), stay open.
+  **Pull request waits (`--after-pr`, 2026-09-29).** `open-terminal --cmd …` / `open-claude` /
+  `open-agent` take `--after-pr <N:checks|N:merged>[,…]` (N may be `#N` or `owner/repo#N`) and
+  `--pr-deadline <90m|12h|3d>`: the held launch ALSO waits for pull requests of the project's
+  board repository, ANDed with `after` and the setup gate. The grammar, the persisted shape
+  (`pendingLaunch.afterPr = {repository, waits, deadlineAt}`) and main's shape gate are ONE module,
+  `@shared/pr-wait`; when a wait is met is `renderer/lib/prWait.ts`. Rules a refactor must not undo:
+  - **No new poller, no new request path.** The status is #1008's `GitHubPullBoard` from the host's
+    memory. Canvas holds the board's own refcounted host subscription (`watchPulls`) while any live
+    node holds a PR wait, so #1008's conditional heartbeat (free while nothing changes) keeps it
+    fresh; a `checks` wait also asks the host's bounded chase (`usePullChase`, visible window only)
+    because a finished check run does not move the heartbeat. Past the chase cap (12 reads, about
+    48 minutes) a still-running CI is noticed on the next repository change — the deadline and ▶
+    are the answer, never a timer of our own.
+  - **#1008's semantics, not new ones.** `checks` = `ci === 'passed'`, which `pullStatusFrom`
+    reports only for a SUCCESS rollup at the CURRENT head; a null rollup ("no checks") never passes;
+    a STALE board never passes `checks` (a push since the last read carries other checks) but may
+    pass `merged` (irreversible). A board whose repository differs from the hold's is `blocked`,
+    which holds rather than fires — that is also what makes a mid-switch board harmless.
+  - **Unknown is never satisfied, in both directions.** `launchesToFire` treats a caller that passes
+    no PR context as CLOSED for a PR hold (the opposite of the setup gate, whose absent probe is
+    open for a restart reason that does not apply here), and a malformed persisted hold becomes
+    `INVALID_PR_WAIT_HOLD` — present, expired, never satisfied — never `undefined`, because dropping
+    it would start the node on its `--after` deps alone. `normalizePendingLaunch`
+    (`@shared/pending-launch-shape`) now runs at BOTH serializer seams for the whole held launch: an
+    `after` that is not a list used to throw inside the canvas's dep-signature selector; an
+    unreadable gate turns the hold `manualOnly` instead of opening it.
+  - **Deadline, and the escape.** Default 24h, 1m–14d, refused (not clamped) outside it. Past it the
+    node never starts on its own: the badge reads ⚠ EXPIRED (TerminalNode sets its own timer — no
+    store changes at a deadline), `list` says EXPIRED, and ▶ / `run` start it anyway (`planRunVerb`
+    treats a PR hold like `--after`: the mount does not fire it). Exactly-once is unchanged:
+    `launchInFlight` plus clearing `pendingLaunch` on submit.
+  - **Refused at arm time, each with its reason** (`resolvePrWaitFor`, resolved ONCE next to
+    `issuePre`, against the project the node OPENS in — and only for a caller `issueFlagScope`
+    authorizes, since the lookup tells its caller whether a project's board exists): a relay tab; a board not connected to GitHub
+    (a cwd-less project says why); no repository or sync not approved on this machine; a full
+    `owner/repo#N` in another repository; a number the harvested PR list lacks — only from a WHOLE,
+    refreshed snapshot (`lookupPullRequests`), anything less is the retryable
+    `after-pr-unconfirmed`; a closed-unmerged PR; `:checks` on a merged PR. A `:merged` wait on an
+    already-merged PR is met now and not stored. An SSH project is NOT refused on its own account:
+    its board's status is read by this machine's GitHub client like any other.
+  - Main (`afterPrFlagRefusal` in its handler) and the Server Edition (`parseControlRequest`) share
+    the shape gate: `--run-now` with `--after-pr`, `--pr-deadline` alone, and `open-terminal` without
+    `--cmd` (nothing to hold) are refused. The Server Edition then refuses the well-formed flag by
+    name (its open allowlist) — it keeps no PR watch, and a silent drop would start the node at once.
+  - A node in a project that is not on screen is judged when that project is next viewed (the watch
+    follows the live canvas), the same contract as a cold-opened `--after` node. **Downgrade:** a
+    build older than this one keeps `afterPr` in the file but ignores it, releasing the node on
+    `after` alone. **Kanban / mobile:** the card does not show QUEUED for any held launch (a
+    pre-existing gap, not new here); the phone never sees `pendingLaunch`.
   **Headless start (`--run-now`, `run`, #925):** `open-*` with `--run-now` into a project that is
   not on screen starts the new node's held launch at once instead of "when next viewed". A node
   with nothing held (an `open-terminal` without `--cmd`) has nothing to start, and gets the plain
