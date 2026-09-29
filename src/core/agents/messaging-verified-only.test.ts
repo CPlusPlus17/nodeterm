@@ -168,16 +168,24 @@ describe('where the verbs sit in the routing tables', () => {
     // New verb, so fail-closed from day one strands no legacy population either.
     // `run` (#925) is here because it STARTS a process in a session the user is not watching —
     // possibly in another project; new verb, so fail-closed from day one strands nobody.
+    // `report-outcome` is here because a reported success RELEASES every dependent armed with
+    // `--after-success`: only a verified caller is provably the station the report is about.
     expect([...requiresVerified].sort()).toEqual([
       'notify',
       'open-project',
       'reply',
       'report-issue',
+      'report-outcome',
       'run',
       'send',
       'settings',
       'sticky'
     ])
+  })
+
+  it('the report-outcome refusal is its own flat sentence, not the messaging one', () => {
+    expect(verifiedRefusalFor('report-outcome')).toBe('Outcome report refused.')
+    expect(verifiedRefusalFor('report-outcome')).not.toBe(MESSAGING_CONTROL_REFUSAL)
   })
 
   it('the run refusal is its own flat sentence, not the messaging one (#925)', () => {

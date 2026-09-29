@@ -97,6 +97,9 @@ export interface ServerEditionControlActions {
   settings(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   /** `run --node <id>` (#925): deliver a retained launch for the node's creator. */
   run(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  /** `report-outcome` (@shared/station-outcome): a station's report about ITSELF — no creator check,
+   *  because it touches no other node. */
+  reportOutcome(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   deliver(input: {
     verb: 'send' | 'reply' | 'notify'
     sourceNodeId: string
@@ -119,7 +122,8 @@ const SERVER_V1_VERBS: ReadonlySet<string> = new Set([
   'notify',
   'sticky',
   'settings',
-  'run'
+  'run',
+  'report-outcome'
 ])
 
 /** A permanent, verb-specific refusal used only while canvas control itself is enabled. */
@@ -186,6 +190,8 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
         return actions.settings(nodeId, command.args)
       case 'run':
         return actions.run(nodeId, command.args, verified)
+      case 'report-outcome':
+        return actions.reportOutcome(nodeId, command.args, verified)
       case 'send':
       case 'reply':
       case 'notify':

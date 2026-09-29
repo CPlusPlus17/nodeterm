@@ -528,6 +528,7 @@ import {
   launchesToFire,
   queueControlLaunch,
   withPrHold,
+  withSuccessHold,
   withLaunchBrief,
   launchBriefPresent,
   LAUNCH_STALL_MS,
@@ -535,6 +536,17 @@ import {
 } from '../lib/pendingLaunch'
 import { prHoldReports, prWaitReplyLine, resolvePrWaitFor, startFreshReadAsks, type PrWaitArmResult } from '../lib/prWait'
 import { RUN_NOW_AFTER_PR_REFUSAL } from '@shared/pr-wait'
+import {
+  afterSuccessFlagRefusal,
+  normalizeSuccessWaitHold,
+  parseAfterSuccessArg,
+  parseSuccessDeadlineArg,
+  outcomeOf,
+  successDepRefusal,
+  type SuccessWaitHold
+} from '@shared/station-outcome'
+import { useStationOutcomes } from '../state/stationOutcomes'
+import { installStationOutcomeWiring } from '../lib/stationOutcomeWiring'
 import { lookupPullRequests, pullBoardFor, useGitHubIssues } from '../state/githubIssues'
 import { usePullChase } from '../components/kanban/usePullAutoMove'
 import {
@@ -2088,6 +2100,25 @@ export function Canvas() {
     }
     return sig
   })
+  // ---- the success reports an armed node waits on (`--after-success`) ----
+  // A PRIMITIVE signature of each waited-on station's latest report, the same discipline as
+  // `armedDepSig`: the launch effect re-runs when one of THOSE stations reports, and nothing
+  // re-renders on another station's report. Their turn state is already in `armedDepSig` — every
+  // success station is in `after` too.
+  const armedSuccessSig = useStationOutcomes((s) => {
+    let sig = ''
+    for (const n of nodesRef.current) {
+      // Through the shape rule: a selector must never throw on a malformed hold.
+      const hold = normalizeSuccessWaitHold((n.data.pendingLaunch as PendingLaunch | undefined)?.afterSuccess)
+      if (!hold || hold.invalid) continue
+      for (const d of hold.deps) {
+        const r = outcomeOf(s.byId, d)
+        sig += `${d}:${r ? `${r.outcome}@${r.at}` : '-'},`
+      }
+      sig += '|'
+    }
+    return sig
+  })
   // Keep the host's pull request status coming while any node here waits on a PR. It is the board's
   // own refcounted host subscription and #1008's conditional heartbeat (free while nothing changes),
   // not a poller; a `checks` wait also asks the host's bounded chase (30 s … 5 min, at most 12 reads
@@ -2207,7 +2238,9 @@ export function Canvas() {
       setupDoneForGroup,
       useLaunchDelivery.getState().byId,
       // The `--after-pr` gate: this canvas's pull request status and the clock its deadlines are on.
-      { board: pullBoardFor(useGitHubIssues.getState(), nodesProjectIdRef.current ?? ''), now: Date.now() }
+      { board: pullBoardFor(useGitHubIssues.getState(), nodesProjectIdRef.current ?? ''), now: Date.now() },
+      // The `--after-success` gate: every station's latest task report (core's store, mirrored).
+      { outcomes: useStationOutcomes.getState().byId, now: Date.now() }
     ).filter((f) => !launchInFlight.current.has(f.id))
     // Anything we were reporting on that is no longer an armed node — delivered, run by hand with
     // ▶, or deleted — stops being reported. Timers go with it: a stall warning for a node that has
@@ -2298,8 +2331,8 @@ export function Canvas() {
         return deliverHeld()
       })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- armedDepSig/armedSetupSig/armedPrSig/launchNudge are the triggers
-  }, [nodes, armedDepSig, armedSetupSig, armedPrSig, launchNudge])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- armedDepSig/armedSetupSig/armedPrSig/armedSuccessSig/launchNudge are the triggers
+  }, [nodes, armedDepSig, armedSetupSig, armedPrSig, armedSuccessSig, launchNudge])
 
   // Selection state for ephemeral nodes (they live outside React Flow's managed nodes), owned by
   // the agent-nodes store so the cards themselves can set it — see `selectable: false` below.
@@ -10215,6 +10248,8 @@ export function Canvas() {
   // never a session's: the default agent-status store and the stations core reports on are both
   // this machine's (lib/stationNoticeWiring).
   useEffect(() => installStationNoticeWiring(window.nodeTerminal), [])
+  // Station task outcomes (`report-outcome`): core's store mirrored for the `--after-success` gate.
+  useEffect(() => installStationOutcomeWiring(window.nodeTerminal), [])
 
   // Session board cards are derived LIVE from the canvas nodes; the board stores only assignments.
   // Only while the board is OPEN: `nodes` gets a fresh identity on every drag frame, so a closed
@@ -11227,6 +11262,45 @@ export function Canvas() {
             }
           }
         : {}
+      // `--after-success` (@shared/station-outcome): stations the new node(s) also need a REPORTED
+      // SUCCESS from. Main already ran the shape gate (and refused the `--after <id>:ok` form); this
+      // is the renderer's belt, never the only gate. The ids are then FOLDED INTO `after` — a success
+      // wait is `--after` plus the station's report — so every existing `--after` rule applies to
+      // them unchanged on every open path: the station must exist and report status, the dependency
+      // rope is drawn and its delete is the escape, `--run-now` / `--project` refuse. The one thing
+      // added is checked where `--after` is checked: the station must be able to REPORT.
+      const successGatePre = openVerb ? afterSuccessFlagRefusal(verb, args) : null
+      if (successGatePre) {
+        reply({ ok: false, error: successGatePre })
+        return
+      }
+      const successParsedPre =
+        openVerb && args['after-success'] !== undefined ? parseAfterSuccessArg(args['after-success']) : undefined
+      const successIdsPre = successParsedPre?.ok ? successParsedPre.ids : []
+      const successDeadlinePre = parseSuccessDeadlineArg(args['success-deadline'])
+      const successHoldPre: SuccessWaitHold | undefined =
+        successIdsPre.length && successDeadlinePre.ok
+          ? { deps: successIdsPre, deadlineAt: Date.now() + successDeadlinePre.ms }
+          : undefined
+      if (successIdsPre.length) {
+        const plainAfter = (args.after ?? '').split(',').map((d) => d.trim()).filter(Boolean)
+        args = { ...args, after: [...new Set([...plainAfter, ...successIdsPre])].join(',') }
+      }
+      const successReplyLines = successHoldPre
+        ? [
+            `waits for a reported success from: ${successHoldPre.deps.join(', ')} ` +
+              `(until ${new Date(successHoldPre.deadlineAt).toISOString()})`
+          ]
+        : []
+      const successReplyText = successReplyLines.map((l) => `\n${l}`).join('')
+      const successResult = successHoldPre
+        ? {
+            afterSuccess: {
+              deps: successHoldPre.deps,
+              deadline: new Date(successHoldPre.deadlineAt).toISOString()
+            }
+          }
+        : {}
 
       // ── Agent messaging (`send`/`reply`) — handled BEFORE the source-routing machinery ──────
       // These are STORE_ANSWERED_VERBS (lib/controlRouting): routing by source must never travel
@@ -11853,7 +11927,7 @@ export function Canvas() {
             return
           }
           if (!needsLiveCanvas(verb)) {
-            const rows = storedNodeListing(projects.find((p) => p.id === route.projectId)?.nodes ?? [], useAgentStatus.getState().byId, useLaunchDelivery.getState().byId)
+            const rows = storedNodeListing(projects.find((p) => p.id === route.projectId)?.nodes ?? [], useAgentStatus.getState().byId, useLaunchDelivery.getState().byId, Date.now(), useStationOutcomes.getState().byId)
             reply({
               ok: true,
               result: rows,
@@ -11922,6 +11996,14 @@ export function Canvas() {
               return
             }
             const coldAfterIds = coldAfter.after ?? []
+            // `--after-success` stations (folded into `after`) must also be able to REPORT.
+            const coldCannotReport = successIdsPre.find(
+              (d) => !sourceIsControlCapable(storedAgentIdOf(coldNodes.find((n) => n.id === d), coldStatusAgent))
+            )
+            if (coldCannotReport) {
+              reply({ ok: false, error: successDepRefusal(verb, coldCannotReport) })
+              return
+            }
             const coldCwd =
               args.cwd || coldGroupCwd(coldNodes, coldGroup.groupId, !!owner.ssh) || coldSrc.cwd
             // Same SSH rule as the live path: a node an agent opens has to run on the same host the
@@ -11974,6 +12056,7 @@ export function Canvas() {
                   ...(coldIssueRef ? [`bound to GitHub issue ${formatIssueRef(coldIssueRef)}`] : []),
                   ...(coldAfterIds.length ? [`armed to wait for: ${coldAfterIds.join(', ')}`] : []),
                   ...prReplyLines,
+                  ...successReplyLines,
                   // #925: `--run-now` starts it headless instead — except on an SSH project, whose
                   // nodes a headless start refuses (they start on view, over SSH).
                   runNowRequested(args) && !owner.ssh
@@ -11988,7 +12071,8 @@ export function Canvas() {
                   after: coldAfterIds,
                   projectId: owner.id,
                   ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {}),
-                  ...prResult
+                  ...prResult,
+                  ...successResult
                 }
               })
               return
@@ -12038,14 +12122,17 @@ export function Canvas() {
               // opener's name goes on the node now (lib/stationOpener). `--after-pr` rides the same
               // held launch (withPrHold — the one attach every path uses).
               const node = withOpenedBy(
-                withPrHold(
-                  held && coldAfterIds.length
-                    ? {
-                        ...armed,
-                        data: { ...armed.data, pendingLaunch: { ...held, after: coldAfterIds } }
-                      }
-                    : armed,
-                  prHoldPre
+                withSuccessHold(
+                  withPrHold(
+                    held && coldAfterIds.length
+                      ? {
+                          ...armed,
+                          data: { ...armed.data, pendingLaunch: { ...held, after: coldAfterIds } }
+                        }
+                      : armed,
+                    prHoldPre
+                  ),
+                  successHoldPre
                 ),
                 sourceNodeId
               )
@@ -12144,7 +12231,8 @@ export function Canvas() {
                     (coldDepLinked.length ? ' (and linked to read them)' : '')
                   : '') +
                 (coldIssueRef ? `\nbound to GitHub issue ${formatIssueRef(coldIssueRef)}` : '') +
-                prReplyText,
+                prReplyText +
+                successReplyText,
               // Every node on this branch has no process behind it until that project is viewed,
               // whether or not it holds a command — the same rule the `--project` branch states.
               result: {
@@ -12155,6 +12243,7 @@ export function Canvas() {
                 after: coldAfterIds,
                 ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {}),
                 ...prResult,
+                ...successResult,
                 queued: true,
                 queuedIds: coldIds
               } as Record<string, unknown>
@@ -12470,6 +12559,12 @@ export function Canvas() {
             })
             return null
           }
+          // `--after-success` (folded into `after` above): the station must also be able to
+          // REPORT, or the wait could only ever end at its deadline.
+          if (successIdsPre.includes(depId) && !sourceIsControlCapable(depAgent)) {
+            reply({ ok: false, error: successDepRefusal(verb, depId) })
+            return null
+          }
         }
         return ids
       }
@@ -12491,7 +12586,10 @@ export function Canvas() {
         const awaitSetupGroup = setupHoldGroup(intoGroup)
         // Always retain the command until the PTY-ready delivery loop acknowledges it.
         // Node creation (even on screen) is not command delivery.
-        return withPrHold(withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile), prHoldPre)
+        return withSuccessHold(
+          withPrHold(withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile), prHoldPre),
+          successHoldPre
+        )
       }
       // Open `count` nodes INTO a group frame: grow the frame FIRST (extent:'parent' would
       // clamp children landing outside it), then drop each node into the next grid slot
@@ -12542,7 +12640,7 @@ export function Canvas() {
               id: n.id, kind: n.type, title: n.data.title as string,
               pendingLaunch: n.data.pendingLaunch, agentId: n.data.agentId as string | undefined,
               issueRef: n.data.issueRef
-            })), st, useLaunchDelivery.getState().byId)
+            })), st, useLaunchDelivery.getState().byId, Date.now(), useStationOutcomes.getState().byId)
             reply({ ok: true, result: list, message: controlListingText(list) })
             return
           }
@@ -12566,7 +12664,8 @@ export function Canvas() {
                     (termCwd ? `, cwd ${termCwd}` : '') +
                     (args.cmd ? `, running: ${args.cmd}` : ''),
                   ...(after?.length ? [`armed to wait for: ${after.join(', ')}`] : []),
-                  ...prReplyLines
+                  ...prReplyLines,
+                  ...successReplyLines
                 ].join('\n'),
                 result: {
                   dryRun: true,
@@ -12574,7 +12673,8 @@ export function Canvas() {
                   group: intoGroupId ?? null,
                   cwd: termCwd ?? null,
                   after: after ?? [],
-                  ...prResult
+                  ...prResult,
+                  ...successResult
                 }
               })
               return
@@ -12607,8 +12707,9 @@ export function Canvas() {
                 `opened ${count} terminal(s): ${ids.join(', ')}` +
                 (queuedIds.length ? '\nqueued; awaiting launch delivery' : '') +
                 (after?.length ? `\nwaiting for ${after.join(', ')} before running` : '') +
-                prReplyText,
-              result: { ...openResult, ...prResult }
+                prReplyText +
+                successReplyText,
+              result: { ...openResult, ...prResult, ...successResult }
             })
             return
           }
@@ -12695,6 +12796,7 @@ export function Canvas() {
                   ...(issueRef ? [`bound to GitHub issue ${formatIssueRef(issueRef)}`] : []),
                   ...(after?.length ? [`armed to wait for: ${after.join(', ')}`] : []),
                   ...prReplyLines,
+                  ...successReplyLines,
                   'Each session would be connected + context-linked to you.'
                 ].join('\n'),
                 result: {
@@ -12705,7 +12807,8 @@ export function Canvas() {
                   cwd: agentCwd ?? null,
                   after: after ?? [],
                   ...(issueRef ? { issue: formatIssueRef(issueRef) } : {}),
-                  ...prResult
+                  ...prResult,
+                  ...successResult
                 }
               })
               return
@@ -12782,12 +12885,14 @@ export function Canvas() {
                   ? `\nwaiting for ${after.join(', ')} before running` +
                     (depLinked.length ? ` (and linked to read them)` : '')
                   : '') +
-                prReplyText,
+                prReplyText +
+                successReplyText,
               result: {
                 ...openResult,
                 linked: bridged,
                 ...(issueRef ? { issue: formatIssueRef(issueRef) } : {}),
-                ...prResult
+                ...prResult,
+                ...successResult
               }
             })
             return

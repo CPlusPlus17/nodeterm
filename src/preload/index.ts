@@ -869,6 +869,14 @@ const api: NodeTerminalApi = {
     reportDropped: (nodeId, dropped) => {
       void ipcRenderer.invoke(IPC.stationNoticeDropped, nodeId, dropped).catch(() => undefined)
     }
+  },
+  stationOutcome: {
+    list: () => ipcRenderer.invoke(IPC.stationOutcomeList),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, records: Parameters<typeof cb>[0]) => cb(records)
+      ipcRenderer.on(IPC.stationOutcomeChanged, handler)
+      return () => ipcRenderer.removeListener(IPC.stationOutcomeChanged, handler)
+    }
   }
 }
 

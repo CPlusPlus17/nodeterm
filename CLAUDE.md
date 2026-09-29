@@ -3646,6 +3646,60 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     build older than this one keeps `afterPr` in the file but ignores it, releasing the node on
     `after` alone. **Kanban / mobile:** the card does not show QUEUED for any held launch (a
     pre-existing gap, not new here); the phone never sees `pendingLaunch`.
+  **Success waits (`--after-success`) and `report-outcome`** (2026-09-29). `--after` releases a
+  node when every station's TURN ends; a turn ending is not the task succeeding (a station can give
+  up, answer its own question or produce something broken, and end its turn cleanly), and #521 only
+  catches a turn that ERRORED. So a station says how its task went —
+  `report-outcome --outcome succeeded|failed [--note <line>]` — and `open-terminal --cmd` /
+  `open-claude` / `open-agent --after-success <id,id> [--success-deadline <90m|12h|3d>]` waits for
+  a reported success. Grammar, the persisted shape and the pure evaluation are ONE module,
+  `@shared/station-outcome`, used by desktop main's shape gate, the Server Edition's parser AND
+  headless factory, and the renderer's launch loop, so the two shells cannot disagree about when a
+  dependent starts. Rules a refactor must not undo:
+  - **A success wait is `--after` plus the report.** Every `--after-success` id is FOLDED INTO
+    `pendingLaunch.after` (renderer: once, right after `prWaitPre`; server: before `resolveAfter`),
+    so the existing rules apply unchanged — the station must exist and report status, the wait rope
+    is drawn and deleting it is the escape (`dropAfterDep` now drops the success half too), the
+    `--run-now` / `--project` refusals, #521's errored-turn hold. The hold
+    (`pendingLaunch.afterSuccess = {deps, deadlineAt}`) adds only "and it reported success". It is
+    also the downgrade story: a build that ignores the field still waits for the turn.
+  - **One grammar; the ambiguous form is refused by name.** `--after a1:ok` (any `:` in `--after` —
+    node ids never contain one) is refused pointing at `--after-success`, not answered "no such
+    node"; an id in both flags is refused ("name each station once").
+  - **The matrix** (`evaluateSuccessDep`): `failed` BLOCKS (never fires; `list` BLOCKED BY FAILURE,
+    badge ⚠ BLOCKED, tooltip names the station and its note); `succeeded` is met once the station's
+    turn is over without an error; no report = waiting (no news is never success); a DELETED station
+    counts only if it reported success before it went — the one place this differs from `--after`,
+    where a deletion is satisfied, because closing a station is how an orchestrator abandons a failed
+    attempt. Only a canvas-control agent can run `report-outcome`, so waiting on anything else is
+    refused (`successDepRefusal`, checked where `--after` is checked). Deadline: the `--pr-deadline`
+    grammar and bounds (`parseWaitDeadlineArg`, one parser for both), EXPIRED badge, `list` EXPIRED,
+    ▶ / `run` start it (`planRunVerb` treats the hold like `--after`).
+  - **The report is core's, transient, and never read from a file.** `core/station-outcome-store.ts`
+    holds it in MAIN (desktop) / the server process: a renderer reload does not lose it; an app
+    restart does, like `lastTurnError`. The board-log line (`station-reported`, on the station's own
+    card, NEVER_COLLAPSE) is display only — `project.json` and the board log are git-shared, and a
+    success anyone can commit would release every dependent. `report-outcome` is verified-only
+    (`requiresVerified`) and a node reports only about ITSELF: `--node` naming another node is
+    refused (`report-outcome-not-self`), not ignored. The note is display text (`sanitizeOutcomeNote`:
+    `oneLine` + format chars stripped, 200 code points) and is never typed into a pane.
+  - **When a report ends — the "new task" rule.** A later report supersedes. A `send` / `reply` /
+    `write` / `run` that SUCCEEDS against a station withdraws its report (`clearOutcomesAfterControl`,
+    run by each shell's control handler AFTER the answer). Without it, "hand a station its next task,
+    then open a dependent `--after-success` it" released the dependent at once on the previous task's
+    success — early, the direction nothing undoes; withdrawing errs toward holding, which the deadline
+    and ▶ end. A new TURN does not clear it (a turn is not a task: a station may report mid-turn, and a
+    person typing "thanks" starts a turn, not a task), and neither does a person typing in the pane or
+    a board comment. Closing a station keeps its report (the deleted-station rule reads it).
+  - **Both shells**: desktop main answers the verb before the forward and clears after it; the Server
+    Edition answers it through the same `handleReportOutcome` (`onRecorded` re-runs `refreshArmed`),
+    honours `--after-success` in the headless factory (`successFacts`: the mirror's `done` plus the
+    fresh-spawn `awaitingFirstWorking` rule) and wraps its handler with the same clearing rule.
+    `station-outcome:list` is in `HOST_ONLY_CHANNELS` (unscoped: every project's notes); relay tabs
+    take the inert stub. Pinned at source level by `main/station-outcome-wiring.test.ts`. **Not
+    done:** a reported `failed` does not raise a station-failure notice to the opener (the opener
+    reads BLOCKED BY FAILURE in `list`) — a candidate trigger for `@shared/station-notice`; the kanban
+    card and the phone show no outcome (the phone never sees `pendingLaunch`).
   **Headless start (`--run-now`, `run`, #925):** `open-*` with `--run-now` into a project that is
   not on screen starts the new node's held launch at once instead of "when next viewed". A node
   with nothing held (an `open-terminal` without `--cmd`) has nothing to start, and gets the plain

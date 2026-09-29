@@ -1,3 +1,4 @@
+import { REPORT_OUTCOME_CONTROL_REFUSAL } from '../../shared/station-outcome'
 import { sessionContextWindow } from '../model-window'
 import { labelHeldForRevision } from './permission-decision'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
@@ -260,7 +261,11 @@ export const requiresVerified: ReadonlySet<string> = new Set([
   // caller", and an unjudgeable caller must never be the one that files.
   'report-issue',
   // Starts a process the user is not watching (#925).
-  'run'
+  'run',
+  // A station's own task outcome (@shared/station-outcome): a reported success RELEASES every
+  // dependent armed with `--after-success`, so the claim must come from the node it is about — and
+  // only a verified caller is provably that node.
+  'report-outcome'
 ])
 
 /**
@@ -286,6 +291,8 @@ export const REPORT_ISSUE_CONTROL_REFUSAL = 'Issue reporting refused.'
 /** Same posture for `run` (#925): it starts a queued session the user is not watching, and the
  *  refusal says only that the run was refused. */
 export const RUN_CONTROL_REFUSAL = 'Run refused.'
+/** Same posture for `report-outcome` (defined beside its grammar, @shared/station-outcome). */
+export { REPORT_OUTCOME_CONTROL_REFUSAL }
 
 /** The verified-only refusal, worded for the verb that was refused. */
 export function verifiedRefusalFor(verb: string): string {
@@ -295,6 +302,7 @@ export function verifiedRefusalFor(verb: string): string {
   if (verb === 'sticky') return STICKY_CONTROL_REFUSAL
   if (verb === 'open-project') return OPEN_PROJECT_CONTROL_REFUSAL
   if (verb === 'run') return RUN_CONTROL_REFUSAL
+  if (verb === 'report-outcome') return REPORT_OUTCOME_CONTROL_REFUSAL
   return MESSAGING_CONTROL_REFUSAL
 }
 
