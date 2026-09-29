@@ -143,8 +143,12 @@ export const VIEW: Readonly<Record<string, Check>> = Object.freeze({
   // Handler args: sessionId, resume, viewerId. A PAUSE is not the sender's own business: it pauses
   // the shared pty process (`PtyManager.setFlow` → `proc.pause()`) for every subscriber until the
   // pausing view resumes or leaves, so a viewer that never resumes freezes the editor's terminal.
-  // A viewer may only resume (a no-op for a view that owes no pause); its socket backlog is still
-  // bounded by the per-client drop-and-redraw ceiling, which pauses nobody.
+  // A viewer may only resume (a no-op for a view that owes no pause). That closes the EXPLICIT
+  // pause, not every pause: a relay peer whose socket backlog passes WS_HIGH_WATER (1 MB) still
+  // takes that connection's `socket` backpressure ticket (ui-sink-registry.ts `sendTo`), which pauses
+  // the shared pty for every subscriber until the backlog drains below WS_LOW_WATER or the peer
+  // leaves. Only past the 8 MB drop-and-redraw ceiling is its output dropped and the pause handed
+  // back. A known residual: docs/hosted-team-relay.md, "Limitations (v1)".
   [IPC.ptyFlow]: (a) => (a[1] === true ? OK : no('Viewers never pause a shared terminal.')),
   // Detaches the sender's OWN view only (the core checks `subscribes`); the session keeps running.
   [IPC.ptyKill]: pass,
