@@ -46,7 +46,6 @@ import {
   boardCommentBody,
   boardCommentFrom,
   boardCommentSourceId,
-  commentIdOfSource,
   commentTextForAgent,
   isBoardCommentDeliverRequest,
   type BoardCommentDeliverRequest
@@ -294,17 +293,18 @@ export function createDeliveryQueue(
               },
           deps
         ),
-      // The trace leg: ring always, board log when the TARGET's owning project is resolvable. For a
-      // board comment that falls back to the project that LISTS the target — the board the comment
-      // is on, which is where its row reads the outcome. A trace is not an authorization, and the
-      // expiry is exactly the moment runtime ownership may be gone (the target restarted), so an
-      // expired comment must not vanish from its row for want of it.
-      trace: (input) =>
+      // The trace leg: ring always, board log when the TARGET's owning project is resolvable. A board
+      // comment's lines go to ITS board instead — where its row reads them — whoever owns the pane
+      // by then: a trace is not an authorization, and the expiry is exactly the moment runtime
+      // ownership may be gone or moved (the target restarted), so an expired comment must neither
+      // vanish from its row nor land on another project's board.
+      trace: (input, qreq) =>
         recordDelivery(input, {
           appendBoardLog: (entry) => {
             const projectId =
-              deps.paneOwnerProject(input.targetNodeId) ??
-              (commentIdOfSource(input.sourceNodeId) ? projectFor(input.targetNodeId) : undefined)
+              qreq?.verb === 'board-comment' && typeof qreq.projectId === 'string'
+                ? qreq.projectId
+                : deps.paneOwnerProject(input.targetNodeId)
             return projectId ? deps.appendBoardLog(projectId, entry) : Promise.resolve(false)
           },
           now
@@ -598,13 +598,16 @@ export async function runDelivery(
   // polite enough to send sequentially. `reserveFlow` checks and holds in one synchronous step;
   // the hold is released in the `finally` below, so a delivery that never reaches the pane still
   // costs nothing (noteSent's own contract). The parallel-sends test in agent-messaging.test.ts
-  // is the one that fails if this goes back to a bare check. A board comment's budget belongs to
-  // its board (`boardFlowSource`), not to the per-comment trace id.
+  // is the one that fails if this goes back to a bare check. A board comment's PAIR window belongs
+  // to its board (`boardFlowSource`: one comment per session per window, whichever comment), and
+  // its FAN-OUT budget to the comment itself — a person's turn is one comment, so an earlier
+  // comment's in-flight holds and later sends (a queued flush) never spend a newer one's.
   const flowSource = board ? boardFlowSource(board.projectId) : ident.sourceNodeId
+  const fanOutKey = board ? `${flowSource}:${board.commentId}` : flowSource
   let retryAfterMs: number | undefined
   let reservation: { release(): void } | null = null
   if (!notPermitted) {
-    const flow = reserveFlow(flowSource, req.targetNodeId, now())
+    const flow = reserveFlow(flowSource, req.targetNodeId, now(), fanOutKey)
     if (!flow.ok) retryAfterMs = flow.outcome.retryAfterMs
     else reservation = flow
   }
@@ -687,12 +690,17 @@ export async function runDelivery(
 
     // No await between the record and the release: the recorded send replaces the hold in the
     // same tick, so no concurrent reservation can slip through the seam between them.
-    if (WROTE.has(outcome.kind)) noteSent(flowSource, req.targetNodeId, now())
+    if (WROTE.has(outcome.kind)) noteSent(flowSource, req.targetNodeId, now(), fanOutKey)
     return outcome
   } finally {
     reservation?.release()
   }
 }
+
+/** What a board comment additionally waits out instead of being refused: the pair window. An agent
+ *  told `rateLimited` retries on its own; a person could only post the comment again. The flush
+ *  re-runs the limiter, so a queued comment still never lands inside the window. */
+const BOARD_QUEUE_ON: ReadonlySet<AgentMessageOutcome['kind']> = new Set(['rateLimited'])
 
 /** The `AgentMessageOutcome` kinds a permitted-but-not-ready target produces — a busy agent, or a
  *  node between sessions. Only these are enqueued (and only with a queue wired): the target passed
@@ -752,6 +760,8 @@ async function deliverWithQueue(
         { hibernated }
       )
     if (QUEUE_ON_BUSY.has(outcome.kind)) return answer(await queued(false))
+    if (req.verb === 'board-comment' && BOARD_QUEUE_ON.has(outcome.kind))
+      return answer(await queued(false))
     // A hibernated target reads as `targetNotAgentPane` (its pane is a shell) — enqueue+wake ONLY
     // then, never for a real non-agent pane.
     if (outcome.kind === 'targetNotAgentPane' && deps.isHibernated?.(req.targetNodeId))
@@ -759,11 +769,6 @@ async function deliverWithQueue(
   }
   return answer(outcome)
 }
-
-/** The comment currently spending each board's flow budget. A NEW comment starts a new turn for
- *  its author — the board's fan-out budget resets, exactly as an agent's does on its own `newTurn`.
- *  Bounded by the number of boards; a lost entry (restart) only means a fresh budget. */
-const boardTurnComment = new Map<string, string>()
 
 /**
  * Deliver ONE mentioned session's copy of a board comment the local user just posted.
@@ -782,11 +787,6 @@ export async function deliverBoardCommentFromUi(
 ): Promise<AgentMessageReply> {
   if (!isBoardCommentDeliverRequest(raw))
     return { ok: false, error: 'malformed board-comment delivery request. Do not retry.' }
-  const source = boardFlowSource(raw.projectId)
-  if (boardTurnComment.get(source) !== raw.commentId) {
-    noteNewTurn(source)
-    boardTurnComment.set(source, raw.commentId)
-  }
   const { reply } = await deliverWithQueue(
     {
       verb: 'board-comment',

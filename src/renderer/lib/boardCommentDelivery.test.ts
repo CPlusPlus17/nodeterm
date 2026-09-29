@@ -78,6 +78,8 @@ describe('deliverCommentMentions', () => {
       ['b1']
     )
     expect(useBoardCommentDelivery.getState().byComment.c1.b1.state).toBe('sending')
+    // Marked as THIS machine's comment before anything else: its log outcomes are trusted after a reload.
+    expect(useBoardCommentDelivery.getState().sent.c1).toBeTypeOf('number')
     finish({ ok: false, result: { kind: 'notPermitted', reason: 'switch-off' } })
     await run
     expect(useBoardCommentDelivery.getState().byComment.c1.b1).toMatchObject({

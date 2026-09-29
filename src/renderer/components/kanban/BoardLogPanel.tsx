@@ -133,6 +133,7 @@ export function BoardLogPanel({ card, title, readOnly, emptyText, mentionables }
   const unsupported = useBoardLog((s) => !!s.unsupportedByProject[projectId])
   const error = useBoardLog((s) => !!s.errorByProject[projectId])
   const deliveries = useBoardCommentDelivery((s) => s.byComment)
+  const sent = useBoardCommentDelivery((s) => s.sent)
   const [draft, setDraft] = useState('')
   const [composeError, setComposeError] = useState<string | null>(null)
   const [picker, setPicker] = useState<{ start: number; caret: number; query: string } | null>(null)
@@ -183,25 +184,38 @@ export function BoardLogPanel({ card, title, readOnly, emptyText, mentionables }
     })
   }
 
+  /** Re-read the @query at the caret — on every edit, and whenever the caret moves (a click, an
+   *  arrow key), so the picker never inserts at a place the user has left. */
+  const syncPicker = (value: string, caret: number): void => {
+    const q = candidates.length ? mentionQueryAt(value, caret) : null
+    setPicker((cur) => {
+      if (!q) return null
+      if (cur && cur.start === q.start && cur.query === q.query && cur.caret === caret) return cur
+      return { ...q, caret }
+    })
+  }
+
   const onDraftChange = (value: string, caret: number): void => {
     setDraft(value)
     setComposeError(null)
-    const q = candidates.length ? mentionQueryAt(value, caret) : null
-    setPicker(q ? { ...q, caret } : null)
+    syncPicker(value, caret)
     setPick(0)
   }
 
   // Card-scoped: this card's comments + its own events. Column events (no nodeId) never match. A
-  // board comment's delivery line is shown on its comment's row, so it is not a row of its own when
-  // that comment is in the log; `traces` reads the WHOLE log, because the line is filed under the
-  // session it was delivered to, which is not necessarily this card.
+  // board comment's delivery line is shown ON its comment's row — so it is not also a row of its own
+  // when that comment is on THIS card and is one this machine sent (the only comments whose row
+  // shows a status). Everywhere else — the mentioned session's own card, a teammate's comment — it
+  // stays a line. `traces` reads the WHOLE log: a line is filed under the session it went to.
   const all = entries ?? []
-  const commentIds = useMemo(() => new Set(all.filter((e) => e.kind === 'comment').map((e) => e.id)), [all])
+  const ownHere = new Set(
+    all.filter((e) => e.kind === 'comment' && e.nodeId === card.id && sent[e.id] !== undefined).map((e) => e.id)
+  )
   const traces = useMemo(() => boardCommentTraces(all), [all])
   const feed = all.filter(
     (e) =>
       e.nodeId === card.id &&
-      !(isBoardCommentTrace(e) && commentIds.has(commentIdOfSource(e.event?.from) ?? ''))
+      !(isBoardCommentTrace(e) && ownHere.has(commentIdOfSource(e.event?.from) ?? ''))
   )
   const titles = useMemo(() => new Map((mentionables ?? []).map((m) => [m.id, m.title])), [mentionables])
   const pending = canDeliver ? parseMentions(draft) : []
@@ -221,6 +235,17 @@ export function BoardLogPanel({ card, title, readOnly, emptyText, mentionables }
             aria-autocomplete={candidates.length ? 'list' : undefined}
             aria-expanded={options.length > 0 ? true : undefined}
             onChange={(e) => onDraftChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+            onKeyUp={(e) => {
+              // A caret move (arrows, Home/End) — the keys that edit already went through onChange.
+              if (!picker || e.nativeEvent.isComposing) return
+              const el = e.currentTarget
+              syncPicker(el.value, el.selectionStart ?? el.value.length)
+            }}
+            onClick={(e) => {
+              const el = e.currentTarget
+              syncPicker(el.value, el.selectionStart ?? el.value.length)
+            }}
+            onBlur={() => setPicker(null)}
             onKeyDown={(e) => {
               // Never act mid-IME-composition (e.g. selecting a kanji candidate with Enter).
               if (e.nativeEvent.isComposing) return
@@ -286,7 +311,12 @@ export function BoardLogPanel({ card, title, readOnly, emptyText, mentionables }
       <BoardLogFeed
         feed={feed}
         titles={titles}
-        statusesFor={(entry) => mentionStatuses(entry, traces, deliveries[entry.id])}
+        statusesFor={(entry) =>
+          mentionStatuses(entry, traces, deliveries[entry.id], {
+            own: sent[entry.id] !== undefined,
+            now: Date.now()
+          })
+        }
       />
     </div>
   )

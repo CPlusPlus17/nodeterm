@@ -86,8 +86,9 @@ export interface DeliveryQueueDeps {
    */
   deliver(req: QueuedDeliveryRequest): Promise<AgentMessageOutcome>
   /** Record an outcome (`recordDelivery`). The queue traces `queued` on enqueue and `expired` on a
-   *  TTL lapse; the flush's own outcomes are traced inside `deliver`. */
-  trace(input: DeliveryTraceInput): Promise<{ traceId: string; traced: string }>
+   *  TTL lapse; the flush's own outcomes are traced inside `deliver`. `req` is the queued request
+   *  itself, so a shell can route the line by what the request carries (a board comment's board). */
+  trace(input: DeliveryTraceInput, req?: QueuedDeliveryRequest): Promise<{ traceId: string; traced: string }>
   /**
    * Wake a hibernated target through the existing registry (`agent-restart.ts` hibernate/wake
    * pair). Optional: a target that is merely busy (not hibernated) needs no wake, and a shell with
@@ -182,7 +183,7 @@ export class DeliveryQueue {
       targetNodeId: req.targetNodeId,
       outcome: 'queued',
       bodyChars: req.body.length
-    })
+    }, req)
     const entry: QueueEntry = {
       req,
       enqueuedAt: now,
@@ -260,7 +261,7 @@ export class DeliveryQueue {
       targetNodeId: entry.req.targetNodeId,
       outcome: 'expired',
       bodyChars: entry.req.body.length
-    })
+    }, entry.req)
     this.deps.onExpired?.(entry.req, { traceId: t.traceId, queuedForMs })
   }
 

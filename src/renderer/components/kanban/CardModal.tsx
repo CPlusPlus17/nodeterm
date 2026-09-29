@@ -276,6 +276,9 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
       // Esc, and closing the whole modal from inside it (or from the composer) threw the typed text
       // away. This listener runs in the CAPTURE phase, before any field's own handler could stop it.
       if (ae && ae.closest('.term-chat__answer, .term-chat__compose')) return
+      // The board-comment composer's @ picker owns Esc while it is open (it closes the picker; the
+      // draft stays). `aria-expanded` is set on the textarea exactly while the picker shows options.
+      if (ae && ae.closest('.board-log__composer[aria-expanded="true"]')) return
       e.preventDefault()
       e.stopPropagation()
       onClose()

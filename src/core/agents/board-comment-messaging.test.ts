@@ -30,6 +30,8 @@ import {
   mentionToken
 } from '../../shared/board-comment'
 import { FANOUT_PER_TURN } from './agent-message-flow'
+import { DELIVERY_QUEUE_TTL_MS } from './delivery-queue'
+import { BOARD_COMMENT_QUEUE_STALE_MS } from '../../shared/board-comment'
 
 const idle: MirrorEntry = {
   state: 'done',
@@ -224,6 +226,64 @@ describe('flow control for a person', () => {
     expect(deps.rec.sent).toHaveLength(1)
   })
 
+  it('with a queue wired, the pair-limited second comment WAITS instead — a person cannot retry', async () => {
+    // An agent told `rateLimited` retries; a person would have to post the comment again. So a board
+    // comment that hits the pair limit is held like a busy target's and flushed on the next idle —
+    // still never inside the window (the flush re-runs the limiter).
+    let t = 1_000_000
+    const deps = fakeDeps({ now: () => t })
+    deps.queue = createDeliveryQueue(deps, { schedule: () => () => {} })
+    expect((await deliverBoardCommentFromUi(comment('b1'), deps)).ok).toBe(true)
+    const second = await deliverBoardCommentFromUi(comment('b1'), deps)
+    expect((second.result as { kind: string }).kind).toBe('queued')
+    t += 11_000
+    onMessagingAgentEvent({ nodeId: 'b1', state: 'done', verified: true, newTurn: false }, deps.queue)
+    await vi.waitFor(() => expect(deps.rec.sent).toHaveLength(2))
+  })
+
+  it('a comment\'s budget is its own: another comment still in flight does not spend it', async () => {
+    // Comment 1 mentions four sessions and its deliveries are still waiting on their receipts when
+    // comment 2 mentions a fifth, never-messaged session. Before: comment 1's in-flight holds
+    // counted against comment 2 and it came back `rateLimited` ("moments ago") — false.
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const deps = fakeDeps({
+      sendEnvelope: async (nodeId, payload) => {
+        if (nodeId !== 'b5') await gate
+        deps.rec.sent.push({ nodeId, payload })
+        return true
+      }
+    })
+    const first = ['b1', 'b2', 'b3', 'b4']
+    const c1 = comment('b1', first.map((t) => mentionToken(t, t)).join(' '))
+    const inflight = first.map((t) => deliverBoardCommentFromUi({ ...c1, targetNodeId: t }, deps))
+    await new Promise((r) => setTimeout(r, 1))
+    let kind: string
+    try {
+      kind = ((await deliverBoardCommentFromUi(comment('b5'), deps)).result as { kind: string }).kind
+    } finally {
+      release() // never leave comment 1's node locks held for the next test
+      await Promise.all(inflight)
+    }
+    expect(kind).toBe('delivered')
+  })
+
+  it('a queued comment is charged to ITSELF when it flushes, not to whatever was posted since', async () => {
+    let entry: MirrorEntry = busy
+    const deps = fakeDeps({ mirrorEntry: (id) => (id === 'b1' ? entry : idle) })
+    deps.queue = createDeliveryQueue(deps, { schedule: () => () => {} })
+    const c1 = comment('b1')
+    expect(((await deliverBoardCommentFromUi(c1, deps)).result as { kind: string }).kind).toBe('queued')
+    // A later comment spends four deliveries on other sessions.
+    const others = ['b2', 'b3', 'b4', 'b5']
+    const c2 = comment('b2', others.map((t) => mentionToken(t, t)).join(' '))
+    for (const t of others)
+      expect(((await deliverBoardCommentFromUi({ ...c2, targetNodeId: t }, deps)).result as { kind: string }).kind).toBe('delivered')
+    entry = idle
+    onMessagingAgentEvent({ nodeId: 'b1', state: 'done', verified: true, newTurn: false }, deps.queue)
+    await vi.waitFor(() => expect(deps.rec.sent.map((s) => s.nodeId)).toContain('b1'))
+  })
+
   it('each comment is its own turn: a new comment has a fresh fan-out budget', async () => {
     expect(BOARD_COMMENT_MENTION_MAX).toBe(FANOUT_PER_TURN)
     const deps = fakeDeps()
@@ -293,6 +353,31 @@ describe('deliver-on-idle for a board comment', () => {
     )
   })
 
+  it('an expiry lands on the comment\'s OWN board even if the pane is now owned by another project', async () => {
+    let fire: (() => void) | null = null
+    let owner: string | undefined = 'p1'
+    const deps = fakeDeps({ mirrorEntry: () => busy, paneOwnerProject: () => owner })
+    deps.queue = createDeliveryQueue(deps, {
+      schedule: (_ms, fn) => {
+        fire = fn
+        return () => {
+          fire = null
+        }
+      }
+    })
+    const c = comment('b1')
+    expect(((await deliverBoardCommentFromUi(c, deps)).result as { kind: string }).kind).toBe('queued')
+    owner = 'p2' // the session was respawned from another project while the comment waited
+    fire!()
+    await vi.waitFor(() =>
+      expect(
+        deps.rec.log.some((l) => l.entry.event?.from === boardCommentSourceId(c.commentId) && l.entry.event.title === 'expired')
+      ).toBe(true)
+    )
+    const expired = deps.rec.log.filter((l) => l.entry.event?.title === 'expired')
+    expect(expired.map((l) => l.projectId)).toEqual(['p1'])
+  })
+
   it('an expiry is recorded in the comment\'s board even when the pane owner is no longer proven', async () => {
     let fire: (() => void) | null = null
     let owner: string | undefined = 'p1'
@@ -321,6 +406,10 @@ describe('deliver-on-idle for a board comment', () => {
 })
 
 describe('the row text', () => {
+  it('a row stops calling a comment "queued" only after the queue itself would have dropped it', () => {
+    expect(BOARD_COMMENT_QUEUE_STALE_MS).toBeGreaterThan(DELIVERY_QUEUE_TTL_MS)
+  })
+
   it('names every outcome the core can produce — no kind falls through to silence', () => {
     for (const kind of Object.keys(RETRYABLE)) {
       const t = boardCommentOutcomeText(kind)

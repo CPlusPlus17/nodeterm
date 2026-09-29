@@ -1726,9 +1726,14 @@ name); on send, each mentioned session gets its own delivery through the SAME `r
 agent `send` takes — scope, runtime pane ownership, the per-project `agentMessaging` switch, flow
 control, the pane probes, the nonce envelope, the receipt, the deliver-on-idle queue with its TTL.
 What differs is only who it is from: the scope is "the target is on the comment's board"
-(`resolveBoardCommentScope`), the flow budget belongs to the board (`board:<projectId>`, and each
-new comment is a new turn, capped at `BOARD_COMMENT_MENTION_MAX` = `FANOUT_PER_TURN` mentions,
-refused whole above it), and the envelope reads `from: board comment by <author>` with no node id
+(`resolveBoardCommentScope`); the PAIR window belongs to the board (`board:<projectId>` — one comment
+per session per 10 s, whichever comment) while the FAN-OUT budget belongs to the comment itself
+(`reserveFlow`'s `fanOutKey`, `board:<projectId>:<commentId>`), because a person's turn is one comment
+and an earlier comment's in-flight holds or queued flush must never spend a newer one's (review
+finding; both scenarios are tests); a comment mentions at most `BOARD_COMMENT_MENTION_MAX` =
+`FANOUT_PER_TURN` sessions and is refused whole above it; a pair-limited board comment is QUEUED
+rather than refused (`BOARD_QUEUE_ON` — an agent retries, a person could only post again; the
+flush re-runs the limiter); and the envelope reads `from: board comment by <author>` with no node id
 and `reply-to: none (…)` (`BOARD_COMMENT_REPLY_TO`; both agent-facing bodies render it from the
 constants). An agent node TITLED like that is labelled `node titled "…"` in its own `from:` line, so
 it cannot pass as a person. The body is the comment with tokens turned into `@<current title>`,
@@ -1743,9 +1748,17 @@ Canvas takes the same two steps as `send`: the target's `guardConcurrentRestart`
 `syncMessageScope`. **No silent success**: every outcome is on the comment row — `sending…`, then
 the reply's typed outcome (with the `notPermitted` reason) from this app run, else the latest
 `agent-message` trace line in the log whose `from` is `board-comment:<commentId>` (the trace now
-carries `reason` too, and the queue's trace leg falls back to the target's listing project for a
-board comment, so an expiry reaches its row even after pane ownership is gone). Those trace lines
-render on their comment's row, not as rows of their own. Desktop: full. Server Edition and relay
+carries `reason` too, and the queue hands its trace leg the queued request, so a board comment's
+`queued`/`expired` lines land on ITS board whoever owns the pane by then). Log lines are trusted
+ONLY for comments this machine sent (`nodeterm.boardCommentsSent`, localStorage, bounded): the log
+is shared, so a teammate's comment arrives with THEIR machine's trace lines and a forged line is one
+append away — such a comment shows no status, and its lines stay ordinary feed rows. For our own:
+a line dated in the future is ignored, a `queued` older than `BOARD_COMMENT_QUEUE_STALE_MS` (the
+queue TTL + 1 min — the queue is process memory, so a quit never writes its end) says no outcome
+was recorded, and a mention with no record at all says so too. A trace line is hidden as a row only
+on the card whose comment row shows it; the mentioned session's own card keeps "routed a board
+comment here: …". Text tables are read with `Object.hasOwn` (values come from the shared file).
+The card modal's capture-phase Escape defers to the composer while its @ picker is open. Desktop: full. Server Edition and relay
 tabs: display-only by design (the bridge answers `notPermitted: unsupported-edition`; the picker is
 not offered) — a browser or a relay guest typing into this machine's panes is exactly the
 cross-user injection this refuses. Mobile: N/A (the phone posts no board comments).

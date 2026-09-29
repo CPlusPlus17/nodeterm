@@ -11,7 +11,8 @@ import {
   isBoardCommentDeliverRequest,
   mentionLabel,
   mentionToken,
-  parseMentions
+  parseMentions,
+  boardCommentOutcomeText
 } from './board-comment'
 
 describe('mention tokens', () => {
@@ -123,5 +124,18 @@ describe('isBoardCommentDeliverRequest', () => {
       { ...ok, text: 5 }
     ])
       expect(isBoardCommentDeliverRequest(bad), JSON.stringify(bad)).toBe(false)
+  })
+})
+
+describe('boardCommentOutcomeText reads values from a SHARED log', () => {
+  it('an inherited key is not an outcome — never an empty or code-shaped sentence', () => {
+    for (const kind of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      const v = boardCommentOutcomeText(kind)
+      expect(v, kind).toEqual({ tone: 'error', text: 'not delivered' })
+    }
+    expect(boardCommentOutcomeText('notPermitted', 'toString')).toEqual({
+      tone: 'error',
+      text: 'not delivered — not permitted'
+    })
   })
 })

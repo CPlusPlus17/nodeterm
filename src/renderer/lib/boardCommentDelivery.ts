@@ -84,6 +84,9 @@ export async function deliverCommentMentions(
   targets: readonly string[]
 ): Promise<void> {
   const store = useBoardCommentDelivery.getState()
+  // Remembered as THIS machine's comment before anything is sent: its row may then trust the log's
+  // delivery lines for it after a reload (and no one else's).
+  store.markSent(comment.commentId)
   for (const t of targets) store.set(comment.commentId, t, { at: Date.now(), state: 'sending' })
   await Promise.all(
     targets.map(async (targetNodeId) => {

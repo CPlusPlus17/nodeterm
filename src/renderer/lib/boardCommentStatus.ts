@@ -1,5 +1,6 @@
 import type { BoardLogEntry } from '@shared/types'
 import {
+  BOARD_COMMENT_QUEUE_STALE_MS,
   boardCommentOutcomeText,
   commentIdOfSource,
   parseMentions,
@@ -49,31 +50,56 @@ export function boardCommentTraces(
   return out
 }
 
-function viewOf(d: MentionDelivery): BoardCommentOutcomeView {
+/** A log line dated after "now" is not an outcome this machine recorded (the core stamps its own
+ *  clock), so it is ignored rather than allowed to outrank what this app run saw. */
+const FUTURE_SLACK_MS = 60_000
+
+const STALE_QUEUED: BoardCommentOutcomeView = {
+  tone: 'warn',
+  text: 'queued, but no outcome was recorded — the app may have closed before it was delivered'
+}
+const NOTHING_RECORDED: BoardCommentOutcomeView = { tone: 'warn', text: 'no delivery outcome was recorded' }
+
+function viewOf(d: MentionDelivery, now: number): BoardCommentOutcomeView {
   if (d.state === 'sending') return { tone: 'pending', text: 'sending…' }
   if (d.kind === 'error') return { tone: 'error', text: `not delivered — ${d.error ?? 'unknown error'}` }
+  if (d.kind === 'queued' && now - d.at > BOARD_COMMENT_QUEUE_STALE_MS) return STALE_QUEUED
   return boardCommentOutcomeText(d.kind, d.reason)
 }
 
 /**
- * The delivery status of each session a comment mentions, in the order the text mentions them: the
- * newer of this app run's own record (`transient`) and the latest outcome the log holds. A mention
- * with neither shows nothing — a comment that arrived by git pull, from a relay peer or from before
- * this feature was never delivered by this app, and the row must not suggest otherwise.
+ * The delivery status of each session a comment mentions, in the order the text mentions them.
+ *
+ * Only for a comment THIS machine sent (`own`). The log is shared: a teammate's comment arrives with
+ * their machine's trace lines, and a forged line is one append away — on this row either would read
+ * as a delivery that happened here. A comment that is not ours shows no status at all; its lines stay
+ * visible in the feed as what they are (`eventBody`).
+ *
+ * For our own: the newer of this app run's record (`transient`) and the latest outcome the log holds.
+ * A `queued` older than the queue can hold a message says it never finished. A mention with neither
+ * record says nothing was recorded — a silence here could be read as success.
  */
 export function mentionStatuses(
   comment: BoardLogEntry,
   traces: Map<string, Map<string, TraceOutcome>>,
-  transient?: Record<string, MentionDelivery>
+  transient: Record<string, MentionDelivery> | undefined,
+  opts: { own: boolean; now: number }
 ): MentionStatus[] {
   if (comment.kind !== 'comment' || typeof comment.text !== 'string') return []
-  const logged = traces.get(comment.id)
+  if (!opts.own && !transient) return []
+  const logged = opts.own ? traces.get(comment.id) : undefined
   const out: MentionStatus[] = []
   for (const nodeId of parseMentions(comment.text)) {
-    const t = logged?.get(nodeId)
+    const raw = logged?.get(nodeId)
+    const t = raw && raw.ts <= opts.now + FUTURE_SLACK_MS ? raw : undefined
     const live = transient?.[nodeId]
-    if (live && (!t || live.at >= t.ts)) out.push({ nodeId, view: viewOf(live) })
-    else if (t) out.push({ nodeId, view: boardCommentOutcomeText(t.kind, t.reason) })
+    if (live && (!t || live.at >= t.ts)) out.push({ nodeId, view: viewOf(live, opts.now) })
+    else if (t)
+      out.push({
+        nodeId,
+        view: viewOf({ at: t.ts, state: 'done', kind: t.kind, reason: t.reason }, opts.now)
+      })
+    else if (opts.own) out.push({ nodeId, view: NOTHING_RECORDED })
   }
   return out
 }

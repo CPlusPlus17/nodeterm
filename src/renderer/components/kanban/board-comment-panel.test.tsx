@@ -205,6 +205,7 @@ describe('a comment that ARRIVES is display-only', () => {
 
 describe('durable outcomes', () => {
   it('a reloaded comment row reads its outcome from the log; the trace line is not a row of its own', async () => {
+    useBoardCommentDelivery.getState().markSent('c-7') // sent by this machine in an earlier run
     const c: BoardLogEntry = {
       id: 'c-7',
       ts: 10,
@@ -226,5 +227,76 @@ describe('durable outcomes', () => {
     expect(host.querySelectorAll('.board-log__event')).toHaveLength(0)
     expect(host.querySelector('.board-log__comment')?.textContent).toMatch(/expired/)
     expect(delivered).toEqual([])
+  })
+
+  it('a teammate\'s comment shows no status on its row; its delivery lines stay visible as lines', async () => {
+    const c: BoardLogEntry = {
+      id: 'c-8',
+      ts: 10,
+      author: { name: 'Teammate', color: '#0ff' },
+      kind: 'comment',
+      nodeId: 'card-a',
+      text: `${mentionToken('card-a', 'Self')} go`
+    }
+    const trace: BoardLogEntry = {
+      id: 't-8',
+      ts: 20,
+      author: { name: 'nodeterm', color: '#8b8b8b' },
+      kind: 'event',
+      nodeId: 'card-a',
+      event: { type: 'agent-message', from: boardCommentSourceId('c-8'), to: 'card-a', title: 'delivered' }
+    }
+    h.loaded = [trace, c]
+    await mount()
+    expect(host.querySelector('.board-log__deliveries')).toBeNull()
+    expect(host.querySelector('.board-log__event')?.textContent).toMatch(/routed a board comment here: delivered/)
+  })
+
+  it('the MENTIONED session\'s own card shows the routed line when the comment was written elsewhere', async () => {
+    useBoardCommentDelivery.getState().markSent('c-9')
+    const c: BoardLogEntry = {
+      id: 'c-9',
+      ts: 10,
+      author: { name: 'Enes', color: '#fff' },
+      kind: 'comment',
+      nodeId: 'card-x',
+      text: `${mentionToken('card-a', 'A')} go`
+    }
+    const trace: BoardLogEntry = {
+      id: 't-9',
+      ts: 20,
+      author: { name: 'nodeterm', color: '#8b8b8b' },
+      kind: 'event',
+      nodeId: 'card-a',
+      event: { type: 'agent-message', from: boardCommentSourceId('c-9'), to: 'card-a', title: 'queued' }
+    }
+    h.loaded = [trace, c]
+    await mount() // card-a's panel
+    expect(host.querySelector('.board-log__event')?.textContent).toMatch(/routed a board comment here: queued/)
+  })
+})
+
+describe('the picker follows the caret', () => {
+  it('moving the caret away from the @query closes it — Enter then sends instead of inserting', async () => {
+    await mount()
+    await type('hi @be')
+    expect(host.querySelectorAll('[role="option"]')).toHaveLength(1)
+    await act(async () => {
+      textarea().setSelectionRange(0, 0)
+      textarea().dispatchEvent(new KeyboardEvent('keyup', { key: 'Home', bubbles: true }))
+    })
+    expect(host.querySelectorAll('[role="option"]')).toHaveLength(0)
+    await key('Enter')
+    expect(api.boardLog.append).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaving the composer closes it', async () => {
+    await mount()
+    await type('@be')
+    expect(host.querySelectorAll('[role="option"]')).toHaveLength(1)
+    await act(async () => {
+      textarea().dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+    })
+    expect(host.querySelectorAll('[role="option"]')).toHaveLength(0)
   })
 })
