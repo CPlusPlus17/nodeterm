@@ -83,3 +83,19 @@ export function worktreeBranchOf(n: CanvasNode, byId: ReadonlyMap<string, Canvas
   }
   return undefined
 }
+
+/**
+ * The board's session cards, from the canvas nodes. On an SSH project the cards carry NO worktree
+ * branch: worktree groups are local-only, so a branch link there is not supported — and leaving the
+ * branch off HERE is what keeps the card face, the merge-driven move and the card modal (which says
+ * so) in agreement. An issue-bound card still links through its issue.
+ */
+export function kanbanSessionsFrom(nodes: CanvasNode[], options: { ssh: boolean }): KanbanSession[] {
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  return nodes.flatMap((n): KanbanSession[] => {
+    const card = toKanbanSession(n)
+    if (!card) return []
+    const worktreeBranch = options.ssh ? undefined : worktreeBranchOf(n, byId)
+    return [worktreeBranch ? { ...card, worktreeBranch } : card]
+  })
+}

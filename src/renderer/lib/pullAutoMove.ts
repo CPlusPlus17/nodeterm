@@ -88,6 +88,10 @@ const SESSION_CARD_KINDS = new Set(['terminal', 'sticky', 'browser'])
 
 export interface PullAutoMovePlan {
   moves: Array<{ cardId: string; fromColumnId: string | null; pulls: number[] }>
+  /** Cards waiting on still-open PRs. The host records these as evidence that THIS card saw the PR
+   *  open; its claim for a move later requires one, so a card that first appears after the merge
+   *  never moves. */
+  waits: Array<{ cardId: string; pulls: number[] }>
 }
 
 /**
@@ -103,21 +107,31 @@ export function planPullAutoMoves(input: {
   entry: KanbanPullAutoMoveEntry | undefined
 }): PullAutoMovePlan {
   const { entry, pullBoard, board } = input
-  if (!entry || !pullBoard || pullBoard.observedAt === undefined || pullBoard.stale) return { moves: [] }
-  if (!board.columns.some((column) => column.id === entry.columnId)) return { moves: [] }
+  const idle: PullAutoMovePlan = { moves: [], waits: [] }
+  if (!entry || !pullBoard || pullBoard.observedAt === undefined || pullBoard.stale) return idle
+  if (!board.columns.some((column) => column.id === entry.columnId)) return idle
   const optedOut = new Set(readPullLinks(board).noAutoMove)
   const moves: PullAutoMovePlan['moves'] = []
+  const waits: PullAutoMovePlan['waits'] = []
   for (const card of input.cards) {
     if (!SESSION_CARD_KINDS.has(card.kind)) continue
+    const linked = pullsForCard(card, pullBoard, board).linked
     const fromColumnId = columnForNode(board, card.id)?.id ?? null
     const decision = decidePullAutoMove({
       optedOut: optedOut.has(card.id),
-      linked: pullsForCard(card, pullBoard, board).linked,
+      linked,
       columnId: fromColumnId,
       targetColumnId: entry.columnId,
       armedAt: entry.armedAt
     })
     if (decision.kind === 'move') moves.push({ cardId: card.id, fromColumnId, pulls: decision.pulls })
+    if (decision.kind === 'none' && decision.reason === 'waiting') {
+      waits.push({
+        cardId: card.id,
+        pulls: linked.filter((pull) => pull.lifecycle === 'open' || pull.lifecycle === 'draft')
+          .map((pull) => pull.number)
+      })
+    }
   }
-  return { moves }
+  return { moves, waits }
 }

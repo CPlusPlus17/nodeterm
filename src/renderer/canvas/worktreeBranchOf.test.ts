@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CanvasNode } from '../state/workspace'
-import { worktreeBranchOf } from './toKanbanSession'
+import { kanbanSessionsFrom, worktreeBranchOf } from './toKanbanSession'
 
 const node = (id: string, over: Partial<CanvasNode> = {}): CanvasNode =>
   ({ id, type: 'terminal', position: { x: 0, y: 0 }, data: {}, ...over }) as CanvasNode
@@ -29,5 +29,17 @@ describe('worktreeBranchOf', () => {
     const byId = new Map(loop.map((n) => [n.id, n]))
     expect(worktreeBranchOf(node('solo'), byId)).toBeUndefined()
     expect(worktreeBranchOf(byId.get('t')!, byId)).toBeUndefined()
+  })
+})
+
+describe('kanbanSessionsFrom', () => {
+  const nodes = [group('g', 'feat/x'), node('t', { parentId: 'g', data: { title: 'Agent' } as never })]
+
+  it('cards in a worktree group carry its branch', () => {
+    expect(kanbanSessionsFrom(nodes, { ssh: false })[0].worktreeBranch).toBe('feat/x')
+  })
+
+  it('on an SSH project no card carries a branch, so the face, the move and the modal agree', () => {
+    expect(kanbanSessionsFrom(nodes, { ssh: true })[0]).not.toHaveProperty('worktreeBranch')
   })
 })

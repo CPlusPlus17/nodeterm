@@ -738,15 +738,35 @@ export class GitHubIssueService {
    * request and resolves no credential.
    */
   async claimPullAutoMove(request: { projectId: string; cardId: string; pulls: number[] }): Promise<boolean> {
+    const key = this.validPullCardRequest(request)
+    if (!key) return false
+    const { projectId, cardId, pulls } = request
+    return this.pulls.claimMove(key, projectId, cardId, pulls)
+  }
+
+  /**
+   * A visible, armed board reports "this card is waiting on these still-open PRs". The host keeps a
+   * note only for PRs it holds as open itself; `claimPullAutoMove` later requires one. Sends no
+   * request and resolves no credential.
+   */
+  async notePullWaits(request: { projectId: string; cardId: string; pulls: number[] }): Promise<number> {
+    const key = this.validPullCardRequest(request)
+    if (!key) return 0
+    return this.pulls.noteWaits(key, request.projectId, request.cardId, request.pulls)
+  }
+
+  /** The repository key for a well-formed card request on a bound project that is not being cleared. */
+  private validPullCardRequest(
+    request: { projectId: string; cardId: string; pulls: number[] } | null | undefined
+  ): string | null {
     const { projectId, cardId, pulls } = request ?? {}
     if (typeof projectId !== 'string' || typeof cardId !== 'string' || !cardId || cardId.length > 256 ||
         /[\u0000-\u001f]/.test(cardId) || !Array.isArray(pulls) || pulls.length === 0 || pulls.length > 100 ||
-        pulls.some((pull) => !Number.isSafeInteger(pull) || pull < 1)) return false
+        pulls.some((pull) => !Number.isSafeInteger(pull) || pull < 1)) return null
     const key = this.projectKeys.get(projectId)
-    if (!key || key.startsWith('unbound:')) return false
-    if (this.repositoryControl(key.slice(key.indexOf('\0') + 1)).deletion) return false
-    const numbers = [...new Set(pulls)].sort((a, b) => a - b).join(',')
-    return this.pulls.claim(key, `${projectId}\0${cardId}\0${numbers}`)
+    if (!key || key.startsWith('unbound:')) return null
+    if (this.repositoryControl(key.slice(key.indexOf('\0') + 1)).deletion) return null
+    return key
   }
 
   /** Per-check detail for one PR, read when its modal opens. Never throws: every failure is one of

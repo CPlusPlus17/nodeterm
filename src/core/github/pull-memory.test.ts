@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { GitHubPullStatus, PullLifecycle } from '../../shared/github-pull-status'
 import {
   PULL_MEMORY_MAX,
+  noteWaitsInMemory,
   REMEMBERED_MERGE_VISIBLE_MS,
   claimInMemory,
   emptyPullMemory,
@@ -52,7 +53,7 @@ describe('rememberPulls', () => {
     const kept = rememberPulls([], [...many, status(1, 'open')], none, 1)
     expect(kept).toHaveLength(PULL_MEMORY_MAX)
     expect(kept.some((pull) => pull.number === 1 && pull.lifecycle === 'open')).toBe(true)
-    expect(validPullMemory({ version: 1, pulls: kept, claims: [] })).toBe(true)
+    expect(validPullMemory({ version: 1, pulls: kept, claims: [], waits: [] })).toBe(true)
   })
 })
 
@@ -72,17 +73,21 @@ describe('rememberedForBoard', () => {
 })
 
 describe('claims', () => {
-  it('the first claim for a key wins', () => {
-    const first = claimInMemory(emptyPullMemory(), 'p|n|1')
+  it('the first claim for a key wins — and only for a card noted waiting on one of its PRs', () => {
+    const noted = noteWaitsInMemory(emptyPullMemory(), ['wait|n|1'])
+    expect(claimInMemory(emptyPullMemory(), 'p|n|1', ['wait|n|1']).claimed).toBe(false)
+    const first = claimInMemory(noted, 'p|n|1', ['wait|n|1'])
     expect(first.claimed).toBe(true)
-    expect(claimInMemory(first.memory, 'p|n|1').claimed).toBe(false)
-    expect(claimInMemory(first.memory, 'p|n|1,2').claimed).toBe(true)
+    expect(claimInMemory(first.memory, 'p|n|1', ['wait|n|1']).claimed).toBe(false)
+    expect(claimInMemory(first.memory, 'p|n|1,2', ['wait|n|1', 'wait|n|2']).claimed).toBe(true)
+    expect(noteWaitsInMemory(noted, ['wait|n|1'])).toBe(noted)
   })
 
   it('rejects a malformed memory file', () => {
-    expect(validPullMemory({ version: 1, pulls: [{ number: -1, headRefName: 'x', lifecycle: 'open' }], claims: [] }))
+    expect(validPullMemory({ version: 1, pulls: [{ number: -1, headRefName: 'x', lifecycle: 'open' }], claims: [], waits: [] }))
       .toBe(false)
-    expect(validPullMemory({ version: 2, pulls: [], claims: [] })).toBe(false)
-    expect(validPullMemory({ version: 1, pulls: [], claims: [3] })).toBe(false)
+    expect(validPullMemory({ version: 2, pulls: [], claims: [], waits: [] })).toBe(false)
+    expect(validPullMemory({ version: 1, pulls: [], claims: [3], waits: [] })).toBe(false)
+    expect(validPullMemory({ version: 1, pulls: [], claims: [] })).toBe(false)
   })
 })

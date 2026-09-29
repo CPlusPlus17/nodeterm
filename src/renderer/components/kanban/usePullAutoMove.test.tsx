@@ -21,13 +21,21 @@ const merged: GitHubPullBoard = {
   observedAt: 1, stale: false, access: { ci: true, merge: true }, undecided: false, truncated: false
 }
 
-/** The host's claim: the first ask for a key wins, like GitHubPullStatusTracker.claim. */
-function hostClaims() {
+/** The host's rules, like GitHubPullStatusTracker: a claim needs a wait note for this card, and the
+ *  first ask for a key wins. `seedWaits` stands in for notes recorded while the PR was open. */
+function hostClaims(seedWaits: string[] = ['p1:card-1:12']) {
   const claimed = new Set<string>()
+  const waits = new Set(seedWaits)
   return {
+    waits,
+    notePullWaits: vi.fn(async (request: { projectId: string; cardId: string; pulls: number[] }) => {
+      for (const pull of request.pulls) waits.add(`${request.projectId}:${request.cardId}:${pull}`)
+      return request.pulls.length
+    }),
     claimPullAutoMove: vi.fn(async (request: { projectId: string; cardId: string; pulls: number[] }) => {
       const key = `${request.projectId}:${request.cardId}:${request.pulls.join(',')}`
       if (claimed.has(key)) return false
+      if (!request.pulls.some((pull) => waits.has(`${request.projectId}:${request.cardId}:${pull}`))) return false
       claimed.add(key)
       return true
     })
@@ -82,6 +90,28 @@ describe('usePullAutoMove', () => {
     act(() => createRoot(document.createElement('div')).render(<Probe api={api} pullBoard={merged} onAutoMove={second} />))
     await settle()
     expect(first.mock.calls.length + second.mock.calls.length).toBe(1)
+  })
+
+  it('notes the wait while the PR is open, then moves on the merge', async () => {
+    const api = hostClaims([])
+    const onAutoMove = vi.fn()
+    const open: GitHubPullBoard = { ...merged, pulls: [{ number: 12, lifecycle: 'open', headRefName: 'feat/x', closes: [] }] }
+    const root = createRoot(document.createElement('div'))
+    act(() => root.render(<Probe api={api} pullBoard={open} onAutoMove={onAutoMove} />))
+    await settle()
+    expect(api.notePullWaits).toHaveBeenCalledWith({ projectId: 'p1', cardId: 'card-1', pulls: [12] })
+    act(() => root.render(<Probe api={api} pullBoard={merged} onAutoMove={onAutoMove} />))
+    await settle()
+    expect(onAutoMove).toHaveBeenCalledTimes(1)
+  })
+
+  it('a card that first appears after the merge never moves', async () => {
+    const api = hostClaims([])
+    const onAutoMove = vi.fn()
+    act(() => createRoot(document.createElement('div')).render(<Probe api={api} pullBoard={merged} onAutoMove={onAutoMove} />))
+    await settle()
+    expect(api.claimPullAutoMove).toHaveBeenCalled()
+    expect(onAutoMove).not.toHaveBeenCalled()
   })
 
   it('never moves a card on a relay tab — that board belongs to the other machine', async () => {

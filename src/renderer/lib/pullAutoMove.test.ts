@@ -97,6 +97,14 @@ describe('planPullAutoMoves', () => {
     }).moves).toEqual([])
   })
 
+  it('reports a card waiting on an open PR, so the host can note that THIS card saw it open', () => {
+    const plan = planPullAutoMoves({
+      cards: [card], board: board(), pullBoard: pulls([pull(3, 'open'), pull(4, 'draft'), observedMerge(1)]), entry
+    })
+    expect(plan.moves).toEqual([])
+    expect(plan.waits).toEqual([{ cardId: 'card-1', pulls: [3, 4] }])
+  })
+
   it('does nothing at all while the switch is off, the status is stale, or unknown', () => {
     const merged = pulls([observedMerge(1)])
     expect(planPullAutoMoves({ cards: [card], board: board(), pullBoard: merged, entry: undefined }).moves).toEqual([])

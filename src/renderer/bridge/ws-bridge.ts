@@ -464,6 +464,8 @@ export function buildGitHubApi(
       >,
     claimPullAutoMove: (request) =>
       client.request(IPC.githubIssuesClaimPullAutoMove, request) as Promise<boolean>,
+    notePullWaits: (request) =>
+      client.request(IPC.githubIssuesNotePullWaits, request) as Promise<number>,
     projectAvatar: (projectId) =>
       client.request(IPC.githubProjectAvatar, projectId) as ReturnType<
         GitHubIssuesApi['projectAvatar']

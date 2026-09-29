@@ -30,8 +30,11 @@ import {
 import type { PullStatusRead } from './graphql-pulls'
 import {
   claimInMemory,
+  claimKey,
   emptyPullMemory,
+  noteWaitsInMemory,
   rememberPulls,
+  waitKey,
   rememberedForBoard,
   withObservations,
   type PullMemory
@@ -96,9 +99,13 @@ export class GitHubPullStatusTracker {
   board(key: string): GitHubPullBoard {
     const state = this.states.get(key)
     const repository = splitKey(key)[1]
-    if (!state) return { ...EMPTY_PULL_BOARD, access: { ...EMPTY_PULL_BOARD.access }, repository }
+    // The host's clock, so a renderer can record when it armed the move in the same clock the host
+    // stamps `mergedSeenAt` with (a Server Edition browser's clock may be minutes off).
+    const now = this.now()
+    if (!state) return { ...EMPTY_PULL_BOARD, access: { ...EMPTY_PULL_BOARD.access }, repository, now }
     return {
       repository,
+      now,
       pulls: state.pulls.map((pull) => ({ ...pull, closes: [...pull.closes] })),
       ...(state.observedAt !== undefined ? { observedAt: state.observedAt } : {}),
       stale: state.stale,
@@ -132,18 +139,46 @@ export class GitHubPullStatusTracker {
   /**
    * The one-time permission to move a card for a set of merged PRs. The first caller for a key wins,
    * whichever window it comes from, and the claim is persisted — a card the user dragged back is not
-   * moved again for the same merges.
+   * moved again for the same merges. Refused unless this card was noted WAITING on one of those PRs
+   * while it was open (`noteWaits`): a card that first appeared after the merge never moves.
    */
-  async claim(key: string, claimKey: string): Promise<boolean> {
+  async claimMove(key: string, projectId: string, cardId: string, pulls: number[]): Promise<boolean> {
     const state = this.stateFor(key)
     const generation = state.generation
     const memory = await this.memoryFor(key, state)
     if (generation !== state.generation) return false
-    const { memory: next, claimed } = claimInMemory(state.memory ?? memory, claimKey)
+    const { memory: next, claimed } = claimInMemory(
+      state.memory ?? memory,
+      claimKey(projectId, cardId, pulls),
+      pulls.map((pull) => waitKey(projectId, cardId, pull))
+    )
     if (!claimed) return false
     state.memory = next
     this.persist(key, state)
     return true
+  }
+
+  /**
+   * "This card is linked to these PRs, and they are still open." Recorded only for PRs the host
+   * itself currently holds as open or a draft — the note is the evidence a later claim rests on, so
+   * the host does not take the caller's word for the state. Returns how many notes were new.
+   */
+  async noteWaits(key: string, projectId: string, cardId: string, pulls: number[]): Promise<number> {
+    const state = this.states.get(key)
+    if (!state) return 0
+    const generation = state.generation
+    const memory = await this.memoryFor(key, state)
+    if (generation !== state.generation) return 0
+    const open = new Set(state.pulls
+      .filter((pull) => pull.lifecycle === 'open' || pull.lifecycle === 'draft')
+      .map((pull) => pull.number))
+    const keys = pulls.filter((pull) => open.has(pull)).map((pull) => waitKey(projectId, cardId, pull))
+    const current = state.memory ?? memory
+    const next = noteWaitsInMemory(current, keys)
+    if (next === current) return 0
+    state.memory = next
+    this.persist(key, state)
+    return next.waits.length - current.waits.length
   }
 
   /**

@@ -188,15 +188,18 @@ export function parsePullStatusResponse(body: unknown, repository: string): Pull
     let mergeable: GitHubMergeable | null = null
     let mergeStateStatus: string | null = null
     if (access.merge) {
-      if (node.mergeable !== 'MERGEABLE' && node.mergeable !== 'CONFLICTING' &&
-          node.mergeable !== 'UNKNOWN') throw new GraphQLShapeError()
-      if (typeof node.mergeStateStatus !== 'string' || !/^[A-Z_]{1,32}$/.test(node.mergeStateStatus)) {
+      // Enum values are decoded LENIENTLY: GitHub adds values (it added `duplicate` to state_reason),
+      // and a value this build does not know must claim nothing — not fail every read of the repo.
+      // A value that is not even an enum-shaped string is still a malformed answer.
+      if (typeof node.mergeable !== 'string' || !/^[A-Z_]{1,32}$/.test(node.mergeable) ||
+          typeof node.mergeStateStatus !== 'string' || !/^[A-Z_]{1,32}$/.test(node.mergeStateStatus)) {
         throw new GraphQLShapeError()
       }
-      mergeable = node.mergeable
+      mergeable = node.mergeable === 'MERGEABLE' || node.mergeable === 'CONFLICTING' ||
+        node.mergeable === 'UNKNOWN' ? node.mergeable : null
       mergeStateStatus = node.mergeStateStatus
     }
-    let rollup: GitHubRollupState | null = null
+    let rollup: GitHubRollupState | 'UNRECOGNIZED' | null = null
     let rollupOid: string | null = null
     if (access.ci) {
       const commits = list(node.commits, 1)
@@ -207,9 +210,9 @@ export function parsePullStatusResponse(body: unknown, repository: string): Pull
         rollupOid = commit.oid
         if (commit.statusCheckRollup !== null) {
           const state = object(commit.statusCheckRollup)?.state
-          if (state !== 'SUCCESS' && state !== 'FAILURE' && state !== 'ERROR' && state !== 'PENDING' &&
-              state !== 'EXPECTED') throw new GraphQLShapeError()
-          rollup = state
+          if (typeof state !== 'string' || !/^[A-Z_]{1,32}$/.test(state)) throw new GraphQLShapeError()
+          rollup = state === 'SUCCESS' || state === 'FAILURE' || state === 'ERROR' || state === 'PENDING' ||
+            state === 'EXPECTED' ? state : 'UNRECOGNIZED'
         }
       }
     }

@@ -16,6 +16,12 @@
 // window asks the host before it moves a card, and only the first ask wins — so two Server Edition
 // tabs cannot both move the card, and a card the user dragged back is not moved again for the same
 // merges.
+//
+// And WAIT NOTES: "card X was linked to PR #N while #N was still open". `mergedSeenAt` is a fact
+// about a PR, not about a card, so on its own it would let a card that first appeared AFTER the
+// merge (a follow-up terminal in the same worktree group, a teammate's card arriving by git pull)
+// win a fresh claim and jump to Done. A claim is only granted for a card that has a wait note for
+// one of the PRs it claims — the transition was observed for THIS card.
 import type { GitHubPullStatus, PullLifecycle } from '../../shared/github-pull-status'
 
 export interface RememberedPull {
@@ -34,16 +40,27 @@ export interface PullMemory {
   version: 1
   pulls: RememberedPull[]
   claims: string[]
+  waits: string[]
 }
 
 export const PULL_MEMORY_MAX = 500
 export const PULL_CLAIMS_MAX = 2_000
+export const PULL_WAITS_MAX = 4_000
 /** A merged PR stays on the board this long after its merge was observed — long enough for a board
  *  opened days later to see the merge and move the card. Older merges are kept only as memory. */
 export const REMEMBERED_MERGE_VISIBLE_MS = 30 * 24 * 60 * 60_000
 
 export function emptyPullMemory(): PullMemory {
-  return { version: 1, pulls: [], claims: [] }
+  return { version: 1, pulls: [], claims: [], waits: [] }
+}
+
+/** The memory keys. `\0` cannot occur in a project id, a card id (both validated) or a number. */
+export function claimKey(projectId: string, cardId: string, pulls: number[]): string {
+  return `${projectId}\0${cardId}\0${[...new Set(pulls)].sort((a, b) => a - b).join(',')}`
+}
+
+export function waitKey(projectId: string, cardId: string, pull: number): string {
+  return `wait\0${projectId}\0${cardId}\0${pull}`
 }
 
 const LIFECYCLES = new Set<PullLifecycle>(['open', 'draft', 'merged', 'closed'])
@@ -67,7 +84,9 @@ export function validPullMemory(value: unknown): value is PullMemory {
   return memory.version === 1 &&
     Array.isArray(memory.pulls) && memory.pulls.length <= PULL_MEMORY_MAX && memory.pulls.every(validRemembered) &&
     Array.isArray(memory.claims) && memory.claims.length <= PULL_CLAIMS_MAX &&
-    memory.claims.every((claim) => typeof claim === 'string' && claim.length <= 1_024)
+    memory.claims.every((claim) => typeof claim === 'string' && claim.length <= 1_024) &&
+    Array.isArray(memory.waits) && memory.waits.length <= PULL_WAITS_MAX &&
+    memory.waits.every((wait) => typeof wait === 'string' && wait.length <= 1_024)
 }
 
 const UNFINISHED = new Set<PullLifecycle>(['open', 'draft'])
@@ -154,8 +173,23 @@ export function withObservations(status: GitHubPullStatus, remembered: Remembere
   }
 }
 
-/** Records a claim; `claimed` is false when it was already there. */
-export function claimInMemory(memory: PullMemory, key: string): { memory: PullMemory; claimed: boolean } {
+/** Records a claim; `claimed` is false when it was already there, or when none of `waitKeys` was
+ *  ever noted (the card was never seen waiting on one of these PRs while it was open). */
+export function claimInMemory(
+  memory: PullMemory,
+  key: string,
+  waitKeys: string[]
+): { memory: PullMemory; claimed: boolean } {
   if (memory.claims.includes(key)) return { memory, claimed: false }
+  const noted = new Set(memory.waits)
+  if (!waitKeys.some((wait) => noted.has(wait))) return { memory, claimed: false }
   return { memory: { ...memory, claims: [...memory.claims, key].slice(-PULL_CLAIMS_MAX) }, claimed: true }
+}
+
+/** Records wait notes; the same memory object back when every one was already there. */
+export function noteWaitsInMemory(memory: PullMemory, keys: string[]): PullMemory {
+  const known = new Set(memory.waits)
+  const fresh = keys.filter((key) => !known.has(key))
+  if (!fresh.length) return memory
+  return { ...memory, waits: [...memory.waits, ...fresh].slice(-PULL_WAITS_MAX) }
 }

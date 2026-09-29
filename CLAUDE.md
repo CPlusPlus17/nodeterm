@@ -5361,7 +5361,10 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   a rollup counts only at the current `headRefOid`, and a CI result is never carried from an older
   head; a failed read keeps the last snapshot marked stale (`pullStatusFreshness`, greyed after
   15 min); a FORBIDDEN/INSUFFICIENT_SCOPES answer for the rollup or mergeability HIDES that region
-  (`access`), which is not the same as a null rollup. **Budget:** GitHub meters `graphql` apart from
+  (`access`), which is not the same as a null rollup. Enum values (`mergeable`, rollup `state`,
+  `mergeStateStatus`) decode LENIENTLY: a value GitHub adds later claims nothing and is not chased,
+  and an unrecognised rollup state is `UNRECOGNIZED`, never `null` ("no checks") — one new value
+  must not fail every read of the repository (it happened with `state_reason: duplicate`). **Budget:** GitHub meters `graphql` apart from
   `core`, and so does the coordinator now — `throttle(identity, at, resource)`, a primary limit is
   tagged with its resource (`GitHubClientError.resource`, from `x-ratelimit-resource`, or GraphQL's
   200-with-`RATE_LIMITED`) and holds only that resource; an untagged (secondary) limit still holds
@@ -5373,8 +5376,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   when its PR merges); a FORK PR never links (36 of 50 open PRs here are forks). Unlinking writes a
   git-shared tombstone in `ProjectKanban.pullLinks` — a BOARD-LEVEL field on purpose: every card-meta
   setter rebuilds `meta[]` entries from a fixed field list, so a field added there is erased by the
-  next member/due/label edit. SSH projects show the worktree reason instead (no worktree groups
-  there). PR → issue → session card: a session started on an issue (`data.issueRef`, below) links to
+  next member/due/label edit. On an SSH project NO card carries a worktree branch
+  (`kanbanSessionsFrom` leaves it off where the cards are built), so the card face, the move and
+  the modal — which states the worktree reason — cannot disagree. PR → issue → session card: a session started on an issue (`data.issueRef`, below) links to
   every PR whose `closingIssuesReferences` name that issue, matched against the pull board's own
   `repository` (a `closes` number means nothing in another repository); here a FORK PR does count —
   GitHub's "Closes #N" is meaningful wherever it comes from. The host memory remembers what a PR
@@ -5398,10 +5402,17 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   asked for. Per-card opt-out is board content (`pullLinks.noAutoMove`). Guards in order
   (`decidePullAutoMove`): opted out → never; any linked PR open/draft → wait; any closed unmerged →
   blocked until the user unlinks it; already in target → nothing; no linked merge with
-  `mergedSeenAt >= armedAt` → no move (arming never sweeps old merges). Each planned move must then
-  win the host's one-time CLAIM (`githubIssues:claim-pull-auto-move`, persisted in the same memory,
-  keyed by project + card + PR set) — the first ask across every window wins, and a card dragged
-  back is not moved again for the same merges — and is applied as a compare-and-set on the column
+  `mergedSeenAt >= armedAt` → no move (arming never sweeps old merges; `armedAt` is taken from the
+  HOST's clock via the pull board's `now`, because `mergedSeenAt` is stamped there and a Server
+  Edition browser's clock can be off). Each planned move must then win the host's one-time CLAIM
+  (`githubIssues:claim-pull-auto-move`, persisted in the same memory, keyed by project + card + PR
+  set) — the first ask across every window wins, and a card dragged back is not moved again for the
+  same merges. **The claim is refused unless THIS card was noted waiting on one of those PRs while it
+  was open** (`githubIssues:note-pull-waits`; the host records a note only for a PR it holds as open
+  itself): `mergedSeenAt` is a fact about the PR, and without the per-card note a card that first
+  appeared after the merge — a follow-up terminal in the same group, a teammate's card by git pull,
+  an issue-bound session started later — would win a fresh claim and jump to Done. It is then
+  applied as a compare-and-set on the column
   the decision saw (`applyPullAutoMove`, run by Canvas against the store's latest board), writing
   ONE `card-moved` board-log line whose `title` names the PRs. The planner writes nothing; it runs
   only while the board is open and never on a stale snapshot. **GitHub issue cards are never

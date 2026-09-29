@@ -44,7 +44,9 @@ export interface PullStatusFacts {
   isDraft: boolean
   mergeable: GitHubMergeable | null
   mergeStateStatus: string | null
-  rollup: GitHubRollupState | null
+  /** `UNRECOGNIZED` = a state GitHub added after this build: it claims nothing (and is NOT "no
+   *  checks", which is `null`). */
+  rollup: GitHubRollupState | 'UNRECOGNIZED' | null
   rollupOid: string | null
   /** Issues in the SAME repository this PR closes on merge (GitHub's own linking). */
   closes: number[]
@@ -76,6 +78,8 @@ export interface GitHubPullStatus {
 export interface GitHubPullBoard {
   /** `owner/name` these pull requests belong to (the one `closes` numbers refer to). */
   repository?: string
+  /** The host's clock when it answered (epoch ms) — what `mergedSeenAt` is measured in. */
+  now?: number
   pulls: GitHubPullStatus[]
   /** Epoch ms of the last read that succeeded. Absent = none yet in this app run. */
   observedAt?: number
@@ -146,7 +150,7 @@ export function pullStatusFrom(
 ): GitHubPullStatus {
   const lifecycle: PullLifecycle = facts.isDraft ? 'draft' : 'open'
   let ci: PullCiState | undefined
-  if (access.ci) {
+  if (access.ci && facts.rollup !== 'UNRECOGNIZED') {
     if (facts.rollup === null) ci = 'none'
     else if (facts.rollupOid === facts.headRefOid) ci = ciState(facts.rollup)
     else if (previous?.headRefOid === facts.headRefOid && previous.ci !== undefined) ci = previous.ci

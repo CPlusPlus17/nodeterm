@@ -680,7 +680,7 @@ import {
 } from './claude-account-switch'
 import type { CodexAccount } from '@shared/codex-account'
 import { useSystemCodexAccount } from '../state/systemCodexAccount'
-import { toKanbanSession, worktreeBranchOf } from './toKanbanSession'
+import { kanbanSessionsFrom, toKanbanSession } from './toKanbanSession'
 import { applyPullAutoMove } from '../lib/pullAutoMove'
 import { useWallpaperBackground, wallpaperLayers } from '../state/wallpaper'
 import { showCanvasDots } from '../lib/canvasDots'
@@ -9745,18 +9745,14 @@ export function Canvas() {
   // board's own consumer is rendered under the same `kanbanOpen` flag, and the board-log's
   // `cardTitle` reads the nodes directly (see onKanbanChange), so nothing else depends on this
   // list existing while the canvas is what you are looking at.
-  const kanbanSessions = useMemo(() => {
-    if (!perProjectKanbanOpen) return NO_KANBAN_SESSIONS
-    // The worktree branch a card works on comes from its enclosing bound group — the link a pull
-    // request's head branch is matched against (lib/pullLinks.ts).
-    const byId = new Map(nodes.map((n) => [n.id, n]))
-    return nodes.flatMap((n): KanbanSession[] => {
-      const card = toKanbanSession(n)
-      if (!card) return []
-      const worktreeBranch = worktreeBranchOf(n, byId)
-      return [worktreeBranch ? { ...card, worktreeBranch } : card]
-    })
-  }, [nodes, perProjectKanbanOpen])
+  // The worktree branch a card works on comes from its enclosing bound group — the link a pull
+  // request's head branch is matched against (lib/pullLinks.ts) — except on an SSH project, where
+  // branch links are not supported and no card carries one (kanbanSessionsFrom).
+  const activeProjectSsh = useProjects((s) => !!s.projects.find((p) => p.id === s.activeProjectId)?.ssh)
+  const kanbanSessions = useMemo(
+    () => perProjectKanbanOpen ? kanbanSessionsFrom(nodes, { ssh: activeProjectSsh }) : NO_KANBAN_SESSIONS,
+    [nodes, perProjectKanbanOpen, activeProjectSsh]
+  )
 
   // Create a node from the board's per-column "+ New" menu: it lands on the canvas (view
   // center) and, for a real column, is assigned there. The assignment is written directly —

@@ -222,9 +222,14 @@ describe('GitHubIssueService pull status', () => {
     expect(await h.service.claimPullAutoMove({ projectId: 'project-1', cardId: 'n', pulls: [1] })).toBe(false)
     await h.service.subscribe(7, { projectId: 'project-1' })
     await vi.waitFor(() => expect(h.client.statusReads).toBe(1))
+    // No card was seen waiting on #1 yet: nothing may move.
+    expect(await h.service.claimPullAutoMove({ projectId: 'project-1', cardId: 'n', pulls: [1] })).toBe(false)
+    expect(await h.service.notePullWaits({ projectId: 'project-1', cardId: 'n', pulls: [1] })).toBe(1)
+    expect(await h.service.notePullWaits({ projectId: 'project-1', cardId: 'other', pulls: [1] })).toBe(1)
     expect(await h.service.claimPullAutoMove({ projectId: 'project-1', cardId: 'n', pulls: [2, 1] })).toBe(true)
     expect(await h.service.claimPullAutoMove({ projectId: 'project-1', cardId: 'n', pulls: [1, 2] })).toBe(false)
     expect(await h.service.claimPullAutoMove({ projectId: 'project-1', cardId: 'other', pulls: [1, 2] })).toBe(true)
+    expect(await h.service.claimPullAutoMove({ projectId: 'project-1', cardId: 'never-waited', pulls: [1] })).toBe(false)
     for (const bad of [
       { projectId: 'project-1', cardId: '', pulls: [1] },
       { projectId: 'project-1', cardId: 'x'.repeat(300), pulls: [1] },
@@ -234,6 +239,7 @@ describe('GitHubIssueService pull status', () => {
       null
     ]) {
       expect(await h.service.claimPullAutoMove(bad as never)).toBe(false)
+      expect(await h.service.notePullWaits(bad as never)).toBe(0)
     }
   })
 })

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { GitHubIssuesClient, GitHubClientError } from './client'
+import { pullStatusFrom } from '../../shared/github-pull-status'
 import {
   GraphQLShapeError,
   PULL_STATUS_QUERY,
@@ -120,10 +121,21 @@ describe('parsePullStatusResponse', () => {
 
   it('rejects malformed nodes', () => {
     expect(() => parsePullStatusResponse(body([node(1, { headRefOid: 'nothex' })]), REPO)).toThrow()
-    expect(() => parsePullStatusResponse(body([node(1, { mergeable: 'MAYBE' })]), REPO)).toThrow()
+    expect(() => parsePullStatusResponse(body([node(1, { mergeable: 7 })]), REPO)).toThrow()
     expect(() => parsePullStatusResponse(body([node(1, {
-      commits: { nodes: [{ commit: { oid: HEAD, statusCheckRollup: { state: 'GREEN' } } }] }
+      commits: { nodes: [{ commit: { oid: HEAD, statusCheckRollup: { state: 'not an enum' } } }] }
     })]), REPO)).toThrow()
+  })
+
+  it('an enum value GitHub adds later claims nothing instead of failing the read', () => {
+    const read = parsePullStatusResponse(body([node(1, {
+      mergeable: 'SOMETIMES',
+      commits: { nodes: [{ commit: { oid: HEAD, statusCheckRollup: { state: 'NEW_STATE' } } }] }
+    })]), REPO)
+    expect(read.open[0]).toMatchObject({ mergeable: null, rollup: 'UNRECOGNIZED' })
+    const status = pullStatusFrom(read.open[0], read.access)
+    expect(status.ci).toBeUndefined()
+    expect(status.merge).toBeUndefined()
   })
 })
 

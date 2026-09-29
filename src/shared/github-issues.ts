@@ -290,6 +290,9 @@ export interface GitHubIssuesApi {
   /** The one-time permission to move a session card because its linked PRs merged. The first ask
    *  across every window wins; the host remembers it. */
   claimPullAutoMove(request: { projectId: string; cardId: string; pulls: number[] }): Promise<boolean>
+  /** "This card is waiting on these still-open PRs." The host keeps a note only for PRs it holds as
+   *  open; a later claim for this card requires one. Answers how many notes were new. */
+  notePullWaits(request: { projectId: string; cardId: string; pulls: number[] }): Promise<number>
   onChanged(projectId: string, listener: (changedIssueNumbers: number[]) => void): () => void
   /** Resolve the project's GitHub org/user avatar (owner derived host-side from the project's own
    *  origin — never a caller-supplied slug). Null when the project has no GitHub origin or the

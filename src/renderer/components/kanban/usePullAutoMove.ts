@@ -18,7 +18,7 @@ import { documentChaseDeps, startPullChase } from '../../lib/pullChase'
  * the user just changed in another.
  */
 export function usePullAutoMove(input: {
-  api: Pick<GitHubIssuesApi, 'claimPullAutoMove'>
+  api: Pick<GitHubIssuesApi, 'claimPullAutoMove' | 'notePullWaits'>
   projectId: string
   cards: Array<{ id: string; kind: string; worktreeBranch?: string; issueRef?: IssueRef }>
   board: ProjectKanban
@@ -44,9 +44,22 @@ export function usePullAutoMove(input: {
   }, [])
   const latest = useRef(onAutoMove)
   latest.current = onAutoMove
+  // Wait notes already sent from this board, so a re-render does not re-send them (the host dedupes
+  // too; this only saves the calls).
+  const noted = useRef(new Set<string>())
   useEffect(() => {
     if (!entry || !onAutoMove) return
-    for (const move of planPullAutoMoves({ cards, board, pullBoard, entry }).moves) {
+    const plan = planPullAutoMoves({ cards, board, pullBoard, entry })
+    for (const wait of plan.waits) {
+      const fresh = wait.pulls.filter((pull) => !noted.current.has(`${projectId}\0${wait.cardId}\0${pull}`))
+      if (!fresh.length) continue
+      for (const pull of fresh) noted.current.add(`${projectId}\0${wait.cardId}\0${pull}`)
+      void api.notePullWaits({ projectId, cardId: wait.cardId, pulls: fresh }).catch(() => {
+        // Not recorded: let a later pass try again.
+        for (const pull of fresh) noted.current.delete(`${projectId}\0${wait.cardId}\0${pull}`)
+      })
+    }
+    for (const move of plan.moves) {
       void api.claimPullAutoMove({ projectId, cardId: move.cardId, pulls: move.pulls })
         .then((claimed) => {
           // A claim that lands after this board closed is spent, not applied: the card stays where it

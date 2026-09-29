@@ -213,33 +213,63 @@ describe('GitHubPullStatusTracker', () => {
     it('a claim is won once, across concurrent asks and across a restart', async () => {
       const store = memoryStore()
       const { subject } = tracker(0, store)
-      const answers = await Promise.all([subject.claim(KEY, 'p\u0000n\u00001'), subject.claim(KEY, 'p\u0000n\u00001')])
+      await subject.read(KEY, 'user-1', 'heartbeat', async () => read([facts(1), facts(2)]))
+      expect(await subject.noteWaits(KEY, 'p', 'n', [1, 2])).toBe(2)
+      const answers = await Promise.all([subject.claimMove(KEY, 'p', 'n', [1]), subject.claimMove(KEY, 'p', 'n', [1])])
       expect(answers.sort()).toEqual([false, true])
       await settleSaves()
       const restarted = tracker(0, store)
-      expect(await restarted.subject.claim(KEY, 'p\u0000n\u00001')).toBe(false)
-      expect(await restarted.subject.claim(KEY, 'p\u0000n\u00002')).toBe(true)
+      expect(await restarted.subject.claimMove(KEY, 'p', 'n', [1])).toBe(false)
+      expect(await restarted.subject.claimMove(KEY, 'p', 'n', [2])).toBe(true)
+    })
+
+    it('a card that first appears after the merge never wins a claim', async () => {
+      const { subject } = tracker()
+      await subject.read(KEY, 'user-1', 'heartbeat', async () => read([facts(12, { headRefName: 'feat/x' })]))
+      expect(await subject.noteWaits(KEY, 'p', 'first-card', [12])).toBe(1)
+      await subject.read(KEY, 'user-1', 'foreground', async () => read([], {
+        recent: [{ number: 12, headRefName: 'feat/x', crossRepository: false, lifecycle: 'merged' }]
+      }))
+      // The card that was there while #12 was open moves; one that appears only now (a follow-up
+      // terminal in the same worktree group, a teammate's card via git pull) never does.
+      expect(await subject.claimMove(KEY, 'p', 'first-card', [12])).toBe(true)
+      expect(await subject.noteWaits(KEY, 'p', 'late-card', [12])).toBe(0)
+      expect(await subject.claimMove(KEY, 'p', 'late-card', [12])).toBe(false)
+    })
+
+    it('notes a wait only for a PR the host itself holds as open', async () => {
+      const { subject } = tracker()
+      expect(await subject.noteWaits(KEY, 'p', 'n', [1])).toBe(0)
+      await subject.read(KEY, 'user-1', 'heartbeat', async () => read([facts(1)], {
+        recent: [{ number: 2, headRefName: 'x', crossRepository: false, lifecycle: 'merged' }]
+      }))
+      expect(await subject.noteWaits(KEY, 'p', 'n', [1, 2, 3])).toBe(1)
+      expect(await subject.claimMove(KEY, 'p', 'n', [2])).toBe(false)
     })
 
     it('a save queued behind a slow one is dropped once the repository is forgotten', async () => {
       const store = memoryStore()
-      let releaseFirst!: () => void
-      const firstSave = new Promise<void>((resolve) => { releaseFirst = resolve })
+      let releaseSlow!: () => void
+      const slowSave = new Promise<void>((resolve) => { releaseSlow = resolve })
+      let slow = false
       const save = store.save
       let calls = 0
       store.save = async (...args) => {
         calls += 1
-        if (calls === 1) await firstSave
+        if (slow) await slowSave
         return save(...args)
       }
       const { subject } = tracker(0, store)
-      expect(await subject.claim(KEY, 'one')).toBe(true)
-      expect(await subject.claim(KEY, 'two')).toBe(true)
+      await subject.read(KEY, 'user-1', 'heartbeat', async () => read([facts(1), facts(2)]))
+      await settleSaves()
+      calls = 0
+      slow = true
+      await subject.noteWaits(KEY, 'p', 'n', [1, 2])      // save #1 starts and hangs
+      expect(await subject.claimMove(KEY, 'p', 'n', [1])).toBe(true) // save #2 queues behind it
       const forgotten = subject.forgetRepository('o/r')
-      releaseFirst()
+      releaseSlow()
       await forgotten
       expect(calls).toBe(1)
-      expect(store.saves).toHaveLength(1)
     })
 
     it('nothing started before a cache clear writes the memory back', async () => {

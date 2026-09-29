@@ -129,16 +129,29 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
     : ''
   /** Machine-local on purpose (see @shared/kanban-pull-links): switching it on here never changes
    *  what a teammate's app does. Every write prunes projects this machine no longer has. */
-  const setAutoMoveColumn = (columnId: string): void => {
+  const setAutoMoveColumn = async (columnId: string): Promise<void> => {
     if (!projectId) return
-    const live = new Set(useProjects.getState().projects.map((item) => item.id))
-    const current = prunePullAutoMove(sanitizeKanbanPullAutoMove(autoMoveRaw), live)
-    const { [projectId]: previous, ...others } = current.projects
+    const previous = sanitizeKanbanPullAutoMove(autoMoveRaw).projects[projectId]
     // Switching it ON starts the clock: only merges observed from now on move a card. Changing only
-    // the target column keeps the original time — the switch never went off.
-    const armedAt = previous?.armedAt ?? Date.now()
+    // the target column keeps the original time — the switch never went off. The time is the HOST's
+    // (from the pull board, which it answers from memory): `mergedSeenAt` is stamped on the host, and
+    // a Server Edition browser's clock can be minutes off it.
+    let armedAt = previous?.armedAt
+    if (columnId && armedAt === undefined) {
+      const hostNow = await window.nodeTerminal.githubIssues.pullStatus(projectId)
+        .then((board) => board.now)
+        .catch(() => undefined)
+      armedAt = typeof hostNow === 'number' && Number.isSafeInteger(hostNow) ? hostNow : Date.now()
+    }
+    // Re-read after the await: another setting may have changed meanwhile.
+    const live = new Set(useProjects.getState().projects.map((item) => item.id))
+    const current = prunePullAutoMove(
+      sanitizeKanbanPullAutoMove(useSettings.getState().settings.kanbanPullAutoMove), live)
+    const { [projectId]: _previous, ...others } = current.projects
     updateSettings({
-      kanbanPullAutoMove: { projects: columnId ? { ...others, [projectId]: { columnId, armedAt } } : others }
+      kanbanPullAutoMove: {
+        projects: columnId && armedAt !== undefined ? { ...others, [projectId]: { columnId, armedAt } } : others
+      }
     })
   }
 
@@ -620,12 +633,12 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
             <FieldRow
               label={ROWS.pullAutoMove.title}
               htmlFor="github-pull-auto-move"
-              description={`${ROWS.pullAutoMove.description} Only session cards in a worktree group move — GitHub closes linked issues itself. Only merges this machine sees after you turn this on count (it must have seen the pull request open first), and a card never moves while one of its pull requests closed without merging. This setting is for this machine only.`}
+              description={`${ROWS.pullAutoMove.description} Session cards move — those in a worktree group, and those started on an issue — never GitHub issue cards, which GitHub closes itself. A card moves only if this machine saw it waiting on the pull request while it was open, only for merges seen after you turn this on, and never while one of its pull requests closed without merging. This setting is for this machine only.`}
               control={
                 <Select
                   id="github-pull-auto-move"
                   value={board.columns.some((column) => column.id === autoMoveColumn) ? autoMoveColumn : ''}
-                  onChange={(event) => setAutoMoveColumn(event.target.value)}
+                  onChange={(event) => void setAutoMoveColumn(event.target.value)}
                 >
                   <option value="">Off</option>
                   {board.columns.map((column) => (
