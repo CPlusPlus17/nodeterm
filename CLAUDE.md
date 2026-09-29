@@ -2464,6 +2464,71 @@ else, and its context links must keep classifying across restarts).
   the validator refuses) settles at one attempt per 15 minutes instead of rewriting every agent's
   hook config every 45 s. A missing spec answers "not alive" rather than "unknown": nothing of ours
   is bound, which is a tunnel that cannot deliver.
+- **An SSH host's agent tools are CHECKED, not assumed** (`RemoteHooks.refreshAgentTools`,
+  `main/remote-ssh/agent-tools-freshness.ts`). The canvas/context shims, both SKILL.md files and our
+  blocks in the codex/gemini/copilot/opencode instruction files used to be written only by the
+  establish path, blind, and never looked at again, so a host could keep another build's text for
+  a whole run: a fire-and-forget install that failed open was never retried; a tunnel that failed
+  verification at connect and was repaired later on the reuse branch (#735, above) never got them
+  at all; and a managed account's skill was written ONCE, when the account was added, so after
+  every update each remote account session read the verb docs of the build that created the
+  account. (The obvious suspect is not one: an app update never lands on the reuse branch. `conns`
+  is in memory, so the first connect after a relaunch adopts the ControlPersist orphan on the
+  ESTABLISH path, which always wrote. `ssh-project.test.ts` pins that it checks there too.)
+  - **The stamp is the bytes.** One generated probe (one round trip, a few hundred bytes back)
+    runs POSIX `cksum` over every file the host holds and, for an instruction file, over exactly
+    the span `merge*Block` would replace (awk under `LC_ALL=C`: the first start marker through the
+    first end marker, only when the end follows the start). That is compared with `posixCksum` of
+    the exact bytes this build would write (`core/remote-ssh/posix-cksum.ts`, pinned against the
+    real binary), and only what differs is rewritten, through the same appliers as the install. A
+    current host costs the probe and no write. Nothing is embedded in the artifacts: a stamp line
+    would be noise in every agent's context, would need a migration for hosts written by older
+    builds, and would trust a file's claim about itself. `cksum` because it is the one checksum POSIX
+    requires; CRC-32 + length is not collision resistant and does not need to be, because this
+    detects drift and is not a security check. Ubuntu's own BusyBox build omits `cksum`, so such a
+    host exists: missing, unreadable and gated files are still told apart there, the files it can
+    read are written without comparison (what every connect did before) and the blocks merged. An
+    awk that fails on a block is reported (`X`, through fd 3 — `awk | cksum` exits with cksum's
+    status) and that block is merged, which writes only on a change. Only files ACTUALLY written
+    are logged as "rewrote" or make the outcome `refreshed`. The permanent suite runs the probe
+    under every shell × awk the machine has (what the CI image has); a one-off manual run added
+    BusyBox sh, zsh 5.9 and the one-true awk 20231127 (`NT_PROBE_EXTRA_AWK` / `_SH`). macOS's own
+    awk (20200816) and BSD `cksum` have never been run — that is on the PR's Mac checklist.
+  - **The end marker is searched AFTER the start marker** — in both `merge*Block` functions and in
+    the probe's awk alike. Taking the first end marker anywhere read a hand-deleted block's leftover
+    end line as "no block": the merge appended a fresh copy every time, and with an hourly check a
+    host's AGENTS.md grew by one block an hour (measured in review: 41,693 → 81,279 → 120,865 →
+    160,451 bytes). The same merges run at boot for the desktop's and the Server Edition's own local
+    instruction files (`initCanvasControl`, `initContextLink`), which grew by one block per launch.
+  - **Refusals.** A file that is not a readable regular file (a directory, a dangling dotfile link,
+    no permission) is NEVER written over, and the host is not called confirmed. A managed account's
+    skill is refreshed only when its dir ALREADY exists — checked by the probe and again on the host
+    in the write itself (`remoteAtomicWrite`'s `requireDir`), so a dir removed in between is not
+    brought back by the parent `mkdir -p`. A report that does not
+    parse changes nothing. Account ids from settings are re-validated (`isSafeAccountId`) before
+    they become paths. The copilot block is judged at the host's `$COPILOT_HOME` only when the
+    installer's validator would accept that value.
+  - **Cadence.** A connect (establish, including the post-relaunch orphan adoption) and a tunnel
+    repair always check. The 45 s reuse branch costs nothing once this run has confirmed the host
+    for the current expected set (content + account list). An unconfirmed host is retried there on
+    the tunnel-repair backoff (1/5/15 min). A confirmed host is looked at again hourly
+    (`AGENT_TOOLS_RECHECK_MS`), because within a run only a writer outside it (another desktop,
+    possibly an older build, on the same host account; a hand edit) can change the files. One check
+    per host at a time: projects sharing a host share it.
+  - **A new agent-facing doc on a host goes into the artifact plan in `remote-hooks.ts`**
+    (`canvasControlArtifacts` / `contextLinkArtifacts` / `accountSkillArtifacts`) — shims, skills,
+    instruction blocks. The installers and the probe both read it, so a file added there is written
+    AND kept current. NOT the rest of what connect writes: the hook scripts and the agents' hook
+    config belong to `setup()`'s ordered chain (after the verified tunnel and the endpoint file),
+    and the endpoint file and node tokens carry credentials — none of those may be rewritten on a
+    freshness cadence.
+  - **What a running agent sees.** The shim's `help` is answered by the shim itself (baked from the
+    verb registry), so it is current the moment the file is. Claude reads a SKILL.md body when the
+    skill is invoked; codex, gemini and opencode read their instruction files at session start, so
+    a session started before a rewrite keeps the old text until it restarts. Nothing is typed into
+    a pane to announce it.
+  - Surfaces: Desktop only (SSH projects are a desktop concept). The Server Edition runs ON its host
+    and rewrites its local shims at every boot. Mobile: N/A.
 - **The per-agent hook installs run CONCURRENTLY, and the order that still matters is the one above
   them.** `RemoteHooks.setup()` is the chain `connectOnce` awaits before a project reports
   `connected`, so every terminal of a switched-to project waits through it. Its shape was: resolve
@@ -3213,9 +3278,11 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `open-agent` are verified-only at the Server handler boundary. A plain terminal keeps generic
   node hook wiring but receives neither `NODETERM_AGENT_ID` nor `NODETERM_CANVAS_CONTROL`; missing
   identity never defaults to Claude.
-  **SSH projects** (docs/ssh-agent-skills.md): the SAME shim + skill + blocks are installed on
-  the remote host at connect (`RemoteHooks.installCanvasControl` + per-account
-  `installCanvasSkillIntoAccountDir`), gated on the VERIFIED reverse hook tunnel — the shim
+  **SSH projects** (docs/ssh-agent-skills.md): the SAME shim + skill + blocks are put on the
+  remote host and KEPT current by the agent-tools check (`RemoteHooks.refreshAgentTools`: on every
+  connect and tunnel repair, rewriting only what differs from this build, managed-account skill
+  dirs included — see "An SSH host's agent tools are CHECKED" under Agent support; an account's
+  skill is also written when the account is added), gated on the VERIFIED reverse hook tunnel — the shim
   carries no machine-specific paths and POSTs through the tunnel's unix socket, so remote agents
   control the desktop's canvas. The shim is generated source no compiler checks:
   `canvas-control-shim.test.ts` runs it for real (/bin/sh against a real hook server, port AND
@@ -3273,9 +3340,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   (`--cmd=--version`), which was previously unexpressible in either direction. Two parsers are in
   play and both are tested — the sh loop (`control-shim-parse.test.ts`, real `sh` + a fake `curl`
   that records argv) and `parseControlBody` reading what it built (`canvas-control-shim.test.ts`).
-  **A new verb must not DEPEND on the fix**: the shim is rewritten locally every app boot but onto
-  an SSH host only inside `RemoteHooks.setup()` (on connect), so an already-connected project keeps
-  the old loop with no signal on the wire. Give every flag a value and both loops agree.
+  **A new verb must still not DEPEND on the fix.** The shim is rewritten locally at every app boot,
+  and an SSH host's copy is checked on every connect and brought to this build's bytes, so an app
+  update reaches the host on the first connect after the relaunch. A host can still run an older
+  loop for a while: while its tunnel is down (nothing is installed through a dead tunnel), when the
+  file is unreadable (never written over), or while a second desktop on an older build shares the
+  host account (it rewrites its own copy on its connects; ours returns within the hour). Nothing
+  on the wire says which loop is running. Give every flag a value and both loops agree.
   **A retried call must not open a second node (`--request-id`, `core/control-request-ledger.ts`).**
   The reply to an open can be lost while the open went through — the agent's own tool call is
   killed (~2 min for a Bash tool call while a slow host holds the POST), the ssh tunnel drops
@@ -3328,8 +3399,9 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   Linux lacks `uuidgen` and macOS lacks `/proc` — or a readable name with a random part): rows are per node for 24 h, so a
   later conversation in the same node reusing a readable id for the same call would be answered
   with the earlier reply. An SSH
-  host keeps the shim it got at its last connect, so until that project reconnects its runs carry
-  no per-run id (an explicit `--request-id` still works through the old loop). Agent-facing text
+  host gets the new shim at its first connect after the update (the agent-tools check,
+  `RemoteHooks.refreshAgentTools`); until then — or while its tunnel is down — its runs carry no
+  per-run id (an explicit `--request-id` still works through the old loop). Agent-facing text
   is rendered from `REQUEST_ID_VERBS` / `REQUEST_ID_RETRYABLE` / `REQUEST_ID_OUTCOME_GLOSS`
   (`requestIdDocLines`). Tests: the ledger alone, the route (both dialects, in flight, conflict,
   late answer, throw), the Server Edition handler behind it, and the real shim under `/bin/sh`
@@ -3869,8 +3941,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     `release:false`: the attached client is what keeps even a plain shell reachable there.
   **Settings (`settings`, 2026-09):** `settings [--project <id>]` lists, `settings --get <key>`
   reads, `settings --set <key> --value <v> [--project <id>]` asks to change — flags only, because the
-  shim drops a positional sub-action for an unlisted verb and an SSH host keeps the shim it got at
-  connect. The pure `@shared/settings-verb` is the whole rule set, shared by the desktop dispatch, the
+  shim drops a positional sub-action for an unlisted verb and an SSH host can still be running an
+  older shim. The pure `@shared/settings-verb` is the whole rule set, shared by the desktop dispatch, the
   Server Edition and main's `parseControlRequest`: an **allowlist** (`agentMessaging` per project;
   `snapToGrid`/`gridSize`/`defaultNodeWidth`/`defaultNodeHeight` machine-wide, bounds = the UI's) with
   a required `why` per entry, and a **forbidden set + name pattern that outranks it** (permission
