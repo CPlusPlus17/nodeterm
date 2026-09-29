@@ -99,13 +99,17 @@ both skills (system and every managed account pinned to the host), and our instr
 - **One probe, one round trip.** The host runs POSIX `cksum` over each file (over exactly our
   marker span for an instruction file), and the desktop compares that with the checksum of the
   bytes it would write. Only what differs is rewritten; a current host costs one read and no
-  write. A host with no `cksum` gets everything written, as every connect did before.
+  write. On a host with no `cksum`, the files it can read are written without comparison (as every
+  connect did before) and the blocks merged; missing, unreadable and gated files are still told
+  apart.
 - **When.** Every connect (a fresh master, or the one that survived an app restart) and every
   reverse-tunnel repair. The 45 s watchdog costs nothing once the host is confirmed for this run,
   retries an unconfirmed host on a 1/5/15-minute backoff, and looks again hourly — the only thing
   that can change the files mid-run is someone else (another desktop, a hand edit).
 - **Never.** A file that cannot be read is not written over; a managed account whose dir is gone
-  from the host does not get it back; a probe reply that does not parse changes nothing.
+  from the host does not get it back (re-checked in the write itself); a probe reply that does not
+  parse changes nothing. A stray end marker left above a hand-deleted block is skipped — by the
+  merge and the probe alike — so it no longer makes every check append a new copy.
 - **A running agent** keeps what it already read: the shim's `help` is current as soon as the
   file is, a Claude skill is re-read when it is next invoked, and codex / gemini / opencode read
   their instruction files at session start.

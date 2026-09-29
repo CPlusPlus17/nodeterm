@@ -5,7 +5,7 @@ import { execFileSync, spawnSync } from 'child_process'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { formatCksum, posixCksum } from '../../core/remote-ssh/posix-cksum'
 import { mergeCanvasControlBlock, frameCanvasControlBlock, CANVAS_CONTROL_MARKERS } from '../../core/canvas-control-core'
 import { posixQuote } from '../../shared/ssh'
@@ -21,11 +21,38 @@ import {
 const sum = (text: string) => formatCksum(posixCksum(Buffer.from(text, 'utf8')))
 /** The formatted checksum the report holds for entry `i`, or its state when it holds none. */
 function sumAt(report: ReturnType<typeof parseAgentToolsReport>, i: number): string {
-  if (report?.kind !== 'report') return String(report?.kind)
+  if (!report) return 'no report'
   const s = report.statuses[i]
   return s.state === 'present' ? formatCksum(s.sum) : s.state
 }
 const { start: S, end: E } = CANVAS_CONTROL_MARKERS
+
+/** A PATH holding every tool this machine has EXCEPT cksum — built once for the whole file. */
+let noCksum: string | undefined
+function noCksumBin(): string {
+  if (noCksum) return noCksum
+  noCksum = mkdtempSync(path.join(tmpdir(), 'nt-no-cksum-'))
+  for (const d of ['/usr/bin', '/bin']) {
+    let names: string[] = []
+    try {
+      names = readdirSync(d)
+    } catch {
+      continue
+    }
+    for (const n of names) {
+      if (n === 'cksum') continue
+      try {
+        symlinkSync(path.join(d, n), path.join(noCksum, n))
+      } catch {
+        // already linked from the other directory
+      }
+    }
+  }
+  return noCksum
+}
+afterAll(() => {
+  if (noCksum) rmSync(noCksum, { recursive: true, force: true })
+})
 
 let home: string
 beforeEach(() => {
@@ -63,7 +90,7 @@ describe.skipIf(process.platform === 'win32')('the freshness probe (real /bin/sh
     const body = '#!/bin/sh\necho şimdi\n'
     const p = put('.nodeterm/nodeterm.sh', body)
     const report = parseAgentToolsReport(runProbe([file(p)]), 1)
-    expect(report).toEqual({ kind: 'report', statuses: [{ state: 'present', sum: posixCksum(Buffer.from(body)) }], env: '' })
+    expect(report).toEqual({ hasCksum: true, statuses: [{ state: 'present', sum: posixCksum(Buffer.from(body)) }], env: '' })
   })
 
   it('tells missing from unreadable, and never reads through a dangling link or a directory', () => {
@@ -75,7 +102,7 @@ describe.skipIf(process.platform === 'win32')('the freshness probe (real /bin/sh
       runProbe([file(path.join(home, 'absent.sh')), file(dir), file(dangling)]),
       3
     )
-    expect(report?.kind === 'report' && report.statuses.map((s) => s.state)).toEqual([
+    expect(report?.statuses.map((s) => s.state)).toEqual([
       'missing',
       'unreadable',
       'unreadable'
@@ -90,7 +117,7 @@ describe.skipIf(process.platform === 'win32')('the freshness probe (real /bin/sh
       runProbe([file(skill, acc), file(path.join(gone, 'skills/x/SKILL.md'), gone)]),
       2
     )
-    expect(report?.kind === 'report' && report.statuses).toEqual([
+    expect(report?.statuses).toEqual([
       { state: 'present', sum: posixCksum(Buffer.from('x\n')) },
       { state: 'no-gate' }
     ])
@@ -102,14 +129,21 @@ describe.skipIf(process.platform === 'win32')('the freshness probe (real /bin/sh
     const stale = put('.gemini/GEMINI.md', mergeCanvasControlBlock('', 'an OLD block'))
     const report = parseAgentToolsReport(runProbe([block(posixQuote(p)), block(posixQuote(stale))]), 2)
     const want = frameCanvasControlBlock('the block\nsecond line')
-    expect(report?.kind === 'report' && report.statuses[0]).toEqual({ state: 'present', sum: posixCksum(Buffer.from(want)) })
+    expect(report?.statuses[0]).toEqual({ state: 'present', sum: posixCksum(Buffer.from(want)) })
     expect(sumAt(report, 1)).not.toBe(sum(want))
   })
 
-  it('an end marker BEFORE the start marker is no block at all, as the merge sees it', () => {
-    // mergeCanvasControlBlock only replaces when the first end marker follows the first start
-    // marker; otherwise it appends. The probe must not call such a file current.
+  it('a stray end marker BEFORE the start marker is skipped, as the merge skips it', () => {
+    // The merge searches the end marker AFTER the first start marker, so a hand-deleted block's
+    // leftover end line is not "the end of our block". The probe must find the same span, or such
+    // a file reads stale on every check.
     const p = put('.codex/AGENTS.md', `${E}\n${frameCanvasControlBlock('b')}\n`)
+    const report = parseAgentToolsReport(runProbe([block(posixQuote(p))]), 1)
+    expect(sumAt(report, 0)).toBe(sum(frameCanvasControlBlock('b')))
+  })
+
+  it('a start marker with no end marker after it is no block at all', () => {
+    const p = put('.codex/AGENTS.md', `${frameCanvasControlBlock('b')}\n${S}\n`.replace(E, 'gone'))
     const report = parseAgentToolsReport(runProbe([block(posixQuote(p))]), 1)
     expect(sumAt(report, 0)).toBe(sum(''))
   })
@@ -118,36 +152,50 @@ describe.skipIf(process.platform === 'win32')('the freshness probe (real /bin/sh
     put('.copilot/copilot-instructions.md', 'c\n')
     const expr = '"${COPILOT_HOME:-$NT_H/.copilot}/copilot-instructions.md"'
     const unset = parseAgentToolsReport(runProbe([{ kind: 'file', pathExpr: expr }]), 1)
-    expect(unset).toEqual({ kind: 'report', statuses: [{ state: 'present', sum: posixCksum(Buffer.from('c\n')) }], env: '' })
+    expect(unset).toEqual({ hasCksum: true, statuses: [{ state: 'present', sum: posixCksum(Buffer.from('c\n')) }], env: '' })
     const hostile = '/x\nNT_END\n0 C 1 1'
     const set = parseAgentToolsReport(runProbe([{ kind: 'file', pathExpr: expr }], { COPILOT_HOME: hostile }), 1)
     // The env value is data: it can neither forge a status line nor end the report early.
-    expect(set).toEqual({ kind: 'report', statuses: [{ state: 'missing' }], env: hostile })
+    expect(set).toEqual({ hasCksum: true, statuses: [{ state: 'missing' }], env: hostile })
   })
 
-  it('a host with no cksum says so instead of reporting every file unreadable', () => {
-    // A PATH holding every tool this machine has EXCEPT cksum (Ubuntu's own BusyBox build ships
-    // without the applet, so "no cksum" is a real host, not a hypothetical one).
-    const bin = mkdtempSync(path.join(tmpdir(), 'nt-no-cksum-'))
+  it('a host with no cksum says so — and still tells missing, unreadable and gated files apart', () => {
+    // Ubuntu's own BusyBox build ships without the applet, so "no cksum" is a real host. The
+    // content of what is there cannot be compared (`unknown`), but what is NOT there, or cannot be
+    // read, still is — the fallback must not write into a directory sitting at a file's path.
+    const dir = path.join(home, 'a-directory')
+    mkdirSync(dir)
+    const out = runProbe(
+      [
+        file(put('present', 'p')),
+        file(path.join(home, 'absent')),
+        file(dir),
+        file(path.join(home, 'gone/x'), path.join(home, 'gone')),
+        block(posixQuote(put('blk', frameCanvasControlBlock('b'))))
+      ],
+      {},
+      noCksumBin()
+    )
+    expect(parseAgentToolsReport(out, 5)).toEqual({
+      hasCksum: false,
+      statuses: [{ state: 'unknown' }, { state: 'missing' }, { state: 'unreadable' }, { state: 'no-gate' }, { state: 'unknown' }],
+      env: ''
+    })
+  })
+
+  it('an awk that fails is reported, not hidden behind the pipeline into cksum', () => {
+    // `awk … | cksum` exits with cksum's status, so a missing or broken awk used to read as "the
+    // block is empty" — stale on every check, and a merge that changed nothing logged as a rewrite.
+    const bin = mkdtempSync(path.join(tmpdir(), 'nt-bad-awk-'))
     try {
-      for (const d of ['/usr/bin', '/bin']) {
-        let names: string[] = []
-        try {
-          names = readdirSync(d)
-        } catch {
-          continue
-        }
-        for (const n of names) {
-          if (n === 'cksum') continue
-          try {
-            symlinkSync(path.join(d, n), path.join(bin, n))
-          } catch {
-            // already linked from the other directory
-          }
-        }
-      }
-      const out = runProbe([file(put('a', 'a'))], {}, bin)
-      expect(parseAgentToolsReport(out, 1)).toEqual({ kind: 'no-cksum', env: '' })
+      writeFileSync(path.join(bin, 'awk'), '#!/bin/sh\nexit 2\n', { mode: 0o755 })
+      const p = put('.codex/AGENTS.md', frameCanvasControlBlock('b'))
+      const f = put('owned', 'o')
+      const report = parseAgentToolsReport(
+        runProbe([block(posixQuote(p)), file(f)], {}, `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`),
+        2
+      )
+      expect(report?.statuses).toEqual([{ state: 'unknown' }, { state: 'present', sum: posixCksum(Buffer.from('o')) }])
     } finally {
       rmSync(bin, { recursive: true, force: true })
     }
@@ -214,7 +262,7 @@ describe.skipIf(process.platform === 'win32')('the probe under every sh × awk o
       expect([0, 1, 2, 3, 4, 5].map((i) => sumAt(report, i))).toEqual([
         sum(frameCanvasControlBlock('line one\nline — two')),
         sum(texts.crlf), // CR stays inside its line: the span is the file's own bytes
-        sum(''), // end before start: no block, as the merge sees it
+        sum(frameCanvasControlBlock('b')), // a stray end marker before the start is skipped
         sum(''),
         sum(frameCanvasControlBlock('tail')),
         sum('#!/bin/sh\necho ğ\n')
@@ -226,19 +274,30 @@ describe.skipIf(process.platform === 'win32')('the probe under every sh × awk o
 })
 
 describe('parseAgentToolsReport', () => {
-  const ok = 'NT_AGENT_TOOLS_CHECK 1\n0 C 1 2\n1 M\n2 U\n3 D\nNT_ENV COPILOT_HOME=/c\nNT_END\n'
+  const ok = 'NT_AGENT_TOOLS_CHECK 1\n0 C 1 2\n1 M\n2 U\n3 D\n4 X\nNT_ENV COPILOT_HOME=/c\nNT_END\n'
 
   it('reads a well-formed report, tolerating a login banner before it', () => {
-    expect(parseAgentToolsReport(`Welcome!\n${ok}`, 4)).toEqual({
-      kind: 'report',
+    expect(parseAgentToolsReport(`Welcome!\n${ok}`, 5)).toEqual({
+      hasCksum: true,
       statuses: [
         { state: 'present', sum: { crc: 1, size: 2 } },
         { state: 'missing' },
         { state: 'unreadable' },
-        { state: 'no-gate' }
+        { state: 'no-gate' },
+        { state: 'unknown' }
       ],
       env: '/c'
     })
+  })
+
+  it('reads a no-cksum report, which may hold no checksum at all', () => {
+    const noCk = 'NT_AGENT_TOOLS_CHECK 1\nNT_NO_CKSUM\n0 X\n1 M\nNT_ENV COPILOT_HOME=\nNT_END\n'
+    expect(parseAgentToolsReport(noCk, 2)).toEqual({
+      hasCksum: false,
+      statuses: [{ state: 'unknown' }, { state: 'missing' }],
+      env: ''
+    })
+    expect(parseAgentToolsReport(noCk.replace('0 X', '0 C 1 2'), 2)).toBeNull()
   })
 
   it('refuses a report that is cut short, out of order, over-long or malformed — never guesses', () => {
@@ -247,13 +306,13 @@ describe('parseAgentToolsReport', () => {
       'NT_AGENT_TOOLS_CHECK 1\n0 C 1 2\n', // no end
       ok.replace('\nNT_END\n', '\n'), // no end sentinel
       ok.replace('1 M', '2 M'), // out of order
-      ok.replace('3 D\n', ''), // too few
-      ok.replace('3 D\n', '3 D\n4 M\n'), // too many
+      ok.replace('4 X\n', ''), // too few
+      ok.replace('4 X\n', '4 X\n5 M\n'), // too many
       ok.replace('0 C 1 2', '0 C one 2'), // not a checksum
-      ok.replace('2 U', '2 X'), // unknown status
+      ok.replace('2 U', '2 Z'), // unknown status
       ok.replace('NT_AGENT_TOOLS_CHECK 1', 'NT_AGENT_TOOLS_CHECK 2') // a version we do not speak
     ]
-    for (const b of bad) expect(parseAgentToolsReport(b, 4)).toBeNull()
+    for (const b of bad) expect(parseAgentToolsReport(b, 5)).toBeNull()
   })
 })
 

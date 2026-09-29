@@ -2441,12 +2441,25 @@ else, and its context links must keep classifying across restarts).
     builds, and would trust a file's claim about itself. `cksum` because it is the one checksum POSIX
     requires; CRC-32 + length is not collision resistant and does not need to be, because this
     detects drift and is not a security check. Ubuntu's own BusyBox build omits `cksum`, so such a
-    host exists: it falls back to writing everything on a connect or repair, which is what every
-    connect did before. The probe is tested under dash, bash, BusyBox sh and zsh with mawk, gawk,
-    BusyBox awk and the one-true awk (the macOS dialect, via `NT_PROBE_EXTRA_AWK`).
+    host exists: missing, unreadable and gated files are still told apart there, the files it can
+    read are written without comparison (what every connect did before) and the blocks merged. An
+    awk that fails on a block is reported (`X`, through fd 3 — `awk | cksum` exits with cksum's
+    status) and that block is merged, which writes only on a change. Only files ACTUALLY written
+    are logged as "rewrote" or make the outcome `refreshed`. The permanent suite runs the probe
+    under every shell × awk the machine has (what the CI image has); a one-off manual run added
+    BusyBox sh, zsh 5.9 and the one-true awk 20231127 (`NT_PROBE_EXTRA_AWK` / `_SH`). macOS's own
+    awk (20200816) and BSD `cksum` have never been run — that is on the PR's Mac checklist.
+  - **The end marker is searched AFTER the start marker** — in both `merge*Block` functions and in
+    the probe's awk alike. Taking the first end marker anywhere read a hand-deleted block's leftover
+    end line as "no block": the merge appended a fresh copy every time, and with an hourly check a
+    host's AGENTS.md grew by one block an hour (measured in review: 41,693 → 81,279 → 120,865 →
+    160,451 bytes). The same merges run at boot for the desktop's and the Server Edition's own local
+    instruction files (`initCanvasControl`, `initContextLink`), which grew by one block per launch.
   - **Refusals.** A file that is not a readable regular file (a directory, a dangling dotfile link,
     no permission) is NEVER written over, and the host is not called confirmed. A managed account's
-    skill is refreshed only when its dir ALREADY exists (never resurrected). A report that does not
+    skill is refreshed only when its dir ALREADY exists — checked by the probe and again on the host
+    in the write itself (`remoteAtomicWrite`'s `requireDir`), so a dir removed in between is not
+    brought back by the parent `mkdir -p`. A report that does not
     parse changes nothing. Account ids from settings are re-validated (`isSafeAccountId`) before
     they become paths. The copilot block is judged at the host's `$COPILOT_HOME` only when the
     installer's validator would accept that value.
@@ -2457,10 +2470,13 @@ else, and its context links must keep classifying across restarts).
     (`AGENT_TOOLS_RECHECK_MS`), because within a run only a writer outside it (another desktop,
     possibly an older build, on the same host account; a hand edit) can change the files. One check
     per host at a time: projects sharing a host share it.
-  - **Anything new we put on a host goes into the artifact plan in `remote-hooks.ts`**
-    (`canvasControlArtifacts` / `contextLinkArtifacts` / `accountSkillArtifacts`). The installers
-    and the probe both read it, so a file added there is written AND kept current. A file written
-    anywhere else is written once and never looked at again.
+  - **A new agent-facing doc on a host goes into the artifact plan in `remote-hooks.ts`**
+    (`canvasControlArtifacts` / `contextLinkArtifacts` / `accountSkillArtifacts`) — shims, skills,
+    instruction blocks. The installers and the probe both read it, so a file added there is written
+    AND kept current. NOT the rest of what connect writes: the hook scripts and the agents' hook
+    config belong to `setup()`'s ordered chain (after the verified tunnel and the endpoint file),
+    and the endpoint file and node tokens carry credentials — none of those may be rewritten on a
+    freshness cadence.
   - **What a running agent sees.** The shim's `help` is answered by the shim itself (baked from the
     verb registry), so it is current the moment the file is. Claude reads a SKILL.md body when the
     skill is invoked; codex, gemini and opencode read their instruction files at session start, so

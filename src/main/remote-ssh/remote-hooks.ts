@@ -20,7 +20,13 @@ import {
   updateRemoteTextFile,
   type RemoteTextResult
 } from '../../core/agents/hooks/remote-settings-file'
-import { remoteAtomicWrite, runRemoteAtomicWrite, type RemoteAtomicWriteOptions } from '../remote-atomic-write'
+import {
+  REMOTE_WRITE_NO_DIR,
+  RemoteWriteError,
+  remoteAtomicWrite,
+  runRemoteAtomicWrite,
+  type RemoteAtomicWriteOptions
+} from '../remote-atomic-write'
 import { curlHeaderConfigLine } from '../../core/agents/hook-curl-config-sh'
 import { buildManagedScript } from '../../core/agents/hooks/managed-script'
 import {
@@ -896,8 +902,13 @@ export class RemoteHooks {
    *
    * Fail-open for the connect, never silent: a failed owned-file write THROWS and ends its group
    * (the steps after it depend on the file) with a warning naming the group; a failed instruction
-   * merge is logged by the transaction and the group carries on. Returns whether everything landed.
-   * `copilotHome` is asked at most once, and only when a copilot block is reached.
+   * merge is logged by the transaction and the group carries on. A gated file (a managed account's
+   * skill) is written only while its dir still exists — re-checked on the host in the write itself —
+   * and is skipped, not failed, when it is gone. `copilotHome` is asked at most once, and only when
+   * a copilot block is reached.
+   *
+   * Returns whether everything that should have landed did, and what was ACTUALLY written: a merge
+   * that changed nothing, or a gated write whose dir vanished, is not a write.
    */
   private async applyAgentTools(
     conn: SshConnection,
@@ -905,7 +916,7 @@ export class RemoteHooks {
     remoteHome: string,
     artifacts: readonly AgentToolArtifact[],
     copilotHome: () => Promise<string>
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; written: AgentToolArtifact[] }> {
     let copilot: Promise<string> | undefined
     const groups = new Map<string, AgentToolArtifact[]>()
     for (const a of artifacts) {
@@ -914,11 +925,21 @@ export class RemoteHooks {
       else groups.set(a.group, [a])
     }
     let ok = true
+    const written: AgentToolArtifact[] = []
     for (const members of groups.values()) {
       try {
         for (const a of members) {
           if (a.kind === 'file') {
-            await this.writeOwnedFile(conn, controlPath, a.path, a.body, a.mode ? { mode: a.mode } : {})
+            try {
+              await this.writeOwnedFile(conn, controlPath, a.path, a.body, {
+                ...(a.mode ? { mode: a.mode } : {}),
+                ...(a.gateDir ? { requireDir: a.gateDir } : {})
+              })
+              written.push(a)
+            } catch (e) {
+              // The account was removed between the probe and this write: nothing to keep current.
+              if (!(a.gateDir && e instanceof RemoteWriteError && e.code === REMOTE_WRITE_NO_DIR)) throw e
+            }
             continue
           }
           const target =
@@ -927,13 +948,14 @@ export class RemoteHooks {
               : this.instructionTarget(remoteHome, a.target)
           const r = await this.mergeRemoteInstructions(conn, controlPath, target.pathExpr, a.block, a.merge, target.prelude)
           if (r === 'failed') ok = false
+          else if (r === 'written') written.push(a)
         }
       } catch (e) {
         ok = false
         warnNotInstalled(members[0].label, e)
       }
     }
-    return ok
+    return { ok, written }
   }
 
   /** The instruction files whose path does not depend on host state we have to ask for. codex and
@@ -956,8 +978,9 @@ export class RemoteHooks {
    * One probe checksums everything the host holds (see agent-tools-freshness.ts for the stamp and
    * the cadence); a current host costs that one round trip and no write. A file we cannot read is
    * never written over, and a host with one is not called confirmed, so the reuse branch keeps
-   * looking (on the tunnel-repair backoff). A host with no `cksum` falls back to writing everything,
-   * which is what every connect did before this check existed. Never throws.
+   * looking (on the tunnel-repair backoff). On a host with no `cksum` the files it can read cannot be
+   * compared: they are written (what every connect did before this check existed) and the blocks
+   * merged, but missing, unreadable and gated files are still told apart. Never throws.
    */
   async refreshAgentTools(
     conn: SshConnection,
@@ -1039,15 +1062,11 @@ export class RemoteHooks {
     }
     if (!report) return done(false, 'failed')
     const copilotHome = copilotHomeFromReported(report.env, remoteHome)
-
-    if (report.kind === 'no-cksum') {
-      // Nothing was probed. On a connect or repair, write everything we used to write on every
-      // connect (never the gated account skills: we cannot see whether their dirs exist). On the
-      // hourly re-look of a host this run already wrote, write nothing blind.
-      if (trigger === 'reuse' && this.agentToolsState.get(key)?.verified?.setId === setId) return done(true, 'current')
-      const system = plan.filter((a) => !(a.kind === 'file' && a.gateDir))
-      const ok = await this.applyAgentTools(conn, controlPath, remoteHome, system, async () => copilotHome)
-      return done(ok, ok ? 'refreshed' : 'failed')
+    // With no cksum every file the host can read is `unknown`. On a connect or a repair those are
+    // written anyway, which is what every connect did before this check; on the hourly re-look of a
+    // host this run already brought up to date, nothing is written blind.
+    if (!report.hasCksum && trigger === 'reuse' && this.agentToolsState.get(key)?.verified?.setId === setId) {
+      return done(true, 'current')
     }
 
     // The probe read copilot's file at the host's raw `$COPILOT_HOME`; the installer refuses an
@@ -1055,27 +1074,44 @@ export class RemoteHooks {
     const copilotProbeTrusted = report.env === '' || isSafeRemoteCopilotHome(report.env)
     const stale: AgentToolArtifact[] = []
     const unreadable: AgentToolArtifact[] = []
+    let unknownBlocks = 0
     plan.forEach((a, i) => {
       const status = report.statuses[i]
       if (status.state === 'unreadable') unreadable.push(a)
       else if (status.state === 'no-gate') return
-      else if (status.state === 'missing' || formatCksum(status.sum) !== expected[i]) stale.push(a)
+      else if (status.state === 'missing') stale.push(a)
+      else if (status.state === 'unknown') {
+        // An owned file is written; an instruction block is MERGED, which writes only on a change.
+        stale.push(a)
+        if (a.kind === 'block') unknownBlocks++
+      } else if (formatCksum(status.sum) !== expected[i]) stale.push(a)
       else if (a.kind === 'block' && a.target === 'copilot' && !copilotProbeTrusted) stale.push(a)
     })
+    if (!report.hasCksum) {
+      console.info(`[remote-hooks] ${host} has no cksum: its agent tool files are written without comparison`)
+    } else if (unknownBlocks) {
+      console.warn(
+        `[remote-hooks] could not checksum ${unknownBlocks} instruction block(s) on ${host} (awk failed or is ` +
+          'missing); merged them instead, which writes only what changed'
+      )
+    }
     if (unreadable.length) {
       console.warn(
         `[remote-hooks] left ${unreadable.length} agent tool file(s) on ${host} untouched because they cannot be ` +
           `read (not a readable regular file): ${unreadable.map(describeArtifact).join(', ')}`
       )
     }
-    if (!stale.length) return done(!unreadable.length, unreadable.length ? 'failed' : 'current')
-    const ok = await this.applyAgentTools(conn, controlPath, remoteHome, stale, async () => copilotHome)
-    console.info(
-      `[remote-hooks] ${host}: ${ok ? 'rewrote' : 'tried to rewrite'} ${stale.length} out-of-date agent tool file(s): ` +
-        stale.map(describeArtifact).join(', ')
-    )
+    const { ok, written } = stale.length
+      ? await this.applyAgentTools(conn, controlPath, remoteHome, stale, async () => copilotHome)
+      : { ok: true, written: [] }
+    if (written.length) {
+      console.info(
+        `[remote-hooks] ${host}: rewrote ${written.length} out-of-date agent tool file(s): ` +
+          written.map(describeArtifact).join(', ')
+      )
+    }
     const settled = ok && !unreadable.length
-    return done(settled, settled ? 'refreshed' : 'failed')
+    return done(settled, !settled ? 'failed' : written.length ? 'refreshed' : 'current')
   }
 
   /** How the probe looks at one artifact — at the SAME path the writer uses (copilot aside: the

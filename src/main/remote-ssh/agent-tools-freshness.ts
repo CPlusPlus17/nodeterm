@@ -20,7 +20,8 @@
  * foreign writer that keeps the line goes unseen. Hashing the bytes catches a generator change
  * with no version bump, a deletion, and a foreign or older writer, and works on day one against
  * files older builds wrote. The checksum is POSIX `cksum` (see posix-cksum.ts for why not sha256);
- * a host without one falls back to the pre-check behaviour — write everything.
+ * on a host without one, the files it can read are written without comparison (what every connect
+ * did before) and the blocks merged — but missing, unreadable and gated files are still told apart.
  *
  * ONE ROUND TRIP. Every file is probed by one generated command whose reply is a few hundred bytes,
  * so a check costs no more than the tunnel probe beside it — and a host that is current costs no
@@ -51,11 +52,18 @@ export type ProbeStatus =
    *  NEVER written over: we cannot see what we would be replacing. */
   | { state: 'unreadable' }
   | { state: 'no-gate' }
+  /** A readable regular file whose content could not be checksummed: the host has no `cksum`, or
+   *  awk failed on this instruction file. Not evidence either way — the caller writes an owned file
+   *  (what every connect did before the check) and MERGES an instruction block, which writes only
+   *  when the merge changes something. */
+  | { state: 'unknown' }
 
-export type AgentToolsReport =
-  | { kind: 'report'; statuses: ProbeStatus[]; env: string }
-  /** The host has no `cksum`. Nothing was probed; `env` is still reported. */
-  | { kind: 'no-cksum'; env: string }
+export interface AgentToolsReport {
+  /** False on a host with no `cksum`: every readable file is then `unknown`. */
+  hasCksum: boolean
+  statuses: ProbeStatus[]
+  env: string
+}
 
 const HEADER = 'NT_AGENT_TOOLS_CHECK 1'
 const END = 'NT_END'
@@ -63,19 +71,26 @@ const END = 'NT_END'
 /**
  * The span of an instruction file that `merge*Block` would replace, printed byte for byte (awk
  * under LC_ALL=C, so `index`/`substr` count bytes): from the FIRST start marker through the end of
- * the FIRST end marker, and only when that end marker comes after the start marker — otherwise the
- * merge appends, so there is no block and nothing is printed. Lines are rejoined with the `\n` awk
- * split them on; a `\r` stays inside its line, so a CRLF file does not pass for our LF block.
+ * the first end marker AFTER it — the merge's own rule, so a stray end line left above a
+ * hand-deleted block is skipped here exactly as it is there. No start marker, or none of the end
+ * marker after it, is no block: nothing is printed and the merge appends. Lines are rejoined with
+ * the `\n` awk split them on; a `\r` stays inside its line, so a CRLF file does not pass for our
+ * LF block.
  */
 const AWK_BLOCK =
   '{ t = (NR == 1) ? $0 : t "\\n" $0 } ' +
-  'END { i = index(t, s); j = index(t, e); if (i > 0 && j > i) printf "%s", substr(t, i, j - i + length(e)) }'
+  'END { i = index(t, s); if (i > 0) { r = substr(t, i); j = index(r, e); ' +
+  'if (j > 0) printf "%s", substr(r, 1, j - 1 + length(e)) } }'
 
 /**
- * The probe. Output, one line each: the header; then either `NT_NO_CKSUM`, or one status per entry
- * in order (`<i> C <crc> <size>` | `<i> M` | `<i> U` | `<i> D`); then `NT_ENV <name>=<value>`
- * (the one environment variable the caller needs resolved on the host — printed LAST, because it
- * is host data and must not be able to forge a status line); then `NT_END`.
+ * The probe. Output, one line each: the header; `NT_NO_CKSUM` when the host has no `cksum`; one
+ * status per entry, in order (`<i> C <crc> <size>` | `<i> M` | `<i> U` | `<i> D` | `<i> X`); then
+ * `NT_ENV <name>=<value>` (the one environment variable the caller needs resolved on the host —
+ * printed LAST, because it is host data and must not be able to forge a status line); then `NT_END`.
+ *
+ * Missing / unreadable / gate are decided for every entry even without `cksum`: those are the
+ * refusals, and a host without a checksum tool must not lose them. An awk that fails on a block is
+ * reported as `X` through fd 3 rather than hidden behind the pipeline, whose status is `cksum`'s.
  */
 export function agentToolsCheckCommand(prelude: string, entries: readonly ProbeEntry[], envName: string): string {
   if (!/^[A-Z_][A-Z0-9_]*$/.test(envName)) throw new Error(`not an environment variable name: ${envName}`)
@@ -87,12 +102,15 @@ export function agentToolsCheckCommand(prelude: string, entries: readonly ProbeE
   }
   const fns =
     `nt_s() { if [ ! -e "$2" ] && [ ! -L "$2" ]; then printf '%s M\\n' "$1"; return 1; fi; ` +
-    `if [ ! -f "$2" ] || [ ! -r "$2" ]; then printf '%s U\\n' "$1"; return 1; fi; return 0; }; ` +
+    `if [ ! -f "$2" ] || [ ! -r "$2" ]; then printf '%s U\\n' "$1"; return 1; fi; ` +
+    `[ -n "$nt_k" ] && return 0; printf '%s X\\n' "$1"; return 1; }; ` +
     `nt_f() { nt_s "$1" "$2" || return 0; nt_c=$(cksum < "$2") || { printf '%s U\\n' "$1"; return 0; }; ` +
     `printf '%s C %s\\n' "$1" "$nt_c"; }; ` +
     `nt_g() { if [ -d "$3" ]; then nt_f "$1" "$2"; else printf '%s D\\n' "$1"; fi; }; ` +
-    `nt_b() { nt_s "$1" "$2" || return 0; nt_c=$(awk -v s="$3" -v e="$4" ${posixQuote(AWK_BLOCK)} "$2" | cksum) || ` +
-    `{ printf '%s U\\n' "$1"; return 0; }; printf '%s C %s\\n' "$1" "$nt_c"; }; `
+    `nt_b() { nt_s "$1" "$2" || return 0; ` +
+    `nt_c=$( { { awk -v s="$3" -v e="$4" ${posixQuote(AWK_BLOCK)} "$2" || printf '%s\\n' NT_AWK_FAILED >&3; } | cksum; } 3>&1 ) || ` +
+    `{ printf '%s U\\n' "$1"; return 0; }; ` +
+    `case "$nt_c" in *NT_AWK_FAILED*) printf '%s X\\n' "$1" ;; *) printf '%s C %s\\n' "$1" "$nt_c" ;; esac; }; `
   const probes = entries
     .map((e, i) => {
       if (e.kind === 'block') return `nt_b ${i} ${e.pathExpr} ${posixQuote(e.start)} ${posixQuote(e.end)}; `
@@ -102,7 +120,8 @@ export function agentToolsCheckCommand(prelude: string, entries: readonly ProbeE
   const env = `printf 'NT_ENV %s=%s\\n' ${envName} "\${${envName}:-}"; printf '%s\\n' ${END}`
   return (
     `${prelude}LC_ALL=C; export LC_ALL; printf '%s\\n' ${posixQuote(HEADER)}; ` +
-    `if command -v cksum >/dev/null 2>&1; then ${fns}${probes}else printf '%s\\n' NT_NO_CKSUM; fi; ${env}`
+    `nt_k=; if command -v cksum >/dev/null 2>&1; then nt_k=1; else printf '%s\\n' NT_NO_CKSUM; fi; ` +
+    `${fns}${probes}${env}`
   )
 }
 
@@ -124,22 +143,25 @@ export function parseAgentToolsReport(stdout: string, count: number): AgentTools
   if (eq < 0 || eq > endAt) return null
   const env = tail.slice(eq + 1, endAt)
   const lines = body.slice(0, envAt).split('\n').filter((l, i, all) => !(i === all.length - 1 && l === ''))
-  if (lines.length === 1 && lines[0] === 'NT_NO_CKSUM') return { kind: 'no-cksum', env }
+  const hasCksum = lines[0] !== 'NT_NO_CKSUM'
+  if (!hasCksum) lines.shift()
   if (lines.length !== count) return null
   const statuses: ProbeStatus[] = []
   for (let i = 0; i < count; i++) {
-    const m = /^(\d+) (C (.+)|M|U|D)$/.exec(lines[i])
+    const m = /^(\d+) (C (.+)|M|U|D|X)$/.exec(lines[i])
     if (!m || Number(m[1]) !== i) return null
     if (m[2] === 'M') statuses.push({ state: 'missing' })
     else if (m[2] === 'U') statuses.push({ state: 'unreadable' })
     else if (m[2] === 'D') statuses.push({ state: 'no-gate' })
+    else if (m[2] === 'X') statuses.push({ state: 'unknown' })
     else {
-      const sum = parseCksumLine(m[3])
+      // A host that said it has no cksum cannot have produced a checksum.
+      const sum = hasCksum ? parseCksumLine(m[3]) : null
       if (!sum) return null
       statuses.push({ state: 'present', sum })
     }
   }
-  return { kind: 'report', statuses, env }
+  return { hasCksum, statuses, env }
 }
 
 // ---- cadence --------------------------------------------------------------------------------

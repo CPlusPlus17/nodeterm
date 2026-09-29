@@ -570,11 +570,15 @@ export function frameCanvasControlBlock(block: string): string {
 }
 
 /** Idempotently merge the canvas-control block into a global instructions file.
- *  Everything outside the markers is preserved; an existing block is replaced. */
+ *  Everything outside the markers is preserved; an existing block is replaced.
+ *
+ *  The end marker is searched AFTER the start marker. Taking the first one anywhere read a stray
+ *  end line (a block the user deleted by hand, end line kept) as "no block", so every merge
+ *  appended another copy — on the desktop at every launch, and on an SSH host at every check. */
 export function mergeCanvasControlBlock(existing: string, block: string): string {
   const full = frameCanvasControlBlock(block)
   const start = existing.indexOf(CC_START)
-  const end = existing.indexOf(CC_END)
+  const end = existing.indexOf(CC_END, start)
   if (start >= 0 && end > start) {
     return existing.slice(0, start) + full + existing.slice(end + CC_END.length)
   }

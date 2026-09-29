@@ -80,11 +80,12 @@ export function frameInstructionsBlock(block: string): string {
 }
 
 /** Idempotently merge our marker-delimited block into a global instructions file
- *  (~/.codex/AGENTS.md, ~/.gemini/GEMINI.md). Everything outside the markers is preserved. */
+ *  (~/.codex/AGENTS.md, ~/.gemini/GEMINI.md). Everything outside the markers is preserved.
+ *  The end marker is searched AFTER the start marker (see `mergeCanvasControlBlock`). */
 export function mergeInstructionsBlock(existing: string, block: string): string {
   const full = frameInstructionsBlock(block)
   const start = existing.indexOf(INSTR_START)
-  const end = existing.indexOf(INSTR_END)
+  const end = existing.indexOf(INSTR_END, start)
   if (start >= 0 && end > start) {
     return existing.slice(0, start) + full + existing.slice(end + INSTR_END.length)
   }

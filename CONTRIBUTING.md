@@ -475,12 +475,14 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   symlink and mode. A guard test fails on a new bare `cat >`. A remote runner RESOLVES on a
   non-zero exit, so check the result or use the helper that does.
 
-- **Anything the app puts on an SSH host goes into the agent-tools plan.** The canvas/context
+- **A new agent-facing doc on an SSH host goes into the agent-tools plan.** The canvas/context
   shims, their skills and our instruction-file blocks are listed once in `remote-hooks.ts`
   (`canvasControlArtifacts` and its siblings); the installers AND the connect-time freshness check
   (`RemoteHooks.refreshAgentTools`) read that list, so a host is brought up to your build's bytes
-  on the next connect. A file written from anywhere else is written once and never checked again —
-  hosts then keep the old text across app updates.
+  on the next connect. A shim, skill or block written from anywhere else is written once and never
+  checked again — hosts then keep the old text across app updates. This is ONLY for those docs:
+  hook scripts and hook config stay in `setup()`'s ordered chain, and the endpoint file and node
+  tokens carry credentials — never put them on a freshness cadence.
 
 - **Never write `chmod <mode> -- <file>` into a remote command.** macOS (BSD) chmod stops parsing
   options at the mode, so the `--` becomes a file operand and the command fails there while passing

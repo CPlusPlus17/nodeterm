@@ -16,7 +16,7 @@ import {
 } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CONTROL_SHIM_SCRIPT,
   buildCanvasControlInstructions,
@@ -29,12 +29,15 @@ import { RemoteHooks, type RemoteRunner } from './remote-hooks'
 const conn = { host: 'fixture', user: 'fixture' }
 let home: string
 let warn: ReturnType<typeof vi.spyOn>
+let info: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), "nt-refresh-' h-"))
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-  vi.spyOn(console, 'info').mockImplementation(() => {})
+  info = vi.spyOn(console, 'info').mockImplementation(() => {})
 })
+/** Did any log line claim a rewrite? It must mean a file was actually written. */
+const claimedRewrite = () => info.mock.calls.flat().some((a: unknown) => typeof a === 'string' && a.includes('rewrote'))
 afterEach(() => {
   vi.restoreAllMocks()
   rmSync(home, { recursive: true, force: true })
@@ -141,6 +144,46 @@ describe.skipIf(process.platform === 'win32')('RemoteHooks.refreshAgentTools (re
     expect(publishedTo(runner, gemini)).toBe(true)
   })
 
+  // Measured before the fix: 41,693 → 81,279 → 120,865 → 160,451 bytes over a connect and three
+  // hourly re-checks — the merge took the stray end marker for "no block" and appended each time.
+  // Two hosts, because two halves had the bug: on a normal host the PROBE must find the block (else
+  // it reads stale every check); on a host whose awk fails every block is merged on every check,
+  // so the MERGE itself must find it.
+  it.each([
+    ['a normal host', false],
+    ['a host whose awk fails (every block merged every check)', true]
+  ])('a stray end marker left by a hand-deleted block costs ONE append, not one per check — %s', async (_n, badAwk) => {
+    await freshHost()
+    const bin = mkdtempSync(path.join(tmpdir(), 'nt-bad-awk-'))
+    try {
+      writeFileSync(path.join(bin, 'awk'), '#!/bin/sh\nexit 2\n', { mode: 0o755 })
+      const opts = badAwk ? { path: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}` } : {}
+      const codex = path.join(home, '.codex/AGENTS.md')
+      // Both of our blocks gone from the file, each leaving its end line behind.
+      let text = read(codex)
+      for (const m of ['manage-canvas', 'get-linked-context']) {
+        const start = text.indexOf(`<!-- nodeterm:${m}:start -->`)
+        const end = text.indexOf(`<!-- nodeterm:${m}:end -->`)
+        text = text.slice(0, start) + text.slice(end)
+      }
+      put(codex, `# mine\n${text}`)
+      await new RemoteHooks(hostRunner(opts)).refreshAgentTools(conn, '/fixture.sock', home, [], 'connect')
+      const size = read(codex).length
+      expect(read(codex).match(/manage-canvas:start/g)).toHaveLength(1)
+      expect(read(codex).match(/get-linked-context:start/g)).toHaveLength(1)
+      for (let i = 0; i < 2; i++) {
+        const runner = hostRunner(opts)
+        expect(await new RemoteHooks(runner).refreshAgentTools(conn, '/fixture.sock', home, [], 'connect')).toBe('current')
+        expect(read(codex).length).toBe(size)
+        expect(publishes(runner)).toHaveLength(0)
+        // On a normal host the probe agrees with the merge outright: no merge read at all.
+        if (!badAwk) expect(runner.calls).toHaveLength(1)
+      }
+    } finally {
+      rmSync(bin, { recursive: true, force: true })
+    }
+  })
+
   it('writes what is missing and nothing else', async () => {
     await freshHost()
     rmSync(CTX())
@@ -212,6 +255,49 @@ describe.skipIf(process.platform === 'win32')('RemoteHooks.refreshAgentTools (re
     await new RemoteHooks(runner).refreshAgentTools(conn, '/fixture.sock', home, [], 'connect')
     expect(read(path.join(home, '.copilot/copilot-instructions.md'))).toContain('nodeterm:manage-canvas:start')
     expect(read(path.join(home, 'relative-dir/copilot-instructions.md'))).toBe(current)
+
+    // The probe can never vouch for ~/.copilot under that env, so every check re-merges it — and a
+    // merge that changes nothing is NOT a rewrite: no write, no "rewrote" line, outcome current.
+    info.mockClear()
+    const again = hostRunner({ env: { COPILOT_HOME: 'relative-dir' } })
+    expect(await new RemoteHooks(again).refreshAgentTools(conn, '/fixture.sock', home, [], 'connect')).toBe('current')
+    expect(publishes(again)).toHaveLength(0)
+    expect(claimedRewrite()).toBe(false)
+  })
+
+  it('a host whose awk fails has its blocks MERGED instead (which write only on a change) — never a false rewrite', async () => {
+    await freshHost()
+    const bin = mkdtempSync(path.join(tmpdir(), 'nt-bad-awk-'))
+    try {
+      writeFileSync(path.join(bin, 'awk'), '#!/bin/sh\nexit 2\n', { mode: 0o755 })
+      info.mockClear()
+      const runner = hostRunner({ path: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}` })
+      expect(await new RemoteHooks(runner).refreshAgentTools(conn, '/fixture.sock', home, [], 'connect')).toBe('current')
+      expect(publishes(runner)).toHaveLength(0)
+      expect(claimedRewrite()).toBe(false)
+      // …and said once, so a host that never confirms by checksum is visible in the log.
+      expect(warn.mock.calls.flat().join('\n')).toMatch(/could not checksum 7 instruction block/)
+    } finally {
+      rmSync(bin, { recursive: true, force: true })
+    }
+  })
+
+  it('an account dir removed between the probe and the write is not brought back', async () => {
+    mkdirSync(accountDir('acc-1'), { recursive: true })
+    const base = hostRunner()
+    const racing: HostRunner = {
+      calls: base.calls,
+      run: async (args, stdin) => {
+        const r = await base.run(args, stdin)
+        // The probe saw the dir; it is gone before the skill write lands.
+        if (args.at(-1)!.includes('NT_AGENT_TOOLS_CHECK')) rmSync(accountDir('acc-1'), { recursive: true })
+        return r
+      }
+    }
+    await new RemoteHooks(racing).refreshAgentTools(conn, '/fixture.sock', home, ['acc-1'], 'connect')
+    expect(existsSync(accountDir('acc-1'))).toBe(false)
+    // The system files still landed: a vanished account costs only its own skills.
+    expect(read(SHIM())).toBe(CONTROL_SHIM_SCRIPT)
   })
 
   it('a probe that could not run changes nothing', async () => {
@@ -241,8 +327,9 @@ describe.skipIf(process.platform === 'win32')('RemoteHooks.refreshAgentTools (re
   })
 
   describe('a host with no cksum', () => {
+    // Every tool this machine has EXCEPT cksum — thousands of links, so built once for the block.
     let bin: string
-    beforeEach(() => {
+    beforeAll(() => {
       bin = mkdtempSync(path.join(tmpdir(), 'nt-no-cksum-'))
       for (const d of ['/usr/bin', '/bin']) {
         let names: string[] = []
@@ -261,9 +348,22 @@ describe.skipIf(process.platform === 'win32')('RemoteHooks.refreshAgentTools (re
         }
       }
     })
-    afterEach(() => rmSync(bin, { recursive: true, force: true }))
+    afterAll(() => rmSync(bin, { recursive: true, force: true }))
 
-    it('falls back to writing everything, as every connect did before the check existed', async () => {
+    it('still never writes into what it cannot read, and still honours the account-dir gate', async () => {
+      mkdirSync(SKILL(), { recursive: true }) // a directory where our file should be
+      mkdirSync(accountDir('acc-1'), { recursive: true })
+      const runner = hostRunner({ path: bin })
+      expect(await new RemoteHooks(runner).refreshAgentTools(conn, '/fixture.sock', home, ['acc-1', 'gone'], 'connect')).toBe(
+        'failed'
+      )
+      expect(readdirSync(SKILL())).toEqual([])
+      expect(read(`${accountDir('acc-1')}/skills/manage-nodeterm-canvas/SKILL.md`)).toBe(buildCanvasSkillBody(SHIM()))
+      expect(existsSync(accountDir('gone'))).toBe(false)
+      expect(read(SHIM())).toBe(CONTROL_SHIM_SCRIPT)
+    })
+
+    it('writes what it can read without comparison, as every connect did before the check existed', async () => {
       put(SHIM(), 'stale\n')
       const runner = hostRunner({ path: bin })
       const rh = new RemoteHooks(runner)
