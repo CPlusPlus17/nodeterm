@@ -495,6 +495,31 @@ describe('hosted service — approve and deny', () => {
   })
 })
 
+describe('hosted service — an approval never overwrites an entry someone else wrote (M3)', () => {
+  it('a `team add-owner` that lands while the approval waits for its pin write keeps its OWNER role', async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    const keys = genKeyPair()
+    const { g, pendingId } = await pendingGuest(w, keys)
+    // The CLI promotes that very key; its write is held, so the approval's pin queues behind it.
+    disk.holdTeamWrite = true
+    const promoted = w.svc.addOwner(pub(keys), 'Racer')
+    await vi.waitFor(() => expect(disk.held).toHaveLength(1))
+    owner.req(5, IPC.relayHostedApprove, [pendingId, 'viewer'])
+    await vi.waitFor(() => expect(g.isApproved()).toBe(true))
+    const writes = disk.done
+    releaseHeldWrites()
+    await promoted
+    await hostOpened(w, keys)
+    // Only the add-owner write landed: the approval found the key already there and wrote nothing.
+    await vi.waitFor(() => expect(disk.done).toBe(writes + 1))
+    const entry = w.teamOnDisk().find((p) => p.pubkeyB64 === pub(keys))
+    expect(entry).toMatchObject({ role: 'owner', label: 'Racer', addedBy: 'cli' })
+    g.req(1, IPC.relayHostedSelf)
+    await vi.waitFor(() => expect(g.res(1)).toMatchObject({ ok: true, result: { role: 'owner' } }))
+  })
+})
+
 describe('hosted service — a refusal while the approval’s pin is being written (R26)', () => {
   it('a deny that lands while the pin write waits its turn pins nothing', async () => {
     const w = world()

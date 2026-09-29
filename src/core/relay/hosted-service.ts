@@ -20,7 +20,8 @@
 //    request per device key, and at most PENDING_MAX at once.
 //  - An approval is pinned only once both humans confirmed. A deny or an expiry that lands while
 //    that pin is still being written wins: the write is skipped, or taken back. A peer that merely
-//    drops meanwhile keeps its pin — both humans did approve.
+//    drops meanwhile keeps its pin — both humans did approve. A key that already has an entry when
+//    the pin is written (a racing `team add-owner`) keeps it: the approval writes nothing.
 //  - The scheduler hears about EVERY session end. The core fires `onClose` only for ends the shell
 //    did not ask for; every end this service causes (deny, expiry, removal, a listener the
 //    scheduler closes) runs the same `ended` bookkeeping, at most once per session.
@@ -322,6 +323,10 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
       await team.update((d) => {
         // Denied or expired while this write waited its turn: pin nothing ('last-owner' = write nothing).
         if (c.refused) return 'last-owner'
+        // The key already has an entry: someone wrote it while this pin waited its turn (a racing
+        // `team add-owner`, say). That is a deliberate act and it stands; replacing it would demote
+        // an owner to the role this dialog picked. The session is served that entry's role.
+        if (peerFor(d, peerKeyB64)) return 'last-owner'
         wrote = true
         return upsertPeer(d, entry)
       })

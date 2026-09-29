@@ -312,7 +312,8 @@ unapproved after 2.5 s, the tab says "Waiting for an owner of X to approve this 
   window refuses the device. An owner whose screen still showed a request that closed is told
   "Another owner answered this request."
 - An approval is pinned only after **both** humans confirmed. A deny or expiry that lands while that
-  pin is being written wins: the write is skipped, or taken back.
+  pin is being written wins: the write is skipped, or taken back. A key that gained a team entry
+  meanwhile (a `team add-owner` of the same key) keeps that entry: the approval writes nothing.
 - The CLI has **no** approve verb. `team status` lists pending requests by SAS and says to approve
   from an owner's desktop. The only way the CLI admits a device is `team add-owner`, which makes it
   an owner.
