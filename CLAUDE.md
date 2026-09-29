@@ -6312,6 +6312,17 @@ the same script hand-packs `build/icon.icns` (size-checked frames — issue #369
 zip, `--publish never`). Production release signing/notarization and the update-feed hosting are
 handled outside this repo.
 
+**The running app's name is `node-terminal`, not `nodeterm`.** Electron reads `app.name` from
+package.json's top-level `name`; `productName` lives only under `build`, which electron-builder
+strips from the packaged package.json, so it names the bundle and the installer and nothing else.
+Everything keyed by the app NAME therefore says `node-terminal` on every build, dev or installed:
+`userData` (`~/Library/Application Support/node-terminal`, `~/.config/node-terminal`,
+`%APPDATA%\node-terminal`), the `node-terminal Safe Storage` Keychain entry, electron-updater's
+`node-terminal-updater` cache. Only what is keyed by the bundle id (`com.nodeterm.app`) or the
+bundle itself (`/Applications/nodeterm.app`) carries `nodeterm`. `scripts/uninstall.sh` looked
+under `…/nodeterm` and never found the desktop's data; `scripts/uninstall.test.ts` now ties its
+`APP_NAME` to package.json `name`.
+
 **Linux ships AppImage + deb + rpm**, all unsigned, all built by `release-linux` on a plain
 `ubuntu-latest` runner (`npm run dist:linux` locally). Three things about it are easy to get wrong:
 
