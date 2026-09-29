@@ -10226,9 +10226,11 @@ export function Canvas() {
   // request's head branch is matched against (lib/pullLinks.ts) — except on an SSH project, where
   // branch links are not supported and no card carries one (kanbanSessionsFrom).
   const activeProjectSsh = useProjects((s) => !!s.projects.find((p) => p.id === s.activeProjectId)?.ssh)
+  // Derived while EITHER board is up: the Omni overview feeds the active project's lane from these
+  // live cards too (GlobalKanbanLive), never from the store copy that lags the canvas.
   const kanbanSessions = useMemo(
-    () => perProjectKanbanOpen ? kanbanSessionsFrom(nodes, { ssh: activeProjectSsh }) : NO_KANBAN_SESSIONS,
-    [nodes, perProjectKanbanOpen, activeProjectSsh]
+    () => kanbanOpen ? kanbanSessionsFrom(nodes, { ssh: activeProjectSsh }) : NO_KANBAN_SESSIONS,
+    [nodes, kanbanOpen, activeProjectSsh]
   )
 
   // Team progress (lib/teamProgress): the stations each session opened, read off the live control
@@ -10246,6 +10248,10 @@ export function Canvas() {
   useEffect(() => {
     useTeamStations.getState().set(teamStations)
   }, [teamStations])
+  const globalKanbanLive = useMemo(
+    () => activeProjectId ? { projectId: activeProjectId, sessions: kanbanSessions, teams: teamStations } : null,
+    [activeProjectId, kanbanSessions, teamStations]
+  )
 
   // Create a node from the board's per-column "+ New" menu: it lands on the canvas (view
   // center) and, for a real column, is assigned there. The assignment is written directly —
@@ -14393,8 +14399,8 @@ export function Canvas() {
   // Global Kanban delegates active-project mutations to the live canvas (React Flow is
   // source of truth — direct store writes for the active project would be clobbered by the
   // next commitActiveToStore). Non-active projects write to the store and then to disk.
-  // Delete uses ConfirmDialog and SSH-aware teardown (local transport.destroy vs remote
-  // sshProject.killSessions with everySocket), not native confirm.
+  // Delete uses ConfirmDialog (not native confirm); an off-canvas delete tears down through
+  // `closeStoredNodes`, the one cross-project teardown funnel.
   useEffect(() => {
     const onGlobalRename = (e: CustomEvent<{ projectId: string; nodeId: string; title: string }>) => {
       renameSession(e.detail.projectId, e.detail.nodeId, e.detail.title)
@@ -14441,34 +14447,17 @@ export function Canvas() {
         deleteNodeFromKanban(nodeId)
         return
       }
+      // Off-canvas teardown: the SAME funnel the sessions sidebar and canvas control's off-canvas
+      // `close` use (parked-xterm dispose, remote-aware destroy, issue run-ended, agent/fan-out/
+      // attach-consent/webview cleanup, frame children freed). A hand-rolled copy here drifted —
+      // it skipped the parked dispose and swallowed a failed SSH kill.
       const proj = useProjects.getState().getProject(projectId)
       const label = proj?.nodes.find((n) => n.id === nodeId)?.title || 'this session'
       setConfirm({
         message: `Delete ${label}? Its terminal session will end.`,
-        onConfirm: async () => {
-          const doomed = proj?.nodes.find((n) => n.id === nodeId)
-          if (doomed?.issueRef) logIssueRunEnded(projectId, doomed)
-          useProjects.setState((s) => ({
-            projects: s.projects.map((p) =>
-              p.id === projectId ? { ...p, nodes: p.nodes.filter((n) => n.id !== nodeId) } : p
-            )
-          }))
-          const owner = useProjects.getState().projects.find((p) => p.id === projectId)
-          const isSsh = !!owner?.ssh
-          try {
-            if (isSsh) {
-              await (window as unknown as { nodeTerminal: { sshProject: { killSessions: (a: string, b: string[], c: unknown) => Promise<void> } } }).nodeTerminal.sshProject.killSessions(projectId, [nodeId], { everySocket: true } as never)
-            } else {
-              transport.destroy(nodeId)
-            }
-          } catch {}
-          useAgentStatus.getState().remove(nodeId)
-          useAgentNodes.getState().clearForParent(nodeId)
-          useAgentNodes.getState().clearLoop(nodeId)
-          useWebviewKeepAlive.getState().drop(nodeId)
-          clearAttachConsent(nodeId)
+        onConfirm: () => {
+          closeStoredNodes(projectId, [nodeId])
           setConfirm(null)
-          void writeDisk()
         }
       })
     }
@@ -14498,7 +14487,7 @@ export function Canvas() {
       window.removeEventListener('nodeterm:global-delete' as never, onGlobalDelete as never)
       window.removeEventListener('nodeterm:global-set-icon' as never, onGlobalSetIcon as never)
     }
-  }, [renameSession, setNodes, markDirty, writeDisk, deleteNodeFromKanban, logIssueRunEnded])
+  }, [renameSession, setNodes, markDirty, writeDisk, deleteNodeFromKanban, closeStoredNodes])
 
   // Sidebar "Name with AI": generate a title from the session's captured terminal output
   // (same BYO-agent path as the terminal node's ✦), then apply it via renameSession.
@@ -16512,7 +16501,7 @@ export function Canvas() {
           })()}
       </div>
       {globalKanbanOpen ? (
-        <GlobalKanbanView />
+        <GlobalKanbanView live={globalKanbanLive} onModalNodeChange={setKanbanModalNode} />
       ) : perProjectKanbanOpen && (
         <KanbanView
           board={projectKanban ?? seedBoard}

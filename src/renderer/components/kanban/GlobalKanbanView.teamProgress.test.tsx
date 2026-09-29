@@ -11,7 +11,8 @@ import { useProjects } from '../../state/projects'
 import { useAgentStatus, type AgentNodeStatus } from '../../state/agentStatus'
 
 vi.mock('../../session/session', () => ({
-  useSession: () => ({ source: 'local', api: window.nodeTerminal })
+  useSession: () => ({ source: 'local', api: window.nodeTerminal }),
+  sessionForProject: () => ({ id: 'local', source: 'local', api: window.nodeTerminal })
 }))
 vi.mock('../ContextMeter', () => ({ ContextMeter: () => null }))
 
