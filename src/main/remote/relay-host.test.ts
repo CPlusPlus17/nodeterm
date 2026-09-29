@@ -90,9 +90,8 @@ import { presenceHub } from '../../core/presence/hub'
 import { initCanvasSync } from '../../core/canvas-sync'
 import { initPlatform, resetPlatformForTests } from '../../core/platform'
 import { IPC } from '../../shared/ipc'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { testTmpDir } from '../../core/test-tmp'
 import type { ScopedGuestDeps } from '../../core/relay/scoped-guest-policy'
 import { decodePtyData, E_UNAUTHORIZED } from '../../shared/rpc'
 
@@ -109,7 +108,8 @@ let platform: ElectronPlatform
  * is the host transport's ws.bufferedAmount — the number the sink must surface.
  */
 /** The shared project's folder in the scoped tests (a real directory: the policy realpaths it). */
-const SHARED_ROOT = mkdtempSync(join(tmpdir(), 'relay-host-scope-'))
+// testTmpDir: removed when this file finishes (a bare mkdtemp here outlived every run — #1044's guard).
+const SHARED_ROOT = testTmpDir('relay-host-scope-')
 /** A scope where every node belongs to the shared project `proj-1`, rooted at SHARED_ROOT. */
 const testScope = (): ScopedGuestDeps => ({
   projectsOfNode: () => ['proj-1'],
