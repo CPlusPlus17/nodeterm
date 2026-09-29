@@ -12,7 +12,8 @@ import { sessionCount, sessionForProject, useProjectSession } from '../session/s
 import { tabClickAction } from '../session/relay-tab'
 import { useMenuFlip } from '../ui/useMenuFlip'
 import { commandTooltip } from '../lib/keybindingOverrides'
-import { IconCanvasView, IconKanban, IconMoreVertical, IconPlus } from './icons'
+import { IconCanvasView, IconKanban, IconMoreVertical, IconPlus, IconUpdate } from './icons'
+import { runPendingUpdate, usePendingUpdate } from '../state/pendingUpdate'
 import { ProjectGlyph } from './ProjectGlyph'
 import {
   ALL_PERMISSION_MODES,
@@ -212,6 +213,7 @@ export function TabBar({
   // The strip scrolls without a visible scrollbar (see .tabbar__tabs), so keep it navigable:
   // a plain mouse wheel scrolls it horizontally, and the active tab is brought into view.
   const tabsRef = useRef<HTMLDivElement>(null)
+  const pendingUpdate = usePendingUpdate((s) => s.pending)
   useEffect(() => {
     tabsRef.current
       ?.querySelector('.tab.active')
@@ -249,6 +251,24 @@ export function TabBar({
       )}
 
       <div className="tabbar">
+        {pendingUpdate && (
+          // Figma-style: first thing after the traffic lights, accent-filled, no ✕. It stays until
+          // the update is installed, the card's dismiss never reaches it.
+          <button
+            className="tabbar__update"
+            title={
+              pendingUpdate.kind === 'downloaded'
+                ? `nodeterm v${pendingUpdate.version} is ready, restart to update`
+                : pendingUpdate.kind === 'manual'
+                  ? `nodeterm v${pendingUpdate.version} is available, download it to update`
+                  : 'This version is no longer supported, update to continue'
+            }
+            onClick={() => runPendingUpdate(pendingUpdate)}
+          >
+            <IconUpdate />
+            Update
+          </button>
+        )}
         <div className="brand">
           <svg className="brand__mark" viewBox="0 0 48 48" width="22" height="22" aria-hidden="true">
             <defs>
