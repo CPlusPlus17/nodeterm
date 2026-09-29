@@ -520,11 +520,16 @@ import {
   deliveriesToRetire,
   launchesToFire,
   queueControlLaunch,
+  withPrHold,
   withLaunchBrief,
   launchBriefPresent,
   LAUNCH_STALL_MS,
   type ArmedNode
 } from '../lib/pendingLaunch'
+import { prHoldReports, prWaitReplyLine, resolvePrWaitFor, startFreshReadAsks, type PrWaitArmResult } from '../lib/prWait'
+import { RUN_NOW_AFTER_PR_REFUSAL } from '@shared/pr-wait'
+import { lookupPullRequests, pullBoardFor, useGitHubIssues } from '../state/githubIssues'
+import { usePullChase } from '../components/kanban/usePullAutoMove'
 import {
   createBoundWorktree,
   type CreateBoundWorktreeDeps,
@@ -2055,6 +2060,87 @@ export function Canvas() {
     }
     return sig
   })
+  // ---- the pull requests an armed node waits on (`--after-pr`) ----
+  // Judged against the pull request status of the project whose nodes are on this canvas
+  // (`nodesProjectIdRef`, never a separately-read active id: during a switch the two disagree, and
+  // a board for the wrong repository answers "blocked", which holds rather than fires). A PRIMITIVE
+  // signature of each wait's state, the same discipline as `armedDepSig`: the launch effect re-runs
+  // when a waited-on PR changes, and nothing re-renders on an unrelated GitHub update.
+  const armedPrSig = useGitHubIssues((s) => {
+    let sig = ''
+    let board: ReturnType<typeof pullBoardFor>
+    let read = false
+    for (const n of nodesRef.current) {
+      const hold = (n.data.pendingLaunch as PendingLaunch | undefined)?.afterPr
+      if (!hold) continue
+      if (!read) {
+        board = pullBoardFor(s, nodesProjectIdRef.current ?? '')
+        read = true
+      }
+      sig += `${n.id}:${prHoldReports(hold, board).map((r) => r.state).join(',')}|`
+    }
+    return sig
+  })
+  // Keep the host's pull request status coming while any node here waits on a PR. It is the board's
+  // own refcounted host subscription and #1008's conditional heartbeat (free while nothing changes),
+  // not a poller; a `checks` wait also asks the host's bounded chase (30 s … 5 min, at most 12 reads
+  // per episode) while the window is visible, because a finished check run does not move the
+  // heartbeat. Everything is released the moment no node waits any more.
+  const prWatchNeeded = nodes.some((n) => !!(n.data.pendingLaunch as PendingLaunch | undefined)?.afterPr)
+  const prWatchProjectId = prWatchNeeded ? (nodesProjectIdRef.current ?? '') : ''
+  useEffect(() => {
+    if (!prWatchProjectId) return
+    let cancelled = false
+    let release: (() => void) | undefined
+    void useGitHubIssues
+      .getState()
+      .watchPulls(api.githubIssues, prWatchProjectId)
+      .then(
+        (r) => {
+          if (cancelled) r()
+          else release = r
+        },
+        () => undefined
+      )
+    return () => {
+      cancelled = true
+      release?.()
+    }
+  }, [api, prWatchProjectId])
+  const prChecksWaited = nodes.some((n) =>
+    (n.data.pendingLaunch as PendingLaunch | undefined)?.afterPr?.waits.some((w) => w.until === 'checks')
+  )
+  const prBoardUndecided = useGitHubIssues(
+    (s) => !!prWatchProjectId && !!pullBoardFor(s, prWatchProjectId)?.undecided
+  )
+  const prChaseNeeded = prChecksWaited && prBoardUndecided
+  usePullChase(api.githubIssues, prWatchProjectId, prChaseNeeded)
+  // B2: a `checks` wait is judged only on a read that STARTED after it was armed — the host may still
+  // remember "passed" for the head before a push made just before arming. While some wait lacks such
+  // a read, ask the host for a foreground one (which answers even when nothing changed), a bounded
+  // number of times: the refresh floor, or a read already in flight from before the arming, can
+  // swallow a single ask.
+  const prFreshReadWanted = useGitHubIssues((s) => {
+    if (!prWatchProjectId) return false
+    const board = pullBoardFor(s, prWatchProjectId)
+    return nodesRef.current.some((n) => {
+      const hold = (n.data.pendingLaunch as PendingLaunch | undefined)?.afterPr
+      return (
+        !!hold &&
+        !hold.invalid &&
+        hold.waits.some((w) => w.until === 'checks') &&
+        (board?.readStartedAt === undefined || board.readStartedAt < hold.armedAt)
+      )
+    })
+  })
+  useEffect(() => {
+    if (!prWatchProjectId || !prFreshReadWanted) return
+    return startFreshReadAsks({
+      ask: () => void api.githubIssues.refresh(prWatchProjectId).catch(() => undefined),
+      setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimeout: (timer) => window.clearTimeout(timer as number)
+    })
+  }, [api, prWatchProjectId, prFreshReadWanted])
   // Bumped to re-run the launch effect: after a refused delivery's backoff, and when a node
   // reports its session ready (`subscribeSessionReady` below).
   const [launchNudge, setLaunchNudge] = useState(0)
@@ -2112,7 +2198,9 @@ export function Canvas() {
       useAgentStatus.getState().byId,
       live,
       setupDoneForGroup,
-      useLaunchDelivery.getState().byId
+      useLaunchDelivery.getState().byId,
+      // The `--after-pr` gate: this canvas's pull request status and the clock its deadlines are on.
+      { board: pullBoardFor(useGitHubIssues.getState(), nodesProjectIdRef.current ?? ''), now: Date.now() }
     ).filter((f) => !launchInFlight.current.has(f.id))
     // Anything we were reporting on that is no longer an armed node — delivered, run by hand with
     // ▶, or deleted — stops being reported. Timers go with it: a stall warning for a node that has
@@ -2203,8 +2291,8 @@ export function Canvas() {
         return deliverHeld()
       })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- armedDepSig/armedSetupSig/launchNudge are the triggers
-  }, [nodes, armedDepSig, armedSetupSig, launchNudge])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- armedDepSig/armedSetupSig/armedPrSig/launchNudge are the triggers
+  }, [nodes, armedDepSig, armedSetupSig, armedPrSig, launchNudge])
 
   // Selection state for ephemeral nodes (they live outside React Flow's managed nodes), owned by
   // the agent-nodes store so the cards themselves can set it — see `selectable: false` below.
@@ -10982,6 +11070,7 @@ export function Canvas() {
       // The authorization belt runs FIRST (`resolveIssueFlagForCall`): a caller the paths would
       // refuse gets their refusal and never makes the host look up a project's board.
       const issueOpen = verb === 'open-agent' || verb === 'open-claude'
+      const openVerb = verb === 'open-terminal' || issueOpen
       const issuePre: IssueFlagResult = issueOpen
         ? await resolveIssueFlagForCall(
             {
@@ -11012,7 +11101,7 @@ export function Canvas() {
       // Which project that is comes from the SAME authorization belt `#N` runs behind
       // (`issueFlagScope`): a caller the paths will refuse gets no project here, so nothing is
       // spilled for it — its path refuses it with the same sentence.
-      const openScopePre = issueOpen
+      const openScopePre = openVerb
         ? issueFlagScope({
             targetId: args.project,
             sourceNodeId,
@@ -11042,6 +11131,59 @@ export function Canvas() {
               spillIo
             )
           : {}
+      // `--after-pr` (see @shared/pr-wait, lib/prWait): which pull requests of the board's repository
+      // the new node(s) also wait on. Resolved HERE for the same two reasons as `issuePre` — it costs
+      // host round trips (the GitHub controller, the harvested PR list), and it must be answered for
+      // the project the node OPENS in. Main refused a malformed value; this is where "that project's
+      // repository has no pull request #N", "its board is not connected to GitHub" and "that PR is
+      // closed" are refused, with the dry run getting the same answer as a real call.
+      // Behind the same belt as `#N`: the lookup asks the host whether a project's board exists and
+      // which pull requests its repository has, so a caller the paths would refuse gets their
+      // refusal here and nobody is asked.
+      const prWaitPre: PrWaitArmResult = !openVerb
+        ? { ok: true, alreadyMerged: [] }
+        : args['after-pr'] !== undefined && openScopePre && !openScopePre.ok
+          ? { ok: false, error: openScopePre.error }
+          : await resolvePrWaitFor(args['after-pr'], args['pr-deadline'], verb, {
+              project: openProjectPre,
+              controlStatus: (id) =>
+                api.githubControl
+                  .status(id)
+                  .then((view) =>
+                    view.project ? { repository: view.project.repository, approved: view.project.approved } : null
+                  ),
+              lookupPulls: (id, numbers) =>
+                lookupPullRequests(
+                  api.githubIssues,
+                  id,
+                  (openProjectPre?.kanban?.columns ?? []).map((c) => c.id),
+                  numbers
+                ),
+              hostNow: (id) => api.githubIssues.pullStatus(id).then((b) => b.now),
+              now: () => Date.now()
+            })
+      if (!prWaitPre.ok) {
+        reply({ ok: false, error: prWaitPre.error })
+        return
+      }
+      const prHoldPre = prWaitPre.hold
+      // What the replies add: the wait, and any `:merged` wait that was already met when armed.
+      const prReplyLines = [
+        ...(prHoldPre ? [prWaitReplyLine(prHoldPre)] : []),
+        ...(prWaitPre.alreadyMerged.length
+          ? [`already merged, so not waited on: ${prWaitPre.alreadyMerged.map((n) => `PR #${n}`).join(', ')}`]
+          : [])
+      ]
+      const prReplyText = prReplyLines.map((l) => `\n${l}`).join('')
+      const prResult = prHoldPre
+        ? {
+            afterPr: {
+              repository: prHoldPre.repository,
+              waits: prHoldPre.waits,
+              deadline: new Date(prHoldPre.deadlineAt).toISOString()
+            }
+          }
+        : {}
 
       // ── Agent messaging (`send`/`reply`) — handled BEFORE the source-routing machinery ──────
       // These are STORE_ANSWERED_VERBS (lib/controlRouting): routing by source must never travel
@@ -11333,6 +11475,12 @@ export function Canvas() {
         reply({ ok: false, error: RUN_NOW_AFTER_REFUSAL })
         return
       }
+      // …and "start when the pull request is ready" contradicts it the same way. Main's shape gate
+      // already refused this pair; the renderer never trusts that the gate in front of it ran.
+      if (openVerb && runNowRequested(args) && args['after-pr'] !== undefined) {
+        reply({ ok: false, error: RUN_NOW_AFTER_PR_REFUSAL })
+        return
+      }
 
       // ── `--project` targeted opens (issue #338 Task 2.3) — the three open verbs, early ──────
       // Main's gateProjectTarget already enforced own-or-granted BEFORE forwarding (spec §3):
@@ -11469,14 +11617,15 @@ export function Canvas() {
             // The human is looking at the target (the caller is a background orchestrator):
             // live insertion still precedes PTY readiness: keep the launch queued.
             const tgQueuedIds = tgMade.filter((n) => !!n.data.initialCommand).map((n) => n.id)
-            setNodes((ns) => [...ns, ...tgMade.map((node) => withLaunchBrief(queueControlLaunch(node), openPrompt.promptFile))])
+            setNodes((ns) => [...ns, ...tgMade.map((node) => withPrHold(withLaunchBrief(queueControlLaunch(node), openPrompt.promptFile), prHoldPre))])
             markDirty()
             reply({
               ok: true,
               message: `opened ${tgCount} ${tgWhat} session(s) in "${target.name}" (${tgIds.join(', ')})` +
-                (tgQueuedIds.length ? ' — queued; awaiting launch delivery' : ''),
+                (tgQueuedIds.length ? ' — queued; awaiting launch delivery' : '') +
+                prReplyText,
               // Being on screen is not proof of launch delivery.
-              result: { ids: tgIds, id: tgIds[0], projectId: target.id, queued: tgQueuedIds.length > 0, queuedIds: tgQueuedIds }
+              result: { ids: tgIds, id: tgIds[0], projectId: target.id, queued: tgQueuedIds.length > 0, queuedIds: tgQueuedIds, ...prResult }
             })
             return
           }
@@ -11489,7 +11638,7 @@ export function Canvas() {
           for (const node of tgMade) {
             tgStore.applyNodeMutation(target.id, {
               op: 'upsert',
-              node: flowToNodeStates([withLaunchBrief(armForColdOpen(node), openPrompt.promptFile)])[0]
+              node: flowToNodeStates([withPrHold(withLaunchBrief(armForColdOpen(node), openPrompt.promptFile), prHoldPre)])[0]
             })
           }
           void writeDisk()
@@ -11498,7 +11647,7 @@ export function Canvas() {
             // ONE sentence for "queued into a project you are not looking at", shared with the
             // own-project cold open below (lib/coldOpen) so an orchestrator never meets two
             // phrasings for one outcome.
-            message: coldOpenMessage(tgCount, tgWhat, target.name, tgIds),
+            message: coldOpenMessage(tgCount, tgWhat, target.name, tgIds) + prReplyText,
             // Every node on this branch is armed by `armForColdOpen`, so the whole batch is
             // QUEUED. Said in the reply as a field, not only in the sentence, so an orchestrator
             // does not have to report a session as started when it is not (#569 item 1).
@@ -11507,7 +11656,8 @@ export function Canvas() {
               id: tgIds[0],
               projectId: target.id,
               queued: true,
-              queuedIds: tgIds
+              queuedIds: tgIds,
+              ...prResult
             } as Record<string, unknown>
           }
           // #925 `--run-now`: start the held launches now, headless. The nodes were upserted
@@ -11780,6 +11930,7 @@ export function Canvas() {
                     (coldCwd ? `, cwd ${coldCwd}` : ''),
                   ...(coldIssueRef ? [`bound to GitHub issue ${formatIssueRef(coldIssueRef)}`] : []),
                   ...(coldAfterIds.length ? [`armed to wait for: ${coldAfterIds.join(', ')}`] : []),
+                  ...prReplyLines,
                   // #925: `--run-now` starts it headless instead — except on an SSH project, whose
                   // nodes a headless start refuses (they start on view, over SSH).
                   runNowRequested(args) && !owner.ssh
@@ -11793,7 +11944,8 @@ export function Canvas() {
                   cwd: coldCwd ?? null,
                   after: coldAfterIds,
                   projectId: owner.id,
-                  ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {})
+                  ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {}),
+                  ...prResult
                 }
               })
               return
@@ -11839,13 +11991,16 @@ export function Canvas() {
               // viewed — checks it is still there before typing.
               const armed = withLaunchBrief(armForColdOpen(built), openPrompt.promptFile)
               const held = armed.data.pendingLaunch as PendingLaunch | undefined
-              const node =
+              // `--after-pr` rides the same held launch (withPrHold — the one attach every path uses).
+              const node = withPrHold(
                 held && coldAfterIds.length
                   ? {
                       ...armed,
                       data: { ...armed.data, pendingLaunch: { ...held, after: coldAfterIds } }
                     }
-                  : armed
+                  : armed,
+                prHoldPre
+              )
               if (coldGroup.groupId) {
                 const w = (node.width as number) ?? 600
                 const h = (node.height as number) ?? 400
@@ -11940,7 +12095,8 @@ export function Canvas() {
                   ? `\nwaiting for ${coldAfterIds.join(', ')} before running` +
                     (coldDepLinked.length ? ' (and linked to read them)' : '')
                   : '') +
-                (coldIssueRef ? `\nbound to GitHub issue ${formatIssueRef(coldIssueRef)}` : ''),
+                (coldIssueRef ? `\nbound to GitHub issue ${formatIssueRef(coldIssueRef)}` : '') +
+                prReplyText,
               // Every node on this branch has no process behind it until that project is viewed,
               // whether or not it holds a command — the same rule the `--project` branch states.
               result: {
@@ -11950,6 +12106,7 @@ export function Canvas() {
                 linked: coldPlan.linked,
                 after: coldAfterIds,
                 ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {}),
+                ...prResult,
                 queued: true,
                 queuedIds: coldIds
               } as Record<string, unknown>
@@ -12281,7 +12438,7 @@ export function Canvas() {
         const awaitSetupGroup = setupHoldGroup(intoGroup)
         // Always retain the command until the PTY-ready delivery loop acknowledges it.
         // Node creation (even on screen) is not command delivery.
-        return withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile)
+        return withPrHold(withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile), prHoldPre)
       }
       // Open `count` nodes INTO a group frame: grow the frame FIRST (extent:'parent' would
       // clamp children landing outside it), then drop each node into the next grid slot
@@ -12355,14 +12512,16 @@ export function Canvas() {
                     (intoGroupId ? ` in group ${intoGroupId}` : '') +
                     (termCwd ? `, cwd ${termCwd}` : '') +
                     (args.cmd ? `, running: ${args.cmd}` : ''),
-                  ...(after?.length ? [`armed to wait for: ${after.join(', ')}`] : [])
+                  ...(after?.length ? [`armed to wait for: ${after.join(', ')}`] : []),
+                  ...prReplyLines
                 ].join('\n'),
                 result: {
                   dryRun: true,
                   count,
                   group: intoGroupId ?? null,
                   cwd: termCwd ?? null,
-                  after: after ?? []
+                  after: after ?? [],
+                  ...prResult
                 }
               })
               return
@@ -12394,8 +12553,9 @@ export function Canvas() {
               message:
                 `opened ${count} terminal(s): ${ids.join(', ')}` +
                 (queuedIds.length ? '\nqueued; awaiting launch delivery' : '') +
-                (after?.length ? `\nwaiting for ${after.join(', ')} before running` : ''),
-              result: openResult
+                (after?.length ? `\nwaiting for ${after.join(', ')} before running` : '') +
+                prReplyText,
+              result: { ...openResult, ...prResult }
             })
             return
           }
@@ -12481,6 +12641,7 @@ export function Canvas() {
                         : ''),
                   ...(issueRef ? [`bound to GitHub issue ${formatIssueRef(issueRef)}`] : []),
                   ...(after?.length ? [`armed to wait for: ${after.join(', ')}`] : []),
+                  ...prReplyLines,
                   'Each session would be connected + context-linked to you.'
                 ].join('\n'),
                 result: {
@@ -12490,7 +12651,8 @@ export function Canvas() {
                   group: intoGroupId ?? null,
                   cwd: agentCwd ?? null,
                   after: after ?? [],
-                  ...(issueRef ? { issue: formatIssueRef(issueRef) } : {})
+                  ...(issueRef ? { issue: formatIssueRef(issueRef) } : {}),
+                  ...prResult
                 }
               })
               return
@@ -12566,11 +12728,13 @@ export function Canvas() {
                 (after?.length
                   ? `\nwaiting for ${after.join(', ')} before running` +
                     (depLinked.length ? ` (and linked to read them)` : '')
-                  : ''),
+                  : '') +
+                prReplyText,
               result: {
                 ...openResult,
                 linked: bridged,
-                ...(issueRef ? { issue: formatIssueRef(issueRef) } : {})
+                ...(issueRef ? { issue: formatIssueRef(issueRef) } : {}),
+                ...prResult
               }
             })
             return

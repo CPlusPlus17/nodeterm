@@ -1245,3 +1245,71 @@ describe('--issue: GitHub issue-bound sessions', () => {
     expect(body).not.toMatch(/nodeterm (posts|comments|closes)/i)
   })
 })
+
+describe('--after-pr: open a node that waits on a pull request', () => {
+  it('passes a well-formed wait through the shape gate on the open verbs', () => {
+    expect(parseControlRequest('open-agent', { agent: 'claude', 'after-pr': '1008:checks' })).toEqual({
+      verb: 'open-agent',
+      args: { agent: 'claude', 'after-pr': '1008:checks' }
+    })
+    expect(parseControlRequest('open-claude', { 'after-pr': '#7:merged', 'pr-deadline': '3d' })).toMatchObject({
+      verb: 'open-claude'
+    })
+    expect(parseControlRequest('open-terminal', { 'after-pr': '7:merged', cmd: 'make' })).toMatchObject({
+      verb: 'open-terminal'
+    })
+  })
+
+  it.each([
+    [{ 'after-pr': '7' }, /--after-pr must be/],
+    [{ 'after-pr': '7:green' }, /--after-pr must be/],
+    [{ 'after-pr': '7:merged', 'run-now': '' }, /--run-now cannot be combined with --after-pr/],
+    [{ 'pr-deadline': '2d' }, /only with --after-pr/],
+    [{ 'after-pr': '7:merged', 'pr-deadline': '30d' }, /--pr-deadline must be/]
+  ])('refuses %j before the renderer sees it', (args, error) => {
+    const r = parseControlRequest('open-agent', { agent: 'claude', ...args })
+    expect((r as { error?: string }).error).toMatch(error)
+  })
+
+  it('refuses the flag on a verb that opens nothing, and on a terminal with nothing to run', () => {
+    expect((parseControlRequest('spawn-team', { team: '[]', 'after-pr': '7:merged' }) as { error: string }).error).toMatch(
+      /applies only to open-terminal/
+    )
+    expect((parseControlRequest('open-terminal', { 'after-pr': '7:merged' }) as { error: string }).error).toMatch(
+      /needs --cmd/
+    )
+  })
+
+  const bodies: Array<[string, string]> = [
+    ['skill body', buildCanvasSkillBody('/x/nodeterm.sh')],
+    ['instructions block', buildCanvasControlInstructions('/x/nodeterm.sh')]
+  ]
+
+  it.each(bodies)('%s lists the flag on all three open verbs', (_name, body) => {
+    expect(body).toMatch(/open-terminal [^\n]*\[--after-pr <N:checks\|N:merged>\] \[--pr-deadline <90m\|12h\|3d>\]/)
+    expect(body).toMatch(/open-claude [^\n]*\[--after-pr <N:checks\|N:merged>\] \[--pr-deadline <90m\|12h\|3d>\]/)
+    expect(body).toMatch(/open-agent --agent [^\n]*\[--after-pr <N:checks\|N:merged>\] \[--pr-deadline <90m\|12h\|3d>\]/)
+  })
+
+  it.each(bodies)('%s states what each condition means, the deadline and the refusals', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    // The two conditions, with #1008's own rules.
+    expect(flat).toContain('`checks` = the PR\'s checks passed at its CURRENT head commit, on a status read taken after you armed the wait')
+    expect(flat).toContain('A PR opened a moment ago is looked up again after one refresh')
+    expect(flat).toContain('a PR that reports no checks never passes')
+    expect(flat).toContain('`merged` = the PR is merged')
+    expect(flat).toContain('ANDed with `--after`')
+    // The deadline and the escape.
+    expect(flat).toContain('default 24h, at most 14d')
+    expect(flat).toContain('`list` marks it EXPIRED')
+    expect(flat).toContain('`list` names QUEUED, STARTING, LAUNCH FAILED, EXPIRED, DROPPED and AGENT STATUS UNCONFIRMED')
+    expect(flat).toContain('you start it with the `run` verb')
+    // What is refused.
+    expect(flat).toContain('the pull request must exist in the repository this project\'s kanban board syncs with')
+    expect(flat).toContain('a project whose board is not connected to GitHub')
+    expect(flat).toContain('`--run-now` cannot be combined with `--after-pr`')
+    expect(flat).toContain('The Server Edition refuses `--after-pr`')
+    // Quoting: an unquoted leading # starts a shell comment.
+    expect(flat).toContain('Write the number bare (`1008:merged`)')
+  })
+})

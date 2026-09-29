@@ -711,6 +711,15 @@ reply carries it (`queued` / `queuedIds`), because a user who cannot see the fai
 orchestrator that is told "opened" both act on a session that is not there. If you add a bounded
 retry anywhere, ask what the clock actually starts on and where its exhaustion becomes visible.
 
+**A held launch is hostile input, and a gate nobody can read stays CLOSED.** `pendingLaunch` lives
+in the git-shared `.nodeterm/project.json`, so `normalizePendingLaunch`
+(`src/shared/pending-launch-shape.ts`) runs at both serializer seams: an `after` that is not a list
+used to throw inside the canvas's dependency-signature selector. Its rule, and the rule for any new
+gate you add (the `--after-pr` pull request wait is the latest): a value it cannot read turns the
+hold `manualOnly` or never-satisfied, never "no gate" — dropping it would start the node early, and
+a dependent that has launched cannot un-launch. A new gate field also goes in that module's `KNOWN`
+set, and `launchesToFire` must treat a missing context for it as closed.
+
 **Never move the user's view on a background agent's say-so.** Canvas-control requests route by
 SOURCE, and React Flow holds only the ACTIVE project's nodes — so the dispatch used to travel to the
 caller's project before answering. For an OPEN that was a screen hijack: the user is looking at

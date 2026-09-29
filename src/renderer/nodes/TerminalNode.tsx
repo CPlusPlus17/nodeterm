@@ -220,6 +220,8 @@ import { codexApprovalCaps } from '../state/codexCli'
 import { useAgentStatus, agentStatusForApi, inferInterruptAfterSettle } from '../state/agentStatus'
 import { useLaunchDelivery } from '../state/launchDelivery'
 import { erroredDeps, launchTooltip } from '../lib/pendingLaunch'
+import { prHoldExpired, prHoldSummary } from '../lib/prWait'
+import { pullBoardFor, useGitHubIssues } from '../state/githubIssues'
 import type { AgentState } from '@shared/agents/normalize'
 import type { ClientId } from '@shared/presence'
 import { PresenceChips } from '../components/PresenceChips'
@@ -2037,7 +2039,8 @@ export function TerminalNode({
     !!data.initialCommand &&
     !observedLaunchDelivery &&
     !(pendingLaunch?.after?.length) &&
-    !pendingLaunch?.awaitSetupGroup
+    !pendingLaunch?.awaitSetupGroup &&
+    !pendingLaunch?.afterPr
   const pendingWaitingOn = [
     ...(pendingLaunch?.after ?? []).map(
       (depId) => ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId
@@ -2058,6 +2061,28 @@ export function TerminalNode({
     const live = new Set(after.filter((d) => !!getNode(d)))
     return erroredDeps({ id, data: { pendingLaunch } }, s.byId, live).join(',')
   })
+  // `--after-pr`: what the pull requests this node waits on look like, from the same status the
+  // launch loop judges (the canvas's watch keeps it coming). Selected only for a node that has a
+  // PR wait, so no other node re-renders on a GitHub update.
+  const prHold = pendingLaunch?.afterPr
+  const prProjectId = useProjects((s) => (prHold ? s.activeProjectId : null))
+  const prBoard = useGitHubIssues((s) => (prHold && prProjectId ? pullBoardFor(s, prProjectId) : undefined))
+  // Nothing in any store changes when a deadline passes, so the badge sets its own timer to turn
+  // EXPIRED on time (one per armed node, cleared with it).
+  const [, setPrClock] = useState(0)
+  useEffect(() => {
+    if (!prHold || prHoldExpired(prHold, Date.now())) return
+    const t = setTimeout(() => setPrClock((v) => v + 1), Math.min(prHold.deadlineAt - Date.now() + 50, 2 ** 31 - 1))
+    return () => clearTimeout(t)
+  }, [prHold])
+  const prExpired = !!prHold && prHoldExpired(prHold, Date.now())
+  const prTooltip = prHold
+    ? {
+        expired: prExpired,
+        summary: prHold.invalid ? 'a pull request wait that could not be read' : prHoldSummary(prHold, prBoard),
+        deadline: prHold.invalid ? 'the project file holds an unreadable one' : new Date(prHold.deadlineAt).toLocaleString()
+      }
+    : undefined
   const pendingErroredOn = erroredDepIds
     ? erroredDepIds
         .split(',')
@@ -5852,12 +5877,12 @@ export function TerminalNode({
         {pendingLaunch && !firstOpenInFlight && (
           <span
             className={`term-node__status term-node__status--queued nodrag${
-              launchDelivery && !startingNow ? ' term-node__status--queued-warn' : ''
+              (launchDelivery || prExpired) && !startingNow ? ' term-node__status--queued-warn' : ''
             }`}
-            title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay')}
+            title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip)}
           >
             <span className="term-node__status-dot" />
-            {startingNow ? 'STARTING' : `${launchDelivery ? '⚠ ' : ''}QUEUED`}
+            {startingNow ? 'STARTING' : launchDelivery ? '⚠ QUEUED' : prExpired ? '⚠ EXPIRED' : 'QUEUED'}
             <button
               className="term-node__queued-run"
               disabled={session.source === 'relay' || startingNow}

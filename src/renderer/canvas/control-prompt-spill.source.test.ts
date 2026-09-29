@@ -72,7 +72,7 @@ describe('the open prompt is resolved ONCE, before any path reads the store', ()
   it('asks the SAME authorization belt as `#N` which project that is — a refused caller spills nothing', () => {
     const decided = src.indexOf('const openPrompt:')
     const before = src.slice(src.indexOf('const issuePre: IssueFlagResult'), decided)
-    expect(before).toMatch(/const openScopePre = issueOpen\s*\?\s*issueFlagScope\(/)
+    expect(before).toMatch(/const openScopePre = (issueOpen|openVerb)\s*\?\s*issueFlagScope\(/)
     expect(src.slice(decided, decided + 400)).toContain('openScopePre?.ok')
   })
 
@@ -135,7 +135,7 @@ describe('the brief file is checked when the launch is DELIVERED (#1014 review)'
     expect(projectBlock()).toContain('withLaunchBrief(queueControlLaunch(node), openPrompt.promptFile)')
     expect(projectBlock()).toContain('withLaunchBrief(armForColdOpen(node), openPrompt.promptFile)')
     expect(coldBlock()).toContain('withLaunchBrief(armForColdOpen(built), openPrompt.promptFile)')
-    expect(src).toContain('return withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile)')
+    expect(src).toContain('withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile)')
     // …and the live open hands its file to armAfter.
     expect(liveAgentCase()).toMatch(/after \?\? \[\],\s*intoGroupId,\s*openPrompt\.promptFile\s*\)/)
   })
