@@ -372,8 +372,8 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   counts as corrupt.
 - **`team.json` edited by hand while the service runs** is not re-read until the service restarts;
   the next CLI write replaces it with the service's copy. Use the CLI.
-- **Two servers on one data directory:** the second one finds the admin socket answering and
-  **does not host** (it logs "Hosted team relay: NOT started — another nodeterm server is already
+- **Two servers on one data directory:** the second one finds the admin socket answering, or loses
+  the race to bind it when both start at once, and **does not host** (it logs "Hosted team relay: NOT started — another nodeterm server is already
   running on this data directory …").
 - **"The nodeterm server is not running (no admin socket …)"**: the service is down, runs with
   another data directory (pass `--data-dir`), or predates this feature and needs a restart after

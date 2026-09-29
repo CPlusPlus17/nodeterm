@@ -385,6 +385,21 @@ describe.skipIf(process.platform === 'win32')('team admin socket (unix socket, P
     expect((await callTeamAdmin(dataDir, { cmd: 'status' })).ok).toBe(true)
   })
 
+  it('M5: two servers racing the bind — the loser is BUSY (it must not host), never a plain error', async () => {
+    const dataDir = tmp()
+    // Both pass the stale-socket check (nothing is there yet) before either binds, so the second
+    // bind meets the first one's socket: EADDRINUSE.
+    const results = await Promise.allSettled([startTeamAdmin(dataDir, fakeService().svc), startTeamAdmin(dataDir, fakeService().svc)])
+    const won = results.filter((r): r is PromiseFulfilledResult<{ close(): Promise<void> }> => r.status === 'fulfilled')
+    const lost = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    for (const w of won) closers.push(() => w.value.close())
+    expect(won).toHaveLength(1)
+    expect(lost).toHaveLength(1)
+    expect(lost[0].reason).toMatchObject({ code: 'E_ADMIN_SOCKET_BUSY', message: expect.stringMatching(/already/) })
+    // The winner is untouched and answers.
+    expect((await callTeamAdmin(dataDir, { cmd: 'status' })).ok).toBe(true)
+  })
+
   it('refuses to remove something at the socket path that is not a socket', async () => {
     const dataDir = tmp()
     fs.mkdirSync(relayDir(dataDir), { recursive: true })

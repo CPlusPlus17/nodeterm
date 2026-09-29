@@ -388,9 +388,20 @@ export async function startTeamAdmin(dataDir: string, svc: HostedService): Promi
     })
   })
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
+    const fail = (err: NodeJS.ErrnoException): void => {
+      // Two servers starting on one data dir both find no socket in `clearStaleSocket`, and the
+      // second bind meets the first one's socket. That is the same verdict as a live socket found
+      // there: busy, so the caller does not host (two hosts on one key would both mint and both
+      // write team.json). Anything else stays the error it is.
+      reject(
+        err.code === 'EADDRINUSE'
+          ? new AdminSocketBusyError(`Another nodeterm server is already listening on ${sock} (two servers sharing one data directory?).`)
+          : err
+      )
+    }
+    server.once('error', fail)
     server.listen(sock, () => {
-      server.off('error', reject)
+      server.off('error', fail)
       resolve()
     })
   })
