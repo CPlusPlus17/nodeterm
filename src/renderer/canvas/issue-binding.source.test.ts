@@ -116,11 +116,13 @@ describe('run history in the node-removal funnels', () => {
     expect(log).toBeLessThan(body.indexOf('useAgentStatus.getState().remove(id)'))
   })
 
-  it('the Omni board delete files run-ended too', () => {
+  it('the Omni board delete files run-ended too — through the cross-project close, not a copy', () => {
+    // An off-canvas Omni delete routes through `closeStoredNodes` (pinned above), so it inherits
+    // run-ended and every other teardown step; the active project's delete goes through deleteNodes.
     const body = code(between('const onGlobalDelete = ', 'const onGlobalSetIcon = '))
-    const log = body.indexOf('logIssueRunEnded(projectId, doomed)')
-    expect(log).toBeGreaterThan(-1)
-    expect(log).toBeLessThan(body.indexOf('useAgentStatus.getState().remove(nodeId)'))
+    expect(body).toContain('deleteNodeFromKanban(nodeId)')
+    expect(body).toContain('closeStoredNodes(projectId, [nodeId])')
+    expect(body).not.toContain('transport.destroy(')
   })
 })
 

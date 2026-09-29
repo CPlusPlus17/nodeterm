@@ -1,3 +1,4 @@
+import { KanbanScopeSwitch } from './KanbanScopeSwitch'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KanbanColumnCategory, KanbanLabel, KanbanSavedView, KanbanViewQuery, ProjectKanban } from '@shared/types'
 import { deleteView, renameView, sameViewQuery, saveView, updateView, viewQuery } from '@shared/kanban-views'
@@ -995,6 +996,7 @@ export const KanbanView = memo(function KanbanView({
       <div className="kanban-header">
         <span className="kanban-header__dot" style={{ background: projectColor }} />
         <span className="kanban-header__name">{projectName}</span>
+        <KanbanScopeSwitch scope="project" />
         {progress && (
           <span
             className="kanban-progress"
