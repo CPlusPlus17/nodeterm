@@ -176,7 +176,7 @@ describe('ClaudeSubagentLifecycle over captured sessions', () => {
     const ev = events('print_sync')
     const { stream } = run(ev)
     const [id] = startedIds(ev)
-    const toolEnd = stream.find((e) => e.kind === 'subagent-end' && e.subagentSignal === 'tool')!
+    const toolEnd = stream.find((e) => e.kind === 'subagent-end' && e.subagentSignal === 'tool' && e.toolUseId === id)!
     expect(toolEnd).toMatchObject({ toolUseId: id, tokens: expect.any(Number), toolUses: 1 })
   })
 
@@ -326,6 +326,75 @@ describe('ClaudeSubagentLifecycle — the rules, one at a time', () => {
     const lc = new ClaudeSubagentLifecycle()
     lc.apply(nativeStart('a1'))
     expect(lc.apply(stop())).toHaveLength(1)
+  })
+
+  // Review of #1032, probe (a): a CLI with native hooks but no Stop inventory (2.0.43 up to the
+  // release that added `background_tasks`). "Every tool call of the turn has resolved by its Stop"
+  // does not depend on the inventory, so the waiting labels must be cleared by ANY turn-end Stop.
+  it('a denied tool call does not lend its label to a later child, even with no Stop inventory', () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(toolStart('t0'))
+    lc.apply(nativeStart('a0')) // latched
+    lc.apply(nativeEnd('a0'))
+    lc.apply(toolStart('t1')) // denied: its child never starts
+    lc.apply(stop()) // older CLI: no inventory
+    const labels: Record<string, string | undefined> = {}
+    for (const [t, a] of [['t2', 'a2'], ['t3', 'a3']]) {
+      lc.apply(toolStart(t))
+      const [start] = lc.apply(nativeStart(a))
+      labels[a] = start.taskLabel
+      lc.apply(nativeEnd(a))
+    }
+    expect(labels).toEqual({ a2: 'task t2', a3: 'task t3' })
+  })
+
+  it('the idle-prompt rescue is not a turn end: a tool call waiting for approval keeps its label', () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(nativeStart('a0'))
+    lc.apply(toolStart('t1')) // Agent call held on a permission prompt; the CLI sits idle
+    lc.apply({ ...stop(), interrupted: true, idle: true })
+    expect(lc.apply(nativeStart('a1'))[0].taskLabel).toBe('task t1')
+  })
+
+  // Probe (b): a SubagentStart POST that overtakes its own PreToolUse, for SYNC children (no ack).
+  it("a sync end names its child exactly: the child's tool call leaves the queue and a mislabelled sibling is corrected", () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(nativeStart('a0')) // latched
+    lc.apply(nativeEnd('a0'))
+    expect(lc.apply(nativeStart('a1'))[0].taskLabel).toBeUndefined() // overtook t1
+    lc.apply(toolStart('t1'))
+    lc.apply(toolStart('t2'))
+    expect(lc.apply(nativeStart('a2'))[0].taskLabel).toBe('task t1') // the FIFO guess, wrong
+    lc.apply(nativeEnd('a1'))
+    const out = lc.apply({ ...base, kind: 'subagent-end', toolUseId: 't1', subagentAgentId: 'a1', subagentSignal: 'tool', tokens: 5 })
+    expect(out[0]).toMatchObject({ kind: 'subagent-end', toolUseId: 'a1', tokens: 5 })
+    // a2 is still running: it gets its own label back at once, not at the next Stop.
+    expect(out.slice(1)).toEqual([expect.objectContaining({ kind: 'subagent-start', toolUseId: 'a2', taskLabel: 'task t2' })])
+    // …and nothing of this turn is left to mislabel the next child.
+    lc.apply(nativeEnd('a2'))
+    lc.apply({ ...base, kind: 'subagent-end', toolUseId: 't2', subagentAgentId: 'a2', subagentSignal: 'tool' })
+    lc.apply(toolStart('t3'))
+    expect(lc.apply(nativeStart('a3'))[0].taskLabel).toBe('task t3')
+  })
+
+  it('a waiting tool call an ack already reserved for another child is not handed out by FIFO', () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(nativeStart('a0'))
+    lc.apply(toolStart('t1'))
+    lc.apply(toolStart('t2'))
+    lc.apply({ ...base, kind: 'state', state: 'working', subagentLaunch: { toolUseId: 't1', agentId: 'a1' } })
+    expect(lc.apply(nativeStart('a2'))[0].taskLabel).toBe('task t2')
+    expect(lc.apply(nativeStart('a1'))[0].taskLabel).toBe('task t1')
+  })
+
+  it('a superseded tool card is also ENDED, after the start that replaces it (an older consumer ignores supersedes)', () => {
+    const lc = new ClaudeSubagentLifecycle()
+    lc.apply(toolStart('t1'))
+    const out = lc.apply(nativeStart('a1'))
+    expect(out.map((e) => [e.kind, e.toolUseId, e.supersedes])).toEqual([
+      ['subagent-start', 'a1', 't1'],
+      ['subagent-end', 't1', undefined]
+    ])
   })
 
   it('stays bounded however many tool calls never start', () => {

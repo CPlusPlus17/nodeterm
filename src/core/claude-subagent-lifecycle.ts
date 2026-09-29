@@ -31,19 +31,27 @@
 //    issues every `PreToolUse` first and then starts the children within 5 ms of each other, and a
 //    backgrounded hook POST can overtake another. The async launch ack names the exact pair
 //    (`tool_response.agentId`, measured ~1 ms after each start), so a wrong guess is corrected
-//    before anything else happens, and an ack that overtakes its own start is remembered. A SYNC
-//    child has no ack until it ends; its FIFO label then stands (see CLAUDE.md for why that pairing
-//    is right in practice).
+//    before anything else happens, and an ack that overtakes its own start is remembered (and the
+//    call it names is not handed to another child meanwhile). A SYNC child has no ack; its end
+//    names it exactly (`tool_response.agentId`), which takes its call out of the queue and gives a
+//    still-running sibling that guessed it its own label back.
 //  - A native stop ends a card; a later native start of the SAME id re-opens it. Measured: a
 //    background agent that ends its turn while its own child still runs fires `SubagentStop`, and
 //    is resumed under the same `agent_id` when the child reports back.
 //  - A native stop for an id that never started is DROPPED: Claude fires stops for its internal
 //    side-agents (prompt suggestions, measured after nearly every interactive turn) with an empty
 //    `agent_type` and no start.
+//  - Every turn end (`Stop`, `StopFailure` — never the idle-prompt rescue, which can fire while an
+//    Agent call waits on a permission prompt) clears the queue of calls whose child never started:
+//    every call of the turn has resolved by then, inventory or not, and a left-over label would go
+//    to the next child for the rest of the session.
 //  - A killed child fires NO stop (measured, SDK interrupt). The parent's next `Stop` carries the
-//    session's live background-task inventory, and a native card still working that it no longer
-//    lists is over. Foreground children are never in that list, and none can be running when the
-//    parent's turn ends; nested children of a background agent are listed (measured).
+//    session's live background-task inventory (when the CLI is new enough to send one), and a
+//    native card still working that it no longer lists is over. Foreground children are never in
+//    that list, and none can be running when the parent's turn ends; nested children of a
+//    background agent are listed (measured).
+//  - A replaced tool card also gets a plain end, AFTER the replacing start, for a consumer too old
+//    to know `supersedes`.
 //  - Tool-path ends (the sync `PostToolUse`, the `<task-notification>` sniff) still arrive in a
 //    native session; they are re-keyed onto the native card, which makes them idempotent — and they
 //    carry the sync stats (tokens, tool uses) the native stop lacks.
@@ -111,7 +119,9 @@ export class ClaudeSubagentLifecycle {
     }
     if (ev.kind === 'state') {
       if (ev.subagentLaunch) return this.ack(ev, ev.subagentLaunch)
-      if (ev.state === 'done' && ev.backgroundTaskIds) return this.reconcile(ev, ev.backgroundTaskIds)
+      // A turn end (Stop / StopFailure) — never the idle-prompt rescue, which can fire while an
+      // Agent call is still held on a permission prompt.
+      if (ev.state === 'done' && !ev.idle) return this.turnEnd(ev)
       return [ev]
     }
     if (!ev.subagentSignal || !ev.toolUseId) return [ev]
@@ -184,7 +194,7 @@ export class ClaudeSubagentLifecycle {
     const hinted = st.ackHints.get(agentId)
     st.ackHints.delete(agentId)
     const superseded = hinted ? this.bind(st, card, hinted, ev, out) : this.bindNext(st, card)
-    out.unshift(this.startEvent(ev, card, superseded))
+    out.unshift(this.startEvent(ev, card, superseded), ...this.supersededEnd(ev, superseded, card.type))
     return out
   }
 
@@ -200,7 +210,12 @@ export class ClaudeSubagentLifecycle {
     if (card.toolUseId === launch.toolUseId) return [ev]
     const out: NormalizedAgentEvent[] = [ev]
     const superseded = this.bind(st, card, launch.toolUseId, ev, out)
-    if (card.working) out.splice(1, 0, this.startEvent(ev, card, superseded))
+    out.splice(
+      1,
+      0,
+      ...(card.working ? [this.startEvent(ev, card, superseded)] : []),
+      ...this.supersededEnd(ev, superseded, card.type)
+    )
     return out
   }
 
@@ -221,9 +236,18 @@ export class ClaudeSubagentLifecycle {
     const exact = ev.subagentAgentId ? st.cards.get(ev.subagentAgentId) : undefined
     const card = exact ?? [...st.cards.values()].find((c) => c.toolUseId === toolUseId)
     if (card) {
+      const fixes: NormalizedAgentEvent[] = []
+      // The sync end names its child exactly (tool_response.agentId). If the pairing guessed
+      // otherwise — a SubagentStart POST that overtook its own PreToolUse, where no ack follows to
+      // correct it — settle it now: this call leaves the queue (it would label the NEXT child), and
+      // a still-running sibling that took it gets its own label back.
+      if (exact && card.toolUseId !== toolUseId) {
+        const superseded = this.bind(st, card, toolUseId, ev, fixes)
+        fixes.push(...this.supersededEnd(ev, superseded, card.type))
+      }
       if (card.working) this.onRelease(card.agentId)
       card.working = false
-      return [{ ...ev, toolUseId: card.agentId }]
+      return [{ ...ev, toolUseId: card.agentId }, ...fixes]
     }
     const i = st.pending.findIndex((p) => p.toolUseId === toolUseId)
     if (i >= 0) {
@@ -234,19 +258,24 @@ export class ClaudeSubagentLifecycle {
     return [ev]
   }
 
-  private reconcile(ev: NormalizedAgentEvent, live: string[]): NormalizedAgentEvent[] {
+  private turnEnd(ev: NormalizedAgentEvent): NormalizedAgentEvent[] {
     const st = this.nodes.get(ev.nodeId)
     if (!st?.native || (ev.sessionId && st.sessionId !== ev.sessionId)) return [ev]
-    const alive = new Set(live)
     const out: NormalizedAgentEvent[] = [ev]
-    for (const card of st.cards.values()) {
-      if (!card.working || alive.has(card.agentId)) continue
-      card.working = false
-      this.onRelease(card.agentId)
-      out.push(this.endEvent(ev, card.agentId, card.type))
+    // The inventory, when the CLI sends one, ends the native cards it no longer lists.
+    if (ev.backgroundTaskIds) {
+      const alive = new Set(ev.backgroundTaskIds)
+      for (const card of st.cards.values()) {
+        if (!card.working || alive.has(card.agentId)) continue
+        card.working = false
+        this.onRelease(card.agentId)
+        out.push(this.endEvent(ev, card.agentId, card.type))
+      }
     }
-    // Every tool call of the turn has resolved by its Stop, so a child that has not started by now
-    // never will. A card drawn for one (only possible before the latch) is ended.
+    // Every tool call of the turn has resolved by its Stop — with or without an inventory (native
+    // hooks shipped in 2.0.43, the inventory much later) — so a child that has not started by now
+    // never will, and its waiting label must not go to the next child. A card drawn for one (only
+    // possible before the latch) is ended.
     for (const p of st.pending) {
       if (!p.shown) continue
       this.onRelease(p.toolUseId)
@@ -261,10 +290,13 @@ export class ClaudeSubagentLifecycle {
   /** First in, first out: the oldest waiting tool call of the same type, else one with no type
    *  on either side. Returns the id of a drawn tool card the new card replaces. */
   private bindNext(st: NodeState, card: Card): string | undefined {
+    // A call an ack already named for another child that has not started yet is not up for grabs.
+    const reserved = new Set(st.ackHints.values())
+    const free = (p: Pending): boolean => !reserved.has(p.toolUseId)
     const i = (() => {
-      const same = st.pending.findIndex((p) => p.type !== undefined && p.type === card.type)
+      const same = st.pending.findIndex((p) => free(p) && p.type !== undefined && p.type === card.type)
       if (same >= 0) return same
-      return st.pending.findIndex((p) => p.type === undefined || card.type === undefined)
+      return st.pending.findIndex((p) => free(p) && (p.type === undefined || card.type === undefined))
     })()
     if (i < 0) return undefined
     const [p] = st.pending.splice(i, 1)
@@ -306,6 +338,7 @@ export class ClaudeSubagentLifecycle {
     if (owner) {
       const ownerSuperseded = this.bindNext(st, owner)
       if (owner.working) out.push(this.startEvent(ev, owner, ownerSuperseded))
+      out.push(...this.supersededEnd(ev, ownerSuperseded, owner.type))
     }
     return superseded
   }
@@ -347,6 +380,17 @@ export class ClaudeSubagentLifecycle {
       subagentSignal: 'native',
       ...(supersedes ? { supersedes } : {})
     }
+  }
+
+  /**
+   * A plain end for a tool card a native card just replaced, AFTER the replacing start. A consumer
+   * that knows `supersedes` has already moved the card, so this is a no-op there; one that does not
+   * (an older relay guest's renderer) would otherwise keep the tool card working until the stale
+   * decay. Never before the start: with auto-hide on, an end first would drop the card the start
+   * is about to move.
+   */
+  private supersededEnd(ev: NormalizedAgentEvent, key: string | undefined, type: string | undefined): NormalizedAgentEvent[] {
+    return key ? [{ ...this.endEvent(ev, key, type), subagentSignal: 'tool' }] : []
   }
 
   private endEvent(ev: NormalizedAgentEvent, key: string, type: string | undefined): NormalizedAgentEvent {

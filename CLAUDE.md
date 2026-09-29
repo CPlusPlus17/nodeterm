@@ -3050,13 +3050,20 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   child is drawn from its tool call and then REPLACED by its native card (`supersedes` — the
   renderer store, the host replay and the notch HUD move the card; nothing can know at the tool
   call that a native start is coming). Native cards are keyed by `agent_id`, so start/stop/resume
-  follow the CLI exactly; only the label is paired, first-in-first-out by type and corrected
-  exactly by the ack (also when the ack overtakes its start). A native stop for an id that never
-  started is dropped (side-agents); a later start of a known id re-opens its card; the parent
-  `Stop` inventory ends a native card it no longer lists (the killed child) and any tool card
-  whose child never started; tool-path ends are re-keyed onto the native card (idempotent, and
-  they bring the sync stats the native stop lacks — a late stats-bearing `finish()` fills them on
-  a done card). Tails: the native start begins the child's tail in the RAW listener, which must run
+  follow the CLI exactly; only the label is paired, first-in-first-out by type, corrected exactly
+  by the ack (also when the ack overtakes its start — and a call an ack already named is never
+  handed to another child), and for a SYNC child by its end (`tool_response.agentId`), which
+  takes its call out of the queue and relabels a still-running sibling that guessed it. Every
+  turn-end `Stop`/`StopFailure` (never the `idle` rescue — an Agent call may be waiting on a
+  permission prompt) clears the queue of calls whose child never started, with or WITHOUT an
+  inventory: 2.0.43 had native hooks long before `background_tasks`, and a denied call's label
+  must not go to the next child. A native stop for an id that never started is dropped
+  (side-agents); a later start of a known id re-opens its card; the parent `Stop` inventory, when
+  present, ends a native card it no longer lists (the killed child); a tool card whose child
+  never started is ended at the turn end; a replaced tool card also gets a plain end AFTER the
+  replacing start (for a consumer too old for `supersedes`); tool-path ends are re-keyed onto the
+  native card (idempotent, and they bring the sync stats the native stop lacks — a late
+  stats-bearing `finish()` fills them on a done card). Tails: the native start begins the child's tail in the RAW listener, which must run
   BEFORE the `ignoreQuestionHook` child-event gate (it ignores every `agent_id`-tagged payload);
   the lifecycle's `onRelease` ends it (local + remote); a resumed child continues from its
   remembered offset (`subagent-tail` / `remote-subagent-tail`) instead of re-streaming; a remote
@@ -3066,9 +3073,9 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   rule than before (it also covers a background shell a subagent launched). Both shells pinned by
   `hook-verified-parity.test.ts`; the Server Edition also behaviorally over the fixture
   (`server/agent-status.test.ts`). Cost: one extra managed-hook process + POST per interactive turn
-  (the side-agent stop). Residuals, stated: a SYNC child has no ack until it ends, so two same-type
-  sync children launched in one reordered burst could swap LABELS (never lifecycle); a killed
-  child with no later parent `Stop` still waits for the decay. **Device checklist** (not runnable
+  (the side-agent stop). Residuals, stated: a SYNC child has no ack, so while it runs a reordered
+  same-type burst can show a sibling's LABEL (never lifecycle) until the first of them ends; a
+  killed child with no later parent `Stop` inventory still waits for the decay. **Device checklist** (not runnable
   here): (a) macOS + Windows canvas, interactive: cards at start, right labels, live activity,
   done at stop, nested card, resumed card re-opens; (b) SSH node: native tail over the
   ControlMaster at the derived path; (c) a session started BEFORE the upgrade (old hook snapshot —
@@ -3076,7 +3083,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   with a background subagent paused on its own background shell: not hibernated, bulk restart
   skips it; (e) a managed-account node gets native cards (installer writes the account dir); (f)
   Windows: the derived path keeps the reported separator; (g) a pre-2.0.43 CLI tolerates the two
-  new keys in settings.json (same class as `StopFailure`, which already shipped).
+  new keys in settings.json (same class as `StopFailure`, which already shipped); (h) the
+  hand-back turn (a background child reporting back wakes the parent for a turn, then the
+  `<task-notification>` wakes it again) may chime "finished" twice — #708's quiet rule is per
+  turn.
   **Codex** (2026-08-24, `spawn_agent` collaboration — issue #401) joined via its **native
   `SubagentStart`/`SubagentStop` hooks**, measured on codex-cli 0.146.0, keyed by `agent_id` (NOT
   `tool_use_id` — nothing correlates the spawn tool call with the Start it launches; agent_id is
