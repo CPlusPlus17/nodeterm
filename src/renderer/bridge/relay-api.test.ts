@@ -3,6 +3,7 @@ import { IPC } from '../../shared/ipc'
 import type { NodeTerminalApi } from '../../shared/types'
 import type { FrameTransport } from './frame-transport'
 import { buildRelayApi } from './relay-api'
+import { onLocalRelayClose } from './relay-local-close'
 
 /**
  * The same in-memory `FrameTransport` double used by frame-transport.test.ts: records outbound
@@ -267,6 +268,18 @@ describe('buildRelayApi — hosted team tabs', () => {
     expect(t.sent).toEqual([])
     // A caller that does await it still sees the refusal.
     await expect(handle.api.workspace.save({ version: 2, activeProjectId: '', projects: [] })).rejects.toMatchObject({ code: 'E_ROLE' })
+  })
+
+  it('closing a hosted tab\'s connection is announced locally (main never reports a close we asked for)', () => {
+    const heard = vi.fn()
+    onLocalRelayClose('conn-h', heard)
+    buildRelayApi('conn-h', new FakeTransport(), { hosted: true }).close()
+    expect(heard).toHaveBeenCalledTimes(1)
+    // A Team Access relay tab's close stays exactly what it was.
+    const legacy = vi.fn()
+    onLocalRelayClose('conn-l', legacy)
+    buildRelayApi('conn-l', new FakeTransport()).close()
+    expect(legacy).not.toHaveBeenCalled()
   })
 
   it('a commenter may also chat; an editor sends everything', () => {

@@ -131,6 +131,22 @@ describe('hosted joiner', () => {
     }
   })
 
+  it('the user closing the tab (our own disconnect) ends the connection and never reconnects', async () => {
+    // Canvas disposes the tab's session (which announces the close synchronously) and marks the
+    // project closed right after, in the same tick: the reconnect decision must see the latter.
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'proj-1')
+    h.closeCbs.get('c0')!(undefined)
+    h.open.delete('proj-1')
+    await flush()
+    expect(h.connects).toHaveLength(1)
+    // …and the team is free again: a later paste of its code connects instead of "already connected".
+    j.joinWithCode(codeFor('H1'))
+    expect(h.connects).toHaveLength(2)
+  })
+
   it('a close the host explained is told once and never reconnects', async () => {
     const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
     const j = createHostedJoiner(h.deps)

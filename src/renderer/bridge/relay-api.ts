@@ -33,6 +33,7 @@
 import type { HostedRole, NodeTerminalApi } from '../../shared/types'
 import { type FrameTransport, RelayFrameTransport } from './frame-transport'
 import { RoleGatedRpcClient } from './hosted-gate'
+import { emitLocalRelayClose } from './relay-local-close'
 import {
   RpcClient,
   buildHostedApi,
@@ -195,7 +196,12 @@ export function buildRelayApi(
   return {
     api,
     ready: () => client.ready(),
-    close: () => local.relayClient.disconnect(connectionId),
+    close: () => {
+      local.relayClient.disconnect(connectionId)
+      // A hosted connection's own close is announced locally: main never reports it (see
+      // relay-local-close.ts), and this tab's team is held until its connection ends.
+      if (hosted) emitLocalRelayClose(connectionId)
+    },
     ...(hosted ? { setHostedRole: (role: HostedRole) => { hostedRole = role } } : {})
   }
 }

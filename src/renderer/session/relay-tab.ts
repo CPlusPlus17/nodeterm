@@ -16,6 +16,7 @@
 
 import type { HostedRole, HostedSessionApi, Project, RelayClientApi } from '@shared/types'
 import { buildRelayApi, type RelayApiHandle } from '../bridge/relay-api'
+import { onLocalRelayClose } from '../bridge/relay-local-close'
 import { closedReasonMessage, RelayApprovalError } from '../lib/hostedTeam'
 import { attachHostedOwner } from '../lib/hostedOwner'
 import { useHostedTeams, type HostedTeamInfo } from '../state/hostedTeams'
@@ -234,13 +235,22 @@ function raceApproval(
   return new Promise<void>((resolve, reject) => {
     let settled = false
     let unClose: () => void = () => {}
+    let unLocal: () => void = () => {}
     let timer: ReturnType<typeof setTimeout> | null = null
     const finish = (fn: () => void) => {
       if (settled) return
       settled = true
       unClose()
+      unLocal()
       if (timer) clearTimeout(timer)
       fn()
+    }
+    // A hosted connection this renderer closed itself (the SAS was declined) is closed NOW: main
+    // never reports it, and the approval wait would otherwise run its full ten minutes.
+    if (handle.api.hosted) {
+      unLocal = onLocalRelayClose(connectionId, () =>
+        finish(() => reject(new RelayApprovalError('The relay connection closed before it was approved.')))
+      )
     }
     // A hosted host may say WHY before it closes (an owner declined, nobody answered); a close
     // without a reason keeps the old sentence exactly.

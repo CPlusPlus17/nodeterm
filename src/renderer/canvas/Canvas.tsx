@@ -481,6 +481,7 @@ import {
   type RelayTab,
 } from '../session/relay-tab'
 import { HostedApprovalDialog } from '../components/HostedApprovalDialog'
+import { emitLocalRelayClose, onLocalRelayClose } from '../bridge/relay-local-close'
 import { isJoinCode } from '@shared/relay-join-code'
 import { createHostedJoiner, type HostedJoiner, type HostedMountOutcome } from '../lib/hostedJoin'
 import { HOSTED_APPROVAL_WAIT_MS, isReadOnlyRole, stripIpcPrefix, viewerBannerText, waitingForOwnerText } from '../lib/hostedTeam'
@@ -4272,6 +4273,8 @@ export function Canvas() {
           // Deliberate decline: mark it so the bootstrap's close-reject isn't surfaced as an error.
           cancelledConnsRef.current.add(connectionId)
           window.nodeTerminal.relayClient.disconnect(connectionId)
+          // Main never reports a close it was asked for; a hosted wait would otherwise run on.
+          if (hosted) emitLocalRelayClose(connectionId)
         }
       })
       return mountRemoteMirror(connectionId, label, reconnectProjectId, staleSessionId, hosted)
@@ -4288,7 +4291,16 @@ export function Canvas() {
   useEffect(() => {
     const joiner = createHostedJoiner({
       connect: (code) => window.nodeTerminal.relayClient.connect(code),
-      onClosed: (id, listener) => window.nodeTerminal.relayClient.onClosed(id, listener),
+      // Main's close (a drop, a refusal) or our own (a closed tab, a declined SAS: main never reports
+      // those) — either way the team's connection is over.
+      onClosed: (id, listener) => {
+        const unMain = window.nodeTerminal.relayClient.onClosed(id, listener)
+        const unLocal = onLocalRelayClose(id, () => listener())
+        return () => {
+          unMain()
+          unLocal()
+        }
+      },
       disconnect: (id) => window.nodeTerminal.relayClient.disconnect(id),
       bookmarks: async () => (await window.nodeTerminal.relayHosted?.bookmarks()) ?? [],
       removeBookmark: (hostId) => window.nodeTerminal.relayHosted.removeBookmark(hostId),

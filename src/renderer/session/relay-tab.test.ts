@@ -17,6 +17,7 @@ import {
 import { LocalTransport } from '../terminal/local-transport'
 import type { NodeTerminalApi, Project, Workspace } from '@shared/types'
 import type { RelayApiHandle } from '../bridge/relay-api'
+import { emitLocalRelayClose } from '../bridge/relay-local-close'
 import { useHostedTeams } from '../state/hostedTeams'
 import { useHostedPending } from '../state/hostedPending'
 import { EMPTY_PENDING_QUEUE } from '../lib/hostedPendingQueue'
@@ -435,6 +436,34 @@ describe('openRelayTab — hosted team tabs', () => {
     const err = await bootstrap.catch((e: Error & { reason?: string }) => e)
     expect((err as Error).message).toBe('An owner declined the request.')
     expect((err as { reason?: string }).reason).toBe('denied')
+  })
+
+  it('a hosted connection closed HERE (a declined SAS) ends the approval wait at once, not after ten minutes', async () => {
+    const h = fakeHostedApi({ role: 'viewer', label: '', hostLabel: 'box' })
+    const close = vi.fn()
+    const handle: RelayApiHandle = { api: h.api, ready: () => new Promise<void>(() => {}), close, setHostedRole: vi.fn() }
+    const bootstrap = openRelayTab('conn-decl', 'box', makeDeps({ handle, relayClient: reasonRelayClient(), timeoutMs: 600_000 }).deps)
+    emitLocalRelayClose('conn-decl')
+    await expect(bootstrap).rejects.toThrow(/^The relay connection closed before it was approved\.$/)
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('a Team Access tab does not listen for local closes (its old wait is unchanged)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { api } = fakeBridgedApi()
+      const handle: RelayApiHandle = { api, ready: () => new Promise<void>(() => {}), close: vi.fn() }
+      let settled = false
+      const bootstrap = openRelayTab('conn-legacy-decl', 'Mac', makeDeps({ handle, timeoutMs: 50 }).deps)
+      void bootstrap.catch(() => {}).finally(() => { settled = true })
+      emitLocalRelayClose('conn-legacy-decl')
+      await vi.advanceTimersByTimeAsync(10)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(60)
+      await expect(bootstrap).rejects.toThrow(/Timed out waiting for the host to approve/)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a legacy close before approval keeps its old message exactly', async () => {
