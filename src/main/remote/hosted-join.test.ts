@@ -3,11 +3,11 @@
 // function: mint discipline, the joiner-side pin, auto-confirm, and the denial reason. The first
 // block drives a fake connect so every option handed to the relay client is observable; the second
 // runs the real core client against the real hosted service over an in-process transport.
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { joinHostedTeam, connectHostedTeam, HostedJoinError, type HostedJoinDeps, type HostedJoinEvents, type HostedConnectOptions, type HostedJoinFailure } from './hosted-join'
+import { joinHostedTeam, connectHostedTeam, removeHostedBookmark, createHostedJoinState, HostedJoinError, type HostedJoinDeps, type HostedJoinEvents, type HostedConnectOptions, type HostedJoinFailure } from './hosted-join'
 import { joinErrorCode } from '../../shared/relay-join-errors'
 import { BookmarkStore, type RelayBookmark } from './relay-bookmarks'
 import { encodeJoinCode, type JoinCode } from '../../core/relay/join-code'
@@ -71,19 +71,30 @@ function events() {
   return { ev, log, closed }
 }
 
-function setup(opts: { routes?: Parameters<typeof api>[0]; bookmarks?: RelayBookmark[]; loadKeys?: () => Promise<KeyPair> } = {}) {
+function setup(opts: { routes?: Parameters<typeof api>[0]; bookmarks?: RelayBookmark[]; loadKeys?: () => Promise<KeyPair>; failWrites?: boolean } = {}) {
   const dir = tmpDir()
   const store = new BookmarkStore(path.join(dir, 'relay-bookmarks.json'))
   if (opts.bookmarks) fs.writeFileSync(path.join(dir, 'relay-bookmarks.json'), JSON.stringify(opts.bookmarks))
   const a = api(opts.routes ?? { device: [DEVICE_OK()], join: [JOIN_OK] })
   const c = fakeConnect()
   const ourKeys = genKeyPair()
+  // A disk that reads fine and then refuses every write: the probe passes, the persist does not.
+  const bookmarks = opts.failWrites
+    ? {
+        file: store.file,
+        list: () => store.list(),
+        readForWrite: () => store.readForWrite(),
+        upsert: async () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }) },
+        update: async () => { throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' }) }
+      }
+    : store
+  const state = createHostedJoinState()
   const deps: HostedJoinDeps = {
     apiBase: 'https://api', deviceId: () => 'my-device', label: 'laptop',
-    bookmarks: store, loadKeys: opts.loadKeys ?? (async () => ourKeys), connect: c.connect, fetch: a.f,
-    now: () => Date.parse('2026-09-29T10:00:00Z')
+    bookmarks, loadKeys: opts.loadKeys ?? (async () => ourKeys), connect: c.connect, fetch: a.f,
+    now: () => Date.parse('2026-09-29T10:00:00Z'), state
   }
-  return { store, file: path.join(dir, 'relay-bookmarks.json'), api: a, c, deps, ourKeys }
+  return { store, state, file: path.join(dir, 'relay-bookmarks.json'), api: a, c, deps, ourKeys }
 }
 
 const hostKeys = genKeyPair()
@@ -300,18 +311,21 @@ describe('joinHostedTeam', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const s = setup({ routes: { device: [DEVICE_OK('MINTED-TOKEN-XYZ')], join: [JOIN_OK] } })
-      // A corrupt file holding a token: writes refuse it (its trust state is unknown).
-      // Shaped so that V8's JSON.parse error would quote the token, were it ever passed through.
+      await joinHostedTeam(codeText, s.deps, events().ev) // the token is now held in memory too
+      // A corrupt file holding a token, shaped so that V8's JSON.parse error would quote it were it
+      // ever passed through. R38: no mint may happen now, but the in-memory token still joins.
       fs.writeFileSync(s.file, '[{"deviceToken": SECRET-TOKEN}]')
+      warn.mockClear()
       await joinHostedTeam(codeText, s.deps, events().ev)
-      s.c.last().onApproved(s.c.sessions[0])
+      s.c.last().onApproved(s.c.sessions[1])
       s.c.last().onDenied?.('removed')
       await vi.waitFor(() => expect(warn.mock.calls.length).toBeGreaterThanOrEqual(3))
+      expect(s.api.count('device')).toBe(1)
       for (const call of warn.mock.calls) {
         const line = call.map(String).join(' ')
         expect(line).toContain(code.hostId)
         expect(line).not.toContain('SECRET')
-        expect(line).not.toContain('MINTED-TOKEN') // the device token minted in this attempt
+        expect(line).not.toContain('MINTED-TOKEN') // the device token minted by this process
         expect(line).not.toContain('nodeterm://join')
         expect(line).not.toContain(codeText.slice('nodeterm://join?code='.length, 40))
       }
@@ -416,6 +430,132 @@ describe('connectHostedTeam (the relay:client:connect leg for a join code)', () 
     await expect(connectHostedTeam(codeText, s.deps, x.io)).rejects.toThrow('[E_JOIN_RATE] Too many join attempts for this team today. Try again tomorrow.')
     expect(x.sessions.size).toBe(0)
     expect(x.sent).toEqual([])
+  })
+})
+
+describe('R38: never mint a device token the joiner cannot keep', () => {
+  const joinTokens = (s: ReturnType<typeof setup>) => s.api.calls.filter((c) => c.route === 'join').map((c) => c.body.deviceToken)
+  let warn: ReturnType<typeof vi.spyOn>
+  beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => {}) })
+  afterEach(() => { warn.mockRestore() })
+
+  it('a bookmarks file that cannot be rewritten refuses BEFORE any mint, on every attempt', async () => {
+    const s = setup({ routes: { device: [DEVICE_OK('MINTED-1')], join: [[503, {}]] } })
+    fs.writeFileSync(s.file, 'nope')
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const err = (await joinHostedTeam(codeText, s.deps, events().ev).catch((e: Error) => e)) as HostedJoinError
+      expect(err).toBeInstanceOf(HostedJoinError)
+      expect(joinErrorCode(err.message)).toBe('E_JOIN_REFUSED')
+      // Names the file and what to do; says nothing of a token or the code.
+      expect(err.message).toContain(s.file)
+      expect(err.message).toMatch(/fix or remove it/)
+      expect(err.message).not.toContain('nodeterm://join')
+    }
+    expect(s.api.count('device')).toBe(0)
+    expect(s.api.count('join')).toBe(0)
+    expect(s.c.opened).toEqual([])
+    expect(fs.readFileSync(s.file, 'utf8')).toBe('nope')
+  })
+
+  it('a persist that fails AFTER the probe keeps the token in memory: the retry presents it, no second mint', async () => {
+    const s = setup({ failWrites: true, routes: { device: [DEVICE_OK('MINTED-1'), DEVICE_OK('MINTED-2')], join: [[503, {}], JOIN_OK] } })
+    await expect(joinHostedTeam(codeText, s.deps, events().ev)).rejects.toMatchObject({ kind: 'network' })
+    await joinHostedTeam(codeText, s.deps, events().ev)
+    expect(s.api.count('device')).toBe(1)
+    expect(joinTokens(s)).toEqual(['MINTED-1', 'MINTED-1'])
+    // The failed writes were said, and never with the token.
+    expect(warn).toHaveBeenCalled()
+    for (const call of warn.mock.calls) expect(call.map(String).join(' ')).not.toContain('MINTED')
+  })
+
+  it('two connects for the same team at once mint exactly once; the duplicate is refused, not retried', async () => {
+    const s = setup()
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const calls: string[] = []
+    const gated = (async (url: string, init: RequestInit) => {
+      if (url.endsWith('/v1/relay/device')) {
+        calls.push('device')
+        await gate
+        return new Response(JSON.stringify({ deviceToken: 'DT', hostId: 'H', exp: 1 }), { status: 200 })
+      }
+      calls.push(`join:${JSON.parse(String(init.body)).deviceToken}`)
+      return new Response(JSON.stringify({ pairingToken: 'PT', hostId: 'H', relayEndpoint: 'wss://r', exp: 1 }), { status: 200 })
+    }) as unknown as typeof fetch
+    const deps = { ...s.deps, fetch: gated }
+    const io = (id: string) => ({ newId: () => id, send: () => {}, sessions: new Map<string, RelayClientSession>() })
+    const first = connectHostedTeam(codeText, deps, io('a'))
+    await vi.waitFor(() => expect(calls).toEqual(['device']))
+    // A boot reconnect racing a manual connect (or a double click): refused, with a code that stops a retry loop.
+    const dup = await connectHostedTeam(codeText, deps, io('b')).catch((e: Error) => e)
+    expect(joinErrorCode((dup as Error).message)).toBe('E_JOIN_REFUSED')
+    expect((dup as Error).message).toMatch(/already joining this team/i)
+    release()
+    expect(await first).toBe('a')
+    expect(calls).toEqual(['device', 'join:DT'])
+    // Released once the first finished: a later connect goes ahead (and reuses the kept token).
+    expect(await connectHostedTeam(codeText, deps, io('c'))).toBe('c')
+    expect(calls.filter((c) => c === 'device')).toHaveLength(1)
+  })
+
+  it('revoked forgets the in-memory token: the next attempt mints fresh', async () => {
+    const s = setup({ failWrites: true, routes: { device: [DEVICE_OK('MINTED-1'), DEVICE_OK('MINTED-2')], join: [[403, {}], JOIN_OK] } })
+    await expect(joinHostedTeam(codeText, s.deps, events().ev)).rejects.toMatchObject({ kind: 'revoked' })
+    await joinHostedTeam(codeText, s.deps, events().ev)
+    expect(s.api.count('device')).toBe(2)
+    expect(joinTokens(s)).toEqual(['MINTED-1', 'MINTED-2'])
+  })
+
+  it('bad-token forgets the in-memory token: the next attempt mints fresh', async () => {
+    const s = setup({ failWrites: true, routes: { device: [DEVICE_OK('MINTED-1'), DEVICE_OK('MINTED-2')], join: [[401, {}], JOIN_OK] } })
+    await expect(joinHostedTeam(codeText, s.deps, events().ev)).rejects.toMatchObject({ kind: 'bad-token' })
+    await joinHostedTeam(codeText, s.deps, events().ev)
+    expect(s.api.count('device')).toBe(2)
+    expect(joinTokens(s)).toEqual(['MINTED-1', 'MINTED-2'])
+  })
+
+  it('the re-mint path still works from an in-memory token: 401 on it earns exactly one fresh mint', async () => {
+    const s = setup({ failWrites: true, routes: { device: [DEVICE_OK('MINTED-1'), DEVICE_OK('MINTED-2')], join: [[503, {}], [401, {}], JOIN_OK] } })
+    await expect(joinHostedTeam(codeText, s.deps, events().ev)).rejects.toMatchObject({ kind: 'network' })
+    await joinHostedTeam(codeText, s.deps, events().ev)
+    expect(s.api.count('device')).toBe(2)
+    expect(joinTokens(s)).toEqual(['MINTED-1', 'MINTED-1', 'MINTED-2'])
+  })
+
+  it('a kept in-memory token wins over the older one still in the bookmark', async () => {
+    // Bookmark holds OLD; OLD earns a 401 and one re-mint (NEW), whose persist fails; the join then
+    // drops (503). The retry must present NEW, not the rejected OLD.
+    const s = setup({ failWrites: true, bookmarks: [bookmark()], routes: { device: [DEVICE_OK('NEW')], join: [[401, {}], [503, {}], JOIN_OK] } })
+    await expect(joinHostedTeam(codeText, s.deps, events().ev)).rejects.toMatchObject({ kind: 'network' })
+    await joinHostedTeam(codeText, s.deps, events().ev)
+    expect(s.api.count('device')).toBe(1)
+    expect(joinTokens(s)).toEqual(['OLD', 'NEW', 'NEW'])
+  })
+
+  it('forgetting a team through the bookmark-remove path forgets its in-memory token too', async () => {
+    const s = setup({ routes: { device: [DEVICE_OK('MINTED-1'), DEVICE_OK('MINTED-2')], join: [JOIN_OK] } })
+    await joinHostedTeam(codeText, s.deps, events().ev)
+    await removeHostedBookmark(code.hostId, s.store, s.state)
+    expect(await s.store.list()).toEqual([])
+    await joinHostedTeam(codeText, s.deps, events().ev)
+    expect(s.api.count('device')).toBe(2)
+    expect(joinTokens(s)).toEqual(['MINTED-1', 'MINTED-2'])
+  })
+
+  it('the in-memory token is forgotten even when the bookmarks file refuses the removal', async () => {
+    const s = setup({ failWrites: true, routes: { device: [DEVICE_OK('MINTED-1'), DEVICE_OK('MINTED-2')], join: [JOIN_OK] } })
+    await joinHostedTeam(codeText, s.deps, events().ev) // token held in memory only
+    fs.writeFileSync(s.file, 'nope')
+    await expect(removeHostedBookmark(code.hostId, s.store, s.state)).rejects.toThrow()
+    fs.rmSync(s.file)
+    await joinHostedTeam(codeText, s.deps, events().ev)
+    expect(joinTokens(s)).toEqual(['MINTED-1', 'MINTED-2'])
+  })
+
+  it('an id that cannot be minted still leaves with a stable code', async () => {
+    const s = setup()
+    const io = { newId: () => { throw new Error('no entropy') }, send: () => {}, sessions: new Map<string, RelayClientSession>() }
+    await expect(connectHostedTeam(codeText, s.deps, io)).rejects.toThrow(/^\[E_JOIN_NETWORK\] no entropy$/)
   })
 })
 

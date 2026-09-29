@@ -19,10 +19,15 @@
 //  - One device id PER TEAM (`<machine id>:<hostId>`). The relay's device record is keyed by the id
 //    alone and re-registering one for a different host needs proof this device cannot give on the
 //    free tier, so a single id per machine would make every team after the first unjoinable.
+//  - Never mint a token this device cannot keep (R38). Before any mint the bookmarks file must be
+//    one a write could land in (`readForWrite`), else the join refuses and says to fix the file:
+//    a mint whose token only lives until the next retry spends the team's shared daily budget one
+//    retry at a time. A write that fails AFTER that check is covered by an in-process cache of the
+//    minted token, and a second join for the same team while one is still minting is refused.
 //  - Every failure leaves with a stable `[E_JOIN_…]` code at the head of its message (the only part
 //    of it Electron IPC carries to the renderer), so an unattended reconnect can tell a network
 //    blip (retry) from anything a retry cannot fix (stop) — see @shared/relay-join-errors.
-import { allowedEndpoint, decodeJoinCode, encodeJoinCode } from '../../core/relay/join-code'
+import { allowedEndpoint, decodeJoinCode, encodeJoinCode, type JoinCode } from '../../core/relay/join-code'
 import { mintDeviceToken, mintJoinToken, type DeviceMintResult, type JoinMintResult } from '../../core/relay/join-token'
 import {
   connectRelayClient,
@@ -76,19 +81,65 @@ export class HostedJoinError extends Error {
 
 const messageOf = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
+/**
+ * Device tokens minted by this process, per team, for exactly the host key they were minted for.
+ * The bookmark is the durable copy; this is what keeps a retry from minting again when writing the
+ * bookmark failed. In memory only: never logged, never sent to the renderer.
+ */
+export class DeviceTokenCache {
+  private readonly byHost = new Map<string, { hostKeyB64: string; token: string }>()
+  get(hostId: string, hostKeyB64: string): string | null {
+    const e = this.byHost.get(hostId)
+    return e && e.hostKeyB64 === hostKeyB64 ? e.token : null
+  }
+  set(hostId: string, hostKeyB64: string, token: string): void {
+    this.byHost.set(hostId, { hostKeyB64, token })
+  }
+  forget(hostId: string): void {
+    this.byHost.delete(hostId)
+  }
+}
+
+/** Process-lifetime join state: the token cache, and the teams a join is currently minting or
+ *  joining for. One instance per app run; tests make their own. */
+export interface HostedJoinState {
+  tokens: DeviceTokenCache
+  inflight: Set<string>
+}
+
+export function createHostedJoinState(): HostedJoinState {
+  return { tokens: new DeviceTokenCache(), inflight: new Set() }
+}
+
+/** The app run's join state. */
+export const hostedJoinState: HostedJoinState = createHostedJoinState()
+
+/** Forget a team: its in-memory token first (so it is gone even if the file refuses the write), then
+ *  its bookmark. */
+export function removeHostedBookmark(
+  hostId: string,
+  bookmarks: Pick<BookmarkStore, 'remove'>,
+  state: HostedJoinState = hostedJoinState
+): Promise<void> {
+  state.tokens.forget(hostId)
+  return bookmarks.remove(hostId)
+}
+
 export interface HostedJoinDeps {
   apiBase: string
   /** This machine's stable device id. */
   deviceId(): string
   /** This device's name as the host will see it next to the request. */
   label: string
-  bookmarks: Pick<BookmarkStore, 'list' | 'upsert' | 'update'>
+  bookmarks: Pick<BookmarkStore, 'file' | 'list' | 'readForWrite' | 'upsert' | 'update'>
   /** Our long-lived peer identity (the key the team pins). May reject (a locked keyring). */
   loadKeys(): Promise<KeyPair>
   /** Defaults to the core relay client. Tests pass their own. */
   connect?(opts: HostedConnectOptions): RelayClientSession
   fetch?: typeof fetch
   now?(): number
+  /** Defaults to the app run's state. */
+  state?: HostedJoinState
 }
 
 export interface HostedJoinEvents {
@@ -110,6 +161,23 @@ function bookmarkedKey(b: RelayBookmark): string | null {
 export async function joinHostedTeam(codeText: string, deps: HostedJoinDeps, ev: HostedJoinEvents): Promise<RelayClientSession> {
   const code = decodeJoinCode(codeText)
   if (!code) throw new HostedJoinError('invalid-code')
+  const state = deps.state ?? hostedJoinState
+  // One join per team at a time, from the first line to the moment the relay client exists. A second
+  // one (a boot reconnect racing a manual connect, a double click) would mint a second token, and
+  // its pending request would replace the first at the host. Refused, with a code that stops a
+  // retry loop: the attempt already running is the one that should finish.
+  if (state.inflight.has(code.hostId)) {
+    throw new HostedJoinError('refused', 'Already joining this team; wait for that attempt to finish.')
+  }
+  state.inflight.add(code.hostId)
+  try {
+    return await joinWithCode(code, deps, ev, state)
+  } finally {
+    state.inflight.delete(code.hostId)
+  }
+}
+
+async function joinWithCode(code: JoinCode, deps: HostedJoinDeps, ev: HostedJoinEvents, state: HostedJoinState): Promise<RelayClientSession> {
   let keys: KeyPair
   try {
     keys = await deps.loadKeys()
@@ -122,7 +190,8 @@ export async function joinHostedTeam(codeText: string, deps: HostedJoinDeps, ev:
   const sameKey = (b: RelayBookmark): boolean => bookmarkedKey(b) === code.hostPublicKeyB64
   const existing = found && sameKey(found) ? found : undefined
 
-  let deviceToken = existing?.deviceToken ?? null
+  // A token this process minted and could not write down is newer than any bookmark.
+  let deviceToken = state.tokens.get(code.hostId, code.hostPublicKeyB64) ?? existing?.deviceToken ?? null
   let approvedAt = existing?.approvedAt ?? null
   const record = (): RelayBookmark => ({
     hostId: code.hostId,
@@ -149,6 +218,15 @@ export async function joinHostedTeam(codeText: string, deps: HostedJoinDeps, ev:
     }
   }
   const mintDevice = async (): Promise<string> => {
+    // Only mint a token that can be kept: a file no write could land in would lose it at once.
+    try {
+      await deps.bookmarks.readForWrite()
+    } catch {
+      throw new HostedJoinError(
+        'refused',
+        `The hosted-team bookmarks file ${deps.bookmarks.file} cannot be read or safely rewritten; fix or remove it, then join again.`
+      )
+    }
     const d: DeviceMintResult = await mintDeviceToken({
       apiBase: deps.apiBase,
       deviceId: `${deps.deviceId()}:${code.hostId}`,
@@ -158,6 +236,7 @@ export async function joinHostedTeam(codeText: string, deps: HostedJoinDeps, ev:
     })
     if (!d.ok) throw new HostedJoinError(d.kind)
     deviceToken = d.deviceToken
+    state.tokens.set(code.hostId, code.hostPublicKeyB64, d.deviceToken)
     await persist()
     return d.deviceToken
   }
@@ -167,10 +246,16 @@ export async function joinHostedTeam(codeText: string, deps: HostedJoinDeps, ev:
     await mintDevice()
     mintedNow = true
   }
-  let j: JoinMintResult = await mintJoinToken({ apiBase: deps.apiBase, deviceToken: deviceToken!, fetch: deps.fetch })
+  // A token the service rejects (401) or whose device it revoked (403) must not be offered again.
+  const join = async (token: string): Promise<JoinMintResult> => {
+    const r = await mintJoinToken({ apiBase: deps.apiBase, deviceToken: token, fetch: deps.fetch })
+    if (!r.ok && (r.kind === 'bad-token' || r.kind === 'revoked')) state.tokens.forget(code.hostId)
+    return r
+  }
+  let j: JoinMintResult = await join(deviceToken!)
   if (!j.ok && j.kind === 'bad-token' && !mintedNow) {
-    // The bookmarked token no longer verifies (it expired, or the service forgot it): one fresh mint.
-    j = await mintJoinToken({ apiBase: deps.apiBase, deviceToken: await mintDevice(), fetch: deps.fetch })
+    // The kept token no longer verifies (it expired, or the service forgot it): one fresh mint.
+    j = await join(await mintDevice())
   }
   if (!j.ok) throw new HostedJoinError(j.kind)
   // The client token is a bearer for the relay: never send it over plaintext to another machine,
@@ -233,10 +318,11 @@ export interface HostedConnectIo {
  * the message the renderer sees starts with a stable code whatever went wrong.
  */
 export async function connectHostedTeam(codeText: string, deps: HostedJoinDeps, io: HostedConnectIo): Promise<string> {
-  const connectionId = io.newId()
+  let connectionId = ''
   let ended = false
   let session: RelayClientSession
   try {
+    connectionId = io.newId()
     session = await joinHostedTeam(codeText, deps, {
       onSas: (sas) => io.send(IPC.relayClientSas(connectionId), sas),
       onApproved: () => io.send(IPC.relayClientApproved(connectionId)),

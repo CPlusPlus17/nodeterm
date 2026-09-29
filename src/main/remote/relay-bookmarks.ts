@@ -48,7 +48,8 @@ export class BookmarkStore {
   // (a join persisting its token while an earlier join records its approval) never lose each other.
   private tail: Promise<unknown> = Promise.resolve()
 
-  constructor(private readonly file: string) {}
+  /** @param file the bookmarks file; public so a refusal can name it (a path, never contents). */
+  constructor(readonly file: string) {}
 
   /** The bookmarks on disk, for DISPLAY. A missing or unreadable file reads as none; malformed
    *  entries are dropped. Reading never writes. Never build a write on this: see `readForWrite`. */

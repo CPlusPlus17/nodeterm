@@ -325,7 +325,7 @@ import { publicKeyToB64 } from './remote/e2ee'
 import { connectRelayClient, type RelayClientSession } from './remote/relay-client'
 import { decodeOffer } from './remote/pairing'
 import { isJoinCode } from '../core/relay/join-code'
-import { connectHostedTeam } from './remote/hosted-join'
+import { connectHostedTeam, removeHostedBookmark } from './remote/hosted-join'
 import { BookmarkStore, publicBookmark } from './remote/relay-bookmarks'
 import { loadOrCreatePeerKeyPair } from './remote/peer-identity'
 import { initSshProject } from './remote-ssh/ssh-project'
@@ -4203,7 +4203,8 @@ app.whenReady().then(async () => {
     })
     // Raw ipcMain handlers, deliberately not on the platform: a relay peer can never reach them.
     ipcMain.handle(IPC.relayHostedBookmarks, async () => (await bookmarks.list()).map(publicBookmark))
-    ipcMain.handle(IPC.relayHostedBookmarkRemove, async (_e, hostId: string) => bookmarks.remove(String(hostId)))
+    // Forgetting a team also forgets the device token this app run holds for it in memory.
+    ipcMain.handle(IPC.relayHostedBookmarkRemove, async (_e, hostId: string) => removeHostedBookmark(String(hostId), bookmarks))
   }
   sshProjectManager = initSshProject(
     (projectId) => {
