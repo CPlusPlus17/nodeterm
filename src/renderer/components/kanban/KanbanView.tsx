@@ -34,7 +34,8 @@ import { GitHubPullCard } from './GitHubPullCard'
 import { kanbanSource, sourceVisible } from '../../lib/kanbanSources'
 import type { ModalSpawn } from './ModalTerminal'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
-import { IconAgent, IconExternal, IconNote, IconSwitch, IconTerminal, IconTrash, IconWeb } from '../icons'
+import { IconAgent, IconBranch, IconExternal, IconNote, IconSwitch, IconTerminal, IconTrash, IconWeb } from '../icons'
+import { issueWorktreeMenuRow, type IssueWorktreeMenuAnswer } from '../../lib/issueWorktree'
 import type { GitHubCloseReason, GitHubIssueCardView } from '@shared/github-issues'
 import { issueKey, issueRefFromHtmlUrl, issueUrl, type IssueRef } from '@shared/github-issue-ref'
 import { NO_ISSUE_RUNS, boundRunsByIssue, type IssueRun } from '../../lib/issueRuns'
@@ -144,6 +145,13 @@ export interface KanbanViewProps {
    */
   issueAgentMenu?: (issue: GitHubIssueCardView) => MenuItem[]
   /**
+   * "Start with agent in a new worktree ▸" for a GitHub issue card: the same picker, pointed at a
+   * fresh `issue-<N>-<slug>` worktree frame — or the reason it cannot run on this project (an SSH
+   * project, a shared tab, a project with no folder or no repository), which the card menu and the
+   * summary modal show DISABLED rather than hide. Optional like `issueAgentMenu`.
+   */
+  issueWorktreeMenu?: (issue: GitHubIssueCardView) => IssueWorktreeMenuAnswer
+  /**
    * The stations each session opened (lib/teamProgress `stationsByOpener`, keyed by the opener's
    * node id), for the team-progress ring on its card and card modal. Optional: without it no card
    * shows one.
@@ -218,7 +226,8 @@ function useCanvasCovered(): void {
 
 export const KanbanView = memo(function KanbanView({
   board, sessions, onChange, onOpenNode, onCreateNode, onRenameNode, onEditSticky, onDeleteNode,
-  onModalNodeChange, onBrowserNav, onSetIcon, accountMenuItems, onAutoMoveFromPulls, issueAgentMenu, teams
+  onModalNodeChange, onBrowserNav, onSetIcon, accountMenuItems, onAutoMoveFromPulls, issueAgentMenu,
+  issueWorktreeMenu, teams
 }: KanbanViewProps) {
   useCanvasCovered()
   const { api } = useSession()
@@ -1188,6 +1197,7 @@ export const KanbanView = memo(function KanbanView({
                   children: issueAgentMenu(issueMenu.issue)
                 }] as MenuItem[])
               : []),
+            ...(issueWorktreeMenu ? [issueWorktreeMenuRow(issueWorktreeMenu(issueMenu.issue), <IconBranch />)] : []),
             {
               label: 'Open summary',
               icon: <IconExternal />,
@@ -1247,6 +1257,9 @@ export const KanbanView = memo(function KanbanView({
           pullObservedAt={pullBoard?.observedAt}
           startMenu={modalIssue.kind === 'issue' && issueAgentMenu
             ? () => issueAgentMenu(modalIssue.item)
+            : undefined}
+          worktreeMenu={modalIssue.kind === 'issue' && issueWorktreeMenu
+            ? () => issueWorktreeMenu(modalIssue.item)
             : undefined}
           runs={modalIssue.kind === 'issue' ? runsFor(modalIssue.item) : NO_ISSUE_RUNS}
           onOpenRun={(nodeId) => {
