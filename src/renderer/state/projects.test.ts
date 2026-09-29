@@ -259,3 +259,27 @@ describe('capability setters schedule a workspace save', () => {
     }
   })
 })
+
+// #925: canvas-control `--run-now` into a "Recently closed" project restores its tab but must not
+// travel the user's view — `reopenProject` is the human path and also activates.
+describe('unhideProject (#925)', () => {
+  it('restores a closed project WITHOUT activating it', () => {
+    const a = useProjects.getState().addProject('A')
+    const b = useProjects.getState().addProject('B')
+    useProjects.getState().closeProject(b.id)
+    useProjects.getState().setActive(a.id)
+
+    useProjects.getState().unhideProject(b.id)
+    const s = useProjects.getState()
+    expect(s.projects.find((p) => p.id === b.id)?.closed).toBe(false)
+    expect(s.activeProjectId).toBe(a.id)
+  })
+
+  it('is a no-op for an unknown id', () => {
+    const a = useProjects.getState().addProject('A')
+    useProjects.getState().setActive(a.id)
+    useProjects.getState().unhideProject('zzz')
+    expect(useProjects.getState().projects).toHaveLength(1)
+    expect(useProjects.getState().activeProjectId).toBe(a.id)
+  })
+})

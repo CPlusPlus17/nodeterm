@@ -9,7 +9,8 @@ import { installGlassCellBackgrounds, scheduleGlassCellAlpha, setGlassCellAlpha 
 import { deliverRelayInitialLaunch } from '../terminal/relay-initial-launch'
 import { commitLaunch } from '../terminal/launch-attempt'
 import { isLaunchShell } from '@shared/agents/pane'
-import { createLaunchWriter, deliverInitialLaunch, launchCommand, registerLaunchWriter, trustsFreshShell } from '../terminal/launch-command'
+import { createLaunchWriter, deliverInitialLaunch, launchCommand, registerLaunchWriter } from '../terminal/launch-command'
+import { trustsFreshShell } from '@shared/launch-trust'
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { NODE_MIN_SIZES } from '../lib/nodeSizing'
 import {
@@ -134,13 +135,19 @@ import {
   cleanEcho,
   deliverCommand,
   type DeliveryIo
-} from '../terminal/command-delivery'
+} from '@shared/command-delivery'
 import { terminalKillLine } from '../terminal/terminal-kill-line'
 import {
   RESUME_MISS_WINDOW_MS,
   detectsResumeMiss,
   resumeSessionMissing
 } from '../terminal/resume-fallback'
+import {
+  GEMINI_MIGRATION_URL,
+  GEMINI_RETIRED_TAIL_CHARS,
+  geminiRetiredIn,
+  watchesGeminiRetirement
+} from '../terminal/gemini-retired'
 import { MAX_LAUNCH_LINE_BYTES, lineBytes } from '@shared/canonical-line'
 import { binariesFor, type PaneOwner } from '@shared/agents/pane-owner-predicate'
 import {
@@ -219,7 +226,7 @@ import { PresenceChips } from '../components/PresenceChips'
 import { useAgentNodes } from '../state/agentNodes'
 import { useTerminalFocus } from '../state/terminalFocus'
 import { useProjects } from '../state/projects'
-import { isGlobalKanbanOpen, isKanbanOpen, isOmniKanbanEnabled, useViewMode, viewFor } from '../state/viewMode'
+import { isGlobalKanbanOpen, isKanbanOpen, isOmniKanbanEnabled, openIssueOnBoard, useViewMode, viewFor } from '../state/viewMode'
 import { useSshConn } from '../state/sshConn'
 import { useWorktrees } from '../state/worktrees'
 import { isRemoteSessionNode } from '@shared/worktree'
@@ -229,6 +236,7 @@ import { isBrowserRuntime } from '../bridge/runtime'
 import { agentLaunchOverride, COLLAPSED_HEIGHT, type CanvasNode } from '../state/workspace'
 import { NodeColorSwatches } from '../components/NodeColorSwatches'
 import { AccountChip, useAccountChip } from '../components/AccountChip'
+import { IssueRefChip } from '../components/IssueRefChip'
 import { effectiveAccountId } from '../lib/accountChip'
 import {
   hasHooks,
@@ -954,6 +962,14 @@ interface CoState {
    * top banner as `staleCwd`, and for the same reason.
    */
   launchTooLongBytes: number | null
+  /**
+   * A gemini node's pane printed Gemini CLI's own retirement refusal ("This client is no longer
+   * supported for Gemini Code Assist for individuals…", see `terminal/gemini-retired.ts`): the
+   * user's Google account is one Google stopped serving from Gemini CLI on 2026-06-18, and the
+   * sign-in screen will loop forever. A slim banner, like `lostSession`: the terminal is alive and
+   * nothing is typed or relaunched — it names the cause and offers an Antigravity node instead.
+   */
+  geminiRetired: boolean
 }
 const NO_CO: CoState = {
   letterbox: false,
@@ -963,7 +979,8 @@ const NO_CO: CoState = {
   spawnError: null,
   staleCwd: false,
   lostSession: false,
-  launchTooLongBytes: null
+  launchTooLongBytes: null,
+  geminiRetired: false
 }
 const coStates = new Map<string, CoState>()
 const coSubs = new Map<string, (s: CoState) => void>()
@@ -1177,7 +1194,8 @@ function setCo(key: string, patch: Partial<CoState>): void {
     next.spawnError === prev.spawnError &&
     next.staleCwd === prev.staleCwd &&
     next.lostSession === prev.lostSession &&
-    next.launchTooLongBytes === prev.launchTooLongBytes
+    next.launchTooLongBytes === prev.launchTooLongBytes &&
+    next.geminiRetired === prev.geminiRetired
   )
     return
   coStates.set(key, next)
@@ -1995,6 +2013,9 @@ export function TerminalNode({
   const observedLaunchDelivery = useLaunchDelivery((s) => s.byId[id])
   const launchDelivery = observedLaunchDelivery ?? (pendingLaunch?.manualOnly
     ? { kind: 'failed' as const, attempts: 1, at: 0 } : undefined)
+  // A headless start (#925) is typing this node's launch from core: the badge says so, without the
+  // warning, and ▶ stands aside — a click would splice a second copy into the pane.
+  const startingNow = launchDelivery?.kind === 'starting'
   // A node's own first-open launch is in flight: the live `initialCommand` alias is still set
   // (it is cleared on every outcome) and nothing holds it. Its `pendingLaunch` is only the durable
   // write-ahead record — and it carries `manualOnly` from the claim until Enter lands — so showing
@@ -2112,6 +2133,14 @@ export function TerminalNode({
   }
   const dismissStaleCwd = (): void => setCo(termKey, { staleCwd: false })
   const dismissLostSession = (): void => setCo(termKey, { lostSession: false })
+  const dismissGeminiRetired = (): void => setCo(termKey, { geminiRetired: false })
+  // Canvas owns node creation; a terminal node has no direct line to it (same pattern as the
+  // file-manager's `nodeterm:open-terminal`). The new node lands beside this one, in its frame.
+  const openAntigravityNode = (): void => {
+    window.dispatchEvent(
+      new CustomEvent('nodeterm:open-agent', { detail: { agentId: 'antigravity', nearNodeId: id } })
+    )
+  }
   const dismissLaunchTooLong = (): void => setCo(termKey, { launchTooLongBytes: null })
 
   // "Not connected" (CoState.offline): the host was unreachable, so this node has no session
@@ -3329,7 +3358,8 @@ export function TerminalNode({
               staleCwd: false,
               lostSession: false,
               launchTooLongBytes: null,
-              letterbox: false
+              letterbox: false,
+              geminiRetired: false
             })
             if (!disposed) term.write(`\r\n\x1b[90m[${refusal.message}]\x1b[0m\r\n`)
             return
@@ -3477,6 +3507,25 @@ export function TerminalNode({
           gate.push(chunk)
         })
         cleanups.push(offData)
+        // Gemini CLI refuses personal Google accounts since 2026-06-18, and the refusal comes
+        // BEFORE any session exists — no hook ever fires to report it, so the pane text is the only
+        // evidence. Watch a gemini-harness node's output for the CLI's own sentence and raise the
+        // banner once; it types nothing and relaunches nothing (see terminal/gemini-retired.ts).
+        // Stops at the first match; unsubscribed with the rest of the session on teardown.
+        if (agentId && watchesGeminiRetirement(capabilityAgentId(agentId))) {
+          let seen = ''
+          let offRetired: (() => void) | undefined = transport.onData(sid, (chunk) => {
+            seen = (seen + cleanEcho(chunk)).slice(-GEMINI_RETIRED_TAIL_CHARS)
+            if (!geminiRetiredIn(seen)) return
+            offRetired?.()
+            offRetired = undefined
+            setCo(termKey, { geminiRetired: true })
+          })
+          cleanups.push(() => {
+            offRetired?.()
+            offRetired = undefined
+          })
+        }
         // We fell so far behind that the server discarded our queued output and redrew us from
         // tmux. The capture IS the current screen, so reset the emulator and write it — writing it
         // on top of a stale buffer would splice two different points in time. An EMPTY payload is
@@ -5650,6 +5699,20 @@ export function TerminalNode({
             {status.session}
           </span>
         )}
+        {/* The GitHub issue this session was started on — opens it on the board (the issue lane
+            lives there), the same thing the session's board card does with its own `#N`. */}
+        <IssueRefChip
+          issueRef={data.issueRef}
+          onOpen={(ref) => {
+            const store = useProjects.getState()
+            openIssueOnBoard(
+              store.activeProjectId,
+              ref,
+              !!store.getProject(store.activeProjectId)?.kanban?.github,
+              (url) => void api.shell.openExternal(url)
+            )
+          }}
+        />
         {/* The fallback, made visible. A Codex node that could not get a managed shared identity
             runs a perfectly good plain `codex` — but the user has to be able to SEE that it did,
             without reading a log, so the chip states it and its tooltip says why. Absent (and the
@@ -5774,16 +5837,16 @@ export function TerminalNode({
         {pendingLaunch && !firstOpenInFlight && (
           <span
             className={`term-node__status term-node__status--queued nodrag${
-              launchDelivery ? ' term-node__status--queued-warn' : ''
+              launchDelivery && !startingNow ? ' term-node__status--queued-warn' : ''
             }`}
             title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay')}
           >
             <span className="term-node__status-dot" />
-            {launchDelivery ? '⚠ ' : ''}QUEUED
+            {startingNow ? 'STARTING' : `${launchDelivery ? '⚠ ' : ''}QUEUED`}
             <button
               className="term-node__queued-run"
-              disabled={session.source === 'relay'}
-              title={session.source === 'relay' ? "Open the host to run this command" : pendingLaunch.manualOnly ? "Retry launch at a shell prompt" : "Run now without waiting"}
+              disabled={session.source === 'relay' || startingNow}
+              title={session.source === 'relay' ? "Open the host to run this command" : startingNow ? "Starting in the background" : pendingLaunch.manualOnly ? "Retry launch at a shell prompt" : "Run now without waiting"}
               onClick={(e) => {
                 e.stopPropagation()
                 // Disarm only on a delivery that actually landed. Dropping `pendingLaunch`
@@ -6200,6 +6263,45 @@ export function TerminalNode({
               <button
                 className="term-node__stalecwd-dismiss"
                 onClick={dismissLostSession}
+                title="Dismiss"
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
+          )}
+        {/* Gemini CLI retired for personal accounts: the same slim banner as lostSession, and
+            yields to the same bigger problems. Two actions — an Antigravity node (Google's
+            replacement) beside this one, and Google's migration guide — plus dismiss. */}
+        {!co.closed &&
+          !co.ended &&
+          !co.spawnError &&
+          !co.offline &&
+          !co.staleCwd &&
+          co.geminiRetired &&
+          !offscreenDown && (
+            <div className="term-node__stalecwd nodrag">
+              <span className="term-node__stalecwd-text">
+                Google no longer serves Gemini CLI to personal accounts (free, AI Pro, AI Ultra);
+                Antigravity CLI replaces it. Code Assist licenses, Vertex AI and API keys still work.
+              </span>
+              <button
+                className="term-node__stalecwd-restart"
+                onClick={openAntigravityNode}
+                title="Open an Antigravity CLI (agy) node next to this one. Install agy first if it is not on this machine: curl -fsSL https://antigravity.google/cli/install.sh | bash"
+              >
+                Open Antigravity
+              </button>
+              <button
+                className="term-node__stalecwd-restart"
+                onClick={() => void window.nodeTerminal.shell.openExternal(GEMINI_MIGRATION_URL)}
+                title={GEMINI_MIGRATION_URL}
+              >
+                Migration guide
+              </button>
+              <button
+                className="term-node__stalecwd-dismiss"
+                onClick={dismissGeminiRetired}
                 title="Dismiss"
                 aria-label="Dismiss"
               >

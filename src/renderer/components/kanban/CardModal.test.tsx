@@ -245,6 +245,51 @@ describe('CardModal', () => {
     act(() => root.unmount())
   })
 
+  it('shows the session\'s #N in the header, like the canvas node and the session card, and opens the issue', () => {
+    const session: KanbanSession = {
+      id: 'node-term-issue',
+      title: 'Claude',
+      color: '#0a84ff',
+      kind: 'terminal',
+      issueRef: { owner: 'eneskirca', repo: 'nodeterm', number: 42 },
+      spawn: {}
+    }
+    const root = createRoot(host)
+    const onOpenIssue = vi.fn()
+    const onClose = vi.fn()
+    act(() =>
+      root.render(
+        <CardModal session={session} columnTitle="To Do" board={board} onChangeBoard={vi.fn()}
+          onClose={onClose} onOpenCanvas={vi.fn()} onRename={vi.fn()} onEditSticky={vi.fn()}
+          onSetIcon={vi.fn()} onBrowserNav={vi.fn()} onOpenIssue={onOpenIssue} />
+      )
+    )
+    const chip = document.body.querySelector<HTMLElement>('.issue-ref-chip')!
+    expect(chip.textContent).toBe('#42')
+    act(() => chip.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onOpenIssue).toHaveBeenCalledWith({ owner: 'eneskirca', repo: 'nodeterm', number: 42 })
+    // The chip's click is the chip's — it does not also rename the card or close the modal.
+    expect(document.body.querySelector('input.kanban-modal__rename')).toBeNull()
+    expect(onClose).not.toHaveBeenCalled()
+    act(() => root.unmount())
+  })
+
+  it('draws no #N for a session with no binding, or a hostile one from a hand-edited file', () => {
+    for (const issueRef of [undefined, { owner: 'o', repo: 'r;rm -rf ~', number: 1 }]) {
+      const root = createRoot(host)
+      act(() =>
+        root.render(
+          <CardModal session={{ id: 'n', title: 'T', color: '#fff', kind: 'terminal', issueRef, spawn: {} } as KanbanSession}
+            columnTitle={null} board={board} onChangeBoard={vi.fn()} onClose={vi.fn()}
+            onOpenCanvas={vi.fn()} onRename={vi.fn()} onEditSticky={vi.fn()} onSetIcon={vi.fn()}
+            onBrowserNav={vi.fn()} onOpenIssue={vi.fn()} />
+        )
+      )
+      expect(document.body.querySelector('.issue-ref-chip')).toBeNull()
+      act(() => root.unmount())
+    }
+  })
+
   it('handles title renaming and Esc cancellation for non-sticky cards', () => {
     const session: KanbanSession = {
       id: 'node-term-1',

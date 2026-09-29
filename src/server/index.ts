@@ -70,6 +70,7 @@ import {
   recordAgentEvent,
   ackDone,
   setMirrorSettingsProvider,
+  setMirrorLiveNodesProvider,
   setMirrorServerProvider,
   onInboxActionable,
   onNodeStateChange,
@@ -78,6 +79,7 @@ import {
   type MirrorServer,
   setNodeSessionName,
   setNodeHibernated,
+  seedNodeIdentities,
   sessionNameSweepEntries,
   nodeSessionName
 } from '../core/agent-status-mirror'
@@ -458,6 +460,9 @@ export async function startServer(
       void flushAgentStatusMirror()
     })
     .catch(() => {})
+  // Lets the mirror drop an identity-only entry (a session id kept past the 6 h state expiry)
+  // once its node is gone from every project. `undefined` = cannot know = keep, TTL-bounded.
+  setMirrorLiveNodesProvider(() => workspaceStore.knownNodeIds())
   setMirrorSettingsProvider((): MirrorSettings => {
     const s = settingsStore.get()
     return {
@@ -490,7 +495,11 @@ export async function startServer(
   // of the handlers because the hook-fed path authority is the tail created just above. No remote
   // leg: the Server Edition runs ON the host whose transcripts it reads, so local resolution is
   // the complete answer (an SSH-project node is a desktop-only concept here).
-  registerTranscriptIpc({ pathFor: (sessionId) => contextTail.pathFor(sessionId) })
+  registerTranscriptIpc({
+    pathFor: (sessionId) => contextTail.pathFor(sessionId),
+    // Codex's ⌘M reader takes ITS tail's hook path (claude's `pathFor` must never answer a codex id).
+    codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId)
+  })
   // The context meter's mount-time rehydration, registered beside the read channels and for the
   // same reason: the tails it feeds are the ones created just above. Until this landed the Server
   // Edition had NO handler for `context:ensure` at all — the browser cast it and nothing received
@@ -553,6 +562,12 @@ export async function startServer(
   platform.handle(IPC.agentHibernated, (msg: { nodeId?: unknown; on?: unknown }) => {
     if (typeof msg?.nodeId !== 'string' || !msg.nodeId) return
     setNodeHibernated(msg.nodeId, msg.on === true)
+  })
+  // Identity seed (parity with desktop's ipcMain.on(IPC.agentSeedIdentity)): the browser renderer's
+  // persisted agentStatus store fills session ids this server's mirror has none for, so a phone
+  // browsing this host finds an idle node's transcript. Add-only and validated in core.
+  platform.handle(IPC.agentSeedIdentity, (entries: unknown) => {
+    seedNodeIdentities(entries)
   })
   // Phone→host read-acks: the phone drops `~/.nodeterm/acks/<nodeId>.seen` on this host when it READS
   // a finished session. Sweep it (15s cadence, cheap dir-mtime gate) and for each ack: `ackDone`
@@ -700,6 +715,10 @@ export async function startServer(
         ptyManager,
         settings: () => settingsStore.get(),
         boardLog,
+        // `open-agent --issue #N` means the repository this project's board syncs with — the same
+        // answer the issue lane gets from the GitHub host controller.
+        issueRepository: (projectId) =>
+          github.controller.status(projectId).then((view) => view.project?.repository ?? null),
         installAgentIntegrations: config.installHooks !== false
       })
       hookServer.setControlHandler(canvasControl.handler)

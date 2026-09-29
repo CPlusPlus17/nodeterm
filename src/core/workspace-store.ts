@@ -13,7 +13,7 @@ import {
   PROJECT_DIR, PROJECT_FILE, fileToProject, inlineProjectFileRelPath, isInlineProjectFileId,
   projectToFile, resolveNodes, sameProjectContent,
   sanitizeLoadedClosedSessions, sanitizeNodeTriggers, serializeProjectFile, splitWorkspace,
-  validKanban,
+  sanitizeKanban,
   type IndexEntryV3, type ProjectFileV1, type WorkspaceIndexV3
 } from './workspace-files'
 import { readProjectSettingsFile, writeProjectSettingsFile } from './project-settings-files'
@@ -335,7 +335,8 @@ export class WorkspaceStore {
         // and the same trigger shape rule (workspace.json is hand-editable input too).
         // `rest` drops BOTH guarded fields; each is added back below only if it passes its guard.
         const { kanban, closedSessions, layouts, layoutViewports, ...rest } = e.project
-        const base = validKanban(kanban) ? { ...rest, kanban } : rest
+        const admittedKanban = sanitizeKanban(kanban)
+        const base = admittedKanban ? { ...rest, kanban: admittedKanban } : rest
         // An inline project's embedded layouts are hand-editable input exactly like a git-shared
         // file's, and they never pass through `fileToProject` on this branch, so they are
         // sanitized (and their cameras pruned against them) here instead.
@@ -1543,6 +1544,39 @@ export class WorkspaceStore {
       out.push(e, e.id, e.project, e.cache, e.cwd, e.cwd ? this.lastWritten.get(projectFilePath(e.cwd)) : undefined)
     }
     return out
+  }
+
+  /**
+   * Every node id in every project the index holds — open, closed and SSH alike — or `undefined`
+   * when that set cannot be known: the index is not loaded, a local ref's project.json has not been
+   * read this run (unavailable folder, corrupt file), or an SSH entry has no offline cache.
+   *
+   * The agent-status mirror uses it to drop an IDENTITY-ONLY entry (a session id kept past the 6 h
+   * state expiry) whose node was deleted while this process was not watching. A wrong "gone" costs
+   * the phone that node's session id, so every doubt answers `undefined` — the mirror then bounds
+   * the entry by its identity TTL alone. Same three-entry-kind scan as `findNode`.
+   * Consequence: ONE permanently unavailable local ref or one never-cached SSH project turns
+   * existence pruning off for EVERY project, leaving only the 30-day identity TTL.
+   * Parses through `parsedLastWritten`, so a mirror flush re-parses no unchanged project.json.
+   */
+  knownNodeIds(): Set<string> | undefined {
+    if (!this.index) return undefined
+    const ids = new Set<string>()
+    for (const e of this.index.entries) {
+      let nodes: CanvasNodeState[] | undefined
+      if (e.project) nodes = e.project.nodes
+      else if (e.cache) nodes = e.cache.nodes
+      else if (e.cwd) {
+        try {
+          nodes = this.parsedLastWritten(projectFilePath(e.cwd))?.nodes
+        } catch {
+          return undefined
+        }
+      }
+      if (!Array.isArray(nodes)) return undefined
+      for (const n of nodes) if (n && typeof n.id === 'string') ids.add(n.id)
+    }
+    return ids
   }
 
   /**

@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { publishCanvasMutation } from '../core/canvas-sync'
+import { launchHeadless } from '../core/headless-launch'
 import { gateProjectTarget, GRANT_CAP } from '../core/project-grants'
 import {
   LINK_ENDPOINT_NOT_FOUND,
@@ -18,6 +19,8 @@ import {
   type NodeColor
 } from '../shared/node-colors'
 import { applyStickyWrite, parseStickyArgs, resolveStickyRef } from '../shared/sticky-write'
+import type { HeadlessLaunchFailure, HeadlessLaunchResult } from '../shared/headless-launch'
+import { localNodePtyOptions } from '../shared/node-pty-options'
 import type { WorkspaceStore } from '../core/workspace-store'
 import {
   AGENT_CONFIG,
@@ -33,6 +36,11 @@ import {
 import { assembleLaunchCommand } from '../shared/agents/launch'
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { oneLine } from '../shared/one-line'
+import { RUN_NOW_AFTER_REFUSAL, runNowRequested } from '../shared/control-verbs'
+import { isRemoteSessionNode } from '../shared/worktree'
+import { issueLaunchPrompt, resolveIssueArg, type IssueRef } from '../shared/github-issue-ref'
+import { runEndedEvent, runStartedEvent } from '../shared/issue-runs'
+import type { BoardLogEntry } from '../shared/types'
 import { UNKNOWN_CODEX_CLI_CAPS } from '../shared/types'
 import type {
   BridgeLink,
@@ -61,6 +69,10 @@ export interface HeadlessPty {
   paneCommand(persistKey: string): Promise<string | null>
   sessionExists(persistKey: string): Promise<boolean>
   sendText(nodeId: string, text: string, opts?: { enter?: boolean }): Promise<TextDeliveryResult>
+  persistentSpawnAvailable(): boolean
+  writeHeadless(persistKey: string, data: string): boolean
+  onOutput(persistKey: string, cb: (chunk: string) => void): () => void
+  releaseHeadless(persistKey: string): void
   destroySession(
     clientId: number | null,
     persistKey: string,
@@ -105,7 +117,22 @@ export interface HeadlessNodeFactoryDeps {
   publishProject?: (project: Project) => void
   /** Injectable only so tests can seed creator facts; production uses a fresh process-local ledger. */
   ownership?: HeadlessNodeOwnership
+  /** Test seam for the launch settle; production uses core's SETTLE_* defaults. */
+  launchTiming?: { quietMs: number; capMs: number }
+  /**
+   * The `owner/repo` a project's kanban board syncs with — what `open-agent --issue #N` means. The
+   * GitHub host controller's answer (configured, else detected from the project's git remote), the
+   * same one the issue lane uses. Absent/throwing/null = only the board's explicitly configured
+   * repository counts, and a `#N` against a board with none is refused — never guessed.
+   */
+  issueRepository?: (projectId: string) => Promise<string | null>
+  /** Append to a project's board log (the issue card's run history). Absent = no history is
+   *  written; the session still opens. */
+  appendBoardLog?: (projectId: string, entry: BoardLogEntry) => Promise<boolean>
 }
+
+/** The author of a run-history line this factory writes: the app acting on an agent's request. */
+const RUN_LOG_AUTHOR = { name: 'nodeterm', color: '#8b8b8b' } as const
 
 export interface HeadlessNodeOwner {
   sourceNodeId: string
@@ -132,6 +159,46 @@ export function createHeadlessNodeOwnership(): HeadlessNodeOwnership {
     forget: (nodeId) => owners.delete(nodeId),
     clear: () => owners.clear()
   }
+}
+
+/** One node an `open-*` persisted but could not start. */
+export interface OpenLaunchFailure {
+  id: string
+  reason: HeadlessLaunchFailure
+  /** The node still holds its launch (manualOnly), so the user's Run now can deliver it. */
+  retained: boolean
+}
+
+/**
+ * The `open-*` failure reply (#925). Each failed node is named with its own reason, grouped, so a
+ * caller can tell a failure Run now may get past from one it repeats: `line-too-long` fails the
+ * same way on every attempt, and this edition has no `--prompt-file` (the open flag allowlist),
+ * so the only way past it is a shorter prompt or command. "Do not repeat the open request" holds
+ * for every reason: the nodes are persisted, so the same request would open duplicates.
+ */
+export function launchFailedError(
+  failures: readonly OpenLaunchFailure[],
+  verb: 'open-terminal' | 'open-agent'
+): string {
+  const groups = new Map<string, OpenLaunchFailure & { ids: string[] }>()
+  for (const f of failures) {
+    const key = `${f.reason}:${f.retained}`
+    const group = groups.get(key) ?? { ...f, ids: [] }
+    group.ids.push(f.id)
+    groups.set(key, group)
+  }
+  const what = (g: OpenLaunchFailure): string =>
+    g.reason === 'line-too-long'
+      ? 'the launch line is longer than a terminal line takes, so Run now will fail the same way; ' +
+        `shorten the ${verb === 'open-terminal' ? 'command' : 'prompt'}`
+      : g.retained
+        ? 'launch retained for Run now in the node'
+        : 'no launch was held'
+  const clauses = [...groups.values()].map((g) => `${g.reason}: ${g.ids.join(', ')} (${what(g)})`)
+  return (
+    `launch-failed: node(s) ${failures.map((f) => f.id).join(', ')} were persisted but their PTY or ` +
+    `initial command could not be delivered — ${clauses.join('; ')}; do not repeat the open request`
+  )
 }
 
 const TERMINAL_LIMIT = 8
@@ -481,16 +548,7 @@ function ungroupPersistedNodes(
 }
 
 function ptyOptions(project: Project, node: CanvasNodeState): PtyCreateOptions {
-  return {
-    cwd: node.cwd || project.cwd,
-    cols: TERMINAL_COLS,
-    rows: TERMINAL_ROWS,
-    persistKey: node.id,
-    ownerProjectId: project.id,
-    ...(node.agentId ? { agentId: node.agentId } : {}),
-    ...(node.agentModel ? { agentModel: node.agentModel } : {}),
-    ...(node.accountId ? { accountId: node.accountId } : {})
-  }
+  return localNodePtyOptions(project, node, { cols: TERMINAL_COLS, rows: TERMINAL_ROWS })
 }
 
 /**
@@ -595,6 +653,29 @@ export class HeadlessNodeFactory {
     const result = await this.deps.ptyManager.createHeadless(ptyOptions(project, node))
     if (result.sessionId) this.attached.add(node.id)
     return result
+  }
+
+  /**
+   * Spawn-or-attach `node` and deliver `command` through the shared echo-verified launcher (#925).
+   * - `release:false` keeps the server's synthetic client attached, as it always has.
+   * - `requirePersistent:false`, because that attached client is what keeps even a plain-shell
+   *   session reachable here. (The desktop releases its client, so it refuses a plain shell instead.)
+   * - `createHeadless` goes through `attach()` so the `attached` ledger stays authoritative.
+   */
+  private launch(project: Project, node: CanvasNodeState, command: string): Promise<HeadlessLaunchResult> {
+    const pty = this.deps.ptyManager
+    return launchHeadless(
+      {
+        persistentSpawnAvailable: () => pty.persistentSpawnAvailable(),
+        createHeadless: () => this.attach(project, node),
+        paneCommand: (key) => pty.paneCommand(key),
+        writeHeadless: (key, data) => pty.writeHeadless(key, data),
+        onOutput: (key, cb) => pty.onOutput(key, cb),
+        releaseHeadless: (key) => pty.releaseHeadless(key),
+        timing: this.deps.launchTiming
+      },
+      { ptyOptions: ptyOptions(project, node), command, release: false, requirePersistent: false }
+    )
   }
 
   private resolveTarget(
@@ -737,6 +818,23 @@ export class HeadlessNodeFactory {
     return this.open(sourceNodeId, 'open-agent', args, verified)
   }
 
+  /** File one run-history line under the issue card. Never throws: history is a record of work,
+   *  and a failed append must not fail the open or close it describes. */
+  private async logRun(
+    projectId: string,
+    run: { nodeId: string; event: BoardLogEntry['event'] } | null
+  ): Promise<void> {
+    if (!run || !this.deps.appendBoardLog) return
+    await this.deps.appendBoardLog(projectId, {
+      id: randomUUID(),
+      ts: (this.deps.now ?? Date.now)(),
+      author: RUN_LOG_AUTHOR,
+      nodeId: run.nodeId,
+      kind: 'event',
+      event: run.event
+    }).catch(() => false)
+  }
+
   close(
     sourceNodeId: string,
     args: Record<string, string>,
@@ -801,6 +899,15 @@ export class HeadlessNodeFactory {
         const project = workspace.projects.find((candidate) => candidate.id === projectId)
         const target = project?.nodes.find((node) => node.id === id)
         if (!project || !target) continue
+        if (target.issueRef) {
+          // A run ends when its node is CLOSED — never when a turn ends.
+          await this.logRun(project.id, runEndedEvent(target.issueRef, {
+            id: target.id,
+            title: target.title,
+            agentId: target.agentId,
+            agentSessionId: target.agentSessionId
+          }, { state: this.deps.stateOf(target.id) }))
+        }
         if (target.kind === 'group') {
           const ungrouped = ungroupPersistedNodes(project.nodes, id)
           project.nodes = ungrouped.nodes
@@ -1018,6 +1125,63 @@ export class HeadlessNodeFactory {
     })
   }
 
+  /** `run --node <id>` (#925): deliver a node's retained launch now. Server v1 ownership applies:
+   *  only nodes the caller spawned during this server run. */
+  run(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      if (!verified) {
+        return { ok: false, error: 'run-identity-refused: Server Edition canvas control requires verified node identity' }
+      }
+      const flagError = unsupportedFlags(args, new Set(['node', 'project']))
+      if (flagError) return { ok: false, error: `run: ${flagError}` }
+      const id = (args.node ?? '').trim()
+      if (!this.ownsSpawn(sourceNodeId, id)) return this.ownershipRefusal('run', sourceNodeId, id)
+      // Resolve through the ownership record, never by first id match: node ids repeat across
+      // projects (a committed project.json opened from a second folder), and `attach()` is keyed
+      // by id alone, so a stranger copy sorting first would be claimed while the owned session is
+      // typed into. `close` resolves the same way. A `--project` naming any other project is the
+      // desktop's lookup inside the named project coming up empty.
+      const owner = this.ownership.ownerOf(id)!
+      const noNode: ServerControlReply = { ok: false, error: `run: no node with id ${id}` }
+      if (args.project !== undefined && args.project !== owner.projectId) return noNode
+      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const project = workspace.projects.find((p) => p.id === owner.projectId)
+      const node = project?.nodes.find((n) => n.id === id)
+      if (!project || !node) return noNode
+      const held = node.pendingLaunch
+      if (!held?.command) return { ok: false, error: `run-nothing-queued: ${id} has no queued launch` }
+      // A remote node is NEVER spawned locally, and this launcher only spawns locally. Refuse
+      // before the claim, leaving the held launch untouched (the desktop's startHeadless guard).
+      if (isRemoteSessionNode(node)) {
+        return {
+          ok: false,
+          error: `run-remote-unsupported: ${id} is an SSH node; the Server Edition cannot start it`
+        }
+      }
+      // Write-ahead, exactly as open() does before its own delivery.
+      node.pendingLaunch = { ...held, attempted: true, manualOnly: true }
+      await this.deps.workspaceStore.save(workspace)
+      const launched = await this.launch(project, node, held.command)
+      // As open() does: an agent this spawned fresh has not had its first real turn yet, so a
+      // later `--after` on it must not be released by the CLI's boot `done` blip.
+      if (node.agentId && launched.fresh) this.awaitingFirstWorking.add(id)
+      if (launched.outcome === 'delivered') node.pendingLaunch = undefined
+      await this.deps.workspaceStore.save(workspace)
+      this.publish(project, [node])
+      return launched.outcome === 'delivered'
+        ? {
+            ok: true,
+            message: `started ${id}; agent startup is not confirmed`,
+            result: { ids: [id], id, started: true, startedIds: [id], queued: false, queuedIds: [] }
+          }
+        : {
+            ok: true,
+            message: `${id} stays queued (${launched.reason}); launch retained for Run now`,
+            result: { ids: [id], id, started: false, startedIds: [], queued: true, queuedIds: [id], reason: launched.reason }
+          }
+    })
+  }
+
   color(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply> {
     return this.runExclusive(async () => {
       const flagError = unsupportedFlags(args, new Set(['node', 'color']))
@@ -1065,11 +1229,16 @@ export class HeadlessNodeFactory {
     return this.runExclusive(async () => {
       const flagError = unsupportedFlags(
         args,
+        // `run-now` (#925) is a no-op, since a server open already delivers immediately; only its
+        // pairing with `--after` is refused, just below.
         verb === 'open-terminal'
-          ? new Set(['count', 'cwd', 'cmd', 'after', 'project'])
-          : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model'])
+          ? new Set(['count', 'cwd', 'cmd', 'after', 'project', 'run-now'])
+          : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model', 'issue', 'run-now'])
       )
       if (flagError) return { ok: false, error: `${verb}: ${flagError}` }
+      // "Start now" and "start when X is done" contradict each other: refused in the desktop's
+      // words, before anything is created, rather than silently opening an armed node.
+      if (runNowRequested(args) && args.after) return { ok: false, error: RUN_NOW_AFTER_REFUSAL }
       if (!verified) {
         return {
           ok: false,
@@ -1089,6 +1258,18 @@ export class HeadlessNodeFactory {
       if (!Array.isArray(after)) return after
       const unownedAfter = this.unownedMutation(sourceNodeId, after)
       if (unownedAfter) return this.ownershipRefusal(verb, sourceNodeId, unownedAfter)
+      // `--issue`: resolved against the project the node OPENS IN, before anything is written. The
+      // shape gate already ran in `parseControlRequest`; this re-parses with the same grammar.
+      let issueRef: IssueRef | undefined
+      if (verb === 'open-agent' && args.issue !== undefined) {
+        const board = target.kanban?.github
+        const repository = board
+          ? (await this.deps.issueRepository?.(target.id).catch(() => null)) ?? board.repository ?? null
+          : null
+        const issue = resolveIssueArg(args.issue, repository)
+        if (!issue.ok) return { ok: false, error: `open-agent: ${issue.error}` }
+        issueRef = issue.ref
+      }
 
       const settings = this.deps.settings()
       const nodeSize = terminalSize(settings)
@@ -1161,7 +1342,8 @@ export class HeadlessNodeFactory {
           command = assembleLaunchCommand(
             {
               agentId: agentId as AgentId,
-              initialPrompt: args.prompt,
+              // An issue-bound session's first prompt is the REFERENCE line, never the issue's text.
+              initialPrompt: issueRef ? issueLaunchPrompt(issueRef, args.prompt) : args.prompt,
               permissionMode,
               sessionId: mintedSessionId,
               sessionIdFlagSupported,
@@ -1200,6 +1382,7 @@ export class HeadlessNodeFactory {
           cwd,
           ...(verb === 'open-agent' ? { agentId: agentId as AgentId } : {}),
           ...(args.model && verb === 'open-agent' ? { agentModel: args.model } : {}),
+          ...(issueRef && verb === 'open-agent' ? { issueRef } : {}),
           ...(mintedSessionId ? { agentSessionId: mintedSessionId } : {}),
           ...(source.node.accountId && verb === 'open-agent' &&
           (agentId === 'claude' || agentId === 'codex')
@@ -1233,24 +1416,42 @@ export class HeadlessNodeFactory {
         this.ownership.record(node.id, { sourceNodeId, projectId: target.id })
       }
       this.publish(target, created)
+      if (issueRef) {
+        for (const node of created) {
+          await this.logRun(target.id, runStartedEvent(issueRef, {
+            id: node.id,
+            title: node.title,
+            agentId: node.agentId,
+            agentSessionId: node.agentSessionId
+          }))
+        }
+      }
 
       const failed: string[] = []
+      // Why each one failed, reported per id (#925): a reply that says only "retained for Run now"
+      // hides the reason Run now would repeat (`line-too-long`).
+      const reasons: Record<string, HeadlessLaunchFailure> = {}
+      const fail = (id: string, reason: HeadlessLaunchFailure): void => {
+        failed.push(id)
+        reasons[id] = reason
+      }
       for (const node of created) {
         try {
-          const result = await this.attach(target, node)
-          if (!result.sessionId) {
-            failed.push(node.id)
+          const command = commands.get(node.id)
+          if (!command) {
+            // Nothing to deliver now (a plain terminal, or a launch held for `--after`): spawn only.
+            const result = await this.attach(target, node)
+            if (!result.sessionId) fail(node.id, 'spawn-failed')
+            else if (verb === 'open-agent' && result.fresh) this.awaitingFirstWorking.add(node.id)
             continue
           }
-          if (verb === 'open-agent' && result.fresh) this.awaitingFirstWorking.add(node.id)
-          const command = commands.get(node.id)
-          if (command) {
-            if (isLaunchShell(await this.deps.ptyManager.paneCommand(node.id)) &&
-                (await this.deps.ptyManager.sendText(node.id, command)) === true) node.pendingLaunch = undefined
-            else failed.push(node.id)
-          }
+          const launched = await this.launch(target, node, command)
+          if (verb === 'open-agent' && launched.fresh) this.awaitingFirstWorking.add(node.id)
+          if (launched.outcome === 'delivered') node.pendingLaunch = undefined
+          else fail(node.id, launched.reason)
         } catch {
-          failed.push(node.id)
+          // The launcher answers its own failures; only the spawn-only `attach` above throws.
+          fail(node.id, 'spawn-failed')
         }
       }
 
@@ -1272,10 +1473,13 @@ export class HeadlessNodeFactory {
       if (failed.length) {
         return {
           ok: false,
-          error:
-            `launch-failed: node(s) ${failed.join(', ')} were persisted but their PTY or initial ` +
-            'command could not be delivered; launch retained for Run now in the node; do not repeat the open request',
-          result: { ids, id: ids[0], after, ...launchResult }
+          error: launchFailedError(
+            created
+              .filter((node) => failed.includes(node.id))
+              .map((node) => ({ id: node.id, reason: reasons[node.id], retained: !!node.pendingLaunch })),
+            verb
+          ),
+          result: { ids, id: ids[0], after, ...launchResult, reasons }
         }
       }
       return {
@@ -1285,7 +1489,7 @@ export class HeadlessNodeFactory {
           ids.join(', ') +
           (queuedIds.length ? `; queued: ${queuedIds.join(', ')}` : '') +
           (deliveredIds.length ? '; launch delivered; agent startup is not confirmed' : ''),
-        result: { ids, id: ids[0], after, ...launchResult }
+        result: { ids, id: ids[0], after, ...launchResult, ...(issueRef ? { issue: `${issueRef.owner}/${issueRef.repo}#${issueRef.number}` } : {}) }
       }
     })
   }

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { MirrorFile, MirrorSettings } from '../../core/agent-status-mirror'
 import { initRemoteStatusPush, STATUS_EDGE_MIN_GAP_MS } from './remote-status-push'
+import { buildFile, EXPIRE_MS } from '../../core/agent-status-mirror'
 import type { AgentState } from '../../shared/agents/normalize'
 
 function doc(updatedAt: number, ids: string[]): MirrorFile {
@@ -62,6 +63,20 @@ describe('initRemoteStatusPush', () => {
     expect(Object.keys(p1.nodes)).toEqual(['a1'])
     const p2 = JSON.parse(pushes.find((p) => p.id === 'p2')!.json)
     expect(Object.keys(p2.nodes)).toEqual(['b1'])
+  })
+
+  it("pushes an IDENTITY-ONLY entry (state expired) so the phone keeps the node's session id", () => {
+    // The phone's chat view finds a node's transcript ONLY via the sessionId in this slice. Past
+    // EXPIRE_MS the mirror strips the state but keeps the identity; the slice must carry it.
+    const now = EXPIRE_MS * 2
+    const built = buildFile(
+      { a1: { state: 'done', agentId: 'claude', sessionId: 'sess-1', updatedAt: now - EXPIRE_MS - 1 } },
+      now
+    )
+    disposer = initRemoteStatusPush(deps())
+    flushCb!(built)
+    const slice = JSON.parse(pushes[0].json)
+    expect(slice.nodes.a1).toEqual({ agentId: 'claude', sessionId: 'sess-1', updatedAt: now - EXPIRE_MS - 1 })
   })
 
   it('throttles a burst into leading + one trailing push with the LATEST doc', () => {

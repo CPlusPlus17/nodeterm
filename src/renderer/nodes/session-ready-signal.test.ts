@@ -104,6 +104,14 @@ describe('the QUEUED badge carries the delivery state (source pins)', () => {
     )
   })
 
+  it('a background start reads STARTING, without the warning, and disables ▶ (#925)', () => {
+    // Core is typing the launch into this pane; a ▶ click would splice a second copy into it.
+    expect(src).toContain("const startingNow = launchDelivery?.kind === 'starting'")
+    expect(src).toContain("launchDelivery && !startingNow ? ' term-node__status--queued-warn' : ''")
+    expect(src).toContain("{startingNow ? 'STARTING' : `${launchDelivery ? '⚠ ' : ''}QUEUED`}")
+    expect(src).toContain("disabled={session.source === 'relay' || startingNow}")
+  })
+
 })
 
 describe('the eye button hides cards AND connections (source pins)', () => {

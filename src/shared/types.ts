@@ -1,4 +1,5 @@
 import type { TextDeliveryResult } from './text-delivery'
+import type { IdentitySeedEntry } from './agent-identity-seed'
 // Types shared across the main, preload, and renderer processes.
 
 import { TABBAR_HEIGHT_PX } from './window-chrome-metrics'
@@ -18,6 +19,7 @@ import type { GroupWorktree } from './worktree'
 import type { ClientId, DinoSnapshot, PeerDiff, PeerIdentity, PeerState } from './presence'
 import type { WhisperModelInfo } from './speech'
 import type { ProjectKanbanGitHub } from './github-issues'
+import type { KanbanPullAutoMove, KanbanPullLinks } from './kanban-pull-links'
 import type { CodexAccount } from './codex-account'
 import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
@@ -407,9 +409,10 @@ export interface PendingLaunch {
   /**
    * Which core process owns delivery. Absent is the historical renderer-owned path. Server
    * Edition headless opens stamp `server`, so a connected browser can render the armed state and
-   * dependency edges without racing the server to type the command into the same pane.
+   * dependency edges without racing the server to type the command into the same pane. The
+   * desktop's headless start (#925) stamps `core` on its manualOnly write-ahead claim.
    */
-  executor?: 'server'
+  executor?: 'server' | 'core'
   /**
    * Server-owned dependencies whose first real turn has not been observed yet. A freshly spawned
    * agent can briefly report `done` while its argv prompt is still booting; that idle blip must not
@@ -466,6 +469,15 @@ export interface CanvasNodeState {
   agentId?: AgentId
   /** Model selected for this agent node through the shared model gateway. */
   agentModel?: string
+  /**
+   * Agent nodes started on a GitHub issue ("Start with agent" on an issue card, or
+   * `open-agent --issue`): WHICH issue this session works on. It drives the binding chips (the
+   * issue card's run chips, the node header's `#N`) and the issue card's run history — never a
+   * launch line: the launch prompt was composed once, at creation, from a validated reference.
+   * Git-shared, so hostile input: `normalizeIssueRef` runs at both serializer seams. See
+   * @shared/github-issue-ref.
+   */
+  issueRef?: import('./github-issue-ref').IssueRef
   /**
    * One-shot "Restart on subscription" flag: when set, the next `transport.create` strips gateway +
    * inherited provider env (per `vanillaEnvStripPattern`) so the agent resumes against its own
@@ -630,19 +642,31 @@ export interface BridgeLink {
   target: string
 }
 
+/** Where a column sits in a card's lifecycle (see @shared/kanban-category). A closed set; an
+ *  unknown value read from a hand-edited or newer file reads as ABSENT (`columnCategory`), and is
+ *  left in the file untouched so a newer build's value survives an older build's save. */
+export type KanbanColumnCategory = 'unstarted' | 'started' | 'done' | 'closed'
+
 /** One kanban board column. Column order = array order in ProjectKanban.columns. */
 export interface KanbanColumn {
   id: string
   title: string
   color: string
+  /** Optional lifecycle category. Absent = uncategorized (the pre-category board, and any column
+   *  the user never categorized). Read it through `columnCategory`, never directly. */
+  category?: KanbanColumnCategory
 }
 
 /** Assignment of one session node to a board column. A session with no assignment sits
- *  in the virtual Ungrouped column (never persisted). Order within a column = relative
- *  order in ProjectKanban.assignments. */
+ *  in the virtual Ungrouped column (never persisted). Order within a column = `rank` (a
+ *  fractional-index string, @shared/kanban-rank), and for an entry without a valid one, its
+ *  position in ProjectKanban.assignments (@shared/kanban-order `columnOrder`). Every write keeps
+ *  the ARRAY in rank order too, so a build that ignores `rank` shows the same column. */
 export interface KanbanAssignment {
   nodeId: string
   columnId: string
+  /** Optional position key within the column. Absent / invalid ⇒ derived from array order. */
+  rank?: string
 }
 
 /** Per-project kanban board (docs/superpowers/specs/2026-07-18-kanban-view-design.md).
@@ -688,9 +712,32 @@ export interface KanbanLabel {
   color: KanbanLabelColor
 }
 
+/** A saved board view's filters (@shared/kanban-views). SHARED content: a view is how a team
+ *  looks at its board. Deliberately NOT here: the live-state status chips (never persisted
+ *  anywhere) and display preferences like showing closed columns (per user, localStorage). */
+export interface KanbanViewQuery {
+  /** The source filter; absent = all. */
+  source?: 'all' | 'github' | 'pulls' | 'sessions'
+  /** Label filter keys (`local:<labelId>` | `github:<folded name>`); OR within the list. */
+  labels?: string[]
+  /** Assignee names (the presence identity's name); a card needs one of them. */
+  assignees?: string[]
+  /** Column ids to SHOW (`ungrouped` names the virtual column); absent/empty = every column. */
+  columns?: string[]
+}
+
+export interface KanbanSavedView {
+  id: string
+  name: string
+  query: KanbanViewQuery
+}
+
 export interface ProjectKanban {
   columns: KanbanColumn[]
   assignments: KanbanAssignment[]
+  /** Saved views — named filter sets shared with everyone on the board. Tolerated as absent or
+   *  malformed (sanitizeViews); the ACTIVE view is per user (localStorage), never here. */
+  views?: KanbanSavedView[]
   /** Optional card metadata; tolerated as absent/malformed by every reader (lib normalizes). */
   meta?: KanbanCardMeta[]
   /** Board-level label palette (Notion-style). Cards reference these by id in `meta[].labels`;
@@ -698,6 +745,9 @@ export interface ProjectKanban {
   labels?: KanbanLabel[]
   /** Shared, non-secret GitHub issue label mapping. Local approval and credentials live elsewhere. */
   github?: ProjectKanbanGitHub
+  /** Card ↔ pull request link tombstones and per-card auto-move opt-outs (@shared/kanban-pull-links).
+   *  Hostile input: read only through `readPullLinks`. */
+  pullLinks?: KanbanPullLinks
 }
 
 /** Who produced a board-log entry (a teammate on a shared board, or this user). */
@@ -731,10 +781,27 @@ export interface BoardLogEvent {
      *  agent node so it files under that agent's card. Written BEFORE the read (fail-closed): a cookie
      *  read that happened but was not recorded is the one outcome this trace exists to prevent. */
     | 'agent-read-cookies'
+    /** An agent session was started on a GitHub issue. Filed under the issue CARD's board-log
+     *  identity (`issueLogId`), not the node's, so the issue keeps its run history after the
+     *  session's node is gone. `run` names the session; `title` is the node title at the time. */
+    | 'run-started'
+    /** That session's node was closed. `run.end` is the last agent state observed at that
+     *  moment — a turn ending (`done`) is NOT a run ending, which is why this is written only when
+     *  the node goes. */
+    | 'run-ended'
   from?: string
   to?: string
-  /** Column title for column-added/deleted; card title for card-created; outcome for agent-message. */
+  /** Column title for column-added/deleted; card title for card-created; outcome for agent-message;
+   *  for card-moved, the reason when the board moved the card itself ("PR #12 merged"). */
   title?: string
+  /** run-started / run-ended only. No cost or token figure: nodeterm has no cumulative number for
+   *  a session, and a context-window reading is not one. */
+  run?: {
+    nodeId: string
+    agentId?: string
+    sessionId?: string
+    end?: 'done' | 'working' | 'waiting' | 'blocked' | 'errored' | 'dropped' | 'unknown'
+  }
 }
 
 /** One line of the append-only board history (`.nodeterm/board-log.jsonl`). A `comment`
@@ -1070,6 +1137,16 @@ export interface PtyApi {
    *  node persistKey. null when it is unknown — no session, no tmux, or the query failed — which
    *  callers must read as "not observed", never as evidence of a particular command. */
   paneCommand(persistKey: string): Promise<string | null>
+  /**
+   * Desktop only (#925). Spawn-or-attach a node's session with no viewer and deliver `command`
+   * through the echo-verified writer, then release the synthetic client (the tmux session keeps
+   * running). Refused as `not-persistent` without tmux or the session-host. The Server Edition
+   * starts nodes through its own factory, so the browser build rejects with E_UNSUPPORTED.
+   */
+  launchHeadless(req: {
+    ptyOptions: PtyCreateOptions
+    command: string
+  }): Promise<import('./headless-launch').HeadlessLaunchResult>
   /** Kernel truth about a node's pane — its root pid, tty, tmux pane id and the full argv of its
    *  foreground process group — so a caller can ask WHO owns the pane rather than what tmux calls
    *  it. `null` is "could not read", never evidence that the pane is free (see `isAgentPane`'s
@@ -1914,6 +1991,11 @@ export interface Settings {
    *  be turned off for a user by a repository they cloned. A waiver is a statement about this
    *  machine's trust in its own agents, so it lives here and NEVER in a project file. */
   controlConfirmWaivers?: ControlConfirmWaivers
+  /** Machine-local: move a session card to a column once every pull request linked to it has
+   *  merged (@shared/kanban-pull-links — why this is here and never in the project file). Absent —
+   *  and absent from DEFAULT_SETTINGS — means off everywhere. Read through
+   *  `sanitizeKanbanPullAutoMove`: settings.json is hand-editable. */
+  kanbanPullAutoMove?: KanbanPullAutoMove
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -2676,9 +2758,18 @@ export interface ClaudeUsage {
   updatedAt: number
   /**
    * 'unavailable' = no OAuth subscription token (API-key billing / logged out) → hide pill.
-   * 'fetching' = request in flight. 'ok' = windows present. 'error' = fetch failed.
+   * 'fetching' = request in flight. 'ok' = windows present. 'error' = fetch failed — and when
+   * `limits` is non-empty alongside it, those are the LAST GOOD numbers the service kept
+   * (`holdLastGood`), still stamped with their own `updatedAt`.
    */
   status: 'unavailable' | 'fetching' | 'ok' | 'error'
+  /**
+   * The latest read was refused with HTTP 429. The usage endpoint's request budget is also
+   * spent by every Claude CLI using the same login (the CLI reads this endpoint itself), so a
+   * host running dozens of sessions can exhaust it without us. Absent = not rate limited (or
+   * not known to be).
+   */
+  rateLimited?: boolean
 }
 
 /**
@@ -2896,11 +2987,13 @@ export interface ChatTranscriptResult {
    */
   unmatchedResults?: ChatCarriedToolResult[]
   /**
-   * PAGED claude reads only: the newest assistant record's `message.model` in the returned window
-   * (`<synthetic>` error lines skipped). Absent when the window has none, and on the legacy read.
+   * PAGED reads only: the newest assistant record's model in the returned window — claude's
+   * `message.model` (`<synthetic>` error lines skipped), grok's `model_id`. Absent when the window
+   * has none, and on the legacy read.
    */
   model?: string
-  /** PAGED claude reads only: the newest assistant record's top-level `effort` in the window. */
+  /** PAGED reads only: that same record's effort — claude's top-level `effort`, grok's
+   *  `reasoning_effort`. Never carried forward from an older record. */
   effort?: string
   /** PAGED reads only, with `found: false`: the transcript could not be READ (a remote host that did
    *  not answer, a growth re-read that failed, a remote node with no reachable master) — as opposed
@@ -3885,6 +3978,11 @@ export interface NodeTerminalApi {
    *  mirrors it into the agent-status file so the phone can render SLEEPING). Fire-and-forget;
    *  called on every `setHibernated` change and replayed for the persisted set at boot. */
   reportHibernated(nodeId: string, on: boolean): void
+  /** Seed the core's agent-status mirror with node identities from this renderer's persisted
+   *  agentStatus store (see `@shared/agent-identity-seed`). Fire-and-forget and add-only: the core
+   *  fills only nodes it has no session for, and validates every field. A relay tab's api is a
+   *  deliberate no-op — its nodes belong to another core, whose own renderer seeds it. */
+  seedAgentIdentity(entries: IdentitySeedEntry[]): void
   /** Fires when the core asks this renderer to WAKE a hibernated node NOW (a phone viewer just
    *  attached to its session over the relay). A nudge with `wakeHibernatedNode`'s exact contract:
    *  re-read the flag, no-op when not hibernated or not mounted. Returns unsubscribe.

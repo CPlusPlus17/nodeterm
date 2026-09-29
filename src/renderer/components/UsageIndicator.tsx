@@ -19,9 +19,11 @@ import {
   barFillPercent,
   formatResetCountdown,
   formatTimeAgo,
+  heldUsageText,
   percentNumber,
   percentText,
-  severityColor
+  severityColor,
+  usageFailureText
 } from '../lib/usageFormat'
 import {
   enabledProviders,
@@ -103,6 +105,12 @@ function DefaultAccountMark({
       Use for new sessions
     </button>
   )
+}
+
+/** Why the bars above are old — only for numbers kept through a failed read. */
+function HeldNote({ u }: { u: ClaudeUsage | null | undefined }) {
+  const text = u ? heldUsageText(u) : null
+  return text ? <div className="usage-popover__held">{text}</div> : null
 }
 
 /** Where a bulk move can send an account's sessions: another account on the same machine. */
@@ -194,9 +202,10 @@ function AccountUsageBlock({
       {u?.limits.map((l) => (
         <LimitRow key={limitKey(l)} limit={l} mode={mode} />
       ))}
+      <HeldNote u={u} />
       {u && u.limits.length === 0 && (
         <div className="usage-popover__empty">
-          {u.status === 'error' ? 'Could not read usage.' : 'No usage data.'}
+          {u.status === 'error' ? usageFailureText(u) : 'No usage data.'}
         </div>
       )}
       {!u && <div className="usage-popover__empty usage-pill__pulse">···</div>}
@@ -242,9 +251,10 @@ function RemoteUsageBlock({
       {row.usage.limits.map((l) => (
         <LimitRow key={limitKey(l)} limit={l} mode={mode} />
       ))}
+      <HeldNote u={row.usage} />
       {row.usage.limits.length === 0 && (
         <div className="usage-popover__empty">
-          {row.usage.status === 'error' ? 'Could not read usage on this host.' : 'No usage data.'}
+          {row.usage.status === 'error' ? usageFailureText(row.usage, 'on this host') : 'No usage data.'}
         </div>
       )}
     </div>
@@ -655,11 +665,12 @@ export function UsageIndicator({
                   {limits.map((l) => (
                     <LimitRow key={limitKey(l)} limit={l} mode={percentMode} />
                   ))}
+                  <HeldNote u={claudeUsage} />
                   {/* Another provider's data must not hide a failed Claude read. Keep any
                       last-known Claude bars instead of replacing them with the empty state. */}
                   {((!hasData && !providerError) || (claudeError && limits.length === 0)) && (
                     <div className="usage-popover__empty">
-                      {claudeError ? 'Could not read usage.' : 'No usage data.'}
+                      {claudeError ? usageFailureText(claudeUsage) : 'No usage data.'}
                     </div>
                   )}
                   {(claudeUsage?.email || claudeUsage?.organization) && (

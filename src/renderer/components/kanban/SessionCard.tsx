@@ -8,6 +8,12 @@ import { NodeIconView } from '../NodeIcon'
 import { LabelChips } from './LabelChips'
 import { PRIORITIES } from './CardMetaBar'
 import type { KanbanSession } from './KanbanView'
+import type { GitHubPullStatus, PullStatusFreshness } from '@shared/github-pull-status'
+import { PullRefChip } from './PullStatusBadges'
+import type { IssueRef } from '@shared/github-issue-ref'
+import { IssueRefChip } from '../IssueRefChip'
+import { cardBadge } from '../../lib/kanbanStatusChips'
+import { cardAssignees } from '@shared/kanban-labels'
 
 const PRIO_COLOR = Object.fromEntries(PRIORITIES.map((p) => [p.id, p.color])) as Record<KanbanPriority, string>
 
@@ -26,10 +32,16 @@ interface SessionCardProps {
   onDropAt: (nodeId: string, side: 'before' | 'after') => void
   /** Right-click on the card — opens the actions menu at the cursor. */
   onContext: (nodeId: string, x: number, y: number) => void
+  /** Pull requests linked to this card through its worktree branch (stable array per card). */
+  pulls?: GitHubPullStatus[]
+  pullFreshness?: PullStatusFreshness
+  /** The session's `#N` chip (it was started on a GitHub issue): open that issue. */
+  onOpenIssue?: (ref: IssueRef) => void
 }
 
 export const SessionCard = memo(function SessionCard({
-  session, meta, labels = [], onOpen, onDragStart, onDragEnd, onDropAt, onContext
+  session, meta, labels = [], onOpen, onDragStart, onDragEnd, onDropAt, onContext, pulls,
+  pullFreshness = 'fresh', onOpenIssue
 }: SessionCardProps) {
   // THIS card's agent status, subscribed per card rather than threaded down from the board.
   // KanbanView used to hold `useAgentStatus((s) => s.byId)` and pass the map through the column:
@@ -50,28 +62,13 @@ export const SessionCard = memo(function SessionCard({
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     return e.clientY < r.top + r.height / 2 ? 'before' : 'after'
   }
-  // The board is the canvas's other view of the same sessions, and it reads the same store — so
-  // SLEEPING (Eco: the agent CLI was exited to reclaim its RAM) is one more branch here, not a
-  // follow-up. Ranked last: a hibernated node is idle by definition, so `working`/`waiting` can
-  // only mean the wake already landed and the hooks are ahead of the flag.
-  // DROPPED (the CLI died unannounced — see terminal/agent-liveness.ts) is ranked FIRST: it is the
-  // strongest claim on the card, and it cannot actually collide with the others, since the verdict
-  // is only ever raised on a `done` node that is neither paused nor hibernated. Ordering it here is
-  // about which sentence a reader of this chain meets first, not about resolving a conflict.
-  const badge =
-    session.kind !== 'sticky' && status?.dropped
-      ? 'dropped'
-      : session.kind !== 'sticky' && status?.state === 'working'
-        ? 'running'
-        : session.kind !== 'sticky' && (status?.state === 'waiting' || status?.state === 'blocked')
-          ? 'needs'
-          : session.kind !== 'sticky' && status?.paused
-            ? 'paused'
-            : session.kind !== 'sticky' && status?.hibernated
-              ? 'sleeping'
-              : null
+  // The board is the canvas's other view of the same sessions and reads the same store, so the
+  // node's pause/liveness chips (DROPPED, PAUSED, SLEEPING) are badges here too.
+  // The ONE badge rule, shared with the board's status chips (lib/kanbanStatusChips), so a chip
+  // can never select cards whose badge says something else. The ranking and its reasons live there.
+  const badge = cardBadge(session.kind, status)
   const stickyPreview = session.kind === 'sticky' ? (session.text ?? '').trim() : ''
-  const assignees = meta?.assignees ?? []
+  const assignees = cardAssignees(meta)
   const due = meta?.dueAt
   const overdue = due !== undefined && due < Date.now()
   const priority = meta?.priority
@@ -85,6 +82,10 @@ export const SessionCard = memo(function SessionCard({
         dropSide ? ` kanban-card--drop-${dropSide}` : ''
       }`}
       draggable
+      // Focusable, and named for the board's keyboard (J/K/arrows walk these, Space opens one —
+      // KanbanView's board-key handler finds the current card through this attribute).
+      tabIndex={0}
+      data-kanban-card={session.id}
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move'
         setDragging(true)
@@ -119,6 +120,9 @@ export const SessionCard = memo(function SessionCard({
         <span className="kanban-card__nodedot" style={{ background: session.color }} />
         <NodeIconView icon={session.icon} size={14} className="kanban-card__icon" />
         <span className="kanban-card__title">{session.title}</span>
+        {session.kind === 'terminal' && onOpenIssue && (
+          <IssueRefChip issueRef={session.issueRef} onOpen={onOpenIssue} />
+        )}
         {session.kind === 'sticky' && <span className="kanban-card__kind">note</span>}
         {session.kind === 'browser' && <span className="kanban-card__kind">web</span>}
         {badge === 'dropped' && (
@@ -149,6 +153,13 @@ export const SessionCard = memo(function SessionCard({
         )}
         {status?.unread && <span className="kanban-card__unread" />}
       </div>
+      {pulls && pulls.length > 0 && (
+        <div className="pull-refs pull-refs--session">
+          {pulls.slice(0, 3).map((pull) => (
+            <PullRefChip key={pull.number} status={pull} freshness={pullFreshness} />
+          ))}
+        </div>
+      )}
       {(labels.length > 0 || assignees.length > 0 || due !== undefined || priority !== undefined) && (
         <div className="kanban-card__metarow">
           {/* Labels share the priority/due/avatars row (left); the meta chips hug the right. */}

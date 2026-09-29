@@ -49,8 +49,14 @@ describe('the cold-open dispatch block (source pins)', () => {
     expect(guard, 'the cold-open guard inside the routing block').toBeGreaterThan(-1)
     expect(refusal, 'the off-screen refusal').toBeGreaterThan(guard)
     // …and it RETURNS, so control cannot fall through to the refusal after writing the node —
-    // which would answer an agent "nothing was changed" about a node it just queued.
-    expect(coldOpenBody()).toMatch(/queuedIds: coldIds\s*\}\s*\}\)\s*return\s*\}/)
+    // which would answer an agent "nothing was changed" about a node it just queued. Both exits
+    // return: the plain cold-open reply, and the `--run-now` reply built from it (#925).
+    const body = coldOpenBody()
+    expect(body).toMatch(/queuedIds: coldIds\s*\}\s*as Record<string, unknown>\s*\}/)
+    expect(body).toMatch(
+      /reply\(mergeRunNow\(coldReply, await startNodesHeadlessRef\.current\(owner, held\)\)\)\s*return\s*\}/
+    )
+    expect(body).toMatch(/reply\(coldReply\)\s*return\s*\}/)
   })
 
   it('the guard polarity is not inverted — a NON-cold verb must not be cold-written', () => {

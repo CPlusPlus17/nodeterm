@@ -13,6 +13,7 @@ import {
   type PromptInjectionMode,
 } from "../shared/agents/config";
 import { approvalFlags } from "../shared/agents/approval-mode";
+import { SAFE_SESSION_ID } from "../shared/session-id";
 
 /** The parser that owns a live local Windows-profile terminal. */
 export type AgentLaunchDialect =
@@ -109,7 +110,6 @@ interface ResolvedAgentConfig {
   builtin: boolean;
 }
 
-const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
 const SAFE_NEW_SESSION_UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 // PowerShell and POSIX parsers also treat Unicode line/paragraph separators as command boundaries

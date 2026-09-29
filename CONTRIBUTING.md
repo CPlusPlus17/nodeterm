@@ -125,12 +125,46 @@ the list path feeding it). Columns take lanes and name no source; the drag path 
 `placement`. If you find yourself writing `=== 'github'` outside the registry, the registry is
 missing a field.
 
+A board feature has to say which of three tiers it lives in: a **board fact** is shared content
+in `project.kanban` (`.nodeterm/project.json`) — optional, sanitized in `sanitizeKanban`
+(`core/workspace-files.ts`, which every load and save seam runs) and harmless to an older build;
+a **display preference** is per-user localStorage (`state/kanbanDisplay.ts`); a filter on **live
+agent state** is component state and is never persisted. An unanchored card move lands at the TOP
+of its column; only a positional drop asks for the bottom (`AT_COLUMN_END`). Card order is a
+`rank` string, and every write — renderer or core — goes through `placeAssignment`
+(`@shared/kanban-order`), which also keeps the assignments ARRAY in rank order for builds that
+ignore `rank`; never splice the array by hand. A saved view's query is built only by `viewQuery`,
+so the live-state chips can never be saved into one. Board keys are
+registry commands in the `board` scope — the only scope allowed a bare letter, because it never
+fires while typing or in a terminal.
+
 Before adding a GitHub read, check what the existing poll already fetches. Pull request cards
 needed no new request at all: `/repos/{repo}/issues` returns pull requests, and the client used to
 discard them. `/repos/{repo}/pulls` looks like the obvious endpoint and is the expensive one — it
 **ignores `since`**, so it can reuse none of the incremental machinery, and its items are ~3.5× the
 bytes. CLAUDE.md's kanban section has the measurements and the eviction rule that keeps the issue
 lane unaffected.
+
+Three rules for any new GitHub call (CLAUDE.md's kanban section, "Sync foundation", has the why):
+- **Never decide what a failure means yourself.** Pass it through `classifyGitHubFailure`
+  (`core/github/failure.ts`). Only `unauthorized` may ever read as "signed out"; a rate limit, an
+  outage or a dropped connection must say so instead, or the user re-authenticates an account that
+  is fine.
+- **Go through the request coordinator and a client built by the host.** That is what feeds every
+  response's rate budget to the coordinator, pauses background work below the floor and caps waits.
+  A request that bypasses it is invisible to the budget. Prefer a conditional request
+  (`If-None-Match`) for anything you poll: a 304 is free.
+- **A write whose meaning comes from the project file needs `context.mappingApproved`.** The column
+  mapping is git-shared; approval covers it, and reads do not need it.
+- **GraphQL spends a different budget.** GitHub meters `graphql` apart from `core`; ask the
+  coordinator with the resource (`throttle(identity, now, 'graphql')`) and let a primary limit carry
+  its `resource`, or a spent GraphQL budget stalls REST issue sync. A GraphQL field the token may
+  not read comes back `null` plus a FORBIDDEN error — decode that as "hidden", never as its empty
+  value (a null check rollup alone means "no checks").
+
+Do not add a field inside `ProjectKanban.meta[]` entries: every card-meta setter (assignees, due,
+priority, labels, the phone's label verb) rebuilds the entry from a fixed list and silently drops
+anything else. Board-level fields survive every transform — `pullLinks` is one.
 
 ## House rules
 
@@ -140,6 +174,14 @@ lane unaffected.
   keyed by API identity, exact cwd and (for SSH) project identity. Never probe an SSH cwd locally
   from a background header: only the active SSH project is git-routable. SSH headers observe
   Source refreshes instead.
+
+- **A GitHub issue reaches a pane only as a validated reference.** Issue titles and bodies are
+  written by strangers on public repositories, and a launch line is typed into a shell. Anything
+  that starts or instructs an agent about an issue goes through `@shared/github-issue-ref`:
+  `issueLaunchPrompt` (the only composer, which re-validates `owner/repo#N` itself) for text, and
+  `normalizeIssueRef` wherever a stored `issueRef` is read — it comes from a git-shared file. Never
+  interpolate `issue.title`/`issue.body` into a prompt, and never add a path that posts an agent's
+  output to GitHub on its own: posting is public, and only the user asks for it.
 
 - **Hook decision JSON is built in core, never in the renderer or the script.** To answer a held
   Claude permission request with more than `allow`/`deny` (a plan's follow-on mode, a question's
@@ -187,6 +229,29 @@ lane unaffected.
   hand-rolled swatch row) — and if the value will be drawn as TEXT or as an opaque fill under
   white, take `SYSTEM_NODE_COLOR_SWATCHES` instead, with the contrast reason in a comment. Deep
   version, including the measured numbers: CLAUDE.md § Node colors.
+
+- **The Antigravity hook is a gate in front of every `agy` tool call on the machine — treat its
+  stdout as a decision.** `agy` reads hook stdout as JSON and our hook, in the global
+  `~/.gemini/config/hooks.json`, is subscribed to `PreToolUse`. Measured: silence runs the tool, but
+  `{}`, any stray non-JSON byte and a non-zero exit DENY it — in nodeterm and in the user's own
+  terminals. So: change answers only in `antigravity-decision.ts` (the one table); print nothing
+  after the answer; keep the Windows command free of quotes (agy escapes them as `\"`, which cmd.exe
+  cannot read) and test Windows dispatch WITHOUT `windowsVerbatimArguments`; keep the `AutoRun`
+  refusal. Deep version: `docs/antigravity-agent.md` and CLAUDE.md § Agent support.
+
+- **Finding `agy` for hook installation is not enough to launch it.** The measured Windows
+  installer wrote `%LOCALAPPDATA%\agy\bin` into a `REG_SZ` user PATH, so command lookup kept the
+  percent expression literal and `agy` was not found even though its executable existed. Local
+  Antigravity PTYs therefore APPEND the directory returned by the same vendor-location lookup the
+  hook installer uses, and only when no PATH entry already names it (`pathWithAgyDir`) — never
+  prepend: on macOS/Linux agy lives in a shared directory, and moving it ahead of the user's entries
+  shadows their own tools. Keep that correction scoped to Antigravity sessions and out of SSH
+  sessions. (The separate Windows `Path`→`PATH` key fix-up applies to every Windows spawn.)
+
+- **Our hooks.json bundle is the user's to switch off.** `"enabled": false` on `nodeterm-status` in
+  `~/.gemini/config/hooks.json` is agy's own switch and nodeterm's only opt-out; the installer
+  carries it across every rewrite. hooks.json is published through the shared settings transaction
+  (`updateSettingsFile`) — never a bare write, which replaced a symlinked file with a regular one.
 
 - **Every loosening of a security gate must be a SETTING the user can see and revoke.** A "don't
   ask again" that lives only in a dialog is a permission granted once and never findable again. The
@@ -790,7 +855,11 @@ coordinate nodeterm, not external editors, so do not claim a filesystem-wide com
 **Creating an agent node is not proof it started.** Control opens retain their launch command
 until delivery is acknowledged, and report `queued` while it is held. A successful terminal send
 proves delivery only; never describe it as a healthy/running agent without agent evidence.
-Desktop launches (automatic and Run now) use the echo-verified command writer, not `sendText`.
+Every launch uses the echo-verified command writer (`@shared/command-delivery`), not `sendText`:
+desktop automatic and Run now, the desktop's headless start, and the Server Edition's immediate
+open and `run` (the last three through `core/headless-launch.ts`). The Server Edition's deferred
+`--after` release (`refreshArmed`) is the one remaining `sendText` launch, pending a move that must
+never create a session.
 Keep unsubmitted UI intent durable through shell settle/unmount. New intent carries `attempted:false`;
 Desktop and Server save `attempted:true` before input. Never-attempted warm `--after` launches may
 proceed after shell verification; attempted/legacy-unknown intent requires Run now. Only confirmed
@@ -805,6 +874,17 @@ while save replaces the entire host index. A pre-input parked-project deferral k
 never-attempted; it must not poison the writer or trigger a retry timer.
 Held Desktop launches retain their attached transport even offscreen with tmux (large fan-outs cost
 memory). Server deferred delivery is one-shot: a failed probe/send needs explicit recovery.
+A headless start (`--run-now` / `run`, #925) follows the same contract: the claim is saved before
+any spawn, and "started" means the echo-verified writer submitted the line (never that the agent is
+healthy). The desktop releases its headless client, so there a start without a persistent terminal
+backend fails `not-persistent` and hands the node back unchanged (a cold open stays an ordinary
+queued node) rather than leaving a shell that the next mount would orphan. Normally that refusal
+comes before any spawn; if the backend vanishes between the probe and the spawn, the plain shell it
+got is refused before anything is typed, and releasing it kills it. A remote (SSH) node, and any
+node of an SSH project, is refused in the renderer before the claim (`remote-unsupported`), which is
+the primary fence. As a belt
+behind it, an SSH-project node's request carries `requireRemote`, which `desktopHeadlessRequest`
+keeps, so core's `spawnNew` refuses rather than spawning it locally. Keep both fences.
 
 ## Testing
 

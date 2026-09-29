@@ -20,6 +20,7 @@ import {
 } from '../shared/types'
 import { bundledTmuxPath, findCommand, findFixedTmux, tmuxInstall } from './tmux-hint'
 import { hookServer, PERM_WAIT_SECS_DEFAULT } from './agents/hook-server'
+import { findAgy, pathWithAgyDir } from './agents/hooks/antigravity'
 import {
   probeSaysAbsent,
   remoteHookEnvArgs,
@@ -109,7 +110,13 @@ import {
 } from './codex-identity-proxy'
 import { ensureNodeToken, ensureRemoteNodeToken, sweepNodeToken } from './agents/node-token-service'
 import { clearNode as clearNodeAgentStatus } from './agent-status-mirror'
-import { hasSharedIdentity, setCustomAgentBaseResolver, vanillaEnvStripPattern, type AgentId } from '../shared/agents/config'
+import {
+  capabilityAgentId,
+  hasSharedIdentity,
+  setCustomAgentBaseResolver,
+  vanillaEnvStripPattern,
+  type AgentId
+} from '../shared/agents/config'
 import { findCustomAgent } from '../shared/agents/custom-agent'
 import { applyCustomAgentEnv, customAgentEnvArgs } from './custom-agent-env'
 import {
@@ -520,6 +527,8 @@ export { findInLoginPath } from './exec-path'
 
 /** A UI client: an Electron webContents id or a ServerPlatform uiId. */
 type ClientId = number
+/** The synthetic subscriber of a spawn no viewer initiated (see createHeadless). */
+const HEADLESS_CLIENT: ClientId = 0
 
 /** A viewer id: which VIEW within one client. `PRIMARY_VIEWER` is the default view — the canvas
  *  node, and every legacy call that omits a viewerId. A second view in the SAME renderer (the
@@ -893,6 +902,8 @@ export class PtyManager {
   private unknownEnds = new Set<string>()
   /** Shell-owned cleanup runs after end processing and, for session host, its kill acknowledgement. */
   private sessionEndedListeners = new Set<(persistKey: string) => void>()
+  /** Per-node output taps for core consumers (the headless launcher's settle + echo, #925). */
+  private outputListeners = new Map<string, Set<(chunk: string) => void>>()
   /** persistKey (node id) → the co-viewers of a session that was RECYCLED (moved into a worktree),
    *  waiting to be told to restart onto the replacement session. Held — not sent — until that
    *  session is registered (`spawnSession`), so a co-viewer's restart can never win the race and
@@ -1993,7 +2004,64 @@ export class PtyManager {
    * account scoping, project env and ownership recording still run through `create` unchanged.
    */
   createHeadless(options: PtyCreateOptions): Promise<PtyCreateResult> {
-    return this.create(0, options)
+    return this.create(HEADLESS_CLIENT, options)
+  }
+
+  /**
+   * Would a spawn right now outlive its client? The same test `spawnNew` applies: tmux found and
+   * enabled, or the session-host backend (Windows). The desktop headless launcher refuses without
+   * it: it releases its client after delivery, and releasing a plain shell kills it (#925).
+   */
+  persistentSpawnAvailable(): boolean {
+    if (this.tmuxPath && this.getSettings().tmuxEnabled) return true
+    return this.hostBackendEligible()
+  }
+
+  /** Subscribe to a node's output as core sees it (after buffering, before fan-out). */
+  onOutput(persistKey: string, cb: (chunk: string) => void): () => void {
+    let set = this.outputListeners.get(persistKey)
+    if (!set) {
+      set = new Set()
+      this.outputListeners.set(persistKey, set)
+    }
+    set.add(cb)
+    return () => {
+      const s = this.outputListeners.get(persistKey)
+      if (!s) return
+      s.delete(cb)
+      if (!s.size) this.outputListeners.delete(persistKey)
+    }
+  }
+
+  /** The live session a node id names: the persist index first, then any session spawned for it
+   *  (a plain shell carries the id only as `nodeId`). */
+  private liveSessionForNode(persistKey: string): [string, Session] | undefined {
+    const indexed = this.byPersistKey.get(persistKey)
+    const hit = indexed ? this.sessions.get(indexed) : undefined
+    if (indexed && hit) return [indexed, hit]
+    for (const [id, s] of this.sessions) {
+      if (s.persistKey === persistKey || s.nodeId === persistKey) return [id, s]
+    }
+    return undefined
+  }
+
+  /**
+   * Type into a node's pane AS the headless client. False unless client 0 subscribes to a live
+   * session for that node, so a launch can never type into a pty it did not attach. Writes the
+   * process directly rather than through `write()`: the synthetic client is not a person, so it
+   * must not light the team typing badge.
+   */
+  writeHeadless(persistKey: string, data: string): boolean {
+    const live = this.liveSessionForNode(persistKey)
+    if (!live || !this.subscribes(HEADLESS_CLIENT, live[0])) return false
+    live[1].proc.write(data)
+    return true
+  }
+
+  /** Drop the headless client. The tmux session keeps running, exactly as `kill()` always leaves it. */
+  releaseHeadless(persistKey: string): void {
+    const live = this.liveSessionForNode(persistKey)
+    if (live) this.kill(HEADLESS_CLIENT, live[0])
   }
 
   private async create(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
@@ -2952,6 +3020,16 @@ export class PtyManager {
     // advertise it — without this, zsh themes and TUIs quietly clamp to the 256 palette and
     // the canvas terminals never match the user's real terminal colors (issue #78).
     const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' } as Record<string, string>
+    if (process.platform === 'win32') {
+      // `process.env` commonly exposes this as `Path`. The copied object is case-sensitive, so a
+      // later `env.PATH = ...` would leave BOTH names in node-pty's environment block. ConPTY uses
+      // the first case-insensitive match, which is then the stale `Path` value. Canonicalise once
+      // before any PATH layer is applied so every downstream writer replaces the same entry.
+      const pathKeys = Object.keys(env).filter((key) => key.toUpperCase() === 'PATH')
+      const inheritedPath = env.PATH ?? (pathKeys.length ? env[pathKeys[0]] : undefined)
+      for (const key of pathKeys) delete env[key]
+      if (inheritedPath !== undefined) env.PATH = inheritedPath
+    }
     // The Server Edition may receive a first-boot password through its own environment. That
     // bootstrap credential belongs to the server process, never to the interactive shells and
     // agent CLIs it launches; inheriting it here would expose it to every terminal node.
@@ -2967,6 +3045,22 @@ export class PtyManager {
     // paths spawn late enough that the init()-time prewarm has long since settled.
     const shellPath = shellPathNow() ?? null
     if (shellPath) env.PATH = shellPath
+
+    // The agy installer writes `%LOCALAPPDATA%\agy\bin` into a REG_SZ user PATH on Windows.
+    // Windows does not expand that nested variable during command lookup, so `agy` is absent even
+    // though our hook installer finds the executable through its vendor-location fallback. APPEND
+    // the directory that same lookup proved, and only when no entry already names it
+    // (`pathWithAgyDir`): prepending shadowed the user's own tools on macOS/Linux, where agy sits in
+    // a shared directory. Keep plain terminals and remote sessions untouched; on SSH the executable
+    // and PATH belong to the host.
+    if (
+      options.agentId &&
+      capabilityAgentId(options.agentId as AgentId) === 'antigravity' &&
+      !options.sshRemote
+    ) {
+      const agy = findAgy()
+      if (agy) env.PATH = pathWithAgyDir(env.PATH, path.dirname(agy))
+    }
 
     // Same GUI-launch gap for the locale: with no LANG/LC_* the shell's `locale` is "C" (non-UTF-8),
     // so Claude Code and other TUIs fall back to ASCII box-drawing (rounded borders render as `_`/`|`).
@@ -3881,6 +3975,17 @@ export class PtyManager {
     session.buf = []
     session.bufBytes = 0
     session.onData?.(data) // relay host sink (unchanged)
+    const tapKey = session.persistKey ?? session.nodeId
+    const taps = tapKey ? this.outputListeners.get(tapKey) : undefined
+    if (taps) {
+      for (const cb of [...taps]) {
+        try {
+          cb(data)
+        } catch (error) {
+          console.warn('[pty] output tap failed', error instanceof Error ? error.message : String(error))
+        }
+      }
+    }
     const channel = IPC.ptyData(sessionId)
     // One send per distinct client — a client's views share the per-client `pty:data:<id>` channel.
     for (const client of this.clientsOf(session)) this.send(client, channel, data)

@@ -47,7 +47,7 @@ export function controlLaunchState(
   pending: boolean,
   delivery: LaunchDelivery | undefined,
   status?: { dropped?: boolean; state?: AgentState }
-): 'queued' | 'stalled' | 'failed' | 'dropped' | 'working' | undefined {
+): 'queued' | 'stalled' | 'failed' | 'starting' | 'dropped' | 'working' | undefined {
   if (pending) return delivery?.kind ?? 'queued'
   if (status?.dropped) return 'dropped'
   if (status?.state === 'working') return 'working'
@@ -126,6 +126,10 @@ export function launchesToFire(
     const p = n.data.pendingLaunch
     if (!p || !p.command || p.manualOnly || p.executor === 'server') continue
     if (deliveries?.[n.id]?.kind === 'failed') continue
+    // A headless start (#925) owns this pane and is typing the launch into it. Its claim makes the
+    // node manualOnly, which the guard above already skips; this covers a live copy that has not
+    // caught up with the claim yet while the store already says so.
+    if (deliveries?.[n.id]?.kind === 'starting') continue
     if (p.awaitSetupGroup && !(setupDone?.(p.awaitSetupGroup) ?? true)) continue
     if (p.after.every((d) => depSatisfied(d, status, live))) out.push({ id: n.id, command: p.command })
   }
@@ -160,9 +164,27 @@ export const LAUNCH_STALL_MS = 45_000
 export type LaunchDelivery =
   | { kind: 'stalled'; since: number }
   | { kind: 'failed'; attempts: number; at: number }
+  /** A headless start (#925) is in flight: core owns the pane, so ▶ must not type into it. */
+  | { kind: 'starting'; since: number }
 
 /**
- * The QUEUED badge's tooltip. One function for all three cases so the sentences cannot drift, and
+ * Which delivery records the Canvas sweep retires: every record whose node is no longer an armed
+ * node on the ACTIVE canvas (delivered, run by hand with ▶, deleted, or in another project) —
+ * EXCEPT a `starting` one. A headless start (#925) runs precisely for a node that is not on the
+ * active canvas, and its orchestrator owns the record end to end (`clear` on success or
+ * not-persistent, `markFailed` otherwise). Retiring it here would re-enable ▶ the moment the user
+ * switched to that project mid-start — the manualOnly claim alone reads as a failed launch — and ▶
+ * would then type into a pane core is still typing into.
+ */
+export function deliveriesToRetire(
+  byId: Record<string, LaunchDelivery | undefined>,
+  isArmedOnCanvas: (nodeId: string) => boolean
+): string[] {
+  return Object.keys(byId).filter((id) => byId[id]?.kind !== 'starting' && !isArmedOnCanvas(id))
+}
+
+/**
+ * The QUEUED badge's tooltip. One function for every case so the sentences cannot drift, and
  * so the two warnings are held to the same standard as the ordinary one: say what is true, name
  * what would fix it, and never claim a cause that was not measured.
  *
@@ -170,6 +192,9 @@ export type LaunchDelivery =
  * why (a host that is down, a spawn that failed, a machine under load all look identical from
  * here), so the text says what we observed and leaves the diagnosis to the node's own overlay,
  * which does know.
+ *
+ * `starting` comes first, ahead even of the relay sentence: while core is typing the launch, no
+ * sentence may offer ▶, and "waiting for X" would describe a wait that is already over.
  */
 export function launchTooltip(
   delivery: LaunchDelivery | undefined,
@@ -178,6 +203,7 @@ export function launchTooltip(
   erroredOn?: string,
   relay = false
 ): string {
+  if (delivery?.kind === 'starting') return 'Starting in the background — an agent asked for this session to run now.'
   const runs = `Runs:\n${command}`
   if (relay) return `Launch delivery from a relay tab is unavailable. Open the host to run this command.\n${runs}`
   if (delivery?.kind === 'failed')

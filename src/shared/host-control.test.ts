@@ -28,6 +28,12 @@ describe('isHostOnlyChannel', () => {
     expect(isHostOnlyChannel(IPC.projectSetupRequestTrust)).toBe(true)
   })
 
+  it('covers pty:launch-headless — the desktop-only headless start is refused to relay peers (#925)', () => {
+    // A relay tab's own bridge already rejects it E_UNSUPPORTED, but that only stops a well-behaved
+    // guest. The host must refuse a peer that sends the raw request too (spec §6: Relay tab refuses).
+    expect(isHostOnlyChannel(IPC.ptyLaunchHeadless)).toBe(true)
+  })
+
   it('leaves the read-only/lifecycle channels alone — the gate is on ACTION, not on the namespace', () => {
     // Subscribing and receiving events costs a guest nothing the canvas does not already show;
     // running host code, and answering the host's own trust prompt, are the two acts being gated.

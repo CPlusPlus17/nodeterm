@@ -32,6 +32,8 @@ export const IPC = {
   /** The foreground command of a node's tmux pane (`#{pane_current_command}`) — how the in-place
    *  agent restart sees that the CLI has exited and a shell owns the pane again. */
   ptyPaneCommand: 'pty:pane-command',
+  /** Desktop-only (#925): start a node's session with no viewer and deliver its held launch. */
+  ptyLaunchHeadless: 'pty:launch-headless',
   /** Kernel truth about a node's tmux pane: its root pid, tty, tmux pane id, and the full argv of
    *  its FOREGROUND process group (`PaneOwner`). The name-only `ptyPaneCommand` above cannot tell
    *  an agent from anything else — an npm-installed CLI reports as `node`, and an agent reached
@@ -177,6 +179,12 @@ export const IPC = {
    *  phone can render SLEEPING, and gives main the `isHibernated` signal the delivery queue's
    *  hibernated leg was recorded as missing (agent-messaging.ts). */
   agentHibernated: 'agent:hibernated',
+  /** Renderer → main/server: seed the agent-status mirror with the node identities (agentId +
+   *  sessionId [+ observed account]) this renderer's persisted agentStatus store holds, for nodes
+   *  the mirror has no session for. Arg: `IdentitySeedEntry[]` (`@shared/agent-identity-seed`,
+   *  validated and capped there). Fire-and-forget; add-only — never overrides a hook-fed id. Feeds
+   *  the phone's chat view, which finds a transcript only by the mirror's session id. */
+  agentSeedIdentity: 'agent:seed-identity',
   /** main → renderer: ask the renderer to wake a hibernated node NOW (a phone viewer attached to
    *  its session over the relay). A nudge, never an assertion: the renderer re-reads the flag and
    *  no-ops for a non-hibernated or unmounted node — same contract as `wakeHibernatedNode`. Arg:
@@ -406,6 +414,11 @@ export const IPC = {
   githubIssuesMove: 'githubIssues:move',
   githubIssuesCreateLabels: 'githubIssues:create-labels',
   githubIssuesClearCache: 'githubIssues:clear-cache',
+  githubIssuesPullStatus: 'githubIssues:pull-status',
+  githubIssuesChasePulls: 'githubIssues:chase-pulls',
+  githubIssuesPullChecks: 'githubIssues:pull-checks',
+  githubIssuesClaimPullAutoMove: 'githubIssues:claim-pull-auto-move',
+  githubIssuesNotePullWaits: 'githubIssues:note-pull-waits',
   githubIssuesChanged: (projectId: string) => `githubIssues:changed:${projectId}`,
   githubProjectAvatar: 'github:projectAvatar',
   githubControlStatus: 'githubControl:status',

@@ -1707,7 +1707,7 @@ the wire never see any of it):
   both directions. Server Edition: inert (no `<webview>` in a plain browser — ghosts are empty
   husks, nothing to preserve). Mobile: N/A (no canvas).
 
-## Agent support (Claude / Codex / Gemini / Copilot / opencode / Grok / custom)
+## Agent support (Claude / Codex / Antigravity / Gemini / Copilot / opencode / Grok / custom)
 
 **Message scope publication:** desktop `send`/`reply`/`notify` wait for pending active-canvas edits
 to be saved when either endpoint is on that canvas (`renderer/lib/messageScopeSync.ts`). `list`
@@ -1738,8 +1738,10 @@ else, and its context links must keep classifying across restarts).
   `PERMISSION_MODE_CAPABLE`, `MODEL_SWITCH_CAPABLE`, with helpers (`hasHooks`,
   `canBranch`, `canContextLink`, `canChat`, `canRename`, `canReadTitle`, `hasPermissionMode`, …).
   Branch stays **Claude-only** purely by being in only `BRANCH_CAPABLE`. The ⌘M **ChatPanel**
-  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok** since 2026-09: grok's
-  `chat_history.jsonl` gets its own reader, and `chat:read-transcript` routes by agent. That list had
+  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok + gemini + codex + copilot +
+  opencode** since 2026-09: grok's `chat_history.jsonl`, gemini's session file, codex's rollout,
+  copilot's `events.jsonl` and opencode's `opencode export` document each get their own reader, and
+  `chat:read-transcript` routes by agent. That list had
   to be SPLIT to do it — `CHAT_CAPABLE` carried two facts that coincided while claude was its only
   member ("we can render this" and "claude's resolver can locate and parse this file"), and the
   second now lives in `CLAUDE_TRANSCRIPT_READABLE` (claude only). Merging them back is a
@@ -1758,7 +1760,7 @@ else, and its context links must keep classifying across restarts).
   on these helpers — no hardcoded `=== 'claude'`. **Custom agents** (user-defined in Settings,
   `customAgents`) inherit the declared `baseAgent` harness through `capabilityAgentId`; a custom
   agent with no base remains spawn + terminal-title + process status only. Per-agent write-ups:
-  **`docs/grok-agent.md`**, **`docs/gemini-agent.md`**, **`docs/copilot-agent.md`** (there is none for codex — its approval mapping
+  **`docs/grok-agent.md`**, **`docs/gemini-agent.md`**, **`docs/copilot-agent.md`**, **`docs/antigravity-agent.md`** (there is none for codex — its approval mapping
   and every value's reasoning live in `src/shared/agents/approval-mode.ts`);
   the distilled rules are **Adding a new agent** at the end of this section.
 - **Model gateway / switcher** — `settings.modelGateway` stores one gateway root + a NON-SECRET
@@ -1815,6 +1817,161 @@ else, and its context links must keep classifying across restarts).
   harmful. The `auto` permission-mode **version gate is claude's alone** (it is fed by a `claude
   --version` probe), and grok's mode flag must go **BEFORE** its `--` separator, which is
   end-of-options. Full picture, dialect traps and the device checklist: **`docs/grok-agent.md`**.
+- **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads
+  `chat_history.jsonl` into claude's `ChatMessage`/`ChatPart` shapes (no new wire field): typed
+  prompts, assistant text, tool calls (`arg` = the salient argument — `command`, `target_file`, …, in
+  claude's `toolArg` order — else the raw JSON, 200 units) with results summarised like claude's,
+  `web_search` backend calls, harness-injected `synthetic_reason` lines as assistant-side `[reason]`
+  notes, and `model_id`/`reasoning_effort` of the NEWEST assistant record (never carried forward).
+  `reasoning` is hidden. It does NOT page: measured on 1.0.13, the file is rewritten via
+  `.sync.tmp` + rename and `/compact`/`/rewind`/history repair replace lines, so it is one capped
+  whole-file read with no keys and no `at`. Routing is by `capabilityAgentId`, so a custom agent built
+  on grok reaches grok's reader, never claude's cwd fallback. **A remote (SSH) grok node is read on its
+  host** (`core/remote-grok-chat.ts`, one `sh -c` round trip: `$GROK_HOME` if absolute else
+  `$HOME/.grok`, the session found by id across `sessions/*/<id>/`, two matches refused, the
+  paged-transcript window at 5 MiB) — its failures are terminal, never this machine's disk (the
+  hook-derived local map names a wrong-machine path for these nodes). The phone gets it for free:
+  `chat.page` reads through the same deps. Golden fixtures + exact rules for the Swift port:
+  `src/shared/chat-fixtures/grok/`. Not supported: the composer's model/effort labels (grok's `/model`
+  and `/effort` pickers are unmeasured — the TUI needed a login here), plan/question answer cards
+  (claude-only), pre-compaction history, and a local session whose map entry `SessionEnd` retired.
+- **Copilot ⌘M chat view** (`core/copilot-chat.ts`, 2026-09; copilot 1.0.88 measured in BYOK mode
+  against a local fake model, plus the CLI's own `schemas/session-events.schema.json`). Reads
+  `<COPILOT_HOME>/session-state/<id>/events.jsonl` (then the snap package's
+  `~/snap/copilot-cli/common/.copilot`), located STRICTLY by the node's session id and routed by
+  `capabilityAgentId` before anything claude-shaped, so a missing journal is "not found", never
+  claude's cwd-newest or another session. The journal is append-only JSONL (compaction appends), so it
+  PAGES like claude's — `parseChatWindow`/`parseGrowingWindow` take copilot's record parser — and the
+  phone gets the same pages over the relay (`page()` gates only on `canChat`). Shown: typed prompts
+  (`content`, never `transformedContent`; the sources copilot's own timeline hides stay hidden),
+  assistant text, tool calls with results (`Error: …` on failure), a user's `!` shell command as the
+  `!` part, `Error:`/`Warning:`/`Info:` notices, and `model`. Never shown: the system prompt,
+  reasoning, sub-agent events (envelope `agentId` / `data.agentId` / `data.parentToolCallId`). Not
+  supported: remote (SSH) nodes (`unreadable`, "not supported yet" — never this machine's disk),
+  `effort` (not recorded), plan/question answer cards (claude-only), composer model labels (claude's
+  picker commands only). Golden fixtures: `src/shared/chat-fixtures/copilot/` (README "Copilot").
+- **Antigravity** (`agy` 1.2.3 measured on Windows; the 1.2.12 Linux binary read; builtin since
+  2026-09 — Google's replacement for Gemini CLI on personal accounts) — in `AGENT_HOOK_TARGETS`
+  (badge, NEEDS YOU from `ask_question`, a closed set of one, `--after` and triggers) and
+  `RESUMABLE_AGENTS` (`agy --conversation=<id>`, the spelling agy's own exit hint uses; a dead id
+  is ignored by agy, which starts fresh — without it a reboot left a bare shell). Launch is
+  `agy --prompt-interactive '<p>'` via the new optional `AgentConfig.promptFlag` (agy has no
+  positional prompt). Its hooks live in the GLOBAL `~/.gemini/config/hooks.json` under our own
+  `nodeterm-status` bundle, and **each one is a synchronous gate whose stdout agy reads as a
+  decision** — we subscribe `PreToolUse`, so a wrong byte denies tools in every `agy` on the
+  machine, inside nodeterm and outside it. Three rules for whoever touches it:
+  - **The stdout table is written ONCE** (`core/agents/hooks/antigravity-decision.ts`): `PreToolUse`
+    → `{"decision":"ask"}`, `Stop` → `{"decision":""}`, the rest → `{}`, an unknown/empty event →
+    NOTHING. Measured on 1.2.3: silence runs the tool, while `{}`, `{"decision":""}`, any non-JSON
+    byte and exit ≠ 0 DENY it. Never `allow`, never `force_ask`, never `"continue"` on `Stop`. The
+    script answers first and then sends stdout/stderr to `/dev/null`, because hook stdout is also
+    model input (`injectSteps`).
+  - **No quotes in the Windows command.** agy passes it to `cmd /c` with inner `"` escaped as `\"`,
+    which cmd.exe does not understand — the codex form (`cmd.exe /d /c call "…"`) exits 1 = DENY.
+    The command is relative to the hooks.json directory (agy's hook cwd) and guarded:
+    `if exist ..\..\.nodeterm\agent-hooks\antigravity-hook.cmd (call … <Event>) & exit 0`. Test
+    Windows dispatch WITHOUT `windowsVerbatimArguments` — Node's default escaping is agy's.
+  - **AutoRun blocks the install.** agy's `cmd /c` has no `/d`, so a registry `AutoRun` runs first
+    and its output would deny tools; the installer reads the three `Command Processor\AutoRun`
+    values (`reg query`, absence decided by listing the parent key — reg's errors are localized)
+    and installs NOTHING — and withdraws a bundle an earlier launch wrote — if one is set or the
+    registry cannot be read.
+  **The vendor-location fallback also owns launch reachability.** Measured on Windows 11 with agy
+  1.2.7: the vendor installer wrote `%LOCALAPPDATA%\agy\bin` into the user PATH as `REG_SZ`, so the
+  process inherited the percent expression literally and both `where agy` and `cmd /c agy` failed
+  while `%LOCALAPPDATA%\agy\bin\agy.exe` existed and ran. `PtyManager` therefore APPENDS the
+  directory returned by `findAgy()` to the PATH of a LOCAL Antigravity session, and only when no
+  entry already names it (`pathWithAgyDir`) — prepending shadowed the user's own tools on
+  macOS/Linux, where agy sits in a shared directory. The gate uses
+  `capabilityAgentId`, so an Antigravity-based custom agent inherits it; plain terminals and SSH
+  sessions do not. Detecting the binary only for hook installation recreates the original split:
+  a configured badge for an agent the pane cannot launch.
+  **Installed only where `agy` exists** (a file lookup — PATH, then the vendor's install dirs —
+  never a spawn), in two passes per launch: the boot pass may only see the inherited PATH, so a miss
+  there does NOTHING; after the login-shell PATH probe settles, a final pass repeats the lookup and
+  only then withdraws a bundle of ours when agy is not found. An `agy` installed later gets the
+  hook the next time nodeterm opens. **The opt-out is agy's own switch**: `"enabled": false` on our
+  bundle is carried across every rewrite. hooks.json goes through the shared settings transaction
+  (`updateSettingsFile`: a symlinked file keeps its link and mode, writers serialize, a file changed
+  mid-update is not overwritten), and only entries under `.nodeterm/agent-hooks/` are swept as
+  ours. The POSIX command forces exit 0 (`sh <script> || :`) — the answer is printed first, and a
+  later failure (a broken endpoint file) must not turn into a non-zero status next to it. **No SSH
+  hook installer yet** (`LOCAL_ONLY_HOOK_AGENTS` / `hasHooksOverSsh`): on an SSH project an agy node
+  never reports, so `--after` refuses it as a dependency. The event name is not in agy's payloads:
+  the command exports `NODETERM_AGY_EVENT`, the script POSTs `nodeterm_hook_event`, and the hook
+  server merges it after `JSON.parse` — for antigravity ONLY, an empty field deleting a planted
+  value. `newTurn` rides only the
+  `PreInvocation` with `invocationNum === 0` (without it `lastTurnError` is never retired). Cost:
+  on POSIX the POST already runs in the background and the part agy waits for measured 2–40 ms
+  (pinned by a stalled-endpoint test, since a foreground POST plus the failover walk measured ~6 s
+  against the 5 s handler timeout); the ~520 ms per event measured on Windows is Git Bash's fork
+  cost before the backgrounding. Full picture,
+  limits (permission prompt and ESC fire no hook) and the device checklist:
+  **`docs/antigravity-agent.md`**.
+  **No conversation view, and that is deliberate** (not in `CHAT_CAPABLE`): ⌘M shows the rendered
+  terminal output, and the phone's Chat screen answers `unsupported`. The
+  LOCATION is measured: every hook payload names `transcriptPath`, which is
+  `~/.gemini/antigravity-cli/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`,
+  keyed by the id `normalizeAntigravity` already records as `sessionId`. The RECORD SHAPES were never
+  captured; the 1.2.12 binary only describes them in prose. Four facts a parser needs are unknown:
+  the `tool_calls` element keys, how a tool result links back to its call, the serialized enum
+  spelling, and whether a line is rewritten when its step's status changes, which decides between
+  claude's paged read and grok's single capped read. A parser built from that prose would be a rule-14
+  wrong guess, so none ships, not even unwired. The capture recipe is §7.1 and §8.1 of the doc, using
+  `scripts/agy-transcript-shape.mjs`, which dumps shapes and never text. When it lands: locate
+  strictly by id (`brain/` holds every conversation on the machine), and have a remote node answer
+  `remoteOnly` → unreadable like gemini.
+- **Codex in the ⌘M chat view** (2026-09-28; the desktop panel, the kanban card modal, the phone's
+  `chat.page`). `core/codex-chat.ts` reads the rollout with codex's own rules, never claude's
+  resolver. It takes USER text from the UI stream only: `event_msg/user_message` (legacy, ≤ 0.146) or
+  an `item_completed` `UserMessage` (paginated, ≥ 0.151). Model-side `role:user` messages also carry
+  injected context (AGENTS.md, `<environment_context>`, image wrappers), so they are never read.
+  Assistant text and tools come from `response_item`, correlated by `call_id`. The UI copies
+  (`agent_message`, `AgentMessage`) and reasoning are skipped. Failed and interrupted turns become
+  `[error] …` / `[turn aborted…]` notes. A tool result drops codex's `… Output:` preamble. The rollout
+  is append-only, so it pages by byte offset like claude. The locator matches a WHOLE-uuid thread id
+  (`CODEX_THREAD_ID_RE`), because a uuid's last group passes `SESSION_ID_RE` and suffix-matches
+  another thread's file. It searches only the node's own account home, and uses the codex tail's hook
+  path only as a checked hint. An SSH node is read on its host (`main/remote-codex-chat-page.ts`,
+  through the same resolvers as its remote meter) or not at all. Because codex announces no session
+  end, a chat send first asks the kernel (`renderer/lib/chatPaneGate.ts`, `isAgentPane`). After a
+  `/quit` the store still reads `done`, and the message would otherwise run in the shell. **Not
+  supported:** images in prompts, reasoning summaries, the composer's model/effort labels (the
+  `/model` picker is measured for claude only), plan/question answer cards (codex never sets
+  `held`), and a closed REMOTE session's transcript. Record rules and fixtures:
+  `src/shared/chat-fixtures/codex/`.
+- **opencode in the ⌘M chat view** (2026-09-28, opencode 1.18.25 measured) — opencode has NO
+  transcript file (SQLite since 1.18; that database also holds its account tokens and is never
+  opened), so `readChatTranscript` routes `capabilityAgentId(agentId) === 'opencode'` to
+  `core/opencode-chat.ts`, which runs `opencode export <sessionId>` (argv only, no flag an older
+  yargs-strict CLI might refuse) and parses the one JSON document into claude's `ChatMessage` shape:
+  user/assistant text, tool chips (arg by an opencode key order, result = 3 lines / 500 units,
+  `Error: …` on a failed call), `[name] message` for an errored turn, compaction/subtask chips,
+  `at` from `time.created`, `model`/`effort` from the newest assistant's `modelID`/`variant`.
+  Reasoning, `synthetic`/`ignored` text, file/agent parts and step bookkeeping are dropped;
+  unmappable shapes are skipped and counted. **One page, always** (`olderCursor: null`): there are
+  no byte offsets to page by. The page honours the caller's `maxBytes` (the phone asks 256 KB),
+  grows ×4 up to 5 MB like claude's reader when it holds no whole message, and shows a newest
+  message larger than 5 MB TRUNCATED (with a note) rather than as an empty conversation. Refusals: no/unsafe session id runs
+  nothing (a bare `opencode export` opens a picker over the NEWEST sessions — someone else's); an
+  export whose `info.id` is another session is `unreadable`; only `Session not found: <id>` with
+  exit 1 and empty stdout is a clean miss. **Remote (SSH) nodes are refused** (`unreadable`, no
+  export runs) — their sessions are in the host's database and there is no remote leg yet; the
+  panel's copy names both causes an opencode `unreadable` can have. One export costs 1.0–1.7 s and
+  ~320 MB, so `createOpencodeExportGate` runs at most one per session (a caller arriving mid-run
+  gets a FRESH export) and two in total; the panel's hook-driven refreshes are marked
+  `page.background` and spaced ≥ 5 s per session, while an open / ↻ / Retry is immediate (and wakes
+  a sleeping background one). A **change gate** in front of it `stat`s (never opens) opencode's
+  `opencode*.db` + `-wal` in `$XDG_DATA_HOME/opencode` (else `~/.local/share/opencode`, opencode's
+  own xdg-basedir rule) BEFORE exporting, and an unchanged fingerprint answers from a 4-session LRU
+  of parsed exports; no db file found, or `OPENCODE_DB` set, means no caching. The export runs with
+  `cwd: os.tmpdir()` (from a repo cwd opencode writes `<repo>/.git/opencode`; sessions resolve by
+  global id). **It inherits the APP's `process.env`, not the node's shell env**: a user who
+  relocates opencode's data via `XDG_DATA_HOME` / `OPENCODE_*` only in their shell rc gets
+  "Session not found" — an honest miss, not a bug in the reader. Plan/question answer
+  cards stay claude-only (no `body`/`questions` on opencode's `question` tool). Desktop and Server
+  Edition both serve it (core handler); the phone gets it over the relay `chat.page` for free.
+  Fixtures + the exact rules for the iOS port: `src/shared/chat-fixtures/opencode/README.md`.
 - **Gemini + codex parity** (2026-08-09) — brought both up to grok's level in the lists above. Unlike
   grok, **both CLIs are installed** and gemini **ships its own hook reference**
   (`/usr/lib/node_modules/@google/gemini-cli/bundle/docs/hooks/reference.md`), so almost every fact is
@@ -1860,6 +2017,29 @@ else, and its context links must keep classifying across restarts).
     because `/quit --delete` exits *and permanently deletes* the session history, i.e. exactly what the
     restart exists to resume (pinned by its own test).
   Full picture, measurements, gaps and a device checklist: **`docs/gemini-agent.md`**.
+- **Gemini CLI refuses personal Google accounts since 2026-06-18** (free / AI Pro / AI Ultra moved to
+  Antigravity CLI — the `antigravity` agent above; Code Assist Standard/Enterprise, Vertex AI and paid
+  API keys still work, so `gemini` stays a builtin). The refusal happens before any session, so no
+  hook reports it: a gemini-harness node reads its own pane for the CLI's sentence
+  (`renderer/terminal/gemini-retired.ts`, letters-and-digits match because the TUI wraps it in a
+  box) and raises a slim banner — "Open Antigravity" (`nodeterm:open-agent`, an agy node beside it,
+  in its frame) + Google's migration guide. It types and relaunches NOTHING, which is why a phrase
+  match is enough here where `resume-fallback.ts` needs three refusals. `AgentConfig.notice` carries
+  the one-line caveat to the menus/Dock tooltips; it is never read to decide behaviour.
+- **Gemini ⌘M chat view** (2026-09, `core/gemini-chat.ts`) — gemini is in `CHAT_CAPABLE` with its own
+  reader, routed in `readChatTranscript` via `capabilityAgentId` BEFORE anything claude-shaped and
+  located only by the header session id (`locateGemini`, which now reads just the header and honours
+  `GEMINI_CLI_HOME`). Its session file is an UPSERT log, not a message list: one id is rewritten in
+  full as tool results/tokens land, `$rewindTo` truncates, and `$set.messages` replaces the MODEL's
+  context at start, compression and rollback. The thread is the message records upserted by id with
+  rewinds honoured and **`$set.messages` ignored** — honouring it erases the thread at every
+  compression and shows the `<state_snapshot>` as the human's words. Not paged (a record depends on
+  earlier ones): one read under the 5 MB cap, `olderCursor: null`, like grok. Shows typed prompts
+  (`displayContent` over `@file` expansion; `<session_context>`/`<hook_context>` dropped per part),
+  replies, tool calls with results, `[info]`/`[warning]`/`[error]` notes and (paged) the model;
+  thinking is dropped. NOT supported: remote (SSH) nodes (`CHAT_LOCAL_ONLY` → "not supported yet"),
+  plan/question answer cards, the composer's model/effort labels. The phone gets it over the relay
+  unchanged; fixtures and exact rules: `src/shared/chat-fixtures/gemini/`, `docs/gemini-agent.md` §3.
 - **Claude session context capacity (#818)** — the managed hook reports only
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` from the effective Claude process environment (including
   `--settings` env), never the GUI/server process environment. HookServer validates decimal safe
@@ -2053,7 +2233,7 @@ else, and its context links must keep classifying across restarts).
   own gate adds one beside claude's.
 - **State via each agent's hooks → shared 4-state model** — detection uses the agent's own
   hooks, **not** output parsing. `src/shared/agents/normalize.ts` has per-agent normalizers
-  (`normalizeClaude`/`normalizeCodex`/`normalizeGemini`/`normalizeCopilot`/`normalizeOpencode`/`normalizeGrok`) that map each agent's native hook
+  (`normalizeClaude`/`normalizeCodex`/`normalizeGemini`/`normalizeCopilot`/`normalizeOpencode`/`normalizeGrok`/`normalizeAntigravity`) that map each agent's native hook
   events to a `NormalizedAgentEvent` over the shared `AgentState` (`working | waiting | blocked
   | done`) plus subagent/recurring/session kinds. Canvas's listener consumes
   `NormalizedAgentEvent` from `agent:status`, drives the `agentStatus` store, fires throttled
@@ -2486,8 +2666,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the same deps and the same distinction. Before this, a mounted SSH node whose locate missed (or
   whose master was down) read THIS machine's resolver, cwd-newest fallback included. `transcriptExists` shares the same locate
   (`remotePresenceFromLocate`: ref/absent/unreadable → present/absent/unknown, a malformed id
-  `unknown`), so it also works for a node with no live pty. A remote grok node (no remote reader)
-  shows "not supported yet", not the retryable error. (2) **The cwd fallback keeps `accountId`** in BOTH
+  `unknown`), so it also works for a node with no live pty. A remote grok node is read on its host
+  by its own leg (`readRemoteGrok`, see the grok chat bullet), with the same absent/unreadable split. (2) **The cwd fallback keeps `accountId`** in BOTH
   `resolveTranscript` and `contextEnsure`; without it a managed-account node fell back to the
   system root and could adopt an unrelated session's newest transcript. (3) **Relay tabs** stay
   local-only (a transcript read over the relay would read the GUEST's disk) and reject with
@@ -2526,7 +2706,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   trip, dd status inside the base64 like the context-tail's window command) instead of pulling the
   5 MB tail on every open and every turn-end reload; its `{ok:false}` is terminal (never the local
   disk), and it is tested under a real `/bin/sh` (`transcript-page.realsh.test.ts`). **Grok does not
-  page**: a paged request gets its whole capped read with `olderCursor: null` and no keys.
+  page** (its file is rewritten in place, so offsets are no identity): a paged request gets its whole
+  capped read with `olderCursor: null`, no keys, and the newest record's `model`/`effort`.
   Server Edition passes `page` through ws-bridge to the same core handler; relay still refuses.
   **ChatPanel consumes it progressively** (pure state in `renderer/lib/chatPaging.ts`): the first
   read is a 256 KB tail (`CHAT_TAIL_PAGE_BYTES`, with a "Loading conversation…" row), older 512 KB
@@ -2923,7 +3104,15 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   that landed while they were busy elsewhere, and once it fades nothing anywhere says it happened. Route **`reopen` (a CLOSED project) cold-writes
   too and does NOT reopen the tab** — closing is the user's explicit "park this, keep it running", so
   restoring the tab *and* activating it is the loudest form of the hijack; the reply names the closure
-  so a caller does not report a session as started. On the cold path `--group`/`--after` ARE resolved
+  so a caller does not report a session as started. **Exception (#925):** `--run-now` (and `run`)
+  restores a closed project's tab WITHOUT activating it (`unhideProject`) and starts the node
+  headless. A session that is running must be findable somewhere more durable than a notice, and
+  not activating it keeps the half of this rule that matters. Two cases keep the tab closed: an SSH
+  project, because its nodes are refused before any claim (`remote-unsupported`), so nothing starts;
+  and the welcome screen (no project active), because un-closing one there would render a canvas
+  with no active project. On the welcome screen the session still starts; the project just stays in
+  Recently closed.
+  On the cold path `--group`/`--after` ARE resolved
   (unlike with `--project`, where the ids would live in another project) against the serialized
   nodes, defaults come from the OWNING project (`projectPermissionMode(owner, …)`, its account,
   its `ssh`), and `--after`'s dep ropes are left to `missingDepRopes` at that project's next load.
@@ -3059,6 +3248,28 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   unsupported cross-project boundary, without probing other projects or exposing their metadata.
   Callers that create and link nodes **in the same tick** must pass their own `lookup` — `setNodes`
   is async, so resolving fresh nodes off `nodesRef` would skip every one as "no such node".
+  **Issue-bound opens (`--issue`, 2026-09-28):** `open-agent`/`open-claude --issue <owner/repo#N |
+  #N>` binds the new session to a GitHub issue exactly like the board's **Start with agent**. The
+  SHAPE is refused by ONE gate, `issueFlagRefusal` (`canvas-control-core.ts`), which desktop MAIN
+  runs in its control handler (desktop main does not run `parseControlRequest` at all — do not move
+  the gate there alone) and the Server Edition runs inside `parseControlRequest`; any other verb
+  carrying `--issue` is refused, not ignored. `#N` is resolved by each shell against the project the
+  node OPENS IN (the `--project` target, the cold-open owner, or `ctlProject`) — the repository its
+  kanban board syncs with, i.e. the GitHub host controller's answer (configured, else detected) —
+  and a project with no GitHub board refuses `#N` and names the full form (`lib/issueFlag.ts`,
+  `HeadlessNodeFactoryDeps.issueRepository`). **On the desktop it is resolved ONCE, at the top of
+  the control handler (`issuePre`), before any open path snapshots the projects store**: the lookup
+  is a host round trip (`git remote`, `gh auth`), and an await inside a path let a tab switch in that
+  window write the node into the wrong project. A full `owner/repo#N` asks nobody. The same
+  placement puts resolution before every path's dry-run branch.
+  `--prompt` replaces the default task after the reference line; `--prompt-file` stays the whole brief. Both
+  generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
+  is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on
+  start, In Review on delivery), never close the issue, never Done, `Closes #N` in a PR, and **post
+  to GitHub only when the user asked in that session — otherwise end with a proposed comment**.
+  nodeterm has no automatic post-to-issue path and must not grow one. `list` marks a bound row
+  `issue owner/repo#N`. Server Edition: `open-agent --issue` works under its verified-only,
+  creator-owned rules and writes the run history; `assign` is unsupported there (the skill says so).
   **Dependency edges (`--after`, 2026-07):** `open-terminal`/`open-claude`/`open-agent` accept
   `--after <id,id>`, which opens the node **armed** — `data.pendingLaunch` ({after, command},
   `PendingLaunch` in shared/types) holds the launch the factory built, and Canvas fires it once
@@ -3095,6 +3306,11 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   graphs through project switches/park expiry. Attempted/legacy-unknown intent stays manual: its
   clearing autosave may have been lost after Enter. Explicit Run now rechecks the foreground shell and
   clears any incomplete line; a refused/throwing/cancelled launch stays held, `manualOnly`.
+  The Server Edition's immediate open and its `run`, and the desktop's headless start (`--run-now` /
+  `run`, below), deliver through the SAME echo-verified writer (`@shared/command-delivery`, moved
+  out of the renderer for this), via the headless launcher `core/headless-launch.ts` (#925): a tmux
+  paste is not immune to zsh's rc-time tty flush (#556) or the canonical-line cap (#706). The
+  Server Edition's deferred `--after` release (`refreshArmed`) still pastes with `sendText`.
   (5) UI `initialCommand` stays until submission; serialization converts unsubmitted UI intent
   into a never-attempted `pendingLaunch`, including a project switch during shell settle. A live
   initialCommand alias on remount cannot reset an attempted marker. Server saves
@@ -3152,8 +3368,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `queued:false` is NOT proof of a running CLI: Server's `deliveredIds` acknowledges terminal
   delivery only. Its initial commands are persisted before attach/send and retained on failure;
   only acknowledged sends clear them. Boot ownership remains fail-closed. Desktop `list` (live
-  and stored projects) names QUEUED / LAUNCH FAILED / DROPPED / AGENT STATUS UNCONFIRMED rather
-  than treating absence of a hook as success. Server v1 still explicitly refuses `list`.
+  and stored projects) names QUEUED / STARTING / LAUNCH FAILED / DROPPED / AGENT STATUS UNCONFIRMED
+  rather than treating absence of a hook as success. Server v1 still explicitly refuses `list`.
   **(8) An armed node must not cold-start its own agent** (found while fixing (7)). The mount-time
   cold-restore relaunch (`fresh && agentId && canResume(...)`) carries a second, independent
   refusal beside the `paused` one (`shouldColdResume`): `!data.pendingLaunch`. A first open is
@@ -3189,6 +3405,79 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   so reporting it as "the error" would be a confident wrong fact. Reading the text, and the
   *failed-to-start* watchdog (a station that never emits ANY hook event — the opposite failure,
   which hangs dependents honestly rather than firing them wrongly), stay open.
+  **Headless start (`--run-now`, `run`, #925):** `open-*` with `--run-now` into a project that is
+  not on screen starts the new node's held launch at once instead of "when next viewed". A node
+  with nothing held (an `open-terminal` without `--cmd`) has nothing to start, and gets the plain
+  cold-open reply. `run --node <id> [--project <id>]` builds nothing: it claims and starts the held
+  launch of a node that already exists, the CLI twin of the QUEUED badge's Run now (like ▶, a `run`
+  that starts the node overrides its `--after` wait). Into a project that IS on screen `--run-now`
+  changes nothing: the mount path already starts the node.
+  - **Flow.** For `--run-now` the renderer first builds the node as a cold open; `run` starts from
+    the node as stored. Either way it then writes an
+    `executor:'core', attempted:true, manualOnly:true` claim to disk BEFORE any spawn (never
+    spawn on an unsaved claim: a failed save restores the original launch and starts nothing,
+    `claim-not-saved`). Desktop main's `pty.launchHeadless` runs core `launchHeadless` on
+    `desktopHeadlessRequest(req)`: `createHeadless` (client 0), then settle a fresh shell (200 ms
+    quiet / 1.5 s silence cap, under an absolute `SETTLE_MAX_MS` = 5 s ceiling that output never
+    extends — nothing cancels this wait, and a pane that keeps painting never goes quiet), then the
+    mounted writer's trust rule (`trustsFreshShell`, `@shared/launch-trust`: a fresh session-host
+    session is trusted without a probe; every other pane must pass `isLaunchShell`, and an unknown
+    answer is `no-shell`, nothing typed), then the echo-verified writer (`@shared/command-delivery`),
+    then `releaseHeadless`.
+  - **The IPC is desktop-only and host-only.** It is registered in `src/main`, not in core
+    `registerIpc`, so a Server Edition browser cannot reach it (ws-bridge declares it
+    `unsupported`), and `IPC.ptyLaunchHeadless` is in `HOST_ONLY_CHANNELS`, so a relay peer that
+    sends the raw request is refused host-side.
+  - **Remote nodes are fenced twice.** The primary fence is the renderer's: `startHeadless`
+    answers `remote-unsupported` before any claim for every node of an SSH project (`project.ssh`)
+    and for a node carrying `ssh` / `sshRemoteTmux`, and leaves its launch exactly as it was. The
+    project is asked, not only the node's flags: a node of an SSH project may carry neither.
+    Behind it is core's belt: `headlessPtyOptions` sets `requireRemote` for an SSH-project
+    (`sshRemoteTmux`) node, and `desktopHeadlessRequest` keeps it while stripping `sshRemote`.
+    So if such a node ever got past the fence, core's `spawnNew` would refuse it (`spawn-failed`)
+    instead of starting a LOCAL `nt-<id>` wearing its identity. `desktopHeadlessRequest` also
+    strips `viewerId` (a create under a viewer id subscribes `(0, viewer)`, while
+    `releaseHeadless` detaches `(0, PRIMARY)`, so client 0 would stay attached forever) and
+    `clearEnv` (a one-shot recycle flag, never a launch option).
+  - **Why release the client.** An invisible client would fight the viewer's window size and
+    keep the session "attached" for the reaper forever.
+  - **No persistent backend** (tmux or session-host): releasing a plain shell would kill it, so the
+    start fails `not-persistent`. In the normal case that happens before any spawn
+    (`persistentSpawnAvailable`). In the race where the backend goes away between that probe and
+    the spawn (tmux switched off in between), the spawn yields a plain shell; the launcher refuses
+    it the same way, before typing anything, and its release kills that shell. Either way the node
+    is handed back exactly as it was, so a cold open degrades to an ordinary queued node.
+  - **Outcome patch.** It lands wherever the node lives at that moment (`savePendingAnywhere`):
+    the live canvas if the user switched there mid-start, otherwise the store copy plus a disk
+    write. `delivered` clears the launch; `not-persistent` restores the original (above); every
+    other launch failure keeps the claim and marks the node failed (amber ⚠ QUEUED, recovered by
+    Run now).
+  - **While starting.** `launchDelivery` holds `starting`: the badge reads STARTING, ▶ is disabled
+    (a click would splice a second copy into the pane), `launchesToFire` skips the node, and
+    `list` names it. Canvas's delivery sweep spares it (`deliveriesToRetire`): the node lives in
+    ANOTHER project by design, so "not armed on this canvas" does not mean "delivered".
+  - **Notice.** A batch that started at least one session raises ONE sticky "Go there" notice
+    (`headlessStartNoticeText`). A launch failure after the claim (`spawn-failed`, `no-shell`,
+    `line-too-long`, `cancelled`) shows on the badge (amber ⚠ QUEUED) and in the reply.
+    `not-persistent`, `claim-not-saved` and `remote-unsupported` show only in the reply: the node
+    reads as it did before the attempt.
+  - **`--run-now` with `--after` is refused on both editions**, before any node is built, with the
+    shared `RUN_NOW_AFTER_REFUSAL` (`@shared/control-verbs`): "start now" and "start when X is
+    done" contradict each other.
+  - **`run` gates.** `run` is verified-only (`requiresVerified`), reaches another project only
+    through `--project` + the existing grant gate (`PROJECT_TARGETABLE_VERBS`), and is
+    `stored-node` off screen. The renderer's `--project` belt is ONE pure resolver,
+    `resolveProjectTarget` (`lib/projectOpen.ts`), shared with the open verbs. A project ON screen
+    never starts headless (`planRunVerb`): `run` there uses the mounted writer (the ▶ path) when
+    the node has one. Without one, a plain queued launch replies `queued` / `starts-when-mounted`,
+    because the mount delivers it; a `manualOnly` or `--after`-armed launch is refused with
+    `run-not-mounted`, because the mount fires neither, and "starts when mounted" would be a
+    promise nobody keeps.
+  - **Server Edition.** It accepts `--run-now` as a no-op (its opens are already immediate) and
+    implements `run` under creator ownership, resolving the node through the ownership record,
+    never by first id match. It neither unhides a closed project nor raises a notice, the same as
+    its other immediate opens. Its immediate open delivers through the same launcher with
+    `release:false`: the attached client is what keeps even a plain shell reachable there.
   **Settings (`settings`, 2026-09):** `settings [--project <id>]` lists, `settings --get <key>`
   reads, `settings --set <key> --value <v> [--project <id>]` asks to change — flags only, because the
   shim drops a positional sub-action for an unlisted verb and an SSH host keeps the shim it got at
@@ -3668,6 +3957,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
      `$HOME` + fake `curl`, the same discipline as the canvas-control shim.
   3. **A read that could not run is `error`, never `unavailable`** — a dead master says nothing
      about whether the account has a subscription, and 'unavailable' silently drops the row.
+  4. **A failed read keeps the last good numbers** (`holdLastGood`, local AND remote): the
+     endpoint answers **429** on a budget every Claude CLI using the same login also spends
+     (measured on a host running 54 `claude` processes: 429 for minutes on end), and replacing
+     the bars with "Could not read usage" made rows flicker for no change in the account. The
+     held snapshot is `status: 'error'` + the old limits + the OLD `updatedAt`, so the debounce
+     must key on the READ's time (`lastFetchAt`/`remoteCache.at`), never on `updatedAt` — keying
+     it on the numbers' age re-reads on every call and hammers the endpoint that said 429.
   Shape: `remoteUsageTargets` (pure) elects ONE connected project per host (several projects share
   a host's `$HOME`) and offers its system `~/.claude` plus every managed account pinned to that
   host. The service (`usage:remote`) caches per target under the usual debounce, evicts targets
@@ -4494,6 +4790,11 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   every hovered node twice, and on the desktop it would duplicate main's forward. (`node.close`
   has no browser owner at all: the browser keeps ⌘W.)
 - **Invariants**
+  - **A bare letter or Space is only ever a `board`-scope binding.** `board` commands resolve only
+    while a board is up and carry neither `allowWhileTyping` nor `allowInTerminal` — that pair of
+    refusals is what makes a bare key a command rather than a character stolen from the user, so a
+    `board` row must never gain either flag, and no other scope may be given bare letters
+    (`normalizeBindingForCommand`). `board` shares the `global` conflict bucket with app/canvas.
   - **Never read `settings.speech.shortcut`.** The dictation chord is `dictationBinding()` (the
     first effective `speech.dictation` binding); the legacy field is a **downgrade mirror only**,
     written by `setKeybindingOverride` so an older build still finds the user's chord.
@@ -5026,7 +5327,7 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   **PULL REQUEST cards are harvested from the issue poll, not fetched** (2026-09-01, read-only):
   `/repos/{repo}/issues` returns pull requests too — `client.listIssues` used to `continue` past
   them — so keeping them costs ZERO extra requests and inherits the incremental `since` watermark,
-  the ETags, the 60 s poll and the cache snapshot the issue lane already has. The alternative was
+  the heartbeat ETag (below), the 60 s poll and the cache snapshot the issue lane already has. The alternative was
   measured and rejected: **`/repos/{repo}/pulls` IGNORES `since`** (a day-old `since` returned the
   same 100 items as none), each item is ~25 KB against ~7 KB, and it would be a second
   ETag/paging/cache lineage — for `head`/`base` and nothing else (mergeable, reviews and checks are
@@ -5047,6 +5348,216 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   dropped, so only a full reconciliation may clear it. **(3)** the `pulls` source is `readOnly` in
   the registry: no drag, no move control, and its page reports `readOnly: true` on the wire rather
   than trusting every consumer to remember.
+  **Sync foundation: what a poll costs, what a failure means, what a write needs** (2026-09-28,
+  `core/github/*`; Desktop and Server Edition identical — all of it is core). Seven rules:
+  **(1) A poll that finds nothing spends nothing.** Before each pass, `client.issuesHeartbeat` asks
+  for the single most recently updated item (`state=all&sort=updated&direction=desc&per_page=1`)
+  with `If-None-Match`; a 304 skips the scan. MEASURED against this repo (read-only `gh api`):
+  twenty 304s moved `x-ratelimit-used` by **0**, the next 200 by 1; five plain 200s by 5. The `since`
+  scan could never do this itself — `since` moves every pass, so its URL (and any ETag) never
+  repeats, and the snapshot's `etags` map was declared and always written empty. The validator is
+  the one read BEFORE the scan (a change landing mid-scan stays "new"), it is persisted in
+  `snapshot.etags.heartbeat` (a restart does not pay a full read), and a 304 NEVER skips a full
+  reconciliation (a deletion or transfer does not move the top item) or an incomplete repository.
+  It covers pull requests by construction: same endpoint, same `updated_at` the scan filters on.
+  **A 304 still prompts the board to re-read** (an empty delta, served from the local cache, no
+  GitHub cost) exactly as every successful refresh always did: a page is not only issues — read
+  only, the mapping approval and the completion column are derived by the host at query time, and
+  the first version, which emitted nothing on a 304, left a board read only after its user
+  approved the mapping (review of #1001). Approve and revoke also notify the project's open boards
+  at once (`service.notifyProject`). **Unknown `state_reason` values decode as no reason**: GitHub
+  added `duplicate` (one of cli/cli's last 100 closed issues, measured 2026-09-29), and the strict
+  decoder failed that repository's whole scan as malformed — it never synced.
+  **The credential check is conditional too** (`createTokenValidator`): every poll re-resolves the
+  credential (30 s memo, 60 s poll), and each resolve was an unconditional `GET /user` — one real
+  request per poll even after the heartbeat. With `If-None-Match` an unchanged identity is a free
+  304 (MEASURED: ten conditional reads, +0), and a bogus token presenting a valid validator still
+  gets 401. Idle polling now costs zero quota. **(2) The budget is read from every response and
+  acted on before GitHub refuses.** `client.onRateLimit` reports `x-ratelimit-*` from 200, 304 and
+  errors alike to `GitHubRequestCoordinator.noteRateSample`, keyed by the credential's identity
+  (the host builds the client from token + userId); within one window the LOWEST reading wins. A
+  spent `core` budget blocks new requests at once. Below `backgroundFloor(limit)` = max(100, 10%)
+  the BACKGROUND poll stops until the window resets — the budget is the whole account's (`gh`, the
+  browser, other tools) — while a refresh the user asks for still runs within its own floors.
+  **Every wait is capped** (`MAX_RATE_WAIT_MS`, 10 s in TOTAL): past it the request is refused at
+  once with its retry time, instead of holding one of four read slots and an IPC call for up to an
+  hour. The page and the Settings status carry the `throttle`; both say "held until HH:MM"
+  (`lib/githubSyncStatus.ts`), and subscribers are prompted once per deadline, not per skipped
+  minute. Do NOT add a `/rate_limit` probe: measured for the same token in the same second it
+  answered 5000 left / used 0 with a different reset time than the response headers (4968 / 32) —
+  the headers are the truth. **(3) Throttled is not signed out.** `classifyGitHubFailure`
+  (`core/github/failure.ts`) is the ONE classifier: only a 401 or a non-rate-limit 403 is
+  `unauthorized`; network, timeout, 5xx and malformed bodies are `unreachable`; limits are
+  `rate-limited`. Token validation is tri-state (`TokenValidation`); the resolver keeps the last
+  credential GitHub vouched for — SAME token only — through an unknown answer, and with none throws
+  a `GitHubReachabilityError` rather than returning the null that every caller reads as "sign in".
+  Auto does not fall through to the saved token when the CLI's token merely could not be checked
+  (that would switch identities for the length of an outage). **`gh auth status` is never run**:
+  measured on gh 2.45 with GitHub unreachable it printed "The token in hosts.yml is invalid";
+  `gh auth token` only reads the local store and our own classified `/user` check decides.
+  Settings says "GitHub could not be reached to check the sign-in" and keeps the last confirmed
+  sign-in on screen; `saveToken` refuses an unchecked token without calling it invalid.
+  **(4) A close carries its reason.** `UpdateIssueInput.stateReason`: the close confirm offers
+  Completed / Not planned (Completed preselected — GitHub's default), a reopen sends `reopened`.
+  It rides ONLY with a state change (the "send `state` only when it changes" rule stands), the
+  client refuses a reason of the wrong kind, and a close GitHub recorded with a different reason is
+  not reported as confirmed. **(5) Writes need an approval that covers the column mapping.** The
+  mapping (which label a column applies, which column closes) is in the git-shared project.json,
+  so a pulled commit could re-aim writes under an approval given for something else. An approval
+  records `githubMappingDigest(repository, completionColumnId, columnMappings)` — column ORDER and
+  titles excluded (they change nothing GitHub sees; `config.revision` includes order and would make
+  every column drag revoke writes). Moves and "Create missing labels" require the digest to match
+  (`context.mappingApproved`); READS stay on the repository approval, since the mapping only decides
+  what a write does. A mismatch makes the board read only and says why (`page.mappingNotApproved`);
+  Settings offers "Approve column labels". **Upgrade:** an approval from before this change has no
+  digest — it keeps reading and must be approved once more before the board writes. Pinning the
+  on-disk mapping at first load was rejected: it would silently trust whatever a `git pull`
+  delivered between the upgrade and that load. **(6) Revoke deletes the cache.** The plaintext
+  issue cache (bodies included) is removed by the same bounded path as "Clear cached data", AFTER
+  the revoke is recorded — a failed delete is reported (`revoked-cache-kept`), never left approved.
+  The cache file is per (identity, repository), so another project on this machine bound to the
+  same repository re-fetches too. **(7) Every client that leaves releases its subscription.** The
+  service polls every 60 s per subscribed repository; the desktop window now releases on `closed`,
+  `render-process-gone` and `did-navigate` (`main/renderer-client-release.ts` — not
+  `did-start-navigation`, which also fires for a navigation the guard blocks), beside the relay
+  peers and Server Edition sockets that already did. **Mobile: N/A** — the phone's board carries
+  session cards only (the `githubIssues:*` channels are served to relay TABS, never the phone
+  dialect), so nothing there can read a throttle as signed out; surfacing GitHub cards on the phone
+  would need this whole contract carried over the relay.
+  **Pull request CI, mergeability and links** (2026-09-29; core `graphql-pulls.ts` +
+  `pull-status-tracker.ts`, shared `github-pull-status.ts` + `kanban-pull-links.ts`, renderer
+  `lib/pullLinks.ts` / `lib/pullAutoMove.ts` / `lib/pullChase.ts`). The issues harvest cannot say a
+  PR's head, checks or mergeability, so ONE GraphQL read per repository adds them: every open PR's
+  `headRefName`/`headRefOid`/`isCrossRepository`/`isDraft`/`mergeable`/`mergeStateStatus`, the head
+  commit's `statusCheckRollup`, `closingIssuesReferences`, plus the 30 most recently merged/closed
+  PRs (so a branch link survives the merge). MEASURED on this repository (60 open PRs): **1 point**
+  of the separate `graphql` budget, ~18 KB; the per-PR checks read (modal open only) is also 1.
+  **When it runs:** after a heartbeat that reported a change, on a user refresh, on the first
+  heartbeat of an app run, when the last read failed or the budget skipped one (`owed`) — never on a
+  304 otherwise. A finished check run does NOT move the heartbeat, so an UNDECIDED PR (mergeable
+  UNKNOWN or rollup PENDING/EXPECTED — measured: 40 of 50 open PRs read UNKNOWN on a first read, all
+  settled 20 s later, because the first read is what starts GitHub's computation) is CHASED at
+  30 s / 1 min / 2 min / 5 min, at most 12 reads per episode, and only while a board is VISIBLE: the
+  renderer asks (`githubIssues.chasePulls`) every 15 s while `document.visibilityState` is visible,
+  and the host answers from a map — schedule, cap and the synchronous `claimChase` live in core, and
+  no context (credential chain) is resolved unless a read is due. A new undecided PR or a new head
+  starts a new episode; the same stuck PR does not restart the count. **Semantics, each a shipped
+  bug somewhere:** a null rollup is "no checks" and renders NOTHING (never a tick); only
+  `mergeStateStatus === 'CLEAN'` is "Ready to merge" (MERGEABLE+BLOCKED is real: 2 of 31 here);
+  a rollup counts only at the current `headRefOid`, and a CI result is never carried from an older
+  head; a failed read keeps the last snapshot marked stale (`pullStatusFreshness`, greyed after
+  15 min); a FORBIDDEN/INSUFFICIENT_SCOPES answer for the rollup or mergeability HIDES that region
+  (`access`), which is not the same as a null rollup. Enum values (`mergeable`, rollup `state`,
+  `mergeStateStatus`) decode LENIENTLY: a value GitHub adds later claims nothing and is not chased,
+  and an unrecognised rollup state is `UNRECOGNIZED`, never `null` ("no checks") — one new value
+  must not fail every read of the repository (it happened with `state_reason: duplicate`). **Budget:** GitHub meters `graphql` apart from
+  `core`, and so does the coordinator now — `throttle(identity, at, resource)`, a primary limit is
+  tagged with its resource (`GitHubClientError.resource`, from `x-ratelimit-resource`, or GraphQL's
+  200-with-`RATE_LIMITED`) and holds only that resource; an untagged (secondary) limit still holds
+  the identity. A spent graphql budget (the user's own `gh pr list` spends it) must not stall REST
+  issue sync. **Links:** PR → issue = GitHub's own `closingIssuesReferences` (same repository only),
+  deliberately NOT unlinkable on the board — GitHub closes the issue at merge whatever the board
+  shows. PR → session card = the PR's head equals `data.worktree.branch` of the card's nearest bound
+  group (`worktreeBranchOf`, no git read; a stale binding still names the branch, which is exactly
+  when its PR merges); a FORK PR never links (36 of 50 open PRs here are forks). Unlinking writes a
+  git-shared tombstone in `ProjectKanban.pullLinks` — a BOARD-LEVEL field on purpose: every card-meta
+  setter rebuilds `meta[]` entries from a fixed field list, so a field added there is erased by the
+  next member/due/label edit. On an SSH project NO card carries a worktree branch
+  (`kanbanSessionsFrom` leaves it off where the cards are built), so the card face, the move and
+  the modal — which states the worktree reason — cannot disagree. PR → issue → session card: a session started on an issue (`data.issueRef`, below) links to
+  every PR whose `closingIssuesReferences` name that issue, matched against the pull board's own
+  `repository` (a `closes` number means nothing in another repository); here a FORK PR does count —
+  GitHub's "Closes #N" is meaningful wherever it comes from. The host memory remembers what a PR
+  closed while open, so the link survives the merge that should move the card; the same tombstones
+  apply, and an issue-bound card on an SSH project still links this way (only the branch half needs
+  a worktree group).
+  **What this machine observed lives on the HOST** (`core/github/pull-memory.ts`, persisted beside
+  the issue cache per identity + repository, deleted with it): every PR it has seen, its head, its
+  lifecycle, whether it was seen open, and `mergedSeenAt` — the first time it was seen merged AFTER
+  being seen open (an OBSERVED merge). The read lists only 50 open + 30 recent PRs, so without it a
+  closed-unmerged PR's block would expire once 30 newer PRs closed; remembered PRs stay on the pull
+  board (closed ones until unlinked, merges for 30 days) and an unlisted one takes its lifecycle
+  from the REST harvest. The first version kept a per-card "seen" map in settings.json instead, and
+  review found three failures in that shape: the planner's output exceeded the sanitizer's bounds so
+  the hook rewrote settings in a loop until React threw; the block expired; and two Server Edition
+  tabs both moved the card while a background tab's settings write reverted another tab's changes.
+  **Merge-driven move — session cards only, OFF by default.** The switch, the target column and
+  `armedAt` are MACHINE-LOCAL (`settings.kanbanPullAutoMove.projects[projectId]`, written ONLY by
+  the user's own Settings action): it makes this machine write the shared board on its own, so a
+  switch in the project file would make every clone move and commit cards nobody on that machine
+  asked for. Per-card opt-out is board content (`pullLinks.noAutoMove`). Guards in order
+  (`decidePullAutoMove`): opted out → never; any linked PR open/draft → wait; any closed unmerged →
+  blocked until the user unlinks it; already in target → nothing; no linked merge with
+  `mergedSeenAt >= armedAt` → no move (arming never sweeps old merges; `armedAt` is taken from the
+  HOST's clock via the pull board's `now`, because `mergedSeenAt` is stamped there and a Server
+  Edition browser's clock can be off). Each planned move must then win the host's one-time CLAIM
+  (`githubIssues:claim-pull-auto-move`, persisted in the same memory, keyed by project + card + PR
+  set) — the first ask across every window wins, and a card dragged back is not moved again for the
+  same merges. **The claim is refused unless THIS card was noted waiting on one of those PRs while it
+  was open** (`githubIssues:note-pull-waits`; the host records a note only for a PR it holds as open
+  itself): `mergedSeenAt` is a fact about the PR, and without the per-card note a card that first
+  appeared after the merge — a follow-up terminal in the same group, a teammate's card by git pull,
+  an issue-bound session started later — would win a fresh claim and jump to Done. It is then
+  applied as a compare-and-set on the column
+  the decision saw (`applyPullAutoMove`, run by Canvas against the store's latest board), writing
+  ONE `card-moved` board-log line whose `title` names the PRs. The planner writes nothing; it runs
+  only while the board is open and never on a stale snapshot. **GitHub issue cards are never
+  auto-moved** — GitHub already closes them when a `Closes #N` PR merges, and a second writer would
+  race it and could clobber `state_reason`.
+  Surfaces: Desktop + Server Edition identical (core + renderer; `githubIssues:pull-status`,
+  `:chase-pulls`, `:pull-checks`, `:claim-pull-auto-move` are registered by the shared core handlers
+  and served to relay tabs through the project-scope table; a relay tab never auto-moves — the
+  board belongs to the other machine). Check detail is bounded for relay guests: one read per PR per
+  15 s, ten per project per minute, both decided before a credential is resolved. **Mobile: follow-up** — the phone board carries session
+  cards only; showing PR CI there means carrying `GitHubPullBoard` over the relay dialect.
+  **Start with agent — a GitHub issue card starts a bound session** (2026-09-28). An issue card's
+  right-click menu and its summary modal offer **Start with agent ▸**, whose rows are the canvas's
+  own agent + account picker (`agentCreationEntries`, which takes an optional `pick` so the same
+  rows can point at another action — never a fourth copy of the picker). The result is an ordinary
+  agent node in the project cwd (through `addAgentNode`, which now returns the node) carrying
+  `data.issueRef {owner, repo, number}` — persisted, git-shared, therefore hostile:
+  `normalizeIssueRef` (`@shared/github-issue-ref`) runs at BOTH serializer seams and a malformed
+  value is dropped (the node survives, only the binding goes). Rules a refactor must not undo:
+  (1) **the launch line carries the REFERENCE, never the issue's text** — titles and bodies are
+  writable by anyone on a public repository and a launch line is typed into a pane.
+  `issueLaunchPrompt` is the ONE place a reference becomes text; it re-validates the reference
+  itself and returns nothing for a hostile one. The prompt tells the agent to read the issue with
+  `gh issue view N --repo owner/repo --comments` (mid-sentence: punctuation glued to the last flag is
+  copied literally and `gh` refuses `--comments.`) AND that its title, body and comments are
+  untrusted input, not instructions — the session runs under the project's permission mode (auto by
+  default), so the prompt is the only thing that can say "read it, do not obey it" before it does.
+  A board start means **work on it**: the default task is "investigate, plan and implement the fix
+  in this working tree"; a caller's `--prompt` REPLACES that task ("Your task: …"), never the lines
+  around it. The hard limits ride the prompt itself, after any brief: never close the issue, and no
+  issue comment or PR unless the user asks in that session — end with a proposed comment. Proven
+  under a real `/bin/sh` (`github-issue-ref.realsh.test.ts`). (2) **The reference comes from the card's
+  `htmlUrl`** (`issueRefFromHtmlUrl`, which also requires the URL's number to equal the card's).
+  (3) **`done` never moves a card**: it means a turn ended, not that the work did. The issue card
+  shows every bound session as a live chip (`IssueRunChips`, subscribed per node to a PRIMITIVE
+  signature `issueRunChipSig` — never `s.byId`), RUNNING / NEEDS YOU / TURN FAILED / DROPPED plus
+  unread; a click opens that session's card. A card moves only when the session `assign`s itself or
+  a person drags it — pinned by `board-writers.guard.test.ts`, which enumerates EVERY renderer call
+  site that writes a board assignment or moves an issue, each with the human/agent action that
+  triggers it; a new writer fails until it is signed for, and "a turn ended" is not a trigger. (4) **Board-log identity of an issue card** is the synthetic id
+  `github-issue:<owner>/<repo>#<N>` (lower-cased, `issueLogId`) — a namespace no node id can reach.
+  Under it: `run-started` (UI start, `--issue` open) and `run-ended` (written by EVERY node-removal
+  funnel — `deleteNodes`, `closeStoredNodes`, the Omni delete, `deleteProject`, the Server `close` —
+  before it drops the node's agent status, with the last observed state). `duplicateNode` drops
+  `issueRef` (a copy is a new session nobody started on the issue; carrying the binding made a
+  phantom run). Known gap: ⌘Z/⌘⇧Z replay node arrays and write no run history, so an undone delete
+  revives a node whose run already ended. The summary modal shows it read-only as
+  "Agent runs" (no composer: a comment box under an issue reads as "post to GitHub"). **No cost or
+  token figure** is recorded: there is no cumulative per-session number, and a context-window
+  reading is not one. (5) The new session card is filed under the issue card's column (the same
+  unpruned direct write `createNodeInColumn` uses); the node header, the session card AND the card
+  modal's header show a `#N` chip (`IssueRefChip`; the modal's closes itself and makes the same
+  request) that opens the issue on the board (`openIssueOnBoard` →
+  `viewMode.requestedIssue`) ONLY when that board has GitHub sync — otherwise straight to GitHub,
+  rather than flipping the project's persisted view to a board that cannot show it — and the board
+  itself falls back to GitHub when the issue is not on a fetched page. Never a dead click. No "start in a new worktree" UI yet: compose `open-worktree` + `open-agent --group --issue`
+  (the skill says how). Surfaces: Desktop + Server Edition (renderer + core); Omni board shows no
+  issue lanes; **Mobile does not render the binding** — `issueRef` reaches the phone inside the
+  project file, and nodeterm-ios ignores the unknown field (follow-up there).
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,
   2026-08-30 — the same membership-plus-one-leaf discipline `AGENT_CONFIG` uses): each entry declares
   its filter `label`, its `placement` (`assignment` = the board's own persisted assignments,
@@ -5189,6 +5700,121 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   ~15 KB under the 128 KB ceiling. **Both verbs announce their write on `workspaceExternalChange`
   and that is not optional**: the renderer holds its own board and the next whole-workspace save
   serializes THAT, so a change the renderer never heard about is one the next autosave reverts.
+  **Board model + UX (2026-09).** Three tiers, and a new board feature must pick one: a board
+  FACT is shared content in `project.kanban` (optional, sanitized, ignored harmlessly by an older
+  build); a DISPLAY preference is per-user localStorage (`state/kanbanDisplay.ts`,
+  `nodeterm.kanbanDisplay`, per project); a filter on LIVE agent state is component state only.
+  - **`sanitizeKanban` (`core/workspace-files.ts`) is the shape rule now**, applied on all three
+    seams — `fileToProject`, the store's inline-project branch (which bypasses it) and
+    `projectToFile` on the way OUT (the two-seam rule `sanitizeLayouts` follows). It is
+    `validKanban` plus per-entry repairs, never inventions: a column that is not an object with
+    string `id` + `title` is dropped (React cannot render an object title — a render throw
+    boot-loops the app, the view choice persists), a non-string `category` is dropped, a malformed
+    assignment is dropped, a card's `assignees` that is not a list is dropped (entries without a
+    string name + colour filtered), every other field round-trips, and a clean board comes back BY
+    IDENTITY so a well-formed file is never rewritten. **Readers do not trust the load path alone**:
+    `cardAssignees` (`@shared/kanban-labels`) is the one reader of `meta[].assignees` — the board,
+    the card, the member filter, the log diff and the handoff pings all go through it, because an
+    `assignees: 5` iterated raw threw during render (a boot loop) and inside the `assign` verb.
+  - **Lifecycle category** (`KanbanColumn.category?: unstarted|started|done|closed`,
+    `@shared/kanban-category`). Every reader goes through `columnCategory`: an unknown STRING reads
+    as absent but is KEPT in the file (dropping it would erase a newer build's value on an older
+    teammate's save); a non-string never reaches a comparison. The default board carries
+    unstarted/started/done on every seeding surface (`defaultBoardColumns`, shared by
+    `defaultKanban` and the relay's `ensureProjectBoard`/label seeding). It drives the header
+    progress (`boardProgress`: live cards in done+closed columns over EVERY live card, Ungrouped
+    included; null when no column is done/closed — a number over an undefined "complete" would be
+    invented), hides `closed` columns behind a per-user toggle (default hidden), and gives the GitHub
+    completion column its default (`defaultCompletionColumnId`: first done, else first closed, else
+    the last column — the pre-category default, so an uncategorized board is unchanged). **A
+    category change on a column that holds cards is never silent**: it is a claim about every card
+    in the column (they start counting as finished, or leave view when it becomes closed), so
+    `categoryChangeImpact` gates a `ConfirmDialog` naming the count and the consequence; an empty
+    column changes at once. Confirm rather than refuse: refusing would only make the user empty
+    the column first, which is friction, not safety. Set from the column's ⋯ menu / header
+    right-click on the per-project board; Omni shows no column menu.
+  - **An unanchored card move lands at the TOP** (`assignNode`): no `before`, or a `before` naming
+    a card outside the destination column. An agent's `assign` into a long Done column used to
+    append at the bottom and read as "disappeared". A POSITIONAL drop still says where it landed —
+    below the last card or on the column body passes `AT_COLUMN_END` explicitly (both board views).
+    The relay's `projects.setCardColumn` follows the same rule; the `assign` help in BOTH agent
+    bodies says so (`canvas-control-core.test.ts` pins it).
+  - **Status chips** (Running / Needs you / Unread, `lib/kanbanStatusChips.ts`) read the store
+    through a derived primitive signature (`statusChipSig`) — never `byId`, the `armedDepSig` rule —
+    and are NEVER persisted (component state, reset on project switch): a filter on
+    second-by-second state that survived a restart shows a wrong board. The card badge and the chips
+    share ONE rule, `cardBadge`, so a chip cannot select cards whose badge says something else. They
+    narrow session cards only (like local labels); they AND with the label filter and OR within
+    themselves.
+  - **Board-log folding is a VIEW** (`lib/boardLogCollapse.ts`, `BoardLogFeed`): consecutive events
+    by the same author (name AND colour) of the same type within two minutes of the run's NEWEST row
+    render as one "×N" row that expands in place; the jsonl is never rewritten. The window is
+    anchored, not chained, so a ×N never spans more than two minutes. Comments never fold, and
+    neither do `agent-message` / `agent-read-cookies` (audit rows) or an issue's `run-started` /
+    `run-ended` history (each row names a different session) — `NEVER_COLLAPSE`.
+  - **Keyboard**: registry scope `board` (group Board) — Space opens the focused/hovered card,
+    J/K + ArrowDown/Up walk board order (the session cards on screen, column by column, Ungrouped
+    first; GitHub cards excluded), ArrowLeft/Right jump to the same row of the neighbouring
+    non-empty column; in the card modal J/K step the modal. `board` resolves only while a board is
+    up and has no `allowWhileTyping`/`allowInTerminal`, which is the ONLY reason
+    `normalizeBindingForCommand` lets it bind a bare letter or Space (the card modal's terminal,
+    the comment box and the chat composer keep every key). Dispatch stays in Canvas's one
+    listener; the mounted per-project board answers through `lib/boardKeys.ts` and DECLINES (the
+    key falls through) when the focused control uses the key (`keyOwnedByControl`: Space on a
+    button/link/checkbox, anything in a `<select>` or ARIA composite), when any dialog other than
+    its own card modal is open, or when a card menu is up. Two pre-existing bugs this had to fix:
+    the canvas's CAPTURE-phase space-to-pan `preventDefault`ed every non-typing Space even while a
+    board covered the canvas (so no board button could be pressed with Space) — `spacePanKeydown`
+    now takes `canvasCovered`; and a `Space` binding could never match because `e.key` is `' '`
+    (`normalizeKey` maps it to `SPACE`). The Settings recorder captures a bare key only for a
+    command that may have one (`board` scope or `allowBareKey`).
+  - **Rank strings** (`KanbanAssignment.rank?`, `@shared/kanban-rank` + `@shared/kanban-order`).
+    Order within a column = rank; an entry without a valid one (every pre-rank board, an older
+    build's move — its `assignNode` rebuilds the moved entry without the field — a hand edit) sits
+    right after the entry before it in the ARRAY, ties keep array order. Keys are base-62
+    fractional-index strings with an integer head, so the board's DEFAULT (top insert) is a
+    decrement: a thousand top inserts stay four characters (a digits-only midpoint scheme grows a
+    character every few). **A move never throws**: ~1.3k inserts into ONE gap grow a key past
+    `RANK_MAX_LENGTH` (256), and only then is the destination column re-keyed evenly as one
+    contiguous block (`rebalanceColumn`) — the one rebalance this scheme does. A rank STRING readers
+    cannot use is kept in the file (like an unknown category) and re-keyed by the next write into
+    that column; a non-string is dropped. A card assigned twice (a clean git merge can do that)
+    keeps its FIRST assignment everywhere — `sanitizeKanban`, `columnOrder` and `placeAssignment`
+    (which removes every copy of the moved card, as the pre-rank `assignNode` did). **Every write goes
+    through `placeAssignment`** (renderer `assignNode` AND the relay's `setProjectCardColumn`), which
+    also keeps the array in rank order so a build that ignores `rank` shows the same column — the
+    brief's two goals ("a move is a one-line diff" and "keep writing the array in rank order") pull
+    against each other, and the resolution is to move as little as the second allows: a
+    cross-column move whose array slot already sits between its new neighbours changes ONE entry in
+    place (two lines: `columnId` + `rank`); otherwise its block moves next to its successor; a
+    reorder WITHIN a column always moves a block (the array must change for an old build to see
+    it). A destination column is repaired first when it must be — missing/invalid/colliding ranks
+    re-keyed in the order it was already showing (only those entries change; a board's first write
+    into an unranked column ranks it once), an array that disagrees re-slotted within the column's
+    own positions. MEASURED with `git merge-file` (`core/kanban-rank-merge.test.ts`): two
+    ADJACENT cards filed into Done concurrently conflict under array-only placement and merge
+    cleanly with ranks; two NON-adjacent ones merged cleanly either way, so do not claim more than
+    that. The file's own `rev`/`savedAt` header still conflicts on any concurrent save — untouched.
+  - **Saved views** (`kanban.views: [{id, name, query}]`, `@shared/kanban-views`) are SHARED
+    content: a query carries source, labels, members and columns (the member and column filters are
+    board filters of their own). `viewQuery` is the ONLY builder and reads only those four, so the
+    status chips can never enter a view. The ACTIVE view and "show closed" are per user
+    (`kanbanDisplay`), restored on entering the board; a view a teammate deleted is ignored.
+    Deleting a view confirms (it goes for everyone). `sanitizeViews` runs inside `sanitizeKanban`,
+    keeps query fields it does not know, and `KANBAN_VIEW_SOURCES` is pinned to the renderer's
+    source registry (the shared sanitizer cannot import it).
+  - **Handoff pings** (`lib/handoffPings.ts`): the `assign` verb notifies a card's ASSIGNEE (this
+    machine's presence name) when an agent files it into a `done` column or a `started` column past
+    the board's first — never on routine moves, and not for needs-you (the existing agent-status
+    alert already covers every agent node). Same consent, background-only rule and per-node
+    cooldown as the turn-end alert, and a handoff ping arms a one-shot FOLD so the Stop hook that
+    follows seconds later is not a second notification for the same moment. v1 is agent-driven
+    moves only: a teammate's move arriving by git, or the phone's relay move, pings nobody.
+  **Phone** (nodeterm-ios): must at least not break on `category`, `rank` or `views` (extra JSON
+  keys its board decoder ignores). The relay-served move now lands at the top with a rank, while
+  the phone's direct-SSH writer (`KanbanBoardWriter`) still appends without one — the next desktop
+  write into that column ranks it, and array order already shows it correctly. `KanbanDefaults`
+  should gain the three categories. All three are the iOS follow-up, not desktop work.
 - **Omni Kanban (global swimlanes)** (`components/kanban/GlobalKanbanView.tsx`; one swimlane per open project; `state/viewMode.ts` `globalKanban` (localStorage `nodeterm.globalKanban`, machine-local, like `viewByProject`) + `settings.omniKanbanEnabled` (feature gate, default OFF, `settings.json`) / `omniKanbanAsDefault` (when true, `view.kanbanToggle` — Cmd+Shift+B — opens Omni; otherwise per-project; `view.globalKanbanToggle` registry command — unbound, remappable — always opens Omni when enabled); `TabBar` and the menu IPC `onToggleKanban` share one `performKanbanToggle` decision, and `isGlobalKanbanOpen()` is the single gate (fail-closed, static import of `useSettings` — the earlier `require` failed open in the packaged renderer). The active project's lane is derived from serialized `p.nodes` via `toKanbanSessionState` — the persisted-state counterpart to `toKanbanSession` — and is committed (`commitActiveToStore`) before the overlay mounts so live React Flow edits are not stale; `pendingLaunch` never becomes `initialCommand` in the modal (the DAG launch must fire only when dependencies report done, and the canvas `TerminalNode` already delivers `initialCommand` via `writeWhenShellReady` after the `nodeterm:create-node` project switch). Active-project edits (rename / sticky / browser nav) route through Canvas live nodes (`setNodes` + `markDirty`), non-active through the store + `writeDisk`; delete uses `ConfirmDialog` (not `confirm`) and SSH-aware teardown (`transport.destroy` locally vs `sshProject.killSessions` with `everySocket` for a remote owner, plus `agentStatus` / `agentNodes` / `webviewKeepAlive` cleanup). The top bar's project pills and Cmd/Ctrl+1..9 (`nodeterm:swimlane-jump`) jump to the lane; header hint shows the correct mod (`Cmd` on Mac, `Ctrl` elsewhere). Server Edition works as-is, Mobile N/A.
 - **Settings** (`SettingsPage.tsx`, ⚙ / ⌘,): font/cursor (live to xterm + Monaco), default
   shell, grid + snap, **default node size** (`defaultNodeWidth`/`defaultNodeHeight` — new

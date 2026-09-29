@@ -240,7 +240,9 @@ export const requiresVerified: ReadonlySet<string> = new Set([
   'settings',
   // Publishes text from this machine to a repository. `legacy` means "we cannot judge this
   // caller", and an unjudgeable caller must never be the one that files.
-  'report-issue'
+  'report-issue',
+  // Starts a process the user is not watching (#925).
+  'run'
 ])
 
 /**
@@ -263,6 +265,9 @@ export const OPEN_PROJECT_CONTROL_REFUSAL = 'Project open refused.'
 export const SETTINGS_CONTROL_REFUSAL = 'Settings access refused.'
 /** One sentence, names what was refused, no diagnosis — house style for every refusal here. */
 export const REPORT_ISSUE_CONTROL_REFUSAL = 'Issue reporting refused.'
+/** Same posture for `run` (#925): it starts a queued session the user is not watching, and the
+ *  refusal says only that the run was refused. */
+export const RUN_CONTROL_REFUSAL = 'Run refused.'
 
 /** The verified-only refusal, worded for the verb that was refused. */
 export function verifiedRefusalFor(verb: string): string {
@@ -271,6 +276,7 @@ export function verifiedRefusalFor(verb: string): string {
   if (verb === 'report-issue') return REPORT_ISSUE_CONTROL_REFUSAL
   if (verb === 'sticky') return STICKY_CONTROL_REFUSAL
   if (verb === 'open-project') return OPEN_PROJECT_CONTROL_REFUSAL
+  if (verb === 'run') return RUN_CONTROL_REFUSAL
   return MESSAGING_CONTROL_REFUSAL
 }
 
@@ -830,6 +836,19 @@ export class HookServer {
           // so the normalizer sees it and maps it to a synthetic working transition. See
           // docs/hook-reply-approvals.md.
           if (form.nodeterm_answered) payload.nodeterm_answered = form.nodeterm_answered
+          // The EVENT NAME, for an agent whose hook payload does not carry one. Antigravity (`agy`)
+          // sends five events with no name in any of them, and two of them (Pre/PostInvocation) have
+          // identical keys, so the managed command exports the name and the script sends it as this
+          // field. Assigned AFTER JSON.parse, so the form wins over a value planted in the agent's
+          // JSON. Deliberately NOT `hook_event_name`: that is a real payload field for claude, codex,
+          // gemini and copilot, and a name of our own cannot collide with any of them. The value is
+          // only ever compared against a closed set (normalizeAntigravity), never interpolated.
+          // Antigravity only: no other normalizer reads it, and for antigravity the form is the ONE
+          // source — an empty field DELETES a value planted in the JSON rather than letting it stand.
+          if (agentId === 'antigravity') {
+            if (form.nodeterm_hook_event) payload.nodeterm_hook_event = form.nodeterm_hook_event
+            else delete payload.nodeterm_hook_event
+          }
           // Raw listener first: it drives the transcript-tailing features (which need
           // transcript_path). Inside the try so a throwing raw listener still ends 204.
           this.rawListener?.(agentId, nodeId, payload, {

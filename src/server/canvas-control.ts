@@ -53,6 +53,10 @@ export interface ServerCanvasControlDeps {
   codexCaps?: () => Promise<CodexCliCaps>
   /** Test seam for the boot-populated shared Codex capability answer. */
   codexSharedIdentity?: () => Promise<boolean>
+  /** The `owner/repo` a project's kanban board syncs with (the GitHub host controller's answer) —
+   *  what `open-agent --issue #N` resolves against. Absent = only an explicitly configured
+   *  repository counts. See HeadlessNodeFactoryDeps.issueRepository. */
+  issueRepository?: (projectId: string) => Promise<string | null>
   /**
    * Whether to write this server's discovery surface into the machine's REAL agent configuration
    * directories: `~/.claude/skills/manage-nodeterm-canvas/SKILL.md`, the marker block in
@@ -189,7 +193,10 @@ export async function initServerCanvasControl(
     // up suspends autosave, so it latched on, and "Keep my version" then wrote the browser's edge
     // state over the ropes this factory had just persisted. These writes are OURS; the renderer
     // merges them (renderer/lib/serverChange.ts) and is never asked to choose.
-    publishProject: (project: Project) => platform().broadcast(IPC.workspaceServerChange, project)
+    publishProject: (project: Project) => platform().broadcast(IPC.workspaceServerChange, project),
+    issueRepository: deps.issueRepository,
+    // An issue card's run history lives in the same board log the messaging trace writes to.
+    appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry)
   })
 
   const messaging: AgentMessagingDeps = {
@@ -229,6 +236,7 @@ export async function initServerCanvasControl(
     rename: (sourceNodeId, args) => factory.rename(sourceNodeId, args),
     color: (sourceNodeId, args) => factory.color(sourceNodeId, args),
     sticky: (sourceNodeId, args) => factory.sticky(sourceNodeId, args),
+    run: (sourceNodeId, args, verified) => factory.run(sourceNodeId, args, verified),
     settings: async (sourceNodeId, args) =>
       serverSettingsControl(
         {

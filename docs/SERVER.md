@@ -574,6 +574,19 @@ factory had just persisted. On the new channel the browser three-way merges inst
 are merged against the last-known disk copy, and unsaved local edits survive. Nothing is asked of
 the user, because both sides of this merge are the same application.
 
+`open-terminal` / `open-agent` accept `--run-now` as a no-op: server opens already start at once,
+headless. `--run-now` together with `--after` is refused, in the desktop's words
+(`RUN_NOW_AFTER_REFUSAL`). `run --node <id>` delivers a node's retained launch (the Run now
+button's job) for the node's creator only. It requires verified identity and resolves the node
+through the ownership record, never by the first id match, because node ids can repeat across
+projects. It refuses an SSH node before its write-ahead claim, and answers a `--project` naming any
+other project as "no node with id". `run`, and every immediate open that carries a launch command,
+deliver through the same echo-verified launcher the desktop's headless start uses
+(`core/headless-launch.ts`), with `release:false`: the server keeps its client attached, which is
+what keeps even a plain-shell session reachable. The deferred `--after` release (`refreshArmed`)
+still pastes with `sendText`. Neither `--run-now` nor `run` unhides a closed project or raises a
+notice, the same as the server's other immediate opens.
+
 Validate upgrades with a disposable `NODETERM_DATA_DIR` and port. Restarting a shared live Server
 service is an explicit operator action; it is not part of a test, repair, or boot-rescue flow.
 

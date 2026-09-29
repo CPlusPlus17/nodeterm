@@ -1,6 +1,6 @@
 import { createRemoteContextEnsure } from '../core/remote-context-ensure'
 import { isKnownRemoteCodexAccount } from '../core/remote-ssh/codex-home'
-import { createRemoteCodexContext } from '../core/remote-ssh/codex-context'
+import { createRemoteCodexContext, type RemoteCodexContextTarget } from '../core/remote-ssh/codex-context'
 import { subagentReplay } from '../core/subagent-replay'
 import { grokHomeDir, grokSessionDir, grokSessionsDir } from '../core/agents/grok-paths'
 import { join, resolve, posix } from 'path'
@@ -78,9 +78,10 @@ import {
   type AgentMessagingDeps
 } from '../core/agents/agent-messaging'
 import type { RemoteLogExec } from '../core/board-log'
-import type { TranscriptPresence } from '../shared/types'
+import type { PtyCreateOptions, TranscriptPresence } from '../shared/types'
 import { boardLogRemotePath } from '../core/board-log'
 import { PtyManager } from '../core/pty-manager'
+import { desktopHeadlessRequest, launchHeadless } from '../core/headless-launch'
 import { WorkspaceStore } from '../core/workspace-store'
 import type { CardLabelEdit } from '../core/project-kanban-write'
 import { WorkspaceWatcher } from '../core/workspace-watcher'
@@ -102,6 +103,7 @@ import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
 import { makeSshSetupRunner } from './remote-ssh/ssh-setup-runner'
 import { registerGitHubIntegration } from '../core/github/integration'
+import { releaseOnRendererDeparture } from './renderer-client-release'
 import { runGitHubCliCommand } from '../core/github/credentials'
 import {
   ElectronGitHubSecretStore,
@@ -173,6 +175,7 @@ import {
   recordRawToolEvent,
   recordContextUsage,
   setMirrorSettingsProvider,
+  setMirrorLiveNodesProvider,
   setMirrorUsageProvider,
   buildMirrorUsage,
   onInboxActionable,
@@ -182,6 +185,7 @@ import {
   type MirrorSettings,
   setNodeSessionName,
   setNodeHibernated,
+  seedNodeIdentities,
   sessionNameSweepEntries,
   nodeState,
   nodeSessionName,
@@ -230,6 +234,7 @@ import {
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
 import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
+import { createReadRemoteGrokChat } from '../core/remote-grok-chat'
 import { createHostChat, mirrorChatSendRefusal } from './remote/host-chat'
 import type { ChatSendOutcome, HostChatReply, RendererChatStatus } from '../shared/mobile-chat'
 import {
@@ -242,6 +247,7 @@ import {
   type RemoteRefLookup,
   type RemoteTranscriptRefCache
 } from './remote-transcript-page'
+import { createReadRemoteCodexPage } from './remote-codex-chat-page'
 import { createRemoteContextTail } from './remote-context-tail'
 import { createRemoteSubagentTail } from './remote-subagent-tail'
 import { RemoteFile, type RemoteFileRef } from './remote-ssh/remote-file'
@@ -263,6 +269,7 @@ import { initContextLink, setNodeTranscript } from '../core/context-link'
 import { transcriptPathOf } from '../core/context-link-core'
 import { initCanvasControl, installCanvasSkillInto } from './canvas-control'
 import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control-verbs'
+import { issueFlagRefusal } from '../core/canvas-control-core'
 import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
 import { initTranscriptIndex, searchTranscripts } from '../core/transcript-index'
 import { initTelemetry } from './telemetry'
@@ -469,13 +476,15 @@ const speechService = new SpeechService({ models: whisperModels, isPremium })
 // viewer. Inert with zero peers: the registry holds no sink, so none of this ever runs.
 // Wired once here — do not double-wire (4b Task 4). A second wirePeerRegistry() call would silently
 // overwrite these deps (last write wins), so keep this the sole call site in src/main.
-let dropGitHubRelayClient: ((id: number) => void) | undefined
+// Releases a departed client's GitHub issue subscriptions (and the 60 s poll they keep alive).
+// Relay peers call it from onPeerGone; the app window from releaseOnRendererDeparture.
+let dropGitHubClient: ((id: number) => void) | undefined
 wirePeerRegistry({
   setFlow: (id, sid, resume, owner) => ptyManager.setFlow(id, sid, resume, owner),
   captureForResync: (sid) => ptyManager.captureForResync(sid),
   onPeerGone: (id) => {
     ptyManager.dropClient(id)
-    dropGitHubRelayClient?.(id)
+    dropGitHubClient?.(id)
   }
 })
 
@@ -1064,6 +1073,9 @@ function createWindow(): BrowserWindow {
   // its webContents are destroyed by then.)
   const presenceId = win.webContents.id
   presenceHub.join(presenceId, 'desktop')
+  // The GitHub board's subscriptions, released on every way this page can go: closed, crashed,
+  // or replaced by a reload (which reuses this webContents id with nothing subscribed).
+  releaseOnRendererDeparture(win, win.webContents, () => dropGitHubClient?.(presenceId))
   win.on('closed', () => {
     presenceHub.leave(presenceId)
     // This webContents is a pty SUBSCRIBER (co-attach: one pty, N subscribers, keyed by the
@@ -1498,6 +1510,20 @@ app.whenReady().then(async () => {
   // block below on the server side too — this one is here beside its sibling.
   corePlatform.handle(IPC.ptySessionAge, (persistKey: string) => ptyManager.sessionAgeSeconds(persistKey))
 
+  // #925: canvas-control `--run-now` / `run`, desktop only. Registered here rather than in core's
+  // shared `registerIpc`, so a Server Edition browser cannot reach it (the server starts nodes
+  // through its own HeadlessNodeFactory). A relay peer does reach this table, and is refused
+  // host-side because the channel is in `HOST_ONLY_CHANNELS` (shared/host-control). All logic lives
+  // in core/headless-launch: `desktopHeadlessRequest` strips `sshRemote`, `viewerId` and `clearEnv`
+  // and forces release + requirePersistent. The renderer refuses an SSH node before any claim (the primary fence); the
+  // `requireRemote` it sets for an SSH-project node is kept here, so core's `spawnNew` refusal
+  // stands behind that fence as a belt.
+  corePlatform.handle(
+    IPC.ptyLaunchHeadless,
+    (req: { ptyOptions: PtyCreateOptions; command: string }) =>
+      launchHeadless(ptyManager, desktopHeadlessRequest(req))
+  )
+
   // Gemini's title read needs the transcript path its own context tail already tracks (nothing
   // scans for it). That tail is created ~600 lines below with the rest of the hook plumbing, while
   // this deps object is consumed by the ptyReadSessionName handler just under here and by the
@@ -1744,7 +1770,7 @@ app.whenReady().then(async () => {
     secret: githubSecret,
     run: runGitHubCliCommand
   })
-  dropGitHubRelayClient = (id) => github.service.dropClient(id)
+  dropGitHubClient = (id) => github.service.dropClient(id)
   // Machine-local record of what has already been reported, per project — never git-shared, or a
   // cloned repo could hand this machine a pre-loaded "already reported" ledger.
   const reportLedger = new ReportLedgerStore(app.getPath('userData'))
@@ -2114,6 +2140,9 @@ app.whenReady().then(async () => {
       void flushAgentStatusMirror()
     })
     .catch(() => {})
+  // Lets the mirror drop an identity-only entry (a session id kept past the 6 h state expiry)
+  // once its node is gone from every project. `undefined` = cannot know = keep, TTL-bounded.
+  setMirrorLiveNodesProvider(() => workspaceStore.knownNodeIds())
   setMirrorSettingsProvider((): MirrorSettings => {
     const s = settingsStore.get()
     return {
@@ -2442,23 +2471,30 @@ app.whenReady().then(async () => {
     if (scoped) pushContextUpdate(scoped)
   }, remoteFile, { parse: codexContextParse, parseModel: codexContextModel })
   // Persisted SSH ownership remains remote while the master is down or before PTY co-attach.
-  const remoteCodexContext = createRemoteCodexContext({
-    targetFor: (nodeId) => {
-      const projectId = workspaceStore.sshProjectIdForNode(nodeId)
-      const live = ptyManager.sshRemoteForNode(nodeId)
-      if (!projectId && !live) return undefined
-      const rt = live ?? (projectId ? sshProjectManager?.refForProject(projectId) : undefined)
-      const node = workspaceStore.getNode(nodeId)
-      if (!rt || !node) return null
-      return { conn: rt.conn, controlPath: rt.controlPath,
-        remoteHome: sshProjectManager?.remoteHomeForControlPath(rt.controlPath), accountId: node.accountId,
-        connectionKey: sshProjectManager?.connectionKeyForControlPath(rt.controlPath) }
-    },
-    knownAccount: (id, target) => isKnownRemoteCodexAccount(
-      settingsStore.get().codexAccounts ?? [], id, sshHostKey(target.conn)),
-    run: (target, command) => sshProjectManager
+  // Named (not inline) because the codex ⌘M reader (`readRemoteCodexPage` below) resolves a node's
+  // host, account and master through the SAME three functions: the meter and the chat can never
+  // disagree about where a codex node's rollout lives.
+  const remoteCodexTargetFor = (nodeId: string): RemoteCodexContextTarget | null | undefined => {
+    const projectId = workspaceStore.sshProjectIdForNode(nodeId)
+    const live = ptyManager.sshRemoteForNode(nodeId)
+    if (!projectId && !live) return undefined
+    const rt = live ?? (projectId ? sshProjectManager?.refForProject(projectId) : undefined)
+    const node = workspaceStore.getNode(nodeId)
+    if (!rt || !node) return null
+    return { conn: rt.conn, controlPath: rt.controlPath,
+      remoteHome: sshProjectManager?.remoteHomeForControlPath(rt.controlPath), accountId: node.accountId,
+      connectionKey: sshProjectManager?.connectionKeyForControlPath(rt.controlPath) }
+  }
+  const knownRemoteCodexAccount = (id: string, target: RemoteCodexContextTarget): boolean =>
+    isKnownRemoteCodexAccount(settingsStore.get().codexAccounts ?? [], id, sshHostKey(target.conn))
+  const runRemoteCodex = (target: RemoteCodexContextTarget, command: string): Promise<{ code: number; stdout: string }> =>
+    sshProjectManager
       ? sshProjectManager.sshRun(childArgs(target.conn, target.controlPath, command))
-      : Promise.resolve({ code: 1, stdout: '' }),
+      : Promise.resolve({ code: 1, stdout: '' })
+  const remoteCodexContext = createRemoteCodexContext({
+    targetFor: remoteCodexTargetFor,
+    knownAccount: knownRemoteCodexAccount,
+    run: runRemoteCodex,
     tail: remoteCodexContextTail,
     onTrack: (nodeId, sessionId) => { nodeContextSession.set(nodeId, sessionId) },
     onClear: (nodeId, sessionId) => {
@@ -2661,11 +2697,33 @@ app.whenReady().then(async () => {
       refFor: (q) => locateRemoteRef(q, sshTargetForNode),
       readPage: (ref, before, maxBytes) => remoteFile.readTranscriptPage(ref, before, maxBytes)
     }),
+    // CODEX's own two legs (`readChatTranscript` routes a codex node here, never through claude's
+    // `pathFor` / `readRemotePage` above): the hint its context tail learned from a hook, and the
+    // remote page — located on the host through the same resolvers as its remote context meter.
+    codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId),
+    readRemoteCodexPage: createReadRemoteCodexPage({
+      targetFor: remoteCodexTargetFor,
+      knownAccount: knownRemoteCodexAccount,
+      run: runRemoteCodex,
+      readPage: (ref, before, maxBytes) => remoteFile.readTranscriptPage(ref, before, maxBytes)
+    }),
     remoteExists: async ({ sessionId, accountId, nodeId }) =>
       sessionId ? await remoteTranscriptPresence(sessionId, accountId, nodeId) : null,
     // Remoteness from THIS shell's records (live pty or SSH project), so every read channel refuses
     // to answer a remote node from this machine's disk — ⌘M, the find-bar index, presence.
-    isRemoteNode: isRemoteTranscriptNode
+    isRemoteNode: isRemoteTranscriptNode,
+    // A remote GROK node's conversation, read on its host by session id (grok's file lives under the
+    // host's $GROK_HOME, and the hook-derived local map names a path on the wrong machine). Same
+    // remoteness and same master resolution as the claude legs above; the phone's `chat.page` reads
+    // through this object too.
+    readRemoteGrok: createReadRemoteGrokChat({
+      isRemote: isRemoteTranscriptNode,
+      target: sshTargetForNode,
+      run: (rt, cmd) =>
+        sshProjectManager
+          ? sshProjectManager.sshRun(childArgs(rt.conn, rt.controlPath, cmd))
+          : Promise.resolve({ code: 1, stdout: '' })
+    })
   }
   registerTranscriptIpc(transcriptIpcDeps)
 
@@ -3674,6 +3732,11 @@ app.whenReady().then(async () => {
       const msg = dryRunRefusal(verb)
       return { ok: false, error: msg, message: msg }
     }
+    // `--issue` (a GitHub issue reference for a new agent session): its shape is refused HERE,
+    // before the renderer ever sees it, by the same gate the Server Edition's parser runs. The
+    // renderer resolves `#N` against the project's repository and re-parses with the same grammar.
+    const issueRefusal = issueFlagRefusal(verb, args)
+    if (issueRefusal) return { ok: false, error: issueRefusal, message: issueRefusal }
     // `browser` is answered in MAIN and never forwarded to the renderer's agent-control dispatch:
     // the debugger handle and the CDP allowlist are main-side, and the renderer is the more
     // attackable half. Every other verb still round-trips to the renderer below.
@@ -4101,6 +4164,13 @@ app.whenReady().then(async () => {
   ipcMain.on(IPC.agentHibernated, (_e, msg: { nodeId?: unknown; on?: unknown } = {}) => {
     if (typeof msg?.nodeId !== 'string' || !msg.nodeId) return
     setNodeHibernated(msg.nodeId, msg.on === true)
+  })
+  // Identity seed: the renderer's persisted agentStatus store reports the session ids it holds for
+  // nodes the mirror has none for (an idle, terminal-made conversation after a restart), so the
+  // phone's chat view can locate the transcript before the next hook fires. Add-only and
+  // validated in core; SSH projects get it through the ordinary per-project slice push.
+  ipcMain.on(IPC.agentSeedIdentity, (_e, entries: unknown) => {
+    seedNodeIdentities(entries)
   })
   initRemoteHost(win, ptyManager, listProjectsOutput, hostBridge)
   // NEW interactive relay host (Stage 4): a connecting peer desktop becomes a first-class

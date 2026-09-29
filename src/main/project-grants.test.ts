@@ -111,8 +111,17 @@ describe('gateProjectTarget (spec §3/§5) — every branch, fail closed', () =>
     expect(PROJECT_TARGETABLE_VERBS.has('open-claude')).toBe(true)
     expect(PROJECT_TARGETABLE_VERBS.has('open-terminal')).toBe(true)
     expect(PROJECT_TARGETABLE_VERBS.has('open-agent')).toBe(true)
+    // #925: `run` reaches a node in another project only through this gate. Dropping it from the
+    // set would make `gateProjectTarget` answer 'allow' for any --project, ungating the verb.
+    expect(PROJECT_TARGETABLE_VERBS.has('run')).toBe(true)
     expect(PROJECT_TARGETABLE_VERBS.has('show-image')).toBe(false)
     expect(gateProjectTarget({ ...base, verb: 'list' })).toBe('allow')
+  })
+
+  it('refuses `run --project <foreign, ungranted>` like any stranger id (#925)', () => {
+    expect(gateProjectTarget({ ...base, verb: 'run', targetProjectId: 'proj-foreign' })).toEqual({
+      refuse: PROJECT_TARGET_REFUSED
+    })
   })
 
   it('is a no-op when no --project is present', () => {

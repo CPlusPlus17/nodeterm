@@ -69,7 +69,7 @@ import {
 } from '../../shared/types'
 import type { PeerIdentity } from '../../shared/presence'
 import type { PaneOwner } from '../../shared/agents/pane-owner-predicate'
-import { buildStubApi } from './stubs'
+import { buildStubApi, unsupported } from './stubs'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 import { encodePcmForWire } from './speech-encode'
 import { type FrameTransport, WebSocketFrameTransport } from './frame-transport'
@@ -276,6 +276,9 @@ export function buildRealApi(
     // shell yet" and gives up on its own deadline.
     paneCommand: (persistKey) =>
       client.request(IPC.ptyPaneCommand, persistKey).catch(() => null) as Promise<string | null>,
+    // Documented degrade (#925): the Server Edition starts nodes through its HeadlessNodeFactory,
+    // never through the browser renderer, so there is nothing for this to call.
+    launchHeadless: () => unsupported('pty.launchHeadless'),
     // A REAL implementation, not a stub: core registers the handler, so the server this browser is
     // served from answers it. The hibernation exit fails CLOSED on a null, so a stub here would
     // have silently switched Eco off for the whole Server Edition rather than degrade it.
@@ -457,6 +460,18 @@ export function buildGitHubApi(
       >,
     clearCache: (projectId) =>
       client.request(IPC.githubIssuesClearCache, projectId) as Promise<void>,
+    pullStatus: (projectId) =>
+      client.request(IPC.githubIssuesPullStatus, projectId) as ReturnType<GitHubIssuesApi['pullStatus']>,
+    chasePulls: (projectId) =>
+      client.request(IPC.githubIssuesChasePulls, projectId) as Promise<boolean>,
+    pullChecks: (projectId, pullNumber) =>
+      client.request(IPC.githubIssuesPullChecks, projectId, pullNumber) as ReturnType<
+        GitHubIssuesApi['pullChecks']
+      >,
+    claimPullAutoMove: (request) =>
+      client.request(IPC.githubIssuesClaimPullAutoMove, request) as Promise<boolean>,
+    notePullWaits: (request) =>
+      client.request(IPC.githubIssuesNotePullWaits, request) as Promise<number>,
     projectAvatar: (projectId) =>
       client.request(IPC.githubProjectAvatar, projectId) as ReturnType<
         GitHubIssuesApi['projectAvatar']
@@ -668,6 +683,7 @@ export function buildAgentApi(
   | 'answerPermission'
   | 'ackDone'
   | 'reportHibernated'
+  | 'seedAgentIdentity'
   | 'onAgentWake'
   | 'onRemoteViewers'
   | 'onAgentRefreshNode'
@@ -682,6 +698,10 @@ export function buildAgentApi(
     // over its SSH browse path — a browser canvas hibernating a node must reach that file too.
     reportHibernated: (nodeId, on) => {
       void client.request(IPC.agentHibernated, { nodeId, on }).catch(() => undefined)
+    },
+    // REAL forward, same reason: the server's mirror is what a phone browsing that host reads.
+    seedAgentIdentity: (entries) => {
+      void client.request(IPC.agentSeedIdentity, entries).catch(() => undefined)
     },
     // Deliberate no-op subscriptions, not stubs-by-accident: both signals originate in the phone
     // RELAY host, which lives only in the desktop main process — the Server Edition serves no
