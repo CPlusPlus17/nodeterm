@@ -618,7 +618,7 @@ import { snapNodeToGrid } from '../lib/nodeSizing'
 import { snapResizeChanges } from '../lib/resizeSnap'
 import { canClearDirty, canCommitCanvas, canCreateOnCanvas, liveCanvasHolds } from '../state/persistGuards'
 import { rebaseOnLatest, useNodesEpoch } from './nodesEpoch'
-import { createKanbanPublisher } from './kanban-sync'
+import { boardLiveNodeIds, createKanbanPublisher } from './kanban-sync'
 import { isHidden } from '../lib/ui-visibility'
 import { boardLogEvents } from '../lib/boardLogDiff'
 import { useBoardLog } from '../state/boardLog'
@@ -3188,6 +3188,27 @@ export function Canvas() {
     []
   )
 
+  /**
+   * Cast a node created THIS tick before anything that names it — spec §2's batch order (node adds,
+   * then card adds). A board write publishes at once from the store funnel (`setProjectKanban` →
+   * the kanban publisher), while `setNodes` lands on a later render and the node publish effect runs
+   * after that, so a site that files a fresh node's card would otherwise put the card on the wire
+   * first. A peer holding the card of a node it has not received prunes the card on its next board
+   * commit (the prune stays local — its removal is never cast — but that peer's own board keeps the
+   * loss). Only for the canvas React Flow holds: a node charged to a stored project is not the node
+   * publisher's. The node is written into `nodesRef` beside the caller's `setNodes` (idempotent), the
+   * same synchronous-ref discipline `attachWorktree` follows, so the render that lands it diffs to
+   * nothing. `node` must be the node AS INSERTED (its frame parenting included).
+   */
+  const castNewNodeNow = useCallback(
+    (projectId: string, node: CanvasNode): void => {
+      if (nodesProjectIdRef.current !== projectId || loadingRef.current) return
+      if (!nodesRef.current.some((n) => n.id === node.id)) nodesRef.current = [...nodesRef.current, node]
+      publisherRef.current?.publish(publishableLater(nodesRef.current))
+    },
+    [publishableLater]
+  )
+
   // ---- persistence helpers ----
   const commitActiveToStore = useCallback(() => {
     const id = useProjects.getState().activeProjectId
@@ -3740,18 +3761,19 @@ export function Canvas() {
     const guard = createMutationGuard()
     /**
      * The node ids live in `projectId` — what the kanban publisher's prune rule asks (a card whose
-     * node is not live is pruned locally and its removal NEVER cast). One project's set, never a mix:
-     * the project React Flow holds answers from the epoch pair (`nodesRef` is that project's canvas
-     * exactly while `nodesProjectIdRef` names it — useNodesEpoch), every other project from its
-     * stored copy (a project mid-load is still the store's until the load installs it).
+     * node is not live is pruned locally and its removal NEVER cast). One project's set, never a mix
+     * (`boardLiveNodeIds`): the project React Flow holds answers from the epoch pair (`nodesRef` is
+     * that project's canvas exactly while `nodesProjectIdRef` names it — useNodesEpoch), every other
+     * project from its stored copy (a project mid-load is still the store's until the load installs
+     * it) — and while the Omni board is open, whose lanes prune against the stored copy, the rendered
+     * project answers from React Flow ∩ store (ruling R6).
      */
     const liveNodeIdsFor = (projectId: string): ReadonlySet<string> =>
-      new Set(
-        (nodesProjectIdRef.current === projectId
-          ? nodesRef.current
-          : (useProjects.getState().getProject(projectId)?.nodes ?? [])
-        ).map((n) => n.id)
-      )
+      boardLiveNodeIds({
+        rendered: nodesProjectIdRef.current === projectId ? nodesRef.current.map((n) => n.id) : null,
+        stored: (useProjects.getState().getProject(projectId)?.nodes ?? []).map((n) => n.id),
+        omniOpen: isGlobalKanbanOpen()
+      })
     /**
      * THE ONE CAST on canvas:mut, for every family this Canvas publishes — nodes and edges (the
      * canvas publisher, for the active project) and board ops (the kanban publisher, for whichever
@@ -3811,8 +3833,10 @@ export function Canvas() {
      * Viewer/Commenter publishes nothing: the host refuses canvas:mut for them (R5).
      */
     const shouldPublishFor = (projectId: string): boolean =>
-      sessionForProject(projectId).api === activeSession.api &&
+      // The peer check FIRST: the node publisher asks this at ~20 Hz while a node is dragged, and a
+      // solo canvas must pay for nothing more than it did before the board shared this gate.
       hasPeersRef.current &&
+      sessionForProject(projectId).api === activeSession.api &&
       !isHostedReadOnly(activeSession.id)
     const pub = createCanvasPublisher(
       (m) => {
@@ -5612,7 +5636,7 @@ export function Canvas() {
       // "Start with agent in a new worktree" opens the agent in the same tick as the frame) — the
       // same `PendingLaunch` hold a control open into a preparing frame gets (`setupHoldGroup`).
       extra?: { issueRef?: IssueRef; awaitSetupGroup?: string }
-    ): { node: CanvasNode; projectId: string } | undefined => {
+    ): { node: CanvasNode; placed: CanvasNode; projectId: string } | undefined => {
       // Resolve the target project LIVE, at click time — never from this callback's render
       // closure. Menu onClick closures outlive the render that built them (`setMenu` freezes
       // them into state), and the sessions-sidebar "+" deliberately switches projects before
@@ -5703,7 +5727,9 @@ export function Canvas() {
       markDirty()
       // The project this node was charged to — the caller files anything else about the node (a
       // board card, its run history) against THIS id, never a second live read of the store.
-      return { node, projectId: targetProjectId }
+      // `placed` is the node exactly as inserted (frame parenting included) — what a caller casting
+      // it ahead of its board card must send (`castNewNodeNow`).
+      return { node, placed, projectId: targetProjectId }
     },
     [
       setNodes,
@@ -10554,6 +10580,8 @@ export function Canvas() {
       setNodes((ns) => [...ns, node])
       const board = project?.kanban ?? defaultKanban(targetProjectId)
       if (columnId) {
+        // The node goes on the wire BEFORE the card that names it (spec §2 batch order).
+        castNewNodeNow(targetProjectId, node)
         useProjects.getState().setProjectKanban(targetProjectId, assignNode(board, node.id, columnId, null))
       }
       markDirty()
@@ -10580,7 +10608,7 @@ export function Canvas() {
         event: { type: 'card-created', to: toName, title }
       })
     },
-    [emptyNodePos, setNodes, markDirty]
+    [emptyNodePos, setNodes, markDirty, castNewNodeNow]
   )
 
   // ---- GitHub issue → agent session ("Start with agent ▸") ----
@@ -10596,7 +10624,7 @@ export function Canvas() {
     (
       issue: GitHubIssueCardView,
       ref: IssueRef,
-      created: { node: CanvasNode; projectId: string },
+      created: { node: CanvasNode; placed: CanvasNode; projectId: string },
       agentId: AgentId
     ) => {
       const { node, projectId: targetProjectId } = created
@@ -10605,6 +10633,8 @@ export function Canvas() {
       const board = useProjects.getState().getProject(targetProjectId)?.kanban ?? defaultKanban(targetProjectId)
       const column = issue.columnId ? board.columns.find((c) => c.id === issue.columnId) : undefined
       if (column) {
+        // The node goes on the wire BEFORE the card that names it (spec §2 batch order).
+        castNewNodeNow(targetProjectId, created.placed)
         useProjects.getState().setProjectKanban(targetProjectId, assignNode(board, nodeId, column.id, null))
         markDirty()
       }
@@ -10629,7 +10659,7 @@ export function Canvas() {
       })
       if (started) useBoardLog.getState().append(sessionForProject(targetProjectId).api, targetProjectId, started)
     },
-    [markDirty]
+    [markDirty, castNewNodeNow]
   )
 
   /** The reference + first prompt of an issue start, or a notice saying why nothing started. The

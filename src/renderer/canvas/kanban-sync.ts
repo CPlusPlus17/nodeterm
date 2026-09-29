@@ -59,3 +59,27 @@ function stable(v: unknown): string {
       : val
   )
 }
+
+/**
+ * The node ids a board write may treat as LIVE in one project — what the prune rule asks
+ * (`liveNodeIds` above). One project's ids, never a mix:
+ *  - a project React Flow does not hold (`rendered` null) answers from its stored nodes;
+ *  - the project React Flow holds answers from React Flow, whose array is ahead of the stored copy;
+ *  - …except while the Omni board is open (ruling R6): its lanes prune against the STORED nodes, and
+ *    for the rendered project that copy lags React Flow for as long as the board is up (a peer's node
+ *    op, a "+ New" or an agent spawn lands in React Flow only, and the store catches up at the next
+ *    commit). A card the Omni board pruned because its node is not stored yet would read as a live
+ *    card someone took off the board, and its removal would delete it for every client. So the
+ *    answer there is React Flow ∩ store — both describe the same project, and a smaller live set
+ *    can only ever cast fewer removals.
+ */
+export function boardLiveNodeIds(src: {
+  rendered: readonly string[] | null
+  stored: readonly string[]
+  omniOpen: boolean
+}): ReadonlySet<string> {
+  if (!src.rendered) return new Set(src.stored)
+  if (!src.omniOpen) return new Set(src.rendered)
+  const stored = new Set(src.stored)
+  return new Set(src.rendered.filter((id) => stored.has(id)))
+}

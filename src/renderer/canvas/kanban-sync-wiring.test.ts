@@ -61,8 +61,38 @@ describe('kanban sync wiring', () => {
   // project's from the store.
   it('the live node ids are the epoch-correct set for the project asked about', () => {
     const body = between(canvas, 'const liveNodeIdsFor = (projectId: string): ReadonlySet<string> =>', 'const castFor = ')
-    expect(body).toMatch(/nodesProjectIdRef\.current === projectId\s*\?\s*nodesRef\.current/)
-    expect(body).toMatch(/useProjects\.getState\(\)\.getProject\(projectId\)\?\.nodes/)
+    expect(body).toContain('boardLiveNodeIds({')
+    expect(body).toMatch(/rendered: nodesProjectIdRef\.current === projectId \? nodesRef\.current\.map\(\(n\) => n\.id\) : null/)
+    expect(body).toMatch(/stored: \(useProjects\.getState\(\)\.getProject\(projectId\)\?\.nodes \?\? \[\]\)\.map\(\(n\) => n\.id\)/)
+    // R6: while the Omni board is open its lanes prune against the STORED nodes.
+    expect(body).toContain('omniOpen: isGlobalKanbanOpen()')
+  })
+
+  // R7: the solo path (~20 Hz while dragging) asks the cheap question first.
+  it('the one gate asks for a peer before it resolves any session', () => {
+    const gate = between(canvas, 'const shouldPublishFor = (projectId: string): boolean =>', 'const pub = createCanvasPublisher(')
+    expect(gate.indexOf('hasPeersRef.current')).toBeGreaterThan(-1)
+    expect(gate.indexOf('hasPeersRef.current')).toBeLessThan(gate.indexOf('sessionForProject('))
+  })
+
+  // R7: spec §2 batch order — node adds before card adds. A board write casts at once from the
+  // store funnel; `setNodes` lands on a later render. So a site that files a FRESH node's card casts
+  // the node first.
+  it('a fresh node is cast before the board write that files its card', () => {
+    const helper = between(canvas, 'const castNewNodeNow = useCallback(', '[publishableLater]')
+    expect(helper).toContain('if (nodesProjectIdRef.current !== projectId || loadingRef.current) return')
+    expect(helper).toContain('if (!nodesRef.current.some((n) => n.id === node.id)) nodesRef.current = [...nodesRef.current, node]')
+    expect(helper).toContain('publisherRef.current?.publish(publishableLater(nodesRef.current))')
+    for (const [start, cast] of [
+      ['const createNodeInColumn = useCallback(', 'castNewNodeNow(targetProjectId, node)'],
+      ['const fileIssueSession = useCallback(', 'castNewNodeNow(targetProjectId, created.placed)']
+    ]) {
+      const body = between(canvas, start, 'useBoardLog.getState().append(')
+      expect(body.indexOf(cast), start).toBeGreaterThan(-1)
+      expect(body.indexOf(cast), start).toBeLessThan(body.indexOf('setProjectKanban('))
+    }
+    // …and the node cast is the one React Flow will hold: `addAgentNode` hands back the node as placed.
+    expect(canvas).toContain('return { node, placed, projectId: targetProjectId }')
   })
 
   it('peer kanban ops are applied through the store reducer, never through setProjectKanban', () => {

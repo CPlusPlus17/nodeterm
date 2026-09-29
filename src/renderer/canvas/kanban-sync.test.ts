@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { createKanbanPublisher, type KanbanPublisherDeps } from './kanban-sync'
+import { boardLiveNodeIds, createKanbanPublisher, type KanbanPublisherDeps } from './kanban-sync'
 import { applyKanbanOp } from '@shared/kanban-ops'
 import { defaultKanbanFor } from '@shared/kanban-default-board'
 import type { CanvasMutation, KanbanOp, ProjectKanban } from '@shared/types'
@@ -152,6 +152,48 @@ describe('createKanbanPublisher', () => {
       pub.publish(P, defaultKanbanFor(P), bad)
       expect(sent.filter(([, m]) => m.op === 'kb-label')).toEqual([])
     })
+  })
+})
+
+// RULING R6. The Omni board prunes each lane against the STORED nodes, and for the project React Flow
+// holds that copy lags the canvas while the board is open (a peer's node op, a "+ New" or an agent
+// spawn lands in React Flow only). A card the Omni board just pruned because its node is not stored
+// yet must not read as a live card someone took off the board — that removal would delete it for
+// everyone. So while the Omni board is open the rendered project's live set is React Flow ∩ store.
+describe('boardLiveNodeIds (R6)', () => {
+  it('a project React Flow does not hold answers from its stored nodes', () => {
+    expect([...boardLiveNodeIds({ rendered: null, stored: ['a', 'b'], omniOpen: true })]).toEqual(['a', 'b'])
+    expect([...boardLiveNodeIds({ rendered: null, stored: ['a'], omniOpen: false })]).toEqual(['a'])
+  })
+
+  it('the rendered project answers from React Flow while the Omni board is closed', () => {
+    expect([...boardLiveNodeIds({ rendered: ['a', 'n'], stored: ['a'], omniOpen: false })].sort()).toEqual(['a', 'n'])
+  })
+
+  it('…and from React Flow ∩ store while it is open', () => {
+    expect([...boardLiveNodeIds({ rendered: ['a', 'n'], stored: ['a', 'gone'], omniOpen: true })]).toEqual(['a'])
+  })
+
+  it('a card the Omni board pruned because its node is not stored yet is never removed for everyone', () => {
+    // n is on the canvas (a peer's node op landed in React Flow) but not in the stored copy the Omni
+    // lane prunes against. The peer's card for n arrived; the Omni user moved another card.
+    const sent: CanvasMutation[] = []
+    const live = { rendered: ['m', 'n'], stored: ['m'] }
+    const pub = createKanbanPublisher({
+      send: (_id, m) => { sent.push(m); return true },
+      liveNodeIds: () => boardLiveNodeIds({ ...live, omniOpen: true }),
+      shouldPublish: () => true,
+      applyLocal: () => {}
+    })
+    const prev: ProjectKanban = {
+      ...withCard(withCard(undefined, 'm', todo), 'n', todo),
+      meta: [{ nodeId: 'n', priority: 'high' }]
+    }
+    // What the Omni lane commits: m moved, and n's card + meta pruned (n is not a stored session).
+    const next: ProjectKanban = { ...withCard(prev, 'm', doing), assignments: [{ nodeId: 'm', columnId: doing }], meta: [] }
+    pub.publish(P, prev, next)
+    expect(sent.filter((m) => m.op === 'kb-card-remove' || m.op === 'kb-meta-remove')).toEqual([])
+    expect(sent).toContainEqual({ op: 'kb-card', assignment: { nodeId: 'm', columnId: doing } })
   })
 })
 

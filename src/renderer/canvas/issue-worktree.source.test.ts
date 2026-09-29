@@ -171,7 +171,7 @@ describe('addAgentNode parents OUTSIDE the setNodes updater', () => {
     // DefaultLane update first mirrors `nodesRef` back to state, which does not yet hold a frame
     // `attachWorktree` created this tick — `parentInto` would then find no group and leave the
     // agent top-level, outside the worktree frame it was opened for.
-    const add = between('const addAgentNode = useCallback(', 'return { node, projectId: targetProjectId }')
+    const add = between('const addAgentNode = useCallback(', 'return { node, placed, projectId: targetProjectId }')
     const placed = add.indexOf('const placed = groupId ? parentInto(node, groupId) : node')
     expect(placed).toBeGreaterThan(-1)
     expect(placed).toBeLessThan(add.indexOf('setNodes((ns) => [...ns, placed])'))
