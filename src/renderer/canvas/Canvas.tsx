@@ -401,7 +401,7 @@ import {
   shouldShowExplorerPinHint,
   writeSeenExplorerPinHint
 } from '../lib/explorerPinHint'
-import { useProjects } from '../state/projects'
+import { setKanbanPublishHook, useProjects } from '../state/projects'
 import { useAgentStatus } from '../state/agentStatus'
 import { hostChatSend, hostChatSession, hostChatStatus } from '../lib/hostChatQuery'
 import { chatPaneRefusal } from '../lib/chatPaneGate'
@@ -618,6 +618,7 @@ import { snapNodeToGrid } from '../lib/nodeSizing'
 import { snapResizeChanges } from '../lib/resizeSnap'
 import { canClearDirty, canCommitCanvas, canCreateOnCanvas, liveCanvasHolds } from '../state/persistGuards'
 import { rebaseOnLatest, useNodesEpoch } from './nodesEpoch'
+import { createKanbanPublisher } from './kanban-sync'
 import { isHidden } from '../lib/ui-visibility'
 import { boardLogEvents } from '../lib/boardLogDiff'
 import { useBoardLog } from '../state/boardLog'
@@ -644,6 +645,7 @@ import {
   isEdgeMutation,
   type CanvasScene
 } from '@shared/canvas-mutations'
+import { isKanbanOp } from '@shared/kanban-ops'
 import { chordHeld, isHoldChord, isModifierEventKey, matchesShortcut } from '@shared/shortcut'
 
 // The dispatch below is the CONSUMER of the confirm-gated set. Before this import the set named
@@ -3117,10 +3119,10 @@ export function Canvas() {
         return card ? card.title || 'Untitled' : ''
       }
       for (const { nodeId, event } of boardLogEvents(prev, next, cardTitle)) {
-        useBoardLog.getState().append(api, id, { kind: 'event', nodeId, event })
+        useBoardLog.getState().append(sessionForProject(id).api, id, { kind: 'event', nodeId, event })
       }
     },
-    [markDirty, api]
+    [markDirty]
   )
 
   // The board moving a session card by itself because every pull request linked to it merged
@@ -3139,13 +3141,13 @@ export function Canvas() {
       markDirty()
       const title = (id: string | null): string =>
         (id && current.columns.find((column) => column.id === id)?.title) || 'Ungrouped'
-      useBoardLog.getState().append(api, projectId, {
+      useBoardLog.getState().append(sessionForProject(projectId).api, projectId, {
         kind: 'event',
         nodeId: cardId,
         event: { type: 'card-moved', from: title(fromColumnId), to: title(toColumnId), title: note }
       })
     },
-    [markDirty, api]
+    [markDirty]
   )
 
   // The node states that go on the wire: React Flow's managed nodes minus the ephemeral cards
@@ -3658,6 +3660,25 @@ export function Canvas() {
   // the SAS-approval effect above — one feeds the dialog, this one feeds the live/pending seats store.
   useTeamAccessEvents()
 
+  /**
+   * Apply ONE op to a project's STORED copy, through the store reducer (`applyCanvasOp`) — never
+   * through `setProjectKanban`, whose publish hook would cast it again. The path for a peer's op on
+   * a project React Flow does not hold, for EVERY peer board op (the board reads the store, not
+   * React Flow), and for the kanban publisher's local repair (ruling R2). Save only when that copy
+   * actually changed: the store writes nothing for an op that changes nothing (a duplicate cast —
+   * every Server Edition tab re-casts what it receives — or a remove of something already gone), so
+   * the project object's identity is the answer, and a no-op schedules no save.
+   */
+  const applyToStored = useCallback(
+    (projectId: string, mutation: CanvasMutation): void => {
+      const store = useProjects.getState()
+      const before = store.getProject(projectId)
+      if (store.applyCanvasOp(projectId, mutation) && useProjects.getState().getProject(projectId) !== before)
+        markDirty()
+    },
+    [markDirty]
+  )
+
   // ---- canvas sync (team) ----
   // Emitting side: diff each settled node snapshot against the last one we published and cast the
   // mutations on `canvas:mut`. The core reflector (src/core/canvas-sync.ts) fans each one out to
@@ -3717,54 +3738,105 @@ export function Canvas() {
     // ~20 Hz, so the size check re-serialized the one oversized node 20×/s, at a cost proportional to
     // its size. Same verdict, paid again only when the node actually changes (@shared/canvas-mutations).
     const guard = createMutationGuard()
+    /**
+     * The node ids live in `projectId` — what the kanban publisher's prune rule asks (a card whose
+     * node is not live is pruned locally and its removal NEVER cast). One project's set, never a mix:
+     * the project React Flow holds answers from the epoch pair (`nodesRef` is that project's canvas
+     * exactly while `nodesProjectIdRef` names it — useNodesEpoch), every other project from its
+     * stored copy (a project mid-load is still the store's until the load installs it).
+     */
+    const liveNodeIdsFor = (projectId: string): ReadonlySet<string> =>
+      new Set(
+        (nodesProjectIdRef.current === projectId
+          ? nodesRef.current
+          : (useProjects.getState().getProject(projectId)?.nodes ?? [])
+        ).map((n) => n.id)
+      )
+    /**
+     * THE ONE CAST on canvas:mut, for every family this Canvas publishes — nodes and edges (the
+     * canvas publisher, for the active project) and board ops (the kanban publisher, for whichever
+     * project a board write touched: the Omni board and node labels write background projects too).
+     *
+     * Only a project on the core this effect is bound to. `order` hears ONE core's echoes — the
+     * receive effect below subscribes `activeSession.api` and nothing else — so rule 1 (our echo is
+     * our ack) holds only there, and `seen` is a position in THAT core's `seq`. Cast anywhere else, a
+     * pending entry would wait for an echo nobody listens to, and `seen` would be judged against
+     * another core's counter. `sessionForProject(projectId)` is the session the project belongs to
+     * (a relay tab → its host), so on a match the cast target below IS that session's api.
+     */
+    const castFor = (projectId: string, m: CanvasMutation): boolean => {
+      if (sessionForProject(projectId).api !== activeSession.api) return false
+      // Stamp our causal position FIRST (canvas-order rule 4: what we had applied when we cast —
+      // it is what lets a teammate's delete beat this frame instead of being resurrected by it),
+      // so the size guard below judges the EXACT payload that goes on the wire. `stamp` is pure:
+      // a refusal still records no pending entry.
+      const stamped = order.stamp({ ...m, src })
+      // THE RE-CREATION GATE (canvas-order `hasPendingRemove`): our own remove of this key has not
+      // come back yet, so it is not in our `seen` — a re-creation cast now (a link redrawn, a node
+      // ⌘Z'd, within one round trip) would be dropped by every peer as a stale frame while we keep
+      // showing it. Held = owed: the publisher keeps it, and the receive handler's release casts it
+      // the moment the remove's echo lands. Never a remove itself (a remove is never stale).
+      // The key carries the project it is cast into: a board's two order ops are per-project
+      // singletons in the ONE order this Canvas keeps for every loaded project (ruling R4).
+      if (!isRemoveOp(stamped) && order.hasPendingRemove(mutationKey(stamped, projectId))) return false
+      // The reflector REFUSES an oversized / malformed mutation at ingest, silently: no peer ever
+      // sees it and there is no negative ack. Ask the same predicate FIRST, so a refusal costs us
+      // neither a pending entry (which would deafen this node to its peers for the whole TTL — a
+      // peer's delete landing in that window would be lost, and our next whole-file save would
+      // resurrect their node) nor the retry (the publisher keeps the node in its baseline). The
+      // only thing that can legitimately blow the cap is free text, i.e. a sticky's body — so say
+      // so, instead of letting the note silently never sync. ONLY for a node upsert, though: an
+      // edge op (or a remove) is refused only for a malformed / over-long id, and "this note is
+      // too large" would name a cause nobody measured.
+      if (!guard(stamped)) {
+        if (stamped.op === 'upsert') setSyncNote(
+          'This note is too large to share with your teammates (over 250 KB). It stays on your ' +
+            'canvas, but they will not see it until you shorten it.'
+        )
+        else console.warn('[canvas-sync] refused an unsendable mutation', stamped.op)
+        return false
+      }
+      order.onLocal(stamped, projectId)
+      // Cast to the project's session's core — a relay tab publishes to the relay HOST, not to its
+      // own local core. Byte-identical on a local tab (`activeSession.api` IS `window.nodeTerminal`).
+      // `canvasSyncTarget` decides the GATE (hasPeers) at bind time; the cast target is just the
+      // session's api, so reach it directly — no per-cast allocation on this ~20 Hz path.
+      activeSession.api.canvas.mutate(projectId, stamped)
+      return true
+    }
+    /**
+     * THE ONE PUBLISH GATE, asked by the node publisher (for the active project) and the kanban
+     * publisher (for the project a board write touched). Someone else must be attached (the solo
+     * gate), the project must be on the core this effect casts to (see `castFor`), and a hosted
+     * Viewer/Commenter publishes nothing: the host refuses canvas:mut for them (R5).
+     */
+    const shouldPublishFor = (projectId: string): boolean =>
+      sessionForProject(projectId).api === activeSession.api &&
+      hasPeersRef.current &&
+      !isHostedReadOnly(activeSession.id)
     const pub = createCanvasPublisher(
       (m) => {
         const projectId = useProjects.getState().activeProjectId
         if (!projectId) return false // no active canvas: nothing was cast — retry on the next publish
-        // Stamp our causal position FIRST (canvas-order rule 4: what we had applied when we cast —
-        // it is what lets a teammate's delete beat this frame instead of being resurrected by it),
-        // so the size guard below judges the EXACT payload that goes on the wire. `stamp` is pure:
-        // a refusal still records no pending entry.
-        const stamped = order.stamp(m)
-        // THE RE-CREATION GATE (canvas-order `hasPendingRemove`): our own remove of this key has not
-        // come back yet, so it is not in our `seen` — a re-creation cast now (a link redrawn, a node
-        // ⌘Z'd, within one round trip) would be dropped by every peer as a stale frame while we keep
-        // showing it. Held = owed: the publisher keeps it, and the receive handler's release casts it
-        // the moment the remove's echo lands. Never a remove itself (a remove is never stale).
-        // The key carries the project it is cast into: a board's two order ops are per-project
-        // singletons in the ONE order this Canvas keeps for every loaded project (ruling R4).
-        if (!isRemoveOp(stamped) && order.hasPendingRemove(mutationKey(stamped, projectId))) return false
-        // The reflector REFUSES an oversized / malformed mutation at ingest, silently: no peer ever
-        // sees it and there is no negative ack. Ask the same predicate FIRST, so a refusal costs us
-        // neither a pending entry (which would deafen this node to its peers for the whole TTL — a
-        // peer's delete landing in that window would be lost, and our next whole-file save would
-        // resurrect their node) nor the retry (the publisher keeps the node in its baseline). The
-        // only thing that can legitimately blow the cap is free text, i.e. a sticky's body — so say
-        // so, instead of letting the note silently never sync. ONLY for a node upsert, though: an
-        // edge op (or a remove) is refused only for a malformed / over-long id, and "this note is
-        // too large" would name a cause nobody measured.
-        if (!guard(stamped)) {
-          if (stamped.op === 'upsert') setSyncNote(
-            'This note is too large to share with your teammates (over 250 KB). It stays on your ' +
-              'canvas, but they will not see it until you shorten it.'
-          )
-          else console.warn('[canvas-sync] refused an unsendable mutation', stamped.op)
-          return false
-        }
-        order.onLocal(stamped, projectId)
-        // Cast to the ACTIVE session's core — a relay tab publishes to the relay HOST, not to B's
-        // own local core (the bug this fixes). Byte-identical on a local tab (`activeSession.api`
-        // IS `window.nodeTerminal`). `canvasSyncTarget` decides the GATE (hasPeers) at bind time;
-        // the cast target is just the session's api, so reach it directly — no per-cast allocation
-        // on this ~20 Hz path.
-        activeSession.api.canvas.mutate(projectId, stamped)
-        return true
+        return castFor(projectId, m)
       },
-      // A hosted Viewer/Commenter publishes nothing: the host refuses canvas:mut for them (R5).
-      { src, shouldPublish: () => hasPeersRef.current && !isHostedReadOnly(activeSession.id) }
+      { src, shouldPublish: () => shouldPublishFor(useProjects.getState().activeProjectId) }
     )
     publisherRef.current = pub
+    // Boards (spec §5, §11.3): every board write goes through `setProjectKanban`, and the store
+    // calls this hook after it — so the board, the card modal, the Omni board, node labels and the
+    // `assign` verb all publish here, through the same cast and the same gate as the nodes. A peer's
+    // board op is applied with the store REDUCER (the receive effect below), which never calls the
+    // hook: nothing received is ever published again.
+    const kanbanPublisher = createKanbanPublisher({
+      send: (projectId, m) => castFor(projectId, m),
+      liveNodeIds: (projectId) => liveNodeIdsFor(projectId),
+      shouldPublish: (projectId) => shouldPublishFor(projectId),
+      applyLocal: (projectId, m) => applyToStored(projectId, m)
+    })
+    setKanbanPublishHook((id, prev, next) => kanbanPublisher.publish(id, prev, next))
     return () => {
+      setKanbanPublishHook(null)
       unsub()
       pub.dispose()
       publisherRef.current = null
@@ -3773,7 +3845,8 @@ export function Canvas() {
     // Keyed on the api OBJECT (stable per core): a local↔relay switch re-binds order + subscription
     // on the new core; a local→local switch keeps the SAME api so the effect does NOT re-run and the
     // per-node order/reconnect state survives the tab switch (the documented invariant).
-  }, [activeSession.api])
+    // `applyToStored` is stable for the Canvas's lifetime (it depends on `markDirty` alone).
+  }, [activeSession.api, applyToStored])
 
   // Publish on every settled node change. While dragging we throttle to ~20 Hz (position frames);
   // the drag-stop handlers flush, and every other change (add / remove / color / title / collapse /
@@ -3836,16 +3909,6 @@ export function Canvas() {
       if (!pub || !pub.hasOwed() || loadingRef.current) return
       pub.publish(publishableLater(nodesRef.current))
     }
-    // A peer op for a project React Flow does not hold lands in its STORED copy. Save only when
-    // that copy actually changed: the store writes nothing for an op that changes nothing (a
-    // duplicate cast — every Server Edition tab re-casts what it receives — or a remove of something
-    // already gone), so the project object's identity is the answer, and a no-op schedules no save.
-    const applyToStored = (projectId: string, mutation: CanvasMutation): void => {
-      const store = useProjects.getState()
-      const before = store.getProject(projectId)
-      if (store.applyCanvasOp(projectId, mutation) && useProjects.getState().getProject(projectId) !== before)
-        markDirty()
-    }
     return activeSession.api.canvas.onMutation((projectId, mutation) => {
       hasPeersRef.current = true // proof of a peer, whatever the presence table says
       const order = orderRef.current
@@ -3856,6 +3919,15 @@ export function Canvas() {
       const released = held && !order.hasPendingRemove(key)
       if (released) queueMicrotask(releaseHeld)
       if (!apply) return
+      // ---- the board (kanban) ----
+      // Into the projects STORE, for the active project and a background one alike: the board, the
+      // column pills and the card modal all read the store live, and React Flow holds no board. The
+      // store reducer, never `setProjectKanban` — its publish hook would re-cast a peer's op as ours
+      // — and no board-log entry: only the client that made the change records it (spec §5).
+      if (isKanbanOp(mutation)) {
+        applyToStored(projectId, mutation)
+        return
+      }
       // ---- edges (context links + "spawned by" ropes) ----
       // They live outside React Flow's `nodes` array, in their own state, so they take their own
       // apply path — but everything around it is the node path's contract, unchanged: the ordering
@@ -3957,7 +4029,7 @@ export function Canvas() {
       setNodes(rebaseOnLatest(base, flow, (ns) => applyMutationToFlow(ns as CanvasNode[], mutation)))
       markDirty()
     })
-  }, [activeSession.api, setNodes, setLinkEdges, setControlEdges, markDirty, publishableLater])
+  }, [activeSession.api, setNodes, setLinkEdges, setControlEdges, markDirty, publishableLater, applyToStored])
 
   // Record an undo snapshot when the canvas settles (debounced; skips drag frames/loads).
   useEffect(() => {
@@ -6103,9 +6175,9 @@ export function Canvas() {
     ) => {
       if (!node.issueRef) return
       const entry = runEndedEntry(node.issueRef, node, useAgentStatus.getState().byId[node.id])
-      if (entry) useBoardLog.getState().append(api, projectId, entry)
+      if (entry) useBoardLog.getState().append(sessionForProject(projectId).api, projectId, entry)
     },
-    [api]
+    []
   )
 
   const deleteNodes = useCallback(
@@ -10502,13 +10574,13 @@ export function Canvas() {
                 ?.label ??
               choice.agentId
       const title = (node.data.title as string) || kindLabel
-      useBoardLog.getState().append(api, targetProjectId, {
+      useBoardLog.getState().append(sessionForProject(targetProjectId).api, targetProjectId, {
         kind: 'event',
         nodeId: node.id,
         event: { type: 'card-created', to: toName, title }
       })
     },
-    [emptyNodePos, setNodes, markDirty, api]
+    [emptyNodePos, setNodes, markDirty]
   )
 
   // ---- GitHub issue → agent session ("Start with agent ▸") ----
@@ -10542,7 +10614,7 @@ export function Canvas() {
         useSettings.getState().settings.customAgents.find((a) => a.id === agentId)?.label ||
         agentId
       // The session card's own feed says where it came from, exactly like a "+ New" card…
-      useBoardLog.getState().append(api, targetProjectId, {
+      useBoardLog.getState().append(sessionForProject(targetProjectId).api, targetProjectId, {
         kind: 'event',
         nodeId,
         event: { type: 'card-created', to: column?.title ?? 'Ungrouped', title }
@@ -10555,9 +10627,9 @@ export function Canvas() {
         agentId,
         agentSessionId: node.data.agentSessionId as string | undefined
       })
-      if (started) useBoardLog.getState().append(api, targetProjectId, started)
+      if (started) useBoardLog.getState().append(sessionForProject(targetProjectId).api, targetProjectId, started)
     },
-    [markDirty, api]
+    [markDirty]
   )
 
   /** The reference + first prompt of an issue start, or a notice saying why nothing started. The
@@ -11286,7 +11358,7 @@ export function Canvas() {
             agentId: n.data.agentId as string | undefined,
             agentSessionId: n.data.agentSessionId as string | undefined
           })
-          if (entry) useBoardLog.getState().append(api, projectId, entry)
+          if (entry) useBoardLog.getState().append(sessionForProject(projectId).api, projectId, entry)
         }
       }
       // Resolved ONCE, HERE — before any open path below snapshots the projects store. A `#N` may
@@ -14253,7 +14325,7 @@ export function Canvas() {
               return card ? card.title || 'Untitled' : ''
             }
             for (const { nodeId: nid, event } of boardLogEvents(prev, next, cardTitle)) {
-              useBoardLog.getState().append(api, pid, { kind: 'event', nodeId: nid, event })
+              useBoardLog.getState().append(sessionForProject(pid).api, pid, { kind: 'event', nodeId: nid, event })
             }
             // Handoff pings (lib/handoffPings): an agent filing a card ASSIGNED TO THIS USER into a
             // handoff column (a done column, or a started one past the first) tells them — through the

@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { useProjects } from './projects'
-import type { CanvasMutation, CanvasNodeState } from '@shared/types'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { setKanbanPublishHook, useProjects } from './projects'
+import type { CanvasMutation, CanvasNodeState, ProjectKanban } from '@shared/types'
 import { defaultKanbanFor } from '@shared/kanban-default-board'
 
 const node = (id: string, x = 0): CanvasNodeState => ({
@@ -214,5 +214,51 @@ describe('applyCanvasOp', () => {
     const id = setup()
     useProjects.getState().applyCanvasOp(id, { op: 'upsert', node: { ...node('evil'), shell: '/bin/evil' } })
     expect(useProjects.getState().getProject(id)?.nodes.find((n) => n.id === 'evil')?.shell).toBeUndefined()
+  })
+})
+
+/**
+ * The kanban publish hook (spec §11.3): every board write goes through `setProjectKanban`, so that is
+ * where a board change is published — once, after the store write, with the board read BEFORE it.
+ * A peer's op arrives through `applyCanvasOp`, which must never reach the hook: publishing it would
+ * re-cast someone else's edit as ours.
+ */
+describe('setKanbanPublishHook', () => {
+  let calls: Array<[string, ProjectKanban | undefined, ProjectKanban | undefined]>
+  beforeEach(() => {
+    calls = []
+    setKanbanPublishHook((id, prev, next) => {
+      // AFTER the write: the store already holds `next` when the hook runs.
+      expect(useProjects.getState().getProject(id)?.kanban).toBe(next)
+      calls.push([id, prev, next])
+    })
+  })
+  afterEach(() => setKanbanPublishHook(null))
+
+  it('setProjectKanban calls it once with (id, prev, next), prev read before the write', () => {
+    const p = useProjects.getState().addProject('p')
+    const first = defaultKanbanFor(p.id)
+    useProjects.getState().setProjectKanban(p.id, first)
+    expect(calls).toEqual([[p.id, undefined, first]])
+    const second: ProjectKanban = { ...first, assignments: [{ nodeId: 'a', columnId: first.columns[0].id }] }
+    useProjects.getState().setProjectKanban(p.id, second)
+    expect(calls).toHaveLength(2)
+    expect(calls[1][1]).toBe(first)
+    expect(calls[1][2]).toBe(second)
+  })
+
+  it('applyCanvasOp with a board op does not call it (a peer op is never re-published)', () => {
+    const p = useProjects.getState().addProject('p')
+    const col = defaultKanbanFor(p.id).columns[0].id
+    expect(useProjects.getState().applyCanvasOp(p.id, { op: 'kb-card', assignment: { nodeId: 'a', columnId: col } })).toBe(true)
+    expect(useProjects.getState().getProject(p.id)?.kanban?.assignments).toEqual([{ nodeId: 'a', columnId: col }])
+    expect(calls).toEqual([])
+  })
+
+  it('a cleared hook is not called', () => {
+    setKanbanPublishHook(null)
+    const p = useProjects.getState().addProject('p')
+    useProjects.getState().setProjectKanban(p.id, defaultKanbanFor(p.id))
+    expect(calls).toEqual([])
   })
 })

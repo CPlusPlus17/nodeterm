@@ -15,7 +15,7 @@ import { toKanbanSessionState } from '../../canvas/toKanbanSessionState'
 import { createAgentNode, createBrowserNode, createStickyNode, createTerminalNode, flowToNodeStates, resolveNewNodeAccount } from '../../state/workspace'
 import { markCanvasCovered } from '../../lib/canvasCovered'
 import { useViewMode } from '../../state/viewMode'
-import { useSession } from '../../session/session'
+import { sessionForProject } from '../../session/session'
 import { activePermissionMode } from '../../state/permissionMode'
 import { CardModal } from './CardModal'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
@@ -314,7 +314,6 @@ export const GlobalKanbanView = memo(function GlobalKanbanView() {
   useEffect(() => markCanvasCovered(document.documentElement), [])
   const boardStyle = useBoardWallpaperStyle()
   const projects = useProjects(s => s.projects.filter(p => !p.closed))
-  const { api } = useSession()
   const modalRef = useRef<string | null>(null)
   const highlightId = useViewMode(s => s.highlightedSwimlaneId)
   const setHighlightId = useViewMode(s => s.setHighlightedSwimlaneId)
@@ -345,9 +344,11 @@ export const GlobalKanbanView = memo(function GlobalKanbanView() {
       return s ? s.title || 'Untitled' : ''
     }
     for (const { nodeId, event } of boardLogEvents(prev, next, cardTitle)) {
-      useBoardLog.getState().append(api, projectId, { kind: 'event', nodeId, event })
+      // The project's own session: a relay tab's board log lives on its host (spec §11.4) — this
+      // board sits outside the per-session provider, so a `useSession()` api here is the LOCAL core.
+      useBoardLog.getState().append(sessionForProject(projectId).api, projectId, { kind: 'event', nodeId, event })
     }
-  }, [api])
+  }, [])
 
   const onCreateNode = useCallback((projectId: string, choice: KanbanCreateChoice, columnId: string | null) => {
     // Delegate to Canvas's createNodeInColumn which correctly mounts the TerminalNode

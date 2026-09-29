@@ -6,9 +6,12 @@ import { readFileSync } from 'node:fs'
 import { describe, it, expect } from 'vitest'
 const src = readFileSync(new URL('./Canvas.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 
-/** The publisher's send callback, from its creation to the cast. */
+/** The ONE cast both publishers send through (`castFor` — the node/edge publisher for the active
+ *  project, the kanban publisher for whichever project a board write touched), from its creation to
+ *  the cast. Task 6 moved the body here out of the node publisher's own send callback. */
 function sendCallback(): string {
-  const start = src.indexOf('const pub = createCanvasPublisher(')
+  const start = src.indexOf('const castFor = (projectId: string, m: CanvasMutation): boolean => {')
+  expect(start).toBeGreaterThan(-1)
   return src.slice(start, src.indexOf('activeSession.api.canvas.mutate(projectId, stamped)', start))
 }
 

@@ -380,6 +380,28 @@ function mapProjectNodes(
   return projects.map((p) => (p.id === projectId ? { ...p, nodes: fn(p.nodes) } : p))
 }
 
+/**
+ * Publishes a board write to the project's peers (spec §11.3). Every board write in the renderer
+ * goes through `setProjectKanban` — the board, the card modal, the Omni board, node labels, the
+ * GitHub settings section, the canvas-control `assign` verb (fenced by board-writers.guard.test.ts)
+ * — so the ONE place a board change is published is here, and no writer needs a call site of its
+ * own. `prev` is the board read BEFORE the write (`undefined` = the project's lazy default), `next`
+ * the board written.
+ *
+ * A peer's board op must NEVER come through here: it is applied with `applyCanvasOp` (the store
+ * reducer), which does not call the hook — publishing it would re-cast someone else's edit as ours.
+ */
+export type KanbanPublishHook = (
+  projectId: string,
+  prev: ProjectKanban | undefined,
+  next: ProjectKanban | undefined
+) => void
+let kanbanPublishHook: KanbanPublishHook | null = null
+/** Canvas registers this once per core binding and clears it (`null`) on teardown. */
+export function setKanbanPublishHook(hook: KanbanPublishHook | null): void {
+  kanbanPublishHook = hook
+}
+
 export const useProjects = create<ProjectsState>((set, get) => ({
   projects: [],
   activeProjectId: '',
@@ -562,9 +584,13 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   setProjectKanban(id, kanban) {
+    // Read BEFORE the write: the publish hook diffs this against what was written.
+    const prev = get().getProject(id)?.kanban
     set((s) => ({
       projects: s.projects.map((p) => (p.id === id ? { ...p, kanban } : p))
     }))
+    // AFTER the write, so a local repair the publisher applies (ruling R2) lands on `kanban`.
+    kanbanPublishHook?.(id, prev, kanban)
   },
 
   setProjectBreadcrumbs(id, breadcrumbs) {

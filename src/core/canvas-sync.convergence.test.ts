@@ -34,8 +34,11 @@ import {
   PENDING_TTL_MS
 } from '../shared/canvas-order'
 import { createCanvasPublisher, publishableScene } from '../shared/canvas-publish'
+import { applyCanvasOp, type CanvasContent } from '../shared/canvas-content'
+import { defaultKanbanFor } from '../shared/kanban-default-board'
+import { applyKanbanOp, diffKanbanOps, isKanbanOp, sanitizeKanbanOp } from '../shared/kanban-ops'
 import { IPC } from '../shared/ipc'
-import type { BridgeLink, CanvasMutation, CanvasNodeState } from '../shared/types'
+import type { BridgeLink, CanvasMutation, CanvasNodeState, ProjectKanban } from '../shared/types'
 
 const node = (id: string, x: number, title = 't', color = '#fff'): CanvasNodeState =>
   ({
@@ -156,12 +159,19 @@ class Client {
   ropes: BridgeLink[] = []
   /** Ephemeral cards (subagent / loop) this client renders — derived locally, never published. */
   ephemeral = new Set<string>()
+  /** The project's board. Absent = the deterministic lazy default, exactly as a project whose file
+   *  has no `kanban` block — so it is part of what converges, like the edge lists. */
+  board: ProjectKanban | undefined = undefined
+  /** Every mutation this client CAST, in order (after its own gates) — what a test reads to prove a
+   *  rule held on the SENDING side, e.g. that a prune removal never left this client. */
+  readonly cast: CanvasMutation[] = []
   /** Mutations APPLIED from the wire (an own echo, or one the order supersedes, is not applied). */
   applied = 0
   /** Local mutations the publisher tried to cast and this client refused (oversized / malformed). */
   refused = 0
   private readonly order: ReturnType<typeof createCanvasOrder>
   private readonly pub: ReturnType<typeof createCanvasPublisher>
+  private readonly src: string
   /** Mirrors Canvas's presence subscription: reset the order state only on a GENUINE reconnect. */
   private readonly reconnected = createReconnectWatch(null)
 
@@ -173,33 +183,13 @@ class Client {
     // properties are assigned, so `this.id` would still be undefined and both clients would stamp
     // the same `src` — every peer mutation would then look like their own echo.
     const src = `src-${id}`
+    this.src = src
     // A FAKE clock: the pending TTL is the one time-dependent rule in canvas-order, and the tests
     // below need to cross it deliberately (`clock += ...`) rather than by sleeping.
     this.order = createCanvasOrder(src, { now: () => clock })
-    this.pub = createCanvasPublisher(
-      (m) => {
-        // Mirrors Canvas: ask the SAME predicate the reflector's ingest asks, BEFORE recording a
-        // pending entry or casting. A refusal means nothing was cast — so nothing is pending (the
-        // node stays open to its peers) and the publisher keeps the node in its baseline and
-        // retries it on the next publish. Canvas also surfaces the refusal to the user.
-        // Stamp our causal position FIRST, so the guard judges the exact payload that is cast
-        // (canvas-order rule 4 — `seen` is what lets a delete beat a concurrent drag frame).
-        const stamped = this.order.stamp(m)
-        // The re-creation gate, as Canvas has it: a re-creation of a key whose remove of ours is
-        // still unacked would carry a `seen` below that remove — held (owed) until the echo lands.
-        // The project rides every key the order builds (ruling R4: a board's order ops are
-        // per-project singletons) — the same PROJECT the cast goes out on.
-        if (!isRemoveOp(stamped) && this.order.hasPendingRemove(mutationKey(stamped, PROJECT))) return false
-        if (!isCanvasMutation(stamped)) {
-          this.refused++
-          return false
-        }
-        this.order.onLocal(stamped, PROJECT)
-        bus.cast(id, PROJECT, stamped)
-        return true
-      },
-      { src }
-    )
+    // Mirrors Canvas: the node/edge publisher and the board publisher cast through ONE send
+    // (`castFor`), so both families are stamped, gated and recorded by the same order.
+    this.pub = createCanvasPublisher((m) => this.send(m), { src })
     bus.deliver.set(id, (projectId, m) => {
       if (projectId !== PROJECT) return
       // Mirrors Canvas: our own remove coming back RELEASES a re-creation the gate held — cast it now,
@@ -208,7 +198,12 @@ class Client {
       const held = this.order.hasPendingRemove(key)
       const apply = this.order.accept(m, projectId)
       const released = held && !this.order.hasPendingRemove(key)
-      if (apply) {
+      if (apply && isKanbanOp(m)) {
+        // Mirrors Canvas: a board op lands in the projects STORE through the one reducer — never
+        // through the board funnel, whose publish hook would cast it again — and touches no node.
+        this.applied++
+        this.board = applyCanvasOp(this.content(), m, PROJECT).kanban
+      } else if (apply) {
         this.applied++
         this.states = applyCanvasMutation(this.states, m)
         // One id is one edge across both lists — what Canvas and the projects store apply.
@@ -219,6 +214,35 @@ class Client {
       }
       if (released && this.pub.hasOwed()) this.pub.publish(this.publishable())
     })
+  }
+
+  /** THE ONE CAST — Canvas's `castFor`, for the one project this harness has: stamp `src` + `seen`,
+   *  the re-creation gate, the reflector's own predicate, then record it as pending and cast. */
+  private send(m: CanvasMutation): boolean {
+    // Mirrors Canvas: ask the SAME predicate the reflector's ingest asks, BEFORE recording a
+    // pending entry or casting. A refusal means nothing was cast — so nothing is pending (the
+    // node stays open to its peers) and the publisher keeps the node in its baseline and
+    // retries it on the next publish. Canvas also surfaces the refusal to the user.
+    // Stamp our causal position FIRST, so the guard judges the exact payload that is cast
+    // (canvas-order rule 4 — `seen` is what lets a delete beat a concurrent drag frame).
+    const stamped = this.order.stamp({ ...m, src: this.src })
+    // The re-creation gate, as Canvas has it: a re-creation of a key whose remove of ours is
+    // still unacked would carry a `seen` below that remove — held (owed) until the echo lands.
+    // The project rides every key the order builds (ruling R4: a board's order ops are
+    // per-project singletons) — the same PROJECT the cast goes out on.
+    if (!isRemoveOp(stamped) && this.order.hasPendingRemove(mutationKey(stamped, PROJECT))) return false
+    if (!isCanvasMutation(stamped)) {
+      this.refused++
+      return false
+    }
+    this.order.onLocal(stamped, PROJECT)
+    this.cast.push(stamped)
+    this.bus.cast(this.id, PROJECT, stamped)
+    return true
+  }
+
+  private content(): CanvasContent {
+    return { nodes: this.states, bridges: this.bridges, ropes: this.ropes, ...(this.board ? { kanban: this.board } : {}) }
   }
 
   private publishable(): CanvasScene {
@@ -240,6 +264,24 @@ class Client {
     if (next.bridges) this.bridges = next.bridges
     if (next.ropes) this.ropes = next.ropes
     this.pub.publish(this.publishable())
+  }
+
+  /** A local BOARD edit — what `useProjects.setProjectKanban` + the kanban publisher do
+   *  (renderer/canvas/kanban-sync.ts): diff the board item by item against this client's OWN nodes
+   *  (a card whose node is not live here is pruned locally and its removal is never cast), cast the
+   *  clean form of each op through the same send, and keep that clean form locally when the board
+   *  held something else (ruling R2: the reflector repairs what it relays and our own echo is only
+   *  an ack, so an unrepaired local value would be ours alone, for good). */
+  editBoard(next: ProjectKanban): void {
+    const prev = this.board
+    this.board = next
+    const live = new Set(this.states.map((n) => n.id))
+    for (const op of diffKanbanOps(prev, next, PROJECT, live)) {
+      const clean = sanitizeKanbanOp(op)
+      if (!clean) continue
+      if (this.send(clean) && stableJson(clean) !== stableJson(op))
+        this.board = applyCanvasOp(this.content(), clean, PROJECT).kanban
+    }
   }
 
   /** Our presence clientId resolved (or changed). What Canvas's presence subscription does: the
@@ -280,6 +322,15 @@ class Client {
  * node set all agree, so either client's save writes a canvas the other agrees with. Documented as
  * such in docs/team-presence.md; use this helper wherever a resurrection can happen.
  */
+/** JSON with sorted keys — "the same op" as the kanban publisher judges it (key order is not a change). */
+function stableJson(v: unknown): string {
+  return JSON.stringify(v, (_k, val: unknown) =>
+    val && typeof val === 'object' && !Array.isArray(val)
+      ? Object.fromEntries(Object.keys(val).sort().map((k) => [k, (val as Record<string, unknown>)[k]]))
+      : val
+  )
+}
+
 const canon = (c: Client): CanvasNodeState[] =>
   [...c.persisted().nodes].sort((x, y) => x.id.localeCompare(y.id))
 
@@ -899,5 +950,206 @@ describe('canvas convergence (async bus)', () => {
     a.edit(a.states.map((n) => (n.id === 'n2' ? node('n2', 3) : n)))
     bus.settle()
     expect(b.ids()).toEqual(['n2'])
+  })
+})
+
+// ---- boards (kanban) ----
+// The board is canvas content too: `.nodeterm/project.json` carries it beside the nodes, so a peer's
+// next whole-file save writes whatever board THAT peer holds. Item-level ops ride the same bus, the
+// same reflector `seq` and the same order as nodes, under their own `k:` keys (@shared/kanban-ops).
+describe('boards converge like nodes (kanban ops)', () => {
+  const COLS = defaultKanbanFor(PROJECT).columns
+  const TODO = COLS[0].id
+  const DOING = COLS[1].id
+  const DONE = COLS[2].id
+
+  /** `board` with `nodeId` filed into `columnId` — a person's drag, as the board computes it. */
+  const file = (board: ProjectKanban | undefined, nodeId: string, columnId: string): ProjectKanban =>
+    applyKanbanOp(board, { op: 'kb-card', assignment: { nodeId, columnId } }, PROJECT)
+
+  /** What the board UI does to every commit (renderer lib/kanban `pruneAssignments`): drop the cards
+   *  and meta of nodes this client does not hold. A LOCAL, lazy cleanup — never an edit. */
+  const prune = (board: ProjectKanban, live: string[]): ProjectKanban => ({
+    ...board,
+    assignments: board.assignments.filter((a) => live.includes(a.nodeId)),
+    ...(board.meta ? { meta: board.meta.filter((m) => live.includes(m.nodeId)) } : {})
+  })
+
+  /** The column a card SHOWS in: its assignment's column when that column exists, else null — the
+   *  virtual Ungrouped column, which holds unassigned AND dangling cards alike. */
+  const where = (c: Client, nodeId: string): string | null => {
+    const board = c.board ?? defaultKanbanFor(PROJECT)
+    const a = board.assignments.find((x) => x.nodeId === nodeId)
+    return a && board.columns.some((col) => col.id === a.columnId) ? a.columnId : null
+  }
+
+  /** The board as a person sees it: the columns in order, and each column's cards in order. */
+  const shown = (c: Client) => {
+    const board = c.board ?? defaultKanbanFor(PROJECT)
+    return board.columns.map((col) => ({
+      id: col.id,
+      title: col.title,
+      cards: board.assignments.filter((a) => a.columnId === col.id).map((a) => a.nodeId)
+    }))
+  }
+
+  const kbCast = (c: Client, op: string) => c.cast.filter((m) => m.op === op)
+
+  it('1. A and B each move a DIFFERENT card at the same time → both moves land on both', () => {
+    a.edit([node('n1', 0), node('n2', 0)])
+    bus.settle()
+    a.editBoard(file(file(undefined, 'n1', TODO), 'n2', TODO))
+    bus.settle()
+    expect(b.board).toEqual(a.board)
+    expect(b.cast).toEqual([]) // B applied A's board ops and cast nothing back (never re-published)
+
+    // Neither hears the other before it commits: both inboxes stalled, both casts in flight.
+    bus.stall(1)
+    bus.stall(2)
+    a.editBoard(file(a.board, 'n1', DOING))
+    b.editBoard(file(b.board, 'n2', DONE))
+    bus.settle()
+    bus.unstall(1)
+    bus.unstall(2)
+    bus.settle()
+
+    for (const c of [a, b]) {
+      expect(where(c, 'n1')).toBe(DOING)
+      expect(where(c, 'n2')).toBe(DONE)
+    }
+    expect(shown(a)).toEqual(shown(b))
+  })
+
+  it('2. A and B move the SAME card concurrently → both end on the higher-seq column', () => {
+    a.edit([node('n1', 0)])
+    bus.settle()
+    a.editBoard(file(undefined, 'n1', TODO))
+    bus.settle()
+
+    a.editBoard(file(a.board, 'n1', DOING)) // cast first → the lower seq
+    b.editBoard(file(b.board, 'n1', DONE)) //  cast second → the higher seq, wins everywhere
+    bus.settle()
+    expect(where(a, 'n1')).toBe(DONE)
+    expect(where(b, 'n1')).toBe(DONE)
+    expect(shown(a)).toEqual(shown(b))
+
+    // …and the other way round.
+    b.editBoard(file(b.board, 'n1', TODO))
+    a.editBoard(file(a.board, 'n1', DOING))
+    bus.settle()
+    expect(where(a, 'n1')).toBe(DOING)
+    expect(where(b, 'n1')).toBe(DOING)
+  })
+
+  it('3. a first-ever board edit made by both at once → three columns on both (deterministic ids)', () => {
+    a.edit([node('n1', 0), node('n2', 0)])
+    bus.settle()
+    expect(a.board).toBeUndefined()
+    expect(b.board).toBeUndefined()
+
+    a.editBoard(file(undefined, 'n1', TODO))
+    b.editBoard(file(undefined, 'n2', DOING))
+    bus.settle()
+
+    for (const c of [a, b]) {
+      expect(c.board?.columns.map((col) => col.id)).toEqual(COLS.map((col) => col.id))
+      expect(where(c, 'n1')).toBe(TODO)
+      expect(where(c, 'n2')).toBe(DOING)
+    }
+    // The lazy default is the same board on both, so materializing it casts no column at all — a
+    // random id per client would have cast three columns each and left six on every board.
+    expect([...kbCast(a, 'kb-column'), ...kbCast(b, 'kb-column'), ...kbCast(a, 'kb-column-order'), ...kbCast(b, 'kb-column-order')]).toEqual([])
+    expect(shown(a)).toEqual(shown(b))
+  })
+
+  it('4. B commits a board edit while A’s card for a new node is still in flight → no kb-card-remove, the card placed on both', () => {
+    a.edit([node('m', 0)])
+    bus.settle()
+    a.editBoard(file(undefined, 'm', TODO))
+    bus.settle()
+
+    // A creates n and files its card (the node op leaves first, as the spec's batch order has it);
+    // neither has reached B.
+    bus.stall(2)
+    a.edit([...a.states, node('n', 0)])
+    a.editBoard(file(a.board, 'n', DOING))
+    // B, meanwhile, moves m — and prunes, as every board commit does, against its OWN nodes.
+    b.editBoard(prune(file(b.board, 'm', DONE), b.ids()))
+    expect(kbCast(b, 'kb-card-remove')).toEqual([])
+    bus.settle()
+    bus.unstall(2)
+    bus.settle()
+
+    for (const c of [a, b]) {
+      expect(where(c, 'n')).toBe(DOING)
+      expect(where(c, 'm')).toBe(DONE)
+    }
+    expect(shown(a)).toEqual(shown(b))
+  })
+
+  // The same rule on the arrival order the live canvas produces: a board write is published the
+  // moment the store funnel runs, a new node only after React renders it — so a peer can hold the
+  // CARD of a node it has not received yet. Its commit prunes that card locally (the board UI prunes
+  // every commit), and the removal is never cast: every replica that did not prune keeps the card.
+  // The pruning client's own copy is the local, lazy cleanup spec amendment 6 accepts.
+  it('4b. a card that arrives before its node survives a peer that prunes it (the removal is never cast)', () => {
+    const c = new Client(3, bus)
+    bus.clients = [1, 2, 3]
+    a.edit([node('m', 0)])
+    bus.settle()
+    a.editBoard(file(undefined, 'm', TODO))
+    bus.settle()
+
+    a.editBoard(file(a.board, 'n', DOING)) // the card, before the node op has left A
+    bus.settle()
+    expect(b.board?.assignments.some((x) => x.nodeId === 'n')).toBe(true) // B holds it, without n
+    bus.stall(2)
+    a.edit([...a.states, node('n', 0)]) // the node op, held in B's inbox
+    b.editBoard(prune(file(b.board, 'm', DONE), b.ids()))
+    expect(kbCast(b, 'kb-card-remove')).toEqual([]) // the prune stayed local
+    bus.settle()
+    bus.unstall(2)
+    bus.settle()
+
+    expect(where(a, 'n')).toBe(DOING)
+    expect(where(c, 'n')).toBe(DOING)
+    for (const x of [a, b, c]) expect(where(x, 'm')).toBe(DONE)
+  })
+
+  it('5. A deletes a column while B moves a card into it → the column is gone, the card Ungrouped on both', () => {
+    for (const bFirst of [false, true]) {
+      boot()
+      a.edit([node('n', 0)])
+      bus.settle()
+      a.editBoard(file(undefined, 'n', TODO))
+      bus.settle()
+
+      const drop = (board: ProjectKanban): ProjectKanban => ({
+        ...board,
+        columns: board.columns.filter((col) => col.id !== DONE),
+        assignments: board.assignments.filter((x) => x.columnId !== DONE)
+      })
+      const tag = bFirst ? 'B ordered first' : 'A ordered first'
+      if (bFirst) b.editBoard(file(b.board, 'n', DONE)) // B had not seen the delete
+      a.editBoard(drop(a.board!))
+      if (!bFirst) b.editBoard(file(b.board, 'n', DONE))
+      bus.settle()
+
+      for (const x of [a, b]) {
+        expect(x.board?.columns.map((col) => col.id), tag).toEqual([TODO, DOING])
+        expect(where(x, 'n'), tag).toBeNull()
+      }
+      expect(shown(a), tag).toEqual(shown(b))
+    }
+  })
+
+  // Ruling R2: the reflector relays the REPAIRED op and the sender drops its own echo as an ack, so
+  // the sender must hold the repaired value too — or its board shows a name no peer has.
+  it('6. an over-long label name lands cut on every board, the sender’s included', () => {
+    a.editBoard({ ...defaultKanbanFor(PROJECT), labels: [{ id: 'lab-1', name: 'x'.repeat(90), color: 'red' }] })
+    bus.settle()
+    expect(a.board?.labels).toEqual([{ id: 'lab-1', name: 'x'.repeat(60), color: 'red' }])
+    expect(b.board?.labels).toEqual(a.board?.labels)
+    expect(a.cast.filter((m) => m.op === 'kb-label')).toHaveLength(1) // repaired locally, not re-cast
   })
 })
