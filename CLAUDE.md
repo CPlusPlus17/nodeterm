@@ -2510,6 +2510,17 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     legacy callers retain existing discovery; actual owning-endpoint refusals remain final.
     Skipped foreign candidates do not consume the three-network-attempt budget. Hook event
     delivery retains its existing independent failover policy.
+    **Measured on an SSH host (2026-09-28/29):** the desktop slept, the session's tunnel socket
+    stayed on disk with no listener, and the walk reached an unrelated Server Edition whose
+    `control-unsupported-on-this-edition … permanent … do not retry` (and, for context reads,
+    "No linked nodes") was true about that server and false about the session; the tunnel came
+    back minutes later. When a foreign candidate was skipped and no owner answered, the shims now
+    print `FOREIGN_ENDPOINT_HINT` — the owning connection is unreachable, the state is temporary,
+    the usual cause for an SSH project is the tunnel — and all four agent-facing bodies quote its
+    lead via `ownerUnreachableGuidanceLines`, because their other refusal lines rightly say "do not
+    retry". `src/server/control-owner-tunnel-down.test.ts` rebuilds that host under real `/bin/sh`
+    with the real Server Edition handlers as the foreign endpoint; removing the owner guard
+    reproduces the incident's exact refusal line.
   - **Every generated sh client walks the SAME endpoint failover** (`nt_candidates`/`nt_adopt`,
     `core/agents/hook-endpoint-failover-sh.ts`) — issue #445, the endpoint-level twin of #384: a
     session is pinned for life to the endpoint PATH it got at tmux creation, so an app

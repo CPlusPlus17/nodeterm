@@ -8,7 +8,8 @@ import {
   HOOK_ENDPOINT_FALLBACK_SH,
   OWNED_ENDPOINT_FALLBACK_SH,
   FOREIGN_ENDPOINT_HINT,
-  STALE_ENDPOINT_HINT
+  STALE_ENDPOINT_HINT,
+  ownerUnreachableGuidanceLines
 } from './agents/hook-endpoint-failover-sh'
 import { codexSandboxGuidanceLines } from './context-link-core'
 import { NODE_TOKEN_READ_SH } from './agents/node-token-sh'
@@ -677,6 +678,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '',
     ...browserGuidanceLines(),
     '',
+    ...ownerUnreachableGuidanceLines(),
+    '',
     ...codexSandboxGuidanceLines(CONTROL_UNREACHABLE_MSG),
     '',
     'Orchestration ("Build with Nodeterm orchestration"): first decide what is genuinely',
@@ -1244,6 +1247,8 @@ Notes:
 - \`board\` and \`assign\` act on the CURRENTLY OPEN project's board — the same one you see when you
   toggle the kanban view. They need no confirmation.
 - If the CLI says canvas control is unavailable, you are not in a controllable nodeterm session — do not retry.
+
+${ownerUnreachableGuidanceLines().join('\n')}
 
 ${codexSandboxGuidanceLines(CONTROL_UNREACHABLE_MSG).join('\n')}
 

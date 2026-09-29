@@ -1055,3 +1055,5 @@ Control and linked-context fallback must keep a known node identity on its ownin
 instance. A foreign server being reachable is not evidence that it owns the canvas. Match the
 candidate's own advertised node token before sending; never borrow a token from a global directory
 for that check. Keep real owning-endpoint refusals final and legacy hook delivery unchanged.
+When no owner answers, say so as a temporary state (`FOREIGN_ENDPOINT_HINT`); never let another
+instance's "permanent, do not retry" stand in for a dropped tunnel.
