@@ -42,6 +42,7 @@ import {
   requestIdGate,
   requestIdOutcomeMessage,
   requestIdReplayLine,
+  requestIdRetryHint,
   type LedgerClaim
 } from '../control-request-ledger'
 
@@ -366,6 +367,8 @@ export class HookServer {
         error?: string
         // The handler could not tell whether its effect happened (see control-request-ledger.ts).
         indeterminate?: boolean
+        // Set by the route, never a handler: the id an indeterminate call is filed under.
+        requestId?: string
       }>)
     | null = null
   /**
@@ -834,6 +837,16 @@ export class HookServer {
             throw e
           }
           held?.settle(result)
+          // A call that may still complete names the id it is filed under, and how to pass it back:
+          // for the shim's per-run id this is the only place the caller ever sees it.
+          if (held && idGate.requestId && result.indeterminate) {
+            const hint = requestIdRetryHint(idGate.requestId)
+            result = {
+              ...result,
+              message: `${result.message ?? result.error ?? 'control request failed'}\n${hint}`,
+              requestId: idGate.requestId
+            }
+          }
           // Which note, not whether: an unmintable node warned with the restart line is sent round
           // the same loop the refusal path already knows better than to send it round.
           const note = [decision === 'allow-with-warning' ? this.identityWarningNote(nodeId) : '', idNote]

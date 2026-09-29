@@ -10,13 +10,13 @@
 // failure and exit 1, and every case here would fail for a reason that has nothing to do with
 // parsing. stderr is no good either — the shim sends curl's stderr to /dev/null.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { CONTROL_SHIM_SCRIPT } from '../core/canvas-control-core'
 import { runNowRequested } from '../shared/control-verbs'
-import { isValidRequestId } from '../core/control-request-ledger'
+import { REQUEST_ID_VERBS, isValidRequestId, requestIdAnnounceLine } from '../core/control-request-ledger'
 
 let dir = ''
 
@@ -88,6 +88,40 @@ describe('the control shim tags each run with its own request id', () => {
     expect(got).toHaveLength(1)
     expect(got[0]).toMatch(/^cli-\d+-\d+$/)
     expect(isValidRequestId(got[0])).toBe(true)
+  })
+
+  // Review follow-up to #1033: an agent's own tool call is usually killed at 120 s — the same
+  // instant the app gives up — so the reply naming the id may never be seen. The id is therefore
+  // printed to stderr BEFORE the POST, for every verb the ledger covers, and only when the caller did
+  // not pass its own (then it already knows it) and it is not a dry run (which claims nothing).
+  it('announces the per-run id on stderr before posting, for exactly the verbs the ledger covers', () => {
+    const stderrOf = (args: string[]): string =>
+      spawnSync('sh', [path.join(dir, 'shim.sh'), ...args], {
+        env: {
+          PATH: `${path.join(dir, 'bin')}:${process.env.PATH ?? ''}`,
+          NODETERM_CANVAS_CONTROL: '1',
+          NODETERM_HOOK_PORT: '1',
+          NODETERM_NODE_ID: 'n1',
+          NT_ARGV_LOG: path.join(dir, 'argv.log'),
+          HOME: dir
+        },
+        encoding: 'utf8'
+      }).stderr
+    for (const verb of REQUEST_ID_VERBS) {
+      const err = stderrOf([verb])
+      const posted = ids([verb])
+      expect(err, verb).toMatch(/^request id: cli-/)
+      // The announced id is well-formed and has the exact announced shape.
+      const announced = /^request id: (\S+) /.exec(err)?.[1] ?? ''
+      expect(isValidRequestId(announced), verb).toBe(true)
+      expect(err, verb).toContain(requestIdAnnounceLine(announced))
+      expect(posted, verb).toHaveLength(1)
+    }
+    expect(stderrOf(['rename', '--node', 'n1', '--title', 't'])).not.toMatch(/request id:/)
+    expect(stderrOf(['list'])).not.toMatch(/request id:/)
+    expect(stderrOf(['open-agent', '--agent', 'claude', '--request-id', 'mine-1'])).not.toMatch(/request id:/)
+    expect(stderrOf(['open-agent', '--agent', 'claude', '--request-id=mine-1'])).not.toMatch(/request id:/)
+    expect(stderrOf(['spawn-team', '--dry-run', '--team', '[]'])).not.toMatch(/request id:/)
   })
 
   it('an explicit --request-id rides as an ordinary arg next to the per-run id', () => {

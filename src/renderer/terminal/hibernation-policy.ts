@@ -26,7 +26,9 @@
  *    error, no record. And no hook fires while it runs, so a node whose only activity is a long
  *    background job looks EXACTLY like the target profile (`done`, offscreen, idle for hours): the
  *    stamp the launch left behind (`agentStatus.backgroundTaskAt`, cleared at the next turn start)
- *    is the only signal there is.
+ *    is the only signal there is. Claude's `Stop` also stamps it while its `background_tasks`
+ *    inventory lists running work — which is what covers a background SUBAGENT that is only paused
+ *    (its native SubagentStop marked its card done; core/claude-subagent-lifecycle.ts).
  *  - **Unknown idle is NOT idle.** A candidate with no `lastEventAt` (no hook event has ever been
  *    seen for it in this run) is never eligible — the same rule as pendingLaunch's "an unknown
  *    dependency state is not satisfied". Guessing here costs the user a live session.

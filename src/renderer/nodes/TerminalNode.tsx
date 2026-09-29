@@ -49,13 +49,22 @@ import {
   installLinkContextMenu,
   cachedCwd,
   findExistingPath,
-  missingFileMessage,
-  makeDirListingLookup
+  fileMissMessage,
+  makeDirListingLookup,
+  type LinkHoverSink,
+  type UnverifiedPath
 } from '../terminal/file-links'
 import { linkMenuItems, resolveLinkTarget, type LinkMenuTarget } from '../terminal/link-menu'
 import { ContextMenu } from '../components/ContextMenu'
 import { DownloadStrip } from '../components/DownloadStrip'
-import { canUseLocalShell, downloadRoute } from '../lib/download'
+import { canUseLocalShell, downloadRoute, type DownloadContext } from '../lib/download'
+import {
+  createLinkHintTooltip,
+  fileLinkHint,
+  hideLinkHints,
+  systemOpenRefusal,
+  urlLinkHint
+} from '../terminal/link-hover'
 import { useDownloads } from '../lib/useDownloads'
 import { fileLinkDialect } from '../terminal/file-link-dialect'
 import { hostPlatformFor } from '../terminal/host-platform'
@@ -3113,6 +3122,8 @@ export function TerminalNode({
       // Reattach the parked xterm's DOM element: the PTY never detached, so the screen is
       // already current — no spawn, no tmux redraw, no terminal-mode re-negotiation.
       if (term.element) container.appendChild(term.element)
+      // A link tooltip showing when the terminal parked would otherwise reappear where it was.
+      if (term.element) hideLinkHints(term.element)
       applyFit()
     } else {
       term.loadAddon(fit)
@@ -3149,13 +3160,43 @@ export function TerminalNode({
       // agent TUI paints, so a long OAuth URL matched only its first row's fragment); file
       // paths → editor node / Explorer reveal via the file provider. Both are modifier-gated
       // inside their activate handlers, so plain clicks stay selections.
+      // Hovering a link names what a click will open — the RESOLVED path (the launch cwd or the
+      // pane's live cwd, whichever held it) and the gestures (link-hover.ts). One tooltip per xterm
+      // instance, inside its element, so it parks and dies with the terminal.
+      const linkHint = term.element ? createLinkHintTooltip(term.element) : null
+      // Read at hover/click time, never captured: the active project can change under a parked
+      // terminal. `projectFs` is declared below and only called after this block has run.
+      const shellCtx = (): DownloadContext => ({
+        browser: isBrowserRuntime(),
+        ssh: projectFs().ssh,
+        source: session.source
+      })
+      const hoverSink: LinkHoverSink | undefined = linkHint
+        ? {
+            hover: (target, ev) =>
+              linkHint.show(
+                target.kind === 'url'
+                  ? urlLinkHint(target.url, isMac)
+                  : fileLinkHint({
+                      abs: target.abs,
+                      dir: target.dir,
+                      mac: isMac,
+                      systemOpen: systemOpenRefusal(shellCtx(), target.abs) === null
+                    }),
+                ev.clientX,
+                ev.clientY
+              ),
+            leave: () => linkHint.hide()
+          }
+        : undefined
       term.registerLinkProvider(
-        createUrlLinkProvider(term, (uri) => window.nodeTerminal.shell.openExternal(uri))
+        createUrlLinkProvider(term, (uri) => window.nodeTerminal.shell.openExternal(uri), hoverSink)
       )
       // Not in xtermOptionsFromSettings: the handler closes over the shell bridge, which the
       // pure options builder must not know.
-      term.options.linkHandler = createOsc8LinkHandler((uri) =>
-        window.nodeTerminal.shell.openExternal(uri)
+      term.options.linkHandler = createOsc8LinkHandler(
+        (uri) => window.nodeTerminal.shell.openExternal(uri),
+        hoverSink
       )
       const projectFs = (): { fs: FsApi; ssh: boolean } => {
         const st = useProjects.getState()
@@ -3185,10 +3226,15 @@ export function TerminalNode({
       const getCwd = (): string | undefined => (data.cwd as string | undefined) || undefined
       // The pane's CURRENT directory — the second anchor for a relative path (see CwdSources).
       const getLiveCwd = cachedCwd(() => api.pty.paneCwd(id))
-      const onMissingFile = (token: string, tried: string[]): void => {
+      // "Couldn't check" when any candidate could not be checked, "File not found" only for a
+      // verified absence (`fileMissMessage`).
+      const onMissingFile = (
+        token: string,
+        miss: { tried: string[]; unverified?: UnverifiedPath[] }
+      ): void => {
         window.dispatchEvent(
           new CustomEvent('nodeterm:toast', {
-            detail: { kind: 'error', message: missingFileMessage(token, tried) }
+            detail: { kind: 'error', message: fileMissMessage(token, miss) }
           })
         )
       }
@@ -3199,12 +3245,26 @@ export function TerminalNode({
             new CustomEvent('nodeterm:open-file', { detail: { path: abs, ssh: projectFs().ssh } })
           )
       }
+      // Shift+Cmd/Ctrl+click → the OS default app (a directory → the OS file manager). The same
+      // `shell.openPath` the files node and ⌘K quick-open use, behind the same `canUseLocalShell`
+      // gate as the link menu's Reveal in Finder; anywhere it cannot act (SSH project, browser tab,
+      // relay) the click says why instead of doing nothing — see `systemOpenRefusal`.
+      const openWithSystem = (abs: string): void => {
+        const why = systemOpenRefusal(shellCtx(), abs)
+        if (why) {
+          window.dispatchEvent(new CustomEvent('nodeterm:toast', { detail: { kind: 'error', message: why } }))
+          return
+        }
+        window.nodeTerminal.shell.openPath(abs)
+      }
       term.registerLinkProvider(
         createFileLinkProvider(term, {
           getCwd,
           getLiveCwd,
           lookup,
           activate: openFile,
+          openWithSystem,
+          hoverSink,
           convention: pathConvention
         })
       )
@@ -3218,6 +3278,7 @@ export function TerminalNode({
           getLiveCwd,
           lookup,
           activateFile: openFile,
+          openFileWithSystem: openWithSystem,
           onMissing: onMissingFile,
           openUrl: (uri) => window.nodeTerminal.shell.openExternal(uri),
           fileEnabled: () => pathConvention() !== null,

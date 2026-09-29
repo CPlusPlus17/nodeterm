@@ -36,9 +36,13 @@ describe('desktop main', () => {
     expect(block).toContain('{ nodeId, args, verified }')
   })
 
-  it('withdraws a station\'s report after new work lands, on the answered result', () => {
-    const clear = handler.indexOf('clearOutcomesAfterControl(stationOutcomes, verb, args, result, nodeId)')
-    expect(clear).toBeGreaterThan(handler.indexOf('controlForwarder.forward('))
+  it('withdraws a station\'s report after new work lands — in the finishing step both answers take', () => {
+    // `finishAnswer` runs on the prompt answer AND on a late one (#1033), so a send whose answer
+    // arrives after main's timeout still withdraws the report.
+    const finish = handler.slice(handler.indexOf('const finishAnswer = ('))
+    const body = finish.slice(0, finish.indexOf('\n    }\n'))
+    expect(body).toContain('clearOutcomesAfterControl(stationOutcomes, verb, args, answer, nodeId)')
+    expect(handler).toMatch(/finish: finishAnswer/)
   })
 
   it('registers the read channel and pushes every change to the window', () => {

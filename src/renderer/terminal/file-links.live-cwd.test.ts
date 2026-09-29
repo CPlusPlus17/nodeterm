@@ -70,7 +70,7 @@ describe('findExistingPath', () => {
     expect(asked).toBe(0)
   })
 
-  it('reads a throwing lookup or live-cwd read as a miss, never a rejection', async () => {
+  it('reads a throwing lookup as unchecked (never a verified miss) and a throwing live-cwd read as unknown, never a rejection', async () => {
     const r = await findExistingPath(
       'a/b',
       {},
@@ -80,7 +80,7 @@ describe('findExistingPath', () => {
         lookup: () => Promise.reject(new Error('ssh down'))
       }
     )
-    expect(r).toEqual({ found: false, tried: ['/one/a/b'] })
+    expect(r).toEqual({ found: false, tried: ['/one/a/b'], unverified: [{ abs: '/one/a/b', reason: 'ssh down' }] })
   })
 
   it('uses the Windows dialect for both candidates', async () => {
