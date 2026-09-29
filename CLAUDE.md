@@ -6168,6 +6168,106 @@ to the class, and no bare `.react-flow__viewport` rule carries `will-change`).
   being packaged (#575, shipped by #579): without that bundle `pty.attach` spawns a new plain shell
   instead of joining the node's session, while `sessionExists` still answers "warm".
 
+## Hosted team relay (Server Edition as a relay host)
+
+A Server Edition core can host a team over the E2EE relay: a standing listener on the tunnel
+dialect, owner approval, roles, a `team` admin CLI, and desktops joining with a
+`nodeterm://join?code=…` code. Operator guide, roles table, join-error table, limitations and the
+device checklist: **`docs/hosted-team-relay.md`**. The relay mechanism moved to `src/core/relay/`
+(`src/main/remote/` keeps re-export shims), and Team Access and the hosted team run the SAME
+`connectRelayHost`: a host that passes no `RelayHostHooks` (the desktop) takes the unhooked path.
+The invariants, each with its reason:
+
+- **Roles are enforced in core, deny-by-default in BOTH directions** (`core/relay/access-policy.ts`).
+  A Viewer/Commenter reaches a method only if `VIEW`/`COMMENT` lists it, and receives an event only
+  if `VIEW_EVENTS` does: the core broadcasts to every attached client (the debug log, whole project
+  documents), so an allow-by-default filter would hand a viewer whatever nobody remembered to list.
+  **"Read" is not "safe"**: relay peers were fully trusted, so every VIEW entry carries its own
+  argument check. `fs:*` is realpath-jailed to a shared project's realpathed cwd; `git:diff` jails
+  the FILE too (`--no-index` diffs any file on the host); a `git:show-file` ref starting with `-`
+  is an option (`--output=` writes a file); **every git read also needs the shared root holding
+  the cwd to be the top of its OWN repository** (a `.git` dir holding `HEAD`, or a worktree's
+  `.git` file; git skips an empty `.git` dir): `git show <ref>:<p>` resolves `<p>` against the
+  repository's top level and `git status`/`log` report the whole repository, so from a shared
+  `repo/shared/` a Viewer read `repo/secret/key.txt` (measured, C1) — a monorepo subfolder gets no
+  git panel; `pty:create` is cut down to a whitelist, because
+  `sshRemote`'s args run `ssh` on the host during the existence probe. A non-editor's terminal
+  frames (output, resync, size, exit) are judged per frame by the session's node
+  (`PtyManager.nodeOfSession`), because a subscription outlives `team unshare`. Editors pass untouched
+  (Editor is shell access). The UI mirror (`@shared/hosted-access.ts`, `bridge/hosted-gate.ts`) is
+  convenience; `access-policy.guard.test.ts` pins it equal and fails on any relay-API channel
+  nobody classified.
+- **The role is read from `team.json` on every message, never cached on a session**, so a removal
+  or promotion applies to the next message. A session with NO team entry is served nothing: that
+  is the window between a removal's write and its kill. The one exception is `pinFailed` (both
+  humans approved but the pin write failed), served as Viewer. The renderer, by contrast, reads the
+  role once per connection; that is UX only.
+- **A viewer's size never votes, and a viewer's create is join-only.** `sizeVote: false` (a
+  non-voting re-join also WITHDRAWS an earlier vote under the same subscriber key) and `pty:resize`
+  rewritten to `(null, null)`: a small window must not shrink everyone's terminal. `joinOnly`
+  asks the STRICT exact-target probe (`has-session -t =nt-<id>`), refuses when it cannot tell, and
+  reattaches without `-D`. The folded probe reads a tmux error as "exists", which is the safe answer
+  for an owner and would let a viewer's `new-session -A` CREATE the session.
+- **The host key is never silently regenerated** (`host-key.ts`). Its public key IS the team's
+  address (`hostId`), so a new key orphans every bookmark and sends every teammate back through
+  first-join approval. Unreadable ⇒ hosting stays off with `host-key-unreadable`; only
+  `team rotate-key` replaces it.
+- **`team.json` is not the phone's pin file.** Push's `hasPairedPhone` counts the entries of
+  `remote-approved-devices.json`, so a teammate pinned there would read as a paired phone. The same
+  rule on the joiner: `hosted-join.ts` runs the core relay client with NO pin store, and the
+  joiner-side pin is the bookmark's `approvedAt` (valid only for the exact host key it was recorded
+  with).
+- **The admin channel is a 0600 unix socket in a 0700 directory, with no token**
+  (`core/relay/team-admin.ts`). Filesystem permissions are the whole gate, so there is nothing to
+  leak into a pane's environment. The root of trust is the core's unix user, which also means an
+  Editor's shell can run `team add-owner`. With no team, the socket serves only
+  `init`/`status`/`info`. The `relay:hosted:*` verbs are intercepted inside the relay session and
+  never registered on the platform, so a Server Edition browser client cannot call them. An
+  interceptor bypasses `access` and every jail, so each one judges the CALLER's own session key.
+- **LOCAL confirms have exactly three call sites on the host side:** the Team Access dialog
+  (`relay:host:confirm`), `autoApprove` for a key `team.json` pins, and an owner's
+  `relay:hosted:approve`. The joiner side has two: the human's `relay:client:confirm`, and the
+  bookmark auto-confirm. The one remote confirm still arrives only on the encrypted tunnel. A new
+  local confirm is a design change; the comment in `relay-trust.ts` lists all five.
+- **Nothing is served before mutual approval.** Frames that arrive between approval and open (while
+  the pin is being written) are HELD, at most `HELD_FRAMES_MAX` (256), then served through the same
+  checks. Refusing them would fail a new teammate's first `workspace:load`, which routinely lands
+  inside the host's pin write. Pending join requests go to connected OWNERS only (never a
+  broadcast), at most one per device key and 16 at once, and expire after 10 minutes. A deny or
+  expiry that lands during the pin write wins.
+- **The scheduler's backoff resets only on proof the relay leg works** (an idle listener held to
+  its refresh, or a completed handshake) or on a fresh `start()`, never on a successful mint. With
+  the API up and the relay down every mint succeeds and every socket dies, and a reset-on-mint
+  re-minted at round-trip speed (relay log, 2026-09-27). Successful mints are also capped at 200
+  per rolling hour, whatever asks for them (the backend's free limit is 240).
+- **A join code is enough to take hosting offline (R44), and only the backend can close that.**
+  `POST /v1/relay/host-token` takes the code's `hostDeviceId` + `hostPublicKeyB64` with no proof of
+  the host's secret key, and the backend damps host tokens and device mints per that device id. So a
+  code holder, a removed teammate included, can spend the host's hourly mints, the team's daily
+  device mints and the 16 pending slots. `team rotate-key` alone does not help (it keeps the device
+  id); recovery is a fresh `<dataDir>/device-id` + `team rotate-key` + fresh codes (the doc's
+  troubleshooting list). Proof-of-possession on that endpoint is a `nodeterm-server` follow-up.
+- **The joiner never mints a device token it cannot keep.** Device mints are damped per HOST device
+  id, so one team shares 10 a day. It probes the bookmarks file before minting and sends a PER-TEAM
+  device id (`<machine id>:<hostId>`), because the backend will not re-register one id for a second
+  host. Every failure carries a stable `[E_JOIN_…]` code, which is the only part of an error that
+  survives Electron IPC. Only `E_JOIN_NETWORK` and `E_JOIN_THROTTLED` (at least 60 s) retry
+  unattended. A drop the host did not explain retries 5 times (1/2/4/8/15 s), then stops and says so.
+
+**Known limitations** (full list in the doc): non-editors still receive cross-project presence and
+`context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still
+pauses the shared pty through Stage 2 backpressure; canvas edits made in a hosted tab are not
+written to the host, because a relay tab never saves the host workspace and the reflector persists
+nothing (ruling R42). Workaround: keep a Server Edition browser tab open on the host's core; it
+applies each reflected mutation, marks itself dirty and saves. Edits made while no browser tab is
+attached are lost. Kanban, bridge and rope edits made in a relay tab are never propagated or saved
+at all, because `canvas:mut` carries nodes only; that predates this feature.
+
+**Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab).
+Server Edition is the host (the `team` CLI; its browser clients cannot approve and are not hosted
+peers). Mobile is N/A for v1: the phone still speaks the legacy dialect, and the host it would join
+now exists in core. The iOS follow-up is the tunnel-dialect migration.
+
 ## Speech / dictation (desktop + server)
 
 Voice-to-text input captured via microphone, turned into terminal text via on-device Whisper. Works on desktop (Electron) and Server Edition (browser); iOS support is separate (`nodeterm-ios`, private — see the three-surfaces entry under Conventions).

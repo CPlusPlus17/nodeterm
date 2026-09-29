@@ -30,10 +30,13 @@
 //    calls `buildRelayApi` while the approval dialog is still open, THEN awaits `ready()`. Building
 //    it after approval already fired leaves `ready()` pending forever and the api never comes up.
 
-import type { NodeTerminalApi } from '../../shared/types'
+import type { HostedRole, NodeTerminalApi } from '../../shared/types'
 import { type FrameTransport, RelayFrameTransport } from './frame-transport'
+import { RoleGatedRpcClient } from './hosted-gate'
+import { emitLocalRelayClose } from './relay-local-close'
 import {
   RpcClient,
+  buildHostedApi,
   buildRealApi,
   buildFilesApi,
   buildAgentApi,
@@ -55,6 +58,16 @@ export interface RelayApiHandle {
   ready(): Promise<void>
   /** Tear the connection down: close the relay socket for this connectionId. */
   close(): void
+  /** HOSTED tabs only: tell the role gate which role the host gave this device (the tab asks
+   *  `hosted.self()` before anything mounts). Absent on every other relay tab. */
+  setHostedRole?(role: HostedRole): void
+}
+
+/** How to build a relay tab's api. */
+export interface RelayApiOptions {
+  /** A relay tab joined by a hosted team's `nodeterm://join` code: it gets `api.hosted` and a role
+   *  gate on everything it sends. Absent/false = a Team Access relay tab, built exactly as before. */
+  hosted?: boolean
 }
 
 /**
@@ -62,11 +75,19 @@ export interface RelayApiHandle {
  * nothing and a `RelayFrameTransport(connectionId)` is constructed here (which is what registers the
  * one-shot `onApproved` listener; see gotcha 2).
  */
-export function buildRelayApi(connectionId: string, transport?: FrameTransport): RelayApiHandle {
+export function buildRelayApi(
+  connectionId: string,
+  transport?: FrameTransport,
+  opts?: RelayApiOptions
+): RelayApiHandle {
   // The LOCAL preload — this is a desktop-only path (relay hosting/joining is Electron), so
   // `window.nodeTerminal` is the full real preload, not the browser stub surface.
   const local = (window as unknown as { nodeTerminal: NodeTerminalApi }).nodeTerminal
-  const client = new RpcClient(transport ?? new RelayFrameTransport(connectionId))
+  const carrier = transport ?? new RelayFrameTransport(connectionId)
+  // A hosted tab's role, once the host has said it. Unknown = the lowest role (hosted-gate.ts).
+  let hostedRole: HostedRole | null = null
+  const hosted = opts?.hosted === true
+  const client = hosted ? new RoleGatedRpcClient(carrier, () => hostedRole) : new RpcClient(carrier)
 
   const real = buildRealApi(client) // { pty, workspace, settings, userDataDir }
   const files = buildFilesApi(client) // { fs, git, files, context }
@@ -169,12 +190,23 @@ export function buildRelayApi(connectionId: string, transport?: FrameTransport):
     // core, whose mirror is seeded by the host's own renderer from its own localStorage. This
     // machine's localStorage holds no identity for them, and `...local` would plant this machine's
     // ids into this machine's mirror under the peer's node ids.
-    seedAgentIdentity: () => undefined
+    seedAgentIdentity: () => undefined,
+
+    // The hosted team verbs — ONLY on a tab joined by a hosted team's code. A Team Access relay
+    // tab's host answers none of them, so there the key is absent altogether (never `undefined`),
+    // and every `api.hosted` check in the renderer takes its old path.
+    ...(hosted ? buildHostedApi(client) : {})
   } satisfies NodeTerminalApi
 
   return {
     api,
     ready: () => client.ready(),
-    close: () => local.relayClient.disconnect(connectionId)
+    close: () => {
+      local.relayClient.disconnect(connectionId)
+      // A hosted connection's own close is announced locally: main never reports it (see
+      // relay-local-close.ts), and this tab's team is held until its connection ends.
+      if (hosted) emitLocalRelayClose(connectionId)
+    },
+    ...(hosted ? { setHostedRole: (role: HostedRole) => { hostedRole = role } } : {})
   }
 }

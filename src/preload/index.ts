@@ -11,6 +11,7 @@ import type {
   PtyPressure,
   LogRecord,
   RecycledInfo,
+  RelayClosedReason,
   RelayPeerPending,
   RemoteUsageQuery,
   SessionMemoryQuery,
@@ -658,11 +659,16 @@ const api: NodeTerminalApi = {
     },
     onClosed: (connectionId, listener) => {
       const channel = IPC.relayClientClosed(connectionId)
-      const handler = () => listener()
+      // A hosted host's refusal reason rides the close; a legacy pairing offer sends none.
+      const handler = (_e: unknown, reason?: RelayClosedReason) => listener(reason)
       ipcRenderer.on(channel, handler)
       return () => ipcRenderer.removeListener(channel, handler)
     },
     disconnect: (connectionId) => ipcRenderer.send(IPC.relayClientDisconnect, connectionId)
+  },
+  relayHosted: {
+    bookmarks: () => ipcRenderer.invoke(IPC.relayHostedBookmarks),
+    removeBookmark: (hostId) => ipcRenderer.invoke(IPC.relayHostedBookmarkRemove, hostId)
   },
   handoff: {
     build: (sessionId, agentId, sourceNodeId, cwd, accountId) =>

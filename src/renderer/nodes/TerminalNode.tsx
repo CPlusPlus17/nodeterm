@@ -231,6 +231,7 @@ import { useSshConn } from '../state/sshConn'
 import { useWorktrees } from '../state/worktrees'
 import { isRemoteSessionNode } from '@shared/worktree'
 import { useSession, useActiveSessionPresence } from '../session/session'
+import { isHostedReadOnly, useHostedReadOnly } from '../state/hostedTeams'
 import { isBrowserRuntime } from '../bridge/runtime'
 import { agentLaunchOverride, COLLAPSED_HEIGHT, type CanvasNode } from '../state/workspace'
 import { NodeColorSwatches } from '../components/NodeColorSwatches'
@@ -1230,6 +1231,9 @@ export function TerminalNode({
   // namespaces (pty, fs) go through it; app-global ones (clipboard, shell) stay on the global.
   const session = useSession()
   const { api } = session
+  // A hosted team tab whose role is below Editor (false everywhere else): no "Restart in folder" —
+  // it recycles the session, which the host refuses for them.
+  const hostedReadOnly = useHostedReadOnly(session.id)
   // The path dialect belongs to the core that owns this tab's filesystem, not necessarily this
   // browser/window. Server Edition and relay tabs can be viewed from a different OS, so their
   // core reports `process.platform` through the already-core-bound tmux status call. Keep it in a
@@ -2268,6 +2272,10 @@ export function TerminalNode({
     // Appearance comes from ONE place, shared with the kanban card modal's viewer of this same
     // session (`ModalTerminal`) — see `xtermOptionsFromSettings`.
     const term = parked?.term ?? new Terminal(xtermOptionsFromSettings(s, isLiquidGlass(s.appTheme)))
+    // A hosted team's Viewer/Commenter watches and never types: keystrokes and pastes are not taken
+    // at all (the host refuses pty:write for them anyway). Set only for such a tab — every other
+    // session never touches the option. The role is known before the session exists (relay-tab).
+    if (isHostedReadOnly(session.id)) term.options.disableStdin = true
     // Only on a FRESH instance: a parked terminal already carries the table, and the buffer it kept
     // alive was measured with it — re-registering under a live buffer buys nothing.
     if (!parked) activateUnicode11(term)
@@ -3333,6 +3341,29 @@ export function TerminalNode({
         // the near-side guard above produces, retry included.
         if (unavailable) {
           const refusal = ptyRefusal(unavailable)
+          // A hosted-relay VIEWER opened a terminal it could not find running. Nothing failed and
+          // nothing is offline, so neither overlay applies — "Try again" would only respawn into the
+          // same refusal. What CAN still be on screen is state from an earlier run of this effect
+          // (a refresh re-enters here): a spawn-error overlay (only its own "Try again" clears it),
+          // the stale-cwd and lost-session banners (the success path resets them on every create
+          // result, and this path returns before it; "Restart in folder" would recycle a session
+          // this view does not hold), a refused-launch banner about a launch into a session that
+          // is not attached, and a letterbox sized to a pty that is not attached. Clear them the
+          // way the neighbouring refusals set theirs, say why the pane is empty, and stop;
+          // "Refresh terminal" re-asks on demand.
+          if (unavailable === 'join-only') {
+            setCo(termKey, {
+              offline: false,
+              spawnError: null,
+              staleCwd: false,
+              lostSession: false,
+              launchTooLongBytes: null,
+              letterbox: false,
+              geminiRetired: false
+            })
+            if (!disposed) term.write(`\r\n\x1b[90m[${refusal.message}]\x1b[0m\r\n`)
+            return
+          }
           setCo(
             termKey,
             refusal.connectionLost
@@ -6172,13 +6203,15 @@ export function TerminalNode({
               This terminal&apos;s folder was deleted (or replaced) — the shell&apos;s working
               directory no longer exists.
             </span>
-            <button
-              className="term-node__stalecwd-restart"
-              onClick={restartInFolder}
-              title={`End this shell and start a fresh one in ${(data.cwd as string) || 'the project folder'}. Anything still running in this terminal will end.`}
-            >
-              Restart in folder
-            </button>
+            {!hostedReadOnly && (
+              <button
+                className="term-node__stalecwd-restart"
+                onClick={restartInFolder}
+                title={`End this shell and start a fresh one in ${(data.cwd as string) || 'the project folder'}. Anything still running in this terminal will end.`}
+              >
+                Restart in folder
+              </button>
+            )}
             <button
               className="term-node__stalecwd-dismiss"
               onClick={dismissStaleCwd}

@@ -244,8 +244,10 @@ export function initStandingHost(
       // what resets it (see connectOne).
       reconnectAttempt = 0
       // A listener serving a client (bridged) is left alone — never cut an active session for a
-      // token refresh; the relay drops it at TTL and onClose replaces it. Only an IDLE listener is
-      // re-minted with a fresh token by dropping it and topping the pool back up.
+      // token refresh. Whether the relay ends a bridged socket at its token's lifetime is
+      // UNVERIFIED (the broker's source checks a token only when a socket joins; the device
+      // checklist in docs/hosted-team-relay.md settles it); if it does, onClose replaces it. Only an
+      // IDLE listener is re-minted with a fresh token by dropping it and topping the pool back up.
       if (p.bridged) {
         scheduleRefreshFor(p, DEFAULT_TTL_MS)
         return

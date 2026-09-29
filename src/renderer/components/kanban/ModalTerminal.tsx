@@ -19,6 +19,7 @@ import { FindBar } from '../FindBar'
 import { useAgentStatus } from '../../state/agentStatus'
 import { useProjects } from '../../state/projects'
 import { useSession } from '../../session/session'
+import { isHostedReadOnly } from '../../state/hostedTeams'
 import { useSettings } from '../../state/settings'
 import { useTerminalSearch } from '../../terminal/useTerminalSearch'
 import { useTerminalGlass } from '../../lib/useTerminalGlass'
@@ -101,7 +102,8 @@ interface ModalTerminalProps {
 }
 
 export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covered = false }: ModalTerminalProps) {
-  const { api } = useSession()
+  const session = useSession()
+  const { api } = session
   const hostRef = useRef<HTMLDivElement>(null)
   const middleClickPaste = useSettings((st) => st.settings.terminalMiddleClickPaste)
   // Chromium pastes the X PRIMARY selection into xterm's hidden textarea on middle click — a path
@@ -204,6 +206,8 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
     // view of one session, and a card that renders it in different colours reads as a different
     // terminal. (It used to hardcode its own background, which is exactly what happened.)
     const term = new Terminal(xtermOptionsFromSettings(s, glassRef.current))
+    // The same read-only rule as the canvas node: a hosted team's Viewer/Commenter never types here.
+    if (isHostedReadOnly(session.id)) term.options.disableStdin = true
     // Without a handler xterm answers an OSC 8 click with a window.confirm — the one surface
     // where this session's links would prompt instead of opening like the canvas node's.
     term.options.linkHandler = createOsc8LinkHandler((uri) =>

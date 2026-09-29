@@ -51,7 +51,21 @@ export interface RemoteWorkspaceIO {
   writeSettings?(projectId: string, ssh: NonNullable<Project['ssh']>, content: string): Promise<boolean>
 }
 
-const projectFilePath = (cwd: string): string => path.join(cwd, PROJECT_DIR, PROJECT_FILE)
+/** cwd -> its project-file path. The path is a pure function of the cwd string, and the hosted
+ *  relay's per-frame access check (`projectIdsForNode` → `canvasInputs`) needs it for every index
+ *  entry on every frame, where `path.join` was most of the cost. Bounded, oldest out: the key set is
+ *  the cwds the index has ever held, which only grows by the user adding folders. */
+const projectFilePaths = new Map<string, string>()
+const PROJECT_FILE_PATHS_CAP = 1024
+const projectFilePath = (cwd: string): string => {
+  let file = projectFilePaths.get(cwd)
+  if (file === undefined) {
+    file = path.join(cwd, PROJECT_DIR, PROJECT_FILE)
+    if (projectFilePaths.size >= PROJECT_FILE_PATHS_CAP) projectFilePaths.delete(projectFilePaths.keys().next().value!)
+    projectFilePaths.set(cwd, file)
+  }
+  return file
+}
 
 /** The data file of one cwd-less ("inline") project: `userData/inline-projects/<id>.json`. Only
  *  ever called with an id `isInlineProjectFileId` has already accepted — workspace.json is
@@ -63,6 +77,9 @@ const inlineFilePath = (projectId: string): string =>
  *  `recentMirrorHashes`). Big enough to cover a burst of throttled writes inside one poll window;
  *  small enough that a server-side revert to genuinely old content still reads as external. */
 const RECENT_MIRROR_CAP = 8
+
+/** `projectIdsForNode`'s answer for an id no project holds (shared, frozen: callers only read it). */
+const NO_PROJECTS: readonly string[] = Object.freeze([])
 
 const contentHash = (content: string): string => createHash('sha256').update(content).digest('hex')
 
@@ -134,6 +151,8 @@ export class WorkspaceStore {
    *  its last write on EVERY autosave; re-parsing each file each time was pure waste. Keyed by the
    *  raw string, so any `lastWritten.set` elsewhere invalidates it by construction. */
   private lastWrittenParsed = new Map<string, { raw: string; parsed: ProjectFileV1 }>()
+  /** `projectIdsForNode`'s node → projects map, and the `canvasInputs` snapshot it was built from. */
+  private nodeProjectMemo: { inputs: unknown[]; map: Map<string, readonly string[]> } | null = null
   /** The index bytes we last wrote and the file's size/mtime/inode right after, so an unchanged
    *  index is not rewritten on every autosave — but one another writer changed on disk still is.
    *  The inode is what catches a same-size rewrite on a coarse-mtime filesystem: every writer
@@ -1503,6 +1522,67 @@ export class WorkspaceStore {
       if (node) return { node, root: !e.project && !e.cache && e.cwd ? e.cwd : undefined }
     }
     return undefined
+  }
+
+  /**
+   * EVERY project that holds this node id, in index order ([] = none) — exactly what a
+   * `persistedCanvases` scan answers. All of them, never the first: node ids travel in git-shared
+   * project files, so one id can sit in two projects, and the hosted team's access policy treats a
+   * node as shared only when every project holding it is shared. Memoized, because a hosted-team
+   * relay asks it once per access decision for every viewer (each agent:status event,
+   * subagent-activity chunk, unread-clear, snapshot element, terminal frame) and a
+   * `persistedCanvases()` call re-parses every local project's cached file.
+   *
+   * The memo is validated against the IDENTITY of every input `persistedCanvases` reads
+   * (`canvasInputs`), not a version counter: a counter is only as good as the writers that remember
+   * to bump it, and this class changes those inputs from a dozen places — `lastWritten.set`, index
+   * reassignment, and in-place entry updates (`e.cache = …`, `e.project = …`, `e.id = …` on a
+   * re-key). Every one of them replaces a reference, so a snapshot comparison sees all of them,
+   * including writers added later. The snapshot goes down to the node arrays themselves
+   * (`e.project.nodes`, `e.cache.nodes`) and the inline project's own id, so a writer that swaps
+   * `.nodes` or re-keys `.id` on the SAME entry and project/cache object is seen too. What it cannot
+   * see is an array MUTATED in place (a push into `nodes`): the rule this file keeps is that a
+   * project's node array is replaced, never mutated.
+   */
+  projectIdsForNode(nodeId: string): readonly string[] {
+    const inputs = this.canvasInputs()
+    const memo = this.nodeProjectMemo
+    const fresh =
+      memo !== null && memo.inputs.length === inputs.length && memo.inputs.every((v, i) => v === inputs[i])
+    if (fresh) return memo.map.get(nodeId) ?? NO_PROJECTS
+    const map = new Map<string, string[]>()
+    for (const c of this.persistedCanvases()) {
+      for (const n of c.nodes) {
+        const held = map.get(n.id)
+        if (!held) map.set(n.id, [c.id])
+        else if (!held.includes(c.id)) held.push(c.id)
+      }
+    }
+    for (const held of map.values()) Object.freeze(held)
+    this.nodeProjectMemo = { inputs, map }
+    return map.get(nodeId) ?? NO_PROJECTS
+  }
+
+  /** Every input `persistedCanvases` reads, by identity: the index object, and per entry the entry,
+   *  its id, its inline project with that project's id and node array, its ssh cache with its node
+   *  array, its cwd and the text last written/read for that cwd's project file. A node array is
+   *  compared by reference: it must be replaced, never mutated in place (see `projectIdsForNode`). */
+  private canvasInputs(): unknown[] {
+    const out: unknown[] = [this.index]
+    for (const e of this.index?.entries ?? []) {
+      out.push(
+        e,
+        e.id,
+        e.project,
+        e.project?.id,
+        e.project?.nodes,
+        e.cache,
+        e.cache?.nodes,
+        e.cwd,
+        e.cwd ? this.lastWritten.get(projectFilePath(e.cwd)) : undefined
+      )
+    }
+    return out
   }
 
   /**

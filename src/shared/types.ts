@@ -172,6 +172,17 @@ export interface PtyCreateOptions {
    * "not connected" overlay and re-spawns when the master is back.
    */
   requireRemote?: boolean
+  /**
+   * Hosted-relay VIEWERS may watch a terminal but never start one: refuse a create that would spawn
+   * a NEW session (`unavailable: 'join-only'`), while a co-attach join or a warm tmux reattach still
+   * proceeds. Set only by the relay access policy (src/core/relay/access-policy.ts).
+   */
+  joinOnly?: boolean
+  /**
+   * `false`: this view never constrains the shared pty's size (a viewer's small window must not
+   * shrink everyone's terminal). It is still a subscriber and is told the authoritative size.
+   */
+  sizeVote?: false
 }
 
 /** A tmux pane's cursor, as tmux reports it: 0-based column/row within the pane, plus whether the
@@ -350,8 +361,12 @@ export interface PtyCreateResult {
    * managed account whose home is missing refuses rather than spawning against the system login
    * (§5 property 4). Remote managed Codex accounts refuse unknown/unsafe ids or unresolved/unsafe homes.
    * System SSH Codex may attach before remote home discovery. Nothing spawned on refusal.
+   *
+   * `'join-only'`: `PtyCreateOptions.joinOnly` was set (a hosted-relay viewer) and no running
+   * session could be confirmed to join or reattach to — either it is gone, or its existence could
+   * not be checked — so nothing was started. Not a lost connection.
    */
-  unavailable?: 'ssh' | 'codex-account'
+  unavailable?: 'ssh' | 'codex-account' | 'join-only'
 }
 
 /** Payload of `pty:recycled` — see IPC.ptyRecycled and `recycleAction` in the renderer. */
@@ -3593,10 +3608,73 @@ export interface RelayClientApi {
   send(connectionId: string, frame: string): void
   /** Listen for an inbound rpc frame (a JSON string) from the host. Returns an unsubscribe. */
   onFrame(connectionId: string, listener: (frame: string) => void): () => void
-  /** Fires when the connection's relay socket drops (host/relay gone). Returns unsubscribe. */
-  onClosed(connectionId: string, listener: () => void): () => void
+  /** Fires when the connection's relay socket drops (host/relay gone). `reason` is set only when
+   *  the host refused this device over the tunnel first (a hosted team: an owner declined, removed
+   *  it, or nobody answered in time). Returns unsubscribe. */
+  onClosed(connectionId: string, listener: (reason?: RelayClosedReason) => void): () => void
   /** Close a connection: end the relay socket and drop access to the host. */
   disconnect(connectionId: string): void
+}
+
+/** Why a host refused a relay client before closing it (the core relay's `TrustDeniedReason`). */
+export type RelayClosedReason = 'denied' | 'removed' | 'expired'
+
+/**
+ * The hosted teams this desktop has joined by `nodeterm://join` code. A join code is passed to
+ * `relayClient.connect` like a pairing offer; these are the bookmarks that connect leaves behind.
+ * Desktop-only: a browser cannot join a relay host, so the Server Edition answers an empty list.
+ */
+export interface RelayHostedApi {
+  /** The bookmarks, never their device tokens. `approved` = both humans approved this device on
+   *  that host, so a reconnect needs no SAS comparison on this side. */
+  bookmarks(): Promise<Array<{ hostId: string; label: string; approved: boolean; code: string }>>
+  /** Forget a bookmark (its device token and its approval). Rejects while a join for that team is
+   *  still minting or joining: that join would write the bookmark straight back. */
+  removeBookmark(hostId: string): Promise<void>
+}
+
+/** A hosted team member's role (the core team store's `TeamRole`). */
+export type HostedRole = 'owner' | 'editor' | 'commenter' | 'viewer'
+
+/** A device waiting for an owner to approve it (core hosted-service's `HostedPending`). */
+export interface HostedPending {
+  pendingId: string
+  /** The code both people compare out of band. */
+  sas: string
+  peerKeyB64: string
+  /** Host wall-clock ms the request arrived. */
+  since: number
+}
+
+/** Why a pending request stopped being pending. `approved` / `denied` may be ANOTHER owner's answer;
+ *  `replaced` = the same device asked again (its newer request arrives on its own). */
+export type HostedPendingClosedReason = 'approved' | 'denied' | 'expired' | 'replaced' | 'gone'
+
+/** What `relay:hosted:self` answers: this device's role, its label on the team, the host's label. */
+export interface HostedSelf {
+  role: HostedRole
+  label: string
+  hostLabel: string
+}
+
+/**
+ * The hosted team verbs of ONE relay session. Only a relay tab joined by a `nodeterm://join` code has
+ * it (`NodeTerminalApi.hosted`); a local session, a Server Edition browser and a Team Access relay
+ * tab (desktop to desktop) never do. The host answers every one of these itself and judges the
+ * caller's role: `self` is open to any member, the rest are owner-only.
+ */
+export interface HostedSessionApi {
+  self(): Promise<HostedSelf>
+  /** The requests still waiting (owner-only). Pulled once on open; the events below are deltas. */
+  pending(): Promise<HostedPending[]>
+  /** The team's join code, or null when the host has none to hand out. */
+  inviteCode(): Promise<string | null>
+  /** Admit a waiting device with `role`. False when it is gone or another owner answered first. */
+  approve(pendingId: string, role: HostedRole): Promise<boolean>
+  /** Refuse a waiting device. False when it is already gone. */
+  deny(pendingId: string): Promise<boolean>
+  onPeerPending(listener: (p: HostedPending) => void): () => void
+  onPendingClosed(listener: (p: { pendingId: string; reason: HostedPendingClosedReason }) => void): () => void
 }
 
 /** A paired device as exposed to the renderer — the bearer token is never included. */
@@ -3795,6 +3873,10 @@ export interface NodeTerminalApi {
   remoteHost: RemoteHostApi
   relayHost: RelayHostApi
   relayClient: RelayClientApi
+  relayHosted: RelayHostedApi
+  /** The hosted team verbs of THIS session's host — present only on a relay tab joined by a hosted
+   *  team's join code; absent everywhere else (local, Server Edition, Team Access relay tabs). */
+  hosted?: HostedSessionApi
   handoff: HandoffApi
   pairing: PairingApi
   presence: PresenceApi

@@ -31,6 +31,9 @@ import {
   type ClaudeCliCaps,
   type GrokApi,
   type GrokCliCaps,
+  type HostedPending,
+  type HostedSelf,
+  type HostedSessionApi,
   type ClaudeSkillShareResult,
   type ClaudeSessionCopyResult,
   type CodexApi,
@@ -762,6 +765,27 @@ export function buildPresenceApi(client: RpcClient): Pick<NodeTerminalApi, 'pres
     onPeer: (listener) => client.subscribe(IPC.presencePeer, listener as Listener)
   }
   return { presence }
+}
+
+/**
+ * Build the hosted-team verbs of ONE relay session (`NodeTerminalApi.hosted`). Only a relay tab
+ * joined by a `nodeterm://join` code spreads this (relay-api.ts, `{ hosted: true }`): a Server
+ * Edition browser never joins a relay host, and a Team Access relay tab (desktop to desktop) talks
+ * to a host that answers none of these, so both leave `hosted` absent. The host core answers every
+ * request itself (src/core/relay/hosted-service.ts) and judges the caller's role: `self` is open to
+ * any member, the rest are owner-only. `peer-pending` / `pending-closed` reach connected OWNERS only.
+ */
+export function buildHostedApi(client: RpcClient): Required<Pick<NodeTerminalApi, 'hosted'>> {
+  const hosted: HostedSessionApi = {
+    self: () => client.request(IPC.relayHostedSelf) as Promise<HostedSelf>,
+    pending: () => client.request(IPC.relayHostedPending) as Promise<HostedPending[]>,
+    inviteCode: () => client.request(IPC.relayHostedInviteCode) as Promise<string | null>,
+    approve: (pendingId, role) => client.request(IPC.relayHostedApprove, pendingId, role) as Promise<boolean>,
+    deny: (pendingId) => client.request(IPC.relayHostedDeny, pendingId) as Promise<boolean>,
+    onPeerPending: (listener) => client.subscribe(IPC.relayHostedPeerPending, listener as Listener),
+    onPendingClosed: (listener) => client.subscribe(IPC.relayHostedPendingClosed, listener as Listener)
+  }
+  return { hosted }
 }
 
 /**

@@ -497,6 +497,15 @@ import {
   reconnectRelayTab,
   type RelayTab,
 } from '../session/relay-tab'
+import { HostedApprovalDialog } from '../components/HostedApprovalDialog'
+import { emitLocalRelayClose, onLocalRelayClose } from '../bridge/relay-local-close'
+import { isJoinCode } from '@shared/relay-join-code'
+import { createHostedJoiner, type HostedJoiner, type HostedMountOutcome } from '../lib/hostedJoin'
+import { HOSTED_APPROVAL_WAIT_MS, isReadOnlyRole, stripIpcPrefix, viewerBannerText } from '../lib/hostedTeam'
+import { answerHostedRequest, type HostedAnswer } from '../lib/hostedOwner'
+import { headRequest, type QueuedRequest } from '../lib/hostedPendingQueue'
+import { useHostedPending } from '../state/hostedPending'
+import { hostedInfoFor, isHostedReadOnly, useHostedTeams } from '../state/hostedTeams'
 import { buildContextLinkNote, buildNotePushMessage, classifyLink, hiddenLinkIds, linkIdsCoveredByRopes, pairKey, planBridges, type LinkEndpoint } from '../lib/noteLink'
 import {
   deliveriesToRetire,
@@ -560,6 +569,7 @@ import type {
   ClaudeSessionCopyResult,
   CanvasNodeState,
   ClosedSessionEntry,
+  HostedSessionApi,
   NodeKind,
   PendingLaunch,
   Project,
@@ -739,6 +749,15 @@ const NOTICE_MAX_MS = 15000
  */
 function noticeDwellMs(text: string): number {
   return Math.min(NOTICE_MAX_MS, NOTICE_MS + text.length * 25)
+}
+
+/** React Flow props for a hosted team tab whose role is below Editor. */
+const HOSTED_READ_ONLY_FLOW = { nodesDraggable: false, nodesConnectable: false } as const
+
+/** Is this project an open tab (not closed, not deleted)? What a hosted reconnect is for (R40). */
+function isOpenTab(projectId: string): boolean {
+  const p = useProjects.getState().getProject(projectId)
+  return !!p && !p.closed
 }
 
 /** What the agent-control handler's `reply` accepts, for helpers that build one outside it. */
@@ -1349,6 +1368,9 @@ export function Canvas() {
   // Live relay tabs, keyed by relay connectionId, so a host/relay drop can dispose the right one
   // (a remote connection is now a project TAB, not a full-surface overlay — Stage 4 Task 6).
   const relayTabsRef = useRef<Map<string, RelayTab>>(new Map())
+  // The hosted-team joiner (created below, with the relay mount it drives): here so the tab disposal
+  // can stop a closed tab's reconnect.
+  const hostedJoinerRef = useRef<HostedJoiner | null>(null)
   // A relay tab is a live client of a remote core — closing/deleting its project must tear the
   // relay session down (held presence teardown + socket close), or the peer lingers in the host's
   // facepile and the socket leaks until quit. Runs on BOTH close and delete (unlike a local tmux
@@ -1361,11 +1383,16 @@ export function Canvas() {
   // a still-live tab, no-ops them for an already-offline one, and unbinds + drops the entry either
   // way. We also sweep any live relayTabsRef entry for the project so a dead connectionId can't linger.
   const disposeRelayTabForProject = useCallback((projectId: string) => {
+    // A hosted tab's team stops trying to come back into it, in any phase (R40). A no-op otherwise.
+    hostedJoinerRef.current?.tabClosed(projectId)
     for (const [connectionId, tab] of relayTabsRef.current) {
       if (tab.projectId === projectId) relayTabsRef.current.delete(connectionId)
     }
     const s = sessionForProject(projectId)
-    if (s.source === 'relay') disposeSession(s.id)
+    if (s.source === 'relay') {
+      disposeSession(s.id)
+      useHostedTeams.getState().forget(s.id) // a no-op for a Team Access relay tab
+    }
   }, [])
   const [remoteDialogOpen, setRemoteDialogOpen] = useState(false)
   // "Connect over SSH…" project-creation dialog (from the Welcome screen).
@@ -1388,6 +1415,22 @@ export function Canvas() {
   const sshPassphraseRequest = sshPassphraseQueue[0] ?? null
   // A client has finished the handshake and is awaiting this host's approval (carries the SAS).
   const [pendingPeer, setPendingPeerState] = useState<PendingPeerState | null>(null)
+  // Devices asking to join a hosted team this device OWNS (lib/hostedPendingQueue.ts, fed per owner
+  // tab by relay-tab's owner subscription): the oldest is on screen, the rest wait their turn. Empty
+  // for anyone who owns no hosted team, so nothing renders.
+  const hostedHead = useHostedPending((st) => headRequest(st.queue))
+  const hostedMore = useHostedPending((st) => Math.max(0, st.queue.items.length - 1))
+  const hostedPendingNotice = useHostedPending((st) => st.notice)
+  useEffect(() => {
+    if (hostedPendingNotice) setNotice({ kind: 'info', text: hostedPendingNotice.text })
+  }, [hostedPendingNotice])
+  const answerHosted = useCallback((item: QueuedRequest, answer: HostedAnswer) => {
+    // Off the screen at once; settled only once the host answers (R40), then say what did not land.
+    const q = useHostedPending.getState()
+    void answerHostedRequest(item, answer, { begin: q.beginAnswer, finish: q.finishAnswer }).then((line) => {
+      if (line) setNotice(line)
+    })
+  }, [])
   const [confirm, setConfirmState] = useState<ConfirmState | null>(null)
   // The closed-session entry whose transcript is on screen (issue #531), or null. A SNAPSHOT of
   // the ledger row, not a reference into the store: reading it needs only the pointer it carries.
@@ -1735,6 +1778,10 @@ export function Canvas() {
   // `usePresence(sel)` hook) is the PERF CONTRACT: a peer's 20 Hz cursor never re-renders Canvas.
   const activeSession = sessionForProject(activeProjectId || '')
   const activePresence = presenceForProject(activeProjectId || '')
+  // The active tab's hosted team, when it is one (undefined for every other tab). A role below Editor
+  // makes the canvas read-only in the UI; the host enforces the role either way.
+  const activeHosted = useHostedTeams((st) => st.bySession[activeSession.id])
+  const hostedReadOnly = isReadOnlyRole(activeHosted?.role)
   // "Has projects" = at least one OPEN (non-closed) tab. With only closed projects left, the
   // welcome screen shows (and lists them under "Recently closed" for reopening).
   const hasProjects = useProjects((s) => s.projects.some((p) => !p.closed))
@@ -2838,6 +2885,8 @@ export function Canvas() {
     (next: ProjectKanban) => {
       const id = useProjects.getState().activeProjectId
       if (!id) return
+      // A hosted Viewer/Commenter's board is the host's to change: a move here would only diverge.
+      if (isHostedReadOnly(sessionForProject(id).id)) return
       // The board BEFORE this change — read fresh at callback entry (a stale closed-over value
       // would misattribute the diff). Same lazy-default as the KanbanView render.
       const prev = useProjects.getState().getProject(id)?.kanban ?? seedBoard
@@ -3419,7 +3468,8 @@ export function Canvas() {
         activeSession.api.canvas.mutate(projectId, m)
         return true
       },
-      { src, shouldPublish: () => hasPeersRef.current }
+      // A hosted Viewer/Commenter publishes nothing: the host refuses canvas:mut for them (R5).
+      { src, shouldPublish: () => hasPeersRef.current && !isHostedReadOnly(activeSession.id) }
     )
     publisherRef.current = pub
     return () => {
@@ -4211,18 +4261,30 @@ export function Canvas() {
   // `reconnectProjectId` (Stage 4 Task 7): when reconnecting an offline tab, bind the fresh session
   // to the EXISTING project id (reuse the tab, clear its "unavailable" grey) instead of adding a new
   // one — so a socket drop → greyed reconnectable tab, never a duplicate.
+  // `hosted` (a hosted team's join code): build the tab with its hosted api, wait up to the host's
+  // own ten-minute pending window for an owner, switch to it only when asked, and hand a failure
+  // back to the caller (the hosted joiner decides whether to retry or say so) instead of alerting.
+  // Absent = a pairing offer, exactly as before. Resolves with the outcome only for `hosted`.
   const mountRemoteMirror = useCallback(
     (
       connectionId: string,
       label = 'Remote host',
       reconnectProjectId?: string,
-      staleSessionId?: string
-    ) => {
-      if (relayTabsRef.current.has(connectionId)) return
-      void openRelayTab(connectionId, label, {
+      staleSessionId?: string,
+      hosted?: { activate: boolean; onSasConfirmed?: () => void }
+    ): Promise<HostedMountOutcome | null> => {
+      if (relayTabsRef.current.has(connectionId)) return Promise.resolve(null)
+      return openRelayTab(connectionId, label, {
         relayClient: window.nodeTerminal.relayClient,
         addProject: reconnectProjectId
-          ? () => ({ id: reconnectProjectId }) // reconnect: reuse the existing tab, don't spawn one
+          ? () => {
+              // A hosted reconnect whose tab was closed or deleted while it connected must never
+              // bind to it (or un-grey it): refused here, the new session is disposed (R40).
+              if (hosted && !isOpenTab(reconnectProjectId)) {
+                throw new Error('The tab this reconnect was for is closed.')
+              }
+              return { id: reconnectProjectId } // reconnect: reuse the existing tab, don't spawn one
+            }
           : (name) => useProjects.getState().addProject(name),
         // First connect adopts the host's shared project (its nodes, fresh id). On reconnect the
         // existing tab (with its nodes) is reused via addProject above, so no adopt lever is passed.
@@ -4230,17 +4292,26 @@ export function Canvas() {
           ? undefined
           : (p) => useProjects.getState().adoptProject(p),
         setActiveProject: (id) => useProjects.getState().setActive(id),
+        ...(hosted ? { hosted: true, timeoutMs: HOSTED_APPROVAL_WAIT_MS, activate: hosted.activate } : {}),
       })
-        .then((tab) => {
+        .then((tab): HostedMountOutcome | null => {
           relayTabsRef.current.set(connectionId, tab)
           if (reconnectProjectId) {
             // The fresh session is now bound to the tab (openRelayTab rebound the SAME project id),
             // so it is finally safe to drop the stale offline session it replaced. Disposing only
             // AFTER a successful rebind is what keeps a FAILED reconnect reconnectable: if approval
             // never lands, the offline session stays bound and the tab stays greyed-clickable.
-            if (staleSessionId) disposeSession(staleSessionId)
+            if (staleSessionId) {
+              disposeSession(staleSessionId)
+              if (hosted) useHostedTeams.getState().forget(staleSessionId)
+            }
             // Back online: un-grey the reused tab.
             useProjects.getState().setProjectUnavailable(reconnectProjectId, false)
+          }
+          // A background (unrequested) reconnect did not switch tabs — but if its tab is the one on
+          // screen, the active session must follow the rebind (disposing the stale one reset it).
+          if (hosted && !hosted.activate && useProjects.getState().activeProjectId === tab.projectId) {
+            setActiveSession(tab.sessionId)
           }
           // A host/relay drop AFTER approval is INVOLUNTARY (not a user close): grey the tab to
           // "unavailable" and take its session offline (presence teardown runs once) — but KEEP the
@@ -4252,11 +4323,15 @@ export function Canvas() {
               setProjectUnavailable: (id, v) => useProjects.getState().setProjectUnavailable(id, v),
             })
           })
+          return hosted ? { projectId: tab.projectId } : null
         })
-        .catch((err) => {
+        .catch((err): HostedMountOutcome | null => {
           // A user who declined the SAS triggered this close themselves — don't cry error.
-          if (cancelledConnsRef.current.delete(connectionId)) return
+          const declined = cancelledConnsRef.current.delete(connectionId)
+          if (hosted) return { error: err, declined }
+          if (declined) return null
           window.alert(`Remote session did not open: ${(err as Error).message}`)
+          return null
         })
     },
     []
@@ -4268,21 +4343,90 @@ export function Canvas() {
   // relay-api.ts gotcha 2). Shared by the first connect and the Task 7 reconnect (which passes the
   // existing project id so the fresh session rebinds the SAME tab).
   const confirmAndMount = useCallback(
-    (connectionId: string, label: string, reconnectProjectId?: string, staleSessionId?: string) => {
+    (
+      connectionId: string,
+      label: string,
+      reconnectProjectId?: string,
+      staleSessionId?: string,
+      hosted?: { activate: boolean; onSasConfirmed?: () => void }
+    ): Promise<HostedMountOutcome | null> => {
       const unSas = window.nodeTerminal.relayClient.onSas(connectionId, (sas) => {
         unSas()
-        if (sas && window.confirm(`Verify this code matches the one shown on the host:\n\n${sas}`)) {
+        // A hosted team's owner is not at a host screen: they read the same code in their approval
+        // dialog, so the joiner reads it to them (a call, a chat).
+        const question = hosted
+          ? `Read this code to an owner of ${label || 'the team'} (call or chat) — they see the same code before approving this device:\n\n${sas}`
+          : `Verify this code matches the one shown on the host:\n\n${sas}`
+        if (sas && window.confirm(question)) {
           window.nodeTerminal.relayClient.confirm(connectionId)
+          // Nothing left for this user to do: the owner's wait starts now (the joiner says so).
+          hosted?.onSasConfirmed?.()
         } else {
           // Deliberate decline: mark it so the bootstrap's close-reject isn't surfaced as an error.
           cancelledConnsRef.current.add(connectionId)
           window.nodeTerminal.relayClient.disconnect(connectionId)
+          // Main never reports a close it was asked for; a hosted wait would otherwise run on.
+          if (hosted) emitLocalRelayClose(connectionId)
         }
       })
-      mountRemoteMirror(connectionId, label, reconnectProjectId, staleSessionId)
+      return mountRemoteMirror(connectionId, label, reconnectProjectId, staleSessionId, hosted)
     },
     [mountRemoteMirror]
   )
+
+  // Hosted teams (a Server Edition hosting over the relay, joined by a `nodeterm://join` code): the
+  // ONE owner of every (re)join — boot, a dropped tab, a click on a greyed tab, a pasted code — so a
+  // team never has two attempts or two connections at once (lib/hostedJoin.ts). Created once
+  // (`hostedJoinerRef` is declared beside relayTabsRef); it reconnects every approved bookmark at
+  // boot. The Server Edition's `relayHosted` answers no bookmarks, so there it does nothing.
+  useEffect(() => {
+    const joiner = createHostedJoiner({
+      connect: (code) => window.nodeTerminal.relayClient.connect(code),
+      // Main's close (a drop, a refusal) or our own (a closed tab, a declined SAS: main never reports
+      // those) — either way the team's connection is over.
+      onClosed: (id, listener) => {
+        const unMain = window.nodeTerminal.relayClient.onClosed(id, listener)
+        const unLocal = onLocalRelayClose(id, () => listener())
+        return () => {
+          unMain()
+          unLocal()
+        }
+      },
+      onApproved: (id, listener) => window.nodeTerminal.relayClient.onApproved(id, listener),
+      onSas: (id, listener) => window.nodeTerminal.relayClient.onSas(id, () => listener()),
+      // A connection the joiner gives up on (its tab closed mid-approval, a cancelled late connect):
+      // main never reports a close it was asked for, so it is announced here too.
+      disconnect: (id) => {
+        window.nodeTerminal.relayClient.disconnect(id)
+        emitLocalRelayClose(id)
+      },
+      bookmarks: async () => (await window.nodeTerminal.relayHosted?.bookmarks()) ?? [],
+      removeBookmark: (hostId) => window.nodeTerminal.relayHosted.removeBookmark(hostId),
+      mount: (connectionId, req, hooks) => {
+        const bound = req.reconnectProjectId ? sessionForProject(req.reconnectProjectId) : null
+        return confirmAndMount(
+          connectionId,
+          req.label || 'Hosted team',
+          req.reconnectProjectId,
+          bound?.source === 'relay' ? bound.id : undefined,
+          // Only a reconnect the user asked for takes the screen (or one with nothing on it).
+          { activate: req.manual || !useProjects.getState().activeProjectId, onSasConfirmed: hooks.sasConfirmed }
+        ).then((o): HostedMountOutcome => o ?? { error: new Error('That connection is already open.'), declined: true })
+      },
+      tabOpen: isOpenTab,
+      notify: (n) => setNotice(n),
+      clearNotice: (text) => setNotice((n) => (n?.text === text ? null : n)),
+      promptForCode: (label) => promptDialog({ message: `Paste an invite code for ${label || 'the team'}:` }),
+      setTimer: (fn, ms) => setTimeout(fn, ms),
+      clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>)
+    })
+    hostedJoinerRef.current = joiner
+    void joiner.bootReconnect()
+    return () => {
+      hostedJoinerRef.current = null
+      joiner.dispose()
+    }
+  }, [confirmAndMount])
 
   // Connect to a host from an already-collected pairing offer: open the relay socket, then run the
   // shared SAS-compare + mount flow. The SINGLE place `relayClient.connect` + `confirmAndMount` live,
@@ -4290,6 +4434,12 @@ export function Canvas() {
   // `nodeterm:open-remote-terminal` event) reuses it instead of re-implementing the SAS handshake.
   const connectOffer = useCallback(
     async (offer: string) => {
+      // A hosted team's join code goes through its team's one attempt owner (never a second
+      // connect for the same team). A pairing offer takes the path below, unchanged.
+      if (isJoinCode(offer) && hostedJoinerRef.current) {
+        hostedJoinerRef.current.joinWithCode(offer)
+        return
+      }
       try {
         const connectionId = await window.nodeTerminal.relayClient.connect(offer)
         confirmAndMount(connectionId, 'Remote host')
@@ -4315,11 +4465,22 @@ export function Canvas() {
   // path), so a cancelled/failed reconnect leaves the offline tab still bound and reconnectable.
   const reconnectRelay = useCallback(
     (projectId: string) => {
+      // A hosted team's tab reconnects from its bookmark: no code to paste.
+      if (hostedJoinerRef.current?.reconnectTab(projectId)) return
       const label = useProjects.getState().getProject(projectId)?.name ?? 'Remote host'
       const bound = sessionForProject(projectId)
       const staleSessionId = bound.source === 'relay' ? bound.id : undefined
       void reconnectRelayTab(projectId, {
-        promptForOffer: () => promptDialog({ message: "Paste the host's new pairing code:" }),
+        promptForOffer: async () => {
+          const offer = await promptDialog({ message: "Paste the host's new pairing code:" })
+          // A join code pasted here goes to the joiner, which refuses it: only a Team Access tab
+          // reaches this prompt, and a team must not be mounted into it (R46).
+          if (offer && isJoinCode(offer) && hostedJoinerRef.current) {
+            hostedJoinerRef.current.joinWithCode(offer, projectId)
+            return null
+          }
+          return offer
+        },
         connect: (offer) => window.nodeTerminal.relayClient.connect(offer),
         mount: (connectionId, projId) => confirmAndMount(connectionId, label, projId, staleSessionId),
         onError: (message) => window.alert(`Could not reconnect: ${message}`),
@@ -14968,6 +15129,68 @@ export function Canvas() {
     [transcriptHits, openTranscriptHit, now]
   )
 
+  // Hosted team palette entries: the owner's invite code, and one "forget" row per joined team. The
+  // bookmarks are read each time the palette opens — a join, a forget or a revocation may have
+  // changed them since. The Server Edition answers none (a browser tab never joins a relay host).
+  const [hostedBookmarks, setHostedBookmarks] = useState<Array<{ hostId: string; label: string }>>([])
+  useEffect(() => {
+    if (!paletteOpen) return
+    let live = true
+    Promise.resolve(window.nodeTerminal.relayHosted?.bookmarks())
+      .then((list) => {
+        if (live) setHostedBookmarks(Array.isArray(list) ? list : [])
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [paletteOpen])
+
+  const copyHostedInviteCode = useCallback((hosted: HostedSessionApi) => {
+    hosted.inviteCode().then(
+      (code) => {
+        if (!code) {
+          setNotice({ kind: 'error', text: 'This team has no invite code to hand out right now.' })
+          return
+        }
+        window.nodeTerminal.clipboard.writeText(code)
+        setNotice({
+          kind: 'info',
+          text: 'Team invite code copied. Anyone with it can ask to join; an owner still approves each device.'
+        })
+      },
+      (err: unknown) =>
+        setNotice({
+          kind: 'error',
+          text: `Could not read the invite code: ${stripIpcPrefix(err instanceof Error ? err.message : String(err))}`
+        })
+    )
+  }, [])
+
+  // Forgetting a team drops this device's bookmark (its saved join details) and stops its boot
+  // reconnect. It changes nothing on the team's host. Refused while that team is connecting: main
+  // would refuse it too (its join's own save would bring the bookmark back).
+  const forgetHostedTeam = useCallback((b: { hostId: string; label: string }) => {
+    const joiner = hostedJoinerRef.current
+    if (!joiner) return
+    const team = b.label || 'this team'
+    if (joiner.connecting(b.hostId)) {
+      setNotice({ kind: 'info', text: `Still connecting to ${team}; forget it once that finishes.` })
+      return
+    }
+    setConfirm({
+      message:
+        `Forget ${team}? This device stops reconnecting to it and forgets its saved join details. ` +
+        `Nothing changes on the team's host; to rejoin, paste its invite code again.`,
+      confirmLabel: 'Forget',
+      danger: true,
+      onConfirm: () => {
+        setConfirm(null)
+        void joiner.forget(b.hostId, b.label)
+      }
+    })
+  }, [setConfirm])
+
   const buildCommands = useCallback((): Command[] => {
     const disabled = useSettings.getState().settings.disabledAgents
     const activeProject = useProjects.getState().getProject(activeProjectId)
@@ -15076,6 +15299,31 @@ export function Canvas() {
         icon: <IconRemote />,
         run: () => void connectRemote()
       },
+      // Hosted team rows. Both are absent unless they apply, so every other palette is unchanged.
+      ...((): Command[] => {
+        const session = sessionForProject(useProjects.getState().activeProjectId ?? '')
+        const hosted = session.api.hosted
+        return hosted && hostedInfoFor(session.id)?.role === 'owner'
+          ? [
+              {
+                id: 'hosted-invite-code',
+                label: 'Copy team invite code',
+                hint: 'hosted team invite join share',
+                icon: <IconRemote />,
+                run: () => copyHostedInviteCode(hosted)
+              }
+            ]
+          : []
+      })(),
+      ...hostedBookmarks.map(
+        (b): Command => ({
+          id: `hosted-forget-${b.hostId}`,
+          label: `Forget hosted team: ${b.label || 'unnamed team'}`,
+          hint: 'hosted team bookmark leave remove',
+          icon: <IconRemote />,
+          run: () => forgetHostedTeam(b)
+        })
+      ),
       {
         id: 'focus-node',
         label: 'Focus node',
@@ -15231,7 +15479,10 @@ export function Canvas() {
     hasArrangeableNodes,
     saveCanvasLayout,
     restoreCanvasLayout,
-    toggleFocusMode
+    toggleFocusMode,
+    hostedBookmarks,
+    copyHostedInviteCode,
+    forgetHostedTeam
   ])
 
   // Build the palette's command list only when its inputs change — the inline `buildCommands()`
@@ -15282,6 +15533,14 @@ export function Canvas() {
             setSettingsOpen(true)
           }}
         />
+        {activeHosted && hostedReadOnly && (
+          <div className="announce-banner announce-banner--info" role="status">
+            <span className="announce-banner__dot" />
+            <div className="announce-banner__content">
+              <span className="announce-banner__body">{viewerBannerText(activeHosted.role, activeHosted.teamLabel)}</span>
+            </div>
+          </div>
+        )}
         {migrationNote && (
           <div className="announce-banner announce-banner--info">
             <span className="announce-banner__dot" />
@@ -15662,6 +15921,9 @@ export function Canvas() {
           panActivationKeyCode={null}
           snapToGrid={settings.snapToGrid}
           snapGrid={[settings.gridSize, settings.gridSize]}
+          // A hosted team's Viewer/Commenter cannot move or wire nodes (the host would refuse the
+          // edit anyway). Spread, so every other tab passes nothing new to React Flow.
+          {...(hostedReadOnly ? HOSTED_READ_ONLY_FLOW : {})}
         >
           {showCanvasDots(settings.canvasDots) && (
           <Background
@@ -16083,6 +16345,20 @@ export function Canvas() {
             confirm.onCancel?.()
             setConfirm(null)
           }}
+        />
+      )}
+
+      {hostedHead && (
+        // A remote device asked to join a hosted team this device owns. Enter never approves it
+        // and Deny holds the focus (components/HostedApprovalDialog). Keyed by request, so the next
+        // one in the queue opens fresh (role back to Viewer, the arm delay again).
+        <HostedApprovalDialog
+          key={hostedHead.pending.pendingId}
+          pending={hostedHead.pending}
+          teamLabel={hostedHead.teamLabel}
+          more={hostedMore}
+          onApprove={(_id, role) => answerHosted(hostedHead, { kind: 'approve', role })}
+          onDeny={() => answerHosted(hostedHead, { kind: 'deny' })}
         />
       )}
 

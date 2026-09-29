@@ -15,7 +15,8 @@
 //   - `onPeerPending` (the E2EE handshake completed, the SAS is known) → send `relay:host:peer-pending`
 //     to the renderer and WAIT. The peer is NOT a client yet: connectRelayHost registers no sink and
 //     joins no presence until its trust gate's `onOpen` fires (BOTH humans confirmed the same SAS).
-//   - the human's `relay:host:confirm` → `session.confirm()` (the ONLY local-confirm call site).
+//   - the human's `relay:host:confirm` → `session.confirm()` (this file's only local-confirm call
+//     site; src/core/relay/relay-trust.ts lists every one).
 //   - `onOpen` (mutual) → `relay:host:open`; `onClose` (socket gone) → `relay:host:closed`.
 // This module never dispatches peer traffic, never registers a sink, never touches a handler — it
 // cannot serve a peer early even by accident, because it holds none of the machinery that serves.
