@@ -17,6 +17,8 @@ const CORPUS = [
   'o/-r',
   '-o/r',
   'o-/r',
+  'a--b/r',
+  'a-b-c/r',
   'o/r;rm',
   'o/r`id`',
   'o/r$(id)',
@@ -30,6 +32,12 @@ const CORPUS = [
 ]
 
 describe('issue-reference grammar agrees with the board repository parser', () => {
+  it('both refuse an owner with consecutive hyphens (GitHub allows only single inner ones)', () => {
+    expect(parseGitHubRepository('a--b/r')).toBeNull()
+    expect(parseGitHubRepository('https://github.com/a--b/r.git')).toBeNull()
+    expect(parseGitHubRepository('a-b-c/r')).toBe('a-b-c/r')
+  })
+
   it.each(CORPUS)('%j', (slug) => {
     // `parseGitHubRepository` also accepts URLs and strips `.git`; compare only on the canonical
     // `owner/repo` form it returns, which is what the renderer is handed as the project repository.

@@ -3261,7 +3261,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the control handler (`issuePre`), before any open path snapshots the projects store**: the lookup
   is a host round trip (`git remote`, `gh auth`), and an await inside a path let a tab switch in that
   window write the node into the wrong project. A full `owner/repo#N` asks nobody. The same
-  placement puts resolution before every path's dry-run branch.
+  placement puts resolution before every path's dry-run branch. **But not before the gates**:
+  `resolveIssueFlagForCall` first runs the renderer's authorization belt — the same
+  `resolveProjectTarget` call and source-capability rule the paths apply — and answers a caller
+  they would refuse with the path's own refusal, asking nobody (the lookup otherwise ran for a
+  refused caller, and its refusal said whether that project had a GitHub board). Main's
+  `gateProjectTarget` runs before the renderer as ever; the Server Edition already resolved after
+  its identity, source and target gates, now pinned by a test.
   `--prompt` replaces the default task after the reference line; `--prompt-file` stays the whole brief. Both
   generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
   is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on
@@ -4794,7 +4800,14 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     while a board is up and carry neither `allowWhileTyping` nor `allowInTerminal` — that pair of
     refusals is what makes a bare key a command rather than a character stolen from the user, so a
     `board` row must never gain either flag, and no other scope may be given bare letters
-    (`normalizeBindingForCommand`). `board` shares the `global` conflict bucket with app/canvas.
+    (`normalizeBindingForCommand`).
+  - **A conflict bucket is a DISPATCH CONTEXT, not a scope** (`conflictBuckets`): `canvas` resolves
+    only with the board closed, `board` only with it open, `app` in both — so an app command sits in
+    `canvas-view` AND `board-view`, and a canvas command never conflicts with a board one. One
+    shared keyspace for all three reported a collision dispatch cannot produce, and the load-time
+    sanitizer then STRIPPED the user's legitimate override (a bare-arrow canvas command against the
+    board's arrow keys). A test walks every pair of view commands through the real
+    `resolveCommandForKeyEvent`, so a new scope or a dispatch change that forgets the buckets reds.
   - **Never read `settings.speech.shortcut`.** The dictation chord is `dictationBinding()` (the
     first effective `speech.dictation` binding); the legacy field is a **downgrade mirror only**,
     written by `setKeybindingOverride` so an older build still finds the user's chord.
@@ -4806,8 +4819,8 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     warning reads that list and cannot derive it — main is not importable from the renderer. Note
     what the pin cannot cover: a HARDCODED intercept (the `Digit0` branch) has no command id, so it
     swallows its chord app-wide with the recorder reporting no conflict.
-  - **Dictation has its own conflict bucket** (`conflictBucket` — `speech.dictation` is never in
-    `global`), because it never competes at dispatch: the resolver skips it and its own keyed
+  - **Dictation has its own conflict bucket** (`conflictBuckets` — `speech.dictation` is never in
+    a view bucket), because it never competes at dispatch: the resolver skips it and its own keyed
     listener claims the chord FIRST **in plain app focus or the ⌘M composer box** (`isChatComposerTarget`),
     which is precedence, not ambiguity.
     Overlap policy is deliberately asymmetric — the LOAD path PERMITS a shared chord (legacy
@@ -5360,6 +5373,10 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   `snapshot.etags.heartbeat` (a restart does not pay a full read), and a 304 NEVER skips a full
   reconciliation (a deletion or transfer does not move the top item) or an incomplete repository.
   It covers pull requests by construction: same endpoint, same `updated_at` the scan filters on.
+  **Only a completed scan advances the incremental cursor** (`lastSuccessfulRefreshAt`, the next
+  scan's `since`): a board write folds its one confirmed issue into the snapshot and leaves the
+  cursor alone. It used to set it to the write's time, so a third party's change landing between the
+  last scan and our write fell outside the next `since` window until the daily full pass.
   **A 304 still prompts the board to re-read** (an empty delta, served from the local cache, no
   GitHub cost) exactly as every successful refresh always did: a page is not only issues — read
   only, the mapping approval and the completion column are derived by the host at query time, and
@@ -5491,10 +5508,16 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   `mergedSeenAt >= armedAt` → no move (arming never sweeps old merges; `armedAt` is taken from the
   HOST's clock via the pull board's `now`, because `mergedSeenAt` is stamped there and a Server
   Edition browser's clock can be off). Each planned move must then win the host's one-time CLAIM
-  (`githubIssues:claim-pull-auto-move`, persisted in the same memory, keyed by project + card + PR
-  set) — the first ask across every window wins, and a card dragged back is not moved again for the
-  same merges. **The claim is refused unless THIS card was noted waiting on one of those PRs while it
-  was open** (`githubIssues:note-pull-waits`; the host records a note only for a PR it holds as open
+  (`githubIssues:claim-pull-auto-move`, persisted in the same memory) — the first ask across every
+  window wins, and a card dragged back is not moved again for the same merges. **Claims are
+  recorded PER PR (project + card + PR), never per PR set**: the linked set changes on its own (a
+  merged PR ages off the pull board, another PR on the branch joins), and a set-keyed claim read
+  every such change as a new transition and moved a dragged-back card again. A claim is granted only
+  for a PR that has not moved this card yet; set keys an earlier build wrote are read as a claim on
+  each PR they list. The board asks each (card, PR set) ONCE (`usePullAutoMove`'s `asked`, cleared
+  only by a failed call) and re-plans only when a field the planner reads changes — it used to send
+  a claim per canvas change for a dragged-back card. **The claim is refused unless THIS card was
+  noted waiting on one of those PRs while it was open** (`githubIssues:note-pull-waits`; the host records a note only for a PR it holds as open
   itself): `mergedSeenAt` is a fact about the PR, and without the per-card note a card that first
   appeared after the merge — a follow-up terminal in the same group, a teammate's card by git pull,
   an issue-bound session started later — would win a fresh claim and jump to Done. It is then
@@ -5808,7 +5831,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     the board's first — never on routine moves, and not for needs-you (the existing agent-status
     alert already covers every agent node). Same consent, background-only rule and per-node
     cooldown as the turn-end alert, and a handoff ping arms a one-shot FOLD so the Stop hook that
-    follows seconds later is not a second notification for the same moment. v1 is agent-driven
+    follows seconds later is not a second notification for the same moment. The fold lasts only
+    while the user is away: a window focus in between drops it (`installHandoffFocusReset`), or the
+    next chime — for a turn the user sat and watched — was swallowed. v1 is agent-driven
     moves only: a teammate's move arriving by git, or the phone's relay move, pings nobody.
   **Phone** (nodeterm-ios): must at least not break on `category`, `rank` or `views` (extra JSON
   keys its board decoder ignores). The relay-served move now lands at the top with a rank, while

@@ -33,7 +33,13 @@ export function usePullAutoMove(input: {
     () => relay ? undefined : sanitizeKanbanPullAutoMove(raw).projects[input.projectId],
     [raw, input.projectId, relay]
   )
-  const { api, projectId, cards, board, pullBoard, onAutoMove } = input
+  const { api, projectId, board, pullBoard, onAutoMove } = input
+  // `cards` is re-derived from the canvas nodes on every canvas change, a fresh array of fresh
+  // objects even when nothing the planner reads changed. Keyed on what it reads, the plan re-runs
+  // only when that does.
+  const cardsSig = autoMoveCardsSig(input.cards)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const cards = useMemo(() => input.cards, [cardsSig])
   // The BOARD's lifetime, not one effect run: the pull board is re-read every minute, and a re-render
   // landing between a won claim and its answer must not throw the move away — the claim is spent
   // either way, so dropping it would lose the move for good.
@@ -47,19 +53,29 @@ export function usePullAutoMove(input: {
   // Wait notes already sent from this board, so a re-render does not re-send them (the host dedupes
   // too; this only saves the calls).
   const noted = useRef(new Set<string>())
+  // Claims already asked from this board, keyed by (project, card, PR set). The host answers each
+  // exactly once for good — a won claim is spent, a refused one (already moved, never seen waiting)
+  // stays refused — so a dragged-back card asks once, not on every pull-board read or board edit, and
+  // a claim still in flight is not sent twice. Only a call that FAILED is forgotten and asked again.
+  const asked = useRef(new Set<string>())
   useEffect(() => {
     if (!entry || !onAutoMove) return
     const plan = planPullAutoMoves({ cards, board, pullBoard, entry })
     for (const wait of plan.waits) {
-      const fresh = wait.pulls.filter((pull) => !noted.current.has(`${projectId}\0${wait.cardId}\0${pull}`))
+      // Keys carry card ids, which come from a git-shared file: JSON, never a separator join.
+      const waitKey = (pull: number): string => JSON.stringify([projectId, wait.cardId, pull])
+      const fresh = wait.pulls.filter((pull) => !noted.current.has(waitKey(pull)))
       if (!fresh.length) continue
-      for (const pull of fresh) noted.current.add(`${projectId}\0${wait.cardId}\0${pull}`)
+      for (const pull of fresh) noted.current.add(waitKey(pull))
       void api.notePullWaits({ projectId, cardId: wait.cardId, pulls: fresh }).catch(() => {
         // Not recorded: let a later pass try again.
-        for (const pull of fresh) noted.current.delete(`${projectId}\0${wait.cardId}\0${pull}`)
+        for (const pull of fresh) noted.current.delete(waitKey(pull))
       })
     }
     for (const move of plan.moves) {
+      const claimKey = JSON.stringify([projectId, move.cardId, move.pulls])
+      if (asked.current.has(claimKey)) continue
+      asked.current.add(claimKey)
       void api.claimPullAutoMove({ projectId, cardId: move.cardId, pulls: move.pulls })
         .then((claimed) => {
           // A claim that lands after this board closed is spent, not applied: the card stays where it
@@ -69,9 +85,20 @@ export function usePullAutoMove(input: {
             latest.current?.(move.cardId, move.fromColumnId, entry.columnId, autoMoveNote(move.pulls))
           }
         })
-        .catch(() => undefined)
+        .catch(() => { asked.current.delete(claimKey) })
     }
   }, [api, entry, cards, board, pullBoard, projectId, onAutoMove])
+}
+
+/** What the planner reads off each card, as one primitive. A card id is written through
+ *  `JSON.stringify`, so no id can forge another card's fields. */
+export function autoMoveCardsSig(
+  cards: Array<{ id: string; kind: string; worktreeBranch?: string; issueRef?: IssueRef }>
+): string {
+  return JSON.stringify(cards.map((card) => [
+    card.id, card.kind, card.worktreeBranch ?? null,
+    card.issueRef ? [card.issueRef.owner, card.issueRef.repo, card.issueRef.number] : null
+  ]))
 }
 
 /** While some PR is undecided, ask the host (only while the page is visible) whether a chase read
