@@ -3892,6 +3892,15 @@ export function Canvas() {
         }
         return true
       })
+      // Nothing left for the managed state: return WITHOUT calling onNodesChange. Its
+      // applyNodeChanges returns a NEW array even for an empty change list, and a new `nodes`
+      // rebuilds every ephemeral card (useMemo keyed on `nodes`) as a fresh object without
+      // `measured` — so React Flow resets its handleBounds, re-observes it, and its ResizeObserver
+      // (force: true) emits another `dimensions` change for that card, filtered out right here.
+      // MEASURED with one subagent card on a 46-node canvas: that loop re-rendered the whole
+      // Canvas every frame (60 unobserve/observe per second, ~35% of the renderer's main thread,
+      // ~110% renderer+GPU CPU with nothing happening). canvas-empty-changes.test.ts pins it.
+      if (managed.length === 0) return
       // Re-snap what the resizer proposes before it is applied, so a resize tracks the grid
       // during the drag instead of correcting itself on release (see lib/resizeSnap.ts).
       const snapSettings = useSettings.getState().settings
