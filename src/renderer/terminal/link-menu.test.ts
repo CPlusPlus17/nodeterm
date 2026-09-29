@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { MenuItem } from '../components/ContextMenu'
+import type { PathResolution } from './file-links'
 import {
   linkMenuItems,
   relativeInside,
@@ -206,19 +207,37 @@ describe('relativeInside', () => {
 })
 
 describe('resolveLinkTarget', () => {
+  const find = async (token: string): Promise<PathResolution> =>
+    token === 'd'
+      ? { found: true, abs: '/p/d', dir: true }
+      : token === 'f'
+        ? { found: true, abs: '/p/f', dir: false }
+        : { found: false, tried: ['/p/' + token] }
+
   it('passes a URL through and resolves a path by existence', async () => {
-    const lookup = async (abs: string) =>
-      abs === '/d' ? { exists: true, dir: true } : abs === '/f' ? { exists: true, dir: false } : { exists: false, dir: false }
-    expect(await resolveLinkTarget({ kind: 'url', url: 'https://x.io' }, lookup)).toEqual({ kind: 'url', url: 'https://x.io' })
-    expect(await resolveLinkTarget({ kind: 'path', abs: '/d' }, lookup)).toEqual({ kind: 'file', abs: '/d', dir: true })
-    expect(await resolveLinkTarget({ kind: 'path', abs: '/f' }, lookup)).toEqual({ kind: 'file', abs: '/f', dir: false })
-    expect(await resolveLinkTarget({ kind: 'path', abs: '/nope' }, lookup)).toEqual({ kind: 'missing', abs: '/nope' })
+    expect(await resolveLinkTarget({ kind: 'url', url: 'https://x.io' }, find)).toEqual({ kind: 'url', url: 'https://x.io' })
+    expect(await resolveLinkTarget({ kind: 'path', token: 'd', abs: '/p/d' }, find)).toEqual({ kind: 'file', abs: '/p/d', dir: true })
+    expect(await resolveLinkTarget({ kind: 'path', token: 'f', abs: '/p/f' }, find)).toEqual({ kind: 'file', abs: '/p/f', dir: false })
+    expect(await resolveLinkTarget({ kind: 'path', token: 'nope', abs: '/p/nope' }, find)).toEqual({ kind: 'missing', abs: '/p/nope' })
+  })
+
+  it('takes the resolver\'s answer, which may come from the live cwd rather than hit.abs', async () => {
+    const live = async (): Promise<PathResolution> => ({ found: true, abs: '/live/var/x.sql', dir: false })
+    expect(await resolveLinkTarget({ kind: 'path', token: 'var/x.sql', abs: '/launch/var/x.sql' }, live)).toEqual({
+      kind: 'file',
+      abs: '/live/var/x.sql',
+      dir: false
+    })
+  })
+
+  it('falls back to the printed token when nothing anchored it', async () => {
+    expect(await resolveLinkTarget({ kind: 'path', token: 'var/x.sql', abs: null }, find)).toEqual({ kind: 'missing', abs: 'var/x.sql' })
   })
 
   it('reads a failed lookup (dead ControlMaster) as missing, never a throw', async () => {
-    const lookup = async (): Promise<{ exists: boolean; dir: boolean }> => {
+    const boom = async (): Promise<PathResolution> => {
       throw new Error('ssh down')
     }
-    expect(await resolveLinkTarget({ kind: 'path', abs: '/x' }, lookup)).toEqual({ kind: 'missing', abs: '/x' })
+    expect(await resolveLinkTarget({ kind: 'path', token: 'x', abs: '/x' }, boom)).toEqual({ kind: 'missing', abs: '/x' })
   })
 })

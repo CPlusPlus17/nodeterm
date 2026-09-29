@@ -558,6 +558,15 @@ export function remotePaneCommandArgs(conn: SshConnection, controlPath: string, 
   )
 }
 
+/** The remote counterpart of `PtyManager.paneCwd`'s local `display-message` path. */
+export function remotePaneCwdArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {
+  return childArgs(
+    conn,
+    controlPath,
+    tmuxCmd(`tmux -L ${RMT_TMUX_SOCKET} display-message -p -t ${sessionId} '#{pane_current_path}'`)
+  )
+}
+
 /** Ask remote tmux for the shell PID and current command as one parseable, bounded record. */
 export function remotePaneProcessArgs(
   conn: SshConnection,

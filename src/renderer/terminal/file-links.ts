@@ -284,8 +284,96 @@ function resolveWindowsFileToken(path: string, cwd: string | undefined): string 
   return `${drive}/${out.join('/')}`
 }
 
-export interface FileLinkDeps {
+/** The two cwds a relative path can be anchored on, in order. `getCwd` is the node's LAUNCH cwd
+ *  (persisted, synchronous); `getLiveCwd` is the pane's CURRENT directory (tmux
+ *  `#{pane_current_path}`, async, may be unknown). An agent printing `var/x/y.sql` prints it relative
+ *  to wherever IT runs, which is not always where the node was opened — the launch cwd alone left
+ *  every such path dead with no hint why. */
+export interface CwdSources {
   getCwd(): string | undefined
+  getLiveCwd?(): Promise<string | undefined>
+}
+
+/** Where a path token resolved: an existing entry, or every absolute path that was tried. */
+export type PathResolution =
+  | { found: true; abs: string; dir: boolean }
+  | { found: false; tried: string[] }
+
+/**
+ * Resolve a path token to an EXISTING file or directory: absolute (and `~/`) tokens are tried as
+ * they are; a relative token against the launch cwd first, then the pane's live cwd. The launch cwd
+ * wins when both hold a match, so a link never changes meaning just because the pane moved. The
+ * live cwd is only asked when the first candidate misses — it is a tmux round trip, and the common
+ * case never pays it. A lookup that throws counts as a miss.
+ */
+export async function findExistingPath(
+  token: string,
+  convention: PathConventionOpts,
+  deps: CwdSources & { lookup(abs: string): Promise<{ exists: boolean; dir: boolean }> }
+): Promise<PathResolution> {
+  const tried: string[] = []
+  const attempt = async (cwd: string | undefined): Promise<PathResolution | null> => {
+    const abs = resolveFileToken(token, cwd, convention)
+    if (!abs || tried.includes(abs)) return null
+    tried.push(abs)
+    const f = await deps.lookup(abs).catch(() => ({ exists: false, dir: false }))
+    return f.exists ? { found: true, abs, dir: f.dir } : null
+  }
+  const first = await attempt(deps.getCwd())
+  if (first) return first
+  if (deps.getLiveCwd && !isAnchoredToken(token, convention)) {
+    const live = await deps.getLiveCwd().catch(() => undefined)
+    if (live) {
+      const second = await attempt(live)
+      if (second) return second
+    }
+  }
+  return { found: false, tried }
+}
+
+/** Does the token carry its own root (so no cwd can change where it points)? */
+function isAnchoredToken(token: string, convention: PathConventionOpts): boolean {
+  if (convention.windows) return WIN_ABSOLUTE_RE.test(token)
+  return token.startsWith('/') || token.startsWith('~/')
+}
+
+/**
+ * Memoize an async cwd read for `ttlMs`, coalescing concurrent calls. xterm asks every link
+ * provider on each hovered row, and a live-cwd read is a tmux (or ssh) exec — uncached, a mouse
+ * sweep over agent output would fire one per row. A failure reads as unknown and is not cached.
+ */
+export function cachedCwd(
+  read: () => Promise<string | null>,
+  ttlMs = 3000,
+  now: () => number = Date.now
+): () => Promise<string | undefined> {
+  let hit: { at: number; value: string } | null = null
+  let inFlight: Promise<string | undefined> | null = null
+  return () => {
+    if (hit && now() - hit.at < ttlMs) return Promise.resolve(hit.value)
+    if (inFlight) return inFlight
+    inFlight = read()
+      .then((v) => {
+        hit = v ? { at: now(), value: v } : null
+        return v || undefined
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        inFlight = null
+      })
+    return inFlight
+  }
+}
+
+/** The toast text for a Cmd/Ctrl+click on a path that exists nowhere we looked. */
+export function missingFileMessage(token: string, tried: string[]): string {
+  if (!tried.length) return `File not found: ${token} (no working directory to resolve it against)`
+  return tried.length === 1
+    ? `File not found: ${tried[0]}`
+    : `File not found: ${token} — looked in ${tried.join(' and ')}`
+}
+
+export interface FileLinkDeps extends CwdSources {
   /** Static compatibility option for direct unit consumers. Live terminals use `convention`. */
   windows?: boolean
   /** Dynamic host decision. `null` means the owning core's dialect was not observed, so file
@@ -399,10 +487,9 @@ export function createFileLinkProvider(term: Terminal, deps: FileLinkDeps): ILin
       const cols = term.cols
       void Promise.all(
         tokens.map(async (t): Promise<ILink | null> => {
-          const abs = resolveFileToken(t.path, deps.getCwd(), convention)
-          if (!abs) return null
-          const found = await deps.lookup(abs)
-          if (!found.exists) return null
+          const found = await findExistingPath(t.path, convention, deps)
+          if (!found.found) return null
+          const { abs } = found
           return {
             text: t.text,
             range: tokenRange(logical.startRow, cols, t.startIndex, t.text.length),
@@ -508,11 +595,14 @@ function bufferPosFromEvent(term: Terminal, ev: MouseEvent): { col: number; row:
 
 /** What sits under a buffer cell: a web URL (typed or OSC 8), or a path resolved to absolute.
  *  A path is NOT yet known to exist — that is the async `lookup`'s answer, taken by the caller. */
-export type LinkHit = { kind: 'url'; url: string } | { kind: 'path'; abs: string }
+export type LinkHit =
+  | { kind: 'url'; url: string }
+  /** `token` is the path as printed; `abs` its resolution against the LAUNCH cwd (null when that
+   *  cannot anchor it — a relative token on a cwd-less node — which the live cwd may still). */
+  | { kind: 'path'; token: string; abs: string | null }
 
 /** What `linkAtCell` needs to turn text into a path: the cwd and dialect the file providers use. */
-export interface LinkHitDeps {
-  getCwd(): string | undefined
+export interface LinkHitDeps extends CwdSources {
   /** See FileLinkDeps.windows. */
   windows?: boolean
   /** See FileLinkDeps.convention. */
@@ -550,7 +640,8 @@ export function linkAtCell(
   for (const t of matchFileTokens(logical.text, convention)) {
     if (inRange(t.startIndex, t.text.length)) {
       const abs = resolveFileToken(t.path, deps.getCwd(), convention)
-      return abs ? { kind: 'path', abs } : null
+      // Unanchorable against the launch cwd is still a hit when a live cwd can be asked.
+      return abs || deps.getLiveCwd ? { kind: 'path', token: t.path, abs } : null
     }
   }
   return null
@@ -560,6 +651,10 @@ export interface LinkClickDeps extends LinkHitDeps {
   lookup(abs: string): Promise<{ exists: boolean; dir: boolean }>
   activateFile(abs: string, dir: boolean): void
   openUrl(url: string): void
+  /** A Cmd/Ctrl+click on a path that exists under neither cwd. The click is already swallowed (it
+   *  must be, before the async lookup), so without this it would do nothing at all — the host says
+   *  where it looked instead. `tried` may be empty (nothing could anchor the token). */
+  onMissing?(token: string, tried: string[]): void
 }
 
 /**
@@ -597,8 +692,10 @@ export function installLinkClickFallback(
       deps.openUrl(hit.url)
       return
     }
-    void deps.lookup(hit.abs).then((f) => {
-      if (f.exists) deps.activateFile(hit.abs, f.dir)
+    const convention = (deps.convention ? deps.convention() : { windows: deps.windows }) ?? {}
+    void findExistingPath(hit.token, convention, deps).then((r) => {
+      if (r.found) deps.activateFile(r.abs, r.dir)
+      else deps.onMissing?.(hit.token, r.tried)
     })
   }
   host.addEventListener('mouseup', onMouseUp, { capture: true })

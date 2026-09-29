@@ -15,7 +15,7 @@ import type { MenuItem } from '../components/ContextMenu'
 import type { DownloadRoute } from '../lib/download'
 import { downloadMenuEntries } from '../lib/filesNode'
 import { tidySeparators } from '../lib/tidySeparators'
-import type { LinkHit } from './file-links'
+import type { LinkHit, PathResolution } from './file-links'
 
 /** What a right-click resolved to, once a path's existence is known. */
 export type LinkMenuTarget =
@@ -72,14 +72,15 @@ export function relativeInside(root: string | undefined, abs: string): string | 
  *  the menu still opens, and the one thing it can honestly offer is the text. */
 export async function resolveLinkTarget(
   hit: LinkHit,
-  lookup: (abs: string) => Promise<{ exists: boolean; dir: boolean }>
+  find: (token: string) => Promise<PathResolution>
 ): Promise<LinkMenuTarget> {
   if (hit.kind === 'url') return { kind: 'url', url: hit.url }
+  const missing: LinkMenuTarget = { kind: 'missing', abs: hit.abs ?? hit.token }
   try {
-    const f = await lookup(hit.abs)
-    return f.exists ? { kind: 'file', abs: hit.abs, dir: f.dir } : { kind: 'missing', abs: hit.abs }
+    const r = await find(hit.token)
+    return r.found ? { kind: 'file', abs: r.abs, dir: r.dir } : missing
   } catch {
-    return { kind: 'missing', abs: hit.abs }
+    return missing
   }
 }
 

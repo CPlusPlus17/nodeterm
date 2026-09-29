@@ -34,6 +34,7 @@ import {
   remotePasteDelivery,
   remoteCapturePaneArgs,
   remotePaneCommandArgs,
+  remotePaneCwdArgs,
   remoteSessionAgeArgs,
   parseSessionAge,
   remotePaneOwnerCombinedArgs,
@@ -1846,6 +1847,7 @@ export class PtyManager {
     )
     platform().handle(IPC.ptyTmuxStatus, () => this.tmuxStatus())
     platform().handle(IPC.ptyPaneCommand, (persistKey: string) => this.paneCommand(persistKey))
+    platform().handle(IPC.ptyPaneCwd, (persistKey: string) => this.paneCwd(persistKey))
     // Registered HERE, beside its name-only sibling, rather than in either shell: core owns both
     // reads, so the desktop and the Server Edition are served by one line and cannot drift.
     platform().handle(IPC.ptyPaneOwner, (persistKey: string) => this.paneOwner(persistKey))
@@ -4614,6 +4616,50 @@ export class PtyManager {
         '-t',
         target,
         '#{pane_current_command}'
+      ])
+      return stdout.trim() || null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * The live working directory of a node's pane (`#{pane_current_path}` — the cwd of the pane's
+   * foreground process, e.g. the agent CLI), by persistKey. File links resolve a relative path
+   * against the node's LAUNCH cwd first; this is the second candidate, for output printed relative
+   * to wherever the pane has since moved (`cd`, or an agent started from another directory).
+   *
+   * Same dispatch and failure contract as `paneCommand`: the SSH branch asks the REMOTE tmux over
+   * the project's ControlMaster, and every unknown — no live session, no tmux, the session-host
+   * backend (it tracks no cwd), a failed query — is null, never a throw.
+   */
+  async paneCwd(persistKey: string): Promise<string | null> {
+    const target = sessionName(persistKey)
+    const live = this.liveSessionForPersistKey(persistKey)
+    const sshRemote = live?.sshRemote
+    if (sshRemote) {
+      const ssh = findSsh()
+      if (!ssh) return null
+      try {
+        const { stdout } = await runAsync(
+          ssh,
+          remotePaneCwdArgs(sshRemote.conn, sshRemote.controlPath, target)
+        )
+        return stdout.trim() || null
+      } catch {
+        return null
+      }
+    }
+    if (live?.sessionHost || !this.tmuxPath) return null
+    try {
+      const { stdout } = await runAsync(this.tmuxPath, [
+        '-L',
+        TMUX_SOCKET,
+        'display-message',
+        '-p',
+        '-t',
+        target,
+        '#{pane_current_path}'
       ])
       return stdout.trim() || null
     } catch {

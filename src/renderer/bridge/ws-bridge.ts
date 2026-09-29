@@ -276,6 +276,10 @@ export function buildRealApi(
     // shell yet" and gives up on its own deadline.
     paneCommand: (persistKey) =>
       client.request(IPC.ptyPaneCommand, persistKey).catch(() => null) as Promise<string | null>,
+    // Real: core registers it. Unknown (null) on failure — a relay host refuses it to a non-editor
+    // (EDITOR_ONLY), which reads as "no live cwd" and file links keep the node's launch cwd.
+    paneCwd: (persistKey) =>
+      client.request(IPC.ptyPaneCwd, persistKey).catch(() => null) as Promise<string | null>,
     // Documented degrade (#925): the Server Edition starts nodes through its HeadlessNodeFactory,
     // never through the browser renderer, so there is nothing for this to call.
     launchHeadless: () => unsupported('pty.launchHeadless'),
