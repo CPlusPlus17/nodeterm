@@ -481,3 +481,94 @@ describe('an edge to a refused node', () => {
     expect(p.refusedNodeIds().size).toBe(0)
   })
 })
+
+// An adopt (every peer op, every project load) replaces the baseline with the scene on screen —
+// which already holds a refused node and the edges held for it. Taken as-is, that baseline claims
+// the peer has them: once the node finally casts, the held edge no longer differs from the baseline,
+// so it is never cast, and the peer's next save drops it. An adopt therefore keeps owed items owed.
+describe('an adopt does not swallow what is still owed', () => {
+  const link = (id: string, source: string, target: string): BridgeLink => ({ id, source, target })
+  const scene = (nodes: CanvasNodeState[], bridges: BridgeLink[] = [], ropes: BridgeLink[] = []) => ({
+    nodes,
+    bridges,
+    ropes
+  })
+  const label = (m: CanvasMutation): string =>
+    `${m.op}:${mutationNodeId(m) ?? (m.op === 'edge-remove' ? m.id : m.op === 'edge-upsert' ? m.edge.id : '')}`
+  /** Refuses node UPSERTS for the ids in `bad` — what the size guard does to an oversized sticky
+   *  (a remove is never too large). */
+  function refusing(bad: Set<string>) {
+    const sent: CanvasMutation[] = []
+    const send = (m: CanvasMutation): boolean => {
+      if (m.op === 'upsert' && bad.has(m.node.id)) return false
+      sent.push(m)
+      return true
+    }
+    return { sent, send }
+  }
+
+  it('a held edge is cast after its endpoint once the endpoint fits, even with an adopt in between', () => {
+    const bad = new Set(['big'])
+    const c = refusing(bad)
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('big'), node('t')], [link('b1', 'big', 't')])) // big refused, b1 held
+    p.adopt(scene([node('big'), node('t', 5)], [link('b1', 'big', 't')])) // a peer op landed
+    bad.clear() // the user trims the sticky
+    p.publish(scene([node('big', 1), node('t', 5)], [link('b1', 'big', 't')]))
+    expect(c.sent.map(label)).toEqual(['upsert:t', 'upsert:big', 'edge-upsert:b1'])
+    expect(p.refusedNodeIds().size).toBe(0)
+  })
+
+  it('after the trim the edge is cast exactly once, and a later publish casts nothing', () => {
+    const bad = new Set(['big'])
+    const c = refusing(bad)
+    const p = createCanvasPublisher(c.send)
+    const now = () => scene([node('big', 1), node('t', 5)], [link('b1', 'big', 't')])
+    p.publish(scene([node('big'), node('t')], [link('b1', 'big', 't')]))
+    p.adopt(scene([node('big'), node('t', 5)], [link('b1', 'big', 't')]))
+    bad.clear()
+    p.publish(now())
+    const cast = c.sent.length
+    p.publish(now())
+    p.publish(now())
+    expect(c.sent.filter((m) => m.op === 'edge-upsert')).toHaveLength(1)
+    expect(c.sent.slice(cast)).toEqual([])
+  })
+
+  it('holds for a lazy adopt thunk too (what Canvas actually passes)', () => {
+    const bad = new Set(['big'])
+    const c = refusing(bad)
+    const p = createCanvasPublisher(c.send)
+    p.publish(() => scene([node('big'), node('t')], [link('b1', 'big', 't')]))
+    p.adopt(() => scene([node('big'), node('t', 5)], [link('b1', 'big', 't')]))
+    bad.clear()
+    p.publish(() => scene([node('big', 1), node('t', 5)], [link('b1', 'big', 't')]))
+    expect(c.sent.map(label)).toEqual(['upsert:t', 'upsert:big', 'edge-upsert:b1'])
+  })
+
+  // Why the adopted baseline keeps the owed items' PREVIOUS entries instead of dropping them: the
+  // peer may hold an older version of the refused node (and its edge). Dropped from the baseline, a
+  // later local delete would diff to nothing — and the peer would keep both forever.
+  it('a node the peer holds an older version of is still deleted on the peer after an adopt', () => {
+    const bad = new Set<string>()
+    const c = refusing(bad)
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('n'), node('t')], [link('b1', 'n', 't')])) // all cast
+    bad.add('n')
+    p.publish(scene([node('n', 9), node('t')], [link('b1', 'n', 't')])) // n's edit refused
+    p.adopt(scene([node('n', 9), node('t', 5)], [link('b1', 'n', 't')]))
+    const cast = c.sent.length
+    p.publish(scene([node('t', 5)])) // the user deletes n (its link goes with it)
+    expect(c.sent.slice(cast).map(label)).toEqual(['edge-remove:b1', 'remove:n'])
+  })
+
+  it('an adopt with nothing owed stays lazy', () => {
+    const c = collect()
+    const p = createCanvasPublisher(c.send)
+    p.publish([node('a')])
+    const snapshot = vi.fn(() => [node('a', 1)])
+    p.adopt(snapshot)
+    p.adopt(() => [node('a', 2)])
+    expect(snapshot).not.toHaveBeenCalled()
+  })
+})

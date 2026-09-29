@@ -462,11 +462,19 @@ They are in the vocabulary now, and everything around them is the node machinery
 - **An edge whose endpoint the peer does not have is held, not cast.** A node the size guard refuses
   (an oversized sticky) never reaches the peer; an edge to it that did would be pruned there, and the
   peer's `edge-remove` would delete the link on our canvas too. The publisher holds such an
-  `edge-upsert` inside the emit that refused the node (and on every later one while the node's last
-  cast stays refused, across adopts — `refusedNodeIds()`), keeps it owed, and casts it in the same
-  batch as the node once the node goes through. The hold is in the publisher, not a filter on the
-  scene: dropping an edge the baseline already holds would diff as an `edge-remove` — the same delete,
-  cast by us. It is conservative: an edge to a node whose EARLIER version the peer has also waits.
+  `edge-upsert` inside the emit that refused the node (and on every later emit while the node's last
+  cast stays refused — `refusedNodeIds()`), keeps it owed, and casts it in the same batch as the node,
+  after it, on the first emit in which the node goes through. That holds across adopts too: an adopt
+  (every peer op, every project load) takes the scene on screen, which already contains the refused
+  node and the held edge, so the adopted baseline keeps the PREVIOUS baseline's entry for the owed
+  node and every edge touching it (`adoptBaseline`) — otherwise the node would re-diff only when it
+  next changed, and the edge would never differ from the baseline again and never be cast. The hold
+  is in the publisher, not a filter on the scene: dropping an edge the baseline already holds would
+  diff as an `edge-remove` — the same delete, cast by us. It is conservative: an edge to a node whose
+  EARLIER version the peer has also waits. What it does not cover: a baseline taken while the solo
+  gate is closed (`shouldPublish` false) is not rebased, so an owed item swallowed there syncs only
+  when it next changes; the gate closes on an open publisher only when a hosted role drops to
+  read-only.
 - **"This note is too large" is said only for a node upsert.** An edge op is refused only for a
   malformed or over-long id, so the sentence would name a cause nobody measured; the refusal is
   logged instead.

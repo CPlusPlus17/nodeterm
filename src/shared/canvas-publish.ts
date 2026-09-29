@@ -54,7 +54,8 @@ export interface CanvasPublisher {
    *  the baseline and nothing is diffed or sent — a solo user pays nothing for team sync. */
   publish(next: CanvasSnapshot, opts?: { throttle?: boolean }): void
   /** Take `next` as the new baseline WITHOUT sending — the loop guard (a peer's mutation, or a
-   *  programmatic project load). The next diff against it is empty. */
+   *  programmatic project load). The next diff against it is empty, except for what is still owed
+   *  (a refused node and the edges held for it), which stays owed — see `adoptBaseline`. */
   adopt(next: CanvasSnapshot): void
   /** Send any coalesced drag frame immediately (drag settle / unmount). */
   flush(): void
@@ -146,8 +147,8 @@ export function createCanvasPublisher(
   let pending: CanvasSnapshot | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
   /** Node ids whose latest cast was refused and not yet made good (`refusedNodeIds`). Kept ACROSS
-   *  emits and adopts: an adopt takes the refused node into the baseline (so it is no longer
-   *  re-diffed) but the peer still does not have it — which is exactly when an edge to it must wait. */
+   *  emits and adopts: the peer still does not have the node, so an edge to it must keep waiting,
+   *  and an adopt keeps both owed in the baseline (`adoptBaseline`). */
   const owedNodes = new Set<string>()
 
   const resolve = (s: CanvasSnapshot): CanvasScene =>
@@ -169,6 +170,45 @@ export function createCanvasPublisher(
       lastLazy = () => asScene(s())
     } else {
       last = asScene(s)
+      lastLazy = null
+    }
+  }
+
+  /**
+   * Take an ADOPTED snapshot as the baseline without letting it swallow what is still owed.
+   *
+   * An adopt (a peer's op applied locally, a project load) takes the scene on screen, and that scene
+   * already holds every refused node and every edge held for one. Taken as-is, the baseline would
+   * claim the peer has them: the node re-diffs only if it changes again, and once it finally casts,
+   * a held edge no longer differs from the baseline, so it is never cast at all — the peer's next save
+   * then drops it. So for the owed nodes, and every edge touching one, the adopted baseline keeps the
+   * PREVIOUS baseline's entry (the refusal rebase, reused): absent where the peer never had it, the
+   * older version where it did. Dropping them outright instead would lose that older version, and a
+   * later local delete of the node would diff to nothing.
+   *
+   * Only while something is owed — and then the previous baseline is resolved now, one serialize per
+   * adopt, because the adopted thunk must be rebased against the baseline AS OF this adopt. With
+   * nothing owed an adopt is exactly what it was: a thunk stored unresolved.
+   */
+  const adoptBaseline = (s: CanvasSnapshot): void => {
+    if (!owedNodes.size) {
+      setBaseline(s)
+      return
+    }
+    const owed = new Set(owedNodes)
+    const prev = baseline()
+    const keepOwed = (next: CanvasScene): CanvasScene => {
+      const keys = new Set<string>()
+      for (const id of owed) keys.add('n:' + id)
+      for (const e of [...prev.bridges, ...prev.ropes, ...next.bridges, ...next.ropes]) {
+        if (owed.has(e.source) || owed.has(e.target)) keys.add('e:' + e.id)
+      }
+      return rebaseRefused(prev, next, keys)
+    }
+    if (typeof s === 'function') {
+      lastLazy = () => keepOwed(asScene(s()))
+    } else {
+      last = keepOwed(asScene(s))
       lastLazy = null
     }
   }
@@ -249,7 +289,7 @@ export function createCanvasPublisher(
       emit(next)
     },
     adopt(next) {
-      setBaseline(next)
+      adoptBaseline(next)
       pending = null
     },
     flush() {
