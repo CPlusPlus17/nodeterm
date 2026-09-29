@@ -1958,6 +1958,10 @@ app.whenReady().then(async () => {
     sendToMain(IPC.stationOutcomeChanged, records)
   )
   registerStationOutcomeIpc(corePlatform, () => stationOutcomes)
+  // A `send` / `reply` hands a station new work — decided by when the message REACHES its pane (a
+  // queued one marks the station "work pending" until it lands), never by when the control answer
+  // comes back. The messaging service reports those moments; the store applies the rule.
+  messagingDeps.onHandover = (ev) => stationOutcomes.onHandover(ev)
 
   ipcMain.handle(IPC.dialogSelectFolder, async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
@@ -3963,9 +3967,10 @@ app.whenReady().then(async () => {
           return { ok: false, error: OPEN_PROJECT_GRANT_CAP, message: OPEN_PROJECT_GRANT_CAP }
         }
       }
-      // New work handed to a station through canvas control withdraws its outcome report — the
+      // New work typed into a station by `write` / `run` withdraws its older outcome report — the
       // "new task" rule in src/core/station-outcome-store.ts. On the answer (prompt or late), and
-      // only on success.
+      // only on success. `send` / `reply` go through `messagingDeps.onHandover` instead: their
+      // answer can be `queued`, long before the message reaches the pane.
       clearOutcomesAfterControl(stationOutcomes, verb, args, answer, nodeId)
       return answer
     }

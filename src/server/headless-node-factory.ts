@@ -582,6 +582,10 @@ export class HeadlessNodeFactory {
   private ownership: HeadlessNodeOwnership
   /** Fresh server-spawned agents that have not emitted their first real working turn yet. */
   private awaitingFirstWorking = new Set<string>()
+  /** Stations whose LAST turn ended on an API/model error (#521, the `errored` flag on a `done`),
+   *  from this edition's own event stream — the desktop's `lastTurnError`, kept here so a success
+   *  wait holds on an errored turn on both editions. Cleared by the next genuine new turn. */
+  private lastTurnErrored = new Set<string>()
   /**
    * Server-local `open-project` grants. The browser shell's grant ledger is process-local too,
    * but Server Edition has its own process and handler. A service restart deliberately clears
@@ -731,7 +735,8 @@ export class HeadlessNodeFactory {
   }
 
   /** What a success wait knows about one station, from the same facts this edition's `--after`
-   *  reads (the mirror's `done`, the `awaitWorking` fresh-spawn rule), plus its report. */
+   *  reads (the mirror's `done`, the `awaitWorking` fresh-spawn rule), the errored-turn rule (#521,
+   *  `lastTurnErrored`, which this edition's plain `--after` does not apply), and its report. */
   private successFacts(
     project: Project,
     depId: string,
@@ -742,7 +747,11 @@ export class HeadlessNodeFactory {
     const reported = this.deps.outcomeOf?.(depId)
     return {
       exists,
-      turnDone: exists && !this.awaitingFirstWorking.has(depId) && state === 'done',
+      turnDone:
+        exists &&
+        !this.awaitingFirstWorking.has(depId) &&
+        !this.lastTurnErrored.has(depId) &&
+        state === 'done',
       ...(reported ? { outcome: reported } : {})
     }
   }
@@ -1667,8 +1676,10 @@ export class HeadlessNodeFactory {
     return Promise.resolve()
   }
 
-  onAgentEvent(event: Pick<NormalizedAgentEvent, 'nodeId' | 'state'>): void {
+  onAgentEvent(event: Pick<NormalizedAgentEvent, 'nodeId' | 'state' | 'errored' | 'newTurn'>): void {
     if (this.stopped || !event?.nodeId) return
+    if (event.state === 'done' && event.errored === true) this.lastTurnErrored.add(event.nodeId)
+    else if (event.newTurn === true) this.lastTurnErrored.delete(event.nodeId)
     if (event.state === 'working') this.awaitingFirstWorking.delete(event.nodeId)
     if (event.state === 'working' || event.state === 'done') void this.refreshArmed(event)
   }

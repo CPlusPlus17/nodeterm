@@ -3903,18 +3903,43 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     (`requiresVerified`) and a node reports only about ITSELF: `--node` naming another node is
     refused (`report-outcome-not-self`), not ignored. The note is display text (`sanitizeOutcomeNote`:
     `oneLine` + format chars stripped, 200 code points) and is never typed into a pane.
-  - **When a report ends — the "new task" rule.** A later report supersedes. A `send` / `reply` /
-    `write` / `run` that SUCCEEDS against a station withdraws its report (`clearOutcomesAfterControl`,
-    run by each shell's control handler AFTER the answer). Without it, "hand a station its next task,
-    then open a dependent `--after-success` it" released the dependent at once on the previous task's
-    success — early, the direction nothing undoes; withdrawing errs toward holding, which the deadline
-    and ▶ end. A new TURN does not clear it (a turn is not a task: a station may report mid-turn, and a
-    person typing "thanks" starts a turn, not a task), and neither does a person typing in the pane or
-    a board comment. Closing a station keeps its report (the deleted-station rule reads it).
-  - **Both shells**: desktop main answers the verb before the forward and clears after it; the Server
-    Edition answers it through the same `handleReportOutcome` (`onRecorded` re-runs `refreshArmed`),
-    honours `--after-success` in the headless factory (`successFacts`: the mirror's `done` plus the
-    fresh-spawn `awaitingFirstWorking` rule) and wraps its handler with the same clearing rule.
+  - **When a report ends — the "new task" rule, decided by when work REACHES THE PANE, never by
+    when a control answer comes back.** A later report supersedes. Otherwise, "hand a station its next
+    task, then open a dependent `--after-success` on it" releases the dependent on the PREVIOUS task's
+    success. The first version withdrew the report on the `send`'s ANSWER, which for a busy station is
+    `queued` (ok: true) long before the message lands — so the station's report for the task it was
+    still on counted, its turn ended, D fired, and the queue flushed the new task on the same idle edge
+    (review of #1034). Now:
+    - `send` / `reply`: the messaging layer emits `AgentMessagingDeps.onHandover` — `queued` (the
+      queue's own `onQueued`, synchronous at the push), `landed` (bytes reached the pane: `delivered`,
+      `stalled`, `deliveredToReplacedTarget`, on a first attempt or a flush, `at` = when that attempt
+      STARTED), `settled` (one per `queued`: flushed, refused on flush, or expired). The store
+      (`StationOutcomeStore.onHandover`) marks a queued station WORK PENDING — its reports publish with
+      `workPending` and do not count — withdraws reports older than a landing's start (so a report
+      about the new work survives a stalled or late answer), and on a settle that never landed
+      withdraws the report too (holding, not the old success; the orchestrator was told it expired).
+      Only `send` / `reply` count: a board comment is a person steering and a station notice is the app.
+    - `write` / `run`: their answer IS the landing (typed after the confirm; a held launch delivered),
+      so `clearOutcomesAfterControl` withdraws reports older than the answer, from each shell's
+      control handler (desktop `finishAnswer`, which runs on a late answer too).
+    - A new TURN clears nothing (a turn is not a task: a station may report mid-turn, and a person
+      typing "thanks" starts a turn), nor does typing in the pane. Closing a station keeps its report
+      (the deleted-station rule reads it). Every rule errs toward holding, which the deadline and ▶ end.
+    `main/station-outcome-handover.test.ts` replays the review's scenario through the REAL queue and
+    fails on the answer-time rule.
+  - **Both shells**: desktop main answers the verb before the forward; the Server Edition answers it
+    through the same `handleReportOutcome` (`onRecorded` re-runs `refreshArmed`) and honours
+    `--after-success` in the headless factory (`successFacts`: the mirror's `done`, the fresh-spawn
+    `awaitingFirstWorking` rule, and #521's errored turn from its own event stream, `lastTurnErrored`
+    — so a succeeded-then-errored station holds on both editions; the server's PLAIN `--after` still
+    does not apply #521, a pre-existing gap). Both wire `onHandover` into their messaging deps and run
+    `clearOutcomesAfterControl` on answers.
+  - **The badge's deadline tick is a memo input** (`lib/useSuccessWait.ts`): nothing in any store
+    changes when a deadline passes, and a timer whose tick the memo ignores re-rendered the node with
+    the cached "waiting" — the badge kept QUEUED while `list` said EXPIRED. `useSuccessWait.test.tsx`.
+  - Reports do not survive an app restart, so a station that reported success and was then CLOSED
+    reads BLOCKED afterwards ("closed without reporting success in this app run"); nothing can report
+    for it any more, so only ▶ / `run` start that dependent. Both agent bodies say so.
     `station-outcome:list` is in `HOST_ONLY_CHANNELS` (unscoped: every project's notes); relay tabs
     take the inert stub. Pinned at source level by `main/station-outcome-wiring.test.ts`. **Not
     done:** a reported `failed` does not raise a station-failure notice to the opener (the opener

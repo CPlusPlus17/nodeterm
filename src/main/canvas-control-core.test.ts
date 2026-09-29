@@ -1505,8 +1505,11 @@ describe('--after-success + report-outcome: a dependent that waits for a reporte
     expect(flat).toContain('No report yet means waiting')
     expect(flat).toContain('A station that is CLOSED counts only if it reported success before it was closed')
     // The "new task" rule, as core implements it (OUTCOME_CLEARING_VERBS).
-    expect(flat).toContain('a `send`, `reply`, `write` or `run` aimed at it withdraws its report')
+    expect(flat).toContain('a `send`, `reply`, `write` or `run` aimed at it withdraws the reports it made before that work arrived')
+    expect(flat).toContain('A `send` / `reply` QUEUED for a busy station stops its report counting the moment it is queued')
+    expect(flat).toContain('a queued message that expires unread withdraws the report too')
     expect(flat).toContain('hand it the next task FIRST, then open the dependent')
+    expect(flat).toContain('only `run` (or ▶) starts it')
     expect(flat).toContain('A new turn does not withdraw a report')
     // Limits rendered from the modules that enforce them.
     expect(flat).toContain('`--success-deadline <90m|12h|3d>` bounds the wait (default 24h, at most 14d)')

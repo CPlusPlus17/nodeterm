@@ -44,6 +44,10 @@ export interface StationOutcomeRecord {
    *  into a pane, never read as a gate. */
   note?: string
   at: number
+  /** New work (a `send` / `reply`) is QUEUED for this station and has not reached it yet: this
+   *  report was made before that work, so it does not count — a success wait keeps waiting. Set by
+   *  the core store on what it publishes; never persisted. */
+  workPending?: true
 }
 
 /** The verb a station runs about ITSELF. Named apart from `report-issue` on purpose: "report" alone
@@ -127,7 +131,13 @@ export function sanitizeOutcomeRecords(raw: unknown): StationOutcomeRecord[] {
     if (!isStationOutcome(r.outcome)) continue
     if (typeof r.at !== 'number' || !Number.isFinite(r.at)) continue
     const note = sanitizeOutcomeNote(r.note)
-    out.push({ nodeId: r.nodeId, outcome: r.outcome, at: r.at, ...(note ? { note } : {}) })
+    out.push({
+      nodeId: r.nodeId,
+      outcome: r.outcome,
+      at: r.at,
+      ...(note ? { note } : {}),
+      ...(r.workPending === true ? { workPending: true as const } : {})
+    })
   }
   return out
 }
@@ -293,7 +303,7 @@ export interface SuccessDepFacts {
    *  counts as that (`depSatisfied` on the desktop, `stateOf === 'done'` on the Server Edition). */
   turnDone: boolean
   /** Its latest report in this app run, if any. */
-  outcome?: Pick<StationOutcomeRecord, 'outcome' | 'note'>
+  outcome?: Pick<StationOutcomeRecord, 'outcome' | 'note' | 'workPending'>
 }
 
 export type SuccessDepState = 'met' | 'waiting' | 'blocked'
@@ -317,10 +327,18 @@ export interface SuccessDepReport {
  *  - a DELETED station: met only if it reported success before it went (a closed station can never
  *    report again, and closing one is exactly how an orchestrator abandons a failed attempt — reading
  *    the deletion as success, which is `--after`'s rule, would release dependents on a failure).
- *    Closed without a success report ⇒ blocked, with the deadline and ▶ as the way out.
+ *    Closed without a success report ⇒ blocked, with the deadline and ▶ as the way out. Reports do
+ *    not survive an app restart, so a station closed before one reads this way afterwards too.
+ *  - a report made before new work that is still QUEUED for the station (`workPending`) is no
+ *    report: it speaks for the task before, and the station has not even received the next one.
  */
 export function evaluateSuccessDep(id: string, facts: SuccessDepFacts): SuccessDepReport {
   const r = (state: SuccessDepState, detail: string): SuccessDepReport => ({ id, state, detail })
+  if (facts.outcome?.workPending) {
+    return facts.exists
+      ? r('waiting', 'new work is queued for it; waiting for its next report')
+      : r('blocked', 'closed while new work was queued for it')
+  }
   const reported = facts.outcome
   if (reported?.outcome === 'failed') {
     return r('blocked', `reported failure${reported.note ? `: "${reported.note}"` : ''}`)
@@ -329,7 +347,9 @@ export function evaluateSuccessDep(id: string, facts: SuccessDepFacts): SuccessD
     if (facts.exists && !facts.turnDone) return r('waiting', 'reported success; waiting for its turn to end')
     return r('met', 'reported success')
   }
-  return facts.exists ? r('waiting', 'no outcome reported yet') : r('blocked', 'closed without reporting success')
+  return facts.exists
+    ? r('waiting', 'no outcome reported yet')
+    : r('blocked', 'closed without reporting success in this app run')
 }
 
 export function successWaitReports(

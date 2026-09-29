@@ -12,12 +12,23 @@
  *
  * WHEN A REPORT ENDS (the "new task" rule):
  *   - the station reports again — the later report supersedes;
- *   - the station is handed new work THROUGH CANVAS CONTROL — a `send` / `reply` / `write` into its
- *     pane, or a `run` of its held launch (`OUTCOME_CLEARING_VERBS`). Those are the moments nodeterm
- *     itself sees new work arrive, and they are how an orchestrator reuses a station: without the
- *     withdrawal, "hand the station its next task, then open a dependent `--after-success` it" would
- *     release that dependent at once on the PREVIOUS task's success — early, the direction nothing
- *     can undo. Withdrawing errs toward holding, which the deadline and ▶ / `run` can always end;
+ *   - the station is handed new work THROUGH CANVAS CONTROL. That is how an orchestrator reuses a
+ *     station, and without it "hand the station its next task, then open a dependent
+ *     `--after-success` on it" would release that dependent at once on the PREVIOUS task's success —
+ *     early, the direction nothing can undo. It is decided by WHEN THE WORK REACHES THE PANE, never
+ *     by when a control answer comes back (the answer to a queued message comes back long before):
+ *       · a `send` / `reply` that is QUEUED for a busy station marks it WORK PENDING
+ *         (`onHandover` 'queued'): every report it makes stops counting — including the one it is
+ *         about to make for the task it is still on — until the message lands;
+ *       · when the bytes LAND (first attempt or flush), every report made before that delivery
+ *         STARTED is withdrawn; a report made after it (about the new work) stands, however late
+ *         the answer arrives;
+ *       · a queued message that ends WITHOUT landing (expired, refused on flush) withdraws the
+ *         report too. The orchestrator handed new work and was told it did not arrive; a dependent it
+ *         armed after that hand-over must not start on the older task's word;
+ *       · `write` / `run` (typed straight into the pane after its confirm, or a held launch started)
+ *         withdraw every report older than their answer, which is when the bytes landed;
+ *     Every one of these errs toward holding, which the deadline and ▶ / `run` can always end;
  *   - NOT a new turn. A turn is not a task: a station may report mid-turn and keep summarising, and
  *     a person typing "thanks" into its pane starts a turn without starting a task. nodeterm cannot
  *     tell a new task from a follow-up by looking at a turn, so a turn changes nothing here; the
@@ -36,6 +47,7 @@ import {
   type StationOutcomeRecord
 } from '../shared/station-outcome'
 import type { CorePlatform } from './platform'
+import type { MessageHandover } from './agents/agent-messaging'
 
 /** How many stations' reports one process keeps. Far past any canvas; evicts the oldest first. */
 export const STATION_OUTCOME_MAX_RECORDS = 1000
@@ -47,6 +59,10 @@ export class StationOutcomeStore {
   // Insertion order IS recency: a record is deleted and re-set on every write, so the first key is
   // always the oldest and eviction is one `keys().next()`.
   private readonly byId = new Map<string, StationOutcomeRecord>()
+  /** Stations with a `send`/`reply` still QUEUED for them, and how many. While a station is here its
+   *  report does not count (`workPending` on the published record). Every entry is removed by the
+   *  queue's own `settled` event — the queue guarantees one per `queued`. */
+  private readonly pending = new Map<string, number>()
 
   /** `publish` gets the FULL list after every change (never a delta), like station notices. */
   constructor(private readonly publish: (records: StationOutcomeRecord[]) => void = () => {}) {}
@@ -69,39 +85,82 @@ export class StationOutcomeStore {
     return true
   }
 
-  get(nodeId: string): StationOutcomeRecord | undefined {
-    return this.byId.get(nodeId)
+  /** Withdraw a station's report if it was made BEFORE `at` — new work landed at `at`, so only a
+   *  report made after it can be about that work. `true` when one was withdrawn. */
+  withdrawBefore(nodeId: string, at: number): boolean {
+    const rec = this.byId.get(nodeId)
+    if (!rec || rec.at >= at) return false
+    return this.clear(nodeId)
   }
 
-  /** Every record, newest first. */
+  /**
+   * The messaging layer's hand-over events (`AgentMessagingDeps.onHandover`). Only `send` and
+   * `reply` count: a board comment is a person steering (like typing in the pane), and a station
+   * notice is the app telling an orchestrator something — neither is a task handed to a station.
+   */
+  onHandover(ev: MessageHandover): void {
+    if (!HANDOVER_VERBS.has(ev.verb) || !isSafeNodeId(ev.targetNodeId)) return
+    const id = ev.targetNodeId
+    if (ev.phase === 'queued') {
+      this.pending.set(id, (this.pending.get(id) ?? 0) + 1)
+      this.publish(this.list())
+      return
+    }
+    if (ev.phase === 'landed') {
+      this.withdrawBefore(id, ev.at)
+      return
+    }
+    // settled: the queued entry is gone. One that never landed withdraws the report as well (see
+    // the header); one that landed already withdrew the older reports on its `landed` event.
+    const left = (this.pending.get(id) ?? 1) - 1
+    if (left > 0) this.pending.set(id, left)
+    else this.pending.delete(id)
+    if (!ev.landed) this.byId.delete(id)
+    this.publish(this.list())
+  }
+
+  get(nodeId: string): StationOutcomeRecord | undefined {
+    const rec = this.byId.get(nodeId)
+    return rec && this.pending.has(nodeId) ? { ...rec, workPending: true } : rec
+  }
+
+  /** Every record, newest first, each flagged `workPending` while new work is still queued for it. */
   list(): StationOutcomeRecord[] {
-    return [...this.byId.values()].reverse()
+    return [...this.byId.values()]
+      .reverse()
+      .map((rec) => (this.pending.has(rec.nodeId) ? { ...rec, workPending: true as const } : rec))
   }
 }
 
-/**
- * Verbs that hand the node they name (`--node`) NEW WORK when they succeed, and so withdraw its
- * outcome report — see the header's "new task" rule. `notify` is not one: it raises an OS
- * notification and types nothing into the pane.
- */
-export const OUTCOME_CLEARING_VERBS: ReadonlySet<string> = new Set(['send', 'reply', 'write', 'run'])
+/** The messaging verbs whose delivery hands a station new work. */
+const HANDOVER_VERBS: ReadonlySet<string> = new Set(['send', 'reply'])
 
 /**
- * Apply the "new task" rule to one finished control request. Run by each shell's control handler
- * AFTER the verb answered, and only on success: a refused or undelivered message handed nothing.
- * A caller naming ITSELF is not handed work by anyone (a station `write`-ing into its own pane is
- * still doing its own task).
+ * The control verbs whose ANSWER marks new work landing in the node they name (`--node`): `write`
+ * types into the pane right before it answers (after its confirm), and `run` answers once a held
+ * launch was delivered. `send` / `reply` are NOT here — their answer can be `queued`, long before
+ * the bytes reach the pane — and are handled by the messaging layer's own hand-over events
+ * (`StationOutcomeStore.onHandover`). `notify` types nothing into the pane.
+ */
+export const OUTCOME_CLEARING_VERBS: ReadonlySet<string> = new Set(['write', 'run'])
+
+/**
+ * Apply the "new task" rule to one finished `write` / `run`. Run by each shell's control handler on
+ * the answer, and only on success: a refused write handed nothing. Withdraws only reports made
+ * BEFORE `now` — the answer is when the bytes landed. A caller naming ITSELF is not handed work by
+ * anyone (a station `write`-ing into its own pane is still doing its own task).
  */
 export function clearOutcomesAfterControl(
-  store: Pick<StationOutcomeStore, 'clear'>,
+  store: Pick<StationOutcomeStore, 'withdrawBefore'>,
   verb: string,
   args: Record<string, string | undefined>,
   result: { ok: boolean },
-  callerNodeId: string
+  callerNodeId: string,
+  now: number = Date.now()
 ): void {
   if (!result.ok || !OUTCOME_CLEARING_VERBS.has(verb) || typeof args.node !== 'string') return
   for (const id of args.node.split(',').map((s) => s.trim())) {
-    if (id && id !== callerNodeId && isSafeNodeId(id)) store.clear(id)
+    if (id && id !== callerNodeId && isSafeNodeId(id)) store.withdrawBefore(id, now)
   }
 }
 
@@ -178,8 +237,8 @@ export async function handleReportOutcome(
   const message = [
     `recorded: your task ${parsed.outcome}${parsed.note ? ` — "${parsed.note}"` : ''}.`,
     RELEASE_TEXT[parsed.outcome],
-    'It stands until you report again, or until you are handed new work through canvas control ' +
-      '(a send, reply, write or run aimed at you). A new turn does not change it.'
+    'It stands until you report again, or until new work handed to you through canvas control (a ' +
+      'send, reply, write or run aimed at you) reaches your session. A new turn does not change it.'
   ].join(' ')
   return {
     ok: true,
