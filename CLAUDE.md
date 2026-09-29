@@ -1369,7 +1369,22 @@ session.
   all terminals — harmless in a plain shell). **Cmd (mac) / Ctrl+click** opens links in the
   output: URLs → default browser (`@xterm/addon-web-links`), file paths → editor node and
   directories → Explorer reveal (`terminal/file-links.ts`, existence-verified against the project
-  fs via cached parent-dir listings, with `path:line[:col]` compiler-output suffixes). A relative
+  fs via cached parent-dir listings, with `path:line[:col]` compiler-output suffixes). **What counts
+  as a path is `terminal/file-link-tokens.ts`**, and it is generous on purpose because existence is
+  the arbiter: segments take any Unicode letter/number/mark (`var/otta-aktarım/çıktı.sql`) and
+  route-folder brackets (`app/(shop)/[id]/page.tsx`; prose parentheses are dropped only when
+  unbalanced); a separator path with SPACES is offered whole, ending at a word with a separator, a
+  word completing `name.ext`, or the line end — AND as its space-free pieces, which is what keeps
+  `/usr/bin/python failed to start app.py` from costing the `/usr/bin/python` link (tokens may
+  overlap; the provider keeps the first that exists in start/longest order, `linkAtCell` carries the
+  rest as `alternatives` for the Cmd+click fallback and the link menu); a BARE filename (`README`,
+  `foo.ts`) only when `looksLikeBareFilename` says so — versions (`v1.2`), abbreviations (`e.g.`)
+  and plain words are never looked up, and a right-click does not claim a bare word; a `file://`
+  URI is percent-decoded to its absolute path (local host only; Windows needs a drive). **The scan
+  must stay linear** — it runs per hovered row on padded TUI rows; no backtracking regex, and the
+  ReDoS guard in `file-link-tokens.test.ts` pins it (the previous regex took 2.2 s on a 30k-char
+  word). Hit-tests and underlines go through `Paragraph.cellStart/cellEnd` (xterm cells, not string
+  indices), so wide CJK glyphs before or inside a path no longer shift its range. A relative
   path is anchored on the node's LAUNCH cwd first, then on the pane's LIVE cwd (`pty:pane-cwd` —
   tmux `#{pane_current_path}`, local or over the ControlMaster; `findExistingPath`), because an
   agent prints paths relative to where IT runs; the launch cwd wins a tie so a link never changes
