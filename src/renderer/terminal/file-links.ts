@@ -24,6 +24,17 @@
 //     gated tightly and capped at MAX_JOIN_ROWS, and the regex still has to match across the
 //     seam for a link to result.
 import type { ILink, ILinkHandler, ILinkProvider, Terminal } from '@xterm/xterm'
+import { linkOpenIntent } from './link-hover'
+
+/** What a hovered link resolved to — what the host's hover tooltip names (see link-hover.ts). */
+export type LinkHoverTarget = { kind: 'file'; abs: string; dir: boolean } | { kind: 'url'; url: string }
+
+/** The host's hover tooltip. Optional everywhere: a host without one (the kanban card modal)
+ *  keeps exactly the pre-tooltip behaviour. */
+export interface LinkHoverSink {
+  hover(target: LinkHoverTarget, event: MouseEvent): void
+  leave(): void
+}
 
 export interface FileToken {
   /** The raw matched span (drives the underline range), incl. any :line:col suffix. */
@@ -191,12 +202,25 @@ function isHttpUrl(text: string): boolean {
  * built-in fallback is a window.confirm). The URI is invisible text the label hides, so a
  * `javascript:`/`file:` link must never reach openExternal.
  */
-export function createOsc8LinkHandler(openUrl: (url: string) => void): ILinkHandler {
+export function createOsc8LinkHandler(
+  openUrl: (url: string) => void,
+  hoverSink?: LinkHoverSink
+): ILinkHandler {
   return {
     activate: (event: MouseEvent, text: string): void => {
       if (!(event.metaKey || event.ctrlKey)) return
+      hoverSink?.leave()
       if (isHttpUrl(text)) openUrl(text)
-    }
+    },
+    // The one link whose target the screen never shows — the hover is where the user learns it.
+    ...(hoverSink
+      ? {
+          hover: (event: MouseEvent, text: string): void => {
+            if (isHttpUrl(text)) hoverSink.hover({ kind: 'url', url: text }, event)
+          },
+          leave: (): void => hoverSink.leave()
+        }
+      : {})
   }
 }
 
@@ -454,6 +478,12 @@ export interface FileLinkDeps extends CwdSources {
   convention?: () => PathConventionOpts | null
   lookup(abs: string): Promise<PathLookup>
   activate(abs: string, dir: boolean): void
+  /** Shift+Cmd/Ctrl+click: hand the path to the OS default app (the host decides per surface —
+   *  see `systemOpenRefusal`). Absent = the plain `activate`, so a host that never wired it keeps
+   *  its old behaviour for the Shift variant too. */
+  openWithSystem?(abs: string, dir: boolean): void
+  /** Hover tooltip naming the resolved path. */
+  hoverSink?: LinkHoverSink
 }
 
 /** The minimal buffer slice paragraph joining needs — unit tests drive a fake. */
@@ -562,14 +592,30 @@ export function createFileLinkProvider(term: Terminal, deps: FileLinkDeps): ILin
         tokens.map(async (t): Promise<ILink | null> => {
           const found = await findExistingPath(t.path, convention, deps)
           if (!found.found) return null
-          const { abs } = found
+          const { abs, dir } = found
+          const sink = deps.hoverSink
           return {
             text: t.text,
             range: tokenRange(logical.startRow, cols, t.startIndex, t.text.length),
             activate: (event: MouseEvent) => {
-              if (!(event.metaKey || event.ctrlKey)) return
-              deps.activate(abs, found.dir)
-            }
+              const intent = linkOpenIntent(event)
+              if (intent === 'none') return
+              sink?.leave()
+              if (intent === 'system') {
+                // Shift also extends an xterm selection: a Shift+Cmd click that left one behind
+                // was a selection gesture, not an open.
+                if (term.hasSelection()) return
+                ;(deps.openWithSystem ?? deps.activate)(abs, dir)
+                return
+              }
+              deps.activate(abs, dir)
+            },
+            ...(sink
+              ? {
+                  hover: (event: MouseEvent) => sink.hover({ kind: 'file', abs, dir }, event),
+                  leave: () => sink.leave()
+                }
+              : {})
           }
         })
       ).then((links) => {
@@ -586,7 +632,11 @@ export function createFileLinkProvider(term: Terminal, deps: FileLinkDeps): ILin
  * underlined and opened just the first row's fragment of a long OAuth URL). Modifier-gated in
  * activate like the file provider, so plain clicks stay selections.
  */
-export function createUrlLinkProvider(term: Terminal, openUrl: (url: string) => void): ILinkProvider {
+export function createUrlLinkProvider(
+  term: Terminal,
+  openUrl: (url: string) => void,
+  hoverSink?: LinkHoverSink
+): ILinkProvider {
   return {
     provideLinks(bufferLineNumber: number, callback: (links: ILink[] | undefined) => void): void {
       const logical = paragraphContaining(bufferView(term), bufferLineNumber - 1)
@@ -599,8 +649,16 @@ export function createUrlLinkProvider(term: Terminal, openUrl: (url: string) => 
           text: u.text,
           range: tokenRange(logical.startRow, term.cols, u.startIndex, u.text.length),
           activate: (event: MouseEvent) => {
-            if (event.metaKey || event.ctrlKey) openUrl(u.url)
-          }
+            if (!(event.metaKey || event.ctrlKey)) return
+            hoverSink?.leave()
+            openUrl(u.url)
+          },
+          ...(hoverSink
+            ? {
+                hover: (event: MouseEvent) => hoverSink.hover({ kind: 'url', url: u.url }, event),
+                leave: () => hoverSink.leave()
+              }
+            : {})
         })
       )
       callback(links.length ? links : undefined)
@@ -756,6 +814,8 @@ export function linkAtCell(
 export interface LinkClickDeps extends LinkHitDeps {
   lookup(abs: string): Promise<PathLookup>
   activateFile(abs: string, dir: boolean): void
+  /** Shift+Cmd/Ctrl+click on a file — see FileLinkDeps.openWithSystem. Absent = `activateFile`. */
+  openFileWithSystem?(abs: string, dir: boolean): void
   openUrl(url: string): void
   /** A Cmd/Ctrl+click on a path found under neither cwd. The click is already swallowed (it
    *  must be, before the async lookup), so without this it would do nothing at all — the host says
@@ -772,16 +832,30 @@ export interface LinkClickDeps extends LinkHitDeps {
  * ⇒ early return). This capture-phase `mouseup` listener runs BEFORE xterm's mouse handler:
  * gated on the modifier, it hit-tests the buffer itself, opens the link, and stops propagation
  * so the mouse report is never sent. Non-modifier clicks/drags fall through untouched, so tmux
- * copy-mode selection and scrolling are unaffected. Attach to `term.element` so the listener
- * travels with the terminal across park/adopt. Returns a disposer.
+ * copy-mode selection and scrolling are unaffected. Shift added to the modifier routes a file to
+ * `openFileWithSystem` (`linkOpenIntent`); a modified press released on another cell is a drag
+ * and is left alone. Hover is NOT this listener's job: xterm's linkifier listens to `mousemove`
+ * on its screen element whatever the mouse-tracking mode, so the providers' `hover` fires in a
+ * tmux pane too. Attach to `term.element` so the listener travels with the terminal across
+ * park/adopt. Returns a disposer.
  */
 export function installLinkClickFallback(
   term: Terminal,
   host: HTMLElement,
   deps: LinkClickDeps
 ): { dispose(): void } {
+  // The cell a modified press landed on. A release on a DIFFERENT cell is a drag (off-mac,
+  // Shift+Ctrl+drag is xterm's forced selection even with mouse reporting on), never a click —
+  // opening whatever link the drag happened to end on would hijack the selection.
+  let down: { row: number; col: number } | null = null
+  const onMouseDown = (ev: MouseEvent): void => {
+    down = ev.button === 0 && linkOpenIntent(ev) !== 'none' ? bufferPosFromEvent(term, ev) : null
+  }
   const onMouseUp = (ev: MouseEvent): void => {
-    if (ev.button !== 0 || !(ev.metaKey || ev.ctrlKey)) return
+    const pressed = down
+    down = null
+    const intent = linkOpenIntent(ev)
+    if (ev.button !== 0 || intent === 'none') return
     // Only take over when the app has mouse-reporting on (tmux mouse / agent TUI) — that is the
     // exact case where xterm's own link `activate` never fires. With reporting OFF (a plain shell
     // when tmux is unavailable) the registered providers handle the click, so stepping in
@@ -789,6 +863,7 @@ export function installLinkClickFallback(
     if (term.modes.mouseTrackingMode === 'none') return
     const pos = bufferPosFromEvent(term, ev)
     if (!pos) return
+    if (pressed && (pressed.row !== pos.row || pressed.col !== pos.col)) return
     const hit = linkAtCell(term, pos.row, pos.col, deps)
     if (!hit) return
     // Swallow the click NOW so tmux never gets the mouse report. For a path, existence is async
@@ -801,14 +876,20 @@ export function installLinkClickFallback(
       return
     }
     const convention = (deps.convention ? deps.convention() : { windows: deps.windows }) ?? {}
+    const open =
+      intent === 'system' ? (deps.openFileWithSystem ?? deps.activateFile) : deps.activateFile
     void findExistingPath(hit.token, convention, deps).then((r) => {
-      if (r.found) deps.activateFile(r.abs, r.dir)
+      if (r.found) open(r.abs, r.dir)
       else deps.onMissing?.(hit.token, r)
     })
   }
+  host.addEventListener('mousedown', onMouseDown, { capture: true })
   host.addEventListener('mouseup', onMouseUp, { capture: true })
   return {
-    dispose: () => host.removeEventListener('mouseup', onMouseUp, { capture: true })
+    dispose: () => {
+      host.removeEventListener('mousedown', onMouseDown, { capture: true })
+      host.removeEventListener('mouseup', onMouseUp, { capture: true })
+    }
   }
 }
 
