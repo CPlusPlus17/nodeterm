@@ -11157,7 +11157,8 @@ button.pull-checks__name {
   border: 1px solid rgba(var(--tint-rgb), 0.35);
 }
 .team-progress__dot--done,
-.team-progress__dot--paused {
+.team-progress__dot--paused,
+.team-progress__dot--ended {
   background: var(--state-success);
   border-color: transparent;
 }

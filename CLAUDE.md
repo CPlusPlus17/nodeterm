@@ -1586,7 +1586,7 @@ session.
   the ephemeral loop/cron cards, which visualize AGENT-initiated recurrence). The card shows the
   schedule + next-run countdown, the target (a derived, never-persisted edge — the
   pending-launch dep edge is NO longer one: since the 2026-09-02 edge model it is a persisted rope,
-  `ctrl-<dep>-<node>`, whose dashed ⏳ LOOK is what is derived), the payload, an honest
+  `ctrl-after-<dep>-<node>`, whose dashed ⏳ LOOK is what is derived), the payload, an honest
   ARMED/DISARMED/CHANGED/SET-UP chip with the
   "definitions travel with the repo, consent never does" narrative, Run-now, and the last runs
   (fired / delivered-late / queued / missed / failed / expired). Arming passes a ConfirmDialog
@@ -3378,8 +3378,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   (6) Canvas subscribes to `armedDepSig`, NOT `useAgentStatus(s => s.byId)` —
   the same discipline as `loopSig`; the full map re-renders the canvas on every hook event.
   Pure logic + refusal matrix in `renderer/lib/pendingLaunch.ts` (unit-tested);
-  the dep→node edge is a **rope** (`ctrl-<dep>-<node>`, persisted in `project.ropes` like the
-  opener's) whose LOOK is derived: dashed + ⏳ while the node's `pendingLaunch.after` still lists the
+  the dep→node edge is a **rope** (`ctrl-after-<dep>-<node>` — `waitRopeId`, marked so it can
+  never be mistaken for the opener's `ctrl-<source>-<node>` once the canvas prunes that one; ropes
+  saved before the mark are re-marked by append order at load, `markLegacyWaitRopes` — persisted in
+  `project.ropes` like the opener's) whose LOOK is derived: dashed + ⏳ while the node's `pendingLaunch.after` still lists the
   dep, solid once it has launched (`lib/edgeModel.ts` `ropeVisual`, over the ONE `ropeInfoOf` lookup
   the render and BOTH delete paths ask — two builders would be two answers, and the label the user
   reads would stop describing what the delete does). The fan-in bridge `--after` also writes hides
@@ -5891,17 +5893,25 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     opened stations shows "N of M done" as a small ring on its board card, its card modal header
     AND its canvas node header — ONE component, so three views of one node cannot count
     differently; clicking it lists the stations and a row travels to that node. A station is a
-    session node that is the target of the FIRST rope into it in `project.ropes` order: ropes carry
-    two relations with one `ctrl-<source>-<target>` id shape ("opened by" and an `--after` / verify
-    wait), nothing on the node records the opener, and every writer appends the opener's rope
-    before the same command's dep ropes (`connect` then `ropeDeps`; `missingDepRopes` heals after
-    the file's own ropes). Without that rule every `--after` upstream read as a team leader. Rules
-    the count keeps: **unknown is unknown, never done** (state is transient; after a restart a
-    station reads `unknown` until it reports), paused/hibernated count as a finished turn (both are
-    written only by an exit that refused a busy session), a held launch reads `queued`, `done` +
-    `lastTurnError` reads `errored` (the `--after` verdict), a station that can never report (plain
-    terminal, hook-less agent) is listed as "no status" and kept OUT of M (it would pin the ring
-    below complete forever — the line `--after` draws), and a deleted station is not a station.
+    session node that is the target of an OPENER rope. Ropes carry two relations — "opened by"
+    (`ctrl-<source>-<node>`) and a wait (`--after`, the verify panel), which is minted
+    `ctrl-after-<dep>-<node>` (`waitRopeId`, `lib/edgeModel.ts`) and skipped. **The mark is what
+    makes this hold, not rope order**: the canvas prunes every rope with an endpoint off the canvas,
+    so deleting an orchestrator (or the user deleting its rope, or a `--project` open whose opener
+    lives in another project) removed the opener's rope, and under the old "first rope is the
+    opener" rule the first surviving wait read as the opener — a pipeline's upstream station showed
+    the next one as its team, a verify panel's reviewed node showed its reviewers. Canvases saved
+    before the mark are re-marked at LOAD by append order (`markLegacyWaitRopes`: every rope into a
+    node after its first is a wait), which must run before the prune; one already pruned and saved
+    has lost that evidence (residual). Tests run the canvas's load → heal → prune steps before
+    `stationsByOpener`. Rules the count keeps: **unknown is unknown, never done** (state is
+    transient; after a restart a station reads `unknown` until it reports), paused/hibernated count
+    as a finished turn (both come only from an exit that refuses a working or blocked session), a
+    CLI that announced its exit (`sessionEnded`) reads `ended` and counts (it is not running and
+    never will be on its own — `unknown` would hold the ring below complete forever), a held launch
+    reads `queued`, `done` + `lastTurnError` reads `errored` (the `--after` verdict), a station that
+    can never report (plain terminal, hook-less agent) is listed as "no status" and kept OUT of M
+    (the line `--after` draws), and a deleted station is not a station.
     Subscriptions: each chip reads `teamProgressSig` — one character per station, no ids — never
     `byId`; the per-project board gets the teams as a prop from Canvas, the Omni lanes derive
     theirs from the stored `p.ropes`/`p.nodes`, and the canvas node header reads `useTeamStations`
@@ -5920,7 +5930,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     what an idle card in In Progress needs distinguished.
   - **`bridges` / `ropes` are admitted through `sanitizeLinks`** (`core/workspace-files.ts`) on the
     same seams as `sanitizeKanban` — `fileToProject`, `projectToFile`, the inline-project branch
-    and the legacy v2 path of the store. They are git-shared, hand-editable input that every reader
+    and the legacy v2 path of the store — and on `persistedCanvases`, which reads the RAW index entry
+    and last-written file for the context-link map (`buildBackgroundLinkMaps` iterates every
+    bridge). They are git-shared, hand-editable input that every reader
     maps as `BridgeLink[]`, and the canvas's rope restore threw on one `null` entry at project load.
     A non-list is dropped, an entry without non-empty string `id`/`source`/`target` is dropped, and a
     clean list comes back BY IDENTITY.

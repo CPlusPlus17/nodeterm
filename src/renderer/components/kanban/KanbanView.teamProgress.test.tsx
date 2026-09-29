@@ -10,6 +10,7 @@ import type { ProjectKanban } from '@shared/types'
 import { useProjects } from '../../state/projects'
 import { useAgentStatus, type AgentNodeStatus } from '../../state/agentStatus'
 import { stationsByOpener, type StationNodeLike } from '../../lib/teamProgress'
+import { waitRopeId } from '../../lib/edgeModel'
 
 vi.mock('../../session/session', () => ({
   useSession: () => ({ source: 'local', api: window.nodeTerminal })
@@ -60,12 +61,12 @@ afterEach(() => {
 })
 
 function mount(opts: { onOpenNode?: (id: string) => void } = {}): void {
-  // orch opened a, b, c, d, gone and a plain terminal; d also waits on a (an `--after` rope, which
-  // must not make `a` a team leader); `gone` was deleted.
+  // orch opened a, b, c, d, gone and a plain terminal; d also waits on a (an `--after` rope, minted
+  // with its wait id, which must not make `a` a team leader); `gone` was deleted.
   const nodes = [term('orch'), term('a'), term('b'), term('c'), term('d'), term('plain', { agentId: undefined })]
   const teams = stationsByOpener(
-    [rope('orch', 'a'), rope('orch', 'b'), rope('orch', 'c'), rope('orch', 'd'), rope('a', 'd'),
-      rope('orch', 'gone'), rope('orch', 'plain')],
+    [rope('orch', 'a'), rope('orch', 'b'), rope('orch', 'c'), rope('orch', 'd'),
+      { id: waitRopeId('a', 'd'), source: 'a', target: 'd' }, rope('orch', 'gone'), rope('orch', 'plain')],
     nodes
   )
   host = document.createElement('div')

@@ -10,6 +10,7 @@ import {
   type TeamStation
 } from './teamProgress'
 import type { AgentNodeStatus } from '../state/agentStatus'
+import { markLegacyWaitRopes, missingDepRopes, pruneRopes, waitRopeId } from './edgeModel'
 
 const term = (id: string, extra: Partial<StationNodeLike> = {}): StationNodeLike => ({
   id,
@@ -19,6 +20,24 @@ const term = (id: string, extra: Partial<StationNodeLike> = {}): StationNodeLike
   ...extra
 })
 const rope = (source: string, target: string) => ({ id: `ctrl-${source}-${target}`, source, target })
+const wait = (source: string, target: string) => ({ id: waitRopeId(source, target), source, target })
+
+/**
+ * The ropes as the LIVE canvas holds them, in the order its effects run: load (legacy waits
+ * re-marked) → heal (`missingDepRopes`) → prune against the nodes still on the canvas. Every
+ * scenario below goes through this before `stationsByOpener`, because the canvas's prune is what
+ * broke the old "first rope is the opener" rule.
+ */
+function canvasRopes(
+  fileRopes: ReturnType<typeof rope>[],
+  nodes: { id: string; data: { pendingLaunch?: { after: string[]; command: string } } }[]
+): ReturnType<typeof rope>[] {
+  const restored = markLegacyWaitRopes(fileRopes)
+  const held = [...restored, ...missingDepRopes(nodes, restored)]
+  return pruneRopes(held, new Set(nodes.map((n) => n.id)))
+}
+const live = (id: string, after?: string[]) =>
+  ({ id, data: after ? { pendingLaunch: { after, command: 'go' } } : {} })
 const st = (patch: Partial<AgentNodeStatus>): AgentNodeStatus => ({ unread: false, ...patch }) as AgentNodeStatus
 
 describe('stationsByOpener', () => {
@@ -28,25 +47,27 @@ describe('stationsByOpener', () => {
     expect(map.get('o')?.[0]).toEqual({ id: 'a', title: 'A', agentId: 'claude', queued: false })
   })
 
-  it('a later rope into the same target is a wait, not a second opener (pipeline + verify panel)', () => {
-    // o opened a, b, c; b waits on a, c waits on b (`--after` writes its dep rope AFTER the opener's).
-    const ropes = [rope('o', 'a'), rope('o', 'b'), rope('a', 'b'), rope('o', 'c'), rope('b', 'c')]
+  it('a wait rope is never an opener (pipeline as the canvas mints it)', () => {
+    // o opened a, b, c; b waits on a, c waits on b.
+    const ropes = [rope('o', 'a'), rope('o', 'b'), wait('a', 'b'), rope('o', 'c'), wait('b', 'c')]
     const map = stationsByOpener(ropes, [term('o'), term('a'), term('b'), term('c')])
     expect(map.get('o')?.map((s) => s.id)).toEqual(['a', 'b', 'c'])
     expect(map.has('a')).toBe(false)
     expect(map.has('b')).toBe(false)
   })
 
-  it('a deleted station is not a station, and its wait rope is not promoted to opener', () => {
-    const ropes = [rope('o', 'a'), rope('o', 'gone'), rope('a', 'gone')]
+  it('a deleted opener in an UNPRUNED stored file does not hand its station to a later rope', () => {
+    // The Omni board reads the store's copy, which keeps ropes to deleted nodes until a canvas
+    // load prunes them — the first rope still claims its target there.
+    const map = stationsByOpener([rope('gone', 'a'), rope('b', 'a')], [term('a'), term('b')])
+    expect(map.size).toBe(0)
+  })
+
+  it('a deleted station is not a station', () => {
+    const ropes = [rope('o', 'a'), rope('o', 'gone'), wait('a', 'gone')]
     const map = stationsByOpener(ropes, [term('o'), term('a')])
     expect(map.get('o')?.map((s) => s.id)).toEqual(['a'])
     expect(map.has('a')).toBe(false)
-  })
-
-  it('a deleted opener shows nowhere, and does not hand its station to the next rope', () => {
-    const map = stationsByOpener([rope('gone', 'a'), rope('b', 'a')], [term('a'), term('b')])
-    expect(map.size).toBe(0)
   })
 
   it('only session nodes are stations (a browser popup rope is lineage, not a team member)', () => {
@@ -141,6 +162,13 @@ describe('stationKind', () => {
     expect(stationKind(s(), st({ hibernated: true }))).toBe('paused')
   })
 
+  it('a CLI that announced its exit is ended — not unknown, so the ring can complete', () => {
+    expect(stationKind(s(), st({ sessionEnded: true }))).toBe('ended')
+    expect(summarizeTeam(['done', 'ended'])).toMatchObject({ done: 2, total: 2, attention: null })
+    // A live turn after a resume wins over the stale flag.
+    expect(stationKind(s(), st({ sessionEnded: true, state: 'working' }))).toBe('working')
+  })
+
   it('a held launch outranks idle readings but not live ones', () => {
     expect(stationKind(s({ queued: true }), undefined)).toBe('queued')
     expect(stationKind(s({ queued: true }), st({ state: 'done' }))).toBe('queued')
@@ -199,5 +227,56 @@ describe('teamProgressSig / summarizeTeam', () => {
 
   it('an unreadable signature character reads as unknown, never done', () => {
     expect(parseTeamProgressSig('dZ')).toEqual(['done', 'unknown'])
+  })
+})
+
+describe('team membership survives the canvas pruning its ropes', () => {
+  const stations = (ropes: ReturnType<typeof rope>[], ids: string[]) =>
+    stationsByOpener(ropes, ids.map((id) => term(id)))
+
+  it('(a) deleting the orchestrator does not make an upstream station the next one\'s leader', () => {
+    // O opened B and C; C runs --after B.
+    const file = [rope('O', 'B'), rope('O', 'C'), wait('B', 'C')]
+    const before = canvasRopes(file, [live('O'), live('B'), live('C', ['B'])])
+    expect(stations(before, ['O', 'B', 'C']).get('O')?.map((s) => s.id)).toEqual(['B', 'C'])
+    const after = canvasRopes(before, [live('B'), live('C', ['B'])])
+    expect(stations(after, ['B', 'C']).size).toBe(0)
+  })
+
+  it('(a) the same canvas saved before waits were marked (legacy ids), loaded then pruned', () => {
+    const legacy = [rope('O', 'B'), rope('O', 'C'), rope('B', 'C')]
+    const loaded = canvasRopes(legacy, [live('O'), live('B'), live('C')])
+    expect(stations(loaded, ['O', 'B', 'C']).get('O')?.map((s) => s.id)).toEqual(['B', 'C'])
+    const pruned = canvasRopes(loaded, [live('B'), live('C')])
+    expect(stations(pruned, ['B', 'C']).size).toBe(0)
+  })
+
+  it('(a) a verify panel: closing the caller does not give the reviewed node a team of reviewers', () => {
+    // K verified T: reviewers R1, R2 wait on T; judge J waits on both. K opened all three.
+    const file = [
+      rope('K', 'R1'), rope('K', 'R2'), rope('K', 'J'),
+      wait('T', 'R1'), wait('T', 'R2'), wait('R1', 'J'), wait('R2', 'J')
+    ]
+    const nodes = [live('T'), live('R1', ['T']), live('R2', ['T']), live('J', ['R1', 'R2'])]
+    const withCaller = canvasRopes(file, [live('K'), ...nodes])
+    expect(stations(withCaller, ['K', 'T', 'R1', 'R2', 'J']).get('K')?.map((s) => s.id)).toEqual(['R1', 'R2', 'J'])
+    const closed = canvasRopes(withCaller, nodes)
+    expect(stations(closed, ['T', 'R1', 'R2', 'J']).size).toBe(0)
+  })
+
+  it('(b) the user removing the opener rope does not promote the wait', () => {
+    const held = canvasRopes([rope('O', 'B'), rope('O', 'C'), wait('B', 'C')], [live('O'), live('B'), live('C', ['B'])])
+    const removed = held.filter((r) => r.id !== 'ctrl-O-C')
+    const map = stations(removed, ['O', 'B', 'C'])
+    expect(map.get('O')?.map((s) => s.id)).toEqual(['B'])
+    expect(map.has('B')).toBe(false)
+  })
+
+  it('(c) a cross-project open whose opener rope is pruned on first load: the healed wait is no opener', () => {
+    // `--project` + `--after`: the file holds only the opener's rope, and its source lives in
+    // another project; the load heals the wait rope, the prune drops the opener's.
+    const loaded = canvasRopes([rope('elsewhere', 'N')], [live('B'), live('N', ['B'])])
+    expect(loaded.map((r) => r.id)).toEqual([waitRopeId('B', 'N')])
+    expect(stations(loaded, ['B', 'N']).size).toBe(0)
   })
 })

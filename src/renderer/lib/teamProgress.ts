@@ -1,24 +1,28 @@
 /**
  * Team progress: how far along the stations an orchestrator session opened are.
  *
- * A STATION is a session node this node opened — a target of one of the project's ropes
+ * A STATION is a session node this node opened — the target of one of the project's OPENER ropes
  * (`project.ropes`, `ctrl-<source>-<target>`). The orchestrator's card, its card modal and its
  * canvas node header show "N of M done" over those stations, and clicking the ring lists them.
  *
  * Four rules decided here, each with its reason:
  *
- * 1. **A rope names an opener only when it is the FIRST rope into its target.** Ropes carry two
- *    relations with one id shape: "opened by" and "waits for" (`--after`, and the `verify` panel's
- *    sequencing). Nothing on the node records which rope was the opener, but every writer appends
- *    the opener's rope BEFORE the dep ropes of the same command (`connect` then `ropeDeps`; the
- *    load-time `missingDepRopes` heal appends after whatever the file already holds). So the first
- *    incoming rope is the opener, and a later one is a wait. Without this, every `--after`
- *    dependency would read as a team leader: in a pipeline A → B → C each station would show the
- *    next one as its team, and in a verify panel each reviewer would show the judge.
+ * 1. **Only an opener rope names an opener, and only the first one into a node.** Ropes carry two
+ *    relations: "opened by" and "waits for" (`--after`, and the `verify` panel's sequencing). A
+ *    wait rope is minted `ctrl-after-<dep>-<node>` (`waitRopeId`, lib/edgeModel) and is skipped
+ *    here; a canvas saved before that is re-marked at load by `markLegacyWaitRopes`, BEFORE the
+ *    canvas prunes ropes to deleted nodes. The id is what makes this hold: the canvas deletes the
+ *    opener's rope when the opener is deleted, and before waits were marked the first surviving
+ *    wait then read as the opener — a pipeline's upstream station showed the next one as its team,
+ *    and a verify panel's reviewed node showed its reviewers. Among the remaining (opener) ropes
+ *    the first into a node wins, so a duplicate cannot put one station on two teams.
  * 2. **Unknown is unknown, never done.** Agent state is transient; after an app restart nobody has
- *    reported yet. A station with no state reads `unknown` and does not count toward N. The only
- *    idle facts that survive a restart are `paused` / `hibernated`, and both are written only by an
- *    exit that refused a busy session — so they count as a finished turn (`paused`).
+ *    reported yet. A station with no state reads `unknown` and does not count toward N. The idle
+ *    facts that survive a restart — `paused` / `hibernated` — count as a finished turn: both are
+ *    written only by an exit that runs when the session is idle (it refuses a working or blocked
+ *    one). A CLI that announced its own exit (`sessionEnded`) reads `ended` and counts too: it is
+ *    not running and never will be again on its own, so leaving it `unknown` would hold the ring
+ *    below complete forever.
  * 3. **A station that can never report is not in M.** A plain terminal (a dev server an orchestrator
  *    started) or an agent with no hooks never says `done`; counting it would pin the ring below
  *    complete forever. It is listed as `untracked` and left out of the fraction — the same line
@@ -31,15 +35,18 @@
  * the whole `byId` map (the `armedDepSig` / `loopSig` discipline). The signature carries no node
  * ids, so a hostile id cannot forge an entry for another station.
  *
- * `project.ropes` comes out of a git-shared, hand-editable file and is not sanitized on load, so
- * `stationsByOpener` accepts `unknown` and skips every entry it cannot read rather than throwing.
+ * `project.ropes` comes out of a git-shared, hand-editable file. It is admitted through
+ * `sanitizeLinks` on every load seam, but this reader is also handed the live canvas's edges and
+ * the Omni board's stored copy, so it still accepts `unknown` and skips every entry it cannot read.
  */
 import { capabilityAgentId, hasHooks, type AgentId } from '@shared/agents/config'
+import { isWaitRope } from './edgeModel'
 import type { AgentNodeStatus } from '../state/agentStatus'
 
 export type StationKind =
   | 'done'
   | 'paused'
+  | 'ended'
   | 'working'
   | 'needs'
   | 'errored'
@@ -70,11 +77,13 @@ export interface StationNodeLike {
 /** Shared empty list, so a card with no stations keeps a stable prop. */
 export const NO_STATIONS: readonly TeamStation[] = Object.freeze([])
 
-function readRope(r: unknown): { source: string; target: string } | null {
+/** An OPENER rope, or null — for anything unreadable and for a wait rope (rule 1). */
+function readOpenerRope(r: unknown): { source: string; target: string } | null {
   if (!r || typeof r !== 'object') return null
-  const { source, target } = r as { source?: unknown; target?: unknown }
+  const { id, source, target } = r as { id?: unknown; source?: unknown; target?: unknown }
   if (typeof source !== 'string' || typeof target !== 'string') return null
   if (!source || !target || source === target) return null
+  if (isWaitRope({ id, source, target })) return null
   return { source, target }
 }
 
@@ -107,10 +116,10 @@ export function stationsByOpener(
   if (Array.isArray(ropes) && sessions.size > 0) {
     const opened = new Set<string>()
     for (const raw of ropes) {
-      const rope = readRope(raw)
+      const rope = readOpenerRope(raw)
       if (!rope || opened.has(rope.target)) continue
-      // The first rope into a target is its opener's, whether or not that target is still here —
-      // a later rope into the same target is a wait, and must not be promoted by a deletion.
+      // The first opener rope into a target claims it, whether or not its source is still here —
+      // a stored (unpruned) file can still hold the rope of an opener that was deleted.
       opened.add(rope.target)
       const node = sessions.get(rope.target)
       if (!node || !sessions.has(rope.source)) continue
@@ -138,7 +147,7 @@ export function stationsByOpener(
 }
 
 type StatusLike = Pick<AgentNodeStatus, 'state'> &
-  Partial<Pick<AgentNodeStatus, 'dropped' | 'paused' | 'hibernated' | 'lastTurnError' | 'agentId'>>
+  Partial<Pick<AgentNodeStatus, 'dropped' | 'paused' | 'hibernated' | 'lastTurnError' | 'agentId' | 'sessionEnded'>>
 
 function reports(agentId: string | undefined): boolean {
   if (!agentId) return false
@@ -164,12 +173,14 @@ export function stationKind(station: TeamStation, status: StatusLike | undefined
   if (station.queued) return 'queued'
   if (state === 'done') return status?.lastTurnError ? 'errored' : 'done'
   if (status?.paused || status?.hibernated) return 'paused'
+  if (status?.sessionEnded) return 'ended'
   return reports(station.agentId ?? status?.agentId) ? 'unknown' : 'untracked'
 }
 
 const CHAR: Record<StationKind, string> = {
   done: 'd',
   paused: 'p',
+  ended: 'z',
   working: 'w',
   needs: 'n',
   errored: 'e',
@@ -198,7 +209,7 @@ export function parseTeamProgressSig(sig: string): StationKind[] {
 }
 
 export interface TeamProgress {
-  /** Stations whose last turn ended cleanly (`done`, or paused/hibernated after one). */
+  /** Stations with nothing left in flight: `done`, paused/hibernated, or a CLI that exited. */
   done: number
   /** Stations that can report — everything but `untracked`. The denominator. */
   total: number
@@ -210,7 +221,7 @@ export interface TeamProgress {
 export function summarizeTeam(kinds: readonly StationKind[]): TeamProgress {
   const counts = Object.fromEntries(Object.keys(CHAR).map((k) => [k, 0])) as Record<StationKind, number>
   for (const k of kinds) counts[k]++
-  const done = counts.done + counts.paused
+  const done = counts.done + counts.paused + counts.ended
   const total = kinds.length - counts.untracked
   const attention =
     counts.errored + counts.dropped > 0
@@ -226,6 +237,7 @@ export function summarizeTeam(kinds: readonly StationKind[]): TeamProgress {
 export const STATION_LABEL: Record<StationKind, string> = {
   done: 'done',
   paused: 'done · paused',
+  ended: 'exited',
   working: 'working',
   needs: 'needs you',
   errored: 'last turn failed',
@@ -237,12 +249,13 @@ export const STATION_LABEL: Record<StationKind, string> = {
 
 /** Order of the breakdown in the tooltip and the list header — attention first. */
 const BREAKDOWN: readonly StationKind[] = [
-  'dropped', 'errored', 'needs', 'working', 'queued', 'unknown', 'done', 'paused', 'untracked'
+  'dropped', 'errored', 'needs', 'working', 'queued', 'unknown', 'done', 'paused', 'ended', 'untracked'
 ]
 
 /** "2 of 5 done — 1 working, 1 needs you, 1 unknown" (+ the untracked count, outside M). */
 export function teamProgressText(p: TeamProgress): string {
-  const parts = BREAKDOWN.filter((k) => k !== 'done' && k !== 'paused' && k !== 'untracked' && p.counts[k] > 0).map(
+  const finished: readonly StationKind[] = ['done', 'paused', 'ended', 'untracked']
+  const parts = BREAKDOWN.filter((k) => !finished.includes(k) && p.counts[k] > 0).map(
     (k) => `${p.counts[k]} ${STATION_LABEL[k]}`
   )
   const head = `${p.done} of ${p.total} done`

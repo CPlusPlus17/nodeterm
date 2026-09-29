@@ -143,7 +143,10 @@ A card chip that reads agent state subscribes to a **primitive signature** of th
 on every hook event of every node. Before a card shows a fact, check that its place on the board
 does not already say it (`lib/cardRedundancy.ts`); the card modal keeps every fact the card drops.
 `project.ropes` / `bridges` are hostile input like the board: they are admitted through
-`sanitizeLinks` on every load and save seam, and a reader still tolerates anything.
+`sanitizeLinks` on every load and save seam, and a reader still tolerates anything. A wait rope
+(`--after`, the verify panel) is minted with `waitRopeId` (`ctrl-after-<dep>-<node>`), never with the
+opener's `ctrl-<source>-<node>` shape: rope ORDER does not survive the canvas pruning ropes to
+deleted nodes, so the id is the only thing that tells a wait from an opener.
 
 Before adding a GitHub read, check what the existing poll already fetches. Pull request cards
 needed no new request at all: `/repos/{repo}/issues` returns pull requests, and the client used to

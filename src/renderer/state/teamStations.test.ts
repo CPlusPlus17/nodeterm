@@ -55,6 +55,14 @@ describe('wiring', () => {
     expect(canvas).toContain('useTeamStations.getState().set(teamStations)')
     expect(canvas).toContain('teams={teamStations}')
   })
+  it('Canvas marks legacy wait ropes at load, before its prune can erase the order, and mints marked waits', () => {
+    const canvas = read('../canvas/Canvas.tsx')
+    expect(canvas).toContain('const restoredRopes = markLegacyWaitRopes(project.ropes ?? [])')
+    expect(canvas).toContain('setControlEdges((es) => pruneRopes(es, ids))')
+    expect(canvas).toContain('ropeEdge(waitRopeId(dep, nid), dep, nid)')
+    // No wait rope is minted with the opener's id shape anywhere on the canvas.
+    expect(canvas).not.toContain('ropeEdge(`ctrl-${dep}-')
+  })
   it("the node header reads its OWN team from the store, never the whole status map", () => {
     const node = read('../nodes/TerminalNode.tsx')
     expect(node).toContain('useTeamStations((s) => s.byNode.get(id))')
