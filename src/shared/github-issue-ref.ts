@@ -42,7 +42,8 @@ export interface IssueRef {
  * refuses a real account stops that board syncing and DROPS every stored issue binding naming it
  * at load, and the next save writes them out of project.json. Nothing here is a shell
  * metacharacter either way. Unanchored so it embeds in a slug pattern; the ONE definition — the
- * board's repository parser and the avatar fetch in `core/github` read it too.
+ * board's repository parser, the avatar fetch in `core/github` and a stored `--after-pr` hold
+ * (`parseRepository`, below) read it too.
  */
 export const GITHUB_OWNER_PATTERN = '[A-Za-z0-9][A-Za-z0-9-]{0,38}'
 const OWNER = new RegExp(`^${GITHUB_OWNER_PATTERN}$`)
@@ -90,6 +91,8 @@ export function normalizeIssueRef(value: unknown): IssueRef | undefined {
 }
 
 /** `owner/repo` split into its halves, validated. Used for a project's configured repository. */
+/** `owner/repo`, validated with the grammar above. Exported so a stored `owner/repo` elsewhere
+ *  (a `--after-pr` hold, `@shared/pr-wait`) is read with the same rule, never a copy of it. */
 export function parseRepository(repository: unknown): { owner: string; repo: string } | undefined {
   if (typeof repository !== 'string') return undefined
   const slash = repository.indexOf('/')

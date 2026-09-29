@@ -68,6 +68,10 @@ export const RUN_NOW_AFTER_PR_REFUSAL =
 
 const FORMS = 'N:checks or N:merged (N may be #N or owner/repo#N), comma-separated'
 
+// The repository a hold names is a STORED value, so it is read with the one owner/name grammar
+// (`parseRepository` over GITHUB_OWNER_PATTERN): what GitHub has actually issued, `john-` and
+// `hello--world` included. A narrower rule would turn every hold on such a repository invalid on
+// load and write it out that way on save.
 const NUMBER = /^[1-9][0-9]{0,9}$/
 const MAX_NUMBER = 2 ** 31 - 1
 

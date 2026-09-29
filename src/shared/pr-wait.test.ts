@@ -180,6 +180,26 @@ describe('normalizePrWaitHold — a git-shared, hand-editable project file is ho
   })
 })
 
+describe('owner names GitHub really issued (a stored value is never narrower than GitHub)', () => {
+  // MEASURED 2026-09-29 (gh api users/<name>): `john-` (user), `Test-` (org), `hello--world` (user)
+  // and `foo--bar` (org) exist; `-foo` does not. A validator narrower than that would turn every
+  // stored hold on such a repository invalid on load, and the next save would write it out that way.
+  it.each(['john-/repo', 'Test-/x', 'hello--world/nodeterm', 'foo--bar/a.b_c-d'])('keeps a hold on %s', (repository) => {
+    const hold = { repository, waits: [{ number: 3, until: 'merged' }], deadlineAt: 5 }
+    expect(normalizePrWaitHold(hold)).toEqual(hold)
+    expect(parseAfterPrArg(`${repository}#3:merged`)).toEqual({
+      ok: true,
+      specs: [{ number: 3, until: 'merged', repository }]
+    })
+  })
+
+  it.each(['-foo/repo', 'o/-repo', 'o/..', 'o/.', 'a'.repeat(40) + '/r', 'o/r;x', 'o/r x'])('still refuses %s', (repository) => {
+    expect(normalizePrWaitHold({ repository, waits: [{ number: 3, until: 'merged' }], deadlineAt: 5 })).toEqual(
+      INVALID_PR_WAIT_HOLD
+    )
+  })
+})
+
 describe('formatPrWaits', () => {
   it('names each pull request and its condition', () => {
     expect(
