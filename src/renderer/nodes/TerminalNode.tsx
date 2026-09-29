@@ -49,8 +49,9 @@ import {
   installLinkContextMenu,
   cachedCwd,
   findExistingPath,
-  missingFileMessage,
-  makeDirListingLookup
+  fileMissMessage,
+  makeDirListingLookup,
+  type UnverifiedPath
 } from '../terminal/file-links'
 import { linkMenuItems, resolveLinkTarget, type LinkMenuTarget } from '../terminal/link-menu'
 import { ContextMenu } from '../components/ContextMenu'
@@ -3129,10 +3130,15 @@ export function TerminalNode({
       const getCwd = (): string | undefined => (data.cwd as string | undefined) || undefined
       // The pane's CURRENT directory — the second anchor for a relative path (see CwdSources).
       const getLiveCwd = cachedCwd(() => api.pty.paneCwd(id))
-      const onMissingFile = (token: string, tried: string[]): void => {
+      // "Couldn't check" when any candidate could not be checked, "File not found" only for a
+      // verified absence (`fileMissMessage`).
+      const onMissingFile = (
+        token: string,
+        miss: { tried: string[]; unverified?: UnverifiedPath[] }
+      ): void => {
         window.dispatchEvent(
           new CustomEvent('nodeterm:toast', {
-            detail: { kind: 'error', message: missingFileMessage(token, tried) }
+            detail: { kind: 'error', message: fileMissMessage(token, miss) }
           })
         )
       }

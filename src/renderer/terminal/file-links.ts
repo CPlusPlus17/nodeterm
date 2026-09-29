@@ -294,31 +294,74 @@ export interface CwdSources {
   getLiveCwd?(): Promise<string | undefined>
 }
 
-/** Where a path token resolved: an existing entry, or every absolute path that was tried. */
+/**
+ * What one existence check knows about one absolute path. `exists: false` WITHOUT `unverified` is a
+ * verified absence (the parent listed real entries and ours is not among them); WITH it, nothing is
+ * known and `unverified` says why. "Could not read" must never be laundered into "nothing there" —
+ * a dead ControlMaster is not evidence that a file is gone.
+ */
+export interface PathLookup {
+  exists: boolean
+  dir: boolean
+  unverified?: string
+}
+
+/** A candidate path that could not be checked, and why. */
+export interface UnverifiedPath {
+  abs: string
+  reason: string
+}
+
+/** Where a path token resolved: an existing entry, or every absolute path that was tried. A miss
+ *  carries `unverified` (non-empty) when any candidate could not be checked — then the answer is
+ *  "unknown", not "missing". Absent means every candidate was a verified absence. */
 export type PathResolution =
   | { found: true; abs: string; dir: boolean }
-  | { found: false; tried: string[] }
+  | { found: false; tried: string[]; unverified?: UnverifiedPath[] }
+
+/** The short reason an error carries, for a toast or a menu row. */
+function reasonOf(err: unknown): string {
+  const msg = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+  return msg.trim() || 'the lookup failed'
+}
 
 /**
  * Resolve a path token to an EXISTING file or directory: absolute (and `~/`) tokens are tried as
  * they are; a relative token against the launch cwd first, then the pane's live cwd. The launch cwd
  * wins when both hold a match, so a link never changes meaning just because the pane moved. The
  * live cwd is only asked when the first candidate misses — it is a tmux round trip, and the common
- * case never pays it. A lookup that throws counts as a miss.
+ * case never pays it.
+ *
+ * Three outcomes, not two: found, a verified miss, or unknown. A lookup that throws or answers
+ * `unverified` records that candidate as UNCHECKED; if nothing is found, the result carries those
+ * so the caller says "couldn't check", never "not found".
+ *
+ * An unchecked launch-cwd candidate still lets the live cwd be tried. A hit there is real evidence
+ * (a listing returned the entry), whereas stopping would turn one flaky listing into a dead link for
+ * a file we can prove exists. The cost is the tie-break: if the launch cwd ALSO held a same-named
+ * file, the one we could not see would have won. Opening a file that provably exists at the path
+ * the pane is standing in is the lesser surprise than a toast saying we could not check.
  */
 export async function findExistingPath(
   token: string,
   convention: PathConventionOpts,
-  deps: CwdSources & { lookup(abs: string): Promise<{ exists: boolean; dir: boolean }> }
+  deps: CwdSources & { lookup(abs: string): Promise<PathLookup> }
 ): Promise<PathResolution> {
   const tried: string[] = []
+  const unverified: UnverifiedPath[] = []
   const attempt = async (cwd: string | undefined): Promise<PathResolution | null> => {
     const abs = resolveFileToken(token, cwd, convention)
     if (!abs || tried.includes(abs)) return null
     tried.push(abs)
-    const f = await deps.lookup(abs).catch(() => ({ exists: false, dir: false }))
-    return f.exists ? { found: true, abs, dir: f.dir } : null
+    const f: PathLookup = await deps
+      .lookup(abs)
+      .catch((err: unknown) => ({ exists: false, dir: false, unverified: reasonOf(err) }))
+    if (f.exists) return { found: true, abs, dir: f.dir }
+    if (f.unverified !== undefined) unverified.push({ abs, reason: f.unverified || 'the lookup failed' })
+    return null
   }
+  const miss = (): PathResolution =>
+    unverified.length ? { found: false, tried, unverified } : { found: false, tried }
   const first = await attempt(deps.getCwd())
   if (first) return first
   if (deps.getLiveCwd && !isAnchoredToken(token, convention)) {
@@ -328,7 +371,7 @@ export async function findExistingPath(
       if (second) return second
     }
   }
-  return { found: false, tried }
+  return miss()
 }
 
 /** Does the token carry its own root (so no cwd can change where it points)? */
@@ -365,12 +408,42 @@ export function cachedCwd(
   }
 }
 
-/** The toast text for a Cmd/Ctrl+click on a path that exists nowhere we looked. */
+/** The toast text for a Cmd/Ctrl+click on a path that exists nowhere we looked. Only for a
+ *  VERIFIED miss — see `fileMissMessage`. */
 export function missingFileMessage(token: string, tried: string[]): string {
   if (!tried.length) return `File not found: ${token} (no working directory to resolve it against)`
   return tried.length === 1
     ? `File not found: ${tried[0]}`
     : `File not found: ${token} — looked in ${tried.join(' and ')}`
+}
+
+/** The toast text when at least one candidate could not be checked and none was found. It must
+ *  not claim the file is gone: it names what it could not check and why, and a candidate that WAS
+ *  a verified miss is mentioned as exactly that. */
+export function unverifiableFileMessage(
+  token: string,
+  tried: string[],
+  unverified: UnverifiedPath[]
+): string {
+  const reasons = [...new Set(unverified.map((u) => u.reason))].join('; ')
+  const unchecked = unverified.map((u) => u.abs)
+  const missed = tried.filter((t) => !unchecked.includes(t))
+  const head =
+    unverified.length === 1
+      ? `Couldn't check ${unchecked[0]}: ${reasons}`
+      : `Couldn't check ${token} at ${unchecked.join(' or ')}: ${reasons}`
+  return missed.length ? `${head} (not found at ${missed.join(' or ')})` : head
+}
+
+/** The honest sentence for a Cmd/Ctrl+click miss: "couldn't check" when any candidate was
+ *  unchecked, "not found" only when every one was a verified absence. */
+export function fileMissMessage(
+  token: string,
+  miss: { tried: string[]; unverified?: UnverifiedPath[] }
+): string {
+  return miss.unverified?.length
+    ? unverifiableFileMessage(token, miss.tried, miss.unverified)
+    : missingFileMessage(token, miss.tried)
 }
 
 export interface FileLinkDeps extends CwdSources {
@@ -379,7 +452,7 @@ export interface FileLinkDeps extends CwdSources {
   /** Dynamic host decision. `null` means the owning core's dialect was not observed, so file
    *  links fail closed instead of borrowing the browser's OS. Takes precedence over `windows`. */
   convention?: () => PathConventionOpts | null
-  lookup(abs: string): Promise<{ exists: boolean; dir: boolean }>
+  lookup(abs: string): Promise<PathLookup>
   activate(abs: string, dir: boolean): void
 }
 
@@ -535,20 +608,43 @@ export function createUrlLinkProvider(term: Terminal, openUrl: (url: string) => 
   }
 }
 
-/** Existence+dir-ness via cached parent-dir listings (one list covers all siblings). */
+/**
+ * Existence+dir-ness via cached parent-dir listings (one list covers all siblings).
+ *
+ * Only a listing that came back WITH entries can prove absence. Two answers cannot, and are
+ * reported as `unverified` instead of a miss (the rule `lib/filesNode.ts classifyEmptyListing`
+ * states at length):
+ *  - a `list` that REJECTS (a transport failure, a relay refusal, a dropped bridge);
+ *  - a listing that is EMPTY. `FsApi` is fail-open by contract — `core/fs-ops.listDir` and
+ *    `SshFs.listDir` end `catch { return [] }`, and the SSH IPC resolves `[]` for a project whose
+ *    ControlMaster is down — so `[]` is what a dead master, a permission error or a timeout looks
+ *    like. It is also what a directory that does not exist looks like; we cannot tell those apart
+ *    from here, so the answer names the doubt rather than telling the user their file is gone.
+ * Plus one shape the listing can never answer: a `.git` entry, which both listing legs strip.
+ *
+ * A failure is cached as a FAILURE, for `failureTtlMs` (short: it only keeps a hover sweep from
+ * re-listing the same dead directory per row) — never as an empty directory for the full TTL, which
+ * used to turn one hiccup into three seconds of "not found".
+ */
 export function makeDirListingLookup(
   list: (dir: string) => Promise<Array<{ name: string; dir: boolean }>>,
   ttlMs = 3000,
-  convention: () => PathConventionOpts | null = () => ({})
-): (abs: string) => Promise<{ exists: boolean; dir: boolean }> {
-  const cache = new Map<string, { at: number; entries: Array<{ name: string; dir: boolean }> }>()
+  convention: () => PathConventionOpts | null = () => ({}),
+  opts: { failureTtlMs?: number; now?: () => number } = {}
+): (abs: string) => Promise<PathLookup> {
+  const failureTtlMs = opts.failureTtlMs ?? Math.min(1000, ttlMs)
+  const now = opts.now ?? Date.now
+  type Listing = { at: number; entries: Array<{ name: string; dir: boolean }> } | { at: number; error: string }
+  const cache = new Map<string, Listing>()
+  const fresh = (l: Listing | undefined): l is Listing =>
+    !!l && now() - l.at < ('error' in l ? failureTtlMs : ttlMs)
   return async (abs) => {
-    const opts = convention()
-    if (!opts) return { exists: false, dir: false }
+    const conv = convention()
+    if (!conv) return { exists: false, dir: false, unverified: 'no filesystem to check it on' }
     // On POSIX a backslash is legal filename text, not a separator. Only the Windows dialect may
     // split on it; resolved Windows tokens normally use `/`, but accepting a native path here keeps
     // this boundary honest if another caller supplies one later.
-    const i = opts.windows
+    const i = conv.windows
       ? Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'))
       : abs.lastIndexOf('/')
     // `C:/a.ts` splits to a dir of `C:`, which on Windows means "the current directory on drive
@@ -561,15 +657,25 @@ export function makeDirListingLookup(
           ? abs.slice(0, i) + separator
           : abs.slice(0, i)
     const name = abs.slice(i + 1)
-    const cacheKey = opts.windows ? dir.toLowerCase() : dir
-    const hit = cache.get(cacheKey)
-    const entries =
-      hit && Date.now() - hit.at < ttlMs ? hit.entries : await list(dir).catch(() => [])
-    if (!hit || Date.now() - (hit?.at ?? 0) >= ttlMs)
-      cache.set(cacheKey, { at: Date.now(), entries })
-    const e = entries.find((x) =>
-      opts.windows ? x.name.toLowerCase() === name.toLowerCase() : x.name === name
-    )
+    const same = (a: string, b: string): boolean =>
+      conv.windows ? a.toLowerCase() === b.toLowerCase() : a === b
+    if (same(name, '.git')) return { exists: false, dir: false, unverified: 'directory listings hide .git' }
+    const cacheKey = conv.windows ? dir.toLowerCase() : dir
+    const cached = cache.get(cacheKey)
+    let listing: Listing
+    if (fresh(cached)) listing = cached
+    else {
+      listing = await list(dir).then(
+        (entries): Listing =>
+          entries.length
+            ? { at: now(), entries }
+            : { at: now(), error: `nothing listed in ${dir} (it may not exist, or the filesystem is unreachable)` },
+        (err: unknown): Listing => ({ at: now(), error: reasonOf(err) })
+      )
+      cache.set(cacheKey, listing)
+    }
+    if ('error' in listing) return { exists: false, dir: false, unverified: listing.error }
+    const e = listing.entries.find((x) => same(x.name, name))
     return { exists: !!e, dir: !!e?.dir }
   }
 }
@@ -648,13 +754,15 @@ export function linkAtCell(
 }
 
 export interface LinkClickDeps extends LinkHitDeps {
-  lookup(abs: string): Promise<{ exists: boolean; dir: boolean }>
+  lookup(abs: string): Promise<PathLookup>
   activateFile(abs: string, dir: boolean): void
   openUrl(url: string): void
-  /** A Cmd/Ctrl+click on a path that exists under neither cwd. The click is already swallowed (it
+  /** A Cmd/Ctrl+click on a path found under neither cwd. The click is already swallowed (it
    *  must be, before the async lookup), so without this it would do nothing at all — the host says
-   *  where it looked instead. `tried` may be empty (nothing could anchor the token). */
-  onMissing?(token: string, tried: string[]): void
+   *  where it looked instead. `tried` may be empty (nothing could anchor the token); `unverified`
+   *  (non-empty when present) lists candidates that could NOT be checked, in which case the host
+   *  must not say the file is missing (`fileMissMessage`). */
+  onMissing?(token: string, miss: { tried: string[]; unverified?: UnverifiedPath[] }): void
 }
 
 /**
@@ -695,7 +803,7 @@ export function installLinkClickFallback(
     const convention = (deps.convention ? deps.convention() : { windows: deps.windows }) ?? {}
     void findExistingPath(hit.token, convention, deps).then((r) => {
       if (r.found) deps.activateFile(r.abs, r.dir)
-      else deps.onMissing?.(hit.token, r.tried)
+      else deps.onMissing?.(hit.token, r)
     })
   }
   host.addEventListener('mouseup', onMouseUp, { capture: true })
