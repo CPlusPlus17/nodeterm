@@ -163,3 +163,86 @@ describe('WorkspaceStore.projectIdsForNode — the memo keys (D1)', () => {
     expect(store.projectIdsForNode('s1')).toEqual([])
   })
 })
+
+describe('WorkspaceStore.projectIdsForNode — the per-frame cost (R46)', () => {
+  // A hosted-team relay asks this once per terminal FRAME for every non-editor viewer, and each ask
+  // snapshots the memo's inputs. That snapshot used to `path.join` every local ref's project-file
+  // path (85% of ~78 µs/frame at 100 entries). The path depends on the cwd string alone, so it is
+  // memoized per cwd — and the memo must keep invalidating on every input kind it did before.
+  type Entry = {
+    id: string
+    cwd?: string
+    project?: { id: string; nodes: CanvasNodeState[] }
+    cache?: { nodes: CanvasNodeState[] }
+  }
+  type Internals = { index: { entries: Entry[] }; lastWritten: Map<string, string> }
+  const internals = (store: WorkspaceStore): Internals => store as unknown as Internals
+
+  it('a lookup against an unchanged store builds no project-file path', async () => {
+    const dirs = await Promise.all(Array.from({ length: 20 }, () => newRoot()))
+    const store = new WorkspaceStore()
+    await store.save(ws(dirs.map((d, i) => project(`p${i}`, d, [`p${i}-n1`]))))
+    expect(store.projectIdsForNode('p3-n1')).toEqual(['p3'])
+    const join = vi.spyOn(path, 'join')
+    try {
+      for (let k = 0; k < 100; k++) store.projectIdsForNode(`p${k % 20}-n1`)
+      expect(join).not.toHaveBeenCalled()
+    } finally {
+      join.mockRestore()
+    }
+  })
+
+  /** Local refs pa (cwd a) and pb (cwd b), an inline project and an SSH cache, memo warmed. */
+  async function fixture(): Promise<{ store: WorkspaceStore; entries: Entry[]; a: string; b: string }> {
+    const [a, b] = [await newRoot(), await newRoot()]
+    const store = new WorkspaceStore()
+    await store.save(ws([project('pa', a, ['n1']), project('pb', b, ['n2']), project('inline', undefined, ['n3'])]))
+    internals(store).index.entries.push({ id: 'ssh1', cache: { nodes: [node('s1')] } })
+    expect(store.projectIdsForNode('n1')).toEqual(['pa'])
+    return { store, entries: internals(store).index.entries, a, b }
+  }
+
+  const kinds: Array<[string, (f: Awaited<ReturnType<typeof fixture>>) => void, string, string[]]> = [
+    ['the index object is reassigned', ({ store, entries }) => {
+      internals(store).index = { ...internals(store).index, entries: entries.filter((e) => e.id !== 'pa') }
+    }, 'n1', []],
+    ['an entry is replaced in the array', ({ entries }) => { entries[0] = { ...entries[0], id: 'pa2' } }, 'n1', ['pa2']],
+    ['a local ref is re-keyed in place', ({ entries }) => { entries[0].id = 'pa3' }, 'n1', ['pa3']],
+    ['an inline project is replaced', ({ entries }) => { entries[2].project = { ...entries[2].project!, nodes: [node('n9')] } }, 'n9', ['inline']],
+    ['an inline project is re-keyed in place', ({ entries }) => { entries[2].project!.id = 'renamed' }, 'n3', ['renamed']],
+    ['an inline node array is replaced', ({ entries }) => { entries[2].project!.nodes = [node('n8')] }, 'n8', ['inline']],
+    ['an SSH cache is replaced', ({ entries }) => { entries[3].cache = { ...entries[3].cache!, nodes: [node('s9')] } }, 's9', ['ssh1']],
+    ['an SSH cached node array is replaced', ({ entries }) => { entries[3].cache!.nodes = [node('s8')] }, 's8', ['ssh1']],
+    ["a local ref's cwd changes in place", ({ entries, b }) => { entries[0].cwd = b }, 'n2', ['pa', 'pb']],
+    ["a local ref's project file text changes", ({ store, a }) => {
+      const file = path.join(a, '.nodeterm', 'project.json')
+      const lw = internals(store).lastWritten
+      lw.set(file, JSON.stringify({ ...JSON.parse(lw.get(file)!), nodes: [node('n7')] }))
+    }, 'n7', ['pa']]
+  ]
+
+  it.each(kinds)('invalidates when %s', async (_kind, change, id, want) => {
+    const f = await fixture()
+    expect(f.store.projectIdsForNode(id)).not.toEqual(want)
+    change(f)
+    expect(f.store.projectIdsForNode(id)).toEqual(want)
+  })
+
+  it("after a cwd moves in place, the memo watches the NEW folder's file text", async () => {
+    // The path memo is keyed on the cwd STRING. A memo keyed on anything else (the entry object,
+    // its id) keeps handing out the old folder's path, so the snapshot watches a file nothing
+    // reads any more and a later edit of the new folder's file is never seen. The new folder is
+    // one no other entry points at, so no other input can invalidate the memo on its behalf.
+    const f = await fixture()
+    const c = await newRoot()
+    const file = path.join(c, '.nodeterm', 'project.json')
+    const lw = internals(f.store).lastWritten
+    const template = JSON.parse(lw.get(path.join(f.a, '.nodeterm', 'project.json'))!)
+    lw.set(file, JSON.stringify({ ...template, nodes: [node('n5')] }))
+    f.entries[0].cwd = c
+    expect(f.store.projectIdsForNode('n5')).toEqual(['pa'])
+    lw.set(file, JSON.stringify({ ...template, nodes: [node('n6')] }))
+    expect(f.store.projectIdsForNode('n6')).toEqual(['pa'])
+    expect(f.store.projectIdsForNode('n5')).toEqual([])
+  })
+})

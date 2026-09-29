@@ -51,7 +51,21 @@ export interface RemoteWorkspaceIO {
   writeSettings?(projectId: string, ssh: NonNullable<Project['ssh']>, content: string): Promise<boolean>
 }
 
-const projectFilePath = (cwd: string): string => path.join(cwd, PROJECT_DIR, PROJECT_FILE)
+/** cwd -> its project-file path. The path is a pure function of the cwd string, and the hosted
+ *  relay's per-frame access check (`projectIdsForNode` → `canvasInputs`) needs it for every index
+ *  entry on every frame, where `path.join` was most of the cost. Bounded, oldest out: the key set is
+ *  the cwds the index has ever held, which only grows by the user adding folders. */
+const projectFilePaths = new Map<string, string>()
+const PROJECT_FILE_PATHS_CAP = 1024
+const projectFilePath = (cwd: string): string => {
+  let file = projectFilePaths.get(cwd)
+  if (file === undefined) {
+    file = path.join(cwd, PROJECT_DIR, PROJECT_FILE)
+    if (projectFilePaths.size >= PROJECT_FILE_PATHS_CAP) projectFilePaths.delete(projectFilePaths.keys().next().value!)
+    projectFilePaths.set(cwd, file)
+  }
+  return file
+}
 
 /** The data file of one cwd-less ("inline") project: `userData/inline-projects/<id>.json`. Only
  *  ever called with an id `isInlineProjectFileId` has already accepted — workspace.json is
