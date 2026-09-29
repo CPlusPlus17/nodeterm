@@ -6,7 +6,8 @@
 // handlers, and a viewer's terminal is the owner's live one. The flow:
 //   team init → add-owner → share → the owner joins (auto-approved) and opens a terminal → a guest
 //   knocks and waits → the owner approves it as a viewer → the viewer joins the owner's live
-//   session, cannot start one, cannot write a file → `team status` lists it as a connected viewer.
+//   session, cannot start one, cannot write a file, cannot read the enclosing repository through git
+//   → `team status` lists it as a connected viewer → `team unshare` silences its terminal.
 //
 // What is real and what is not:
 //  - REAL: startServer and every core service it boots, the admin unix socket and its client, the
@@ -26,6 +27,7 @@
 //
 // ONE startServer per file (see hosted-boot.test.ts: some core paths are memoized per process).
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -217,10 +219,35 @@ const project = (id: string, nodes: CanvasNodeState[]): Project => ({
   viewport: { x: 0, y: 0, zoom: 1 },
   nodes
 })
-const WORKSPACE: Workspace = {
+/** The shared project is a FOLDER project: `cwd` is a subfolder of a real git repository (C1). */
+const workspaceWith = (sharedCwd: string): Workspace => ({
   version: 2,
   activeProjectId: SHARED,
-  projects: [project(SHARED, [terminalNode(LIVE, 0), terminalNode(IDLE, 700)]), project(PRIVATE, [terminalNode(SECRET, 0)])]
+  projects: [
+    { ...project(SHARED, [terminalNode(LIVE, 0), terminalNode(IDLE, 700)]), cwd: sharedCwd },
+    project(PRIVATE, [terminalNode(SECRET, 0)])
+  ]
+})
+
+/** A real repository with a committed secret OUTSIDE the shared subfolder: `repo/shared/` is what
+ *  the team sees, `repo/secret/key.txt` is not. Outside the server's data dir on purpose (M7 would
+ *  refuse a viewer anything in there for another reason). */
+function repoWithSecret(base: string): { repo: string; shared: string } {
+  const repo = path.join(base, 'repo')
+  fs.mkdirSync(path.join(repo, 'shared'), { recursive: true })
+  fs.mkdirSync(path.join(repo, 'secret'), { recursive: true })
+  fs.writeFileSync(path.join(repo, 'shared', 'a.txt'), 'shared file\n')
+  fs.writeFileSync(path.join(repo, 'secret', 'key.txt'), 'TOPSECRET\n')
+  const git = (...args: string[]): void => {
+    execFileSync('git', ['-c', 'user.name=e2e', '-c', 'user.email=e2e@example.invalid', '-c', 'commit.gpgsign=false', ...args], {
+      cwd: repo,
+      stdio: 'ignore'
+    })
+  }
+  git('init', '-q')
+  git('add', '-A')
+  git('commit', '-qm', 'init')
+  return { repo, shared: path.join(repo, 'shared') }
 }
 
 async function admin<T>(dataDir: string, req: Parameters<typeof callTeamAdmin>[1]): Promise<T> {
@@ -282,22 +309,30 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       throw new Error('hosted-e2e: the global fetch is not used in this test')
     }) as typeof fetch)
 
-    const srv = await step(
-      'server boot',
-      startServer({
-        port: 0,
-        host: '127.0.0.1',
-        dataDir,
-        rendererDir: path.join(dataDir, 'no-renderer'),
-        insecureHttp: false,
-        headless: true,
-        // Never touch the developer's real agent configs (see ServerConfig.installHooks).
-        installHooks: false,
-        relayTestTransport,
-        relayTestFetch
-      })
-    )
-    teardown.push(() => srv.close())
+    // The shared project's folder: a subfolder of a real repository, in its own temp dir.
+    const repoBase = fs.mkdtempSync(path.join(SHORT_BASE, 'nther-'))
+    teardown.push(() => fs.rmSync(repoBase, { recursive: true, force: true }))
+    const { shared: sharedCwd } = repoWithSecret(repoBase)
+
+    const booting = startServer({
+      port: 0,
+      host: '127.0.0.1',
+      dataDir,
+      rendererDir: path.join(dataDir, 'no-renderer'),
+      insecureHttp: false,
+      headless: true,
+      // Never touch the developer's real agent configs (see ServerConfig.installHooks).
+      installHooks: false,
+      relayTestTransport,
+      relayTestFetch
+    })
+    // Registered BEFORE the boot is awaited: a boot that outlives its step deadline is still closed
+    // once it lands, instead of leaking a server (and its admin socket) into the next test.
+    teardown.push(async () => {
+      const s = await booting.catch(() => null)
+      await s?.close()
+    })
+    const srv = await step('server boot', booting)
     // After the boot, so the log sink the server installs is what this spy calls through to.
     const warn = vi.spyOn(console, 'warn')
     teardown.push(() => warn.mockRestore())
@@ -326,7 +361,7 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
     })
 
     // The owner puts the canvas on this core and opens one terminal: that session is now live.
-    expect(await owner.call(IPC.workspaceSave, [WORKSPACE])).toMatchObject({ ok: true })
+    expect(await owner.call(IPC.workspaceSave, [workspaceWith(sharedCwd)])).toMatchObject({ ok: true })
     const opened = await owner.call(IPC.ptyCreate, [{ cols: 120, rows: 40, persistKey: LIVE }])
     expect(opened).toMatchObject({ ok: true, result: { fresh: true } })
     const ownerSessionId = (opened.result as PtyCreateResult).sessionId
@@ -371,10 +406,11 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       result: { sessionId: '', unavailable: 'join-only' }
     })
     expect(spawned).toHaveLength(1)
-    // A terminal in a project nobody shared is not reachable at all.
+    // A terminal in a project nobody shared is not reachable at all, and the refusal is the access
+    // policy's own sentence (not some other E_ROLE).
     expect(await guest.call(IPC.ptyCreate, [{ cols: 80, rows: 24, persistKey: SECRET }])).toMatchObject({
       ok: false,
-      error: { code: 'E_ROLE' }
+      error: { code: 'E_ROLE', message: 'Viewers can only watch terminals in a shared project that are already running.' }
     })
     expect(spawned).toHaveLength(1)
     // Its workspace is the shared project only.
@@ -384,8 +420,23 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
 
     // ---- 6. A viewer cannot write a file.
     const target = path.join(dataDir, 'written-by-a-viewer.txt')
-    expect(await guest.call(IPC.fsWrite, [target, 'x'])).toMatchObject({ ok: false, error: { code: 'E_ROLE' } })
+    expect(await guest.call(IPC.fsWrite, [target, 'x'])).toMatchObject({
+      ok: false,
+      error: { code: 'E_ROLE', message: "Viewers can't do that here. Ask an owner for Editor access." }
+    })
     expect(fs.existsSync(target)).toBe(false)
+
+    // ---- 6b. Git (C1): the shared folder is a SUBFOLDER of a repository. `git show HEAD:<path>`
+    // resolves the path against the repository's top level, so the real handler hands the owner the
+    // secret outside the shared folder — which is exactly why a viewer is refused git there. Its
+    // files are still readable.
+    const showSecret = [sharedCwd, 'HEAD', 'secret/key.txt']
+    expect(await owner.call(IPC.gitShowFile, showSecret)).toMatchObject({ ok: true, result: 'TOPSECRET' })
+    const gitRefusal =
+      'Git is available to viewers only in a project that is the top folder of its own repository, never in a subfolder of a larger one.'
+    expect(await guest.call(IPC.gitShowFile, showSecret)).toMatchObject({ ok: false, error: { code: 'E_ROLE', message: gitRefusal } })
+    expect(await guest.call(IPC.gitStatus, [sharedCwd])).toMatchObject({ ok: false, error: { code: 'E_ROLE', message: gitRefusal } })
+    expect(await guest.call(IPC.fsRead, [path.join(sharedCwd, 'a.txt')])).toMatchObject({ ok: true })
     // Its own view of itself says so.
     expect(await guest.call(IPC.relayHostedSelf)).toMatchObject({ ok: true, result: { role: 'viewer' } })
 
