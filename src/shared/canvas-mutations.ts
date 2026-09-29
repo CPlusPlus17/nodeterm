@@ -2,7 +2,8 @@
 // the relay host (src/main/remote), the renderer (Canvas), and the canvas-sync reflector
 // (src/core). Pure: no electron, no sockets, no disk.
 
-import { carryLocalNodeExec, sanitizeInboundNode } from './node-exec'
+import { isKanbanOp, sanitizeKanbanOp } from './kanban-ops'
+import { carryLocalNodeExec, sanitizeInboundMutation, sanitizeInboundNode } from './node-exec'
 import { REF_MAX_LEN } from './presence'
 import type { BridgeLink, CanvasEdgeKind, CanvasMutation, CanvasNodeState } from './types'
 
@@ -66,10 +67,16 @@ export function isRefId(value: unknown): value is string {
  * whole-file save would resurrect the node they deleted). The publisher therefore asks THIS function
  * first and, on a refusal, casts nothing, records nothing, and keeps the node in its baseline so the
  * next edit retries it. One predicate, one verdict, both ends.
+ *
+ * A kanban op (`kb-*`) is accepted iff `sanitizeKanbanOp` would keep it — its shape rules live in
+ * ONE place (@shared/kanban-ops) — and it fits the same byte cap. Accepted is not the same as
+ * clean: a repairable field (a label colour off the palette, an invalid rank) passes here and is
+ * repaired by `sanitizeCanvasMutation` before anyone applies or reflects it.
  */
 export function isCanvasMutation(value: unknown): value is CanvasMutation {
   if (!value || typeof value !== 'object') return false
   const m = value as { op?: unknown; id?: unknown; node?: unknown; kind?: unknown; edge?: unknown }
+  if (isKanbanOp(m)) return sanitizeKanbanOp(value) !== null && withinSizeLimit(value)
   if (m.op === 'remove') return isRefId(m.id)
   if (m.op === 'edge-remove') return isEdgeKind(m.kind) && isRefId(m.id)
   if (m.op === 'edge-upsert') {
@@ -89,6 +96,30 @@ export function isCanvasMutation(value: unknown): value is CanvasMutation {
   if (!pos || typeof pos !== 'object') return false
   if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return false
   return withinSizeLimit(m)
+}
+
+/**
+ * The CLEAN form of an accepted mutation — what a reflector reflects and an authority applies, so
+ * every peer receives the repaired op rather than each repairing the raw one on its own:
+ *  - a node `upsert` loses the exec-enabling fields (`sanitizeInboundMutation`, @shared/node-exec);
+ *  - a kanban op is rebuilt by `sanitizeKanbanOp` (unknown fields dropped, colour / rank / priority /
+ *    dueAt / category repaired or dropped), KEEPING the stamp fields `src` / `seq` / `seen` — the
+ *    order still has to judge it;
+ *  - everything else passes through unchanged.
+ * `null` = refused (a kanban op `sanitizeKanbanOp` refuses). The caller still runs
+ * `isCanvasMutation` first for the size cap; this adds no size check of its own.
+ */
+export function sanitizeCanvasMutation(m: CanvasMutation): CanvasMutation | null {
+  if (isKanbanOp(m)) {
+    const clean = sanitizeKanbanOp(m)
+    if (!clean) return null
+    const out: CanvasMutation = { ...clean }
+    if (m.src !== undefined) out.src = m.src
+    if (m.seq !== undefined) out.seq = m.seq
+    if (m.seen !== undefined) out.seen = m.seen
+    return out
+  }
+  return sanitizeInboundMutation(m)
 }
 
 function withinSizeLimit(m: unknown): boolean {
@@ -200,6 +231,8 @@ export function applyCanvasMutation(
   // safe reading of "this list is not what that mutation is about".
   if (isEdgeMutation(m)) return states
   if (m.op === 'remove') return states.filter((n) => n.id !== m.id)
+  // A kanban op addresses the board, not the node list (its `nodeId` names a CARD) — same no-op.
+  if (m.op !== 'upsert') return states
   const node = sanitizeInboundNode(m.node)
   const idx = states.findIndex((n) => n.id === node.id)
   if (idx === -1) return [...states, node]

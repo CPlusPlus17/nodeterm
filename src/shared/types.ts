@@ -639,7 +639,9 @@ export interface CanvasState {
 }
 
 /**
- * A minimal change to a canvas node list: replace-or-append a node by id, or drop one by id.
+ * A minimal change to a canvas: replace-or-append a node by id, or drop one by id — and, on the team
+ * canvas-sync path, the same for one persisted edge (`edge-*`) or one board item (`kb-*`, see
+ * `KanbanOp` below and @shared/kanban-ops).
  * Used for the client's optimistic edits and host-side diffing (see `applyMutation`/`diffToMutations`).
  *
  * `src` and `seq` exist ONLY on the team canvas-sync path (`canvas:mut`), and they are what makes
@@ -669,6 +671,37 @@ export type CanvasMutation =
       seen?: number
     }
   | { op: 'edge-remove'; kind: CanvasEdgeKind; id: string; src?: string; seq?: number; seen?: number }
+  | (KanbanOp & MutationStamp)
+
+/** Stamp fields every canvas mutation may carry (see canvas-order): the sender tag, the reflector's
+ *  total order, and the sender's causal position. Documented on `CanvasMutation` above. */
+export interface MutationStamp {
+  src?: string
+  seq?: number
+  seen?: number
+}
+
+/**
+ * The board half of the `canvas:mut` vocabulary (@shared/kanban-ops): one op per board ITEM, so two
+ * people editing one board converge item by item instead of last-writer-wins on the whole `kanban`
+ * block. Keys live in one `k:` space (`kanbanOpKey`); only a column / label / view REMOVAL is a
+ * rule-4 deletion — `kb-card-remove` and `kb-meta-remove` set a card's placement / metadata to
+ * "none", an ordinary last-writer-wins value (`isKanbanDeletion`). `github` and `pullLinks` are
+ * outside the vocabulary and never cast.
+ */
+export type KanbanOp =
+  | { op: 'kb-column'; column: KanbanColumn }
+  | { op: 'kb-column-remove'; id: string }
+  | { op: 'kb-column-order'; ids: string[] }
+  | { op: 'kb-card'; assignment: KanbanAssignment }
+  | { op: 'kb-card-remove'; nodeId: string }
+  | { op: 'kb-meta'; meta: KanbanCardMeta }
+  | { op: 'kb-meta-remove'; nodeId: string }
+  | { op: 'kb-label'; label: KanbanLabel }
+  | { op: 'kb-label-remove'; id: string }
+  | { op: 'kb-label-order'; ids: string[] }
+  | { op: 'kb-view'; view: KanbanSavedView }
+  | { op: 'kb-view-remove'; id: string }
 
 /**
  * Which persisted edge list a mutation addresses — `bridges` (context links, which an agent can

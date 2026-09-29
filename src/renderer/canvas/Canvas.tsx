@@ -3088,13 +3088,12 @@ export function Canvas() {
   const globalKanbanOpen = rawGlobalKanban && omniEnabled
   const kanbanOpen = globalKanbanOpen || perProjectKanbanOpen
   const projectKanban = useProjects((s) => s.projects.find((p) => p.id === s.activeProjectId)?.kanban)
-  // Fresh default per project — ids must not be shared across projects; NOT persisted
-  // until the first edit writes it (spec lazy-default rule).
-  const seedBoard = useMemo(
-    () => defaultKanban(),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [activeProjectId]
-  )
+  // The active project's lazy default board — deterministic per project (the same ids on every
+  // client, different across projects); NOT persisted until the first edit writes it (spec
+  // lazy-default rule). Callbacks that know WHICH project they write read `defaultKanban(thatId)`
+  // themselves rather than this render-time value, which can name the previous project for a
+  // render during a switch.
+  const seedBoard = useMemo(() => defaultKanban(activeProjectId ?? ''), [activeProjectId])
   const onKanbanChange = useCallback(
     (next: ProjectKanban) => {
       const id = useProjects.getState().activeProjectId
@@ -3103,7 +3102,7 @@ export function Canvas() {
       if (isHostedReadOnly(sessionForProject(id).id)) return
       // The board BEFORE this change — read fresh at callback entry (a stale closed-over value
       // would misattribute the diff). Same lazy-default as the KanbanView render.
-      const prev = useProjects.getState().getProject(id)?.kanban ?? seedBoard
+      const prev = useProjects.getState().getProject(id)?.kanban ?? defaultKanban(id)
       useProjects.getState().setProjectKanban(id, next)
       markDirty() // rides the existing debounced persist (commitActiveToStore + workspace.save)
       // cardTitle must return '' for — and ONLY for — nodes that no longer exist (the diff reads
@@ -3120,7 +3119,7 @@ export function Canvas() {
         useBoardLog.getState().append(api, id, { kind: 'event', nodeId, event })
       }
     },
-    [markDirty, api, seedBoard]
+    [markDirty, api]
   )
 
   // The board moving a session card by itself because every pull request linked to it merged
@@ -10468,7 +10467,7 @@ export function Canvas() {
                 targetProjectId
               )
       setNodes((ns) => [...ns, node])
-      const board = project?.kanban ?? seedBoard
+      const board = project?.kanban ?? defaultKanban(targetProjectId)
       if (columnId) {
         useProjects.getState().setProjectKanban(targetProjectId, assignNode(board, node.id, columnId, null))
       }
@@ -10496,7 +10495,7 @@ export function Canvas() {
         event: { type: 'card-created', to: toName, title }
       })
     },
-    [emptyNodePos, setNodes, markDirty, seedBoard, api]
+    [emptyNodePos, setNodes, markDirty, api]
   )
 
   // ---- GitHub issue → agent session ("Start with agent ▸") ----
@@ -10518,7 +10517,7 @@ export function Canvas() {
       const { node, projectId: targetProjectId } = created
       const nodeId = node.id
       // The project addAgentNode charged the node to (its guarded, live read) — not a second read.
-      const board = useProjects.getState().getProject(targetProjectId)?.kanban ?? seedBoard
+      const board = useProjects.getState().getProject(targetProjectId)?.kanban ?? defaultKanban(targetProjectId)
       const column = issue.columnId ? board.columns.find((c) => c.id === issue.columnId) : undefined
       if (column) {
         useProjects.getState().setProjectKanban(targetProjectId, assignNode(board, nodeId, column.id, null))
@@ -10545,7 +10544,7 @@ export function Canvas() {
       })
       if (started) useBoardLog.getState().append(api, targetProjectId, started)
     },
-    [seedBoard, markDirty, api]
+    [markDirty, api]
   )
 
   /** The reference + first prompt of an issue start, or a notice saying why nothing started. The
@@ -14216,7 +14215,7 @@ export function Canvas() {
             // Read prev fresh so the board-log diff below has the SAME base the write mutates —
             // a lazy-default board is materialized here (as the first UI edit would) so the
             // resolved column ids are stable across the write and the diff.
-            const prev = store.getProject(pid)?.kanban ?? defaultKanban()
+            const prev = store.getProject(pid)?.kanban ?? defaultKanban(pid)
             // Resolve --column by id or (case-insensitive) title; empty / "ungrouped" → null
             // (unassign). `undefined` = no such column, so report what IS available.
             const rawCol = (args.column ?? '').trim()

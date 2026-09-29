@@ -1943,8 +1943,8 @@ export class WorkspaceStore {
    * when this project cannot have a board written at all.
    *
    * **Why the phone needs a verb for this at all.** The desktop's board is a LAZY default: the
-   * canvas renders `kanban ?? defaultKanban()` and the `kanban` block is not written to the file
-   * until the user's first board edit. So on a fresh project the columns exist only in the
+   * canvas renders `kanban ?? defaultKanban(projectId)` and the `kanban` block is not written to
+   * the file until the user's first board edit. So on a fresh project the columns exist only in the
    * renderer's memory — and the phone, which knows a project solely by its `.nodeterm/project.json`,
    * saw a project with no board and could not offer one. (Measured on the author's own machine:
    * 1 of 13 project files had a `kanban` block.) Seeding the SAME three columns from the SAME

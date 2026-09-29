@@ -6,6 +6,7 @@ import { initPlatform, resetPlatformForTests, type CorePlatform } from './platfo
 import { fakePlatform } from './platform-fake'
 import {
   initCanvasSync,
+  publishCanvasMutation,
   reflectTargets,
   stampMutation,
   isCanvasMutation,
@@ -255,5 +256,55 @@ describe('initCanvasSync (reflector)', () => {
     expect(t.registrations).toEqual([IPC.canvasMut]) // beforeEach registered it
     initCanvasSync()
     expect(t.registrations).toEqual([IPC.canvasMut])
+  })
+})
+
+// Kanban ops ride the same reflector (@shared/kanban-ops): the same ingest verdict, the same stamp —
+// and, because every peer and the authority must receive the SAME repaired op rather than each
+// repairing the raw one, the reflector reflects the SANITIZED op (stamp fields kept).
+describe('initCanvasSync (reflector) — kanban ops', () => {
+  it('refuses a kb-label whose name carries a control character', () => {
+    t.setClients([1, 2])
+    t.cast(1, 'p1', { op: 'kb-label', label: { id: 'l1', name: 'a\u0007b', color: 'red' }, src: 'cv-a' })
+    expect(t.sent).toEqual([])
+  })
+
+  it('reflects a valid kb-label to every client, stamped with the total order', () => {
+    t.setClients([1, 2])
+    const m = { op: 'kb-label', label: { id: 'l1', name: 'Bug', color: 'red' }, src: 'cv-a', seen: 0 }
+    t.cast(1, 'p1', m)
+    const stamped = { ...m, seq: 1 }
+    expect(t.sent).toEqual([
+      { to: 1, channel: IPC.canvasMut, args: ['p1', stamped] },
+      { to: 2, channel: IPC.canvasMut, args: ['p1', stamped] }
+    ])
+  })
+
+  it('reflects the REPAIRED op: a label colour off the palette becomes default, src/seen kept', () => {
+    t.setClients([1, 2])
+    t.cast(1, 'p1', { op: 'kb-label', label: { id: 'l1', name: ' Bug ', color: 'neon', junk: 'x' }, src: 'cv-a', seen: 0 })
+    const repaired = { op: 'kb-label', label: { id: 'l1', name: 'Bug', color: 'default' }, src: 'cv-a', seen: 0, seq: 1 }
+    expect(t.sent).toEqual([
+      { to: 1, channel: IPC.canvasMut, args: ['p1', repaired] },
+      { to: 2, channel: IPC.canvasMut, args: ['p1', repaired] }
+    ])
+  })
+
+  it('the core\'s own publish path reflects the repaired op too', () => {
+    t.setClients([1])
+    const ok = publishCanvasMutation('p1', {
+      op: 'kb-card',
+      assignment: { nodeId: 'n1', columnId: 'c1', rank: '!!' }
+    } as CanvasMutation)
+    expect(ok).toBe(true)
+    expect(t.sent).toEqual([
+      { to: 1, channel: IPC.canvasMut, args: ['p1', { op: 'kb-card', assignment: { nodeId: 'n1', columnId: 'c1' }, seq: 1 }] }
+    ])
+  })
+
+  it('the core\'s own publish path refuses what the reflector refuses', () => {
+    t.setClients([1])
+    expect(publishCanvasMutation('p1', { op: 'kb-card-remove', nodeId: '' } as CanvasMutation)).toBe(false)
+    expect(t.sent).toEqual([])
   })
 })

@@ -1,7 +1,8 @@
 // Canvas sync — the reflector.
 //
-// Every attached client (an Electron renderer, a Server-Edition browser tab) casts its LOCAL node
-// mutations on `canvas:mut`. This service stamps each one with a monotone `seq` and sends it back
+// Every attached client (an Electron renderer, a Server-Edition browser tab) casts its LOCAL canvas
+// mutations — nodes, edges and board items (@shared/kanban-ops) — on `canvas:mut`. This service
+// stamps each one with a monotone `seq` and sends it back
 // out on the same channel to EVERY attached client, so all clients converge on the same node set —
 // a teammate's cursor never hovers over stale geometry, and a client whose canvas still held a node
 // someone else deleted can no longer write it back on the next whole-file workspace.save.
@@ -38,8 +39,12 @@
 
 import { platform, type CorePlatform } from './platform'
 import { IPC } from '../shared/ipc'
-import { isCanvasMutation, isRefId, MUTATION_MAX_BYTES } from '../shared/canvas-mutations'
-import { sanitizeInboundMutation } from '../shared/node-exec'
+import {
+  isCanvasMutation,
+  isRefId,
+  MUTATION_MAX_BYTES,
+  sanitizeCanvasMutation
+} from '../shared/canvas-mutations'
 import { type ClientId } from '../shared/presence'
 import type { CanvasMutation } from '../shared/types'
 
@@ -108,8 +113,10 @@ let seq = 0
  */
 export function publishCanvasMutation(projectId: string, mutation: CanvasMutation): boolean {
   if (!isRefId(projectId) || !isCanvasMutation(mutation)) return false
+  const clean = sanitizeCanvasMutation(mutation)
+  if (!clean) return false
   const p = platform()
-  const stamped = stampMutation(sanitizeInboundMutation(mutation), ++seq)
+  const stamped = stampMutation(clean, ++seq)
   for (const id of p.clientIds()) p.sendTo(id, IPC.canvasMut, projectId, stamped)
   return true
 }
@@ -126,11 +133,19 @@ export function initCanvasSync(): void {
     if (!isCanvasMutation(mutation)) return
     // Stamped ONCE, here: the order every client will agree on. The sender is in the target list —
     // its copy is the ack that tells it where its own edit landed (see the header).
-    // The exec-enabling node fields (`shell`, `ssh.extraArgs`) are stripped HERE too, so they are
-    // not even reflected to the other clients: a peer must not be able to put a program name or an
-    // `-o ProxyCommand=…` into anybody's canvas (@shared/node-exec). Every receiver strips them
-    // again on apply — this is the cheap upstream half.
-    const stamped = stampMutation(sanitizeInboundMutation(mutation), ++seq)
+    // What is stamped is the CLEAN op (`sanitizeCanvasMutation`), so every client receives the same
+    // bytes rather than each repairing the raw cast on its own:
+    //  - the exec-enabling node fields (`shell`, `ssh.extraArgs`) are stripped HERE too, so they are
+    //    not even reflected to the other clients: a peer must not be able to put a program name or
+    //    an `-o ProxyCommand=…` into anybody's canvas (@shared/node-exec). Every receiver strips
+    //    them again on apply — this is the cheap upstream half;
+    //  - a kanban op is rebuilt by `sanitizeKanbanOp` (unknown fields dropped, a label colour off the
+    //    palette → `default`, an invalid rank / priority / dueAt / category dropped), keeping its
+    //    `src` / `seen` so the order can still judge it. Kanban fields land in a git-shared
+    //    project.json, and the authority sanitizes again before it writes (the two-seam rule).
+    const clean = sanitizeCanvasMutation(mutation)
+    if (!clean) return
+    const stamped = stampMutation(clean, ++seq)
     for (const id of reflectTargets(p.clientIds(), senderId)) {
       p.sendTo(id, IPC.canvasMut, projectId, stamped)
     }

@@ -2117,6 +2117,8 @@ export function applyMutationToFlow(nodes: CanvasNode[], m: CanvasMutation): Can
     if (!nodes.some((n) => n.id === m.id)) return nodes // already gone — keep identity, skip render
     return nodes.filter((n) => n.id !== m.id)
   }
+  // A kanban op addresses the project's board, not the node list — same no-op, same reference.
+  if (m.op !== 'upsert') return nodes
   // A peer's node never brings the exec-enabling fields with it (@shared/node-exec): they are
   // per-machine settings, and letting one into the live array is exactly how it ends up harvested
   // into this machine's "trusted" workspace.json on the next save.

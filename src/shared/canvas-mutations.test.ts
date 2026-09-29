@@ -6,9 +6,10 @@ import {
   createMutationGuard,
   diffToMutations,
   isCanvasMutation,
-  MUTATION_MAX_BYTES
+  MUTATION_MAX_BYTES,
+  sanitizeCanvasMutation
 } from './canvas-mutations'
-import type { BridgeLink, CanvasNodeState } from './types'
+import type { BridgeLink, CanvasMutation, CanvasNodeState } from './types'
 
 const n = (id: string, x = 0, title = 't'): CanvasNodeState =>
   ({
@@ -331,5 +332,76 @@ describe('diffToMutations — scenes', () => {
       'edge-remove',
       'remove'
     ])
+  })
+})
+
+// Kanban ops ride canvas:mut too (@shared/kanban-ops). The guard is `sanitizeKanbanOp`'s verdict —
+// one set of shape rules, not a second copy here — plus the same byte cap every mutation has.
+describe('isCanvasMutation — kanban ops', () => {
+  it('accepts a well-formed kanban op of every kind', () => {
+    const ok: unknown[] = [
+      { op: 'kb-column', column: { id: 'c1', title: 'To Do', color: '#fff' } },
+      { op: 'kb-column-remove', id: 'c1' },
+      { op: 'kb-column-order', ids: ['c1', 'c2'] },
+      { op: 'kb-card', assignment: { nodeId: 'n1', columnId: 'c1' } },
+      { op: 'kb-card-remove', nodeId: 'n1' },
+      { op: 'kb-meta', meta: { nodeId: 'n1', priority: 'high' } },
+      { op: 'kb-meta-remove', nodeId: 'n1' },
+      { op: 'kb-label', label: { id: 'l1', name: 'Bug', color: 'red' } },
+      { op: 'kb-label-remove', id: 'l1' },
+      { op: 'kb-label-order', ids: ['l1'] },
+      { op: 'kb-view', view: { id: 'v1', name: 'Mine', query: {} } },
+      { op: 'kb-view-remove', id: 'v1' }
+    ]
+    for (const m of ok) expect(isCanvasMutation(m), JSON.stringify(m)).toBe(true)
+  })
+
+  it('refuses what sanitizeKanbanOp refuses — an unknown kb- op, a bad id, a control character', () => {
+    expect(isCanvasMutation({ op: 'kb-nope' })).toBe(false)
+    expect(isCanvasMutation({ op: 'kb-card-remove', nodeId: '' })).toBe(false)
+    expect(isCanvasMutation({ op: 'kb-column-remove', id: 'x'.repeat(129) })).toBe(false)
+    expect(isCanvasMutation({ op: 'kb-label', label: { id: 'l1', name: 'a\u0007b', color: 'red' } })).toBe(false)
+  })
+
+  it('accepts a repairable op (the repair is sanitizeCanvasMutation\'s job, not a refusal)', () => {
+    expect(isCanvasMutation({ op: 'kb-label', label: { id: 'l1', name: 'Bug', color: 'neon' } })).toBe(true)
+  })
+
+  it('bounds a kanban op by the same byte cap', () => {
+    const big = { op: 'kb-card', assignment: { nodeId: 'n1', columnId: 'c1' }, pad: 'x'.repeat(MUTATION_MAX_BYTES) }
+    expect(isCanvasMutation(big)).toBe(false)
+  })
+})
+
+describe('sanitizeCanvasMutation', () => {
+  it('repairs a kanban op and keeps its stamp fields', () => {
+    const raw = { op: 'kb-label', label: { id: 'l1', name: ' Bug ', color: 'neon', junk: 1 }, src: 'cv-a', seq: 4, seen: 3 } as unknown as CanvasMutation
+    expect(sanitizeCanvasMutation(raw)).toEqual({
+      op: 'kb-label',
+      label: { id: 'l1', name: 'Bug', color: 'default' },
+      src: 'cv-a',
+      seq: 4,
+      seen: 3
+    })
+  })
+
+  it('refuses (null) a kanban op sanitizeKanbanOp refuses', () => {
+    expect(sanitizeCanvasMutation({ op: 'kb-card-remove', nodeId: '' })).toBeNull()
+  })
+
+  it('strips the exec-enabling fields off a node upsert, and passes other ops through', () => {
+    const withShell = { op: 'upsert', node: { ...n('1'), shell: '/bin/evil' } } as CanvasMutation
+    const out = sanitizeCanvasMutation(withShell) as Extract<CanvasMutation, { op: 'upsert' }>
+    expect(out.node.shell).toBeUndefined()
+    const rm: CanvasMutation = { op: 'remove', id: '1', src: 'a' }
+    expect(sanitizeCanvasMutation(rm)).toBe(rm)
+  })
+})
+
+describe('applyCanvasMutation with a kanban op', () => {
+  it('leaves the node list untouched, by reference (a kanban op addresses the board, not a node)', () => {
+    const a = [n('1')]
+    expect(applyCanvasMutation(a, { op: 'kb-card', assignment: { nodeId: '1', columnId: 'c' } })).toBe(a)
+    expect(applyCanvasMutation(a, { op: 'kb-card-remove', nodeId: '1' })).toBe(a)
   })
 })

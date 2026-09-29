@@ -334,7 +334,7 @@ export const GlobalKanbanView = memo(function GlobalKanbanView() {
   }, [jumpTo])
 
   const onChangeBoard = useCallback((projectId: string, next: ProjectKanban) => {
-    const prev = useProjects.getState().getProject(projectId)?.kanban ?? defaultKanban()
+    const prev = useProjects.getState().getProject(projectId)?.kanban ?? defaultKanban(projectId)
     useProjects.getState().setProjectKanban(projectId, next)
     markWorkspaceDirty()
     const cardTitle = (nodeId: string) => {
@@ -412,7 +412,7 @@ export const GlobalKanbanView = memo(function GlobalKanbanView() {
       </div>
       <div className="global-kanban__scroll">
         {projects.map((p, idx) => {
-          const board = p.kanban ?? defaultKanban()
+          const board = p.kanban ?? defaultKanban(p.id)
           const sessions = p.nodes.map(n => toKanbanSessionState(n as never)).filter((s): s is KanbanSession => s !== null)
           return (
             <Swimlane

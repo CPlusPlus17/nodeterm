@@ -69,7 +69,8 @@
 //
 // Pure: no React, no DOM, no timers (the pending TTL below is a lazy clock read, not a timer).
 
-import type { CanvasMutation } from './types'
+import { isKanbanDeletion, isKanbanOp, kanbanOpKey } from './kanban-ops'
+import type { CanvasMutation, KanbanOp } from './types'
 
 /**
  * How long an unacked local mutation keeps suppressing peers' mutations for that node.
@@ -109,28 +110,48 @@ export const REMOVED_MAX = 512
  * bridge and a rope claiming the same id must fight in the total order and be resolved to one
  * thing, not held as two independent entities on different clients. The apply side enforces the
  * same identity (`applyEdgeMutationToScene` in canvas-mutations).
+ *
+ * Kanban ops take the third prefix, `k:`, with a sub-prefix per board item (`k:col:<id>`,
+ * `k:card:<nodeId>`, `k:colorder`, … — `kanbanOpKey`). A card's placement and meta are keyed by
+ * the node id they describe, under their own sub-prefixes, so they never share an order with the
+ * node itself: deleting a node does not tombstone its card, and a card move is not a node edit.
  */
 export function mutationKey(m: CanvasMutation): string {
+  if (isKanbanOp(m)) return kanbanOpKey(m as KanbanOp)
   if (m.op === 'edge-remove') return `e:${m.id}`
   if (m.op === 'edge-upsert') return `e:${m.edge.id}`
-  return `n:${m.op === 'remove' ? m.id : m.node.id}`
+  if (m.op === 'remove') return `n:${m.id}`
+  if (m.op === 'upsert') return `n:${m.node.id}`
+  // Unreachable for a typed mutation; an op this build does not know keys on its own name, so it
+  // can never be confused with (or tombstone) a real node, edge or board item.
+  return `?:${(m as { op: string }).op}`
 }
 
-/** The node a mutation addresses. Node ops only — an edge mutation addresses no node. */
+/** The node a mutation addresses. Node ops only — an edge mutation addresses no node, and neither
+ *  does a kanban op (a card's `nodeId` names the card, not a node this op creates or deletes). */
 export function mutationNodeId(m: CanvasMutation): string | null {
   if (m.op === 'remove') return m.id
   if (m.op === 'upsert') return m.node.id
   return null
 }
 
-/** Does this mutation ADD-OR-REPLACE its subject (as opposed to dropping it)? Nodes and edges are
- *  ordered by the same rules, so every rule below asks this rather than `op === 'upsert'`. */
+/** Does this mutation ADD-OR-REPLACE its subject (as opposed to dropping it)? Nodes, edges and
+ *  board items are ordered by the same rules, so every rule below asks this rather than
+ *  `op === 'upsert'`. Every kanban op that is not a rule-4 deletion is a value here — including
+ *  `kb-card-remove` / `kb-meta-remove`, which set a card's placement / meta to "none" (an ordinary
+ *  last-writer-wins value, never a tombstone), and the two order ops. */
 function isUpsert(m: CanvasMutation): boolean {
+  if (isKanbanOp(m)) return !isKanbanDeletion(m as KanbanOp)
   return m.op === 'upsert' || m.op === 'edge-upsert'
 }
 
-/** Does this mutation DROP its subject? The mirror of `isUpsert`. */
+/** Does this mutation DROP its subject — a rule-4 deletion? The mirror of `isUpsert`: `remove`,
+ *  `edge-remove`, and the three board removals that mean "this item is gone" (`kb-column-remove`,
+ *  `kb-label-remove`, `kb-view-remove`). NOT `kb-card-remove` / `kb-meta-remove`: a card moved back
+ *  to Ungrouped and then filed again is not a resurrection, and tombstoning it would drop a
+ *  teammate's concurrent move as a "stale frame". */
 function isRemove(m: CanvasMutation): boolean {
+  if (isKanbanOp(m)) return isKanbanDeletion(m as KanbanOp)
   return m.op === 'remove' || m.op === 'edge-remove'
 }
 
