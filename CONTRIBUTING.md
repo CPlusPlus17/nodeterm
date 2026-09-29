@@ -802,8 +802,9 @@ healthy). The desktop releases its headless client, so there a start without a p
 backend fails `not-persistent` and hands the node back unchanged (a cold open stays an ordinary
 queued node) rather than leaving a shell that the next mount would orphan. Normally that refusal
 comes before any spawn; if the backend vanishes between the probe and the spawn, the plain shell it
-got is refused before anything is typed, and releasing it kills it. A remote (SSH) node is refused
-in the renderer before the claim (`remote-unsupported`), which is the primary fence. As a belt
+got is refused before anything is typed, and releasing it kills it. A remote (SSH) node, and any
+node of an SSH project, is refused in the renderer before the claim (`remote-unsupported`), which is
+the primary fence. As a belt
 behind it, an SSH-project node's request carries `requireRemote`, which `desktopHeadlessRequest`
 keeps, so core's `spawnNew` refuses rather than spawning it locally. Keep both fences.
 

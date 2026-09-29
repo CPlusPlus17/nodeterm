@@ -3226,11 +3226,16 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     `unsupported`), and `IPC.ptyLaunchHeadless` is in `HOST_ONLY_CHANNELS`, so a relay peer that
     sends the raw request is refused host-side.
   - **Remote nodes are fenced twice.** The primary fence is the renderer's: `startHeadless`
-    answers `remote-unsupported` for a node carrying `ssh` / `sshRemoteTmux` before any claim, and
-    leaves its launch exactly as it was. Behind it is core's belt: `headlessPtyOptions` sets
-    `requireRemote` for an SSH-project (`sshRemoteTmux`) node, and `desktopHeadlessRequest` keeps
-    it while stripping `sshRemote`. So if such a node ever got past the fence, core's `spawnNew`
-    would refuse it (`spawn-failed`) instead of starting a LOCAL `nt-<id>` wearing its identity.
+    answers `remote-unsupported` before any claim for every node of an SSH project (`project.ssh`)
+    and for a node carrying `ssh` / `sshRemoteTmux`, and leaves its launch exactly as it was. The
+    project is asked, not only the node's flags: a node of an SSH project may carry neither.
+    Behind it is core's belt: `headlessPtyOptions` sets `requireRemote` for an SSH-project
+    (`sshRemoteTmux`) node, and `desktopHeadlessRequest` keeps it while stripping `sshRemote`.
+    So if such a node ever got past the fence, core's `spawnNew` would refuse it (`spawn-failed`)
+    instead of starting a LOCAL `nt-<id>` wearing its identity. `desktopHeadlessRequest` also
+    strips `viewerId` (a create under a viewer id subscribes `(0, viewer)`, while
+    `releaseHeadless` detaches `(0, PRIMARY)`, so client 0 would stay attached forever) and
+    `clearEnv` (a one-shot recycle flag, never a launch option).
   - **Why release the client.** An invisible client would fight the viewer's window size and
     keep the session "attached" for the reaper forever.
   - **No persistent backend** (tmux or session-host): releasing a plain shell would kill it, so the
