@@ -1030,6 +1030,15 @@ tmux without carrying `TMUX_TMPDIR` into it, which is the one way left to escape
 `src/core/tmux-socket-isolation.guard.test.ts` holds the short allowlist of suites that name a
 production socket on purpose; adding a third is a review conversation, not a checkbox.
 
+**A test removes every temp directory it creates.** Many sessions run `npm test` on one shared
+host, and a leaked `mkdtemp` directory costs an inode forever: `/tmp` on that host reached 100%
+inode use, about 395,000 of them empty `nodeterm-fake-*` directories from `fakePlatform()`. Those
+are now swept by `test/setup/fake-platform-cleanup.ts` once each test file finishes (see
+`src/core/platform-fake-dirs.ts`), so use a `fakePlatform()` directory freely inside its file, but
+never across files. For your own `mkdtempSync`, record the path and remove it in an `afterEach` or
+`afterAll` with `rmSync(dir, { recursive: true, force: true })`; prefer `afterAll` when something
+you started (a tail, a backgrounded script) can still be writing into it after the test returns.
+
 **An `infinite` CSS animation is a frame loop, and it runs whether or not anyone is looking.** A
 running animation makes the compositor produce a frame every vsync — 120/s on a ProMotion display —
 and re-raster the window each time; measured on a 40-terminal canvas, ONE visible pulsing node took

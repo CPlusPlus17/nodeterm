@@ -192,8 +192,16 @@ describe('buildManagedScript', () => {
     /** Runs the generated script with a fake curl, a fake cygpath, and a fake `uname` that decides
      *  which branch of the gate is taken. `uname` rather than an env var on purpose: that is what
      *  the script reads, and it is what keeps working when a caller replaces the environment. */
+    // Every run's directory is removed when this block finishes — they used to leak, one per run
+    // (see src/core/platform-fake-dirs.ts for what that did to a shared /tmp). Not per test: the
+    // script backgrounds its POST, which can still be writing curl.log when spawnSync returns.
+    const payloadDirs: string[] = []
+    afterAll(() => {
+      for (const dir of payloadDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+    })
     const run = (unameS: string, cygpath: string | null): CurlCall[] => {
       const dir = mkdtempSync(join(tmpdir(), 'nt-payload-'))
+      payloadDirs.push(dir)
       const bin = join(dir, 'bin')
       const home = join(dir, 'home')
       mkdirSync(bin, { recursive: true })

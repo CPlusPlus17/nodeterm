@@ -30,7 +30,10 @@ export default defineConfig({
     // this machine runs nodeterm on. `globalSetup` creates and removes it, the setup file re-asserts
     // it inside each worker (and refuses if it is missing). See test/setup/tmux-sandbox.ts.
     globalSetup: ['test/setup/tmux-sandbox.ts'],
-    setupFiles: ['test/setup/tmux-worker-env.ts'],
+    // fake-platform-cleanup: removes every temp dir `fakePlatform()` made once each test file ends.
+    // Without it they were never removed, and a shared host's /tmp ran out of inodes. See
+    // src/core/platform-fake-dirs.ts; src/core/platform-fake.test.ts proves the wiring end to end.
+    setupFiles: ['test/setup/tmux-worker-env.ts', 'test/setup/fake-platform-cleanup.ts'],
     // Issue #160: with the default (one worker per core), a 10-core Mac runs ~10 fs-heavy suites
     // at once and transient fd exhaustion (EMFILE) turns into silent test flakiness — probes like
     // `fs.existsSync` swallow the error and answer false, so whole files fail in ways that never

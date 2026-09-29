@@ -2,6 +2,7 @@ import { mkdtempSync } from 'fs'
 import os from 'os'
 import path from 'path'
 import type { CorePlatform } from './platform'
+import { trackFakePlatformDir } from './platform-fake-dirs'
 
 export interface FakePlatform extends CorePlatform {
   handlers: Record<string, (...args: any[]) => unknown>
@@ -23,10 +24,17 @@ export interface FakePlatform extends CorePlatform {
  * store, context-link, the token files — statically reads as a write to a PREDICTABLE temp path,
  * which is a real symlink-attack shape and which CodeQL flags as `js/insecure-temporary-file`.
  * Tests that want their own directory still pass one in; this only fixes what they inherit.
+ *
+ * The directory is REMOVED when the test file finishes — see platform-fake-dirs.ts. It used to be
+ * made on every call and never removed, which is how `/tmp` on a shared host ran out of inodes.
+ * A caller that passes its own `userDataDir` gets no directory made at all (one used to be created
+ * and immediately shadowed by the override); that caller owns its directory's lifetime.
  */
 export function fakePlatform(overrides: Partial<CorePlatform> = {}): FakePlatform {
+  const userDataDir =
+    overrides.userDataDir ?? trackFakePlatformDir(mkdtempSync(path.join(os.tmpdir(), 'nodeterm-fake-')))
   const f: FakePlatform = {
-    userDataDir: mkdtempSync(path.join(os.tmpdir(), 'nodeterm-fake-')),
+    userDataDir,
     appVersion: '0.0.0-test',
     isPackaged: false,
     handlers: {},

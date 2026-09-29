@@ -3,7 +3,7 @@
 // function: mint discipline, the joiner-side pin, auto-confirm, and the denial reason. The first
 // block drives a fake connect so every option handed to the relay client is observable; the second
 // runs the real core client against the real hosted service over an in-process transport.
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, vi, afterAll, afterEach, beforeEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -20,7 +20,18 @@ import type { PeerAttach } from '../../core/relay/relay-host'
 import type { RelayTransport } from '../../core/relay/relay-socket'
 import { IPC } from '../../shared/ipc'
 
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-join-'))
+// Every directory this file makes is removed when it finishes: `setup()` never removed its own, and
+// one leaked per test on every run of the suite (see src/core/platform-fake-dirs.ts for what that
+// did to a shared host's /tmp). `hostedWorld()` still removes its own early, in `afterEach`.
+const madeDirs: string[] = []
+const tmpDir = () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-join-'))
+  madeDirs.push(dir)
+  return dir
+}
+afterAll(() => {
+  for (const dir of madeDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
+})
 const pub = (k: KeyPair) => publicKeyToB64(k.publicKey)
 
 function codeFor(hostKeys: KeyPair, over: Partial<JoinCode> = {}): JoinCode {

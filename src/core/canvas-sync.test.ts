@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync } from 'fs'
+import { mkdtempSync, rmSync } from 'fs'
 import os from 'os'
 import path from 'path'
 import { initPlatform, resetPlatformForTests, type CorePlatform } from './platform'
@@ -68,7 +68,12 @@ beforeEach(() => {
   initPlatform(t.p)
   initCanvasSync()
 })
-afterEach(() => resetPlatformForTests())
+afterEach(() => {
+  resetPlatformForTests()
+  // Every test mints a fresh mkdtemp dir above; nothing removed them, so each run leaked one per
+  // test into the shared temp dir (see src/core/platform-fake-dirs.ts for what that did to /tmp).
+  rmSync(t.p.userDataDir, { recursive: true, force: true })
+})
 
 describe('reflectTargets', () => {
   // The sender IS a target: its copy is the ACK that tells it where its own edit landed in the
