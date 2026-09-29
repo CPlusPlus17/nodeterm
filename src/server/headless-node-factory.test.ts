@@ -8,6 +8,7 @@ import { fakePlatform } from '../core/platform-fake'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { WorkspaceStore } from '../core/workspace-store'
 import type { AgentState } from '../shared/agents/normalize'
+import { MAX_LAUNCH_LINE_BYTES } from '../shared/canonical-line'
 import { RUN_NOW_AFTER_REFUSAL } from '../shared/control-verbs'
 import {
   DEFAULT_SETTINGS,
@@ -20,6 +21,7 @@ import {
 import {
   createHeadlessNodeOwnership,
   HeadlessNodeFactory,
+  launchFailedError,
   type HeadlessNodeOwnership,
   type HeadlessPty
 } from './headless-node-factory'
@@ -120,6 +122,32 @@ const terminal = (
   group: null,
   tags: [],
   agentId
+})
+
+describe('launchFailedError (#925)', () => {
+  it('groups ids by reason, says what each reason means, and keeps the launch-failed prefix', () => {
+    const msg = launchFailedError(
+      [
+        { id: 'a', reason: 'no-shell', retained: true },
+        { id: 'b', reason: 'line-too-long', retained: true },
+        { id: 'c', reason: 'no-shell', retained: true },
+        { id: 'd', reason: 'spawn-failed', retained: false }
+      ],
+      'open-agent'
+    )
+    expect(msg).toMatch(/^launch-failed: node\(s\) a, b, c, d were persisted/)
+    expect(msg).toContain('no-shell: a, c (launch retained for Run now in the node)')
+    expect(msg).toContain('line-too-long: b (the launch line is longer than a terminal line takes, so Run now will fail the same way; shorten the prompt)')
+    // A plain terminal that never spawned held no launch: promising Run now would be false.
+    expect(msg).toContain('spawn-failed: d (no launch was held)')
+    expect(msg).toMatch(/; do not repeat the open request$/)
+  })
+
+  it('an open-terminal --cmd that is too long is a command, not a prompt', () => {
+    expect(launchFailedError([{ id: 't', reason: 'line-too-long', retained: true }], 'open-terminal')).toContain(
+      'shorten the command'
+    )
+  })
 })
 
 describe('HeadlessNodeFactory', () => {
@@ -1311,6 +1339,63 @@ describe('HeadlessNodeFactory', () => {
     const id = (reply.result as { id: string }).id
     const node = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
     expect(node?.pendingLaunch).toMatchObject({ command: 'printf hello', manualOnly: true })
+  })
+
+  it('a failed open names each node\'s reason, per id and in the message (#925)', async () => {
+    vi.spyOn(pty, 'writeHeadless').mockReturnValue(false)
+    const reply = await factory.openTerminal('term-source', { cwd: projectDir, cmd: 'printf hello' }, true)
+    const id = (reply.result as { id: string }).id
+    expect(reply.ok).toBe(false)
+    expect(reply.error).toMatch(/^launch-failed:/)
+    expect(reply.error).toContain(`cancelled: ${id} (launch retained for Run now in the node)`)
+    expect(reply.error).toContain('do not repeat the open request')
+    // The result shape is unchanged; the per-id reasons ride beside it.
+    expect(reply.result).toMatchObject({ failed: [id], deliveredIds: [], reasons: { [id]: 'cancelled' } })
+  })
+
+  it('line-too-long says Run now fails the same way and to shorten the prompt: --prompt-file is not a flag here (#925)', async () => {
+    // A canonical-mode tty drops everything past its cap, so the echo never matches the command.
+    const write = pty.writeHeadless.bind(pty)
+    vi.spyOn(pty, 'writeHeadless').mockImplementation((key, data) =>
+      write(key, data.length > MAX_LAUNCH_LINE_BYTES ? data.slice(0, MAX_LAUNCH_LINE_BYTES) : data)
+    )
+    // Only the delivery's timers are faked (3 x VERIFY_TIMEOUT_MS of real time otherwise); the
+    // workspace store's file I/O stays real, so each step also yields to the event loop.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let reply!: Awaited<ReturnType<HeadlessNodeFactory['openAgent']>>
+    try {
+      let settled = false
+      const pending = factory
+        .openAgent('term-source', { agent: 'claude', prompt: 'x'.repeat(1100) }, true)
+        .finally(() => (settled = true))
+      for (let i = 0; i < 400 && !settled; i++) {
+        await new Promise((r) => setImmediate(r))
+        await vi.advanceTimersByTimeAsync(100)
+      }
+      reply = await pending
+    } finally {
+      vi.useRealTimers()
+    }
+    const id = (reply.result as { id: string }).id
+    expect(reply.ok).toBe(false)
+    expect(reply.error).toMatch(/^launch-failed:/)
+    expect(reply.error).toContain(`line-too-long: ${id}`)
+    expect(reply.error).toContain('Run now will fail the same way')
+    expect(reply.error).toContain('shorten the prompt')
+    expect(reply.error).not.toContain('retained for Run now')
+    expect(reply.error).not.toContain('--prompt-file')
+    expect(reply.result).toMatchObject({ failed: [id], reasons: { [id]: 'line-too-long' } })
+    expect(pty.sends).toEqual([]) // killed, never submitted
+    // Still held, exactly as every other failure: the user can edit the node or delete it.
+    const node = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
+    expect(node?.pendingLaunch).toMatchObject({ manualOnly: true })
+  })
+
+  it('--prompt-file is not an open-agent flag on the Server Edition (the reply above relies on it)', async () => {
+    const reply = await factory.openAgent('term-source', { agent: 'claude', 'prompt-file': '/tmp/brief.md' }, true)
+    expect(reply.ok).toBe(false)
+    expect(reply.error).toMatch(/prompt-file/)
+    expect(pty.creates).toEqual([])
   })
 
   it('accepts --run-now on open verbs as a no-op: server opens are already immediate (#925)', async () => {
