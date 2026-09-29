@@ -43,6 +43,9 @@ export interface AccessContext {
   hostDataDir: string
   /** `fs.realpath`; null = the path does not resolve. */
   realpath(p: string): string | null
+  /** Does `p` resolve (symlinks followed) to a regular file? false when it is missing, not a file,
+   *  or unreadable. Only the git rule asks it (`ownRepoMarker`). */
+  isFile(p: string): boolean
 }
 
 type Check = (args: unknown[], ctx: AccessContext) => AccessDecision
@@ -123,18 +126,29 @@ const NOT_OWN_REPO =
   'Git is available to viewers only in a project that is the top folder of its own repository, never in a subfolder of a larger one.'
 
 /**
- * Is `real` (a realpath inside a shared root) under a shared root that holds its OWN `.git` — a
- * directory, or a worktree's `.git` file? The cwd jail alone does not bound git: `git show <ref>:<p>`
- * resolves a bare `<p>` against the repository's TOP LEVEL, and `git status` / `git log` report the
- * whole repository, so from `repo/shared/` a viewer could read `repo/secret/key.txt` (measured with
- * real git). A root with its own `.git` stops git's upward discovery at or below it, so every
- * repository reachable from `real` is inside something that is shared anyway. Any containing root
- * counts: a nested shared root that is its own repository is fine even when the outer one is not.
- * Planting a `.git` (or a `gitdir:` file pointing elsewhere) takes write access to the shared root,
- * which only an editor has.
+ * Does `root` hold a `.git` that stops git's upward search there? A regular FILE (a worktree's or
+ * submodule's gitfile), which git either follows or stops on with an error, or a DIRECTORY holding
+ * HEAD. Git skips an empty `.git` directory, or a `.git` symlink to a directory that is not a
+ * repository, and finds the ENCLOSING repository (measured with real git), so neither counts.
+ */
+function ownRepoMarker(root: string, ctx: AccessContext): boolean {
+  const dotGit = path.join(root, '.git')
+  return ctx.isFile(dotGit) || ctx.isFile(path.join(dotGit, 'HEAD'))
+}
+
+/**
+ * Is `real` (a realpath inside a shared root) under a shared root that is the top of its OWN
+ * repository (`ownRepoMarker`)? The cwd jail alone does not bound git: `git show <ref>:<p>` resolves
+ * a bare `<p>` against the repository's TOP LEVEL, and `git status` / `git log` report the whole
+ * repository, so from `repo/shared/` a viewer could read `repo/secret/key.txt` (measured with real
+ * git). A root with its own repository stops git's upward discovery at or below it. Any containing
+ * root counts: a nested shared root that is its own repository is fine even when the outer one is
+ * not. This check cannot tell a real repository from a planted one: a `.git` directory with a HEAD,
+ * or a gitfile pointing at another repository's gitdir, would pass. Planting either needs write
+ * access to the shared root, which only an Editor has, and an Editor already has a shell.
  */
 function underOwnRepoRoot(real: string, ctx: AccessContext): boolean {
-  return sharedRoots(ctx).some((root) => within(root, real) && ctx.realpath(path.join(root, '.git')) !== null)
+  return sharedRoots(ctx).some((root) => within(root, real) && ownRepoMarker(root, ctx))
 }
 
 /** Every git VIEW check: the cwd jailed like a file read, then the repository rule above. */

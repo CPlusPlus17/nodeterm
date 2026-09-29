@@ -25,7 +25,7 @@
 //  - The scheduler hears about EVERY session end. The core fires `onClose` only for ends the shell
 //    did not ask for; every end this service causes (deny, expiry, removal, a listener the
 //    scheduler closes) runs the same `ended` bookkeeping, at most once per session.
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { IPC } from '../../shared/ipc'
@@ -164,6 +164,14 @@ const realpath = (p: string): string | null => {
   }
 }
 
+const isFile = (p: string): boolean => {
+  try {
+    return statSync(p).isFile()
+  } catch {
+    return false
+  }
+}
+
 const idOf = (p: unknown): unknown =>
   p !== null && typeof p === 'object' ? (p as Record<string, unknown>).id : undefined
 
@@ -227,7 +235,8 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
         [...shared].map((p) => deps.projectCwd(p)).filter((cwd): cwd is string => typeof cwd === 'string' && cwd.length > 0),
       // Never readable by a non-editor, even when a shared project's folder contains it (M7).
       hostDataDir: deps.dataDir,
-      realpath
+      realpath,
+      isFile
     }
   }
 

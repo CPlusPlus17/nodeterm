@@ -6186,10 +6186,11 @@ The invariants, each with its reason:
   argument check. `fs:*` is realpath-jailed to a shared project's realpathed cwd; `git:diff` jails
   the FILE too (`--no-index` diffs any file on the host); a `git:show-file` ref starting with `-`
   is an option (`--output=` writes a file); **every git read also needs the shared root holding
-  the cwd to be the top of its OWN repository** (a `.git` dir or worktree file): `git show
-  <ref>:<p>` resolves `<p>` against the repository's top level and `git status`/`log` report the
-  whole repository, so from a shared `repo/shared/` a Viewer read `repo/secret/key.txt` (measured,
-  C1) — a monorepo subfolder gets no git panel; `pty:create` is cut down to a whitelist, because
+  the cwd to be the top of its OWN repository** (a `.git` dir holding `HEAD`, or a worktree's
+  `.git` file; git skips an empty `.git` dir): `git show <ref>:<p>` resolves `<p>` against the
+  repository's top level and `git status`/`log` report the whole repository, so from a shared
+  `repo/shared/` a Viewer read `repo/secret/key.txt` (measured, C1) — a monorepo subfolder gets no
+  git panel; `pty:create` is cut down to a whitelist, because
   `sshRemote`'s args run `ssh` on the host during the existence probe. A non-editor's terminal
   frames (output, resync, size, exit) are judged per frame by the session's node
   (`PtyManager.nodeOfSession`), because a subscription outlives `team unshare`. Editors pass untouched

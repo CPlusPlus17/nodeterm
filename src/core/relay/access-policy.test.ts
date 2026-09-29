@@ -21,7 +21,9 @@ const ctx = (role: AccessContext['role']): AccessContext => ({
   nodeOfSession: (sid) => (sid === 's' || sid === 's1' ? 'n1' : sid === 's2' ? 'n2' : undefined),
   projectCwds: () => ['/srv/app'],
   hostDataDir: '/var/lib/nodeterm-data',
-  realpath: (p) => (p.startsWith('/srv/app/link') ? '/etc/passwd' : p)
+  realpath: (p) => (p.startsWith('/srv/app/link') ? '/etc/passwd' : p),
+  // Every mock root is the top of its own repository unless a helper says otherwise.
+  isFile: (p) => p.endsWith('/.git/HEAD')
 })
 
 describe('access policy', () => {
@@ -123,6 +125,13 @@ describe('access policy: the fs jail', () => {
             return fs.realpathSync(p)
           } catch {
             return null
+          }
+        },
+        isFile: (p) => {
+          try {
+            return fs.statSync(p).isFile()
+          } catch {
+            return false
           }
         }
       }
@@ -464,7 +473,7 @@ describe('access policy: git needs a shared root that is its own repository (C1)
   const subfolder = (role: AccessContext['role']): AccessContext => ({
     ...ctx(role),
     projectCwds: () => ['/repo/shared'],
-    realpath: (p) => (p.endsWith('/.git') && p !== '/repo/.git' ? null : p)
+    isFile: (p) => p === '/repo/.git/HEAD'
   })
 
   it('every git VIEW method is refused, with the reason, when the shared root has no .git of its own', () => {
@@ -492,7 +501,7 @@ describe('access policy: git needs a shared root that is its own repository (C1)
     const c: AccessContext = {
       ...ctx('viewer'),
       projectCwds: () => ['/mono/a', '/mono/a/b'],
-      realpath: (p) => (p.endsWith('/.git') && p !== '/mono/a/b/.git' ? null : p)
+      isFile: (p) => p === '/mono/a/b/.git/HEAD'
     }
     expect(decideAccess('req', IPC.gitStatus, ['/mono/a/b/src'], c).allow).toBe(true)
     expect(decideAccess('req', IPC.gitStatus, ['/mono/a/x'], c)).toEqual({ allow: false, message: NOT_OWN_REPO })
@@ -502,6 +511,7 @@ describe('access policy: git needs a shared root that is its own repository (C1)
     const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'access-git-')))
     try {
       fs.mkdirSync(path.join(base, 'repo', '.git'), { recursive: true })
+      fs.writeFileSync(path.join(base, 'repo', '.git', 'HEAD'), 'ref: refs/heads/main\n')
       fs.mkdirSync(path.join(base, 'repo', 'shared'), { recursive: true })
       fs.mkdirSync(path.join(base, 'wt'), { recursive: true })
       fs.writeFileSync(path.join(base, 'wt', '.git'), `gitdir: ${path.join(base, 'repo', '.git', 'worktrees', 'wt')}\n`)
@@ -518,6 +528,13 @@ describe('access policy: git needs a shared root that is its own repository (C1)
           } catch {
             return null
           }
+        },
+        isFile: (p) => {
+          try {
+            return fs.statSync(p).isFile()
+          } catch {
+            return false
+          }
         }
       })
       const show = (root: string, cwd: string) => decideAccess('req', IPC.gitShowFile, [cwd, 'HEAD', 'secret/key.txt'], onDisk(root))
@@ -529,6 +546,60 @@ describe('access policy: git needs a shared root that is its own repository (C1)
       expect(decideAccess('req', IPC.gitStatus, [path.join(base, 'repo')], onDisk(path.join(base, 'repo'))).allow).toBe(true)
       // A worktree's .git is a file; its root is the top of its own checkout.
       expect(decideAccess('req', IPC.gitStatus, [path.join(base, 'wt')], onDisk(path.join(base, 'wt'))).allow).toBe(true)
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  // R46. Git skips a `.git` that is not a repository and keeps searching upward (measured with real
+  // git 2.43: an empty `.git` dir and a `.git` symlink to a plain directory both resolve to the
+  // ENCLOSING repository). So "the root holds a `.git`" is not enough: it must be a gitfile, which
+  // git either follows or stops on, or a directory that holds HEAD.
+  it.skipIf(process.platform === 'win32')('on disk: a .git counts only as a gitfile or a directory holding HEAD (symlinks need privileges on Windows)', () => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'access-gitmark-')))
+    try {
+      const repo = path.join(base, 'repo')
+      fs.mkdirSync(path.join(repo, '.git'), { recursive: true })
+      fs.writeFileSync(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+      // An empty `.git` dir at a subfolder root.
+      fs.mkdirSync(path.join(repo, 'empty', '.git'), { recursive: true })
+      // A `.git` dir holding HEAD: its own repository.
+      fs.mkdirSync(path.join(repo, 'headed', '.git'), { recursive: true })
+      fs.writeFileSync(path.join(repo, 'headed', '.git', 'HEAD'), 'ref: refs/heads/main\n')
+      // A `.git` file (a worktree or submodule gitfile).
+      fs.mkdirSync(path.join(repo, 'gitfile'), { recursive: true })
+      fs.writeFileSync(path.join(repo, 'gitfile', '.git'), `gitdir: ${path.join(repo, '.git', 'worktrees', 'gitfile')}\n`)
+      // A `.git` symlink to a directory that is not a repository.
+      fs.mkdirSync(path.join(base, 'plain'), { recursive: true })
+      fs.mkdirSync(path.join(repo, 'linked'), { recursive: true })
+      fs.symlinkSync(path.join(base, 'plain'), path.join(repo, 'linked', '.git'))
+      const onDisk = (root: string): AccessContext => ({
+        role: 'viewer',
+        sharedProjects: new Set(['P']),
+        projectsOfNode: () => [],
+        nodeOfSession: () => undefined,
+        hostDataDir: '/nonexistent-nodeterm-data',
+        projectCwds: () => [root],
+        realpath: (p) => {
+          try {
+            return fs.realpathSync(p)
+          } catch {
+            return null
+          }
+        },
+        isFile: (p) => {
+          try {
+            return fs.statSync(p).isFile()
+          } catch {
+            return false
+          }
+        }
+      })
+      const status = (sub: string) => decideAccess('req', IPC.gitStatus, [path.join(repo, sub)], onDisk(path.join(repo, sub)))
+      expect(status('empty')).toEqual({ allow: false, message: NOT_OWN_REPO })
+      expect(status('linked')).toEqual({ allow: false, message: NOT_OWN_REPO })
+      expect(status('headed')).toEqual({ allow: true })
+      expect(status('gitfile')).toEqual({ allow: true })
     } finally {
       fs.rmSync(base, { recursive: true, force: true })
     }
