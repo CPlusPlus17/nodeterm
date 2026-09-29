@@ -4473,7 +4473,8 @@ export function Canvas() {
       void reconnectRelayTab(projectId, {
         promptForOffer: async () => {
           const offer = await promptDialog({ message: "Paste the host's new pairing code:" })
-          // A join code pasted here reconnects THIS tab through its team's attempt owner.
+          // A join code pasted here goes to the joiner, which refuses it: only a Team Access tab
+          // reaches this prompt, and a team must not be mounted into it (R46).
           if (offer && isJoinCode(offer) && hostedJoinerRef.current) {
             hostedJoinerRef.current.joinWithCode(offer, projectId)
             return null

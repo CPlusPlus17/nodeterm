@@ -31,6 +31,10 @@ import {
  *  whose device the host no longer knows waits for an owner like a first join (R40). */
 export const WAITING_NOTICE_DELAY_MS = 2500
 
+/** Said when a hosted team's invite code is pasted into a Team Access tab's reconnect prompt. */
+export const HOSTED_CODE_IN_TEAM_ACCESS_TAB =
+  'That is a hosted team invite code — paste it with New Remote Connection to open the team in its own tab.'
+
 /** How a mount ended, as the canvas reports it: a live tab, or the error it failed with. `declined`
  *  = this user declined the SAS themselves (nothing to tell them). */
 export type HostedMountOutcome = { projectId: string } | { error: unknown; declined: boolean }
@@ -260,6 +264,13 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
       // another team would mount that team inside this tab, under this tab's name: refuse, and say
       // where it goes instead. (An unreadable code is main's to answer, below.)
       const tab = reconnectProjectId ? tabs.get(reconnectProjectId) : undefined
+      // A tab this joiner did not open is a Team Access tab: a hosted tab reconnects from its
+      // bookmark and never reaches the pairing prompt. Rebinding it would mount the team there,
+      // under that tab's name, with no team to check the code against. Refuse, readable or not.
+      if (reconnectProjectId && !tab) {
+        deps.notify({ kind: 'error', text: HOSTED_CODE_IN_TEAM_ACCESS_TAB })
+        return
+      }
       if (tab && peek && peek.hostId !== tab.hostId) {
         const mine = team(tab.label)
         const theirs = peek.label.trim()

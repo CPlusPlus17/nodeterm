@@ -41,6 +41,11 @@ describe('hosted team glue in Canvas', () => {
       body.indexOf('void reconnectRelayTab(projectId, {')
     )
     expect(body).toContain(`promptDialog({ message: "Paste the host's new pairing code:" })`)
+    // R46: a join code pasted there goes to the joiner WITH this tab's id, which refuses to rebind a
+    // tab it did not open (lib/hostedJoin.test.ts); a pairing offer is returned untouched.
+    const divert = body.indexOf('hostedJoinerRef.current.joinWithCode(offer, projectId)')
+    expect(divert).toBeGreaterThan(-1)
+    expect(body.indexOf('return offer', divert)).toBeGreaterThan(divert)
   })
 
   it('the relay tab is built with hosted options, a long approval wait and no alert ONLY when hosted', () => {

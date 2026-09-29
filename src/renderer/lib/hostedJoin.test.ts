@@ -98,14 +98,30 @@ describe('hosted joiner', () => {
     expect(h.connects).toHaveLength(1)
   })
 
-  it('a code pasted into a greyed tab\'s prompt reconnects THAT tab (never a second one)', async () => {
+  it('R46: a code pasted into a Team Access tab\'s reconnect prompt never rebinds that tab — refused, and said where it goes', async () => {
+    // A greyed tab this joiner never opened is a Team Access tab (a hosted tab reconnects from its
+    // bookmark and never reaches the pairing prompt). Rebinding it would mount the team inside it,
+    // under its name, with no cross-team check (there is no team to check against).
     const h = harness()
-    h.open.add('proj-7') // the greyed tab the prompt was raised on
+    h.open.add('proj-7') // the Team Access tab the prompt was raised on
     const j = createHostedJoiner(h.deps)
+    const refused = {
+      kind: 'error',
+      text: 'That is a hosted team invite code — paste it with New Remote Connection to open the team in its own tab.'
+    }
     j.joinWithCode(codeFor('H1'), 'proj-7')
+    expect(h.connects).toHaveLength(0)
+    expect(h.notices.at(-1)).toMatchObject(refused)
+    // An unreadable code is refused there too: whatever main made of it, it would land in that tab.
+    j.joinWithCode(`${JOIN_CODE_PREFIX}%%%`, 'proj-7')
+    expect(h.connects).toHaveLength(0)
+    expect(h.notices.at(-1)).toMatchObject(refused)
+    // The same code from New Remote Connection opens the team in its own tab.
+    j.joinWithCode(codeFor('H1'))
     h.connects[0].resolve('c0')
     await flush()
-    expect(h.mounts[0].req).toMatchObject({ hostId: 'H1', reconnectProjectId: 'proj-7', manual: true, retry: false })
+    expect(h.mounts[0].req).toMatchObject({ hostId: 'H1', manual: true, retry: false })
+    expect(h.mounts[0].req.reconnectProjectId).toBeUndefined()
   })
 
   it('a pasted code the renderer cannot read is still handed to main, which answers for it', async () => {
