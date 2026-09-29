@@ -235,6 +235,8 @@ describe('canvas-control shim over a unix socket', () => {
     expect(lastSeen()?.token).toBe('tok-remote')
     expect(parseControlBody(lastSeen()?.body ?? '', 'application/x-www-form-urlencoded')).toEqual({
       nodeId: 'node-1',
+      // The per-run id the server's request ledger keys the shim's own re-posts by.
+      requestId: expect.stringMatching(/^cli-[0-9a-f]{24}$/),
       args: { count: '2' }
     })
   })
@@ -249,6 +251,8 @@ describe('canvas-control shim over a unix socket', () => {
     expect(lastSeen()?.path).toBe('/control/link')
     expect(parseControlBody(lastSeen()?.body ?? '', 'application/x-www-form-urlencoded')).toEqual({
       nodeId: 'node-1',
+      // The per-run id the server's request ledger keys the shim's own re-posts by.
+      requestId: expect.stringMatching(/^cli-[0-9a-f]{24}$/),
       args: { to: 'n2,n3', from: 'n1' }
     })
   })

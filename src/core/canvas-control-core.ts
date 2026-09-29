@@ -32,6 +32,14 @@ import {
 import { STATION_NOTICE_FROM } from '../shared/agents/agent-messaging'
 import { PR_DEADLINE_DEFAULT_MS, PR_DEADLINE_MAX_MS, PR_WAIT_MAX, afterPrFlagRefusal } from '../shared/pr-wait'
 import { ISSUE_BRANCH_SLUG_MAX, issueWorktreeBranch } from '../shared/issue-worktree'
+import {
+  REQUEST_ID_MAX_LENGTH,
+  REQUEST_ID_OUTCOME_GLOSS,
+  REQUEST_ID_REPLAYED_LEAD,
+  REQUEST_ID_RETRYABLE,
+  REQUEST_ID_VERBS,
+  REQUEST_LEDGER_TTL_MS
+} from './control-request-ledger'
 
 /**
  * The messaging verbs' retry guidance, RENDERED from `RETRYABLE` — the table is the source, and
@@ -456,6 +464,42 @@ function dryRunDocLines(): string[] {
 }
 
 /**
+ * The `--request-id` paragraph both agent-facing bodies share, RENDERED from the ledger's tables
+ * (`control-request-ledger.ts`) — the verb set, the retry split, the glosses, the replay lead and
+ * the retention — the same derive-don't-retype rule as `messagingGuidanceLines`, so an outcome or a
+ * verb added there lands in the text an agent reads the day it is added.
+ */
+function requestIdDocLines(): string[] {
+  const yes: string[] = []
+  const no: string[] = []
+  for (const [kind, retryable] of Object.entries(REQUEST_ID_RETRYABLE)) {
+    const line = `\`${kind}\` (${REQUEST_ID_OUTCOME_GLOSS[kind as keyof typeof REQUEST_ID_OUTCOME_GLOSS]})`
+    ;(retryable ? yes : no).push(line)
+  }
+  const hours = Math.round(REQUEST_LEDGER_TTL_MS / 3_600_000)
+  return [
+    'Retrying safely (`--request-id`):',
+    `- The verbs that create something (${[...REQUEST_ID_VERBS].join(', ')}) take`,
+    `  \`--request-id <id>\`: 1-${REQUEST_ID_MAX_LENGTH} letters, digits, \`.\`, \`_\`, \`:\` or \`-\`, starting with`,
+    '  a letter or digit. Give each operation its own id (a uuid, or a name like `wave2-reviewer-1`).',
+    '- When a call\'s reply never reached you — your tool call timed out, the connection dropped, the',
+    '  output was cut off — run the SAME command with the SAME id. nodeterm recognises it and, instead',
+    '  of opening a second node, returns the first call\'s reply, whose first line starts',
+    `  \`${REQUEST_ID_REPLAYED_LEAD}\`. Without an id, repeating an open whose reply you lost can open it twice.`,
+    '- A reply you DID see is the answer for that id, a refusal included: to try again after a',
+    '  refusal, or to open another node on purpose, use a NEW id. The same id with different flags is',
+    '  refused, and opens nothing.',
+    `- Retry with the SAME id after a short wait: ${yes.join('; ')}.`,
+    `- A same-id retry never clears these — fix the call: ${no.join('; ')}.`,
+    '- Without `--request-id` the CLI still tags each RUN with its own id, so its own automatic',
+    '  re-send to another endpoint never opens twice — but a second run is a second call. An id is',
+    `  matched only for a session whose node identity is verified (the reply says so otherwise), for ${hours} hours,`,
+    '  and not across an app restart. An SSH host keeps the CLI it got at its last connect: until that',
+    '  project reconnects, `--request-id` works there but runs carry no automatic id.'
+  ]
+}
+
+/**
  * The `--issue` SHAPE gate, shared by both shells: the Server Edition runs it inside
  * `parseControlRequest`, and desktop main runs it in its control handler before forwarding (desktop
  * main does not run `parseControlRequest` at all). A plain terminal cannot read an issue and no other
@@ -596,6 +640,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     'flag. A flag with no value is allowed anywhere on the line.',
     '',
     ...dryRunDocLines(),
+    '',
+    ...requestIdDocLines(),
     '',
     'Server Edition ownership is fail-closed: every request requires verified node identity, and',
     'a caller may mutate or message only nodes it opened during the current server run.',
@@ -957,6 +1003,17 @@ ${OWNED_ENDPOINT_FALLBACK_SH}
 
 nt_out=$(mktemp 2>/dev/null || echo "/tmp/nodeterm-control.$$")
 
+# ONE id for this RUN, sent on every POST of it (see control-request-ledger.ts). The endpoint walk
+# below re-posts the same call when the first transport failed with no answer — but a request can
+# be read and executed and only the REPLY lost, and a second POST was then a second open. With the
+# id, the server recognises its own re-post and replays the first reply instead. A second RUN gets a
+# new id: repeating a command on purpose is a new call (an agent retrying after a lost reply passes
+# --request-id to say otherwise). Random bytes when the system has them, else pid + time — the
+# server ignores a malformed one rather than refusing the call.
+nt_request_id=$(od -An -N12 -tx1 /dev/urandom 2>/dev/null | tr -d ' \\n')
+[ -n "$nt_request_id" ] || nt_request_id="$$-$(date +%s 2>/dev/null)"
+nt_request_id="cli-$nt_request_id"
+
 # One POST against the CURRENT endpoint vars — call as \`nt_control_post "$@"\` so the translated
 # curl args reach it. Sets nt_code: '' when there is no transport to try at all, curl's
 # %{http_code} otherwise ('000' = the transport failed before any HTTP answer). nt_had_transport
@@ -970,14 +1027,16 @@ nt_control_post() {
       curl -sS -o "$nt_out" -w '%{http_code}' -X POST --config - \\
       --unix-socket "$NODETERM_HOOK_SOCK" "http://localhost/control/$nt_verb" \\
       -H "Accept: text/plain" \\
-      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" "$@" 2>/dev/null)
+      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" \\
+      --data-urlencode "requestId=$nt_request_id" "$@" 2>/dev/null)
   elif [ -n "$NODETERM_HOOK_PORT" ]; then
     nt_had_transport=1
     nt_code=$(nt_hook_headers |
       curl -sS -o "$nt_out" -w '%{http_code}' -X POST --config - \\
       "http://127.0.0.1:\${NODETERM_HOOK_PORT}/control/$nt_verb" \\
       -H "Accept: text/plain" \\
-      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" "$@" 2>/dev/null)
+      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" \\
+      --data-urlencode "requestId=$nt_request_id" "$@" 2>/dev/null)
   fi
 }
 # Only a dead transport or an explicit wrong-owner (421) answer permits failover; 403 stays final.
@@ -1097,6 +1156,8 @@ next flag, so \`--text --oops\` sends an empty \`--text\` plus a stray \`--oops\
 value is allowed anywhere on the line, not only at the end.
 
 ${dryRunDocLines().join('\n')}
+
+${requestIdDocLines().join('\n')}
 
 Server Edition ownership is fail-closed: every request requires verified node identity, and a
 caller may mutate or message only nodes it opened during the current server run. Restarting

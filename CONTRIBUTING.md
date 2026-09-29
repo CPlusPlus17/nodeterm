@@ -335,6 +335,17 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   against the renderer's dispositions — deliberately cross-layer, because that is the only way
   "every verb" is checked rather than remembered.
 
+- **A canvas-control verb that creates something must be safe to retry.** An agent whose reply
+  was lost (its tool call timed out, the tunnel dropped) runs the same command again, and the
+  shim's endpoint walk re-posts on its own. The hook server's `/control/` route — the one place
+  desktop main and the Server Edition both sit behind — keys a ledger on (verified caller node,
+  request id) and replays the first reply instead of running the call twice
+  (`src/core/control-request-ledger.ts`). A new verb that opens a node, a team, a worktree or a frame
+  joins `REQUEST_ID_VERBS` in the same PR; the agent-facing text renders from that set. A handler
+  that gives up before it knows whether its effect happened answers `indeterminate: true`, never a
+  plain failure that says "safe to retry" — the retry would then open a second one. Do not move the
+  ledger into one shell's handler: the other shell silently loses it.
+
 - **A new canvas-control open path must record who opened the node.** When a station stops, the
   agent that opened it is told (`src/core/agents/station-notice.ts`) — and a rope alone cannot say
   who that is, because an `--after` node is roped to the stations it waited on too, with the same id
