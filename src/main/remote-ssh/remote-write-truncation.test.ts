@@ -13,7 +13,7 @@
 //
 // The `cut` runner below is that failure: every command that carries a body gets NO body — the
 // host sees stdin at EOF, exactly as when the channel dies first. Read commands run untouched.
-import { spawnSync } from 'child_process'
+import { execFileSync, spawn, spawnSync } from 'child_process'
 import {
   chmodSync,
   existsSync,
@@ -33,33 +33,59 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CONTROL_SHIM_SCRIPT } from '../../core/canvas-control-core'
 import { CONTEXT_SHIM_SCRIPT } from '../../core/context-link-core'
 import { RemoteHooks, type RemoteRunner } from './remote-hooks'
+import { SshProjectManager } from './ssh-project'
 
 const conn = { host: 'fixture', user: 'fixture' }
 let home: string
+let bsdBin: string
 let warn: { mock: { calls: unknown[][] } }
 
 beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), "nt-remote-write-' h-"))
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  // Every fake host runs a NON-PERMUTING chmod first on PATH, as a macOS host has: BSD chmod stops
+  // parsing options at the mode, so `chmod 600 -- f` treats `--` as a file and fails. GNU chmod
+  // under POSIXLY_CORRECT parses the same way. See remote-atomic-write.test.ts for the control.
+  bsdBin = mkdtempSync(path.join(tmpdir(), 'nt-bsd-chmod-'))
+  if (process.platform !== 'win32') {
+    const real = execFileSync('/bin/sh', ['-c', 'command -v chmod'], { encoding: 'utf8' }).trim()
+    writeFileSync(path.join(bsdBin, 'chmod'), `#!/bin/sh\nPOSIXLY_CORRECT=1 exec '${real}' "$@"\n`)
+    chmodSync(path.join(bsdBin, 'chmod'), 0o755)
+  }
 })
 afterEach(() => {
   vi.restoreAllMocks()
   rmSync(home, { recursive: true, force: true })
+  rmSync(bsdBin, { recursive: true, force: true })
 })
 
+const hostEnv = (h: string) => ({ PATH: `${bsdBin}:${process.env.PATH ?? '/usr/bin:/bin'}`, HOME: h })
+/** The two runner calls that are not a remote shell command: the mux `-O forward/cancel` and the
+ *  tunnel's own curl probe, which answers only through a live reverse forward. */
+function fakeTransport(args: string[], command: string): { code: number; stdout: string } | null {
+  if (args[0] === '-O') return { code: 0, stdout: '' }
+  if (command.includes('%{http_code}')) return { code: 0, stdout: '204' }
+  return null
+}
+
 /** `cut`: every body is lost; a predicate: only the bodies of the commands it names are lost. */
-function hostRunner(mode: 'deliver' | 'cut' | ((command: string) => boolean)): RemoteRunner & { calls: string[] } {
+function hostRunner(
+  mode: 'deliver' | 'cut' | ((command: string) => boolean),
+  h: () => string = () => home
+): RemoteRunner & { calls: string[] } {
   const calls: string[] = []
   return {
     calls,
     run: async (args, stdin) => {
       const command = args.at(-1)!
       calls.push(command)
+      const faked = fakeTransport(args, command)
+      if (faked) return faked
       const lose = mode === 'cut' || (typeof mode === 'function' && mode(command))
       const result = spawnSync('/bin/sh', ['-c', command], {
         // Only what the host shell would have: no GROK_HOME / COPILOT_HOME / XDG_* of the machine
         // running the tests may leak into the fake host.
-        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home },
+        env: hostEnv(h()),
         input: stdin === undefined ? undefined : lose ? '' : stdin,
         encoding: 'utf8'
       })
@@ -236,5 +262,146 @@ describe.skipIf(process.platform === 'win32')('remote writes never leave a trunc
     ).rejects.toThrow(/empty body/)
     expect(runner.calls).toEqual([])
     expect(existsSync(path.join(home, '.nodeterm'))).toBe(false)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('every mode-bearing caller publishes on a macOS host (non-permuting chmod)', () => {
+  it('setup(): the hook endpoint lands 0600, every agent hook script 0755', async () => {
+    const rh = new RemoteHooks(hostRunner('deliver'))
+    const res = await rh.setup('p1', conn, '/fixture.sock', { port: 51234, token: 'tok', version: '1' })
+    // On a host whose chmod does not permute, `chmod 600 -- <temp>` failed the endpoint write, so
+    // setup returned null and the host got no status hooks, canvas control or context link at all.
+    expect(res).not.toBeNull()
+    const endpoint = res!.endpointPath
+    expect(readFileSync(endpoint, 'utf8')).toContain("NODETERM_HOOK_TOKEN='tok'")
+    expect(statSync(endpoint).mode & 0o777).toBe(0o600)
+    for (const a of ['claude', 'gemini', 'codex', 'grok', 'copilot']) {
+      expect(modeOf(`.nodeterm/agent-hooks/${a}.sh`)).toBe(0o755)
+    }
+    expect(leftovers()).toEqual([])
+  })
+
+  it('node tokens land 0600', async () => {
+    const rh = new RemoteHooks(hostRunner('deliver'))
+    await rh.writeNodeTokens(conn, '/fixture.sock', home, ['n-1', 'n-2'], (id) => `token-${id}`)
+    for (const id of ['n-1', 'n-2']) {
+      expect(read(`.nodeterm/node-tokens/${id}`)).toBe(`token-${id}\n`)
+      expect(modeOf(`.nodeterm/node-tokens/${id}`)).toBe(0o600)
+    }
+  })
+
+  it('the canvas/context shims and a managed-account hook script land 0755', async () => {
+    const rh = new RemoteHooks(hostRunner('deliver'))
+    await rh.installAgentTools(conn, '/fixture.sock', home)
+    await rh.installIntoAccountDir(conn, '/fixture.sock', home, 'acc')
+    expect(modeOf('.nodeterm/nodeterm.sh')).toBe(0o755)
+    expect(modeOf('.nodeterm/context.sh')).toBe(0o755)
+    expect(modeOf('.nodeterm/agent-hooks/claude.sh')).toBe(0o755)
+  })
+
+  describe('ssh-project writers', () => {
+    // writeSessionEnvFile refuses a path holding a quote, so these use a plain home.
+    let plain: string
+    beforeEach(() => { plain = mkdtempSync(path.join(tmpdir(), 'nt-rw-plain-')) })
+    afterEach(() => rmSync(plain, { recursive: true, force: true }))
+
+    function manager(): SshProjectManager {
+      const runner = hostRunner('deliver', () => plain)
+      const run = vi.fn(async (args: string[], stdin?: string) => {
+        const command = args.at(-1)!
+        // The login-shell probe for node/codex/curl: answer it like a host that has all three.
+        if (command.includes('command -v node')) {
+          return { code: 0, stdout: '/usr/bin/node\n/usr/bin/codex\n/usr/bin/curl\n' }
+        }
+        return runner.run(args, stdin)
+      })
+      const mgr = new SshProjectManager({
+        userDataDir: plain,
+        spawnMaster: vi.fn(() => ({ kill: vi.fn(), on: vi.fn() })),
+        run,
+        runScp: vi.fn(async () => ({ code: 0 })),
+        getHook: () => ({ port: 1, token: 't', version: '1' }),
+        codexRelaySource: async () => '// relay bundle\n',
+        onStatus: () => {}
+      } as never)
+      ;(mgr as unknown as { conns: Map<string, unknown> }).conns.set('p1', {
+        conn,
+        controlPath: '/fixture.sock',
+        master: { kill: () => {}, on: () => {} },
+        remoteCwd: '~'
+      })
+      return mgr
+    }
+
+    it('a session env file lands 0600', async () => {
+      const file = path.join(plain, '.nodeterm', 'env', 'nt-n1.env')
+      await manager().writeSessionEnvFile('/fixture.sock', file, "export KEY='v'\n")
+      expect(readFileSync(file, 'utf8')).toBe("export KEY='v'\n")
+      expect(statSync(file).mode & 0o777).toBe(0o600)
+      expect(warned('session env not staged')).toBe(false)
+    })
+
+    it('the Codex relay and launcher land 0700', async () => {
+      const mgr = manager()
+      const installed = await (
+        mgr as unknown as { installRemoteCodexRuntime: (c: unknown, cp: string, h: string) => Promise<unknown> }
+      ).installRemoteCodexRuntime(conn, '/fixture.sock', plain)
+      expect(installed).not.toBeNull()
+      for (const f of ['codex-relay.js', 'nodeterm-codex']) {
+        expect(statSync(path.join(plain, '.nodeterm', 'bin', f)).mode & 0o777).toBe(0o700)
+      }
+      expect(readFileSync(path.join(plain, '.nodeterm', 'bin', 'codex-relay.js'), 'utf8')).toBe('// relay bundle\n')
+    })
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('canvas control and context link share instruction files', () => {
+  /** Real concurrency: each command runs in its own /bin/sh process, and the runner resolves when it
+   *  exits, so two installers in flight genuinely interleave on the host. */
+  function asyncHostRunner(h: string): RemoteRunner {
+    return {
+      run: (args, stdin) => {
+        const command = args.at(-1)!
+        const faked = fakeTransport(args, command)
+        if (faked) return Promise.resolve(faked)
+        return new Promise((resolve, reject) => {
+          const child = spawn('/bin/sh', ['-c', command], { env: hostEnv(h) })
+          let stdout = ''
+          child.stdout.setEncoding('utf8')
+          child.stdout.on('data', (c: string) => { stdout += c })
+          child.stdin.on('error', () => {})
+          child.on('error', reject)
+          child.on('close', (code) => resolve({ code: code ?? 1, stdout }))
+          child.stdin.end(stdin ?? '')
+        })
+      }
+    }
+  }
+
+  // ~25 real shell processes per host; the budget is for a loaded CI runner, not the work.
+  it('a fresh connect leaves BOTH blocks in every shared file (8 fresh hosts)', { timeout: 60_000 }, async () => {
+    const shared = ['.codex/AGENTS.md', '.gemini/GEMINI.md', '.config/opencode/AGENTS.md']
+    const missing: string[] = []
+    for (let i = 0; i < 8; i++) {
+      const h = mkdtempSync(path.join(tmpdir(), 'nt-rw-fresh-'))
+      try {
+        await new RemoteHooks(asyncHostRunner(h)).installAgentTools(conn, '/fixture.sock', h)
+        for (const f of shared) {
+          const text = readFileSync(path.join(h, f), 'utf8')
+          if (!text.includes('nodeterm:manage-canvas:start')) missing.push(`${i}:${f}:canvas`)
+          if (!text.includes('nodeterm:get-linked-context:start')) missing.push(`${i}:${f}:context`)
+        }
+      } finally {
+        rmSync(h, { recursive: true, force: true })
+      }
+    }
+    expect(missing).toEqual([])
+  })
+
+  it('the connect path runs them as one chain, never side by side', () => {
+    const src = readFileSync(path.join(__dirname, 'ssh-project.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n')
+    expect(code).toContain('this.remoteHooks.installAgentTools(')
+    expect(code).not.toMatch(/void this\.remoteHooks\.install(CanvasControl|ContextLink)\(/)
   })
 })

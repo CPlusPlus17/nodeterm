@@ -980,8 +980,9 @@ export class SshProjectManager {
         // canvas control as unavailable. Not awaited: it is several remote round-trips of pure
         // best-effort setup, and holding the connect on them would delay every terminal.
         if (remoteHome && hookEndpointPath) {
-          void this.remoteHooks.installCanvasControl(conn, controlPath, remoteHome)
-          void this.remoteHooks.installContextLink(conn, controlPath, remoteHome)
+          // ONE chain, not two: both merge into the same instruction files, and two writers racing
+          // on one file cannot both publish (see RemoteHooks.installAgentTools).
+          void this.remoteHooks.installAgentTools(conn, controlPath, remoteHome)
           // Per-node tokens for every node of this project (the endpoint file written just above
           // is what tells the host's hook script where to find them, which is also why this is
           // gated on `hookEndpointPath`: a token nothing can be pointed at is a wasted round-trip).

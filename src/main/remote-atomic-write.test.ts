@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -70,7 +70,7 @@ describe('remoteAtomicWrite', { timeout: REAL_SHELL_TIMEOUT_MS }, () => {
     expect(second.temporaryPath).not.toBe(first.temporaryPath)
     expect(first.command).toContain('umask 077; mkdir -p -- ~/' + "'a b'")
     expect(first.command).toContain(`cat > ${quoteRemotePath(first.temporaryPath)}`)
-    expect(first.command).toContain(`chmod 600 -- ${quoteRemotePath(first.temporaryPath)}`)
+    expect(first.command).toContain(`chmod 600 ${quoteRemotePath(first.temporaryPath)}`)
     // The byte count of THIS body, checked on the temp before anything is published.
     expect(first.command).toContain(`[ "$(wc -c < ${quoteRemotePath(first.temporaryPath)})" -eq 4 ]`)
     expect(first.stdin).toBe('body')
@@ -285,6 +285,74 @@ describe('remoteAtomicWrite', { timeout: REAL_SHELL_TIMEOUT_MS }, () => {
     const write = remoteAtomicWrite(target, '', { allowEmpty: true })
     execFileSync(SHELL!, ['-c', write.command], { input: write.stdin })
     expect(readFileSync(path.join(root, 'notes.txt'), 'utf8')).toBe('')
+  })
+})
+
+// BSD/macOS chmod does not permute: its getopt stops at the MODE operand, so in `chmod 600 -- f`
+// the `--` is a FILE operand ("chmod: --: No such file or directory", exit 1) and the publish never
+// happens. GNU chmod with POSIXLY_CORRECT parses the same way, which is how CI can stand in for a
+// macOS host. `chmod <mode> -- <temp>` shipped from v0.3.3 for the hook endpoint and node tokens.
+describe.skipIf(!SHELL || process.platform === 'win32')('publishing under a non-permuting chmod (BSD/macOS)', () => {
+  function bsdChmodPath(): string {
+    const bin = mkdtempSync(path.join(os.tmpdir(), 'nt-bsd-chmod-'))
+    roots.push(bin)
+    const real = execFileSync(SHELL!, ['-c', 'command -v chmod'], { encoding: 'utf8' }).trim()
+    writeFileSync(path.join(bin, 'chmod'), `#!/bin/sh\nPOSIXLY_CORRECT=1 exec '${real}' "$@"\n`)
+    chmodSync(path.join(bin, 'chmod'), 0o755)
+    return `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`
+  }
+
+  it('the stand-in really is non-permuting (else every case below proves nothing)', () => {
+    const PATH = bsdChmodPath()
+    const root = mkdtempSync(path.join(os.tmpdir(), 'nt-bsd-control-'))
+    roots.push(root)
+    writeFileSync(path.join(root, 'f'), 'x')
+    const refused = spawnSync(SHELL!, ['-c', 'chmod 600 -- f'], { cwd: root, env: { ...process.env, PATH }, encoding: 'utf8' })
+    expect(refused.status).not.toBe(0)
+    expect(refused.stderr).toContain('--')
+    const accepted = spawnSync(SHELL!, ['-c', 'chmod 600 f'], { cwd: root, env: { ...process.env, PATH } })
+    expect(accepted.status).toBe(0)
+  })
+
+  // Every mode a caller passes: 600 (hook endpoint, node tokens, session env), 700 (Codex relay and
+  // launcher), 755 (hook scripts, canvas/context shims), 644 (the type allows it).
+  // Under BOTH parsers: a non-permuting chmod reads everything after the mode as a file, while a
+  // PERMUTING one (GNU, the Linux default) would take a temp starting with `-` as options — which is
+  // what the `./` prefix is for.
+  it.each([
+    ...(['600', '644', '700', '755'] as const).map((mode) => ({ mode, chmod: 'non-permuting' as const })),
+    ...(['600', '644', '700', '755'] as const).map((mode) => ({ mode, chmod: 'host default' as const }))
+  ])('publishes mode $mode at every temp-path shape ($chmod chmod)', ({ mode, chmod }) => {
+    const PATH = chmod === 'non-permuting' ? bsdChmodPath() : (process.env.PATH ?? '/usr/bin:/bin')
+    const root = mkdtempSync(path.join(os.tmpdir(), 'nt-bsd-publish-'))
+    roots.push(root)
+    mkdirSync(path.join(root, '-dash'))
+    const cases: { target: string; native: string }[] = [
+      { target: path.join(root, 'absolute.sh'), native: path.join(root, 'absolute.sh') },
+      { target: 'relative-leaf.sh', native: path.join(root, 'relative-leaf.sh') },
+      // A relative parent that starts with `-` would read as an option; it gets `./`.
+      { target: '-dash/under-dash.sh', native: path.join(root, '-dash', 'under-dash.sh') }
+    ]
+    for (const { target, native } of cases) {
+      const write = remoteAtomicWrite(target, '#!/bin/sh\n', { restrictPermissions: mode === '600', mode })
+      const result = spawnSync(SHELL!, ['-c', write.command], {
+        cwd: root,
+        env: { ...process.env, PATH },
+        input: write.stdin,
+        encoding: 'utf8'
+      })
+      expect({ target, status: result.status, stderr: result.stderr }).toEqual({ target, status: 0, stderr: '' })
+      expect(readFileSync(native, 'utf8')).toBe('#!/bin/sh\n')
+      expect(statSync(native).mode & 0o777).toBe(parseInt(mode, 8))
+    }
+    expect(readdirSync(root).filter((n) => n.endsWith('.tmp'))).toEqual([])
+    expect(readdirSync(path.join(root, '-dash')).filter((n) => n.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('never spells `chmod <mode> --`', () => {
+    for (const mode of ['600', '644', '700', '755'] as const) {
+      expect(remoteAtomicWrite('/h/f', 'x', { mode }).command).not.toMatch(/chmod \d+ --/)
+    }
   })
 })
 

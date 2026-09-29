@@ -424,6 +424,10 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   symlink and mode. A guard test fails on a new bare `cat >`. A remote runner RESOLVES on a
   non-zero exit, so check the result or use the helper that does.
 
+- **Never write `chmod <mode> -- <file>` into a remote command.** macOS (BSD) chmod stops parsing
+  options at the mode, so the `--` becomes a file operand and the command fails there while passing
+  on Linux. To test it on Linux, put a `POSIXLY_CORRECT=1` wrapper around GNU chmod first on PATH.
+
 - **A write ack is a claim about a WRITE, never about what the remote now holds.** Do not retire
   state that records "the server still needs to be told X" just because the write returned true.
   The SSH mirror's writer acks the 5 s throttle's trailing write **optimistically** — it returns

@@ -649,6 +649,21 @@ export class RemoteHooks {
   }
 
   /**
+   * Canvas control, THEN context link, never both at once.
+   *
+   * They merge DIFFERENT marker blocks into the SAME instruction files (codex AGENTS.md, GEMINI.md,
+   * opencode AGENTS.md), and the guarded transaction publishes a file only if it still holds what
+   * the writer read — so two writers racing on one file cannot both land: the second one finds the
+   * file changed, or our lock held, and skips it. Fired side by side on a connect (as they were),
+   * a fresh host routinely ended up with ONE of the two blocks per file until a later connect. Both
+   * installers fail open, so this never throws.
+   */
+  async installAgentTools(conn: SshConnection, controlPath: string, remoteHome: string): Promise<void> {
+    await this.installCanvasControl(conn, controlPath, remoteHome)
+    await this.installContextLink(conn, controlPath, remoteHome)
+  }
+
+  /**
    * Install the canvas-control CLI + its discovery docs on the REMOTE host, so an agent running
    * in an SSH project can create and organize canvas nodes exactly like a local one.
    *

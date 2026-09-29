@@ -98,7 +98,7 @@ describe('RemoteHooks.setup', () => {
       /cat > ('\/home\/u\/\.nodeterm\/\.nodeterm-[0-9a-f-]{36}\.tmp')/
     )?.[1]
     expect(endpointTemp).toBeTruthy()
-    expect(endpointWrite?.cmd).toContain(`chmod 600 -- ${endpointTemp}`)
+    expect(endpointWrite?.cmd).toContain(`chmod 600 ${endpointTemp}`)
     expect(endpointWrite?.cmd).toContain(
       `mv -f -- ${endpointTemp} '/home/u/.nodeterm/hook-endpoint-p1-${owner}.env'`
     )
@@ -116,7 +116,7 @@ describe('RemoteHooks.setup', () => {
     const scriptWrite = joined.find((j) => writesTo(j, '/home/u/.nodeterm/agent-hooks/claude.sh'))
     const scriptTemp = tempFor(scriptWrite ?? '', '/home/u/.nodeterm/agent-hooks/claude.sh')
     expect(scriptTemp).toBeTruthy()
-    expect(scriptWrite).toContain(`chmod 755 -- ${scriptTemp}`)
+    expect(scriptWrite).toContain(`chmod 755 ${scriptTemp}`)
     expect(scriptWrite).toContain(`[ "$(wc -c < ${scriptTemp})" -eq `)
     expect(joined.some((j) => j.includes(`mv -f -- "$nt_stage/publish" '/home/u/.claude/settings.json'`))).toBe(true)
     expect(calls.some((c) => (c.stdin ?? '').includes('--unix-socket'))).toBe(true)
@@ -618,7 +618,7 @@ describe('RemoteHooks.installCanvasControl', () => {
     // The shim must land executable: the skill tells the agent to run it via `sh <path>`, but the
     // instruction blocks and a user's own habits may exec it directly.
     const shimWrite = joined.find((j) => writesTo(j, '/home/u/.nodeterm/nodeterm.sh')) ?? ''
-    expect(shimWrite).toContain(`chmod 755 -- ${tempFor(shimWrite, '/home/u/.nodeterm/nodeterm.sh')}`)
+    expect(shimWrite).toContain(`chmod 755 ${tempFor(shimWrite, '/home/u/.nodeterm/nodeterm.sh')}`)
     // It is the POSIX shim, NOT the retired Electron-as-Node one — nothing may reference a local
     // interpreter path, which is exactly what made the old CLI unusable off the desktop.
     const shim = calls.find((c) => isWriteTo(c.args, '/home/u/.nodeterm/nodeterm.sh'))?.stdin ?? ''
@@ -697,7 +697,7 @@ describe('RemoteHooks.installContextLink', () => {
     await rh.installContextLink(conn, '/s.sock', '/home/u')
     const joined = calls.map((c) => c.args.join(' '))
     const shimWrite = joined.find((j) => writesTo(j, '/home/u/.nodeterm/context.sh')) ?? ''
-    expect(shimWrite).toContain(`chmod 755 -- ${tempFor(shimWrite, '/home/u/.nodeterm/context.sh')}`)
+    expect(shimWrite).toContain(`chmod 755 ${tempFor(shimWrite, '/home/u/.nodeterm/context.sh')}`)
     // The shim is the thin client: it POSTs and prints. All transcript parsing stays on the
     // desktop, which is what makes the host's missing `node` irrelevant.
     const shim = calls.find((c) => isWriteTo(c.args, '/home/u/.nodeterm/context.sh'))?.stdin ?? ''
@@ -780,7 +780,7 @@ describe('RemoteHooks.writeNodeTokens', () => {
       /cat > ('\/home\/u\/\.nodeterm\/node-tokens\/\.nodeterm-[0-9a-f-]{36}\.tmp')/
     )?.[1]
     expect(temp).toBeTruthy()
-    expect(writes[0].cmd).toContain(`chmod 600 -- ${temp}`)
+    expect(writes[0].cmd).toContain(`chmod 600 ${temp}`)
     expect(writes[0].cmd).toContain(
       `mv -f -- ${temp} '/home/u/.nodeterm/node-tokens/node-1'`
     )

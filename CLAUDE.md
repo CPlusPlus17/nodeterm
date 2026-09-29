@@ -6522,7 +6522,18 @@ file (the old `cat f || true` then `cat > f` replaced an unreadable AGENTS.md wi
 The local installers for the same files use `writeManagedHookFileAtomic` / `mergeInstructionFile`.
 `src/main/remote-ssh/remote-write.guard.test.ts` fails on any new bare `cat > <file>` in
 src/{core,main,server}, and `remote-write-truncation.test.ts` runs every installer under a real
-`/bin/sh` with the body cut off. Upload directories use UUIDs across app
+`/bin/sh` with the body cut off.
+**Never `chmod <mode> -- <file>` in a remote command.** BSD/macOS chmod does not permute: its
+getopt stops at the MODE operand, so the `--` after it is a FILE named `--` ("No such file or
+directory", exit 1) and the `&&` chain never publishes. `mkdir -p --`, `mv -f --` and `rm -f --` are
+fine (their `--` comes before any operand). That spelling shipped from v0.3.3 (fbc65ad8) for the
+hook endpoint and node tokens, so `setup()` returned null on every macOS SSH host — no status
+hooks, canvas control or context link there. The real-shell tests put a non-permuting chmod
+(`POSIXLY_CORRECT=1` GNU chmod) first on PATH for every mode-bearing caller.
+**Canvas control and context link install as ONE chain** (`RemoteHooks.installAgentTools`): they
+merge different blocks into the same AGENTS.md / GEMINI.md, and the transaction lets only one of two
+racing writers publish a snapshot — fired side by side they lost 16–19 of 48 blocks over 8 fresh
+hosts. Upload directories use UUIDs across app
 processes. Downloads and media-cache copies use hidden UUID `.part` names; user-visible downloads
 also hold an exclusive candidate lock until the rename and cleanup finish. Never simplify any of
 those back to `<target>.tmp` / `<target>.part` or a read-only "does the destination exist?" check —

@@ -108,7 +108,7 @@ ${unchanged} || exit 1
 mv -f -- "$nt_stage/publish" ${q}`
     const result = await run(command, (before ?? '') + next)
     if (result.code === 73) {
-      console.warn(`[agent-hooks] Remote file lock unavailable: ${lockPath}. Installation skipped; if it persists, stop nodeterm writers and inspect/remove the stale lock before retrying.`)
+      console.warn(`[agent-hooks] Remote file lock held: ${lockPath}. Another nodeterm writer is updating this file right now, so this installation skipped it; the next connect tries again. A lock that stays after every writer has finished was left by an interrupted one: stop nodeterm writers, then remove it.`)
       return 'failed'
     }
     if (result.code !== 0) throw new Error('Remote file publication failed (conflict or I/O error)')

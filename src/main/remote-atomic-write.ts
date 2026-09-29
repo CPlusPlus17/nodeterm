@@ -92,7 +92,14 @@ export function remoteAtomicWrite(
     ? ''
     : `mkdir -p -- ${quoteRemotePath(parentPath)} && `
   const complete = ` && { [ "$(wc -c < ${temporary})" -eq ${bytes} ] || (exit ${REMOTE_WRITE_SHORT_BODY}); }`
-  const protect = options.mode ? ` && chmod ${options.mode} -- ${temporary}` : ''
+  // NEVER `chmod <mode> -- <file>`. BSD/macOS chmod does not permute: its getopt stops at the MODE
+  // operand, so a `--` after it is read as a FILE named `--` ("chmod: --: No such file or
+  // directory", exit 1) and the publish never happens. That spelling shipped from v0.3.3 on, for the
+  // hook endpoint and node tokens, so every write of them to a macOS host failed. The `--` is not
+  // needed: the temp is absolute, `~/…` or a `.nodeterm-…` leaf; only a relative parent starting
+  // with `-` could look like an option, and that one gets `./`.
+  const chmodTarget = temporaryPath.startsWith('-') ? quoteRemotePath(`./${temporaryPath}`) : temporary
+  const protect = options.mode ? ` && chmod ${options.mode} ${chmodTarget}` : ''
   const command =
     `${prefix}${parent}{ cat > ${temporary}${complete}${protect} && mv -f -- ${temporary} ${target}; ` +
     `nt_status=$?; ` +
