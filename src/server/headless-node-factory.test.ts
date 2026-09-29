@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { StationHandoverTracker } from '../core/station-handover'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -1258,6 +1259,32 @@ describe('HeadlessNodeFactory', () => {
       await factory.refreshArmed()
       expect(pty.sends).toEqual([])
       handedOver.delete('term-upstream')
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'consume result'" }])
+    })
+
+    it('with a REAL tracker, a done still listing background tasks holds; an empty one releases', async () => {
+      // Wired as canvas-control.ts wires it: the tracker is fed every event BEFORE the factory.
+      const tracker = new StationHandoverTracker()
+      handedOver = { has: (id: string) => tracker.isHandedOver(id) } as unknown as Set<string>
+      const feed = (ev: { nodeId: string; state: 'working' | 'done'; backgroundTaskIds?: string[] }) => {
+        states[ev.nodeId] = ev.state
+        tracker.onAgentEvent(ev)
+        factory.onAgentEvent(ev)
+      }
+      feed({ nodeId: 'term-upstream', state: 'working' })
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'consume result', after: 'term-upstream' },
+        true
+      )
+      const id = (reply.result as { id: string }).id
+      feed({ nodeId: 'term-upstream', state: 'done', backgroundTaskIds: ['bash_suite'] })
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      feed({ nodeId: 'term-upstream', state: 'working' })
+      feed({ nodeId: 'term-upstream', state: 'done', backgroundTaskIds: [] })
+      await factory.refreshArmed()
       await factory.refreshArmed()
       expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'consume result'" }])
     })

@@ -247,6 +247,12 @@ function depSatisfied(
 
 /** Of the deps this node is still waiting on, which are held because they were handed new work
  *  they have not finished — what the QUEUED tooltip and `list` name. */
+/** Why a dep is held (see `handedOverDeps`): new work handed to it, or ONLY tasks its last turn left
+ *  running in the background. Named differently in the tooltip and in `list`. */
+export function holdReason(record: StationHandoverRecord | undefined): 'work' | 'background' {
+  return record?.background && !record.queued && record.since === undefined ? 'background' : 'work'
+}
+
 export function handedOverDeps(
   node: ArmedNode,
   live: ReadonlySet<string>,
@@ -467,7 +473,7 @@ export function launchTooltip(
   // X to finish" alone would read as a wait that should already be over.
   if (handedOverOn)
     return (
-      `Waiting for ${handedOverOn} to finish the work just handed to it — its earlier turn does not ` +
+      `Waiting for ${handedOverOn} to finish — a turn that ended before that work was done does not ` +
       `count${waitingOn ? ` (all waits: ${waitingOn})` : ''}, then runs:\n${command}`
     )
   if (success?.status === 'waiting') {

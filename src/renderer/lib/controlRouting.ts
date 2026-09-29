@@ -27,6 +27,7 @@ import { prHoldExpired } from './prWait'
 import {
   controlLaunchState,
   handedOverDeps,
+  holdReason,
   successDepFacts,
   type HandoverById,
   type LaunchDelivery,
@@ -256,7 +257,12 @@ export function storedNodeListing(
       ...(launchState ? { launchState } : {}),
       ...(launchState === 'queued' && prHold && !prHold.invalid ? { prWait: formatPrWaits(prHold) } : {}),
       ...(successWait ? { successWait } : {}),
-      ...(handedOver.length ? { handoverWait: handedOver.map(titleOf).join(', ') } : {}),
+      ...(handedOver.some((d) => holdReason(handovers[d]) === 'work')
+        ? { handoverWait: handedOver.filter((d) => holdReason(handovers[d]) === 'work').map(titleOf).join(', ') }
+        : {}),
+      ...(handedOver.some((d) => holdReason(handovers[d]) === 'background')
+        ? { backgroundWait: handedOver.filter((d) => holdReason(handovers[d]) === 'background').map(titleOf).join(', ') }
+        : {}),
       ...(reported
         ? {
             outcome: reported.outcome,
@@ -290,6 +296,7 @@ export function controlListingText(rows: ReturnType<typeof storedNodeListing>): 
     (n.prWait ? ` — waits on ${n.prWait}` : '') +
     (n.successWait ? ` — needs success from: ${n.successWait}` : '') +
     (n.handoverWait ? ` — waiting for ${n.handoverWait} to finish the work handed to it` : '') +
+    (n.backgroundWait ? ` — waiting for ${n.backgroundWait} to finish the tasks still running in its background` : '') +
     (n.outcome ? ` — REPORTED ${n.outcome === 'succeeded' ? 'SUCCESS' : 'FAILURE'}${n.outcomeNote ? ` ("${n.outcomeNote}")` : ''}` : '') +
     (n.outcomeSuperseded ? ' (before new work queued for it; not counted until it reports again)' : '') +
     (n.lastTurnErrored ? ' — LAST TURN ERRORED' : '')

@@ -3852,6 +3852,20 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     `--after` would hold. The Server Edition's factory asks `handedOver` in `refreshArmed` AND in the
     creation shortcut (`mustWait`): "already satisfied at creation" must mean satisfied under this
     rule, or the node is launched immediately by the shortcut.
+  - **Background tasks hold the same way** (same module, same list; `background: true` on the
+    record). MEASURED live 2026-09-30: an agent's turn ended while its full test suite still ran in
+    a background shell, and the node armed `--after` it fired before anything was pushed — the same
+    bug class, from background work instead of a hand-over. Claude's `Stop` carries
+    `background_tasks` (see **Claude's native subagent hooks**, fact 6), normalized to
+    `backgroundTaskIds`. A `done` whose inventory lists a live task holds the station; only a later
+    `done` whose inventory is PRESENT and EMPTY releases it, or `SessionEnd` (the CLI took its tasks
+    with it and will never report them). An ABSENT inventory is unknown and changes NOTHING: a CLI
+    too old to send the field keeps today's behaviour exactly (it never sets the hold — holding on
+    "unknown" would strand every such station forever), and a `done` without one (the idle-prompt
+    rescue, `StopFailure`, other agents) neither sets nor clears it. A turn STARTING does not clear
+    it (the task may outlive that turn). A task that finishes without waking the station for another
+    turn leaves the hold until the station's next turn end — holding, with ▶ / `run` as the way out.
+    The agent bodies tell a station not to end its turn with background work a dependent needs.
   - **Eviction never drops a held station** (the bound is 2000 tracked stations; the oldest with
     nothing handed over goes first) — dropping one would release its dependents.
   - Surfaces: `list` says `waiting for <station> to finish the work handed to it`; the QUEUED tooltip

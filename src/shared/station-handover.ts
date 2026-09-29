@@ -9,6 +9,9 @@
 // `--after-success` (a report stops counting once new work is handed over); this is the plain-turn
 // half.
 //
+// The same hold covers BACKGROUND work: a turn that ended with background tasks still running
+// (Claude's `background_tasks` on `Stop`) has not finished what a dependent is armed to read.
+//
 // THE RULE (decided in core, `core/station-handover.ts`; this module is only the wire shape): a
 // station is "handed over" from the moment new work is queued for it, or lands in its pane, until a
 // turn that STARTED at or after that hand-over has ENDED. While it is, `--after` on it is not
@@ -29,6 +32,9 @@ export interface StationHandoverRecord {
   since?: number
   /** A `send` / `reply` is still waiting in the station's queue. */
   queued?: true
+  /** The station's last turn ended with background tasks still running (Claude's
+   *  `background_tasks`): its output is still being produced. */
+  background?: true
 }
 
 /** Parse a pushed / pulled list defensively: it crosses a process boundary (and, in the Server
@@ -44,7 +50,8 @@ export function sanitizeHandoverRecords(raw: unknown): StationHandoverRecord[] {
     out.push({
       nodeId: r.nodeId,
       ...(since !== undefined ? { since } : {}),
-      ...(r.queued === true ? { queued: true as const } : {})
+      ...(r.queued === true ? { queued: true as const } : {}),
+      ...(r.background === true ? { background: true as const } : {})
     })
   }
   return out

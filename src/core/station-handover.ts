@@ -28,6 +28,23 @@
  * current turn instead, the hold lasts until the next turn — the holding direction, with ▶ and
  * `run` as the way out).
  *
+ * BACKGROUND WORK is the second kind of unfinished work, and it holds the same way. Claude's `Stop`
+ * carries `background_tasks` — every background task of the session still running at that turn end
+ * (background shells, async subagents; `NormalizedAgentEvent.backgroundTaskIds`). A turn that ends
+ * with such a task running has not finished the station's work: the output the dependent is armed
+ * to read is still being produced (measured live, 2026-09-30: an agent's turn ended while its test
+ * suite ran in a background shell, and the node armed `--after` it fired before anything was
+ * pushed). So a `done` whose inventory lists a live task holds the station, and only a later
+ * `done` whose inventory is PRESENT and EMPTY releases it. Three decisions:
+ *   - an ABSENT inventory is "unknown", never "none" — and it changes nothing: a CLI too old to send
+ *     the field never sets the hold (today's behaviour, exactly), and a `done` without one (the
+ *     idle-prompt rescue, a `StopFailure`, another agent) neither sets nor clears it;
+ *   - the hold is not cleared by a turn STARTING (the tasks may well outlive it) — only by a turn
+ *     end that says they are gone, or by `SessionEnd` (the CLI exited, taking its tasks with it;
+ *     waiting on a session that will never report again would strand the dependent);
+ *   - a background task that finishes WITHOUT waking the station for another turn leaves the hold
+ *     up until the station's next turn end. That is the holding direction, and ▶ / `run` end it.
+ *
  * NOT a hand-over: a board comment (a person steering), a station notice (the app telling an
  * orchestrator something), a person typing in the pane. Deliberately the same set #1042 counts.
  *
@@ -61,6 +78,12 @@ interface StationTrack {
   queued: number
   /** The newest hand-over that no finished turn has answered yet. */
   handedAt?: number
+  /** The last turn end listed background tasks still running (see the header). */
+  background?: boolean
+}
+
+function holds(t: StationTrack): boolean {
+  return t.queued > 0 || t.handedAt !== undefined || t.background === true
 }
 
 export class StationHandoverTracker {
@@ -82,7 +105,7 @@ export class StationHandoverTracker {
     while (this.byId.size > STATION_HANDOVER_MAX_TRACKED) {
       let victim: string | undefined
       for (const [id, t] of this.byId) {
-        if (id !== nodeId && t.queued <= 0 && t.handedAt === undefined) {
+        if (id !== nodeId && !holds(t)) {
           victim = id
           break
         }
@@ -107,7 +130,9 @@ export class StationHandoverTracker {
 
   private changed(): void {
     const list = this.list()
-    const sig = list.map((r) => `${r.nodeId}:${r.since ?? ''}:${r.queued ? 1 : 0}`).join('|')
+    const sig = list
+      .map((r) => `${r.nodeId}:${r.since ?? ''}:${r.queued ? 1 : 0}:${r.background ? 1 : 0}`)
+      .join('|')
     if (sig === this.lastSig) return
     this.lastSig = sig
     this.publish(list)
@@ -115,9 +140,22 @@ export class StationHandoverTracker {
 
   /** Every agent event of every node, fed BEFORE anything that acts on it (the Server Edition's
    *  `refreshArmed`, the messaging queue's flush on `done`). Events without a state are ignored. */
-  onAgentEvent(event: Pick<NormalizedAgentEvent, 'nodeId' | 'state'>): void {
-    const state = event?.state
-    if (!event?.nodeId || !isSafeNodeId(event.nodeId) || typeof state !== 'string') return
+  onAgentEvent(
+    event: Pick<NormalizedAgentEvent, 'nodeId' | 'state'> &
+      Partial<Pick<NormalizedAgentEvent, 'backgroundTaskIds' | 'sessionPhase'>>
+  ): void {
+    if (!event?.nodeId || !isSafeNodeId(event.nodeId)) return
+    // The CLI exited: its background tasks died with it, and it will never report them finished.
+    if (event.sessionPhase === 'end') {
+      const t = this.byId.get(event.nodeId)
+      if (t?.background) {
+        t.background = false
+        this.changed()
+      }
+      return
+    }
+    const state = event.state
+    if (typeof state !== 'string') return
     const t = this.touch(event.nodeId)
     if (ACTIVE.has(state)) {
       if (!t.state || !ACTIVE.has(t.state)) t.turnStartedAt = this.now()
@@ -126,6 +164,8 @@ export class StationHandoverTracker {
     }
     t.state = state
     if (state === 'done') {
+      // Only a PRESENT inventory speaks about background work; an absent one is unknown.
+      if (Array.isArray(event.backgroundTaskIds)) t.background = event.backgroundTaskIds.length > 0
       this.settle(t)
       this.changed()
     }
@@ -179,21 +219,23 @@ export class StationHandoverTracker {
     }
   }
 
-  /** Is `--after` on this station held by unfinished handed-over work? */
+  /** Is `--after` on this station held by unfinished work — handed over, or still running in the
+   *  background of its last turn? */
   isHandedOver(nodeId: string): boolean {
     const t = this.byId.get(nodeId)
-    return !!t && (t.queued > 0 || t.handedAt !== undefined)
+    return !!t && holds(t)
   }
 
   /** Every station with unfinished handed-over work, newest first. */
   list(): StationHandoverRecord[] {
     const out: StationHandoverRecord[] = []
     for (const [nodeId, t] of [...this.byId.entries()].reverse()) {
-      if (t.queued <= 0 && t.handedAt === undefined) continue
+      if (!holds(t)) continue
       out.push({
         nodeId,
         ...(t.handedAt !== undefined ? { since: t.handedAt } : {}),
-        ...(t.queued > 0 ? { queued: true as const } : {})
+        ...(t.queued > 0 ? { queued: true as const } : {}),
+        ...(t.background ? { background: true as const } : {})
       })
     }
     return out

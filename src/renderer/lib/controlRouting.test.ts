@@ -369,6 +369,13 @@ describe('storedNodeListing — a dependent held by work handed to its station (
     expect(controlListingText(rows).split('\n')[1]).toBe(
       'd [terminal] Reviewer — QUEUED — waiting for st "Builder" to finish the work handed to it'
     )
+    // Only background tasks left running: named as such.
+    const bg = storedNodeListing(nodes, statuses, {}, 0, {}, { st: { nodeId: 'st', background: true } })
+    expect(bg[1]).toMatchObject({ backgroundWait: 'st "Builder"' })
+    expect(bg[1]).not.toHaveProperty('handoverWait')
+    expect(controlListingText(bg).split('\n')[1]).toBe(
+      'd [terminal] Reviewer — QUEUED — waiting for st "Builder" to finish the tasks still running in its background'
+    )
     // Nothing handed over: the row is what it always was.
     expect(storedNodeListing(nodes, statuses, {}, 0, {}, {})[1]).not.toHaveProperty('handoverWait')
   })

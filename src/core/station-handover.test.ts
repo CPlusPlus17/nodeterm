@@ -136,6 +136,55 @@ describe('StationHandoverTracker — when a station counts as finished for plain
     expect(h.t.list().map((r) => r.nodeId)).toEqual(['st'])
   })
 
+  describe('background tasks left running at a turn end (Claude `Stop.background_tasks`)', () => {
+    const stop = (t: StationHandoverTracker, ids?: string[]) =>
+      t.onAgentEvent({ nodeId: 'st', state: 'done', ...(ids ? { backgroundTaskIds: ids } : {}) })
+
+    it('a done that still lists a running task holds; a later done with an EMPTY inventory releases', () => {
+      const h = tracker()
+      h.ev('working', 100)
+      stop(h.t, ['bash_1'])
+      expect(h.t.isHandedOver('st')).toBe(true)
+      expect(h.t.list()).toEqual([{ nodeId: 'st', background: true }])
+      // A turn starting does not end it: the task may outlive that turn.
+      h.ev('working', 200)
+      expect(h.t.isHandedOver('st')).toBe(true)
+      stop(h.t, [])
+      expect(h.t.isHandedOver('st')).toBe(false)
+    })
+
+    it('an ABSENT inventory is unknown: it neither sets the hold (older CLI) nor clears it', () => {
+      const h = tracker()
+      h.ev('working', 100)
+      stop(h.t) // a CLI too old to send the field: today's behaviour
+      expect(h.t.isHandedOver('st')).toBe(false)
+      stop(h.t, ['agent_1'])
+      h.ev('done', 300) // the idle-prompt rescue / StopFailure carry no inventory
+      expect(h.t.isHandedOver('st')).toBe(true)
+    })
+
+    it('SessionEnd ends it: the CLI took its tasks with it and will never report them', () => {
+      const h = tracker()
+      h.ev('working', 100)
+      stop(h.t, ['bash_1'])
+      h.t.onAgentEvent({ nodeId: 'st', state: undefined, sessionPhase: 'end' })
+      expect(h.t.isHandedOver('st')).toBe(false)
+    })
+
+    it('background work and a hand-over hold independently', () => {
+      const h = tracker()
+      h.ev('working', 100)
+      stop(h.t, ['bash_1'])
+      h.t.noteControlAnswer('write', { node: 'st' }, { ok: true }, 'orch', h.at(150))
+      h.ev('working', 160)
+      stop(h.t, ['bash_1']) // the new work's turn ended, the background task still runs
+      expect(h.t.list()).toEqual([{ nodeId: 'st', background: true }])
+      h.ev('working', 200)
+      stop(h.t, [])
+      expect(h.t.isHandedOver('st')).toBe(false)
+    })
+  })
+
   it('ignores unsafe ids and stateless events', () => {
     const h = tracker()
     h.t.markHandedOver('../x', 5)

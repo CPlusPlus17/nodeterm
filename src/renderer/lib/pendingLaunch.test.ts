@@ -593,7 +593,7 @@ describe('plain --after on a station handed new work (core/station-handover.ts)'
   it('the tooltip says what the wait is for, not "waiting for X to finish" about an idle X', () => {
     const text = launchTooltip(undefined, 'Builder, Tester', 'claude go', undefined, false, undefined, undefined, 'Builder')
     expect(text).toBe(
-      'Waiting for Builder to finish the work just handed to it — its earlier turn does not count ' +
+      'Waiting for Builder to finish — a turn that ended before that work was done does not count ' +
         '(all waits: Builder, Tester), then runs:\nclaude go'
     )
     // An errored upstream is still named first: it will not end on its own.

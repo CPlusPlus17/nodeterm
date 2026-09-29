@@ -1532,6 +1532,9 @@ describe('--after-success + report-outcome: a dependent that waits for a reporte
     expect(flat).toContain('hand it the next task FIRST, then open the dependent `--after` it')
     expect(flat).toContain('"waiting for <station> to finish the work handed to it"')
     expect(flat).toContain("A person typing in the station's pane is not a hand-over")
+    expect(flat).toContain('A turn that ENDS with background tasks still running')
+    expect(flat).toContain('waits for a later turn end that reports none')
+    expect(flat).toContain('"waiting for <station> to finish the tasks still running in its background"')
   })
 
   it.each(bodies)('%s teaches stations to report, honestly, about themselves only', (_name, body) => {

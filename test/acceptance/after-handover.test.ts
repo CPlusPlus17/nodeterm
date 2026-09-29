@@ -217,6 +217,35 @@ describe('plain --after after a write / run', () => {
   })
 })
 
+describe('plain --after on a station whose turn ended with BACKGROUND tasks still running', () => {
+  // Measured live (2026-09-30): an agent's turn ended while its test suite still ran in a
+  // background shell, and the node armed `--after` it fired before anything had been pushed.
+  const stop = (h: Harness, ids: string[] | undefined) => {
+    h.tick(10)
+    h.state.st = 'done'
+    h.tracker.onAgentEvent({ nodeId: 'st', state: 'done', ...(ids ? { backgroundTaskIds: ids } : {}) })
+  }
+
+  it('a done listing a running task does not release D; a later done with an empty inventory does', () => {
+    const h = harness()
+    h.event('working')
+    stop(h, ['bash_suite'])
+    expect(dFires(h)).toBe(false)
+    // The suite finishes and wakes the station (or the next prompt does); that turn's end is empty.
+    h.event('working')
+    expect(dFires(h)).toBe(false)
+    stop(h, [])
+    expect(dFires(h)).toBe(true)
+  })
+
+  it('a CLI that sends no inventory keeps today\'s behaviour: its done releases D', () => {
+    const h = harness()
+    h.event('working')
+    stop(h, undefined)
+    expect(dFires(h)).toBe(true)
+  })
+})
+
 describe('the ordinary case is unchanged', () => {
   it('a station nobody handed anything fires D on its done, as before', () => {
     const h = harness()

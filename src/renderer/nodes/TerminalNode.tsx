@@ -234,7 +234,7 @@ import { useCodexIdentity, codexSharedIdentity, codexFallbackText } from '../sta
 import { codexApprovalCaps } from '../state/codexCli'
 import { useAgentStatus, agentStatusForApi, inferInterruptAfterSettle } from '../state/agentStatus'
 import { useLaunchDelivery } from '../state/launchDelivery'
-import { erroredDeps, handedOverDeps, launchTooltip } from '../lib/pendingLaunch'
+import { erroredDeps, handedOverDeps, holdReason, launchTooltip } from '../lib/pendingLaunch'
 import { useStationHandovers } from '../state/stationHandovers'
 import { useSuccessWait } from '../lib/useSuccessWait'
 import { StationFailedChip } from '../components/StationFailedChip'
@@ -2129,12 +2129,20 @@ export function TerminalNode({
     const after = pendingLaunch?.after ?? []
     if (!after.length) return ''
     const live = new Set(after.filter((d) => !!getNode(d)))
-    return handedOverDeps({ id, data: { pendingLaunch } }, live, s.byId).join(',')
+    return handedOverDeps({ id, data: { pendingLaunch } }, live, s.byId)
+      .map((d) => `${d}:${holdReason(s.byId[d])}`)
+      .join(',')
   })
   const pendingHandedOverOn = handedOverDepIds
     ? handedOverDepIds
         .split(',')
-        .map((depId) => ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId)
+        .map((entry) => {
+          const [depId, reason] = entry.split(':')
+          const title = ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId
+          return reason === 'background'
+            ? `${title} (tasks still running in its background)`
+            : `${title} (the work just handed to it)`
+        })
         .join(', ')
     : undefined
   const pendingErroredOn = erroredDepIds

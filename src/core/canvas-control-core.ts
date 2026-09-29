@@ -270,7 +270,13 @@ function afterHandoverDocLines(): string[] {
     '- So to reuse a station, hand it the next task FIRST, then open the dependent `--after` it — opened',
     '  first, the dependent would start at once on the previous task\'s output. `list` marks such a',
     '  dependent "waiting for <station> to finish the work handed to it". A person typing in the',
-    "  station's pane is not a hand-over. `run` (or the user's ▶) always starts a held node anyway."
+    "  station's pane is not a hand-over. `run` (or the user's ▶) always starts a held node anyway.",
+    '- A turn that ENDS with background tasks still running (a background shell, an async subagent —',
+    '  Claude reports them when its turn ends) has not finished either: `--after` on that station waits',
+    '  for a later turn end that reports none (`list`: "waiting for <station> to finish the tasks still',
+    '  running in its background"). If YOU are the station, do not end your turn with background work',
+    '  whose result a dependent needs; wait for it, then finish. Agents that do not report background',
+    '  tasks release on their turn end as before.'
   ]
 }
 
