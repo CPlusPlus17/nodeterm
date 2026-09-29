@@ -9,9 +9,14 @@
 // the timeout answers `indeterminate: true` (the request ledger then refuses a retry as "unknown"
 // instead of running it a second time), and an answer that arrives afterwards is handed to the
 // caller's `onLate` so the ledger can replay what really happened to the next retry.
+//
+// WHATEVER MAIN DOES WITH AN ANSWER RUNS ON BOTH. Main post-processes the renderer's answer
+// (recording who owns an opened browser, a project grant). That step is `finish`, and the forwarder
+// applies it to the on-time answer AND to a late one before handing it off: the late answer is the
+// one the ledger replays, and replaying "opened browser b1" without the ownership record told the
+// agent it had a browser it could never drive.
 import { randomUUID } from 'node:crypto'
 import { isDestructiveVerb } from '../shared/control-verbs'
-import { REQUEST_ID_VERBS } from '../core/control-request-ledger'
 
 export interface ControlForwardReply {
   ok: boolean
@@ -25,18 +30,19 @@ export interface ControlForwardReply {
  * The timeout's sentence, by what the verb could still be doing. Only a confirm-gated verb may be
  * called safe to retry: its dialog is gone, so nothing was confirmed. Anything else may still
  * complete, and telling an agent it is safe to retry an open is how a second node gets opened.
+ *
+ * `claimed` = the request ledger holds a row for this call (the forwarder was given `onLate`). Then
+ * the ROUTE, which holds the id, adds the line that names it and says to pass it as `--request-id`
+ * (`requestIdRetryHint`); this sentence must not point at the flag itself, because the forwarder
+ * never sees the id — and a flag with no value to pass is how an agent came to re-run the bare
+ * command, get a fresh id, and open a second one. Without a claim there is no id to pass at all:
+ * the only honest advice is to look before retrying.
  */
-export function controlTimeoutError(verb: string, timeoutMs: number): string {
+export function controlTimeoutError(verb: string, timeoutMs: number, claimed: boolean): string {
   const lead = `no answer within ${timeoutMs / 1000}s`
   if (isDestructiveVerb(verb)) return `${lead} — the confirmation dialog has been dismissed; safe to retry`
-  if (REQUEST_ID_VERBS.has(verb)) {
-    return (
-      `${lead} — the request was not cancelled and may still complete, so it may have taken effect: ` +
-      'retry the same command with the same --request-id to get its answer, or run `list` before ' +
-      'opening anything again'
-    )
-  }
-  return `${lead} — the request was not cancelled and may still complete; check its effect before retrying`
+  if (claimed) return `${lead} — the request was not cancelled and may still complete, so it may have taken effect`
+  return `${lead} — the request was not cancelled and may still complete; check the canvas for its effect before retrying`
 }
 
 /** How long a late renderer answer is still worth handing back. Past it the ledger row stays
@@ -48,32 +54,51 @@ export function createControlForwarder(opts: {
   lateWindowMs?: number
   newId?: () => string
 }): {
-  /** Send via `send(requestId)` and wait for `answer` with that id, at most `timeoutMs`. */
+  /**
+   * Send via `send(requestId)` and wait for `answer` with that id, at most `timeoutMs`. `finish`
+   * post-processes whichever answer arrives (on time, or late before it goes to `onLate`); it never
+   * runs on the timeout's own reply, which is not an answer.
+   */
   forward(
     verb: string,
     send: (requestId: string) => void,
-    onLate?: (reply: ControlForwardReply) => void
+    opts?: {
+      onLate?: (reply: ControlForwardReply) => void
+      finish?: (reply: ControlForwardReply) => ControlForwardReply
+    }
   ): Promise<ControlForwardReply>
   /** The renderer's answer (the `agentControlResult` IPC). */
   answer(payload: { requestId: string } & ControlForwardReply): void
 } {
   const newId = opts.newId ?? randomUUID
   const lateWindowMs = opts.lateWindowMs ?? LATE_CONTROL_ANSWER_MS
-  const pending = new Map<string, { resolve: (r: ControlForwardReply) => void; timer: NodeJS.Timeout }>()
-  const late = new Map<string, { onLate: (r: ControlForwardReply) => void; timer: NodeJS.Timeout }>()
+  type Finish = (r: ControlForwardReply) => ControlForwardReply
+  const same: Finish = (r) => r
+  const pending = new Map<
+    string,
+    { resolve: (r: ControlForwardReply) => void; finish: Finish; timer: NodeJS.Timeout }
+  >()
+  const late = new Map<
+    string,
+    { onLate: (r: ControlForwardReply) => void; finish: Finish; timer: NodeJS.Timeout }
+  >()
   return {
-    forward(verb, send, onLate) {
+    forward(verb, send, { onLate, finish = same } = {}) {
       const requestId = newId()
       return new Promise<ControlForwardReply>((resolve) => {
         const timer = setTimeout(() => {
           pending.delete(requestId)
           if (onLate) {
             const lateTimer = setTimeout(() => late.delete(requestId), lateWindowMs)
-            late.set(requestId, { onLate, timer: lateTimer })
+            late.set(requestId, { onLate, finish, timer: lateTimer })
           }
-          resolve({ ok: false, error: controlTimeoutError(verb, opts.timeoutMs), indeterminate: true })
+          resolve({
+            ok: false,
+            error: controlTimeoutError(verb, opts.timeoutMs, onLate !== undefined),
+            indeterminate: true
+          })
         }, opts.timeoutMs)
-        pending.set(requestId, { resolve, timer })
+        pending.set(requestId, { resolve, finish, timer })
         send(requestId)
       })
     },
@@ -82,14 +107,14 @@ export function createControlForwarder(opts: {
       if (waiting) {
         clearTimeout(waiting.timer)
         pending.delete(requestId)
-        waiting.resolve(reply)
+        waiting.resolve(waiting.finish(reply))
         return
       }
       const after = late.get(requestId)
       if (!after) return
       clearTimeout(after.timer)
       late.delete(requestId)
-      after.onLate(reply)
+      after.onLate(after.finish(reply))
     }
   }
 }

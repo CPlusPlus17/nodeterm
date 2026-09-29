@@ -33,6 +33,7 @@ import { STATION_NOTICE_FROM } from '../shared/agents/agent-messaging'
 import { PR_DEADLINE_DEFAULT_MS, PR_DEADLINE_MAX_MS, PR_WAIT_MAX, afterPrFlagRefusal } from '../shared/pr-wait'
 import { ISSUE_BRANCH_SLUG_MAX, issueWorktreeBranch } from '../shared/issue-worktree'
 import {
+  REQUEST_ID_HINT_LEAD,
   REQUEST_ID_MAX_LENGTH,
   REQUEST_ID_OUTCOME_GLOSS,
   REQUEST_ID_REPLAYED_LEAD,
@@ -481,7 +482,10 @@ function requestIdDocLines(): string[] {
     'Retrying safely (`--request-id`):',
     `- The verbs that create something (${[...REQUEST_ID_VERBS].join(', ')}) take`,
     `  \`--request-id <id>\`: 1-${REQUEST_ID_MAX_LENGTH} letters, digits, \`.\`, \`_\`, \`:\` or \`-\`, starting with`,
-    '  a letter or digit. Give each operation its own id (a uuid, or a name like `wave2-reviewer-1`).',
+    '  a letter or digit. Make each id UNIQUE: a uuid (`uuidgen`), or a readable name with a random',
+    '  part (`wave2-reviewer-1-7f3a9c`). A bare readable name can come back: ids are remembered per',
+    `  node for ${Math.round(REQUEST_LEDGER_TTL_MS / 3_600_000)} hours, so a later conversation in the same node that reuses one for the same`,
+    '  call is answered with the earlier reply — an open that never happened this time.',
     '- When a call\'s reply never reached you — your tool call timed out, the connection dropped, the',
     '  output was cut off — run the SAME command with the SAME id. nodeterm recognises it and, instead',
     '  of opening a second node, returns the first call\'s reply, whose first line starts',
@@ -491,6 +495,9 @@ function requestIdDocLines(): string[] {
     '  refused, and opens nothing.',
     `- Retry with the SAME id after a short wait: ${yes.join('; ')}.`,
     `- A same-id retry never clears these — fix the call: ${no.join('; ')}.`,
+    `- A reply that says a call may still complete names its id on a \`${REQUEST_ID_HINT_LEAD}\` line — also`,
+    '  when you passed none, because the CLI picks one per run. To retry, pass exactly that id with',
+    '  `--request-id`. Never re-run the bare command: it gets a fresh id and can open a second one.',
     '- Without `--request-id` the CLI still tags each RUN with its own id, so its own automatic',
     '  re-send to another endpoint never opens twice — but a second run is a second call. An id is',
     `  matched only for a session whose node identity is verified (the reply says so otherwise), for ${hours} hours,`,

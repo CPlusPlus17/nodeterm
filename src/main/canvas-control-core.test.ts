@@ -15,6 +15,7 @@ import {
 } from '../core/agents/hook-sandbox-hint-sh'
 import { RETRYABLE } from '../core/agents/agent-message-decide'
 import {
+  REQUEST_ID_HINT_LEAD,
   REQUEST_ID_MAX_LENGTH,
   REQUEST_ID_OUTCOME_GLOSS,
   REQUEST_ID_REPLAYED_LEAD,
@@ -717,6 +718,15 @@ describe('parseControlRequest', () => {
       expect(section).toMatch(/NEW id/)
       expect(section).toMatch(/verified/)
       expect(section).toMatch(/24 hours/)
+      // Review follow-up to #1027: the ids suggested must be UNIQUE (a readable name alone comes back
+      // in a later conversation of the same node and replays the old reply), and a reply that may
+      // still complete names its id — the CLI's own included — to be passed back with the flag.
+      expect(section).toMatch(/UNIQUE/)
+      expect(section).toContain('`uuidgen`')
+      expect(section).toMatch(/random\s+part/)
+      expect(section).not.toMatch(/a name like `wave2-reviewer-1`\)/)
+      expect(section).toContain(`\`${REQUEST_ID_HINT_LEAD}\``)
+      expect(section).toMatch(/Never re-run the bare command/)
       const yesAt = section.indexOf('Retry with the SAME id after a short wait')
       const noAt = section.indexOf('A same-id retry never clears these')
       expect(yesAt, name).toBeGreaterThan(-1)

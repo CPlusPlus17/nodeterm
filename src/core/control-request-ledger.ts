@@ -130,6 +130,22 @@ export function requestIdReplayLine(requestId: string, ageMs: number): string {
   )
 }
 
+/** The line that names the id a call may still complete under. Exported so tests quote it. */
+export const REQUEST_ID_HINT_LEAD = 'request id:'
+
+/**
+ * Added to a reply that could not say whether its call took effect, when the route holds a row for
+ * it. It must carry the id ITSELF: the shim's per-run id is otherwise never seen, so "retry with the
+ * same --request-id" sent the agent to re-run the bare command — a fresh id, and a second open.
+ */
+export function requestIdRetryHint(requestId: string): string {
+  return (
+    `${REQUEST_ID_HINT_LEAD} ${requestId} — to retry, run the same command with ` +
+    `\`--request-id ${requestId}\` added: you get this call's answer (or its refusal), never a ` +
+    'second one. Running it without that flag may open it twice.'
+  )
+}
+
 /** Appended when the caller passed `--request-id` but its node identity is not verified. */
 export const REQUEST_ID_UNVERIFIED_NOTE =
   'request id ignored: this session\'s node identity is not verified, so a retry cannot be matched ' +
@@ -150,15 +166,15 @@ export function requestIdOutcomeMessage(
     case 'request-in-flight':
       return (
         `request-in-flight: request ${id} is still running${since} — nothing new was started. ` +
-        'Run the same command with the same --request-id again in a few seconds to get its reply.'
+        `Run the same command with \`--request-id ${id}\` in a few seconds to get its reply.`
       )
     case 'request-outcome-unknown':
       return (
         `request-outcome-unknown: request ${id} ended without a confirmed answer${since}, so it MAY ` +
-        'have taken effect — nothing new was started. Retry the same command with the same ' +
-        '--request-id in a minute: an answer that arrives late is returned then. If it keeps saying ' +
-        'this, run `list` before opening anything again, and use a new --request-id only for ' +
-        'something that is not there.'
+        'have taken effect — nothing new was started. Retry the same command with ' +
+        `\`--request-id ${id}\` in a minute: an answer that arrives late is returned then. If it ` +
+        'keeps saying this, run `list` before opening anything again, and use a new --request-id ' +
+        'only for something that is not there.'
       )
     case 'request-id-conflict':
       return (

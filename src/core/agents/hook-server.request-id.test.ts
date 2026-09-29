@@ -10,12 +10,14 @@ import { initPlatform, resetPlatformForTests } from '../platform'
 import { fakePlatform } from '../platform-fake'
 import { hookServer } from './hook-server'
 import { nodeAuthToken } from './node-auth-token'
-import { REQUEST_ID_REPLAYED_LEAD } from '../control-request-ledger'
+import { REQUEST_ID_HINT_LEAD, REQUEST_ID_REPLAYED_LEAD } from '../control-request-ledger'
 
 const secret = Buffer.alloc(32, 7)
 let dir: string
 type Cmd = { verb: string; nodeId: string; args: Record<string, string>; verified: boolean }
 let handled: Cmd[] = []
+/** Whether each call was handed the late-answer path — main words its timeout by exactly this. */
+let lateOffered: boolean[] = []
 let next: (cmd: Cmd, late?: (r: { ok: boolean; message?: string }) => void) => Promise<{
   ok: boolean
   message?: string
@@ -32,11 +34,13 @@ beforeAll(async () => {
   hookServer.setNodeAuthSecret(secret)
   hookServer.setControlHandler(async (cmd) => {
     handled.push({ verb: cmd.verb, nodeId: cmd.nodeId, args: cmd.args, verified: cmd.verified })
+    lateOffered.push(typeof cmd.onLateAnswer === 'function')
     return next(cmd, cmd.onLateAnswer)
   })
 })
 beforeEach(() => {
   handled = []
+  lateOffered = []
   let n = 0
   next = async (cmd) => ({ ok: true, message: `opened n${++n}`, result: { ids: [`n${n}`], verb: cmd.verb } })
 })
@@ -228,6 +232,62 @@ describe('control route: --request-id makes a retried open idempotent', () => {
     const replay = await post('open-worktree', { node, args })
     expect(replay.status).toBe(200)
     expect(replay.body).toContain('opened worktree feat-x')
+    expect(handled).toHaveLength(1)
+  })
+
+  // Review follow-up to #1027: the timeout told the caller to "retry with the same --request-id" and
+  // never said what that id was. For the per-run id the shim generates, the caller has never seen
+  // it — so its natural retry was the bare command, a FRESH id, and a second open.
+  it('an indeterminate answer names the request id it holds — the per-run one included — and how to pass it', async () => {
+    next = async () => ({ ok: false, error: 'no answer within 120s — may still complete', indeterminate: true })
+    const text = await post('open-worktree', { node: freshNode(), args: { branch: 'b' }, cliRequestId: 'cli-feed01' })
+    expect(text.status).toBe(400)
+    expect(text.body).toContain('no answer within 120s')
+    expect(text.body).toContain(`${REQUEST_ID_HINT_LEAD} cli-feed01`)
+    expect(text.body).toContain('--request-id cli-feed01')
+    const json = JSON.parse(
+      (await post('open-worktree', { node: freshNode(), args: { branch: 'b' }, cliRequestId: 'cli-feed02', json: true }))
+        .body
+    )
+    expect(json.requestId).toBe('cli-feed02')
+    expect(json.message).toContain('--request-id cli-feed02')
+    expect(json.error).toContain('no answer within 120s')
+  })
+
+  it('with no claim there is no id to name, and the handler is offered no late-answer path', async () => {
+    next = async () => ({ ok: false, error: 'no answer within 120s — check the canvas', indeterminate: true })
+    const unverified = await post('open-worktree', {
+      node: freshNode(),
+      args: { branch: 'b', 'request-id': 'mine' },
+      verified: false
+    })
+    expect(unverified.body).not.toContain(REQUEST_ID_HINT_LEAD)
+    const noId = await post('open-worktree', { node: freshNode(), args: { branch: 'b' } })
+    expect(noId.body).not.toContain(REQUEST_ID_HINT_LEAD)
+    await post('open-worktree', { node: freshNode(), args: { branch: 'b' }, cliRequestId: 'cli-x1' })
+    expect(lateOffered).toEqual([false, false, true])
+  })
+
+  it('an in-flight or unknown refusal spells the flag WITH its value, so a per-run id can be passed back', async () => {
+    const node = freshNode()
+    let release!: () => void
+    next = () =>
+      new Promise((resolve) => {
+        release = () => resolve({ ok: false, error: 'late', indeterminate: true })
+      })
+    const firstP = post('open-agent', { node, args: { agent: 'claude' }, cliRequestId: 'cli-abc123' })
+    await vi_waitFor(() => handled.length === 1)
+    const during = await post('open-agent', { node, args: { agent: 'claude' }, cliRequestId: 'cli-abc123' })
+    expect(during.body).toMatch(/^request-in-flight: /)
+    expect(during.body).toContain('--request-id cli-abc123')
+    release()
+    await firstP
+    const unknown = await post('open-agent', { node, args: { agent: 'claude' }, cliRequestId: 'cli-abc123' })
+    expect(unknown.body).toMatch(/^request-outcome-unknown: /)
+    expect(unknown.body).toContain('--request-id cli-abc123')
+    // …and passing it back as --request-id is the same call, not a conflict.
+    const passedBack = await post('open-agent', { node, args: { agent: 'claude', 'request-id': 'cli-abc123' } })
+    expect(passedBack.body).toMatch(/^request-outcome-unknown: /)
     expect(handled).toHaveLength(1)
   })
 

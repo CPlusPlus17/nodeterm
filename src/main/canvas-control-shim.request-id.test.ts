@@ -32,6 +32,10 @@ let home = ''
 let proxy: net.Server
 let proxied = 0
 let handled: { verb: string; args: Record<string, string> }[] = []
+/** When set, the handler answers like desktop main after its 120 s wait: indeterminate, with the
+ *  real answer handed back later through `onLateAnswer`. */
+let timeOutNext = false
+let lateAnswer: ((r: { ok: boolean; message?: string }) => void) | undefined
 
 beforeAll(async () => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nodeterm-shim-rid-'))
@@ -43,6 +47,11 @@ beforeAll(async () => {
   hookServer.setNodeAuthSecret(SECRET)
   hookServer.setControlHandler(async (cmd) => {
     handled.push({ verb: cmd.verb, args: cmd.args })
+    if (timeOutNext) {
+      timeOutNext = false
+      lateAnswer = cmd.onLateAnswer
+      return { ok: false, error: 'no answer within 120s — the request may still complete', indeterminate: true }
+    }
     return { ok: true, message: `opened node #${handled.length}` }
   })
 
@@ -86,6 +95,8 @@ beforeAll(async () => {
 beforeEach(() => {
   handled = []
   proxied = 0
+  timeOutNext = false
+  lateAnswer = undefined
 })
 
 afterAll(async () => {
@@ -141,6 +152,25 @@ describe('canvas-control shim: a retried open does not open a second node', () =
     )
     expect(err?.code).toBe(1)
     expect(err?.stderr).toMatch(/request-id-conflict/)
+    expect(handled).toHaveLength(1)
+  })
+
+  // Review follow-up to #1027. The per-run id is invisible to the agent — until a call times out,
+  // when it is the only handle on a call that may still complete. The reply prints it; passing it
+  // back as --request-id turns the retry into the SAME call, which answers with what really happened.
+  it('a timed-out run prints its per-run id, and passing it back recovers the late answer — one node', async () => {
+    timeOutNext = true
+    const err = await callShim('node-b', liveEndpoint, ['open-agent', '--agent', 'claude']).then(
+      () => null,
+      (e: { code: number; stderr: string }) => e
+    )
+    expect(err?.code).toBe(1)
+    const id = /--request-id (cli-[0-9a-f]+)/.exec(err?.stderr ?? '')?.[1]
+    expect(id, err?.stderr).toBeDefined()
+    lateAnswer?.({ ok: true, message: 'opened node #1 (late)' })
+    const retry = await callShim('node-b', liveEndpoint, ['open-agent', '--agent', 'claude', '--request-id', id!])
+    expect(retry.stdout).toContain(REQUEST_ID_REPLAYED_LEAD)
+    expect(retry.stdout).toContain('opened node #1 (late)')
     expect(handled).toHaveLength(1)
   })
 

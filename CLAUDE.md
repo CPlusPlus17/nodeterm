@@ -3171,15 +3171,28 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   (desktop main's 120 s wait, now `src/main/control-forward.ts`: the renderer is not cancelled, and
   an `open-worktree` whose `git worktree add` outlives the wait still completes) or throws, and the
   row becomes UNKNOWN — refused, never re-run; the forwarder hands a late renderer answer back via
-  the handler's `onLateAnswer`, and settlement only moves up (unknown → answer, never the reverse);
+  the handler's `onLateAnswer`, and settlement only moves up (unknown → answer, never the reverse).
+  **A late answer is finished exactly like an on-time one**: everything main does with a renderer
+  answer (the `open-browser` ownership claim, `browser-open-claim.ts`; the `open-project` grant) is
+  ONE `finishAnswer` step the forwarder runs on whichever answer arrives — replaying a late
+  "opened browser b1" without the claim told the agent it had a browser it could never drive. And
+  **an indeterminate reply names its id**: the route adds a `request id: <id>` line saying to pass
+  it back as `--request-id <id>`, and the in-flight/unknown refusals spell the flag with its value —
+  the shim's per-run id is otherwise never seen, so "retry with the same --request-id" sent agents
+  to re-run the bare command, get a fresh id and open a second one;
   (7) an explicit id on a verb outside the set is REFUSED (`request-id-unsupported`), like
   `--dry-run` — an agent believing its `write` is protected when it is not is the failure the flag
   exists to end — while a malformed or out-of-set per-run id is silently ignored; (8) a dry run
   neither claims nor replays. The ledger is **process memory** (24 h, 256 per caller, 4096 in total,
   in-flight rows never evicted): an app restart between the effect and the retry runs the retry
   again, which is the case that matters least and costs a store with atomic writes on every call
-  to cover. The timeout sentence is now verb-aware (`controlTimeoutError`): only a confirm-gated
-  verb, whose dialog dismisses itself at the same deadline, is still called "safe to retry". An SSH
+  to cover. The timeout sentence is verb- and claim-aware (`controlTimeoutError`): only a
+  confirm-gated verb, whose dialog dismisses itself at the same deadline, is still called "safe to
+  retry"; a call with no ledger row (no id, or an unverified caller) is told to check the canvas for
+  its effect before retrying, never pointed at a flag it has no value for. Ids suggested to agents
+  must be UNIQUE (a uuid, or a readable name with a random part): rows are per node for 24 h, so a
+  later conversation in the same node reusing a readable id for the same call would be answered
+  with the earlier reply. An SSH
   host keeps the shim it got at its last connect, so until that project reconnects its runs carry
   no per-run id (an explicit `--request-id` still works through the old loop). Agent-facing text
   is rendered from `REQUEST_ID_VERBS` / `REQUEST_ID_RETRYABLE` / `REQUEST_ID_OUTCOME_GLOSS`
