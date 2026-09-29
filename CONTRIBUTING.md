@@ -319,6 +319,17 @@ lane unaffected.
   unless that table can read its projectId. Add the row in the same PR as the channel, or the verb
   is refused for every scoped guest (and `relay-project-scope.test.ts` goes red telling you so).
 
+- **A new IPC channel a relay tab can call must be classified in `src/core/relay/access-policy.ts`
+  — the guard test fails otherwise.** Every `IPC.*` the relay API's builders reference
+  (`BUILDERS` in `ws-bridge.ts`, plus `relay-api.ts`) goes in `VIEW` or `COMMENT` with its own
+  argument check, or in the reviewed `EDITOR_ONLY` set; `access-policy.guard.test.ts` names every
+  one you missed. A hosted team's Viewers and Commenters are refused anything unlisted, so
+  forgetting is safe but silent, and the guard is what makes someone decide. Opening a channel to
+  viewers also means adding it to the renderer's mirror, `src/shared/hosted-access.ts` (the same
+  test pins the two lists equal). An EVENT a viewer must receive needs a `VIEW_EVENTS` entry, and no
+  test forces that: without one, the event simply never arrives. Deep version: CLAUDE.md § Hosted
+  team relay.
+
 - **Normalize BOTH sides of a path comparison, through one function.** A marker normalized where
   it is built and matched raw where it is used is a no-op on the machine you wrote it on and a
   silent defect on Windows. That is issue #558: the managed-hook marker was folded to `/` while
