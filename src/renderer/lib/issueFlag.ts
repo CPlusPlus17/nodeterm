@@ -86,8 +86,10 @@ export async function resolveIssueFlagForCall(
 }
 
 /** Which project `#N` is resolved against — the one the node opens in — or the refusal the open
- *  paths would give this call. */
-function issueFlagScope<P extends ProjectTargetProject & ControlProject>(input: {
+ *  paths would give this call. Exported because it is the one answer for every per-open question the
+ *  dispatch decides before its paths (Canvas also sizes the open prompt's spill by it): two copies
+ *  of "which project, and may this caller ask" are how one of them drifts. */
+export function issueFlagScope<P extends ProjectTargetProject & ControlProject>(input: {
   targetId: string | undefined
   sourceNodeId: string
   liveNodes: readonly { id: string; data: { agentId?: unknown } }[]

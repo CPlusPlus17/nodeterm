@@ -271,6 +271,7 @@ import { transcriptPathOf } from '../core/context-link-core'
 import { initCanvasControl, installCanvasSkillInto } from './canvas-control'
 import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control-verbs'
 import { issueFlagRefusal } from '../core/canvas-control-core'
+import { afterPrFlagRefusal } from '../shared/pr-wait'
 import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
 import { initTranscriptIndex, searchTranscripts } from '../core/transcript-index'
 import { initTelemetry } from './telemetry'
@@ -3748,6 +3749,10 @@ app.whenReady().then(async () => {
     // renderer resolves `#N` against the project's repository and re-parses with the same grammar.
     const issueRefusal = issueFlagRefusal(verb, args)
     if (issueRefusal) return { ok: false, error: issueRefusal, message: issueRefusal }
+    // `--after-pr` / `--pr-deadline`: same placement and same reason. Whether the pull request
+    // exists in the board's repository is the renderer's question (`resolvePrWaitFor`).
+    const afterPrRefusal = afterPrFlagRefusal(verb, args)
+    if (afterPrRefusal) return { ok: false, error: afterPrRefusal, message: afterPrRefusal }
     // `browser` is answered in MAIN and never forwarded to the renderer's agent-control dispatch:
     // the debugger handle and the CDP allowlist are main-side, and the renderer is the more
     // attackable half. Every other verb still round-trips to the renderer below.

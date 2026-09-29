@@ -15,6 +15,8 @@
 
 import { canControlCanvas, type AgentId } from '@shared/agents/config'
 import { formatIssueRef } from '@shared/github-issue-ref'
+import { formatPrWaits, normalizePrWaitHold } from '@shared/pr-wait'
+import { prHoldExpired } from './prWait'
 import { controlLaunchState, type LaunchDelivery, type StatusById } from './pendingLaunch'
 import { projectTravel } from './presenceTravel'
 import {
@@ -175,11 +177,16 @@ export function answerBrowserResolve(
 export function storedNodeListing(
   nodes: readonly StoredNode[],
   statuses: StatusById & Record<string, { dropped?: boolean } | undefined> = {},
-  deliveries: Record<string, LaunchDelivery | undefined> = {}
+  deliveries: Record<string, LaunchDelivery | undefined> = {},
+  now: number = Date.now()
 ) {
   return nodes.map((n) => {
     const status = statuses[n.id]
-    const launchState = controlLaunchState(!!n.pendingLaunch, deliveries[n.id] ?? ((n.pendingLaunch as { manualOnly?: boolean } | undefined)?.manualOnly ? { kind: 'failed', attempts: 1, at: 0 } : undefined), status) ??
+    // `--after-pr`: the row names what the node waits on (the pull request STATUS is the canvas's
+    // to judge; `list` states the wait and whether its deadline has passed, which needs no board).
+    const prHold = normalizePrWaitHold((n.pendingLaunch as { afterPr?: unknown } | undefined)?.afterPr)
+    const prExpired = !!prHold && prHoldExpired(prHold, now)
+    const launchState = controlLaunchState(!!n.pendingLaunch, deliveries[n.id] ?? ((n.pendingLaunch as { manualOnly?: boolean } | undefined)?.manualOnly ? { kind: 'failed', attempts: 1, at: 0 } : undefined), status, prExpired) ??
       (n.agentId && !status?.state ? 'unconfirmed' as const : undefined)
     // A session started on an issue is told so on its OWN row, so `list` is enough for an agent to
     // learn it is bound (and which card to move). Only a reference `formatIssueRef` vouches for.
@@ -188,7 +195,8 @@ export function storedNodeListing(
       id: n.id, kind: n.kind ?? 'terminal', title: n.title ?? '',
       ...(issue ? { issue } : {}),
       ...(status?.lastTurnError ? { lastTurnErrored: true } : {}),
-      ...(launchState ? { launchState } : {})
+      ...(launchState ? { launchState } : {}),
+      ...(launchState === 'queued' && prHold && !prHold.invalid ? { prWait: formatPrWaits(prHold) } : {})
     }
   })
 }
@@ -198,15 +206,18 @@ const launchLabels = {
   failed: 'LAUNCH FAILED',
   stalled: 'QUEUED (terminal not ready)',
   starting: 'STARTING',
+  'brief-missing': 'HELD (its prompt file no longer exists; run it with `run` to start without it)',
   dropped: 'DROPPED',
   working: 'WORKING',
-  unconfirmed: 'AGENT STATUS UNCONFIRMED'
+  unconfirmed: 'AGENT STATUS UNCONFIRMED',
+  expired: 'EXPIRED (PR wait deadline passed; run it with `run`)'
 } as const
 
 export function controlListingText(rows: ReturnType<typeof storedNodeListing>): string {
   return rows.map((n) => `${n.id} [${n.kind}] ${n.title}` +
     (n.issue ? ` — issue ${n.issue}` : '') +
     (n.launchState ? ` — ${launchLabels[n.launchState]}` : '') +
+    (n.prWait ? ` — waits on ${n.prWait}` : '') +
     (n.lastTurnErrored ? ' — LAST TURN ERRORED' : '')
   ).join('\n')
 }

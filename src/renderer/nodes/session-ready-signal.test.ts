@@ -98,17 +98,18 @@ describe('the QUEUED badge carries the delivery state (source pins)', () => {
     expect(src).toContain('term-node__status--queued-warn')
     // `pendingErroredOn` is the fourth argument since #521 — an errored upstream is idle, so
     // without it the tooltip would promise a wait that never ends. The relay flag also
-    // keeps unsupported queued delivery from promising a working Run now action.
+    // keeps unsupported queued delivery from promising a working Run now action, and the last
+    // argument names an `--after-pr` wait (and its deadline) beside the stations.
     expect(src).toContain(
-      "launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay')"
+      "launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip)"
     )
   })
 
   it('a background start reads STARTING, without the warning, and disables ▶ (#925)', () => {
     // Core is typing the launch into this pane; a ▶ click would splice a second copy into it.
     expect(src).toContain("const startingNow = launchDelivery?.kind === 'starting'")
-    expect(src).toContain("launchDelivery && !startingNow ? ' term-node__status--queued-warn' : ''")
-    expect(src).toContain("{startingNow ? 'STARTING' : `${launchDelivery ? '⚠ ' : ''}QUEUED`}")
+    expect(src).toContain("(launchDelivery || prExpired) && !startingNow ? ' term-node__status--queued-warn' : ''")
+    expect(src).toContain("{startingNow ? 'STARTING' : launchDelivery ? '⚠ QUEUED' : prExpired ? '⚠ EXPIRED' : 'QUEUED'}")
     expect(src).toContain("disabled={session.source === 'relay' || startingNow}")
   })
 
