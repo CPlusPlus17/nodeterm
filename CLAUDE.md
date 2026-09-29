@@ -6887,12 +6887,11 @@ unpatched number while looking correct in the diff. When you add a gate, verify 
 The gate itself: `renderer/lib/windowActivity.ts` sets `data-nt-window="idle"` on the document
 element when the window loses focus or the page hides, `:root[data-nt-window='idle']` flips
 `--nt-anim-state` to `paused`, and the three per-node glows take a static-lit rule instead of the
-shared pause — `nt-unread-glow` rests at `opacity: 0`, so pausing it is a coin flip on whether the
-glow that says "this agent finished while you were away" is still on screen when you come back to
-look for it. `hud.css` is deliberately excluded: the notch HUD's window is never focused, so the
+shared pause — pausing freezes a glow wherever its clock stopped, and the glow that says "this
+agent finished while you were away" must still be on screen when you come back to look for it. `hud.css` is deliberately excluded: the notch HUD's window is never focused, so the
 shared gate would freeze it permanently rather than while nobody is looking.
 
-**The working glow is BOUNDED; the unread and attention glows are not.** The idle gate only helps an
+**The working and unread glows are BOUNDED; the attention glow is not.** The idle gate only helps an
 unfocused window, and an agent mid-turn in a FOCUSED one kept `nt-working-glow` looping for the
 whole turn — MEASURED (production build, M2, focused): one visible working node cost **+3 points
 total CPU and ~25 style recalcs/s** for as long as it ran. It now runs 4 cycles of 2.6 s (~10 s) and
@@ -6900,9 +6899,19 @@ rests at `opacity: 0.7`, the same static-lit value the idle gate and Reduce Moti
 at; the keyframes start and end at 0.7, so the settle is seamless. A new turn re-adds `.working`,
 which restarts the pulse — and so does anything else that re-applies the animation: a window
 refocus (the idle gate sets `animation: none`, so lifting it starts the shorthand afresh) and a node
-remount (a project switch, a park re-adopt) each replay the four pulses. Still bounded every time. Unread and attention stay infinite on purpose — they exist to pull the
-eye, and the idle gate covers the unfocused case. `styles.animation-gate.test.ts` pins the bounded
-shorthand, the resting opacity and the keyframe endpoints.
+remount (a project switch, a park re-adopt) each replay the four pulses. Still bounded every time.
+**Unread is bounded the same way** (4 cycles of 2 s, resting lit at `opacity: 0.85`), and so are the
+minimap's working and unread beats (`mm-pulse-soft` / `mm-pulse-unread`, resting at full stroke), and
+a WAITING `--after` rope is dashed + ⏳ but no longer `animated` (React Flow's `dashdraw`, 0.5 s
+infinite): an unread node stays unread until someone looks, and a wait can last hours, so on a busy
+canvas those three kept the frame loop open indefinitely. MEASURED (46-node SSH canvas, 14 unread
+nodes, 8 waiting ropes, FOCUSED window, dev build): idle renderer+GPU **~120% → ~25%**, and pausing
+every remaining animation no longer moves it. Pausing any ONE family alone saved far less (85–104%),
+which is the first-animation step above again. Only the attention glow (and its minimap beat) stays
+infinite — needs-you is the one state that must keep pulling the eye — and the idle gate covers the
+unfocused case. The driven-browser rope still flows (it lasts only while an agent drives the page).
+`styles.animation-gate.test.ts` pins the bounded shorthands, the resting values and the keyframe
+endpoints.
 
 **The viewport is never promoted — not even while the camera moves.** A `will-change: transform`
 on `.react-flow__viewport` during pan/zoom was tried (00c9c5fc, measured 41–48% → 30–36% CPU on

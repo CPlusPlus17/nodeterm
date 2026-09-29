@@ -2602,7 +2602,10 @@ export function Canvas() {
       const base = {
         ...e,
         type: 'floating',
-        animated: v.waiting,
+        // A waiting rope is dashed + ⏳ but does NOT flow: an `--after` wait can last hours, and
+        // React Flow's `animated` (dashdraw, 0.5 s, infinite) kept the compositor producing frames
+        // for the whole wait. The driven-browser rope below still flows; it is short-lived.
+        animated: false,
         style: { stroke: v.color, strokeWidth: 1.5, ...(v.waiting ? { strokeDasharray: '6 4' } : {}) },
         markerEnd: { type: MarkerType.ArrowClosed, color: v.color, width: 14, height: 14 },
         ...(v.waiting

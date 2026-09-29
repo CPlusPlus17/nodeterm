@@ -1641,17 +1641,27 @@ body,
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--state-unread) 80%, transparent),
     0 0 26px 4px color-mix(in srgb, var(--state-unread) 60%, transparent);
-  opacity: 0;
-  animation: nt-unread-glow 2s ease-in-out infinite;
+  opacity: 0.85;
+  animation: nt-unread-glow 2s ease-in-out 4;
   will-change: opacity;
 }
 
+/* Bounded like the working glow (4 cycles, ~8 s) and resting LIT at 0.85, the value the idle gate
+   and Reduce Motion already hold it at, so the glow still says "finished while you were away" after
+   the pulse ends. It used to run forever: an unread node stays unread until someone looks at it,
+   which on a busy canvas is many nodes for hours, and one running animation keeps the compositor at
+   display rate for the whole window. MEASURED (46-node SSH canvas, 14 unread nodes, focused window,
+   dev build): pausing every status animation took idle renderer+GPU CPU from ~120% to ~26%, and no
+   single family alone got there — see styles.animation-gate.test.ts. */
 @keyframes nt-unread-glow {
   0%,
   100% {
-    opacity: 0;
+    opacity: 0.85;
   }
-  50% {
+  40% {
+    opacity: 0.1;
+  }
+  75% {
     opacity: 1;
   }
 }
@@ -7681,7 +7691,7 @@ button.group-node__setup:disabled {
 }
 .minimap .mm-working {
   filter: drop-shadow(0 0 3px color-mix(in srgb, var(--mm-working) 80%, transparent));
-  animation: mm-pulse-soft 2.6s ease-in-out infinite;
+  animation: mm-pulse-soft 2.6s ease-in-out 4;
   animation-play-state: var(--nt-anim-state);
 }
 .minimap .mm-attention {
@@ -7694,16 +7704,23 @@ button.group-node__setup:disabled {
    stroke THICKENS on the beat as well, which is what makes it findable on a busy map. */
 .minimap .mm-unread {
   filter: drop-shadow(0 0 4px color-mix(in srgb, var(--mm-unread) 95%, transparent));
-  animation: mm-pulse-unread 1.6s ease-in-out infinite;
+  animation: mm-pulse-unread 1.6s ease-in-out 4;
   animation-play-state: var(--nt-anim-state);
 }
+/* Working and unread beat 4 times and then REST at full stroke (the drop-shadow halo is static),
+   mirroring their bounded canvas glows: an infinite beat repainted the minimap's filtered SVG every
+   frame for as long as a node stayed unread. Needs-you keeps beating, like its canvas glow. */
 @keyframes mm-pulse-unread {
   0%,
   100% {
+    stroke-opacity: 1;
+    stroke-width: 4px;
+  }
+  40% {
     stroke-opacity: 0.3;
     stroke-width: 3px;
   }
-  50% {
+  75% {
     stroke-opacity: 1;
     stroke-width: 6px;
   }
@@ -7721,10 +7738,10 @@ button.group-node__setup:disabled {
 @keyframes mm-pulse-soft {
   0%,
   100% {
-    stroke-opacity: 0.45;
+    stroke-opacity: 1;
   }
   50% {
-    stroke-opacity: 1;
+    stroke-opacity: 0.45;
   }
 }
 
