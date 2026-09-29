@@ -268,8 +268,8 @@ joining answers `E_JOIN_BUSY`.
   with one notice ("Couldn't reconnect to X. Click its tab to try again."). A click is a fresh
   attempt. A boot reconnect that runs out says to paste the invite code instead.
 - Unattended attempts (boot and drop reconnects) retry `E_JOIN_NETWORK` on 1, 2, 4, 8, 15 s, then
-  every 60 s, and `E_JOIN_THROTTLED` no sooner than 60 s (or the Retry-After), announced once per
-  streak. Nothing else retries, and a pasted code never retries: it is told once.
+  every 60 s, and `E_JOIN_THROTTLED` no sooner than 60 s (or the Retry-After, capped at 10 minutes),
+  announced once per streak. Nothing else retries, and a pasted code never retries: it is told once.
 - Closing or deleting the tab cancels its team's attempt in any phase. At most one attempt and one
   live connection exist per team.
 - A code pasted into a greyed tab's prompt must be for that tab's team. A code for another team is

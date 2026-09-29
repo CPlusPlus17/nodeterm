@@ -21,7 +21,7 @@
 // Pure orchestration over injected deps, so every rule is testable without React or a relay.
 // See docs/hosted-team-relay.md.
 import type { RelayClosedReason } from '@shared/types'
-import { classifyJoinFailure, DROP_RETRY_MAX, reconnectDelayMs, THROTTLE_MIN_DELAY_MS, type JoinFailure } from './hostedTeam'
+import { classifyJoinFailure, DROP_RETRY_MAX, reconnectDelayMs, throttleDelayMs, type JoinFailure } from './hostedTeam'
 
 /** The ladder rung of the 60 s tail (1/2/4/8/15 s come before it). */
 const TAIL_RUNG = 5
@@ -230,13 +230,14 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
         const failure = classifyJoinFailure(err instanceof Error ? err.message : String(err))
         if (failure.throttled && e.req.retry) {
           // The per-network limiter clears within a minute: wait at least that long (or its
-          // Retry-After), and stay on the 60 s tail after it — never a burst back down to 1 s.
+          // Retry-After, never more than ten minutes), and stay on the 60 s tail after it — never a
+          // burst back down to 1 s.
           if (!e.throttleSaid) {
             e.throttleSaid = true
             deps.throttled(e.req)
           }
           e.attempt = Math.max(e.attempt, TAIL_RUNG)
-          retryAfter(e, Math.max(THROTTLE_MIN_DELAY_MS, failure.retryAfterMs ?? 0))
+          retryAfter(e, throttleDelayMs(failure.retryAfterMs))
           return
         }
         if (failure.retry && e.req.retry) {

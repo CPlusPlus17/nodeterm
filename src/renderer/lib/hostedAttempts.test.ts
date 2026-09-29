@@ -482,6 +482,26 @@ describe('hosted attempts: one attempt and one live connection per team (R38/R39
     expect(h.stopped).toEqual([])
   })
 
+  it('D2: a Retry-After longer than ten minutes waits ten minutes — a huge one never fires at once', async () => {
+    const h = harness()
+    const a = createHostedAttempts(h.deps)
+    a.run(boot())
+    // 99 999 999 s: past 2^31-1 ms, where a timer would fire immediately.
+    h.connects[0].reject(wrap('[E_JOIN_THROTTLED] limiting [retry-after:99999999]'))
+    await flush()
+    expect(h.armed()[0].ms).toBe(600_000)
+    h.fire()
+    // Too many digits to be a number at all (Infinity): still ten minutes.
+    h.connects[1].reject(wrap(`[E_JOIN_THROTTLED] limiting [retry-after:${'9'.repeat(400)}]`))
+    await flush()
+    expect(h.armed()[0].ms).toBe(600_000)
+    h.fire()
+    // Just under the ceiling is honoured as is.
+    h.connects[2].reject(wrap('[E_JOIN_THROTTLED] limiting [retry-after:599]'))
+    await flush()
+    expect(h.armed()[0].ms).toBe(599_000)
+  })
+
   it('R41: a throttle streak is announced once; a new streak (after the service answered) again', async () => {
     const h = harness()
     const a = createHostedAttempts(h.deps)

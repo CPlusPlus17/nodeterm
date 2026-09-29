@@ -18,6 +18,17 @@ export const THROTTLED_NOTICE = 'The nodeterm service is limiting requests from 
 /** A throttled retry never comes sooner than this, whatever Retry-After says (R41). */
 export const THROTTLE_MIN_DELAY_MS = 60_000
 
+/** ...and never later than this. The per-network limiter clears within a minute, so a longer
+ *  Retry-After is not a reason to go quiet for longer, and a huge one (past 2^31-1 ms, or too many
+ *  digits to be a number) would make the timer fire at once: exactly the burst the floor prevents. */
+export const THROTTLE_MAX_DELAY_MS = 600_000
+
+/** How long a throttled join waits: its Retry-After, clamped to [1 min, 10 min]. */
+export function throttleDelayMs(retryAfterMs: number | null): number {
+  const asked = retryAfterMs === null || Number.isNaN(retryAfterMs) ? 0 : retryAfterMs
+  return Math.min(THROTTLE_MAX_DELAY_MS, Math.max(THROTTLE_MIN_DELAY_MS, asked))
+}
+
 /** How many times an unattended attempt retries a connection that dropped before the host answered
  *  (a host restarting): the short steps of the ladder, 1/2/4/8/15 s, and then it stops and says so
  *  (R40). Each try mints a join token and opens a relay socket, so this one is bounded — unlike a
