@@ -1077,9 +1077,14 @@ a transmitted text request is uncertain delivery, never a pre-paste refusal; sho
 warning. SessionStart idle rescue is scoped to that same nonempty session and agent identity,
 and a foreign idle must not broadcast fresh state proof to the renderer.
 
-Control and linked-context fallback must keep a known node identity on its owning nodeterm
-instance. A foreign server being reachable is not evidence that it owns the canvas. Match the
-candidate's own advertised node token before sending; never borrow a token from a global directory
-for that check. Keep real owning-endpoint refusals final and legacy hook delivery unchanged.
-When no owner answers, say so as a temporary state (`FOREIGN_ENDPOINT_HINT`); never let another
-instance's "permanent, do not retry" stand in for a dropped tunnel.
+Control and linked-context fallback must keep a known node identity on the endpoint family the
+session was born on. A foreign server being reachable is not evidence that it owns the canvas —
+and a matching token is not proof either (on an SSH host the token dir is shared per unix
+account); it is a routing rule, and the server still authorizes. Take the reference token from the
+primary endpoint's own dir, never from a global directory, and match each candidate's own dir
+against it — by value, or, when the reference is empty, by the directory's real path (an empty
+value matches every stranger). Probe a fallback candidate (bounded) before posting to it, but never put a timeout on
+the real POST: a confirm-gated verb waits for a human. Keep real owning-endpoint refusals final and
+legacy hook delivery unchanged. When no owner answers, say so once, as a temporary state
+(`FOREIGN_ENDPOINT_HINT`); never let another instance's "permanent, do not retry" stand in for a
+dropped tunnel.
