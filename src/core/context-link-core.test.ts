@@ -197,6 +197,16 @@ describe('mergeInstructionsBlock', () => {
     const out = mergeInstructionsBlock('', block)
     expect(out.startsWith('<!-- nodeterm:get-linked-context:start -->')).toBe(true)
   })
+  it('a stray end marker BEFORE the block does not make every merge append another copy', () => {
+    // A user who deletes our block by hand but leaves its end line: the end marker is found first,
+    // and a merge that took the first end marker anywhere read "no block" and appended — again on
+    // every connect, forever. The end marker is searched AFTER the start marker.
+    const stray = '# mine\n<!-- nodeterm:get-linked-context:end -->\n'
+    const once = mergeInstructionsBlock(stray, block)
+    expect(mergeInstructionsBlock(once, block)).toBe(once)
+    expect(once.match(/get-linked-context:start/g)).toHaveLength(1)
+    expect(once.startsWith(stray)).toBe(true)
+  })
 })
 
 describe('buildLinkedContextInstructions', () => {

@@ -19,6 +19,7 @@ import { transportPair } from '../../core/relay/transport-pair'
 import type { PeerAttach } from '../../core/relay/relay-host'
 import type { RelayTransport } from '../../core/relay/relay-socket'
 import { IPC } from '../../shared/ipc'
+import { relayPtyDataKey } from '../../shared/relay-pty-channel'
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-join-'))
 const pub = (k: KeyPair) => publicKeyToB64(k.publicKey)
@@ -385,8 +386,10 @@ describe('connectHostedTeam (the relay:client:connect leg for a join code)', () 
       [IPC.relayClientSas('c1'), '123 456'],
       [IPC.relayClientApproved('c1')],
       [IPC.relayClientFrame('c1'), '{"t":"res"}'],
-      [IPC.ptyData('p1'), 'out']
+      // NAMESPACED: the host's `p1` must never land on a local pty's `pty:data:p1` channel.
+      [IPC.ptyData(relayPtyDataKey('c1', 'p1')), 'out']
     ])
+    expect(x.sent.some(([ch]) => ch === IPC.ptyData('p1'))).toBe(false)
   })
 
   it('a close carries the host\'s refusal reason and unregisters the session', async () => {

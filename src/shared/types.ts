@@ -441,6 +441,14 @@ export interface PendingLaunch {
    */
   afterPr?: PrWaitHold
   /**
+   * Also wait for these stations to REPORT SUCCESS (`--after-success`, see @shared/station-outcome):
+   * each id is in `after` too, so this adds "and it said it succeeded" to "its turn is over". ANDed
+   * with every other gate. Validated at both serializer seams (`normalizePendingLaunch`): a malformed
+   * value becomes a hold that never fires on its own. A build older than this one does not know the
+   * field and releases the node on the turn ending alone.
+   */
+  afterSuccess?: import('./station-outcome').SuccessWaitHold
+  /**
    * The file `command` reads its prompt from (`"$(cat '<path>')"`): a `--prompt-file`, or a long
    * `--prompt` spilled to a file (#706). A held launch may be delivered weeks after it was armed, so
    * the delivery loop checks this file still exists before it types the command, and holds the node
@@ -649,11 +657,15 @@ export interface CanvasState {
  *    that echo is the ACK that tells the sender where its edit landed in the total order).
  *  - `seq` is stamped by the reflector (src/core/canvas-sync.ts) and is the TOTAL ORDER. It is
  *    server-authoritative: a client-supplied `seq` is overwritten at ingest, never trusted.
+ *  - `origin: 'core'` is ALSO reflector-authoritative: a client-supplied one is deleted at ingest.
+ *    The core adds it only on a copy that came from an OWNER client (or the core itself) and goes to
+ *    an owner client, and it is the ONE thing that lets a receiver take the node's machine-local
+ *    `pendingLaunch` as sent (@shared/node-exec `mutationTrustsLaunch`).
  * The relay's host↔client mirror (src/main/remote) uses the same vocabulary and simply omits both.
  */
 export type CanvasMutation =
-  | { op: 'upsert'; node: CanvasNodeState; src?: string; seq?: number }
-  | { op: 'remove'; id: string; src?: string; seq?: number }
+  | { op: 'upsert'; node: CanvasNodeState; src?: string; seq?: number; origin?: 'core' }
+  | { op: 'remove'; id: string; src?: string; seq?: number; origin?: 'core' }
 
 /** Canvas pan/zoom state. */
 export interface Viewport {
@@ -822,6 +834,11 @@ export interface BoardLogEvent {
      *  `StationFailureReason`, @shared/station-notice), `title` = the station's title as the notice
      *  carried it (one line, capped). Never any station output. */
     | 'station-failed'
+    /** A station reported its TASK outcome (`report-outcome`, @shared/station-outcome). Filed under
+     *  the STATION's own card. `from` = the station's node id, `to` = the outcome (`succeeded` /
+     *  `failed`), `title` = its note (one line, capped). Written by the app, never a gate: the
+     *  outcome a `--after-success` wait reads lives in core's transient store, not in this file. */
+    | 'station-reported'
   from?: string
   to?: string
   /** Column title for column-added/deleted; card title for card-created; outcome for agent-message;
@@ -3760,7 +3777,8 @@ export type DeviceRevokeServerOutcome = 'ok' | 'failed' | 'skipped'
  * as a clean one (the same discipline as remote/revocation.ts's persisted/killed).
  */
 export interface DeviceRevokeResult {
-  /** The agent.json entry + authorized_keys line were removed from this machine. */
+  /** The phone's relay trust (every phone relay pin + live relay session), its authorized_keys line
+   *  and its agent.json entry were all removed from this machine. */
   local: boolean
   /** Whether the phone's Pro entitlement was taken back on the relay backend. */
   server: DeviceRevokeServerOutcome
@@ -4114,5 +4132,13 @@ export interface NodeTerminalApi {
     list(): Promise<import('./station-notice').StationNoticeView[]>
     onChanged(cb: (views: import('./station-notice').StationNoticeView[]) => void): () => void
     reportDropped(nodeId: string, dropped: boolean): void
+  }
+  /** Station task outcomes (`report-outcome`, src/core/station-outcome-store.ts): what each station
+   *  reported about its own task in this app run — what a `--after-success` wait reads. Desktop and
+   *  Server Edition are real; a relay tab's stations belong to the host's core, so there it is inert
+   *  (and its launch delivery is refused anyway). */
+  stationOutcome: {
+    list(): Promise<import('./station-outcome').StationOutcomeRecord[]>
+    onChanged(cb: (records: import('./station-outcome').StationOutcomeRecord[]) => void): () => void
   }
 }

@@ -96,6 +96,12 @@ export function eventBody(e: BoardLogEvent): string {
       // Rendered from the closed reason table, never from anything the station wrote: `to` is a
       // reason CODE, and an unknown one (a newer peer, a hand edit) reads as a plain "stopped".
       return `told this agent that station ${stationName(e)} stopped: ${stationTrigger(e.to)?.label ?? 'it stopped'}`
+    case 'station-reported':
+      // `to` is the outcome CODE and `title` the station's note — from a shared file, so text only
+      // (React escapes it); an outcome this build does not know reads as a plain report.
+      return `recorded this session's report: ${
+        e.to === 'succeeded' ? 'its task succeeded' : e.to === 'failed' ? 'its task failed' : 'an outcome'
+      }${typeof e.title === 'string' && e.title ? ` — "${e.title}"` : ''}`
     default:
       // A newer peer may write event types this build doesn't know — show them neutrally.
       return `updated this card`

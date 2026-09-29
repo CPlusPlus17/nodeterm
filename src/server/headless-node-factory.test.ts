@@ -10,6 +10,7 @@ import { WorkspaceStore } from '../core/workspace-store'
 import type { AgentState } from '../shared/agents/normalize'
 import { MAX_LAUNCH_LINE_BYTES } from '../shared/canonical-line'
 import { RUN_NOW_AFTER_REFUSAL } from '../shared/control-verbs'
+import { RUN_NOW_AFTER_SUCCESS_REFUSAL, type StationOutcomeRecord } from '../shared/station-outcome'
 import {
   DEFAULT_SETTINGS,
   type CanvasNodeState,
@@ -163,6 +164,7 @@ describe('HeadlessNodeFactory', () => {
   let ownership: HeadlessNodeOwnership
   let codexSharedIdentity: boolean
   let codexApprovalValues: { approvalValues: string[] | null }
+  let outcomes: Record<string, StationOutcomeRecord>
 
   const settings = (): Settings => ({
     ...DEFAULT_SETTINGS,
@@ -179,6 +181,7 @@ describe('HeadlessNodeFactory', () => {
     store = new WorkspaceStore()
     pty = new FakePty()
     states = {}
+    outcomes = {}
     published = []
     removed = []
     publishedProjects = []
@@ -235,6 +238,7 @@ describe('HeadlessNodeFactory', () => {
       codexSharedIdentity: async () => codexSharedIdentity,
       ownership,
       stateOf: (id) => states[id],
+      outcomeOf: (id) => outcomes[id],
       launchTiming: { quietMs: 0, capMs: 0 },
       publishNode: (_projectId, node) => published.push(node),
       publishRemoval: (_projectId, nodeId) => removed.push(nodeId),
@@ -1209,6 +1213,138 @@ describe('HeadlessNodeFactory', () => {
     expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'consume result'" }])
     workspace = await store.load({ sideline: false })
     expect(workspace.projects[0].nodes.find((node) => node.id === id)?.pendingLaunch).toBeUndefined()
+  })
+
+  describe('--after-success: the dependent waits for a REPORTED success, not a turn ending', () => {
+    const report = (nodeId: string, outcome: 'succeeded' | 'failed', note?: string) => {
+      outcomes[nodeId] = { nodeId, outcome, at: Date.now(), ...(note ? { note } : {}) }
+    }
+    const openWaiting = async () => {
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'ship it', 'after-success': 'term-upstream' },
+        true
+      )
+      expect(reply.ok).toBe(true)
+      return (reply.result as { id: string }).id
+    }
+
+    it('holds on an idle station with no report, and releases once it reports success', async () => {
+      states['term-upstream'] = 'done'
+      const id = await openWaiting()
+      expect(pty.sends).toEqual([])
+      const held = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
+      expect(held?.pendingLaunch).toMatchObject({
+        after: ['term-upstream'],
+        afterSuccess: { deps: ['term-upstream'], deadlineAt: expect.any(Number) },
+        executor: 'server'
+      })
+      // The turn is over and nothing was reported: `--after` alone would fire here.
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      report('term-upstream', 'succeeded')
+      await factory.refreshArmed()
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'ship it'" }])
+    })
+
+    it('a reported failure blocks it for good', async () => {
+      states['term-upstream'] = 'done'
+      const id = await openWaiting()
+      report('term-upstream', 'failed', 'tests red')
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      const still = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
+      expect(still?.pendingLaunch?.afterSuccess).toBeDefined()
+    })
+
+    it('holds when the station\'s last turn ERRORED after it reported success (#521, like the desktop)', async () => {
+      states['term-upstream'] = 'done'
+      const id = await openWaiting()
+      report('term-upstream', 'succeeded')
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'done', errored: true })
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      // The next genuine new turn clears the verdict; a clean end of it releases.
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'working', newTurn: true })
+      states['term-upstream'] = 'done'
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'done' })
+      await vi.waitFor(() => expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'ship it'" }]))
+    })
+
+    it('a reported success mid-turn waits for the turn to end', async () => {
+      states['term-upstream'] = 'working'
+      await openWaiting()
+      report('term-upstream', 'succeeded')
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      states['term-upstream'] = 'done'
+      await factory.refreshArmed()
+      expect(pty.sends).toHaveLength(1)
+    })
+
+    it('a station already reported successful and idle releases the open at once', async () => {
+      states['term-upstream'] = 'done'
+      report('term-upstream', 'succeeded')
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'go', 'after-success': 'term-upstream' },
+        true
+      )
+      expect(reply.result).toMatchObject({ deliveredIds: [expect.any(String)], afterSuccess: ['term-upstream'] })
+      expect(pty.sends).toHaveLength(1)
+    })
+
+    it('never fires past its deadline', async () => {
+      states['term-upstream'] = 'done'
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'x', 'after-success': 'term-upstream', 'success-deadline': '1m' },
+        true
+      )
+      expect(reply.ok).toBe(true)
+      const ws = await store.load({ sideline: false })
+      const node = ws.projects[0].nodes.find((n) => n.id === (reply.result as { id: string }).id)
+      node!.pendingLaunch!.afterSuccess!.deadlineAt = 1
+      await store.save(ws)
+      report('term-upstream', 'succeeded')
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+    })
+
+    it('a hostile persisted hold never fires and never throws', async () => {
+      states['term-upstream'] = 'done'
+      const id = await openWaiting()
+      const ws = await store.load({ sideline: false })
+      const node = ws.projects[0].nodes.find((n) => n.id === id)
+      ;(node!.pendingLaunch as unknown as { afterSuccess: unknown }).afterSuccess = { deps: 'term-upstream' }
+      await store.save(ws)
+      report('term-upstream', 'succeeded')
+      await expect(factory.refreshArmed()).resolves.toBeUndefined()
+      expect(pty.sends).toEqual([])
+    })
+
+    it('refuses a station that could never report, and --run-now, before creating anything', async () => {
+      const ws = await store.load({ sideline: false })
+      ws.projects[0].nodes.push({ ...terminal('term-agy', 'Agy'), agentId: 'antigravity' })
+      await store.save(ws)
+      ownership.record('term-agy', { sourceNodeId: 'term-source', projectId: 'project-1' })
+      const before = (await store.load({ sideline: false })).projects[0].nodes.length
+      const r = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'x', 'after-success': 'term-agy' },
+        true
+      )
+      expect(r).toMatchObject({ ok: false, error: expect.stringContaining('cannot report an outcome') })
+      await expect(
+        factory.openAgent(
+          'term-source',
+          { agent: 'claude', prompt: 'x', 'after-success': 'term-upstream', 'run-now': '1' },
+          true
+        )
+      ).resolves.toEqual({ ok: false, error: RUN_NOW_AFTER_SUCCESS_REFUSAL })
+      expect((await store.load({ sideline: false })).projects[0].nodes.length).toBe(before)
+    })
   })
 
   it('holds a fresh dependency through its boot done blip, then releases after working -> done', async () => {

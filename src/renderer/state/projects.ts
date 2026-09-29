@@ -22,7 +22,7 @@ import {
   pruneLayoutViewports,
   type CanvasLayout
 } from '@shared/canvas-layout'
-import { applyCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
+import { applyCanvasMutation, applyOwnCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
 import { markWorkspaceDirty } from './workspaceDirty'
 import { folderName } from '../lib/projectOpen'
 // One order-independent key for an edge's endpoints — the SAME rule `hiddenLinkIds` uses, so a
@@ -154,10 +154,30 @@ interface ProjectsState {
    * they deleted on the very next save — the data-loss shape canvas sync exists to fix.
    */
   applyNodeMutation(projectId: string, mutation: CanvasMutation): boolean
+  /**
+   * Applies a mutation THIS renderer authored (a cold open, an off-canvas display node, the
+   * headless start's outcome patch) to a project that is not on screen. Unlike `applyNodeMutation`
+   * nothing is stripped: the node's machine-local `pendingLaunch` is ours to set, and an upsert
+   * without one CLEARS it (the peer path carries the old one across instead — @shared/node-exec).
+   * Never route a peer's mutation through this.
+   */
+  applyOwnNodeMutation(projectId: string, mutation: CanvasMutation): boolean
   /** Renames a node within a project (source of truth for inactive projects). */
   renameNode(projectId: string, nodeId: string, title: string): void
   /** Recolors a node within a project. */
   recolorNode(projectId: string, nodeId: string, color: string): void
+  /**
+   * Writes an in-place agent restart's rebind (which agent, which account) into a project's
+   * serialized node — for a restart that finished after its project stopped being the active one
+   * (the user switched away while the CLI was quitting), when React Flow no longer holds the node.
+   * A key that is PRESENT is written, even as `undefined` (= the system account); an absent key is
+   * left alone.
+   */
+  rebindNode(
+    projectId: string,
+    nodeId: string,
+    patch: Pick<CanvasNodeState, 'agentId'> & Partial<Pick<CanvasNodeState, 'accountId'>>
+  ): void
   /** Removes a node from a project. */
   removeNode(projectId: string, nodeId: string): void
   /** Duplicates a node within a project (fresh id, offset position). */
@@ -591,6 +611,16 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     return true
   },
 
+  applyOwnNodeMutation(projectId, mutation) {
+    if (!get().projects.some((p) => p.id === projectId)) return false
+    set((s) => ({
+      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+        applyOwnCanvasMutation(nodes, mutation)
+      )
+    }))
+    return true
+  },
+
   renameNode(projectId, nodeId, title) {
     set((s) => ({
       projects: mapProjectNodes(s.projects, projectId, (nodes) =>
@@ -604,6 +634,14 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     set((s) => ({
       projects: mapProjectNodes(s.projects, projectId, (nodes) =>
         nodes.map((n) => (n.id === nodeId ? { ...n, color } : n))
+      )
+    }))
+  },
+
+  rebindNode(projectId, nodeId, patch) {
+    set((s) => ({
+      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+        nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n))
       )
     }))
   },

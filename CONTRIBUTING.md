@@ -443,6 +443,11 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   the relay, so a key that works locks it onto a path that cannot work. CLAUDE.md, "Remote access",
   has the details.
 
+- **Relay pins are per role, and a revoke is one call.** Pin a peer only through its role's store
+  in `src/main/remote/approved-devices.ts` (`phonePins` is the only one anything auto-admits from —
+  never write a desktop peer there), and revoke only through `src/main/remote/peer-revoke.ts`, which
+  unpins AND closes every live session on every host. A new host that serves relay peers must
+  `registerPeerSessionKiller`, or revoking a device leaves its shell open. CLAUDE.md, "Remote access".
 - **A relay channel that names a project needs a row in `relay-project-scope.ts`.** A relay guest
   bound to one shared project must never reach another, and the jail is keyed on channel class:
   anything named `githubIssues:*`, `board-log:*` or `projects.*` is refused on a scoped session
@@ -488,6 +493,15 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   to the user (settings, config.toml, AGENTS.md) use `updateRemoteTextFile`, which also keeps its
   symlink and mode. A guard test fails on a new bare `cat >`. A remote runner RESOLVES on a
   non-zero exit, so check the result or use the helper that does.
+
+- **A new agent-facing doc on an SSH host goes into the agent-tools plan.** The canvas/context
+  shims, their skills and our instruction-file blocks are listed once in `remote-hooks.ts`
+  (`canvasControlArtifacts` and its siblings); the installers AND the connect-time freshness check
+  (`RemoteHooks.refreshAgentTools`) read that list, so a host is brought up to your build's bytes
+  on the next connect. A shim, skill or block written from anywhere else is written once and never
+  checked again — hosts then keep the old text across app updates. This is ONLY for those docs:
+  hook scripts and hook config stay in `setup()`'s ordered chain, and the endpoint file and node
+  tokens carry credentials — never put them on a freshness cadence.
 
 - **Never write `chmod <mode> -- <file>` into a remote command.** macOS (BSD) chmod stops parsing
   options at the mode, so the `--` becomes a file operand and the command fails there while passing
@@ -746,14 +760,24 @@ reply carries it (`queued` / `queuedIds`), because a user who cannot see the fai
 orchestrator that is told "opened" both act on a session that is not there. If you add a bounded
 retry anywhere, ask what the clock actually starts on and where its exhaustion becomes visible.
 
-**A held launch is hostile input, and a gate nobody can read stays CLOSED.** `pendingLaunch` lives
-in the git-shared `.nodeterm/project.json`, so `normalizePendingLaunch`
+**A held launch is an exec field, and a gate nobody can read stays CLOSED.** `pendingLaunch` is a
+command typed into a shell when its wait ends, so it is MACHINE-LOCAL like `shell`
+(`src/shared/node-exec.ts`): it rides workspace.json's `localExec`, never the git-shared
+`.nodeterm/project.json`, and a peer's or relay guest's value is dropped on `canvas:mut`. A write
+your renderer authors into a background project goes through `applyOwnNodeMutation`, never the
+peer path `applyNodeMutation` (which strips the launch and cannot clear one). Where a value is read
+(workspace.json is still hand-editable), `normalizePendingLaunch`
 (`src/shared/pending-launch-shape.ts`) runs at both serializer seams: an `after` that is not a list
 used to throw inside the canvas's dependency-signature selector. Its rule, and the rule for any new
-gate you add (the `--after-pr` pull request wait is the latest): a value it cannot read turns the
+gate you add (the `--after-success` wait is the latest): a value it cannot read turns the
 hold `manualOnly` or never-satisfied, never "no gate" — dropping it would start the node early, and
 a dependent that has launched cannot un-launch. A new gate field also goes in that module's `KNOWN`
-set, and `launchesToFire` must treat a missing context for it as closed.
+set, and `launchesToFire` must treat a missing context for it as closed. If both shells evaluate the
+gate (the Server Edition's headless factory releases its own held launches), put the evaluation in
+`src/shared` beside the shape, as `@shared/station-outcome` does, so the desktop and the server
+cannot disagree about when a dependent starts. And never let a gate read its "satisfied" from a
+file: a success a git commit can claim releases every dependent waiting on it — the station's
+report lives in a transient core store, and its board-log line is display only.
 
 **Never move the user's view on a background agent's say-so.** Canvas-control requests route by
 SOURCE, and React Flow holds only the ACTIVE project's nodes — so the dispatch used to travel to the
@@ -795,7 +819,7 @@ an SSH ref (the same file on the host, with an offline `cache`), and a cwd-less 
 (`userData/inline-projects/<id>.json`, with the entry's `project` field kept as a cache for one
 release so an older build still reads it). Two habits follow. **Content goes in the file; anything
 this machine would legitimately disagree with another machine about — project id, viewport, default
-account, breadcrumbs, closed-session history, per-node `shell` — goes on the index entry**
+account, breadcrumbs, closed-session history, per-node `shell` and held `pendingLaunch` — goes on the index entry**
 (`IndexEntryV3`), or a `git worktree add` / a second instance hands one machine's state to another.
 And **`workspace.json` is one file with last-writer-wins semantics, so it may not be the only home
 of any content**: that is precisely what let a second app instance erase a cwd-less canvas. Between
@@ -1033,6 +1057,12 @@ name at once. Write real-tmux suites the normal way — pick your own socket nam
 tmux without carrying `TMUX_TMPDIR` into it, which is the one way left to escape the sandbox.
 `src/core/tmux-socket-isolation.guard.test.ts` holds the short allowlist of suites that name a
 production socket on purpose; adding a third is a review conversation, not a checkbox.
+
+**A test's temp directory must go away when the run does.** `fakePlatform()`'s `userDataDir` is made
+on first read under one per-run root (`test/setup/fake-platform-root.ts`), and that root is removed
+after the last test file finishes. It used to be one `mkdtemp` in the system temp dir per call, never
+removed, and a development server collected ~395,000 of them until `/tmp` ran out of inodes and whole
+runs failed with ENOSPC. If you `mkdtemp` in a test yourself, remove it in `afterEach`/`afterAll`.
 
 **An `infinite` CSS animation is a frame loop, and it runs whether or not anyone is looking.** A
 running animation makes the compositor produce a frame every vsync — 120/s on a ProMotion display —

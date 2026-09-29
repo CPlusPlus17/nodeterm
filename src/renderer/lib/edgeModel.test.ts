@@ -57,6 +57,19 @@ describe('dropAfterDep — deleting a waiting rope means "stop waiting on that o
     expect(dropAfterDep(p, 'a')).toEqual({ after: ['b'], command: 'claude "x"' })
   })
 
+  it('deleting a success station\'s rope stops BOTH waits on it — no success half is left behind', () => {
+    const p = { after: ['a', 'b'], command: 'c', afterSuccess: { deps: ['a', 'b'], deadlineAt: 9 } }
+    expect(dropAfterDep(p, 'a')).toEqual({ after: ['b'], command: 'c', afterSuccess: { deps: ['b'], deadlineAt: 9 } })
+    // The last one takes the whole success hold with it: an empty wait could never be met.
+    expect(dropAfterDep({ after: ['a'], command: 'c', afterSuccess: { deps: ['a'], deadlineAt: 9 } }, 'a')).toEqual({
+      after: [],
+      command: 'c'
+    })
+    // A hostile hold is not repaired here and does not throw.
+    const bad = { after: ['a'], command: 'c', afterSuccess: 'a' } as never
+    expect(() => dropAfterDep(bad, 'a')).not.toThrow()
+  })
+
   it('returns the SAME object when the dep is not listed (no spurious re-render)', () => {
     const p = { after: ['a'], command: 'c' }
     expect(dropAfterDep(p, 'zzz')).toBe(p)

@@ -35,6 +35,7 @@ import {
 import { urlLinkMenuItems } from '../../terminal/link-menu'
 import { ContextMenu } from '../ContextMenu'
 import { parseOsc52 } from '../../terminal/osc52'
+import { createOsc52Notice, dispatchOsc52Toast, handleOsc52Write } from '../../terminal/osc52-policy'
 import { activateUnicode11 } from '../../terminal/unicode-width'
 import { useCopyFeedback } from '../../terminal/useCopyFeedback'
 import {
@@ -271,11 +272,17 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
     // tmux's mouse is ON, so a drag-select in copy-mode emits OSC 52 to this client; this handler
     // writes the system clipboard. `parseOsc52` returns null for a `?` read query so a remote program
     // can never read the local clipboard. Returning true swallows the sequence (also the read query).
+    // MIRROR TerminalNode: a RELAY tab's writes are refused (osc52-policy.ts).
+    const osc52Notice = createOsc52Notice()
     term.parser.registerOscHandler(52, (data) => {
       const text = parseOsc52(data)
       if (text !== null) {
-        window.nodeTerminal.clipboard.writeText(text)
-        copy.notifyCopy(text)
+        handleOsc52Write(text, session.source, {
+          write: (t) => window.nodeTerminal.clipboard.writeText(t),
+          notifyCopied: (t) => copy.notifyCopy(t),
+          shouldNotify: osc52Notice,
+          toast: dispatchOsc52Toast
+        })
       }
       return true
     })

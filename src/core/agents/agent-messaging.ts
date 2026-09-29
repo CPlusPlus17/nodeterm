@@ -187,7 +187,26 @@ export interface AgentMessagingDeps {
    * `createDeliveryQueue` has run.
    */
   onQueuedResult?(req: QueuedDeliveryRequest, outcome: AgentMessageOutcome): void
+  /**
+   * Where a message stands on its way INTO a target's pane — the facts a station's task-outcome
+   * report depends on (src/core/station-outcome-store.ts: new work handed to a station ends its
+   * previous report). Emitted for every verb; the listener picks the ones it counts:
+   *   - `queued`: accepted into the target's queue (the bytes have NOT reached the pane);
+   *   - `landed`: the bytes reached the pane (`delivered`, `stalled`, `deliveredToReplacedTarget`),
+   *     on a first attempt or a flush. `at` is when that delivery attempt STARTED — a report made
+   *     after it started was made about the new work, whenever the answer comes back;
+   *   - `settled`: a queued entry ended (flushed, refused on flush, or expired), `landed` saying
+   *     whether its bytes reached the pane. Exactly one per `queued`.
+   * Read at call time, so a shell may assign it after `createDeliveryQueue` has run.
+   */
+  onHandover?(event: MessageHandover): void
 }
+
+/** See `AgentMessagingDeps.onHandover`. */
+export type MessageHandover =
+  | { phase: 'queued'; verb: string; targetNodeId: string }
+  | { phase: 'landed'; verb: string; targetNodeId: string; at: number }
+  | { phase: 'settled'; verb: string; targetNodeId: string; landed: boolean }
 
 /**
  * The production `messagingEnabled`: the per-project capability GRANT, one call, nothing else.
@@ -291,10 +310,12 @@ export function createDeliveryQueue(
     }
     void deps.appendBoardLog(projectId, entry)
   }
+  const handover = (ev: MessageHandover): void => deps.onHandover?.(ev)
   const queue: DeliveryQueue = new DeliveryQueue(
     {
       now,
       deliver: async (qreq) => {
+        const startedAt = now()
         const outcome = await runDelivery(
           qreq.verb === 'board-comment'
             ? (qreq as unknown as BoardCommentMessage)
@@ -308,6 +329,8 @@ export function createDeliveryQueue(
               },
           deps
         )
+        if (WROTE.has(outcome.kind))
+          handover({ phase: 'landed', verb: String(qreq.verb), targetNodeId: qreq.targetNodeId, at: startedAt })
         // A board comment re-queued by the pair window waits on a CLOCK, not on the target's turn:
         // re-offer it when the window ends (see `DeliveryQueue.retryAfter`).
         if (qreq.verb === 'board-comment' && outcome.kind === 'rateLimited')
@@ -331,7 +354,10 @@ export function createDeliveryQueue(
           now
         }),
       // The sender leg: a durable line where the sender's operator will see it.
+      onQueued: (req) =>
+        handover({ phase: 'queued', verb: String(req.verb), targetNodeId: req.targetNodeId }),
       onExpired: (req, info) => {
+        handover({ phase: 'settled', verb: String(req.verb), targetNodeId: req.targetNodeId, landed: false })
         senderBoardLog(req, 'expired')
         deps.onQueuedResult?.(req, {
           kind: 'expired',
@@ -340,6 +366,12 @@ export function createDeliveryQueue(
         })
       },
       onFlushed: (req, outcome) => {
+        handover({
+          phase: 'settled',
+          verb: String(req.verb),
+          targetNodeId: req.targetNodeId,
+          landed: WROTE.has(outcome.kind)
+        })
         senderBoardLog(req, outcome.kind)
         deps.onQueuedResult?.(req, outcome)
       },
@@ -795,7 +827,10 @@ async function deliverWithQueue(
     outcome,
     reply: renderMessageOutcome(outcome)
   })
+  const startedAt = (deps.now ?? ((): number => Date.now()))()
   const outcome = await runDelivery(req, deps)
+  if (WROTE.has(outcome.kind))
+    deps.onHandover?.({ phase: 'landed', verb: req.verb, targetNodeId: req.targetNodeId, at: startedAt })
   const queue = deps.queue
   if (queue) {
     const ident = requestIdentity(req)
