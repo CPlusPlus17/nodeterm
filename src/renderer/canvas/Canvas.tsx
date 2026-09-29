@@ -200,7 +200,7 @@ import { containerOrigin, snapPointInRootSpace } from '../lib/gridSnap'
 import { zoomFromPct } from '../lib/zoomPresets'
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from './zoom-limits'
 import { isSpaceRelease, spacePanKeydown } from '../lib/spacePan'
-import { handoffsFor, noteHandoff, suppressDoneAfterHandoff } from '../lib/handoffPings'
+import { handoffsFor, installHandoffFocusReset, noteHandoff, suppressDoneAfterHandoff } from '../lib/handoffPings'
 import { loadIdentity } from '../state/presence'
 import { runBoardKey } from '../lib/boardKeys'
 import { readCanvasLocked, writeCanvasLocked } from '../lib/canvasLock'
@@ -13948,6 +13948,9 @@ export function Canvas() {
   }, [])
 
   const notifyCooldownRef = useRef<Record<string, number>>({})
+  // A handoff ping folds the "finished" alert that follows it (lib/handoffPings) only while the user
+  // is still away: a window focus in between drops the fold, so the next turn end chimes as always.
+  useEffect(() => installHandoffFocusReset(window), [])
   // Sound effects have their OWN cooldown: they fire whether or not the window is focused, so they
   // can't share the notification one (which only ticks in the background).
   const sfxCooldownRef = useRef<Record<string, number>>({})

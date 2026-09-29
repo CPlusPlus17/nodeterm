@@ -5815,7 +5815,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     the board's first — never on routine moves, and not for needs-you (the existing agent-status
     alert already covers every agent node). Same consent, background-only rule and per-node
     cooldown as the turn-end alert, and a handoff ping arms a one-shot FOLD so the Stop hook that
-    follows seconds later is not a second notification for the same moment. v1 is agent-driven
+    follows seconds later is not a second notification for the same moment. The fold lasts only
+    while the user is away: a window focus in between drops it (`installHandoffFocusReset`), or the
+    next chime — for a turn the user sat and watched — was swallowed. v1 is agent-driven
     moves only: a teammate's move arriving by git, or the phone's relay move, pings nobody.
   **Phone** (nodeterm-ios): must at least not break on `category`, `rank` or `views` (extra JSON
   keys its board decoder ignores). The relay-served move now lands at the top with a rank, while
