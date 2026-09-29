@@ -96,9 +96,10 @@ export interface RelayHostHooks {
    *
    * An intercepted request BYPASSES `access` and every project-scope jail below: nothing else looks
    * at it. An interceptor therefore enforces its own role and scope checks. The hosted team's do
-   * (src/core/relay/hosted-service.ts): only `relay:hosted:self` is open to any approved peer;
-   * approve, deny and invite-code are owner-only, judged from the CALLER's own session key in the
-   * team store — never from anything the request carries.
+   * (src/core/relay/hosted-service.ts): only `relay:hosted:self` is open to any team member (and to a
+   * session whose own approval could not be pinned, served as the lowest role); approve, deny,
+   * invite-code and pending are owner-only, judged from the CALLER's own session key in the team
+   * store — never from anything the request carries.
    */
   interceptReq?(s: RelayHostSession, method: string, args: unknown[]): Promise<unknown> | null
   /** Allow (optionally rewriting args) or refuse a request/cast before any scope check or dispatch. */
