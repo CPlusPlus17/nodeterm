@@ -117,3 +117,25 @@ export async function spillPromptToFile(
     return null
   }
 }
+
+/**
+ * The prompt an open types, decided ONCE for every canvas-control open path — live, cold (the
+ * caller's own project, not on screen) and `--project`. Two of the three used to type the prompt
+ * inline whatever its length, so the docs' promise that a long `--prompt` is safe on a local
+ * project held only on the live one.
+ *
+ * - An explicit `--prompt-file` passes through untouched: the file is already the whole brief.
+ * - A prompt within budget, or any prompt for a pane that cannot read this machine's files
+ *   (`localFs` false: an SSH project), stays inline. The delivery layer's `line-too-long` refusal is
+ *   the backstop there.
+ * - Otherwise it is spilled; a spill that cannot be written keeps the prompt inline (fail open).
+ */
+export async function launchPromptFor(
+  input: { prompt?: string; promptFile?: string; localFs: boolean },
+  io: PromptSpillIo
+): Promise<{ prompt?: string; promptFile?: string }> {
+  if (input.promptFile) return { promptFile: input.promptFile }
+  if (!shouldSpillPrompt(input.prompt, input.localFs)) return { prompt: input.prompt }
+  const path = await spillPromptToFile(input.prompt as string, io)
+  return path ? { promptFile: path } : { prompt: input.prompt }
+}

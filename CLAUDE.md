@@ -3287,6 +3287,16 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   refused caller, and its refusal said whether that project had a GitHub board). Main's
   `gateProjectTarget` runs before the renderer as ever; the Server Edition already resolved after
   its identity, source and target gates, now pinned by a test.
+  **The open PROMPT is decided in the same place, once, for every open path** (`openPrompt`, via
+  `launchPromptFor` in `lib/promptSpill.ts`): the issue reference line composed through
+  `issueLaunchPrompt`, then spilled to a file when it is over the typed-line budget (#706), judged
+  "local" by the project the node opens in (an SSH project's pane cannot read a file written here),
+  which comes from the SAME authorization belt (`issueFlagScope`, exported for this): a caller the
+  paths refuse gets no project and no spill. The live open was the only path that spilled; the `--project` and cold opens typed the prompt
+  inline, so the docs' "a long `--prompt` is safe on a local project" was false exactly where the
+  ~490-byte issue line made it likeliest to bite, and the `--project` path silently DROPPED
+  `--prompt-file` (the session started with no brief) and `--model`. A new open path types
+  `openPrompt`, never its own prompt — `control-prompt-spill.source.test.ts` pins each path.
   `--prompt` replaces the default task after the reference line; `--prompt-file` stays the whole brief. Both
   generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
   is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on
