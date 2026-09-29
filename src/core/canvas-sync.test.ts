@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync } from 'fs'
-import os from 'os'
-import path from 'path'
 import { initPlatform, resetPlatformForTests, type CorePlatform } from './platform'
-import { fakePlatform } from './platform-fake'
+import { fakePlatform, makeFakeUserDataDir } from './platform-fake'
 import {
   initCanvasSync,
   reflectTargets,
@@ -34,8 +31,10 @@ function testPlatform() {
     // A fresh mkdtemp dir, never a fixed literal: this platform is registered via initPlatform,
     // so a predictable '/tmp/...' here reads (to CodeQL's js/insecure-temporary-file, and to a
     // parallel test run) as every production write through platform().userDataDir landing on a
-    // shared guessable temp path — the exact fix platform-fake.ts documents.
-    userDataDir: mkdtempSync(path.join(os.tmpdir(), 'nodeterm-canvas-sync-')),
+    // shared guessable temp path — the exact fix platform-fake.ts documents. Made under the run's
+    // root (makeFakeUserDataDir), so the run's teardown removes it; a bare mkdtemp in os.tmpdir()
+    // here left one directory behind per test, for good.
+    userDataDir: makeFakeUserDataDir(),
     appVersion: '0.0.0-test',
     isPackaged: false,
     handle: () => {},
