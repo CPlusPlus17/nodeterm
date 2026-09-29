@@ -47,9 +47,34 @@ describe('joiner tokens', () => {
     expect(await mintJoinToken({ apiBase: 'a', deviceToken: 'x', fetch: fake(403, {}).f })).toEqual({ ok: false, kind: 'revoked' })
   })
 
-  it('join: 429 is a rate limit (R40) — never retried as a network failure, never a token verdict', async () => {
+  // The backend's two 429s (nodeterm-server). The PER-IP limiter — `rateLimit({ windowMs: 60_000,
+  // max: 30 })`, src/routes/relay.ts:104, shared by /device, /join and /host-token — answers
+  // `{ error: 'rate_limited', scope: 'ip' }` (src/lib/rate-limit.ts:77) with no Retry-After, and
+  // clears within a minute. The free device-mint DAMPER on /device is the one daily limit, and it
+  // answers `{ error: 'rate_limited' }` with no `scope`. /join has no daily limit at all.
+  const IP_429 = { error: 'rate_limited', scope: 'ip' }
+  const DAILY_429 = { error: 'rate_limited' }
+
+  it('R41: device — the per-IP 429 is `throttled` (retry in a minute); the damper\'s 429 is `rate-limited` (tomorrow)', async () => {
+    const mint = (f: typeof fetch) => mintDeviceToken({ apiBase: 'a', deviceId: 'd', code, label: 'l', fetch: f })
+    expect(await mint(fake(429, IP_429).f)).toEqual({ ok: false, kind: 'throttled' })
+    expect(await mint(fake(429, DAILY_429).f)).toEqual({ ok: false, kind: 'rate-limited' })
+    // A body that does not parse is the damper's answer on /device: never a retry that could spend mints.
+    expect(await mint(fake(429, 'not json').f)).toEqual({ ok: false, kind: 'rate-limited' })
+  })
+
+  it('R41: join — every 429 is `throttled`: /join has no daily limit', async () => {
     const join = (f: typeof fetch) => mintJoinToken({ apiBase: 'a', deviceToken: 'x', fetch: f })
-    expect(await join(fake(429, {}).f)).toEqual({ ok: false, kind: 'rate-limited' })
+    expect(await join(fake(429, IP_429).f)).toEqual({ ok: false, kind: 'throttled' })
+    expect(await join(fake(429, DAILY_429).f)).toEqual({ ok: false, kind: 'throttled' })
+    expect(await join(fake(429, 'not json').f)).toEqual({ ok: false, kind: 'throttled' })
+  })
+
+  it('R41: a Retry-After, when the service sends one, rides the throttle', async () => {
+    const withHeader = (async () =>
+      new Response(JSON.stringify(IP_429), { status: 429, headers: { 'retry-after': '90' } })) as unknown as typeof fetch
+    expect(await mintJoinToken({ apiBase: 'a', deviceToken: 'x', fetch: withHeader })).toEqual({ ok: false, kind: 'throttled', retryAfterMs: 90_000 })
+    expect(await mintDeviceToken({ apiBase: 'a', deviceId: 'd', code, label: 'l', fetch: withHeader })).toEqual({ ok: false, kind: 'throttled', retryAfterMs: 90_000 })
   })
 
   it('join: any other failure is network, never a token verdict', async () => {

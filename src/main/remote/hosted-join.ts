@@ -39,12 +39,21 @@ import type { KeyPair } from '../../core/relay/e2ee'
 import type { BookmarkStore, RelayBookmark } from './relay-bookmarks'
 import { IPC } from '../../shared/ipc'
 import type { RelayClosedReason } from '../../shared/types'
-import type { JoinErrorCode } from '../../shared/relay-join-errors'
+import { retryAfterTag, type JoinErrorCode } from '../../shared/relay-join-errors'
 
 /** What a hosted join hands the relay client: never a pin store. */
 export type HostedConnectOptions = Omit<ConnectRelayClientOptions, 'pins' | 'transport'>
 
-export type HostedJoinFailure = 'invalid-code' | 'rate-limited' | 'refused' | 'network' | 'bad-token' | 'revoked' | 'key-locked' | 'busy'
+export type HostedJoinFailure =
+  | 'invalid-code'
+  | 'rate-limited'
+  | 'refused'
+  | 'network'
+  | 'bad-token'
+  | 'revoked'
+  | 'key-locked'
+  | 'busy'
+  | 'throttled'
 
 /** Each failure's stable code. `bad-token` is a refusal: a token the service will not accept even
  *  freshly minted cannot be fixed by retrying, which would only spend damped mints. */
@@ -56,7 +65,8 @@ const CODES: Record<HostedJoinFailure, JoinErrorCode> = {
   network: 'E_JOIN_NETWORK',
   revoked: 'E_JOIN_REVOKED',
   'key-locked': 'E_JOIN_KEY_LOCKED',
-  busy: 'E_JOIN_BUSY'
+  busy: 'E_JOIN_BUSY',
+  throttled: 'E_JOIN_THROTTLED'
 }
 
 const MESSAGES: Record<HostedJoinFailure, string> = {
@@ -67,15 +77,18 @@ const MESSAGES: Record<HostedJoinFailure, string> = {
   'bad-token': "The nodeterm service did not accept this device's token for that team.",
   revoked: "This device's relay access was revoked.",
   'key-locked': 'This device identity could not be loaded.',
-  busy: 'Already joining this team; wait for that attempt to finish.'
+  busy: 'Already joining this team; wait for that attempt to finish.',
+  throttled: 'The nodeterm service is limiting requests from this network. Try again in a minute.'
 }
 
 /** A join that did not reach the relay. `kind` says why; the message is `[<code>] <for the human>`,
  *  with `detail` in place of the stock sentence when the failing step said something better. */
 export class HostedJoinError extends Error {
   readonly code: JoinErrorCode
-  constructor(readonly kind: HostedJoinFailure, detail?: string) {
-    super(`[${CODES[kind]}] ${detail ?? MESSAGES[kind]}`)
+  /** @param retryAfterMs a throttle's Retry-After, carried in the message (the only part of the
+   *  error that crosses Electron IPC) as `[retry-after:<s>]`. */
+  constructor(readonly kind: HostedJoinFailure, detail?: string, retryAfterMs?: number) {
+    super(`[${CODES[kind]}] ${detail ?? MESSAGES[kind]}${retryAfterMs !== undefined ? ` ${retryAfterTag(retryAfterMs)}` : ''}`)
     this.code = CODES[kind]
     this.name = 'HostedJoinError'
   }
@@ -240,7 +253,8 @@ async function joinWithCode(code: JoinCode, deps: HostedJoinDeps, ev: HostedJoin
       label: deps.label,
       fetch: deps.fetch
     })
-    if (!d.ok) throw new HostedJoinError(d.kind)
+    // A throttled mint minted nothing: there is no token to keep, and the retry is budget-safe.
+    if (!d.ok) throw new HostedJoinError(d.kind, undefined, d.kind === 'throttled' ? d.retryAfterMs : undefined)
     deviceToken = d.deviceToken
     state.tokens.set(code.hostId, code.hostPublicKeyB64, d.deviceToken)
     await persist()
@@ -263,7 +277,7 @@ async function joinWithCode(code: JoinCode, deps: HostedJoinDeps, ev: HostedJoin
     // The kept token no longer verifies (it expired, or the service forgot it): one fresh mint.
     j = await join(await mintDevice())
   }
-  if (!j.ok) throw new HostedJoinError(j.kind)
+  if (!j.ok) throw new HostedJoinError(j.kind, undefined, j.kind === 'throttled' ? j.retryAfterMs : undefined)
   // The client token is a bearer for the relay: never send it over plaintext to another machine,
   // whoever named the endpoint. Same rule a join code's own endpoint is held to.
   if (!allowedEndpoint(j.relayEndpoint)) {

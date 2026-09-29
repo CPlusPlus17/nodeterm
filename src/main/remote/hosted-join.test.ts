@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { joinHostedTeam, connectHostedTeam, removeHostedBookmark, createHostedJoinState, HostedJoinError, type HostedJoinDeps, type HostedJoinEvents, type HostedConnectOptions, type HostedJoinFailure } from './hosted-join'
-import { joinErrorCode } from '../../shared/relay-join-errors'
+import { joinErrorCode, joinRetryAfterMs } from '../../shared/relay-join-errors'
 import { BookmarkStore, type RelayBookmark } from './relay-bookmarks'
 import { encodeJoinCode, type JoinCode } from '../../core/relay/join-code'
 import { hostIdFromPublicKeyB64 } from '../../core/relay/relay-id'
@@ -278,7 +278,9 @@ describe('joinHostedTeam', () => {
       revoked: 'E_JOIN_REVOKED',
       'key-locked': 'E_JOIN_KEY_LOCKED',
       // Another join of OURS for the same team is running: says nothing about the team (R39).
-      busy: 'E_JOIN_BUSY'
+      busy: 'E_JOIN_BUSY',
+      // The service's per-network limiter: clears within a minute, so it retries (R41).
+      throttled: 'E_JOIN_THROTTLED'
     }
     for (const [kind, codeName] of Object.entries(expected) as Array<[HostedJoinFailure, string]>) {
       const e = new HostedJoinError(kind)
@@ -426,14 +428,49 @@ describe('connectHostedTeam (the relay:client:connect leg for a join code)', () 
     expect(x.sessions.size).toBe(0)
   })
 
-  it('R40: a rate-limited /v1/relay/join is E_JOIN_RATE (never retried), and the device token is kept', async () => {
-    const s = setup({ routes: { device: [DEVICE_OK('KEEP')], join: [[429, {}], JOIN_OK] } })
+  // nodeterm-server's per-IP limiter (src/routes/relay.ts:104, body from src/lib/rate-limit.ts:77):
+  // shared by /device and /join, 30 a minute, no Retry-After. Its 429 clears within a minute.
+  const IP_429: [number, unknown] = [429, { error: 'rate_limited', scope: 'ip' }]
+
+  it('R41: a throttled /v1/relay/join is E_JOIN_THROTTLED (retryable), and the device token is kept', async () => {
+    const s = setup({ routes: { device: [DEVICE_OK('KEEP')], join: [IP_429, JOIN_OK] } })
     const err = await connectHostedTeam(codeText, s.deps, io().io).catch((e: Error) => e)
-    expect(joinErrorCode((err as Error).message)).toBe('E_JOIN_RATE')
-    // A later attempt (a person's, the next day) presents the SAME token: a rate limit costs no mint.
+    expect(joinErrorCode((err as Error).message)).toBe('E_JOIN_THROTTLED')
+    // The retry a minute later presents the SAME token: a throttle costs no mint.
     await connectHostedTeam(codeText, s.deps, io().io)
     expect(s.api.count('device')).toBe(1)
     expect(s.api.calls.filter((c) => c.route === 'join').map((c) => c.body.deviceToken)).toEqual(['KEEP', 'KEEP'])
+  })
+
+  it('R41: retrying a throttle is budget-safe — the mints never grow past what the service granted', async () => {
+    // The device leg throttled once (no token granted, nothing to keep), then granted ONE token; the
+    // join leg throttled once more. Three attempts, one granted mint, and every join presents it.
+    const s = setup({ routes: { device: [IP_429, DEVICE_OK('GRANTED')], join: [IP_429, JOIN_OK] } })
+    for (let i = 0; i < 2; i++) {
+      const err = await connectHostedTeam(codeText, s.deps, io().io).catch((e: Error) => e)
+      expect(joinErrorCode((err as Error).message)).toBe('E_JOIN_THROTTLED')
+    }
+    await connectHostedTeam(codeText, s.deps, io().io)
+    expect(s.api.count('device')).toBe(2) // one throttled (no mint), one granted
+    expect(s.api.calls.filter((c) => c.route === 'join').map((c) => c.body.deviceToken)).toEqual(['GRANTED', 'GRANTED'])
+    expect((await s.store.list())[0]?.deviceToken).toBe('GRANTED')
+  })
+
+  it('R41: the device damper (a 429 with no scope) stays E_JOIN_RATE — the daily limit, never retried', async () => {
+    const s = setup({ routes: { device: [[429, { error: 'rate_limited' }]] } })
+    const err = await connectHostedTeam(codeText, s.deps, io().io).catch((e: Error) => e)
+    expect(joinErrorCode((err as Error).message)).toBe('E_JOIN_RATE')
+  })
+
+  it('R41: a Retry-After the service sends crosses IPC with the throttle', async () => {
+    const s = setup()
+    const f = (async (url: string) =>
+      url.endsWith('/v1/relay/device')
+        ? new Response(JSON.stringify({ error: 'rate_limited', scope: 'ip' }), { status: 429, headers: { 'retry-after': '120' } })
+        : new Response('{}', { status: 500 })) as unknown as typeof fetch
+    const err = await connectHostedTeam(codeText, { ...s.deps, fetch: f }, io().io).catch((e: Error) => e)
+    expect(joinErrorCode((err as Error).message)).toBe('E_JOIN_THROTTLED')
+    expect(joinRetryAfterMs((err as Error).message)).toBe(120_000)
   })
 
   it('a failed join registers nothing and rejects with the human message', async () => {

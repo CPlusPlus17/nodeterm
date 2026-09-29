@@ -6,19 +6,42 @@
 // Neither leg grants anything on its own: the host still decides who gets in.
 //
 // Each result says WHICH failure it was, because the caller reacts differently to each: only a
-// `bad-token` join earns one fresh device mint, a `revoked` one never does, and `rate-limited`
-// means waiting until tomorrow rather than retrying.
+// `bad-token` join earns one fresh device mint, a `revoked` one never does, and the two 429s mean
+// different things (the backend is nodeterm-server):
+//  - `throttled`: the PER-IP limiter — `rateLimit({ windowMs: 60_000, max: 30 })`,
+//    src/routes/relay.ts:104, shared by /device, /join and /host-token — whose body is
+//    `{ error: 'rate_limited', scope: 'ip' }` (src/lib/rate-limit.ts:77), sent with no Retry-After.
+//    It clears within a minute; a desktop behind an office NAT can hit it. Retried, once a minute.
+//  - `rate-limited`: the free device-mint DAMPER on /device, the one DAILY limit — the same error
+//    with no `scope`. Waiting for tomorrow, never retried. /join has no daily limit, so every /join
+//    429 is `throttled`; a /device 429 whose body cannot be read is taken as the damper's.
 import type { JoinCode } from './join-code'
 
 const TIMEOUT_MS = 8000
 
-export type DeviceMintResult = { ok: true; deviceToken: string } | { ok: false; kind: 'network' | 'refused' | 'rate-limited' }
+/** The per-network limiter said to slow down; `retryAfterMs` only when it named a Retry-After. */
+export type ThrottledResult = { ok: false; kind: 'throttled'; retryAfterMs?: number }
+export type DeviceMintResult =
+  | { ok: true; deviceToken: string }
+  | { ok: false; kind: 'network' | 'refused' | 'rate-limited' }
+  | ThrottledResult
 export type JoinMintResult =
   | { ok: true; pairingToken: string; relayEndpoint: string }
-  | { ok: false; kind: 'bad-token' | 'revoked' | 'rate-limited' | 'network' }
+  | { ok: false; kind: 'bad-token' | 'revoked' | 'network' }
+  | ThrottledResult
 
-/** A reply: its status and its parsed JSON body (`null` when the body is not JSON). */
-interface Reply { status: number; ok: boolean; body: unknown }
+/** A reply: its status, its parsed JSON body (`null` when the body is not JSON) and its Retry-After
+ *  in ms (`null` when absent or not a number of seconds). */
+interface Reply { status: number; ok: boolean; body: unknown; retryAfterMs: number | null }
+
+/** The per-IP limiter's 429 body names its scope; the device damper's does not. */
+function ipScoped(body: unknown): boolean {
+  return !!body && typeof body === 'object' && (body as { scope?: unknown }).scope === 'ip'
+}
+
+function throttled(res: Reply): ThrottledResult {
+  return res.retryAfterMs !== null ? { ok: false, kind: 'throttled', retryAfterMs: res.retryAfterMs } : { ok: false, kind: 'throttled' }
+}
 
 /** POST `body` and read the JSON reply under ONE timeout that covers the body too: a reply whose
  *  body stalls would otherwise leave the join pending forever. `null` = no usable response (the
@@ -39,7 +62,9 @@ async function post(apiBase: string, p: string, body: unknown, f: typeof fetch, 
     } catch {
       if (ctrl.signal.aborted) return null
     }
-    return { status: res.status, ok: res.ok, body: parsed }
+    const ra = res.headers?.get?.('retry-after')
+    const retryAfterMs = ra && /^\d+$/.test(ra.trim()) ? Number(ra.trim()) * 1000 : null
+    return { status: res.status, ok: res.ok, body: parsed, retryAfterMs }
   } catch {
     return null
   } finally {
@@ -64,7 +89,7 @@ export async function mintDeviceToken(d: {
     d.timeoutMs ?? TIMEOUT_MS
   )
   if (!res) return { ok: false, kind: 'network' }
-  if (res.status === 429) return { ok: false, kind: 'rate-limited' }
+  if (res.status === 429) return ipScoped(res.body) ? throttled(res) : { ok: false, kind: 'rate-limited' }
   // A 5xx is the service being down, not a verdict on this device.
   if (res.status >= 500) return { ok: false, kind: 'network' }
   if (!res.ok) return { ok: false, kind: 'refused' }
@@ -84,9 +109,8 @@ export async function mintJoinToken(d: {
   // Everything else says nothing about the token, so it must not cost a device mint.
   if (res.status === 401) return { ok: false, kind: 'bad-token' }
   if (res.status === 403) return { ok: false, kind: 'revoked' }
-  // A rate limit is a verdict about WHEN, not a network blip: read as `network`, an unattended
-  // reconnect would ask again every minute for as long as the limit holds (R40).
-  if (res.status === 429) return { ok: false, kind: 'rate-limited' }
+  // /join has no daily limit: its 429 is always the per-network limiter (see the header).
+  if (res.status === 429) return throttled(res)
   if (!res.ok) return { ok: false, kind: 'network' }
   const j = res.body as { pairingToken?: unknown; relayEndpoint?: unknown } | null
   if (typeof j?.pairingToken !== 'string' || !j.pairingToken || typeof j.relayEndpoint !== 'string' || !j.relayEndpoint) {
