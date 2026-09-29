@@ -5514,9 +5514,11 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   merged PR ages off the pull board, another PR on the branch joins), and a set-keyed claim read
   every such change as a new transition and moved a dragged-back card again. A claim is granted only
   for a PR that has not moved this card yet; set keys an earlier build wrote are read as a claim on
-  each PR they list. The board asks each (card, PR set) ONCE (`usePullAutoMove`'s `asked`, cleared
-  only by a failed call) and re-plans only when a field the planner reads changes — it used to send
-  a claim per canvas change for a dragged-back card. **The claim is refused unless THIS card was
+  each PR they list. The board asks each (card, PR set) ONCE while it is in flight or after it was
+  won, and re-asks a REFUSED one only after `REFUSED_CLAIM_RETRY_MS` (60 s: the host also refuses
+  transiently, before it is bound to the project or while it clears its cache, and remembering that
+  for the board's lifetime lost the move); a failed call is forgotten. It re-plans only when a field
+  the planner reads changes — it used to send a claim per canvas change for a dragged-back card. **The claim is refused unless THIS card was
   noted waiting on one of those PRs while it was open** (`githubIssues:note-pull-waits`; the host records a note only for a PR it holds as open
   itself): `mergedSeenAt` is a fact about the PR, and without the per-card note a card that first
   appeared after the merge — a follow-up terminal in the same group, a teammate's card by git pull,
