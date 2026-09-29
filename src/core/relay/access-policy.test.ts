@@ -385,7 +385,7 @@ describe('wrapSinkForRole — project documents lose their exec fields for non-e
   const doc = JSON.stringify({
     t: 'ev',
     channel: IPC.workspaceServerChange,
-    args: [{ id: 'P', nodes: [{ id: 'n1', kind: 'terminal', position: { x: 0, y: 0 }, shell: '/usr/bin/evil' }] }]
+    args: [{ id: 'P', nodes: [{ id: 'n1', kind: 'terminal', position: { x: 0, y: 0 }, shell: '/usr/bin/evil', pendingLaunch: { after: [], command: 'claude "held prompt text"' } }] }]
   })
   const run = (role: AccessContext['role']) => {
     const text: string[] = []
@@ -396,13 +396,16 @@ describe('wrapSinkForRole — project documents lose their exec fields for non-e
     const v = run('viewer')
     expect(v).toHaveLength(1)
     expect(JSON.parse(v[0]).args[0].nodes[0].shell).toBeUndefined()
+    expect(JSON.parse(v[0]).args[0].nodes[0].pendingLaunch).toBeUndefined()
+    expect(v[0]).not.toContain('held prompt text')
     expect(run('editor')).toEqual([doc])
   })
   it('a viewer\'s workspace:load is stripped too', () => {
     const out = narrowResponseForRole(IPC.workspaceLoad, { projects: [JSON.parse(doc).args[0]] }, ctx('viewer')) as {
-      projects: Array<{ nodes: Array<{ shell?: string }> }>
+      projects: Array<{ nodes: Array<{ shell?: string; pendingLaunch?: unknown }> }>
     }
     expect(out.projects[0].nodes[0].shell).toBeUndefined()
+    expect(out.projects[0].nodes[0].pendingLaunch).toBeUndefined()
   })
 })
 

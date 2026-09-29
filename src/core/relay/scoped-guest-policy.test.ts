@@ -260,12 +260,12 @@ describe('relay host — host-only channels refused to every peer', () => {
 })
 
 describe('project documents reach peers without exec fields', () => {
-  // `shell` is an exec field stripSharedNodeExec removes today; a held `pendingLaunch` joins it with
-  // the held-launch work (#1038), through the same helper, with no change here.
+  // `shell` and a held `pendingLaunch` (its command text included) are exec fields
+  // stripSharedNodeExec removes.
   const project = (id: string) => ({
     id,
     name: id,
-    nodes: [{ id: 'a1', kind: 'terminal', position: { x: 0, y: 0 }, shell: '/usr/bin/evil' }]
+    nodes: [{ id: 'a1', kind: 'terminal', position: { x: 0, y: 0 }, shell: '/usr/bin/evil', pendingLaunch: { after: [], command: 'claude "held prompt text"' } }]
   })
   const ev = (channel: string, ...args: unknown[]) => JSON.stringify({ t: 'ev', channel, args })
 
@@ -281,14 +281,17 @@ describe('project documents reach peers without exec fields', () => {
       const node = JSON.parse(j).args[0].nodes[0]
       expect(node.id).toBe('a1')
       expect(node.shell).toBeUndefined()
+      expect(node.pendingLaunch).toBeUndefined()
+      expect(j).not.toContain('held prompt text')
     }
   })
 
   it('scoped guest: workspace:load response is stripped', () => {
     const hooks = scopedGuestHooks('alpha', deps())
     const out = hooks.narrowResponse!(null as never, IPC.workspaceLoad, { projects: [project('alpha')] }) as {
-      projects: Array<{ nodes: Array<{ shell?: string }> }>
+      projects: Array<{ nodes: Array<{ shell?: string; pendingLaunch?: unknown }> }>
     }
     expect(out.projects[0].nodes[0].shell).toBeUndefined()
+    expect(out.projects[0].nodes[0].pendingLaunch).toBeUndefined()
   })
 })
