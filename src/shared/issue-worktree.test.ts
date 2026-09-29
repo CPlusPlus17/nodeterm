@@ -234,9 +234,38 @@ describe('planIssueWorktree', () => {
     })
   })
 
-  it('treats branch names case-insensitively (a case-insensitive filesystem cannot hold both)', async () => {
+  it('treats branch names case-insensitively, and offers the existing one under its OWN spelling', async () => {
+    // A case-insensitive filesystem cannot hold both; and git resolves the name it is given, so the
+    // checkout must name `Issue-12-Fix-Login`, not the lower-case name the app would have created.
     const plan = await planIssueWorktree(base({ branches: ['main', 'Issue-12-Fix-Login'] }), nothingOnDisk)
-    expect(plan.kind === 'choose' && plan.existing.kind).toBe('branch')
+    expect(plan).toEqual({
+      kind: 'choose',
+      existing: { kind: 'branch', branch: 'Issue-12-Fix-Login', path: wt('issue-12-fix-login') },
+      alternative: { branch: 'issue-12-fix-login-2', path: wt('issue-12-fix-login-2') }
+    })
+  })
+
+  it('a differently-cased branch still takes the name when its folder is taken too (no second branch that differs only in case)', async () => {
+    const plan = await planIssueWorktree(
+      base({ branches: ['main', 'Issue-12-Fix-Login'] }),
+      async (p) => p === wt('issue-12-fix-login')
+    )
+    expect(plan).toEqual({
+      kind: 'create',
+      target: { branch: 'issue-12-fix-login-2', path: wt('issue-12-fix-login-2') },
+      renamedFrom: 'issue-12-fix-login'
+    })
+  })
+
+  it('skips a suffix whose branch exists under another case', async () => {
+    const plan = await planIssueWorktree(
+      base({ branches: ['main', 'Issue-12-Fix-Login', 'ISSUE-12-FIX-LOGIN-2'] }),
+      nothingOnDisk
+    )
+    expect(plan.kind === 'choose' && plan.alternative).toEqual({
+      branch: 'issue-12-fix-login-3',
+      path: wt('issue-12-fix-login-3')
+    })
   })
 
   it('never overwrites a folder that already exists — it moves to the next free suffix', async () => {

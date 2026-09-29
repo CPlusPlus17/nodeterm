@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { IssueWorktreeExisting, IssueWorktreeTarget } from '@shared/issue-worktree'
 import type { MenuItem } from '../components/ContextMenu'
 import { WORKTREE_NO_CWD_HINT, WORKTREE_SSH_HINT } from './addMenuSpec'
+import { groupSizeFor, groupSlot } from './coldOpen'
 
 // The renderer half of "Start with agent in a new worktree" on a GitHub issue card: when the
 // action is unavailable (and why), and what the reuse-or-new choice says. The branch/plan rules
@@ -16,7 +17,11 @@ export const ISSUE_WORKTREE_BUTTON_LABEL = 'Start in a new worktree'
 /** Worktrees are made on THIS machine's filesystem; a relay tab's canvas belongs to another one. */
 export const ISSUE_WORKTREE_RELAY_HINT = 'Not available in a shared tab — worktrees are local to this machine in this version'
 
-export const ISSUE_WORKTREE_NO_REPO_HINT = 'No git repository was found in this project’s folder'
+/** `repoRoot` is null both for a folder that is not a repository and while (or after) the store's
+ *  read failed — so the reason names both, rather than claiming absence on a read that did not
+ *  happen. */
+export const ISSUE_WORKTREE_NO_REPO_HINT =
+  'No git repository was found for this project’s folder (or git could not be read)'
 
 /**
  * Why the action cannot run on this project, or `null` when it can. The rows are shown DISABLED
@@ -98,4 +103,47 @@ export function issueWorktreeMenuRow(answer: IssueWorktreeMenuAnswer, icon?: Rea
     return { label: ISSUE_WORKTREE_LABEL, icon, disabled: true, hint: answer.refusal, onClick: () => {} }
   }
   return { type: 'submenu', label: ISSUE_WORKTREE_LABEL, icon, children: answer.items }
+}
+
+/**
+ * Where the next agent opened INTO a worktree frame goes, in root space, and how big the frame must
+ * then be. The same grid the control opens use (`groupSlot` / `groupSizeFor`). Returns a CENTER,
+ * because that is what `addAgentNode` takes — the node factories centre a node on the point they
+ * are given (`placeAt`) — while `groupSlot` is a TOP-LEFT offset inside the frame. Handing the slot
+ * over as-is put the agent half a node up and left: over the frame's label, its only drag handle.
+ */
+export function frameAgentPlacement(
+  frameOrigin: { x: number; y: number },
+  children: number,
+  size: { width: number; height: number }
+): { center: { x: number; y: number }; frame: { width: number; height: number } } {
+  const slot = groupSlot(children, size.width, size.height)
+  return {
+    center: {
+      x: frameOrigin.x + slot.x + size.width / 2,
+      y: frameOrigin.y + slot.y + size.height / 2
+    },
+    frame: groupSizeFor(children + 1, size.width, size.height)
+  }
+}
+
+/**
+ * Run `task` unless one is already running under `key`; `false` = refused (a start for this issue is
+ * in flight). Held across EVERYTHING the start awaits — the planning reads AND a create confirmed
+ * from the reuse-or-new dialog — so a second click while git works cannot plan against the store as
+ * it was before the first worktree existed and race it for the same name.
+ */
+export async function runExclusive(
+  inFlight: Set<string>,
+  key: string,
+  task: () => Promise<void>
+): Promise<boolean> {
+  if (inFlight.has(key)) return false
+  inFlight.add(key)
+  try {
+    await task()
+  } finally {
+    inFlight.delete(key)
+  }
+  return true
 }

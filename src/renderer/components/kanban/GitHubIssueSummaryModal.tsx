@@ -12,6 +12,7 @@ import { useSession } from '../../session/session'
 import { Button } from '@renderer/ui/Button'
 import { Select } from '@renderer/ui/Select'
 import { ContextMenu, type MenuItem } from '../ContextMenu'
+import { openDialogCount } from '../dialog-stack'
 import { NO_ISSUE_RUNS, type IssueRun } from '../../lib/issueRuns'
 import { IssueRunChips } from './IssueRunChips'
 import { BoardLogPanel } from './BoardLogPanel'
@@ -94,7 +95,9 @@ export function GitHubIssueSummaryModal({
   }, [])
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      // A dialog stacked over this modal (the close/reopen confirm, the worktree reuse-or-new
+      // choice) owns its own Escape: closing the modal underneath it too took two answers for one key.
+      if (event.key === 'Escape' && openDialogCount() === 0) onClose()
       if (event.key === 'Tab' && dialog.current) {
         const focusable = [...dialog.current.querySelectorAll<HTMLElement>(
           'button:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'

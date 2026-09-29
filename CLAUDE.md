@@ -5251,22 +5251,35 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     updater runs at render time and a zustand-flushed SyncLane render may already have mirrored
     `nodesRef` back to a list without the fresh frame (the `nodesEpoch` lesson).
   - **A worktree per GitHub issue** (`@shared/issue-worktree`) — "Start with agent in a new
-    worktree ▸" on an issue card and its summary modal: branch `issue-<N>-<slug>` off the repo's
-    default (`effectiveWorktreeBaseRef`) at the templated path, a frame titled `Issue #N`, and the
-    agent opened inside it with the same ref-only prompt and `issueRef` as "Start with agent" (one
-    `issueStartPrompt`, one `fileIssueSession` for both). The frame's binding is what links a pull
-    request from that branch to the session card. **The title is attacker-controlled**: the slug is
+    worktree ▸" on an issue card and its summary modal: branch `issue-<N>-<slug>` at the templated
+    path, off the SAME base the New worktree dialog defaults to (`effectiveWorktreeBaseRef`: the
+    project's base-ref override, else the MAIN CHECKOUT's current branch — not `origin/HEAD`; a main
+    checkout parked on a feature branch forks from it, so the success notice names the base), a
+    frame titled `Issue #N`, and the agent opened inside it with the same ref-only prompt and
+    `issueRef` as "Start with agent" (one `issueStartPrompt`, one `fileIssueSession` for both). The
+    frame's binding is what links a pull request from that branch to the session card. Whatever
+    `addAgentNode` would refuse (canvas not the active project's, an unusable Codex account) is asked
+    BEFORE git runs (`agentCreateRefusal`, same functions and wording) — a refusal after it would
+    leave a fresh worktree with no agent. The agent's launch rides `pendingLaunch` held on the
+    frame's setup gate, so it shows QUEUED for the moment the setup ack takes even when the project
+    has no setup script. **The title is attacker-controlled**: the slug is
     an allowlist `[a-z0-9-]` (lower-cased, NFKD with marks stripped so `café` → `cafe`; every other
     script, lookalike, bidi or zero-width character is dropped), capped at `ISSUE_BRANCH_SLUG_MAX`
     (40) and cut back to a word boundary, and `issue-<N>` alone when nothing survives; the name only
     ever reaches git as one argv element, and the tests run the real `git check-ref-format --branch`
     over the hostile set. **Nothing on disk is overwritten**: `planIssueWorktree` (filesystem only
-    through an injected probe; a probe that fails reads as "taken") offers REUSE of what the issue
-    already has — a frame on this canvas bound to `issue-<N>` / `issue-<N>-…` (open the agent in it),
-    an unbound worktree of the issue (adopt it, `createdByApp: false`), or the exact branch existing
-    but checked out nowhere (check it out) — beside the next free `-2` … `-20`; a name or folder that
-    is merely taken moves to the next suffix and the notice says why. Never the main checkout, never
-    a prunable registration. Disabled WITH its reason on a relay tab, an SSH project, a cwd-less
+    through an injected probe; a probe that REJECTS reads as "taken" — the app's `fs.exists` folds a
+    stat error into `false`, and git refusing a non-empty folder is the backstop there) offers REUSE
+    of what the issue already has — a frame on this canvas bound to `issue-<N>` / `issue-<N>-…` (open
+    the agent in it), an unbound worktree of the issue (adopt it, `createdByApp: false`), or the exact
+    branch existing but checked out nowhere (check it out, under the branch's OWN spelling — the
+    match is case-insensitive, git's lookup is not; the new folder is the app's, so `createdByApp`
+    is true exactly as the dialog's "Existing branch" mode sets it) — beside the next free `-2` …
+    `-20`; a name or folder that is merely taken moves to the next suffix and the notice says why.
+    Never the main checkout, never a prunable registration. Reuse is re-checked at the dialog's click
+    (a frame on that folder now, else a worktree git still lists), and one `runExclusive` key per
+    issue covers the planning AND a dialog-confirmed create, so a second click cannot race the first
+    for the same `-2`. Disabled WITH its reason on a relay tab, an SSH project, a cwd-less
     project and a folder with no repository (`issueWorktreeRefusal`). **There is no `--worktree`
     flag**: an agent composes `open-worktree --branch issue-<N>-<slug>` then `open-agent --group
     <groupId> --issue #N`, and both agent bodies render that convention from `issueWorktreeBranch`.

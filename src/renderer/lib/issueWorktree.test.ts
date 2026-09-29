@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { createAgentNode, terminalNodeSize } from '../state/workspace'
+import { GROUP_PAD_TOP, GROUP_PAD_X } from './coldOpen'
 import {
+  frameAgentPlacement,
+  runExclusive,
   ISSUE_WORKTREE_LABEL,
   ISSUE_WORKTREE_NO_REPO_HINT,
   ISSUE_WORKTREE_RELAY_HINT,
@@ -104,5 +108,55 @@ describe('issueWorktreeRenamedNotice', () => {
     expect(issueWorktreeRenamedNotice('issue-12-fix', 'issue-12-fix-2')).toBe(
       'issue-12-fix was already taken (a branch or folder of that name exists), so the new worktree is issue-12-fix-2.'
     )
+  })
+})
+
+describe('frameAgentPlacement', () => {
+  const size = terminalNodeSize()
+  const origin = { x: 1000, y: 2000 }
+
+  it('hands addAgentNode a CENTER whose node lands at the frame\'s first slot, inside the frame', () => {
+    const { center, frame } = frameAgentPlacement(origin, 0, size)
+    // The REAL factory, which centres the node on the point it is given.
+    const node = createAgentNode('claude', 0, '/w', center)
+    expect(node.position).toEqual({ x: origin.x + GROUP_PAD_X, y: origin.y + GROUP_PAD_TOP })
+    // Below the label band (the frame's drag handle), and wholly inside the frame.
+    expect(node.position.y - origin.y).toBeGreaterThanOrEqual(GROUP_PAD_TOP)
+    expect(node.position.x + (node.width as number)).toBeLessThanOrEqual(origin.x + frame.width)
+    expect(node.position.y + (node.height as number)).toBeLessThanOrEqual(origin.y + frame.height)
+  })
+
+  it('a second agent takes the next slot without overlapping the first, and the frame grows to hold both', () => {
+    const first = createAgentNode('claude', 0, '/w', frameAgentPlacement(origin, 0, size).center)
+    const next = frameAgentPlacement(origin, 1, size)
+    const second = createAgentNode('claude', 1, '/w', next.center)
+    expect(second.position.x).toBeGreaterThanOrEqual(first.position.x + (first.width as number))
+    expect(second.position.y).toBe(first.position.y)
+    expect(second.position.x + (second.width as number)).toBeLessThanOrEqual(origin.x + next.frame.width)
+  })
+})
+
+describe('runExclusive', () => {
+  it('refuses a second start while the first is running, and frees the key when it ends', async () => {
+    const inFlight = new Set<string>()
+    let release!: () => void
+    const first = runExclusive(inFlight, 'o/r#12', () => new Promise<void>((r) => (release = r)))
+    expect(await runExclusive(inFlight, 'o/r#12', async () => {})).toBe(false)
+    // Another issue is not blocked.
+    expect(await runExclusive(inFlight, 'o/r#13', async () => {})).toBe(true)
+    release()
+    expect(await first).toBe(true)
+    expect(inFlight.has('o/r#12')).toBe(false)
+    expect(await runExclusive(inFlight, 'o/r#12', async () => {})).toBe(true)
+  })
+
+  it('frees the key when the task throws', async () => {
+    const inFlight = new Set<string>()
+    await expect(
+      runExclusive(inFlight, 'k', async () => {
+        throw new Error('boom')
+      })
+    ).rejects.toThrow('boom')
+    expect(inFlight.has('k')).toBe(false)
   })
 })

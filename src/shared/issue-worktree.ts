@@ -126,14 +126,16 @@ export interface IssueWorktreeInput {
   template: string
   /** `git worktree list` in git's order: the MAIN checkout is first. */
   entries: readonly WorktreeEntry[]
-  /** Local branch names, or null when they could not be read (git then has the last word). */
+  /** Local branch names; null or empty when they could not be read (git then has the last word). */
   branches: readonly string[] | null
   /** Non-stale worktree-bound group frames on this canvas. */
   bound: readonly IssueWorktreeBoundGroup[]
 }
 
-/** Does anything live at this path? A probe that FAILS answers "yes": a failed read is never
- *  evidence of absence, and the cost of the wrong answer is only a `-2`. */
+/** Does anything live at this path? A probe that REJECTS reads as "yes": a failed read is never
+ *  evidence of absence, and the cost of the wrong answer is only a `-2`. (A probe that folds a stat
+ *  error into `false` — the app's `fs.exists` does — is backstopped by git, which refuses to add a
+ *  worktree into a folder that is not empty.) */
 export type PathProbe = (path: string) => Promise<boolean>
 
 /**
@@ -206,13 +208,17 @@ export async function planIssueWorktree(
   // 2. The branch exists but is checked out NOWHERE: offer to check it out. (Checked out somewhere
   //    — the main checkout, or a registration whose folder is gone — it cannot be, so it is simply
   //    taken, and case 3 moves on to `-2`.)
+  //    The branch is offered under ITS OWN spelling: `known` is case-folded, but git resolves the
+  //    name it is given, and `issue-12-x` does not name a local `Issue-12-X` on a case-sensitive
+  //    filesystem or in packed refs.
   const checkedOut = input.entries.some((e) => e.branch?.toLowerCase() === canonical)
-  if (branchTaken(canonical) && !checkedOut) {
+  const existingBranch = (input.branches ?? []).find((b) => b.toLowerCase() === canonical)
+  if (existingBranch && !checkedOut) {
     const path = pathFor(canonical)
     if (!(await pathTaken(path))) {
       return {
         kind: 'choose',
-        existing: { kind: 'branch', branch: canonical, path },
+        existing: { kind: 'branch', branch: existingBranch, path },
         alternative: await firstFree(2)
       }
     }

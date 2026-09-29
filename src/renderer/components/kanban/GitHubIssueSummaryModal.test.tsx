@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { describe, expect, it, vi } from 'vitest'
 import type { GitHubIssueCardView } from '@shared/github-issues'
 import { GitHubIssueSummaryModal } from './GitHubIssueSummaryModal'
+import { popDialog, pushDialog } from '../dialog-stack'
 
 vi.mock('../../session/session', () => ({
   useSession: () => ({
@@ -71,6 +72,25 @@ describe('GitHubIssueSummaryModal', () => {
     act(() => root.unmount())
     host.remove()
     vi.unstubAllGlobals()
+  })
+
+  it('Escape closes the modal, but not while a dialog stacked over it owns the key', () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const root = createRoot(host)
+    const onClose = vi.fn()
+    act(() => root.render(
+      <GitHubIssueSummaryModal issue={issue} columns={[]} moving={false} readOnly={false}
+        onMove={vi.fn()} onClose={onClose} />
+    ))
+    pushDialog('stacked-confirm')
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(onClose).not.toHaveBeenCalled()
+    popDialog('stacked-confirm')
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(onClose).toHaveBeenCalledTimes(1)
+    act(() => root.unmount())
+    host.remove()
   })
 
   it('offers "Start in a new worktree" beside it, with the same picker rows', () => {
