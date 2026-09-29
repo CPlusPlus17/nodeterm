@@ -1405,6 +1405,27 @@ session.
   Downloads report in a `DownloadStrip` floated over the terminal, not in a drawer that may be
   shut. The kanban card modal gets URL rows only (no file links there) and no "Open in canvas
   browser" (the node would land under the board).
+  **Hovering a link says what a click opens** (`terminal/link-hover.ts`): the RESOLVED absolute
+  path — which of the two cwds held it — plus the gestures, `<abs> (⌘-click to open · ⇧⌘-click to
+  open with default app)` (Ctrl/Shift+Ctrl off-mac; a directory reads "reveal" / "open in
+  Finder|file manager"; a URL just `<url> (⌘-click to open)`, OSC 8 included, whose target the label
+  hides). It rides xterm's `ILink.hover`/`leave`, which fire in a tmux pane too — the linkifier
+  listens to `mousemove` on the screen element whatever the mouse-tracking mode; only CLICKS need
+  the capture fallback. One tooltip per xterm instance, INSIDE `term.element` (parks and dies with
+  the terminal, scales with the canvas zoom like the copy pill; positioned by dividing the rect by
+  the rendered/layout width ratio), `pointer-events: none` + `xterm-hover`, hidden by any press or
+  wheel. **Shift+Cmd/Ctrl+click opens with the OS default app** (`linkOpenIntent` — ONE routing rule
+  for the provider `activate` and `installLinkClickFallback`): `shell.openPath` behind
+  `canUseLocalShell`, the same gate as Reveal in Finder, so a directory opens in the OS file
+  manager. Everywhere that gate says no the click TOASTS its reason (`systemOpenRefusal`) and the
+  hint omits the gesture: an SSH project is refused rather than downloaded-then-opened (a click must
+  not silently copy a file or folder to this machine, and edits would land on a stale copy — the
+  link menu's Download is one right-click away), the Server Edition is refused rather than falling
+  back to the plain open (a modified gesture that quietly does something else is harder to learn;
+  the bridge's `shell.openPath` stays its documented inert stub), and a relay tab is refused (the
+  path is on the peer). Shift alone is never a link gesture (xterm's selection modifier); a
+  modified press released on another cell is a drag and is left alone, and a Shift+Cmd click that
+  extended an xterm selection does not open.
   **Home-relative `~/x` tokens** (Claude Code prints its plan file as `~/.claude/plans/<name>.md`)
   stay `~`-rooted all the way to the fs call and are expanded by the core that OWNS the filesystem
   — `expandHomePath` in `core/fs-handlers.ts` for desktop/Server Edition, the remote shell for

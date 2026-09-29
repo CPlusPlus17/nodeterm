@@ -2631,6 +2631,27 @@ body,
   border-color: var(--border);
 }
 
+/* Hovering a terminal link names what a click opens — the resolved path + the gestures
+   (terminal/link-hover.ts). Lives INSIDE the xterm element (`.xterm` is position:relative), so it
+   scales with the terminal text like the copy pill; same quiet chrome as the pill's hint variant.
+   `pointer-events: none`: it must never take a click, wheel or hover from the terminal under it. */
+.term-link-hint {
+  position: absolute;
+  z-index: 10;
+  max-width: calc(100% - 8px);
+  pointer-events: none;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 4px 8px;
+  border-radius: 7px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 35%);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 /* Downloads started from a terminal link's right-click menu (terminal/link-menu.ts): the shared
    `.ex-dls` strip, floated over the terminal's bottom-right like the copy receipt above — one
    notch higher so the two never cover each other — instead of docked under a file tree. */
