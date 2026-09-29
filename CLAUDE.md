@@ -3179,7 +3179,14 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   **an indeterminate reply names its id**: the route adds a `request id: <id>` line saying to pass
   it back as `--request-id <id>`, and the in-flight/unknown refusals spell the flag with its value —
   the shim's per-run id is otherwise never seen, so "retry with the same --request-id" sent agents
-  to re-run the bare command, get a fresh id and open a second one;
+  to re-run the bare command, get a fresh id and open a second one. That reply is not enough on
+  its own: an agent's tool call is typically killed at 120 s — the SAME instant the app gives up —
+  so the shim also prints the per-run id to stderr BEFORE posting an open it carries no caller id
+  for (`requestIdAnnounceLine`, skipped for a caller's own `--request-id` and for `--dry-run`), and
+  both agent bodies say to pass an OWN unique id up front for slow opens (open-worktree,
+  spawn-team, verify) with a tool timeout above 120 s. A `finishAnswer` step that throws never
+  escapes into the IPC listener: on time it resolves indeterminate, late it hands nothing back (the
+  row stays unknown);
   (7) an explicit id on a verb outside the set is REFUSED (`request-id-unsupported`), like
   `--dry-run` — an agent believing its `write` is protected when it is not is the failure the flag
   exists to end — while a malformed or out-of-set per-run id is silently ignored; (8) a dry run
@@ -3190,7 +3197,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   confirm-gated verb, whose dialog dismisses itself at the same deadline, is still called "safe to
   retry"; a call with no ledger row (no id, or an unverified caller) is told to check the canvas for
   its effect before retrying, never pointed at a flag it has no value for. Ids suggested to agents
-  must be UNIQUE (a uuid, or a readable name with a random part): rows are per node for 24 h, so a
+  must be UNIQUE (a uuid — `$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)`, since slim
+  Linux lacks `uuidgen` and macOS lacks `/proc` — or a readable name with a random part): rows are per node for 24 h, so a
   later conversation in the same node reusing a readable id for the same call would be answered
   with the earlier reply. An SSH
   host keeps the shim it got at its last connect, so until that project reconnects its runs carry

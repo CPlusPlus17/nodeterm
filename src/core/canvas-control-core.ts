@@ -32,6 +32,7 @@ import {
 import { STATION_NOTICE_FROM } from '../shared/agents/agent-messaging'
 import { PR_DEADLINE_DEFAULT_MS, PR_DEADLINE_MAX_MS, PR_WAIT_MAX, afterPrFlagRefusal } from '../shared/pr-wait'
 import { ISSUE_BRANCH_SLUG_MAX, issueWorktreeBranch } from '../shared/issue-worktree'
+import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
 import {
   REQUEST_ID_HINT_LEAD,
   REQUEST_ID_MAX_LENGTH,
@@ -39,7 +40,8 @@ import {
   REQUEST_ID_REPLAYED_LEAD,
   REQUEST_ID_RETRYABLE,
   REQUEST_ID_VERBS,
-  REQUEST_LEDGER_TTL_MS
+  REQUEST_LEDGER_TTL_MS,
+  requestIdAnnounceLine
 } from './control-request-ledger'
 
 /**
@@ -470,6 +472,9 @@ function dryRunDocLines(): string[] {
  * the retention — the same derive-don't-retype rule as `messagingGuidanceLines`, so an outcome or a
  * verb added there lands in the text an agent reads the day it is added.
  */
+// The opens that can take longer than the app's own wait: git work, a whole team, a review panel.
+const SLOW_OPEN_VERBS = ['open-worktree', 'spawn-team', 'verify'] as const
+
 function requestIdDocLines(): string[] {
   const yes: string[] = []
   const no: string[] = []
@@ -482,7 +487,9 @@ function requestIdDocLines(): string[] {
     'Retrying safely (`--request-id`):',
     `- The verbs that create something (${[...REQUEST_ID_VERBS].join(', ')}) take`,
     `  \`--request-id <id>\`: 1-${REQUEST_ID_MAX_LENGTH} letters, digits, \`.\`, \`_\`, \`:\` or \`-\`, starting with`,
-    '  a letter or digit. Make each id UNIQUE: a uuid (`uuidgen`), or a readable name with a random',
+    '  a letter or digit. Make each id UNIQUE: a uuid',
+    '  (`$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)`: slim Linux images lack',
+    '  `uuidgen`, macOS lacks `/proc`), or a readable name with a random',
     '  part (`wave2-reviewer-1-7f3a9c`). A bare readable name can come back: ids are remembered per',
     `  node for ${Math.round(REQUEST_LEDGER_TTL_MS / 3_600_000)} hours, so a later conversation in the same node that reuses one for the same`,
     '  call is answered with the earlier reply — an open that never happened this time.',
@@ -495,8 +502,13 @@ function requestIdDocLines(): string[] {
     '  refused, and opens nothing.',
     `- Retry with the SAME id after a short wait: ${yes.join('; ')}.`,
     `- A same-id retry never clears these — fix the call: ${no.join('; ')}.`,
-    `- A reply that says a call may still complete names its id on a \`${REQUEST_ID_HINT_LEAD}\` line — also`,
-    '  when you passed none, because the CLI picks one per run. To retry, pass exactly that id with',
+    `- For an open that can be slow — ${SLOW_OPEN_VERBS.join(', ')}, or any open while the app may be busy —`,
+    '  pass your OWN unique `--request-id` up front, and give the tool call a timeout longer than',
+    `  the app's own ${CONTROL_REQUEST_TIMEOUT_MS / 1000}s wait (180s is safe). At a ${CONTROL_REQUEST_TIMEOUT_MS / 1000}s tool default the tool is killed at the`,
+    '  same moment the app gives up, and the reply that would have named the id is lost with it.',
+    `- When you pass none, the CLI picks an id per run and prints it to stderr BEFORE it sends the`,
+    `  open (\`${requestIdAnnounceLine('<id>')}\`); a reply that says the call may still`,
+    `  complete names it again on a \`${REQUEST_ID_HINT_LEAD}\` line. To retry, pass exactly that id with`,
     '  `--request-id`. Never re-run the bare command: it gets a fresh id and can open a second one.',
     '- Without `--request-id` the CLI still tags each RUN with its own id, so its own automatic',
     '  re-send to another endpoint never opens twice — but a second run is a second call. An id is',
@@ -957,6 +969,17 @@ fi
 # write/close/rename/color/branch/send/reply/sticky/run forms accept — into curl --data-urlencode arguments. The positional
 # list doubles as the accumulator: originals are consumed from the front, translated pairs
 # appended at the back, so "$@" holds exactly the curl args once the loop drains.
+# Two flags the shim itself acts on (before posting, below): a caller that named its own
+# --request-id already knows it, and a --dry-run claims nothing.
+nt_own_request_id=""
+nt_dry_run=""
+nt_note_flag() {
+  case "$1" in
+    request-id) nt_own_request_id=1 ;;
+    dry-run) nt_dry_run=1 ;;
+  esac
+}
+
 nt_seen_pos=0
 nt_count=$#
 nt_i=0
@@ -969,6 +992,7 @@ while [ "$nt_i" -lt "$nt_count" ]; do
       nt_k=\${nt_a#--}
       nt_v=\${nt_k#*=}
       nt_k=\${nt_k%%=*}
+      nt_note_flag "$nt_k"
       set -- "$@" --data-urlencode "arg.$nt_k=$nt_v"
       ;;
     --*)
@@ -984,6 +1008,7 @@ while [ "$nt_i" -lt "$nt_count" ]; do
       # \`--text=--oops\`, which the branch above exists for and which was previously unexpressible
       # in either direction.
       nt_k=\${nt_a#--}
+      nt_note_flag "$nt_k"
       nt_v=""
       if [ "$nt_i" -lt "$nt_count" ]; then
         case "$1" in
@@ -1048,6 +1073,15 @@ nt_control_post() {
 }
 # Only a dead transport or an explicit wrong-owner (421) answer permits failover; 403 stays final.
 nt_reached() { [ -n "$nt_code" ] && [ "$nt_code" != "000" ] && [ "$nt_code" != "421" ]; }
+
+# Say the per-run id BEFORE posting an open (see requestIdAnnounceLine): an agent's own tool call is
+# usually killed at 120 s, the same instant the app gives up waiting, and with it the reply that
+# would have named the id. On stderr, so stdout stays the reply alone.
+if [ -z "$nt_own_request_id" ] && [ -z "$nt_dry_run" ]; then
+  case "$nt_verb" in
+    ${[...REQUEST_ID_VERBS].join('|')}) echo "${requestIdAnnounceLine('$nt_request_id')}" >&2 ;;
+  esac
+fi
 
 nt_had_transport=""
 nt_control_post "$@"

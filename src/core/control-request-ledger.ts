@@ -146,6 +146,16 @@ export function requestIdRetryHint(requestId: string): string {
   )
 }
 
+/**
+ * What the shim prints to STDERR before it posts an open the caller gave no id for. An agent's own
+ * tool call is usually killed at 120 s — the same instant the app gives up waiting — so the reply
+ * carrying `requestIdRetryHint` may never be seen; this line is on screen before anything can go
+ * wrong. `id` is interpolated as-is, so the shim passes its shell variable.
+ */
+export function requestIdAnnounceLine(id: string): string {
+  return `${REQUEST_ID_HINT_LEAD} ${id} (pass --request-id ${id} if you retry)`
+}
+
 /** Appended when the caller passed `--request-id` but its node identity is not verified. */
 export const REQUEST_ID_UNVERIFIED_NOTE =
   'request id ignored: this session\'s node identity is not verified, so a retry cannot be matched ' +

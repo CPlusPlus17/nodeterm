@@ -85,6 +85,53 @@ describe('createControlForwarder', () => {
     expect(late).toHaveBeenCalledWith({ ok: true, message: 'opened b1 (finished)' })
   })
 
+  // Review NIT on #1033: `finish` runs after the pending entry is gone. A throw there used to escape
+  // into the IPC listener with `resolve` never called — the route's handler hung, and its ledger row
+  // sat in flight until stale. The answer existed, so the effect may have happened: indeterminate.
+  it('a finishing step that throws on an on-time answer resolves INDETERMINATE instead of hanging', async () => {
+    const sent: string[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const fwd = createControlForwarder({ timeoutMs: 1000 })
+      const p = fwd.forward('open-browser', (id) => sent.push(id), {
+        onLate: () => {},
+        finish: () => {
+          throw new Error('ledger exploded')
+        }
+      })
+      expect(() => fwd.answer({ requestId: sent[0], ok: true, message: 'opened b1' })).not.toThrow()
+      const r = await p
+      expect(r.ok).toBe(false)
+      expect(r.indeterminate).toBe(true)
+      expect(r.error).toMatch(/may have taken effect/)
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a finishing step that throws on a LATE answer hands nothing back and does not throw', async () => {
+    const sent: string[] = []
+    const late = vi.fn()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const fwd = createControlForwarder({ timeoutMs: 1000 })
+      const p = fwd.forward('open-browser', (id) => sent.push(id), {
+        onLate: late,
+        finish: () => {
+          throw new Error('ledger exploded')
+        }
+      })
+      vi.advanceTimersByTime(1000)
+      await p
+      expect(() => fwd.answer({ requestId: sent[0], ok: true, message: 'opened b1' })).not.toThrow()
+      // The row stays unknown: an answer main could not finish is not one to replay.
+      expect(late).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('without a request-id claim, a timed-out open is told to check the canvas — never pointed at a flag', async () => {
     const fwd = createControlForwarder({ timeoutMs: 120_000 })
     const p = fwd.forward('open-agent', () => {})

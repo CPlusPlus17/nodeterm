@@ -45,6 +45,17 @@ export function controlTimeoutError(verb: string, timeoutMs: number, claimed: bo
   return `${lead} — the request was not cancelled and may still complete; check the canvas for its effect before retrying`
 }
 
+/**
+ * The reply when main's own finishing step throws on an answer the renderer DID give. The effect may
+ * well have happened (the renderer answered), so this is indeterminate like a timeout — and worded by
+ * the same claim rule: with a ledger row the route adds the id to pass back, without one the only
+ * honest advice is to look first.
+ */
+export function controlFinishError(verb: string, claimed: boolean): string {
+  const lead = `${verb}: the app could not finish processing the answer, so it may have taken effect`
+  return claimed ? lead : `${lead}; check the canvas for its effect before retrying`
+}
+
 /** How long a late renderer answer is still worth handing back. Past it the ledger row stays
  *  unknown and a retry is told to `list`. */
 export const LATE_CONTROL_ANSWER_MS = 30 * 60 * 1000
@@ -74,13 +85,31 @@ export function createControlForwarder(opts: {
   const lateWindowMs = opts.lateWindowMs ?? LATE_CONTROL_ANSWER_MS
   type Finish = (r: ControlForwardReply) => ControlForwardReply
   const same: Finish = (r) => r
+  // `finish` runs after the pending entry is gone, inside the IPC listener. A throw there must not
+  // escape (nothing would resolve the route's handler, and its ledger row would sit in flight until
+  // stale): it becomes an indeterminate reply on time, and on the late path no answer at all — the
+  // row stays unknown, because an answer main could not finish is not one to replay.
+  const guarded = (verb: string, finish: Finish, reply: ControlForwardReply): ControlForwardReply | null => {
+    try {
+      return finish(reply)
+    } catch (e) {
+      console.warn(`[canvas-control] finishing the ${verb} answer failed`, e)
+      return null
+    }
+  }
   const pending = new Map<
     string,
-    { resolve: (r: ControlForwardReply) => void; finish: Finish; timer: NodeJS.Timeout }
+    {
+      resolve: (r: ControlForwardReply) => void
+      verb: string
+      claimed: boolean
+      finish: Finish
+      timer: NodeJS.Timeout
+    }
   >()
   const late = new Map<
     string,
-    { onLate: (r: ControlForwardReply) => void; finish: Finish; timer: NodeJS.Timeout }
+    { onLate: (r: ControlForwardReply) => void; verb: string; finish: Finish; timer: NodeJS.Timeout }
   >()
   return {
     forward(verb, send, { onLate, finish = same } = {}) {
@@ -90,7 +119,7 @@ export function createControlForwarder(opts: {
           pending.delete(requestId)
           if (onLate) {
             const lateTimer = setTimeout(() => late.delete(requestId), lateWindowMs)
-            late.set(requestId, { onLate, finish, timer: lateTimer })
+            late.set(requestId, { onLate, verb, finish, timer: lateTimer })
           }
           resolve({
             ok: false,
@@ -98,7 +127,7 @@ export function createControlForwarder(opts: {
             indeterminate: true
           })
         }, opts.timeoutMs)
-        pending.set(requestId, { resolve, finish, timer })
+        pending.set(requestId, { resolve, verb, claimed: onLate !== undefined, finish, timer })
         send(requestId)
       })
     },
@@ -107,14 +136,22 @@ export function createControlForwarder(opts: {
       if (waiting) {
         clearTimeout(waiting.timer)
         pending.delete(requestId)
-        waiting.resolve(waiting.finish(reply))
+        const finished = guarded(waiting.verb, waiting.finish, reply)
+        waiting.resolve(
+          finished ?? {
+            ok: false,
+            error: controlFinishError(waiting.verb, waiting.claimed),
+            indeterminate: true
+          }
+        )
         return
       }
       const after = late.get(requestId)
       if (!after) return
       clearTimeout(after.timer)
       late.delete(requestId)
-      after.onLate(after.finish(reply))
+      const finished = guarded(after.verb, after.finish, reply)
+      if (finished) after.onLate(finished)
     }
   }
 }
