@@ -108,6 +108,10 @@ beforeAll(async () => {
     foreignContext.push(req.verb)
     return handleContextLinkRequest(req)
   })
+  for (const [name, script] of [['nodeterm.sh', CONTROL_SHIM_SCRIPT], ['context.sh', CONTEXT_SHIM_SCRIPT]]) {
+    fs.writeFileSync(path.join(dir, name), script, { mode: 0o755 })
+  }
+
   foreignEndpoint = path.join(home, '.nodeterm-server', 'hook-endpoint.env')
   const advertised = fs.readFileSync(foreignEndpoint, 'utf8')
   // The shape measured on the host: a port, a token dir, and (off Windows) a unix socket — all of
@@ -123,21 +127,14 @@ afterAll(async () => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
-function shim(script: string, name: string): string {
-  const p = path.join(dir, name)
-  if (!fs.existsSync(p)) fs.writeFileSync(p, script, { mode: 0o755 })
-  return p
-}
-
 /** Run a shim the way an agent on the SSH host does, with the env its tmux session was born with. */
 async function call(
-  script: string,
   name: string,
   args: string[],
   endpoint = primaryEndpoint
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
-    const { stdout, stderr } = await run('/bin/sh', [shim(script, name), ...args], {
+    const { stdout, stderr } = await run('/bin/sh', [path.join(dir, name), ...args], {
       timeout: 15_000,
       env: {
         PATH: process.env.PATH ?? '',
@@ -154,8 +151,8 @@ async function call(
   }
 }
 
-const control = (args: string[], endpoint?: string) => call(CONTROL_SHIM_SCRIPT, 'nodeterm.sh', args, endpoint)
-const context = (args: string[], endpoint?: string) => call(CONTEXT_SHIM_SCRIPT, 'context.sh', args, endpoint)
+const control = (args: string[], endpoint?: string) => call('nodeterm.sh', args, endpoint)
+const context = (args: string[], endpoint?: string) => call('context.sh', args, endpoint)
 
 /** The claims that made the incident expensive. None of them may reach an agent whose own
  *  connection is merely down. */
