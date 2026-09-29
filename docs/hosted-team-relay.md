@@ -73,10 +73,24 @@ verb would create team state on a server that never asked to host.
 ### 1. The project must already be on this core
 
 `team share` takes a project id from this core's workspace index, `<dataDir>/workspace.json`
-(`entries[].id`, beside each entry's `name` and `cwd`). A headless install has no UI that creates a
-project, so open the folder once from the Server Edition's browser UI (serving mode, see
-`docs/SERVER.md`); the hosted relay boots in serving mode too. Adopting an existing SSH project
-into the server core is sub-project 3.
+(`entries[].id`, beside each entry's `name` and `cwd`). Adopting an existing SSH project into the
+server core is sub-project 3; in v1 the folder has to be opened on the core once, from the Server
+Edition's browser UI. The installer's unit runs the server **headless** (`NODETERM_HEADLESS=1`), so
+there is no UI until you run it once in serving mode:
+
+```bash
+systemctl --user stop nodeterm-server        # `systemctl stop …` for a root install
+NODETERM_SERVER_PASSWORD='<choose one>' node $APP
+# From your desktop: ssh -L 8443:127.0.0.1:8443 <host>, open http://127.0.0.1:8443, sign in,
+# open the folder as a project. Then Ctrl-C the server and:
+systemctl --user start nodeterm-server
+```
+
+Serving mode binds `127.0.0.1:8443` by default, and the password seeds only when none exists yet
+(`docs/SERVER.md`); it hosts the team too. **Stop the service first.** A second server on the same
+data directory still serves the UI, but it skips hosting ("Hosted team relay: NOT started — another
+nodeterm server is already running on this data directory …") and disables its agent hooks, and
+two servers then write one workspace.
 
 A joiner's tab shows **one** project: the first shared project in the host's workspace order
 (`openRelayTab` adopts `projects[0]` of the narrowed workspace). With nothing shared, even an owner
@@ -87,22 +101,27 @@ owners included.
 
 The key is the `publicKey` field of `<userData>/remote-peer-key.json` on your desktop
 (`src/main/remote/peer-identity.ts`). The public key is always stored as plaintext base64, even when
-the keyring encrypts the secret next to it (`key-file-codec.ts`), so it is readable either way. On
-macOS:
+the keyring encrypts the secret next to it (`key-file-codec.ts`), so it is readable either way.
+
+`<userData>` is named after `package.json`'s `name`, **`node-terminal`**, not the product name
+(the shipped hook scripts search the same directories): `~/Library/Application Support/node-terminal`
+on macOS, `~/.config/node-terminal` on Linux, `%APPDATA%\node-terminal` on Windows. On macOS:
 
 ```bash
-grep -o '"publicKey":"[^"]*"' ~/Library/Application\ Support/nodeterm/remote-peer-key.json | cut -d'"' -f4
+grep -o '"publicKey":"[^"]*"' ~/Library/Application\ Support/node-terminal/remote-peer-key.json | cut -d'"' -f4
+# not there? look under any app name before assuming there is no key yet:
+ls ~/Library/Application\ Support/*/remote-peer-key.json
 ```
 
-(`~/.config/nodeterm/` on Linux, `%APPDATA%\nodeterm\` on Windows.) No UI shows this key in v1;
-sub-project 3 automates this step.
+No UI shows this key in v1; sub-project 3 automates this step.
 
-The file is created the first time the desktop uses the relay. If it is not there yet, paste the
-team's join code once (step 3). While your desktop asks you to read a code to an owner, `team status
---json` lists your device under `pending` with its `peerKeyB64` and `sas`. Take the key whose `sas`
-matches your prompt, press Cancel on the prompt (that ends the request), run `team add-owner` with
-that key, and paste the code again. A request that is still pending when its key becomes an owner is
-not upgraded; it would wait out its 10 minutes.
+The file is created the first time the desktop uses the relay. Only if it is really not there,
+paste the team's join code once (step 3); that join spends one of the team's shared device mints.
+While your desktop asks you to read a code to an owner, `team status --json` lists your device under
+`pending` with its `peerKeyB64` and `sas`. Take the key whose `sas` matches your prompt, press Cancel
+on the prompt (that ends the request), run `team add-owner` with that key, and paste the code again.
+A request that is still pending when its key becomes an owner is not upgraded; it would wait out its
+10 minutes.
 
 ### 3. The first connect
 
@@ -229,7 +248,7 @@ the sentences):
 | `E_JOIN_THROTTLED` | A 429 with `scope:'ip'` on `/device`, or any 429 on `/join`: the per-IP limiter (30 a minute) | Yes, ≥ 60 s | Unattended: "The nodeterm service is limiting requests from this network — retrying in a minute." (once per streak). A pasted code: "… Try again in a minute." |
 | `E_JOIN_NETWORK` | Fetch failure or timeout, a 5xx, a malformed reply, a relay endpoint the desktop will not dial, anything unexpected | Yes | A pasted code: "Could not reach X: …". An unattended attempt keeps retrying without a notice. |
 | `E_JOIN_REVOKED` | `/join` 403: the backend revoked this device | No | "This device's access to X was revoked. Remove the team and join again with a fresh invite code.", with a **Remove and rejoin** action |
-| `E_JOIN_KEY_LOCKED` | The peer key's keyring is locked | No | "Could not load this device's identity to join X: " + unlock instructions |
+| `E_JOIN_KEY_LOCKED` | Loading this desktop's peer key failed: a locked keyring, or any other failure to read `remote-peer-key.json` | No | "Could not load this device's identity to join X: " + the loader's sentence (for a locked keyring, how to unlock) |
 | `E_JOIN_BUSY` | Another join of ours for the same team is still running | No | Nothing: the running attempt answers |
 
 Once connected, the host's own refusals arrive over the encrypted tunnel: "An owner declined the
@@ -246,11 +265,16 @@ unapproved after 2.5 s, the tab says "Waiting for an owner of X to approve this 
   subscribed.
 - At most **one** request per device key (a newer connection replaces the older one) and **16** at
   once. A request expires after **10 minutes** or when the joiner's socket closes. Pending requests
-  live in memory: a service restart drops them, and the joiner tries again.
+  live in memory, so a service restart drops them. Only a bookmarked (already approved) reconnect
+  retries on its own; a joiner who pasted a code reads "Could not open X: The relay connection
+  closed before it was approved." once and pastes it again.
 - Owners answer from a **desktop** hosted tab. The dialog queues requests (keyed by `pendingId`,
   oldest first). Enter never approves, Escape denies only once the dialog is armed and never on a
-  held key, and focus lands on Deny. When two owners see one request, the first answer wins; an owner
-  whose screen still showed it is told "Another owner answered this request."
+  held key, and focus lands on Deny. When two owners answer one request, a second Allow is refused
+  (the first one stands), but a **Deny beats an earlier Allow** until the request actually opens:
+  an Allow still waits for the joiner's own OK and for the pin write, and a Deny that lands in that
+  window refuses the device. An owner whose screen still showed a request that closed is told
+  "Another owner answered this request."
 - An approval is pinned only after **both** humans confirmed. A deny or expiry that lands while that
   pin is being written wins: the write is skipped, or taken back.
 - The CLI has **no** approve verb. `team status` lists pending requests by SAS and says to approve
@@ -299,7 +323,9 @@ The human `team status` reads `state`, `idle` and `lastError` together:
 
 - **`host-key-unreadable`.** Hosting stays off and the key is **not** replaced (a new key would
   invalidate every bookmark). Restore `host-key.json` from a backup and run `team init` (no restart
-  needed), or run `team rotate-key` on purpose and hand out new join codes.
+  needed). Or, on purpose, run `team rotate-key` **and then `team init`**: a rotation on a service
+  that is not hosting (which an unreadable key means) leaves hosting off, and the CLI says so. Then
+  hand out new join codes.
 - **A corrupt `team.json`** is set aside as `team.json.corrupt-<ms>` and hosting starts **closed**:
   no members, so nobody auto-reconnects. Recover with `team add-owner`. A file listing one key twice
   counts as corrupt.
@@ -364,8 +390,14 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   connected, but are not in the host's project file: a teammate who connects later, or everyone
   after a host restart, sees the saved canvas. A terminal an Editor starts that way keeps running
   on the host, but Viewers cannot watch it, because node membership is read from the saved canvas.
-  Only a client attached directly to the core (a Server Edition browser tab) writes the project
-  file; that combination is untested with a hosted team.
+  **Workaround:** keep a Server Edition browser tab open on the host's core (serving mode, see setup
+  step 1). The reflector sends every mutation to every attached client, and a browser's canvas
+  applies it and marks itself dirty (to its store for a background project, to the live canvas for
+  the active one), so its own autosave writes the edit. Edits made while no browser tab is attached
+  are lost. This is a v1 limitation (ruling R42); a server-side persister belongs to sub-project 2.
+- **Kanban, bridge and rope edits made in a relay tab are never propagated or saved.** `canvas:mut`
+  carries nodes only (an upsert or a remove), so project-level state (`kanban`, `bridges`, `ropes`)
+  never leaves the tab. This predates the hosted relay; it holds for Team Access relay tabs too.
 - **One shared project per tab.** A joiner's tab adopts the first shared project; other shared
   projects are allowed by the policy but not reachable from the UI.
 - **Viewers watch only what is already running.** A terminal must be live on the host (a tmux
@@ -428,16 +460,21 @@ on a Mac and a second desktop as a teammate. Record `team status --json` at each
    needs one click.
 5. **Removal.** `team remove <key>` on a connected teammate: their tab says "X: Your access to this
    team was removed by an owner.", and their next attempt is a new join request.
-6. **Owner offline, new device.** With no owner connected, a new device pastes the code: it shows
-   "Waiting for an owner of X to approve this device…", `team status` lists the request, and after
-   10 minutes the joiner reads "Could not open X: No owner answered the request in time."
+6. **Owner offline, new device.** With no owner connected, a new device pastes the code and presses
+   OK on its SAS prompt. About 2.5 s later it shows "Waiting for an owner of X to approve this
+   device…" (the notice starts only after that OK), `team status` lists the request, and after 10
+   minutes the joiner reads "Could not open X: No owner answered the request in time."
 7. **Corrupt host key.** Corrupt `host-key.json` and restart: the journal says "Hosted team relay:
    OFF — the host key could not be read", `team status` says why, `team init` refuses, and the key
    file is left as it was.
 8. **Long session.** A teammate stays connected for over an hour without the tab greying. The host
    never refreshes a bridged session, and the relay broker's source checks a token only when a
-   socket joins; two code comments (`hosted-scheduler.ts`, `standing-host.ts`) say the relay drops a
-   bridged socket at its token's lifetime. This item settles which is true.
+   socket joins, but whether production ends a bridged socket at its token's lifetime is unverified
+   (the comments in `hosted-scheduler.ts` and `standing-host.ts` say so). This item settles it.
 9. **Viewer size.** A Viewer with a small window does not shrink the Editor's terminal.
 10. **Two owners.** With two owners connected, one approves a request; the other owner's dialog
     closes with "Another owner answered this request."
+11. **Device-key path on a real Mac.** On a packaged Mac build, after one relay use, the key file is
+    `~/Library/Application Support/node-terminal/remote-peer-key.json` (the setup step 2 command
+    prints the key), and `ls ~/Library/Application\ Support/*/remote-peer-key.json` finds no other
+    copy.

@@ -5595,7 +5595,7 @@ The invariants, each with its reason:
   (`relay:host:confirm`), `autoApprove` for a key `team.json` pins, and an owner's
   `relay:hosted:approve`. The joiner side has two: the human's `relay:client:confirm`, and the
   bookmark auto-confirm. The one remote confirm still arrives only on the encrypted tunnel. A new
-  local confirm is a design change. (The comment in `relay-trust.ts` names the host-side three.)
+  local confirm is a design change; the comment in `relay-trust.ts` lists all five.
 - **Nothing is served before mutual approval.** Frames that arrive between approval and open (while
   the pin is being written) are HELD, at most `HELD_FRAMES_MAX` (256), then served through the same
   checks. Refusing them would fail a new teammate's first `workspace:load`, which routinely lands
@@ -5603,7 +5603,7 @@ The invariants, each with its reason:
   broadcast), at most one per device key and 16 at once, and expire after 10 minutes. A deny or
   expiry that lands during the pin write wins.
 - **The scheduler's backoff resets only on proof the relay leg works** (an idle listener held to
-  its refresh, or a completed handshake), never on a successful mint. With the API up and the
+  its refresh, or a completed handshake) or on a fresh `start()`, never on a successful mint. With the API up and the
   relay down every mint succeeds and every socket dies, and a reset-on-mint re-minted at
   round-trip speed (relay log, 2026-09-27). Successful mints are also capped at 200 per rolling
   hour, whatever asks for them (the backend's free limit is 240).
@@ -5617,8 +5617,11 @@ The invariants, each with its reason:
 **Known limitations** (full list in the doc): non-editors still receive cross-project presence and
 `context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still
 pauses the shared pty through Stage 2 backpressure; canvas edits made in a hosted tab are not
-written to the host (a relay tab never saves the host workspace, and the reflector persists
-nothing).
+written to the host, because a relay tab never saves the host workspace and the reflector persists
+nothing (ruling R42). Workaround: keep a Server Edition browser tab open on the host's core; it
+applies each reflected mutation, marks itself dirty and saves. Edits made while no browser tab is
+attached are lost. Kanban, bridge and rope edits made in a relay tab are never propagated or saved
+at all, because `canvas:mut` carries nodes only; that predates this feature.
 
 **Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab).
 Server Edition is the host (the `team` CLI; its browser clients cannot approve and are not hosted

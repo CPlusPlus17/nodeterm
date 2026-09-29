@@ -320,10 +320,12 @@ lane unaffected.
   is refused for every scoped guest (and `relay-project-scope.test.ts` goes red telling you so).
 
 - **A new IPC channel a relay tab can call must be classified in `src/core/relay/access-policy.ts`
-  — the guard test fails otherwise.** Every `IPC.*` the relay API's builders reference
-  (`BUILDERS` in `ws-bridge.ts`, plus `relay-api.ts`) goes in `VIEW` or `COMMENT` with its own
-  argument check, or in the reviewed `EDITOR_ONLY` set; `access-policy.guard.test.ts` names every
-  one you missed. A hosted team's Viewers and Commenters are refused anything unlisted, so
+  — the guard test fails otherwise.** Every `IPC.*` referenced by the relay API's builder
+  functions in `src/renderer/bridge/ws-bridge.ts` (the ones the guard's own `BUILDERS` list names)
+  and by `src/renderer/bridge/relay-api.ts` goes in `VIEW` or `COMMENT` with its own argument check,
+  or in the reviewed `EDITOR_ONLY` set; `src/core/relay/access-policy.guard.test.ts` names every one
+  you missed. A NEW builder function must also be added to that `BUILDERS` list, or its channels are
+  never scanned. A hosted team's Viewers and Commenters are refused anything unlisted, so
   forgetting is safe but silent, and the guard is what makes someone decide. Opening a channel to
   viewers also means adding it to the renderer's mirror, `src/shared/hosted-access.ts` (the same
   test pins the two lists equal). An EVENT a viewer must receive needs a `VIEW_EVENTS` entry, and no
