@@ -27,7 +27,7 @@ import {
 } from '../shared/project-settings'
 import { readProjectCapabilities, type ProjectCapability } from '../shared/project-capabilities'
 import type { CapabilityAckMap } from './project-capability-consent'
-import { hoistLegacyNodeExec, type LocalNodeExecMap } from '../shared/node-exec'
+import { carryLocalNodeExec, hoistLegacyNodeExec, stripSharedNodeExec, type LocalNodeExecMap } from '../shared/node-exec'
 import { collisionSeed, derivedProjectId, freshProjectId } from '../shared/project-id'
 import {
   pruneLayoutViewports,
@@ -1221,14 +1221,23 @@ export class WorkspaceStore {
 
   /** The cwd-less leg: the data file under `writeDataFile`'s rules, then the index cache. A pre-file
    *  canvas (no `dataFile`, or an id we will not turn into a path) is stored IN the index, so for
-   *  it the index write is the write. */
+   *  it the index write is the write.
+   *
+   *  The index `project` also holds this machine's exec values (`shell`, `ssh.extraArgs`): for a
+   *  pre-file canvas it is their ONLY store, and for a data-ref it is the cache a missing data file
+   *  falls back to. The content carries none (the authority strips them), so each node keeps the
+   *  cached node's values, and whatever the content carried is dropped first: the index is the
+   *  trusted store, and nothing but this machine's own save may put an exec value there
+   *  (@shared/node-exec). The data file is unaffected either way, since `projectToFile` strips. */
   private async writeInlineContent(
     e: IndexEntryV3,
     cached: Project,
     content: CanvasContent,
     savedAt: string
   ): Promise<boolean> {
-    const updated = withContent(cached, content)
+    const cachedById = new Map((Array.isArray(cached.nodes) ? cached.nodes : []).map((n) => [n.id, n]))
+    const nodes = stripSharedNodeExec(content.nodes).map((n) => carryLocalNodeExec(cachedById.get(n.id), n))
+    const updated = withContent(cached, { ...content, nodes })
     const viaFile = e.dataFile === true && isInlineProjectFileId(e.id)
     if (viaFile) {
       const landed = await this.writeDataFile(e.id, projectToFile(updated, 0, savedAt))

@@ -442,6 +442,71 @@ describe('writeProjectContent — cwd-less canvas', () => {
   })
 })
 
+/**
+ * The content handed to `writeProjectContent` carries no exec fields (the authority strips them on
+ * the way in), but a cwd-less canvas's index `project` is where this machine's exec values live: for
+ * a pre-file canvas it is the ONLY place, and for a data-ref it is the cache a missing data file
+ * falls back to. The write keeps the cached values and never takes the incoming ones.
+ */
+describe('writeProjectContent — this machine’s exec values in the index cache', () => {
+  const PRE_FILE = 'pre-file'
+  const sshConn = { host: 'h', user: 'u', extraArgs: '-J jump', execTrusted: true } as NonNullable<CanvasNodeState['ssh']>
+  const withExec = (x = 0): CanvasNodeState => node('a', { shell: '/bin/zsh', ssh: sshConn, position: { x, y: 0 } })
+
+  /** A cwd-less canvas stored IN the index (no `dataFile`): the index is its only storage. */
+  async function seedPreFile(nodes: CanvasNodeState[]): Promise<WorkspaceStore> {
+    await fs.writeFile(path.join(userData, 'workspace.json'), JSON.stringify({
+      version: 3,
+      activeProjectId: PRE_FILE,
+      entries: [{ id: PRE_FILE, name: 'X', color: '#fff', viewport: { x: 0, y: 0, zoom: 1 }, project: project({ id: PRE_FILE, nodes }) }]
+    }))
+    const store = new WorkspaceStore()
+    await store.load()
+    return store
+  }
+
+  it('a pre-file canvas keeps its shell and ssh args across a write of stripped content', async () => {
+    const store = await seedPreFile([withExec(), node('b')])
+    const stripped = node('a', { ssh: { host: 'h', user: 'u' } as NonNullable<CanvasNodeState['ssh']>, position: { x: 5, y: 0 } })
+    expect(await store.writeProjectContent(PRE_FILE, content([stripped, node('b')]))).toBe(true)
+
+    const entry = (await readIndex()).entries[0]
+    expect(entry.dataFile).toBeUndefined()
+    const a = entry.project.nodes.find((n: CanvasNodeState) => n.id === 'a')
+    expect(a.position.x).toBe(5)
+    expect(a.shell).toBe('/bin/zsh')
+    expect(a.ssh.extraArgs).toBe('-J jump')
+    const loaded = (await new WorkspaceStore().load()).projects[0].nodes.find((n) => n.id === 'a')!
+    expect(loaded.position.x).toBe(5)
+    expect(loaded.shell).toBe('/bin/zsh')
+    expect(loaded.ssh?.extraArgs).toBe('-J jump')
+  })
+
+  it('never takes exec values from the incoming content into the index', async () => {
+    const store = await seedPreFile([node('a'), node('b')])
+    expect(await store.writeProjectContent(PRE_FILE, content([node('a', { shell: '/bin/evil' }), node('b')]))).toBe(true)
+    const a = (await readIndex()).entries[0].project.nodes.find((n: CanvasNodeState) => n.id === 'a')
+    expect(a.shell).toBeUndefined()
+  })
+
+  it('a data-ref keeps them in its cache too, so the fallback load (data file gone) still has them', async () => {
+    const store = new WorkspaceStore()
+    await store.save(ws([project({ id: INLINE_ID, nodes: [withExec(), node('b')] })]))
+    expect(await store.writeProjectContent(INLINE_ID, content([node('a', { position: { x: 5, y: 0 } }), node('b')]))).toBe(true)
+
+    const f = JSON.parse(await fs.readFile(dataFile(), 'utf-8'))
+    expect(f.nodes.find((n: CanvasNodeState) => n.id === 'a').shell).toBeUndefined() // the file stays exec-free
+    const entry = (await readIndex()).entries[0]
+    expect(entry.dataFile).toBe(true)
+    expect(entry.project.nodes.find((n: CanvasNodeState) => n.id === 'a').shell).toBe('/bin/zsh')
+
+    await fs.rm(dataFile())
+    const loaded = (await new WorkspaceStore().load()).projects[0].nodes.find((n) => n.id === 'a')!
+    expect(loaded.position.x).toBe(5)
+    expect(loaded.shell).toBe('/bin/zsh')
+  })
+})
+
 describe('writeProjectContent — bookkeeping and refusals', () => {
   it('calls onPersist once per landed write', async () => {
     const store = new WorkspaceStore()

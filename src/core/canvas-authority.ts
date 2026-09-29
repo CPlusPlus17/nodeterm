@@ -30,6 +30,11 @@
 //
 //  4. A FAILED READ GOVERNS NOTHING. A shared project whose content cannot be read keeps `governs`
 //     true (the clients must keep publishing), drops its ops, and says so once.
+//
+// One accepted exception to "content comes only from ops": a node too large to travel as an op
+// (over the byte cap every cast is held to) can only ever arrive in a save, so a save may contribute
+// it. That node is outside the total order, and it has known limits, written beside the code that
+// adopts it (`overlayProject`).
 
 import { applyCanvasOp, contentOf, diffContent, type CanvasContent } from '../shared/canvas-content'
 import { isCanvasMutation } from '../shared/canvas-mutations'
@@ -177,6 +182,13 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
   let stopped = false
 
   const isShared = (id: string): boolean => deps.sharedProjectIds().has(id)
+  // `governs` asks only "shared, and not stopped", on purpose: a shared project whose content cannot
+  // be read must still read as governed, so its clients keep publishing ops (rule 4). That includes a
+  // shared SSH project, which the authority never overlays (`overlayable`) and cannot read (the
+  // store refuses SSH content), so its eager adoption logs once that its content could not be read.
+  // Harmless: the Server Edition has no SSH-project manager, so it never opens an SSH project, and
+  // such an entry can only come from a hand-copied index. Its saves pass through un-overlaid, which
+  // is exactly how an ungoverned project is saved.
   const governs = (id: string): boolean => !stopped && isShared(id)
 
   function clearTimers(g: Governed): void {
@@ -328,9 +340,21 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
   function overlayProject(p: Project, g: Governed, mode: 'save' | 'load'): Project {
     const theirs = Array.isArray(p.nodes) ? p.nodes.filter(isObject) : []
     if (mode === 'save') {
-      // The one node a save may contribute: one that can never travel as an op. It enters as a
-      // synthetic upsert, so the reducer strips its exec fields (rule 1), an unchanged copy is a
-      // no-op (two saves of one big sticky write once), and an outside edit re-applies it.
+      // The one node a save may contribute: one that can never travel as an op (the accepted
+      // exception in the header). It enters as a synthetic upsert, so the reducer strips its exec
+      // fields (rule 1), an unchanged copy is a no-op (two saves of one big sticky write once), and
+      // an outside edit re-applies it.
+      //
+      // Its limits, which follow from it having no place in the total order:
+      //  (a) A STALE SAVE REVIVES A REMOVED BIG NODE. A client's save issued before that client
+      //      applied a `remove` of the node still carries it, and the save is not ordered against
+      //      the remove, so the node is adopted back and written. The window is one save debounce.
+      //  (b) AN OUTSIDE EDIT OF A BIG NODE REACHES NO CLIENT, AND THE NEXT SAVE UNDOES IT. The
+      //      published upsert is refused by the reflector (too large), so every client keeps its old
+      //      copy, and the next save from any of them re-adopts that copy: a git-pulled change to a
+      //      big node is reverted on disk.
+      //  (c) Two clients holding different copies of one big node replace each other's on every
+      //      save.
       for (const n of theirs) if (tooLargeToSync(n)) applyTo(p.id, g, { op: 'upsert', node: n })
     }
     // This machine's exec fields live on the incoming copy (and in the index's localExec); carry

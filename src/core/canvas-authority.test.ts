@@ -190,6 +190,28 @@ describe('canvas authority — governing', () => {
     expect(byId(h.writes[0].content.nodes, 'b')?.position.x).toBe(10)
   })
 
+  it('5c. rule 4 holds for an edge: a stale re-upsert cannot bring back a removed link', async () => {
+    const e1 = { id: 'e1', source: 'a', target: 'b' }
+    const h = harness({ disk: { P: content([node('a'), node('b')], { bridges: [e1] }) } })
+    h.authority.onReflected('P', { op: 'edge-remove', kind: 'bridge', id: 'e1', seq: 5 })
+    h.authority.onReflected('P', { op: 'edge-upsert', kind: 'bridge', edge: e1, seq: 6, seen: 3 })
+    await h.clock.advance(1000)
+    expect(h.writes).toHaveLength(1)
+    expect(h.writes[0].content.bridges).toEqual([])
+    expect(h.writes[0].content.ropes).toEqual([])
+  })
+
+  it('5d. rule 4 holds for a board column: a stale re-upsert cannot bring back a removed column', async () => {
+    const c1 = { id: 'c1', title: 'One', color: '#fff' }
+    const c2 = { id: 'c2', title: 'Two', color: '#fff' }
+    const h = harness({ disk: { P: content([node('a')], { kanban: { columns: [c1, c2], assignments: [] } }) } })
+    h.authority.onReflected('P', { op: 'kb-column-remove', id: 'c2', seq: 5 })
+    h.authority.onReflected('P', { op: 'kb-column', column: c2, seq: 6, seen: 3 })
+    await h.clock.advance(1000)
+    expect(h.writes).toHaveLength(1)
+    expect(h.writes[0].content.kanban?.columns.map((c) => c.id)).toEqual(['c1'])
+  })
+
   it('5b. an op carrying any src tag is judged like every other op (none is taken for its own echo)', async () => {
     const h = harness({ disk: { P: content([node('a')]) } })
     h.authority.onReflected('P', { op: 'upsert', node: node('b'), src: 'canvas-authority', seq: 1 })
