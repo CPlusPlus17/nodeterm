@@ -832,8 +832,11 @@ export async function startServer(
   })
 
   // Hosted team relay (docs/hosted-team-relay.md): this server as the relay host of a team. OFF
-  // unless `team init` created <dataDir>/relay/team.json — with no team, start() answers 'no-team'
-  // and nothing is opened or written. Booted HERE: after every handler above is registered (a relay
+  // unless `team init` created <dataDir>/relay/team.json — with no team, start() answers 'no-team':
+  // no relay listener is opened, and no host key, team.json or device id is written. What EVERY boot
+  // does create is <dataDir>/relay/ (0700) and the listening admin socket in it, relay/admin.sock
+  // (0600, removed again on close), which is how `team init` reaches a server that has no team yet
+  // (hosted-boot.test.ts pins exactly that). Booted HERE: after every handler above is registered (a relay
   // peer's requests dispatch through them) and after the workspace index is loaded (the access
   // policy reads it to place a node in a project), and BEFORE the headless return, because a
   // headless host is exactly where a team is hosted.
