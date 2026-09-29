@@ -551,7 +551,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  path>` instead: write the brief to a file, pass the absolute path, and the session starts',
     '  with the file\'s exact contents — newlines, numbered lists and headings preserved. The file',
     '  is read when the session LAUNCHES (later than the call for an `--after`-armed node), so',
-    '  leave it in place until the station has started. A long `--prompt` is SAFE on a local',
+    '  leave it in place until the station has started: a local node whose file is gone by then is',
+    '  not started, `list` marks it HELD and it waits for `run`. A long `--prompt` is SAFE on a local',
     '  project (nodeterm spills it to a file itself), but on an SSH project pass `--prompt-file`:',
     '  a terminal line caps at 1024 bytes on macOS, and a launch line that cannot be delivered is',
     '  refused with a message on the node rather than half-run. Never begin a prompt with `/`: once',
@@ -1067,7 +1068,9 @@ Verbs:
     absolute path, and the session starts with the file's exact contents: the launch line stays
     one line and the pane's shell reads the file at execution. The file is read when the session
     LAUNCHES — for an \`--after\`-armed node that is later than your call — so leave it in place
-    until the station has started. On an SSH project the path is on the host (where you run).
+    until the station has started. On a local project a node whose file is gone by then is not
+    started with an empty brief: \`list\` marks it HELD and it waits for \`run\`. On an SSH project
+    the path is on the host (where you run).
     Pass either \`--prompt\` or \`--prompt-file\`, not both.
   - **Never start a prompt with \`/\`.** Flattened, \`/model sonnet\` followed by your task reads
     to the agent as one slash command whose argument is the entire rest of the prompt. The

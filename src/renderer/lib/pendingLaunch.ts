@@ -21,6 +21,22 @@ export type StatusById = Record<
 export interface LaunchToFire {
   id: string
   command: string
+  /** The file `command` reads its prompt from, which the loop checks before typing. */
+  briefFile?: string
+}
+
+/**
+ * Record the file a held launch reads its prompt from (`--prompt-file`, or a spilled `--prompt`).
+ * Applied by every control open path after arming, so the delivery loop can check the file is still
+ * there when the node finally launches — possibly weeks later, for a cold open.
+ */
+export function withLaunchBrief<T extends { data: { pendingLaunch?: PendingLaunch } }>(
+  node: T,
+  promptFile: string | undefined
+): T {
+  const p = node.data.pendingLaunch
+  if (!promptFile || !p) return node
+  return { ...node, data: { ...node.data, pendingLaunch: { ...p, promptFile } } }
 }
 
 /** Control opens reply before the PTY exists. Keep their command durable until delivery lands,
@@ -42,12 +58,32 @@ export function queueControlLaunch<T extends { data: { initialCommand?: string; 
   }
 }
 
+/**
+ * Is the file a held launch reads its prompt from still there, right before the launch is typed?
+ * Only a definite "not there" answers false. No file to check, a check that fails (sync or async),
+ * and any project not on this machine's disk answer true: an SSH project never gets a spilled file,
+ * and there `exists === false` cannot tell a gone file from a dropped ControlMaster; a relay tab's
+ * launches are refused elsewhere. The open-time check fails open the same way.
+ */
+export async function launchBriefPresent(
+  path: string | undefined,
+  project: { id: string; ssh?: unknown; remote?: boolean } | undefined,
+  exists: (path: string) => Promise<boolean>
+): Promise<boolean> {
+  if (!path || !project || project.ssh || project.remote) return true
+  try {
+    return (await exists(path)) !== false
+  } catch {
+    return true
+  }
+}
+
 /** A list row states only observed facts; absence of a launch error is not proof of a live CLI. */
 export function controlLaunchState(
   pending: boolean,
   delivery: LaunchDelivery | undefined,
   status?: { dropped?: boolean; state?: AgentState }
-): 'queued' | 'stalled' | 'failed' | 'starting' | 'dropped' | 'working' | undefined {
+): 'queued' | 'stalled' | 'failed' | 'starting' | 'brief-missing' | 'dropped' | 'working' | undefined {
   if (pending) return delivery?.kind ?? 'queued'
   if (status?.dropped) return 'dropped'
   if (status?.state === 'working') return 'working'
@@ -131,7 +167,9 @@ export function launchesToFire(
     // caught up with the claim yet while the store already says so.
     if (deliveries?.[n.id]?.kind === 'starting') continue
     if (p.awaitSetupGroup && !(setupDone?.(p.awaitSetupGroup) ?? true)) continue
-    if (p.after.every((d) => depSatisfied(d, status, live))) out.push({ id: n.id, command: p.command })
+    if (p.after.every((d) => depSatisfied(d, status, live))) {
+      out.push({ id: n.id, command: p.command, ...(p.promptFile ? { briefFile: p.promptFile } : {}) })
+    }
   }
   return out
 }
@@ -166,6 +204,8 @@ export type LaunchDelivery =
   | { kind: 'failed'; attempts: number; at: number }
   /** A headless start (#925) is in flight: core owns the pane, so ▶ must not type into it. */
   | { kind: 'starting'; since: number }
+  /** The file the launch reads its prompt from was gone at delivery: held for ▶, never typed. */
+  | { kind: 'brief-missing'; path: string; at: number }
 
 /**
  * Which delivery records the Canvas sweep retires: every record whose node is no longer an armed
@@ -206,6 +246,15 @@ export function launchTooltip(
   if (delivery?.kind === 'starting') return 'Starting in the background — an agent asked for this session to run now.'
   const runs = `Runs:\n${command}`
   if (relay) return `Launch delivery from a relay tab is unavailable. Open the host to run this command.\n${runs}`
+  // Checked right before typing: the file the prompt is read from went away (a spill outlived its
+  // TTL while a cold-opened node waited, or a `--prompt-file` was deleted). Typing the command would
+  // start the agent with an empty prompt, so it is held, and ▶ is the human's call.
+  if (delivery?.kind === 'brief-missing')
+    return (
+      `The file this launch reads its prompt from no longer exists:\n${delivery.path}\n` +
+      'It was not started, because the agent would get no brief. Open the node again with its ' +
+      `prompt, or press \u25b6 to run it anyway.\n${runs}`
+    )
   if (delivery?.kind === 'failed')
     return (
       'Launch delivery is unconfirmed; automatic retry is stopped.\n' +

@@ -27,6 +27,7 @@
 //     `shouldSpillPrompt` takes that as an explicit argument rather than guessing.
 
 import { MAX_LAUNCH_LINE_BYTES, lineBytes } from '@shared/canonical-line'
+import { LAUNCH_PROMPT_FILE_PREFIX } from '@shared/launch-prompt'
 
 /**
  * How many bytes of PROMPT we will put on a typed line before spilling.
@@ -110,7 +111,9 @@ export async function spillPromptToFile(
   io: PromptSpillIo
 ): Promise<string | null> {
   try {
-    const name = `nodeterm-prompt-${Date.now().toString(36)}-${(spillSeq++).toString(36)}.txt`
+    // The prefix is what makes the core keep this file out of the 7-day uploads sweep
+    // (@shared/launch-prompt): it is read at LAUNCH, which for a cold open can be weeks away.
+    const name = `${LAUNCH_PROMPT_FILE_PREFIX}${Date.now().toString(36)}-${(spillSeq++).toString(36)}.txt`
     const path = await io.saveUpload(name, io.encodeBase64(flattenPrompt(prompt)))
     return path || null
   } catch {

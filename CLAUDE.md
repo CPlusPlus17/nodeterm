@@ -3328,6 +3328,17 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   ~490-byte issue line made it likeliest to bite, and the `--project` path silently DROPPED
   `--prompt-file` (the session started with no brief) and `--model`. A new open path types
   `openPrompt`, never its own prompt — `control-prompt-spill.source.test.ts` pins each path.
+  **A spilled prompt is read at LAUNCH, which for a cold open can be weeks away**, so it is not a
+  paste: `saveUpload` puts a `LAUNCH_PROMPT_FILE_PREFIX` name under `<userData>/launch-prompts`
+  (`@shared/launch-prompt`), owner-only, swept after `LAUNCH_PROMPT_TTL_MS` (30 days) by the next
+  spill — under `uploads` the 7-day sweep of the next paste deleted it and `"$(cat '<path>')"`
+  started the agent with nothing. And because a cold open can wait longer than ANY TTL, the held
+  launch records the file (`pendingLaunch.promptFile`, via `withLaunchBrief` on every arming path)
+  and the delivery loop checks it right before typing (`launchBriefPresent`: local projects only,
+  a failed check answers "present"); a definite "gone" persists `manualOnly`, raises the
+  `brief-missing` delivery state (tooltip names the path, `list` says HELD) and waits for ▶ / `run`,
+  which still run it on purpose. The one residue: a refused open may leave a spill file behind
+  (the spill is decided before the paths, to keep awaits out of them), swept with the rest.
   `--prompt` replaces the default task after the reference line; `--prompt-file` stays the whole brief. Both
   generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
   is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on

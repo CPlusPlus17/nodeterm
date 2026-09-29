@@ -126,3 +126,33 @@ describe('each open path types openPrompt, never its own inline prompt', () => {
     expect(body.slice(active, active + 200)).toContain('useProjects.getState().activeProjectId')
   })
 })
+
+describe('the brief file is checked when the launch is DELIVERED (#1014 review)', () => {
+  // A cold-opened node launches when its project is next viewed, maybe weeks later; the file its
+  // command `cat`s may be gone by then. Behaviour: `lib/pendingLaunch.test.ts` (briefFile, tooltip)
+  // and `core/uploads.test.ts` (spills survive the paste sweep).
+  it('every open path records the file on the held launch', () => {
+    expect(projectBlock()).toContain('withLaunchBrief(queueControlLaunch(node), openPrompt.promptFile)')
+    expect(projectBlock()).toContain('withLaunchBrief(armForColdOpen(node), openPrompt.promptFile)')
+    expect(coldBlock()).toContain('withLaunchBrief(armForColdOpen(built), openPrompt.promptFile)')
+    expect(src).toContain('return withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile)')
+    // …and the live open hands its file to armAfter.
+    expect(liveAgentCase()).toMatch(/after \?\? \[\],\s*intoGroupId,\s*openPrompt\.promptFile\s*\)/)
+  })
+
+  it('the launch loop checks the file before typing, and holds the node for ▶ when it is gone', () => {
+    const loop = slice('const ready = launchesToFire(', '}, [nodes, armedDepSig')
+    const check = loop.indexOf('briefPresent(f.briefFile)')
+    expect(check).toBeGreaterThan(-1)
+    const missing = loop.slice(check, check + 700)
+    expect(missing).toMatch(/\.then\(\(present\) => \{\s*if \(!present\) \{/)
+    expect(missing).toContain('manualOnly: true')
+    expect(missing).toContain('markBriefMissing(f.id')
+    // Typing happens only on the "present" branch.
+    expect(missing).toMatch(/return deliverHeld\(\)/)
+    // …on the node's own project, with the local fs (the rule itself: `launchBriefPresent`).
+    const effect = slice('const briefPresent = ', 'const ready = launchesToFire(')
+    expect(effect).toContain('launchBriefPresent(')
+    expect(effect).toContain('getProject(nodesProjectIdRef.current')
+  })
+})
