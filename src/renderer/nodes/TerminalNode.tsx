@@ -40,6 +40,7 @@ import { guardMiddleClickPaste } from '../terminal/middle-click'
 import { patchTerminalScale } from '../terminal/scale-fix'
 import { focusedNodeId, subscribeFocusedNode, focusSurfaceEl } from '../state/focusNode'
 import { parseOsc52 } from '../terminal/osc52'
+import { createOsc52Notice, dispatchOsc52Toast, handleOsc52Write } from '../terminal/osc52-policy'
 import { activateUnicode11 } from '../terminal/unicode-width'
 import {
   createFileLinkProvider,
@@ -3090,12 +3091,19 @@ export function TerminalNode({
       // The emulator's own Cmd+C / Ctrl+Shift+C chords (below) stay for a selection xterm owns.
       // WRITE-ONLY — `parseOsc52` returns null for a `?` read query so a remote program can never
       // read the local clipboard. Returning true swallows the sequence (also the read query).
+      // A RELAY tab's stream is another person's core: its writes are refused (osc52-policy.ts —
+      // paste-jacking). Local and SSH-project terminals (source 'local') are untouched.
+      const osc52Notice = createOsc52Notice()
       term.parser.registerOscHandler(52, (data) => {
         const text = parseOsc52(data)
         if (text !== null) {
-          window.nodeTerminal.clipboard.writeText(text)
-          // Through the registry, never a captured setState: this handler outlives a park.
-          copySubs.get(termKey)?.(text)
+          handleOsc52Write(text, session.source, {
+            write: (t) => window.nodeTerminal.clipboard.writeText(t),
+            // Through the registry, never a captured setState: this handler outlives a park.
+            notifyCopied: (t) => copySubs.get(termKey)?.(t),
+            shouldNotify: osc52Notice,
+            toast: dispatchOsc52Toast
+          })
         }
         return true
       })

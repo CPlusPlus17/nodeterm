@@ -339,6 +339,7 @@ import { createRevoker } from './remote/revocation'
 import { loadApprovedDevices, saveApprovedDevices, updateApprovedDevices } from './remote/approved-devices'
 import { publicKeyToB64 } from './remote/e2ee'
 import { connectRelayClient, type RelayClientSession } from './remote/relay-client'
+import { relayPtyDataKey } from '../shared/relay-pty-channel'
 import { decodeOffer } from './remote/pairing'
 import { isJoinCode } from '../core/relay/join-code'
 import { connectHostedTeam, removeHostedBookmark } from './remote/hosted-join'
@@ -4331,8 +4332,10 @@ app.whenReady().then(async () => {
         onApproved: () => sendTo(IPC.relayClientApproved(connectionId)),
         // An inbound rpc frame from the host (res/ev) → the renderer's RpcClient.
         onFrame: (json) => sendTo(IPC.relayClientFrame(connectionId), json),
-        // pty output arrives on the SAME per-session channel a local pty uses (ws-bridge binary path).
-        onPtyData: (sessionId, data) => sendTo(IPC.ptyData(sessionId), data),
+        // pty output rides a NAMESPACED per-session channel, never the bare host id: host ids are
+        // `pty-<n>` like local ones, and a bare id would land the host's output in a LOCAL xterm
+        // (shared/relay-pty-channel.ts). The relay tab subscribes on the same key.
+        onPtyData: (sessionId, data) => sendTo(IPC.ptyData(relayPtyDataKey(connectionId, sessionId)), data),
         onClose: () => {
           relayClients.delete(connectionId)
           sendTo(IPC.relayClientClosed(connectionId))
