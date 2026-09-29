@@ -2113,7 +2113,7 @@ export function Canvas() {
       if (!hold || hold.invalid) continue
       for (const d of hold.deps) {
         const r = outcomeOf(s.byId, d)
-        sig += `${d}:${r ? `${r.outcome}@${r.at}` : '-'},`
+        sig += `${d}:${r ? `${r.outcome}@${r.at}${r.workPending ? 'p' : ''}` : '-'},`
       }
       sig += '|'
     }

@@ -228,7 +228,13 @@ export function storedNodeListing(
       ...(launchState ? { launchState } : {}),
       ...(launchState === 'queued' && prHold && !prHold.invalid ? { prWait: formatPrWaits(prHold) } : {}),
       ...(successWait ? { successWait } : {}),
-      ...(reported ? { outcome: reported.outcome, ...(reported.note ? { outcomeNote: reported.note } : {}) } : {})
+      ...(reported
+        ? {
+            outcome: reported.outcome,
+            ...(reported.note ? { outcomeNote: reported.note } : {}),
+            ...(reported.workPending ? { outcomeSuperseded: true } : {})
+          }
+        : {})
     }
   })
 }
@@ -255,6 +261,7 @@ export function controlListingText(rows: ReturnType<typeof storedNodeListing>): 
     (n.prWait ? ` — waits on ${n.prWait}` : '') +
     (n.successWait ? ` — needs success from: ${n.successWait}` : '') +
     (n.outcome ? ` — REPORTED ${n.outcome === 'succeeded' ? 'SUCCESS' : 'FAILURE'}${n.outcomeNote ? ` ("${n.outcomeNote}")` : ''}` : '') +
+    (n.outcomeSuperseded ? ' (before new work queued for it; not counted until it reports again)' : '') +
     (n.lastTurnErrored ? ' — LAST TURN ERRORED' : '')
   ).join('\n')
 }

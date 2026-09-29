@@ -142,7 +142,7 @@ describe('StationOutcomeStore', () => {
   })
 })
 
-describe('clearOutcomesAfterControl — new work handed through canvas control withdraws a report', () => {
+describe('clearOutcomesAfterControl — a write / run landing in a station withdraws its OLDER report', () => {
   const seeded = () => {
     const s = new StationOutcomeStore()
     s.record({ nodeId: 'st1', outcome: 'succeeded', at: 1 })
@@ -150,37 +150,107 @@ describe('clearOutcomesAfterControl — new work handed through canvas control w
     return s
   }
 
-  it.each(['send', 'reply', 'write', 'run'])('a successful %s aimed at a station clears its report', (verb) => {
+  it.each(['write', 'run'])('a successful %s aimed at a station withdraws a report made before its answer', (verb) => {
     const s = seeded()
-    clearOutcomesAfterControl(s, verb, { node: 'st1', text: 'next task' }, { ok: true }, 'orch')
+    clearOutcomesAfterControl(s, verb, { node: 'st1', text: 'next task' }, { ok: true }, 'orch', 10)
     expect(s.get('st1')).toBeUndefined()
     expect(s.get('st2')).toBeDefined()
   })
 
-  it('a refused or failed request handed nothing, so nothing is cleared', () => {
+  it('a report made after the answer (about the new work) stands', () => {
     const s = seeded()
-    clearOutcomesAfterControl(s, 'send', { node: 'st1' }, { ok: false }, 'orch')
+    clearOutcomesAfterControl(s, 'write', { node: 'st1' }, { ok: true }, 'orch', 1)
     expect(s.get('st1')).toBeDefined()
   })
 
-  it('notify types nothing into a pane, and other verbs hand no work', () => {
+  it('send / reply are NOT decided by their answer — a queued answer comes back before the pane gets it', () => {
     const s = seeded()
+    for (const verb of ['send', 'reply']) clearOutcomesAfterControl(s, verb, { node: 'st1' }, { ok: true }, 'orch', 10)
+    expect(s.get('st1')).toBeDefined()
+    expect([...OUTCOME_CLEARING_VERBS].sort()).toEqual(['run', 'write'])
+  })
+
+  it('a refused request handed nothing, and other verbs hand no work', () => {
+    const s = seeded()
+    clearOutcomesAfterControl(s, 'write', { node: 'st1' }, { ok: false }, 'orch', 10)
     for (const verb of ['notify', 'rename', 'list', 'close', 'color', 'assign']) {
-      clearOutcomesAfterControl(s, verb, { node: 'st1' }, { ok: true }, 'orch')
+      clearOutcomesAfterControl(s, verb, { node: 'st1' }, { ok: true }, 'orch', 10)
     }
     expect(s.get('st1')).toBeDefined()
-    expect([...OUTCOME_CLEARING_VERBS].sort()).toEqual(['reply', 'run', 'send', 'write'])
   })
 
   it('a node writing into its OWN pane is not handed work by anyone', () => {
     const s = seeded()
-    clearOutcomesAfterControl(s, 'write', { node: 'st1' }, { ok: true }, 'st1')
+    clearOutcomesAfterControl(s, 'write', { node: 'st1' }, { ok: true }, 'st1', 10)
     expect(s.get('st1')).toBeDefined()
   })
 
   it('reads a comma list, and ignores an id it would not vouch for', () => {
     const s = seeded()
-    clearOutcomesAfterControl(s, 'send', { node: 'st1, st2, ../x' }, { ok: true }, 'orch')
+    clearOutcomesAfterControl(s, 'run', { node: 'st1, st2, ../x' }, { ok: true }, 'orch', 10)
     expect(s.list()).toEqual([])
+  })
+})
+
+describe('StationOutcomeStore.onHandover — decided by when the work reaches the pane', () => {
+  it('queued → every report stops counting (workPending), including one made after', () => {
+    const publish = vi.fn()
+    const s = new StationOutcomeStore(publish)
+    s.record({ nodeId: 'st', outcome: 'succeeded', at: 5 })
+    s.onHandover({ phase: 'queued', verb: 'send', targetNodeId: 'st' })
+    expect(s.get('st')).toEqual({ nodeId: 'st', outcome: 'succeeded', at: 5, workPending: true })
+    s.record({ nodeId: 'st', outcome: 'succeeded', at: 7 })
+    expect(s.list()).toEqual([{ nodeId: 'st', outcome: 'succeeded', at: 7, workPending: true }])
+    expect(publish).toHaveBeenLastCalledWith([{ nodeId: 'st', outcome: 'succeeded', at: 7, workPending: true }])
+  })
+
+  it('landed withdraws only reports older than when the delivery started; settled drops the mark', () => {
+    const s = new StationOutcomeStore()
+    s.onHandover({ phase: 'queued', verb: 'reply', targetNodeId: 'st' })
+    s.record({ nodeId: 'st', outcome: 'succeeded', at: 5 })
+    s.onHandover({ phase: 'landed', verb: 'reply', targetNodeId: 'st', at: 10 })
+    expect(s.get('st')).toBeUndefined()
+    s.onHandover({ phase: 'settled', verb: 'reply', targetNodeId: 'st', landed: true })
+    s.record({ nodeId: 'st', outcome: 'failed', at: 12 })
+    expect(s.get('st')).toEqual({ nodeId: 'st', outcome: 'failed', at: 12 })
+    // A later landing whose delivery started BEFORE that report leaves it alone.
+    s.onHandover({ phase: 'landed', verb: 'send', targetNodeId: 'st', at: 11 })
+    expect(s.get('st')?.outcome).toBe('failed')
+  })
+
+  it('two queued messages keep the mark until BOTH have settled', () => {
+    const s = new StationOutcomeStore()
+    s.onHandover({ phase: 'queued', verb: 'send', targetNodeId: 'st' })
+    s.onHandover({ phase: 'queued', verb: 'send', targetNodeId: 'st' })
+    s.onHandover({ phase: 'landed', verb: 'send', targetNodeId: 'st', at: 1 })
+    s.onHandover({ phase: 'settled', verb: 'send', targetNodeId: 'st', landed: true })
+    s.record({ nodeId: 'st', outcome: 'succeeded', at: 2 })
+    expect(s.get('st')?.workPending).toBe(true)
+    s.onHandover({ phase: 'landed', verb: 'send', targetNodeId: 'st', at: 3 })
+    s.onHandover({ phase: 'settled', verb: 'send', targetNodeId: 'st', landed: true })
+    expect(s.get('st')).toBeUndefined()
+    s.record({ nodeId: 'st', outcome: 'succeeded', at: 4 })
+    expect(s.get('st')?.workPending).toBeUndefined()
+  })
+
+  it('a queued entry that ends without landing withdraws the report and drops the mark', () => {
+    const s = new StationOutcomeStore()
+    s.onHandover({ phase: 'queued', verb: 'send', targetNodeId: 'st' })
+    s.record({ nodeId: 'st', outcome: 'succeeded', at: 5 })
+    s.onHandover({ phase: 'settled', verb: 'send', targetNodeId: 'st', landed: false })
+    expect(s.get('st')).toBeUndefined()
+    s.record({ nodeId: 'st', outcome: 'succeeded', at: 6 })
+    expect(s.get('st')?.workPending).toBeUndefined()
+  })
+
+  it('only send / reply count — a board comment, a station notice or notify hand no task', () => {
+    const s = new StationOutcomeStore()
+    s.record({ nodeId: 'st', outcome: 'succeeded', at: 1 })
+    for (const verb of ['board-comment', 'station-notice', 'notify']) {
+      s.onHandover({ phase: 'queued', verb, targetNodeId: 'st' })
+      s.onHandover({ phase: 'landed', verb, targetNodeId: 'st', at: 10 })
+      s.onHandover({ phase: 'settled', verb, targetNodeId: 'st', landed: false })
+    }
+    expect(s.get('st')).toEqual({ nodeId: 'st', outcome: 'succeeded', at: 1 })
   })
 })

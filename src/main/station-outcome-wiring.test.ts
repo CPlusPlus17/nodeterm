@@ -45,6 +45,10 @@ describe('desktop main', () => {
     expect(handler).toMatch(/finish: finishAnswer/)
   })
 
+  it('wires the messaging layer\'s hand-over events — send / reply are decided by when they LAND', () => {
+    expect(main).toContain('messagingDeps.onHandover = (ev) => stationOutcomes.onHandover(ev)')
+  })
+
   it('registers the read channel and pushes every change to the window', () => {
     expect(main).toContain('registerStationOutcomeIpc(corePlatform, () => stationOutcomes)')
     expect(main).toMatch(/new StationOutcomeStore\(\(records\) =>\s*sendToMain\(IPC\.stationOutcomeChanged, records\)/)
@@ -58,6 +62,10 @@ describe('Server Edition', () => {
     const block = serverControl.slice(at, at + 900)
     expect(block).toContain('handleReportOutcome(')
     expect(block).toContain('onRecorded: () => void factory.refreshArmed()')
+  })
+
+  it('wires the same hand-over events into its messaging deps', () => {
+    expect(serverControl).toContain('onHandover: (ev) => stationOutcomes.onHandover(ev)')
   })
 
   it('hands the factory the outcome store, so --after-success is honoured headlessly', () => {
