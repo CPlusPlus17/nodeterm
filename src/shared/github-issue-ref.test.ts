@@ -42,6 +42,9 @@ const HOSTILE = [
   'o/.#1',
   '-o/r#1',
   'o-/r#1',
+  // GitHub allows only SINGLE inner hyphens in a login.
+  'a--b/r#1',
+  '---/r#1',
   'o/-r#1',
   'o//r#1',
   'o/r/x#1',

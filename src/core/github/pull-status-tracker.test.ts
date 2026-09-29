@@ -221,6 +221,18 @@ describe('GitHubPullStatusTracker', () => {
       const restarted = tracker(0, store)
       expect(await restarted.subject.claimMove(KEY, 'p', 'n', [1])).toBe(false)
       expect(await restarted.subject.claimMove(KEY, 'p', 'n', [2])).toBe(true)
+      // Both merges have moved it now; the set shrinking back to one of them is not a new merge.
+      expect(await restarted.subject.claimMove(KEY, 'p', 'n', [2])).toBe(false)
+      expect(await restarted.subject.claimMove(KEY, 'p', 'n', [1, 2])).toBe(false)
+    })
+
+    it('a dragged-back card stays put when one of its merged PRs ages off the pull board', async () => {
+      const { subject } = tracker()
+      await subject.read(KEY, 'user-1', 'heartbeat', async () => read([facts(1), facts(2)]))
+      expect(await subject.noteWaits(KEY, 'p', 'n', [1, 2])).toBe(2)
+      expect(await subject.claimMove(KEY, 'p', 'n', [1, 2])).toBe(true)
+      // The user drags the card back; #2 later leaves the board, so the planner now asks for {1}.
+      expect(await subject.claimMove(KEY, 'p', 'n', [1])).toBe(false)
     })
 
     it('a card that first appears after the merge never wins a claim', async () => {

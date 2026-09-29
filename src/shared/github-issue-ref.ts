@@ -32,7 +32,14 @@ export interface IssueRef {
   number: number
 }
 
-const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
+/**
+ * A GitHub login (user or organization): 1–39 characters, alphanumerics and SINGLE inner hyphens —
+ * no leading, trailing or consecutive hyphen. A hyphen must be followed by an alphanumeric (the
+ * lookahead), which is what refuses all three. Unanchored so it embeds in a slug pattern; the ONE
+ * definition — the board's repository parser and the avatar fetch in `core/github` read it too.
+ */
+export const GITHUB_OWNER_PATTERN = '[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}'
+const OWNER = new RegExp(`^${GITHUB_OWNER_PATTERN}$`)
 const REPO = /^[A-Za-z0-9_.-]{1,100}$/
 const NUMBER = /^[1-9][0-9]{0,9}$/
 const MAX_ISSUE_NUMBER = 2 ** 31 - 1

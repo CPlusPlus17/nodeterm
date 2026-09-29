@@ -200,7 +200,7 @@ import { containerOrigin, snapPointInRootSpace } from '../lib/gridSnap'
 import { zoomFromPct } from '../lib/zoomPresets'
 import { CANVAS_MAX_ZOOM, CANVAS_MIN_ZOOM } from './zoom-limits'
 import { isSpaceRelease, spacePanKeydown } from '../lib/spacePan'
-import { handoffsFor, noteHandoff, suppressDoneAfterHandoff } from '../lib/handoffPings'
+import { handoffsFor, installHandoffFocusReset, noteHandoff, suppressDoneAfterHandoff } from '../lib/handoffPings'
 import { loadIdentity } from '../state/presence'
 import { runBoardKey } from '../lib/boardKeys'
 import { readCanvasLocked, writeCanvasLocked } from '../lib/canvasLock'
@@ -480,7 +480,7 @@ import {
   type IssueRef
 } from '@shared/github-issue-ref'
 import { runEndedEntry, runStartedEntry } from '../lib/issueRuns'
-import { resolveIssueFlagFor, type IssueFlagResult } from '../lib/issueFlag'
+import { resolveIssueFlagForCall, type IssueFlagResult } from '../lib/issueFlag'
 import type { GitHubIssueCardView } from '@shared/github-issues'
 import { branchClaudeSession } from '../lib/claudeBranch'
 import {
@@ -10461,13 +10461,6 @@ export function Canvas() {
       // asked of the core that owns the project). No board repository = `#N` is refused and told
       // the full form; nothing is guessed. The issue's own text is never fetched here: the launch
       // prompt carries only the reference (`issueLaunchPrompt`).
-      const resolveIssueFlag = (projectId: string | undefined): Promise<IssueFlagResult> =>
-        resolveIssueFlagFor(
-          args.issue,
-          verb,
-          projectId ? useProjects.getState().getProject(projectId) : undefined,
-          (id) => api.githubControl.status(id).then((view) => view.project?.repository ?? null)
-        )
       /** The node, bound to the issue (display + run history only — its launch line is already built). */
       const bindIssue = (node: CanvasNode, ref: IssueRef | undefined): CanvasNode =>
         ref ? { ...node, data: { ...node.data, issueRef: ref } } : node
@@ -10491,15 +10484,21 @@ export function Canvas() {
       // #443 class) or report a node as queued that the next commit dropped. The project `#N` is
       // resolved against is the one the node opens in: the `--project` target, else the source's own
       // project (the live canvas's when the source is on it, else the stored project owning it).
+      // The authorization belt runs FIRST (`resolveIssueFlagForCall`): a caller the paths would
+      // refuse gets their refusal and never makes the host look up a project's board.
       const issueOpen = verb === 'open-agent' || verb === 'open-claude'
       const issuePre: IssueFlagResult = issueOpen
-        ? await resolveIssueFlag(
-            args.project ??
-              (nodesRef.current.some((n) => n.id === sourceNodeId)
-                ? useProjects.getState().activeProjectId
-                : useProjects
-                    .getState()
-                    .projects.find((p) => p.nodes.some((n) => n.id === sourceNodeId))?.id)
+        ? await resolveIssueFlagForCall(
+            {
+              raw: args.issue,
+              verb,
+              targetId: args.project,
+              sourceNodeId,
+              liveNodes: nodesRef.current,
+              projects: useProjects.getState().projects,
+              activeProjectId: useProjects.getState().activeProjectId
+            },
+            (id) => api.githubControl.status(id).then((view) => view.project?.repository ?? null)
           )
         : { ok: true }
       if (!issuePre.ok) {
@@ -13949,6 +13948,9 @@ export function Canvas() {
   }, [])
 
   const notifyCooldownRef = useRef<Record<string, number>>({})
+  // A handoff ping folds the "finished" alert that follows it (lib/handoffPings) only while the user
+  // is still away: a window focus in between drops the fold, so the next turn end chimes as always.
+  useEffect(() => installHandoffFocusReset(window), [])
   // Sound effects have their OWN cooldown: they fire whether or not the window is focused, so they
   // can't share the notification one (which only ticks in the background).
   const sfxCooldownRef = useRef<Record<string, number>>({})
