@@ -632,6 +632,7 @@ import {
 } from '@shared/canvas-publish'
 import { createCanvasOrder, createReconnectWatch, type CanvasOrder } from '@shared/canvas-order'
 import { createMutationGuard } from '@shared/canvas-mutations'
+import { withoutCoreOrigin } from '@shared/node-exec'
 import { chordHeld, isHoldChord, isModifierEventKey, matchesShortcut } from '@shared/shortcut'
 
 // The dispatch below is the CONSUMER of the confirm-gated set. Before this import the set named
@@ -3729,7 +3730,12 @@ export function Canvas() {
     // mount-time local one (the bug). Byte-identical on a local tab (`activeSession.api` IS
     // `window.nodeTerminal`). Re-keyed on the api OBJECT below, in lockstep with the publisher, so a
     // tab switch tears down + re-binds both together (and a local→local switch does neither).
-    return activeSession.api.canvas.onMutation((projectId, mutation) => {
+    // A relay tab's mutations come from ANOTHER machine's core, which can put anything on the wire,
+    // so its `origin: 'core'` vouches for nothing here: drop it, and the node's held launch stays
+    // ours (strip theirs, carry our own — @shared/node-exec).
+    const relay = activeSession.source === 'relay'
+    return activeSession.api.canvas.onMutation((projectId, received) => {
+      const mutation = relay ? withoutCoreOrigin(received) : received
       hasPeersRef.current = true // proof of a peer, whatever the presence table says
       if (!orderRef.current?.accept(mutation)) return
       if (projectId !== useProjects.getState().activeProjectId) {
@@ -3774,7 +3780,7 @@ export function Canvas() {
       setNodes(flow)
       markDirty()
     })
-  }, [activeSession.api, setNodes, markDirty, publishableLater])
+  }, [activeSession.api, activeSession.source, setNodes, markDirty, publishableLater])
 
   // Record an undo snapshot when the canvas settles (debounced; skips drag frames/loads).
   useEffect(() => {
@@ -8432,7 +8438,7 @@ export function Canvas() {
           for (const node of plan.nodes) {
             useProjects
               .getState()
-              .applyNodeMutation(plan.projectId, {
+              .applyOwnNodeMutation(plan.projectId, {
                 op: 'upsert',
                 node: flowToNodeStates([armForColdOpen(node)])[0]
               })
@@ -11679,7 +11685,7 @@ export function Canvas() {
           // starts when that project's canvas is next shown (mount spawns the PTY, the
           // armed-launch effect delivers with its retry loop — Task 2.0's measured round-trip).
           for (const node of tgMade) {
-            tgStore.applyNodeMutation(target.id, {
+            tgStore.applyOwnNodeMutation(target.id, {
               op: 'upsert',
               node: flowToNodeStates([withPrHold(withLaunchBrief(armForColdOpen(node), openPrompt.promptFile), prHoldPre)])[0]
             })
@@ -11806,7 +11812,7 @@ export function Canvas() {
               }
               useProjects
                 .getState()
-                .applyNodeMutation(route.projectId, {
+                .applyOwnNodeMutation(route.projectId, {
                   op: 'upsert',
                   node: { ...target, text: next.text, ...stamp }
                 })
@@ -11847,7 +11853,7 @@ export function Canvas() {
             node.data.textUpdatedBy = stamp.textUpdatedBy
             useProjects
               .getState()
-              .applyNodeMutation(route.projectId, { op: 'upsert', node: flowToNodeStates([node])[0] })
+              .applyOwnNodeMutation(route.projectId, { op: 'upsert', node: flowToNodeStates([node])[0] })
             void writeDisk()
             reply({ ok: true, message: `created note "${node.data.title}" (${node.id})` })
             return
@@ -12070,7 +12076,7 @@ export function Canvas() {
                 const w = (coldMade[0]?.width as number) ?? 600
                 const h = (coldMade[0]?.height as number) ?? 400
                 const need = groupSizeFor(coldExistingInGroup + coldCount, w, h)
-                coldStore.applyNodeMutation(owner.id, {
+                coldStore.applyOwnNodeMutation(owner.id, {
                   op: 'upsert',
                   node: {
                     ...frame,
@@ -12083,7 +12089,7 @@ export function Canvas() {
               }
             }
             for (const node of coldMade) {
-              coldStore.applyNodeMutation(owner.id, {
+              coldStore.applyOwnNodeMutation(owner.id, {
                 op: 'upsert',
                 node: flowToNodeStates([node])[0]
               })
@@ -12399,7 +12405,7 @@ export function Canvas() {
           // `applyNodeMutation` + `appendCanvasLinks` are the store paths a peer mutation and the
           // cold open already take, and `writeDisk` is what persists them.
           const ocStore = useProjects.getState()
-          ocStore.applyNodeMutation(offCanvas.project.id, {
+          ocStore.applyOwnNodeMutation(offCanvas.project.id, {
             op: 'upsert',
             node: flowToNodeStates([withOpenedBy(placed, sourceNodeId)])[0]
           })
@@ -15682,7 +15688,7 @@ export function Canvas() {
           const st = useProjects.getState()
           const stored = st.getProject(projectId)?.nodes.find((n) => n.id === nodeId)
           if (!stored) return false
-          return st.applyNodeMutation(projectId, { op: 'upsert', node: { ...stored, pendingLaunch: pending } })
+          return st.applyOwnNodeMutation(projectId, { op: 'upsert', node: { ...stored, pendingLaunch: pending } })
         },
         writeDisk,
         markDirty
