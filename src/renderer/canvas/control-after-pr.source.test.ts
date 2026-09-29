@@ -75,7 +75,7 @@ describe('the wait is resolved ONCE, before any open path reads the store', () =
 describe('every open path attaches the wait through withPrHold', () => {
   it('the live paths, through armAfter (terminal and agent both use it)', () => {
     const armAfter = slice('const armAfter = (', 'const addGrouped = (')
-    expect(armAfter).toMatch(/withPrHold\(queueControlLaunch\(node, after, awaitSetupGroup\), prHoldPre\)/)
+    expect(armAfter).toMatch(/withPrHold\(withLaunchBrief\(queueControlLaunch\(node, after, awaitSetupGroup\), promptFile\), prHoldPre\)/)
   })
 
   it('the cold open', () => {
@@ -86,8 +86,8 @@ describe('every open path attaches the wait through withPrHold', () => {
 
   it('both --project branches (on screen and stored)', () => {
     const block = slice(PROJECT_GUARD, RUN_PROJECT)
-    expect(block).toMatch(/withPrHold\(queueControlLaunch\(node\), prHoldPre\)/)
-    expect(block).toMatch(/withPrHold\(armForColdOpen\(node\), prHoldPre\)/)
+    expect(block).toMatch(/withPrHold\(withLaunchBrief\(queueControlLaunch\(node\), openPrompt\.promptFile\), prHoldPre\)/)
+    expect(block).toMatch(/withPrHold\(withLaunchBrief\(armForColdOpen\(node\), openPrompt\.promptFile\), prHoldPre\)/)
   })
 })
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import type { PendingLaunch } from '@shared/types'
 import {
   launchesToFire,
@@ -9,6 +9,8 @@ import {
   unmetDeps,
   LAUNCH_STALL_MS,
   withPrHold,
+  withLaunchBrief,
+  launchBriefPresent,
   type ArmedNode,
   type StatusById
 } from './pendingLaunch'
@@ -440,5 +442,56 @@ describe('withPrHold — one way every open path attaches a PR wait', () => {
     expect(withPrHold(held, undefined)).toBe(held)
     const bare = { id: 'n', data: {} as { pendingLaunch?: PendingLaunch } }
     expect(withPrHold(bare, hold)).toBe(bare)
+  })
+})
+
+describe('the launch brief file is verified at DELIVERY, not only at open (#1014 review)', () => {
+  const node = { id: 'n', data: { pendingLaunch: { after: [], command: 'claude "$(cat \'/x/p.txt\')"' } } }
+
+  it('withLaunchBrief records the file the command reads; nothing held, nothing recorded', () => {
+    expect(withLaunchBrief(node, '/x/p.txt').data.pendingLaunch).toMatchObject({ promptFile: '/x/p.txt' })
+    expect(withLaunchBrief(node, undefined)).toBe(node)
+    const bare = { id: 'b', data: {} as { pendingLaunch?: { after: string[]; command: string } } }
+    expect(withLaunchBrief(bare, '/x/p.txt')).toBe(bare)
+  })
+
+  it('launchesToFire hands the file to the loop, which checks it before typing', () => {
+    const armedWithBrief = withLaunchBrief(node, '/x/p.txt')
+    expect(launchesToFire([armedWithBrief], {}, new Set(['n']))).toEqual([
+      { id: 'n', command: armedWithBrief.data.pendingLaunch.command, briefFile: '/x/p.txt' }
+    ])
+  })
+
+  it('a missing brief is a named, manual hold — never an agent started with no brief', () => {
+    const t = launchTooltip({ kind: 'brief-missing', path: '/x/p.txt', at: 1 }, '', 'claude')
+    expect(t).toContain('/x/p.txt')
+    expect(t).toMatch(/no longer exists/)
+    expect(t).toMatch(/no brief/)
+    expect(t).toMatch(/▶/)
+    expect(controlLaunchState(true, { kind: 'brief-missing', path: '/x/p.txt', at: 1 })).toBe('brief-missing')
+  })
+})
+
+describe('launchBriefPresent — only a definite "not there" holds a launch', () => {
+  const local = { id: 'p' }
+  it('no file to check is present', async () => {
+    const exists = vi.fn(async () => false)
+    expect(await launchBriefPresent(undefined, local, exists)).toBe(true)
+    expect(exists).not.toHaveBeenCalled()
+  })
+  it('a local file that is gone is absent; one that is there is present', async () => {
+    expect(await launchBriefPresent('/x', local, async () => false)).toBe(false)
+    expect(await launchBriefPresent('/x', local, async () => true)).toBe(true)
+  })
+  it('a check that fails answers present — the open-time check fails open the same way', async () => {
+    expect(await launchBriefPresent('/x', local, async () => { throw new Error('EIO') })).toBe(true)
+    expect(await launchBriefPresent('/x', local, () => { throw new Error('sync') })).toBe(true)
+  })
+  it('an SSH or relay project is never judged from here (a false there is not evidence of absence)', async () => {
+    const exists = vi.fn(async () => false)
+    expect(await launchBriefPresent('/x', { id: 'p', ssh: {} }, exists)).toBe(true)
+    expect(await launchBriefPresent('/x', { id: 'p', remote: true }, exists)).toBe(true)
+    expect(await launchBriefPresent('/x', undefined, exists)).toBe(true)
+    expect(exists).not.toHaveBeenCalled()
   })
 })

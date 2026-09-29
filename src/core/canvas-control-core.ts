@@ -9,6 +9,7 @@ import {
   OWNED_ENDPOINT_FALLBACK_SH,
   FOREIGN_ENDPOINT_HINT,
   STALE_ENDPOINT_HINT,
+  TUNNEL_DOWN_HINT,
   ownerUnreachableGuidanceLines
 } from './agents/hook-endpoint-failover-sh'
 import { codexSandboxGuidanceLines } from './context-link-core'
@@ -584,7 +585,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  path>` instead: write the brief to a file, pass the absolute path, and the session starts',
     '  with the file\'s exact contents — newlines, numbered lists and headings preserved. The file',
     '  is read when the session LAUNCHES (later than the call for an `--after`-armed node), so',
-    '  leave it in place until the station has started. A long `--prompt` is SAFE on a local',
+    '  leave it in place until the station has started: a local node whose file is gone by then is',
+    '  not started, `list` marks it HELD and it waits for `run`. A long `--prompt` is SAFE on a local',
     '  project (nodeterm spills it to a file itself), but on an SSH project pass `--prompt-file`:',
     '  a terminal line caps at 1024 bytes on macOS, and a launch line that cannot be delivered is',
     '  refused with a message on the node rather than half-run. Never begin a prompt with `/`: once',
@@ -796,8 +798,6 @@ fi
 # Missing everywhere leaves it empty, which the server reads as legacy — the request still goes.
 ${NODE_TOKEN_READ_SH}
 nt_read_node_token
-nt_owner_node_token="$nt_node_token"
-nt_skipped_foreign_endpoint=""
 
 ${HOOK_CURL_HEADERS_SH}
 
@@ -929,6 +929,7 @@ if ! nt_reached && { [ "$nt_code" = "421" ] || [ -z "$CODEX_SANDBOX_NETWORK_DISA
       [ "$nt_n" -lt "$nt_fallback_max" ] || break
       nt_adopt_for_node "$nt_ep" || continue
       nt_n=$((nt_n + 1))
+      nt_probe_endpoint || continue
       nt_control_post "$@"
       nt_reached && break
     done <<NT_CANDIDATES
@@ -954,10 +955,21 @@ if [ -z "$nt_code" ] || [ "$nt_code" = "000" ]; then
     echo "nodeterm control endpoint unavailable." >&2
   else
     nt_codex_sandbox_hint || echo "${CONTROL_UNREACHABLE_MSG}" >&2
-    if [ -z "$CODEX_SANDBOX_NETWORK_DISABLED" ]; then
-      echo "${STALE_ENDPOINT_HINT}" >&2
+    # One piece of advice per failure: when the walk skipped a foreign endpoint, the owner-unreachable
+    # sentence above already says what happened and when to retry. Otherwise an SSH tunnel primary
+    # gets the tunnel advice (reconnect), anything else the stale-endpoint advice (app restart).
+    if [ -z "$CODEX_SANDBOX_NETWORK_DISABLED" ] && [ -z "$nt_skipped_foreign_endpoint" ]; then
+      if [ -n "$nt_primary_tunnel" ]; then
+        echo "${TUNNEL_DOWN_HINT}" >&2
+      else
+        echo "${STALE_ENDPOINT_HINT}" >&2
+      fi
     fi
   fi
+elif [ "$nt_code" = "421" ]; then
+  # Every endpoint that answered refused this bearer before dispatch (its body is printed above):
+  # nothing was delivered. Say so in the shim's own words, as the context shim always has.
+  echo "${CONTROL_UNREACHABLE_MSG}" >&2
 fi
 exit 1
 `
@@ -1091,7 +1103,9 @@ Verbs:
     absolute path, and the session starts with the file's exact contents: the launch line stays
     one line and the pane's shell reads the file at execution. The file is read when the session
     LAUNCHES — for an \`--after\`-armed node that is later than your call — so leave it in place
-    until the station has started. On an SSH project the path is on the host (where you run).
+    until the station has started. On a local project a node whose file is gone by then is not
+    started with an empty brief: \`list\` marks it HELD and it waits for \`run\`. On an SSH project
+    the path is on the host (where you run).
     Pass either \`--prompt\` or \`--prompt-file\`, not both.
   - **Never start a prompt with \`/\`.** Flattened, \`/model sonnet\` followed by your task reads
     to the agent as one slash command whose argument is the entire rest of the prompt. The

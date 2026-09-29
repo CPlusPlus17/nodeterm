@@ -51,6 +51,17 @@ describe('normalizePendingLaunch — the held launch as a hostile project file c
     })
   })
 
+  it('keeps the launch brief file, and holds the launch when it is unreadable (#1014 review)', () => {
+    // The delivery loop checks this file before typing; a hold whose file it cannot read must not
+    // be typed unchecked, or a gone file starts the agent with an empty brief.
+    expect(normalizePendingLaunch({ after: [], command: 'x', promptFile: '/p.txt' })).toMatchObject({
+      promptFile: '/p.txt'
+    })
+    const bad = normalizePendingLaunch({ after: [], command: 'x', promptFile: 7 })
+    expect(bad).toMatchObject({ manualOnly: true })
+    expect(bad).not.toHaveProperty('promptFile')
+  })
+
   it('keeps a field this build does not know, so an older save does not erase a newer one', () => {
     expect(normalizePendingLaunch({ after: [], command: 'x', futureGate: { k: 1 } })).toMatchObject({
       futureGate: { k: 1 }

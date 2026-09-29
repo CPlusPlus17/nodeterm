@@ -2502,25 +2502,53 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     the launcher and the prelude, pass `npm run typecheck` and every unit test, and ship INERT.
     `main/codex-identity-record-wiring.test.ts` pins it at source level, the same remedy
     `hook-verified-parity.test.ts` uses for the same class of hole.
-  - Control/context endpoint discovery retains a known node capability. A dead Desktop SSH tunnel
-    must not redirect a command to a local Server Edition that has no matching token for that node:
-    its unsupported-edition response describes the wrong instance. The two shims use
-    `nt_adopt_for_node` and read only the candidate's advertised token directory (or adjacent
-    `node-tokens` for old endpoint files), never borrow a global token for a candidate. Unknown
-    legacy callers retain existing discovery; actual owning-endpoint refusals remain final.
-    Skipped foreign candidates do not consume the three-network-attempt budget. Hook event
-    delivery retains its existing independent failover policy.
+  - Control/context endpoint discovery keeps a known node capability as a **routing rule, not an
+    ownership proof**. A dead Desktop SSH tunnel must not redirect a command to a local Server
+    Edition: its unsupported-edition response describes the wrong instance. The two shims use
+    `nt_adopt_for_node` (`core/agents/hook-endpoint-failover-sh.ts`). The reference value is read
+    from the PRIMARY endpoint's own token dir only — the one it advertises, else the adjacent
+    `node-tokens` — never from the global search `nt_read_node_token` walks (that search exists to
+    PRESENT a capability, #384; as a reference it let a Server Edition that opened the same
+    project.json supply the "owner's" token whenever the desktop's token write had failed). Once
+    that dir EXISTS, a candidate must hold the same value in its own dir — and when the reference
+    is EMPTY (the write failed), a value proves nothing (a Server Edition that never heard of the
+    node holds nothing too, and `"" = ""` relayed its permanent refusal, measured in review), so the
+    candidate's token dir must be the same REAL directory (`pwd -P`) instead. Only a session with no
+    such dir at all keeps legacy discovery. What a match shows is
+    that the candidate reads the same token file for this node — on an SSH host that file is shared
+    per unix ACCOUNT (`remote-hooks.ts`, KNOWN LIMITATION), so two desktops driving one account are
+    indistinguishable here, and the receiving server still authorizes every request. Actual
+    owning-endpoint refusals remain final. Skipped foreign candidates do not consume the
+    three-attempt budget, and a skipped candidate restores the previous endpoint vars (the codex
+    sandbox hint names `$NODETERM_HOOK_SOCK` as the socket to allow). Hook event delivery retains
+    its existing independent failover policy.
+    **Every FALLBACK candidate is probed before the real POST** (`nt_probe_endpoint`: `/hook/verify`,
+    204 on the bearer alone on every server build, `--connect-timeout 0.5 --max-time 1.5`). A reverse
+    tunnel whose sshd outlived the desktop's connection ACCEPTS and never answers, and once the
+    foreign Server Edition stopped absorbing the walk, a call posted straight into such a socket
+    hung. The bound is on the probe only: the primary is never probed and every real POST stays
+    unbounded, because a confirm-gated verb waits for a human (see "two canvases cannot raise two
+    dialogs" below). The probe writes into `$nt_out` like the POST would, so a 421 at the probe
+    still prints its body (into /dev/null it left the control shim exiting 1 with an EMPTY stderr),
+    and the control shim names a final 421 with `CONTROL_UNREACHABLE_MSG` as the context shim does.
+    Consequence to know: while sshd still holds the session's OWN tunnel socket, the primary POST
+    itself still hangs — unbounded by design, for the dialogs.
     **Measured on an SSH host (2026-09-28/29):** the desktop slept, the session's tunnel socket
     stayed on disk with no listener, and the walk reached an unrelated Server Edition whose
     `control-unsupported-on-this-edition … permanent … do not retry` (and, for context reads,
     "No linked nodes") was true about that server and false about the session; the tunnel came
     back minutes later. When a foreign candidate was skipped and no owner answered, the shims now
     print `FOREIGN_ENDPOINT_HINT` — the owning connection is unreachable, the state is temporary,
-    the usual cause for an SSH project is the tunnel — and all four agent-facing bodies quote its
-    lead via `ownerUnreachableGuidanceLines`, because their other refusal lines rightly say "do not
-    retry". `src/server/control-owner-tunnel-down.test.ts` rebuilds that host under real `/bin/sh`
-    with the real Server Edition handlers as the foreign endpoint; removing the owner guard
-    reproduces the incident's exact refusal line.
+    the usual cause for an SSH project is the tunnel — INSTEAD OF `STALE_ENDPOINT_HINT`, so a failure
+    carries one retry advice, not two. With nothing foreign skipped, a primary that is an SSH tunnel
+    file (`~/.nodeterm/hook-endpoint*.env`, the only files the desktop writes there) gets
+    `TUNNEL_DOWN_HINT` (reconnect) instead of the stale-endpoint advice (app restart); both hints
+    open with the lead the bodies quote. All four agent-facing bodies quote its lead via
+    `ownerUnreachableGuidanceLines`, because their other refusal lines rightly say "do not retry".
+    `src/server/control-owner-tunnel-down.test.ts` rebuilds that host under real `/bin/sh` with the
+    real Server Edition handlers as the foreign endpoint; `src/core/owned-endpoint-walk.test.ts`
+    pins the probe (hanging sockets), the owner reference, the single advice and the restore, each
+    mutation-checked.
   - **Every generated sh client walks the SAME endpoint failover** (`nt_candidates`/`nt_adopt`,
     `core/agents/hook-endpoint-failover-sh.ts`) — issue #445, the endpoint-level twin of #384: a
     session is pinned for life to the endpoint PATH it got at tmux creation, so an app
@@ -3238,6 +3266,9 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `nt_reached()` is true — failover fires only on a dead transport (`000`/empty). If a future change
   gives that curl a timeout, this paragraph stops being true: a confirm-gated verb would then fail
   over mid-wait and a second instance WOULD open a second dialog for the same logical request.
+  (The walk's liveness probe IS bounded, and does not break this: it runs only against a FALLBACK
+  candidate, only after the primary failed — a dead transport, or a 421 wrong-owner answer, which
+  the server gives before dispatch, so no dialog exists — and before any POST to that candidate.)
   **Grouping verbs** (`group` / `ungroup` / `move` / `arrange` / `align`): `group` wraps **sibling**
   objects — nodes or frames — into a new frame in their shared container (a mixed-container set, or
   an ancestor plus its descendant, is refused with that reason); `ungroup --group <id>` dissolves a
@@ -3297,6 +3328,17 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   ~490-byte issue line made it likeliest to bite, and the `--project` path silently DROPPED
   `--prompt-file` (the session started with no brief) and `--model`. A new open path types
   `openPrompt`, never its own prompt — `control-prompt-spill.source.test.ts` pins each path.
+  **A spilled prompt is read at LAUNCH, which for a cold open can be weeks away**, so it is not a
+  paste: `saveUpload` puts a `LAUNCH_PROMPT_FILE_PREFIX` name under `<userData>/launch-prompts`
+  (`@shared/launch-prompt`), owner-only, swept after `LAUNCH_PROMPT_TTL_MS` (30 days) by the next
+  spill — under `uploads` the 7-day sweep of the next paste deleted it and `"$(cat '<path>')"`
+  started the agent with nothing. And because a cold open can wait longer than ANY TTL, the held
+  launch records the file (`pendingLaunch.promptFile`, via `withLaunchBrief` on every arming path)
+  and the delivery loop checks it right before typing (`launchBriefPresent`: local projects only,
+  a failed check answers "present"); a definite "gone" persists `manualOnly`, raises the
+  `brief-missing` delivery state (tooltip names the path, `list` says HELD) and waits for ▶ / `run`,
+  which still run it on purpose. The one residue: a refused open may leave a spill file behind
+  (the spill is decided before the paths, to keep awaits out of them), swept with the rest.
   `--prompt` replaces the default task after the reference line; `--prompt-file` stays the whole brief. Both
   generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
   is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on

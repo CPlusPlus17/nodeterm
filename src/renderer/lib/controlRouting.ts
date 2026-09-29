@@ -206,6 +206,7 @@ const launchLabels = {
   failed: 'LAUNCH FAILED',
   stalled: 'QUEUED (terminal not ready)',
   starting: 'STARTING',
+  'brief-missing': 'HELD (its prompt file no longer exists; run it with `run` to start without it)',
   dropped: 'DROPPED',
   working: 'WORKING',
   unconfirmed: 'AGENT STATUS UNCONFIRMED',

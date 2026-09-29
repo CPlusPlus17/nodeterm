@@ -508,6 +508,8 @@ import {
   launchesToFire,
   queueControlLaunch,
   withPrHold,
+  withLaunchBrief,
+  launchBriefPresent,
   LAUNCH_STALL_MS,
   type ArmedNode
 } from '../lib/pendingLaunch'
@@ -2108,6 +2110,12 @@ export function Canvas() {
   // sitting in a poll loop burning context.
   useEffect(() => {
     const live = new Set(nodes.map((n) => n.id))
+    const briefPresent = (path: string | undefined): Promise<boolean> =>
+      launchBriefPresent(
+        path,
+        useProjects.getState().getProject(nodesProjectIdRef.current ?? ''),
+        (p) => activeSession.api.fs.exists(p)
+      )
     const ready = launchesToFire(
       nodes as unknown as ArmedNode[],
       useAgentStatus.getState().byId,
@@ -2163,7 +2171,7 @@ export function Canvas() {
       launchInFlight.current.add(f.id)
       const attempt = (launchAttempts.current.get(f.id) ?? 0) + 1
       launchAttempts.current.set(f.id, attempt)
-      void launchCommand(f.id, f.command, false, activeSession.api).then((outcome) => {
+      const deliverHeld = (): Promise<void> => launchCommand(f.id, f.command, false, activeSession.api).then((outcome) => {
         if (outcome === 'submitted') {
           setNodes((ns) =>
             ns.map((n) => (n.id === f.id ? { ...n, data: { ...n.data, pendingLaunch: undefined } } : n))
@@ -2186,6 +2194,24 @@ export function Canvas() {
         markDirty()
         useLaunchDelivery.getState().markFailed(f.id, attempt)
         console.warn('[pending-launch] gave up delivering held launch for', f.id)
+      })
+      // The file the launch reads its prompt from must still be there: a held launch may be
+      // delivered weeks after it was armed (a cold open waits for its project to be viewed), and
+      // `"$(cat '<path>')"` over a missing file starts the agent with an EMPTY prompt — the silent
+      // failure the open-time existence check exists to catch. Only a definite "not there" holds it
+      // (for ▶, persisted `manualOnly`, the path named on the badge); a check that errors answers
+      // "present", as the open-time check does. Local projects only: a spill is never written for an
+      // SSH project, and there `exists === false` cannot tell a gone file from a dropped master.
+      void briefPresent(f.briefFile).then((present) => {
+        if (!present) {
+          setNodes((ns) => ns.map((n) => n.id === f.id && n.data.pendingLaunch
+            ? { ...n, data: { ...n.data, pendingLaunch: { ...n.data.pendingLaunch, manualOnly: true } } }
+            : n))
+          markDirty()
+          useLaunchDelivery.getState().markBriefMissing(f.id, f.briefFile as string)
+          return
+        }
+        return deliverHeld()
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- armedDepSig/armedSetupSig/armedPrSig/launchNudge are the triggers
@@ -11091,7 +11117,7 @@ export function Canvas() {
             // The human is looking at the target (the caller is a background orchestrator):
             // live insertion still precedes PTY readiness: keep the launch queued.
             const tgQueuedIds = tgMade.filter((n) => !!n.data.initialCommand).map((n) => n.id)
-            setNodes((ns) => [...ns, ...tgMade.map((node) => withPrHold(queueControlLaunch(node), prHoldPre))])
+            setNodes((ns) => [...ns, ...tgMade.map((node) => withPrHold(withLaunchBrief(queueControlLaunch(node), openPrompt.promptFile), prHoldPre))])
             markDirty()
             reply({
               ok: true,
@@ -11112,7 +11138,7 @@ export function Canvas() {
           for (const node of tgMade) {
             tgStore.applyNodeMutation(target.id, {
               op: 'upsert',
-              node: flowToNodeStates([withPrHold(armForColdOpen(node), prHoldPre)])[0]
+              node: flowToNodeStates([withPrHold(withLaunchBrief(armForColdOpen(node), openPrompt.promptFile), prHoldPre)])[0]
             })
           }
           void writeDisk()
@@ -11460,7 +11486,9 @@ export function Canvas() {
               // Arm it: the project is not mounted, so nothing would deliver an `initialCommand`
               // and serialization drops it. `--after` rides the same held launch — an empty `after`
               // is vacuously ready, so a node with no deps fires on that project's first view.
-              const armed = armForColdOpen(built)
+              // The brief file rides the held launch, so delivery — whenever this project is next
+              // viewed — checks it is still there before typing.
+              const armed = withLaunchBrief(armForColdOpen(built), openPrompt.promptFile)
               const held = armed.data.pendingLaunch as PendingLaunch | undefined
               // `--after-pr` rides the same held launch (withPrHold — the one attach every path uses).
               const node = withPrHold(
@@ -11900,7 +11928,9 @@ export function Canvas() {
       const armAfter = (
         node: CanvasNode,
         after: string[],
-        intoGroup?: string | null
+        intoGroup?: string | null,
+        // The file the launch reads its prompt from, checked again right before delivery.
+        promptFile?: string
       ): CanvasNode => {
         const command = node.data.initialCommand as string | undefined
         if (!command) return node
@@ -11915,7 +11945,7 @@ export function Canvas() {
         const awaitSetupGroup = holdsForSetup ? intoGroup ?? undefined : undefined
         // Always retain the command until the PTY-ready delivery loop acknowledges it.
         // Node creation (even on screen) is not command delivery.
-        return withPrHold(queueControlLaunch(node, after, awaitSetupGroup), prHoldPre)
+        return withPrHold(withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile), prHoldPre)
       }
       // Open `count` nodes INTO a group frame: grow the frame FIRST (extent:'parent' would
       // clamp children landing outside it), then drop each node into the next grid slot
@@ -12163,7 +12193,8 @@ export function Canvas() {
                   openPrompt.promptFile
                 ),
                 after ?? [],
-                intoGroupId
+                intoGroupId,
+                openPrompt.promptFile
               )
               const bound = bindIssue(node, issueRef)
               if (issueRef) issueNodes.push(bound)
@@ -12561,7 +12592,9 @@ export function Canvas() {
               )
               return armAfter(
                 { ...node, data: { ...node.data, title: `Verify: ${lens}`, titleAuto: false } },
-                [targetId]
+                [targetId],
+                undefined,
+                lensLaunches[i].promptFile
               )
             })
             const reviewerIds = reviewers.map((r) => r.id)
@@ -12591,7 +12624,9 @@ export function Canvas() {
                     )
                     return { ...j, data: { ...j.data, title: 'Verify: verdict', titleAuto: false } }
                   })(),
-                  reviewerIds
+                  reviewerIds,
+                  undefined,
+                  judgeLaunch.promptFile
                 )
               : null
             const panelIds = [...reviewerIds, ...(judge ? [judge.id] : [])]

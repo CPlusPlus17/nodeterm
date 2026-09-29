@@ -12,6 +12,7 @@ import { MAX_LAUNCH_LINE_BYTES, fitsLaunchLine, lineBytes } from '@shared/canoni
 import { DEFAULT_LENSES, verifyLensPrompt, verifySynthesisPrompt } from './verifyPanel'
 import { assembleLaunchCommand } from '@shared/agents/launch'
 import { issueLaunchPrompt } from '@shared/github-issue-ref'
+import { LAUNCH_PROMPT_FILE_PREFIX } from '@shared/launch-prompt'
 
 const io = (saveUpload: (n: string, d: string) => Promise<string | null>) => ({
   saveUpload,
@@ -79,6 +80,15 @@ describe('spillPromptToFile', () => {
         })
       )
     ).toBeNull()
+  })
+
+  it('names the file with the launch-prompt prefix, which keeps it out of the 7-day uploads sweep', async () => {
+    let named = ''
+    await spillPromptToFile('x', io(async (n) => {
+      named = n
+      return '/tmp/x'
+    }))
+    expect(named.startsWith(LAUNCH_PROMPT_FILE_PREFIX)).toBe(true)
   })
 
   it('never reuses a name — two spills in the same millisecond are separate files', async () => {

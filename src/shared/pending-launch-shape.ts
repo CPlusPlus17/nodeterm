@@ -22,7 +22,8 @@ const KNOWN = new Set([
   'executor',
   'awaitWorking',
   'awaitSetupGroup',
-  'afterPr'
+  'afterPr',
+  'promptFile'
 ])
 
 export function normalizePendingLaunch(value: unknown): PendingLaunch | undefined {
@@ -52,6 +53,10 @@ export function normalizePendingLaunch(value: unknown): PendingLaunch | undefine
   }
   if (v.awaitSetupGroup !== undefined) {
     if (typeof v.awaitSetupGroup === 'string') out.awaitSetupGroup = v.awaitSetupGroup
+    else manual = true
+  }
+  if (v.promptFile !== undefined) {
+    if (typeof v.promptFile === 'string') out.promptFile = v.promptFile
     else manual = true
   }
   const afterPr = normalizePrWaitHold(v.afterPr)

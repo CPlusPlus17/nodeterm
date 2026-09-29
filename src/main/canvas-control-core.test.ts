@@ -13,7 +13,7 @@ import {
   CODEX_SANDBOX_RETRY_LINE
 } from '../core/agents/hook-sandbox-hint-sh'
 import { RETRYABLE } from '../core/agents/agent-message-decide'
-import { FOREIGN_ENDPOINT_HINT, OWNER_UNREACHABLE_LEAD } from '../core/agents/hook-endpoint-failover-sh'
+import { FOREIGN_ENDPOINT_HINT, OWNER_UNREACHABLE_LEAD, TUNNEL_DOWN_HINT } from '../core/agents/hook-endpoint-failover-sh'
 import { PROJECT_TARGETABLE_VERBS } from '../core/project-grants'
 import { DRY_RUN_VERBS } from '../shared/control-verbs'
 import {
@@ -411,6 +411,9 @@ describe('parseControlRequest', () => {
   it('both agent-facing texts teach the owner-unreachable failure as temporary', () => {
     expect(FOREIGN_ENDPOINT_HINT.startsWith(OWNER_UNREACHABLE_LEAD)).toBe(true)
     expect(CONTROL_SHIM_SCRIPT).toContain(`echo "${FOREIGN_ENDPOINT_HINT}" >&2`)
+    // The tunnel variant (no foreign endpoint, SSH tunnel primary) opens with the same quoted lead.
+    expect(TUNNEL_DOWN_HINT.startsWith(OWNER_UNREACHABLE_LEAD)).toBe(true)
+    expect(CONTROL_SHIM_SCRIPT).toContain(`echo "${TUNNEL_DOWN_HINT}" >&2`)
     for (const body of [buildCanvasSkillBody('/x/shim.sh'), buildCanvasControlInstructions('/tmp/nodeterm.sh')]) {
       expect(body).toContain(OWNER_UNREACHABLE_LEAD.replace(/\.$/, ''))
       expect(body).toMatch(/This is temporary: *\n?retry the same *\n?command later/)
@@ -1140,6 +1143,17 @@ describe('trigger wording does not claim in-process subagent requests (issue #91
     const skill = buildCanvasSkillBody('/x/shim.sh')
     expect(skill).not.toMatch(/2–5 independent workstreams/)
     expect(skill).toMatch(/independent workstreams step 0 identified/)
+  })
+})
+
+describe('a held launch whose prompt file is gone is not started (#1014 review)', () => {
+  it.each([
+    ['skill body', buildCanvasSkillBody('/x/nodeterm.sh')],
+    ['instructions block', buildCanvasControlInstructions('/x/nodeterm.sh')]
+  ])('%s says so, and names the list marker and the way out', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toMatch(/whose file is gone by then is not started/)
+    expect(flat).toContain('`list` marks it HELD and it waits for `run`')
   })
 })
 

@@ -159,8 +159,9 @@ describe('the --project targeted-opens block (source pins)', () => {
     // command into pendingLaunch is the silent-never-starts mutation (Task 2.0's pins prove the
     // round-trip; this pins that the store path actually uses the mover).
     const body = targetedOpensBody()
-    // `withPrHold` attaches an `--after-pr` wait to the launch armForColdOpen already moved.
-    expect(body).toMatch(/flowToNodeStates\(\[withPrHold\(armForColdOpen\(node\), prHoldPre\)\]\)\[0\]/)
+    // `withLaunchBrief` records the prompt file and `withPrHold` the `--after-pr` wait, both on the
+    // launch armForColdOpen already moved.
+    expect(body).toMatch(/flowToNodeStates\(\[withPrHold\(withLaunchBrief\(armForColdOpen\(node\), openPrompt\.promptFile\), prHoldPre\)\]\)\[0\]/)
   })
 
   it('the store path persists (writeDisk) and states the cold-open contract in the reply', () => {
