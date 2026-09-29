@@ -335,6 +335,20 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   against the renderer's dispositions — deliberately cross-layer, because that is the only way
   "every verb" is checked rather than remembered.
 
+- **A canvas-control verb that creates something must be safe to retry.** An agent whose reply
+  was lost (its tool call timed out, the tunnel dropped) runs the same command again, and the
+  shim's endpoint walk re-posts on its own. The hook server's `/control/` route — the one place
+  desktop main and the Server Edition both sit behind — keys a ledger on (verified caller node,
+  request id) and replays the first reply instead of running the call twice
+  (`src/core/control-request-ledger.ts`). A new verb that opens a node, a team, a worktree or a frame
+  joins `REQUEST_ID_VERBS` in the same PR; the agent-facing text renders from that set. A handler
+  that gives up before it knows whether its effect happened answers `indeterminate: true`, never a
+  plain failure that says "safe to retry" — the retry would then open a second one. Anything desktop
+  main does with a renderer answer belongs in its `finishAnswer` step, which the forwarder also runs
+  on a LATE answer (the one a retry is replayed): post-processing written after the `await` instead
+  runs only on time. Do not move the ledger into one shell's handler: the other shell silently loses
+  it.
+
 - **A new canvas-control open path must record who opened the node.** When a station stops, the
   agent that opened it is told (`src/core/agents/station-notice.ts`) — and a rope alone cannot say
   who that is, because an `--after` node is roped to the stations it waited on too, with the same id
@@ -1100,6 +1114,15 @@ lose approvals or resurrect revoked keys. Server Edition does not host this lega
 Managed Codex login terminals are agent-less: core identifies their provider from the saved
 account list. Before opening one, await `useSettings.getState().flush()` after adding the account.
 The normal 300 ms coalesced save is too late: an unknown id can launch against the system home.
+
+Claude subagent cards come from Claude's native `SubagentStart`/`SubagentStop` whenever a session
+sends them; the `Agent`/`Task` tool pairing stays as the fallback and the task-label source. Both
+shells pass every normalized event, and the `<task-notification>` end, through the one
+`ClaudeSubagentLifecycle` before any consumer, and start the native tail before the child-event
+gate. A consumer that keys subagents by id must honour `supersedes`. A native stop is not always
+the final end (a background child is resumed under the same id), so Eco safety rides the parent
+`Stop`'s `background_tasks` inventory, not the card alone. Measure a CLI change against real
+payloads (`__fixtures__/claude/subagent-hook-payloads.json`) before changing any of this.
 
 Claude child `PreToolUse`/`PostToolUse`/`PostToolUseFailure` hooks must not drive parent state.
 Child `PermissionRequest` and attention `Notification` hooks still reach needs-you and phone

@@ -1369,13 +1369,36 @@ session.
   all terminals — harmless in a plain shell). **Cmd (mac) / Ctrl+click** opens links in the
   output: URLs → default browser (`@xterm/addon-web-links`), file paths → editor node and
   directories → Explorer reveal (`terminal/file-links.ts`, existence-verified against the project
-  fs via cached parent-dir listings, with `path:line[:col]` compiler-output suffixes). A relative
+  fs via cached parent-dir listings, with `path:line[:col]` compiler-output suffixes). **What counts
+  as a path is `terminal/file-link-tokens.ts`**, and it is generous on purpose because existence is
+  the arbiter: segments take any Unicode letter/number/mark (`var/otta-aktarım/çıktı.sql`) and
+  route-folder brackets (`app/(shop)/[id]/page.tsx`; prose parentheses are dropped only when
+  unbalanced); a separator path with SPACES is offered whole, ending at a word with a separator, a
+  word completing `name.ext`, or the line end — AND as its space-free pieces, which is what keeps
+  `/usr/bin/python failed to start app.py` from costing the `/usr/bin/python` link (tokens may
+  overlap; the provider keeps the first that exists in start/longest order, `linkAtCell` carries the
+  rest as `alternatives` for the Cmd+click fallback and the link menu); a BARE filename (`README`,
+  `foo.ts`) only when `looksLikeBareFilename` says so — versions (`v1.2`), abbreviations (`e.g.`)
+  and plain words are never looked up, and a right-click does not claim a bare word; a `file://`
+  URI is percent-decoded to its absolute path (local host only; Windows needs a drive). **The scan
+  must stay linear** — it runs per hovered row on padded TUI rows; no backtracking regex, and the
+  ReDoS guard in `file-link-tokens.test.ts` pins it (the previous regex took 2.2 s on a 30k-char
+  word). Hit-tests and underlines go through `Paragraph.cellStart/cellEnd` (xterm cells, not string
+  indices), so wide CJK glyphs before or inside a path no longer shift its range. A relative
   path is anchored on the node's LAUNCH cwd first, then on the pane's LIVE cwd (`pty:pane-cwd` —
   tmux `#{pane_current_path}`, local or over the ControlMaster; `findExistingPath`), because an
   agent prints paths relative to where IT runs; the launch cwd wins a tie so a link never changes
   meaning when the pane moves. A Cmd/Ctrl+click on a path that exists under neither raises a
   `File not found: …` toast naming where it looked — the click is swallowed before the async
-  lookup, so without it the gesture silently did nothing. The path
+  lookup, so without it the gesture silently did nothing. **"Could not check" is never "not
+  found"**: a lookup has three outcomes (`PathLookup.unverified`, `PathResolution.unverified`), and
+  `makeDirListingLookup` treats a REJECTED listing and an EMPTY one as unverified — `FsApi` is
+  fail-open (`listDir` ends `catch { return [] }`, and a dead ControlMaster lists `[]`), so only a
+  listing WITH entries can prove absence (same rule as `classifyEmptyListing`); `.git` is unverified
+  too (both listing legs strip it). A failure is cached as a failure for ~1 s, never as an empty
+  directory for the 3 s TTL. An unchecked launch-cwd candidate still lets the live cwd be tried (a
+  hit there is proof). The toast then reads `Couldn't check <path>: <reason>` (`fileMissMessage`),
+  and the link menu shows `Couldn't check: <reason>` instead of `Not found`. The path
   dialect follows the FILESYSTEM-OWNING CORE, not the viewer: desktop-local may use its own
   platform, Server Edition and relay tabs use the core's reported `process.platform`, and SSH
   projects are POSIX. A failed host-platform read disables file links for that connection — it
@@ -1392,10 +1415,32 @@ session.
   right PRESS, not on `contextmenu`:** tmux 3.x binds `MouseDown3Pane` to its own `display-menu`, so
   the press is what must be swallowed; a right-click OFF a link stays byte-identical (tmux menu,
   agent TUI, node menu). A path-shaped token that turns out not to exist still gets a menu ("Not
-  found" + Copy path) — its press was already swallowed, and a silent swallow reads as broken.
+  found" + Copy path; "Couldn't check: <reason>" when its existence could not be checked) — its
+  press was already swallowed, and a silent swallow reads as broken.
   Downloads report in a `DownloadStrip` floated over the terminal, not in a drawer that may be
   shut. The kanban card modal gets URL rows only (no file links there) and no "Open in canvas
   browser" (the node would land under the board).
+  **Hovering a link says what a click opens** (`terminal/link-hover.ts`): the RESOLVED absolute
+  path — which of the two cwds held it — plus the gestures, `<abs> (⌘-click to open · ⇧⌘-click to
+  open with default app)` (Ctrl/Shift+Ctrl off-mac; a directory reads "reveal" / "open in
+  Finder|file manager"; a URL just `<url> (⌘-click to open)`, OSC 8 included, whose target the label
+  hides). It rides xterm's `ILink.hover`/`leave`, which fire in a tmux pane too — the linkifier
+  listens to `mousemove` on the screen element whatever the mouse-tracking mode; only CLICKS need
+  the capture fallback. One tooltip per xterm instance, INSIDE `term.element` (parks and dies with
+  the terminal, scales with the canvas zoom like the copy pill; positioned by dividing the rect by
+  the rendered/layout width ratio), `pointer-events: none` + `xterm-hover`, hidden by any press or
+  wheel. **Shift+Cmd/Ctrl+click opens with the OS default app** (`linkOpenIntent` — ONE routing rule
+  for the provider `activate` and `installLinkClickFallback`): `shell.openPath` behind
+  `canUseLocalShell`, the same gate as Reveal in Finder, so a directory opens in the OS file
+  manager. Everywhere that gate says no the click TOASTS its reason (`systemOpenRefusal`) and the
+  hint omits the gesture: an SSH project is refused rather than downloaded-then-opened (a click must
+  not silently copy a file or folder to this machine, and edits would land on a stale copy — the
+  link menu's Download is one right-click away), the Server Edition is refused rather than falling
+  back to the plain open (a modified gesture that quietly does something else is harder to learn;
+  the bridge's `shell.openPath` stays its documented inert stub), and a relay tab is refused (the
+  path is on the peer). Shift alone is never a link gesture (xterm's selection modifier); a
+  modified press released on another cell is a drag and is left alone, and a Shift+Cmd click that
+  extended an xterm selection does not open.
   **Home-relative `~/x` tokens** (Claude Code prints its plan file as `~/.claude/plans/<name>.md`)
   stay `~`-rooted all the way to the fs call and are expanded by the core that OWNS the filesystem
   — `expandHomePath` in `core/fs-handlers.ts` for desktop/Server Edition, the remote shell for
@@ -3026,13 +3071,15 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   otherwise it is the terminal as before. Every refusal says so in one `nodeterm:toast`
   (`announceChatDictationRefusal`, naming the composer mic) instead of a silent dead key.
 - **Subagent visualization** (agents in `SUBAGENT_CAPABLE`) — `subagent-start`/`subagent-end`
-  normalized events (from Claude's `PreToolUse`/`PostToolUse` on tool `Agent`/`Task`, correlated
-  by `tool_use_id`) drive a transient `state/agentNodes.ts` store. Claude launches subagents
-  **async by default**: that PostToolUse is only a launch ack (`status:'async_launched'`), NOT the
-  end — normalize keeps the card working, the transcript tail keeps streaming, and the real end is
-  the `<task-notification>` queued into the parent transcript (sniffed by the context tails →
-  synthetic `subagent-end` in `index.ts`; the notification's `UserPromptSubmit` is also not a
-  `newTurn`, so it doesn't clear the fan-out). Canvas renders each subagent
+  normalized events drive a transient `state/agentNodes.ts` store. For Claude they come from
+  **Claude's own `SubagentStart`/`SubagentStop` hooks** whenever a session sends them (2026-09,
+  see **Claude's native subagent hooks** below); the older reconstruction — `PreToolUse`/
+  `PostToolUse` on tool `Agent`/`Task` correlated by `tool_use_id`, whose PostToolUse on an async
+  launch is only an ack (`status:'async_launched'`), with the real end sniffed from the
+  `<task-notification>` queued into the parent transcript (context tails → synthetic
+  `subagent-end` in both shells) — is kept as the FALLBACK and as the source of the task label.
+  Neither the notification's `UserPromptSubmit` nor the `[Subagent hand-back]` one is a `newTurn`,
+  so neither clears the fan-out. Canvas renders each subagent
   as an **ephemeral** `SubagentNode` (display-only card: type + task + working/done) connected by
   an **edge** to its parent agent node. These ephemeral nodes/edges live outside the React Flow
   `nodes` state (merged only at the `<ReactFlow>` prop), so they're never persisted
@@ -3044,7 +3091,7 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   definition" is true of a finished card and false of a working one: Claude launches subagents
   **async**, so *"waiting for N background agents to finish"* is exactly the state in which the
   next prompt gets typed, and nothing rehydrates `byId` afterwards (`start()` fires only from a
-  live `PreToolUse`; a subagent past that emits no second one) — the card was gone for the rest of
+  live launch event; a running subagent emits no second one) — the card was gone for the rest of
   the run while the agent kept working. The expensive half is not the missing card: Eco's
   hibernation guard derives `liveSubagents` from this same store, so the wipe let a parent with
   live background agents read as idle and get its CLI `/exit`ed. Keeping an unfinished card then
@@ -3066,10 +3113,90 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   Mobile N/A.
   (Subagents share the parent's process — no PTY.) Each card shows
   duration/tokens/tool-uses and **expands** (click) to a **live transcript**:
-  `core/subagent-tail.ts` resolves the subagent's own transcript file
-  (`<…>/<sessionId>/subagents/agent-<id>.jsonl`, matched by `tool_use_id` via the sibling
-  `.meta.json`), tails it read-only, formats each line (assistant text + tool calls + results),
-  and streams chunks over `agent:subagent-activity` into the store.
+  `core/subagent-tail.ts` tails the subagent's own transcript file
+  (`<…>/<sessionId>/subagents/agent-<id>.jsonl` — for a native card at the path DERIVED from the
+  parent's transcript and the `agent_id`, `claudeSubagentTranscriptPath`; for a tool-path card
+  matched by `tool_use_id` via the sibling `.meta.json`), read-only, formats each line (assistant
+  text + tool calls + results), and streams chunks over `agent:subagent-activity` into the store.
+  **Claude's native subagent hooks** (2026-09; `CLAUDE_HOOK_EVENTS` subscribes `SubagentStart` +
+  `SubagentStop` for every installer — local, managed account dirs, SSH host). MEASURED on Claude
+  Code **2.1.284** in a throwaway `CLAUDE_CONFIG_DIR` (nine scenarios, print mode and the
+  interactive TUI; fixture `src/shared/agents/__fixtures__/claude/subagent-hook-payloads.json`,
+  pinned by `normalize.claude.subagent-capture.test.ts`); the published npm bundles date them:
+  `SubagentStop` gained `agent_id` + `agent_transcript_path` in **2.0.42**, `SubagentStart` first
+  ships in **2.0.43**. Facts a refactor must not lose:
+  **(1)** both events carry the PARENT's `session_id` and `transcript_path` (unlike grok, whose
+  stop carries the child's), and `agent_id` (`a` + 16 hex, validated as a token by
+  `isClaudeAgentId` because it becomes a card key and a file name) is the one id they share. The
+  start names the child ONLY by `agent_id` + `agent_type` — no `tool_use_id`, no task text; the
+  stop adds `last_assistant_message` + `agent_transcript_path`. **(2)** `SubagentStop` is the end
+  of the child's TURN and arrives before the `<task-notification>`, sync or async — but a
+  background child that stops while its OWN child still runs is **resumed under the same
+  `agent_id`** (a second start, then a second stop): a native stop does not always mean
+  "finished". **(3)** Claude fires `SubagentStop` for **internal side-agents** (prompt
+  suggestions — after nearly every interactive turn) with `agent_type: ""` and **no start**. **(4)**
+  a **killed** child (interrupt) fires **no** stop. **(5)** nested children fire both events
+  through the same subscription and connect flat to the owning node; the tool path never saw them
+  (their `PreToolUse` carries `agent_id` and is filtered), so native hooks are the first time a
+  nested subagent gets a card at all. **(6)** `Stop` (and `SubagentStop`) carry
+  `background_tasks` — every running BACKGROUND task of the session (async subagents incl.
+  nested ones, background shells), never a foreground subagent; on `SubagentStop` the finishing
+  child still lists itself, so only the parent `Stop`'s copy is read (`liveBackgroundTaskIds`,
+  closed set of finished statuses, anything else counts as running). Absent through 2.1.112,
+  present by 2.1.266 (not bisected — feature-detected per payload). **(7)** in interactive auto
+  mode every `PreToolUse(Agent)` of a message fires FIRST, then the children start within 5 ms of
+  each other (the permission classifier sits between; 20 ms gap in print mode, up to ~5 s
+  interactive), each followed ~1 ms later by its async ack whose `tool_response.agentId` names the
+  exact child. **(8)** the child's `SubagentHandback` tool injects `<agent-message from="…">
+  [Subagent hand-back] …` into the parent before the task-notification — not a genuine turn
+  (`isInjectedSubagentPrompt`, matched on the whole marker).
+  **How the two paths coexist** — ONE core module, `core/claude-subagent-lifecycle.ts`, fed every
+  normalized event (and the task-notification end) by BOTH shells before any consumer; events it
+  does not act on come back as the same object. Latch per node+session on the first native
+  start: before it a tool call draws its card immediately (an old CLI, or a session whose hook
+  snapshot predates the upgrade, is byte-for-byte the old stream — pinned over the fixtures with
+  the native events stripped); after it a tool call is only a pending LABEL and the card appears
+  at the child's own `SubagentStart` (so a denied tool call draws nothing). The session's first
+  child is drawn from its tool call and then REPLACED by its native card (`supersedes` — the
+  renderer store, the host replay and the notch HUD move the card; nothing can know at the tool
+  call that a native start is coming). Native cards are keyed by `agent_id`, so start/stop/resume
+  follow the CLI exactly; only the label is paired, first-in-first-out by type, corrected exactly
+  by the ack (also when the ack overtakes its start — and a call an ack already named is never
+  handed to another child), and for a SYNC child by its end (`tool_response.agentId`), which
+  takes its call out of the queue and relabels a still-running sibling that guessed it. Every
+  turn-end `Stop`/`StopFailure` (never the `idle` rescue — an Agent call may be waiting on a
+  permission prompt) clears the queue of calls whose child never started, with or WITHOUT an
+  inventory: 2.0.43 had native hooks long before `background_tasks`, and a denied call's label
+  must not go to the next child. A native stop for an id that never started is dropped
+  (side-agents); a later start of a known id re-opens its card; the parent `Stop` inventory, when
+  present, ends a native card it no longer lists (the killed child); a tool card whose child
+  never started is ended at the turn end; a replaced tool card also gets a plain end AFTER the
+  replacing start (for a consumer too old for `supersedes`); tool-path ends are re-keyed onto the
+  native card (idempotent, and they bring the sync stats the native stop lacks — a late
+  stats-bearing `finish()` fills them on a done card). Tails: the native start begins the child's tail in the RAW listener, which must run
+  BEFORE the `ignoreQuestionHook` child-event gate (it ignores every `agent_id`-tagged payload);
+  the lifecycle's `onRelease` ends it (local + remote); a resumed child continues from its
+  remembered offset (`subagent-tail` / `remote-subagent-tail`) instead of re-streaming; a remote
+  child is tailed at its derived host path with no `.meta.json` ssh polling. **Eco**: because a
+  native stop can be a pause (fact 2), the parent `Stop`'s non-empty inventory stamps
+  `backgroundTaskAt` (Canvas), the guard Eco and the bulk restart already read — a strictly safer
+  rule than before (it also covers a background shell a subagent launched). Both shells pinned by
+  `hook-verified-parity.test.ts`; the Server Edition also behaviorally over the fixture
+  (`server/agent-status.test.ts`). Cost: one extra managed-hook process + POST per interactive turn
+  (the side-agent stop). Residuals, stated: a SYNC child has no ack, so while it runs a reordered
+  same-type burst can show a sibling's LABEL (never lifecycle) until the first of them ends; a
+  killed child with no later parent `Stop` inventory still waits for the decay. **Device checklist** (not runnable
+  here): (a) macOS + Windows canvas, interactive: cards at start, right labels, live activity,
+  done at stop, nested card, resumed card re-opens; (b) SSH node: native tail over the
+  ControlMaster at the derived path; (c) a session started BEFORE the upgrade (old hook snapshot —
+  whether Claude reloads hooks mid-session is unmeasured): no double and no missing cards; (d) Eco
+  with a background subagent paused on its own background shell: not hibernated, bulk restart
+  skips it; (e) a managed-account node gets native cards (installer writes the account dir); (f)
+  Windows: the derived path keeps the reported separator; (g) a pre-2.0.43 CLI tolerates the two
+  new keys in settings.json (same class as `StopFailure`, which already shipped); (h) the
+  hand-back turn (a background child reporting back wakes the parent for a turn, then the
+  `<task-notification>` wakes it again) may chime "finished" twice — #708's quiet rule is per
+  turn.
   **Codex** (2026-08-24, `spawn_agent` collaboration — issue #401) joined via its **native
   `SubagentStart`/`SubagentStop` hooks**, measured on codex-cli 0.146.0, keyed by `agent_id` (NOT
   `tool_use_id` — nothing correlates the spawn tool call with the Start it launches; agent_id is
@@ -3094,8 +3221,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   counterpart — follow-up).
   **Grok** (2026-09) joined via its own native `SubagentStart`/`SubagentStop`, measured on
   grok 1.0.13 by launching two `explore` children in parallel. Keyed by `subagentId` occupying
-  the same `toolUseId` slot the store already uses (claude correlates by `tool_use_id`,
-  codex by `agent_id`; grok has no tool call behind a subagent). Facts a refactor must not
+  the same `toolUseId` slot the store already uses (claude by `agent_id` natively, else
+  `tool_use_id`; codex by `agent_id`; grok has no tool call behind a subagent). Facts a refactor must not
   lose: **(1)** the start's `sessionId` is the PARENT's and the stop's is the CHILD's own
   (equal to `subagentId`) — keying on it files start and stop under different cards and the
   started one never closes. **(2)** the child's transcript is DERIVED from `subagentId` as
@@ -3220,6 +3347,69 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   file is unreadable (never written over), or while a second desktop on an older build shares the
   host account (it rewrites its own copy on its connects; ours returns within the hour). Nothing
   on the wire says which loop is running. Give every flag a value and both loops agree.
+  **A retried call must not open a second node (`--request-id`, `core/control-request-ledger.ts`).**
+  The reply to an open can be lost while the open went through — the agent's own tool call is
+  killed (~2 min for a Bash tool call while a slow host holds the POST), the ssh tunnel drops
+  mid-reply, or the shim's endpoint walk re-posts after a transport that failed AFTER the request
+  was read — and the agent's natural retry used to open a second agent, team or worktree. The
+  verbs that create something (`REQUEST_ID_VERBS`) take `--request-id <id>`, and the shim also
+  sends its own `requestId` form field, generated once per RUN (`od` of `/dev/urandom`, else
+  pid+time), on every POST of that run, so its own re-post is covered for an agent that never read
+  the docs. Rules a refactor must not undo: (1) **the ledger lives in the hook server's `/control/`
+  route** (core), the one place desktop main's forwarder and the Server Edition's
+  `createServerEditionControlHandler` both sit behind — putting it in either shell's handler
+  leaves the other without it; (2) rows are keyed **(verified caller node, id)** only — an
+  unverified caller gets no dedupe rather than a shared bucket, and an explicit id from one is
+  answered with `REQUEST_ID_UNVERIFIED_NOTE`; (3) the row is **claimed before the handler runs**,
+  synchronously after the lookup, so two concurrent POSTs cannot both run; (4) a fingerprint (verb
+  + args minus the id, key order ignored) makes the same id with a different call a
+  `request-id-conflict`; (5) a settled row stores the WHOLE reply and a replay returns it (text:
+  a `replayed:` first line; JSON: `replayed: true`) — a refusal included, so an id never runs
+  twice; (6) a handler that cannot say whether its effect happened answers `indeterminate: true`
+  (desktop main's 120 s wait, now `src/main/control-forward.ts`: the renderer is not cancelled, and
+  an `open-worktree` whose `git worktree add` outlives the wait still completes) or throws, and the
+  row becomes UNKNOWN — refused, never re-run; the forwarder hands a late renderer answer back via
+  the handler's `onLateAnswer`, and settlement only moves up (unknown → answer, never the reverse).
+  **A late answer is finished exactly like an on-time one**: everything main does with a renderer
+  answer (the `open-browser` ownership claim, `browser-open-claim.ts`; the `open-project` grant) is
+  ONE `finishAnswer` step the forwarder runs on whichever answer arrives — replaying a late
+  "opened browser b1" without the claim told the agent it had a browser it could never drive. And
+  **an indeterminate reply names its id**: the route adds a `request id: <id>` line saying to pass
+  it back as `--request-id <id>`, and the in-flight/unknown refusals spell the flag with its value —
+  the shim's per-run id is otherwise never seen, so "retry with the same --request-id" sent agents
+  to re-run the bare command, get a fresh id and open a second one. That reply is not enough on
+  its own: an agent's tool call is typically killed at 120 s — the SAME instant the app gives up —
+  so the shim also prints the per-run id to stderr BEFORE posting an open it carries no caller id
+  for (`requestIdAnnounceLine`, skipped for a caller's own `--request-id` and for `--dry-run`), and
+  both agent bodies say to pass an OWN unique id up front for slow opens (open-worktree,
+  spawn-team, verify) with a tool timeout above 120 s. A `finishAnswer` step that throws never
+  escapes into the IPC listener: on time it resolves indeterminate, late it hands nothing back (the
+  row stays unknown);
+  (7) an explicit id on a verb outside the set is REFUSED (`request-id-unsupported`), like
+  `--dry-run` — an agent believing its `write` is protected when it is not is the failure the flag
+  exists to end — while a malformed or out-of-set per-run id is silently ignored; (8) a dry run
+  neither claims nor replays. The ledger is **process memory** (24 h, 256 per caller, 4096 in total,
+  in-flight rows never evicted): an app restart between the effect and the retry runs the retry
+  again, which is the case that matters least and costs a store with atomic writes on every call
+  to cover. The timeout sentence is verb- and claim-aware (`controlTimeoutError`): only a
+  confirm-gated verb, whose dialog dismisses itself at the same deadline, is still called "safe to
+  retry"; a call with no ledger row (no id, or an unverified caller) is told to check the canvas for
+  its effect before retrying, never pointed at a flag it has no value for. Ids suggested to agents
+  must be UNIQUE (a uuid — `$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)`, since slim
+  Linux lacks `uuidgen` and macOS lacks `/proc` — or a readable name with a random part): rows are per node for 24 h, so a
+  later conversation in the same node reusing a readable id for the same call would be answered
+  with the earlier reply. An SSH
+  host gets the new shim at its first connect after the update (the agent-tools check,
+  `RemoteHooks.refreshAgentTools`); until then — or while its tunnel is down — its runs carry no
+  per-run id (an explicit `--request-id` still works through the old loop). Agent-facing text
+  is rendered from `REQUEST_ID_VERBS` / `REQUEST_ID_RETRYABLE` / `REQUEST_ID_OUTCOME_GLOSS`
+  (`requestIdDocLines`). Tests: the ledger alone, the route (both dialects, in flight, conflict,
+  late answer, throw), the Server Edition handler behind it, and the real shim under `/bin/sh`
+  through a proxy that forwards the request and drops the reply — the re-post case, red before.
+  Deliberately NOT in the set: reads (a replay would serve a stale snapshot, and `browser
+  --cookies` would sit in memory for a day), the idempotent-by-nature verbs, and the
+  human-confirmed / rate-limited ones (`write`, `send`, `settings`, `report-issue`) — widening it
+  to those is a separate decision.
   **WHICH CANVAS ANSWERS, and why an open never moves the camera** (`renderer/lib/controlRouting.ts`
   + `renderer/lib/coldOpen.ts`). React Flow holds only the ACTIVE project's nodes, but every other
   open project's tmux sessions keep running, so a control call routinely arrives from a node the
@@ -3751,8 +3941,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     `release:false`: the attached client is what keeps even a plain shell reachable there.
   **Settings (`settings`, 2026-09):** `settings [--project <id>]` lists, `settings --get <key>`
   reads, `settings --set <key> --value <v> [--project <id>]` asks to change — flags only, because the
-  shim drops a positional sub-action for an unlisted verb and an SSH host keeps the shim it got at
-  connect. The pure `@shared/settings-verb` is the whole rule set, shared by the desktop dispatch, the
+  shim drops a positional sub-action for an unlisted verb and an SSH host can still be running an
+  older shim. The pure `@shared/settings-verb` is the whole rule set, shared by the desktop dispatch, the
   Server Edition and main's `parseControlRequest`: an **allowlist** (`agentMessaging` per project;
   `snapToGrid`/`gridSize`/`defaultNodeWidth`/`defaultNodeHeight` machine-wide, bounds = the UI's) with
   a required `why` per entry, and a **forbidden set + name pattern that outranks it** (permission

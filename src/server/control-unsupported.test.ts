@@ -410,3 +410,51 @@ describe('a failing verb that carries only `error` is rendered exactly as before
     }
   })
 })
+
+/**
+ * A retried open on the Server Edition. The request ledger lives in the hook-server route, which
+ * this edition's handler sits behind exactly as desktop main's does — so the edition inherits the
+ * dedupe without a line of its own. Proven here with the REAL enabled handler, so a future change
+ * that moves the ledger into one shell's handler goes red for the other.
+ */
+describe('the enabled Server Edition handler, behind the request ledger', () => {
+  it('opens ONE agent for a request id posted twice, and answers the second from the first', async () => {
+    const openAgent = vi.fn(async () => ({ ok: true as const, message: 'opened agent-new', result: { id: 'agent-new' } }))
+    const handler = createServerEditionControlHandler({
+      openProject: vi.fn(),
+      openTerminal: vi.fn(),
+      openAgent,
+      close: vi.fn(),
+      link: vi.fn(),
+      group: vi.fn(),
+      rename: vi.fn(),
+      color: vi.fn(),
+      sticky: vi.fn(),
+      settings: vi.fn(),
+      run: vi.fn(),
+      deliver: vi.fn()
+    })
+    hookServer.setControlHandler(handler)
+    try {
+      const post = () =>
+        fetch(`http://127.0.0.1:${hookServer.getPort()}/control/open-agent`, {
+          method: 'POST',
+          headers: {
+            'X-Nodeterm-Hook-Token': hookServer.getToken(),
+            'X-Nodeterm-Node-Token': nodeAuthToken(SECRET, 'se-src'),
+            'content-type': 'application/x-www-form-urlencoded',
+            accept: 'text/plain'
+          },
+          body: 'nodeId=se-src&requestId=cli-5e1f&arg.agent=claude'
+        })
+      expect((await (await post()).text()).trim()).toBe('opened agent-new')
+      const again = await (await post()).text()
+      expect(again).toMatch(/^replayed:/)
+      expect(again).toContain('opened agent-new')
+      expect(openAgent).toHaveBeenCalledTimes(1)
+      expect(openAgent).toHaveBeenCalledWith('se-src', { agent: 'claude' }, true)
+    } finally {
+      hookServer.setControlHandler(serverEditionControlHandler)
+    }
+  })
+})

@@ -32,6 +32,17 @@ import {
 import { STATION_NOTICE_FROM } from '../shared/agents/agent-messaging'
 import { PR_DEADLINE_DEFAULT_MS, PR_DEADLINE_MAX_MS, PR_WAIT_MAX, afterPrFlagRefusal } from '../shared/pr-wait'
 import { ISSUE_BRANCH_SLUG_MAX, issueWorktreeBranch } from '../shared/issue-worktree'
+import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
+import {
+  REQUEST_ID_HINT_LEAD,
+  REQUEST_ID_MAX_LENGTH,
+  REQUEST_ID_OUTCOME_GLOSS,
+  REQUEST_ID_REPLAYED_LEAD,
+  REQUEST_ID_RETRYABLE,
+  REQUEST_ID_VERBS,
+  REQUEST_LEDGER_TTL_MS,
+  requestIdAnnounceLine
+} from './control-request-ledger'
 
 /**
  * The messaging verbs' retry guidance, RENDERED from `RETRYABLE` — the table is the source, and
@@ -456,6 +467,58 @@ function dryRunDocLines(): string[] {
 }
 
 /**
+ * The `--request-id` paragraph both agent-facing bodies share, RENDERED from the ledger's tables
+ * (`control-request-ledger.ts`) — the verb set, the retry split, the glosses, the replay lead and
+ * the retention — the same derive-don't-retype rule as `messagingGuidanceLines`, so an outcome or a
+ * verb added there lands in the text an agent reads the day it is added.
+ */
+// The opens that can take longer than the app's own wait: git work, a whole team, a review panel.
+const SLOW_OPEN_VERBS = ['open-worktree', 'spawn-team', 'verify'] as const
+
+function requestIdDocLines(): string[] {
+  const yes: string[] = []
+  const no: string[] = []
+  for (const [kind, retryable] of Object.entries(REQUEST_ID_RETRYABLE)) {
+    const line = `\`${kind}\` (${REQUEST_ID_OUTCOME_GLOSS[kind as keyof typeof REQUEST_ID_OUTCOME_GLOSS]})`
+    ;(retryable ? yes : no).push(line)
+  }
+  const hours = Math.round(REQUEST_LEDGER_TTL_MS / 3_600_000)
+  return [
+    'Retrying safely (`--request-id`):',
+    `- The verbs that create something (${[...REQUEST_ID_VERBS].join(', ')}) take`,
+    `  \`--request-id <id>\`: 1-${REQUEST_ID_MAX_LENGTH} letters, digits, \`.\`, \`_\`, \`:\` or \`-\`, starting with`,
+    '  a letter or digit. Make each id UNIQUE: a uuid',
+    '  (`$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)`: slim Linux images lack',
+    '  `uuidgen`, macOS lacks `/proc`), or a readable name with a random',
+    '  part (`wave2-reviewer-1-7f3a9c`). A bare readable name can come back: ids are remembered per',
+    `  node for ${Math.round(REQUEST_LEDGER_TTL_MS / 3_600_000)} hours, so a later conversation in the same node that reuses one for the same`,
+    '  call is answered with the earlier reply — an open that never happened this time.',
+    '- When a call\'s reply never reached you — your tool call timed out, the connection dropped, the',
+    '  output was cut off — run the SAME command with the SAME id. nodeterm recognises it and, instead',
+    '  of opening a second node, returns the first call\'s reply, whose first line starts',
+    `  \`${REQUEST_ID_REPLAYED_LEAD}\`. Without an id, repeating an open whose reply you lost can open it twice.`,
+    '- A reply you DID see is the answer for that id, a refusal included: to try again after a',
+    '  refusal, or to open another node on purpose, use a NEW id. The same id with different flags is',
+    '  refused, and opens nothing.',
+    `- Retry with the SAME id after a short wait: ${yes.join('; ')}.`,
+    `- A same-id retry never clears these — fix the call: ${no.join('; ')}.`,
+    `- For an open that can be slow — ${SLOW_OPEN_VERBS.join(', ')}, or any open while the app may be busy —`,
+    '  pass your OWN unique `--request-id` up front, and give the tool call a timeout longer than',
+    `  the app's own ${CONTROL_REQUEST_TIMEOUT_MS / 1000}s wait (180s is safe). At a ${CONTROL_REQUEST_TIMEOUT_MS / 1000}s tool default the tool is killed at the`,
+    '  same moment the app gives up, and the reply that would have named the id is lost with it.',
+    `- When you pass none, the CLI picks an id per run and prints it to stderr BEFORE it sends the`,
+    `  open (\`${requestIdAnnounceLine('<id>')}\`); a reply that says the call may still`,
+    `  complete names it again on a \`${REQUEST_ID_HINT_LEAD}\` line. To retry, pass exactly that id with`,
+    '  `--request-id`. Never re-run the bare command: it gets a fresh id and can open a second one.',
+    '- Without `--request-id` the CLI still tags each RUN with its own id, so its own automatic',
+    '  re-send to another endpoint never opens twice — but a second run is a second call. An id is',
+    `  matched only for a session whose node identity is verified (the reply says so otherwise), for ${hours} hours,`,
+    '  and not across an app restart. An SSH host keeps the CLI it got at its last connect: until that',
+    '  project reconnects, `--request-id` works there but runs carry no automatic id.'
+  ]
+}
+
+/**
  * The `--issue` SHAPE gate, shared by both shells: the Server Edition runs it inside
  * `parseControlRequest`, and desktop main runs it in its control handler before forwarding (desktop
  * main does not run `parseControlRequest` at all). A plain terminal cannot read an issue and no other
@@ -611,6 +674,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     'flag. A flag with no value is allowed anywhere on the line.',
     '',
     ...dryRunDocLines(),
+    '',
+    ...requestIdDocLines(),
     '',
     'Server Edition ownership is fail-closed: every request requires verified node identity, and',
     'a caller may mutate or message only nodes it opened during the current server run.',
@@ -848,10 +913,10 @@ export function buildCanvasControlInstructions(shimPath: string): string {
 // could not be made safe.
 //
 // INSTALL LIFECYCLE, and why a verb must not depend on this parser's fixes: the shim is rewritten
-// locally at every app boot, but onto an SSH host ONLY inside RemoteHooks.setup(), i.e. on connect.
-// An already-connected SSH project keeps the shim it was handed. So a parsing improvement reaches
-// remote agent nodes only after a reconnect, with no signal on the wire — the same shape as the
-// managed hook script's stale window. Verbs are therefore designed to parse identically under both
+// locally at every app boot, and an SSH host's copy is checked on every connect and brought to this
+// build's bytes (RemoteHooks.refreshAgentTools). A host can still run an older loop for a while —
+// its tunnel is down, the file is unreadable, or a second desktop on an older build shares the host
+// account — with no signal on the wire. Verbs are therefore designed to parse identically under both
 // the old and the new loop: give every flag a value, and the two loops agree.
 /** The shim's generic transport-failure sentence — exported so the agent-facing docs can quote it
  *  verbatim and the parity test holds the two ends together (issue #367). */
@@ -919,6 +984,17 @@ fi
 # write/close/rename/color/branch/send/reply/sticky/run forms accept — into curl --data-urlencode arguments. The positional
 # list doubles as the accumulator: originals are consumed from the front, translated pairs
 # appended at the back, so "$@" holds exactly the curl args once the loop drains.
+# Two flags the shim itself acts on (before posting, below): a caller that named its own
+# --request-id already knows it, and a --dry-run claims nothing.
+nt_own_request_id=""
+nt_dry_run=""
+nt_note_flag() {
+  case "$1" in
+    request-id) nt_own_request_id=1 ;;
+    dry-run) nt_dry_run=1 ;;
+  esac
+}
+
 nt_seen_pos=0
 nt_count=$#
 nt_i=0
@@ -931,6 +1007,7 @@ while [ "$nt_i" -lt "$nt_count" ]; do
       nt_k=\${nt_a#--}
       nt_v=\${nt_k#*=}
       nt_k=\${nt_k%%=*}
+      nt_note_flag "$nt_k"
       set -- "$@" --data-urlencode "arg.$nt_k=$nt_v"
       ;;
     --*)
@@ -946,6 +1023,7 @@ while [ "$nt_i" -lt "$nt_count" ]; do
       # \`--text=--oops\`, which the branch above exists for and which was previously unexpressible
       # in either direction.
       nt_k=\${nt_a#--}
+      nt_note_flag "$nt_k"
       nt_v=""
       if [ "$nt_i" -lt "$nt_count" ]; then
         case "$1" in
@@ -972,6 +1050,17 @@ ${OWNED_ENDPOINT_FALLBACK_SH}
 
 nt_out=$(mktemp 2>/dev/null || echo "/tmp/nodeterm-control.$$")
 
+# ONE id for this RUN, sent on every POST of it (see control-request-ledger.ts). The endpoint walk
+# below re-posts the same call when the first transport failed with no answer — but a request can
+# be read and executed and only the REPLY lost, and a second POST was then a second open. With the
+# id, the server recognises its own re-post and replays the first reply instead. A second RUN gets a
+# new id: repeating a command on purpose is a new call (an agent retrying after a lost reply passes
+# --request-id to say otherwise). Random bytes when the system has them, else pid + time — the
+# server ignores a malformed one rather than refusing the call.
+nt_request_id=$(od -An -N12 -tx1 /dev/urandom 2>/dev/null | tr -d ' \\n')
+[ -n "$nt_request_id" ] || nt_request_id="$$-$(date +%s 2>/dev/null)"
+nt_request_id="cli-$nt_request_id"
+
 # One POST against the CURRENT endpoint vars — call as \`nt_control_post "$@"\` so the translated
 # curl args reach it. Sets nt_code: '' when there is no transport to try at all, curl's
 # %{http_code} otherwise ('000' = the transport failed before any HTTP answer). nt_had_transport
@@ -985,18 +1074,29 @@ nt_control_post() {
       curl -sS -o "$nt_out" -w '%{http_code}' -X POST --config - \\
       --unix-socket "$NODETERM_HOOK_SOCK" "http://localhost/control/$nt_verb" \\
       -H "Accept: text/plain" \\
-      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" "$@" 2>/dev/null)
+      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" \\
+      --data-urlencode "requestId=$nt_request_id" "$@" 2>/dev/null)
   elif [ -n "$NODETERM_HOOK_PORT" ]; then
     nt_had_transport=1
     nt_code=$(nt_hook_headers |
       curl -sS -o "$nt_out" -w '%{http_code}' -X POST --config - \\
       "http://127.0.0.1:\${NODETERM_HOOK_PORT}/control/$nt_verb" \\
       -H "Accept: text/plain" \\
-      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" "$@" 2>/dev/null)
+      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" \\
+      --data-urlencode "requestId=$nt_request_id" "$@" 2>/dev/null)
   fi
 }
 # Only a dead transport or an explicit wrong-owner (421) answer permits failover; 403 stays final.
 nt_reached() { [ -n "$nt_code" ] && [ "$nt_code" != "000" ] && [ "$nt_code" != "421" ]; }
+
+# Say the per-run id BEFORE posting an open (see requestIdAnnounceLine): an agent's own tool call is
+# usually killed at 120 s, the same instant the app gives up waiting, and with it the reply that
+# would have named the id. On stderr, so stdout stays the reply alone.
+if [ -z "$nt_own_request_id" ] && [ -z "$nt_dry_run" ]; then
+  case "$nt_verb" in
+    ${[...REQUEST_ID_VERBS].join('|')}) echo "${requestIdAnnounceLine('$nt_request_id')}" >&2 ;;
+  esac
+fi
 
 nt_had_transport=""
 nt_control_post "$@"
@@ -1112,6 +1212,8 @@ next flag, so \`--text --oops\` sends an empty \`--text\` plus a stray \`--oops\
 value is allowed anywhere on the line, not only at the end.
 
 ${dryRunDocLines().join('\n')}
+
+${requestIdDocLines().join('\n')}
 
 Server Edition ownership is fail-closed: every request requires verified node identity, and a
 caller may mutate or message only nodes it opened during the current server run. Restarting

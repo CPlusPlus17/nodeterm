@@ -32,6 +32,18 @@ import {
   type IdentityDecision
 } from './node-identity-policy'
 import { posixQuote } from '../../shared/ssh'
+import { dryRunRequested } from '../../shared/control-verbs'
+import {
+  ControlRequestLedger,
+  REQUEST_ID_RETRYABLE,
+  REQUEST_ID_UNVERIFIED_NOTE,
+  controlCallFingerprint,
+  requestIdGate,
+  requestIdOutcomeMessage,
+  requestIdReplayLine,
+  requestIdRetryHint,
+  type LedgerClaim
+} from '../control-request-ledger'
 
 // v2 advertises NODETERM_NODE_TOKEN_DIR so clients read their per-node capability from a file
 // rather than receiving it in argv. Nothing consumes the posted version server-side, so the bump
@@ -43,10 +55,10 @@ const SLOWLORIS_MS = 2000
 // phase (a client that dribbles bytes to pin a socket), not for the handler. But it is replaced
 // with a HIGHER ceiling, never removed: a confirmation-gated control verb legitimately parks
 // while the renderer waits for the user's answer, yet nothing may park forever. The desktop shell
-// bounds a control request at 120s (`pendingControl` in src/main/index.ts) — a bound that lives
-// OUTSIDE core, so a future core-side handler with no bound of its own would inherit an unbounded
-// socket if this were `setTimeout(0)`. 130s sits comfortably above that, so in the desktop the
-// handler's own timeout always wins and this only ever fires as a backstop.
+// bounds a control request at 120s (`createControlForwarder`, src/main/control-forward.ts) — a
+// bound that lives OUTSIDE core, so a future core-side handler with no bound of its own would
+// inherit an unbounded socket if this were `setTimeout(0)`. 130s sits comfortably above that, so
+// in the desktop the handler's own timeout always wins and this only ever fires as a backstop.
 // Exported so a caller that parks on this socket can assert its own deadline sits under it by
 // RUNNING the comparison rather than by copying the number into a comment (the delivery receipt,
 // `agent-message.ts`, does exactly that).
@@ -122,18 +134,25 @@ function parseForm(body: string): Record<string, string> {
 export function parseControlBody(
   raw: string,
   contentType: string
-): { nodeId: string; args: Record<string, string> } {
+): { nodeId: string; args: Record<string, string>; requestId?: string } {
   if (contentType.includes('application/x-www-form-urlencoded')) {
     const form = parseForm(raw)
     const args: Record<string, string> = {}
     for (const [k, v] of Object.entries(form)) {
       if (k.startsWith('arg.') && k.length > 4) args[k.slice(4)] = v
     }
-    return { nodeId: form.nodeId ?? '', args }
+    // `requestId` is the id the shim generates once per RUN (not the caller's `--request-id`,
+    // which arrives as `arg.request-id`): what lets the shim's own endpoint-walk re-post be
+    // recognised as the same call. See control-request-ledger.ts.
+    return { nodeId: form.nodeId ?? '', args, ...(form.requestId ? { requestId: form.requestId } : {}) }
   }
   try {
-    const parsed = JSON.parse(raw) as { nodeId?: string; args?: Record<string, string> }
-    return { nodeId: parsed.nodeId ?? '', args: parsed.args ?? {} }
+    const parsed = JSON.parse(raw) as { nodeId?: string; args?: Record<string, string>; requestId?: unknown }
+    return {
+      nodeId: parsed.nodeId ?? '',
+      args: parsed.args ?? {},
+      ...(typeof parsed.requestId === 'string' && parsed.requestId ? { requestId: parsed.requestId } : {})
+    }
   } catch {
     return { nodeId: '', args: {} }
   }
@@ -328,13 +347,28 @@ export class HookServer {
         // claims a node ONLY when this is true — a `legacy`/warned caller opens a browser but owns
         // nothing, so it can drive nothing. `browser-ownership-source.test.ts` guards the source.
         verified: boolean
+        // Present only when the request CLAIMED a row in the request ledger. A handler that gives
+        // up before its effect is known (desktop main's 120s wait on the renderer) answers with
+        // `indeterminate: true` and may hand the real answer back here when it arrives: the
+        // ledger then replays it to a retry instead of refusing it as unknown.
+        onLateAnswer?: (reply: { ok: boolean; message?: string; result?: unknown; error?: string }) => void
       }) => Promise<{
         ok: boolean
         message?: string
         result?: unknown
         error?: string
+        // The handler could not tell whether its effect happened (see control-request-ledger.ts).
+        indeterminate?: boolean
+        // Set by the route, never a handler: the id an indeterminate call is filed under.
+        requestId?: string
       }>)
     | null = null
+  /**
+   * Retried control calls (`--request-id`, or the shim's per-run id). In memory, like
+   * `provenNodes`: it records what happened on THIS process's socket, and a restart forgets it —
+   * see the header of control-request-ledger.ts for why that is the right trade.
+   */
+  private requestLedger = new ControlRequestLedger({ inFlightStaleMs: CONTROL_CEILING_MS })
   // Context-link reads. Same shape as the control handler, but it answers with TEXT (a rendered
   // transcript / summary / terminal capture) rather than acting on the canvas.
   private contextLinkHandler:
@@ -653,10 +687,11 @@ export class HookServer {
         }
         if (reqUrl.pathname.startsWith('/control/')) {
           const verb = decodeURIComponent(reqUrl.pathname.replace(/^\/control\//, ''))
-          const { nodeId, args } = parseControlBody(
-            await readBody(req),
-            String(req.headers['content-type'] ?? '')
-          )
+          const {
+            nodeId,
+            args: rawArgs,
+            requestId: cliRequestId
+          } = parseControlBody(await readBody(req), String(req.headers['content-type'] ?? ''))
           // Body fully received: hand the socket from the receive-phase guard to the much larger
           // handler ceiling. A destructive control verb parks here for as long as the user takes
           // to answer the confirmation dialog, and the 2s guard used to destroy the socket mid-
@@ -664,6 +699,11 @@ export class HookServer {
           // late confirm still delivered, so the agent was told nothing happened when it had.
           req.setTimeout(CONTROL_CEILING_MS, () => req.destroy())
           const wantsText = String(req.headers.accept ?? '').includes('text/plain')
+          // The request id is not an argument of any verb: take it out here, once, so no handler
+          // (and no parser that refuses flags it does not know) ever meets it. A bad EXPLICIT id is
+          // refused below, after identity — the order every other refusal on this route keeps.
+          const idGate = requestIdGate(verb, rawArgs, cliRequestId)
+          const args = idGate.kind === 'pass' ? idGate.args : rawArgs
           // IDENTITY, and it runs BEFORE the handler: the promise of a refusal is that nothing
           // happened, and a check after the handler is a check that happened too late.
           const { verdict, decision } = this.identityGate(
@@ -717,12 +757,93 @@ export class HookServer {
             }
             return
           }
-          const result = this.controlHandler
-            ? await this.controlHandler({ verb, nodeId, args, verified: verdict === 'verified' })
-            : { ok: false, error: 'control unavailable' }
+          if (idGate.kind === 'refuse') {
+            const refusal = requestIdOutcomeMessage(idGate.outcome, { verb })
+            this.writeControlReply(res, wantsText, 400, { ok: false, error: idGate.outcome, message: refusal })
+            return
+          }
+          // RETRIED CALLS. Claimed HERE, before the handler, because from this instant the truthful
+          // answer to "did it happen?" is "it may have" — and here is the one place both shells'
+          // handlers pass. Keyed by the VERIFIED caller only: an unverified caller's id would share
+          // a bucket with anyone claiming its node id, so it gets no dedupe at all (and is told, when
+          // it asked for one). A dry run creates nothing, so it neither claims nor answers from a row.
+          let claim: LedgerClaim | undefined
+          let idNote = ''
+          if (idGate.requestId && !dryRunRequested(args)) {
+            if (verdict === 'verified') {
+              const decided = this.requestLedger.begin(
+                nodeId,
+                idGate.requestId,
+                controlCallFingerprint(verb, args)
+              )
+              if (decided.kind === 'replay') {
+                const stored = decided.reply
+                const lead = requestIdReplayLine(idGate.requestId, Date.now() - decided.firstRunAt)
+                if (wantsText) {
+                  const text = stored.ok
+                    ? stored.message ?? JSON.stringify(stored.result ?? {})
+                    : stored.message ?? stored.error ?? 'control request failed'
+                  res.writeHead(stored.ok ? 200 : 400, { 'content-type': 'text/plain; charset=utf-8' })
+                  res.end(`${lead}\n${text}\n`)
+                } else {
+                  res.writeHead(stored.ok ? 200 : 400, { 'content-type': 'application/json' })
+                  res.end(JSON.stringify({ ...stored, replayed: true, requestId: idGate.requestId }))
+                }
+                return
+              }
+              if (decided.kind === 'refuse') {
+                const refusal = requestIdOutcomeMessage(decided.outcome, {
+                  verb,
+                  requestId: idGate.requestId,
+                  ageMs: Date.now() - decided.firstRunAt
+                })
+                this.writeControlReply(res, wantsText, 409, {
+                  ok: false,
+                  error: decided.outcome,
+                  message: refusal,
+                  retryable: REQUEST_ID_RETRYABLE[decided.outcome]
+                })
+                return
+              }
+              claim = decided.claim
+            } else if (idGate.explicit) {
+              idNote = REQUEST_ID_UNVERIFIED_NOTE
+            }
+          }
+          const held = claim
+          let result: Awaited<ReturnType<NonNullable<HookServer['controlHandler']>>>
+          try {
+            result = this.controlHandler
+              ? await this.controlHandler({
+                  verb,
+                  nodeId,
+                  args,
+                  verified: verdict === 'verified',
+                  ...(held ? { onLateAnswer: (late) => held.settleLate(late) } : {})
+                })
+              : { ok: false, error: 'control unavailable' }
+          } catch (e) {
+            // Nobody can say what a handler that threw got done: the id stays unknown, and its retry
+            // is refused rather than run a second time.
+            held?.settleUnknown()
+            throw e
+          }
+          held?.settle(result)
+          // A call that may still complete names the id it is filed under, and how to pass it back:
+          // for the shim's per-run id this is the only place the caller ever sees it.
+          if (held && idGate.requestId && result.indeterminate) {
+            const hint = requestIdRetryHint(idGate.requestId)
+            result = {
+              ...result,
+              message: `${result.message ?? result.error ?? 'control request failed'}\n${hint}`,
+              requestId: idGate.requestId
+            }
+          }
           // Which note, not whether: an unmintable node warned with the restart line is sent round
           // the same loop the refusal path already knows better than to send it round.
-          const note = decision === 'allow-with-warning' ? this.identityWarningNote(nodeId) : ''
+          const note = [decision === 'allow-with-warning' ? this.identityWarningNote(nodeId) : '', idNote]
+            .filter(Boolean)
+            .join('\n')
           // The POSIX-sh shim asks for text/plain: it has no JSON parser, so the server does the
           // rendering the Node CLI used to do client-side. Everything else keeps the JSON shape.
           if (wantsText) {
@@ -985,6 +1106,26 @@ export class HookServer {
    */
   private nodeTokenVerified(nodeId: string, provided: string | string[] | undefined): boolean {
     return verifyNodeToken(this.nodeAuthSecretOrNull(), nodeId, provided) === 'verified'
+  }
+
+  /**
+   * One control reply in either dialect, for the route's own answers (the request-id outcomes):
+   * the sentence for the POSIX-sh shim, which prints one line and has no JSON parser; the whole
+   * object for a structured client, which keys on `error`.
+   */
+  private writeControlReply(
+    res: ServerResponse,
+    wantsText: boolean,
+    status: number,
+    body: { ok: false; error: string; message: string; retryable?: boolean }
+  ): void {
+    if (wantsText) {
+      res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end(`${body.message}\n`)
+      return
+    }
+    res.writeHead(status, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(body))
   }
 
   /**

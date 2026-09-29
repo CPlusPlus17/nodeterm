@@ -23,9 +23,9 @@
  *
  * THE CLI SHAPE uses flags only — `settings`, `settings --get <key>`, `settings --set <key> --value
  * <v> [--project <id>]` — never a positional sub-action. The sh shim maps a bare positional only for
- * the verbs it names, and an SSH host keeps the shim it was given at connect
- * (`RemoteHooks.setup()`), so `settings get` would reach an already-connected host's server with
- * the `get` silently dropped. Every flag carries a value, which both the old and the new shim loop
+ * the verbs it names, and an SSH host can still be running an older shim (it is brought up to
+ * date on connect, but not through a dead tunnel, and not over another desktop's older copy), so
+ * `settings get` could reach the server with the `get` silently dropped. Every flag carries a value, which both the old and the new shim loop
  * read identically.
  *
  * In `src/shared` because both edges need it: the desktop renderer (dispatch + dialog) and the

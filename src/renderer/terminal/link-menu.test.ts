@@ -191,6 +191,21 @@ describe('linkMenuItems — a path that does not exist', () => {
   })
 })
 
+describe('linkMenuItems — a path that could not be checked', () => {
+  it('does not claim absence, says why, and still lets the text be copied', () => {
+    const { calls, act } = recorder()
+    const items = linkMenuItems(
+      { kind: 'unverified', abs: '/home/me/proj/x.csv', reason: 'ssh down' },
+      LOCAL_DESKTOP,
+      act
+    )
+    expect(labels(items)).toEqual(["Couldn't check: ssh down", 'Copy path'])
+    expect(labels(items)).not.toContain('Not found')
+    click(items, 'Copy path')
+    expect(calls).toEqual(['copy /home/me/proj/x.csv'])
+  })
+})
+
 describe('relativeInside', () => {
   it('is the path below the root, or null', () => {
     expect(relativeInside('/a/b', '/a/b/c/d.ts')).toBe('c/d.ts')
@@ -234,10 +249,27 @@ describe('resolveLinkTarget', () => {
     expect(await resolveLinkTarget({ kind: 'path', token: 'var/x.sql', abs: null }, find)).toEqual({ kind: 'missing', abs: 'var/x.sql' })
   })
 
-  it('reads a failed lookup (dead ControlMaster) as missing, never a throw', async () => {
+  it('reads a failed lookup (dead ControlMaster) as unverified, never missing and never a throw', async () => {
     const boom = async (): Promise<PathResolution> => {
       throw new Error('ssh down')
     }
-    expect(await resolveLinkTarget({ kind: 'path', token: 'x', abs: '/x' }, boom)).toEqual({ kind: 'missing', abs: '/x' })
+    expect(await resolveLinkTarget({ kind: 'path', token: 'x', abs: '/x' }, boom)).toEqual({
+      kind: 'unverified',
+      abs: '/x',
+      reason: 'ssh down'
+    })
+  })
+
+  it('reads a resolution with an unchecked candidate as unverified, naming that candidate', async () => {
+    const find = async (): Promise<PathResolution> => ({
+      found: false,
+      tried: ['/launch/x', '/live/x'],
+      unverified: [{ abs: '/live/x', reason: 'timeout' }]
+    })
+    expect(await resolveLinkTarget({ kind: 'path', token: 'x', abs: '/launch/x' }, find)).toEqual({
+      kind: 'unverified',
+      abs: '/live/x',
+      reason: 'timeout'
+    })
   })
 })

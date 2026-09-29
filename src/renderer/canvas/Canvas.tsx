@@ -14863,6 +14863,12 @@ export function Canvas() {
               e.errored,
               e.held
             )
+          // Claude's Stop names the BACKGROUND tasks still running (async subagents, nested ones,
+          // background shells). A background subagent that ends its turn while its own work runs
+          // fires SubagentStop — its card goes done — and is resumed later, so the card alone would
+          // let Eco or the bulk restart type /exit over live work. The existing background-task
+          // stamp is the guard both already read; a turn start clears it, the next Stop re-decides.
+          if (e.state === 'done' && !stuckRescueSkip && e.backgroundTaskIds?.length) cs.markBackgroundTask(e.nodeId)
           // A genuine new turn drops the previous fan-out — but only the cards that FINISHED
           // (issue #547). Claude launches subagents async, so "waiting for N background agents to
           // finish" is exactly the state in which the next prompt gets typed, and clearing a
@@ -14904,12 +14910,17 @@ export function Canvas() {
         }
         case 'subagent-start':
           if (e.toolUseId) {
-            an.start(e.toolUseId, {
-              parentNodeId: e.nodeId,
-              type: e.subagentType,
-              label: e.taskLabel,
-              startedAt: e.subagentStartedAt
-            })
+            an.start(
+              e.toolUseId,
+              {
+                parentNodeId: e.nodeId,
+                type: e.subagentType,
+                label: e.taskLabel,
+                startedAt: e.subagentStartedAt
+              },
+              // A Claude native card replacing the card its tool call drew (claude-subagent-lifecycle).
+              e.supersedes
+            )
           }
           break
         case 'subagent-end':

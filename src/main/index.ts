@@ -216,6 +216,8 @@ import { initCanvasSync } from '../core/canvas-sync'
 import { retainUntilDismissed } from './notifications'
 import { installManagedAgentHooks } from '../core/agents/hooks'
 import { createSubagentTail } from '../core/subagent-tail'
+import { ClaudeSubagentLifecycle } from '../core/claude-subagent-lifecycle'
+import { claudeSubagentTranscriptPath, isClaudeAgentId } from '../shared/agents/claude-subagents'
 import { createContextTail, type TaskNotification } from '../core/context-tail'
 import { registerContextEnsureIpc } from '../core/context-ensure'
 import { grokContextParse, GROK_SIGNALS_FILE } from '../core/grok-signals'
@@ -276,6 +278,8 @@ import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control
 import { issueFlagRefusal } from '../core/canvas-control-core'
 import { afterPrFlagRefusal } from '../shared/pr-wait'
 import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
+import { createControlForwarder, type ControlForwardReply } from './control-forward'
+import { claimOpenedBrowser } from './browser-open-claim'
 import { initTranscriptIndex, searchTranscripts } from '../core/transcript-index'
 import { initTelemetry } from './telemetry'
 import { initClaudeUsage } from './claude-usage'
@@ -2422,6 +2426,18 @@ app.whenReady().then(async () => {
   const subagentTail = createSubagentTail(({ toolUseId, chunk }) => {
     if (!win.isDestroyed()) win.webContents.send(IPC.agentSubagentActivity, { toolUseId, chunk })
   })
+  // Claude's two subagent signal paths merged into one card per child (native SubagentStart/Stop
+  // win once a session sends them — core/claude-subagent-lifecycle.ts). Every normalized event
+  // passes through it before any consumer; a card it ends or replaces stops that key's live
+  // transcript tail, local or remote. Same wiring as the Server Edition's (src/server/agent-status.ts).
+  // The remote names below are declared further down; onRelease only runs once hooks flow.
+  const claudeSubagents = new ClaudeSubagentLifecycle({
+    onRelease: (key) => {
+      subagentTail.finish(key)
+      if (remoteSubagentResolving.has(key)) remoteSubagentCancel.add(key)
+      remoteSubagentTail.untrack(key)
+    }
+  })
   // Async subagents (Claude's default) end via a <task-notification> queued into the PARENT
   // transcript — their PostToolUse is only a launch ack (see the raw listener below). The
   // context tails already read that transcript, so they surface the notification here and we
@@ -2450,10 +2466,15 @@ app.whenReady().then(async () => {
       sessionId,
       kind: 'subagent-end',
       toolUseId: n.toolUseId,
-      result: n.result
+      result: n.result,
+      subagentSignal: 'transcript'
     } satisfies NormalizedAgentEvent
-    sendToMain(IPC.agentStatus, taskDoneEvent)
-    recordAgentEvent(taskDoneEvent)
+    // Through the lifecycle like every other event: in a session that sends native hooks the card
+    // is keyed by the child's agent_id, and this tool-keyed end is re-keyed onto it (idempotent).
+    for (const out of claudeSubagents.apply(taskDoneEvent)) {
+      sendToMain(IPC.agentStatus, out)
+      recordAgentEvent(out)
+    }
     subagentTail.finish(n.toolUseId)
     remoteSubagentTail.untrack(n.toolUseId)
     nodeSubagents.get(nodeId)?.delete(n.toolUseId)
@@ -2851,19 +2872,23 @@ app.whenReady().then(async () => {
   // and the mobile-facing mirror. Named so the deterministic-approval answer handler below can reuse
   // it for the optimistic flip.
   const emitAgentStatus = (e: NormalizedAgentEvent): void => {
-    // Record FIRST: recordAgentEvent computes the stash-priority classification and returns the
-    // event ENRICHED for a needs-you edge (a question strips its pendingId), so the canvas keys off
-    // the same single source of truth as the mirror/phone. Then broadcast the enriched event.
-    const enriched = recordAgentEvent(e) ?? e
-    sendToMain(IPC.agentStatus, enriched)
-    // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
-    notchHudOnAgentEvent(enriched)
-    // Agent messaging taps the SAME stream: the sender's newTurn resets its fan-out budget, and
-    // an open delivery receipt watch is satisfied by the target's verified advance.
-    onMessagingAgentEvent(enriched)
-    // …and so does the station-failure monitor: an errored turn, a needs-you edge, and the
-    // successful turn that re-arms a station's notice all ride this one stream.
-    stationNotices.onAgentEvent(enriched)
+    // Claude subagent events first become one card per child (claudeSubagents); every other event
+    // comes back as itself, so for them this loop runs exactly once, over `e`.
+    for (const out of claudeSubagents.apply(e)) {
+      // Record FIRST: recordAgentEvent computes the stash-priority classification and returns the
+      // event ENRICHED for a needs-you edge (a question strips its pendingId), so the canvas keys off
+      // the same single source of truth as the mirror/phone. Then broadcast the enriched event.
+      const enriched = recordAgentEvent(out) ?? out
+      sendToMain(IPC.agentStatus, enriched)
+      // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
+      notchHudOnAgentEvent(enriched)
+      // Agent messaging taps the SAME stream: the sender's newTurn resets its fan-out budget, and
+      // an open delivery receipt watch is satisfied by the target's verified advance.
+      onMessagingAgentEvent(enriched)
+      // …and so does the station-failure monitor: an errored turn, a needs-you edge, and the
+      // successful turn that re-arms a station's notice all ride this one stream.
+      stationNotices.onAgentEvent(enriched)
+    }
   }
   hookServer.setListener(emitAgentStatus)
   // Deterministic hook-reply approvals (docs/hook-reply-approvals.md): the canvas Approve/Deny
@@ -3263,6 +3288,43 @@ app.whenReady().then(async () => {
     // Runs BEFORE the local/remote split so it covers remote (SSH) nodes too — it needs only
     // tool_name/tool_input, never the transcript path the split routes on.
     recordRawToolEvent(nodeId, payload)
+    // Claude's native subagent hooks, BEFORE the child-event gate below: that gate ignores every
+    // agent_id-tagged payload, and these carry the CHILD's agent_id with the PARENT's
+    // transcript_path. All they drive here is the child's own transcript tail, started at
+    // SubagentStart at the path derived from the parent's (the start does not name the file; the
+    // stop does, too late) — on the node's host for a remote node, jailed like every other remote
+    // path, and with no meta.json polling over ssh. The stop needs nothing here: the lifecycle's
+    // onRelease ends the tail. Same branch as the Server Edition's, plus the remote leg.
+    const native = payload as { hook_event_name?: string; agent_id?: unknown; transcript_path?: string }
+    if (native.hook_event_name === 'SubagentStart' || native.hook_event_name === 'SubagentStop') {
+      if (native.hook_event_name === 'SubagentStart' && isClaudeAgentId(native.agent_id)) {
+        const agentChild = native.agent_id
+        const rtn = nodeId ? ptyManager.sshRemoteForNode(nodeId) : undefined
+        let tracked = false
+        if (rtn) {
+          const parent = safeRemoteTranscriptPath(
+            native.transcript_path,
+            sshProjectManager?.remoteHomeForControlPath(rtn.controlPath)
+          )
+          const file = parent ? claudeSubagentTranscriptPath(parent, agentChild) : undefined
+          if (file) {
+            remoteSubagentTail.track(agentChild, { conn: rtn.conn, controlPath: rtn.controlPath, path: file })
+            tracked = true
+          }
+        } else {
+          const parent = safeTranscriptPath(native.transcript_path)
+          const file = parent ? claudeSubagentTranscriptPath(parent, agentChild) : undefined
+          subagentTail.trackFile(agentChild, file)
+          tracked = !!file
+        }
+        if (nodeId && tracked) {
+          const set = nodeSubagents.get(nodeId) ?? new Set<string>()
+          set.add(agentChild)
+          nodeSubagents.set(nodeId, set)
+        }
+      }
+      return
+    }
     if (ignoreQuestionHook(nodeId, payload)) return
     const p = payload as {
       hook_event_name?: string
@@ -3301,7 +3363,9 @@ app.whenReady().then(async () => {
       }
       if (p.tool_use_id && p.tool_name && SUBAGENT_TOOLS.has(p.tool_name) && transcriptPath) {
         const toolUseId = p.tool_use_id
-        if (p.hook_event_name === 'PreToolUse') {
+        // Once this session has sent a native SubagentStart, the child brings its own tail there;
+        // resolving a tool-keyed one would only poll the host with ssh execs for the same file.
+        if (p.hook_event_name === 'PreToolUse' && !claudeSubagents.isNative(nodeId, p.session_id)) {
           remoteSubagentCancel.delete(toolUseId)
           remoteSubagentResolving.add(toolUseId)
           // Resolve the remote subagent file asynchronously (it appears shortly after), then track.
@@ -3347,7 +3411,9 @@ app.whenReady().then(async () => {
     // Subagent live transcript: track on PreToolUse / finish on PostToolUse for subagent tools.
     if (p.tool_use_id && p.tool_name && SUBAGENT_TOOLS.has(p.tool_name)) {
       if (p.hook_event_name === 'PreToolUse') {
-        subagentTail.track(p.tool_use_id, transcriptPath)
+        // Once this session has sent a native SubagentStart, the child brings its own tail there
+        // (keyed by its agent_id); a tool-keyed tail would only read the same file twice.
+        if (!claudeSubagents.isNative(nodeId, p.session_id)) subagentTail.track(p.tool_use_id, transcriptPath)
         if (nodeId) {
           const set = nodeSubagents.get(nodeId) ?? new Set<string>()
           set.add(p.tool_use_id)
@@ -3374,6 +3440,7 @@ app.whenReady().then(async () => {
   //    tails of the OLD session's transcript are just as dead; the respawned agent re-registers
   //    them under its new session id via the hook events).
   const releaseNodeTails = (nodeId: string): void => {
+    claudeSubagents.forgetNode(nodeId)
     remoteCodexContext.release(nodeId)
     const sessionId = nodeContextSession.get(nodeId)
     if (sessionId) {
@@ -3416,13 +3483,10 @@ app.whenReady().then(async () => {
   // confirm dialog collect itself once this timer has already abandoned the request (main sends
   // no expiry event), and two copies of the deadline is the drift this repo keeps paying for.
   // See @shared/control-confirm.
-  const pendingControl = new Map<
-    string,
-    {
-      resolve: (r: { ok: boolean; message?: string; result?: unknown; error?: string }) => void
-      timer: NodeJS.Timeout
-    }
-  >()
+  // The map and its timer live in `control-forward.ts`, where a timeout answers INDETERMINATE (the
+  // renderer is not cancelled and may still act) and a late answer is handed back to the request
+  // ledger rather than dropped — see that module's header.
+  const controlForwarder = createControlForwarder({ timeoutMs: CONTROL_REQUEST_TIMEOUT_MS })
   // Who owns which agent-opened browser node, THIS app run only. In-memory, never persisted, never
   // read from project.json (Task 4.3/4.4). Consumed by PR 5 (attach/lease), PR 6 (indicator/Stop).
   const browserLedger = new BrowserControlLedger()
@@ -3588,18 +3652,12 @@ app.whenReady().then(async () => {
     (
       _e,
       payload: { requestId: string; ok: boolean; message?: string; result?: unknown; error?: string }
-    ) => {
-      const pending = pendingControl.get(payload.requestId)
-      if (!pending) return
-      clearTimeout(pending.timer)
-      pendingControl.delete(payload.requestId)
-      pending.resolve(payload)
-    }
+    ) => controlForwarder.answer(payload)
   )
   // The `browser` verb resolve round-trip (Task 7.2). Main asks the renderer to resolve a source
   // node's owning project, control-capability and the LIVE per-project capability value; the renderer
-  // answers here. Modelled on `pendingControl`, but its own map with its own short (2s) timeout so a
-  // slow canvas can NEVER consume the 120s pending-control budget.
+  // answers here. Modelled on the control forwarder (`control-forward.ts`), but its own map with its
+  // own short (2s) timeout so a slow canvas can NEVER consume the 120s pending-control budget.
   const pendingBrowserResolve = new Map<string, (r: BrowserResolve) => void>()
   ipcMain.on(
     IPC.browserControlResolveResult,
@@ -3765,7 +3823,7 @@ app.whenReady().then(async () => {
         : { ok: false, error: result.error, message: result.message }
     )
   }
-  hookServer.setControlHandler(async ({ verb, nodeId, args, verified }) => {
+  hookServer.setControlHandler(async ({ verb, nodeId, args, verified, onLateAnswer }) => {
     // `--dry-run` (issue #532) is honoured by the spawn verbs only, and this gate runs FIRST —
     // before the browser intercept, the open-project gates and the renderer forward — because a
     // verb that cannot dry-run must REFUSE rather than silently perform: a `close --dry-run`
@@ -3832,74 +3890,60 @@ app.whenReady().then(async () => {
     }
     const target = getMainWindow()
     if (!target) return { ok: false, error: 'window unavailable' }
-    const requestId = randomUUID()
-    const result = await new Promise<{ ok: boolean; message?: string; result?: unknown; error?: string }>((resolve) => {
-      const timer = setTimeout(() => {
-        pendingControl.delete(requestId)
-        // Name the timeout and say it is retryable. A DENIAL is a different answer with different
-        // guidance (`denied by user`, final, never retried), and the old wording — "no response /
-        // not confirmed" — read as though it covered both, so a caller that had merely waited out
-        // an unanswered dialog treated it as a refusal and gave up.
-        resolve({
-          ok: false,
-          // The dialog is not left behind any more: it carries the same deadline and dismisses
-          // itself (ConfirmState.expiresAt), which is what stops a retry hitting "a confirmation
-          // is already pending" for the rest of the app run.
-          error: `no answer within ${CONTROL_REQUEST_TIMEOUT_MS / 1000}s — the confirmation dialog has been dismissed; safe to retry`
-        })
-      }, CONTROL_REQUEST_TIMEOUT_MS)
-      pendingControl.set(requestId, { resolve, timer })
-      target.webContents.send(IPC.agentControl, { requestId, sourceNodeId: nodeId, verb, args })
-    })
-    // Record browser ownership the moment an open-browser succeeds — and ONLY when the caller's
-    // identity verdict for THIS request was `verified` (main's own verdict, not anything off the
-    // wire or project.json). A `legacy`/warned caller may open a browser but owns nothing, so it
-    // can drive nothing. The owner is the verified caller (`nodeId`); the project id + partition
-    // ride along from the renderer's reply for release-by-project and the indicator. This is the
-    // browser sibling of pane-ownership's record-at-fresh-spawn. See browser-control-ledger.ts and
-    // browser-ownership-source.test.ts (ownership is NEVER read from Project.ropes).
-    if (verb === 'open-browser' && verified && result.ok) {
-      const opened = result.result as { id?: string; projectId?: string; partition?: string } | undefined
-      // Refuse to record an entry with no owning project: `releaseByProject('')` would match it, and
-      // a project-less ownership record is meaningless. Fail-closed against future reply-shape drift
-      // — today `partition` is present only when agentBrowserPartition(projectId) succeeded, so a
-      // non-empty safe projectId always rides with it.
-      if (opened?.id && opened.partition && opened.projectId) {
-        browserLedger.claim(opened.id, {
-          ownerNodeId: nodeId,
-          projectId: opened.projectId,
-          partition: opened.partition,
-          navGeneration: 0,
-          leaseActiveUntil: 0,
-          openedAt: Date.now()
-        })
+    // What main does with the renderer's answer, as ONE step the forwarder runs on whichever answer
+    // arrives: on time, or LATE — after the 120 s wait below gave up — before the request ledger
+    // stores it for a retry to replay. A late answer is the same answer, only later: the node exists
+    // and this caller opened it, so it owes exactly what an on-time answer owes. Keeping it off this
+    // path replayed "opened browser b1" for a browser its opener could never drive.
+    const finishAnswer = (answer: ControlForwardReply): ControlForwardReply => {
+      // Record browser ownership the moment an open-browser succeeds — and ONLY when the caller's
+      // identity verdict for THIS request was `verified` (main's own verdict, not anything off the
+      // wire or project.json). A `legacy`/warned caller may open a browser but owns nothing, so it
+      // can drive nothing. The owner is the verified caller (`nodeId`); the project id + partition
+      // ride along from the renderer's reply for release-by-project and the indicator. This is the
+      // browser sibling of pane-ownership's record-at-fresh-spawn. See browser-open-claim.ts,
+      // browser-control-ledger.ts and browser-ownership-source.test.ts (ownership is NEVER read
+      // from Project.ropes).
+      if (claimOpenedBrowser(browserLedger, { verb, ownerNodeId: nodeId, verified }, answer, Date.now())) {
         // A claim carries no live lease (a verb sets that in PR 7), so this does not light the chip;
         // it keeps the renderer's view consistent from the moment ownership exists.
         pushBrowserLeases()
       }
-    }
-    // Record a project grant the moment an open-project succeeds — the open-browser ledger
-    // pattern above, same conditions: ONLY when the caller's identity verdict for THIS request
-    // was `verified` (main's own verdict, never anything off the wire) AND the renderer's reply
-    // carries a non-empty projectId. Inert until PR 2: today the renderer's `default:` case
-    // answers `unknown verb: open-project` with ok: false, so nothing is ever recorded — but the
-    // record path ships fail-closed and finished, not stubbed.
-    if (verb === 'open-project') {
-      // The whole decision (verified && ok && string projectId → grant; cap race detection) is
-      // the PURE recordOpenProjectGrant — proven branch by branch in project-grants.test.ts.
-      // 'cap' = the pre-forward atCap() check passed but a concurrent open-project from the same
-      // caller filled the last slot while this one was in flight (PR #362 review, M1): the
-      // caller must NOT hear ok while holding no targeting right, so the named refusal replaces
-      // the success reply. Nothing is lost — open-project is idempotent (B1), so a re-run once
-      // grants have cleared returns the same project id and records the grant.
-      if (recordOpenProjectGrant(nodeId, result, verified) === 'cap') {
-        console.warn(
-          `[project-grants] grant cap raced for caller ${nodeId}: open-project succeeded but ` +
-            'the grant was not recorded; replying open-project-grant-cap'
-        )
-        return { ok: false, error: OPEN_PROJECT_GRANT_CAP, message: OPEN_PROJECT_GRANT_CAP }
+      // Record a project grant the moment an open-project succeeds — the open-browser ledger
+      // pattern above, same conditions: ONLY when the caller's identity verdict for THIS request
+      // was `verified` (main's own verdict, never anything off the wire) AND the renderer's reply
+      // carries a non-empty projectId. (open-project never claims a request-ledger row, so it never
+      // gets a late answer; it is here so no finishing step can be left off one path.)
+      if (verb === 'open-project') {
+        // The whole decision (verified && ok && string projectId → grant; cap race detection) is
+        // the PURE recordOpenProjectGrant — proven branch by branch in project-grants.test.ts.
+        // 'cap' = the pre-forward atCap() check passed but a concurrent open-project from the same
+        // caller filled the last slot while this one was in flight (PR #362 review, M1): the
+        // caller must NOT hear ok while holding no targeting right, so the named refusal replaces
+        // the success reply. Nothing is lost — open-project is idempotent (B1), so a re-run once
+        // grants have cleared returns the same project id and records the grant.
+        if (recordOpenProjectGrant(nodeId, answer, verified) === 'cap') {
+          console.warn(
+            `[project-grants] grant cap raced for caller ${nodeId}: open-project succeeded but ` +
+              'the grant was not recorded; replying open-project-grant-cap'
+          )
+          return { ok: false, error: OPEN_PROJECT_GRANT_CAP, message: OPEN_PROJECT_GRANT_CAP }
+        }
       }
+      return answer
     }
+    // The timeout is NAMED, and what it says depends on the verb and on whether the request ledger
+    // holds a row for this call (`controlTimeoutError`): a DENIAL is a different answer (`denied by
+    // user`, final), and only a confirm-gated verb, whose dialog dismisses itself at the same
+    // deadline (ConfirmState.expiresAt), may be called safe to retry. An open is not cancelled by
+    // main giving up, so its timeout is indeterminate and its late answer goes back to the request
+    // ledger through `onLateAnswer` — finished first.
+    const result = await controlForwarder.forward(
+      verb,
+      (requestId) =>
+        target.webContents.send(IPC.agentControl, { requestId, sourceNodeId: nodeId, verb, args }),
+      { onLate: onLateAnswer, finish: finishAnswer }
+    )
     return result
   })
   initMediaProtocol()

@@ -14,6 +14,14 @@ import {
   CODEX_SANDBOX_RETRY_LINE
 } from '../core/agents/hook-sandbox-hint-sh'
 import { RETRYABLE } from '../core/agents/agent-message-decide'
+import {
+  REQUEST_ID_HINT_LEAD,
+  REQUEST_ID_MAX_LENGTH,
+  REQUEST_ID_OUTCOME_GLOSS,
+  REQUEST_ID_REPLAYED_LEAD,
+  REQUEST_ID_RETRYABLE,
+  REQUEST_ID_VERBS
+} from '../core/control-request-ledger'
 import { BOARD_COMMENT_FROM_PREFIX, BOARD_COMMENT_REPLY_TO } from '../shared/board-comment'
 import {
   STATION_NOTICE_COMMON_OPTIONS,
@@ -30,7 +38,7 @@ import {
   SETTINGS_VERB_KEY_LIST,
   readSettingsValue
 } from '../shared/settings-verb'
-import { decideControlConfirm, isWaivableVerb } from '../shared/control-confirm'
+import { CONTROL_REQUEST_TIMEOUT_MS, decideControlConfirm, isWaivableVerb } from '../shared/control-confirm'
 import { DEFAULT_SETTINGS } from '../shared/types'
 import { serverSettingsControl } from '../server/settings-control'
 import {
@@ -697,6 +705,58 @@ describe('parseControlRequest', () => {
       const word = new RegExp(`\\b${kind}\\b`)
       expect(word.test(retryable ? yesSection : noSection), `${kind} in its group`).toBe(true)
       expect(word.test(retryable ? noSection : yesSection), `${kind} not in the other`).toBe(false)
+    }
+  })
+
+  // --- retried calls (src/core/control-request-ledger.ts) ----------------------------------------
+  // The request-id contract an agent reads must be the TABLES': which verbs take an id, which
+  // outcomes a same-id retry can change, what a replay looks like. Rendered, never re-typed, so a
+  // verb or an outcome added to the ledger lands in both bodies the day it is added.
+  it('both bodies document --request-id, rendered from the ledger tables', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      const at = body.indexOf('Retrying safely')
+      expect(at, `${name}: the section exists`).toBeGreaterThan(-1)
+      const section = body.slice(at, body.indexOf('\n\n', at))
+      for (const verb of REQUEST_ID_VERBS) expect(section, `${name}: ${verb}`).toContain(verb)
+      expect(section).toContain(`1-${REQUEST_ID_MAX_LENGTH}`)
+      expect(section).toContain(`\`${REQUEST_ID_REPLAYED_LEAD}\``)
+      expect(section).toMatch(/SAME command with the SAME id/)
+      expect(section).toMatch(/refusal included/)
+      expect(section).toMatch(/NEW id/)
+      expect(section).toMatch(/verified/)
+      expect(section).toMatch(/24 hours/)
+      // Review follow-up to #1027: the ids suggested must be UNIQUE (a readable name alone comes back
+      // in a later conversation of the same node and replays the old reply), and a reply that may
+      // still complete names its id — the CLI's own included — to be passed back with the flag.
+      expect(section).toMatch(/UNIQUE/)
+      // A portable uuid: `uuidgen` is missing on slim Debian/Ubuntu (uuid-runtime), macOS has no /proc.
+      expect(section).toContain('`$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)`')
+      expect(section).toMatch(/random\s+part/)
+      // Review follow-up to #1033: an agent's tool call is typically killed at the same 120 s the app
+      // waits, so the advice for a slow open is to name the id up front and give the tool more time;
+      // and the CLI's own id is on stderr before the POST, whatever becomes of the reply.
+      expect(section).toMatch(/OWN\s+unique\s+`--request-id`\s+up\s+front/)
+      for (const verb of ['open-worktree', 'spawn-team', 'verify']) expect(section).toContain(verb)
+      expect(section).toContain(`${CONTROL_REQUEST_TIMEOUT_MS / 1000}s`)
+      expect(section).toMatch(/timeout\s+longer\s+than/)
+      expect(section).toMatch(/to\s+stderr\s+BEFORE\s+it\s+sends/)
+      expect(section).not.toMatch(/a name like `wave2-reviewer-1`\)/)
+      expect(section).toContain(`\`${REQUEST_ID_HINT_LEAD}\``)
+      expect(section).toMatch(/Never re-run the bare command/)
+      const yesAt = section.indexOf('Retry with the SAME id after a short wait')
+      const noAt = section.indexOf('A same-id retry never clears these')
+      expect(yesAt, name).toBeGreaterThan(-1)
+      expect(noAt, name).toBeGreaterThan(yesAt)
+      const yes = section.slice(yesAt, noAt)
+      const no = section.slice(noAt)
+      for (const [kind, retryable] of Object.entries(REQUEST_ID_RETRYABLE)) {
+        expect(retryable ? yes : no, `${name}: ${kind} in its group`).toContain(`\`${kind}\``)
+        expect(retryable ? no : yes, `${name}: ${kind} not in the other`).not.toContain(`\`${kind}\``)
+        expect(section).toContain(REQUEST_ID_OUTCOME_GLOSS[kind as keyof typeof REQUEST_ID_OUTCOME_GLOSS])
+      }
     }
   })
 
