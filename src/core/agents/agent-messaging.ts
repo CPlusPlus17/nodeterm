@@ -22,9 +22,15 @@ import { binariesFor, type PaneOwner } from '../../shared/agents/pane-owner-pred
 import type { BoardLogEntry } from '../../shared/types'
 import type {
   AgentMessageDeliverRequest,
+  AgentMessageDeliveryInput,
   AgentMessageReply
 } from '../../shared/agents/agent-messaging'
-import { AGENT_MESSAGE_VERBS, NOTIFY_BODY } from '../../shared/agents/agent-messaging'
+import {
+  AGENT_MESSAGE_VERBS,
+  NOTIFY_BODY,
+  STATION_NOTICE_FROM,
+  STATION_NOTICE_VERB
+} from '../../shared/agents/agent-messaging'
 import {
   deliverAgentMessage,
   type DeliveryDeps,
@@ -78,8 +84,8 @@ export interface BoardCommentMessage extends BoardCommentDeliverRequest {
   verb: 'board-comment'
 }
 
-/** Everything `runDelivery` can carry: an agent's verb, or a board comment. */
-export type MessagingRequest = AgentMessageDeliverRequest | BoardCommentMessage
+/** Everything `runDelivery` can carry: an agent's verb, the app's station notice, or a board comment. */
+export type MessagingRequest = AgentMessageDeliveryInput | BoardCommentMessage
 
 /** The flow-control identity of a board: one person's budget per project. `board:` can never be a
  *  node id (no ':' in `isSafeNodeId`'s alphabet), and a project id with a control character never
@@ -174,6 +180,13 @@ export interface AgentMessagingDeps {
    * injected. Absent ⇒ never hibernated, and only a `targetBusy` refusal queues.
    */
   isHibernated?(nodeId: string): boolean
+  /**
+   * How a QUEUED delivery finally ended: its flush outcome, or `expired`. Absent ⇒ nobody asks. The
+   * station-failure monitor uses it so a queued notice's chip reports what actually happened rather
+   * than "queued" forever (station-notice.ts); read at call time, so a shell may assign it after
+   * `createDeliveryQueue` has run.
+   */
+  onQueuedResult?(req: QueuedDeliveryRequest, outcome: AgentMessageOutcome): void
 }
 
 /**
@@ -286,7 +299,9 @@ export function createDeliveryQueue(
           qreq.verb === 'board-comment'
             ? (qreq as unknown as BoardCommentMessage)
             : {
-                verb: qreq.verb as AgentMessageDeliverRequest['verb'],
+                // A queued station notice flushes as a station notice: the verb rides the queue, so
+                // its app-authored body and its reversed ownership check survive the wait.
+                verb: qreq.verb as AgentMessageDeliveryInput['verb'],
                 sourceNodeId: qreq.sourceNodeId,
                 targetNodeId: qreq.targetNodeId,
                 body: qreq.body
@@ -316,8 +331,18 @@ export function createDeliveryQueue(
           now
         }),
       // The sender leg: a durable line where the sender's operator will see it.
-      onExpired: (req) => senderBoardLog(req, 'expired'),
-      onFlushed: (req, outcome) => senderBoardLog(req, outcome.kind),
+      onExpired: (req, info) => {
+        senderBoardLog(req, 'expired')
+        deps.onQueuedResult?.(req, {
+          kind: 'expired',
+          traceId: info.traceId,
+          queuedForMs: info.queuedForMs
+        })
+      },
+      onFlushed: (req, outcome) => {
+        senderBoardLog(req, outcome.kind)
+        deps.onQueuedResult?.(req, outcome)
+      },
       // Injected so a test pins TTL expiry deterministically; production uses the default setTimeout.
       ...(opts.schedule ? { schedule: opts.schedule } : {})
     },
@@ -567,6 +592,14 @@ export async function runDelivery(
   const now = deps.now ?? ((): number => Date.now())
   const board = req.verb === 'board-comment' ? req : null
   const ident = requestIdentity(req)
+  // The app's own station-failure notice (station-notice.ts): the SOURCE is the station the notice
+  // is about and the TARGET is the agent that opened it. It runs every gate below — scope, the
+  // per-project switch, runtime pane ownership, flow limits, the pane probes, the receipt — with
+  // two differences, both because the app, not the station, is the author: the body was composed
+  // in core from a closed table, and the creator check runs the OTHER way round (the recipient must
+  // have opened the station, which is how the recipient was chosen; re-asked here so a queued
+  // notice is re-validated at flush time like every other delivery).
+  const stationNotice = req.verb === STATION_NOTICE_VERB
 
   const projects = deps.projects()
   // WHO MAY BE ADDRESSED — the serialized store, never a live canvas (there is nothing to travel
@@ -581,9 +614,14 @@ export async function runDelivery(
   // A shell with a creator ledger (the Server Edition) authorizes control by which AGENT spawned
   // the target. A person's board comment is no agent's, and that shell serves no board-comment
   // delivery at all — refused by edition rather than squeezed through a ledger it was not built for.
+  // A station notice asks the ledger the other way round (see `stationNotice` above).
   if (!notPermitted && deps.callerOwnsTarget) {
     if (board) notPermitted = 'unsupported-edition'
-    else if (!deps.callerOwnsTarget(ident.sourceNodeId, req.targetNodeId))
+    else if (
+      !(stationNotice
+        ? deps.callerOwnsTarget(req.targetNodeId, ident.sourceNodeId)
+        : deps.callerOwnsTarget(ident.sourceNodeId, req.targetNodeId))
+    )
       notPermitted = 'caller-not-owner'
   }
   if (!notPermitted) {
@@ -681,7 +719,11 @@ export async function runDelivery(
         // The from-line is composed HERE from the store's title (oneLine'd inside buildEnvelope);
         // the renderer never supplies a string that ends up inside the frame — except a board
         // comment's author name, which is the local user's own presence name.
-        sourceTitle: board ? ident.sourceTitle : sourceNode?.title || ident.sourceNodeId,
+        sourceTitle: board
+          ? ident.sourceTitle
+          : stationNotice
+            ? STATION_NOTICE_FROM
+            : sourceNode?.title || ident.sourceNodeId,
         body,
         targetAgentId,
         targetBinaries: binariesFor(targetAgentId, deps.customAgents()),
@@ -734,7 +776,7 @@ const QUEUE_ON_BUSY: ReadonlySet<AgentMessageOutcome['kind']> = new Set([
  * once the flush delivers them.
  */
 export async function deliverFromControl(
-  req: AgentMessageDeliverRequest,
+  req: AgentMessageDeliveryInput,
   deps: AgentMessagingDeps
 ): Promise<{ outcome: AgentMessageOutcome; reply: AgentMessageReply }> {
   return deliverWithQueue(req, deps)
@@ -817,7 +859,32 @@ export async function deliverBoardCommentFromUi(
   return reply
 }
 
-/** Guard for the IPC boundary: the request came over a channel, so its shape is asserted here. */
+/**
+ * Deliver a station-failure notice into the pane of the agent that opened the station — the pane
+ * leg of `station-notice.ts`. The same gate chain and the same deliver-on-idle queue as `send`
+ * (a busy orchestrator is not interrupted; the notice waits for its next idle moment), with the
+ * app as the author. `body` must come from `stationNoticeBody`; nothing outside core can reach
+ * this function with a body of its own, because `STATION_NOTICE_VERB` is not an IPC verb.
+ */
+export async function deliverStationNotice(
+  notice: { stationNodeId: string; recipientNodeId: string; body: string },
+  deps: AgentMessagingDeps
+): Promise<AgentMessageOutcome> {
+  const { outcome } = await deliverFromControl(
+    {
+      verb: STATION_NOTICE_VERB,
+      sourceNodeId: notice.stationNodeId,
+      targetNodeId: notice.recipientNodeId,
+      body: notice.body
+    },
+    deps
+  )
+  return outcome
+}
+
+/** Guard for the IPC boundary: the request came over a channel, so its shape is asserted here.
+ *  `AGENT_MESSAGE_VERBS` does not contain `STATION_NOTICE_VERB`, so a notice with a body of the
+ *  caller's choosing is refused here — the one door a renderer has into this service. */
 export function isDeliverRequest(x: unknown): x is AgentMessageDeliverRequest {
   const r = x as AgentMessageDeliverRequest | null
   return (

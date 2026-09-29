@@ -51,6 +51,7 @@ import os from 'os'
 import { hookServer } from '../core/agents/hook-server'
 import { serverEditionControlHandler } from './control-unsupported'
 import { initServerCanvasControl, type ServerCanvasControl } from './canvas-control'
+import { registerStationNoticeIpc } from '../core/agents/station-notice'
 import { refreshNodeTokens } from '../core/agents/node-token-service'
 import { armServerNodeIdentity } from './node-identity-arm'
 import { wireServerCodexSharedIdentity } from './codex-shared-identity'
@@ -488,6 +489,10 @@ export async function startServer(
   // Set after the initial workspace load when the opt-in flag is on. The status listener is wired
   // now so the runtime, once present, consumes the exact same normalized stream as the UI/mirror.
   let canvasControl: ServerCanvasControl | null = null
+  // Station-failure notices: registered whether or not canvas control comes up, so a browser tab's
+  // `list` answers "none" rather than an unknown channel. Only the canvas-control runtime has a
+  // creator ledger, so only it has stations to report.
+  registerStationNoticeIpc(platform, () => canvasControl?.stationNotices ?? null)
   const { contextTail, geminiContextTail, codexContextTail } = wireAgentStatus(platform, {
     onEvent: (event) => canvasControl?.onAgentEvent(event)
   })

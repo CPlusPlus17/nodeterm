@@ -35,7 +35,8 @@ export function stationNodeFromFlow(n: CanvasNode): StationNodeLike {
     kind: n.type,
     title: data.title,
     agentId: data.agentId,
-    queued: !!data.pendingLaunch
+    queued: !!data.pendingLaunch,
+    openedBy: data.openedBy
   }
 }
 
@@ -48,7 +49,8 @@ export function stationNodeFromState(n: CanvasNodeState): StationNodeLike {
     kind: n.kind,
     title: n.title,
     agentId: n.agentId,
-    queued: !!n.pendingLaunch
+    queued: !!n.pendingLaunch,
+    openedBy: n.openedBy
   }
 }
 

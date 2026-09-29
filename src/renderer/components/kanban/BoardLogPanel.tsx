@@ -27,6 +27,7 @@ import {
   type MentionCandidate
 } from '../../lib/boardMentions'
 import { isBrowserRuntime } from '../../bridge/runtime'
+import { stationTrigger } from '@shared/station-notice'
 import type { KanbanSession } from './KanbanView'
 
 interface BoardLogPanelProps {
@@ -91,10 +92,20 @@ export function eventBody(e: BoardLogEvent): string {
       return `started ${runName(e)} on this issue`
     case 'run-ended':
       return `closed ${runName(e)}${e.run?.end ? ` (last state: ${e.run.end})` : ''}`
+    case 'station-failed':
+      // Rendered from the closed reason table, never from anything the station wrote: `to` is a
+      // reason CODE, and an unknown one (a newer peer, a hand edit) reads as a plain "stopped".
+      return `told this agent that station ${stationName(e)} stopped: ${stationTrigger(e.to)?.label ?? 'it stopped'}`
     default:
       // A newer peer may write event types this build doesn't know — show them neutrally.
       return `updated this card`
   }
+}
+
+/** `"Build UI" (term-1a2b)` — the station as the notice named it. Text only, like `runName`. */
+function stationName(e: BoardLogEvent): string {
+  const id = typeof e.from === 'string' && e.from ? ` (${e.from})` : ''
+  return typeof e.title === 'string' && e.title ? `"${e.title}"${id}` : `${e.from ?? 'a station'}`
 }
 
 /** "Claude session term-1a2b" — the node title when the event recorded one, else the node id. */

@@ -16,6 +16,13 @@
  *    wait then read as the opener — a pipeline's upstream station showed the next one as its team,
  *    and a verify panel's reviewed node showed its reviewers. Among the remaining (opener) ropes
  *    the first into a node wins, so a duplicate cannot put one station on two teams.
+ *    A node that RECORDS its opener (`data.openedBy`, stamped by the open verbs where they draw the
+ *    opener's rope — lib/stationOpener) is claimed only by that opener's rope: the recorded name is
+ *    the fact, the rope is what keeps it in force (delete the rope and the station leaves the team,
+ *    exactly as the station-failure notice reads the same pair). That closes the residual
+ *    `markLegacyWaitRopes` names — a canvas pruned and saved before waits were marked has lost its
+ *    opener rope, and its first surviving wait would otherwise read as the opener. A node with no
+ *    recorded opener (opened before the field existed) keeps the rope rule above.
  * 2. **Unknown is unknown, never done.** Agent state is transient; after an app restart nobody has
  *    reported yet. A station with no state reads `unknown` and does not count toward N. The idle
  *    facts that survive a restart — `paused` / `hibernated` — count as a finished turn: both are
@@ -41,6 +48,7 @@
  */
 import { capabilityAgentId, hasHooks, type AgentId } from '@shared/agents/config'
 import { isWaitRope } from './edgeModel'
+import { isSafeNodeId } from '@shared/safe-id'
 import type { AgentNodeStatus } from '../state/agentStatus'
 
 export type StationKind =
@@ -72,10 +80,18 @@ export interface StationNodeLike {
   title?: unknown
   agentId?: unknown
   queued?: boolean
+  /** The node's recorded opener (`data.openedBy`), when it has one. Hostile input: checked here. */
+  openedBy?: unknown
 }
 
 /** Shared empty list, so a card with no stations keeps a stable prop. */
 export const NO_STATIONS: readonly TeamStation[] = Object.freeze([])
+
+/** The opener a node records, when it is an id we would address and not the node itself. */
+function recordedOpener(node: StationNodeLike | undefined): string | undefined {
+  const o = node?.openedBy
+  return typeof o === 'string' && isSafeNodeId(o) && o !== node?.id ? o : undefined
+}
 
 /** An OPENER rope, or null — for anything unreadable and for a wait rope (rule 1). */
 function readOpenerRope(r: unknown): { source: string; target: string } | null {
@@ -118,6 +134,10 @@ export function stationsByOpener(
     for (const raw of ropes) {
       const rope = readOpenerRope(raw)
       if (!rope || opened.has(rope.target)) continue
+      // A recorded opener names the one rope that may claim this node (rule 1); any other rope
+      // into it is passed over, not allowed to claim it first.
+      const recorded = recordedOpener(sessions.get(rope.target))
+      if (recorded && recorded !== rope.source) continue
       // The first opener rope into a target claims it, whether or not its source is still here —
       // a stored (unpruned) file can still hold the rope of an opener that was deleted.
       opened.add(rope.target)

@@ -582,6 +582,13 @@ export function buildStubApi(): Omit<
         error: 'Board comments reach agents only in the desktop app.',
         result: { kind: 'notPermitted', reason: 'unsupported-edition' }
       })
+    },
+    // Inert by default: the Server Edition overrides it with the real bridge
+    // (`buildStationNoticeApi`), and a relay tab keeps this — its stations belong to the host's core.
+    stationNotice: {
+      list: async () => [],
+      onChanged: noopUnsub,
+      reportDropped: noop
     }
   } satisfies Omit<
     NodeTerminalApi,

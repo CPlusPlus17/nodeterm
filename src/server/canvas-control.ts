@@ -5,11 +5,14 @@ import path from 'node:path'
 import {
   createDeliveryQueue,
   deliverFromControl,
+  deliverStationNotice,
   messagingEnabledVia,
   onMessagingAgentEvent,
   type AgentMessagingDeps
 } from '../core/agents/agent-messaging'
 import { paneOwnerProject } from '../core/agents/pane-ownership'
+import { StationNoticeMonitor } from '../core/agents/station-notice'
+import { stationRecipientFromOwner } from '../shared/station-notice'
 import {
   mirrorEntry,
   nodeState
@@ -83,6 +86,8 @@ export interface ServerCanvasControlDeps {
 export interface ServerCanvasControl {
   handler: ReturnType<typeof createServerEditionControlHandler>
   onAgentEvent(event: NormalizedAgentEvent): void
+  /** Station-failure notices for the stations agents opened during THIS server run. */
+  stationNotices: StationNoticeMonitor
   installSkillInto(configDir: string): void
   stop(): void
 }
@@ -224,6 +229,30 @@ export async function initServerCanvasControl(
   const queue = createDeliveryQueue(messaging)
   messaging.queue = queue
 
+  // Station-failure notices. The recipient is the CREATOR LEDGER's answer — who opened the station
+  // during this server run — which is this edition's ownership rule for every verb; a restart
+  // clears it, so a station opened before one has nobody to tell. The pane leg is the same
+  // messaging service `send` uses (creator check reversed: the recipient must have opened the
+  // station), and the canvas leg is the board log plus a push to every attached browser tab.
+  // DROPPED arrives only from a browser tab that shows the node (its liveness check); a server with
+  // no tab attached reports errored and long-blocked stations only.
+  const stationNotices = new StationNoticeMonitor({
+    now: () => Date.now(),
+    recipientFor: (stationNodeId) =>
+      stationRecipientFromOwner(
+        deps.workspaceStore.persistedCanvases(),
+        stationNodeId,
+        factory.openerOf(stationNodeId)
+      ),
+    pendingQuestionOf: (nodeId) => mirrorEntry(nodeId)?.pendingQuestion?.toolUseId,
+    appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry),
+    deliver: (notice) => deliverStationNotice(notice, messaging),
+    publish: (views) => platform().broadcast(IPC.stationNoticeChanged, views),
+    exists: (nodeId) => deps.workspaceStore.projectIdsForNode(nodeId).length > 0
+  })
+  stationNotices.start()
+  messaging.onQueuedResult = (req, outcome) => stationNotices.onQueuedResult(req, outcome)
+
   const actions: ServerEditionControlActions = {
     openProject: (sourceNodeId, args, verified) =>
       factory.openProject(sourceNodeId, args, verified),
@@ -262,11 +291,14 @@ export async function initServerCanvasControl(
     onAgentEvent: (event) => {
       onMessagingAgentEvent(event, queue)
       factory.onAgentEvent(event)
+      stationNotices.onAgentEvent(event)
     },
+    stationNotices,
     installSkillInto,
     stop: () => {
       factory.stop()
       queue.resetForTests()
+      stationNotices.stop()
     }
   }
 }

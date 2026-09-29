@@ -70,6 +70,7 @@ import {
 import type { PeerIdentity } from '../../shared/presence'
 import type { PaneOwner } from '../../shared/agents/pane-owner-predicate'
 import { buildStubApi, unsupported } from './stubs'
+import { sanitizeStationNotices } from '@shared/station-notice'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 import { encodePcmForWire } from './speech-encode'
 import { type FrameTransport, WebSocketFrameTransport } from './frame-transport'
@@ -668,6 +669,27 @@ export function buildFilesApi(
 }
 
 /**
+ * The Server Edition's station-failure notices — REAL, because the server's canvas-control runtime
+ * opens stations headlessly and its monitor is the one that decides (src/core/agents/
+ * station-notice.ts). Kept OUT of `buildAgentApi` on purpose: that builder is spread into relay
+ * tabs too, and a relay tab's stations are the host's to report, never this browser's.
+ */
+export function buildStationNoticeApi(client: RpcClient): Pick<NodeTerminalApi, 'stationNotice'> {
+  return {
+    stationNotice: {
+      list: () =>
+        (client.request(IPC.stationNoticeList) as Promise<unknown>).then(sanitizeStationNotices, () => []),
+      onChanged: (cb) =>
+        client.subscribe(IPC.stationNoticeChanged, ((views: unknown) =>
+          cb(sanitizeStationNotices(views))) as Listener),
+      reportDropped: (nodeId, dropped) => {
+        void client.request(IPC.stationNoticeDropped, nodeId, dropped).catch(() => undefined)
+      }
+    }
+  }
+}
+
+/**
  * Build the top-level agent-event subscriptions (`onAgentStatus` / `onSubagentActivity`) over an
  * RpcClient. These mirror the preload's `.on(channel, …)` → `client.subscribe(channel, …)` split:
  * each takes a listener and returns an unsubscribe. Declared against its `NodeTerminalApi` slice so
@@ -1187,6 +1209,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildRealApi(client),
     ...buildFilesApi(client),
     ...buildAgentApi(client),
+    ...buildStationNoticeApi(client),
     ...buildCanvasApi(client),
     ...buildPresenceApi(client),
     ...buildSpeechApi(client),

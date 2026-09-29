@@ -146,7 +146,10 @@ does not already say it (`lib/cardRedundancy.ts`); the card modal keeps every fa
 `sanitizeLinks` on every load and save seam, and a reader still tolerates anything. A wait rope
 (`--after`, the verify panel) is minted with `waitRopeId` (`ctrl-after-<dep>-<node>`), never with the
 opener's `ctrl-<source>-<node>` shape: rope ORDER does not survive the canvas pruning ropes to
-deleted nodes, so the id is the only thing that tells a wait from an opener.
+deleted nodes, so the id is the only thing that tells a wait from an opener. A node opened by a
+control verb also RECORDS its opener (`data.openedBy`); readers that ask "who opened this"
+(`stationsByOpener`, the station-failure notice) prefer that record and still require the opener's
+rope to exist.
 
 Before adding a GitHub read, check what the existing poll already fetches. Pull request cards
 needed no new request at all: `/repos/{repo}/issues` returns pull requests, and the client used to
@@ -331,6 +334,16 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   The guard is `test/acceptance/control-verb-disposition.test.ts`, which walks main's verb table
   against the renderer's dispositions — deliberately cross-layer, because that is the only way
   "every verb" is checked rather than remembered.
+
+- **A new canvas-control open path must record who opened the node.** When a station stops, the
+  agent that opened it is told (`src/core/agents/station-notice.ts`) — and a rope alone cannot say
+  who that is, because an `--after` node is roped to the stations it waited on too, with the same id
+  shape. So every open verb stamps `data.openedBy` where it draws the opener's rope
+  (`lib/stationOpener.ts`; the live paths get it from `connect`, the off-canvas and cold-open writes
+  call `withOpenedBy` themselves). An open path that ropes without stamping compiles and passes, and
+  its stations fail in silence; `src/main/station-notice-wiring.test.ts` pins the sites that exist.
+  The notice text is app-authored and fixed — never add anything the STATION wrote to it (its
+  output is exactly where an injection aimed at the orchestrator would come from).
 
 - **A location from `.nodeterm/settings.json` is hostile input.** That file is committed to the
   repository, so anyone who can commit wrote it. A worktree location it produces must pass

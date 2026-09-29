@@ -610,6 +610,12 @@ export class HeadlessNodeFactory {
     this.publishChangeSet(project, nodes, [])
   }
 
+  /** Who opened `nodeId` during THIS server run (and into which project), or undefined — the
+   *  station-failure notice's recipient rule on this edition (src/core/agents/station-notice.ts). */
+  openerOf(nodeId: string): HeadlessNodeOwner | undefined {
+    return this.ownership.ownerOf(nodeId)
+  }
+
   /** Literal creator ownership: a caller may act only on nodes it freshly spawned this run. */
   ownsSpawn(sourceNodeId: string, nodeId: string): boolean {
     return this.ownership.ownerOf(nodeId)?.sourceNodeId === sourceNodeId

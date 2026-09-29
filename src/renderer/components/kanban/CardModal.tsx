@@ -40,6 +40,7 @@ import { useSession } from '../../session/session'
 // retries. Importing one function out of the canvas node module is safe: TerminalNode.tsx already
 // imports from `components/kanban/*`, and none of those re-import CardModal.
 import { nodeUploadScope, wakeHibernatedNode } from '../../nodes/TerminalNode'
+import { StationFailedChip } from '../StationFailedChip'
 import { droppedPaths } from '../../terminal/file-drop'
 import { requestTerminalFocusOnExit } from '../../terminal/useMdModeFocus'
 import type { ProjectKanban } from '@shared/types'
@@ -383,6 +384,13 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
               when the node is being driven even though the drive lands on the CANVAS webview, not
               this modal's — which is what the user needs to know (Task 6.3). */}
           {isBrowser && <BrowserDrivingIndicator nodeId={session.id} />}
+          {isTerminal && (
+            // The orchestrator's own card: the canvas header's STATION FAILED chip, same component.
+            <StationFailedChip
+              nodeId={session.id}
+              className="kanban-badge kanban-badge--station-failed"
+            />
+          )}
           {isTerminal && dropped && (
             // Same argument as PAUSED below, with a worse cause: the modal co-attaches a live view
             // of a pane that holds a bare shell, and without this the user would be looking at the
