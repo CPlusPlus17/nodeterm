@@ -47,10 +47,12 @@ export async function resolveIssueFlagFor(
 /**
  * `resolveIssueFlagFor`, behind the renderer's authorization belt. A `#N` lookup runs the GitHub
  * host controller for a project (`git remote`, `gh auth`) and its answer tells the caller whether
- * that project has a board — so it runs only for a call the open paths would ACCEPT: a source that
+ * that project has a board — so it runs only for a caller the open paths AUTHORIZE: a source that
  * is a known control-capable agent, and a `--project` target `resolveProjectTarget` allows (the very
- * call the `--project` path makes). A call the paths would refuse is refused HERE, with the path's
- * own sentence, before anybody is asked. Main's `gateProjectTarget` (identity + own-or-granted) has
+ * call the `--project` path makes). A caller they would refuse is refused HERE, with the path's own
+ * sentence, before anybody is asked. Argument-shape refusals (`--dry-run` with `--project`, a
+ * `--group`/`--after` into another project, `--run-now` with `--after`) still come from the paths,
+ * after this; they say nothing about who may look at which project. Main's `gateProjectTarget` (identity + own-or-granted) has
  * already run on the desktop; this is the renderer not depending on it, the order the Server
  * Edition keeps too. It stays ahead of the paths because each of them snapshots the projects store
  * synchronously, and an await inside one lets a tab switch land in between (#443 class).
@@ -115,10 +117,15 @@ function issueFlagScope<P extends ProjectTargetProject & ControlProject>(input: 
   if (route.kind === 'unknown' || route.kind === 'blocked') {
     return { ok: false, error: 'source node is not on an open canvas' }
   }
-  const ownerId = route.kind === 'active' ? input.activeProjectId : route.projectId
-  const stored = input.projects.find((project) => project.id === ownerId)?.nodes
+  // On the active project but not on the live canvas yet (the boot load is in flight): the path
+  // waits for the live node and judges ITS agent id, which the load may still have to migrate (a
+  // legacy `tags:['claude']` node stores none). The source is the caller's own project either way,
+  // so this gate defers to that verdict rather than being stricter than it.
+  if (route.kind === 'active') return { ok: true, projectId: input.activeProjectId }
+  const stored = input.projects.find((project) => project.id === route.projectId)?.nodes
     .find((node) => node.id === input.sourceNodeId)
+  // The cold-open path judges the SERIALIZED node, exactly as here.
   return stored && sourceIsControlCapable(stored.agentId)
-    ? { ok: true, projectId: ownerId }
+    ? { ok: true, projectId: route.projectId }
     : { ok: false, error: 'source node is not a control-capable agent' }
 }

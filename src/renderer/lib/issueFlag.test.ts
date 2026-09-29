@@ -150,6 +150,18 @@ describe('resolveIssueFlagForCall (the gates run before anybody is asked)', () =
     expect(ask).not.toHaveBeenCalled()
   })
 
+  it('never refuses a source on the ACTIVE project that is not on the live canvas yet', async () => {
+    // The boot load is still in flight: the path waits for the live node, whose agent id the load
+    // may still have to MIGRATE (a legacy `tags:['claude']` node has no stored agentId). The gate
+    // must not be stricter than that path, so it resolves against the active project and leaves
+    // the capability verdict to it.
+    const ask = vi.fn(async () => 'o/r')
+    const legacy = [{ id: 'mine', nodes: [{ id: 'booting' }], kanban: board }]
+    expect(await resolveIssueFlagForCall(call({ sourceNodeId: 'booting', liveNodes: [], projects: legacy }), ask))
+      .toMatchObject({ ok: true })
+    expect(ask).toHaveBeenCalledWith('mine')
+  })
+
   it('leaves an open without --issue to the paths (no gate, nobody asked)', async () => {
     const ask = vi.fn(async () => 'o/r')
     expect(await resolveIssueFlagForCall(call({ raw: undefined, sourceNodeId: 'ghost' }), ask)).toEqual({ ok: true })
