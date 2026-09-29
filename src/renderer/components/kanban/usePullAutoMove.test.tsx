@@ -7,7 +7,7 @@ import type { GitHubPullBoard } from '@shared/github-pull-status'
 import { useProjects } from '../../state/projects'
 import { useSettings } from '../../state/settings'
 import { planPullAutoMoves } from '../../lib/pullAutoMove'
-import { autoMoveCardsSig, usePullAutoMove } from './usePullAutoMove'
+import { autoMoveCardsSig, REFUSED_CLAIM_RETRY_MS, usePullAutoMove } from './usePullAutoMove'
 
 // The real planner, counted: a pass that re-plans an unchanged board is the chatter this pins.
 vi.mock('../../lib/pullAutoMove', async (importOriginal) => {
@@ -167,6 +167,44 @@ describe('usePullAutoMove', () => {
   it('the card signature cannot be forged by an id carrying separators', () => {
     expect(autoMoveCardsSig([{ id: 'a","terminal","feat/x', kind: 'sticky' }]))
       .not.toBe(autoMoveCardsSig([{ id: 'a', kind: 'terminal', worktreeBranch: 'feat/x' }]))
+  })
+
+  it('asks again after a refusal once the retry window passes — a refusal can be transient', async () => {
+    // The host refuses while it is not bound to the project yet (or mid cache-clear); remembering
+    // that answer for the board's lifetime would lose the move until the board was reopened.
+    let clock = 1_000_000
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    try {
+      let bound = false
+      const api = {
+        notePullWaits: vi.fn(async () => 0),
+        claimPullAutoMove: vi.fn(async () => bound)
+      }
+      const onAutoMove = vi.fn()
+      const root = createRoot(document.createElement('div'))
+      act(() => root.render(<Probe api={api} pullBoard={merged} onAutoMove={onAutoMove} />))
+      await settle()
+      expect(api.claimPullAutoMove).toHaveBeenCalledTimes(1)
+      bound = true
+      // Inside the window: a fresh read does not re-ask.
+      clock += REFUSED_CLAIM_RETRY_MS - 1
+      act(() => root.render(<Probe api={api} pullBoard={{ ...merged }} onAutoMove={onAutoMove} />))
+      await settle()
+      expect(api.claimPullAutoMove).toHaveBeenCalledTimes(1)
+      // Past it: the next read asks again, wins, and moves the card.
+      clock += 2
+      act(() => root.render(<Probe api={api} pullBoard={{ ...merged }} onAutoMove={onAutoMove} />))
+      await settle()
+      expect(api.claimPullAutoMove).toHaveBeenCalledTimes(2)
+      expect(onAutoMove).toHaveBeenCalledTimes(1)
+      // A WON claim is never asked again, however long the board stays open.
+      clock += 10 * REFUSED_CLAIM_RETRY_MS
+      act(() => root.render(<Probe api={api} pullBoard={{ ...merged }} onAutoMove={onAutoMove} />))
+      await settle()
+      expect(api.claimPullAutoMove).toHaveBeenCalledTimes(2)
+    } finally {
+      now.mockRestore()
+    }
   })
 
   it('does not send a second claim while the first is still in flight', async () => {
