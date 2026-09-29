@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ProjectKanban } from '@shared/types'
+import type { BridgeLink, CanvasNodeState, ProjectKanban } from '@shared/types'
 import { AGENT_CONFIG, BUILTIN_AGENT_IDS, type AgentId } from '@shared/agents/config'
 import { useProjects } from '../../state/projects'
 import { useSettings } from '../../state/settings'
@@ -25,6 +25,9 @@ import { boardLogEvents } from '../../lib/boardLogDiff'
 import { markWorkspaceDirty } from '../../state/workspaceDirty'
 import type { KanbanCreateChoice, KanbanSession } from './KanbanView'
 import type { NodeIcon } from '@shared/node-icon'
+import { columnCategory } from '@shared/kanban-category'
+import { NO_STATIONS, stationsByOpener, type TeamStation } from '../../lib/teamProgress'
+import { stationNodeFromState } from '../../state/teamStations'
 
 /**
  * Global (Omni) Kanban overview — one swimlane per open project.
@@ -52,6 +55,10 @@ interface SwimlaneProps {
   projectColor?: string
   board: ProjectKanban
   sessions: KanbanSession[]
+  /** The project's persisted ropes and nodes — the source of each card's team-progress ring
+   *  (lib/teamProgress). The ropes are hand-editable input; the reader tolerates anything. */
+  ropes?: BridgeLink[]
+  nodes: CanvasNodeState[]
   onChangeBoard: (next: ProjectKanban) => void
   onOpenNode: (nodeId: string, projectId: string) => void
   onCreateNode: (projectId: string, choice: KanbanCreateChoice, columnId: string | null) => void
@@ -65,7 +72,7 @@ interface SwimlaneProps {
 }
 
 const Swimlane = memo(function Swimlane({
-  projectId, projectName, projectColor, board, sessions, onChangeBoard, onOpenNode, onCreateNode, onDeleteNode, onRenameNode, onEditSticky, onBrowserNav, onSetIcon, onModalChange, highlight
+  projectId, projectName, projectColor, board, sessions, ropes, nodes, onChangeBoard, onOpenNode, onCreateNode, onDeleteNode, onRenameNode, onEditSticky, onBrowserNav, onSetIcon, onModalChange, highlight
 }: SwimlaneProps) {
   const dragRef = useRef<{ kind: 'column'; id: string } | { kind: 'card'; id: string } | null>(null)
   const [modalNodeId, setModalNodeId] = useState<string | null>(null)
@@ -87,6 +94,14 @@ const Swimlane = memo(function Swimlane({
   }, [requestedCardNodeId, sessions])
 
   const byId = useMemo(() => new Map(sessions.map(s => [s.id, s])), [sessions])
+  // Team progress per opener. The previous map is threaded back in so an unchanged team keeps its
+  // array identity and the memoized card does not re-render.
+  const teamsRef = useRef<ReadonlyMap<string, readonly TeamStation[]>>()
+  const teams = useMemo(() => {
+    teamsRef.current = stationsByOpener(ropes, Array.isArray(nodes) ? nodes.map(stationNodeFromState) : [], teamsRef.current)
+    return teamsRef.current
+  }, [ropes, nodes])
+  const travel = useCallback((nodeId: string) => onOpenNode(nodeId, projectId), [onOpenNode, projectId])
   const sessionIds = useMemo(() => sessions.map(s => s.id), [sessions])
 
   const paletteLabels = useMemo(() => boardLabels(board), [board])
@@ -174,6 +189,7 @@ const Swimlane = memo(function Swimlane({
   const lanesFor = (columnId: string | null): KanbanLane[] => {
     const cards = columnId === null ? columnCards.ungrouped : columnCards.byColumn.get(columnId) ?? []
     const onDropAt = dropAtCardFor(columnId)
+    const category = columnId === null ? undefined : columnCategory(board.columns.find(c => c.id === columnId))
     return [{
       sourceId: 'sessions' as const,
       count: cards.length,
@@ -188,6 +204,9 @@ const Swimlane = memo(function Swimlane({
           onDragStart={handleCardDragStart}
           onDragEnd={handleDragEnd}
           onDropAt={onDropAt}
+          team={teams.get(s.id) ?? NO_STATIONS}
+          onTravel={travel}
+          columnCategory={category}
         />
       ))
     }]
@@ -282,6 +301,8 @@ const Swimlane = memo(function Swimlane({
           onEditSticky={(t) => onEditSticky(projectId, modalNodeId, t)}
           onBrowserNav={(patch) => onBrowserNav(projectId, modalNodeId, patch)}
           onSetIcon={(icon) => onSetIcon(projectId, modalNodeId, icon)}
+          team={teams.get(modalNodeId) ?? NO_STATIONS}
+          onTravel={(nodeId) => { setModalNodeId(null); travel(nodeId) }}
         />
       )}
     </div>
@@ -401,6 +422,8 @@ export const GlobalKanbanView = memo(function GlobalKanbanView() {
               projectColor={p.color}
               board={board}
               sessions={sessions}
+              ropes={p.ropes}
+              nodes={p.nodes}
               onChangeBoard={next => onChangeBoard(p.id, next)}
               onOpenNode={onOpenNode}
               onCreateNode={onCreateNode}

@@ -11092,6 +11092,98 @@ button.pull-checks__name {
   color: var(--text);
   background: rgba(var(--tint-rgb), 0.08);
 }
+/* Team progress — "N of M done" over the stations a session opened (lib/teamProgress). One
+   component on the board card, the card modal header and the canvas node header. The arc is the
+   done fraction; the dot says the strongest thing a station is asking for. */
+.team-progress-wrap {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.team-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 0 6px 0 3px;
+  border: 1px solid rgba(var(--tint-rgb), 0.16);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.team-progress:hover {
+  color: var(--text);
+  background: rgba(var(--tint-rgb), 0.08);
+}
+.team-progress__ring {
+  flex: 0 0 auto;
+}
+.team-progress__track {
+  fill: none;
+  stroke: rgba(var(--tint-rgb), 0.2);
+  stroke-width: 2;
+}
+.team-progress__arc {
+  fill: none;
+  stroke: var(--state-success);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.team-progress--complete {
+  color: var(--text);
+}
+.team-progress__attn {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--state-working);
+}
+.team-progress--needs .team-progress__attn {
+  background: var(--state-attention);
+}
+.team-progress--error .team-progress__attn {
+  background: var(--state-error);
+}
+/* The station list's state dots (ContextMenu row icons). */
+.team-progress__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(var(--tint-rgb), 0.35);
+}
+.team-progress__dot--done,
+.team-progress__dot--paused {
+  background: var(--state-success);
+  border-color: transparent;
+}
+.team-progress__dot--working {
+  background: var(--state-working);
+  border-color: transparent;
+}
+.team-progress__dot--needs {
+  background: var(--state-attention);
+  border-color: transparent;
+}
+.team-progress__dot--errored,
+.team-progress__dot--dropped {
+  background: var(--state-error);
+  border-color: transparent;
+}
+.team-progress__dot--queued {
+  background: var(--state-queued);
+  border-color: transparent;
+}
+/* The session name in the card modal header: sized to its text, not a flex-filling detail line. */
+.kanban-modal__session {
+  flex: 0 1 auto;
+  max-width: 220px;
+  font-size: 11px;
+}
 @media (max-width: 520px) {
   .kanban-header {
     gap: 6px;

@@ -708,6 +708,8 @@ import {
 import type { CodexAccount } from '@shared/codex-account'
 import { useSystemCodexAccount } from '../state/systemCodexAccount'
 import { kanbanSessionsFrom, toKanbanSession } from './toKanbanSession'
+import type { TeamStation } from '../lib/teamProgress'
+import { canvasTeamStations, useTeamStations } from '../state/teamStations'
 import { applyPullAutoMove } from '../lib/pullAutoMove'
 import { useWallpaperBackground, wallpaperLayers } from '../state/wallpaper'
 import { showCanvasDots } from '../lib/canvasDots'
@@ -9944,6 +9946,22 @@ export function Canvas() {
     [nodes, perProjectKanbanOpen, activeProjectSsh]
   )
 
+  // Team progress (lib/teamProgress): the stations each session opened, read off the live control
+  // ropes — the first rope into a node is its opener's; a later one is an `--after` wait. Published
+  // to a small store so a terminal node's header draws the same ring its board card does. The
+  // previous map is threaded back in, so an unchanged team keeps its array identity and a node
+  // header (or card) subscribed to it does not re-render on every drag frame. A canvas without
+  // ropes — most of them — skips the node walk entirely.
+  const teamStationsRef = useRef<ReadonlyMap<string, readonly TeamStation[]>>()
+  const teamStations = useMemo(() => {
+    const next = canvasTeamStations(controlEdges, nodes, teamStationsRef.current)
+    teamStationsRef.current = next
+    return next
+  }, [controlEdges, nodes])
+  useEffect(() => {
+    useTeamStations.getState().set(teamStations)
+  }, [teamStations])
+
   // Create a node from the board's per-column "+ New" menu: it lands on the canvas (view
   // center) and, for a real column, is assigned there. The assignment is written directly —
   // NOT through the board's pruned commit path: the fresh node isn't in the derived session
@@ -15742,6 +15760,7 @@ export function Canvas() {
           accountMenuItems={accountSwitchRows}
           onAutoMoveFromPulls={autoMoveCardFromPulls}
           issueAgentMenu={issueAgentMenu}
+          teams={teamStations}
         />
       )}
       <UpdateCard />

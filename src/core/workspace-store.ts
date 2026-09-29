@@ -14,6 +14,7 @@ import {
   projectToFile, resolveNodes, sameProjectContent,
   sanitizeLoadedClosedSessions, sanitizeNodeTriggers, serializeProjectFile, splitWorkspace,
   sanitizeKanban,
+  sanitizeLinks,
   type IndexEntryV3, type ProjectFileV1, type WorkspaceIndexV3
 } from './workspace-files'
 import { readProjectSettingsFile, writeProjectSettingsFile } from './project-settings-files'
@@ -351,9 +352,12 @@ export class WorkspaceStore {
         // same kanban shape guard here — a v1/hand-edited board would otherwise crash the render —
         // and the same trigger shape rule (workspace.json is hand-editable input too).
         // `rest` drops BOTH guarded fields; each is added back below only if it passes its guard.
-        const { kanban, closedSessions, layouts, layoutViewports, ...rest } = e.project
+        const { kanban, closedSessions, layouts, layoutViewports, bridges, ropes, ...rest } = e.project
         const admittedKanban = sanitizeKanban(kanban)
         const base = admittedKanban ? { ...rest, kanban: admittedKanban } : rest
+        // The canvas links, like the board: a non-list or a `null` entry threw on project load.
+        const admittedBridges = bridges ? sanitizeLinks(bridges) : undefined
+        const admittedRopes = ropes ? sanitizeLinks(ropes) : undefined
         // An inline project's embedded layouts are hand-editable input exactly like a git-shared
         // file's, and they never pass through `fileToProject` on this branch, so they are
         // sanitized (and their cameras pruned against them) here instead.
@@ -369,6 +373,8 @@ export class WorkspaceStore {
           project: {
             ...base,
             nodes: sanitizeNodeTriggers(base.nodes),
+            ...(admittedBridges ? { bridges: admittedBridges } : {}),
+            ...(admittedRopes ? { ropes: admittedRopes } : {}),
             ...(history ? { closedSessions: history } : {}),
             ...(admitted ? { layouts: admitted } : {}),
             ...(views ? { layoutViewports: views } : {})
@@ -2407,13 +2413,20 @@ function migrateLegacy(parsed: unknown): Workspace {
       // migrates the file.
       const layouts = sanitizeLayouts(p.layouts)
       const views = pruneLayoutViewports(sanitizeLayoutViewports(p.layoutViewports), layouts)
+      // And the canvas links, for the same reason: a malformed rope threw at project load.
+      const bridges = p.bridges ? sanitizeLinks(p.bridges) : undefined
+      const ropes = p.ropes ? sanitizeLinks(p.ropes) : undefined
       const unchanged = history === p.closedSessions
         && layouts === p.layouts
         && views === p.layoutViewports
+        && bridges === p.bridges
+        && ropes === p.ropes
       if (unchanged) return p
-      const { closedSessions: _c, layouts: _l, layoutViewports: _v, ...rest } = p
+      const { closedSessions: _c, layouts: _l, layoutViewports: _v, bridges: _b, ropes: _r, ...rest } = p
       return {
         ...rest,
+        ...(bridges ? { bridges } : {}),
+        ...(ropes ? { ropes } : {}),
         ...(history ? { closedSessions: history } : {}),
         ...(layouts ? { layouts } : {}),
         ...(views ? { layoutViewports: views } : {})

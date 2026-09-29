@@ -5854,6 +5854,43 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     while the user is away: a window focus in between drops it (`installHandoffFocusReset`), or the
     next chime — for a turn the user sat and watched — was swallowed. v1 is agent-driven
     moves only: a teammate's move arriving by git, or the phone's relay move, pings nobody.
+  - **Team progress** (`lib/teamProgress.ts`, `components/TeamProgressChip.tsx`): a session that
+    opened stations shows "N of M done" as a small ring on its board card, its card modal header
+    AND its canvas node header — ONE component, so three views of one node cannot count
+    differently; clicking it lists the stations and a row travels to that node. A station is a
+    session node that is the target of the FIRST rope into it in `project.ropes` order: ropes carry
+    two relations with one `ctrl-<source>-<target>` id shape ("opened by" and an `--after` / verify
+    wait), nothing on the node records the opener, and every writer appends the opener's rope
+    before the same command's dep ropes (`connect` then `ropeDeps`; `missingDepRopes` heals after
+    the file's own ropes). Without that rule every `--after` upstream read as a team leader. Rules
+    the count keeps: **unknown is unknown, never done** (state is transient; after a restart a
+    station reads `unknown` until it reports), paused/hibernated count as a finished turn (both are
+    written only by an exit that refused a busy session), a held launch reads `queued`, `done` +
+    `lastTurnError` reads `errored` (the `--after` verdict), a station that can never report (plain
+    terminal, hook-less agent) is listed as "no status" and kept OUT of M (it would pin the ring
+    below complete forever — the line `--after` draws), and a deleted station is not a station.
+    Subscriptions: each chip reads `teamProgressSig` — one character per station, no ids — never
+    `byId`; the per-project board gets the teams as a prop from Canvas, the Omni lanes derive
+    theirs from the stored `p.ropes`/`p.nodes`, and the canvas node header reads `useTeamStations`
+    (`state/teamStations.ts`, a transient store Canvas publishes from its live control ropes). The
+    previous map is threaded back into `stationsByOpener`, so an unchanged team keeps its array
+    identity across drag frames and nothing re-renders. Desktop + Server Edition identical;
+    Mobile: follow-up (the phone board would need the ropes).
+  - **The card does not repeat what its place says** (`lib/cardRedundancy.ts`). The session-name
+    chip is hidden when it is the card's title (agent titles auto-track it) — the same rule the
+    canvas node header has always had, now one function for both — and a past due date in a
+    done/closed column keeps its date but drops the overdue alarm. The card MODAL keeps both facts:
+    its header names a session that differs from the title, and its Due strip still says
+    "Overdue". Audited and NOT hidden (written in the module so the next audit does not re-derive
+    it): the card never names its column or its project, and there is no badge that restates a
+    column category — RUNNING / NEEDS YOU describe the agent's turn right now, which is exactly
+    what an idle card in In Progress needs distinguished.
+  - **`bridges` / `ropes` are admitted through `sanitizeLinks`** (`core/workspace-files.ts`) on the
+    same seams as `sanitizeKanban` — `fileToProject`, `projectToFile`, the inline-project branch
+    and the legacy v2 path of the store. They are git-shared, hand-editable input that every reader
+    maps as `BridgeLink[]`, and the canvas's rope restore threw on one `null` entry at project load.
+    A non-list is dropped, an entry without non-empty string `id`/`source`/`target` is dropped, and a
+    clean list comes back BY IDENTITY.
   **Phone** (nodeterm-ios): must at least not break on `category`, `rank` or `views` (extra JSON
   keys its board decoder ignores). The relay-served move now lands at the top with a rank, while
   the phone's direct-SSH writer (`KanbanBoardWriter`) still appends without one — the next desktop

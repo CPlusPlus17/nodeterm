@@ -138,6 +138,13 @@ so the live-state chips can never be saved into one. Board keys are
 registry commands in the `board` scope — the only scope allowed a bare letter, because it never
 fires while typing or in a terminal.
 
+A card chip that reads agent state subscribes to a **primitive signature** of the nodes it shows
+(`teamProgressSig`, `issueRunChipSig`), never to the whole `agentStatus.byId` map — that map changes
+on every hook event of every node. Before a card shows a fact, check that its place on the board
+does not already say it (`lib/cardRedundancy.ts`); the card modal keeps every fact the card drops.
+`project.ropes` / `bridges` are hostile input like the board: they are admitted through
+`sanitizeLinks` on every load and save seam, and a reader still tolerates anything.
+
 Before adding a GitHub read, check what the existing poll already fetches. Pull request cards
 needed no new request at all: `/repos/{repo}/issues` returns pull requests, and the client used to
 discard them. `/repos/{repo}/pulls` looks like the obvious endpoint and is the expensive one — it
