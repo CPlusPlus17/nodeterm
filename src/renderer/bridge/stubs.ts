@@ -589,6 +589,11 @@ export function buildStubApi(): Omit<
       list: async () => [],
       onChanged: noopUnsub,
       reportDropped: noop
+    },
+    // Same split: the Server Edition overrides it (`buildStationOutcomeApi`); a relay tab keeps this.
+    stationOutcome: {
+      list: async () => [],
+      onChanged: noopUnsub
     }
   } satisfies Omit<
     NodeTerminalApi,

@@ -233,7 +233,14 @@ import { useCodexIdentity, codexSharedIdentity, codexFallbackText } from '../sta
 import { codexApprovalCaps } from '../state/codexCli'
 import { useAgentStatus, agentStatusForApi, inferInterruptAfterSettle } from '../state/agentStatus'
 import { useLaunchDelivery } from '../state/launchDelivery'
-import { erroredDeps, launchTooltip } from '../lib/pendingLaunch'
+import { erroredDeps, launchTooltip, successDepFacts } from '../lib/pendingLaunch'
+import {
+  normalizeSuccessWaitHold,
+  successWaitExpired,
+  successWaitStatus,
+  successWaitSummary
+} from '@shared/station-outcome'
+import { useStationOutcomes } from '../state/stationOutcomes'
 import { StationFailedChip } from '../components/StationFailedChip'
 import { prHoldExpired, prHoldSummary } from '../lib/prWait'
 import { pullBoardFor, useGitHubIssues } from '../state/githubIssues'
@@ -2056,9 +2063,17 @@ export function TerminalNode({
     !observedLaunchDelivery &&
     !(pendingLaunch?.after?.length) &&
     !pendingLaunch?.awaitSetupGroup &&
-    !pendingLaunch?.afterPr
+    !pendingLaunch?.afterPr &&
+    !pendingLaunch?.afterSuccess
+  // Through the shape rule, memoized on the raw value: a malformed hold (a peer's mutation, a
+  // hand-edited file) reads as an unreadable, expired hold rather than throwing during render.
+  const rawSuccessHold = pendingLaunch?.afterSuccess
+  const successHold = useMemo(() => normalizeSuccessWaitHold(rawSuccessHold), [rawSuccessHold])
+  // The stations a `--after-success` wait names are ALSO in `after`; the tooltip speaks of them in
+  // the success sentence, so the plain list leaves them out rather than naming them twice.
+  const successDepIds = successHold && !successHold.invalid ? successHold.deps : []
   const pendingWaitingOn = [
-    ...(pendingLaunch?.after ?? []).map(
+    ...(pendingLaunch?.after ?? []).filter((depId) => !successDepIds.includes(depId)).map(
       (depId) => ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId
     ),
     // The other thing a launch can be held on: this worktree's project setup script. Named, or the
@@ -2099,6 +2114,47 @@ export function TerminalNode({
         deadline: prHold.invalid ? 'the project file holds an unreadable one' : new Date(prHold.deadlineAt).toLocaleString()
       }
     : undefined
+  // `--after-success`: where the wait stands, from the same facts the launch loop judges (the
+  // stations' reports, their turn state, whether they still exist). A PRIMITIVE signature per store,
+  // selected only for a node that has such a wait, so no other node re-renders on a report or a
+  // hook event.
+  const successOutcomeSig = useStationOutcomes((s) =>
+    successDepIds.map((d) => {
+      const r = Object.prototype.hasOwnProperty.call(s.byId, d) ? s.byId[d] : undefined
+      return r ? `${d}:${r.outcome}:${r.at}` : `${d}:-`
+    }).join('|')
+  )
+  const successStateSig = useAgentStatus((s) =>
+    successDepIds.map((d) => `${d}:${s.byId[d]?.state ?? '-'}:${s.byId[d]?.lastTurnError ? 'e' : ''}`).join('|')
+  )
+  const [, setSuccessClock] = useState(0)
+  useEffect(() => {
+    if (!successHold || successWaitExpired(successHold, Date.now())) return
+    const t = setTimeout(
+      () => setSuccessClock((v) => v + 1),
+      Math.min(successHold.deadlineAt - Date.now() + 50, 2 ** 31 - 1)
+    )
+    return () => clearTimeout(t)
+  }, [successHold])
+  const successTooltip = useMemo(() => {
+    if (!successHold) return undefined
+    const live = new Set(successDepIds.filter((d) => !!getNode(d)))
+    const facts = (d: string) =>
+      successDepFacts(d, useAgentStatus.getState().byId, live, useStationOutcomes.getState().byId)
+    const name = (d: string) => ((getNode(d) as CanvasNode | undefined)?.data.title as string) || d
+    return {
+      status: successWaitStatus(successHold, facts, Date.now()),
+      summary: successHold.invalid
+        ? 'a success wait that could not be read'
+        : successWaitSummary(successHold, facts, name),
+      deadline: successHold.invalid
+        ? 'the project file holds an unreadable one'
+        : new Date(successHold.deadlineAt).toLocaleString()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the two signatures are the triggers
+  }, [successHold, successOutcomeSig, successStateSig, getNode])
+  const successExpired = successTooltip?.status === 'expired'
+  const successBlocked = successTooltip?.status === 'blocked'
   const pendingErroredOn = erroredDepIds
     ? erroredDepIds
         .split(',')
@@ -5971,12 +6027,22 @@ export function TerminalNode({
         {pendingLaunch && !firstOpenInFlight && (
           <span
             className={`term-node__status term-node__status--queued nodrag${
-              (launchDelivery || prExpired) && !startingNow ? ' term-node__status--queued-warn' : ''
+              (launchDelivery || prExpired || successExpired || successBlocked) && !startingNow
+                ? ' term-node__status--queued-warn'
+                : ''
             }`}
-            title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip)}
+            title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip, successTooltip)}
           >
             <span className="term-node__status-dot" />
-            {startingNow ? 'STARTING' : launchDelivery ? '⚠ QUEUED' : prExpired ? '⚠ EXPIRED' : 'QUEUED'}
+            {startingNow
+              ? 'STARTING'
+              : launchDelivery
+                ? '⚠ QUEUED'
+                : prExpired || successExpired
+                  ? '⚠ EXPIRED'
+                  : successBlocked
+                    ? '⚠ BLOCKED'
+                    : 'QUEUED'}
             <button
               className="term-node__queued-run"
               disabled={session.source === 'relay' || startingNow}

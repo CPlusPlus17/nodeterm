@@ -184,7 +184,42 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     sticky: vi.fn(async () => ({ ok: true as const, result: { id: 'sticky-new' } })),
     settings: vi.fn(async () => ({ ok: true as const, message: 'settings' })),
     run: vi.fn(async () => ({ ok: true as const })),
+    reportOutcome: vi.fn(async () => ({ ok: true as const, message: 'recorded' })),
     deliver: vi.fn(async () => ({ ok: true as const, message: 'queued' }))
+  })
+
+  it('routes report-outcome to its action, after the shared parse', async () => {
+    const a = actions()
+    const handler = createServerEditionControlHandler(a)
+    await handler({
+      verb: 'report-outcome',
+      nodeId: 'src',
+      args: { outcome: 'succeeded', note: 'done' },
+      verified: true
+    })
+    expect(a.reportOutcome).toHaveBeenCalledWith('src', { outcome: 'succeeded', note: 'done' }, true)
+    // The shared parser requires --outcome before the action is reached.
+    await expect(
+      handler({ verb: 'report-outcome', nodeId: 'src', args: {}, verified: true })
+    ).resolves.toEqual({ ok: false, error: 'report-outcome requires --outcome succeeded|failed' })
+    expect(a.reportOutcome).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses the --after <id>:ok form and a malformed --after-success before any action', async () => {
+    const a = actions()
+    const handler = createServerEditionControlHandler(a)
+    await expect(
+      handler({ verb: 'open-agent', nodeId: 'src', args: { agent: 'claude', after: 'a1:ok' }, verified: true })
+    ).resolves.toMatchObject({ ok: false, error: expect.stringContaining('--after-success') })
+    await expect(
+      handler({
+        verb: 'open-agent',
+        nodeId: 'src',
+        args: { agent: 'claude', 'after-success': 'a1', after: 'a1' },
+        verified: true
+      })
+    ).resolves.toMatchObject({ ok: false, error: expect.stringContaining('name each station once') })
+    expect(a.openAgent).not.toHaveBeenCalled()
   })
 
   it('routes run to the factory (#925)', async () => {
@@ -432,6 +467,7 @@ describe('the enabled Server Edition handler, behind the request ledger', () => 
       sticky: vi.fn(),
       settings: vi.fn(),
       run: vi.fn(),
+      reportOutcome: vi.fn(),
       deliver: vi.fn()
     })
     hookServer.setControlHandler(handler)

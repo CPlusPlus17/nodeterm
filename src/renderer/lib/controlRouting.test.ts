@@ -493,3 +493,62 @@ it('lists a PR wait on the row, and EXPIRED once its deadline has passed (--afte
   expect(text).toContain('late [terminal]  — EXPIRED (PR wait deadline passed; run it with `run`)')
   expect(text).toContain('bad [terminal]  — EXPIRED')
 })
+
+it('lists every station’s own report, and where a success wait stands (--after-success)', () => {
+  const NOW = 10_000
+  const wait = (deps: string[], deadlineAt = NOW + 1) => ({
+    command: 'claude',
+    after: deps,
+    afterSuccess: { deps, deadlineAt }
+  })
+  const nodes = [
+    { id: 'build', title: 'Builder', agentId: 'claude' },
+    { id: 'lint', title: 'Linter', agentId: 'claude' },
+    { id: 'rev', title: 'Reviewer', pendingLaunch: wait(['build']) },
+    { id: 'rel', title: 'Release', pendingLaunch: wait(['lint']) },
+    { id: 'late', title: 'Late', pendingLaunch: wait(['build'], NOW) },
+    { id: 'go', title: 'Go', pendingLaunch: wait(['build', 'lint']) }
+  ]
+  const statuses = { build: { state: 'done' as const }, lint: { state: 'done' as const } }
+  const outcomes = {
+    lint: { nodeId: 'lint', outcome: 'failed' as const, note: 'eslint red', at: 1 }
+  }
+  const rows = storedNodeListing(nodes, statuses, {}, NOW, outcomes)
+  const byId = Object.fromEntries(rows.map((r) => [r.id, r]))
+  expect(byId.rev.launchState).toBe('waiting-success')
+  expect(byId.rel.launchState).toBe('blocked-failure')
+  expect(byId.late.launchState).toBe('success-expired')
+  expect(byId.go.launchState).toBe('blocked-failure')
+  expect(byId.lint.outcome).toBe('failed')
+  const text = controlListingText(rows)
+  expect(text).toContain('lint [terminal] Linter — REPORTED FAILURE ("eslint red")')
+  expect(text).toContain(
+    'rev [terminal] Reviewer — WAITING FOR SUCCESS — needs success from: build "Builder" (no outcome reported yet)'
+  )
+  expect(text).toContain(
+    'rel [terminal] Release — BLOCKED BY FAILURE (will not start on its own; run it with `run`) — needs success from: lint "Linter" (reported failure: "eslint red")'
+  )
+  expect(text).toContain('late [terminal] Late — EXPIRED (success wait deadline passed; run it with `run`)')
+
+  // The success arrives: the row stops waiting, and the station's own row says what it reported.
+  const after = storedNodeListing(nodes, statuses, {}, NOW, {
+    build: { nodeId: 'build', outcome: 'succeeded', at: 2 }
+  })
+  const r2 = Object.fromEntries(after.map((r) => [r.id, r]))
+  expect(r2.rev.launchState).toBe('queued')
+  expect(r2.rev.successWait).toBeUndefined()
+  expect(controlListingText(after)).toContain('build [terminal] Builder — REPORTED SUCCESS')
+})
+
+it('a hostile success hold in a stored project neither throws nor reads as met', () => {
+  const rows = storedNodeListing(
+    [
+      { id: 'x', pendingLaunch: { command: 'claude', after: [], afterSuccess: 'build' } },
+      { id: 'y', pendingLaunch: { command: 'claude', after: [], afterSuccess: { deps: [1], deadlineAt: 'soon' } } }
+    ],
+    {},
+    {},
+    5
+  )
+  expect(rows.map((r) => r.launchState)).toEqual(['success-expired', 'success-expired'])
+})

@@ -28,7 +28,10 @@ export const NEVER_COLLAPSE: ReadonlySet<BoardLogEvent['type']> = new Set<BoardL
   'run-started',
   'run-ended',
   // Each names a different station — a "×N" would hide exactly which stations stopped.
-  'station-failed'
+  'station-failed',
+  // A report is superseded by the next one, so which came LAST is the fact a reader needs — a
+  // "×N" row would hide it.
+  'station-reported'
 ])
 
 export type FeedItem =

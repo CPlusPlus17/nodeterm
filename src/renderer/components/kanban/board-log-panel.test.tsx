@@ -58,4 +58,17 @@ describe('eventBody — the activity sentence', () => {
       'told this agent that station st1 stopped: it stopped'
     )
   })
+
+  it('renders a station outcome report from the outcome code, the note as text only', () => {
+    expect(eventBody({ type: 'station-reported', from: 'st1', to: 'succeeded', title: 'tests pass' })).toBe(
+      'recorded this session\'s report: its task succeeded — "tests pass"'
+    )
+    expect(eventBody({ type: 'station-reported', from: 'st1', to: 'failed' })).toBe(
+      'recorded this session\'s report: its task failed'
+    )
+    // An outcome code this build does not know (a newer peer, a hand edit) reads as a plain report.
+    expect(eventBody({ type: 'station-reported', from: 'st1', to: 'rm -rf ~' })).toBe(
+      'recorded this session\'s report: an outcome'
+    )
+  })
 })

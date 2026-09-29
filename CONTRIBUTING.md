@@ -759,10 +759,15 @@ retry anywhere, ask what the clock actually starts on and where its exhaustion b
 in the git-shared `.nodeterm/project.json`, so `normalizePendingLaunch`
 (`src/shared/pending-launch-shape.ts`) runs at both serializer seams: an `after` that is not a list
 used to throw inside the canvas's dependency-signature selector. Its rule, and the rule for any new
-gate you add (the `--after-pr` pull request wait is the latest): a value it cannot read turns the
+gate you add (the `--after-success` wait is the latest): a value it cannot read turns the
 hold `manualOnly` or never-satisfied, never "no gate" — dropping it would start the node early, and
 a dependent that has launched cannot un-launch. A new gate field also goes in that module's `KNOWN`
-set, and `launchesToFire` must treat a missing context for it as closed.
+set, and `launchesToFire` must treat a missing context for it as closed. If both shells evaluate the
+gate (the Server Edition's headless factory releases its own held launches), put the evaluation in
+`src/shared` beside the shape, as `@shared/station-outcome` does, so the desktop and the server
+cannot disagree about when a dependent starts. And never let a gate read its "satisfied" from a
+file: a success a git commit can claim releases every dependent waiting on it — the station's
+report lives in a transient core store, and its board-log line is display only.
 
 **Never move the user's view on a background agent's say-so.** Canvas-control requests route by
 SOURCE, and React Flow holds only the ACTIVE project's nodes — so the dispatch used to travel to the

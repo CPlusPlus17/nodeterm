@@ -80,6 +80,13 @@ import {
   type AgentMessagingDeps
 } from '../core/agents/agent-messaging'
 import { registerStationNoticeIpc, StationNoticeMonitor } from '../core/agents/station-notice'
+import {
+  StationOutcomeStore,
+  clearOutcomesAfterControl,
+  handleReportOutcome,
+  registerStationOutcomeIpc
+} from '../core/station-outcome-store'
+import { afterSuccessFlagRefusal } from '../shared/station-outcome'
 import { stationRecipient } from '../shared/station-notice'
 import type { RemoteLogExec } from '../core/board-log'
 import type { PtyCreateOptions, TranscriptPresence } from '../shared/types'
@@ -1946,6 +1953,13 @@ app.whenReady().then(async () => {
   // "queued" about a message that has since landed or lapsed.
   messagingDeps.onQueuedResult = (req, outcome) => stationNotices.onQueuedResult(req, outcome)
   registerStationNoticeIpc(corePlatform, () => stationNotices)
+  // Station task outcomes (`report-outcome`, src/core/station-outcome-store.ts): what each station
+  // said about its OWN task, read by the renderer's `--after-success` gate. Held here, in main, so a
+  // renderer reload does not lose it; pushed whole to the window on every change.
+  const stationOutcomes = new StationOutcomeStore((records) =>
+    sendToMain(IPC.stationOutcomeChanged, records)
+  )
+  registerStationOutcomeIpc(corePlatform, () => stationOutcomes)
 
   ipcMain.handle(IPC.dialogSelectFolder, async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
@@ -3842,6 +3856,23 @@ app.whenReady().then(async () => {
     // exists in the board's repository is the renderer's question (`resolvePrWaitFor`).
     const afterPrRefusal = afterPrFlagRefusal(verb, args)
     if (afterPrRefusal) return { ok: false, error: afterPrRefusal, message: afterPrRefusal }
+    // `--after-success` / `--success-deadline`, and the refused `--after <id>:ok` form: same
+    // placement, same reason. Whether a named station exists and can report is the renderer's.
+    const afterSuccessRefusal = afterSuccessFlagRefusal(verb, args)
+    if (afterSuccessRefusal) return { ok: false, error: afterSuccessRefusal, message: afterSuccessRefusal }
+    // A station's report about ITSELF: recorded in main's store, board-logged on its own card, and
+    // never forwarded — there is no canvas work in it, and the renderer hears the store's push.
+    if (verb === 'report-outcome') {
+      return handleReportOutcome(
+        { nodeId, args, verified },
+        {
+          store: stationOutcomes,
+          now: () => Date.now(),
+          projectIdOfNode,
+          appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry)
+        }
+      )
+    }
     // `browser` is answered in MAIN and never forwarded to the renderer's agent-control dispatch:
     // the debugger handle and the CDP allowlist are main-side, and the renderer is the more
     // attackable half. Every other verb still round-trips to the renderer below.
@@ -3930,6 +3961,10 @@ app.whenReady().then(async () => {
           return { ok: false, error: OPEN_PROJECT_GRANT_CAP, message: OPEN_PROJECT_GRANT_CAP }
         }
       }
+      // New work handed to a station through canvas control withdraws its outcome report — the
+      // "new task" rule in src/core/station-outcome-store.ts. On the answer (prompt or late), and
+      // only on success.
+      clearOutcomesAfterControl(stationOutcomes, verb, args, answer, nodeId)
       return answer
     }
     // The timeout is NAMED, and what it says depends on the verb and on whether the request ledger

@@ -3,6 +3,7 @@
 // "sequenced after (--after)" — and its LOOK is derived from the target's pendingLaunch, never
 // stored: dashed while the target still waits on the rope's source, solid otherwise. Kept free of
 // React/store imports so Canvas.tsx only wraps these in a memo.
+import { normalizeSuccessWaitHold } from '@shared/station-outcome'
 import type { PendingLaunch } from '@shared/types'
 
 /** Rope colour for a source with no agent (a browser popup, a plain terminal that opened nothing). */
@@ -39,8 +40,19 @@ export function ropeVisual(
  * satisfied and fires the held command, which is exactly what removing the last wait should do.
  */
 export function dropAfterDep(p: PendingLaunch, depId: string): PendingLaunch {
-  if (!p.after.includes(depId)) return p
-  return { ...p, after: p.after.filter((d) => d !== depId) }
+  const success = normalizeSuccessWaitHold(p.afterSuccess)
+  const inSuccess = !!success && !success.invalid && success.deps.includes(depId)
+  if (!p.after.includes(depId) && !inSuccess) return p
+  const next: PendingLaunch = { ...p, after: p.after.filter((d) => d !== depId) }
+  // A `--after-success` station rides the same rope, so deleting that rope stops BOTH waits on it —
+  // "stop waiting for it" cannot leave the success half behind with no edge left to say so. A hold
+  // that names nobody any more is dropped whole: an empty success wait could never be met.
+  if (inSuccess && success) {
+    const deps = success.deps.filter((d) => d !== depId)
+    if (deps.length) next.afterSuccess = { ...success, deps }
+    else delete next.afterSuccess
+  }
+  return next
 }
 
 /** Nodes whose eye is closed (`hideFanout`): every edge touching them is hidden from the canvas. */

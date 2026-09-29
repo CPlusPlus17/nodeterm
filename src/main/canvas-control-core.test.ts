@@ -54,6 +54,7 @@ import {
   offScreenDisposition,
   controlVerbSetsForTests
 } from '../shared/control-off-screen'
+import { OUTCOME_NOTE_MAX, REPORT_OUTCOME_VERB, SUCCESS_WAIT_MAX } from '../shared/station-outcome'
 
 describe('parseControlRequest', () => {
   it('accepts known verbs', () => {
@@ -1434,5 +1435,100 @@ describe('--after-pr: open a node that waits on a pull request', () => {
     expect(flat).toContain('The Server Edition refuses `--after-pr`')
     // Quoting: an unquoted leading # starts a shell comment.
     expect(flat).toContain('Write the number bare (`1008:merged`)')
+  })
+})
+
+describe('--after-success + report-outcome: a dependent that waits for a reported SUCCESS', () => {
+  it('passes a well-formed wait through the shape gate on the open verbs', () => {
+    expect(parseControlRequest('open-claude', { 'after-success': 'a1,a2', 'success-deadline': '6h' })).toMatchObject({
+      verb: 'open-claude'
+    })
+    expect(parseControlRequest('open-terminal', { 'after-success': 'a1', cmd: 'make' })).toMatchObject({
+      verb: 'open-terminal'
+    })
+    expect(parseControlRequest('open-agent', { agent: 'codex', after: 'b1', 'after-success': 'a1' })).toMatchObject({
+      verb: 'open-agent'
+    })
+  })
+
+  it.each([
+    [{ after: 'a1:ok' }, /--after takes plain node ids/],
+    [{ after: 'a1', 'after-success': 'a1' }, /name each station once/],
+    [{ 'after-success': 'a1:ok' }, /--after-success takes plain node ids/],
+    [{ 'after-success': 'a1', 'run-now': '1' }, /--run-now cannot be combined with --after-success/],
+    [{ 'success-deadline': '2h' }, /only with --after-success/],
+    [{ 'after-success': 'a1', 'success-deadline': '30d' }, /--success-deadline must be/]
+  ])('refuses %j before the renderer sees it', (args, error) => {
+    const r = parseControlRequest('open-agent', { agent: 'claude', ...args })
+    expect((r as { error?: string }).error).toMatch(error)
+  })
+
+  it('refuses the flag on a verb that opens nothing, and on a terminal with nothing to run', () => {
+    expect((parseControlRequest('spawn-team', { team: '[]', 'after-success': 'a1' }) as { error: string }).error).toMatch(
+      /applies only to open-terminal/
+    )
+    expect((parseControlRequest('open-terminal', { 'after-success': 'a1' }) as { error: string }).error).toMatch(
+      /needs --cmd/
+    )
+  })
+
+  it('report-outcome is a registered verb that needs --outcome', () => {
+    expect(parseControlRequest('report-outcome', { outcome: 'succeeded' })).toEqual({
+      verb: 'report-outcome',
+      args: { outcome: 'succeeded' }
+    })
+    expect(parseControlRequest('report-outcome', {})).toEqual({
+      error: 'report-outcome requires --outcome succeeded|failed'
+    })
+  })
+
+  const bodies: Array<[string, string]> = [
+    ['skill body', buildCanvasSkillBody('/x/nodeterm.sh')],
+    ['instructions block', buildCanvasControlInstructions('/x/nodeterm.sh')]
+  ]
+
+  it.each(bodies)('%s lists the flag on all three open verbs', (_name, body) => {
+    const synopsis = /\[--after-success <id,id>\] \[--success-deadline <90m\|12h\|3d>\]/
+    for (const verb of ['open-terminal ', 'open-claude ', 'open-agent --agent ']) {
+      const line = body.split('\n').find((l) => l.includes(`\`${verb}`)) ?? ''
+      expect(line, verb).toMatch(synopsis)
+    }
+  })
+
+  it.each(bodies)('%s states what a success wait needs, what blocks it, and when a report ends', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('`--after-success <id,id>` holds the launch until every listed station has REPORTED SUCCESS')
+    expect(flat).toContain('It is `--after` plus the report')
+    expect(flat).toContain('A station that reports `failed` BLOCKS the dependent')
+    expect(flat).toContain('BLOCKED BY FAILURE')
+    expect(flat).toContain('WAITING FOR SUCCESS')
+    expect(flat).toContain('No report yet means waiting')
+    expect(flat).toContain('A station that is CLOSED counts only if it reported success before it was closed')
+    // The "new task" rule, as core implements it (OUTCOME_CLEARING_VERBS).
+    expect(flat).toContain('a `send`, `reply`, `write` or `run` aimed at it withdraws its report')
+    expect(flat).toContain('hand it the next task FIRST, then open the dependent')
+    expect(flat).toContain('A new turn does not withdraw a report')
+    // Limits rendered from the modules that enforce them.
+    expect(flat).toContain('`--success-deadline <90m|12h|3d>` bounds the wait (default 24h, at most 14d)')
+    expect(flat).toContain(`at most ${SUCCESS_WAIT_MAX}`)
+    expect(flat).toContain('a suffix on `--after` (`--after a1:ok`)')
+    expect(flat).toContain('The Server Edition accepts both the flag and the verb')
+  })
+
+  it.each(bodies)('%s teaches stations to report, honestly, about themselves only', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain(`\`${REPORT_OUTCOME_VERB} --outcome succeeded|failed [--note "<one line>"]\``)
+    expect(flat).toContain('REPORT WHEN EVERY TASK YOU ARE GIVEN ENDS')
+    expect(flat).toContain('not merely that you stopped')
+    expect(flat).toContain('`--node` naming another node is refused')
+    expect(flat).toContain(`at most ${OUTCOME_NOTE_MAX} characters`)
+    expect(flat).toContain('never typed into anyone\'s session')
+    // And orchestrators are told to ask for it.
+    expect(flat).toMatch(/--after-success <upstream-id>/)
+    expect(flat).toMatch(/report-outcome/)
+  })
+
+  it('the verb is in the shim\'s derived verb list and reached only through the verified gate', () => {
+    expect(CONTROL_SHIM_SCRIPT).toContain('report-outcome')
   })
 })

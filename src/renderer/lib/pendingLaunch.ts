@@ -6,6 +6,14 @@
 import type { AgentState } from '@shared/agents/normalize'
 import type { GitHubPullBoard } from '@shared/github-pull-status'
 import type { PrWaitHold } from '@shared/pr-wait'
+import {
+  normalizeSuccessWaitHold,
+  outcomeOf,
+  successWaitSatisfied,
+  type StationOutcomeRecord,
+  type SuccessDepFacts,
+  type SuccessWaitHold
+} from '@shared/station-outcome'
 import type { PendingLaunch } from '@shared/types'
 import { prHoldSatisfied } from './prWait'
 
@@ -47,6 +55,47 @@ export function withLaunchBrief<T extends { data: { pendingLaunch?: PendingLaunc
 export interface PrGateContext {
   board?: GitHubPullBoard
   now: number
+}
+
+/** What `launchesToFire` needs to judge a `--after-success` wait: every station's latest task
+ *  report in this app run (core's store, mirrored) and the clock deadlines are on. */
+export interface SuccessGateContext {
+  outcomes: Readonly<Record<string, StationOutcomeRecord>>
+  now: number
+}
+
+/**
+ * What the success wait knows about one station, from the same sources the `--after` gate reads:
+ * whether it is still on the canvas, whether its turn is over without an error (`depSatisfied`'s
+ * rule, so a success wait can never release where plain `--after` would still hold), and its report.
+ */
+export function successDepFacts(
+  depId: string,
+  status: StatusById,
+  live: ReadonlySet<string>,
+  outcomes: Readonly<Record<string, StationOutcomeRecord>>
+): SuccessDepFacts {
+  const exists = live.has(depId)
+  const reported = outcomeOf(outcomes, depId)
+  return {
+    exists,
+    turnDone: exists && depSatisfied(depId, status, live),
+    ...(reported ? { outcome: reported } : {})
+  }
+}
+
+/**
+ * Attach a `--after-success` wait to a node whose launch is already held — the sibling of
+ * `withPrHold`, applied by every open path that applies that one, so no path can arm a node that
+ * forgets a wait it was asked for.
+ */
+export function withSuccessHold<T extends { data: { pendingLaunch?: PendingLaunch } }>(
+  node: T,
+  hold: SuccessWaitHold | undefined
+): T {
+  const p = node.data.pendingLaunch
+  if (!hold || !p) return node
+  return { ...node, data: { ...node.data, pendingLaunch: { ...p, afterSuccess: hold } } }
 }
 
 /** Control opens reply before the PTY exists. Keep their command durable until delivery lands,
@@ -109,9 +158,30 @@ export function controlLaunchState(
   delivery: LaunchDelivery | undefined,
   status?: { dropped?: boolean; state?: AgentState },
   /** The node's `--after-pr` wait has passed its deadline: it will not start on its own. */
-  prExpired = false
-): 'queued' | 'stalled' | 'failed' | 'starting' | 'brief-missing' | 'dropped' | 'working' | 'expired' | undefined {
-  if (pending) return delivery?.kind ?? (prExpired ? 'expired' : 'queued')
+  prExpired = false,
+  /** Where the node's `--after-success` wait stands, when it has one. */
+  success?: 'met' | 'waiting' | 'blocked' | 'expired'
+):
+  | 'queued'
+  | 'stalled'
+  | 'failed'
+  | 'starting'
+  | 'brief-missing'
+  | 'dropped'
+  | 'working'
+  | 'expired'
+  | 'success-expired'
+  | 'waiting-success'
+  | 'blocked-failure'
+  | undefined {
+  if (pending) {
+    if (delivery) return delivery.kind
+    if (prExpired) return 'expired'
+    if (success === 'expired') return 'success-expired'
+    if (success === 'blocked') return 'blocked-failure'
+    if (success === 'waiting') return 'waiting-success'
+    return 'queued'
+  }
   if (status?.dropped) return 'dropped'
   if (status?.state === 'working') return 'working'
   return undefined
@@ -183,7 +253,8 @@ export function launchesToFire(
   live: ReadonlySet<string>,
   setupDone?: (groupId: string) => boolean,
   deliveries?: Record<string, LaunchDelivery | undefined>,
-  pr?: PrGateContext
+  pr?: PrGateContext,
+  success?: SuccessGateContext
 ): LaunchToFire[] {
   const out: LaunchToFire[] = []
   for (const n of nodes) {
@@ -199,6 +270,23 @@ export function launchesToFire(
     // that did not say what the pull requests look like has told us nothing, and "no news" is
     // exactly what must never release a launch (the same rule as an unknown agent state).
     if (p.afterPr && !(pr && prHoldSatisfied(p.afterPr, pr.board, pr.now))) continue
+    // The FOURTH gate (`--after-success`): every named station reported SUCCESS and its turn is over.
+    // Closed without a context, for the same reason as the PR gate: no news is never a success.
+    // Re-read through the shape rule: live node data can arrive by a path that did not cross a
+    // serializer seam (a peer's canvas mutation), and a malformed hold must hold, never throw.
+    const successHold = normalizeSuccessWaitHold(p.afterSuccess)
+    if (
+      successHold &&
+      !(
+        success &&
+        successWaitSatisfied(
+          successHold,
+          (d) => successDepFacts(d, status, live, success.outcomes),
+          success.now
+        )
+      )
+    )
+      continue
     if (p.after.every((d) => depSatisfied(d, status, live))) {
       out.push({ id: n.id, command: p.command, ...(p.promptFile ? { briefFile: p.promptFile } : {}) })
     }
@@ -276,7 +364,10 @@ export function launchTooltip(
   relay = false,
   /** The node's `--after-pr` wait: what is still unmet (`prHoldSummary`), whether it has passed
    *  its deadline, and that deadline as the caller formats it (a locale string is not pure). */
-  pr?: { expired: boolean; summary: string; deadline: string }
+  pr?: { expired: boolean; summary: string; deadline: string },
+  /** The node's `--after-success` wait: where it stands (`successWaitStatus`), the unmet stations
+   *  (`successWaitSummary`), and its deadline as the caller formats it. */
+  success?: { status: 'met' | 'waiting' | 'blocked' | 'expired'; summary: string; deadline: string }
 ): string {
   if (delivery?.kind === 'starting') return 'Starting in the background — an agent asked for this session to run now.'
   const runs = `Runs:\n${command}`
@@ -312,12 +403,34 @@ export function launchTooltip(
       'its own.\n' +
       `Press \u25b6 to run it now.\n${runs}`
     )
+  if (success?.status === 'expired')
+    return (
+      `The wait for stations to report success passed its deadline (${success.deadline}), so this ` +
+      'will not start on its own.\n' +
+      `Press \u25b6 to run it now.\n${runs}`
+    )
+  // A reported failure is the other wait that will not end on its own: named, with both ways out.
+  if (success?.status === 'blocked')
+    return (
+      `Held on ${success.summary}.\n` +
+      'It does not start on a task that did not succeed. Retry that station — this starts when it ' +
+      `reports success — or press \u25b6 to run it now.\n${runs}`
+    )
   if (delivery?.kind === 'stalled')
     return (
       'Ready to run, but this terminal has not started yet — the launch is still held and ' +
       'fires as soon as it does.\n' +
       `Press \u25b6 to try it now.\n${runs}`
     )
+  if (success?.status === 'waiting') {
+    // `waitingOn` here is the caller's list of the OTHER stations (plain `--after`), if any.
+    const stations = waitingOn ? `${waitingOn} to finish and for ` : ''
+    const prs = pr?.summary ? `, and for ${pr.summary}` : ''
+    return (
+      `Waiting for ${stations}a reported success from ${success.summary}${prs}, until ` +
+      `${success.deadline}, then runs:\n${command}`
+    )
+  }
   if (pr?.summary) {
     const stations = waitingOn ? `${waitingOn} to finish and for ` : ''
     return `Waiting for ${stations}${pr.summary}, until ${pr.deadline}, then runs:\n${command}`

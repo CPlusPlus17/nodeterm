@@ -189,6 +189,7 @@ export function buildRelayApi(
     // Station-failure notices are about THIS machine's stations and its own orchestrators; a relay
     // tab's nodes live in the host's core, whose notices are the host's renderer's to draw.
     stationNotice: stub.stationNotice,
+    stationOutcome: stub.stationOutcome,
     // The mirror identity seed is a deliberate no-op here: a relay tab's nodes belong to the HOST's
     // core, whose mirror is seeded by the host's own renderer from its own localStorage. This
     // machine's localStorage holds no identity for them, and `...local` would plant this machine's
