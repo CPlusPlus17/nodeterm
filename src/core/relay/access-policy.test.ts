@@ -428,3 +428,92 @@ describe('narrowResponseForRole', () => {
     expect(narrowResponseForRole(IPC.fsRead, r, ctx('viewer'))).toBe(r)
   })
 })
+
+// C1 / R43. `git show <ref>:<p>` resolves a bare <p> against the REPOSITORY'S TOP LEVEL, not the cwd:
+// measured with real git, from repo/shared/ a `git show HEAD:secret/key.txt` prints repo/secret/key.txt,
+// and `git status` / `git log` list every changed path and commit of the whole repository. The cwd
+// jail cannot stop that, so a non-editor gets git only when the shared root holding the cwd is the
+// top of its OWN repository (a `.git` directory, or a worktree's `.git` file).
+describe('access policy: git needs a shared root that is its own repository (C1)', () => {
+  const NOT_OWN_REPO = 'Git is available to viewers only in a project that is the top folder of its own repository, never in a subfolder of a larger one.'
+  const GIT_CALLS: Array<[string, unknown[]]> = [
+    [IPC.gitStatus, ['/repo/shared']],
+    [IPC.gitRepoRoot, ['/repo/shared']],
+    [IPC.gitHistory, ['/repo/shared']],
+    [IPC.gitDiff, ['/repo/shared', 'a.txt', false, false]],
+    [IPC.gitShowFile, ['/repo/shared', 'HEAD', 'secret/key.txt']]
+  ]
+  // The shared project is repo/shared; only repo/ holds a `.git`.
+  const subfolder = (role: AccessContext['role']): AccessContext => ({
+    ...ctx(role),
+    projectCwds: () => ['/repo/shared'],
+    realpath: (p) => (p.endsWith('/.git') && p !== '/repo/.git' ? null : p)
+  })
+
+  it('every git VIEW method is refused, with the reason, when the shared root has no .git of its own', () => {
+    for (const [m, args] of GIT_CALLS) {
+      expect(decideAccess('req', m, args, subfolder('viewer')), m).toEqual({ allow: false, message: NOT_OWN_REPO })
+      expect(decideAccess('req', m, args, subfolder('commenter')), m).toEqual({ allow: false, message: NOT_OWN_REPO })
+    }
+    // Files are still readable: the jail for fs:* is the folder, and the folder IS shared.
+    expect(decideAccess('req', IPC.fsRead, ['/repo/shared/a.txt'], subfolder('viewer')).allow).toBe(true)
+  })
+
+  it('editors and owners are unaffected', () => {
+    for (const [m, args] of GIT_CALLS) {
+      expect(decideAccess('req', m, args, subfolder('editor')), m).toEqual({ allow: true })
+      expect(decideAccess('req', m, args, subfolder('owner')), m).toEqual({ allow: true })
+    }
+  })
+
+  it('a cwd outside every shared root is still the read jail, not the repository reason', () => {
+    expect(decideAccess('req', IPC.gitStatus, ['/elsewhere'], subfolder('viewer'))).toEqual({ allow: false, message: READ_JAIL_MSG })
+  })
+
+  it('a nested shared root with its own .git allows the cwds under it, and only those', () => {
+    // Shared: /mono/a (no .git of its own) and /mono/a/b (its own repository).
+    const c: AccessContext = {
+      ...ctx('viewer'),
+      projectCwds: () => ['/mono/a', '/mono/a/b'],
+      realpath: (p) => (p.endsWith('/.git') && p !== '/mono/a/b/.git' ? null : p)
+    }
+    expect(decideAccess('req', IPC.gitStatus, ['/mono/a/b/src'], c).allow).toBe(true)
+    expect(decideAccess('req', IPC.gitStatus, ['/mono/a/x'], c)).toEqual({ allow: false, message: NOT_OWN_REPO })
+  })
+
+  it.skipIf(process.platform === 'win32')('on disk: a subfolder is refused, the repo root and a worktree root (a .git FILE) are allowed', () => {
+    const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'access-git-')))
+    try {
+      fs.mkdirSync(path.join(base, 'repo', '.git'), { recursive: true })
+      fs.mkdirSync(path.join(base, 'repo', 'shared'), { recursive: true })
+      fs.mkdirSync(path.join(base, 'wt'), { recursive: true })
+      fs.writeFileSync(path.join(base, 'wt', '.git'), `gitdir: ${path.join(base, 'repo', '.git', 'worktrees', 'wt')}\n`)
+      const onDisk = (root: string): AccessContext => ({
+        role: 'viewer',
+        sharedProjects: new Set(['P']),
+        projectOfNode: () => undefined,
+        projectCwds: () => [root],
+        realpath: (p) => {
+          try {
+            return fs.realpathSync(p)
+          } catch {
+            return null
+          }
+        }
+      })
+      const show = (root: string, cwd: string) => decideAccess('req', IPC.gitShowFile, [cwd, 'HEAD', 'secret/key.txt'], onDisk(root))
+      const shared = path.join(base, 'repo', 'shared')
+      expect(show(shared, shared)).toEqual({ allow: false, message: NOT_OWN_REPO })
+      expect(decideAccess('req', IPC.gitStatus, [shared], onDisk(shared))).toEqual({ allow: false, message: NOT_OWN_REPO })
+      // The repository root is shared as a whole: its history is the project's own.
+      expect(show(path.join(base, 'repo'), shared).allow).toBe(true)
+      expect(decideAccess('req', IPC.gitStatus, [path.join(base, 'repo')], onDisk(path.join(base, 'repo'))).allow).toBe(true)
+      // A worktree's .git is a file; its root is the top of its own checkout.
+      expect(decideAccess('req', IPC.gitStatus, [path.join(base, 'wt')], onDisk(path.join(base, 'wt'))).allow).toBe(true)
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true })
+    }
+  })
+})
+
+const READ_JAIL_MSG = 'Viewers can only read files inside a shared project.'

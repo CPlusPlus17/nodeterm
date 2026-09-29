@@ -85,6 +85,34 @@ function realInSharedCwd(p: unknown, ctx: AccessContext): string | null {
 
 const READ_JAIL = 'Viewers can only read files inside a shared project.'
 
+const NOT_OWN_REPO =
+  'Git is available to viewers only in a project that is the top folder of its own repository, never in a subfolder of a larger one.'
+
+/**
+ * Is `real` (a realpath inside a shared root) under a shared root that holds its OWN `.git` — a
+ * directory, or a worktree's `.git` file? The cwd jail alone does not bound git: `git show <ref>:<p>`
+ * resolves a bare `<p>` against the repository's TOP LEVEL, and `git status` / `git log` report the
+ * whole repository, so from `repo/shared/` a viewer could read `repo/secret/key.txt` (measured with
+ * real git). A root with its own `.git` stops git's upward discovery at or below it, so every
+ * repository reachable from `real` is inside something that is shared anyway. Any containing root
+ * counts: a nested shared root that is its own repository is fine even when the outer one is not.
+ * Planting a `.git` (or a `gitdir:` file pointing elsewhere) takes write access to the shared root,
+ * which only an editor has.
+ */
+function underOwnRepoRoot(real: string, ctx: AccessContext): boolean {
+  return sharedRoots(ctx).some((root) => within(root, real) && ctx.realpath(path.join(root, '.git')) !== null)
+}
+
+/** Every git VIEW check: the cwd jailed like a file read, then the repository rule above. */
+const gitView =
+  (rest: Check = pass): Check =>
+  (a, ctx) => {
+    const cwd = realInSharedCwd(a[0], ctx)
+    if (!cwd) return no(READ_JAIL)
+    if (!underOwnRepoRoot(cwd, ctx)) return no(NOT_OWN_REPO)
+    return rest(a, ctx)
+  }
+
 const nodeArg0: Check = (a, ctx) => (sharedNode(a[0], ctx) ? OK : no('That terminal is not in a shared project.'))
 const pathArg0: Check = (a, ctx) => (realInSharedCwd(a[0], ctx) ? OK : no(READ_JAIL))
 const projectArg0: Check = (a, ctx) => (sharedProject(a[0], ctx) ? OK : no('That project is not shared.'))
@@ -101,7 +129,10 @@ function viewerCreateOptions(o: Record<string, unknown>): Record<string, unknown
   return { ...out, joinOnly: true, sizeVote: false }
 }
 
-/** `git diff` (handler args: cwd, file, staged, untracked). The FILE is jailed as well as the cwd. */
+/** `git diff` (handler args: cwd, file, staged, untracked). The FILE is jailed as well as the cwd.
+ *  Its pathspec is cwd-relative, not top-level-relative (measured: from `repo/shared/`,
+ *  `git diff -- secret/key.txt` matches nothing), so the lexical file jail below holds; the
+ *  repository rule (`gitView`) runs first all the same, like for every git VIEW method. */
 const gitDiff: Check = (a, ctx) => {
   const cwd = realInSharedCwd(a[0], ctx)
   if (!cwd) return no(READ_JAIL)
@@ -118,9 +149,9 @@ const gitDiff: Check = (a, ctx) => {
 }
 
 /** `git show <ref>:<file>` (handler args: cwd, ref, file). A ref starting with `-` becomes an
- *  OPTION of `git show`; measured: `--output=<path>` writes the command's output to that path. */
-const gitShowFile: Check = (a, ctx) => {
-  if (!realInSharedCwd(a[0], ctx)) return no(READ_JAIL)
+ *  OPTION of `git show`; measured: `--output=<path>` writes the command's output to that path. The
+ *  file is relative to the repository's top level, which is why `gitView` runs first. */
+const gitShowFile: Check = (a) => {
   const ref = a[1]
   if (ref !== undefined && ref !== null && (typeof ref !== 'string' || ref.startsWith('-'))) {
     return no('That is not a revision name.')
@@ -160,12 +191,13 @@ export const VIEW: Readonly<Record<string, Check>> = Object.freeze({
   [IPC.fsRead]: pathArg0,
   [IPC.fsReadBinary]: pathArg0,
   [IPC.fsExists]: pathArg0,
-  [IPC.gitStatus]: pathArg0,
-  [IPC.gitRepoRoot]: pathArg0,
-  [IPC.gitDiff]: gitDiff,
-  [IPC.gitShowFile]: gitShowFile,
+  // Every git VIEW method: the cwd jail, then the shared root must be its own repository (C1).
+  [IPC.gitStatus]: gitView(),
+  [IPC.gitRepoRoot]: gitView(),
+  [IPC.gitDiff]: gitView(gitDiff),
+  [IPC.gitShowFile]: gitView(gitShowFile),
   // Its only other argument's ref (`baseRef`) is refused by the core when it starts with `-`.
-  [IPC.gitHistory]: pathArg0,
+  [IPC.gitHistory]: gitView(),
   // The RESPONSE is trimmed by narrowResponseForRole (it is a response, not an event).
   [IPC.agentSubagentSnapshot]: pass,
   [IPC.presenceHello]: pass,

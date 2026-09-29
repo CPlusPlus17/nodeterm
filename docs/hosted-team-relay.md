@@ -180,7 +180,8 @@ later, is Editor-only until someone decides otherwise.
 |---|---|---|---|---|
 | See the shared projects' canvas, presence and cursors (`workspace:load`, `presence:hello/cursor/focus/project`) | ✓ | ✓ | ✓ | ✓ |
 | Watch a terminal of a shared project that is **already running** | ✓ | ✓ | ✓ | ✓ |
-| Read files and git state inside a shared project | ✓ | ✓ | ✓ | ✓ |
+| Read files inside a shared project | ✓ | ✓ | ✓ | ✓ |
+| Read a shared project's git state (status, diffs, history, file versions) | only when the project is the top folder of its own repository | same as Viewer | ✓ | ✓ |
 | Read a shared project's board log | ✓ | ✓ | ✓ | ✓ |
 | Cursor chat (`presence:chat`), board-log comments (`board-log:append`) | — | ✓ | ✓ | ✓ |
 | Type into terminals, start terminals, write files, every git mutation, canvas edits, settings, credentials, logs, GitHub | — | — | ✓ | ✓ |
@@ -200,9 +201,10 @@ session key** in the team store.
 | `pty:kill` | Detaches the caller's own view; the session keeps running. |
 | `pty:capture`, `pty:read-scrollback`, `pty:pane-command` | Nodes of shared projects only. |
 | `pty:tmux-status` | Allowed. |
-| `fs:list`, `fs:read`, `fs:read-binary`, `fs:exists`, `git:status`, `git:repo-root`, `git:history` | The path must be absolute and its **realpath** inside a shared project's cwd (also realpathed). A symlink planted inside the project that points out of it is outside. |
-| `git:diff` | The cwd **and** the file are jailed; a pathspec starting with `:` is refused; an untracked diff (`git diff --no-index`, which diffs any file) needs a real path inside. |
-| `git:show-file` | Cwd jailed; a ref starting with `-` is refused (it would become an option, and `--output=` writes a file). |
+| `fs:list`, `fs:read`, `fs:read-binary`, `fs:exists` | The path must be absolute and its **realpath** inside a shared project's cwd (also realpathed). A symlink planted inside the project that points out of it is outside. |
+| `git:status`, `git:repo-root`, `git:history` | The cwd is jailed like a file read, **and** the shared project that contains it must be the top folder of its own repository: a `.git` directory, or a worktree's `.git` file. Otherwise: "Git is available to viewers only in a project that is the top folder of its own repository, never in a subfolder of a larger one." A cwd jail alone does not bound git: `git status` and `git log` report the whole repository, and `git show <ref>:<path>` reads `<path>` from the repository's top level, so from a shared `repo/shared/` a Viewer could read `repo/secret/key.txt`. |
+| `git:diff` | The cwd (with the repository rule above) **and** the file are jailed; a pathspec starting with `:` is refused; an untracked diff (`git diff --no-index`, which diffs any file) needs a real path inside. The file is relative to the cwd, not the repository's top level. |
+| `git:show-file` | The cwd jailed, with the repository rule above; a ref starting with `-` is refused (it would become an option, and `--output=` writes a file). Any other revision is allowed. |
 | `agent:subagent-snapshot` | The response is trimmed to shared nodes. |
 | `board-log:read/subscribe/unsubscribe` (+ `append` for Commenters) | Shared projects only. |
 
@@ -385,6 +387,12 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   same as SSH access".
 - **A Viewer sees terminal output** (the dialog says "including anything printed in them") and can
   read **every file** under a shared project's folder, including `.env` files and `.git`.
+- **Sharing a repository shares its whole history.** When a shared project is the top folder of its
+  own repository, `git:show-file` takes any revision, so a Viewer can read every branch, tag, stash
+  and past commit of it, including files deleted since. A worktree shares its main repository's
+  object store and refs, so sharing a worktree's folder exposes the whole repository's history
+  (the main checkout's stash included), not only that checkout. A project that is a subfolder of a
+  larger repository gets no git at all for Viewers and Commenters.
 - **Nothing is served before mutual approval.** A pre-approval request answers `E_UNAUTHORIZED`
   and never reaches a handler. Frames that arrive between approval and open (while the pin is
   written) are held (at most 256), then served through the same checks.
@@ -427,6 +435,9 @@ The human `team status` reads `state`, `idle` and `lastError` together:
 - **Kanban, bridge and rope edits made in a relay tab are never propagated or saved.** `canvas:mut`
   carries nodes only (an upsert or a remove), so project-level state (`kanban`, `bridges`, `ropes`)
   never leaves the tab. This predates the hosted relay; it holds for Team Access relay tabs too.
+- **No git for Viewers in a subfolder of a larger repository.** Viewers and Commenters get the git
+  panel only for a project that is the top folder of its own repository (or a worktree's). A
+  monorepo subfolder shows its files but refuses every git read (see [Roles](#roles)).
 - **One shared project per tab.** A joiner's tab adopts the first shared project; other shared
   projects are allowed by the policy but not reachable from the UI.
 - **Viewers watch only what is already running.** A terminal must be live on the host (a tmux
