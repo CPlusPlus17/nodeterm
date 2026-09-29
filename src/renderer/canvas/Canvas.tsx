@@ -420,7 +420,6 @@ import {
   isRemoteSessionNode,
   resolveBaseRef,
   sanitizeWorktreeBranch,
-  worktreeFromCreate,
   worktreeFromEntry,
   worktreeRemoveMessage,
   resolveWorktreeBase,
@@ -478,11 +477,25 @@ import { applyIconChoice } from '../lib/nodeIconChoice'
 import type { NodeIcon } from '@shared/node-icon'
 import {
   formatIssueRef,
+  issueKey,
   issueLaunchPrompt,
   issueRefFromHtmlUrl,
   normalizeIssueRef,
   type IssueRef
 } from '@shared/github-issue-ref'
+import { planIssueWorktree } from '@shared/issue-worktree'
+import { sharedBasePathOf, sharedWorktreeLocationRefusal } from '@shared/worktree-location'
+import {
+  frameAgentPlacement,
+  issueWorktreeChoiceCopy,
+  issueWorktreeFrames,
+  issueWorktreeRefusal,
+  issueWorktreeRenamedNotice,
+  runExclusive,
+  type IssueWorktreeAsk,
+  type IssueWorktreeChoice,
+  type IssueWorktreeMenuAnswer
+} from '../lib/issueWorktree'
 import { runEndedEntry, runStartedEntry } from '../lib/issueRuns'
 import { resolveIssueFlagForCall, type IssueFlagResult } from '../lib/issueFlag'
 import type { GitHubIssueCardView } from '@shared/github-issues'
@@ -518,6 +531,11 @@ import {
   LAUNCH_STALL_MS,
   type ArmedNode
 } from '../lib/pendingLaunch'
+import {
+  createBoundWorktree,
+  type CreateBoundWorktreeDeps,
+  type WorktreeAttachTarget
+} from '../lib/worktreeCreate'
 import { WAIT_LABEL, dropAfterDep, edgeHidden, hiddenEdgeNodeIds, missingDepRopes, ropeInfoOf, ropeVisual } from '../lib/edgeModel'
 import { triggerEdges } from '../lib/triggerCard'
 import {
@@ -696,6 +714,7 @@ import {
   refitMaximizedNode,
   restoreMaximizedNode,
   placeNodeInRect,
+  terminalNodeSize,
   type CanvasNode
 } from '../state/workspace'
 import { codexAccountSelectable, codexAccountSwitchStillEligible } from './codex-account-switch'
@@ -887,6 +906,12 @@ const WORKTREE_SSH_NOTICE = 'Worktrees are not supported in SSH projects yet.'
 const WORKTREE_NO_CWD_NOTICE =
   'This project has no folder, so it has no git repository to add a worktree to. Set one first (tab ⌄ → “Set folder…”).'
 const FOCUS_NO_TARGET_NOTICE = 'Select a terminal or agent node to focus.'
+/** `addAgentNode`'s up-front refusals, shared with `agentCreateRefusal` (one wording per reason). */
+const CANVAS_NOT_ACTIVE_NOTICE =
+  'Could not create the node: the canvas on screen is not the active project’s. Switch tabs once and try again.'
+const CODEX_ACCOUNT_NO_CONNECTION_NOTICE =
+  'That Codex account lives on a host that is not connected — connect its SSH project first.'
+const CODEX_ACCOUNT_GONE_NOTICE = 'That Codex account is no longer available. Nothing was created.'
 
 // The webview's file loader renders off the LOCAL disk and has no remote counterpart, so a host
 // path from a remote agent could only resolve to a same-named local file — or nothing. Refuse and
@@ -1821,7 +1846,8 @@ export function Canvas() {
     merge: false,
     peer: false,
     closeProject: false,
-    deleteProject: false
+    deleteProject: false,
+    issueWorktree: false
   })
   // Every confirm setter flips its flag AT CALL TIME. Assigning the mirror during RENDER (what this
   // used to do) is a tick too late: two agent verbs arriving in separate IPC events before React
@@ -1920,6 +1946,7 @@ export function Canvas() {
       f.peer ||
       f.closeProject ||
       f.deleteProject ||
+      f.issueWorktree ||
       removePendingRef.current
     )
   }, [])
@@ -1994,6 +2021,25 @@ export function Canvas() {
     const s = useProjectSetup.getState()
     return setupGateDone(s.runForGroup(groupId), s.pendingForGroup(groupId) > 0)
   }, [])
+  /**
+   * Should a node opened INTO this frame hold its launch for the frame's setup script? Returns the
+   * group to wait on (`PendingLaunch.awaitSetupGroup`), or undefined to launch as usual. A group
+   * counts while its launch is still PENDING (the ack — and with it `waitForSetup` — has not come
+   * back yet; holding is the safe side of that unknown, and a non-waiting ack releases it again) or
+   * while its acked run said `waitForSetup` and has not finished. Shared by the control opens
+   * (`armAfter`) and the issue card's "Start with agent in a new worktree".
+   */
+  const setupHoldGroup = useCallback(
+    (groupId: string | null | undefined): string | undefined => {
+      if (!groupId) return undefined
+      const holds =
+        (useProjectSetup.getState().pendingForGroup(groupId) > 0 ||
+          setupWaitGroupsRef.current.has(groupId)) &&
+        !setupDoneForGroup(groupId)
+      return holds ? groupId : undefined
+    },
+    [setupDoneForGroup]
+  )
   // A signature over the setup-run state of every group an armed node is waiting on, so a run going
   // `done` re-runs the launch effect — the same trick as `armedDepSig`. Subscribing to the whole
   // store would re-render the canvas on every output chunk of every script.
@@ -4073,9 +4119,13 @@ export function Canvas() {
    * board) — otherwise every one lands on the view center and piles into a stack you only discover
    * when you switch back to the canvas. Returns undefined only if the view isn't measured yet.
    */
-  const emptyNodePos = useCallback((): { x: number; y: number } | undefined => {
-    const preferred = viewCenter()
-    if (!preferred) return undefined
+  // `box` places something other than a default-sized node — a worktree frame, say. For a box the
+  // answer is a TOP-LEFT that centres it on the view (`freeSpot` answers top-lefts); without one
+  // the historical point is returned unchanged.
+  const emptyNodePos = useCallback((box?: { w: number; h: number }): { x: number; y: number } | undefined => {
+    const center = viewCenter()
+    if (!center) return undefined
+    const preferred = box ? { x: center.x - box.w / 2, y: center.y - box.h / 2 } : center
     const s = useSettings.getState().settings
     const w = s.defaultNodeWidth || 640
     const h = s.defaultNodeHeight || 440
@@ -4090,7 +4140,7 @@ export function Canvas() {
         w: (n.measured?.width as number | undefined) ?? (n.width as number | undefined) ?? w,
         h: (n.measured?.height as number | undefined) ?? (n.height as number | undefined) ?? h
       }))
-    return freeSpot(boxes, preferred, { w, h })
+    return freeSpot(boxes, preferred, box ?? { w, h })
   }, [viewCenter])
 
   /** The checkout a Source Control action refers to. The panel hands its ACTIVE SCOPE's cwd
@@ -5145,6 +5195,31 @@ export function Canvas() {
       .projects.find((p) => p.ssh && sshHostKey(p.ssh.server) === host && conn[p.id])?.id
   }, [])
 
+  /**
+   * The refusals `addAgentNode` makes before it builds anything, asked AHEAD of it by a caller that
+   * does something expensive on the node's behalf first — the issue card's "Start with agent in a
+   * new worktree" runs `git worktree add` before the agent exists, and a refusal after that would
+   * leave a fresh worktree with no agent in it. Same functions, same wording, same inputs.
+   */
+  const agentCreateRefusal = useCallback(
+    (agentId: AgentId, accountId?: string | null): string | null => {
+      if (!canCreateOnCanvas(nodesProjectIdRef.current, useProjects.getState().activeProjectId)) {
+        return CANVAS_NOT_ACTIVE_NOTICE
+      }
+      if (agentId !== 'codex') return null
+      const decision = resolveNewCodexNodeAccount(
+        accountId ?? undefined,
+        useSettings.getState().settings.codexAccounts,
+        connectedProjectIdForHost
+      )
+      if (decision.create) return null
+      return decision.reason === 'no-connection'
+        ? CODEX_ACCOUNT_NO_CONNECTION_NOTICE
+        : CODEX_ACCOUNT_GONE_NOTICE
+    },
+    [connectedProjectIdForHost]
+  )
+
   const addAgentNode = useCallback(
     (
       agentId: AgentId,
@@ -5157,7 +5232,10 @@ export function Canvas() {
       // A GitHub issue binding (Start with agent on an issue card). Stamped on the node AFTER the
       // factory: it drives chips and run history only — the launch prompt was already composed
       // from it by `issueLaunchPrompt`, the one place a reference may become text in a pane.
-      extra?: { issueRef?: IssueRef }
+      // `awaitSetupGroup` holds the launch for that worktree frame's setup script (the issue card's
+      // "Start with agent in a new worktree" opens the agent in the same tick as the frame) — the
+      // same `PendingLaunch` hold a control open into a preparing frame gets (`setupHoldGroup`).
+      extra?: { issueRef?: IssueRef; awaitSetupGroup?: string }
     ): { node: CanvasNode; projectId: string } | undefined => {
       // Resolve the target project LIVE, at click time — never from this callback's render
       // closure. Menu onClick closures outlive the render that built them (`setMenu` freezes
@@ -5170,10 +5248,7 @@ export function Canvas() {
         console.warn(
           `[nodeterm] node-create refused: canvas holds ${nodesProjectIdRef.current ?? 'nothing'} but the active project is ${targetProjectId || 'none'}`
         )
-        setNotice({
-          kind: 'error',
-          text: 'Could not create the node: the canvas on screen is not the active project’s. Switch tabs once and try again.'
-        })
+        setNotice({ kind: 'error', text: CANVAS_NOT_ACTIVE_NOTICE })
         return
       }
       const project = useProjects.getState().getProject(targetProjectId)
@@ -5194,8 +5269,8 @@ export function Canvas() {
             kind: 'error',
             text:
               decision.reason === 'no-connection'
-                ? 'That Codex account lives on a host that is not connected — connect its SSH project first.'
-                : 'That Codex account is no longer available. Nothing was created.'
+                ? CODEX_ACCOUNT_NO_CONNECTION_NOTICE
+                : CODEX_ACCOUNT_GONE_NOTICE
           })
           return
         }
@@ -5242,8 +5317,13 @@ export function Canvas() {
         model
       )
       const issueRef = normalizeIssueRef(extra?.issueRef)
-      const node = issueRef ? { ...created, data: { ...created.data, issueRef } } : created
-      setNodes((ns) => [...ns, groupId ? parentInto(node, groupId) : node])
+      const bound = issueRef ? { ...created, data: { ...created.data, issueRef } } : created
+      const node = extra?.awaitSetupGroup ? queueControlLaunch(bound, [], extra.awaitSetupGroup) : bound
+      // Parented HERE, not inside the updater: the updater runs at render time, and a render that
+      // a zustand write flushes first (SyncLane, skipping this DefaultLane update) mirrors
+      // `nodesRef` back to state — which does not hold a frame `attachWorktree` created this tick.
+      const placed = groupId ? parentInto(node, groupId) : node
+      setNodes((ns) => [...ns, placed])
       markDirty()
       // The project this node was charged to — the caller files anything else about the node (a
       // board card, its run history) against THIS id, never a second live read of the store.
@@ -6139,24 +6219,27 @@ export function Canvas() {
   // carries no cwd of its own — the worktree's path is what its children inherit
   // (`cwdForNewNodeIn`), so the frame IS the binding.
   const attachWorktree = useCallback(
-    (
-      target: { groupId: string | null; at?: { x: number; y: number }; size?: { width: number; height: number } },
-      wt: GroupWorktree
-    ): string => {
+    (target: WorktreeAttachTarget, wt: GroupWorktree): string => {
       let groupId = target.groupId
       if (groupId) {
-        setNodes((ns) =>
+        const bind = (ns: CanvasNode[]): CanvasNode[] =>
           ns.map((n) => (n.id === groupId ? { ...n, data: { ...n.data, worktree: wt } } : n))
-        )
+        // The ref too, not only state: a caller that opens a node into this frame in the SAME tick
+        // (the issue card's "Start with agent in a new worktree") resolves the frame's cwd and
+        // position through `nodesRef`, which otherwise catches up only at the next render.
+        nodesRef.current = bind(nodesRef.current)
+        setNodes((ns) => bind(ns as CanvasNode[]))
       } else {
         const group = createGroupNode(
           target.at ?? viewCenter() ?? { x: 0, y: 0 },
-          WORKTREE_GROUP_SIZE,
+          target.size ?? WORKTREE_GROUP_SIZE,
           nodesRef.current.length
         )
-        group.data = { ...group.data, title: wt.branch, worktree: wt }
+        group.data = { ...group.data, title: target.title ?? wt.branch, worktree: wt }
         groupId = group.id
-        // Parents must come first — React Flow requires a group before its children.
+        // Parents must come first — React Flow requires a group before its children. The ref gets
+        // it at once for the same reason as the bind branch above.
+        nodesRef.current = [group, ...nodesRef.current]
         setNodes((ns) => [group, ...(ns as CanvasNode[])])
       }
       markDirty()
@@ -6169,12 +6252,24 @@ export function Canvas() {
       // BEFORE the setup script runs, so a setup `npm install` sees those links. Fire-and-forget re
       // the bind (it never blocks the frame), but ORDERED before `startWorktreeSetup` — main reads
       // the sharedPaths list itself by projectId and validates `wt.path`, so a `[]`/reject is safe.
+      //
+      // The setup gate is closed from THIS moment, not only once `startWorktreeSetup` asks for the
+      // run: a node opened into the frame while the shared paths are still being linked (the issue
+      // card opens its agent in the same tick; an `open-agent --group` right after the
+      // `open-worktree` reply can land there too) must hold like one opened a moment later. The
+      // count is released in `finally`, after `startWorktreeSetup` took its own.
+      const setupGroupId = groupId
+      useProjectSetup.getState().markGroupPending(setupGroupId)
       void (async () => {
-        const projectId = useProjects.getState().activeProjectId
-        if (projectId) {
-          await window.nodeTerminal.worktree.materializeShared(projectId, wt.path).catch(() => {})
+        try {
+          const projectId = useProjects.getState().activeProjectId
+          if (projectId) {
+            await window.nodeTerminal.worktree.materializeShared(projectId, wt.path).catch(() => {})
+          }
+          startWorktreeSetup(setupGroupId, wt.path)
+        } finally {
+          useProjectSetup.getState().clearGroupPending(setupGroupId)
         }
-        startWorktreeSetup(groupId, wt.path)
       })()
       // The bound group's id (fresh one when created here) — nodesRef lags setNodes, so
       // callers that need the id (agent-control's open-worktree reply) take it from here.
@@ -6183,34 +6278,68 @@ export function Canvas() {
     [setNodes, markDirty, viewCenter, refreshWorktreeStore, startWorktreeSetup]
   )
 
+  /** What `createBoundWorktree` (lib/worktreeCreate) runs on: this session's git, the live active
+   *  project, and `attachWorktree`. One builder for all three callers. `attach` may be wrapped by a
+   *  caller that must open a node into the frame in the SAME tick (the issue action).
+   *
+   *  The default `attach` resolves `attachWorktree` through `worktreeControlRef` WHEN IT RUNS, after
+   *  the git await — never the instance of the render that built these deps. `attachWorktree`'s
+   *  store refresh closes over that render's active project, and `open-worktree` binds to whatever
+   *  canvas is on screen when git returns: a tab switch in between would otherwise refresh the
+   *  worktree store with the PREVIOUS project's folder against the new canvas's frames, and the
+   *  stale refresh wins the store's epoch — the hazard `worktreeControlRef` exists for. */
+  const worktreeCreateDeps = useCallback(
+    (
+      attach: CreateBoundWorktreeDeps['attach'] = (target, wt) =>
+        worktreeControlRef.current.attachWorktree(target, wt)
+    ): CreateBoundWorktreeDeps => ({
+      worktreeAdd: (repoPath, wtPath, branch, baseRef, isNew) =>
+        api.git.worktreeAdd(repoPath, wtPath, branch, baseRef, isNew),
+      activeProjectId: () => useProjects.getState().activeProjectId,
+      attach
+    }),
+    [api]
+  )
+
   const createWorktreeAndGroup = useCallback(
     async (v: WorktreeCreateValue) => {
       const target = worktreeDialog
       if (!target) return
+      // The dialog's suggested path can come from the git-shared settings file: a location it
+      // produced must stay beside the repository (@shared/worktree-location). A path the person
+      // typed is theirs — the rule judges only the one the shared setting derives for this branch.
+      const locationRefusal = sharedWorktreeLocationRefusal({
+        path: v.path,
+        repoRoot: v.repoPath,
+        branch: v.branch,
+        sharedBasePath: sharedBasePathOf(projectLaunchInfoNow(target.projectId)?.resolved.worktree)
+      })
+      if (locationRefusal) {
+        setWorktreeError(locationRefusal)
+        return
+      }
       setWorktreeBusy(true)
       setWorktreeError(null)
       // A REJECTED ipc is not the same as a failed op, and both have to land here. The Server
       // Edition reaches git over WS-RPC, and a socket that drops mid-create rejects this promise
-      // (`E_DISCONNECTED`) — without the catch the `await` threw straight out of the callback,
-      // `setWorktreeBusy(false)` never ran, and the dialog sat on "Creating…" with its own Cancel
-      // button disabled by `busy`: no error, no way out but Escape. Fail closed — clear busy, say so
-      // inline, and leave the dialog open so the user can retry. (The sibling READS in this feature
-      // catch for exactly this reason; the three destructive calls did not.)
-      const res = await api.git
-        .worktreeAdd(v.repoPath, v.path, v.branch, v.baseRef, v.mode === 'new')
-        .catch((e: unknown) => ({
-          ok: false as const,
-          message: `Could not create the worktree: ${e instanceof Error ? e.message : String(e)}`
-        }))
+      // (`E_DISCONNECTED`) — `createBoundWorktree` turns that into a failure instead of throwing
+      // out of this callback, where `setWorktreeBusy(false)` never ran and the dialog sat on
+      // "Creating…" with its own Cancel disabled. Fail closed — clear busy, say so inline, and
+      // leave the dialog open so the user can retry.
+      const res = await createBoundWorktree(worktreeCreateDeps(), v, {
+        target: () => target,
+        projectId: target.projectId
+      })
       setWorktreeBusy(false)
-      if (!res.ok) {
-        setWorktreeError(res.message) // inline, never window.alert
+      if (!res.ok && res.reason === 'git') {
+        // inline, never window.alert
+        setWorktreeError(res.rejected ? `Could not create the worktree: ${res.message}` : res.message)
         return
       }
       // The worktree exists now, but the canvas may have moved on during the await: binding it to
-      // whatever is on screen would attach ANOTHER repo's worktree to this project. Leave it as an
-      // orphan (the dialog will offer it again on its own project) and say so.
-      if (useProjects.getState().activeProjectId !== target.projectId) {
+      // whatever is on screen would attach ANOTHER repo's worktree to this project. Left as an
+      // orphan (the dialog will offer it again on its own project) — say so.
+      if (!res.ok) {
         setWorktreeDialog(null)
         setNotice({
           kind: 'info',
@@ -6218,11 +6347,9 @@ export function Canvas() {
         })
         return
       }
-      // We created this directory, so `createdByApp` is true — Remove may delete it.
-      attachWorktree(target, worktreeFromCreate(v))
       setWorktreeDialog(null)
     },
-    [attachWorktree, worktreeDialog]
+    [worktreeCreateDeps, worktreeDialog]
   )
 
   const bindExistingWorktree = useCallback(
@@ -6553,6 +6680,7 @@ export function Canvas() {
   // '' (refresh no-ops, wrong SSH gate). The ref always holds this render's instances.
   const worktreeControlRef = useRef({
     attachWorktree,
+    worktreeCreateDeps,
     releaseWorktreeBinding,
     clearWorktreeBinding,
     requestRemoveWorktree,
@@ -6561,6 +6689,7 @@ export function Canvas() {
   useEffect(() => {
     worktreeControlRef.current = {
       attachWorktree,
+      worktreeCreateDeps,
       releaseWorktreeBinding,
       clearWorktreeBinding,
       requestRemoveWorktree,
@@ -10058,29 +10187,20 @@ export function Canvas() {
 
   // ---- GitHub issue → agent session ("Start with agent ▸") ----
   /**
-   * Start an agent on a GitHub issue card: a normal agent node in the project cwd, bound to the
-   * issue (`data.issueRef`), launched with a prompt that carries only the REFERENCE — the issue's
-   * title and body are attacker-writable on a public repository and never reach the pane; the
-   * agent reads them itself with `gh`. The reference comes from the card's GitHub URL and is
-   * validated before anything is created; a card whose URL does not parse starts nothing.
-   *
-   * The new session card is filed under the issue card's column (board metadata only — the same
-   * unpruned direct write `createNodeInColumn` uses, for the same reason: the fresh node is not in
-   * the derived session list yet). The issue card's run history gets `run-started`.
+   * What every issue start does once its agent node exists: file the new session card under the
+   * issue card's column (board metadata only — the same unpruned direct write `createNodeInColumn`
+   * uses, for the same reason: the fresh node is not in the derived session list yet), log its
+   * `card-created`, and record `run-started` on the issue card's history. ONE place for both
+   * "Start with agent" and "Start with agent in a new worktree", so the two cannot file a run
+   * differently.
    */
-  const startIssueAgent = useCallback(
-    (issue: GitHubIssueCardView, agentId: AgentId, accountId?: string | null) => {
-      const ref = issueRefFromHtmlUrl(issue.htmlUrl, issue.number)
-      const prompt = ref ? issueLaunchPrompt(ref) : undefined
-      if (!ref || !prompt) {
-        setNotice({
-          kind: 'error',
-          text: `Could not start an agent on #${issue.number}: its GitHub address could not be read. Nothing was started.`
-        })
-        return
-      }
-      const created = addAgentNode(agentId, undefined, undefined, accountId, prompt, { issueRef: ref })
-      if (!created) return // addAgentNode already said why
+  const fileIssueSession = useCallback(
+    (
+      issue: GitHubIssueCardView,
+      ref: IssueRef,
+      created: { node: CanvasNode; projectId: string },
+      agentId: AgentId
+    ) => {
       const { node, projectId: targetProjectId } = created
       const nodeId = node.id
       // The project addAgentNode charged the node to (its guarded, live read) — not a second read.
@@ -10111,7 +10231,46 @@ export function Canvas() {
       })
       if (started) useBoardLog.getState().append(api, targetProjectId, started)
     },
-    [addAgentNode, seedBoard, markDirty, api]
+    [seedBoard, markDirty, api]
+  )
+
+  /** The reference + first prompt of an issue start, or a notice saying why nothing started. The
+   *  reference comes from the card's GitHub URL and is validated before anything is created; a card
+   *  whose URL does not parse starts nothing. The issue's title and body never reach the prompt. */
+  const issueStartPrompt = useCallback(
+    (issue: GitHubIssueCardView): { ref: IssueRef; prompt: string } | undefined => {
+      const ref = issueRefFromHtmlUrl(issue.htmlUrl, issue.number)
+      const prompt = ref ? issueLaunchPrompt(ref) : undefined
+      if (!ref || !prompt) {
+        setNotice({
+          kind: 'error',
+          text: `Could not start an agent on #${issue.number}: its GitHub address could not be read. Nothing was started.`
+        })
+        return undefined
+      }
+      return { ref, prompt }
+    },
+    []
+  )
+
+  /**
+   * Start an agent on a GitHub issue card: a normal agent node in the project cwd, bound to the
+   * issue (`data.issueRef`), launched with a prompt that carries only the REFERENCE — the issue's
+   * title and body are attacker-writable on a public repository and never reach the pane; the
+   * agent reads them itself with `gh`. The new session card is filed under the issue card's column
+   * and the issue card's run history gets `run-started` (`fileIssueSession`).
+   */
+  const startIssueAgent = useCallback(
+    (issue: GitHubIssueCardView, agentId: AgentId, accountId?: string | null) => {
+      const start = issueStartPrompt(issue)
+      if (!start) return
+      const created = addAgentNode(agentId, undefined, undefined, accountId, start.prompt, {
+        issueRef: start.ref
+      })
+      if (!created) return // addAgentNode already said why
+      fileIssueSession(issue, start.ref, created, agentId)
+    },
+    [addAgentNode, issueStartPrompt, fileIssueSession]
   )
 
   /** The "Start with agent ▸" rows for one issue card: the canvas's own agent + account picker
@@ -10123,6 +10282,299 @@ export function Canvas() {
         label: (agentLabel) => agentLabel
       }).map((entry) => entry.item),
     [agentCreationEntries, startIssueAgent]
+  )
+
+  // ---- GitHub issue → agent session in its OWN worktree ("Start with agent in a new worktree ▸") ----
+  /** The reuse-or-new question, when the issue already has a worktree (or its branch exists). */
+  const [issueWorktreeAsk, setIssueWorktreeAskState] = useState<IssueWorktreeAsk | null>(null)
+  // Tracked like every other confirm (`confirmFlags` / `confirmBusy()`): while it is open an agent's
+  // destructive verb is refused rather than stacked over it, and it does not open over another one.
+  const setIssueWorktreeAsk = useCallback((v: IssueWorktreeAsk | null) => {
+    confirmFlags.current.issueWorktree = !!v
+    setIssueWorktreeAskState(v)
+  }, [])
+  /** Issues with a start in flight (`runExclusive`) — planning AND a dialog-confirmed create. */
+  const issueWorktreeInFlightRef = useRef(new Set<string>())
+
+  /** Why "Start with agent in a new worktree" cannot run on the ACTIVE project, or null. Read at
+   *  click time (menus are built then), so it always describes the canvas on screen. */
+  const issueWorktreeUnavailable = useCallback((): string | null => {
+    const projectId = useProjects.getState().activeProjectId
+    const project = useProjects.getState().getProject(projectId ?? '')
+    return issueWorktreeRefusal({
+      relay: sessionForProject(projectId ?? '').source === 'relay',
+      ssh: !!project?.ssh,
+      cwd: project?.cwd,
+      repoRoot: useWorktrees.getState().repoRoot
+    })
+  }, [])
+
+  /**
+   * Open the issue's agent INTO a worktree frame, in the same tick the frame was made (or found).
+   * Synchronous on purpose: `attachWorktree` has just put the frame in `nodesRef`, and a render in
+   * between — a zustand write flushes one — would mirror the ref back to a node list without it,
+   * so the agent's cwd would fall back to the project folder. The slot is the control opens' grid
+   * (`frameAgentPlacement`), and the frame grows to hold the node as actually built.
+   */
+  const openIssueAgentInFrame = useCallback(
+    (
+      groupId: string,
+      issue: GitHubIssueCardView,
+      start: { ref: IssueRef; prompt: string },
+      agentId: AgentId,
+      accountId: string | null | undefined
+    ): boolean => {
+      const all = nodesRef.current
+      const group = all.find((n) => n.id === groupId)
+      if (!group) return false
+      const children = all.filter((n) => n.parentId === groupId).length
+      const origin = absolutePosition(group as FocusableNode, all as FocusableNode[])
+      const { center } = frameAgentPlacement(origin, children, terminalNodeSize())
+      const created = addAgentNode(
+        agentId,
+        center,
+        groupId,
+        accountId,
+        start.prompt,
+        // A frame whose setup script is still preparing the checkout holds the launch, exactly like
+        // a control open into it; a frame with nothing to prepare launches at once.
+        { issueRef: start.ref, awaitSetupGroup: setupHoldGroup(groupId) }
+      )
+      if (!created) return false // addAgentNode already said why
+      // Grow the frame to hold the node as BUILT (snap-to-grid can round its size up). Queued after
+      // the node's own insert, so both land in one render; `extent: 'parent'` then has room.
+      const built = created.node
+      const { frame } = frameAgentPlacement(origin, children, {
+        width: (built.width as number | undefined) ?? terminalNodeSize().width,
+        height: (built.height as number | undefined) ?? terminalNodeSize().height
+      })
+      const width = Math.max((group.width as number | undefined) ?? 0, frame.width)
+      const height = Math.max((group.height as number | undefined) ?? 0, frame.height)
+      if (width !== group.width || height !== group.height) {
+        const grow = (ns: CanvasNode[]): CanvasNode[] =>
+          ns.map((n) =>
+            n.id === groupId ? { ...n, width, height, style: { ...n.style, width, height } } : n
+          )
+        nodesRef.current = grow(nodesRef.current)
+        setNodes((ns) => grow(ns as CanvasNode[]))
+      }
+      fileIssueSession(issue, start.ref, created, agentId)
+      return true
+    },
+    [setNodes, addAgentNode, setupHoldGroup, fileIssueSession]
+  )
+
+  /**
+   * "Start with agent in a new worktree" on a GitHub issue card: a git worktree on a branch named
+   * `issue-<N>-<slug>` (at the configured worktree location, off the same base the New worktree
+   * dialog defaults to — the project's base-ref override, else the main checkout's branch), a group
+   * frame titled after the issue number bound to it, and the issue's agent opened inside — the same
+   * ref-only launch prompt and `issueRef` as "Start with agent". The frame's binding is what lets a
+   * pull request from that branch find this session card by branch.
+   *
+   * The branch is slugged from the issue TITLE, which anyone can write on a public repository, so
+   * `@shared/issue-worktree` owns every rule about it; nothing here builds a name. An existing
+   * worktree for the issue (or an existing branch of the same name) is offered for reuse beside a
+   * fresh `-2`; nothing on disk is ever overwritten.
+   */
+  const startIssueAgentInWorktree = useCallback(
+    async (issue: GitHubIssueCardView, agentId: AgentId, accountId?: string | null) => {
+      const refusal = issueWorktreeUnavailable()
+      if (refusal) {
+        setNotice({ kind: 'error', text: `Could not start on #${issue.number} in a new worktree: ${refusal}.` })
+        return
+      }
+      const start = issueStartPrompt(issue)
+      if (!start) return
+      const key = issueKey(start.ref) ?? `#${issue.number}`
+      const busy = (): void =>
+        setNotice({ kind: 'info', text: `A worktree for #${issue.number} is already being prepared.` })
+      /** Refuse BEFORE git whatever `addAgentNode` would refuse after it — a fresh worktree with no
+       *  agent in it is the one outcome this action must not leave behind. Asked again at a click. */
+      const agentRefused = (): boolean => {
+        const why = agentCreateRefusal(agentId, accountId)
+        if (why) setNotice({ kind: 'error', text: why })
+        return !!why
+      }
+      if (agentRefused()) return
+      const projectId = useProjects.getState().activeProjectId
+      const project = useProjects.getState().getProject(projectId ?? '')
+      const { repoRoot, entries, staleGroupIds } = useWorktrees.getState()
+      if (!projectId || !project || !repoRoot) return // issueWorktreeUnavailable already refused these
+      const projectMoved = (): boolean => {
+        if (useProjects.getState().activeProjectId === projectId) return false
+        setNotice({ kind: 'info', text: `The project changed, so nothing was started for #${issue.number}.` })
+        return true
+      }
+      // Same defaults as the New worktree dialog and `open-worktree`: a project override, else the
+      // main checkout's branch and the global location template.
+      const pw = projectLaunchInfoNow(project.id)?.resolved.worktree
+      const defaults = { basePath: pw?.basePath?.value, baseRef: pw?.baseRef?.value }
+      const baseRef = effectiveWorktreeBaseRef(defaults, entries)
+      const template = effectiveWorktreeTemplate(
+        defaults,
+        useSettings.getState().settings.worktreePathTemplate
+      )
+      const size = terminalNodeSize()
+      const { frame: need } = frameAgentPlacement({ x: 0, y: 0 }, 0, size)
+      const frame = {
+        width: Math.max(WORKTREE_GROUP_SIZE.width, need.width),
+        height: Math.max(WORKTREE_GROUP_SIZE.height, need.height)
+      }
+      const newFrame = (): WorktreeAttachTarget => ({
+        groupId: null,
+        at: emptyNodePos({ w: frame.width, h: frame.height }),
+        size: frame,
+        title: `Issue #${start.ref.number}`
+      })
+      /** Create (`mode: 'new'`, or check out an existing branch) and bind, then open the agent —
+       *  inside the attach, in the same tick as the frame. */
+      const create = async (
+        target: { branch: string; path: string },
+        mode: 'new' | 'existing',
+        renamedFrom?: string
+      ): Promise<void> => {
+        let opened = false
+        const out = await createBoundWorktree(
+          worktreeCreateDeps((t, wt) => {
+            const groupId = worktreeControlRef.current.attachWorktree(t, wt)
+            opened = openIssueAgentInFrame(groupId, issue, start, agentId, accountId)
+            return groupId
+          }),
+          { repoPath: repoRoot, mode, branch: target.branch, baseRef, path: target.path },
+          { target: newFrame, projectId }
+        )
+        if (!out.ok && out.reason === 'git') {
+          setNotice({ kind: 'error', text: `Could not create the worktree for #${issue.number}: ${out.message}` })
+          return
+        }
+        if (!out.ok) {
+          setNotice({
+            kind: 'info',
+            text: `Created worktree ${target.branch} at ${target.path}. The project changed, so no group or agent was started.`
+          })
+          return
+        }
+        if (!opened) return // the frame is bound; addAgentNode already said why the agent is not
+        const where = mode === 'new' ? `off ${baseRef} ` : ''
+        setNotice({
+          kind: 'info',
+          text: renamedFrom
+            ? `${issueWorktreeRenamedNotice(renamedFrom, target.branch)} It is ${where}at ${target.path}.`
+            : `Worktree ${target.branch} created ${where}at ${target.path}; the agent opens there.`
+        })
+      }
+      const ran = await runExclusive(issueWorktreeInFlightRef.current, key, async () => {
+        // Local branches, so a taken name is seen before git refuses it. An unreadable list comes
+        // back empty: git then has the last word, and its refusal is what the notice shows.
+        const status = await api.git.status(repoRoot).catch(() => null)
+        const plan = await planIssueWorktree(
+          {
+            number: start.ref.number,
+            title: issue.title,
+            repoRoot,
+            template,
+            entries,
+            branches: status?.branches ?? null,
+            // A name that exists on a remote is taken (→ `-k`), never checked out.
+            remoteBranches: status?.remoteBranches ?? [],
+            bound: issueWorktreeFrames(nodesRef.current, repoRoot, staleGroupIds),
+            sharedBasePath: sharedBasePathOf(pw)
+          },
+          (path) => api.fs.exists(path)
+        )
+        // The canvas may have moved on while git and the filesystem answered: everything below
+        // writes into the canvas on screen.
+        if (projectMoved()) return
+        if (plan.kind === 'refused') {
+          setNotice({ kind: 'error', text: `Could not start on #${issue.number} in a new worktree: ${plan.reason}` })
+          return
+        }
+        if (plan.kind === 'create') {
+          await create(plan.target, 'new', plan.renamedFrom)
+          return
+        }
+        const { existing, alternative } = plan
+        if (confirmBusy()) {
+          setNotice({
+            kind: 'info',
+            text: `Another confirmation is open — answer it, then start #${issue.number} again.`
+          })
+          return
+        }
+        const copy = issueWorktreeChoiceCopy(start.ref.number, existing, alternative, baseRef)
+        setIssueWorktreeAsk({
+          ...copy,
+          // Everything re-asked at the click: the dialog stays up for as long as the person reads it.
+          run: (choice) => {
+            if (projectMoved() || agentRefused()) return
+            if (choice === 'new' || existing.kind === 'branch') {
+              const target = choice === 'new' ? alternative : existing
+              if (!target) return
+              void runExclusive(issueWorktreeInFlightRef.current, key, () =>
+                create({ branch: target.branch, path: target.path }, choice === 'new' ? 'new' : 'existing')
+              ).then((started) => started || busy())
+              return
+            }
+            // A frame bound to this worktree now — the one the plan found, or one that adopted the
+            // orphan while the dialog was open — takes the agent. Never a second frame on one folder.
+            const live = issueWorktreeFrames(
+              nodesRef.current,
+              repoRoot,
+              useWorktrees.getState().staleGroupIds
+            ).find((b) => normWorktreePath(b.path) === normWorktreePath(existing.path))
+            if (live) {
+              openIssueAgentInFrame(live.groupId, issue, start, agentId, accountId)
+              return
+            }
+            // The frame the plan found is gone or no longer bound, or the unbound worktree is no
+            // longer listed (removed, or pruned): say so rather than bind a folder that may be gone.
+            const listed = useWorktrees
+              .getState()
+              .entries.find((e) => normWorktreePath(e.path) === normWorktreePath(existing.path))
+            if (existing.kind === 'bound' || !listed || listed.prunable || !listed.branch) {
+              setNotice({
+                kind: 'error',
+                text: `The worktree for #${issue.number} at ${existing.path} is gone or no longer bound. Nothing was started.`
+              })
+              return
+            }
+            // An unbound worktree on disk: adopt it (the app did not create it, so Remove will
+            // never delete it), then open the agent inside, in the same tick.
+            const wt = worktreeFromEntry(listed, repoRoot, resolveBaseRef(useWorktrees.getState().entries))
+            if (!wt) return
+            const groupId = worktreeControlRef.current.attachWorktree(newFrame(), wt)
+            openIssueAgentInFrame(groupId, issue, start, agentId, accountId)
+          }
+        })
+      })
+      if (!ran) busy()
+    },
+    [
+      issueWorktreeUnavailable,
+      issueStartPrompt,
+      agentCreateRefusal,
+      api,
+      emptyNodePos,
+      worktreeCreateDeps,
+      openIssueAgentInFrame
+    ]
+  )
+
+  /** The "Start with agent in a new worktree ▸" rows (the same agent + account picker), or the
+   *  reason the action cannot run on this project — the board shows that DISABLED, never hidden. */
+  const issueWorktreeMenu = useCallback(
+    (issue: GitHubIssueCardView): IssueWorktreeMenuAnswer => {
+      const refusal = issueWorktreeUnavailable()
+      if (refusal) return { refusal }
+      return {
+        items: agentCreationEntries(undefined, undefined, {
+          onPick: (aid, acct) => void startIssueAgentInWorktree(issue, aid, acct),
+          label: (agentLabel) => agentLabel
+        }).map((entry) => entry.item)
+      }
+    },
+    [agentCreationEntries, issueWorktreeUnavailable, startIssueAgentInWorktree]
   )
 
     // Global kanban swimlane "New session" path — creates a node in the target project's
@@ -11750,15 +12202,7 @@ export function Canvas() {
       ): CanvasNode => {
         const command = node.data.initialCommand as string | undefined
         if (!command) return node
-        // A group counts while its launch is still PENDING (the ack — and with it `waitForSetup` —
-        // has not come back yet; holding is the safe side of that unknown, and a non-waiting ack
-        // releases these again) or while its acked run said `waitForSetup` and has not finished.
-        const holdsForSetup =
-          !!intoGroup &&
-          (useProjectSetup.getState().pendingForGroup(intoGroup) > 0 ||
-            setupWaitGroupsRef.current.has(intoGroup)) &&
-          !setupDoneForGroup(intoGroup)
-        const awaitSetupGroup = holdsForSetup ? intoGroup ?? undefined : undefined
+        const awaitSetupGroup = setupHoldGroup(intoGroup)
         // Always retain the command until the PTY-ready delivery loop acknowledges it.
         // Node creation (even on screen) is not command delivery.
         return queueControlLaunch(node, after, awaitSetupGroup)
@@ -12707,6 +13151,19 @@ export function Canvas() {
               reply({ ok: false, error: 'open-worktree: could not derive a worktree path — pass --path' })
               return
             }
+            // A location the git-shared settings file produced must stay beside the repository
+            // (@shared/worktree-location). An explicit `--path` is the caller's own and not judged.
+            // Before the dry run, which must refuse what the real call refuses.
+            const locationRefusal = sharedWorktreeLocationRefusal({
+              path: wtPath,
+              repoRoot,
+              branch,
+              sharedBasePath: args.path?.trim() ? undefined : sharedBasePathOf(pw)
+            })
+            if (locationRefusal) {
+              reply({ ok: false, error: `open-worktree: ${locationRefusal}` })
+              return
+            }
             if (dryRun) {
               reply({
                 ok: true,
@@ -12733,31 +13190,34 @@ export function Canvas() {
               })
               return
             }
-            const res = await api.git
-              .worktreeAdd(repoRoot, wtPath, branch, baseRef, true)
-              .catch((e: unknown) => ({
-                ok: false as const,
-                message: e instanceof Error ? e.message : String(e)
-              }))
-            if (!res.ok) {
-              reply({ ok: false, error: `open-worktree: ${res.message}` })
+            // The shared create-and-bind (lib/worktreeCreate), WITHOUT its project-changed refusal:
+            // this verb has always bound to the canvas on screen when git returns.
+            const created = await createBoundWorktree(
+              worktreeControlRef.current.worktreeCreateDeps(),
+              { repoPath: repoRoot, mode: 'new', branch, baseRef, path: wtPath },
+              {
+                // A fresh frame takes the first free cell under the caller, like every other open.
+                // (This used to fan by the number of top-level frames on the canvas, which landed a
+                // frame on whatever terminal happened to sit at that offset.) The claim is keyed by
+                // a placeholder id — `attachWorktree` mints the real one — so it simply ages out.
+                // Asked only once git succeeded, against the canvas as it is then.
+                target: () => ({
+                  groupId: bindGroupId,
+                  at: bindGroupId
+                    ? undefined
+                    : settleBelowSource(nodesRef.current as PlaceableNode[], ctlProject?.id ?? '', {
+                        id: `pending-worktree-${requestId}`,
+                        position: { x: 0, y: 0 },
+                        ...WORKTREE_GROUP_SIZE
+                      }).position
+                })
+              }
+            )
+            if (!created.ok) {
+              reply({ ok: false, error: `open-worktree: ${created.reason === 'git' ? created.message : 'the project changed'}` })
               return
             }
-            // A fresh frame takes the first free cell under the caller, like every other open.
-            // (This used to fan by the number of top-level frames on the canvas, which landed a
-            // frame on whatever terminal happened to sit at that offset.) The claim is keyed by a
-            // placeholder id — `attachWorktree` mints the real one — so it simply ages out.
-            const frameAt = bindGroupId
-              ? undefined
-              : settleBelowSource(nodesRef.current as PlaceableNode[], ctlProject?.id ?? '', {
-                  id: `pending-worktree-${requestId}`,
-                  position: { x: 0, y: 0 },
-                  ...WORKTREE_GROUP_SIZE
-                }).position
-            const groupId = worktreeControlRef.current.attachWorktree(
-              { groupId: bindGroupId, at: frameAt },
-              worktreeFromCreate({ repoPath: repoRoot, mode: 'new', branch, baseRef, path: wtPath })
-            )
+            const groupId = created.groupId
             reply({
               ok: true,
               message: `opened worktree ${branch} (off ${baseRef || 'the repo default branch'}${baseNote}) at ${wtPath} in group ${groupId}`,
@@ -15776,6 +16236,7 @@ export function Canvas() {
           accountMenuItems={accountSwitchRows}
           onAutoMoveFromPulls={autoMoveCardFromPulls}
           issueAgentMenu={issueAgentMenu}
+          issueWorktreeMenu={issueWorktreeMenu}
         />
       )}
       <UpdateCard />
@@ -16493,6 +16954,30 @@ export function Canvas() {
             setSettingsOpen(true)
           }}
           onClose={() => setRemotePicker(null)}
+        />
+      )}
+
+      {issueWorktreeAsk && (
+        // "Start with agent in a new worktree" found the issue's worktree (or its branch) already
+        // there. Asked, never decided for the person: reuse is the likely answer, but a second,
+        // independent checkout is a legitimate one too. Nothing on disk is overwritten either way.
+        <ConfirmDialog
+          message={issueWorktreeAsk.message}
+          choice={{
+            label: 'Start the agent in',
+            options: issueWorktreeAsk.options,
+            value: issueWorktreeAsk.value,
+            onChange: (value) =>
+              setIssueWorktreeAskState((ask) => (ask ? { ...ask, value: value as IssueWorktreeChoice } : ask))
+          }}
+          confirmLabel="Start agent"
+          danger={false}
+          onConfirm={() => {
+            const ask = issueWorktreeAsk
+            setIssueWorktreeAsk(null)
+            ask.run(ask.value)
+          }}
+          onCancel={() => setIssueWorktreeAsk(null)}
         />
       )}
 
