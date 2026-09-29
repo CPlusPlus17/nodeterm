@@ -5234,6 +5234,50 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     safe slug is appended automatically. The shipped `../${repoName}.worktrees/${branch}` keeps
     worktrees beside — not nested inside — the main checkout. There is no general project-settings
     surface today, so the setting is intentionally global rather than hidden in a one-off menu.
+  - **One create-and-bind** (`renderer/lib/worktreeCreate.ts`, `createBoundWorktree`) — the New
+    worktree dialog, the `open-worktree` verb and the issue card's "Start with agent in a new
+    worktree" all create through it: `git worktree add` (a REJECTED call becomes a failure, never a
+    throw out of the caller), then `attachWorktree`. The frame's place is asked only once git
+    succeeded. `projectId` opts in to the "the canvas moved on during the await" refusal: the dialog
+    and the issue action pass it; `open-worktree` does not, and still binds to whatever is on screen
+    when git returns (unchanged, and a known gap). `git worktree add` is reached from ONE place
+    (`worktreeCreateDeps`), pinned by `canvas/issue-worktree.source.test.ts`. Three same-tick rules
+    the issue action rests on: `attachWorktree` writes the new frame into `nodesRef` beside its
+    `setNodes`, so a caller can open a node INTO a frame it just made; it closes the frame's setup
+    gate from the bind (`markGroupPending` before the `sharedPaths` materialize, released in a
+    `finally` once `startWorktreeSetup` took its own count), so a node opened into it at once holds
+    its launch — the hold is ONE rule, `setupHoldGroup`, shared with the control opens' `armAfter`;
+    and `addAgentNode` parents the node BEFORE `setNodes`, never inside the updater, because the
+    updater runs at render time and a zustand-flushed SyncLane render may already have mirrored
+    `nodesRef` back to a list without the fresh frame (the `nodesEpoch` lesson).
+  - **A worktree per GitHub issue** (`@shared/issue-worktree`) — "Start with agent in a new
+    worktree ▸" on an issue card and its summary modal: branch `issue-<N>-<slug>` off the repo's
+    default (`effectiveWorktreeBaseRef`) at the templated path, a frame titled `Issue #N`, and the
+    agent opened inside it with the same ref-only prompt and `issueRef` as "Start with agent" (one
+    `issueStartPrompt`, one `fileIssueSession` for both). The frame's binding is what links a pull
+    request from that branch to the session card. **The title is attacker-controlled**: the slug is
+    an allowlist `[a-z0-9-]` (lower-cased, NFKD with marks stripped so `café` → `cafe`; every other
+    script, lookalike, bidi or zero-width character is dropped), capped at `ISSUE_BRANCH_SLUG_MAX`
+    (40) and cut back to a word boundary, and `issue-<N>` alone when nothing survives; the name only
+    ever reaches git as one argv element, and the tests run the real `git check-ref-format --branch`
+    over the hostile set. **Nothing on disk is overwritten**: `planIssueWorktree` (filesystem only
+    through an injected probe; a probe that fails reads as "taken") offers REUSE of what the issue
+    already has — a frame on this canvas bound to `issue-<N>` / `issue-<N>-…` (open the agent in it),
+    an unbound worktree of the issue (adopt it, `createdByApp: false`), or the exact branch existing
+    but checked out nowhere (check it out) — beside the next free `-2` … `-20`; a name or folder that
+    is merely taken moves to the next suffix and the notice says why. Never the main checkout, never
+    a prunable registration. Disabled WITH its reason on a relay tab, an SSH project, a cwd-less
+    project and a folder with no repository (`issueWorktreeRefusal`). **There is no `--worktree`
+    flag**: an agent composes `open-worktree --branch issue-<N>-<slug>` then `open-agent --group
+    <groupId> --issue #N`, and both agent bodies render that convention from `issueWorktreeBranch`.
+    A flag was judged not worth it: the two calls already reach the identical end state; the
+    "worktree already exists" question needs a person's answer, which an agent gets from `list`
+    instead; the slug needs the issue title, which the control dispatch does not hold reliably (only
+    a subscribed board does), so the flag would name one issue's branch two ways; and a second copy
+    of `open-worktree`'s surface (`--base`, `--path`, dry run, setup holds, refusals) inside
+    `open-agent` is the drift this file warns about. Surfaces: Desktop and Server Edition (the
+    whole path is renderer + the existing git/fs/worktree bridges); a relay tab is refused (above);
+    the Omni board has no issue lanes; Mobile N/A like every worktree affordance.
   - **One store, one poller** — `renderer/state/worktrees.ts` is the **only** caller of the worktree
     /status *read* IPCs (`git.repoRoot`, `git.worktreeList`, `git.status`); the group chip, the
     creation dialog and the Source Control panel all read that store. Three independent pollers would
@@ -5243,8 +5287,9 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     *deletion*) and **fails open**. Exactly **two** direct `git.status` reads live outside it, both in
     `Canvas.tsx` and both deliberate: the one-shot probes on the **Remove** confirm (the dirty-file
     count in the warning) and on **↪ Move into worktree** (staleness only arrives by poll, so the
-    directory is re-checked immediately before an irreversible session kill). Anything recurring
-    belongs in the store.
+    directory is re-checked immediately before an irreversible session kill). Two more one-shot
+    reads take only the local BRANCH list: the New worktree dialog's dropdown and the issue action's
+    planner (so a taken name is seen before git refuses it). Anything recurring belongs in the store.
   - **Scoped Source Control** — the panel operates on a selected `ScmScope` (the main checkout or a
     bound worktree). A worktree scope's **id is its group node id**, which is what lets the canvas
     selection preselect it. `scmScopes` / `defaultScmScope` / `selectedScmGroupId`
@@ -5554,8 +5599,10 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   request) that opens the issue on the board (`openIssueOnBoard` →
   `viewMode.requestedIssue`) ONLY when that board has GitHub sync — otherwise straight to GitHub,
   rather than flipping the project's persisted view to a board that cannot show it — and the board
-  itself falls back to GitHub when the issue is not on a fetched page. Never a dead click. No "start in a new worktree" UI yet: compose `open-worktree` + `open-agent --group --issue`
-  (the skill says how). Surfaces: Desktop + Server Edition (renderer + core); Omni board shows no
+  itself falls back to GitHub when the issue is not on a fetched page. Never a dead click. **"Start
+  with agent in a new worktree ▸"** sits beside it on the card menu and in the summary modal: a
+  fresh `issue-<N>-<slug>` worktree frame with the agent inside, reuse offered when the issue
+  already has one — see the Worktrees bullet ("A worktree per GitHub issue"). Surfaces: Desktop + Server Edition (renderer + core); Omni board shows no
   issue lanes; **Mobile does not render the binding** — `issueRef` reaches the phone inside the
   project file, and nodeterm-ios ignores the unknown field (follow-up there).
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,

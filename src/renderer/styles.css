@@ -10985,6 +10985,7 @@ button.pull-checks__name {
 }
 .github-issue-modal__actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;

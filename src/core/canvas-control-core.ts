@@ -16,6 +16,7 @@ import { nodeColorChoices } from '@shared/node-colors'
 import { offScreenGuidanceLines } from '@shared/control-off-screen'
 import { codexThreadIdentityResolverSh } from './codex-thread-identity-sh'
 import { ISSUE_SESSION_COLUMNS, issueLaunchPrompt, parseIssueArg } from '../shared/github-issue-ref'
+import { ISSUE_BRANCH_SLUG_MAX, issueWorktreeBranch } from '../shared/issue-worktree'
 
 /**
  * The messaging verbs' retry guidance, RENDERED from `RETRYABLE` — the table is the source, and
@@ -52,6 +53,9 @@ function messagingGuidanceLines(): string[] {
 function issueBindingDocLines(): string[] {
   const { started, delivered } = ISSUE_SESSION_COLUMNS
   const example = issueLaunchPrompt({ owner: 'owner', repo: 'repo', number: 123 })
+  // Rendered from the function the board's "Start with agent in a new worktree" names its branch
+  // with, so the convention an agent reads is the one the button follows.
+  const exampleBranch = issueWorktreeBranch(123, 'Fix login crash on Safari')
   return [
     'Issue-bound sessions (`--issue`):',
     '- `open-agent --agent <id> --issue <owner/repo#N | #N>` (and `open-claude --issue …`) starts a session ON',
@@ -65,8 +69,14 @@ function issueBindingDocLines(): string[] {
     '  `#N` means the repository this project\'s kanban board syncs with; with no repository configured it is',
     '  refused — pass `owner/repo#N`. The value must be exactly `owner/repo#N` or `#N`: anything else is refused,',
     '  never repaired. With `--prompt-file` the file is the whole brief, so name the issue in it.',
-    '  `--dry-run` reports the resolved reference. For a branch per issue:',
-    '  `open-worktree --branch issue-<N>-<slug>`, then `open-agent --agent <id> --group <groupId> --issue #N`.',
+    '  `--dry-run` reports the resolved reference.',
+    '- A worktree per issue is two calls — what the board\'s "Start with agent in a new worktree" does:',
+    `  \`open-worktree --branch ${exampleBranch}\` (\`issue-<N>-\` then the title in lower-case ASCII letters,`,
+    `  digits and \`-\`, at most ${ISSUE_BRANCH_SLUG_MAX} characters), then`,
+    '  `open-agent --agent <id> --group <groupId> --issue #N` with the `groupId` it replied. The frame\'s branch is',
+    '  what links a pull request from it to the session card. Check `list` first: a frame titled `Issue #N` or',
+    '  `issue-<N>-…` already holds that issue\'s worktree — open into it with `--group` instead of making a second',
+    '  one. `open-worktree` never overwrites: a branch that already exists fails, so pick the next `-2`.',
     '- If YOUR session was started on an issue (your first prompt names it; `list` marks your row',
     '  `issue owner/repo#N`), keep this contract:',
     '  - Unless your first prompt named a narrower task, the issue IS your task: read it, then investigate,',
