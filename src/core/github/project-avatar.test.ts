@@ -94,7 +94,7 @@ describe('resolveProjectAvatarDataUrl', () => {
 
   it('refuses an owner GitHub could not have issued, before any request', async () => {
     let fetched = false
-    for (const owner of ['a--b', '-acme', 'acme-', '../x']) {
+    for (const owner of ['-acme', 'x'.repeat(40), '../x', 'a/b', 'a?b']) {
       expect(await resolveProjectAvatarDataUrl({
         owner,
         fetchImpl: async () => { fetched = true; return userJson(AVATAR) }

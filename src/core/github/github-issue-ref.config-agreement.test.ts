@@ -17,7 +17,8 @@ const CORPUS = [
   'o/-r',
   '-o/r',
   'o-/r',
-  'a--b/r',
+  'hello--world/a',
+  'john-/x',
   'a-b-c/r',
   'o/r;rm',
   'o/r`id`',
@@ -32,10 +33,12 @@ const CORPUS = [
 ]
 
 describe('issue-reference grammar agrees with the board repository parser', () => {
-  it('both refuse an owner with consecutive hyphens (GitHub allows only single inner ones)', () => {
-    expect(parseGitHubRepository('a--b/r')).toBeNull()
-    expect(parseGitHubRepository('https://github.com/a--b/r.git')).toBeNull()
-    expect(parseGitHubRepository('a-b-c/r')).toBe('a-b-c/r')
+  it('both accept the logins GitHub has issued, consecutive and trailing hyphens included', () => {
+    // Real accounts (`hello--world`, `john-`); a board synced with one must keep syncing.
+    expect(parseGitHubRepository('https://github.com/hello--world/a.git')).toBe('hello--world/a')
+    expect(parseGitHubRepository('git@github.com:john-/x.git')).toBe('john-/x')
+    expect(resolveIssueArg('#1', 'hello--world/a').ok).toBe(true)
+    expect(parseGitHubRepository('-foo/r')).toBeNull()
   })
 
   it.each(CORPUS)('%j', (slug) => {
