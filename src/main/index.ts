@@ -216,6 +216,8 @@ import { initCanvasSync } from '../core/canvas-sync'
 import { retainUntilDismissed } from './notifications'
 import { installManagedAgentHooks } from '../core/agents/hooks'
 import { createSubagentTail } from '../core/subagent-tail'
+import { ClaudeSubagentLifecycle } from '../core/claude-subagent-lifecycle'
+import { claudeSubagentTranscriptPath, isClaudeAgentId } from '../shared/agents/claude-subagents'
 import { createContextTail, type TaskNotification } from '../core/context-tail'
 import { registerContextEnsureIpc } from '../core/context-ensure'
 import { grokContextParse, GROK_SIGNALS_FILE } from '../core/grok-signals'
@@ -2423,6 +2425,18 @@ app.whenReady().then(async () => {
   const subagentTail = createSubagentTail(({ toolUseId, chunk }) => {
     if (!win.isDestroyed()) win.webContents.send(IPC.agentSubagentActivity, { toolUseId, chunk })
   })
+  // Claude's two subagent signal paths merged into one card per child (native SubagentStart/Stop
+  // win once a session sends them — core/claude-subagent-lifecycle.ts). Every normalized event
+  // passes through it before any consumer; a card it ends or replaces stops that key's live
+  // transcript tail, local or remote. Same wiring as the Server Edition's (src/server/agent-status.ts).
+  // The remote names below are declared further down; onRelease only runs once hooks flow.
+  const claudeSubagents = new ClaudeSubagentLifecycle({
+    onRelease: (key) => {
+      subagentTail.finish(key)
+      if (remoteSubagentResolving.has(key)) remoteSubagentCancel.add(key)
+      remoteSubagentTail.untrack(key)
+    }
+  })
   // Async subagents (Claude's default) end via a <task-notification> queued into the PARENT
   // transcript — their PostToolUse is only a launch ack (see the raw listener below). The
   // context tails already read that transcript, so they surface the notification here and we
@@ -2451,10 +2465,15 @@ app.whenReady().then(async () => {
       sessionId,
       kind: 'subagent-end',
       toolUseId: n.toolUseId,
-      result: n.result
+      result: n.result,
+      subagentSignal: 'transcript'
     } satisfies NormalizedAgentEvent
-    sendToMain(IPC.agentStatus, taskDoneEvent)
-    recordAgentEvent(taskDoneEvent)
+    // Through the lifecycle like every other event: in a session that sends native hooks the card
+    // is keyed by the child's agent_id, and this tool-keyed end is re-keyed onto it (idempotent).
+    for (const out of claudeSubagents.apply(taskDoneEvent)) {
+      sendToMain(IPC.agentStatus, out)
+      recordAgentEvent(out)
+    }
     subagentTail.finish(n.toolUseId)
     remoteSubagentTail.untrack(n.toolUseId)
     nodeSubagents.get(nodeId)?.delete(n.toolUseId)
@@ -2852,19 +2871,23 @@ app.whenReady().then(async () => {
   // and the mobile-facing mirror. Named so the deterministic-approval answer handler below can reuse
   // it for the optimistic flip.
   const emitAgentStatus = (e: NormalizedAgentEvent): void => {
-    // Record FIRST: recordAgentEvent computes the stash-priority classification and returns the
-    // event ENRICHED for a needs-you edge (a question strips its pendingId), so the canvas keys off
-    // the same single source of truth as the mirror/phone. Then broadcast the enriched event.
-    const enriched = recordAgentEvent(e) ?? e
-    sendToMain(IPC.agentStatus, enriched)
-    // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
-    notchHudOnAgentEvent(enriched)
-    // Agent messaging taps the SAME stream: the sender's newTurn resets its fan-out budget, and
-    // an open delivery receipt watch is satisfied by the target's verified advance.
-    onMessagingAgentEvent(enriched)
-    // …and so does the station-failure monitor: an errored turn, a needs-you edge, and the
-    // successful turn that re-arms a station's notice all ride this one stream.
-    stationNotices.onAgentEvent(enriched)
+    // Claude subagent events first become one card per child (claudeSubagents); every other event
+    // comes back as itself, so for them this loop runs exactly once, over `e`.
+    for (const out of claudeSubagents.apply(e)) {
+      // Record FIRST: recordAgentEvent computes the stash-priority classification and returns the
+      // event ENRICHED for a needs-you edge (a question strips its pendingId), so the canvas keys off
+      // the same single source of truth as the mirror/phone. Then broadcast the enriched event.
+      const enriched = recordAgentEvent(out) ?? out
+      sendToMain(IPC.agentStatus, enriched)
+      // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
+      notchHudOnAgentEvent(enriched)
+      // Agent messaging taps the SAME stream: the sender's newTurn resets its fan-out budget, and
+      // an open delivery receipt watch is satisfied by the target's verified advance.
+      onMessagingAgentEvent(enriched)
+      // …and so does the station-failure monitor: an errored turn, a needs-you edge, and the
+      // successful turn that re-arms a station's notice all ride this one stream.
+      stationNotices.onAgentEvent(enriched)
+    }
   }
   hookServer.setListener(emitAgentStatus)
   // Deterministic hook-reply approvals (docs/hook-reply-approvals.md): the canvas Approve/Deny
@@ -3264,6 +3287,43 @@ app.whenReady().then(async () => {
     // Runs BEFORE the local/remote split so it covers remote (SSH) nodes too — it needs only
     // tool_name/tool_input, never the transcript path the split routes on.
     recordRawToolEvent(nodeId, payload)
+    // Claude's native subagent hooks, BEFORE the child-event gate below: that gate ignores every
+    // agent_id-tagged payload, and these carry the CHILD's agent_id with the PARENT's
+    // transcript_path. All they drive here is the child's own transcript tail, started at
+    // SubagentStart at the path derived from the parent's (the start does not name the file; the
+    // stop does, too late) — on the node's host for a remote node, jailed like every other remote
+    // path, and with no meta.json polling over ssh. The stop needs nothing here: the lifecycle's
+    // onRelease ends the tail. Same branch as the Server Edition's, plus the remote leg.
+    const native = payload as { hook_event_name?: string; agent_id?: unknown; transcript_path?: string }
+    if (native.hook_event_name === 'SubagentStart' || native.hook_event_name === 'SubagentStop') {
+      if (native.hook_event_name === 'SubagentStart' && isClaudeAgentId(native.agent_id)) {
+        const agentChild = native.agent_id
+        const rtn = nodeId ? ptyManager.sshRemoteForNode(nodeId) : undefined
+        let tracked = false
+        if (rtn) {
+          const parent = safeRemoteTranscriptPath(
+            native.transcript_path,
+            sshProjectManager?.remoteHomeForControlPath(rtn.controlPath)
+          )
+          const file = parent ? claudeSubagentTranscriptPath(parent, agentChild) : undefined
+          if (file) {
+            remoteSubagentTail.track(agentChild, { conn: rtn.conn, controlPath: rtn.controlPath, path: file })
+            tracked = true
+          }
+        } else {
+          const parent = safeTranscriptPath(native.transcript_path)
+          const file = parent ? claudeSubagentTranscriptPath(parent, agentChild) : undefined
+          subagentTail.trackFile(agentChild, file)
+          tracked = !!file
+        }
+        if (nodeId && tracked) {
+          const set = nodeSubagents.get(nodeId) ?? new Set<string>()
+          set.add(agentChild)
+          nodeSubagents.set(nodeId, set)
+        }
+      }
+      return
+    }
     if (ignoreQuestionHook(nodeId, payload)) return
     const p = payload as {
       hook_event_name?: string
@@ -3302,7 +3362,9 @@ app.whenReady().then(async () => {
       }
       if (p.tool_use_id && p.tool_name && SUBAGENT_TOOLS.has(p.tool_name) && transcriptPath) {
         const toolUseId = p.tool_use_id
-        if (p.hook_event_name === 'PreToolUse') {
+        // Once this session has sent a native SubagentStart, the child brings its own tail there;
+        // resolving a tool-keyed one would only poll the host with ssh execs for the same file.
+        if (p.hook_event_name === 'PreToolUse' && !claudeSubagents.isNative(nodeId, p.session_id)) {
           remoteSubagentCancel.delete(toolUseId)
           remoteSubagentResolving.add(toolUseId)
           // Resolve the remote subagent file asynchronously (it appears shortly after), then track.
@@ -3348,7 +3410,9 @@ app.whenReady().then(async () => {
     // Subagent live transcript: track on PreToolUse / finish on PostToolUse for subagent tools.
     if (p.tool_use_id && p.tool_name && SUBAGENT_TOOLS.has(p.tool_name)) {
       if (p.hook_event_name === 'PreToolUse') {
-        subagentTail.track(p.tool_use_id, transcriptPath)
+        // Once this session has sent a native SubagentStart, the child brings its own tail there
+        // (keyed by its agent_id); a tool-keyed tail would only read the same file twice.
+        if (!claudeSubagents.isNative(nodeId, p.session_id)) subagentTail.track(p.tool_use_id, transcriptPath)
         if (nodeId) {
           const set = nodeSubagents.get(nodeId) ?? new Set<string>()
           set.add(p.tool_use_id)
@@ -3375,6 +3439,7 @@ app.whenReady().then(async () => {
   //    tails of the OLD session's transcript are just as dead; the respawned agent re-registers
   //    them under its new session id via the hook events).
   const releaseNodeTails = (nodeId: string): void => {
+    claudeSubagents.forgetNode(nodeId)
     remoteCodexContext.release(nodeId)
     const sessionId = nodeContextSession.get(nodeId)
     if (sessionId) {

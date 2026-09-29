@@ -69,6 +69,11 @@ export interface AgentNodeStatus {
    * hibernation and the bulk in-place restart both type it — kills it silently, with no output and
    * no error. The stamp is what those two exclude on.
    *
+   * Second writer: a Claude `Stop` whose `background_tasks` inventory still lists running work
+   * (async subagents, background shells — `NormalizedAgentEvent.backgroundTaskIds`). A background
+   * subagent that ends its turn while its own work runs fires SubagentStop, so its card reads done
+   * while it is only paused; the inventory is what still says the CLI holds live work.
+   *
    * TRANSIENT — never persisted, same rationale as `lastEventAt`: after a relaunch Eco is inert
    * until a turn happens anyway, and any turn's `working` would have cleared this. A stale stamp
    * restored from disk would exempt the node from Eco for good.

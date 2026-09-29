@@ -1,6 +1,7 @@
 import type { AgentId } from './config'
 import type { ObservedClaudeAccount } from '../types'
 import { ASK_USER_QUESTION_TOOL, isSafeToolName, readQuestions, type HeldPermission } from './permission-answer'
+import { isClaudeAgentId, isInjectedSubagentPrompt, liveBackgroundTaskIds } from './claude-subagents'
 
 export type AgentState = 'working' | 'waiting' | 'blocked' | 'done'
 
@@ -84,6 +85,35 @@ export interface NormalizedAgentEvent {
   // subagent
   toolUseId?: string
   subagentType?: string
+  /**
+   * Claude only: WHICH of Claude's two subagent signals produced this subagent event, so
+   * `core/claude-subagent-lifecycle.ts` can merge them into one card per subagent.
+   *  - `'native'` — Claude's own `SubagentStart`/`SubagentStop` hooks, keyed by `agent_id`.
+   *  - `'tool'` — the older reconstruction from `PreToolUse`/`PostToolUse` on the `Agent`/`Task`
+   *    tool, keyed by `tool_use_id`.
+   *  - `'transcript'` — the synthetic end the shells sniff out of a `<task-notification>`.
+   * Absent on every other agent's events, which the lifecycle passes through untouched.
+   */
+  subagentSignal?: 'native' | 'tool' | 'transcript'
+  /**
+   * subagent-start only (set by the lifecycle, never by a normalizer): this card REPLACES the card
+   * keyed by this id. Emitted once, when a session proves it sends native hooks while a card built
+   * from the tool path is already on screen — consumers move that card (its place, its start time)
+   * to the new key instead of drawing a second one.
+   */
+  supersedes?: string
+  /** Claude tool-path end only: the exact child `agent_id` its `tool_response.agentId` names. */
+  subagentAgentId?: string
+  /** Claude async-launch ack only (a `state: working` event): the exact tool_use_id → agent_id pair
+   *  the ack names, measured to arrive ~1 ms after the child's `SubagentStart`. */
+  subagentLaunch?: { toolUseId: string; agentId: string }
+  /**
+   * Claude `Stop` only: the ids of the BACKGROUND tasks (async subagents, background shells) the
+   * CLI reports still running at this turn end. Present only when the payload carried the
+   * inventory — absent from older CLIs, so absent means "unknown", never "none". See
+   * `liveBackgroundTaskIds`.
+   */
+  backgroundTaskIds?: string[]
   /** Host-observed start time for display-only renderer reload replay. */
   subagentStartedAt?: number
   // grok StopCancelled only: normalized state-less so the mirror can make the session-aware badge
@@ -151,7 +181,11 @@ const SUBAGENT_TOOLS = new Set(['Agent', 'Task'])
 const RECURRING_TOOLS = new Set(['Skill', 'CronCreate', 'ScheduleWakeup'])
 
 interface ClaudePayload {
-  agent_id?: string
+  /** SubagentStart/SubagentStop: the child. Any other event: the child that produced it. */
+  agent_id?: unknown
+  agent_type?: string
+  /** Stop / SubagentStop: the session's background-task inventory (see liveBackgroundTaskIds). */
+  background_tasks?: unknown
   hook_event_name?: string
   session_id?: string
   /** Deterministic-approval ticket the managed hook script added to its POST body and the hook
@@ -182,6 +216,8 @@ interface ClaudePayload {
   tool_response?: {
     status?: string
     isAsync?: boolean
+    /** Agent/Task only: the child's `agent_id` (measured, 2.1.284 — on the async ack and the sync end). */
+    agentId?: unknown
     content?: { type?: string; text?: string }[]
     totalDurationMs?: number
     totalTokens?: number
@@ -230,6 +266,29 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
   const ev = p.hook_event_name
   const tool = p.tool_name ?? ''
 
+  // Claude's native subagent hooks (since 2.0.43), keyed by the child's `agent_id`. MEASURED on
+  // 2.1.284 (fixture __fixtures__/claude/subagent-hook-payloads.json): both carry the PARENT's
+  // session_id; the start names the child only by agent_id + agent_type (no tool_use_id, no task
+  // text); the stop adds `last_assistant_message` and `agent_transcript_path`. A stop is the end of
+  // the child's TURN — sync or async, it arrives before the `<task-notification>` — but a background
+  // child that stops while its own children run is RESUMED later under the same agent_id (a second
+  // start). Claude also fires stops for internal side-agents (prompt suggestions) that never
+  // started: that one is dropped by the lifecycle, by id, not here.
+  if (ev === 'SubagentStart' || ev === 'SubagentStop') {
+    if (!isClaudeAgentId(p.agent_id)) return null
+    const subagentType = typeof p.agent_type === 'string' && p.agent_type ? p.agent_type : undefined
+    return ev === 'SubagentStart'
+      ? { ...base, kind: 'subagent-start', toolUseId: p.agent_id, subagentType, subagentSignal: 'native' }
+      : {
+          ...base,
+          kind: 'subagent-end',
+          toolUseId: p.agent_id,
+          subagentType,
+          subagentSignal: 'native',
+          result: typeof p.last_assistant_message === 'string' ? p.last_assistant_message : undefined
+        }
+  }
+
   if (ev === 'PreToolUse' || ev === 'PostToolUse') {
     if (tool === 'AskUserQuestion' && p.tool_use_id) {
       return ev === 'PreToolUse'
@@ -243,14 +302,26 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
           kind: 'subagent-start',
           toolUseId: p.tool_use_id,
           subagentType: p.tool_input?.subagent_type,
-          taskLabel: p.tool_input?.description ?? p.tool_input?.prompt
+          taskLabel: p.tool_input?.description ?? p.tool_input?.prompt,
+          subagentSignal: 'tool'
         }
       }
-      // Async launch acknowledgment — the subagent just started, it didn't finish.
-      if (isAsyncSubagentLaunch(p.tool_response)) return { ...base, kind: 'state', state: 'working' }
+      const childId = isClaudeAgentId(p.tool_response?.agentId) ? p.tool_response.agentId : undefined
+      // Async launch acknowledgment — the subagent just started, it didn't finish. It names the
+      // exact child, which is what lets the lifecycle pair this tool call with its SubagentStart.
+      if (isAsyncSubagentLaunch(p.tool_response)) {
+        return {
+          ...base,
+          kind: 'state',
+          state: 'working',
+          ...(childId && p.tool_use_id ? { subagentLaunch: { toolUseId: p.tool_use_id, agentId: childId } } : {})
+        }
+      }
       return {
         ...base,
         kind: 'subagent-end',
+        subagentSignal: 'tool',
+        ...(childId ? { subagentAgentId: childId } : {}),
         toolUseId: p.tool_use_id,
         durationMs: p.tool_response?.totalDurationMs,
         tokens: p.tool_response?.totalTokens,
@@ -296,21 +367,24 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
   }
 
   if (ev === 'UserPromptSubmit') {
-    // A completed async subagent is delivered back as a queued <task-notification> prompt.
-    // That's not a genuine user turn — flagging it newTurn would clear the subagent fan-out
-    // at the exact moment one of the cards completes.
-    if ((p.prompt ?? '').trimStart().startsWith('<task-notification>')) {
+    // A completed async subagent is delivered back as a queued <task-notification> prompt (and,
+    // since the SubagentHandback tool, a `[Subagent hand-back]` message before it). Neither is a
+    // genuine user turn — flagging it newTurn would clear the subagent fan-out at the exact moment
+    // one of the cards completes.
+    if (isInjectedSubagentPrompt(p.prompt ?? '')) {
       return { ...base, kind: 'state', state: 'working' }
     }
     return { ...base, kind: 'state', state: 'working', task: p.prompt, newTurn: true }
   }
   if (ev === 'Stop') {
+    const backgroundTaskIds = liveBackgroundTaskIds(p.background_tasks)
     return {
       ...base,
       kind: 'state',
       state: 'done',
       interrupted: p.is_interrupt === true,
-      lastMessage: p.last_assistant_message
+      lastMessage: p.last_assistant_message,
+      ...(backgroundTaskIds ? { backgroundTaskIds } : {})
     }
   }
   // The turn died on an API/model error — Claude Code skips the normal Stop hook here,
