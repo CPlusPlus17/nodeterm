@@ -876,6 +876,16 @@ examples). If the same effect also WRITES, latch its first run: otherwise switch
 mid-session applies stored state to whatever the user is doing right then, which is a different
 feature from the one they asked for.
 
+**Canvas's `nodesRef` / `nodesProjectIdRef` are the LATEST pair, not the rendered one.** During a
+project switch a zustand write re-renders Canvas at SyncLane before the load's DefaultLane
+`setNodes` lands, so for a moment the ref names the incoming project while the render's `nodes`
+are still the outgoing one's (`canvas/nodesEpoch.ts`). Event-time code (commits, the `canvas:mut`
+receive path, creates) reads the refs; code that pairs the tag with the RENDERED `nodes` (a
+render-time publish, an effect keyed on `nodes`) reads `renderedProjectId`. A peer op goes live
+only when `liveCanvasHolds` says React Flow has that project, and its `setNodes` is functional
+(`rebaseOnLatest`). `nodesEpoch.test.tsx` reproduces the window with real React; never wrap it in
+`act`, which flushes both lanes together and hides it.
+
 Maximize placement and refocusing must use the same measured usable rectangle
 (`measureMaximizeInsets`): pinned side panels plus persistent top controls and bottom dock.
 Do not hardcode chrome heights or add the outer margin twice; transient menus must not resize

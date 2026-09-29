@@ -494,7 +494,8 @@ They are in the vocabulary now, and everything around them is the node machinery
 What this does **not** change: an edge is still pruned locally when an endpoint disappears, so a
 peer's node delete can leave one drawn against nothing for a tick (see Known risks). Also still
 open: a peer edge op applied in the same task as a local functional edge update overwrites that
-update (the node path has the same hazard); a local node delete publishes its `remove` first and the
+update (the node path no longer does: its receive `setNodes` is functional, `rebaseOnLatest`); a
+local node delete publishes its `remove` first and the
 pruned edges' `edge-remove`s one render later, and every peer prunes the same dangling edge itself
 (converges, with redundant casts); canvas-control writes into a project that is not on screen, and
 the Server Edition's headless edge writes, are not cast as edge ops (the latter reach browsers

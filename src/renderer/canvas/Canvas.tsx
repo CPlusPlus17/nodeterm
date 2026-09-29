@@ -615,8 +615,8 @@ import { assignNode, assignedTo, defaultKanban, labelsForCard, migrateProjectTag
 import { registerWorkspaceDirty } from '../state/workspaceDirty'
 import { snapNodeToGrid } from '../lib/nodeSizing'
 import { snapResizeChanges } from '../lib/resizeSnap'
-import { canClearDirty, canCommitCanvas, canCreateOnCanvas } from '../state/persistGuards'
-import { useNodesEpoch } from './nodesEpoch'
+import { canClearDirty, canCommitCanvas, canCreateOnCanvas, liveCanvasHolds } from '../state/persistGuards'
+import { rebaseOnLatest, useNodesEpoch } from './nodesEpoch'
 import { isHidden } from '../lib/ui-visibility'
 import { boardLogEvents } from '../lib/boardLogDiff'
 import { useBoardLog } from '../state/boardLog'
@@ -1664,7 +1664,7 @@ export function Canvas() {
    * load effect, cleared (null) on its bail-out paths; null until the first load, so the initial
    * empty `useNodesState([])` can never be committed as some project's canvas.
    */
-  const { nodesRef, nodesProjectIdRef, installEpoch } = useNodesEpoch(nodes)
+  const { nodesRef, nodesProjectIdRef, renderedProjectId, installEpoch } = useNodesEpoch(nodes)
   /**
    * The project whose webview nodes the NEXT load must retire into the keep-alive pool. Separate
    * from `nodesProjectIdRef` on purpose: the epoch tag is invalidated on the load effect's
@@ -2125,7 +2125,8 @@ export function Canvas() {
   // per episode) while the window is visible, because a finished check run does not move the
   // heartbeat. Everything is released the moment no node waits any more.
   const prWatchNeeded = nodes.some((n) => !!(n.data.pendingLaunch as PendingLaunch | undefined)?.afterPr)
-  const prWatchProjectId = prWatchNeeded ? (nodesProjectIdRef.current ?? '') : ''
+  // Paired with the rendered `nodes` it was derived from — the rendered epoch, not the latest one.
+  const prWatchProjectId = prWatchNeeded ? (renderedProjectId ?? '') : ''
   useEffect(() => {
     if (!prWatchProjectId) return
     let cancelled = false
@@ -2225,10 +2226,13 @@ export function Canvas() {
   // sitting in a poll loop burning context.
   useEffect(() => {
     const live = new Set(nodes.map((n) => n.id))
+    // The project THIS render's `nodes` belong to (`renderedProjectId`), not the latest installed
+    // epoch: in a project switch's window the ref already names the incoming project while `nodes`
+    // are still the outgoing one's (see useNodesEpoch).
     const briefPresent = (path: string | undefined): Promise<boolean> =>
       launchBriefPresent(
         path,
-        useProjects.getState().getProject(nodesProjectIdRef.current ?? ''),
+        useProjects.getState().getProject(renderedProjectId ?? ''),
         (p) => activeSession.api.fs.exists(p)
       )
     const ready = launchesToFire(
@@ -2238,7 +2242,7 @@ export function Canvas() {
       setupDoneForGroup,
       useLaunchDelivery.getState().byId,
       // The `--after-pr` gate: this canvas's pull request status and the clock its deadlines are on.
-      { board: pullBoardFor(useGitHubIssues.getState(), nodesProjectIdRef.current ?? ''), now: Date.now() }
+      { board: pullBoardFor(useGitHubIssues.getState(), renderedProjectId ?? ''), now: Date.now() }
     ).filter((f) => !launchInFlight.current.has(f.id))
     // Anything we were reporting on that is no longer an armed node — delivered, run by hand with
     // ▶, or deleted — stops being reported. Timers go with it: a stall warning for a node that has
@@ -3846,7 +3850,9 @@ export function Canvas() {
       // gate above has already decided this mutation wins, `adopt` is still the loop guard, and a
       // background project is still patched in the store so our next save cannot delete the edge.
       if (isEdgeMutation(mutation)) {
-        if (projectId !== useProjects.getState().activeProjectId) {
+        // Live only while React Flow holds that project (the epoch tag), not merely while it is the
+        // active one — the same rule as the node branch below (`liveCanvasHolds`).
+        if (!liveCanvasHolds(nodesProjectIdRef.current, useProjects.getState().activeProjectId, projectId)) {
           if (useProjects.getState().applyEdgeMutation(projectId, mutation)) markDirty()
           return
         }
@@ -3888,7 +3894,12 @@ export function Canvas() {
         markDirty()
         return
       }
-      if (projectId !== useProjects.getState().activeProjectId) {
+      // Live only while React Flow holds that project's canvas (`liveCanvasHolds` — the epoch tag
+      // AND the active id). During a switch the store already says B while React Flow still holds
+      // A, or nothing after a bail-out; B's op applied to that array ended the canvas on A's nodes
+      // plus the op, tagged B, and the next commit wrote them into B's file (Task 2 review, risk
+      // E). In that case B's serialized nodes are the right target: the load reads them.
+      if (!liveCanvasHolds(nodesProjectIdRef.current, useProjects.getState().activeProjectId, projectId)) {
         // Not on screen (a parked / background project): no terminal is mounted, but one may be
         // PARKED from a recent project switch — dispose it, as an active-project remove does.
         if (mutation.op === 'remove') {
@@ -3903,8 +3914,9 @@ export function Canvas() {
       // PATCH THE LIVE ARRAY — do not round-trip the canvas through the (lossy) serializers. That
       // wiped your selection, deleted your relay-remote nodes and re-rendered every node component,
       // ~20 times a second while a teammate dragged. See applyMutationToFlow.
-      const flow = applyMutationToFlow(nodesRef.current, mutation)
-      if (flow === nodesRef.current) return // nothing to do (a remove for a node we do not have)
+      const base = nodesRef.current
+      const flow = applyMutationToFlow(base, mutation)
+      if (flow === base) return // nothing to do (a remove for a node we do not have)
       if (mutation.op === 'remove') {
         // The peer's delete must also dispose OUR terminal co-state for that node — otherwise the
         // module-level state survives the node, and if the owner UNDOES the delete we are left
@@ -3927,7 +3939,10 @@ export function Canvas() {
       // first (i.e. constantly, while anyone else was dragging). Rebasing keeps the difference that
       // IS yours, and adds nothing that is theirs.
       committedRef.current = applyMutationToFlow(committedRef.current, mutation)
-      setNodes(flow)
+      // FUNCTIONAL, a second guard behind the epoch refs: applied to whatever the state is when it
+      // lands. A plain `setNodes(flow)` overwrote every update queued since the last render — a local
+      // edit mid-drag, or the load's own `setNodes` if the ref were ever stale again.
+      setNodes(rebaseOnLatest(base, flow, (ns) => applyMutationToFlow(ns as CanvasNode[], mutation)))
       markDirty()
     })
   }, [activeSession.api, setNodes, setLinkEdges, setControlEdges, markDirty, publishableLater])
@@ -4234,7 +4249,10 @@ export function Canvas() {
     setControlEdges((es) => pruneRopes(es, ids))
   }, [nodes])
 
-  useContextLinkSync({ projectId: nodesProjectIdRef.current, nodes, edges: linkEdges })
+  // The RENDERED epoch, not the ref: in a project switch's window the ref already names the incoming
+  // project while `nodes` / `linkEdges` are still the outgoing one's (see useNodesEpoch), and this map
+  // authorizes context reads.
+  useContextLinkSync({ projectId: renderedProjectId, nodes, edges: linkEdges })
   // Phone chat: tell the core's agent-status mirror which session each node was last running, for
   // nodes it learned nothing about this run (see useMirrorIdentitySeed).
   useMirrorIdentitySeed()

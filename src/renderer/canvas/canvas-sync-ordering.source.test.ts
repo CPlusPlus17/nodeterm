@@ -50,3 +50,37 @@ describe('the re-creation gate (canvas-order hasPendingRemove)', () => {
     expect(body).toMatch(/pub\.publish\(publishableLater\(nodesRef\.current\)\)/)
   })
 })
+
+// The switch-window race (Task 2 review, risk E) — behaviour in nodesEpoch.test.tsx, which runs the
+// real hook against a replica of this receive path; these pin that Canvas IS that replica.
+describe('the canvas:mut receive path routes by the epoch tag', () => {
+  it('both branches go live only when liveCanvasHolds says React Flow has that project', () => {
+    const body = receiveHandler()
+    const route = /if \(!liveCanvasHolds\(nodesProjectIdRef\.current, useProjects\.getState\(\)\.activeProjectId, projectId\)\) \{/g
+    expect(body.match(route) ?? []).toHaveLength(2) // the edge branch and the node branch
+    // …and the old active-id-only test is gone from both.
+    expect(body).not.toMatch(/if \(projectId !== useProjects\.getState\(\)\.activeProjectId\)/)
+  })
+
+  it('the node branch queues a FUNCTIONAL update built on the latest state', () => {
+    const body = receiveHandler()
+    expect(body).toMatch(
+      /setNodes\(rebaseOnLatest\(base, flow, \(ns\) => applyMutationToFlow\(ns as CanvasNode\[\], mutation\)\)\)/
+    )
+    expect(body).not.toMatch(/\n\s*setNodes\(flow\)\n/)
+  })
+})
+
+describe('render-time readers pair the rendered nodes with the rendered epoch', () => {
+  // `nodesProjectIdRef` is the LATEST installed epoch now (useNodesEpoch): in the switch window it
+  // already names the incoming project while this render's `nodes` are still the outgoing one's.
+  // The context-link map (which authorizes context reads) must not pair A's links with B's id.
+  it('the context-link sync takes the rendered epoch', () => {
+    expect(src).toContain('useContextLinkSync({ projectId: renderedProjectId, nodes, edges: linkEdges })')
+    expect(src).not.toContain('useContextLinkSync({ projectId: nodesProjectIdRef.current')
+  })
+
+  it('the pull-request watch takes the rendered epoch', () => {
+    expect(src).toContain("const prWatchProjectId = prWatchNeeded ? (renderedProjectId ?? '') : ''")
+  })
+})
