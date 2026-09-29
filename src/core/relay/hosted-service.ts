@@ -225,6 +225,8 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
       nodeOfSession: (sessionId) => deps.nodeOfSession(sessionId),
       projectCwds: () =>
         [...shared].map((p) => deps.projectCwd(p)).filter((cwd): cwd is string => typeof cwd === 'string' && cwd.length > 0),
+      // Never readable by a non-editor, even when a shared project's folder contains it (M7).
+      hostDataDir: deps.dataDir,
       realpath
     }
   }

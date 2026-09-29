@@ -20,6 +20,7 @@ const ctx = (role: AccessContext['role']): AccessContext => ({
   // Terminal sessions: 's' / 's1' run node n1 (project P, shared), 's2' runs n2 (project Q, not).
   nodeOfSession: (sid) => (sid === 's' || sid === 's1' ? 'n1' : sid === 's2' ? 'n2' : undefined),
   projectCwds: () => ['/srv/app'],
+  hostDataDir: '/var/lib/nodeterm-data',
   realpath: (p) => (p.startsWith('/srv/app/link') ? '/etc/passwd' : p)
 })
 
@@ -115,6 +116,7 @@ describe('access policy: the fs jail', () => {
         sharedProjects: new Set(['P']),
         projectsOfNode: () => [],
         nodeOfSession: () => undefined,
+        hostDataDir: '/nonexistent-nodeterm-data',
         projectCwds: () => [path.join(root, 'link')],
         realpath: (p) => {
           try {
@@ -508,6 +510,7 @@ describe('access policy: git needs a shared root that is its own repository (C1)
         sharedProjects: new Set(['P']),
         projectsOfNode: () => [],
         nodeOfSession: () => undefined,
+        hostDataDir: '/nonexistent-nodeterm-data',
         projectCwds: () => [root],
         realpath: (p) => {
           try {
@@ -645,5 +648,58 @@ describe('access policy: a node id held by more than one project (M4)', () => {
 
   it('editors are unaffected', () => {
     expect(decideAccess('req', IPC.ptyCapture, ['both'], dup('editor', ['P'])).allow).toBe(true)
+  })
+})
+
+// M7. A shared project whose folder CONTAINS this server's data directory (a project opened on $HOME,
+// say) would let a Viewer read the host key, team.json, the password hash, every project's
+// scrollback snapshots and the unshared inline canvases. The data directory is never readable by a
+// non-editor, whatever shared root holds it.
+describe('access policy: the server data directory is never readable by a non-editor (M7)', () => {
+  const HOST_DATA = "Viewers can't read this server's own data folder."
+  const home = (role: AccessContext['role']): AccessContext => ({
+    ...ctx(role),
+    projectCwds: () => ['/home/u'],
+    hostDataDir: '/home/u/.nodeterm-server',
+    realpath: (p) => (p === '/home/u/data-link' ? '/home/u/.nodeterm-server' : p.startsWith('/home/u/data-link/') ? '/home/u/.nodeterm-server' + p.slice('/home/u/data-link'.length) : p)
+  })
+
+  it('fs reads, lists and existence checks inside it are refused with the reason; the rest of the root is not', () => {
+    const v = home('viewer')
+    for (const m of [IPC.fsRead, IPC.fsReadBinary, IPC.fsExists]) {
+      expect(decideAccess('req', m, ['/home/u/.nodeterm-server/relay/host-key.json'], v), m).toEqual({ allow: false, message: HOST_DATA })
+    }
+    expect(decideAccess('req', IPC.fsList, ['/home/u/.nodeterm-server'], v)).toEqual({ allow: false, message: HOST_DATA })
+    expect(decideAccess('req', IPC.fsRead, ['/home/u/notes.txt'], v)).toEqual({ allow: true })
+    expect(decideAccess('req', IPC.fsList, ['/home/u'], v)).toEqual({ allow: true })
+    // A sibling whose name starts the same is not inside it.
+    expect(decideAccess('req', IPC.fsRead, ['/home/u/.nodeterm-server2/x'], v)).toEqual({ allow: true })
+  })
+
+  it('a symlink inside the shared root that points into it is refused too', () => {
+    expect(decideAccess('req', IPC.fsRead, ['/home/u/data-link/team.json'], home('commenter'))).toEqual({ allow: false, message: HOST_DATA })
+  })
+
+  it('git reads cannot reach it either: a cwd inside it, or a diffed file inside it', () => {
+    const v = home('viewer')
+    expect(decideAccess('req', IPC.gitStatus, ['/home/u/.nodeterm-server'], v)).toEqual({ allow: false, message: HOST_DATA })
+    expect(decideAccess('req', IPC.gitDiff, ['/home/u', '.nodeterm-server/relay/team.json', false, true], v)).toEqual({ allow: false, message: HOST_DATA })
+    expect(decideAccess('req', IPC.gitDiff, ['/home/u', '.nodeterm-server/relay/team.json', false, false], v)).toEqual({ allow: false, message: HOST_DATA })
+    expect(decideAccess('req', IPC.gitDiff, ['/home/u', 'src/a.ts', false, false], v)).toEqual({ allow: true })
+  })
+
+  it('a data directory configured through a symlink is compared by its real path', () => {
+    const c: AccessContext = {
+      ...ctx('viewer'),
+      projectCwds: () => ['/data'],
+      hostDataDir: '/srv/nt-link',
+      realpath: (p) => (p === '/srv/nt-link' ? '/data/nt' : p)
+    }
+    expect(decideAccess('req', IPC.fsRead, ['/data/nt/relay/host-key.json'], c)).toEqual({ allow: false, message: HOST_DATA })
+    expect(decideAccess('req', IPC.fsRead, ['/data/other.txt'], c)).toEqual({ allow: true })
+  })
+
+  it('editors are unaffected', () => {
+    expect(decideAccess('req', IPC.fsRead, ['/home/u/.nodeterm-server/relay/host-key.json'], home('editor'))).toEqual({ allow: true })
   })
 })

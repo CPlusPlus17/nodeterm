@@ -203,7 +203,7 @@ session key** in the team store.
 | `pty:kill` | Detaches the caller's own view; the session keeps running. |
 | `pty:capture`, `pty:read-scrollback`, `pty:pane-command` | Nodes of shared projects only. |
 | `pty:tmux-status` | Allowed. |
-| `fs:list`, `fs:read`, `fs:read-binary`, `fs:exists` | The path must be absolute and its **realpath** inside a shared project's cwd (also realpathed). A symlink planted inside the project that points out of it is outside. |
+| `fs:list`, `fs:read`, `fs:read-binary`, `fs:exists` | The path must be absolute and its **realpath** inside a shared project's cwd (also realpathed). A symlink planted inside the project that points out of it is outside. This server's data directory is refused even when a shared project's folder contains it (a project opened on `$HOME`, say): "Viewers can't read this server's own data folder." It holds the host key, `team.json`, every terminal's scrollback snapshot and the unshared canvases. The same holds for a git cwd, and for the file of a `git:diff`. |
 | `git:status`, `git:repo-root`, `git:history` | The cwd is jailed like a file read, **and** the shared project that contains it must be the top folder of its own repository: a `.git` directory, or a worktree's `.git` file. Otherwise: "Git is available to viewers only in a project that is the top folder of its own repository, never in a subfolder of a larger one." A cwd jail alone does not bound git: `git status` and `git log` report the whole repository, and `git show <ref>:<path>` reads `<path>` from the repository's top level, so from a shared `repo/shared/` a Viewer could read `repo/secret/key.txt`. |
 | `git:diff` | The cwd (with the repository rule above) **and** the file are jailed; a pathspec starting with `:` is refused; an untracked diff (`git diff --no-index`, which diffs any file) needs a real path inside. The file is relative to the cwd, not the repository's top level. |
 | `git:show-file` | The cwd jailed, with the repository rule above; a ref starting with `-` is refused (it would become an option, and `--output=` writes a file). Any other revision is allowed. |
@@ -420,7 +420,7 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   terminal runs as that user and can run `team add-owner`. The approval dialog says Editor is "the
   same as SSH access".
 - **A Viewer sees terminal output** and can read **every file** under a shared project's folder,
-  including `.env` files and `.git`. The approval dialog says so for the Viewer role: "Can read every
+  including `.env` files and `.git`, except this server's own data directory. The approval dialog says so for the Viewer role: "Can read every
   file in the shared project's folder, .env files included, and watch its terminals and anything
   printed in them. Its git history too, when the folder is a repository of its own."
 - **Sharing a repository shares its whole history.** When a shared project is the top folder of its

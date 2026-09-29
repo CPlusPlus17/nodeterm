@@ -34,6 +34,10 @@ export interface AccessContext {
   nodeOfSession(sessionId: string): string | undefined
   /** The LOCAL cwds of the shared projects. */
   projectCwds(): string[]
+  /** This server's own data directory (host key, team.json, password hash, every project's
+   *  scrollback, the unshared inline canvases). Never readable by a non-editor, even under a shared
+   *  root. Compared by its realpath. */
+  hostDataDir: string
   /** `fs.realpath`; null = the path does not resolve. */
   realpath(p: string): string | null
 }
@@ -82,16 +86,35 @@ function within(root: string, p: string): boolean {
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel))
 }
 
-/** The REAL path of `p` when it is an absolute path inside a shared project root, else null. The
- *  file is realpathed, so a symlink planted inside the project that points out of it is outside. */
-function realInSharedCwd(p: unknown, ctx: AccessContext): string | null {
-  if (typeof p !== 'string' || !path.isAbsolute(p)) return null
-  const resolved = ctx.realpath(path.resolve(p))
-  if (!resolved) return null
-  return sharedRoots(ctx).some((root) => within(root, resolved)) ? resolved : null
+const READ_JAIL = 'Viewers can only read files inside a shared project.'
+const HOST_DATA = "Viewers can't read this server's own data folder."
+
+/** `p` (a real or lexically resolved path) is inside this server's data directory. A share of `$HOME`
+ *  or `/` contains it, and it holds the host's secret key: the shared root is not the only fence. */
+function inHostData(p: string, ctx: AccessContext): boolean {
+  const d = ctx.hostDataDir
+  if (typeof d !== 'string' || !d) return false
+  const resolved = path.resolve(d)
+  return within(ctx.realpath(resolved) ?? resolved, p)
 }
 
-const READ_JAIL = 'Viewers can only read files inside a shared project.'
+/** The REAL path of `p` when a non-editor may read it, else why not. An absolute path inside a
+ *  shared project root and outside the data directory. The file is realpathed, so a symlink planted
+ *  inside the project that points out of it (or into the data directory) is refused. */
+function jailRead(p: unknown, ctx: AccessContext): { real: string } | { refuse: string } {
+  if (typeof p !== 'string' || !path.isAbsolute(p)) return { refuse: READ_JAIL }
+  const resolved = ctx.realpath(path.resolve(p))
+  if (!resolved) return { refuse: READ_JAIL }
+  if (!sharedRoots(ctx).some((root) => within(root, resolved))) return { refuse: READ_JAIL }
+  if (inHostData(resolved, ctx)) return { refuse: HOST_DATA }
+  return { real: resolved }
+}
+
+/** `jailRead`'s real path, or null when it refuses. */
+function realInSharedCwd(p: unknown, ctx: AccessContext): string | null {
+  const j = jailRead(p, ctx)
+  return 'real' in j ? j.real : null
+}
 
 const NOT_OWN_REPO =
   'Git is available to viewers only in a project that is the top folder of its own repository, never in a subfolder of a larger one.'
@@ -115,14 +138,17 @@ function underOwnRepoRoot(real: string, ctx: AccessContext): boolean {
 const gitView =
   (rest: Check = pass): Check =>
   (a, ctx) => {
-    const cwd = realInSharedCwd(a[0], ctx)
-    if (!cwd) return no(READ_JAIL)
-    if (!underOwnRepoRoot(cwd, ctx)) return no(NOT_OWN_REPO)
+    const j = jailRead(a[0], ctx)
+    if (!('real' in j)) return no(j.refuse)
+    if (!underOwnRepoRoot(j.real, ctx)) return no(NOT_OWN_REPO)
     return rest(a, ctx)
   }
 
 const nodeArg0: Check = (a, ctx) => (sharedNode(a[0], ctx) ? OK : no('That terminal is not in a shared project.'))
-const pathArg0: Check = (a, ctx) => (realInSharedCwd(a[0], ctx) ? OK : no(READ_JAIL))
+const pathArg0: Check = (a, ctx) => {
+  const j = jailRead(a[0], ctx)
+  return 'real' in j ? OK : no(j.refuse)
+}
 const projectArg0: Check = (a, ctx) => (sharedProject(a[0], ctx) ? OK : no('That project is not shared.'))
 
 /** The ONLY create fields a watch-only join keeps. Everything else on `PtyCreateOptions` either
@@ -150,10 +176,14 @@ const gitDiff: Check = (a, ctx) => {
   const target = path.resolve(cwd, file)
   // The handler reads `untracked` truthily, and then runs `git diff --no-index -- /dev/null <file>`,
   // which compares FILES, not a repository: any path on the host. Only a real path inside passes.
-  if (a[3]) return realInSharedCwd(target, ctx) ? OK : no(READ_JAIL)
+  if (a[3]) {
+    const j = jailRead(target, ctx)
+    return 'real' in j ? OK : no(j.refuse)
+  }
   // A tracked diff: git refuses a pathspec outside the repository and does not follow a symlink in
   // one, so a lexical check is enough — and a deleted file, which has no realpath, stays viewable.
-  return sharedRoots(ctx).some((root) => within(root, target)) ? OK : no(READ_JAIL)
+  if (!sharedRoots(ctx).some((root) => within(root, target))) return no(READ_JAIL)
+  return inHostData(target, ctx) ? no(HOST_DATA) : OK
 }
 
 /** `git show <ref>:<file>` (handler args: cwd, ref, file). A ref starting with `-` becomes an
