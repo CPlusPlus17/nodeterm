@@ -80,17 +80,40 @@ there is no UI until you run it once in serving mode:
 
 ```bash
 systemctl --user stop nodeterm-server        # `systemctl stop …` for a root install
-NODETERM_SERVER_PASSWORD='<choose one>' node $APP
+cd ~/.nodeterm-server-app                    # REQUIRED: the UI is found relative to this directory
+NODETERM_SERVER_PASSWORD='<choose one>' node out/server/main.cjs
 # From your desktop: ssh -L 8443:127.0.0.1:8443 <host>, open http://127.0.0.1:8443, sign in,
 # open the folder as a project. Then Ctrl-C the server and:
 systemctl --user start nodeterm-server
 ```
 
-Serving mode binds `127.0.0.1:8443` by default, and the password seeds only when none exists yet
-(`docs/SERVER.md`); it hosts the team too. **Stop the service first.** A second server on the same
-data directory still serves the UI, but it skips hosting ("Hosted team relay: NOT started — another
-nodeterm server is already running on this data directory …") and disables its agent hooks, and
-two servers then write one workspace.
+**Run it from the app directory** (or pass `--renderer-dir ~/.nodeterm-server-app/out/renderer`).
+The built UI is looked up as `out/renderer` relative to the current directory; the unit only works
+because it sets `WorkingDirectory` to the app directory. Started from `$HOME`, sign-in succeeds and
+then `/` answers `{"error":"not_found"}`, with no warning at boot.
+
+Serving mode puts the web UI (password sign-in) on the configured bind, `127.0.0.1:8443` by
+default, so you reach it through an SSH tunnel. The password seeds only when none exists yet
+(`docs/SERVER.md`), and serving mode hosts the team too. **Stop the service first.** A second server
+on the same data directory still serves the UI, but it skips hosting ("Hosted team relay: NOT
+started — another nodeterm server is already running on this data directory …") and disables its
+agent hooks.
+
+To keep the UI running instead (the route [Limitations](#limitations-v1) needs for saving canvas
+edits), switch the unit to serving mode with a drop-in rather than by editing the unit:
+
+```bash
+mkdir -p ~/.config/systemd/user/nodeterm-server.service.d
+printf '[Service]\nEnvironment=NODETERM_HEADLESS=\n' \
+  > ~/.config/systemd/user/nodeterm-server.service.d/serving.conf
+systemctl --user daemon-reload && systemctl --user restart nodeterm-server
+```
+
+An empty `NODETERM_HEADLESS` is not headless. A drop-in is parsed after the unit and the later
+assignment wins, and the installer (re-run daily by its auto-update) rewrites only the `.service`
+file, never its `.d/` directory, so the drop-in survives updates. For a root install the directory
+is `/etc/systemd/system/nodeterm-server.service.d/`, with plain `systemctl`. If no password exists
+yet, the first boot prints a one-time setup URL to the journal.
 
 A joiner's tab shows **one** project: the first shared project in the host's workspace order
 (`openRelayTab` adopts `projects[0]` of the narrowed workspace). With nothing shared, even an owner
@@ -115,8 +138,11 @@ ls ~/Library/Application\ Support/*/remote-peer-key.json
 
 No UI shows this key in v1; sub-project 3 automates this step.
 
-The file is created the first time the desktop uses the relay. Only if it is really not there,
-paste the team's join code once (step 3); that join spends one of the team's shared device mints.
+The file is created the first time the desktop hosts a Team Access invite, connects to another
+desktop's pairing code (New Remote Connection) or joins a hosted team. Pairing a **phone** does not
+create it; that uses a different key file (`remote-host-key.json`). Only if the file is really not
+there, paste the team's join code once (step 3); that join spends one of the team's shared device
+mints.
 While your desktop asks you to read a code to an owner, `team status --json` lists your device under
 `pending` with its `peerKeyB64` and `sas`. Take the key whose `sas` matches your prompt, press Cancel
 on the prompt (that ends the request), run `team add-owner` with that key, and paste the code again.
@@ -390,11 +416,14 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   connected, but are not in the host's project file: a teammate who connects later, or everyone
   after a host restart, sees the saved canvas. A terminal an Editor starts that way keeps running
   on the host, but Viewers cannot watch it, because node membership is read from the saved canvas.
-  **Workaround:** keep a Server Edition browser tab open on the host's core (serving mode, see setup
-  step 1). The reflector sends every mutation to every attached client, and a browser's canvas
+  **Workaround (verified in code, not yet run; device checklist item 12):** run the service in
+  serving mode with the drop-in from setup step 1, and keep a Server Edition browser tab open on it
+  through an SSH tunnel. The one-off serving run in step 1 is not enough: it ends by restarting the
+  headless unit. The reflector sends every mutation to every attached client, and a browser's canvas
   applies it and marks itself dirty (to its store for a background project, to the live canvas for
-  the active one), so its own autosave writes the edit. Edits made while no browser tab is attached
-  are lost. This is a v1 limitation (ruling R42); a server-side persister belongs to sub-project 2.
+  the active one), so its own autosave writes the edit. Edits made while no browser tab is attached,
+  including across a service restart, are lost. This is a v1 limitation (ruling R42); a server-side
+  persister belongs to sub-project 2.
 - **Kanban, bridge and rope edits made in a relay tab are never propagated or saved.** `canvas:mut`
   carries nodes only (an upsert or a remove), so project-level state (`kanban`, `bridges`, `ropes`)
   never leaves the tab. This predates the hosted relay; it holds for Team Access relay tabs too.
@@ -474,7 +503,13 @@ on a Mac and a second desktop as a teammate. Record `team status --json` at each
 9. **Viewer size.** A Viewer with a small window does not shrink the Editor's terminal.
 10. **Two owners.** With two owners connected, one approves a request; the other owner's dialog
     closes with "Another owner answered this request."
-11. **Device-key path on a real Mac.** On a packaged Mac build, after one relay use, the key file is
-    `~/Library/Application Support/node-terminal/remote-peer-key.json` (the setup step 2 command
+11. **Device-key path on a real Mac.** On a packaged Mac build, after the desktop has joined a hosted
+    team or used a Team Access invite or pairing code (phone pairing does not count), the key file
+    is `~/Library/Application Support/node-terminal/remote-peer-key.json` (the setup step 2 command
     prints the key), and `ls ~/Library/Application\ Support/*/remote-peer-key.json` finds no other
     copy.
+12. **Canvas edits survive with a browser tab attached (R42 workaround).** With the service in
+    serving mode (the setup step 1 drop-in) and a Server Edition browser tab open on it, a teammate
+    adds and moves a node in their hosted tab. After `systemctl --user restart nodeterm-server`, a
+    reconnected teammate (and the browser tab) still sees the node where it was moved. Repeat with no
+    browser tab attached: the edit is lost, as documented.

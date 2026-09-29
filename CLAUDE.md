@@ -5603,10 +5603,10 @@ The invariants, each with its reason:
   broadcast), at most one per device key and 16 at once, and expire after 10 minutes. A deny or
   expiry that lands during the pin write wins.
 - **The scheduler's backoff resets only on proof the relay leg works** (an idle listener held to
-  its refresh, or a completed handshake) or on a fresh `start()`, never on a successful mint. With the API up and the
-  relay down every mint succeeds and every socket dies, and a reset-on-mint re-minted at
-  round-trip speed (relay log, 2026-09-27). Successful mints are also capped at 200 per rolling
-  hour, whatever asks for them (the backend's free limit is 240).
+  its refresh, or a completed handshake) or on a fresh `start()`, never on a successful mint. With
+  the API up and the relay down every mint succeeds and every socket dies, and a reset-on-mint
+  re-minted at round-trip speed (relay log, 2026-09-27). Successful mints are also capped at 200
+  per rolling hour, whatever asks for them (the backend's free limit is 240).
 - **The joiner never mints a device token it cannot keep.** Device mints are damped per HOST device
   id, so one team shares 10 a day. It probes the bookmarks file before minting and sends a PER-TEAM
   device id (`<machine id>:<hostId>`), because the backend will not re-register one id for a second

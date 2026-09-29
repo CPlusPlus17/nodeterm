@@ -485,9 +485,10 @@ off. Operator guide, roles and limitations: **`docs/hosted-team-relay.md`**. Wha
   `RelayHostHooks`, `deny()`). Team Access passes no hooks and takes the unhooked path, unchanged.
 - **A standing host on the tunnel dialect now exists in core**: `hosted-scheduler.ts` (one warm
   idle listener, refreshed against the token's server-clock expiry, with a backoff that resets only
-  on proof the relay works or on a fresh start), driven by `hosted-service.ts`. It is the host-side mechanism the iOS
-  tunnel migration below needs. The desktop's own phone host (`standing-host.ts`) is still on the
-  old dialect; rebuilding it on this scheduler is the remaining desktop step.
+  on proof the relay works or on a fresh start), driven by `hosted-service.ts`. It is the
+  host-side mechanism the iOS tunnel migration below needs. The desktop's own phone host
+  (`standing-host.ts`) is still on the old dialect; rebuilding it on this scheduler is the
+  remaining desktop step.
 - **Roles exist, for hosted peers only.** Viewer, Commenter, Editor and Owner are enforced in the
   host core (`core/relay/access-policy.ts`). A Team Access peer is still fully trusted (decision 2).
 - **The bookmark follow-up is partly closed, for hosted teams only.** A joined team is bookmarked
