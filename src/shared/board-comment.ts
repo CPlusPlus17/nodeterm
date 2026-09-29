@@ -102,19 +102,30 @@ export function parseMentions(text: string): string[] {
   return seen
 }
 
-/** The comment as the agent reads it: every token becomes `@<name>`, preferring the node's current
- *  title (`titleFor`, main's store) over the label the token was written with. The name goes through
- *  `mentionLabel`, so a title with a newline in it cannot start a line of its own in the body. */
-export function commentTextForAgent(
-  text: string,
-  titleFor?: (nodeId: string) => string | undefined
-): string {
+/** Longest @name the agent reads for a mention. */
+export const MENTION_AGENT_NAME_MAX = 40
+
+/**
+ * The name a mention becomes in the text the AGENT reads: the label its author saw when they wrote it
+ * (never the store's title at delivery time, which can have changed under them), reduced to words —
+ * letters, digits, spaces and `. _ - #` — and capped. A node title is chosen by whoever wrote the
+ * project file (a cloned repo, a team guest), and this lands in another agent's prompt, so it keeps
+ * nothing that reads as syntax. Nothing left ⇒ the node id, addressable by construction.
+ */
+export function mentionNameForAgent(label: string, nodeId: string): string {
+  const words = String(label ?? '')
+    .replace(/[^\p{L}\p{M}\p{N} ._#-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MENTION_AGENT_NAME_MAX)
+    .trimEnd()
+  return words || nodeId
+}
+
+/** The comment as the agent reads it: every token becomes `@<name>` (`mentionNameForAgent`). */
+export function commentTextForAgent(text: string): string {
   return commentSegments(text)
-    .map((s) => {
-      if (s.kind === 'text') return s.text
-      const current = titleFor?.(s.nodeId)
-      return `@${mentionLabel(current || s.label || s.nodeId)}`
-    })
+    .map((s) => (s.kind === 'text' ? s.text : `@${mentionNameForAgent(s.label, s.nodeId)}`))
     .join('')
 }
 
@@ -183,7 +194,8 @@ export interface BoardCommentOutcomeView {
 // cannot reach a comment row as silence.
 const OUTCOME_TEXT: Record<string, BoardCommentOutcomeView> = {
   delivered: { tone: 'ok', text: 'delivered' },
-  queued: { tone: 'pending', text: 'queued — delivered when the session is idle' },
+  // Held for the session's turn to end, or for the ten-second window after the last comment to it.
+  queued: { tone: 'pending', text: 'queued — delivered as soon as the session can take it' },
   stalled: {
     tone: 'warn',
     text: 'reached the session, but it started no turn — check its prompt'

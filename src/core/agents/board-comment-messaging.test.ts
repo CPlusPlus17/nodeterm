@@ -125,7 +125,7 @@ describe('a board comment that mentions a session', () => {
     expect(payload).toMatch(/^--- NODETERM MESSAGE \S+ ---\n/)
     expect(payload).toContain('from: board comment by Enes\n')
     expect(payload).toContain(`reply-to: ${BOARD_COMMENT_REPLY_TO}\n`)
-    // The token reached the agent as a readable @name — the store's title, not the token's label.
+    // The token reached the agent as the readable @name its author saw.
     expect(payload).toContain('@Beta please rebase')
     expect(payload).not.toContain('(node:')
   })
@@ -184,7 +184,7 @@ describe('a board comment that mentions a session', () => {
     const payload = deps.rec.sent[0].payload
     expect(payload).not.toContain('\x1b')
     expect(payload).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/)
-    expect(payload).toContain('@Beta x[201~ y\nsecond line')
+    expect(payload).toContain('@B x[201~ y\nsecond line')
   })
 
   it('a malformed request is refused before anything runs — including a target the text does not mention', async () => {
@@ -297,6 +297,89 @@ describe('flow control for a person', () => {
     // A fifth, different session in a NEW comment is not refused by the previous comment's budget.
     const next = await deliverBoardCommentFromUi(comment('b5'), deps)
     expect((next.result as { kind: string }).kind).toBe('delivered')
+  })
+})
+
+/** A retry nudge is the pair window plus slack; a TTL (even a re-armed remainder) is minutes. */
+const NUDGE_SCALE_MS = 60_000
+
+/** A scheduler the test drives: timers are recorded, never fired on their own. */
+function manualTimers(): {
+  schedule: (ms: number, fn: () => void) => () => void
+  /** Fire every pending retry nudge — a timer on the pair-window scale, never a TTL (a re-queued
+   *  entry re-arms its TTL for the time it has LEFT, so "shorter than the TTL" is not a test). */
+  fireNudges(): void
+  nudges(): number[]
+} {
+  const timers: { ms: number; fn: () => void }[] = []
+  return {
+    schedule: (ms, fn) => {
+      const e = { ms, fn }
+      timers.push(e)
+      return () => {
+        const i = timers.indexOf(e)
+        if (i >= 0) timers.splice(i, 1)
+      }
+    },
+    fireNudges: () => {
+      for (const e of timers.filter((x) => x.ms <= NUDGE_SCALE_MS)) {
+        timers.splice(timers.indexOf(e), 1)
+        e.fn()
+      }
+    },
+    nudges: () => timers.filter((x) => x.ms <= NUDGE_SCALE_MS).map((x) => x.ms)
+  }
+}
+
+describe('a pair-limited board comment does not wait for an idle event that never comes', () => {
+  it('the idle event lands INSIDE the window, then nothing: it is still delivered when the window ends', async () => {
+    let t = 1_000_000
+    const timers = manualTimers()
+    const deps = fakeDeps({ now: () => t })
+    deps.queue = createDeliveryQueue(deps, { schedule: timers.schedule })
+    expect((await deliverBoardCommentFromUi(comment('b1'), deps)).ok).toBe(true)
+    expect(((await deliverBoardCommentFromUi(comment('b1'), deps)).result as { kind: string }).kind).toBe('queued')
+    // The agent answered comment 1 quickly: its `done` arrives 4 s in, still inside the window.
+    t += 4_000
+    onMessagingAgentEvent({ nodeId: 'b1', state: 'done', verified: true, newTurn: false }, deps.queue)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(deps.rec.sent).toHaveLength(1)
+    expect(deps.queue.depth('b1')).toBe(1)
+    // No further event ever comes (the session is idle). The window ends:
+    t += 7_000
+    timers.fireNudges()
+    await vi.waitFor(() => expect(deps.rec.sent).toHaveLength(2))
+    expect(deps.queue.depth('b1')).toBe(0)
+  })
+
+  it('an idle session that emits nothing at all still gets it once the window ends', async () => {
+    let t = 1_000_000
+    const timers = manualTimers()
+    const deps = fakeDeps({ now: () => t })
+    deps.queue = createDeliveryQueue(deps, { schedule: timers.schedule })
+    await deliverBoardCommentFromUi(comment('b1'), deps)
+    await deliverBoardCommentFromUi(comment('b1'), deps)
+    expect(timers.nudges().length).toBe(1)
+    expect(timers.nudges()[0]).toBeGreaterThanOrEqual(10_000) // the window, plus slack — never early
+    t += 11_000
+    timers.fireNudges()
+    await vi.waitFor(() => expect(deps.rec.sent).toHaveLength(2))
+  })
+
+  it('a retry that is still inside the window re-arms itself instead of falling back to "next idle"', async () => {
+    let t = 1_000_000
+    const timers = manualTimers()
+    const deps = fakeDeps({ now: () => t })
+    deps.queue = createDeliveryQueue(deps, { schedule: timers.schedule })
+    await deliverBoardCommentFromUi(comment('b1'), deps)
+    await deliverBoardCommentFromUi(comment('b1'), deps)
+    t += 5_000 // the nudge ran early (a clock step, a slow machine)
+    timers.fireNudges()
+    await vi.waitFor(() => expect(timers.nudges().length).toBe(1))
+    expect(deps.rec.sent).toHaveLength(1)
+    t += 6_000
+    timers.fireNudges()
+    await vi.waitFor(() => expect(deps.rec.sent).toHaveLength(2))
   })
 })
 

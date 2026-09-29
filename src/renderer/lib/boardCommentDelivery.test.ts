@@ -3,6 +3,7 @@ import type { AgentMessageReply } from '@shared/agents/agent-messaging'
 import { mentionToken, type BoardCommentDeliverRequest } from '@shared/board-comment'
 import {
   canDeliverBoardComments,
+  coalesce,
   deliverCommentMentions,
   mentionResultFromReply,
   registerBoardCommentDeliverer,
@@ -112,6 +113,37 @@ describe('deliverCommentMentions', () => {
       error: 'ipc gone'
     })
     unregister()
+  })
+})
+
+describe('coalesce — one publish for a comment\'s mentions', () => {
+  it('concurrent callers share ONE in-flight run; a later caller starts a fresh one', async () => {
+    let runs = 0
+    let finish!: (v: boolean) => void
+    const save = coalesce(() => {
+      runs++
+      return new Promise<boolean>((r) => (finish = r))
+    })
+    const a = save()
+    const b = save()
+    expect(runs).toBe(1)
+    finish(true)
+    expect(await Promise.all([a, b])).toEqual([true, true])
+    const c = save()
+    expect(runs).toBe(2)
+    finish(false)
+    expect(await c).toBe(false)
+  })
+
+  it('a run that throws releases the slot, so the next caller is not stuck on it', async () => {
+    let runs = 0
+    const save = coalesce(async () => {
+      runs++
+      throw new Error('disk')
+    })
+    await expect(save()).rejects.toThrow('disk')
+    await expect(save()).rejects.toThrow('disk')
+    expect(runs).toBe(2)
   })
 })
 

@@ -64,6 +64,29 @@ export async function runBoardCommentDelivery(
   return reply ?? { ok: false, error: 'delivery produced no reply' }
 }
 
+/**
+ * One in-flight run of `fn`, shared by every caller that asks while it runs; the next caller after
+ * it settles starts a fresh one. A comment mentioning four sessions delivers them in parallel, and
+ * each asks `syncMessageScope` to publish pending canvas edits — one save serves them all.
+ */
+export function coalesce<T>(fn: () => Promise<T>): () => Promise<T> {
+  let inFlight: Promise<T> | null = null
+  return () => {
+    if (inFlight) return inFlight
+    let run: Promise<T>
+    try {
+      run = fn()
+    } catch (err) {
+      run = Promise.reject(err) // a synchronous throw is a failed run, not a stuck slot
+    }
+    const shared = run.finally(() => {
+      if (inFlight === shared) inFlight = null
+    })
+    inFlight = shared
+    return shared
+  }
+}
+
 export type MentionResult = { kind: string; reason?: string; error?: string }
 
 /** The typed outcome a reply carries, or a plain failure with the reply's own words. */

@@ -1733,11 +1733,18 @@ and an earlier comment's in-flight holds or queued flush must never spend a newe
 finding; both scenarios are tests); a comment mentions at most `BOARD_COMMENT_MENTION_MAX` =
 `FANOUT_PER_TURN` sessions and is refused whole above it; a pair-limited board comment is QUEUED
 rather than refused (`BOARD_QUEUE_ON` — an agent retries, a person could only post again; the
-flush re-runs the limiter); and the envelope reads `from: board comment by <author>` with no node id
+flush re-runs the limiter) AND re-offered on a timer when the window ends
+(`DeliveryQueue.retryAfter`, armed at enqueue and at every `rateLimited` re-queue, one pending nudge
+per target): the queue otherwise flushes only on the target's `done`, and a window ending emits
+nothing — a session already idle, or whose `done` landed inside the window, left the comment to
+expire at the TTL; and the envelope reads `from: board comment by <author>` with no node id
 and `reply-to: none (…)` (`BOARD_COMMENT_REPLY_TO`; both agent-facing bodies render it from the
 constants). An agent node TITLED like that is labelled `node titled "…"` in its own `from:` line, so
-it cannot pass as a person. The body is the comment with tokens turned into `@<current title>`,
-then `sanitizeChatText` (every C0/C1 control but `\n`/`\t` — the one shared rule) and a cap.
+it cannot pass as a person. The body is the comment with each token turned into the `@<name>` its author saw
+(`mentionNameForAgent`: the token's label reduced to letters, digits, spaces and `. _ - #`, capped at
+40, else the node id — a node title is whatever the project file says, and it lands in another
+agent's prompt), then `sanitizeChatText` (every C0/C1 control but `\n`/`\t` — the one shared rule)
+and a cap. A comment's parallel mention deliveries share ONE `syncMessageScope` save (`coalesce`).
 **Only the local user, typing in THIS app, can trigger it.** The log is a shared file — a git pull,
 another instance, a relay peer or a team-presence guest can put a token in it — so NOTHING that
 reads the log reaches a delivery: the one call site is `BoardLogPanel`'s send

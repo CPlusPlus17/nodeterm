@@ -136,6 +136,8 @@ const REQUEUE_ON: ReadonlySet<AgentMessageOutcome['kind']> = new Set(
 
 export class DeliveryQueue {
   private readonly queues = new Map<string, QueueEntry[]>()
+  /** At most one pending retry nudge per target (`retryAfter`). */
+  private readonly nudges = new Map<string, CancelTimer>()
   private readonly capacity: number
   private readonly ttlMs: number
   private readonly schedule: (ms: number, fn: () => void) => CancelTimer
@@ -230,6 +232,26 @@ export class DeliveryQueue {
     }
   }
 
+  /**
+   * Re-offer a target's queue after `ms` — for an entry held by a CLOCK (the pair window) rather than
+   * by the target's turn. A busy target emits `done` when its turn ends, which is what flushes the
+   * queue; a pair window ending emits nothing, so an entry waiting only on it (the target idle all
+   * along, or its `done` having landed inside the window) would otherwise sit until its TTL expired.
+   *
+   * One pending nudge per target: a second request while one is armed is dropped, and a nudge that
+   * fires too early simply meets the same refusal, whose caller arms the next. Bounded by the TTL — an
+   * expired or delivered entry leaves an empty queue, and a nudge on an empty queue does nothing — and
+   * cheap: a refusal on the pair window is decided before any pane probe.
+   */
+  retryAfter(nodeId: string, ms: number): void {
+    if (this.nudges.has(nodeId)) return
+    const cancel = this.schedule(Math.max(0, ms), () => {
+      this.nudges.delete(nodeId)
+      void this.onTargetIdle(nodeId)
+    })
+    this.nudges.set(nodeId, cancel)
+  }
+
   /** Put an entry back at the front with its TTL re-armed for the time it has LEFT (never reset to a
    *  full TTL — the wait it has already served counts). A lapsed remainder expires it immediately. */
   private requeueFront(nodeId: string, entry: QueueEntry): void {
@@ -270,5 +292,7 @@ export class DeliveryQueue {
   resetForTests(): void {
     for (const list of this.queues.values()) for (const e of list) e.cancelTimer()
     this.queues.clear()
+    for (const cancel of this.nudges.values()) cancel()
+    this.nudges.clear()
   }
 }

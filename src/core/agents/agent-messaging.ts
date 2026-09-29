@@ -278,11 +278,11 @@ export function createDeliveryQueue(
     }
     void deps.appendBoardLog(projectId, entry)
   }
-  return new DeliveryQueue(
+  const queue: DeliveryQueue = new DeliveryQueue(
     {
       now,
-      deliver: (qreq) =>
-        runDelivery(
+      deliver: async (qreq) => {
+        const outcome = await runDelivery(
           qreq.verb === 'board-comment'
             ? (qreq as unknown as BoardCommentMessage)
             : {
@@ -292,7 +292,13 @@ export function createDeliveryQueue(
                 body: qreq.body
               },
           deps
-        ),
+        )
+        // A board comment re-queued by the pair window waits on a CLOCK, not on the target's turn:
+        // re-offer it when the window ends (see `DeliveryQueue.retryAfter`).
+        if (qreq.verb === 'board-comment' && outcome.kind === 'rateLimited')
+          queue.retryAfter(qreq.targetNodeId, outcome.retryAfterMs + BOARD_RETRY_SLACK_MS)
+        return outcome
+      },
       // The trace leg: ring always, board log when the TARGET's owning project is resolvable. A board
       // comment's lines go to ITS board instead — where its row reads them — whoever owns the pane
       // by then: a trace is not an authorization, and the expiry is exactly the moment runtime
@@ -317,6 +323,7 @@ export function createDeliveryQueue(
     },
     { capacity: opts.capacity, ttlMs: opts.ttlMs }
   )
+  return queue
 }
 
 /**
@@ -656,13 +663,12 @@ export async function runDelivery(
   // The body. notify's is APP-OWNED (#98): substituted here, in main, whatever the request carried
   // — the renderer's `--text` refusal is UX, this line is the boundary. The test sends a hostile
   // body over the IPC shape and asserts it never reaches the envelope. A board comment's is the
-  // comment with each mention token turned into `@<current title>` (read off THIS process's store),
-  // stripped of every control character and capped — `boardCommentBody`, the one rule for it.
-  const titleFor = (id: string): string | undefined =>
-    projects.find((p) => p.id === board?.projectId)?.nodes.find((n) => n.id === id)?.title
+  // comment with each mention token turned into the `@<name>` its author saw (words only, capped —
+  // a node title is whatever the project file says), stripped of every control character and
+  // capped — `boardCommentBody`, the one rule for it.
   const body =
     req.verb === 'board-comment'
-      ? boardCommentBody(commentTextForAgent(req.text, titleFor))
+      ? boardCommentBody(commentTextForAgent(req.text))
       : req.verb === 'notify'
         ? NOTIFY_BODY
         : req.body
@@ -701,6 +707,10 @@ export async function runDelivery(
  *  told `rateLimited` retries on its own; a person could only post the comment again. The flush
  *  re-runs the limiter, so a queued comment still never lands inside the window. */
 const BOARD_QUEUE_ON: ReadonlySet<AgentMessageOutcome['kind']> = new Set(['rateLimited'])
+
+/** How long after the pair window ends a queued board comment is re-offered. Never early: a retry
+ *  inside the window would only meet the same refusal. */
+const BOARD_RETRY_SLACK_MS = 500
 
 /** The `AgentMessageOutcome` kinds a permitted-but-not-ready target produces — a busy agent, or a
  *  node between sessions. Only these are enqueued (and only with a queue wired): the target passed
@@ -760,8 +770,14 @@ async function deliverWithQueue(
         { hibernated }
       )
     if (QUEUE_ON_BUSY.has(outcome.kind)) return answer(await queued(false))
-    if (req.verb === 'board-comment' && BOARD_QUEUE_ON.has(outcome.kind))
-      return answer(await queued(false))
+    if (req.verb === 'board-comment' && BOARD_QUEUE_ON.has(outcome.kind)) {
+      const held = await queued(false)
+      // Held by the pair window, not by the target's turn: nothing will report "idle" when the
+      // window ends (the target may be idle already), so the queue is re-offered on a timer.
+      if (held.kind === 'queued' && outcome.kind === 'rateLimited')
+        queue.retryAfter(req.targetNodeId, outcome.retryAfterMs + BOARD_RETRY_SLACK_MS)
+      return answer(held)
+    }
     // A hibernated target reads as `targetNotAgentPane` (its pane is a shell) — enqueue+wake ONLY
     // then, never for a real non-agent pane.
     if (outcome.kind === 'targetNotAgentPane' && deps.isHibernated?.(req.targetNodeId))

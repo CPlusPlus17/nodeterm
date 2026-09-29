@@ -177,6 +177,7 @@ import {
 import { SaveFailureBar } from '../components/SaveFailureBar'
 import { syncMessageScope } from '../lib/messageScopeSync'
 import {
+  coalesce,
   registerBoardCommentDeliverer,
   runBoardCommentDelivery
 } from '../lib/boardCommentDelivery'
@@ -3134,29 +3135,29 @@ export function Canvas() {
   // pending canvas edits first (main authorizes against its persisted store, which a just-created
   // node is not in yet). A project bound to a relay session is another machine's: its panes are not
   // ours to type into, so it is refused here too, behind the panel's own display-only gate.
-  useEffect(
-    () =>
-      registerBoardCommentDeliverer((req) => {
-        if (sessionForProject(req.projectId).source !== 'local')
-          return Promise.resolve({
-            ok: false,
-            error: 'board comments reach agents only on this machine',
-            result: { kind: 'notPermitted', reason: 'unsupported-edition' }
-          })
-        return runBoardCommentDelivery(req, {
-          guard: (target, fn) => guardConcurrentRestart(target, fn)(),
-          sync: () =>
-            syncMessageScope({
-              needed: dirtyRef.current && nodesRef.current.some((n) => n.id === req.targetNodeId),
-              conflict: !!conflictRef.current,
-              save: persist
-            }),
-          deliver: (r) => api.agentMessage.deliverBoardComment(r)
+  useEffect(() => {
+    // A comment's mentions deliver in parallel; they share ONE publish of the pending edits.
+    const saveOnce = coalesce(persist)
+    return registerBoardCommentDeliverer((req) => {
+      if (sessionForProject(req.projectId).source !== 'local')
+        return Promise.resolve({
+          ok: false,
+          error: 'board comments reach agents only on this machine',
+          result: { kind: 'notPermitted', reason: 'unsupported-edition' }
         })
-      }),
+      return runBoardCommentDelivery(req, {
+        guard: (target, fn) => guardConcurrentRestart(target, fn)(),
+        sync: () =>
+          syncMessageScope({
+            needed: dirtyRef.current && nodesRef.current.some((n) => n.id === req.targetNodeId),
+            conflict: !!conflictRef.current,
+            save: saveOnce
+          }),
+        deliver: (r) => api.agentMessage.deliverBoardComment(r)
+      })
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs are read at call time
-    [api, persist]
-  )
+  }, [api, persist])
 
   /** Re-runs the active-project load effect by bumping the store's `reloadNonce`.
    *
