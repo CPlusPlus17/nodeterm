@@ -196,10 +196,10 @@ export function createHostedAttempts(deps: HostedAttemptDeps): HostedAttempts {
               e.drops += 1
               return
             }
+            // Live. This entry ends when this connection does (released, reported as `ended`); a later
+            // attempt for the team is a fresh entry, with a fresh ladder and a fresh drop budget.
             const projectId = result.projectId
             e.projectId = projectId
-            e.attempt = 0
-            e.drops = 0
             if (e.closedEarly) {
               endLive(e, e.closedEarly.reason)
               return

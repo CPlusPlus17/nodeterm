@@ -459,6 +459,19 @@ describe('hosted joiner', () => {
     expect(h.approvedCbs.has('c0')).toBe(false) // unsubscribed once settled
   })
 
+  it('R40: once approved, the waiting notice never appears — even while the tab is still loading', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    h.connects[0].resolve('c0')
+    await flush()
+    h.approvedCbs.get('c0')!() // approved; the mount is still loading the workspace
+    const wait = h.timers.find((t) => t.ms === WAITING_NOTICE_DELAY_MS && !t.cleared)!
+    wait.cleared = true
+    wait.fn()
+    expect(h.notices).toEqual([])
+  })
+
   it('R40: an approval that lands quickly never shows the waiting notice', async () => {
     const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
     const j = createHostedJoiner(h.deps)
