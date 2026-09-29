@@ -460,11 +460,7 @@ import {
 } from '@shared/agents/config'
 import { withPermissionMode } from '@shared/agents/approval-mode'
 import { promptFilePathError } from '@shared/agents/launch'
-import {
-  encodeUtf8Base64,
-  shouldSpillPrompt,
-  spillPromptToFile
-} from '../lib/promptSpill'
+import { encodeUtf8Base64, launchPromptFor } from '../lib/promptSpill'
 import { parseTeamSpec } from '../lib/teamSpec'
 import { relativeTime } from '../lib/relativeTime'
 import { AgentIcon } from '../lib/agentIcons'
@@ -493,7 +489,7 @@ import {
   type IssueWorktreeMenuAnswer
 } from '../lib/issueWorktree'
 import { runEndedEntry, runStartedEntry } from '../lib/issueRuns'
-import { resolveIssueFlagForCall, type IssueFlagResult } from '../lib/issueFlag'
+import { issueFlagScope, resolveIssueFlagForCall, type IssueFlagResult } from '../lib/issueFlag'
 import type { GitHubIssueCardView } from '@shared/github-issues'
 import { branchClaudeSession } from '../lib/claudeBranch'
 import {
@@ -524,6 +520,8 @@ import {
   deliveriesToRetire,
   launchesToFire,
   queueControlLaunch,
+  withLaunchBrief,
+  launchBriefPresent,
   LAUNCH_STALL_MS,
   type ArmedNode
 } from '../lib/pendingLaunch'
@@ -2103,6 +2101,12 @@ export function Canvas() {
   // sitting in a poll loop burning context.
   useEffect(() => {
     const live = new Set(nodes.map((n) => n.id))
+    const briefPresent = (path: string | undefined): Promise<boolean> =>
+      launchBriefPresent(
+        path,
+        useProjects.getState().getProject(nodesProjectIdRef.current ?? ''),
+        (p) => activeSession.api.fs.exists(p)
+      )
     const ready = launchesToFire(
       nodes as unknown as ArmedNode[],
       useAgentStatus.getState().byId,
@@ -2156,7 +2160,7 @@ export function Canvas() {
       launchInFlight.current.add(f.id)
       const attempt = (launchAttempts.current.get(f.id) ?? 0) + 1
       launchAttempts.current.set(f.id, attempt)
-      void launchCommand(f.id, f.command, false, activeSession.api).then((outcome) => {
+      const deliverHeld = (): Promise<void> => launchCommand(f.id, f.command, false, activeSession.api).then((outcome) => {
         if (outcome === 'submitted') {
           setNodes((ns) =>
             ns.map((n) => (n.id === f.id ? { ...n, data: { ...n.data, pendingLaunch: undefined } } : n))
@@ -2179,6 +2183,24 @@ export function Canvas() {
         markDirty()
         useLaunchDelivery.getState().markFailed(f.id, attempt)
         console.warn('[pending-launch] gave up delivering held launch for', f.id)
+      })
+      // The file the launch reads its prompt from must still be there: a held launch may be
+      // delivered weeks after it was armed (a cold open waits for its project to be viewed), and
+      // `"$(cat '<path>')"` over a missing file starts the agent with an EMPTY prompt — the silent
+      // failure the open-time existence check exists to catch. Only a definite "not there" holds it
+      // (for ▶, persisted `manualOnly`, the path named on the badge); a check that errors answers
+      // "present", as the open-time check does. Local projects only: a spill is never written for an
+      // SSH project, and there `exists === false` cannot tell a gone file from a dropped master.
+      void briefPresent(f.briefFile).then((present) => {
+        if (!present) {
+          setNodes((ns) => ns.map((n) => n.id === f.id && n.data.pendingLaunch
+            ? { ...n, data: { ...n.data, pendingLaunch: { ...n.data.pendingLaunch, manualOnly: true } } }
+            : n))
+          markDirty()
+          useLaunchDelivery.getState().markBriefMissing(f.id, f.briefFile as string)
+          return
+        }
+        return deliverHeld()
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- armedDepSig/armedSetupSig/launchNudge are the triggers
@@ -10979,6 +11001,47 @@ export function Canvas() {
         return
       }
       const issueRefPre = issuePre.ref
+      // The prompt every agent open types, decided ONCE, HERE, for the same reason as `issuePre`
+      // (#706, `launchPromptFor`): an over-budget `--prompt` becomes a file the pane's own shell
+      // reads, on EVERY open path — live, cold and `--project`. Two of the three typed it inline,
+      // so the docs' "a long --prompt is safe on a local project" held only on screen; deciding it
+      // inside a path would also put an await after that path had read the projects store.
+      // "Local" is judged by the project the node OPENS in (the one `#N` was resolved against): an
+      // SSH project's pane runs on the host, where a file written here does not exist. A dry run
+      // writes nothing, and a call passing both flags is refused by its path before this is read.
+      // Which project that is comes from the SAME authorization belt `#N` runs behind
+      // (`issueFlagScope`): a caller the paths will refuse gets no project here, so nothing is
+      // spilled for it — its path refuses it with the same sentence.
+      const openScopePre = issueOpen
+        ? issueFlagScope({
+            targetId: args.project,
+            sourceNodeId,
+            liveNodes: nodesRef.current,
+            projects: useProjects.getState().projects,
+            activeProjectId: useProjects.getState().activeProjectId
+          })
+        : undefined
+      const openProjectPre = openScopePre?.ok
+        ? useProjects.getState().getProject(openScopePre.projectId)
+        : undefined
+      const openPromptFileArg = (args['prompt-file'] ?? '').trim() || undefined
+      const spillIo = {
+        saveUpload: (name: string, data: string) => api.files.saveUpload(name, data),
+        encodeBase64: encodeUtf8Base64
+      }
+      const openPrompt: { prompt?: string; promptFile?: string } =
+        issueOpen && openScopePre?.ok && !dryRun && !(args.prompt && openPromptFileArg)
+          ? await launchPromptFor(
+              {
+                // An issue-bound session's prompt is the REFERENCE line, with the caller's own
+                // `--prompt` after it. `--prompt-file` is the whole brief and passes through.
+                prompt: issueRefPre ? issueLaunchPrompt(issueRefPre, args.prompt) : args.prompt,
+                promptFile: openPromptFileArg,
+                localFs: !openProjectPre?.ssh
+              },
+              spillIo
+            )
+          : {}
 
       // ── Agent messaging (`send`/`reply`) — handled BEFORE the source-routing machinery ──────
       // These are STORE_ANSWERED_VERBS (lib/controlRouting): routing by source must never travel
@@ -11320,9 +11383,29 @@ export function Canvas() {
           const target = tgResolved.project
           const tgAgentId = (verb === 'open-agent' ? args.agent : 'claude') as AgentId
           const tgIsTerminal = verb === 'open-terminal'
-          // `#N` was resolved against the TARGET project above (`issuePre`) — the node opens there.
+          // `#N` was resolved against the TARGET project above (`issuePre`) — the node opens there,
+          // and so was `openPrompt` (the target is local here: SSH and relay targets are refused).
           const tgIssueRef = tgIsTerminal ? undefined : issueRefPre
-          const tgPrompt = tgIssueRef ? issueLaunchPrompt(tgIssueRef, args.prompt) : args.prompt
+          // `--prompt-file` used to be DROPPED on this path without a word, so the session started
+          // with no brief at all. Validated exactly as the live and cold paths do; the file is read
+          // from this machine's filesystem, which is the target's (resolveProjectTarget refused an
+          // SSH or relay one above).
+          if (!tgIsTerminal && openPromptFileArg) {
+            if (args.prompt) {
+              reply({ ok: false, error: `${verb}: pass either --prompt or --prompt-file, not both` })
+              return
+            }
+            const pfErr = promptFilePathError(openPromptFileArg)
+            if (pfErr) {
+              reply({ ok: false, error: `${verb}: --prompt-file ${pfErr}` })
+              return
+            }
+            const pfExists = await api.fs.exists(openPromptFileArg).catch(() => true)
+            if (!pfExists) {
+              reply({ ok: false, error: `${verb}: --prompt-file not found: ${openPromptFileArg}` })
+              return
+            }
+          }
           const tgCount = Math.max(
             1,
             Math.min(tgIsTerminal ? 8 : 5, parseInt(args.count || '1', 10) || 1)
@@ -11336,14 +11419,17 @@ export function Canvas() {
             ? undefined
             : resolveNewNodeAccount(undefined, target, useSettings.getState().settings.claudeAccounts)
           const tgMode = tgIsTerminal ? undefined : projectPermissionMode(target, tgAgentId)
-          const tgActive = target.id === tgStore.activeProjectId
+          // Read AFTER the `--prompt-file` await above: a tab switch in that window decides whether
+          // the node belongs on the live canvas or in the store (the #443 class).
+          const tgActive = target.id === useProjects.getState().activeProjectId
           // Placement: below the lowest existing node in the TARGET (placeBelow(src) is
           // meaningless in a project that does not contain the source). The live canvas is the
           // truthful node set for the active project, the serialized store for any other.
-          const tgPlacedNodes = tgActive ? nodesRef.current : target.nodes
+          const tgStoredNodes = useProjects.getState().getProject(target.id)?.nodes ?? target.nodes
+          const tgPlacedNodes = tgActive ? nodesRef.current : tgStoredNodes
           const tgMade: CanvasNode[] = []
           let tgBase = { x: 0, y: 0 }
-          const tgIndexBase = tgActive ? nodesRef.current.length : target.nodes.length
+          const tgIndexBase = tgActive ? nodesRef.current.length : tgStoredNodes.length
           for (let i = 0; i < tgCount; i++) {
             const node = tgIsTerminal
               ? createTerminalNode(tgIndexBase + i, tgCwd, { x: 0, y: 0 }, args.cmd)
@@ -11353,13 +11439,17 @@ export function Canvas() {
                     tgIndexBase + i,
                     tgCwd,
                     { x: 0, y: 0 },
-                    tgPrompt,
+                    openPrompt.prompt,
                     undefined,
                     tgAccount,
                     tgMode,
                     // The TARGET project: its `.nodeterm/settings.json` launch override applies to
                     // what runs in it, not the caller's.
-                    target.id
+                    target.id,
+                    // `--model` was dropped here too, like `--prompt-file`: honoured as on every
+                    // other open path (`withAgentModel` re-validates it at the interpolation site).
+                    args.model,
+                    openPrompt.promptFile
                   ),
                   tgIssueRef
                 )
@@ -11379,7 +11469,7 @@ export function Canvas() {
             // The human is looking at the target (the caller is a background orchestrator):
             // live insertion still precedes PTY readiness: keep the launch queued.
             const tgQueuedIds = tgMade.filter((n) => !!n.data.initialCommand).map((n) => n.id)
-            setNodes((ns) => [...ns, ...tgMade.map((node) => queueControlLaunch(node))])
+            setNodes((ns) => [...ns, ...tgMade.map((node) => withLaunchBrief(queueControlLaunch(node), openPrompt.promptFile))])
             markDirty()
             reply({
               ok: true,
@@ -11399,7 +11489,7 @@ export function Canvas() {
           for (const node of tgMade) {
             tgStore.applyNodeMutation(target.id, {
               op: 'upsert',
-              node: flowToNodeStates([armForColdOpen(node)])[0]
+              node: flowToNodeStates([withLaunchBrief(armForColdOpen(node), openPrompt.promptFile)])[0]
             })
           }
           void writeDisk()
@@ -11664,9 +11754,9 @@ export function Canvas() {
                 return
               }
             }
-            // `#N` was resolved against the OWNING project above (`issuePre`): the node is saved there.
+            // `#N` was resolved against the OWNING project above (`issuePre`): the node is saved
+            // there — and so was `openPrompt`, spilled or not by that project's own locality.
             const coldIssueRef = coldTerminal ? undefined : issueRefPre
-            const coldPrompt = coldIssueRef ? issueLaunchPrompt(coldIssueRef, args.prompt) : args.prompt
             if (dryRun) {
               if (!coldTerminal) {
                 const dryKnownAgent =
@@ -11732,20 +11822,22 @@ export function Canvas() {
                       coldNodes.length + i,
                       coldCwd,
                       undefined,
-                      coldPrompt,
+                      openPrompt.prompt,
                       coldSsh,
                       coldAccount,
                       coldMode,
                       owner.id,
                       args.model,
-                      coldPromptFile
+                      openPrompt.promptFile
                     ),
                     coldIssueRef
                   )
               // Arm it: the project is not mounted, so nothing would deliver an `initialCommand`
               // and serialization drops it. `--after` rides the same held launch — an empty `after`
               // is vacuously ready, so a node with no deps fires on that project's first view.
-              const armed = armForColdOpen(built)
+              // The brief file rides the held launch, so delivery — whenever this project is next
+              // viewed — checks it is still there before typing.
+              const armed = withLaunchBrief(armForColdOpen(built), openPrompt.promptFile)
               const held = armed.data.pendingLaunch as PendingLaunch | undefined
               const node =
                 held && coldAfterIds.length
@@ -11997,12 +12089,7 @@ export function Canvas() {
       const spillLongPrompt = async (
         prompt: string | undefined
       ): Promise<{ prompt?: string; promptFile?: string }> => {
-        if (!shouldSpillPrompt(prompt, !ctlSsh)) return { prompt }
-        const path = await spillPromptToFile(prompt as string, {
-          saveUpload: (n, d) => api.files.saveUpload(n, d),
-          encodeBase64: encodeUtf8Base64
-        })
-        return path ? { promptFile: path } : { prompt }
+        return launchPromptFor({ prompt, localFs: !ctlSsh }, spillIo)
       }
       // Place opened nodes BELOW the source and rope them to it (source flow-out → target
       // flow-in), mirroring how subagent/loop nodes attach — so they read as "hanging off" the
@@ -12185,14 +12272,16 @@ export function Canvas() {
       const armAfter = (
         node: CanvasNode,
         after: string[],
-        intoGroup?: string | null
+        intoGroup?: string | null,
+        // The file the launch reads its prompt from, checked again right before delivery.
+        promptFile?: string
       ): CanvasNode => {
         const command = node.data.initialCommand as string | undefined
         if (!command) return node
         const awaitSetupGroup = setupHoldGroup(intoGroup)
         // Always retain the command until the PTY-ready delivery loop acknowledges it.
         // Node creation (even on screen) is not command delivery.
-        return queueControlLaunch(node, after, awaitSetupGroup)
+        return withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile)
       }
       // Open `count` nodes INTO a group frame: grow the frame FIRST (extent:'parent' would
       // clamp children landing outside it), then drop each node into the next grid slot
@@ -12409,15 +12498,10 @@ export function Canvas() {
             // See the same list in open-terminal: which of these nodes end up ARMED is
             // `armAfter`'s per-node decision, recorded as it builds them.
             const openBatch = createControlOpenBatch()
-            // A `--prompt` over the typed-line budget is spilled to a file and delivered through
-            // the same `"$(cat …)"` substitution `--prompt-file` uses (#706). An explicit
-            // `--prompt-file` already took that route and is passed through untouched.
-            // An issue-bound session's prompt is the REFERENCE line (`issueLaunchPrompt`), with the
-            // caller's own `--prompt` after it. `--prompt-file` is left untouched: the file is the
-            // whole brief (the skill tells the caller to name the issue in it).
-            const promptLaunch = await spillLongPrompt(
-              promptFile ? undefined : issueRef ? issueLaunchPrompt(issueRef, args.prompt) : args.prompt
-            )
+            // The prompt was decided above (`openPrompt`, #706): an over-budget `--prompt` rides a
+            // spilled file through the same `"$(cat …)"` substitution `--prompt-file` uses, an
+            // issue-bound session's prompt leads with the REFERENCE line, and an explicit
+            // `--prompt-file` (the whole brief) is passed through untouched.
             const issueNodes: CanvasNode[] = []
             const make = (i: number): CanvasNode => {
               const node = armAfter(
@@ -12426,7 +12510,7 @@ export function Canvas() {
                   nodesRef.current.length + i,
                   agentCwd,
                   placeBelow(i),
-                  promptLaunch.prompt,
+                  openPrompt.prompt,
                   sshFor(agentCwd),
                   account,
                   activePermissionMode(agentId),
@@ -12437,10 +12521,11 @@ export function Canvas() {
                   // interpolation site and emits nothing for an agent outside MODEL_SWITCH_CAPABLE,
                   // so an unsupported agent's command line stays byte-identical.
                   args.model,
-                  promptFile ?? promptLaunch.promptFile
+                  openPrompt.promptFile
                 ),
                 after ?? [],
-                intoGroupId
+                intoGroupId,
+                openPrompt.promptFile
               )
               const bound = bindIssue(node, issueRef)
               if (issueRef) issueNodes.push(bound)
@@ -12836,7 +12921,9 @@ export function Canvas() {
               )
               return armAfter(
                 { ...node, data: { ...node.data, title: `Verify: ${lens}`, titleAuto: false } },
-                [targetId]
+                [targetId],
+                undefined,
+                lensLaunches[i].promptFile
               )
             })
             const reviewerIds = reviewers.map((r) => r.id)
@@ -12866,7 +12953,9 @@ export function Canvas() {
                     )
                     return { ...j, data: { ...j.data, title: 'Verify: verdict', titleAuto: false } }
                   })(),
-                  reviewerIds
+                  reviewerIds,
+                  undefined,
+                  judgeLaunch.promptFile
                 )
               : null
             const panelIds = [...reviewerIds, ...(judge ? [judge.id] : [])]

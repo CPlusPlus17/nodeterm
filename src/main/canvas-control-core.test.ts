@@ -1147,6 +1147,17 @@ describe('trigger wording does not claim in-process subagent requests (issue #91
   })
 })
 
+describe('a held launch whose prompt file is gone is not started (#1014 review)', () => {
+  it.each([
+    ['skill body', buildCanvasSkillBody('/x/nodeterm.sh')],
+    ['instructions block', buildCanvasControlInstructions('/x/nodeterm.sh')]
+  ])('%s says so, and names the list marker and the way out', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toMatch(/whose file is gone by then is not started/)
+    expect(flat).toContain('`list` marks it HELD and it waits for `run`')
+  })
+})
+
 describe('--issue: GitHub issue-bound sessions', () => {
   it('accepts owner/repo#N and #N on the two agent-open verbs', () => {
     expect(parseControlRequest('open-agent', { agent: 'claude', issue: 'eneskirca/nodeterm#42' })).toEqual({

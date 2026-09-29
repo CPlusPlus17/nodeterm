@@ -57,8 +57,9 @@ describe('--issue in the desktop control dispatch', () => {
     expect(body).not.toContain('resolveIssueFlagForCall(')
     expect(body).toContain('const issueRef = issueRefPre')
     expect(body).toContain('bound to GitHub issue ${formatIssueRef(issueRef)}')
-    // The launch prompt is composed by the one function allowed to turn a reference into text.
-    expect(body).toMatch(/issueRef \? issueLaunchPrompt\(issueRef, args\.prompt\) : args\.prompt/)
+    // The launch prompt is the one composed (and spilled if long) above, through issueLaunchPrompt.
+    expect(body).toContain('openPrompt.prompt,')
+    expect(body).not.toContain('issueLaunchPrompt(')
     expect(body).toContain('bindIssue(node, issueRef)')
     expect(body).toContain('logRunsStarted(ctlProject?.id, issueNodes, issueRef)')
   })
@@ -68,7 +69,8 @@ describe('--issue in the desktop control dispatch', () => {
     expect(body).not.toContain('resolveIssueFlagForCall(')
     expect(body).toContain('const coldIssueRef = coldTerminal ? undefined : issueRefPre')
     expect(body).toContain('bound to GitHub issue ${formatIssueRef(coldIssueRef)}')
-    expect(body).toMatch(/coldIssueRef \? issueLaunchPrompt\(coldIssueRef, args\.prompt\) : args\.prompt/)
+    expect(body).toContain('openPrompt.prompt,')
+    expect(body).not.toContain('issueLaunchPrompt(')
     expect(body).toContain('logRunsStarted(owner.id, coldMade, coldIssueRef)')
   })
 
@@ -76,11 +78,19 @@ describe('--issue in the desktop control dispatch', () => {
     const body = code(between("args.project !== undefined\n      ) {", '// ── end of the early-handled'))
     expect(body).not.toContain('resolveIssueFlagForCall(')
     expect(body).toContain('const tgIssueRef = tgIsTerminal ? undefined : issueRefPre')
-    expect(body).toMatch(/tgIssueRef \? issueLaunchPrompt\(tgIssueRef, args\.prompt\) : args\.prompt/)
+    expect(body).toContain('openPrompt.prompt,')
+    expect(body).not.toContain('issueLaunchPrompt(')
     expect(body).toContain('logRunsStarted(target.id, tgMade, tgIssueRef)')
     // The pre-resolution is handed the `--project` target, which it judges before asking anyone
     // (`resolveIssueFlagForCall` runs the renderer's authorization belt first — lib/issueFlag.test).
     expect(code(src)).toMatch(/await resolveIssueFlagForCall\(\s*\{[^}]*targetId: args\.project,/)
+  })
+
+  it('every agent open types the prompt composed ONCE through issueLaunchPrompt', () => {
+    // The one function allowed to turn a reference into text, used at the one place the open
+    // prompt is decided (`openPrompt`, which also spills it when long — #706).
+    const body = code(between('const openPrompt:', 'if (verb === \'send\''))
+    expect(body).toMatch(/prompt: issueRefPre \? issueLaunchPrompt\(issueRefPre, args\.prompt\) : args\.prompt/)
   })
 
   it('no path splices the raw --issue value into a prompt or a launch line', () => {
