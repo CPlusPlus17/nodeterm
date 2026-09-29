@@ -8099,9 +8099,13 @@ button.group-node__setup:disabled {
   vertical-align: middle;
   white-space: nowrap;
 }
-.usage-account__use:hover {
+.usage-account__use:hover:not(:disabled) {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+/* A bulk move in flight: "Moving N sessions…" on its row, every other row's move held. */
+.usage-account__use:disabled {
+  cursor: default;
 }
 /* The bulk "Move N sessions" control: the picked targets wrap onto their own line under the label. */
 .usage-account__move-targets {

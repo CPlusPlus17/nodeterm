@@ -267,7 +267,7 @@ import {
   terminalShortcutPolicy
 } from '../lib/keybindingOverrides'
 import { CanvasPills } from '../components/CanvasPills'
-import { UsageIndicator } from '../components/UsageIndicator'
+import { UsageIndicator, type AccountMoveProgress } from '../components/UsageIndicator'
 import { SystemResourcePill } from '../components/SystemResourcePill'
 import { PresenceLayer } from '../components/PresenceLayer'
 import { Facepile } from '../components/Facepile'
@@ -723,6 +723,7 @@ import {
   claudeSwitchHostKey,
   claudeSwitchTargets,
   planClaudeAccountSwitch,
+  startBulkSwitch,
   summarizeBulkSwitch,
   switchOutcomeNotice,
   type ClaudeSwitchOutcome
@@ -7293,20 +7294,24 @@ export function Canvas() {
 
   /**
    * The usage popover's bulk move: every Claude session on this canvas that runs on `from` (and on
-   * the popover's machine) is moved to `to`, ONE AT A TIME — each is the same quit → copy → recycle
-   * as the single switch, and running them in parallel would put N transcript copies and N pane
-   * recycles on one host at once. Busy sessions are skipped, never interrupted. One summary line.
+   * the popover's machine) is moved to `to`, ALL AT ONCE — each is the same quit → copy → recycle
+   * as the single switch (`startBulkSwitch` says why they are not serialized, and where an SSH
+   * host's load is paced instead). Busy sessions are skipped, never interrupted. One summary line.
    */
   const bulkSwitchRunning = useRef(false)
+  // The same move, as the popover sees it: its sessions keep their OLD account until each lands, so
+  // without this the source row re-offers them mid-move (see `MoveSessionsControl`).
+  const [accountMove, setAccountMove] = useState<AccountMoveProgress | null>(null)
   const moveAccountSessions = useCallback(
     async (from: string | undefined, to: string | undefined, toLabel: string) => {
       if (bulkSwitchRunning.current) return
       bulkSwitchRunning.current = true
       try {
         const byId = useAgentStatus.getState().byId
-        const scope = scopeFromKey(
-          usageScopeKey(useProjects.getState().getProject(useProjects.getState().activeProjectId))
+        const scopeKey = usageScopeKey(
+          useProjects.getState().getProject(useProjects.getState().activeProjectId)
         )
+        const scope = scopeFromKey(scopeKey)
         const { ready, busy } = bulkSwitchCandidates(
           nodesRef.current
             .filter((n) => n.type === 'terminal')
@@ -7321,15 +7326,22 @@ export function Canvas() {
           scope.kind === 'ssh' ? scope.hostKey : undefined
         )
         if (ready.length + busy.length === 0) return
+        setAccountMove({ from, count: ready.length, scopeKey })
         setNotice({
           kind: 'info',
           text: `Moving ${ready.length} ${ready.length === 1 ? 'session' : 'sessions'} to ${toLabel}…`
         })
-        const outcomes: ClaudeSwitchOutcome[] = []
-        for (const n of ready) outcomes.push(await runClaudeAccountSwitch(n.id, to))
+        // All at once, not one after another — see `startBulkSwitch`.
+        const outcomes = (
+          await startBulkSwitch(
+            ready.map((n) => n.id),
+            (id) => runClaudeAccountSwitch(id, to)
+          )
+        ).map((o): ClaudeSwitchOutcome => o ?? { kind: 'not-restarted', outcome: 'exit-timeout' })
         setNotice(summarizeBulkSwitch(outcomes, busy.length, toLabel))
       } finally {
         bulkSwitchRunning.current = false
+        setAccountMove(null)
       }
     },
     [runClaudeAccountSwitch]
@@ -16503,6 +16515,7 @@ export function Canvas() {
             onSetDefaultAccount={setProjectDefaultAccount}
             countAccountSessions={countAccountSessions}
             onMoveSessions={(from, to, label) => void moveAccountSessions(from, to, label)}
+            accountMove={accountMove}
           />
         </CanvasPills>
 
