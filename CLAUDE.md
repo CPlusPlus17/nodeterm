@@ -3261,7 +3261,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the control handler (`issuePre`), before any open path snapshots the projects store**: the lookup
   is a host round trip (`git remote`, `gh auth`), and an await inside a path let a tab switch in that
   window write the node into the wrong project. A full `owner/repo#N` asks nobody. The same
-  placement puts resolution before every path's dry-run branch.
+  placement puts resolution before every path's dry-run branch. **But not before the gates**:
+  `resolveIssueFlagForCall` first runs the renderer's authorization belt — the same
+  `resolveProjectTarget` call and source-capability rule the paths apply — and answers a caller
+  they would refuse with the path's own refusal, asking nobody (the lookup otherwise ran for a
+  refused caller, and its refusal said whether that project had a GitHub board). Main's
+  `gateProjectTarget` runs before the renderer as ever; the Server Edition already resolved after
+  its identity, source and target gates, now pinned by a test.
   `--prompt` replaces the default task after the reference line; `--prompt-file` stays the whole brief. Both
   generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
   is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on
@@ -5367,6 +5373,10 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   `snapshot.etags.heartbeat` (a restart does not pay a full read), and a 304 NEVER skips a full
   reconciliation (a deletion or transfer does not move the top item) or an incomplete repository.
   It covers pull requests by construction: same endpoint, same `updated_at` the scan filters on.
+  **Only a completed scan advances the incremental cursor** (`lastSuccessfulRefreshAt`, the next
+  scan's `since`): a board write folds its one confirmed issue into the snapshot and leaves the
+  cursor alone. It used to set it to the write's time, so a third party's change landing between the
+  last scan and our write fell outside the next `since` window until the daily full pass.
   **A 304 still prompts the board to re-read** (an empty delta, served from the local cache, no
   GitHub cost) exactly as every successful refresh always did: a page is not only issues — read
   only, the mapping approval and the completion column are derived by the host at query time, and
@@ -5498,10 +5508,16 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   `mergedSeenAt >= armedAt` → no move (arming never sweeps old merges; `armedAt` is taken from the
   HOST's clock via the pull board's `now`, because `mergedSeenAt` is stamped there and a Server
   Edition browser's clock can be off). Each planned move must then win the host's one-time CLAIM
-  (`githubIssues:claim-pull-auto-move`, persisted in the same memory, keyed by project + card + PR
-  set) — the first ask across every window wins, and a card dragged back is not moved again for the
-  same merges. **The claim is refused unless THIS card was noted waiting on one of those PRs while it
-  was open** (`githubIssues:note-pull-waits`; the host records a note only for a PR it holds as open
+  (`githubIssues:claim-pull-auto-move`, persisted in the same memory) — the first ask across every
+  window wins, and a card dragged back is not moved again for the same merges. **Claims are
+  recorded PER PR (project + card + PR), never per PR set**: the linked set changes on its own (a
+  merged PR ages off the pull board, another PR on the branch joins), and a set-keyed claim read
+  every such change as a new transition and moved a dragged-back card again. A claim is granted only
+  for a PR that has not moved this card yet; set keys an earlier build wrote are read as a claim on
+  each PR they list. The board asks each (card, PR set) ONCE (`usePullAutoMove`'s `asked`, cleared
+  only by a failed call) and re-plans only when a field the planner reads changes — it used to send
+  a claim per canvas change for a dragged-back card. **The claim is refused unless THIS card was
+  noted waiting on one of those PRs while it was open** (`githubIssues:note-pull-waits`; the host records a note only for a PR it holds as open
   itself): `mergedSeenAt` is a fact about the PR, and without the per-card note a card that first
   appeared after the merge — a follow-up terminal in the same group, a teammate's card by git pull,
   an issue-bound session started later — would win a fresh claim and jump to Done. It is then
