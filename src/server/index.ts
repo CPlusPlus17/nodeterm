@@ -864,7 +864,11 @@ export async function startServer(
     // persistedCanvases() scan re-parses every local project's file (measured 4.5 ms per call at
     // 20 projects x 100 nodes).
     projectOfNode: (nodeId) => workspaceStore.projectIdForNode(nodeId),
-    projectCwd: (projectId) => workspaceStore.localCwdForProject(projectId)
+    projectCwd: (projectId) => workspaceStore.localCwdForProject(projectId),
+    // TEST ONLY seams (see ServerConfig): never set by resolveConfig, so production dials the relay
+    // and mints against API_BASE with the global fetch.
+    ...(config.relayTestTransport ? { transport: config.relayTestTransport } : {}),
+    ...(config.relayTestFetch ? { fetch: config.relayTestFetch } : {})
   })
   // The local admin channel for the `team` CLI, opened BEFORE hosting starts: it is also how this
   // server learns that another one already runs on this data dir (someone answers on its socket).

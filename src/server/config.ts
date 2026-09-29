@@ -1,6 +1,7 @@
 import os from 'os'
 import path from 'path'
 import { parseTrustedNets, DEFAULT_TRUSTED_NETS_SPEC, type TrustProxyConfig } from './proxy-trust'
+import type { RelayTransport } from '../core/relay/relay-socket'
 
 /**
  * Fully-resolved server configuration. Produced by {@link resolveConfig} from the
@@ -55,6 +56,19 @@ export type ServerConfig = {
    * Absent = feature off (default). See src/server/proxy-trust.ts and docs/SERVER.md.
    */
   trustProxy?: TrustProxyConfig
+  /**
+   * TEST ONLY: an in-process relay transport for each hosted-team listener, in place of the real
+   * WebSocket to the relay. Passed straight to `createHostedService`'s `transport`.
+   * `resolveConfig` NEVER sets it — no env var or flag reaches it (pinned in config.test.ts) — so a
+   * production boot always dials the real relay. See src/server/hosted-e2e.test.ts.
+   */
+  relayTestTransport?: () => RelayTransport
+  /**
+   * TEST ONLY: the fetch the hosted-team host-token mint uses in place of the global one. Passed
+   * straight to `createHostedService`'s `fetch`. `resolveConfig` NEVER sets it (pinned in
+   * config.test.ts).
+   */
+  relayTestFetch?: typeof fetch
 }
 
 /**

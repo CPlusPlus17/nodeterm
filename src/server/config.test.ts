@@ -83,6 +83,15 @@ describe('resolveConfig', () => {
       /TRUST_PROXY_HEADER/i
     )
   })
+
+  it('never sets the TEST ONLY hosted-relay seams, whatever the env or argv says', () => {
+    const env = { NODETERM_RELAY_TEST_TRANSPORT: '1', NODETERM_RELAY_TEST_FETCH: '1', NODETERM_HEADLESS: '1' }
+    const argv = ['--relay-test-transport', 'x', '--relay-test-fetch', 'x', '--relayTestTransport', 'x']
+    for (const c of [resolveConfig({}, []), resolveConfig(env, argv)]) {
+      expect(Object.hasOwn(c, 'relayTestTransport')).toBe(false)
+      expect(Object.hasOwn(c, 'relayTestFetch')).toBe(false)
+    }
+  })
 })
 
 describe('resolveDataDir (the team admin CLI\'s data dir)', () => {
