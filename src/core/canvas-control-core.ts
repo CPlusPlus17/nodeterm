@@ -558,10 +558,21 @@ export function parseControlRequest(
 const CC_START = '<!-- nodeterm:manage-canvas:start -->'
 const CC_END = '<!-- nodeterm:manage-canvas:end -->'
 
+/** The two markers, for the SSH freshness probe, which must find the block exactly where the
+ *  merge below would. */
+export const CANVAS_CONTROL_MARKERS = { start: CC_START, end: CC_END } as const
+
+/** The exact bytes the merge below writes from the start marker through the end marker. ONE
+ *  definition: the SSH freshness probe compares a host's copy against this, so a second spelling
+ *  would make every host look stale (or, worse, current). */
+export function frameCanvasControlBlock(block: string): string {
+  return `${CC_START}\n${block.trim()}\n${CC_END}`
+}
+
 /** Idempotently merge the canvas-control block into a global instructions file.
  *  Everything outside the markers is preserved; an existing block is replaced. */
 export function mergeCanvasControlBlock(existing: string, block: string): string {
-  const full = `${CC_START}\n${block.trim()}\n${CC_END}`
+  const full = frameCanvasControlBlock(block)
   const start = existing.indexOf(CC_START)
   const end = existing.indexOf(CC_END)
   if (start >= 0 && end > start) {

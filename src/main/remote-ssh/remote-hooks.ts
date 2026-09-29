@@ -17,7 +17,8 @@ import { hookServer } from '../../core/agents/hook-server'
 import {
   updateRemoteSettingsFile,
   updateRemoteSettingsFileResult,
-  updateRemoteTextFile
+  updateRemoteTextFile,
+  type RemoteTextResult
 } from '../../core/agents/hooks/remote-settings-file'
 import { remoteAtomicWrite, runRemoteAtomicWrite, type RemoteAtomicWriteOptions } from '../remote-atomic-write'
 import { curlHeaderConfigLine } from '../../core/agents/hook-curl-config-sh'
@@ -46,19 +47,35 @@ import {
 import { upsertHookTrustEntriesInContent, type CodexTrustEntry } from '../../core/agents/hooks/codex-trust'
 import { ensureFullscreenTui } from '../../core/agents/hooks/claude-tui'
 import {
+  CANVAS_CONTROL_MARKERS,
   CONTROL_SHIM_SCRIPT,
   buildCanvasControlInstructions,
   buildCanvasSkillBody,
+  frameCanvasControlBlock,
   mergeCanvasControlBlock
 } from '../../core/canvas-control-core'
 import {
   CONTEXT_SHIM_SCRIPT,
+  LINKED_CONTEXT_MARKERS,
   buildContextLinkSkillBody,
   buildLinkedContextInstructions,
+  frameInstructionsBlock,
   mergeInstructionsBlock
 } from '../../core/context-link-core'
+import { isSafeAccountId } from '../../core/claude-accounts-core'
+import { formatCksum, posixCksum } from '../../core/remote-ssh/posix-cksum'
 import { posixQuote, type SshConnection } from '../../shared/ssh'
 import { describeTunnelProbe } from './tunnel-repair'
+import {
+  agentToolsCheckCommand,
+  agentToolsCheckDue,
+  parseAgentToolsReport,
+  recordAgentToolsCheck,
+  type AgentToolsHostState,
+  type AgentToolsReport,
+  type AgentToolsTrigger,
+  type ProbeEntry
+} from './agent-tools-freshness'
 
 /**
  * Every install step in this file fails OPEN for the connect — a host that cannot take a hook must
@@ -116,10 +133,115 @@ const AGENT_TARGETS: { agentId: string; config: string; events: readonly Managed
   { agentId: 'gemini', config: '.gemini/settings.json', events: GEMINI_HOOK_EVENTS }
 ]
 
+/** Where the host's instruction files live — one marker block per feature in each. */
+type InstructionTarget = 'codex' | 'gemini' | 'copilot' | 'opencode'
+const CANVAS_TARGETS: readonly InstructionTarget[] = ['codex', 'gemini', 'copilot', 'opencode']
+const CONTEXT_TARGETS: readonly InstructionTarget[] = ['codex', 'gemini', 'opencode']
+
+/**
+ * One thing the agent tools put on a host, as DATA. The installers write these and the freshness
+ * check (`refreshAgentTools`) probes these — one list, so the check can never judge a file the
+ * installer does not write, or at a path the installer does not use.
+ *
+ * `group` is the unit that fails together: a shim that did not land stops the rest of its group
+ * (a skill pointing at a missing shim is worse than no skill), and `label` is what the warning
+ * names.
+ */
+type AgentToolArtifact = { group: string; label: string } & (
+  | { kind: 'file'; path: string; body: string; mode?: '755'; gateDir?: string }
+  | {
+      kind: 'block'
+      target: InstructionTarget
+      block: string
+      /** The exact bytes the merge places from the start marker through the end marker. */
+      framed: string
+      markers: { start: string; end: string }
+      merge: (existing: string, block: string) => string
+    }
+)
+
+export type AgentToolsOutcome = 'current' | 'refreshed' | 'skipped' | 'failed'
+
+const canvasShimPath = (home: string) => `${home}/.nodeterm/nodeterm.sh`
+const contextShimPath = (home: string) => `${home}/.nodeterm/context.sh`
+const skillFilePath = (configDir: string, name: string) => `${configDir}/skills/${name}/SKILL.md`
+const accountConfigDir = (home: string, accountId: string) => `${home}/.nodeterm/claude-accounts/${accountId}`
+
+function canvasControlArtifacts(home: string): AgentToolArtifact[] {
+  const shim = canvasShimPath(home)
+  const block = buildCanvasControlInstructions(shim)
+  const g = { group: 'canvas', label: 'canvas control' }
+  return [
+    { ...g, kind: 'file', path: shim, body: CONTROL_SHIM_SCRIPT, mode: '755' },
+    { ...g, kind: 'file', path: skillFilePath(`${home}/.claude`, 'manage-nodeterm-canvas'), body: buildCanvasSkillBody(shim) },
+    ...CANVAS_TARGETS.map((target): AgentToolArtifact => ({
+      ...g,
+      kind: 'block',
+      target,
+      block,
+      framed: frameCanvasControlBlock(block),
+      markers: CANVAS_CONTROL_MARKERS,
+      merge: mergeCanvasControlBlock
+    }))
+  ]
+}
+
+function contextLinkArtifacts(home: string): AgentToolArtifact[] {
+  const shim = contextShimPath(home)
+  const block = buildLinkedContextInstructions(shim)
+  const g = { group: 'context', label: 'context link' }
+  return [
+    { ...g, kind: 'file', path: shim, body: CONTEXT_SHIM_SCRIPT, mode: '755' },
+    { ...g, kind: 'file', path: skillFilePath(`${home}/.claude`, 'get-linked-context'), body: buildContextLinkSkillBody(shim) },
+    ...CONTEXT_TARGETS.map((target): AgentToolArtifact => ({
+      ...g,
+      kind: 'block',
+      target,
+      block,
+      framed: frameInstructionsBlock(block),
+      markers: LINKED_CONTEXT_MARKERS,
+      merge: mergeInstructionsBlock
+    }))
+  ]
+}
+
+/** A managed account's two skills. Gated on the account dir ALREADY existing on the host: the
+ *  refresh keeps an account's skills current, it never recreates the dir of an account the host
+ *  no longer has. (Creating it is `remoteAccountAdd`'s job.) */
+function accountSkillArtifacts(home: string, accountId: string): AgentToolArtifact[] {
+  const dir = accountConfigDir(home, accountId)
+  const g = { group: `account:${accountId}`, label: 'a managed-account skill' }
+  return [
+    { ...g, kind: 'file', path: skillFilePath(dir, 'manage-nodeterm-canvas'), body: buildCanvasSkillBody(canvasShimPath(home)), gateDir: dir },
+    { ...g, kind: 'file', path: skillFilePath(dir, 'get-linked-context'), body: buildContextLinkSkillBody(contextShimPath(home)), gateDir: dir }
+  ]
+}
+
+/** Where `resolveCopilotHome` would put copilot's instructions, from the host's raw `$COPILOT_HOME`
+ *  (the installer's validator: a value it refuses means `~/.copilot`, never the refused value). */
+function copilotHomeFromReported(reported: string, home: string): string {
+  const trimmed = reported.trim()
+  const stripped = trimmed.replace(/\/+$/, '') || '/'
+  return isSafeRemoteCopilotHome(trimmed) ? stripped : `${home}/.copilot`
+}
+
+/** What a human reads in a log line about one artifact. */
+function describeArtifact(a: AgentToolArtifact): string {
+  return a.kind === 'file' ? a.path : `the ${a.target} instructions file (${a.label} block)`
+}
+
 export class RemoteHooks {
   // Remember the absolute sock path + hook port used at setup per project so teardown cancels
   // the exact `-R` spec (teardown does not re-resolve $HOME).
   private specs = new Map<string, { sock: string; port: number }>()
+  /** Per HOST (user, host, port, remote $HOME — several projects share one host's files): what the
+   *  last agent-tools check confirmed, and the backoff after failed ones. See agent-tools-freshness. */
+  private agentToolsState = new Map<string, AgentToolsHostState>()
+  /** One check per host at a time; a caller arriving mid-check shares it. */
+  private agentToolsInFlight = new Map<string, Promise<AgentToolsOutcome>>()
+  /** The expected bytes are fixed for an app build + home + account set, and the reuse branch asks
+   *  every 45 s per project — do not rebuild ~150 KB of skill text and its checksums each time. */
+  private agentToolsPlans = new Map<string, { plan: AgentToolArtifact[]; expected: string[]; setId: string }>()
 
   constructor(private r: RemoteRunner) {}
 
@@ -609,9 +731,7 @@ export class RemoteHooks {
     const { stdout } = await this.r.run(
       childArgs(conn, controlPath, 'printf %s "${COPILOT_HOME:-}"')
     )
-    const reported = stdout.trim()
-    const stripped = reported.replace(/\/+$/, '') || '/'
-    return isSafeRemoteCopilotHome(reported) ? stripped : `${home}/.copilot`
+    return copilotHomeFromReported(stdout, home)
   }
 
   /**
@@ -679,40 +799,12 @@ export class RemoteHooks {
    * instead of telling the user canvas control is unavailable. Fail-open per step otherwise.
    */
   async installCanvasControl(conn: SshConnection, controlPath: string, remoteHome: string): Promise<void> {
-    try {
-      const shim = `${remoteHome}/.nodeterm/nodeterm.sh`
-      await this.writeRemoteShim(conn, controlPath, shim, CONTROL_SHIM_SCRIPT)
-      await this.writeRemoteSkill(
-        conn,
-        controlPath,
-        `${remoteHome}/.claude`,
-        'manage-nodeterm-canvas',
-        buildCanvasSkillBody(shim)
-      )
-      // codex / gemini / opencode have no skill system — same marker-delimited instruction block
-      // the desktop merges into their global instruction files. The opencode path is expanded by
-      // the REMOTE shell (it is XDG-respecting and the local value says nothing about the host).
-      const block = buildCanvasControlInstructions(shim)
-      // codex/gemini are plain quoted literals; opencode must stay shell-expandable and so
-      // carries a prelude that binds the untrusted $HOME to a variable (see the helper).
-      const targets: { pathExpr: string; prelude?: string }[] = [
-        { pathExpr: posixQuote(`${remoteHome}/.codex/AGENTS.md`) },
-        { pathExpr: posixQuote(`${remoteHome}/.gemini/GEMINI.md`) },
-        {
-          pathExpr: posixQuote(
-            `${await this.resolveCopilotHome(conn, controlPath, remoteHome)}/copilot-instructions.md`
-          )
-        },
-        openCodeInstructionsTarget(remoteHome)
-      ]
-      for (const t of targets) {
-        await this.mergeRemoteInstructions(conn, controlPath, t.pathExpr, block, mergeCanvasControlBlock, t.prelude)
-      }
-    } catch (e) {
-      // Fail-open for the connect, never silent: a shim that did not land is an agent whose canvas
-      // calls fail, and this line is the only place that says why.
-      warnNotInstalled('canvas control', e)
-    }
+    // codex / gemini / copilot / opencode have no skill system — they get the same marker-delimited
+    // instruction block the desktop merges into their global instruction files. The copilot home is
+    // the HOST's, resolved only when that block is reached.
+    await this.applyAgentTools(conn, controlPath, remoteHome, canvasControlArtifacts(remoteHome), () =>
+      this.resolveCopilotHome(conn, controlPath, remoteHome)
+    )
   }
 
   /**
@@ -753,30 +845,9 @@ export class RemoteHooks {
    * verified tunnel; fail-open per step.
    */
   async installContextLink(conn: SshConnection, controlPath: string, remoteHome: string): Promise<void> {
-    try {
-      const shim = `${remoteHome}/.nodeterm/context.sh`
-      await this.writeRemoteShim(conn, controlPath, shim, CONTEXT_SHIM_SCRIPT)
-      await this.writeRemoteSkill(
-        conn,
-        controlPath,
-        `${remoteHome}/.claude`,
-        'get-linked-context',
-        buildContextLinkSkillBody(shim)
-      )
-      const block = buildLinkedContextInstructions(shim)
-      // codex/gemini are plain quoted literals; opencode must stay shell-expandable and so
-      // carries a prelude that binds the untrusted $HOME to a variable (see the helper).
-      const targets: { pathExpr: string; prelude?: string }[] = [
-        { pathExpr: posixQuote(`${remoteHome}/.codex/AGENTS.md`) },
-        { pathExpr: posixQuote(`${remoteHome}/.gemini/GEMINI.md`) },
-        openCodeInstructionsTarget(remoteHome)
-      ]
-      for (const t of targets) {
-        await this.mergeRemoteInstructions(conn, controlPath, t.pathExpr, block, mergeInstructionsBlock, t.prelude)
-      }
-    } catch (e) {
-      warnNotInstalled('context link', e)
-    }
+    await this.applyAgentTools(conn, controlPath, remoteHome, contextLinkArtifacts(remoteHome), () =>
+      this.resolveCopilotHome(conn, controlPath, remoteHome)
+    )
   }
 
   /** The context-link skill for a REMOTE managed-account config dir (see the canvas twin). */
@@ -817,7 +888,207 @@ export class RemoteHooks {
     name: string,
     body: string
   ): Promise<void> {
-    await this.writeOwnedFile(conn, controlPath, `${configDir}/skills/${name}/SKILL.md`, body)
+    await this.writeOwnedFile(conn, controlPath, skillFilePath(configDir, name), body)
+  }
+
+  /**
+   * Write (or merge) a list of agent-tool artifacts, in order, one group at a time.
+   *
+   * Fail-open for the connect, never silent: a failed owned-file write THROWS and ends its group
+   * (the steps after it depend on the file) with a warning naming the group; a failed instruction
+   * merge is logged by the transaction and the group carries on. Returns whether everything landed.
+   * `copilotHome` is asked at most once, and only when a copilot block is reached.
+   */
+  private async applyAgentTools(
+    conn: SshConnection,
+    controlPath: string,
+    remoteHome: string,
+    artifacts: readonly AgentToolArtifact[],
+    copilotHome: () => Promise<string>
+  ): Promise<boolean> {
+    let copilot: Promise<string> | undefined
+    const groups = new Map<string, AgentToolArtifact[]>()
+    for (const a of artifacts) {
+      const members = groups.get(a.group)
+      if (members) members.push(a)
+      else groups.set(a.group, [a])
+    }
+    let ok = true
+    for (const members of groups.values()) {
+      try {
+        for (const a of members) {
+          if (a.kind === 'file') {
+            await this.writeOwnedFile(conn, controlPath, a.path, a.body, a.mode ? { mode: a.mode } : {})
+            continue
+          }
+          const target =
+            a.target === 'copilot'
+              ? { pathExpr: posixQuote(`${await (copilot ??= copilotHome())}/copilot-instructions.md`) }
+              : this.instructionTarget(remoteHome, a.target)
+          const r = await this.mergeRemoteInstructions(conn, controlPath, target.pathExpr, a.block, a.merge, target.prelude)
+          if (r === 'failed') ok = false
+        }
+      } catch (e) {
+        ok = false
+        warnNotInstalled(members[0].label, e)
+      }
+    }
+    return ok
+  }
+
+  /** The instruction files whose path does not depend on host state we have to ask for. codex and
+   *  gemini are plain quoted literals; opencode must stay shell-expandable (XDG) and so carries a
+   *  prelude binding the untrusted $HOME to a variable (see `openCodeInstructionsTarget`). */
+  private instructionTarget(
+    remoteHome: string,
+    target: Exclude<InstructionTarget, 'copilot'>
+  ): { pathExpr: string; prelude?: string } {
+    if (target === 'codex') return { pathExpr: posixQuote(`${remoteHome}/.codex/AGENTS.md`) }
+    if (target === 'gemini') return { pathExpr: posixQuote(`${remoteHome}/.gemini/GEMINI.md`) }
+    return openCodeInstructionsTarget(remoteHome)
+  }
+
+  /**
+   * Bring an SSH host's agent tools — both shims, both skills (system and every managed account
+   * pinned to this host), and our blocks in the instruction files — up to what THIS build writes,
+   * rewriting ONLY what differs.
+   *
+   * One probe checksums everything the host holds (see agent-tools-freshness.ts for the stamp and
+   * the cadence); a current host costs that one round trip and no write. A file we cannot read is
+   * never written over, and a host with one is not called confirmed, so the reuse branch keeps
+   * looking (on the tunnel-repair backoff). A host with no `cksum` falls back to writing everything,
+   * which is what every connect did before this check existed. Never throws.
+   */
+  async refreshAgentTools(
+    conn: SshConnection,
+    controlPath: string,
+    remoteHome: string,
+    accountIds: readonly string[],
+    trigger: AgentToolsTrigger,
+    now = Date.now()
+  ): Promise<AgentToolsOutcome> {
+    try {
+      // settings.json is hand-editable: an id that could leave the accounts root is dropped here,
+      // before it is spliced into any path.
+      const accounts = [...new Set(accountIds.filter(isSafeAccountId))].sort()
+      const key = `${conn.user}@${conn.host}:${conn.port ?? 22}\0${remoteHome}`
+      const inFlight = this.agentToolsInFlight.get(key)
+      if (inFlight) return await inFlight
+      const planned = this.agentToolsPlan(remoteHome, accounts)
+      if (!agentToolsCheckDue(this.agentToolsState.get(key), planned.setId, now, trigger)) return 'skipped'
+      const attempt = this.checkAgentTools(conn, controlPath, remoteHome, planned, trigger, key, now)
+      this.agentToolsInFlight.set(key, attempt)
+      try {
+        return await attempt
+      } finally {
+        this.agentToolsInFlight.delete(key)
+      }
+    } catch (e) {
+      warnNotInstalled('an agent-tools refresh', e)
+      return 'failed'
+    }
+  }
+
+  private agentToolsPlan(
+    remoteHome: string,
+    accounts: readonly string[]
+  ): { plan: AgentToolArtifact[]; expected: string[]; setId: string } {
+    const cacheKey = [remoteHome, ...accounts].join('\0')
+    const cached = this.agentToolsPlans.get(cacheKey)
+    if (cached) return cached
+    const plan = [
+      ...canvasControlArtifacts(remoteHome),
+      ...contextLinkArtifacts(remoteHome),
+      ...accounts.flatMap((id) => accountSkillArtifacts(remoteHome, id))
+    ]
+    const expected = plan.map((a) => formatCksum(posixCksum(Buffer.from(a.kind === 'file' ? a.body : a.framed, 'utf8'))))
+    const setId = createHash('sha256')
+      .update(JSON.stringify(plan.map((a, i) => [a.kind === 'file' ? a.path : `${a.group}:${a.target}`, expected[i]])))
+      .digest('hex')
+    if (this.agentToolsPlans.size >= 16) this.agentToolsPlans.clear()
+    const planned = { plan, expected, setId }
+    this.agentToolsPlans.set(cacheKey, planned)
+    return planned
+  }
+
+  private async checkAgentTools(
+    conn: SshConnection,
+    controlPath: string,
+    remoteHome: string,
+    planned: { plan: AgentToolArtifact[]; expected: string[]; setId: string },
+    trigger: AgentToolsTrigger,
+    key: string,
+    now: number
+  ): Promise<AgentToolsOutcome> {
+    const { plan, expected, setId } = planned
+    const host = `${conn.user}@${conn.host}`
+    const done = (ok: boolean, outcome: AgentToolsOutcome): AgentToolsOutcome => {
+      this.agentToolsState.set(key, recordAgentToolsCheck(this.agentToolsState.get(key), setId, ok, now))
+      return outcome
+    }
+    const entries = plan.map((a) => this.probeEntry(remoteHome, a))
+    const command = agentToolsCheckCommand(openCodeInstructionsTarget(remoteHome).prelude, entries, 'COPILOT_HOME')
+    let report: AgentToolsReport | null = null
+    try {
+      const r = await this.r.run(childArgs(conn, controlPath, command))
+      report = r.code === 0 ? parseAgentToolsReport(r.stdout, entries.length) : null
+      // A report we cannot read is not evidence that anything is stale: change nothing.
+      if (!report) console.warn(`[remote-hooks] could not check the agent tools on ${host} (exit ${r.code}); will look again`)
+    } catch (e) {
+      console.warn(`[remote-hooks] could not check the agent tools on ${host}: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    if (!report) return done(false, 'failed')
+    const copilotHome = copilotHomeFromReported(report.env, remoteHome)
+
+    if (report.kind === 'no-cksum') {
+      // Nothing was probed. On a connect or repair, write everything we used to write on every
+      // connect (never the gated account skills: we cannot see whether their dirs exist). On the
+      // hourly re-look of a host this run already wrote, write nothing blind.
+      if (trigger === 'reuse' && this.agentToolsState.get(key)?.verified?.setId === setId) return done(true, 'current')
+      const system = plan.filter((a) => !(a.kind === 'file' && a.gateDir))
+      const ok = await this.applyAgentTools(conn, controlPath, remoteHome, system, async () => copilotHome)
+      return done(ok, ok ? 'refreshed' : 'failed')
+    }
+
+    // The probe read copilot's file at the host's raw `$COPILOT_HOME`; the installer refuses an
+    // unsafe value and writes under ~/.copilot instead. Trust the probe only when the two agree.
+    const copilotProbeTrusted = report.env === '' || isSafeRemoteCopilotHome(report.env)
+    const stale: AgentToolArtifact[] = []
+    const unreadable: AgentToolArtifact[] = []
+    plan.forEach((a, i) => {
+      const status = report.statuses[i]
+      if (status.state === 'unreadable') unreadable.push(a)
+      else if (status.state === 'no-gate') return
+      else if (status.state === 'missing' || formatCksum(status.sum) !== expected[i]) stale.push(a)
+      else if (a.kind === 'block' && a.target === 'copilot' && !copilotProbeTrusted) stale.push(a)
+    })
+    if (unreadable.length) {
+      console.warn(
+        `[remote-hooks] left ${unreadable.length} agent tool file(s) on ${host} untouched because they cannot be ` +
+          `read (not a readable regular file): ${unreadable.map(describeArtifact).join(', ')}`
+      )
+    }
+    if (!stale.length) return done(!unreadable.length, unreadable.length ? 'failed' : 'current')
+    const ok = await this.applyAgentTools(conn, controlPath, remoteHome, stale, async () => copilotHome)
+    console.info(
+      `[remote-hooks] ${host}: ${ok ? 'rewrote' : 'tried to rewrite'} ${stale.length} out-of-date agent tool file(s): ` +
+        stale.map(describeArtifact).join(', ')
+    )
+    const settled = ok && !unreadable.length
+    return done(settled, settled ? 'refreshed' : 'failed')
+  }
+
+  /** How the probe looks at one artifact — at the SAME path the writer uses (copilot aside: the
+   *  probe reads the host's own `$COPILOT_HOME`, which `checkAgentTools` reconciles). */
+  private probeEntry(remoteHome: string, a: AgentToolArtifact): ProbeEntry {
+    if (a.kind === 'file') {
+      return { kind: 'file', pathExpr: posixQuote(a.path), ...(a.gateDir ? { gateDirExpr: posixQuote(a.gateDir) } : {}) }
+    }
+    const pathExpr =
+      a.target === 'copilot'
+        ? '"${COPILOT_HOME:-$NT_H/.copilot}/copilot-instructions.md"'
+        : this.instructionTarget(remoteHome, a.target).pathExpr
+    return { kind: 'block', pathExpr, start: a.markers.start, end: a.markers.end }
   }
 
   /**
@@ -863,13 +1134,13 @@ export class RemoteHooks {
     block: string,
     merge: (existing: string, block: string) => string,
     prelude = ''
-  ): Promise<void> {
+  ): Promise<RemoteTextResult> {
     // These are the USER's instruction files (often a dotfile symlink), so they get the same
     // guarded transaction as settings.json: the link and the mode are kept, and nothing is
     // published unless exactly the merged body arrived and the file still holds what we read. The
     // old `cat … || true` then `cat >` read an UNREADABLE file as empty and replaced the user's
     // text with our block alone. Never throws; a failure is logged and leaves the file as it was.
-    await updateRemoteTextFile(
+    return updateRemoteTextFile(
       { pathExpr, prelude, label: pathExpr },
       (cmd, stdin) => this.r.run(childArgs(conn, controlPath, cmd), stdin),
       (before) => {

@@ -4395,7 +4395,13 @@ app.whenReady().then(async () => {
     loadCodexRelayBundle,
     // Lead-pane width (issue #119) for the remote tmux conf, read at connect time so the host
     // carries the value the user last saved. 0 (the default) keeps the conf byte-identical.
-    () => settingsStore.get().tmuxLeadPaneWidth
+    () => settingsStore.get().tmuxLeadPaneWidth,
+    // The managed Claude accounts pinned to a host, whose config dirs there hold their own copies of
+    // the canvas/context skills — kept current by the connect-time agent-tools check. Read per
+    // check, so an account added mid-run is included. A pending account has no finished login and
+    // is skipped; the refresh re-validates every id before it becomes a path.
+    (hostKey) =>
+      (settingsStore.get().claudeAccounts ?? []).filter((a) => a.host === hostKey && !a.pending).map((a) => a.id)
   )
   // Pre-warm the ControlMasters of OPEN SSH projects, in the background, one host at a time.
   //

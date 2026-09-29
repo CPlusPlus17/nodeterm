@@ -398,10 +398,31 @@ describe.skipIf(process.platform === 'win32')('canvas control and context link s
     expect(missing).toEqual([])
   })
 
+  // The connect path now goes through the freshness check, which writes the same artifacts through
+  // the same applier, group by group — the same property, for the chain that actually runs.
+  it('the freshness check leaves BOTH blocks in every shared file (8 fresh hosts)', { timeout: 60_000 }, async () => {
+    const shared = ['.codex/AGENTS.md', '.gemini/GEMINI.md', '.config/opencode/AGENTS.md']
+    const missing: string[] = []
+    for (let i = 0; i < 8; i++) {
+      const h = mkdtempSync(path.join(tmpdir(), 'nt-rw-fresh-'))
+      try {
+        await new RemoteHooks(asyncHostRunner(h)).refreshAgentTools(conn, '/fixture.sock', h, [], 'connect')
+        for (const f of shared) {
+          const text = readFileSync(path.join(h, f), 'utf8')
+          if (!text.includes('nodeterm:manage-canvas:start')) missing.push(`${i}:${f}:canvas`)
+          if (!text.includes('nodeterm:get-linked-context:start')) missing.push(`${i}:${f}:context`)
+        }
+      } finally {
+        rmSync(h, { recursive: true, force: true })
+      }
+    }
+    expect(missing).toEqual([])
+  })
+
   it('the connect path runs them as one chain, never side by side', () => {
     const src = readFileSync(path.join(__dirname, 'ssh-project.ts'), 'utf8').replace(/\r\n/g, '\n')
     const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n')
-    expect(code).toContain('this.remoteHooks.installAgentTools(')
-    expect(code).not.toMatch(/void this\.remoteHooks\.install(CanvasControl|ContextLink)\(/)
+    expect(code).toContain('this.remoteHooks.refreshAgentTools(')
+    expect(code).not.toMatch(/this\.remoteHooks\.install(CanvasControl|ContextLink|AgentTools)\(/)
   })
 })
