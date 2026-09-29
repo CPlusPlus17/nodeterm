@@ -176,7 +176,8 @@ export interface CanvasOrder {
    * a lost one comes with a reconnect, whose `reset` clears it.
    */
   hasPendingRemove(key: string): boolean
-  /** Forget everything (project switch / disconnect). */
+  /** Forget the per-connection order state on a genuine reconnect (see `createReconnectWatch`) —
+   *  everything except our causal position (`lastSeq`, what `stamp` puts in `seen`). */
   reset(): void
 }
 
@@ -234,6 +235,7 @@ export function createCanvasOrder(
    * position in the total order, and what `stamp` puts on every mutation we cast. Global, not per
    * node: rule 4 compares a sender's knowledge of the ORDER against a remove's place in it, and
    * "what did this client know when it cast" has nothing to do with which node it addressed.
+   * It survives `reset()` (see there): a same-core reconnect must not rewind it.
    */
   let lastSeq = 0
 
@@ -371,10 +373,15 @@ export function createCanvasOrder(
       superseded.clear()
       pendingRemoves.clear()
       // The core may have restarted at seq 0 — a `removed` entry stamped with the OLD counter would
-      // then outrank every new mutation and blackhole that node, and a stale `lastSeq` would put a
-      // causal position on our casts that the new order has not reached.
+      // then outrank every new mutation and blackhole that node.
       removed.clear()
-      lastSeq = 0
+      // `lastSeq` is deliberately KEPT. A reset also fires on a reconnect to the SAME core (a new
+      // clientId, `seq` carrying on), and zeroing it stamped our first cast after it `seen: 0` — a
+      // ⌘Z of a node deleted before the drop was then a stale frame to every peer holding the
+      // tombstone, and our own echo of it is no repair: a persistent split. If the core REALLY
+      // restarted, the kept value is above every `seq` it hands out and the reflector clamps it to
+      // `seq - 1` (canvas-sync `stampMutation`), so our casts read as "never stale" there — the
+      // pre-rule-4 verdict. A degrade, never a split.
     }
   }
 }

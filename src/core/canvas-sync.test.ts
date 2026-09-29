@@ -12,6 +12,7 @@ import {
   MUTATION_MAX_BYTES
 } from './canvas-sync'
 import { IPC } from '../shared/ipc'
+import { createCanvasOrder } from '../shared/canvas-order'
 import type { CanvasMutation, CanvasNodeState } from '../shared/types'
 
 const node = (id: string, x = 0): CanvasNodeState =>
@@ -121,6 +122,21 @@ describe('stampMutation', () => {
       ).toBeUndefined()
     }
     expect(stampMutation({ op: 'upsert', node: node('n1') }, 4).seen).toBeUndefined()
+  })
+
+  // canvas-order's reset() keeps a client's causal position (a same-core reconnect needs it). If the
+  // core REALLY restarted, that kept value is above every `seq` the new core hands out, and this
+  // clamp is what makes it harmless: the cast can only read as "never stale" on a peer — the
+  // pre-rule-4 verdict. A degrade, never a split.
+  it('a causal position kept across a real core restart is clamped into a verdict that applies', () => {
+    const me = createCanvasOrder('me')
+    me.accept({ op: 'upsert', node: node('n2'), src: 'x', seq: 40 }) // the old core had reached 40
+    me.reset() // …and restarted at 0
+    const peer = createCanvasOrder('peer')
+    expect(peer.accept({ op: 'remove', id: 'n1', src: 'x', seq: 3 })).toBe(true) // the new core's delete
+    const cast = stampMutation(me.stamp({ op: 'upsert', node: node('n1') }), 5)
+    expect(cast.seen).toBe(4)
+    expect(peer.accept(cast)).toBe(true)
   })
 })
 

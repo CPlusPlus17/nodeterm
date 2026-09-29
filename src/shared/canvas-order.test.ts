@@ -287,6 +287,21 @@ describe('createCanvasOrder', () => {
       // outrank every new mutation and blackhole this node for the rest of the session.
       expect(o.accept({ ...up('n1', 1, 'b', 1), seen: 0 })).toBe(true)
     })
+
+    // …but NOT our causal position. A reset also fires on a reconnect to the SAME core (a new
+    // clientId, `seq` carrying on), and a `seen` of 0 on our first cast after it — say, ⌘Z on a node
+    // deleted before the drop — made every peer that still holds the tombstone drop the re-creation
+    // as a stale frame, while our echo is no repair: a persistent split.
+    it('reset keeps our causal position: a re-creation after a reconnect is applied by a peer', () => {
+      const me = createCanvasOrder('me')
+      const peer = createCanvasOrder('peer')
+      expect(peer.accept(rm('n1', 'x', 10))).toBe(true) // the peer tombstones n1 at 10
+      me.accept(rm('n1', 'x', 10)) // …and so did we
+      me.reset() // a new connection to the same core
+      const redo = me.stamp(up('n1', 1, 'me', 0))
+      expect(redo.seen).toBe(10) // was: 0
+      expect(peer.accept({ ...redo, seq: 11 })).toBe(true) // a re-creation, not a stale frame
+    })
   })
 
   // THE RE-CREATION GATE (port map §6.5). Rule 4 judges an upsert by what its sender had applied

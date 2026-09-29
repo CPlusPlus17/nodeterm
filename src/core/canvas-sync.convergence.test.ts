@@ -821,6 +821,26 @@ describe('canvas convergence (async bus)', () => {
     expect(a.x('n1')).toBe(9)
   })
 
+  // …and a reconnect to the SAME core must not throw away our causal position. The reset fires on
+  // any new clientId, and the core's `seq` carries on; a first cast stamped `seen: 0` — ⌘Z on a node
+  // deleted before the drop — is a stale frame to every peer holding the tombstone, and our own echo
+  // of it is no repair. A persistent split, until the next edit of that node.
+  it('a re-creation after a same-core reconnect reaches the peer (reset keeps our `seen`)', () => {
+    a.presence('cl-a')
+    a.edit([node('n1', 0), node('n2', 0)])
+    bus.settle()
+    const before = a.states
+    a.edit(a.states.filter((n) => n.id !== 'n1')) // A deletes n1…
+    bus.settle() // …and everyone has applied it
+
+    a.presence('cl-a2') // the socket dropped and came back: new clientId, same core, `seq` goes on
+    a.edit(before) // ⌘Z
+    bus.settle()
+
+    expect(b.ids()).toEqual(['n1', 'n2']) // was: ['n2'] — dropped as a stale frame
+    expect(canon(a)).toEqual(canon(b))
+  })
+
   // A REFUSED CAST. The reflector drops a malformed / oversized mutation at ingest (silently — there
   // is no negative ack). If the publisher has already advanced its baseline it never retries, and if
   // the ordering state has already recorded a pending entry the node goes DEAF to its peers for the

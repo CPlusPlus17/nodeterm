@@ -388,7 +388,11 @@ independently on each client from the already-broadcast `agent:status` stream; a
   `order.reset()` is called whenever our presence clientId changes (i.e. on every (re)connect): if
   the core restarted, its `seq` restarted at 0 while our `seen` map still held high values, and we
   would silently drop every new mutation as a straggler. Correctness no longer depends on the
-  ws-bridge's `location.reload()`.
+  ws-bridge's `location.reload()`. The reset keeps one thing: our own causal position (`lastSeq`,
+  what rule 4's `seen` stamps). A reconnect to the SAME core also resets, and a first cast stamped
+  `seen: 0` there — ⌘Z of a node deleted before the drop — was a stale frame to every peer holding
+  the tombstone. After a real restart the kept value is above every new `seq`, and the reflector
+  clamps it to `seq - 1`, so our casts read as "never stale": the pre-rule-4 verdict, not a split.
 - **A cast the reflector would refuse is never made** — the publisher validates with the **same**
   predicate the reflector's ingest uses (`isCanvasMutation`, moved to `src/shared/canvas-mutations.ts`
   so both ends share one verdict) *before* recording a pending entry and *before* casting. A refusal
