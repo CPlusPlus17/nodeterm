@@ -6,15 +6,19 @@
 
 import { isRefId } from './canvas-mutations'
 import { defaultKanbanFor } from './kanban-default-board'
-import { KANBAN_LABEL_COLORS } from './kanban-labels'
+import { boardLabels, KANBAN_LABEL_COLORS, metaList } from './kanban-labels'
 import { isValidRank } from './kanban-rank'
 import { sanitizeViews } from './kanban-views'
+import { capCodePoints } from './presence'
 import type {
   KanbanAssignment, KanbanCardMeta, KanbanColumn, KanbanColumnCategory, KanbanLabel,
   KanbanLabelColor, KanbanOp, KanbanPriority, KanbanSavedView, ProjectKanban
 } from './types'
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
+/** What a display name must never carry: C0/C1 controls (they break a name out of its one-line chip)
+ *  and the bidi overrides / isolates (they make a name DISPLAY as something it is not). */
+const UNSAFE_DISPLAY = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g
 const TITLE_MAX = 200
 const COLOR_MAX = 64
 const NAME_MAX = 100
@@ -29,6 +33,18 @@ const DUE_MAX = 32_503_680_000_000
 const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x)
 const text = (x: unknown, max: number): string | null =>
   typeof x === 'string' && x.length <= max && !CONTROL.test(x) ? x : null
+/**
+ * A label name, column title or assignee name, REPAIRED rather than refused (ruling R5): the UI puts
+ * no length cap on them, so refusing an over-long rename would make it silently never sync. Unsafe
+ * characters are removed, the rest trimmed, then cut to `max` CODE POINTS (never splitting an astral
+ * character in half) and trimmed again. Only what is empty once repaired is refused (`null`). Ids
+ * are never passed through here — an id is an address, and a repaired one addresses the wrong thing.
+ */
+function displayText(x: unknown, max: number): string | null {
+  if (typeof x !== 'string') return null
+  const out = capCodePoints(x.replace(UNSAFE_DISPLAY, '').trim(), max).trim()
+  return out ? out : null
+}
 const idList = (x: unknown): string[] | null => {
   if (!Array.isArray(x) || x.length > LIST_MAX || !x.every(isRefId)) return null
   return [...new Set(x as string[])]
@@ -36,7 +52,7 @@ const idList = (x: unknown): string[] | null => {
 
 function column(x: unknown): KanbanColumn | null {
   if (!isObj(x) || !isRefId(x.id)) return null
-  const title = text(x.title, TITLE_MAX)
+  const title = displayText(x.title, TITLE_MAX)
   const color = text(x.color, COLOR_MAX)
   if (title === null || color === null) return null
   const out: KanbanColumn = { id: x.id, title, color }
@@ -57,7 +73,7 @@ function meta(x: unknown): KanbanCardMeta | null {
   if (Array.isArray(x.assignees)) {
     const a = x.assignees
       .filter(isObj)
-      .map((p) => ({ name: text(p.name, NAME_MAX), color: text(p.color, COLOR_MAX) }))
+      .map((p) => ({ name: displayText(p.name, NAME_MAX), color: text(p.color, COLOR_MAX) }))
       .filter((p): p is { name: string; color: string } => !!p.name && p.color !== null)
       .slice(0, 50)
     if (a.length) out.assignees = a
@@ -71,9 +87,9 @@ function meta(x: unknown): KanbanCardMeta | null {
 }
 
 function label(x: unknown): KanbanLabel | null {
-  if (!isObj(x) || !isRefId(x.id) || typeof x.name !== 'string') return null
-  const name = x.name.trim()
-  if (!name || [...name].length > LABEL_NAME_MAX || CONTROL.test(name)) return null
+  if (!isObj(x) || !isRefId(x.id)) return null
+  const name = displayText(x.name, LABEL_NAME_MAX)
+  if (name === null) return null
   const color: KanbanLabelColor = KANBAN_LABEL_COLORS.includes(x.color as KanbanLabelColor)
     ? (x.color as KanbanLabelColor)
     : 'default'
@@ -91,7 +107,8 @@ export function isKanbanOp(m: { op?: unknown }): boolean {
 }
 
 /** The sanitized op, or null to REFUSE it. Refusals are whole-op (a bad id addresses the wrong
- *  thing); repairable fields (colour, rank, priority, dueAt, category) are repaired or dropped. */
+ *  thing); repairable fields are repaired or dropped — colour, rank, priority, dueAt, category, and
+ *  the display text (label name, column title, assignee name: see `displayText`). */
 export function sanitizeKanbanOp(m: unknown): KanbanOp | null {
   if (!isObj(m)) return null
   switch (m.op) {
@@ -111,19 +128,27 @@ export function sanitizeKanbanOp(m: unknown): KanbanOp | null {
   }
 }
 
-/** The ordering key (canvas-order): one `k:` space with a sub-prefix per item kind. */
-export function kanbanOpKey(m: KanbanOp): string {
+/**
+ * The ordering key (canvas-order): one `k:` space with a sub-prefix per item kind.
+ *
+ * The two ORDER ops are per-project SINGLETONS, so their key carries the project (ruling R4): one
+ * `CanvasOrder` orders every loaded project, and an unscoped `k:colorder` let our unacked reorder in
+ * project A hold off (rule 2) a peer's reorder in project B. Every other key names an item whose id
+ * is already unique across projects — a card/meta by its node id (global), a column by a
+ * per-project seeded or random id, a label or view by a random id — so it needs no scope.
+ */
+export function kanbanOpKey(m: KanbanOp, projectId: string): string {
   switch (m.op) {
     case 'kb-column': return `k:col:${m.column.id}`
     case 'kb-column-remove': return `k:col:${m.id}`
-    case 'kb-column-order': return 'k:colorder'
+    case 'kb-column-order': return `k:colorder:${projectId}`
     case 'kb-card': return `k:card:${m.assignment.nodeId}`
     case 'kb-card-remove': return `k:card:${m.nodeId}`
     case 'kb-meta': return `k:meta:${m.meta.nodeId}`
     case 'kb-meta-remove': return `k:meta:${m.nodeId}`
     case 'kb-label': return `k:label:${m.label.id}`
     case 'kb-label-remove': return `k:label:${m.id}`
-    case 'kb-label-order': return 'k:labelorder'
+    case 'kb-label-order': return `k:labelorder:${projectId}`
     case 'kb-view': return `k:view:${m.view.id}`
     case 'kb-view-remove': return `k:view:${m.id}`
   }
@@ -134,6 +159,28 @@ export function kanbanOpKey(m: KanbanOp): string {
 export function isKanbanDeletion(m: KanbanOp): boolean {
   return m.op === 'kb-column-remove' || m.op === 'kb-label-remove' || m.op === 'kb-view-remove'
 }
+
+// The board's lists, read TOLERANTLY. A board reaches a project through the load seam
+// (`sanitizeKanban`), which admits a non-list `meta` / `labels` / `views` and non-record entries in
+// them (types.ts: "tolerated as absent/malformed by every reader") — and the reducer and the diff
+// are readers. A throw here is not a refused op, it is a dead board sync for that project on every
+// edit. Malformed entries are invisible to both: the diff never casts them, and the one op that
+// writes a list back writes it clean.
+const isEntry = <K extends string>(key: K) => (x: unknown): x is Record<K, string> =>
+  isObj(x) && typeof x[key] === 'string'
+const columnsOf = (b: ProjectKanban): KanbanColumn[] =>
+  Array.isArray(b.columns) ? b.columns.filter(isEntry('id')) as KanbanColumn[] : []
+const assignmentsOf = (b: ProjectKanban): KanbanAssignment[] =>
+  Array.isArray(b.assignments)
+    ? (b.assignments.filter((a) => isEntry('nodeId')(a) && typeof (a as { columnId?: unknown }).columnId === 'string') as KanbanAssignment[])
+    : []
+const metaOf = (b: ProjectKanban): KanbanCardMeta[] => metaList(b).filter(isEntry('nodeId')) as KanbanCardMeta[]
+const labelsOf = (b: ProjectKanban): KanbanLabel[] => boardLabels(b)
+const viewsOf = (b: ProjectKanban): KanbanSavedView[] =>
+  Array.isArray(b.views) ? b.views.filter(isEntry('id')) as KanbanSavedView[] : []
+/** A card's label ids, whatever a malformed file put there. */
+const cardLabelIds = (x: KanbanCardMeta): string[] =>
+  Array.isArray(x.labels) ? x.labels.filter((l): l is string => typeof l === 'string') : []
 
 function reorder<T extends { id: string }>(list: T[], ids: string[]): T[] {
   const byId = new Map(list.map((x) => [x.id, x]))
@@ -152,15 +199,19 @@ function upsertById<T extends { id: string }>(list: T[] | undefined, item: T): T
 }
 
 /** Insert a placement so its column stays in rank order in the ARRAY (a build that ignores `rank`
- *  reads array order, see ProjectKanban.assignments). */
+ *  reads array order, see ProjectKanban.assignments). An INVALID rank is treated exactly as an absent
+ *  one, on both sides — the rule `columnOrder` reads by: the incoming card goes to the end of its
+ *  column, and an entry already placed with an invalid rank sits with its array predecessor, so it
+ *  is never the one a valid rank is compared against (`'zz' > 'a1'` as strings, but `zz` is no rank). */
 function placeCard(assignments: KanbanAssignment[], a: KanbanAssignment): KanbanAssignment[] {
   const rest = assignments.filter((x) => x.nodeId !== a.nodeId)
   const sameCol: number[] = []
   rest.forEach((x, i) => { if (x.columnId === a.columnId) sameCol.push(i) })
   if (!sameCol.length) return [...rest, a]
-  const before = a.rank === undefined
-    ? undefined
-    : sameCol.find((i) => { const r = rest[i].rank; return r !== undefined && r > (a.rank as string) })
+  const rank = a.rank
+  const before = isValidRank(rank)
+    ? sameCol.find((i) => { const r = rest[i].rank; return isValidRank(r) && r > rank })
+    : undefined
   const at = before ?? sameCol[sameCol.length - 1] + 1
   return [...rest.slice(0, at), a, ...rest.slice(at)]
 }
@@ -170,37 +221,39 @@ function placeCard(assignments: KanbanAssignment[], a: KanbanAssignment): Kanban
 export function applyKanbanOp(board: ProjectKanban | undefined, m: KanbanOp, projectId: string): ProjectKanban {
   const b: ProjectKanban = board ?? defaultKanbanFor(projectId)
   switch (m.op) {
-    case 'kb-column': return { ...b, columns: upsertById(b.columns, m.column) }
+    case 'kb-column': return { ...b, columns: upsertById(columnsOf(b), m.column) }
     case 'kb-column-remove':
       return {
         ...b,
-        columns: b.columns.filter((c) => c.id !== m.id),
-        assignments: b.assignments.filter((a) => a.columnId !== m.id)
+        columns: columnsOf(b).filter((c) => c.id !== m.id),
+        assignments: assignmentsOf(b).filter((a) => a.columnId !== m.id)
       }
-    case 'kb-column-order': return { ...b, columns: reorder(b.columns, m.ids) }
-    case 'kb-card': return { ...b, assignments: placeCard(b.assignments, m.assignment) }
-    case 'kb-card-remove': return { ...b, assignments: b.assignments.filter((a) => a.nodeId !== m.nodeId) }
+    case 'kb-column-order': return { ...b, columns: reorder(columnsOf(b), m.ids) }
+    case 'kb-card': return { ...b, assignments: placeCard(assignmentsOf(b), m.assignment) }
+    case 'kb-card-remove': return { ...b, assignments: assignmentsOf(b).filter((a) => a.nodeId !== m.nodeId) }
     case 'kb-meta': {
-      const cur = b.meta ?? []
+      const cur = metaOf(b)
       const i = cur.findIndex((x) => x.nodeId === m.meta.nodeId)
       const next = i === -1 ? [...cur, m.meta] : cur.map((x, j) => (j === i ? m.meta : x))
       return { ...b, meta: next }
     }
     case 'kb-meta-remove': {
-      const next = (b.meta ?? []).filter((x) => x.nodeId !== m.nodeId)
+      const next = metaOf(b).filter((x) => x.nodeId !== m.nodeId)
       return { ...b, meta: next }
     }
-    case 'kb-label': return { ...b, labels: upsertById(b.labels, m.label) }
+    case 'kb-label': return { ...b, labels: upsertById(labelsOf(b), m.label) }
     case 'kb-label-remove': {
-      const meta = (b.meta ?? [])
-        .map((x) => (x.labels?.includes(m.id) ? { ...x, labels: x.labels.filter((l) => l !== m.id) } : x))
+      const meta = metaOf(b)
+        // Any `labels` field is rewritten from its valid ids minus the removed one, which also
+        // repairs a malformed list; a card with no field is left exactly as it was.
+        .map((x) => (x.labels === undefined ? x : { ...x, labels: cardLabelIds(x).filter((l) => l !== m.id) }))
         .map((x) => (x.labels && x.labels.length === 0 ? (({ labels: _l, ...rest }) => rest)(x) : x))
         .filter((x) => Object.keys(x).length > 1) // an entry with only nodeId is "no metadata"
-      return { ...b, labels: (b.labels ?? []).filter((l) => l.id !== m.id), meta }
+      return { ...b, labels: labelsOf(b).filter((l) => l.id !== m.id), meta }
     }
-    case 'kb-label-order': return { ...b, labels: reorder(b.labels ?? [], m.ids) }
-    case 'kb-view': return { ...b, views: upsertById(b.views, m.view) }
-    case 'kb-view-remove': return { ...b, views: (b.views ?? []).filter((v) => v.id !== m.id) }
+    case 'kb-label-order': return { ...b, labels: reorder(labelsOf(b), m.ids) }
+    case 'kb-view': return { ...b, views: upsertById(viewsOf(b), m.view) }
+    case 'kb-view-remove': return { ...b, views: viewsOf(b).filter((v) => v.id !== m.id) }
   }
 }
 
@@ -211,11 +264,33 @@ function stable(v: unknown): string {
 const same = (a: unknown, b: unknown): boolean => stable(a) === stable(b)
 
 /**
+ * Does a list need its order op? When it GAINED an id, or the relative order of the ids both sides
+ * share changed (ruling R3). The first half is what makes a list converge: an item op only says the
+ * item exists, and a peer that applies it alone appends it — so a column inserted mid-list (the
+ * UI's add-then-move, a git pull) landed last everywhere else, and two people adding a column at
+ * once ended A at …,X,Y and B at …,Y,X. With the order op every replica lands on the LATER order
+ * op's list. A pure removal needs none: dropping an id never reorders the rest.
+ * Residual, stated: an order op lists the ids its sender knew. An id added concurrently by ANOTHER
+ * client that the op does not list keeps its place after the listed ones in each replica's local
+ * order — one such id converges (it is last everywhere), two from two different clients in the same
+ * window can still sit in different relative orders until the next order op.
+ */
+function orderChanged(prevIds: string[], nextIds: string[]): boolean {
+  const had = new Set(prevIds)
+  if (nextIds.some((id) => !had.has(id))) return true
+  const kept = new Set(nextIds)
+  const common = prevIds.filter((id) => kept.has(id))
+  const commonSet = new Set(common)
+  return !same(common, nextIds.filter((id) => commonSet.has(id)))
+}
+
+/**
  * The item-level ops that turn `prev` into `next`. Never casts `github` / `pullLinks` (outside the
  * vocabulary). Never casts the removal of a DEAD card's placement or meta: pruning is a local, lazy
  * cleanup, and a peer whose node op has not arrived yet would otherwise delete a fresh card.
  * Batch order: upserts (columns, column order, labels, label order, views, cards, meta), then
- * removals (meta, cards, views, labels, columns).
+ * removals (meta, cards, views, labels, columns). Reads both boards tolerantly (see `metaOf`), so a
+ * malformed list on either side is never a throw — its junk entries are simply not ops.
  */
 export function diffKanbanOps(
   prev: ProjectKanban | undefined,
@@ -228,40 +303,47 @@ export function diffKanbanOps(
   const up: KanbanOp[] = []
   const down: KanbanOp[] = []
 
-  const pCols = new Map(p.columns.map((c) => [c.id, c]))
-  for (const c of next.columns) if (!same(pCols.get(c.id), c)) up.push({ op: 'kb-column', column: c })
-  const nColIds = next.columns.map((c) => c.id)
-  const common = p.columns.map((c) => c.id).filter((id) => nColIds.includes(id))
-  if (!same(common, nColIds.filter((id) => common.includes(id)))) up.push({ op: 'kb-column-order', ids: nColIds })
+  const pColumns = columnsOf(p)
+  const nColumns = columnsOf(next)
+  const pCols = new Map(pColumns.map((c) => [c.id, c]))
+  for (const c of nColumns) if (!same(pCols.get(c.id), c)) up.push({ op: 'kb-column', column: c })
+  const nColIds = nColumns.map((c) => c.id)
+  if (orderChanged(pColumns.map((c) => c.id), nColIds)) up.push({ op: 'kb-column-order', ids: nColIds })
 
-  const pLabels = new Map((p.labels ?? []).map((l) => [l.id, l]))
-  for (const l of next.labels ?? []) if (!same(pLabels.get(l.id), l)) up.push({ op: 'kb-label', label: l })
-  const nLabelIds = (next.labels ?? []).map((l) => l.id)
-  const commonL = (p.labels ?? []).map((l) => l.id).filter((id) => nLabelIds.includes(id))
-  if (!same(commonL, nLabelIds.filter((id) => commonL.includes(id)))) up.push({ op: 'kb-label-order', ids: nLabelIds })
+  const pLabelList = labelsOf(p)
+  const nLabelList = labelsOf(next)
+  const pLabels = new Map(pLabelList.map((l) => [l.id, l]))
+  for (const l of nLabelList) if (!same(pLabels.get(l.id), l)) up.push({ op: 'kb-label', label: l })
+  const nLabelIds = nLabelList.map((l) => l.id)
+  if (orderChanged(pLabelList.map((l) => l.id), nLabelIds)) up.push({ op: 'kb-label-order', ids: nLabelIds })
 
-  const pViews = new Map((p.views ?? []).map((v) => [v.id, v]))
-  for (const v of next.views ?? []) if (!same(pViews.get(v.id), v)) up.push({ op: 'kb-view', view: v })
+  const pViewList = viewsOf(p)
+  const pViews = new Map(pViewList.map((v) => [v.id, v]))
+  for (const v of viewsOf(next)) if (!same(pViews.get(v.id), v)) up.push({ op: 'kb-view', view: v })
 
-  const pCards = new Map(p.assignments.map((a) => [a.nodeId, a]))
-  for (const a of next.assignments) if (!same(pCards.get(a.nodeId), a)) up.push({ op: 'kb-card', assignment: a })
-  const pMeta = new Map((p.meta ?? []).map((x) => [x.nodeId, x]))
-  for (const x of next.meta ?? []) if (!same(pMeta.get(x.nodeId), x)) up.push({ op: 'kb-meta', meta: x })
+  const pAssignments = assignmentsOf(p)
+  const nAssignments = assignmentsOf(next)
+  const pCards = new Map(pAssignments.map((a) => [a.nodeId, a]))
+  for (const a of nAssignments) if (!same(pCards.get(a.nodeId), a)) up.push({ op: 'kb-card', assignment: a })
+  const pMetaList = metaOf(p)
+  const nMetaList = metaOf(next)
+  const pMeta = new Map(pMetaList.map((x) => [x.nodeId, x]))
+  for (const x of nMetaList) if (!same(pMeta.get(x.nodeId), x)) up.push({ op: 'kb-meta', meta: x })
 
-  const nMeta = new Set((next.meta ?? []).map((x) => x.nodeId))
-  for (const x of p.meta ?? []) if (!nMeta.has(x.nodeId) && liveNodeIds.has(x.nodeId)) down.push({ op: 'kb-meta-remove', nodeId: x.nodeId })
-  const nCards = new Set(next.assignments.map((a) => a.nodeId))
+  const nMeta = new Set(nMetaList.map((x) => x.nodeId))
+  for (const x of pMetaList) if (!nMeta.has(x.nodeId) && liveNodeIds.has(x.nodeId)) down.push({ op: 'kb-meta-remove', nodeId: x.nodeId })
+  const nCards = new Set(nAssignments.map((a) => a.nodeId))
   const nColSet = new Set(nColIds)
-  for (const a of p.assignments) {
+  for (const a of pAssignments) {
     // A placement that vanished because its COLUMN was removed is covered by kb-column-remove.
     if (!nCards.has(a.nodeId) && liveNodeIds.has(a.nodeId) && nColSet.has(a.columnId))
       down.push({ op: 'kb-card-remove', nodeId: a.nodeId })
   }
-  const nViews = new Set((next.views ?? []).map((v) => v.id))
-  for (const v of p.views ?? []) if (!nViews.has(v.id)) down.push({ op: 'kb-view-remove', id: v.id })
+  const nViews = new Set(viewsOf(next).map((v) => v.id))
+  for (const v of pViewList) if (!nViews.has(v.id)) down.push({ op: 'kb-view-remove', id: v.id })
   const nLabels = new Set(nLabelIds)
-  for (const l of p.labels ?? []) if (!nLabels.has(l.id)) down.push({ op: 'kb-label-remove', id: l.id })
-  for (const c of p.columns) if (!nColSet.has(c.id)) down.push({ op: 'kb-column-remove', id: c.id })
+  for (const l of pLabelList) if (!nLabels.has(l.id)) down.push({ op: 'kb-label-remove', id: l.id })
+  for (const c of pColumns) if (!nColSet.has(c.id)) down.push({ op: 'kb-column-remove', id: c.id })
 
   return [...up, ...down]
 }

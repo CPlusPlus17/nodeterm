@@ -5,7 +5,7 @@
 import { isKanbanOp, sanitizeKanbanOp } from './kanban-ops'
 import { carryLocalNodeExec, sanitizeInboundMutation, sanitizeInboundNode } from './node-exec'
 import { REF_MAX_LEN } from './presence'
-import type { BridgeLink, CanvasEdgeKind, CanvasMutation, CanvasNodeState } from './types'
+import type { BridgeLink, CanvasEdgeKind, CanvasMutation, CanvasNodeState, SceneMutation } from './types'
 
 /**
  * A canvas as the publisher sees it: the nodes React Flow manages, plus the two PERSISTED edge
@@ -328,8 +328,8 @@ function diffEdges(
   next: BridgeLink[],
   kind: CanvasEdgeKind,
   liveIds: ReadonlySet<string>,
-  upserts: CanvasMutation[],
-  removes: CanvasMutation[]
+  upserts: SceneMutation[],
+  removes: SceneMutation[]
 ): void {
   const prevById = new Map(prev.map((e) => [e.id, e]))
   for (const edge of next) {
@@ -360,11 +360,11 @@ function diffEdges(
 export function diffToMutations(
   prev: CanvasScene | CanvasNodeState[],
   next: CanvasScene | CanvasNodeState[]
-): CanvasMutation[] {
+): SceneMutation[] {
   const a = asScene(prev)
   const b = asScene(next)
-  const upserts: CanvasMutation[] = []
-  const removes: CanvasMutation[] = []
+  const upserts: SceneMutation[] = []
+  const removes: SceneMutation[] = []
   const prevById = new Map(a.nodes.map((node) => [node.id, node]))
   const nextIds = new Set(b.nodes.map((node) => node.id))
 
@@ -380,8 +380,8 @@ export function diffToMutations(
     if (!nextIds.has(node.id)) removes.push({ op: 'remove', id: node.id })
   }
 
-  const edgeUpserts: CanvasMutation[] = []
-  const edgeRemoves: CanvasMutation[] = []
+  const edgeUpserts: SceneMutation[] = []
+  const edgeRemoves: SceneMutation[] = []
   const liveEdgeIds = new Set([...b.bridges, ...b.ropes].map((e) => e.id))
   diffEdges(a.bridges, b.bridges, 'bridge', liveEdgeIds, edgeUpserts, edgeRemoves)
   diffEdges(a.ropes, b.ropes, 'rope', liveEdgeIds, edgeUpserts, edgeRemoves)

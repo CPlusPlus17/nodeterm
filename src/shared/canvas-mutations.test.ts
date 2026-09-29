@@ -356,15 +356,17 @@ describe('isCanvasMutation — kanban ops', () => {
     for (const m of ok) expect(isCanvasMutation(m), JSON.stringify(m)).toBe(true)
   })
 
-  it('refuses what sanitizeKanbanOp refuses — an unknown kb- op, a bad id, a control character', () => {
+  it('refuses what sanitizeKanbanOp refuses — an unknown kb- op, a bad id, a name empty once repaired', () => {
     expect(isCanvasMutation({ op: 'kb-nope' })).toBe(false)
     expect(isCanvasMutation({ op: 'kb-card-remove', nodeId: '' })).toBe(false)
     expect(isCanvasMutation({ op: 'kb-column-remove', id: 'x'.repeat(129) })).toBe(false)
-    expect(isCanvasMutation({ op: 'kb-label', label: { id: 'l1', name: 'a\u0007b', color: 'red' } })).toBe(false)
+    expect(isCanvasMutation({ op: 'kb-label', label: { id: 'l1', name: ' \u0007\u202e ', color: 'red' } })).toBe(false)
   })
 
   it('accepts a repairable op (the repair is sanitizeCanvasMutation\'s job, not a refusal)', () => {
     expect(isCanvasMutation({ op: 'kb-label', label: { id: 'l1', name: 'Bug', color: 'neon' } })).toBe(true)
+    // ruling R5: a control character in a NAME is stripped, never a refusal (an id's still is)
+    expect(isCanvasMutation({ op: 'kb-label', label: { id: 'l1', name: 'a\u0007b', color: 'red' } })).toBe(true)
   })
 
   it('bounds a kanban op by the same byte cap', () => {

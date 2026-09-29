@@ -263,10 +263,22 @@ describe('initCanvasSync (reflector)', () => {
 // and, because every peer and the authority must receive the SAME repaired op rather than each
 // repairing the raw one, the reflector reflects the SANITIZED op (stamp fields kept).
 describe('initCanvasSync (reflector) — kanban ops', () => {
-  it('refuses a kb-label whose name carries a control character', () => {
+  // Ruling R5: a name is REPAIRED (control and bidi characters stripped), never refused — the UI
+  // has no length cap, so a refused rename would silently never sync. A name with nothing left once
+  // repaired is still refused, and so is a bad id.
+  it('refuses a kb-label whose name is empty once repaired, and one with a bad id', () => {
     t.setClients([1, 2])
-    t.cast(1, 'p1', { op: 'kb-label', label: { id: 'l1', name: 'a\u0007b', color: 'red' }, src: 'cv-a' })
+    t.cast(1, 'p1', { op: 'kb-label', label: { id: 'l1', name: '\u0007\u202e ', color: 'red' }, src: 'cv-a' })
+    t.cast(1, 'p1', { op: 'kb-label', label: { id: '', name: 'Bug', color: 'red' }, src: 'cv-a' })
     expect(t.sent).toEqual([])
+  })
+
+  it('reflects a kb-label whose name carried control / bidi characters with them stripped', () => {
+    t.setClients([1])
+    t.cast(1, 'p1', { op: 'kb-label', label: { id: 'l1', name: 'a\u0007b\u202e', color: 'red' }, src: 'cv-a' })
+    expect(t.sent).toEqual([
+      { to: 1, channel: IPC.canvasMut, args: ['p1', { op: 'kb-label', label: { id: 'l1', name: 'ab', color: 'red' }, src: 'cv-a', seq: 1 }] }
+    ])
   })
 
   it('reflects a valid kb-label to every client, stamped with the total order', () => {

@@ -70,7 +70,7 @@
 // Pure: no React, no DOM, no timers (the pending TTL below is a lazy clock read, not a timer).
 
 import { isKanbanDeletion, isKanbanOp, kanbanOpKey } from './kanban-ops'
-import type { CanvasMutation, KanbanOp } from './types'
+import type { CanvasMutation, KanbanOp, MutationStamp, SceneMutation } from './types'
 
 /**
  * How long an unacked local mutation keeps suppressing peers' mutations for that node.
@@ -112,12 +112,23 @@ export const REMOVED_MAX = 512
  * same identity (`applyEdgeMutationToScene` in canvas-mutations).
  *
  * Kanban ops take the third prefix, `k:`, with a sub-prefix per board item (`k:col:<id>`,
- * `k:card:<nodeId>`, `k:colorder`, … — `kanbanOpKey`). A card's placement and meta are keyed by
- * the node id they describe, under their own sub-prefixes, so they never share an order with the
- * node itself: deleting a node does not tombstone its card, and a card move is not a node edit.
+ * `k:card:<nodeId>`, `k:colorder:<projectId>`, … — `kanbanOpKey`). A card's placement and meta are
+ * keyed by the node id they describe, under their own sub-prefixes, so they never share an order
+ * with the node itself: deleting a node does not tombstone its card, and a card move is not a node
+ * edit.
+ *
+ * THE PROJECT. One `CanvasOrder` orders every loaded project (Canvas applies mutations for
+ * loaded-but-inactive projects too), and a board's two order ops are per-project SINGLETONS — so
+ * their keys carry the project (ruling R4), and every caller that may hold a board op must pass it.
+ * The overloads make that a type error rather than a convention: a SceneMutation (node / edge) keys
+ * the same in every project and may omit it; anything typed `CanvasMutation` may not.
  */
-export function mutationKey(m: CanvasMutation): string {
-  if (isKanbanOp(m)) return kanbanOpKey(m as KanbanOp)
+export function mutationKey(m: SceneMutation, projectId?: string): string
+export function mutationKey(m: CanvasMutation, projectId: string): string
+export function mutationKey(m: CanvasMutation, projectId?: string): string {
+  // `?? ''` is unreachable through the types (a board op has no overload without a project); it
+  // keeps an untyped caller keying on the empty scope rather than throwing on the order's hot path.
+  if (isKanbanOp(m)) return kanbanOpKey(m as KanbanOp, projectId ?? '')
   if (m.op === 'edge-remove') return `e:${m.id}`
   if (m.op === 'edge-upsert') return `e:${m.edge.id}`
   if (m.op === 'remove') return `n:${m.id}`
@@ -170,16 +181,20 @@ export interface CanvasOrder {
    * bytes smaller than the one that actually goes on the wire — the one difference that can put a
    * borderline mutation on the wrong side of the cap.
    */
-  stamp(m: CanvasMutation): CanvasMutation
-  /** Record a mutation WE are casting (it becomes pending until its echo comes back). */
-  onLocal(m: CanvasMutation): void
+  stamp<M extends CanvasMutation>(m: M): M & MutationStamp
+  /** Record a mutation WE are casting (it becomes pending until its echo comes back). `projectId`
+   *  is the canvas it is cast into — it scopes a board's singleton order keys (see `mutationKey`),
+   *  and is required for anything that may be a board op. */
+  onLocal(m: SceneMutation, projectId?: string): void
+  onLocal(m: CanvasMutation, projectId: string): void
   /**
-   * Decide an incoming mutation (a peer's, or our own echoed back).
+   * Decide an incoming mutation (a peer's, or our own echoed back) for the canvas `projectId`.
    * `true`  → apply it to the canvas.
    * `false` → drop it: our own echo (already applied), a straggler the total order has superseded,
    *           or a peer's edit to a node whose newer local edit of ours is still in flight.
    */
-  accept(m: CanvasMutation): boolean
+  accept(m: SceneMutation, projectId?: string): boolean
+  accept(m: CanvasMutation, projectId: string): boolean
   /**
    * True while one of OUR remove-class casts (`remove` / `edge-remove`) for `key` (a `mutationKey`)
    * is unacked — THE RE-CREATION GATE.
@@ -195,6 +210,10 @@ export interface CanvasOrder {
    * Counted per key, not a flag: two removes in flight (delete, undo, delete) release on the second
    * ack. Not TTL-bound, unlike rule 2's suppression: a late ack is exactly when the gate matters, and
    * a lost one comes with a reconnect, whose `reset` clears it.
+   *
+   * The PROJECT rides in the key: callers build it with `mutationKey(m, projectId)` — the same
+   * function `onLocal` keys with — so the gate is project-scoped wherever a key is. (Only a
+   * remove-class op can open the gate, and none of those has a project-scoped key today.)
    */
   hasPendingRemove(key: string): boolean
   /** Forget the per-connection order state on a genuine reconnect (see `createReconnectWatch`) —
@@ -297,15 +316,15 @@ export function createCanvasOrder(
   }
 
   return {
-    stamp(m) {
+    stamp<M extends CanvasMutation>(m: M): M & MutationStamp {
       // `lastSeq` 0 = we have applied nothing from the reflector yet, which is also the value an
       // unstamped mutation would carry. Stamp it anyway: 0 is a truthful causal position (we know
       // about nothing), and it is what makes a first-frame drag lose to a delete that precedes it.
       return { ...m, seen: lastSeq }
     },
 
-    onLocal(m) {
-      const id = mutationKey(m)
+    onLocal(m: CanvasMutation, projectId?: string) {
+      const id = mutationKey(m, projectId ?? '')
       const p = pending.get(id)
       if (p) {
         p.count++
@@ -321,8 +340,8 @@ export function createCanvasOrder(
       superseded.delete(id)
     },
 
-    accept(m) {
-      const id = mutationKey(m)
+    accept(m: CanvasMutation, projectId?: string) {
+      const id = mutationKey(m, projectId ?? '')
       const seq = m.seq ?? 0
       const highest = seen.get(id) ?? 0
       // `seq` 0 means an unstamped mutation (no reflector in the path) — never treat it as stale.

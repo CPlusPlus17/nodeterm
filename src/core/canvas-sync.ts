@@ -46,7 +46,7 @@ import {
   sanitizeCanvasMutation
 } from '../shared/canvas-mutations'
 import { type ClientId } from '../shared/presence'
-import type { CanvasMutation } from '../shared/types'
+import type { CanvasMutation, MutationStamp } from '../shared/types'
 
 // The ingest guard (`isCanvasMutation`) and its size cap live in `shared`, because the PUBLISHER
 // must reach the same verdict BEFORE it casts: a mutation this reflector refuses is dropped
@@ -81,8 +81,8 @@ export function reflectTargets(all: ClientId[], _sender: ClientId): ClientId[] {
  * beyond the moment it actually cast. A non-integer / negative value is dropped, which degrades to
  * "unstamped" (judged exactly as before rule 4 existed), never to a value that outranks a delete.
  */
-export function stampMutation(m: CanvasMutation, seq: number): CanvasMutation {
-  const stamped: CanvasMutation = { ...m, seq }
+export function stampMutation<M extends CanvasMutation>(m: M, seq: number): M & MutationStamp {
+  const stamped: M & MutationStamp = { ...m, seq }
   if (!isRefId(stamped.src)) delete stamped.src
   const seen = stamped.seen
   if (typeof seen !== 'number' || !Number.isInteger(seen) || seen < 0) delete stamped.seen

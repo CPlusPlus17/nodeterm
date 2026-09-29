@@ -3730,7 +3730,9 @@ export function Canvas() {
         // ⌘Z'd, within one round trip) would be dropped by every peer as a stale frame while we keep
         // showing it. Held = owed: the publisher keeps it, and the receive handler's release casts it
         // the moment the remove's echo lands. Never a remove itself (a remove is never stale).
-        if (!isRemoveOp(stamped) && order.hasPendingRemove(mutationKey(stamped))) return false
+        // The key carries the project it is cast into: a board's two order ops are per-project
+        // singletons in the ONE order this Canvas keeps for every loaded project (ruling R4).
+        if (!isRemoveOp(stamped) && order.hasPendingRemove(mutationKey(stamped, projectId))) return false
         // The reflector REFUSES an oversized / malformed mutation at ingest, silently: no peer ever
         // sees it and there is no negative ack. Ask the same predicate FIRST, so a refusal costs us
         // neither a pending entry (which would deafen this node to its peers for the whole TTL — a
@@ -3748,7 +3750,7 @@ export function Canvas() {
           else console.warn('[canvas-sync] refused an unsendable mutation', stamped.op)
           return false
         }
-        order.onLocal(stamped)
+        order.onLocal(stamped, projectId)
         // Cast to the ACTIVE session's core — a relay tab publishes to the relay HOST, not to B's
         // own local core (the bug this fixes). Byte-identical on a local tab (`activeSession.api`
         // IS `window.nodeTerminal`). `canvasSyncTarget` decides the GATE (hasPeers) at bind time;
@@ -3837,9 +3839,9 @@ export function Canvas() {
       hasPeersRef.current = true // proof of a peer, whatever the presence table says
       const order = orderRef.current
       if (!order) return
-      const key = mutationKey(mutation)
+      const key = mutationKey(mutation, projectId)
       const held = order.hasPendingRemove(key)
-      const apply = order.accept(mutation)
+      const apply = order.accept(mutation, projectId)
       const released = held && !order.hasPendingRemove(key)
       if (released) queueMicrotask(releaseHeld)
       if (!apply) return

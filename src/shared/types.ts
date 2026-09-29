@@ -673,6 +673,12 @@ export type CanvasMutation =
   | { op: 'edge-remove'; kind: CanvasEdgeKind; id: string; src?: string; seq?: number; seen?: number }
   | (KanbanOp & MutationStamp)
 
+/** The node and edge half of `CanvasMutation` — all a canvas SCENE diff (`diffToMutations`) ever
+ *  produces. Their order keys are project-independent (node and edge ids are globally unique), so
+ *  the ordering API accepts them without a project id; any value that MAY be a board op must name
+ *  its project (see `mutationKey`). */
+export type SceneMutation = Exclude<CanvasMutation, { op: `kb-${string}` }>
+
 /** Stamp fields every canvas mutation may carry (see canvas-order): the sender tag, the reflector's
  *  total order, and the sender's causal position. Documented on `CanvasMutation` above. */
 export interface MutationStamp {

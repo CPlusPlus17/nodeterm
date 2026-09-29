@@ -23,10 +23,10 @@ describe('the re-creation gate (canvas-order hasPendingRemove)', () => {
   // peer drops it as a stale frame (rule 4) while we keep showing it.
   it('the send callback holds a non-remove op whose key has our remove in flight', () => {
     const body = sendCallback()
-    const gate = body.indexOf('if (!isRemoveOp(stamped) && order.hasPendingRemove(mutationKey(stamped))) return false')
+    const gate = body.indexOf('if (!isRemoveOp(stamped) && order.hasPendingRemove(mutationKey(stamped, projectId))) return false')
     expect(gate).toBeGreaterThan(-1)
     // …before anything records or casts it: a held op must not leave a pending entry behind.
-    expect(gate).toBeLessThan(body.indexOf('order.onLocal(stamped)'))
+    expect(gate).toBeLessThan(body.indexOf('order.onLocal(stamped, projectId)'))
   })
 
   // Held = owed, but nothing re-publishes on its own: our echo is an ack, it changes no React state,
@@ -34,11 +34,25 @@ describe('the re-creation gate (canvas-order hasPendingRemove)', () => {
   it('our own remove coming back releases what the gate held', () => {
     const body = receiveHandler()
     const held = body.indexOf('const held = order.hasPendingRemove(key)')
-    const accept = body.indexOf('order.accept(mutation)')
+    const accept = body.indexOf('order.accept(mutation, projectId)')
     expect(held).toBeGreaterThan(-1)
     expect(held).toBeLessThan(accept) // asked BEFORE the ack draws the count down
     expect(body).toMatch(/const released = held && !order\.hasPendingRemove\(key\)/)
     expect(body).toMatch(/if \(released\) queueMicrotask\(releaseHeld\)/)
+  })
+
+  // RULING R4: one order serves every loaded project, and a board's two order ops are per-project
+  // singletons — so both paths key, record and judge with the project the op belongs to. Dropping
+  // the project from any one of these made our unacked reorder in A deafen a peer's reorder in B.
+  it('both paths thread the project id into the order (key, onLocal, accept)', () => {
+    const send = sendCallback()
+    expect(send).toContain('mutationKey(stamped, projectId)')
+    expect(send).toContain('order.onLocal(stamped, projectId)')
+    expect(send).not.toMatch(/order\.onLocal\(stamped\)/)
+    const recv = receiveHandler()
+    expect(recv).toContain('const key = mutationKey(mutation, projectId)')
+    expect(recv).toContain('order.accept(mutation, projectId)')
+    expect(recv).not.toMatch(/order\.accept\(mutation\)/)
   })
 
   it('the release publishes only when something is owed, and never during a load', () => {

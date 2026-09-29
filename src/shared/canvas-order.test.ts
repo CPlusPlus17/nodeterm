@@ -12,7 +12,7 @@ import {
   PENDING_TTL_MS,
   REMOVED_MAX
 } from './canvas-order'
-import type { CanvasMutation, CanvasNodeState } from './types'
+import type { CanvasMutation, CanvasNodeState, SceneMutation } from './types'
 
 const node = (id: string, x = 0): CanvasNodeState =>
   ({
@@ -25,13 +25,13 @@ const node = (id: string, x = 0): CanvasNodeState =>
     size: { width: 10, height: 10 }
   }) as CanvasNodeState
 
-const up = (id: string, x: number, src: string | undefined, seq: number): CanvasMutation => ({
+const up = (id: string, x: number, src: string | undefined, seq: number): SceneMutation => ({
   op: 'upsert',
   node: node(id, x),
   ...(src ? { src } : {}),
   seq
 })
-const rm = (id: string, src: string | undefined, seq: number): CanvasMutation => ({
+const rm = (id: string, src: string | undefined, seq: number): SceneMutation => ({
   op: 'remove',
   id,
   ...(src ? { src } : {}),
@@ -53,7 +53,7 @@ describe('mutationNodeId', () => {
 // One key space for nodes and edges, with a prefix: a node id and an edge id are generated
 // independently and could be equal. The kind is NOT in the key — one id is one edge.
 describe('mutationKey', () => {
-  const edgeUp = (id: string, kind: 'bridge' | 'rope'): CanvasMutation => ({
+  const edgeUp = (id: string, kind: 'bridge' | 'rope'): SceneMutation => ({
     op: 'edge-upsert',
     kind,
     edge: { id, source: 'a', target: 'b' }
@@ -90,6 +90,7 @@ describe('mutationKey', () => {
 // VALUE — "no placement", "no meta" — and must never tombstone, or a teammate filing a card a moment
 // after someone moved it to Ungrouped would be dropped everywhere as a stale frame.
 describe('kanban ops in the order', () => {
+  const P = 'project-1'
   const card = (nodeId: string, columnId: string, src: string, seq: number, seen?: number): CanvasMutation => ({
     op: 'kb-card',
     assignment: { nodeId, columnId },
@@ -99,15 +100,15 @@ describe('kanban ops in the order', () => {
   })
 
   it('keys every kanban op in the k: space, apart from the node its card names', () => {
-    expect(mutationKey(card('x', 'c', 'a', 1))).toBe('k:card:x')
-    expect(mutationKey({ op: 'kb-card-remove', nodeId: 'x' })).toBe('k:card:x')
-    expect(mutationKey({ op: 'kb-column', column: { id: 'x', title: 'T', color: '#fff' } })).toBe('k:col:x')
-    expect(mutationKey({ op: 'kb-column-remove', id: 'x' })).toBe('k:col:x')
-    expect(mutationKey({ op: 'kb-meta-remove', nodeId: 'x' })).toBe('k:meta:x')
-    expect(mutationKey({ op: 'kb-label-order', ids: [] })).toBe('k:labelorder')
-    expect(mutationKey({ op: 'kb-view-remove', id: 'x' })).toBe('k:view:x')
+    expect(mutationKey(card('x', 'c', 'a', 1), P)).toBe('k:card:x')
+    expect(mutationKey({ op: 'kb-card-remove', nodeId: 'x' }, P)).toBe('k:card:x')
+    expect(mutationKey({ op: 'kb-column', column: { id: 'x', title: 'T', color: '#fff' } }, P)).toBe('k:col:x')
+    expect(mutationKey({ op: 'kb-column-remove', id: 'x' }, P)).toBe('k:col:x')
+    expect(mutationKey({ op: 'kb-meta-remove', nodeId: 'x' }, P)).toBe('k:meta:x')
+    expect(mutationKey({ op: 'kb-label-order', ids: [] }, P)).toBe(`k:labelorder:${P}`)
+    expect(mutationKey({ op: 'kb-view-remove', id: 'x' }, P)).toBe('k:view:x')
     // …never the node's key: a card move is not a node edit, a node delete does not tombstone its card
-    expect(mutationKey(card('x', 'c', 'a', 1))).not.toBe(mutationKey(up('x', 0, 'a', 1)))
+    expect(mutationKey(card('x', 'c', 'a', 1), P)).not.toBe(mutationKey(up('x', 0, 'a', 1)))
   })
 
   it('addresses no node (mutationNodeId is null for every kanban op)', () => {
@@ -118,38 +119,38 @@ describe('kanban ops in the order', () => {
 
   it('two kb-card ops for the same card: the higher seq wins, the straggler is dropped', () => {
     const o = createCanvasOrder('me')
-    expect(o.accept(card('n1', 'doing', 'a', 5))).toBe(true)
-    expect(o.accept(card('n1', 'todo', 'b', 4))).toBe(false) // superseded by seq 5
-    expect(o.accept(card('n1', 'done', 'b', 6))).toBe(true)
+    expect(o.accept(card('n1', 'doing', 'a', 5), P)).toBe(true)
+    expect(o.accept(card('n1', 'todo', 'b', 4), P)).toBe(false) // superseded by seq 5
+    expect(o.accept(card('n1', 'done', 'b', 6), P)).toBe(true)
   })
 
   it('a kb-column-remove at seq 5 beats a kb-column cast before its sender saw it (seen 3, seq 6)', () => {
     const o = createCanvasOrder('me')
-    expect(o.accept({ op: 'kb-column-remove', id: 'c1', src: 'a', seq: 5 })).toBe(true)
+    expect(o.accept({ op: 'kb-column-remove', id: 'c1', src: 'a', seq: 5 }, P)).toBe(true)
     const stale: CanvasMutation = { op: 'kb-column', column: { id: 'c1', title: 'T', color: '#fff' }, src: 'b', seq: 6, seen: 3 }
-    expect(o.accept(stale)).toBe(false)
+    expect(o.accept(stale, P)).toBe(false)
     // a deliberate re-creation — cast knowing the removal — is applied
-    expect(o.accept({ ...stale, seq: 7, seen: 6 })).toBe(true)
+    expect(o.accept({ ...stale, seq: 7, seen: 6 }, P)).toBe(true)
   })
 
   it('label and view removals tombstone their keys the same way', () => {
     const o = createCanvasOrder('me')
-    expect(o.accept({ op: 'kb-label-remove', id: 'l1', src: 'a', seq: 5 })).toBe(true)
-    expect(o.accept({ op: 'kb-label', label: { id: 'l1', name: 'Bug', color: 'red' }, src: 'b', seq: 6, seen: 3 })).toBe(false)
-    expect(o.accept({ op: 'kb-view-remove', id: 'v1', src: 'a', seq: 7 })).toBe(true)
-    expect(o.accept({ op: 'kb-view', view: { id: 'v1', name: 'Mine', query: {} }, src: 'b', seq: 8, seen: 3 })).toBe(false)
+    expect(o.accept({ op: 'kb-label-remove', id: 'l1', src: 'a', seq: 5 }, P)).toBe(true)
+    expect(o.accept({ op: 'kb-label', label: { id: 'l1', name: 'Bug', color: 'red' }, src: 'b', seq: 6, seen: 3 }, P)).toBe(false)
+    expect(o.accept({ op: 'kb-view-remove', id: 'v1', src: 'a', seq: 7 }, P)).toBe(true)
+    expect(o.accept({ op: 'kb-view', view: { id: 'v1', name: 'Mine', query: {} }, src: 'b', seq: 8, seen: 3 }, P)).toBe(false)
   })
 
   it('a kb-card-remove does NOT tombstone: a kb-card with seen 3 at seq 6 after it (seq 5) is accepted', () => {
     const o = createCanvasOrder('me')
-    expect(o.accept({ op: 'kb-card-remove', nodeId: 'n1', src: 'a', seq: 5 })).toBe(true)
-    expect(o.accept(card('n1', 'todo', 'b', 6, 3))).toBe(true)
+    expect(o.accept({ op: 'kb-card-remove', nodeId: 'n1', src: 'a', seq: 5 }, P)).toBe(true)
+    expect(o.accept(card('n1', 'todo', 'b', 6, 3), P)).toBe(true)
   })
 
   it('a kb-meta-remove does NOT tombstone either', () => {
     const o = createCanvasOrder('me')
-    expect(o.accept({ op: 'kb-meta-remove', nodeId: 'n1', src: 'a', seq: 5 })).toBe(true)
-    expect(o.accept({ op: 'kb-meta', meta: { nodeId: 'n1', priority: 'high' }, src: 'b', seq: 6, seen: 3 })).toBe(true)
+    expect(o.accept({ op: 'kb-meta-remove', nodeId: 'n1', src: 'a', seq: 5 }, P)).toBe(true)
+    expect(o.accept({ op: 'kb-meta', meta: { nodeId: 'n1', priority: 'high' }, src: 'b', seq: 6, seen: 3 }, P)).toBe(true)
   })
 
   it('the rule-4 deletion classification is exactly the five removals', () => {
@@ -175,18 +176,46 @@ describe('kanban ops in the order', () => {
 
   it('a rule-2 hold applies to a kb-card-remove (a value) but not to a kb-column-remove (a deletion)', () => {
     const o = createCanvasOrder('me')
-    o.onLocal(o.stamp(card('n1', 'todo', 'me', 0))) // our own card move is unacked
-    expect(o.accept({ op: 'kb-card-remove', nodeId: 'n1', src: 'peer', seq: 7 })).toBe(false) // held off
-    o.onLocal(o.stamp({ op: 'kb-column', column: { id: 'c1', title: 'T', color: '#fff' } }))
-    expect(o.accept({ op: 'kb-column-remove', id: 'c1', src: 'peer', seq: 8 })).toBe(true) // never held off
+    o.onLocal(o.stamp(card('n1', 'todo', 'me', 0)), P) // our own card move is unacked
+    expect(o.accept({ op: 'kb-card-remove', nodeId: 'n1', src: 'peer', seq: 7 }, P)).toBe(false) // held off
+    o.onLocal(o.stamp({ op: 'kb-column', column: { id: 'c1', title: 'T', color: '#fff' } }), P)
+    expect(o.accept({ op: 'kb-column-remove', id: 'c1', src: 'peer', seq: 8 }, P)).toBe(true) // never held off
   })
 
   it('the re-creation gate covers a kanban deletion key, and ignores a card removal', () => {
     const o = createCanvasOrder('me')
-    o.onLocal(o.stamp({ op: 'kb-column-remove', id: 'c1' }))
+    o.onLocal(o.stamp({ op: 'kb-column-remove', id: 'c1' }), P)
     expect(o.hasPendingRemove('k:col:c1')).toBe(true)
-    o.onLocal(o.stamp({ op: 'kb-card-remove', nodeId: 'n1' }))
+    o.onLocal(o.stamp({ op: 'kb-card-remove', nodeId: 'n1' }), P)
     expect(o.hasPendingRemove('k:card:n1')).toBe(false)
+  })
+
+  // RULING R4 — one CanvasOrder orders EVERY loaded project (Canvas keeps loaded-but-inactive
+  // projects in step), so a board's two singleton keys must carry the project: otherwise our own
+  // unacked reorder in project A holds off (rule 2) a peer's reorder in project B, and B diverges.
+  it('a project-A pending order op does not suppress a peer\'s project-B order op', () => {
+    const o = createCanvasOrder('me')
+    o.onLocal(o.stamp({ op: 'kb-column-order', ids: ['a2', 'a1'] }), 'A') // ours, unacked
+    expect(o.accept({ op: 'kb-column-order', ids: ['b3', 'b1'], src: 'peer', seq: 7, seen: 6 }, 'B')).toBe(true)
+    o.onLocal(o.stamp({ op: 'kb-label-order', ids: ['la'] }), 'A')
+    expect(o.accept({ op: 'kb-label-order', ids: ['lb'], src: 'peer', seq: 8 }, 'B')).toBe(true)
+    // …while in project A itself rule 2 still holds
+    expect(o.accept({ op: 'kb-column-order', ids: ['a1', 'a2'], src: 'peer', seq: 9 }, 'A')).toBe(false)
+  })
+
+  it('scopes only the two singleton keys: per-item kanban, node and edge keys ignore the project', () => {
+    expect(mutationKey({ op: 'kb-column-order', ids: [] }, 'A')).toBe('k:colorder:A')
+    expect(mutationKey({ op: 'kb-label-order', ids: [] }, 'B')).toBe('k:labelorder:B')
+    expect(mutationKey(card('n1', 'c', 'a', 1), 'A')).toBe(mutationKey(card('n1', 'c', 'a', 1), 'B'))
+    expect(mutationKey(up('n1', 0, 'a', 1), 'A')).toBe('n:n1')
+    expect(mutationKey({ op: 'edge-remove', kind: 'rope', id: 'e1' }, 'A')).toBe('e:e1')
+  })
+
+  it('a straggler order op in one project is still a straggler; another project has its own order', () => {
+    const o = createCanvasOrder('me')
+    expect(o.accept({ op: 'kb-column-order', ids: ['x'], src: 'a', seq: 5 }, 'A')).toBe(true)
+    expect(o.accept({ op: 'kb-column-order', ids: ['y'], src: 'b', seq: 4 }, 'A')).toBe(false)
+    expect(o.accept({ op: 'kb-column-order', ids: ['z'], src: 'b', seq: 4 }, 'B')).toBe(true)
   })
 })
 
@@ -315,7 +344,7 @@ describe('createCanvasOrder', () => {
 
   it('an unstamped mutation (no reflector in the path) is never treated as stale', () => {
     const o = createCanvasOrder('me')
-    const unstamped: CanvasMutation = { op: 'upsert', node: node('n1', 1) }
+    const unstamped: SceneMutation = { op: 'upsert', node: node('n1', 1) }
     expect(o.accept(unstamped)).toBe(true)
     expect(o.accept(unstamped)).toBe(true)
   })
@@ -434,7 +463,7 @@ describe('createCanvasOrder', () => {
   describe('a pending local remove (the re-creation gate)', () => {
     it('reports a pending local remove until its echo returns', () => {
       const o = createCanvasOrder('a')
-      const rm: CanvasMutation = { op: 'edge-remove', kind: 'bridge', id: 'b1', src: 'a' }
+      const rm: SceneMutation = { op: 'edge-remove', kind: 'bridge', id: 'b1', src: 'a' }
       o.onLocal(rm)
       expect(o.hasPendingRemove('e:b1')).toBe(true)
       o.accept({ ...rm, seq: 7 })

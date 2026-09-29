@@ -187,12 +187,14 @@ class Client {
         const stamped = this.order.stamp(m)
         // The re-creation gate, as Canvas has it: a re-creation of a key whose remove of ours is
         // still unacked would carry a `seen` below that remove — held (owed) until the echo lands.
-        if (!isRemoveOp(stamped) && this.order.hasPendingRemove(mutationKey(stamped))) return false
+        // The project rides every key the order builds (ruling R4: a board's order ops are
+        // per-project singletons) — the same PROJECT the cast goes out on.
+        if (!isRemoveOp(stamped) && this.order.hasPendingRemove(mutationKey(stamped, PROJECT))) return false
         if (!isCanvasMutation(stamped)) {
           this.refused++
           return false
         }
-        this.order.onLocal(stamped)
+        this.order.onLocal(stamped, PROJECT)
         bus.cast(id, PROJECT, stamped)
         return true
       },
@@ -202,9 +204,9 @@ class Client {
       if (projectId !== PROJECT) return
       // Mirrors Canvas: our own remove coming back RELEASES a re-creation the gate held — cast it now,
       // after this mutation is handled (a repaired remove is applied first), or it waits for an edit.
-      const key = mutationKey(m)
+      const key = mutationKey(m, projectId)
       const held = this.order.hasPendingRemove(key)
-      const apply = this.order.accept(m)
+      const apply = this.order.accept(m, projectId)
       const released = held && !this.order.hasPendingRemove(key)
       if (apply) {
         this.applied++
