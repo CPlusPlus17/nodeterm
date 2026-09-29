@@ -72,16 +72,20 @@ export function HostedApprovalDialog(props: {
           <strong>{pending.sas}</strong>
           {'\n\n'}Device key {keyFingerprint(pending.peerKeyB64)}
           {more > 0 ? `\n\n${more} more ${more === 1 ? 'request is' : 'requests are'} waiting.` : ''}
+          {'\n\n'}Role:
         </div>
-        <label className="confirm__option">
-          Role{' '}
-          <select aria-label="Role" value={role} onChange={(e) => setRole(e.target.value as HostedRole)}>
-            <option value="viewer">Viewer</option>
-            <option value="commenter">Commenter</option>
-            <option value="editor">Editor</option>
-            <option value="owner">Owner</option>
-          </select>
-        </label>
+        {/* The app's dialog field (the prompt dialogs' input), so the picker reads as part of it. */}
+        <select
+          className="confirm__input"
+          aria-label="Role"
+          value={role}
+          onChange={(e) => setRole(e.target.value as HostedRole)}
+        >
+          <option value="viewer">Viewer</option>
+          <option value="commenter">Commenter</option>
+          <option value="editor">Editor</option>
+          <option value="owner">Owner</option>
+        </select>
         <p className="remote-consent" role="note">
           {grant}
         </p>
