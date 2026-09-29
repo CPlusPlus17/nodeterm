@@ -912,6 +912,12 @@ export async function startServer(
     projectCwd: (projectId) => workspaceStore.localCwdForProject(projectId),
     // A share or unshare: the authority adopts what joined and writes + releases what left, then every
     // client hears the new governed set (a client alone on a newly shared canvas must start publishing).
+    // RESIDUAL, the share-time window (docs/hosted-team-relay.md): an edit a client made just before
+    // the share — not yet published (it was alone) or published but not yet saved — is not in what the
+    // authority adopts from disk here, and that client's next save is overlaid with the authority's
+    // content, so the edit can be lost from disk (it stays on that client's screen until a reload).
+    // The save debounce is 800 ms and `team share` is an admin action; the client-side mount window
+    // is closed separately (collab-sync `followGoverned`, Canvas.tsx `governedRef`).
     onSharedChange: () => {
       canvasAuthority?.sharedChanged()
       platform.broadcast(IPC.canvasAuthorityChanged, canvasAuthority?.governedIds() ?? [])

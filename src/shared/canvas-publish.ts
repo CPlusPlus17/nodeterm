@@ -141,13 +141,18 @@ const EMPTY_SCENE: CanvasScene = { nodes: [], bridges: [], ropes: [] }
  *   moment something reads it, which for a solo user is never.
  */
 /**
- * THE publish rule, one definition (the renderer's gate applies it through collab-sync's
- * `shouldPublish`): publish when a teammate is attached, OR when the project is governed by a canvas
- * authority. A governed project's content is written only from the ops the authority hears
+ * THE publish rule, one definition (Canvas's one gate calls it, as collab-sync's `shouldPublish`):
+ * publish when a teammate is attached, OR when the project is governed by a canvas authority. A
+ * governed project's content is written only from the ops the authority hears
  * (docs/hosted-team-relay.md), so a solo edit there that is not published is never saved.
+ * Positional and allocation-free, the peer check first: the gate is asked at ~20 Hz during a drag.
  */
-export function shouldPublishCanvas(gate: { hasPeers: boolean; governed: boolean }): boolean {
-  return gate.hasPeers || gate.governed
+export function shouldPublishCanvas(
+  hasPeers: boolean,
+  governed: { has(projectId: string): boolean },
+  projectId: string
+): boolean {
+  return hasPeers || governed.has(projectId)
 }
 
 export function createCanvasPublisher(

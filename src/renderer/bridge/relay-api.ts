@@ -204,6 +204,8 @@ export function buildRelayApi(
     // binding already holds). A Team Access tab's host is a desktop, which governs nothing: `local`.
     canvasAuthority: hosted
       ? {
+          // Answered at once from the bindings, so nothing needs to be assumed before it.
+          assumeAllUntilAnswered: false,
           governed: async () => projectIdsBoundToApi(api),
           // The set changes only when a tab binds or unbinds, and Canvas re-reads it on every bind.
           onChanged: () => () => {}

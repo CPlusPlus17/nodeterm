@@ -224,3 +224,12 @@ describe('bridge clipboard', () => {
     expect(ev.detail.message).toMatch(/copy/i)
   })
 })
+
+describe('bridge stubs: canvasAuthority', () => {
+  it('governs nothing and assumes nothing by default (only the Server Edition bridge overrides it)', async () => {
+    const s = buildStubApi()
+    expect(s.canvasAuthority.assumeAllUntilAnswered).toBe(false)
+    expect(await s.canvasAuthority.governed()).toEqual([])
+    expect(typeof s.canvasAuthority.onChanged(() => {})).toBe('function')
+  })
+})

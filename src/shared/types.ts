@@ -3007,6 +3007,11 @@ export interface CanvasApi {
  * attached — the solo gate is overridden for it. The desktop runs no authority and governs nothing.
  */
 export interface CanvasAuthorityApi {
+  /** true = this core may govern projects, and which ones is known only once `governed()` answers:
+   *  until then a client publishes for EVERY project on it (the Server Edition). false = known in
+   *  advance, so nothing is assumed (the desktop and a Team Access tab govern nothing; a hosted
+   *  relay tab answers from its own bindings). */
+  readonly assumeAllUntilAnswered: boolean
   /** The governed project ids right now. Never rejects: "unknown" is the empty list. */
   governed(): Promise<string[]>
   /** Fires with the NEW governed set whenever it changes (a share or unshare). Returns unsubscribe. */

@@ -329,17 +329,20 @@ describe('buildRelayApi — canvasAuthority (which projects publish even when al
     // Its host governs everything it shares, and a hosted tab holds only shared projects.
     expect(await api.canvasAuthority.governed()).toEqual(['p-team'])
     expect(typeof api.canvasAuthority.onChanged(() => {})).toBe('function')
+    // Answered from its own bindings, at once: nothing is assumed governed before that.
+    expect(api.canvasAuthority.assumeAllUntilAnswered).toBe(false)
     expect(t.sent).toEqual([])
   })
 
   it('a Team Access tab governs nothing: its host (a desktop) runs no authority', async () => {
     const local = fakeLocalApi().local as unknown as Record<string, unknown>
-    local.canvasAuthority = { governed: async () => [], onChanged: () => () => {} }
+    local.canvasAuthority = { assumeAllUntilAnswered: false, governed: async () => [], onChanged: () => () => {} }
     ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
     const t = new FakeTransport()
     const { api } = buildRelayApi('conn-1', t)
     bindProjectToSession('p-peer', createSession('relay', api, 'Peer').id)
     expect(await api.canvasAuthority.governed()).toEqual([])
+    expect(api.canvasAuthority.assumeAllUntilAnswered).toBe(false)
     expect(t.sent).toEqual([])
   })
 })

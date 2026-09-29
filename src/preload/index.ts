@@ -541,6 +541,7 @@ const api: NodeTerminalApi = {
   // (docs/hosted-team-relay.md), and main registers no `canvas:authority` handler. A relay tab onto
   // such a host answers for itself (renderer/bridge/relay-api.ts).
   canvasAuthority: {
+    assumeAllUntilAnswered: false,
     governed: async () => [],
     onChanged: () => () => {}
   },

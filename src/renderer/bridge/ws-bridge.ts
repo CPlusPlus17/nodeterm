@@ -783,6 +783,9 @@ export function buildCanvasAuthorityApi(client: RpcClient): Pick<NodeTerminalApi
     Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
   return {
     canvasAuthority: {
+      // A Server Edition core governs the projects its hosted team shares, and says which only when
+      // asked: until it answers, a client publishes for every project (collab-sync `followGoverned`).
+      assumeAllUntilAnswered: true,
       governed: () => client.request(IPC.canvasAuthority).then(ids, () => []),
       onChanged: (listener) => client.subscribe(IPC.canvasAuthorityChanged, ((v: unknown) => listener(ids(v))) as Listener)
     }

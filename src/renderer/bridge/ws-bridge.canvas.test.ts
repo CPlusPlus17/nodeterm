@@ -58,6 +58,8 @@ describe('buildCanvasAuthorityApi (Server Edition: the core answers which projec
       }
     }
     const { canvasAuthority } = buildCanvasAuthorityApi(client as never)
+    // Which projects are governed is known only once the core answers: until then, all of them.
+    expect(canvasAuthority.assumeAllUntilAnswered).toBe(true)
     // A malformed entry is dropped: only project ids gate a publish.
     expect(await canvasAuthority.governed()).toEqual(['p1', 'p2'])
     expect(reqs).toEqual([{ method: IPC.canvasAuthority, args: [] }])

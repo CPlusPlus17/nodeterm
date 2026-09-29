@@ -4,7 +4,8 @@ import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { fakePlatform } from '../core/platform-fake'
+import { fakePlatform, type FakePlatform } from '../core/platform-fake'
+import { IPC } from '../shared/ipc'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { WorkspaceStore } from '../core/workspace-store'
 import { createCanvasAuthority } from '../core/canvas-authority'
@@ -16,6 +17,7 @@ import {
   DEFAULT_SETTINGS,
   type CanvasMutation,
   type CanvasNodeState,
+  type Project,
   type PtyCreateOptions,
   type PtyCreateResult,
   type Settings,
@@ -1824,5 +1826,298 @@ describe('HeadlessNodeFactory — one load and one save, both through the cast h
     const helper = src.lastIndexOf('private async castAndSave(', saveAt)
     expect(helper).toBeGreaterThan(0)
     expect(src.slice(helper, saveAt)).toContain('diffContent(')
+    // The one read is the read-only view; every edit copies it (loadForEdit).
+    const readAt = src.indexOf('workspaceStore.load(')
+    expect(src.lastIndexOf('private readWorkspace(', readAt)).toBeGreaterThan(0)
+  })
+
+  it('browsers are sent the PERSISTED project, re-read after the save, never a verb\'s copy', () => {
+    const calls = [...src.matchAll(/this\.deps\.publishProject/g)].map((m) => m.index ?? -1)
+    const helper = src.indexOf('private async publishPersisted(')
+    const end = src.indexOf('\n  }\n', helper)
+    expect(helper).toBeGreaterThan(0)
+    for (const at of calls) expect(at > helper && at < end, `publishProject outside publishPersisted at ${at}`).toBe(true)
+    expect(src.slice(helper, end)).toContain('await this.readWorkspace()')
+  })
+})
+
+// A launch can take seconds. A verb's SECOND save (after it) must never write back the copy it
+// loaded before the launch: that copy predates whatever a teammate did meanwhile, and a whole-node
+// upsert (or a whole-project broadcast) built from it would undo it. Each second phase re-reads, and
+// re-applies only its own patch (the launch outcome).
+describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix round 1)', () => {
+  let dataDir = ''
+  let projectDir = ''
+  let store: WorkspaceStore
+  let pty: FakePty
+  let ownership: HeadlessNodeOwnership
+  let fake: FakePlatform
+  let shared: Set<string>
+  let states: Record<string, AgentState | undefined>
+  let cast: CanvasMutation[]
+  let broadcast: Project[]
+  let authority: ReturnType<typeof createCanvasAuthority>
+
+  const held = (command: string, after: string[] = []) => ({ after, command, executor: 'server' as const })
+  const deps = (): HeadlessNodeFactoryDeps => ({
+    workspaceStore: store,
+    ptyManager: pty,
+    settings: () => ({ ...DEFAULT_SETTINGS, claudePermissionMode: 'manual' }),
+    cliCaps: async () => ({ version: null, autoPermissionMode: false, fullscreenTui: false, sessionIdFlag: false }),
+    grokCaps: async () => ({ sessionIdFlag: false, models: [] }),
+    codexCaps: async () => ({ approvalValues: ['on-request', 'never'] }),
+    codexSharedIdentity: async () => false,
+    ownership,
+    stateOf: (id) => states[id],
+    launchTiming: { quietMs: 0, capMs: 0 },
+    publishMutation: (id, m) => {
+      cast.push(m)
+      publishCanvasMutation(id, m)
+    },
+    publishProject: (project) => broadcast.push(structuredClone(project))
+  })
+
+  beforeEach(async () => {
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nodeterm-headless-phase-'))
+    projectDir = path.join(dataDir, 'project')
+    fs.mkdirSync(projectDir, { recursive: true })
+    resetPlatformForTests()
+    fake = fakePlatform({ userDataDir: dataDir })
+    initPlatform(fake)
+    initCanvasSync()
+    store = new WorkspaceStore()
+    pty = new FakePty()
+    states = {}
+    cast = []
+    broadcast = []
+    ownership = createHeadlessNodeOwnership()
+    for (const id of ['term-held', 'term-armed']) ownership.record(id, { sourceNodeId: 'term-source', projectId: 'project-1' })
+    await store.save({
+      version: 2,
+      activeProjectId: 'project-1',
+      projects: [
+        {
+          id: 'project-1',
+          name: 'Test',
+          color: '#0a84ff',
+          cwd: projectDir,
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes: [
+            terminal('term-source', 'Director'),
+            terminal('term-dep', 'Dependency', 'claude', 700),
+            { ...terminal('term-held', 'Held', 'claude', 1400), pendingLaunch: held('printf held') },
+            { ...terminal('term-armed', 'Armed', 'claude', 2100), pendingLaunch: held('printf armed', ['term-dep']) }
+          ],
+          bridges: [],
+          ropes: []
+        }
+      ]
+    })
+    shared = new Set(['project-1'])
+    authority = createCanvasAuthority({
+      sharedProjectIds: () => shared,
+      readContent: (id) => store.readProjectContent(id),
+      writeContent: (id, c) => store.writeProjectContent(id, c),
+      publish: (id, m) => {
+        publishCanvasMutation(id, m)
+      },
+      // No flush timer ever fires: the disk holds exactly what the verb's own saves wrote.
+      setTimer: () => null,
+      clearTimer: () => {},
+      log: () => {}
+    })
+    store.setContentAuthority(authority)
+    setReflectedListener((id, m) => authority.onReflected(id, m))
+  })
+
+  afterEach(async () => {
+    await authority.stop()
+    store.setContentAuthority(null)
+    setReflectedListener(null)
+    resetPlatformForTests()
+    fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  /** A browser's cast, through the real reflector (the authority hears it). */
+  const clientCast = (m: CanvasMutation): void => {
+    fake.senderListeners[IPC.canvasMut](42, 'project-1', { ...m, src: 'browser-42' })
+  }
+  const liveNode = async (id: string): Promise<CanvasNodeState> =>
+    (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)!
+  const onDisk = (id: string): CanvasNodeState | undefined =>
+    (JSON.parse(fs.readFileSync(path.join(projectDir, '.nodeterm', 'project.json'), 'utf8')) as { nodes: CanvasNodeState[] })
+      .nodes.find((n) => n.id === id)
+  const upsertsOf = (ms: CanvasMutation[], id: string): CanvasNodeState[] =>
+    ms.flatMap((m) => (m.op === 'upsert' && m.node.id === id ? [m.node] : []))
+
+  it('open: a move made while the launch runs survives on disk, in the cast and in the broadcast', async () => {
+    const factory = new HeadlessNodeFactory(deps())
+    let castAtMove = -1
+    const create = pty.createHeadless.bind(pty)
+    vi.spyOn(pty, 'createHeadless').mockImplementation(async (o) => {
+      clientCast({ op: 'upsert', node: { ...(await liveNode(o.persistKey!)), position: { x: 999, y: 7 } } })
+      castAtMove = cast.length
+      return create(o)
+    })
+    const reply = await factory.openAgent('term-source', { agent: 'claude', prompt: 'hello' }, true)
+    factory.stop()
+    expect(reply).toMatchObject({ ok: true })
+    const id = (reply.result as { id: string }).id
+    expect(castAtMove).toBeGreaterThan(0)
+    // The verb's own patch (the launch was delivered) landed; the teammate's move was kept.
+    expect(onDisk(id)?.position).toEqual({ x: 999, y: 7 })
+    expect(onDisk(id)?.pendingLaunch).toBeUndefined()
+    const later = upsertsOf(cast.slice(castAtMove), id)
+    expect(later.length).toBeGreaterThan(0)
+    for (const n of later) expect(n.position).toEqual({ x: 999, y: 7 })
+    expect(broadcast.at(-1)?.nodes.find((n) => n.id === id)?.position).toEqual({ x: 999, y: 7 })
+  })
+
+  it('open: a node deleted while the launch runs stays deleted, and nothing re-creates it', async () => {
+    const factory = new HeadlessNodeFactory(deps())
+    let castAtDelete = -1
+    let deleted = ''
+    const create = pty.createHeadless.bind(pty)
+    vi.spyOn(pty, 'createHeadless').mockImplementation(async (o) => {
+      deleted = o.persistKey!
+      clientCast({ op: 'remove', id: deleted })
+      castAtDelete = cast.length
+      return create(o)
+    })
+    await factory.openAgent('term-source', { agent: 'claude', prompt: 'hello' }, true)
+    factory.stop()
+    expect(deleted).not.toBe('')
+    // Nothing is left for the verb to write (its node is gone), so the deletion reaches disk with the
+    // authority's own flush — and a stale upsert from the verb would have re-created it there.
+    await authority.flushAll()
+    expect(onDisk(deleted)).toBeUndefined()
+    expect(upsertsOf(cast.slice(castAtDelete), deleted)).toEqual([])
+    expect(broadcast.at(-1)?.nodes.some((n) => n.id === deleted)).toBe(false)
+  })
+
+  it('run: a move made while the launch runs survives; the claim is cleared on the moved node', async () => {
+    const factory = new HeadlessNodeFactory(deps())
+    let castAtMove = -1
+    const create = pty.createHeadless.bind(pty)
+    vi.spyOn(pty, 'createHeadless').mockImplementation(async (o) => {
+      clientCast({ op: 'upsert', node: { ...(await liveNode('term-held')), position: { x: 999, y: 7 } } })
+      castAtMove = cast.length
+      return create(o)
+    })
+    expect(await factory.run('term-source', { node: 'term-held' }, true)).toMatchObject({ ok: true, result: { started: true } })
+    factory.stop()
+    expect(onDisk('term-held')?.position).toEqual({ x: 999, y: 7 })
+    expect(onDisk('term-held')?.pendingLaunch).toBeUndefined()
+    for (const n of upsertsOf(cast.slice(castAtMove), 'term-held')) expect(n.position).toEqual({ x: 999, y: 7 })
+    expect(broadcast.at(-1)?.nodes.find((n) => n.id === 'term-held')?.position).toEqual({ x: 999, y: 7 })
+  })
+
+  it('refreshArmed: a move made while the held launch is typed survives; the arm is cleared on the moved node', async () => {
+    const factory = new HeadlessNodeFactory(deps())
+    pty.live.add('term-armed')
+    let castAtMove = -1
+    const send = pty.sendText.bind(pty)
+    vi.spyOn(pty, 'sendText').mockImplementation(async (id, text) => {
+      clientCast({ op: 'upsert', node: { ...(await liveNode('term-armed')), position: { x: 999, y: 7 } } })
+      castAtMove = cast.length
+      return send(id, text)
+    })
+    await factory.refreshArmed({ nodeId: 'term-dep', state: 'done' })
+    factory.stop()
+    expect(pty.sends).toEqual([{ nodeId: 'term-armed', text: 'printf armed' }])
+    expect(onDisk('term-armed')?.position).toEqual({ x: 999, y: 7 })
+    expect(onDisk('term-armed')?.pendingLaunch).toBeUndefined()
+    for (const n of upsertsOf(cast.slice(castAtMove), 'term-armed')) expect(n.position).toEqual({ x: 999, y: 7 })
+    expect(broadcast.at(-1)?.nodes.find((n) => n.id === 'term-armed')?.position).toEqual({ x: 999, y: 7 })
+  })
+
+  it('an UNGOVERNED project: a browser save made while the launch runs is not overwritten either', async () => {
+    shared.clear()
+    const factory = new HeadlessNodeFactory(deps())
+    const create = pty.createHeadless.bind(pty)
+    vi.spyOn(pty, 'createHeadless').mockImplementation(async (o) => {
+      const ws = await store.load({ sideline: false })
+      const n = ws.projects[0].nodes.find((x) => x.id === o.persistKey)!
+      n.position = { x: 999, y: 7 }
+      await store.save(ws)
+      return create(o)
+    })
+    const reply = await factory.openAgent('term-source', { agent: 'claude', prompt: 'hello' }, true)
+    factory.stop()
+    const id = (reply.result as { id: string }).id
+    expect(onDisk(id)?.position).toEqual({ x: 999, y: 7 })
+    expect(onDisk(id)?.pendingLaunch).toBeUndefined()
+  })
+
+  it('close: a browser save made while the panes are killed is not overwritten by the close', async () => {
+    shared.clear()
+    const factory = new HeadlessNodeFactory(deps())
+    const destroy = pty.destroySession.bind(pty)
+    vi.spyOn(pty, 'destroySession').mockImplementation(async (c, id, o) => {
+      const ws = await store.load({ sideline: false })
+      ws.projects[0].nodes.find((x) => x.id === 'term-dep')!.position = { x: 999, y: 7 }
+      await store.save(ws)
+      return destroy(c, id, o)
+    })
+    expect(await factory.close('term-source', { node: 'term-held' }, true)).toMatchObject({ ok: true })
+    factory.stop()
+    expect(onDisk('term-held')).toBeUndefined()
+    expect(onDisk('term-dep')?.position).toEqual({ x: 999, y: 7 })
+    expect(broadcast.at(-1)?.nodes.find((n) => n.id === 'term-dep')?.position).toEqual({ x: 999, y: 7 })
+  })
+
+  it('once canvas control stopped, a verb still mid-launch neither casts nor saves (and says so)', async () => {
+    const factory = new HeadlessNodeFactory(deps())
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const save = vi.spyOn(store, 'save')
+    let castAtStop = -1
+    let savesAtStop = -1
+    const create = pty.createHeadless.bind(pty)
+    vi.spyOn(pty, 'createHeadless').mockImplementation(async (o) => {
+      factory.stop()
+      castAtStop = cast.length
+      savesAtStop = save.mock.calls.length
+      return create(o)
+    })
+    await factory.openAgent('term-source', { agent: 'claude', prompt: 'hello' }, true)
+    expect(castAtStop).toBeGreaterThan(0)
+    expect(cast.length).toBe(castAtStop)
+    expect(save.mock.calls.length).toBe(savesAtStop)
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('canvas control stopped'))).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('a verb that stops before its FIRST save writes nothing either', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const save = vi.spyOn(store, 'save')
+    let factory: HeadlessNodeFactory | null = null
+    factory = new HeadlessNodeFactory({
+      ...deps(),
+      cliCaps: async () => {
+        factory!.stop()
+        return { version: null, autoPermissionMode: false, fullscreenTui: false, sessionIdFlag: false }
+      }
+    })
+    await factory.openAgent('term-source', { agent: 'claude', prompt: 'hello' }, true)
+    expect(cast).toEqual([])
+    expect(save).not.toHaveBeenCalled()
+    expect(broadcast).toEqual([])
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('canvas control stopped'))).toBe(true)
+    warn.mockRestore()
+  })
+
+  it('refreshArmed with nothing ready deep-copies nothing and saves nothing', async () => {
+    const factory = new HeadlessNodeFactory(deps())
+    const save = vi.spyOn(store, 'save')
+    const clone = vi.spyOn(globalThis, 'structuredClone')
+    // Armed, but its dependency is not done: nothing changes.
+    await factory.refreshArmed({ nodeId: 'term-dep', state: 'working' })
+    // A hook event from a node nobody waits on.
+    await factory.refreshArmed({ nodeId: 'term-source', state: 'done' })
+    factory.stop()
+    expect(clone).not.toHaveBeenCalled()
+    expect(save).not.toHaveBeenCalled()
+    expect(cast).toEqual([])
+    clone.mockRestore()
   })
 })

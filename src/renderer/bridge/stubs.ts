@@ -593,6 +593,7 @@ export function buildStubApi(): Omit<
     // Governs nothing by default. The Server Edition overrides it with the real bridge
     // (`buildCanvasAuthorityApi`); a relay tab answers from its own connection (relay-api.ts).
     canvasAuthority: {
+      assumeAllUntilAnswered: false,
       governed: async () => [],
       onChanged: noopUnsub
     }

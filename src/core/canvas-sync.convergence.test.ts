@@ -1188,7 +1188,7 @@ describe('a solo client on a governed project (the canvas authority)', () => {
   }
 
   it('with the project governed, the solo edit reaches the authority and is written', async () => {
-    const { solo, writes, authority } = soloWithAuthority(() => shouldPublishCanvas({ hasPeers: false, governed: true }))
+    const { solo, writes, authority } = soloWithAuthority(() => shouldPublishCanvas(false, new Set([PROJECT]), PROJECT))
     solo.edit([node('n1', 42)])
     solo.editEdges({ bridges: [{ id: 'e1', source: 'n1', target: 'n1' }] })
     bus.settle()
@@ -1200,7 +1200,7 @@ describe('a solo client on a governed project (the canvas authority)', () => {
   })
 
   it('with the pre-authority gate (a peer only), nothing is cast and nothing is written', async () => {
-    const { solo, writes, authority } = soloWithAuthority(() => shouldPublishCanvas({ hasPeers: false, governed: false }))
+    const { solo, writes, authority } = soloWithAuthority(() => shouldPublishCanvas(false, new Set<string>(), PROJECT))
     solo.edit([node('n1', 42)])
     bus.settle()
     await authority.flushAll()
