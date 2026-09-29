@@ -63,6 +63,7 @@ import {
 } from './canvas-image-import'
 import {
   SharedGlyphLayer,
+  createPixelRatioWatcher,
   flushOpaqueNodeIds,
   gestureTerminalIds,
   hasActiveGesture,
@@ -84,6 +85,7 @@ import { terminalKey } from '../terminal/terminal-config'
 import {
   setWebglGesture,
   setWebglZoom,
+  setWebglDevicePixelRatio,
   releaseAllHiddenGrants,
   WEBGL_GESTURE_SETTLE_MS
 } from '../terminal/webgl-budget'
@@ -10191,9 +10193,10 @@ export function Canvas() {
           zoomRafRef.current = null
           setZoomPct(Math.round(viewportRef.current.zoom * 100))
           setGroupLabelBoost(viewportRef.current.zoom)
-          // Feed the crisp gate (GPU text is a magnified bitmap past ~175%; the DOM renderer
-          // re-rasters and stays sharp). Idempotent + hysteresis inside, and the swaps it queues
-          // only run once the gesture settles — per-frame cost here is a float compare.
+          // Feed the crisp gate (GPU text is a magnified bitmap past ~175%, or past 100% on a
+          // low-DPI display; the DOM renderer re-rasters and stays sharp). Idempotent + hysteresis
+          // inside, and the swaps it queues only run once the gesture settles — per-frame cost
+          // here is a float compare.
           setWebglZoom(viewportRef.current.zoom)
         })
       }
@@ -15104,6 +15107,27 @@ export function Canvas() {
           break
       }
     })
+  }, [])
+
+  // The crisp gate's zoom threshold depends on the display (issue #986): report the device-pixel
+  // ratio now and whenever it changes. Same two triggers as the shared glyph layer: the re-arming
+  // media-query watcher, plus `resize` for ratios an exact `dppx` query can miss (fractional
+  // browser-zoom steps in the Server Edition).
+  useEffect(() => {
+    const report = (): void => setWebglDevicePixelRatio(window.devicePixelRatio)
+    report()
+    const watch = createPixelRatioWatcher(
+      {
+        dpr: () => window.devicePixelRatio || 1,
+        match: (query) => (typeof window.matchMedia === 'function' ? window.matchMedia(query) : null)
+      },
+      report
+    )
+    window.addEventListener('resize', report)
+    return () => {
+      watch.stop()
+      window.removeEventListener('resize', report)
+    }
   }, [])
 
   // Safety net for a lost Stop POST / crashed CLI: decay working entries that saw no hook
