@@ -161,14 +161,33 @@ export function createHostedJoiner(deps: HostedJoinerDeps): HostedJoiner {
         approved = true
         disarm()
       })
-      const unSas = deps.onSas(connectionId, disarm)
+      let sasSeen = false
+      let settled = false
+      const unSas = deps.onSas(connectionId, () => {
+        sasSeen = true
+        disarm()
+      })
       if (req.autoConfirm) arm()
+      else {
+        // A PASTED code for a team this device holds an APPROVED bookmark for: main confirms that
+        // join on its own (the bookmark's approval, for the same host key — a hostId derives from
+        // it), so no SAS prompt comes and `sasConfirmed` never fires. Arm when the lookup answers —
+        // unless a SAS showed up first (the host asked for a comparison after all) or the mount has
+        // already settled.
+        void deps.bookmarks().then(
+          (list) => {
+            if (!settled && !sasSeen && list.some((b) => b.hostId === req.hostId && b.approved)) arm()
+          },
+          () => {}
+        )
+      }
       let outcome: HostedMountOutcome
       try {
         outcome = await deps.mount(connectionId, req, { sasConfirmed: arm })
       } catch (error) {
         outcome = { error, declined: false }
       } finally {
+        settled = true
         unApproved()
         unSas()
         disarm()

@@ -580,6 +580,44 @@ describe('hosted joiner', () => {
     expect(h.notices).toEqual([{ kind: 'info', text: 'Waiting for an owner of box to approve this device…', sticky: true }])
   })
 
+  it('D3: a PASTED code for a team this device already has an approved bookmark for arms the notice too', async () => {
+    // Main auto-confirms such a join (the bookmark's approval, for the same host key), so no SAS
+    // prompt comes and no `sasConfirmed` ever fires: the clock must start when the connect resolves.
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    j.joinWithCode(codeFor('H1', 'box'))
+    h.connects[0].resolve('c0')
+    await flush()
+    const waits = h.timers.filter((t) => t.ms === WAITING_NOTICE_DELAY_MS && !t.cleared)
+    expect(waits).toHaveLength(1)
+    waits[0].cleared = true
+    waits[0].fn()
+    expect(h.notices).toEqual([{ kind: 'info', text: 'Waiting for an owner of box to approve this device…', sticky: true }])
+  })
+
+  it('D3: a pasted code for a bookmark that is NOT approved still waits for the SAS confirm', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: false, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    j.joinWithCode(codeFor('H1', 'box'))
+    h.connects[0].resolve('c0')
+    await flush()
+    expect(h.timers.filter((t) => t.ms === WAITING_NOTICE_DELAY_MS && !t.cleared)).toEqual([])
+  })
+
+  it('D3: a SAS that shows up before the bookmark lookup answers wins — the lookup does not arm the notice', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    let answer!: (l: Array<{ hostId: string; label: string; approved: boolean; code: string }>) => void
+    ;(h.deps.bookmarks as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise((r) => (answer = r)))
+    const j = createHostedJoiner(h.deps)
+    j.joinWithCode(codeFor('H1', 'box'))
+    h.connects[0].resolve('c0')
+    await flush()
+    h.sasCbs.get('c0')!() // the host asked for a comparison after all
+    answer([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    await flush()
+    expect(h.timers.filter((t) => t.ms === WAITING_NOTICE_DELAY_MS && !t.cleared)).toEqual([])
+  })
+
   it('R41: a bookmarked reconnect arms it when its connect resolves; a SAS that shows up after all disarms it', async () => {
     const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
     const j = createHostedJoiner(h.deps)
