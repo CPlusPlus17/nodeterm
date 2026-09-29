@@ -232,6 +232,7 @@ export type ControlVerb =
   | 'color'
   | 'write'
   | 'close'
+  | 'run'
   | 'board'
   | 'assign'
   | 'send'
@@ -272,6 +273,10 @@ const VERBS: ControlVerb[] = [
   'color',
   'write',
   'close',
+  // #925: start a QUEUED node now: the CLI twin of the node's Run now button. It works on a node in
+  // a project the user is not viewing (headless), and takes `--project` through the same grant gate
+  // as the open verbs.
+  'run',
   'board',
   'assign',
   'send',
@@ -364,6 +369,7 @@ export function parseControlRequest(
   if (!VERBS.includes(verb as ControlVerb)) return { error: `Unknown verb: ${verb}` }
   const v = verb as ControlVerb
   if (v === 'close' && !args.node) return { error: 'close requires --node <id>' }
+  if (v === 'run' && !args.node) return { error: 'run requires --node <id>' }
   if (v === 'write' && !args.node) return { error: 'write requires --node <id>' }
   if (v === 'write' && !args.text) return { error: 'write requires --text' }
   if ((v === 'show-image' || v === 'show-video') && !args.path) {
@@ -480,13 +486,15 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     'a caller may mutate or message only nodes it opened during the current server run.',
     'Restarting the server clears that creator proof; persisted nodes and queued launches are never',
     'auto-adopted, relaunched, or controlled at boot. An unowned target receives a named refusal.',
+    'On the Server Edition `--run-now` changes nothing else (opens start at once; the `--after`',
+    'refusal still applies) and `run` reaches only nodes you opened during this server run.',
     '',
     'Verbs:',
     '- `list` — current nodes (id, kind, title). Start here when you need a node id.',
     '- `help` — print the verb list. Answered by the shim itself, so it works even if the app is down.',
-    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>]` — open N plain terminals. `--cmd` requires verified node identity.',
-    '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>]` — open N Claude sessions.',
-    `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>]\` — open`,
+    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>] [--run-now]` — open N plain terminals. `--cmd` requires verified node identity.',
+    '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]` — open N Claude sessions.',
+    `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open`,
     '  any agent CLI. `--group` parents the node(s) into a group frame; a worktree-bound group also',
     '  hands its worktree path down as the cwd. `--after <id,id>` opens the node ARMED: it does not',
     '  start until every listed station has finished a turn SUCCESSFULLY. It is',
@@ -503,11 +511,20 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  and do not report the session as started. `--cwd`/`--count`/`--group`/`--after`/`--prompt`',
     '  all still apply. If your project is CLOSED the node is still saved into it and the reply',
     '  says the project is closed; the tab is not reopened for you.',
+    '  Add `--run-now` to start a cold-opened session immediately instead. Put it LAST on the line,',
+    '  in either form (`--run-now` or `--run-now=1`): an older shim can still sit on an SSH host (it',
+    '  is rewritten only on connect), and it takes the token after any flag as that flag\'s value,',
+    '  so mid-line either form swallows the flag after it. The session starts headless while the',
+    '  user stays where they are, the reply reports `started: true` with `startedIds`, and a closed',
+    '  project gets its tab restored (not switched to), except for an SSH project or when no',
+    '  project is open.',
+    '  `--run-now` cannot be combined with `--after`. A start that could not be delivered still',
+    '  reports `queued` with a `reason`, and the node keeps its Run now button.',
     '  `--project <id>` opens the node(s) in another',
     '  project instead of yours. It accepts exactly two things — any other id is refused: your OWN',
     '  project id, which behaves exactly as if the flag were omitted; or an id `open-project`',
     '  returned to YOU in this session. A session opened into a non-active project',
-    '  starts when the user next views that project — do not poll for it.',
+    '  starts when the user next views that project (at once with `--run-now`) — do not poll for it.',
     '  `--group`/`--after` cannot be combined with `--project`.',
     '  The reply reports delivery: `queued` is true (and `queuedIds`',
     '  lists which) while launch delivery is pending, including a visible node waiting for its PTY,',
@@ -517,8 +534,10 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  exists on the canvas but its agent launch has not been delivered: do not route work to it, do not',
     '  `send` to it and do not report it as started. It launches itself when its wait ends,',
     '  then reports through the ordinary status hooks — there is nothing to poll.',
+    '  With `--run-now` a started node is listed in `startedIds`, not `queuedIds`.',
     '  `queued: false` is not proof the agent is running. `deliveredIds` confirms command delivery only.',
-    '  `list` names QUEUED, LAUNCH FAILED, DROPPED and AGENT STATUS UNCONFIRMED where observed.',
+    '  `list` names QUEUED, STARTING, LAUNCH FAILED, DROPPED and AGENT STATUS UNCONFIRMED where',
+    '  observed. STARTING means a background start is in flight: do not `run` that node again.',
     '  `--prompt` arrives on ONE LINE: every run of whitespace in it, newlines included, is',
     '  collapsed to a single space before the session starts (the prompt rides the launch command',
     '  line typed into the pane). For a structured or multi-line brief use `--prompt-file <abs',
@@ -594,6 +613,18 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '- `rename --node <id> --title "New Name"` — rename any node (terminals, groups, stickies…).',
     '  Renaming to the title the node ALREADY has is a no-op: nothing is typed into its agent',
     '  session, and the reply says `already named`. Re-assert your own name as often as you like.',
+    '- `run --node <id> [--project <id>]` — start a QUEUED node now: the command-line twin of the',
+    '  node\'s Run now button. It delivers the node\'s held launch even while the user looks',
+    '  elsewhere. In a project that is not on screen, or on a node whose terminal is mounted, it also',
+    '  skips an `--after` wait (a deliberate override). A node whose project IS on screen but whose',
+    '  terminal is not mounted (released while out of view) and that waits on `--after` or already',
+    '  failed to launch is refused with `run-not-mounted`: the user must bring it into view and press',
+    '  Run now. A node in another project needs `--project <id>` (your own project, or an id',
+    '  `open-project` returned to you). The reply says `started: true`, or `queued: true` with a',
+    '  `reason`. `remote-unsupported` is an SSH project\'s node while that project is not on screen:',
+    '  its launch is left exactly as it was, so a plain queued launch starts when the user views the',
+    '  project, and an armed or failed one still needs its wait or Run now.',
+    '  A node with nothing queued is refused. `run` requires verified node identity.',
     `- \`color --node <id,id> --color C\` — recolor nodes, frames, or stickies. C is a palette NAME`,
     `  or its hex: ${nodeColorChoices()}. The agent names paint a node its CLI's own brand color.`,
     '- `write --node <id> --text "..."` / `close --node <id,id>` — type into / close nodes.',
@@ -660,7 +691,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '',
     'Multi-repo orchestration: one project per repository — `open-project --cwd <repo>` (the user',
     'confirms once), then `open-agent --agent claude --project <returned id> --prompt "…"` per repo,',
-    'one repo at a time. Sessions in a non-active project start when the user views that project —',
+    'one repo at a time. Sessions in a non-active project start when the user views that project, or at',
+    'once with `--run-now` —',
     'do not poll for them. v1 has no cross-project links: read a repo\'s results by opening a',
     'reader agent inside that project and linking within it.'
   ].join('\n')
@@ -747,7 +779,7 @@ if [ "$nt_verb" = "help" ] || [ "$nt_verb" = "--help" ] || [ "$nt_verb" = "-h" ]
 fi
 
 # Translate \`--flag value\` pairs — plus the one bare positional the show-image/show-video and
-# write/close/rename/color/branch/send/reply/sticky forms accept — into curl --data-urlencode arguments. The positional
+# write/close/rename/color/branch/send/reply/sticky/run forms accept — into curl --data-urlencode arguments. The positional
 # list doubles as the accumulator: originals are consumed from the front, translated pairs
 # appended at the back, so "$@" holds exactly the curl args once the loop drains.
 nt_seen_pos=0
@@ -791,7 +823,7 @@ while [ "$nt_i" -lt "$nt_count" ]; do
         nt_seen_pos=1
         case "$nt_verb" in
           show-image|show-video) set -- "$@" --data-urlencode "arg.path=$nt_a" ;;
-          write|close|rename|color|branch|send|reply|sticky) set -- "$@" --data-urlencode "arg.node=$nt_a" ;;
+          write|close|rename|color|branch|send|reply|sticky|run) set -- "$@" --data-urlencode "arg.node=$nt_a" ;;
         esac
       fi
       ;;
@@ -934,7 +966,9 @@ ${dryRunDocLines().join('\n')}
 Server Edition ownership is fail-closed: every request requires verified node identity, and a
 caller may mutate or message only nodes it opened during the current server run. Restarting
 the server clears that creator proof; persisted nodes and queued launches are never auto-adopted,
-relaunched, or controlled at boot. An unowned target receives a named refusal.
+relaunched, or controlled at boot. An unowned target receives a named refusal. On the Server
+Edition \`--run-now\` changes nothing else (opens start at once; the \`--after\` refusal still
+applies) and \`run\` reaches only nodes you opened during this server run.
 
 Verbs:
 - \`list\` — list current nodes (id, kind, title). Start here when you need a node id.
@@ -944,9 +978,9 @@ Verbs:
   not seven. It clears itself the moment that station completes another turn.
 - \`help\` — print the verb list. The shim answers this itself, without reaching the app, so it
   is also what to run when you are unsure whether the control endpoint is alive.
-- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
-- \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>]\` — open N Claude sessions (default 1).
-- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>]\` — open N sessions of any agent CLI.
+- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--project <id>] [--run-now]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
+- \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N Claude sessions (default 1).
+- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N sessions of any agent CLI.
   \`--group\` parents the node(s) into an existing group frame; a worktree-bound group also
   hands its worktree path down as the cwd.
   \`--after <id,id>\` opens the node **armed**: it does NOT start yet, and launches itself once
@@ -967,8 +1001,8 @@ Verbs:
   were omitted; or an id \`open-project\` returned to YOU
   in this session. Neither switches the user's view. Defaults inside the target are the
   TARGET project's (its cwd, its default account and permission mode). A session opened into a
-  non-active project starts when the user next views that project — do not poll for it; the reply
-  says so. \`--group\`/\`--after\` cannot be combined with \`--project\`.
+  non-active project starts when the user next views that project (at once with \`--run-now\`) —
+  do not poll for it; the reply says so. \`--group\`/\`--after\` cannot be combined with \`--project\`.
   **An open NEVER switches the user's view — not even into your own project.** If the project you
   are running in is not the one on screen, the node is opened **cold**: created and saved there,
   with its session starting when the user next views that project. Every flag still applies
@@ -977,6 +1011,14 @@ Verbs:
   **closed**, the node is still saved into it and the reply says so; the tab is not reopened for
   you. So: opening a station is safe to do at any time, but a station you opened while the user was
   elsewhere is not running yet — read \`queued\` before you route work to it.
+  Add \`--run-now\` to start a cold-opened session immediately instead. Put it LAST on the line,
+  in either form (\`--run-now\` or \`--run-now=1\`): an older shim can still sit on an SSH host (it
+  is rewritten only on connect), and it takes the token after any flag as that flag's value, so
+  mid-line either form swallows the flag after it. The session starts headless while the user
+  stays where they are, the reply reports \`started: true\` with \`startedIds\`, and a closed
+  project gets its tab restored (not switched to), except for an SSH project or when no
+  project is open. \`--run-now\` cannot be combined with \`--after\`. A start that could not be
+  delivered still reports \`queued\` with a \`reason\`, and the node keeps its Run now button.
   **The reply reports launch delivery, not agent health.** \`queued\` is true — and
   \`queuedIds\` names which of the returned ids — while launch delivery is pending: waiting for its PTY, or on
   \`--after\`, on a worktree's setup script, or on a project the user has not viewed yet (a
@@ -985,7 +1027,8 @@ Verbs:
   to it, do not \`send\` to it and do not report it as started. It launches itself when its wait
   ends and then reports through the ordinary status hooks, so there is nothing to poll.
   \`queued: false\` does not prove the agent is running. \`deliveredIds\` confirms command delivery only.
-  \`list\` names QUEUED, LAUNCH FAILED, DROPPED and AGENT STATUS UNCONFIRMED where observed.
+  \`list\` names QUEUED, STARTING, LAUNCH FAILED, DROPPED and AGENT STATUS UNCONFIRMED where
+  observed. STARTING means a background start is in flight: do not \`run\` that node again.
   \`--prompt\` arrives on ONE LINE. Every run of whitespace in it — newlines included — is
   collapsed to a single space before the session starts, because the prompt is passed as an
   argument on the agent CLI's launch command line and that line is typed into the pane. Two
@@ -1106,6 +1149,18 @@ ${issueBindingDocLines().join('\n')}
 - \`rename --node <id> --title "New Name"\` — rename any node (terminals, groups, stickies…).
   Renaming to the title the node ALREADY has is a no-op: nothing is typed into its agent
   session, and the reply says \`already named\`. Re-assert your own name as often as you like.
+- \`run --node <id> [--project <id>]\` — start a QUEUED node now: the command-line twin of the
+  node's Run now button. It delivers the node's held launch even while the user looks elsewhere.
+  In a project that is not on screen, or on a node whose terminal is mounted, it also skips an
+  \`--after\` wait (a deliberate override). A node whose project IS on screen but whose terminal
+  is not mounted (released while out of view) and that waits on \`--after\` or already failed to
+  launch is refused with \`run-not-mounted\`: the user must bring it into view and press Run now.
+  A node in another project needs \`--project <id>\` (your own project, or an id \`open-project\`
+  returned to you). The reply says \`started: true\`, or \`queued: true\` with a \`reason\`.
+  \`remote-unsupported\` is an SSH project's node while that project is not on screen: its launch
+  is left exactly as it was, so a plain queued launch starts when the user views the project, and
+  an armed or failed one still needs its wait or Run now. A node with nothing queued is refused.
+  \`run\` requires verified node identity.
 - \`color --node <id,id> --color C\` — recolor nodes, frames, or stickies. C is a palette NAME or
   its hex (either is accepted, and the hex is case-insensitive): ${nodeColorChoices()}.
   The agent names are that CLI's own brand color — \`--color claude\` paints a node the color a
@@ -1244,9 +1299,8 @@ When the workstreams live in DIFFERENT repositories, give each repo its own proj
 piling every session onto your canvas: \`open-project --cwd <repo>\` (the user confirms once;
 idempotent thereafter), then \`open-agent --agent claude --project <returned id> --prompt
 "<task>"\` — one repo at a time. With a RETURNED id neither verb moves the user's view, and a
-session opened into a non-active project starts when the user next views that project — do not
-poll for it. v1 has no
-cross-project links: read a repo's results by opening a reader agent inside that project and
-linking within it.
+session opened into a non-active project starts when the user next views that project, or at once
+with \`--run-now\` — do not poll for it. v1 has no cross-project links: read a repo's results by
+opening a reader agent inside that project and linking within it.
 `
 }

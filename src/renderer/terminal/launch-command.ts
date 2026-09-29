@@ -23,6 +23,10 @@ export function registerLaunchWriter(id: string, writer: Writer, scope: object =
 export function launchCommand(id: string, command: string, manual = false, scope: object = defaultScope): Promise<LaunchOutcome> {
   return writersFor(scope).get(id)?.(command, manual) ?? Promise.resolve('cancelled')
 }
+/** Is a writer registered for `id` (its PTY is mounted, or parked with the writer alive)? */
+export function hasLaunchWriter(id: string, scope: object = defaultScope): boolean {
+  return writersFor(scope).has(id)
+}
 
 export function createLaunchWriter(opts: {
   claimAttempt(manual: boolean, command: string): Promise<LaunchClaim>

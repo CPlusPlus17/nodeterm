@@ -78,9 +78,10 @@ import {
   type AgentMessagingDeps
 } from '../core/agents/agent-messaging'
 import type { RemoteLogExec } from '../core/board-log'
-import type { TranscriptPresence } from '../shared/types'
+import type { PtyCreateOptions, TranscriptPresence } from '../shared/types'
 import { boardLogRemotePath } from '../core/board-log'
 import { PtyManager } from '../core/pty-manager'
+import { desktopHeadlessRequest, launchHeadless } from '../core/headless-launch'
 import { WorkspaceStore } from '../core/workspace-store'
 import type { CardLabelEdit } from '../core/project-kanban-write'
 import { WorkspaceWatcher } from '../core/workspace-watcher'
@@ -1505,6 +1506,20 @@ app.whenReady().then(async () => {
   // The late cold-start check (PtyCreateResult.freshUnverified). Registered in core's shared pty
   // block below on the server side too — this one is here beside its sibling.
   corePlatform.handle(IPC.ptySessionAge, (persistKey: string) => ptyManager.sessionAgeSeconds(persistKey))
+
+  // #925: canvas-control `--run-now` / `run`, desktop only. Registered here rather than in core's
+  // shared `registerIpc`, so a Server Edition browser cannot reach it (the server starts nodes
+  // through its own HeadlessNodeFactory). A relay peer does reach this table, and is refused
+  // host-side because the channel is in `HOST_ONLY_CHANNELS` (shared/host-control). All logic lives
+  // in core/headless-launch: `desktopHeadlessRequest` strips `sshRemote`, `viewerId` and `clearEnv`
+  // and forces release + requirePersistent. The renderer refuses an SSH node before any claim (the primary fence); the
+  // `requireRemote` it sets for an SSH-project node is kept here, so core's `spawnNew` refusal
+  // stands behind that fence as a belt.
+  corePlatform.handle(
+    IPC.ptyLaunchHeadless,
+    (req: { ptyOptions: PtyCreateOptions; command: string }) =>
+      launchHeadless(ptyManager, desktopHeadlessRequest(req))
+  )
 
   // Gemini's title read needs the transcript path its own context tail already tracks (nothing
   // scans for it). That tail is created ~600 lines below with the rest of the hook plumbing, while

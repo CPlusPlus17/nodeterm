@@ -197,6 +197,7 @@ const launchLabels = {
   queued: 'QUEUED',
   failed: 'LAUNCH FAILED',
   stalled: 'QUEUED (terminal not ready)',
+  starting: 'STARTING',
   dropped: 'DROPPED',
   working: 'WORKING',
   unconfirmed: 'AGENT STATUS UNCONFIRMED'

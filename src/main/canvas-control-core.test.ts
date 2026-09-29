@@ -77,6 +77,108 @@ describe('parseControlRequest', () => {
     })
   })
 
+  it('run requires --node (#925)', () => {
+    expect(parseControlRequest('run', {})).toEqual({ error: 'run requires --node <id>' })
+    expect(parseControlRequest('run', { node: 'n1' })).toEqual({ verb: 'run', args: { node: 'n1' } })
+  })
+
+  it('both bodies document the run verb with --project (#925)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      expect(body, name).toMatch(/- `run --node <id> \[--project <id>\]`/)
+      expect(body, name).toMatch(/twin of the\s+node'?s Run now button/)
+      expect(body, name).toMatch(/nothing queued is refused/)
+    }
+  })
+
+  it('both bodies document --run-now: headless start, reply shape, closed-tab exception (#925)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      expect(body, name).toMatch(/`--run-now`/)
+      expect(body, name).toMatch(/LAST on the line/)
+      expect(body, name).toContain('`--run-now=1`')
+      expect(body, name).toContain('startedIds')
+      expect(body, name).toMatch(/tab restored\s+\(not\s+switched\s+to\)/)
+      expect(body, name).toMatch(/`--run-now` cannot be\s+combined with `--after`/)
+      expect(body, name).toMatch(/keeps its Run now/)
+      // The pre-existing contract survives next to the new flag.
+      expect(body, name).toMatch(/not reopened/i)
+      expect(body, name).toMatch(/starts when the user next views/)
+      expect(body, name).not.toMatch(/without switching/)
+    }
+  })
+
+  // The `=1` form is NOT position-free: the pre-2026-08-15 shim loop (still on an SSH host that has
+  // not reconnected) takes the token after any `--flag` as its value, so `--run-now=1 --agent claude`
+  // becomes `arg.run-now=1=--agent` and loses `--agent`. Last on the line works in either form
+  // there (control-shim-parse.test.ts runs that old loop). The old text offered `=1` as an
+  // alternative to "last", which is the claim that broke.
+  it('both bodies say --run-now goes LAST in either form, and why (#925 final review)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      expect(body, name).toMatch(/Put it LAST on the line,\s+in either form \(`--run-now` or `--run-now=1`\)/)
+      expect(body, name).toMatch(/older shim can still sit on an SSH host/)
+      expect(body, name).toMatch(/mid-line either form\s+swallows the flag after it/)
+      expect(body, name).not.toMatch(/or write `--run-now=1`/)
+    }
+  })
+
+  it('both bodies list [--run-now] on every open verb and say run needs verified identity (#925 final review)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      for (const verb of ['open-terminal', 'open-claude', 'open-agent']) {
+        // The verb's signature line: the first line naming it, the same finder the --project
+        // walker below uses.
+        const line = body.split('\n').find((l) => l.includes(`\`${verb} `))
+        expect(line, `${name}: ${verb} signature`).toContain('[--run-now]')
+      }
+      // `run` joined requiresVerified: a legacy-token caller is refused ('Run refused.').
+      const entry = body.slice(body.indexOf('- `run --node'), body.indexOf('- `color --node'))
+      expect(entry, name).toMatch(/`run` requires verified node\s+identity/)
+    }
+  })
+
+  it('both bodies state the run / --run-now edges the implementation actually has (#925)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      // `run` skips an `--after` wait only off screen or on a mounted node: an on-screen node whose
+      // terminal is not mounted, armed or failed, is refused — the mount will not fire it.
+      expect(body, name).toContain('`run-not-mounted`')
+      expect(body, name).not.toMatch(/and it skips an `--after` wait/)
+      // An SSH project's node cannot start headless: it stays queued with that reason, and only
+      // while its project is off screen. `startHeadless` refuses before any claim, so the launch
+      // is untouched — a plain one starts on view, an armed or failed one still waits (review
+      // fix 1: "which starts when the user views it" over-promised for those two).
+      expect(body, name).toContain('`remote-unsupported`')
+      expect(body, name).toMatch(/while that project is not on\s+screen/)
+      expect(body, name).toMatch(/left exactly as it\s+was/)
+      expect(body, name).toMatch(/armed or failed one still\s+needs its wait or Run now/)
+      expect(body, name).not.toMatch(/which starts when the user views it/)
+      // The closed-tab restore has two exceptions in the code (Canvas.tsx startNodesHeadlessRef): an SSH
+      // project, and no project open (the welcome screen). The claim must not read as universal.
+      expect(body, name).toMatch(/tab restored\s+\(not\s+switched\s+to\), except for an SSH\s+project or when\s+no\s+project is open/)
+      // `list` prints STARTING while a headless start is in flight, and says not to run it again.
+      expect(body, name).toMatch(/`list` names QUEUED, STARTING,/)
+      expect(body, name).toMatch(/STARTING means a background start is in flight/)
+      // The Server Edition: --run-now changes nothing ELSE there (the --after refusal still
+      // applies — review ruling 3), and `run` is creator-owned.
+      expect(body, name).toMatch(
+        /On the Server\s+Edition `--run-now` changes\s+nothing else \(opens start at once; the\s+`--after`\s+refusal still\s+applies\)/
+      )
+      expect(body, name).toMatch(/`run` reaches only\s+nodes you opened during this server run/)
+    }
+  })
+
   it('requires a source for show verbs', () => {
     expect(parseControlRequest('show-video', {})).toEqual({ error: 'show-video requires --path' })
     expect(parseControlRequest('show-web', {})).toEqual({
@@ -316,10 +418,11 @@ describe('parseControlRequest', () => {
     expect(parseControlRequest('reply', { node: 'n1' })).toEqual({ error: 'reply requires --text' })
   })
 
-  it('the shim maps a bare positional onto arg.node for color/send/reply/sticky too', () => {
-    // The positional list is a case pattern inside CONTROL_SHIM_SCRIPT; send/reply/sticky take the
-    // same "first bare word is the node" convenience write/close/rename/color/branch already have.
-    expect(CONTROL_SHIM_SCRIPT).toContain('write|close|rename|color|branch|send|reply|sticky)')
+  it('the shim maps a bare positional onto arg.node for color/send/reply/sticky/run too', () => {
+    // The positional list is a case pattern inside CONTROL_SHIM_SCRIPT; send/reply/sticky/run take
+    // the same "first bare word is the node" convenience write/close/rename/color/branch already
+    // have (run joined for #925; control-shim-parse.test.ts runs it through a real sh).
+    expect(CONTROL_SHIM_SCRIPT).toContain('write|close|rename|color|branch|send|reply|sticky|run)')
   })
 
   it('sticky requires --node plus exactly one of --text/--append, and is not destructive', () => {
@@ -344,6 +447,8 @@ describe('parseControlRequest', () => {
       args: { node: 'n1', text: '' }
     })
     expect(isDestructiveVerb('sticky')).toBe(false)
+    // #925: `run` starts a queued launch; it is verified-only, not confirm-gated.
+    expect(isDestructiveVerb('run')).toBe(false)
   })
 
   it('both agent-facing texts warn that --prompt is one line and must not start with a slash', () => {

@@ -185,6 +185,10 @@ interface ProjectsState {
   closeProject(id: string): string
   /** Restores a closed project and makes it active. No-op if the id is unknown. */
   reopenProject(id: string): void
+  /** Un-close a project WITHOUT making it active: a closed tab reappears, the camera stays put.
+   *  For work that landed while the user was elsewhere (`registerProject`, canvas-control
+   *  `--run-now` #925). `reopenProject` is the human path and also activates. */
+  unhideProject(id: string): void
 
   /** Records freshly deleted sessions into the project's history (newest-first, capped at
    *  `CLOSED_SESSIONS_CAP`). No-op if `entries` is empty or the project no longer exists. */
@@ -860,6 +864,13 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     })
   },
 
+  unhideProject(id) {
+    set((s) => {
+      if (!s.projects.some((p) => p.id === id && p.closed)) return s
+      return { projects: s.projects.map((p) => (p.id === id ? { ...p, closed: false } : p)) }
+    })
+  },
+
   registerProject({ resolvedCwd, name, color, probed }) {
     // The same exact-match rule as `openFolderProject` (a folder maps to one project), with the
     // trailing slash stripped so `/a/b/` and `/a/b` cannot mint two tabs for one directory.
@@ -870,9 +881,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
       if (existing.closed) {
         // Un-close WITHOUT activation — reopenProject also activates, which is the exact
         // mutation the register tests are checked against (spec P6).
-        set((s) => ({
-          projects: s.projects.map((p) => (p.id === existing.id ? { ...p, closed: false } : p))
-        }))
+        get().unhideProject(existing.id)
       }
       return {
         project: get().projects.find((p) => p.id === existing.id) ?? existing,

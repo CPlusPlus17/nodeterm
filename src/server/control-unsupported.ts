@@ -95,6 +95,8 @@ export interface ServerEditionControlActions {
   sticky(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   /** Reads only; `--set` is refused by name (src/server/settings-control.ts). */
   settings(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
+  /** `run --node <id>` (#925): deliver a retained launch for the node's creator. */
+  run(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   deliver(input: {
     verb: 'send' | 'reply' | 'notify'
     sourceNodeId: string
@@ -116,7 +118,8 @@ const SERVER_V1_VERBS: ReadonlySet<string> = new Set([
   'reply',
   'notify',
   'sticky',
-  'settings'
+  'settings',
+  'run'
 ])
 
 /** A permanent, verb-specific refusal used only while canvas control itself is enabled. */
@@ -181,6 +184,8 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
         return actions.sticky(nodeId, command.args)
       case 'settings':
         return actions.settings(nodeId, command.args)
+      case 'run':
+        return actions.run(nodeId, command.args, verified)
       case 'send':
       case 'reply':
       case 'notify':

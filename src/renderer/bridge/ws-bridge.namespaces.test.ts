@@ -108,6 +108,20 @@ describe('buildRealApi: host platform', () => {
   })
 })
 
+// #925: the Server Edition starts nodes through its own HeadlessNodeFactory, so the browser build
+// has nothing to call. It must REFUSE with the coded error and never reach the wire — a relay tab
+// spreads this same `pty`, so a request here would ask the HOST's core to spawn a session.
+describe('buildRealApi: pty.launchHeadless', () => {
+  it('rejects E_UNSUPPORTED without a request', async () => {
+    const c = fakeClient()
+    const api = buildRealApi(c as never)
+    await expect(
+      api.pty.launchHeadless({ ptyOptions: { persistKey: 'n1', cols: 80, rows: 24 }, command: 'x' })
+    ).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    expect(c.calls).toEqual([])
+  })
+})
+
 describe('buildRealApi: sessionMemory', () => {
   // A real WS namespace, not a stub: the same core service (`startSessionMemoryService`) registers
   // both channels in the server shell, so the browser gets a genuine per-session breakdown of the

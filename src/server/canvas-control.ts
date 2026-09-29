@@ -236,6 +236,7 @@ export async function initServerCanvasControl(
     rename: (sourceNodeId, args) => factory.rename(sourceNodeId, args),
     color: (sourceNodeId, args) => factory.color(sourceNodeId, args),
     sticky: (sourceNodeId, args) => factory.sticky(sourceNodeId, args),
+    run: (sourceNodeId, args, verified) => factory.run(sourceNodeId, args, verified),
     settings: async (sourceNodeId, args) =>
       serverSettingsControl(
         {

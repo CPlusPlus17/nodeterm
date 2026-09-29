@@ -66,7 +66,7 @@ import {
 } from '../../shared/types'
 import type { PeerIdentity } from '../../shared/presence'
 import type { PaneOwner } from '../../shared/agents/pane-owner-predicate'
-import { buildStubApi } from './stubs'
+import { buildStubApi, unsupported } from './stubs'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 import { encodePcmForWire } from './speech-encode'
 import { type FrameTransport, WebSocketFrameTransport } from './frame-transport'
@@ -273,6 +273,9 @@ export function buildRealApi(
     // shell yet" and gives up on its own deadline.
     paneCommand: (persistKey) =>
       client.request(IPC.ptyPaneCommand, persistKey).catch(() => null) as Promise<string | null>,
+    // Documented degrade (#925): the Server Edition starts nodes through its HeadlessNodeFactory,
+    // never through the browser renderer, so there is nothing for this to call.
+    launchHeadless: () => unsupported('pty.launchHeadless'),
     // A REAL implementation, not a stub: core registers the handler, so the server this browser is
     // served from answers it. The hibernation exit fails CLOSED on a null, so a stub here would
     // have silently switched Eco off for the whole Server Edition rather than degrade it.

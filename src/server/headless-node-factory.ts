@@ -19,7 +19,7 @@ import {
   type NodeColor
 } from '../shared/node-colors'
 import { applyStickyWrite, parseStickyArgs, resolveStickyRef } from '../shared/sticky-write'
-import type { HeadlessLaunchResult } from '../shared/headless-launch'
+import type { HeadlessLaunchFailure, HeadlessLaunchResult } from '../shared/headless-launch'
 import { localNodePtyOptions } from '../shared/node-pty-options'
 import type { WorkspaceStore } from '../core/workspace-store'
 import {
@@ -36,6 +36,8 @@ import {
 import { assembleLaunchCommand } from '../shared/agents/launch'
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { oneLine } from '../shared/one-line'
+import { RUN_NOW_AFTER_REFUSAL, runNowRequested } from '../shared/control-verbs'
+import { isRemoteSessionNode } from '../shared/worktree'
 import { issueLaunchPrompt, resolveIssueArg, type IssueRef } from '../shared/github-issue-ref'
 import { runEndedEvent, runStartedEvent } from '../shared/issue-runs'
 import type { BoardLogEntry } from '../shared/types'
@@ -157,6 +159,46 @@ export function createHeadlessNodeOwnership(): HeadlessNodeOwnership {
     forget: (nodeId) => owners.delete(nodeId),
     clear: () => owners.clear()
   }
+}
+
+/** One node an `open-*` persisted but could not start. */
+export interface OpenLaunchFailure {
+  id: string
+  reason: HeadlessLaunchFailure
+  /** The node still holds its launch (manualOnly), so the user's Run now can deliver it. */
+  retained: boolean
+}
+
+/**
+ * The `open-*` failure reply (#925). Each failed node is named with its own reason, grouped, so a
+ * caller can tell a failure Run now may get past from one it repeats: `line-too-long` fails the
+ * same way on every attempt, and this edition has no `--prompt-file` (the open flag allowlist),
+ * so the only way past it is a shorter prompt or command. "Do not repeat the open request" holds
+ * for every reason: the nodes are persisted, so the same request would open duplicates.
+ */
+export function launchFailedError(
+  failures: readonly OpenLaunchFailure[],
+  verb: 'open-terminal' | 'open-agent'
+): string {
+  const groups = new Map<string, OpenLaunchFailure & { ids: string[] }>()
+  for (const f of failures) {
+    const key = `${f.reason}:${f.retained}`
+    const group = groups.get(key) ?? { ...f, ids: [] }
+    group.ids.push(f.id)
+    groups.set(key, group)
+  }
+  const what = (g: OpenLaunchFailure): string =>
+    g.reason === 'line-too-long'
+      ? 'the launch line is longer than a terminal line takes, so Run now will fail the same way; ' +
+        `shorten the ${verb === 'open-terminal' ? 'command' : 'prompt'}`
+      : g.retained
+        ? 'launch retained for Run now in the node'
+        : 'no launch was held'
+  const clauses = [...groups.values()].map((g) => `${g.reason}: ${g.ids.join(', ')} (${what(g)})`)
+  return (
+    `launch-failed: node(s) ${failures.map((f) => f.id).join(', ')} were persisted but their PTY or ` +
+    `initial command could not be delivered — ${clauses.join('; ')}; do not repeat the open request`
+  )
 }
 
 const TERMINAL_LIMIT = 8
@@ -1083,6 +1125,63 @@ export class HeadlessNodeFactory {
     })
   }
 
+  /** `run --node <id>` (#925): deliver a node's retained launch now. Server v1 ownership applies:
+   *  only nodes the caller spawned during this server run. */
+  run(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      if (!verified) {
+        return { ok: false, error: 'run-identity-refused: Server Edition canvas control requires verified node identity' }
+      }
+      const flagError = unsupportedFlags(args, new Set(['node', 'project']))
+      if (flagError) return { ok: false, error: `run: ${flagError}` }
+      const id = (args.node ?? '').trim()
+      if (!this.ownsSpawn(sourceNodeId, id)) return this.ownershipRefusal('run', sourceNodeId, id)
+      // Resolve through the ownership record, never by first id match: node ids repeat across
+      // projects (a committed project.json opened from a second folder), and `attach()` is keyed
+      // by id alone, so a stranger copy sorting first would be claimed while the owned session is
+      // typed into. `close` resolves the same way. A `--project` naming any other project is the
+      // desktop's lookup inside the named project coming up empty.
+      const owner = this.ownership.ownerOf(id)!
+      const noNode: ServerControlReply = { ok: false, error: `run: no node with id ${id}` }
+      if (args.project !== undefined && args.project !== owner.projectId) return noNode
+      const workspace = await this.deps.workspaceStore.load({ sideline: false })
+      const project = workspace.projects.find((p) => p.id === owner.projectId)
+      const node = project?.nodes.find((n) => n.id === id)
+      if (!project || !node) return noNode
+      const held = node.pendingLaunch
+      if (!held?.command) return { ok: false, error: `run-nothing-queued: ${id} has no queued launch` }
+      // A remote node is NEVER spawned locally, and this launcher only spawns locally. Refuse
+      // before the claim, leaving the held launch untouched (the desktop's startHeadless guard).
+      if (isRemoteSessionNode(node)) {
+        return {
+          ok: false,
+          error: `run-remote-unsupported: ${id} is an SSH node; the Server Edition cannot start it`
+        }
+      }
+      // Write-ahead, exactly as open() does before its own delivery.
+      node.pendingLaunch = { ...held, attempted: true, manualOnly: true }
+      await this.deps.workspaceStore.save(workspace)
+      const launched = await this.launch(project, node, held.command)
+      // As open() does: an agent this spawned fresh has not had its first real turn yet, so a
+      // later `--after` on it must not be released by the CLI's boot `done` blip.
+      if (node.agentId && launched.fresh) this.awaitingFirstWorking.add(id)
+      if (launched.outcome === 'delivered') node.pendingLaunch = undefined
+      await this.deps.workspaceStore.save(workspace)
+      this.publish(project, [node])
+      return launched.outcome === 'delivered'
+        ? {
+            ok: true,
+            message: `started ${id}; agent startup is not confirmed`,
+            result: { ids: [id], id, started: true, startedIds: [id], queued: false, queuedIds: [] }
+          }
+        : {
+            ok: true,
+            message: `${id} stays queued (${launched.reason}); launch retained for Run now`,
+            result: { ids: [id], id, started: false, startedIds: [], queued: true, queuedIds: [id], reason: launched.reason }
+          }
+    })
+  }
+
   color(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply> {
     return this.runExclusive(async () => {
       const flagError = unsupportedFlags(args, new Set(['node', 'color']))
@@ -1130,11 +1229,16 @@ export class HeadlessNodeFactory {
     return this.runExclusive(async () => {
       const flagError = unsupportedFlags(
         args,
+        // `run-now` (#925) is a no-op, since a server open already delivers immediately; only its
+        // pairing with `--after` is refused, just below.
         verb === 'open-terminal'
-          ? new Set(['count', 'cwd', 'cmd', 'after', 'project'])
-          : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model', 'issue'])
+          ? new Set(['count', 'cwd', 'cmd', 'after', 'project', 'run-now'])
+          : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model', 'issue', 'run-now'])
       )
       if (flagError) return { ok: false, error: `${verb}: ${flagError}` }
+      // "Start now" and "start when X is done" contradict each other: refused in the desktop's
+      // words, before anything is created, rather than silently opening an armed node.
+      if (runNowRequested(args) && args.after) return { ok: false, error: RUN_NOW_AFTER_REFUSAL }
       if (!verified) {
         return {
           ok: false,
@@ -1324,22 +1428,30 @@ export class HeadlessNodeFactory {
       }
 
       const failed: string[] = []
+      // Why each one failed, reported per id (#925): a reply that says only "retained for Run now"
+      // hides the reason Run now would repeat (`line-too-long`).
+      const reasons: Record<string, HeadlessLaunchFailure> = {}
+      const fail = (id: string, reason: HeadlessLaunchFailure): void => {
+        failed.push(id)
+        reasons[id] = reason
+      }
       for (const node of created) {
         try {
           const command = commands.get(node.id)
           if (!command) {
             // Nothing to deliver now (a plain terminal, or a launch held for `--after`): spawn only.
             const result = await this.attach(target, node)
-            if (!result.sessionId) failed.push(node.id)
+            if (!result.sessionId) fail(node.id, 'spawn-failed')
             else if (verb === 'open-agent' && result.fresh) this.awaitingFirstWorking.add(node.id)
             continue
           }
           const launched = await this.launch(target, node, command)
           if (verb === 'open-agent' && launched.fresh) this.awaitingFirstWorking.add(node.id)
           if (launched.outcome === 'delivered') node.pendingLaunch = undefined
-          else failed.push(node.id)
+          else fail(node.id, launched.reason)
         } catch {
-          failed.push(node.id)
+          // The launcher answers its own failures; only the spawn-only `attach` above throws.
+          fail(node.id, 'spawn-failed')
         }
       }
 
@@ -1361,10 +1473,13 @@ export class HeadlessNodeFactory {
       if (failed.length) {
         return {
           ok: false,
-          error:
-            `launch-failed: node(s) ${failed.join(', ')} were persisted but their PTY or initial ` +
-            'command could not be delivered; launch retained for Run now in the node; do not repeat the open request',
-          result: { ids, id: ids[0], after, ...launchResult }
+          error: launchFailedError(
+            created
+              .filter((node) => failed.includes(node.id))
+              .map((node) => ({ id: node.id, reason: reasons[node.id], retained: !!node.pendingLaunch })),
+            verb
+          ),
+          result: { ids, id: ids[0], after, ...launchResult, reasons }
         }
       }
       return {
