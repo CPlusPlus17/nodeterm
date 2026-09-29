@@ -7362,7 +7362,9 @@ teardown never throws and is listed first so it runs last: vitest's teardown loo
 file, and a throw there would silently skip the tmux sandbox's teardown. The leaf under the root is a
 bare `u-`, because every byte added is closer to the macOS unix-socket path budget
 (`hook-sock-path.ts`) for anything a test binds under `userDataDir`. A run killed before teardown
-leaves ONE directory.
+leaves ONE directory. A test that builds its own `CorePlatform` takes its `userDataDir` from
+`makeFakeUserDataDir()` (same root, removed with it) — never a bare `mkdtemp` in the system temp
+dir and never a fixed `/tmp/...` literal.
 `platform-fake.test.ts` fails if the root is not in effect, so dropping the `globalSetup` entry is loud.
 
 ## Conventions

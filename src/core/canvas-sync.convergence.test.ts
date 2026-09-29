@@ -19,6 +19,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { initPlatform, resetPlatformForTests, type CorePlatform } from './platform'
+import { makeFakeUserDataDir } from './platform-fake'
 import { initCanvasSync, MUTATION_MAX_BYTES } from './canvas-sync'
 import { applyCanvasMutation, isCanvasMutation } from '../shared/canvas-mutations'
 import { createCanvasOrder, createReconnectWatch, PENDING_TTL_MS } from '../shared/canvas-order'
@@ -69,7 +70,9 @@ class Bus {
   private readonly stalled = new Set<number>()
 
   platform: CorePlatform = {
-    userDataDir: '/tmp/nodeterm-convergence',
+    // Never a fixed literal: a predictable '/tmp/...' registered through initPlatform is the
+    // js/insecure-temporary-file shape (see canvas-sync.test.ts). Under the run root, removed with it.
+    userDataDir: makeFakeUserDataDir(),
     appVersion: '0.0.0-test',
     isPackaged: false,
     handle: () => {},

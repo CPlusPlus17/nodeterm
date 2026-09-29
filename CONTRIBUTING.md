@@ -1057,8 +1057,9 @@ production socket on purpose; adding a third is a review conversation, not a che
 on first read under one per-run root (`test/setup/fake-platform-root.ts`), and that root is removed
 after the last test file finishes. It used to be one `mkdtemp` in the system temp dir per call, never
 removed, and a development server collected ~395,000 of them until `/tmp` ran out of inodes and whole
-runs failed with ENOSPC. If you `mkdtemp` in a test yourself, remove it in `afterEach`/`afterAll` — or, for the `userDataDir`
-of a `CorePlatform` you build by hand, call `makeFakeUserDataDir()`, which lands under the same root.
+runs failed with ENOSPC. If you `mkdtemp` in a test yourself, remove it in `afterEach`/`afterAll`
+— or, for the `userDataDir` of a `CorePlatform` you build by hand, call `makeFakeUserDataDir()`,
+which lands under the same root.
 
 **An `infinite` CSS animation is a frame loop, and it runs whether or not anyone is looking.** A
 running animation makes the compositor produce a frame every vsync — 120/s on a ProMotion display —
