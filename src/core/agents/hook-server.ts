@@ -1453,6 +1453,11 @@ export class HookServer {
     }
     this.port = 0
     this.token = ''
+    // Forget the memoized path only now, after removeEndpointFile() used it: the next start()
+    // re-derives it from the platform it runs under. A process that boots a second core (the
+    // server e2e suites do, each on its own dataDir) otherwise advertised into the FIRST core's
+    // directory — recreating a dataDir its test had already removed.
+    this.endpointPath = ''
   }
 }
 

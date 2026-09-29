@@ -7407,6 +7407,33 @@ leaves ONE directory. A test that builds its own `CorePlatform` takes its `userD
 dir and never a fixed `/tmp/...` literal.
 `platform-fake.test.ts` fails if the root is not in effect, so dropping the `globalSetup` entry is loud.
 
+## The test suite leaves nothing in the OS temp dir
+
+Measured 2026-09-29 on a shared dev box: `/tmp` held ~41k top-level entries, and one full run of this
+suite added ~1,560 of them (`nodeterm-fake-*` alone was 1,412 — see the `fakePlatform()` paragraph
+above for that half). The filesystem ran out of INODES and every session's builds and tests broke.
+For every OTHER test dir, two layers, both needed:
+
+- **Every test dir is removed where it is made.** `testTmpDir(prefix)` (`src/core/test-tmp.ts`) is
+  a tracked `mkdtemp` whose removal is an `afterAll` in the setup file `test/setup/tmp-worker-env.ts`
+  — a setup file's hooks sit on the file's root suite and, with vitest's default stacked hook order,
+  run AFTER the file's own `afterAll` hooks, i.e. after the suite stopped whatever was writing there.
+- **The run is sandboxed and FAILS on a leak.** `test/setup/tmp-sandbox.ts` (`globalSetup`, listed
+  AFTER the tmux sandbox so that one keeps its short base path) points `TMPDIR` (and `TEMP`/`TMP` on
+  Windows) at one private directory; teardown lists what is left, removes the sandbox anyway, and
+  sets `process.exitCode = 1` naming each prefix. **Not `throw`**: vitest only LOGS a teardown error
+  (`error during close`) and still exits 0, and a throw skips the other globalSetup teardowns — the
+  tmux sandbox's, measured. Windows warns instead of failing (a just-exited child's file can be
+  EBUSY for a moment after a correct cleanup). `NODETERM_TEST_KEEP_TMP=1` keeps it for inspection.
+  `FOREIGN_TMP_ENTRIES` is the short allowlist of names nothing in this repo creates (Chrome's own
+  scratch files from the headless layout tests), each with its reason.
+- **Two leaks were production memos, not test bugs**: `contextLinkDir()` and
+  `HookServer.endpointFilePath()` cached the FIRST platform's `userDataDir` for the life of the
+  process, so a process that booted a second core (the server e2e suites) wrote `context.sh` and
+  `hook-endpoint.env` into the first core's already-removed directory. `initContextLink` and
+  `hookServer.stop()` now drop the memo. Found with `strace -f -e trace=mkdir,rename` — an EMPTY
+  leftover dir is the signature of a late writer, not of a missing `rm`.
+
 ## Conventions
 
 - **Two docs, two audiences — keep both.** This file holds the deep invariants with their

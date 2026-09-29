@@ -5,7 +5,6 @@
 // runs the real core client against the real hosted service over an in-process transport.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { joinHostedTeam, connectHostedTeam, removeHostedBookmark, createHostedJoinState, HostedJoinError, type HostedJoinDeps, type HostedJoinEvents, type HostedConnectOptions, type HostedJoinFailure } from './hosted-join'
 import { joinErrorCode, joinRetryAfterMs } from '../../shared/relay-join-errors'
@@ -20,8 +19,9 @@ import type { PeerAttach } from '../../core/relay/relay-host'
 import type { RelayTransport } from '../../core/relay/relay-socket'
 import { IPC } from '../../shared/ipc'
 import { relayPtyDataKey } from '../../shared/relay-pty-channel'
+import { testTmpDir } from '../../core/test-tmp'
 
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-join-'))
+const tmpDir = () => testTmpDir('hosted-join-')
 const pub = (k: KeyPair) => publicKeyToB64(k.publicKey)
 
 function codeFor(hostKeys: KeyPair, over: Partial<JoinCode> = {}): JoinCode {
