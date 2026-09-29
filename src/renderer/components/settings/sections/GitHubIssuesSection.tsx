@@ -10,6 +10,14 @@ import { defaultCompletionColumnId } from '@shared/kanban-category'
 import { useProjects } from '../../../state/projects'
 import { useSettings } from '../../../state/settings'
 import { prunePullAutoMove, sanitizeKanbanPullAutoMove } from '@shared/kanban-pull-links'
+import {
+  BOARD_DISPATCH_DEFAULT_CONCURRENT,
+  BOARD_DISPATCH_MAX_CONCURRENT,
+  pruneBoardDispatch,
+  sanitizeBoardDispatch,
+  type BoardDispatchProject
+} from '@shared/board-dispatch'
+import { AGENT_CONFIG, BUILTIN_AGENT_IDS } from '@shared/agents/config'
 import { markWorkspaceDirty } from '../../../state/workspaceDirty'
 import { SAVE_DEBOUNCE_MS } from '../../../lib/savePersistence'
 import { SettingsSection } from '../SettingsSection'
@@ -49,6 +57,11 @@ const ROWS = {
     title: 'Move merged session cards',
     description: 'When every pull request linked to a session card has merged, move the card to this column.',
     keywords: ['github', 'pull request', 'merged', 'move', 'automation', 'worktree', 'session']
+  },
+  dispatch: {
+    title: 'Dispatch agents',
+    description: 'When you move an issue card into this column, an agent session starts on it by itself — the same run as “Start with agent”.',
+    keywords: ['github', 'dispatch', 'agent', 'automation', 'queue', 'start with agent', 'issue', 'pause']
   },
   data: {
     title: 'Sync and local data',
@@ -154,6 +167,43 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
       }
     })
   }
+
+  const dispatchRaw = useSettings((state) => state.settings.boardDispatch)
+  const customAgents = useSettings((state) => state.settings.customAgents)
+  const claudeAccounts = useSettings((state) => state.settings.claudeAccounts)
+  const codexAccounts = useSettings((state) => state.settings.codexAccounts)
+  const dispatch = sanitizeBoardDispatch(dispatchRaw)
+  const dispatchConfig = projectId ? dispatch.projects[projectId] : undefined
+  /** Machine-local on purpose (see @shared/board-dispatch): a repository can never switch this on
+   *  for anyone. `patch: null` switches the project off, `undefined` leaves it as it is (the kill
+   *  switch alone). Every write prunes vanished projects. */
+  const setDispatch = (patch: Partial<BoardDispatchProject> | null | undefined, paused?: boolean): void => {
+    const live = new Set(useProjects.getState().projects.map((item) => item.id))
+    const current = pruneBoardDispatch(
+      sanitizeBoardDispatch(useSettings.getState().settings.boardDispatch), live)
+    const projects = { ...current.projects }
+    if (projectId && patch === null) delete projects[projectId]
+    else if (projectId && patch) {
+      const base: BoardDispatchProject = projects[projectId] ?? {
+        columnId: '',
+        agentId: 'claude',
+        maxConcurrent: BOARD_DISPATCH_DEFAULT_CONCURRENT
+      }
+      const next = { ...base, ...patch }
+      if (!next.accountId) delete next.accountId
+      if (next.columnId) projects[projectId] = next
+    }
+    updateSettings({ boardDispatch: { paused: paused ?? current.paused, projects } })
+  }
+  const dispatchAgentOptions = [
+    ...BUILTIN_AGENT_IDS.map((id) => ({ id: id as string, label: AGENT_CONFIG[id].label })),
+    ...customAgents.map((agent) => ({ id: agent.id, label: agent.label }))
+  ]
+  const dispatchAccountOptions = dispatchConfig?.agentId === 'claude'
+    ? claudeAccounts.filter((a) => !a.host && !a.pending).map((a) => ({ id: a.id, label: a.label }))
+    : dispatchConfig?.agentId === 'codex'
+      ? codexAccounts.filter((a) => !a.host && !a.pending).map((a) => ({ id: a.id, label: a.label }))
+      : []
 
   /** `GitHubHostController.status(projectId)` MASKS the auth block for a project that is not
    *  approved on this machine (`ghAuthenticated: false, activeProvider: null, tokenPresent: false`)
@@ -647,6 +697,95 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                 </Select>
               }
             />
+          </SearchableRow>
+
+          <SearchableRow {...ROWS.dispatch}>
+            <div className="space-y-3">
+              <FieldRow
+                label={ROWS.dispatch.title}
+                htmlFor="github-dispatch-column"
+                description={`${ROWS.dispatch.description} Only a move you make in this app on this machine starts one — never a label change on GitHub, a teammate’s move, or a board that arrives by git pull. One run per issue; further runs queue. This setting is for this machine only.`}
+                control={
+                  <Select
+                    id="github-dispatch-column"
+                    value={dispatchConfig && board.columns.some((c) => c.id === dispatchConfig.columnId)
+                      ? dispatchConfig.columnId : ''}
+                    onChange={(event) => setDispatch(event.target.value ? { columnId: event.target.value } : null)}
+                  >
+                    <option value="">Off</option>
+                    {board.columns
+                      .filter((column) => column.id !== githubConfig.completionColumnId)
+                      .map((column) => (
+                        <option key={column.id} value={column.id}>{column.title}</option>
+                      ))}
+                  </Select>
+                }
+              />
+              {dispatchConfig && (
+                <>
+                  <FieldRow
+                    label="Agent"
+                    htmlFor="github-dispatch-agent"
+                    control={
+                      <Select
+                        id="github-dispatch-agent"
+                        value={dispatchConfig.agentId}
+                        onChange={(event) => setDispatch({ agentId: event.target.value, accountId: undefined })}
+                      >
+                        {dispatchAgentOptions.map((agent) => (
+                          <option key={agent.id} value={agent.id}>{agent.label}</option>
+                        ))}
+                      </Select>
+                    }
+                  />
+                  {dispatchAccountOptions.length > 0 && (
+                    <FieldRow
+                      label="Account"
+                      htmlFor="github-dispatch-account"
+                      control={
+                        <Select
+                          id="github-dispatch-account"
+                          value={dispatchConfig.accountId ?? ''}
+                          onChange={(event) => setDispatch({ accountId: event.target.value || undefined })}
+                        >
+                          <option value="">Project default</option>
+                          {dispatchAccountOptions.map((account) => (
+                            <option key={account.id} value={account.id}>{account.label}</option>
+                          ))}
+                        </Select>
+                      }
+                    />
+                  )}
+                  <FieldRow
+                    label="Runs at once"
+                    htmlFor="github-dispatch-cap"
+                    description="Sessions of this project that are working or waiting on you. More dispatches wait in a queue shown on their cards."
+                    control={
+                      <Select
+                        id="github-dispatch-cap"
+                        value={String(dispatchConfig.maxConcurrent)}
+                        onChange={(event) => setDispatch({ maxConcurrent: Number(event.target.value) })}
+                      >
+                        {Array.from({ length: BOARD_DISPATCH_MAX_CONCURRENT }, (_, i) => i + 1).map((n) => (
+                          <option key={n} value={n}>{n}</option>
+                        ))}
+                      </Select>
+                    }
+                  />
+                </>
+              )}
+              <FieldRow
+                label="Pause all dispatch"
+                description="The kill switch, for every project on this machine: nothing new starts and queued dispatches are dropped. Running sessions are not touched."
+                control={
+                  <Switch
+                    ariaLabel="Pause all dispatch"
+                    checked={dispatch.paused}
+                    onChange={(checked) => setDispatch(undefined, checked)}
+                  />
+                }
+              />
+            </div>
           </SearchableRow>
 
           <SearchableRow {...ROWS.data}>

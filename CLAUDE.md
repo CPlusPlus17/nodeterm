@@ -6311,6 +6311,62 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   already has one — see the Worktrees bullet ("A worktree per GitHub issue"). Surfaces: Desktop + Server Edition (renderer + core); Omni board shows no
   issue lanes; **Mobile does not render the binding** — `issueRef` reaches the phone inside the
   project file, and nodeterm-ios ignores the unknown field (follow-up there).
+  **Board dispatch — a card THIS person moves into the dispatch column starts its own run**
+  (2026-09-30; `@shared/board-dispatch` consent, `renderer/lib/boardDispatch.ts` decisions,
+  `state/boardDispatch.ts` queue, wired in Canvas `dispatchOnUserMove`). The run is exactly "Start
+  with agent" — `issueRef` binding, the reference-only `issueLaunchPrompt`, `fileIssueSession`
+  (card filed + `run-started`) — only nobody clicked it. The hard question is WHO may trigger a run
+  on this machine, and the answer shapes everything else:
+  - **The trigger is the person's own move in this app**, never a fact that arrives from outside.
+    `decideDispatch` answers `ignore` for every origin but `'user-move'`, and the only caller that
+    says `'user-move'` is the board's move-result path (`KanbanView.moveIssueByUser` →
+    `onIssueMoved`, reached only from `requestGitHubMove` and the close/reopen confirm). A label
+    set on GitHub (by anyone — on a public repository, ANYONE) reaches this app only as a refreshed
+    page, and a board change arriving by `git pull` only as a new project file; neither has a path
+    in. `lib/board-dispatch.guard.test.ts` pins the whole chain line by line — a new caller of
+    `decideDispatch`, a second `origin: 'user-move'`, or `onIssueMoved` fired from anywhere else
+    fails it. A move GitHub did not CONFIRM (`stale`, `failed`, `read-only`, …) is not a dispatch.
+  - **Why not a label with an actor allowlist** (the other design considered): it works from a
+    phone, but it needs one issue-events read per candidate issue (budget), compares an actor
+    against a credential that can change under it, and today the poll runs only while a board is
+    subscribed — a network-derived fact standing in for consent, and no run at all when nobody has
+    the board open. That is the follow-up, not v1.
+  - **Consent is machine-local** (`settings.boardDispatch`, the `kanbanPullAutoMove` / trigger arm
+    store tier), never `.nodeterm/project.json`: a switch in the project file would let a pull
+    request make every clone start agents. Per project: the column, the agent, an optional account
+    (absent = the project default through the same funnel as "New <agent>"), and a cap (1–8,
+    default 2). Read through `sanitizeBoardDispatch`: an unreadable entry is OFF, an unreadable cap
+    is 1, the kill switch (`paused`) is on only for a literal `true`. `boardDispatch` is in
+    `SETTINGS_VERB_FORBIDDEN` — an agent that could switch the dispatcher on would grant itself more
+    agents, and the name pattern does not catch the key, so the set is its only fence. Model: the
+    same gateway default `addAgentNode` applies; there is no per-project model.
+  - **Bounds.** One run per issue: a bound session that still exists in ANY project, or a dispatch
+    already queued/starting, refuses the next with a reason on the card. The cap counts this
+    project's bound sessions that are `working`/`waiting`/`blocked`, hold a launch, or were started
+    by dispatch within `DISPATCH_STARTUP_GRACE_MS` (no hook yet) — `done` frees the slot (the cap
+    limits concurrent WORK; an idle agent spends nothing), and an unknown state from before a
+    restart does not hold one, or the cap would stay pinned. Over the cap, the dispatch QUEUES; the
+    queue is drained on a 5 s timer that runs only while something is queued, oldest first. Moving
+    a queued card out of the column withdraws it. The kill switch (Settings → GitHub Issues → Pause
+    all dispatch) refuses new dispatches and drops the queue; running sessions are not touched.
+  - **The queue is in memory, on purpose**: a queue that survived a restart would start agents at
+    boot with nobody there. A restart drops it silently, and the drag (or Start with agent) can be
+    repeated.
+  - **The card says what happened** (`DispatchChip`): "Queued for an agent (#2)", "Dispatching an
+    agent…", or "Not dispatched: <reason>" (`DISPATCH_REFUSAL_TEXT`). A started run shows as the
+    ordinary run chip.
+  - **Where it runs: the renderer**, because the trigger is a UI gesture core never sees. When the
+    dispatch is on screen (it always is at trigger time — the board is the active project's) it is
+    `addAgentNode`. A queued run whose slot frees while its project is NOT on screen is a cold open
+    into the stored project (the control verbs' path: `armForColdOpen`, `applyOwnNodeMutation`,
+    `writeDisk`) plus the #925 headless start, which raises its "Go there" notice; a headless start
+    that fails leaves the node queued to start on view and says so. **Server Edition**: on-screen
+    dispatch works; an off-screen one is written as an armed node that starts when that project is
+    next viewed (it has no headless launcher) and the notice says so. **SSH projects: refused by
+    name** (the headless launcher is local-only). **Relay tabs: refused** (the board is the host's).
+    **Mobile: N/A** (the phone board carries no issue cards). Never auto-posts to GitHub, never
+    closes an issue, never moves a card on a turn `done` — the existing rules; the dispatch column
+    may not be the completion column.
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,
   2026-08-30 — the same membership-plus-one-leaf discipline `AGENT_CONFIG` uses): each entry declares
   its filter `label`, its `placement` (`assignment` = the board's own persisted assignments,

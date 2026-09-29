@@ -138,6 +138,12 @@ so the live-state chips can never be saved into one. Board keys are
 registry commands in the `board` scope — the only scope allowed a bare letter, because it never
 fires while typing or in a terminal.
 
+Anything that **starts an agent by itself** (board dispatch is the first) takes its consent from
+machine-local settings and its trigger from a gesture the person made in this app — never from a
+label, a column or a file that can arrive from GitHub or a `git pull`. Board dispatch's one
+trigger is `KanbanView.moveIssueByUser` → `onIssueMoved`; `lib/board-dispatch.guard.test.ts`
+fails if anything else reaches `decideDispatch` with `origin: 'user-move'`.
+
 A card chip that reads agent state subscribes to a **primitive signature** of the nodes it shows
 (`teamProgressSig`, `issueRunChipSig`), never to the whole `agentStatus.byId` map — that map changes
 on every hook event of every node. Before a card shows a fact, check that its place on the board
