@@ -215,7 +215,14 @@ export const VIEW: Readonly<Record<string, Check>> = Object.freeze({
 
 export const COMMENT: Readonly<Record<string, Check>> = Object.freeze({
   [IPC.presenceChat]: pass,
-  [IPC.boardLogAppend]: projectArg0
+  // Handler args: projectId, entry. The entry is written as the client sent it (board-log-handlers
+  // `boardLogAppend`), and the board renders `kind: 'event'` as ACTIVITY ("<author> moved <card> to
+  // Done"), so a Commenter may append comments only. The author is client-supplied either way (the
+  // presence identity): a comment under someone else's name is a documented limit.
+  [IPC.boardLogAppend]: (a, ctx) => {
+    if (!sharedProject(a[0], ctx)) return no('That project is not shared.')
+    return field(a[1], 'kind') === 'comment' ? OK : no('Commenters can only add comments to the board log.')
+  }
 })
 
 /**

@@ -55,8 +55,19 @@ describe('access policy', () => {
   it('commenter may chat and append to a shared board, viewer may not', () => {
     expect(decideAccess('cast', IPC.presenceChat, ['hi'], ctx('viewer')).allow).toBe(false)
     expect(decideAccess('cast', IPC.presenceChat, ['hi'], ctx('commenter')).allow).toBe(true)
-    expect(decideAccess('req', IPC.boardLogAppend, ['P', {}], ctx('commenter')).allow).toBe(true)
-    expect(decideAccess('req', IPC.boardLogAppend, ['Q', {}], ctx('commenter')).allow).toBe(false)
+    expect(decideAccess('req', IPC.boardLogAppend, ['P', { kind: 'comment' }], ctx('commenter')).allow).toBe(true)
+    expect(decideAccess('req', IPC.boardLogAppend, ['Q', { kind: 'comment' }], ctx('commenter')).allow).toBe(false)
+  })
+  it('M1: a commenter appends COMMENTS only — an activity entry ("moved card to Done") is refused', () => {
+    const COMMENTS_ONLY = 'Commenters can only add comments to the board log.'
+    const entry = (kind: unknown) => ({ id: 'e1', ts: 1, author: { name: 'Owner', color: '#fff' }, kind, event: { type: 'card-moved' } })
+    expect(decideAccess('req', IPC.boardLogAppend, ['P', entry('comment')], ctx('commenter'))).toEqual({ allow: true })
+    expect(decideAccess('req', IPC.boardLogAppend, ['P', entry('event')], ctx('commenter'))).toEqual({ allow: false, message: COMMENTS_ONLY })
+    for (const bad of [undefined, null, 'comment', ['comment'], {}]) {
+      expect(decideAccess('req', IPC.boardLogAppend, ['P', bad], ctx('commenter')).allow, String(bad)).toBe(false)
+    }
+    // Editors write activity entries (the board's own diff funnel runs in their tab).
+    expect(decideAccess('req', IPC.boardLogAppend, ['P', entry('event')], ctx('editor'))).toEqual({ allow: true })
   })
   it('outbound: non-shared canvas and agent events are dropped for non-editors only', () => {
     const mutQ = JSON.stringify({ t: 'ev', channel: IPC.canvasMut, args: ['Q', {}] })

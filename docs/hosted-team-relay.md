@@ -208,7 +208,7 @@ session key** in the team store.
 | `git:diff` | The cwd (with the repository rule above) **and** the file are jailed; a pathspec starting with `:` is refused; an untracked diff (`git diff --no-index`, which diffs any file) needs a real path inside. The file is relative to the cwd, not the repository's top level. |
 | `git:show-file` | The cwd jailed, with the repository rule above; a ref starting with `-` is refused (it would become an option, and `--output=` writes a file). Any other revision is allowed. |
 | `agent:subagent-snapshot` | The response is trimmed to shared nodes. |
-| `board-log:read/subscribe/unsubscribe` (+ `append` for Commenters) | Shared projects only. |
+| `board-log:read/subscribe/unsubscribe` (+ `append` for Commenters) | Shared projects only. A Commenter's `append` must be a comment (`kind: 'comment'`): an activity entry ("moved a card to Done") is Editor-only. |
 
 **Outbound is deny-by-default too.** The core broadcasts to every attached client, so a non-editor
 receives only the events `VIEW_EVENTS` lists: `canvas:mut`, `workspace:external-change` /
@@ -503,6 +503,9 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   "No team member has that key." Restart the service: every session is cut, members reconnect on
   their own, and that device becomes a pending request again. (`team rotate-key` also works, but
   invalidates every join code.)
+- **A board-log comment's author is what the commenter's tab says.** The entry is written as the
+  client sent it, author included (its presence name and color), so a Commenter can post a comment
+  under another member's name. The host checks the project and that it is a comment, not who wrote it.
 - **Approved devices have no label** in `team.json` and `team status`, and there is no relabel verb.
 - **Device mints are shared by the team.** The backend's free device-mint damper (10 per 24 h) is
   keyed by the **host's** device id, so every joiner of one team draws from one budget. A device
