@@ -103,7 +103,7 @@ describe('server fs handlers', () => {
       ok: true,
       name: 'ding.wav'
     })
-    expect(fs.readdirSync(path.join(dir, 'sounds'))).toEqual(['done.wav'])
+    expect(fs.readdirSync(path.join(dir, 'sounds'))).toEqual(['done.sound'])
     expect(await call(IPC.filesReadAlertSound, 'done')).toBe(wav.toString('base64'))
     expect(await call(IPC.filesClearAlertSound, 'done')).toBe(true)
     expect(await call(IPC.filesReadAlertSound, 'done')).toBeNull()

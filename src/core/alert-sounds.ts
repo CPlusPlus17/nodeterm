@@ -9,8 +9,13 @@
 //   • the extension against the audio allow-list;
 //   • the size (encoded length first, then decoded) against ALERT_SOUND_MAX_BYTES;
 //   • the magic bytes against the claimed extension, so a renamed image/executable is refused.
-// The file is written under a FIXED name, `<userData>/sounds/<kind>.<ext>`. The user's name is
-// only echoed back for display; it never becomes part of a path.
+// The file is written under ONE fixed, format-independent name per kind, `<userData>/sounds/
+// <kind>.sound`. The user's name is only echoed back for display; it never becomes part of a path.
+// Format-independent on purpose: with a name per format (`done.mp3`, `done.wav`) a new pick had to
+// delete the other formats afterwards, and two Server Edition tabs saving different formats at
+// once could each delete the OTHER's freshly published file — both reporting success, no sound
+// left. One target means a save is a single atomic rename and concurrent saves/clears simply
+// resolve last-writer-wins. The format needs no record: the renderer's `decodeAudioData` sniffs it.
 //
 // Reading back takes only a `kind`, so no caller can aim it at another file, and a symlink planted
 // at the fixed name is refused (lstat) rather than followed. Every function resolves — none
@@ -32,6 +37,10 @@ import {
 
 /** `<userData>/sounds` — exported so tests (and messages) can name it. */
 export const alertSoundsDir = (userDataDir: string): string => join(userDataDir, 'sounds')
+
+/** The one stored file for `kind`, whatever its format. Only ever called with a validated kind. */
+export const alertSoundFile = (userDataDir: string, kind: AlertSoundKind): string =>
+  join(alertSoundsDir(userDataDir), `${kind}.sound`)
 
 const startsWith = (buf: Buffer, sig: string, at = 0): boolean =>
   buf.length >= at + sig.length && buf.toString('latin1', at, at + sig.length) === sig
@@ -64,14 +73,6 @@ export function sniffAlertSound(buf: Buffer, ext: AlertSoundExtension): boolean 
   }
 }
 
-/** Remove every stored variant of `kind` except `keep` (a pick of another format replaces it). */
-async function removeVariants(dir: string, kind: AlertSoundKind, keep?: string): Promise<void> {
-  for (const ext of ALERT_SOUND_EXTENSIONS) {
-    const name = `${kind}.${ext}`
-    if (name !== keep) await fs.rm(join(dir, name), { force: true })
-  }
-}
-
 /** Validate and store a custom sound for `kind`. Never throws. */
 export async function saveAlertSound(
   userDataDir: string,
@@ -96,16 +97,14 @@ export async function saveAlertSound(
   if (!sniffAlertSound(buf, ext)) {
     return { ok: false, error: `That file does not look like ${ext.toUpperCase()} audio.` }
   }
-  const dir = alertSoundsDir(userDataDir)
-  const target = `${kind}.${ext}`
-  const tmp = tempNameFor(join(dir, target))
+  const target = alertSoundFile(userDataDir, kind)
+  const tmp = tempNameFor(target)
   try {
-    await fs.mkdir(dir, { recursive: true })
+    await fs.mkdir(alertSoundsDir(userDataDir), { recursive: true })
     // `wx` refuses a pre-planted temp (symlink) instead of writing through it; the rename then
     // swaps the file in whole, so a concurrent read never sees half a sound.
     await fs.writeFile(tmp, buf, { flag: 'wx' })
-    await renameAtomic(tmp, join(dir, target))
-    await removeVariants(dir, kind, target)
+    await renameAtomic(tmp, target)
     return { ok: true, name: displayName }
   } catch {
     await fs.rm(tmp, { force: true }).catch(() => {})
@@ -116,18 +115,14 @@ export async function saveAlertSound(
 /** The stored custom sound for `kind` as base64, or null (none, unreadable, refused). Never throws. */
 export async function readAlertSound(userDataDir: string, kind: AlertSoundKind): Promise<string | null> {
   if (!isAlertSoundKind(kind)) return null
-  const dir = alertSoundsDir(userDataDir)
-  for (const ext of ALERT_SOUND_EXTENSIONS) {
-    const file = join(dir, `${kind}.${ext}`)
-    try {
-      const st = await fs.lstat(file)
-      if (!st.isFile() || st.size === 0 || st.size > ALERT_SOUND_MAX_BYTES) return null
-      return (await fs.readFile(file)).toString('base64')
-    } catch {
-      /* not this extension — try the next */
-    }
+  const file = alertSoundFile(userDataDir, kind)
+  try {
+    const st = await fs.lstat(file)
+    if (!st.isFile() || st.size === 0 || st.size > ALERT_SOUND_MAX_BYTES) return null
+    return (await fs.readFile(file)).toString('base64')
+  } catch {
+    return null
   }
-  return null
 }
 
 /** Delete the custom sound for `kind` (Reset to default). True unless the kind is unknown or the
@@ -135,7 +130,7 @@ export async function readAlertSound(userDataDir: string, kind: AlertSoundKind):
 export async function clearAlertSound(userDataDir: string, kind: AlertSoundKind): Promise<boolean> {
   if (!isAlertSoundKind(kind)) return false
   try {
-    await removeVariants(alertSoundsDir(userDataDir), kind)
+    await fs.rm(alertSoundFile(userDataDir, kind), { force: true })
     return true
   } catch {
     return false

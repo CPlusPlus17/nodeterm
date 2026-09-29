@@ -2592,8 +2592,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `soundEffects`, 5 s/node cooldown). Settings → Notifications lets the user replace either with their
   own file. The picked file's BYTES (never its path) go to `files.saveAlertSound`, a core handler in
   `registerFsHandlers` (both shells), which validates kind / extension allow-list / 5 MB cap / magic
-  bytes and writes a FIXED name `<userData>/sounds/<kind>.<ext>` (`core/alert-sounds.ts`); reads and
-  Reset take only the kind (no path from the renderer, symlinks refused). Settings keep only
+  bytes and writes ONE format-independent name `<userData>/sounds/<kind>.sound` (`core/alert-sounds.ts`;
+  a name per format needed a delete-the-others step, and two tabs saving different formats at once
+  deleted each other's file — do not reintroduce per-format names); reads and Reset take only the
+  kind (no path from the renderer, symlinks refused). Settings keep only
   `customAlertSounds[kind] = {name, stamp}`. Playback decodes the bytes with `decodeAudioData` — no
   `<audio>`, so CSP `media-src` is untouched on both surfaces — and **any failure (missing file,
   refused read, decode/playback error) falls back to the chime without throwing** (`lib/customSfx.ts`,

@@ -51,18 +51,18 @@ describe('sniffAlertSound', () => {
 })
 
 describe('saveAlertSound', () => {
-  it('writes the bytes under a FIXED per-kind name in <userData>/sounds, never the picked name', async () => {
+  it('writes the bytes under a FIXED, format-independent per-kind name in <userData>/sounds, never the picked name', async () => {
     const res = await saveAlertSound(dir, 'done', 'My Ding.WAV', b64(WAV))
     expect(res).toEqual({ ok: true, name: 'My Ding.WAV' })
     const files = await fs.readdir(alertSoundsDir(dir))
-    expect(files).toEqual(['done.wav'])
-    expect(await fs.readFile(path.join(alertSoundsDir(dir), 'done.wav'))).toEqual(WAV)
+    expect(files).toEqual(['done.sound'])
+    expect(await fs.readFile(path.join(alertSoundsDir(dir), 'done.sound'))).toEqual(WAV)
   })
 
   it('reduces a path-shaped name to its base name — traversal never steers the write', async () => {
     const res = await saveAlertSound(dir, 'needsYou', '../../etc/evil.mp3', b64(MP3_ID3))
     expect(res).toEqual({ ok: true, name: 'evil.mp3' })
-    expect(await fs.readdir(alertSoundsDir(dir))).toEqual(['needsYou.mp3'])
+    expect(await fs.readdir(alertSoundsDir(dir))).toEqual(['needsYou.sound'])
     expect(await fs.readdir(dir)).toEqual(['sounds'])
   })
 
@@ -70,7 +70,7 @@ describe('saveAlertSound', () => {
     await saveAlertSound(dir, 'done', 'a.wav', b64(WAV))
     await saveAlertSound(dir, 'needsYou', 'b.ogg', b64(OGG))
     await saveAlertSound(dir, 'done', 'c.mp3', b64(MP3_SYNC))
-    expect((await fs.readdir(alertSoundsDir(dir))).sort()).toEqual(['done.mp3', 'needsYou.ogg'])
+    expect((await fs.readdir(alertSoundsDir(dir))).sort()).toEqual(['done.sound', 'needsYou.sound'])
   })
 
   it('refuses an unknown kind, a non-audio extension, mismatched bytes, empty and oversized files', async () => {
@@ -104,6 +104,30 @@ describe('saveAlertSound', () => {
   })
 })
 
+describe('concurrent mutations of one kind (Server Edition: several tabs, one data dir)', () => {
+  it('two concurrent saves of DIFFERENT formats leave exactly one readable sound, never none', async () => {
+    for (let i = 0; i < 20; i++) {
+      const [a, b] = await Promise.all([
+        saveAlertSound(dir, 'done', 'a.mp3', b64(MP3_ID3)),
+        saveAlertSound(dir, 'done', 'b.wav', b64(WAV))
+      ])
+      expect(a.ok && b.ok).toBe(true)
+      const got = await readAlertSound(dir, 'done')
+      expect([b64(MP3_ID3), b64(WAV)]).toContain(got)
+      expect((await fs.readdir(alertSoundsDir(dir))).filter((f) => f.startsWith('done'))).toHaveLength(1)
+    }
+  })
+
+  it('a save racing a clear ends in one coherent state: the new sound, or none', async () => {
+    for (let i = 0; i < 20; i++) {
+      await saveAlertSound(dir, 'done', 'old.flac', b64(FLAC))
+      await Promise.all([saveAlertSound(dir, 'done', 'new.ogg', b64(OGG)), clearAlertSound(dir, 'done')])
+      const got = await readAlertSound(dir, 'done')
+      expect([null, b64(OGG)]).toContain(got)
+    }
+  })
+})
+
 describe('readAlertSound', () => {
   it('returns the stored bytes as base64 for a kind', async () => {
     await saveAlertSound(dir, 'done', 'a.flac', b64(FLAC))
@@ -122,13 +146,13 @@ describe('readAlertSound', () => {
     const secret = path.join(dir, 'secret.txt')
     await fs.writeFile(secret, 'ID3 top secret')
     await fs.mkdir(alertSoundsDir(dir), { recursive: true })
-    await fs.symlink(secret, path.join(alertSoundsDir(dir), 'done.mp3'))
+    await fs.symlink(secret, path.join(alertSoundsDir(dir), 'done.sound'))
     expect(await readAlertSound(dir, 'done')).toBeNull()
   })
 
   it('refuses a stored file over the size cap (hand-placed into the data dir)', async () => {
     await fs.mkdir(alertSoundsDir(dir), { recursive: true })
-    await fs.writeFile(path.join(alertSoundsDir(dir), 'done.wav'), Buffer.concat([WAV, Buffer.alloc(ALERT_SOUND_MAX_BYTES)]))
+    await fs.writeFile(path.join(alertSoundsDir(dir), 'done.sound'), Buffer.concat([WAV, Buffer.alloc(ALERT_SOUND_MAX_BYTES)]))
     expect(await readAlertSound(dir, 'done')).toBeNull()
   })
 })
@@ -138,7 +162,7 @@ describe('clearAlertSound', () => {
     await saveAlertSound(dir, 'done', 'a.wav', b64(WAV))
     await saveAlertSound(dir, 'needsYou', 'b.wav', b64(WAV))
     expect(await clearAlertSound(dir, 'done')).toBe(true)
-    expect(await fs.readdir(alertSoundsDir(dir))).toEqual(['needsYou.wav'])
+    expect(await fs.readdir(alertSoundsDir(dir))).toEqual(['needsYou.sound'])
     expect(await readAlertSound(dir, 'done')).toBeNull()
   })
 
