@@ -22,8 +22,37 @@ import { createServerEditionControlHandler } from './control-unsupported'
 class FakePty implements HeadlessPty {
   readonly creates: PtyCreateOptions[] = []
   readonly sends: Array<{ nodeId: string; text: string }> = []
+  private readonly live = new Set<string>()
+  private readonly taps = new Map<string, Set<(c: string) => void>>()
+  private readonly lines = new Map<string, string>()
+  persistentSpawnAvailable(): boolean { return true }
+  onOutput(key: string, cb: (c: string) => void): () => void {
+    let set = this.taps.get(key)
+    if (!set) this.taps.set(key, (set = new Set()))
+    set.add(cb)
+    return () => set!.delete(cb)
+  }
+  // An interactive shell: echoes what it is typed, and Enter submits the line into `sends` — the
+  // immediate open delivers through the echo-verified launcher, not through `sendText`.
+  writeHeadless(key: string, data: string): boolean {
+    if (!this.live.has(key)) return false
+    if (data === '\r') {
+      this.sends.push({ nodeId: key, text: this.lines.get(key) ?? '' })
+      this.lines.set(key, '')
+      return true
+    }
+    if (data === '\x15' || data === '\x1b') {
+      this.lines.set(key, '')
+      return true
+    }
+    this.lines.set(key, (this.lines.get(key) ?? '') + data)
+    for (const cb of [...(this.taps.get(key) ?? [])]) cb(data)
+    return true
+  }
+  releaseHeadless(): void {}
   async createHeadless(options: PtyCreateOptions): Promise<PtyCreateResult> {
     this.creates.push(options)
+    if (options.persistKey) this.live.add(options.persistKey)
     return { sessionId: `pty-${options.persistKey}`, fresh: true, persistent: true }
   }
   async paneCommand(): Promise<string | null> { return 'bash' }
@@ -105,6 +134,7 @@ describe('Server Edition open-agent --issue', () => {
       codexCaps: async () => ({ approvalValues: ['on-request', 'never'] }),
       codexSharedIdentity: async () => false,
       stateOf: () => undefined,
+      launchTiming: { quietMs: 0, capMs: 0 },
       issueRepository: async () => boardRepository,
       appendBoardLog: async (projectId, entry) => {
         log.push({ projectId, entry })

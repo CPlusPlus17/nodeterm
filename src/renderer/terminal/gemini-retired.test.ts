@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cleanEcho } from './command-delivery'
+import { cleanEcho } from '@shared/command-delivery'
 import {
   GEMINI_RETIRED_PHRASE,
   GEMINI_RETIRED_TAIL_CHARS,

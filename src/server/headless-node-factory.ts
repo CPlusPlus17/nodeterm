@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { publishCanvasMutation } from '../core/canvas-sync'
+import { launchHeadless } from '../core/headless-launch'
 import { gateProjectTarget, GRANT_CAP } from '../core/project-grants'
 import {
   LINK_ENDPOINT_NOT_FOUND,
@@ -18,6 +19,8 @@ import {
   type NodeColor
 } from '../shared/node-colors'
 import { applyStickyWrite, parseStickyArgs, resolveStickyRef } from '../shared/sticky-write'
+import type { HeadlessLaunchResult } from '../shared/headless-launch'
+import { localNodePtyOptions } from '../shared/node-pty-options'
 import type { WorkspaceStore } from '../core/workspace-store'
 import {
   AGENT_CONFIG,
@@ -64,6 +67,10 @@ export interface HeadlessPty {
   paneCommand(persistKey: string): Promise<string | null>
   sessionExists(persistKey: string): Promise<boolean>
   sendText(nodeId: string, text: string, opts?: { enter?: boolean }): Promise<TextDeliveryResult>
+  persistentSpawnAvailable(): boolean
+  writeHeadless(persistKey: string, data: string): boolean
+  onOutput(persistKey: string, cb: (chunk: string) => void): () => void
+  releaseHeadless(persistKey: string): void
   destroySession(
     clientId: number | null,
     persistKey: string,
@@ -108,6 +115,8 @@ export interface HeadlessNodeFactoryDeps {
   publishProject?: (project: Project) => void
   /** Injectable only so tests can seed creator facts; production uses a fresh process-local ledger. */
   ownership?: HeadlessNodeOwnership
+  /** Test seam for the launch settle; production uses core's SETTLE_* defaults. */
+  launchTiming?: { quietMs: number; capMs: number }
   /**
    * The `owner/repo` a project's kanban board syncs with — what `open-agent --issue #N` means. The
    * GitHub host controller's answer (configured, else detected from the project's git remote), the
@@ -497,16 +506,7 @@ function ungroupPersistedNodes(
 }
 
 function ptyOptions(project: Project, node: CanvasNodeState): PtyCreateOptions {
-  return {
-    cwd: node.cwd || project.cwd,
-    cols: TERMINAL_COLS,
-    rows: TERMINAL_ROWS,
-    persistKey: node.id,
-    ownerProjectId: project.id,
-    ...(node.agentId ? { agentId: node.agentId } : {}),
-    ...(node.agentModel ? { agentModel: node.agentModel } : {}),
-    ...(node.accountId ? { accountId: node.accountId } : {})
-  }
+  return localNodePtyOptions(project, node, { cols: TERMINAL_COLS, rows: TERMINAL_ROWS })
 }
 
 /**
@@ -611,6 +611,29 @@ export class HeadlessNodeFactory {
     const result = await this.deps.ptyManager.createHeadless(ptyOptions(project, node))
     if (result.sessionId) this.attached.add(node.id)
     return result
+  }
+
+  /**
+   * Spawn-or-attach `node` and deliver `command` through the shared echo-verified launcher (#925).
+   * - `release:false` keeps the server's synthetic client attached, as it always has.
+   * - `requirePersistent:false`, because that attached client is what keeps even a plain-shell
+   *   session reachable here. (The desktop releases its client, so it refuses a plain shell instead.)
+   * - `createHeadless` goes through `attach()` so the `attached` ledger stays authoritative.
+   */
+  private launch(project: Project, node: CanvasNodeState, command: string): Promise<HeadlessLaunchResult> {
+    const pty = this.deps.ptyManager
+    return launchHeadless(
+      {
+        persistentSpawnAvailable: () => pty.persistentSpawnAvailable(),
+        createHeadless: () => this.attach(project, node),
+        paneCommand: (key) => pty.paneCommand(key),
+        writeHeadless: (key, data) => pty.writeHeadless(key, data),
+        onOutput: (key, cb) => pty.onOutput(key, cb),
+        releaseHeadless: (key) => pty.releaseHeadless(key),
+        timing: this.deps.launchTiming
+      },
+      { ptyOptions: ptyOptions(project, node), command, release: false, requirePersistent: false }
+    )
   }
 
   private resolveTarget(
@@ -1303,18 +1326,18 @@ export class HeadlessNodeFactory {
       const failed: string[] = []
       for (const node of created) {
         try {
-          const result = await this.attach(target, node)
-          if (!result.sessionId) {
-            failed.push(node.id)
+          const command = commands.get(node.id)
+          if (!command) {
+            // Nothing to deliver now (a plain terminal, or a launch held for `--after`): spawn only.
+            const result = await this.attach(target, node)
+            if (!result.sessionId) failed.push(node.id)
+            else if (verb === 'open-agent' && result.fresh) this.awaitingFirstWorking.add(node.id)
             continue
           }
-          if (verb === 'open-agent' && result.fresh) this.awaitingFirstWorking.add(node.id)
-          const command = commands.get(node.id)
-          if (command) {
-            if (isLaunchShell(await this.deps.ptyManager.paneCommand(node.id)) &&
-                (await this.deps.ptyManager.sendText(node.id, command)) === true) node.pendingLaunch = undefined
-            else failed.push(node.id)
-          }
+          const launched = await this.launch(target, node, command)
+          if (verb === 'open-agent' && launched.fresh) this.awaitingFirstWorking.add(node.id)
+          if (launched.outcome === 'delivered') node.pendingLaunch = undefined
+          else failed.push(node.id)
         } catch {
           failed.push(node.id)
         }
