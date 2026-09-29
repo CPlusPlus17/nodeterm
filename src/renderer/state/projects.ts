@@ -22,8 +22,8 @@ import {
   pruneLayoutViewports,
   type CanvasLayout
 } from '@shared/canvas-layout'
-import { applyEdgeMutationToScene } from '@shared/canvas-mutations'
-import { applyCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
+import { applyCanvasOp as applyCanvasOpTo, contentOf } from '@shared/canvas-content'
+import { createProject, reorderGroupWithinParent } from './workspace'
 import { markWorkspaceDirty } from './workspaceDirty'
 import { folderName } from '../lib/projectOpen'
 // One order-independent key for an edge's endpoints — the SAME rule `hiddenLinkIds` uses, so a
@@ -146,6 +146,20 @@ interface ProjectsState {
    */
   appendCanvasLinks(projectId: string, links: { bridges?: BridgeLink[]; ropes?: BridgeLink[] }): void
   /**
+   * Applies ONE canvas mutation — node, edge or board — to a project's serialized content, through
+   * the ONE reducer (`applyCanvasOp`, @shared/canvas-content) every client and the Server Edition
+   * canvas authority share — the path for a project React Flow does not hold (it only ever holds
+   * the active project's nodes). Returns false only if the project is unknown here (nothing
+   * applied, nothing created); an op that changes nothing is still `true` but writes NOTHING — no
+   * new `projects` array, so no subscriber re-runs — and callers that schedule a save compare the
+   * project object before and after to tell the two apart.
+   *
+   * Only the fields the op changed are written back, so an absent `bridges` / `ropes` / `kanban`
+   * stays absent (materializing `"bridges": []` or a lazy default board would dirty a file nobody
+   * edited). Side-effect free beyond the store: it marks nothing dirty and publishes nothing.
+   */
+  applyCanvasOp(projectId: string, mutation: CanvasMutation): boolean
+  /**
    * Applies ONE peer canvas mutation to a project's serialized nodes — the path for a project
    * that is loaded but NOT active (React Flow only holds the active project's nodes). Returns
    * false if the project is unknown here (nothing applied, nothing created).
@@ -153,6 +167,8 @@ interface ProjectsState {
    * This must not be skipped for background projects: their serialized nodes are what the next
    * whole-file `workspace.save` writes, so dropping a peer's `remove` would resurrect the node
    * they deleted on the very next save — the data-loss shape canvas sync exists to fix.
+   *
+   * Delegates to `applyCanvasOp` (one reducer), so it takes any family.
    */
   applyNodeMutation(projectId: string, mutation: CanvasMutation): boolean
   /**
@@ -161,7 +177,7 @@ interface ProjectsState {
    * peer's edge mutation for a project we are not looking at has the identical failure mode: our
    * next save writes a project without their edge, deleting it for everyone.
    *
-   * Returns false if the project is unknown here (nothing applied).
+   * Returns false if the project is unknown here (nothing applied). Delegates to `applyCanvasOp`.
    */
   applyEdgeMutation(projectId: string, mutation: CanvasMutation): boolean
   /** Renames a node within a project (source of truth for inactive projects). */
@@ -591,37 +607,32 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     }))
   },
 
-  applyNodeMutation(projectId, mutation) {
-    if (!get().projects.some((p) => p.id === projectId)) return false
+  applyCanvasOp(projectId, mutation) {
+    const p = get().projects.find((x) => x.id === projectId)
+    if (!p) return false
+    // Compare against the object handed to the reducer: `contentOf` builds a new one per call (and
+    // a fresh `[]` for an absent list), so only this reference can say "nothing changed".
+    const before = contentOf(p)
+    const after = applyCanvasOpTo(before, mutation, projectId)
+    if (after === before) return true
+    // Write back ONLY what the op changed — an absent list or board must stay absent.
+    const patch: Partial<Project> = {}
+    if (after.nodes !== before.nodes) patch.nodes = after.nodes
+    if (after.bridges !== before.bridges) patch.bridges = after.bridges
+    if (after.ropes !== before.ropes) patch.ropes = after.ropes
+    if (after.kanban !== before.kanban) patch.kanban = after.kanban
     set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
-        applyCanvasMutation(nodes, mutation)
-      )
+      projects: s.projects.map((x) => (x.id === projectId ? { ...x, ...patch } : x))
     }))
     return true
   },
 
+  applyNodeMutation(projectId, mutation) {
+    return get().applyCanvasOp(projectId, mutation)
+  },
+
   applyEdgeMutation(projectId, mutation) {
-    if (!get().projects.some((p) => p.id === projectId)) return false
-    set((s) => ({
-      projects: s.projects.map((p) => {
-        if (p.id !== projectId) return p
-        // One id is one edge across BOTH lists (applyEdgeMutationToScene), which returns the SAME
-        // array for a list the mutation does not change — so the untouched kind keeps its identity,
-        // and a project whose stored list was `undefined` stays `undefined` rather than being
-        // materialized as an empty array on every peer edge (which would dirty the file with
-        // `"bridges": []` on projects that have never had one). The base is built ONCE for that
-        // compare: two separate `?? []` literals are never the same array, which is how the branch
-        // this was ported from wrote `[]` anyway.
-        const base = { bridges: p.bridges ?? [], ropes: p.ropes ?? [] }
-        const next = applyEdgeMutationToScene(base, mutation)
-        const nextBridges = next.bridges === base.bridges ? p.bridges : next.bridges
-        const nextRopes = next.ropes === base.ropes ? p.ropes : next.ropes
-        if (nextBridges === p.bridges && nextRopes === p.ropes) return p
-        return { ...p, bridges: nextBridges, ropes: nextRopes }
-      })
-    }))
-    return true
+    return get().applyCanvasOp(projectId, mutation)
   },
 
   renameNode(projectId, nodeId, title) {

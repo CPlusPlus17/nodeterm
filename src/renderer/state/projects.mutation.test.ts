@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useProjects } from './projects'
-import type { CanvasNodeState } from '@shared/types'
+import type { CanvasMutation, CanvasNodeState } from '@shared/types'
+import { defaultKanbanFor } from '@shared/kanban-default-board'
 
 const node = (id: string, x = 0): CanvasNodeState => ({
   id,
@@ -121,5 +122,97 @@ describe('applyEdgeMutation', () => {
     expect(useProjects.getState().getProject(p.id)?.ropes).toEqual([link('x')])
     useProjects.getState().applyEdgeMutation(p.id, { op: 'edge-remove', kind: 'bridge', id: 'x' })
     expect(useProjects.getState().getProject(p.id)?.ropes).toEqual([])
+  })
+})
+
+/**
+ * The store's ONE apply path (`applyCanvasOp`, over @shared/canvas-content's reducer): node, edge
+ * and board ops for a project React Flow does not hold. `applyNodeMutation` / `applyEdgeMutation`
+ * delegate to it. `false` means only "no such project here".
+ */
+describe('applyCanvasOp', () => {
+  const link = (id: string, source = 'a', target = 'b') => ({ id, source, target })
+  const setup = () => {
+    const p = useProjects.getState().addProject('p')
+    useProjects.getState().commitCanvas(p.id, [node('a'), node('b')], { x: 0, y: 0, zoom: 1 })
+    return p.id
+  }
+
+  it('applies a node op', () => {
+    const id = setup()
+    expect(useProjects.getState().applyCanvasOp(id, { op: 'upsert', node: node('c', 7) })).toBe(true)
+    expect(useProjects.getState().getProject(id)?.nodes.map((n) => n.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('applies an edge op', () => {
+    const id = setup()
+    expect(
+      useProjects.getState().applyCanvasOp(id, { op: 'edge-upsert', kind: 'bridge', edge: link('x') })
+    ).toBe(true)
+    expect(useProjects.getState().getProject(id)?.bridges).toEqual([link('x')])
+  })
+
+  it('applies a board op, materializing the lazy default board', () => {
+    const id = setup()
+    expect(useProjects.getState().getProject(id)?.kanban).toBeUndefined()
+    const col = defaultKanbanFor(id).columns[1].id
+    expect(
+      useProjects.getState().applyCanvasOp(id, { op: 'kb-card', assignment: { nodeId: 'a', columnId: col } })
+    ).toBe(true)
+    const board = useProjects.getState().getProject(id)?.kanban
+    expect(board?.columns).toEqual(defaultKanbanFor(id).columns)
+    expect(board?.assignments).toEqual([{ nodeId: 'a', columnId: col }])
+  })
+
+  it('reports false for an unknown project and creates nothing', () => {
+    expect(useProjects.getState().applyCanvasOp('nope', { op: 'kb-card-remove', nodeId: 'a' })).toBe(false)
+    expect(useProjects.getState().projects).toHaveLength(0)
+  })
+
+  // A duplicate op (every Server Edition tab re-casts what it receives) must not rebuild `projects`:
+  // every subscriber to the store re-runs on a new array, and the caller would schedule a save of a
+  // canvas that did not change.
+  it('an op that changes nothing is applied (true) without touching the store', () => {
+    const id = setup()
+    useProjects.getState().applyCanvasOp(id, { op: 'edge-upsert', kind: 'rope', edge: link('r') })
+    const projects = useProjects.getState().projects
+    const dup: CanvasMutation[] = [
+      { op: 'upsert', node: node('a') },
+      { op: 'remove', id: 'ghost' },
+      { op: 'edge-upsert', kind: 'rope', edge: link('r') },
+      { op: 'edge-remove', kind: 'bridge', id: 'ghost' },
+      { op: 'kb-card-remove', nodeId: 'a' }
+    ]
+    for (const m of dup) {
+      expect(useProjects.getState().applyCanvasOp(id, m)).toBe(true)
+      expect(useProjects.getState().projects, JSON.stringify(m)).toBe(projects)
+    }
+    // The two legacy entry points keep the same contract.
+    expect(useProjects.getState().applyNodeMutation(id, { op: 'upsert', node: node('b') })).toBe(true)
+    expect(useProjects.getState().applyEdgeMutation(id, { op: 'edge-upsert', kind: 'rope', edge: link('r') })).toBe(true)
+    expect(useProjects.getState().projects).toBe(projects)
+  })
+
+  it('writes back only what changed — an absent list or board stays absent', () => {
+    const id = setup()
+    useProjects.getState().applyCanvasOp(id, { op: 'upsert', node: node('c') })
+    const p = useProjects.getState().getProject(id)
+    expect(p?.bridges).toBeUndefined()
+    expect(p?.ropes).toBeUndefined()
+    expect(p?.kanban).toBeUndefined()
+    expect(p && 'kanban' in p).toBe(false)
+  })
+
+  it('the node and edge entry points route a board op too (one reducer)', () => {
+    const id = setup()
+    const col = defaultKanbanFor(id).columns[0].id
+    useProjects.getState().applyNodeMutation(id, { op: 'kb-card', assignment: { nodeId: 'b', columnId: col } })
+    expect(useProjects.getState().getProject(id)?.kanban?.assignments).toEqual([{ nodeId: 'b', columnId: col }])
+  })
+
+  it('never lets a peer set our shell', () => {
+    const id = setup()
+    useProjects.getState().applyCanvasOp(id, { op: 'upsert', node: { ...node('evil'), shell: '/bin/evil' } })
+    expect(useProjects.getState().getProject(id)?.nodes.find((n) => n.id === 'evil')?.shell).toBeUndefined()
   })
 })

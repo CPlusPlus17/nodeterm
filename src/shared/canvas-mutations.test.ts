@@ -6,6 +6,7 @@ import {
   createMutationGuard,
   diffToMutations,
   isCanvasMutation,
+  isWellFormedMutation,
   MUTATION_MAX_BYTES,
   sanitizeCanvasMutation
 } from './canvas-mutations'
@@ -269,6 +270,65 @@ describe('isCanvasMutation — edge ops', () => {
       isCanvasMutation({ op: 'edge-upsert', kind: 'bridge', edge: e('x', 'a'.repeat(129), 'b') })
     ).toBe(false)
     expect(isCanvasMutation({ op: 'edge-upsert', kind: 'bridge' })).toBe(false)
+  })
+
+  // One case per check, each breaking exactly ONE field of an otherwise valid op, so every check is
+  // pinned on its own (a test that breaks two fields at once still passes with either check gone).
+  describe('one check per field', () => {
+    const ok = { op: 'edge-upsert', kind: 'rope', edge: e('x', 'a', 'b') }
+    const okRemove = { op: 'edge-remove', kind: 'bridge', id: 'x' }
+    const long = 'z'.repeat(129)
+
+    it('the valid baselines pass', () => {
+      expect(isCanvasMutation(ok)).toBe(true)
+      expect(isCanvasMutation(okRemove)).toBe(true)
+    })
+    it('edge-upsert: kind must be bridge or rope', () => {
+      expect(isCanvasMutation({ ...ok, kind: 'link' })).toBe(false)
+    })
+    it('edge-remove: kind must be bridge or rope', () => {
+      expect(isCanvasMutation({ ...okRemove, kind: 'Rope' })).toBe(false)
+    })
+    it('edge-upsert: edge.id must be a ref id', () => {
+      expect(isCanvasMutation({ ...ok, edge: e('', 'a', 'b') })).toBe(false)
+      expect(isCanvasMutation({ ...ok, edge: e(long, 'a', 'b') })).toBe(false)
+    })
+    it('edge-upsert: edge.source must be a ref id', () => {
+      expect(isCanvasMutation({ ...ok, edge: { id: 'x', source: 7, target: 'b' } })).toBe(false)
+    })
+    it('edge-upsert: edge.target must be a ref id', () => {
+      expect(isCanvasMutation({ ...ok, edge: e('x', 'a', '') })).toBe(false)
+      expect(isCanvasMutation({ ...ok, edge: e('x', 'a', long) })).toBe(false)
+    })
+    it('edge-remove: id must be a ref id', () => {
+      expect(isCanvasMutation({ ...okRemove, id: '' })).toBe(false)
+      expect(isCanvasMutation({ ...okRemove, id: long })).toBe(false)
+      expect(isCanvasMutation({ ...okRemove, id: 3 })).toBe(false)
+    })
+    it('edge-upsert: edge must be an object', () => {
+      expect(isCanvasMutation({ ...ok, edge: 'x' })).toBe(false)
+    })
+  })
+})
+
+describe('isWellFormedMutation — the reducer guard', () => {
+  it('is isCanvasMutation without the wire byte cap', () => {
+    const big = { op: 'upsert', node: { ...n('big'), text: 'x'.repeat(MUTATION_MAX_BYTES) } }
+    expect(isCanvasMutation(big)).toBe(false)
+    expect(isWellFormedMutation(big)).toBe(true)
+    const cases: unknown[] = [
+      null,
+      { op: 'remove', id: 'a' },
+      { op: 'remove', id: '' },
+      { op: 'upsert', node: n('a') },
+      { op: 'upsert', node: { id: 'a', position: { x: Number.NaN, y: 0 } } },
+      { op: 'edge-upsert', kind: 'rope', edge: e('x') },
+      { op: 'edge-upsert', kind: 'ropes', edge: e('x') },
+      { op: 'edge-remove', kind: 'bridge', id: 'x' },
+      { op: 'kb-card', assignment: { nodeId: 'a', columnId: 'k' } },
+      { op: 'kb-card', assignment: { nodeId: '', columnId: 'k' } }
+    ]
+    for (const c of cases) expect(isWellFormedMutation(c), JSON.stringify(c)).toBe(isCanvasMutation(c))
   })
 })
 

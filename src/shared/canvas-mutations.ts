@@ -74,9 +74,31 @@ export function isRefId(value: unknown): value is string {
  * repaired by `sanitizeCanvasMutation` before anyone applies or reflects it.
  */
 export function isCanvasMutation(value: unknown): value is CanvasMutation {
+  return checkMutation(value, true)
+}
+
+/**
+ * `isCanvasMutation` WITHOUT the byte cap — the guard of the one reducer (`applyCanvasOp`,
+ * @shared/canvas-content). Same shape verdict, field for field (one implementation, so the two
+ * cannot drift); only `MUTATION_MAX_BYTES` is skipped.
+ *
+ * The cap is a TRANSPORT rule: it bounds what one cast pushes into every peer's socket, and both
+ * ends of the wire already apply it (the reflector refuses, the publisher never casts). An op that
+ * reaches a reducer either passed it or never travelled at all — the projects store takes this
+ * client's OWN writes to a background project through the same reducer (cold open, a canvas-control
+ * sticky write, a pending-launch patch), and silently dropping one of those because its node is big
+ * would lose the user's edit while the caller reports success. The shape half is what keeps a
+ * malformed op from wedging a canvas, and that half stays.
+ */
+export function isWellFormedMutation(value: unknown): value is CanvasMutation {
+  return checkMutation(value, false)
+}
+
+function checkMutation(value: unknown, sized: boolean): value is CanvasMutation {
   if (!value || typeof value !== 'object') return false
+  const fits = (x: unknown): boolean => !sized || withinSizeLimit(x)
   const m = value as { op?: unknown; id?: unknown; node?: unknown; kind?: unknown; edge?: unknown }
-  if (isKanbanOp(m)) return sanitizeKanbanOp(value) !== null && withinSizeLimit(value)
+  if (isKanbanOp(m)) return sanitizeKanbanOp(value) !== null && fits(value)
   if (m.op === 'remove') return isRefId(m.id)
   if (m.op === 'edge-remove') return isEdgeKind(m.kind) && isRefId(m.id)
   if (m.op === 'edge-upsert') {
@@ -86,7 +108,7 @@ export function isCanvasMutation(value: unknown): value is CanvasMutation {
     // All three ids are ADDRESSES — an edge with a truncated endpoint would attach to the wrong
     // node on every peer — so they are rejected rather than capped, exactly like a node id.
     if (!isRefId(edge.id) || !isRefId(edge.source) || !isRefId(edge.target)) return false
-    return withinSizeLimit(m)
+    return fits(m)
   }
   if (m.op !== 'upsert') return false
   const node = m.node as { id?: unknown; position?: { x?: unknown; y?: unknown } } | undefined
@@ -95,7 +117,7 @@ export function isCanvasMutation(value: unknown): value is CanvasMutation {
   const pos = node.position
   if (!pos || typeof pos !== 'object') return false
   if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y)) return false
-  return withinSizeLimit(m)
+  return fits(m)
 }
 
 /**

@@ -598,6 +598,7 @@ import { sshHostKey } from '@shared/ssh'
 import type {
   BridgeLink,
   ClaudeSessionCopyResult,
+  CanvasMutation,
   CanvasNodeState,
   ClosedSessionEntry,
   HostedSessionApi,
@@ -3835,6 +3836,16 @@ export function Canvas() {
       if (!pub || !pub.hasOwed() || loadingRef.current) return
       pub.publish(publishableLater(nodesRef.current))
     }
+    // A peer op for a project React Flow does not hold lands in its STORED copy. Save only when
+    // that copy actually changed: the store writes nothing for an op that changes nothing (a
+    // duplicate cast — every Server Edition tab re-casts what it receives — or a remove of something
+    // already gone), so the project object's identity is the answer, and a no-op schedules no save.
+    const applyToStored = (projectId: string, mutation: CanvasMutation): void => {
+      const store = useProjects.getState()
+      const before = store.getProject(projectId)
+      if (store.applyCanvasOp(projectId, mutation) && useProjects.getState().getProject(projectId) !== before)
+        markDirty()
+    }
     return activeSession.api.canvas.onMutation((projectId, mutation) => {
       hasPeersRef.current = true // proof of a peer, whatever the presence table says
       const order = orderRef.current
@@ -3854,7 +3865,7 @@ export function Canvas() {
         // Live only while React Flow holds that project (the epoch tag), not merely while it is the
         // active one — the same rule as the node branch below (`liveCanvasHolds`).
         if (!liveCanvasHolds(nodesProjectIdRef.current, useProjects.getState().activeProjectId, projectId)) {
-          if (useProjects.getState().applyEdgeMutation(projectId, mutation)) markDirty()
+          applyToStored(projectId, mutation)
           return
         }
         // One id is one edge (`applyEdgeMutationToScene`): an upsert of one kind also takes that id
@@ -3909,7 +3920,7 @@ export function Canvas() {
           // its page running invisibly until the next switch.
           useWebviewKeepAlive.getState().drop(mutation.id)
         }
-        if (useProjects.getState().applyNodeMutation(projectId, mutation)) markDirty()
+        applyToStored(projectId, mutation)
         return
       }
       // PATCH THE LIVE ARRAY — do not round-trip the canvas through the (lossy) serializers. That
