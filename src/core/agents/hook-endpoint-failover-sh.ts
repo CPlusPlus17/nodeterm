@@ -35,11 +35,10 @@
  * `nt_read_node_token "$candidate"` (node-token-sh.ts) — the capability must come from the dir
  * the adopted endpoint advertises, never from the one being walked away from.
  *
- * Safety is the same argument as the token resolver's: sending one node's request over another
- * instance's endpoint is correct where it can succeed at all — the node id in the body is what
- * identifies the session, a foreign instance that does not know it refuses with its ordinary
- * answer, and a foreign token dir yields a foreign kid = `legacy`, bit-for-bit what presenting
- * nothing already gave.
+ * Hook events retain the legacy failover policy: foreign node tokens classify as legacy on the
+ * receiver. That is NOT sufficient routing evidence for control/context requests: a foreign
+ * instance can answer an unsupported-edition or unknown-node refusal before a live owning tunnel
+ * is reached. Those clients use OWNED_ENDPOINT_FALLBACK_SH below to retain a known capability.
  */
 /**
  * The line both shims append under their generic transport-failure sentence when a transport WAS
@@ -115,3 +114,61 @@ export const HOOK_ENDPOINT_FALLBACK_SH = [
   '  return 0',
   '}'
 ].join('\n')
+
+
+/** Control/context requests must retain a known node identity across endpoint discovery.
+ * Hook event failover deliberately keeps its existing policy. This is client-side routing,
+ * not authorization: the receiving server still checks every bearer, node and verb. */
+export const OWNED_ENDPOINT_FALLBACK_SH = `
+# A candidate must advertise this node's SAME capability. Do not use the global token search:
+# that could borrow the desktop token while posting to an unrelated headless server.
+nt_adopt_for_node() {
+  nt_adopt "$1" || return 1
+  if [ -z "$nt_owner_node_token" ]; then
+    nt_read_node_token "$1"
+    return 0
+  fi
+  nt_node_token=""
+  nt_owner_dir="$NODETERM_NODE_TOKEN_DIR"
+  [ -n "$nt_owner_dir" ] || nt_owner_dir=$(nt_token_dir_beside "$1")
+  if [ -n "$nt_owner_dir" ]; then
+    nt_node_token=$(head -n 1 "$nt_owner_dir/$NODETERM_NODE_ID" 2>/dev/null) || nt_node_token=""
+  fi
+  [ -n "$nt_node_token" ] && [ "$nt_node_token" = "$nt_owner_node_token" ] && return 0
+  nt_skipped_foreign_endpoint=1
+  return 1
+}
+`
+
+/**
+ * What the shims print when the walk skipped at least one foreign endpoint and nothing that owns
+ * this node answered. Measured on an SSH host (2026-09-28/29): the desktop slept, its reverse
+ * tunnel's socket stayed on disk with no listener, and the walk used to reach an unrelated Server
+ * Edition whose reply — "permanent on this host … do not retry" — was true about that server and
+ * false about this session. An agent that reads a permanent refusal stops for good; the tunnel came
+ * back minutes later. So this sentence says the three things that are actually known: the OWNER is
+ * unreachable, the other endpoints were not asked, and the state is temporary. The tunnel is named
+ * as the usual cause for an SSH project, not asserted: the shim cannot see why a socket is silent.
+ *
+ * `OWNER_UNREACHABLE_LEAD` is quoted verbatim by the agent-facing bodies (see
+ * `ownerUnreachableGuidanceLines`), so the docs and the script cannot drift apart.
+ */
+export const OWNER_UNREACHABLE_LEAD = 'The nodeterm connection that owns this node is unreachable.'
+
+export const FOREIGN_ENDPOINT_HINT =
+  `${OWNER_UNREACHABLE_LEAD} Other nodeterm endpoints on this machine were skipped: they do not own ` +
+  'this node, so their answer would describe a different canvas. This is temporary — for an SSH ' +
+  "project it usually means the desktop's reverse tunnel is down (the desktop is asleep, offline or " +
+  'reconnecting). Retry the same command after it reconnects.'
+
+/** The agent-facing half of FOREIGN_ENDPOINT_HINT, rendered into all four bodies (canvas skill +
+ *  instructions block, context skill + instructions block). Without it an agent has only the
+ *  bodies' other refusal lines to go on, and several of those correctly say "do not retry". */
+export function ownerUnreachableGuidanceLines(): string[] {
+  return [
+    `Owner unreachable: if a call fails with "${OWNER_UNREACHABLE_LEAD.replace(/\.$/, '')}", the`,
+    'nodeterm app that owns this session is not answering right now; for an SSH project that usually',
+    "means the desktop's reverse tunnel is down (asleep, offline or reconnecting). This is temporary:",
+    'retry the same command later rather than giving up.'
+  ]
+}
