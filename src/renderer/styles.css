@@ -11348,21 +11348,6 @@ button.pull-checks__name {
   border-color: var(--accent);
   color: #fff;
 }
-.kanban-header__close {
-  margin-left: 12px;
-  border: 0;
-  background: rgba(var(--tint-rgb), 0.06);
-  color: rgba(var(--tint-rgb), 0.6);
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-}
-.kanban-header__close:hover {
-  background: rgba(var(--tint-rgb), 0.12);
-  color: var(--text-strong);
-}
 .kanban-empty {
   padding: 40px 18px;
   color: rgba(var(--tint-rgb), 0.5);

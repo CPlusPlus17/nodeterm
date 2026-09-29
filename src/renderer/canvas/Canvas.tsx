@@ -620,7 +620,16 @@ import { useNodesEpoch } from './nodesEpoch'
 import { isHidden } from '../lib/ui-visibility'
 import { boardLogEvents } from '../lib/boardLogDiff'
 import { useBoardLog } from '../state/boardLog'
-import { isGlobalKanbanOpen, isKanbanOpen, isOmniKanbanEnabled, useViewMode, viewFor } from '../state/viewMode'
+import {
+  isGlobalKanbanOpen,
+  isKanbanOpen,
+  isOmniKanbanEnabled,
+  showCanvas,
+  toggleAllProjectsBoard,
+  toggleBoardView,
+  useViewMode,
+  viewFor
+} from '../state/viewMode'
 import { GlobalKanbanView } from '../components/kanban/GlobalKanbanView'
 import { useFocusNode, FOCUS_SURFACE_ID } from '../state/focusNode'
 import { focusTargetId } from '../lib/focusTarget'
@@ -3216,29 +3225,18 @@ export function Canvas() {
   // place: the IPC path bypasses the registry, so duplicating the omni/asDefault choice
   // caused Cmd+Shift+B on desktop to ignore omniKanbanAsDefault and to toggle the per-project
   // board underneath the global overlay.
-  const performKanbanToggle = useCallback(() => {
-    if (isGlobalKanbanOpen()) {
-      useViewMode.getState().toggleGlobalKanban()
-      return true
-    }
-    const settings = useSettings.getState().settings
-    if (isOmniKanbanEnabled(settings) && settings.omniKanbanAsDefault === true) {
-      commitActiveToStore()
-      useViewMode.getState().toggleGlobalKanban()
-      return true
-    }
-    const id = useProjects.getState().activeProjectId
-    if (!id) return false
-    useViewMode.getState().toggle(id)
-    return true
-  }, [commitActiveToStore])
+  // The decision itself is `toggleBoardView` / `toggleAllProjectsBoard` (state/viewMode.ts), which
+  // TabBar's board icon calls too. No commit is needed before Omni opens: its active lane reads
+  // the live canvas (GlobalKanbanLive), and the effect above commits for the other readers.
+  const performKanbanToggle = useCallback(
+    () => toggleBoardView(useProjects.getState().activeProjectId),
+    []
+  )
 
-  const performGlobalKanbanToggle = useCallback(() => {
-    if (!isOmniKanbanEnabled(useSettings.getState().settings)) return false
-    if (!isGlobalKanbanOpen()) commitActiveToStore()
-    useViewMode.getState().toggleGlobalKanban()
-    return true
-  }, [commitActiveToStore])
+  const performGlobalKanbanToggle = useCallback(
+    () => toggleAllProjectsBoard(useProjects.getState().activeProjectId),
+    []
+  )
 
   // Mirror `dirty` into a ref so the external-change listener (mounted once) reads the
   // live value without re-subscribing on every edit.
@@ -5289,8 +5287,7 @@ export function Canvas() {
       // so the user actually sees the login node they must interact with. Same rationale as the
       // Settings-overlay close in the add-account listeners above.
       if (pid) {
-        if (isGlobalKanbanOpen()) useViewMode.getState().toggleGlobalKanban()
-        else if (isKanbanOpen(pid)) useViewMode.getState().toggle(pid)
+        if (isGlobalKanbanOpen() || isKanbanOpen(pid)) showCanvas(pid)
       }
     }
     window.addEventListener('nodeterm:switch-system-account', onSwitchSystemAccount)

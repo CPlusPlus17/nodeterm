@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useProjects } from '../state/projects'
-import { isOmniKanbanEnabled, useViewMode, viewFor } from '../state/viewMode'
+import { isOmniKanbanEnabled, toggleBoardView, useViewMode, viewFor } from '../state/viewMode'
 import { useAgentStatus } from '../state/agentStatus'
 import { useSettings } from '../state/settings'
 import { accountsForProject, sshAccountsHint, systemAccountDisplay } from '../state/workspace'
@@ -415,21 +415,9 @@ export function TabBar({
                         aria-label={kanbanActive ? 'Canvas view' : 'Kanban view'}
                         onClick={(e) => {
                           e.stopPropagation() // a tab click switches projects, this flips the view
-                          const vm = useViewMode.getState()
-                          const settings = useSettings.getState().settings
-                          const omni = isOmniKanbanEnabled(settings)
-                          const asDefault = settings.omniKanbanAsDefault === true
-                          // Closing: the global overlay is exclusive, so any board toggle while
-                          // it is open closes it.
-                          if (vm.globalKanban) {
-                            vm.toggleGlobalKanban()
-                            return
-                          }
-                          if (omni && asDefault) {
-                            vm.toggleGlobalKanban()
-                          } else {
-                            vm.toggle(p.id)
-                          }
+                          // One decision with ⌘⇧B and the menu (state/viewMode.ts): from any board
+                          // to the canvas, from the canvas into the board.
+                          toggleBoardView(p.id)
                         }}
                       >
                         {kanbanActive ? <IconCanvasView /> : <IconKanban />}

@@ -16,6 +16,7 @@ import type { KanbanSession } from './KanbanView'
 import { useProjects } from '../../state/projects'
 import { useViewMode } from '../../state/viewMode'
 import { useBoardLog } from '../../state/boardLog'
+import { useSettings } from '../../state/settings'
 import { addColumn, defaultKanban } from '../../lib/kanban'
 
 const localApi = { tag: 'local-api' }
@@ -160,5 +161,20 @@ describe("Omni overview — a lane's board belongs to its project's session", ()
     expect(useProjects.getState().getProject('relay')!.kanban!.assignments).toHaveLength(1)
     expect(appended.length).toBeGreaterThan(0)
     for (const entry of appended) expect(entry.api).toBe(hostedApi)
+  })
+})
+
+describe('Omni header — the scope switch replaces the close button', () => {
+  it('"This project" lands on the active project board, not the canvas', () => {
+    useSettings.setState((s) => ({ settings: { ...s.settings, omniKanbanEnabled: true } }))
+    useViewMode.setState({ globalKanban: true, viewByProject: { p1: 'canvas' } } as never)
+    mount([project('p1', [sticky('a', 'x')])])
+    expect(document.querySelector('.kanban-header__close')).toBeNull()
+    const thisProject = [...document.querySelectorAll('.kanban-scope-switch button')].find(
+      (b) => b.textContent === 'This project'
+    ) as HTMLElement
+    act(() => thisProject.click())
+    expect(useViewMode.getState().globalKanban).toBe(false)
+    expect(useViewMode.getState().viewByProject.p1).toBe('kanban')
   })
 })

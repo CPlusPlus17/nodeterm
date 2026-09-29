@@ -14,7 +14,8 @@ import { SessionCard } from './SessionCard'
 import { toKanbanSessionState } from '../../canvas/toKanbanSessionState'
 import { createAgentNode, createBrowserNode, createStickyNode, createTerminalNode, flowToNodeStates, resolveNewNodeAccount } from '../../state/workspace'
 import { markCanvasCovered } from '../../lib/canvasCovered'
-import { useViewMode } from '../../state/viewMode'
+import { showCanvas, useViewMode } from '../../state/viewMode'
+import { KanbanScopeSwitch } from './KanbanScopeSwitch'
 import { sessionForProject } from '../../session/session'
 import { isHostedReadOnly } from '../../state/hostedTeams'
 import { activePermissionMode } from '../../state/permissionMode'
@@ -432,9 +433,11 @@ export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, on
     window.dispatchEvent(new CustomEvent('nodeterm:global-set-icon', { detail: { projectId, nodeId, icon } }))
   }, [])
 
-  const onOpenNode = useCallback((nodeId: string, _projectId: string) => {
-    const vm = useViewMode.getState()
-    if (vm.globalKanban) vm.toggleGlobalKanban()
+  const onOpenNode = useCallback((nodeId: string, projectId: string) => {
+    // "Open on canvas" leaves the board for the OWNING project's canvas. Only clearing the scope
+    // would land on that project's own board whenever its view is the board, and focusNodeById
+    // then opens the card again instead of framing the node.
+    showCanvas(projectId)
     // Let Canvas's focusNodeById handle project switching and canvas framing
     setTimeout(() => window.dispatchEvent(new CustomEvent('nodeterm:focus-node', { detail: { nodeId } })), 50)
   }, [])
@@ -442,7 +445,7 @@ export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, on
   if (projects.length === 0) {
     return (
       <div className="kanban-overlay global-kanban" style={boardStyle}>
-        <div className="kanban-header"><span className="kanban-header__name">All Projects — Kanban</span></div>
+        <div className="kanban-header"><span className="kanban-header__name">All Projects</span><KanbanScopeSwitch scope="all" /></div>
         <div className="kanban-empty">No projects yet. Create a project to see its swimlane.</div>
       </div>
     )
@@ -452,14 +455,8 @@ export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, on
     <div className="kanban-overlay global-kanban" ref={containerRef} style={boardStyle}>
       <div className="kanban-header">
         <span className="kanban-header__name">All Projects</span>
+        <KanbanScopeSwitch scope="all" />
         <span className="kanban-swimlane__hint">{projects.length} projects — {mod}+1..{Math.min(9, projects.length)} to jump</span>
-        <button
-          className="kanban-header__close"
-          title={`Back to canvas (${mod}+Shift+B)`}
-          onClick={() => useViewMode.getState().toggleGlobalKanban()}
-        >
-          ✕
-        </button>
       </div>
       <div className="global-kanban__scroll">
         {projects.map((p, idx) => {
