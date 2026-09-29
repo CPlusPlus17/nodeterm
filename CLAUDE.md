@@ -6904,16 +6904,15 @@ remount (a project switch, a park re-adopt) each replay the four pulses. Still b
 eye, and the idle gate covers the unfocused case. `styles.animation-gate.test.ts` pins the bounded
 shorthand, the resting opacity and the keyframe endpoints.
 
-**A camera move freezes the viewport's raster scale, and only for the move.** `onCanvasMoveStart`
-adds `canvas-camera-moving` to the flow wrapper in EVERY appearance (before the glass-only
-early-return — it is not a glass feature), and `.canvas-camera-moving .react-flow__viewport` sets
-`will-change: transform`, so the compositor scales the already-rastered layer instead of
-re-rasterising every node's DOM at each intermediate zoom. MEASURED (12 WebGL terminals, 60 Hz
-synthetic wheel zoom, M2, production build): **41–48% → 30–36%** total CPU, GPU process **22% →
-15%**. It MUST stay transient: `onCanvasMoveEnd` removes the class 150 ms after the move settles so
-text re-rasters sharp at the final scale — a permanent `will-change` on the viewport leaves every
-terminal blurry after a zoom. `canvas/camera-moving.test.ts` pins both halves (the rule is scoped
-to the class, and no bare `.react-flow__viewport` rule carries `will-change`).
+**The viewport is never promoted — not even while the camera moves.** A `will-change: transform`
+on `.react-flow__viewport` during pan/zoom was tried (00c9c5fc, measured 41–48% → 30–36% CPU on
+12 WebGL terminals) and removed: the viewport layer spans the WHOLE canvas, and Chromium rasters it
+at a scale it ratchets up during a zoom and never lowers. MEASURED on a 46-node SSH canvas (41
+terminals, 1470×923 @2x, CDP-driven wheel zoom 0.8 ↔ 0.12 and pans, dev build): with it, 41–252
+`tile memory limits exceeded, some content may not draw` warnings per gesture round — blank tiles,
+which users saw as the canvas flickering on zoom — and no CPU gain (~170% total during the gesture
+either way; the scripted gesture itself ran 36 s vs 28 s); without it, 0. The small-canvas gain
+does not survive a real canvas. `canvas/camera-moving.test.ts` pins the absence.
 
 ## Remote access (phone relay) — free, not Pro
 
