@@ -240,7 +240,9 @@ describe('HeadlessNodeFactory', () => {
       stateOf: (id) => states[id],
       outcomeOf: (id) => outcomes[id],
       launchTiming: { quietMs: 0, capMs: 0 },
-      publishNode: (_projectId, node) => published.push(node),
+      // A snapshot, as the real publisher (publishCanvasMutation) takes one at call time: the factory
+      // goes on to update the same node object in place after it publishes.
+      publishNode: (_projectId, node) => published.push(structuredClone(node)),
       publishRemoval: (_projectId, nodeId) => removed.push(nodeId),
       publishProject: (project) => publishedProjects.push(structuredClone(project))
     })
@@ -273,6 +275,11 @@ describe('HeadlessNodeFactory', () => {
     expect(pty.sends).toEqual([{ nodeId: id, text: 'printf hello' }])
     // The persisted hold is published first, then its acknowledged delivery.
     expect(published.map((node) => node.id)).toEqual([id, id])
+    // …and the first publish CARRIES the claimed hold: an owner tab appends this brand-new node
+    // with its launch (test/acceptance/pending-launch-reflector.test.ts), so its next save
+    // cannot drop what this core persisted. The second is the delivery, which clears it.
+    expect(published[0].pendingLaunch).toMatchObject({ command: 'printf hello', attempted: true, manualOnly: true })
+    expect(published[1].pendingLaunch).toBeUndefined()
 
     expect(fs.existsSync(path.join(dataDir, 'workspace.json'))).toBe(true)
     const projectFile = path.join(projectDir, '.nodeterm', 'project.json')

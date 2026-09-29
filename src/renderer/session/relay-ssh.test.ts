@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CanvasNodeState, Project } from '@shared/types'
-import { projectMayDialSsh, sanitizeRelayMutation, sanitizeRelayNode, sanitizeRelayProject } from './relay-ssh'
+import { projectMayDialSsh, receivedCanvasMutation, sanitizeRelayMutation, sanitizeRelayNode, sanitizeRelayProject } from './relay-ssh'
 
 const EVIL = { host: 'evil.example', user: 'me', identityFile: '/home/me/.ssh/id_ed25519', extraArgs: '-A' }
 
@@ -44,6 +44,16 @@ describe('relay-ssh', () => {
     expect(m.op === 'upsert' && m.seq).toBe(3)
     const rm = { op: 'remove' as const, id: 'n1' }
     expect(sanitizeRelayMutation(rm)).toBe(rm)
+  })
+
+  it('receivedCanvasMutation: a relay session loses the remote origin and the ssh endpoint; a local one is untouched', () => {
+    const m = { op: 'upsert' as const, node: node({ ssh: EVIL, sshRemoteTmux: true }), seq: 3, origin: 'core' as const }
+    const relay = receivedCanvasMutation(m, true)
+    expect(relay.origin).toBeUndefined()
+    expect(relay.op === 'upsert' && relay.node.ssh).toBeFalsy()
+    expect(relay.seq).toBe(3)
+    expect(receivedCanvasMutation(m, false)).toBe(m)
+    // What that means for a held launch is behaviour-tested in state/pending-launch-sync.test.ts.
   })
 
   it('projectMayDialSsh refuses exactly relay projects', () => {

@@ -76,7 +76,7 @@ import {
   useSharedGlyphActive
 } from './SharedGlyphLayer'
 import { SshReconnector } from '../lib/sshReconnect'
-import { projectMayDialSsh, sanitizeRelayMutation } from '../session/relay-ssh'
+import { projectMayDialSsh, receivedCanvasMutation } from '../session/relay-ssh'
 import {
   hostAttachmentsFor,
   planActiveProjectDials,
@@ -657,7 +657,6 @@ import {
 } from '@shared/canvas-publish'
 import { createCanvasOrder, createReconnectWatch, type CanvasOrder } from '@shared/canvas-order'
 import { createMutationGuard } from '@shared/canvas-mutations'
-import { withoutCoreOrigin } from '@shared/node-exec'
 import { chordHeld, isHoldChord, isModifierEventKey, matchesShortcut } from '@shared/shortcut'
 
 // The dispatch below is the CONSUMER of the confirm-gated set. Before this import the set named
@@ -3775,7 +3774,7 @@ export function Canvas() {
     // dial-capable SSH connection onto this machine (session/relay-ssh.ts).
     const relay = activeSession.source === 'relay'
     return activeSession.api.canvas.onMutation((projectId, received) => {
-      const mutation = relay ? sanitizeRelayMutation(withoutCoreOrigin(received)) : received
+      const mutation = receivedCanvasMutation(received, relay)
       hasPeersRef.current = true // proof of a peer, whatever the presence table says
       if (!orderRef.current?.accept(mutation)) return
       if (projectId !== useProjects.getState().activeProjectId) {

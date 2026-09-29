@@ -27,7 +27,8 @@ describe('relay tabs never reach a guest-side ssh dial', () => {
   })
 
   it('relay canvas-sync mutations are stripped', () => {
-    expect(canvas).toContain('const mutation = relay ? sanitizeRelayMutation(withoutCoreOrigin(received)) : received')
+    // The decision itself is behaviour-tested in relay-ssh.test.ts (`receivedCanvasMutation`).
+    expect(canvas).toContain('const mutation = receivedCanvasMutation(received, relay)')
   })
 
   it('a relay terminal never resolves a guest-local ControlMaster', () => {

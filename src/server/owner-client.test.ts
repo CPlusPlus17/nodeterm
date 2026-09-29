@@ -21,24 +21,19 @@ describe('ServerPlatform.isOwnerClient', () => {
   })
 })
 
+// The other owner decisions are behaviour-tested where they live:
+//   - the authenticated browser socket attaches as owner: ws.test.ts (a real WS connection);
+//   - Electron's window is the owner, a relay peer never is: main/platform-electron.test.ts;
+//   - a relay tab cannot set or clear a local launch with a remote `origin: 'core'`:
+//     renderer/state/pending-launch-sync.test.ts (`receivedCanvasMutation`, applied to the live
+//     canvas and the store).
+// The hosted-team attach adapter is inline in the server's boot function, so it is still pinned by
+// its source line; ServerPlatform.attach without the flag is the behaviour tested above.
 describe('wiring', () => {
-  it('the authenticated browser WebSocket attaches as owner', () => {
-    expect(src('src/server/ws.ts')).toMatch(/platform\.attach\([\s\S]{0,400}\{ owner: true \}\s*\)/)
-  })
   it('a relay-hosted peer attaches WITHOUT the owner flag', () => {
     const idx = src('src/server/index.ts')
     const at = idx.indexOf('const id = platform.attach(')
     expect(at).toBeGreaterThan(-1)
     expect(idx.slice(at, idx.indexOf('\n', at))).toBe('const id = platform.attach(sink)')
-  })
-  it('Electron: the main window is the owner, a relay peer never is', () => {
-    expect(src('src/main/platform-electron.ts')).toContain(
-      'isOwnerClient: (id) => !peerRegistry().has(id) && mainWindowClientIds().includes(id)'
-    )
-  })
-  it('a relay tab drops the remote core\'s origin before applying its mutations', () => {
-    const canvas = src('src/renderer/canvas/Canvas.tsx')
-    expect(canvas).toContain("const relay = activeSession.source === 'relay'")
-    expect(canvas).toContain('const mutation = relay ? sanitizeRelayMutation(withoutCoreOrigin(received)) : received')
   })
 })
