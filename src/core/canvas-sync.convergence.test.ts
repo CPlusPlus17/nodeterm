@@ -26,7 +26,13 @@ import {
   isCanvasMutation,
   type CanvasScene
 } from '../shared/canvas-mutations'
-import { createCanvasOrder, createReconnectWatch, PENDING_TTL_MS } from '../shared/canvas-order'
+import {
+  createCanvasOrder,
+  createReconnectWatch,
+  isRemoveOp,
+  mutationKey,
+  PENDING_TTL_MS
+} from '../shared/canvas-order'
 import { createCanvasPublisher, publishableScene } from '../shared/canvas-publish'
 import { IPC } from '../shared/ipc'
 import type { BridgeLink, CanvasMutation, CanvasNodeState } from '../shared/types'
@@ -179,6 +185,9 @@ class Client {
         // Stamp our causal position FIRST, so the guard judges the exact payload that is cast
         // (canvas-order rule 4 — `seen` is what lets a delete beat a concurrent drag frame).
         const stamped = this.order.stamp(m)
+        // The re-creation gate, as Canvas has it: a re-creation of a key whose remove of ours is
+        // still unacked would carry a `seen` below that remove — held (owed) until the echo lands.
+        if (!isRemoveOp(stamped) && this.order.hasPendingRemove(mutationKey(stamped))) return false
         if (!isCanvasMutation(stamped)) {
           this.refused++
           return false
@@ -191,14 +200,22 @@ class Client {
     )
     bus.deliver.set(id, (projectId, m) => {
       if (projectId !== PROJECT) return
-      if (!this.order.accept(m)) return
-      this.applied++
-      this.states = applyCanvasMutation(this.states, m)
-      // One id is one edge across both lists — what Canvas and the projects store apply.
-      const edges = applyEdgeMutationToScene({ bridges: this.bridges, ropes: this.ropes }, m)
-      this.bridges = edges.bridges
-      this.ropes = edges.ropes
-      this.pub.adopt(this.publishable()) // loop guard — never re-publish someone else's change
+      // Mirrors Canvas: our own remove coming back RELEASES a re-creation the gate held — cast it now,
+      // after this mutation is handled (a repaired remove is applied first), or it waits for an edit.
+      const key = mutationKey(m)
+      const held = this.order.hasPendingRemove(key)
+      const apply = this.order.accept(m)
+      const released = held && !this.order.hasPendingRemove(key)
+      if (apply) {
+        this.applied++
+        this.states = applyCanvasMutation(this.states, m)
+        // One id is one edge across both lists — what Canvas and the projects store apply.
+        const edges = applyEdgeMutationToScene({ bridges: this.bridges, ropes: this.ropes }, m)
+        this.bridges = edges.bridges
+        this.ropes = edges.ropes
+        this.pub.adopt(this.publishable()) // loop guard — never re-publish someone else's change
+      }
+      if (released && this.pub.hasOwed()) this.pub.publish(this.publishable())
     })
   }
 
@@ -452,6 +469,87 @@ describe('canvas convergence (async bus)', () => {
 
       expect(bus.castCount - before).toBe(0)
       expect(b.bridges).toEqual([])
+    })
+  })
+
+  // THE RE-CREATION GATE (port map §6.5). Our own remove enters `seen` only when its echo comes back,
+  // so a re-creation of the same id cast before that — a link deleted and redrawn, a node deleted and
+  // ⌘Z'd, inside one round trip — carries a `seen` below the remove, and every PEER drops it as a
+  // stale frame (rule 4) while we keep showing it. Held back until the echo lands, then cast, it
+  // carries the remove in its `seen` and is a re-creation everywhere.
+  describe('a re-creation waits for our own pending remove of the same id', () => {
+    const bridge = { id: 'bridge-n1-n2', source: 'n1', target: 'n2' }
+    const byId = (es: BridgeLink[]) => [...es].sort((x, y) => x.id.localeCompare(y.id))
+
+    it('a link deleted and redrawn before our echo returns reaches the peer', () => {
+      a.edit([node('n1', 0), node('n2', 0)])
+      a.editEdges({ bridges: [bridge] })
+      bus.settle()
+
+      bus.stall(a.id) // our socket is backed up: our acks are late
+      a.editEdges({ bridges: [] }) // A removes the link…
+      a.editEdges({ bridges: [bridge] }) // …and draws it again before the remove's echo is back
+      bus.unstall(a.id)
+      bus.settle()
+
+      expect(canon(a)).toEqual(canon(b))
+      expect(byId(a.persisted().bridges)).toEqual(byId(b.persisted().bridges))
+      expect(a.bridges).toEqual([bridge])
+      expect(b.bridges).toEqual([bridge]) // was: [] — B dropped the redraw as a stale frame
+    })
+
+    // The echo is rarely the only thing in flight: a teammate's op for ANOTHER node is ordered first
+    // and adopted while the redraw is still held. The adopt must not take the held link into the
+    // baseline, or the release finds nothing to cast.
+    it('…even when a teammate’s op is adopted while the redraw is held', () => {
+      a.edit([node('n1', 0), node('n2', 0), node('n3', 0)])
+      a.editEdges({ bridges: [bridge] })
+      bus.settle()
+
+      bus.stall(a.id)
+      b.edit(b.states.map((n) => (n.id === 'n3' ? node('n3', 30) : n))) // B's move is ordered first
+      a.editEdges({ bridges: [] })
+      a.editEdges({ bridges: [bridge] })
+      bus.unstall(a.id)
+      bus.settle()
+
+      expect(a.x('n3')).toBe(30)
+      expect(b.bridges).toEqual([bridge])
+      expect(a.persisted()).toEqual(b.persisted())
+    })
+
+    it('a node deleted and ⌘Z’d before our echo returns comes back on the peer too', () => {
+      a.edit([node('n1', 0), node('n2', 0)])
+      bus.settle()
+
+      bus.stall(a.id)
+      const before = a.states
+      a.edit(a.states.filter((n) => n.id !== 'n1')) // delete…
+      a.edit(before) // …undo
+      bus.unstall(a.id)
+      bus.settle()
+
+      expect(b.ids()).toEqual(['n1', 'n2']) // was: ['n2'] — B dropped the undo as a stale frame
+      expect(canon(a)).toEqual(canon(b))
+    })
+
+    it('the release casts the held re-creation once, and nothing after it', () => {
+      a.edit([node('n1', 0), node('n2', 0)])
+      a.editEdges({ bridges: [bridge] })
+      bus.settle()
+
+      bus.stall(a.id)
+      a.editEdges({ bridges: [] })
+      a.editEdges({ bridges: [bridge] })
+      const beforeRelease = bus.castCount
+      bus.unstall(a.id)
+      bus.settle()
+      expect(bus.castCount - beforeRelease).toBe(1) // the held redraw, cast on the echo
+
+      const settled = bus.castCount
+      a.edit([...a.states]) // an unrelated publish
+      bus.settle()
+      expect(bus.castCount - settled).toBe(0)
     })
   })
 

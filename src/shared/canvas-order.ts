@@ -134,6 +134,10 @@ function isRemove(m: CanvasMutation): boolean {
   return m.op === 'remove' || m.op === 'edge-remove'
 }
 
+/** The order's own "drops its subject" predicate, for a caller that has to ask the same question —
+ *  the re-creation gate (`hasPendingRemove`) holds back everything EXCEPT a remove. */
+export const isRemoveOp = isRemove
+
 export interface CanvasOrder {
   /**
    * Stamp a mutation we are ABOUT to cast with our causal position (`seen`) — rule 4.
@@ -155,6 +159,23 @@ export interface CanvasOrder {
    *           or a peer's edit to a node whose newer local edit of ours is still in flight.
    */
   accept(m: CanvasMutation): boolean
+  /**
+   * True while one of OUR remove-class casts (`remove` / `edge-remove`) for `key` (a `mutationKey`)
+   * is unacked — THE RE-CREATION GATE.
+   *
+   * Rule 4 judges an upsert by the `seen` its sender stamped, and our own remove enters `seen` only
+   * when its ECHO comes back. So a re-creation of that key cast before the echo — a link deleted and
+   * redrawn, a node deleted and ⌘Z'd, inside one round trip — carries a `seen` below the remove, and
+   * every peer drops it as a stale frame while this client keeps showing it: a split that the next
+   * whole-file save turns into last-writer-wins on disk. The caller therefore refuses to cast a
+   * non-remove op for a key this reports (the publisher keeps it owed) and casts it once the echo
+   * lands, when `stamp` puts the remove in its `seen`.
+   *
+   * Counted per key, not a flag: two removes in flight (delete, undo, delete) release on the second
+   * ack. Not TTL-bound, unlike rule 2's suppression: a late ack is exactly when the gate matters, and
+   * a lost one comes with a reconnect, whose `reset` clears it.
+   */
+  hasPendingRemove(key: string): boolean
   /** Forget everything (project switch / disconnect). */
   reset(): void
 }
@@ -205,6 +226,9 @@ export function createCanvasOrder(
    * is applied (which also clears the entry). Insertion-ordered, capped at REMOVED_MAX.
    */
   const removed = new Map<string, number>()
+  /** The re-creation gate (`hasPendingRemove`): per key, how many of our remove-class casts are
+   *  still unacked. Kept apart from `pending`, which counts EVERY cast of ours for the key. */
+  const pendingRemoves = new Map<string, number>()
   /**
    * The highest `seq` we have applied or deliberately dropped, across ALL nodes — our causal
    * position in the total order, and what `stamp` puts on every mutation we cast. Global, not per
@@ -267,6 +291,7 @@ export function createCanvasOrder(
       } else {
         pending.set(id, { count: 1, since: now() })
       }
+      if (isRemove(m)) pendingRemoves.set(id, (pendingRemoves.get(id) ?? 0) + 1)
       // A fresh local edit IS an optimistic value on our canvas again, so rule 1 is sound for this
       // node once more and an older echo of ours must not be replayed over it. (This one's own echo
       // will be dropped as the ack it is; it carries what we already show.)
@@ -306,6 +331,14 @@ export function createCanvasOrder(
           pending.delete(id)
           superseded.delete(id) // every cast of ours is accounted for; the node is settled
         }
+        // The re-creation gate: this remove is now in our `seen` (above), so a re-creation of the
+        // key stamped from here on carries it. Only an entry we are tracking is drawn down — an echo
+        // straggling in after a reset must not push a later remove's count below one.
+        const r = isRemove(m) ? pendingRemoves.get(id) : undefined
+        if (r !== undefined) {
+          if (r <= 1) pendingRemoves.delete(id)
+          else pendingRemoves.set(id, r - 1)
+        }
         return repair
       }
       // A straggler: a mutation the total order has already superseded on this client (applied, or
@@ -328,10 +361,15 @@ export function createCanvasOrder(
       return true
     },
 
+    hasPendingRemove(key) {
+      return (pendingRemoves.get(key) ?? 0) > 0
+    },
+
     reset() {
       seen.clear()
       pending.clear()
       superseded.clear()
+      pendingRemoves.clear()
       // The core may have restarted at seq 0 — a `removed` entry stamped with the OLD counter would
       // then outrank every new mutation and blackhole that node, and a stale `lastSeq` would put a
       // causal position on our casts that the new order has not reached.

@@ -772,6 +772,18 @@ the receiving side: **a `remove` is never held off by rule 2's suppression** —
 unacked mutation wins everywhere", which under rule 4 it no longer does, so suppressing the remove
 would be the one way to disagree with our peers.
 
+**A re-creation waits for our OWN remove's echo** (`CanvasOrder.hasPendingRemove`). Our remove enters
+our `seen` only when its echo comes back, so a re-creation of the same id cast before that — a link
+deleted and redrawn, a node deleted and ⌘Z'd, inside one round trip — carried a `seen` below the
+remove: every peer dropped it as a stale frame while we kept showing it, and the next whole-file save
+became last-writer-wins on disk. Canvas's send callback now refuses any non-remove op for a key with a
+remove of ours in flight (counted per key, not TTL-bound — a late ack is exactly when it matters, and a
+lost one comes with a reconnect, whose `reset` clears it). The refusal keeps the op owed in the
+publisher, and an adopt in that window keeps an owed EDGE owed as well as an owed node (a teammate's
+op is usually what arrives during that round trip). Nothing else would ever cast it — our echo is an
+ack and changes no React state — so the echo that clears the gate re-publishes, after the handler and
+only when the publisher `hasOwed()`.
+
 `seen` is client-supplied and it *decides* something, so the reflector **bounds** it
 (`stampMutation`): it can never legitimately reach the order the mutation is being given, so it is
 clamped there, and a non-integer/negative one is dropped. A mutation with **no** `seen` (an older

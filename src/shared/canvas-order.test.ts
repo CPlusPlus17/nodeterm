@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import {
   createCanvasOrder,
   createReconnectWatch,
+  isRemoveOp,
   mutationKey,
   mutationNodeId,
   PENDING_TTL_MS
@@ -285,6 +286,90 @@ describe('createCanvasOrder', () => {
       // Same low seq the new core would hand out: without the clear, the old entry (10) would
       // outrank every new mutation and blackhole this node for the rest of the session.
       expect(o.accept({ ...up('n1', 1, 'b', 1), seen: 0 })).toBe(true)
+    })
+  })
+
+  // THE RE-CREATION GATE (port map §6.5). Rule 4 judges an upsert by what its sender had applied
+  // when it cast (`seen`). Our OWN remove is applied locally at once, but it enters `seen` only when
+  // its echo comes back — so a re-creation of the same id cast before that echo (a link deleted and
+  // redrawn, a node deleted and ⌘Z'd, inside one round trip) carries a `seen` below the remove and
+  // every peer drops it as a stale frame, while we keep showing it: a split. The caller holds such a
+  // re-creation back while our remove is unacked; this is the question it asks.
+  describe('a pending local remove (the re-creation gate)', () => {
+    it('reports a pending local remove until its echo returns', () => {
+      const o = createCanvasOrder('a')
+      const rm: CanvasMutation = { op: 'edge-remove', kind: 'bridge', id: 'b1', src: 'a' }
+      o.onLocal(rm)
+      expect(o.hasPendingRemove('e:b1')).toBe(true)
+      o.accept({ ...rm, seq: 7 })
+      expect(o.hasPendingRemove('e:b1')).toBe(false)
+    })
+
+    it('covers a node key the same way', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(o.stamp(rm('n1', 'me', 0)))
+      expect(o.hasPendingRemove('n:n1')).toBe(true)
+      expect(o.hasPendingRemove('e:n1')).toBe(false) // one key space, two prefixes
+      o.accept(rm('n1', 'me', 3))
+      expect(o.hasPendingRemove('n:n1')).toBe(false)
+    })
+
+    it('counts removes: one ack does not release a key with a second remove still in flight', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(rm('n1', 'me', 0))
+      o.onLocal(rm('n1', 'me', 0))
+      o.accept(rm('n1', 'me', 4))
+      expect(o.hasPendingRemove('n:n1')).toBe(true)
+      o.accept(rm('n1', 'me', 5))
+      expect(o.hasPendingRemove('n:n1')).toBe(false)
+    })
+
+    it('only a REMOVE counts: an unacked edit of the key is not a pending remove', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(up('n1', 1, 'me', 0))
+      expect(o.hasPendingRemove('n:n1')).toBe(false)
+    })
+
+    it('a peer’s remove of the same key is not our ack', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(rm('n1', 'me', 0))
+      o.accept(rm('n1', 'peer', 6))
+      expect(o.hasPendingRemove('n:n1')).toBe(true)
+    })
+
+    it('an ack for a remove we no longer track (after a reset) releases nothing twice', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(rm('n1', 'me', 0))
+      o.reset()
+      expect(o.hasPendingRemove('n:n1')).toBe(false) // a reconnect forgets the in-flight casts
+      o.accept(rm('n1', 'me', 2)) // the old echo straggling in
+      o.onLocal(rm('n1', 'me', 0))
+      expect(o.hasPendingRemove('n:n1')).toBe(true) // a later remove still counts from one
+    })
+
+    it('isRemoveOp is the order’s own remove predicate, nodes and edges alike', () => {
+      expect(isRemoveOp(rm('n1', 'me', 0))).toBe(true)
+      expect(isRemoveOp({ op: 'edge-remove', kind: 'rope', id: 'r1' })).toBe(true)
+      expect(isRemoveOp(up('n1', 0, 'me', 0))).toBe(false)
+      expect(
+        isRemoveOp({ op: 'edge-upsert', kind: 'bridge', edge: { id: 'b1', source: 'a', target: 'b' } })
+      ).toBe(false)
+    })
+
+    // WHY the gate lives in the caller: the whole failure is visible on a PEER'S order. Cast before
+    // our remove's echo, the re-creation is a stale frame there; cast after it, it is a re-creation.
+    it('a re-creation cast before our remove’s echo is stale on a peer; cast after it, it applies', () => {
+      const me = createCanvasOrder('me')
+      const peer = createCanvasOrder('peer')
+      me.accept(up('n2', 0, 'peer', 5)) // we have applied the order up to 5
+      const remove = me.stamp(rm('n1', 'me', 0))
+      me.onLocal(remove)
+      expect(peer.accept({ ...remove, seq: 6 })).toBe(true) // the peer tombstones n1 at 6
+      const early = me.stamp(up('n1', 1, 'me', 0)) // ⌘Z before our echo is back: seen 5
+      expect(peer.accept({ ...early, seq: 7 })).toBe(false) // dropped as a stale frame
+      me.accept({ ...remove, seq: 6 }) // our echo lands…
+      const late = me.stamp(up('n1', 1, 'me', 0)) // …so the re-creation now carries seen 6
+      expect(peer.accept({ ...late, seq: 8 })).toBe(true)
     })
   })
 

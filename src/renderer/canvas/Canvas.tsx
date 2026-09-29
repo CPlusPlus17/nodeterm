@@ -630,7 +630,13 @@ import {
   publishableScene,
   type CanvasPublisher
 } from '@shared/canvas-publish'
-import { createCanvasOrder, createReconnectWatch, type CanvasOrder } from '@shared/canvas-order'
+import {
+  createCanvasOrder,
+  createReconnectWatch,
+  isRemoveOp,
+  mutationKey,
+  type CanvasOrder
+} from '@shared/canvas-order'
 import {
   applyEdgeMutationToScene,
   createMutationGuard,
@@ -3716,6 +3722,12 @@ export function Canvas() {
         // so the size guard below judges the EXACT payload that goes on the wire. `stamp` is pure:
         // a refusal still records no pending entry.
         const stamped = order.stamp(m)
+        // THE RE-CREATION GATE (canvas-order `hasPendingRemove`): our own remove of this key has not
+        // come back yet, so it is not in our `seen` — a re-creation cast now (a link redrawn, a node
+        // ⌘Z'd, within one round trip) would be dropped by every peer as a stale frame while we keep
+        // showing it. Held = owed: the publisher keeps it, and the receive handler's release casts it
+        // the moment the remove's echo lands. Never a remove itself (a remove is never stale).
+        if (!isRemoveOp(stamped) && order.hasPendingRemove(mutationKey(stamped))) return false
         // The reflector REFUSES an oversized / malformed mutation at ingest, silently: no peer ever
         // sees it and there is no negative ack. Ask the same predicate FIRST, so a refusal costs us
         // neither a pending entry (which would deafen this node to its peers for the whole TTL — a
@@ -3807,9 +3819,27 @@ export function Canvas() {
     // mount-time local one (the bug). Byte-identical on a local tab (`activeSession.api` IS
     // `window.nodeTerminal`). Re-keyed on the api OBJECT below, in lockstep with the publisher, so a
     // tab switch tears down + re-binds both together (and a local→local switch does neither).
+    //
+    // The re-creation gate's release: the send callback holds a re-creation of a key whose remove of
+    // ours is unacked, and nothing else would ever cast it — our own echo is an ack, it changes no
+    // React state, so the [nodes] publish effect does not run. So the echo that clears the gate
+    // publishes, AFTER this handler (a repaired remove is applied first), and only when something is
+    // actually owed (a bulk delete's acks must not each serialize the canvas).
+    const releaseHeld = (): void => {
+      const pub = publisherRef.current
+      if (!pub || !pub.hasOwed() || loadingRef.current) return
+      pub.publish(publishableLater(nodesRef.current))
+    }
     return activeSession.api.canvas.onMutation((projectId, mutation) => {
       hasPeersRef.current = true // proof of a peer, whatever the presence table says
-      if (!orderRef.current?.accept(mutation)) return
+      const order = orderRef.current
+      if (!order) return
+      const key = mutationKey(mutation)
+      const held = order.hasPendingRemove(key)
+      const apply = order.accept(mutation)
+      const released = held && !order.hasPendingRemove(key)
+      if (released) queueMicrotask(releaseHeld)
+      if (!apply) return
       // ---- edges (context links + "spawned by" ropes) ----
       // They live outside React Flow's `nodes` array, in their own state, so they take their own
       // apply path — but everything around it is the node path's contract, unchanged: the ordering

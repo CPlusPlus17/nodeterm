@@ -621,3 +621,131 @@ describe('an adopt does not swallow what is still owed', () => {
     expect(snapshot).not.toHaveBeenCalled()
   })
 })
+
+// THE RE-CREATION GATE (canvas-order `hasPendingRemove`). The send callback refuses a re-creation of
+// an id whose REMOVE of ours is still unacked — cast now, it would carry a `seen` below that remove
+// and every peer would drop it as stale. A refusal keeps it owed, and it is cast when the remove's
+// echo lands. That refusal is TRANSIENT and usually lasts one round trip, which is exactly when a
+// teammate's op arrives and is adopted. An owed EDGE therefore has to survive an adopt just like an
+// owed node does — otherwise the adopt takes the redrawn link into the baseline, the release finds
+// nothing to cast, and the peer never gets it (their next save deletes it on disk).
+describe('a re-creation held by the send gate', () => {
+  const link = (id: string, source: string, target: string): BridgeLink => ({ id, source, target })
+  const scene = (nodes: CanvasNodeState[], bridges: BridgeLink[] = [], ropes: BridgeLink[] = []) => ({
+    nodes,
+    bridges,
+    ropes
+  })
+  const label = (m: CanvasMutation): string =>
+    `${m.op}:${mutationNodeId(m) ?? (m.op === 'edge-remove' ? m.id : m.op === 'edge-upsert' ? m.edge.id : '')}`
+  /** A send that refuses every non-remove op for the gated keys — what Canvas's gate does. */
+  function gated(keys: Set<string>) {
+    const sent: CanvasMutation[] = []
+    const send = (m: CanvasMutation): boolean => {
+      const key = mutationNodeId(m) !== null ? `n:${mutationNodeId(m)}` : `e:${m.op === 'edge-remove' ? m.id : m.op === 'edge-upsert' ? m.edge.id : ''}`
+      if (m.op !== 'remove' && m.op !== 'edge-remove' && keys.has(key)) return false
+      sent.push(m)
+      return true
+    }
+    return { sent, send }
+  }
+
+  it('a redrawn link is cast once the gate opens, even with an adopt in between', () => {
+    const gate = new Set<string>()
+    const c = gated(gate)
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('n1'), node('n2')], [link('b1', 'n1', 'n2')])) // all cast
+    p.publish(scene([node('n1'), node('n2')])) // the user deletes the link: edge-remove cast
+    gate.add('e:b1') // …its echo is not back yet
+    p.publish(scene([node('n1'), node('n2')], [link('b1', 'n1', 'n2')])) // …and redraws it: held
+    p.adopt(scene([node('n1'), node('n2', 5)], [link('b1', 'n1', 'n2')])) // a teammate moved n2
+    gate.clear() // our remove's echo lands
+    const cast = c.sent.length
+    p.publish(scene([node('n1'), node('n2', 5)], [link('b1', 'n1', 'n2')]))
+    expect(c.sent.slice(cast).map(label)).toEqual(['edge-upsert:b1'])
+  })
+
+  it('holds for a lazy adopt thunk too (what Canvas actually passes)', () => {
+    const gate = new Set<string>()
+    const c = gated(gate)
+    const p = createCanvasPublisher(c.send)
+    p.publish(() => scene([node('n1'), node('n2')], [link('b1', 'n1', 'n2')]))
+    p.publish(() => scene([node('n1'), node('n2')]))
+    gate.add('e:b1')
+    p.publish(() => scene([node('n1'), node('n2')], [], [link('b1', 'n1', 'n2')])) // redrawn as a rope
+    p.adopt(() => scene([node('n1'), node('n2', 5)], [], [link('b1', 'n1', 'n2')]))
+    gate.clear()
+    const cast = c.sent.length
+    p.publish(() => scene([node('n1'), node('n2', 5)], [], [link('b1', 'n1', 'n2')]))
+    expect(c.sent.slice(cast).map(label)).toEqual(['edge-upsert:b1'])
+  })
+
+  it('casts it exactly once: a later publish casts nothing', () => {
+    const gate = new Set<string>()
+    const c = gated(gate)
+    const p = createCanvasPublisher(c.send)
+    const now = () => scene([node('n1'), node('n2', 5)], [link('b1', 'n1', 'n2')])
+    p.publish(scene([node('n1'), node('n2')], [link('b1', 'n1', 'n2')]))
+    p.publish(scene([node('n1'), node('n2')]))
+    gate.add('e:b1')
+    p.publish(scene([node('n1'), node('n2')], [link('b1', 'n1', 'n2')]))
+    p.adopt(now())
+    gate.clear()
+    p.publish(now())
+    const cast = c.sent.length
+    p.publish(now())
+    expect(c.sent.slice(cast)).toEqual([])
+    expect(c.sent.filter((m) => m.op === 'edge-upsert')).toHaveLength(2) // the draw and the redraw
+  })
+
+  // The Fix-round-2 rule, for an owed edge: what the adopted scene no longer holds is not ours to
+  // re-emit. The teammate deleted the redrawn link too; the adopt must not echo it back as an add.
+  it('a held link the adopted scene dropped is not re-emitted', () => {
+    const gate = new Set<string>()
+    const c = gated(gate)
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('n1'), node('n2')], [link('b1', 'n1', 'n2')]))
+    p.publish(scene([node('n1'), node('n2')]))
+    gate.add('e:b1')
+    p.publish(scene([node('n1'), node('n2')], [link('b1', 'n1', 'n2')]))
+    p.adopt(scene([node('n1'), node('n2')])) // a teammate's remove of b1 applied locally
+    gate.clear()
+    const cast = c.sent.length
+    p.publish(scene([node('n1'), node('n2')]))
+    expect(c.sent.slice(cast)).toEqual([])
+    expect(p.hasOwed()).toBe(false)
+  })
+
+  it('a node re-creation held by the gate survives an adopt (and its link waits for it)', () => {
+    const gate = new Set<string>()
+    const c = gated(gate)
+    const p = createCanvasPublisher(c.send)
+    p.publish(scene([node('n1'), node('t')], [link('b1', 'n1', 't')]))
+    p.publish(scene([node('t')])) // n1 deleted: edge-remove + remove cast
+    gate.add('n:n1') // ⌘Z before the remove's echo is back
+    p.publish(scene([node('n1'), node('t')], [link('b1', 'n1', 't')]))
+    p.adopt(scene([node('n1'), node('t', 5)], [link('b1', 'n1', 't')]))
+    gate.clear()
+    const cast = c.sent.length
+    p.publish(scene([node('n1'), node('t', 5)], [link('b1', 'n1', 't')]))
+    expect(c.sent.slice(cast).map(label)).toEqual(['upsert:n1', 'edge-upsert:b1'])
+  })
+
+  it('hasOwed says whether anything refused is still owed, node or edge', () => {
+    const gate = new Set<string>()
+    const c = gated(gate)
+    const p = createCanvasPublisher(c.send)
+    expect(p.hasOwed()).toBe(false)
+    p.publish(scene([node('n1'), node('n2')], [link('b1', 'n1', 'n2')]))
+    p.publish(scene([node('n1'), node('n2')]))
+    gate.add('e:b1')
+    p.publish(scene([node('n1'), node('n2')], [link('b1', 'n1', 'n2')]))
+    expect(p.hasOwed()).toBe(true)
+    gate.clear()
+    p.publish(scene([node('n1'), node('n2')], [link('b1', 'n1', 'n2')]))
+    expect(p.hasOwed()).toBe(false)
+    gate.add('n:n3')
+    p.publish(scene([node('n1'), node('n2'), node('n3')], [link('b1', 'n1', 'n2')]))
+    expect(p.hasOwed()).toBe(true)
+  })
+})

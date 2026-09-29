@@ -65,6 +65,10 @@ export interface CanvasPublisher {
    *  project) and is still owed — the node half of the refusal rebase. An `edge-upsert` naming one
    *  of them is held back (see `emit`), because the peer does not have that node. A copy. */
   refusedNodeIds(): ReadonlySet<string>
+  /** Is anything REFUSED still owed — a node (`refusedNodeIds`) or an edge whose own cast was
+   *  refused? A caller that just removed the reason for a refusal (the re-creation gate's remove was
+   *  acked) re-publishes only when this says there is something to cast. */
+  hasOwed(): boolean
 }
 
 /**
@@ -151,6 +155,11 @@ export function createCanvasPublisher(
    *  emits and adopts: the peer still does not have the node, so an edge to it must keep waiting,
    *  and an adopt keeps both owed in the baseline (`adoptBaseline`). */
   const owedNodes = new Set<string>()
+  /** Edge ids whose OWN cast was refused (not held for an owed endpoint — those ride `owedNodes`)
+   *  and not yet made good. Kept across adopts for the same reason: the refusal is transient (the
+   *  re-creation gate holds a redrawn link for one round trip — exactly when a teammate's op is
+   *  adopted), and an adopt that took the link into the baseline would never cast it. */
+  const owedEdges = new Set<string>()
 
   const resolve = (s: CanvasSnapshot): CanvasScene =>
     asScene(typeof s === 'function' ? s() : s)
@@ -187,8 +196,11 @@ export function createCanvasPublisher(
    * older version where it did. Dropping them outright instead would lose that older version, and a
    * later local delete of the node would diff to nothing.
    *
-   * Only for what the ADOPTED scene still holds: an owed node present in it, and edges in it that
-   * touch one. An owed node the scene no longer holds is not ours to re-emit — a project switch
+   * The same for an edge whose OWN cast was refused (`owedEdges` — the re-creation gate holds a
+   * redrawn link for one round trip, and a teammate's op adopted in that window must not swallow it).
+   *
+   * Only for what the ADOPTED scene still holds: an owed node present in it, edges in it that touch
+   * one, and owed edges present in it. An owed node the scene no longer holds is not ours to re-emit — a project switch
    * adopts ANOTHER project's scene (one publisher serves every local project), where keeping the old
    * entry would cast a `remove` of the previous project's node under the new project's id; and a
    * peer's delete arrives here as an adopt, where it would echo their remove back. The same goes for
@@ -200,20 +212,21 @@ export function createCanvasPublisher(
    * nothing owed an adopt is exactly what it was: a thunk stored unresolved.
    */
   const adoptBaseline = (s: CanvasSnapshot): void => {
-    if (!owedNodes.size) {
+    if (!owedNodes.size && !owedEdges.size) {
       setBaseline(s)
       return
     }
     const owed = new Set(owedNodes)
+    const owedE = new Set(owedEdges)
     const prev = baseline()
     const keepOwed = (next: CanvasScene): CanvasScene => {
       const here = new Set(next.nodes.filter((n) => owed.has(n.id)).map((n) => n.id))
-      if (!here.size) return next
       const keys = new Set<string>()
       for (const id of here) keys.add('n:' + id)
       for (const e of [...next.bridges, ...next.ropes]) {
-        if (here.has(e.source) || here.has(e.target)) keys.add('e:' + e.id)
+        if (here.has(e.source) || here.has(e.target) || owedE.has(e.id)) keys.add('e:' + e.id)
       }
+      if (!keys.size) return next
       return rebaseRefused(prev, next, keys)
     }
     if (typeof s === 'function') {
@@ -234,6 +247,7 @@ export function createCanvasPublisher(
     const mutations = diffToMutations(prev, next)
     const refused = new Set<string>()
     const refusedNow = new Set<string>()
+    const refusedEdgesNow = new Set<string>()
     for (const m of mutations) {
       // An edge whose endpoint the peer does not have is HELD, not cast: the peer's link prune would
       // drop it and cast an `edge-remove`, deleting the link on our canvas too. Held = refused, so
@@ -247,7 +261,16 @@ export function createCanvasPublisher(
       const cast = send(opts.src ? { ...m, src: opts.src } : m) !== false
       if (!cast) refused.add(mutationKey(m))
       const nodeId = mutationNodeId(m)
-      if (nodeId === null) continue
+      if (nodeId === null) {
+        const edgeId = m.op === 'edge-remove' ? m.id : m.op === 'edge-upsert' ? m.edge.id : null
+        if (edgeId === null) continue
+        if (cast) owedEdges.delete(edgeId)
+        else {
+          owedEdges.add(edgeId)
+          refusedEdgesNow.add(edgeId)
+        }
+        continue
+      }
       if (cast) owedNodes.delete(nodeId)
       else {
         owedNodes.add(nodeId)
@@ -259,6 +282,11 @@ export function createCanvasPublisher(
     if (owedNodes.size) {
       const live = new Set(next.nodes.map((n) => n.id))
       for (const id of owedNodes) if (!live.has(id) && !refusedNow.has(id)) owedNodes.delete(id)
+    }
+    // Same for an owed edge (the scene no longer draws it, and its remove was not the refusal).
+    if (owedEdges.size) {
+      const live = new Set([...next.bridges, ...next.ropes].map((e) => e.id))
+      for (const id of owedEdges) if (!live.has(id) && !refusedEdgesNow.has(id)) owedEdges.delete(id)
     }
     last = refused.size ? rebaseRefused(prev, next, refused) : next
     lastLazy = null
@@ -321,6 +349,9 @@ export function createCanvasPublisher(
     },
     refusedNodeIds() {
       return new Set(owedNodes)
+    },
+    hasOwed() {
+      return owedNodes.size > 0 || owedEdges.size > 0
     }
   }
 }
