@@ -156,6 +156,9 @@ Three rules for any new GitHub call (CLAUDE.md's kanban section, "Sync foundatio
   (`If-None-Match`) for anything you poll: a 304 is free.
 - **A write whose meaning comes from the project file needs `context.mappingApproved`.** The column
   mapping is git-shared; approval covers it, and reads do not need it.
+- **Only a completed scan moves the incremental cursor.** `lastSuccessfulRefreshAt` is the next
+  scan's `since`; a write that folds one issue into the snapshot must leave it alone, or other
+  people's changes from before the write wait for the daily full pass.
 - **GraphQL spends a different budget.** GitHub meters `graphql` apart from `core`; ask the
   coordinator with the resource (`throttle(identity, now, 'graphql')`) and let a primary limit carry
   its `resource`, or a spent GraphQL budget stalls REST issue sync. A GraphQL field the token may
@@ -537,7 +540,10 @@ a hand-launched agent to report hooks, but it gets no `NODETERM_AGENT_ID` and no
 `NODETERM_CANVAS_CONTROL` until the serialized node explicitly names an agent.
 
 **Re-validate hand-editable values at the point of use**, not by their TypeScript type. Settings
-come from git-shared JSON and can end up interpolated into a shell command line.
+come from git-shared JSON and can end up interpolated into a shell command line. The same goes for
+node ids: a string built from them (a subscription signature, a claim or cache key) writes them with
+`JSON.stringify`, never joined with a separator — an id containing `|` or `:` otherwise forges an
+entry for another node.
 
 **Test generated shell for real.** If you generate a shell command, run it under an actual
 `/bin/sh` against a fixture tree. A composed fixture will not tell you that `echo ##MEM` prints an
@@ -1074,9 +1080,14 @@ a transmitted text request is uncertain delivery, never a pre-paste refusal; sho
 warning. SessionStart idle rescue is scoped to that same nonempty session and agent identity,
 and a foreign idle must not broadcast fresh state proof to the renderer.
 
-Control and linked-context fallback must keep a known node identity on its owning nodeterm
-instance. A foreign server being reachable is not evidence that it owns the canvas. Match the
-candidate's own advertised node token before sending; never borrow a token from a global directory
-for that check. Keep real owning-endpoint refusals final and legacy hook delivery unchanged.
-When no owner answers, say so as a temporary state (`FOREIGN_ENDPOINT_HINT`); never let another
-instance's "permanent, do not retry" stand in for a dropped tunnel.
+Control and linked-context fallback must keep a known node identity on the endpoint family the
+session was born on. A foreign server being reachable is not evidence that it owns the canvas —
+and a matching token is not proof either (on an SSH host the token dir is shared per unix
+account); it is a routing rule, and the server still authorizes. Take the reference token from the
+primary endpoint's own dir, never from a global directory, and match each candidate's own dir
+against it — by value, or, when the reference is empty, by the directory's real path (an empty
+value matches every stranger). Probe a fallback candidate (bounded) before posting to it, but never put a timeout on
+the real POST: a confirm-gated verb waits for a human. Keep real owning-endpoint refusals final and
+legacy hook delivery unchanged. When no owner answers, say so once, as a temporary state
+(`FOREIGN_ENDPOINT_HINT`); never let another instance's "permanent, do not retry" stand in for a
+dropped tunnel.

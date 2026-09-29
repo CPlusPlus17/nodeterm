@@ -720,6 +720,17 @@ describe('issueRef serialization (GitHub issue binding)', () => {
     expect(nodeStatesToFlow(states)[0].data.issueRef).toEqual(ref)
   })
 
+  it('keeps a binding whose owner GitHub issued with consecutive or trailing hyphens', () => {
+    // `hello--world` and `john-` are real accounts. A grammar that refused them dropped the
+    // binding on load, and the next save wrote it out of project.json for good.
+    for (const owner of ['hello--world', 'john-']) {
+      const kept = { owner, repo: 'a', number: 1 }
+      const loaded = nodeStatesToFlow([stateWithIssue(kept) as never])
+      expect(loaded[0].data.issueRef).toEqual(kept)
+      expect(flowToNodeStates(loaded)[0].issueRef).toEqual(kept)
+    }
+  })
+
   it('tolerates its absence: a node saved before the feature hydrates with no binding', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { issueRef: _omit, ...legacy } = stateWithIssue(undefined) as any
