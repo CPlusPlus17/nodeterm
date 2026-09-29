@@ -1056,7 +1056,8 @@ session was born on. A foreign server being reachable is not evidence that it ow
 and a matching token is not proof either (on an SSH host the token dir is shared per unix
 account); it is a routing rule, and the server still authorizes. Take the reference token from the
 primary endpoint's own dir, never from a global directory, and match each candidate's own dir
-against it. Probe a fallback candidate (bounded) before posting to it, but never put a timeout on
+against it — by value, or, when the reference is empty, by the directory's real path (an empty
+value matches every stranger). Probe a fallback candidate (bounded) before posting to it, but never put a timeout on
 the real POST: a confirm-gated verb waits for a human. Keep real owning-endpoint refusals final and
 legacy hook delivery unchanged. When no owner answers, say so once, as a temporary state
 (`FOREIGN_ENDPOINT_HINT`); never let another instance's "permanent, do not retry" stand in for a

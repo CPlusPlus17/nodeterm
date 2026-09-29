@@ -2510,8 +2510,11 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     `node-tokens` — never from the global search `nt_read_node_token` walks (that search exists to
     PRESENT a capability, #384; as a reference it let a Server Edition that opened the same
     project.json supply the "owner's" token whenever the desktop's token write had failed). Once
-    that dir EXISTS, a candidate must hold the same value in its own dir, "both hold nothing"
-    included; only a session with no such dir at all keeps legacy discovery. What a match shows is
+    that dir EXISTS, a candidate must hold the same value in its own dir — and when the reference
+    is EMPTY (the write failed), a value proves nothing (a Server Edition that never heard of the
+    node holds nothing too, and `"" = ""` relayed its permanent refusal, measured in review), so the
+    candidate's token dir must be the same REAL directory (`pwd -P`) instead. Only a session with no
+    such dir at all keeps legacy discovery. What a match shows is
     that the candidate reads the same token file for this node — on an SSH host that file is shared
     per unix ACCOUNT (`remote-hooks.ts`, KNOWN LIMITATION), so two desktops driving one account are
     indistinguishable here, and the receiving server still authorizes every request. Actual
@@ -2525,7 +2528,11 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     foreign Server Edition stopped absorbing the walk, a call posted straight into such a socket
     hung. The bound is on the probe only: the primary is never probed and every real POST stays
     unbounded, because a confirm-gated verb waits for a human (see "two canvases cannot raise two
-    dialogs" below).
+    dialogs" below). The probe writes into `$nt_out` like the POST would, so a 421 at the probe
+    still prints its body (into /dev/null it left the control shim exiting 1 with an EMPTY stderr),
+    and the control shim names a final 421 with `CONTROL_UNREACHABLE_MSG` as the context shim does.
+    Consequence to know: while sshd still holds the session's OWN tunnel socket, the primary POST
+    itself still hangs — unbounded by design, for the dialogs.
     **Measured on an SSH host (2026-09-28/29):** the desktop slept, the session's tunnel socket
     stayed on disk with no listener, and the walk reached an unrelated Server Edition whose
     `control-unsupported-on-this-edition … permanent … do not retry` (and, for context reads,
@@ -2533,7 +2540,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     back minutes later. When a foreign candidate was skipped and no owner answered, the shims now
     print `FOREIGN_ENDPOINT_HINT` — the owning connection is unreachable, the state is temporary,
     the usual cause for an SSH project is the tunnel — INSTEAD OF `STALE_ENDPOINT_HINT`, so a failure
-    carries one retry advice, not two. All four agent-facing bodies quote its lead via
+    carries one retry advice, not two. With nothing foreign skipped, a primary that is an SSH tunnel
+    file (`~/.nodeterm/hook-endpoint*.env`, the only files the desktop writes there) gets
+    `TUNNEL_DOWN_HINT` (reconnect) instead of the stale-endpoint advice (app restart); both hints
+    open with the lead the bodies quote. All four agent-facing bodies quote its lead via
     `ownerUnreachableGuidanceLines`, because their other refusal lines rightly say "do not retry".
     `src/server/control-owner-tunnel-down.test.ts` rebuilds that host under real `/bin/sh` with the
     real Server Edition handlers as the foreign endpoint; `src/core/owned-endpoint-walk.test.ts`
@@ -3257,7 +3267,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   gives that curl a timeout, this paragraph stops being true: a confirm-gated verb would then fail
   over mid-wait and a second instance WOULD open a second dialog for the same logical request.
   (The walk's liveness probe IS bounded, and does not break this: it runs only against a FALLBACK
-  candidate, only after the primary's transport already failed, and before any POST to it.)
+  candidate, only after the primary failed — a dead transport, or a 421 wrong-owner answer, which
+  the server gives before dispatch, so no dialog exists — and before any POST to that candidate.)
   **Grouping verbs** (`group` / `ungroup` / `move` / `arrange` / `align`): `group` wraps **sibling**
   objects — nodes or frames — into a new frame in their shared container (a mixed-container set, or
   an ancestor plus its descendant, is refused with that reason); `ungroup --group <id>` dissolves a

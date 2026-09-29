@@ -13,7 +13,7 @@ import {
   CODEX_SANDBOX_RETRY_LINE
 } from '../core/agents/hook-sandbox-hint-sh'
 import { RETRYABLE } from '../core/agents/agent-message-decide'
-import { FOREIGN_ENDPOINT_HINT, OWNER_UNREACHABLE_LEAD } from '../core/agents/hook-endpoint-failover-sh'
+import { FOREIGN_ENDPOINT_HINT, OWNER_UNREACHABLE_LEAD, TUNNEL_DOWN_HINT } from '../core/agents/hook-endpoint-failover-sh'
 import { PROJECT_TARGETABLE_VERBS } from '../core/project-grants'
 import { DRY_RUN_VERBS } from '../shared/control-verbs'
 import {
@@ -411,6 +411,9 @@ describe('parseControlRequest', () => {
   it('both agent-facing texts teach the owner-unreachable failure as temporary', () => {
     expect(FOREIGN_ENDPOINT_HINT.startsWith(OWNER_UNREACHABLE_LEAD)).toBe(true)
     expect(CONTROL_SHIM_SCRIPT).toContain(`echo "${FOREIGN_ENDPOINT_HINT}" >&2`)
+    // The tunnel variant (no foreign endpoint, SSH tunnel primary) opens with the same quoted lead.
+    expect(TUNNEL_DOWN_HINT.startsWith(OWNER_UNREACHABLE_LEAD)).toBe(true)
+    expect(CONTROL_SHIM_SCRIPT).toContain(`echo "${TUNNEL_DOWN_HINT}" >&2`)
     for (const body of [buildCanvasSkillBody('/x/shim.sh'), buildCanvasControlInstructions('/tmp/nodeterm.sh')]) {
       expect(body).toContain(OWNER_UNREACHABLE_LEAD.replace(/\.$/, ''))
       expect(body).toMatch(/This is temporary: *\n?retry the same *\n?command later/)
