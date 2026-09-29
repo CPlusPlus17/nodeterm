@@ -40,8 +40,11 @@ export interface HeadlessLaunchDeps {
  * `{ ptyOptions, command }`, and the desktop always releases its synthetic client, so it always
  * requires a persistent backend. Whatever else the wire carries is overwritten here.
  *
- * `sshRemote` is stripped: this path never spawns over a ControlMaster. `requireRemote` is KEPT as
- * sent. The primary fence is the renderer's: `startHeadless` refuses an SSH node before any claim
+ * `sshRemote` is stripped: this path never spawns over a ControlMaster. `viewerId` is stripped: a
+ * headless start is the connection's PRIMARY view, and `releaseHeadless` detaches `(0, PRIMARY)`,
+ * so a create under a viewer id would subscribe `(0, viewer)` and leave client 0 attached forever.
+ * `clearEnv` is stripped: it is a one-shot "Restart on subscription" recycle flag, never a launch
+ * option. `requireRemote` is KEPT as sent. The primary fence is the renderer's: `startHeadless` refuses an SSH node before any claim
  * (`remote-unsupported`), so none should arrive here. `requireRemote` — which the renderer's
  * `headlessPtyOptions` sets for an SSH-project node — is core's belt behind that fence: it makes
  * `spawnNew` refuse (`unavailable:'ssh'` → `spawn-failed`), where clearing it with `sshRemote`
@@ -53,7 +56,7 @@ export function desktopHeadlessRequest(req: {
   command: string
 }): HeadlessLaunchRequest {
   return {
-    ptyOptions: { ...req.ptyOptions, sshRemote: undefined },
+    ptyOptions: { ...req.ptyOptions, sshRemote: undefined, viewerId: undefined, clearEnv: undefined },
     command: String(req.command ?? ''),
     release: true,
     requirePersistent: true

@@ -329,6 +329,33 @@ describe('desktopHeadlessRequest (#925)', () => {
     expect(out.ptyOptions).toMatchObject(opts)
   })
 
+  // A `viewerId` would subscribe `(0, viewer)` while `releaseHeadless` kills `(0, PRIMARY)`, leaving
+  // client 0 attached forever; `clearEnv` is a one-shot "Restart on subscription" flag that a
+  // headless start must never carry. Neither may cross the wire into this launcher.
+  it('removes viewerId and clearEnv, and keeps every other option as sent', () => {
+    const out = desktopHeadlessRequest({
+      ptyOptions: { ...opts, viewerId: 'modal-1', clearEnv: true, agentId: 'claude', requireRemote: true },
+      command: CMD
+    })
+    expect(out.ptyOptions.viewerId).toBeUndefined()
+    expect(out.ptyOptions.clearEnv).toBeUndefined()
+    expect(out.ptyOptions).toMatchObject({ ...opts, agentId: 'claude', requireRemote: true })
+  })
+
+  it('what reaches createHeadless carries no viewerId, so the release detaches the client it spawned', async () => {
+    const { deps } = harness()
+    const p = launchHeadless(
+      deps,
+      desktopHeadlessRequest({ ptyOptions: { ...opts, viewerId: 'modal-1', clearEnv: true }, command: CMD })
+    )
+    await vi.advanceTimersByTimeAsync(SETTLE_CAP_MS)
+    expect(await p).toEqual({ outcome: 'delivered', fresh: true })
+    const sent = (deps.createHeadless as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>
+    expect(sent.viewerId).toBeUndefined()
+    expect(sent.clearEnv).toBeUndefined()
+    expect(deps.releaseHeadless).toHaveBeenCalledWith('n1')
+  })
+
   it('keeps requireRemote, so core still refuses to spawn a remote node locally', () => {
     const out = desktopHeadlessRequest({
       ptyOptions: { ...opts, sshRemote: ssh, requireRemote: true },

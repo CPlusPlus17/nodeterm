@@ -1502,8 +1502,8 @@ app.whenReady().then(async () => {
   // shared `registerIpc`, so a Server Edition browser cannot reach it (the server starts nodes
   // through its own HeadlessNodeFactory). A relay peer does reach this table, and is refused
   // host-side because the channel is in `HOST_ONLY_CHANNELS` (shared/host-control). All logic lives
-  // in core/headless-launch: `desktopHeadlessRequest` strips `sshRemote` and forces release +
-  // requirePersistent. The renderer refuses an SSH node before any claim (the primary fence); the
+  // in core/headless-launch: `desktopHeadlessRequest` strips `sshRemote`, `viewerId` and `clearEnv`
+  // and forces release + requirePersistent. The renderer refuses an SSH node before any claim (the primary fence); the
   // `requireRemote` it sets for an SSH-project node is kept here, so core's `spawnNew` refusal
   // stands behind that fence as a belt.
   corePlatform.handle(
