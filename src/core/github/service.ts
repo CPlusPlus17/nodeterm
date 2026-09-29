@@ -541,13 +541,17 @@ export class GitHubIssueService {
       if (!this.repositoryWriteAllowed(captured.repository, operationId, repositoryGeneration)) {
         return { status: 'refresh-pending', issue: updated }
       }
+      // The write folds ONE issue into the snapshot and leaves `lastSuccessfulRefreshAt` alone: that
+      // is the incremental scan's `since` cursor, and only a completed scan has looked at everything
+      // up to it. Advancing it here skipped any third party's change that landed between the last
+      // scan and this write until the next daily full reconciliation.
       const snapshot = state.snapshot ?? {
-        issues: [], etags: {}, lastSuccessfulRefreshAt: this.now(), lastFullReconciliationAt: 0
+        issues: [], etags: {}, lastSuccessfulRefreshAt: 0, lastFullReconciliationAt: 0
       }
       const issues = snapshot.issues.some((item) => item.number === updated.number)
         ? snapshot.issues.map((item) => item.number === updated.number ? updated : item)
         : [...snapshot.issues, updated]
-      state.snapshot = { ...snapshot, issues, lastSuccessfulRefreshAt: this.now() }
+      state.snapshot = { ...snapshot, issues }
       state.partialIssues = undefined
       try {
         await this.options.cache.saveComplete(captured.userId, captured.repository, state.snapshot)
@@ -734,8 +738,8 @@ export class GitHubIssueService {
   /**
    * The one-time permission for the board to move `cardId` because every PR in `pulls` merged. The
    * first ask wins across every window (two Server Edition tabs cannot both move it), and it is
-   * remembered, so a card the user dragged back is not moved again for the same merges. It sends no
-   * request and resolves no credential.
+   * remembered per PR, so a card the user dragged back is not moved again for the same merges — even
+   * after one of them ages off the pull board. It sends no request and resolves no credential.
    */
   async claimPullAutoMove(request: { projectId: string; cardId: string; pulls: number[] }): Promise<boolean> {
     const key = this.validPullCardRequest(request)
