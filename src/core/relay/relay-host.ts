@@ -309,9 +309,23 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
     // Never make this a constant.
     //
     // A `wrapSink` hook must keep its `bufferedAmount` pointing at `base.bufferedAmount`.
+    //
+    // A session this host already CLOSED is not a dead socket: it is being torn down right now, and
+    // `detach` broadcasts on its way out — the presence hub's `leave` diff goes to every registered
+    // sink, the leaver's own included, before the sink is unregistered. Delivering to a peer that is
+    // gone loses nothing, so that send is dropped; throwing would log a false dead-socket strike on
+    // every ordinary disconnect (measured on a real headless boot, src/server/hosted-e2e.test.ts).
+    // Only a socket that dies while the session still counts as open throws, which is what the
+    // registry's eviction is for.
     const base: UiSink = {
-      sendText: (json) => { if (!socket.sendTunnelText(json)) throw new Error('relay socket is not connected') },
-      sendBinary: (buf) => { if (!socket.sendTunnelBinary(buf)) throw new Error('relay socket is not connected') },
+      sendText: (json) => {
+        if (closed) return
+        if (!socket.sendTunnelText(json)) throw new Error('relay socket is not connected')
+      },
+      sendBinary: (buf) => {
+        if (closed) return
+        if (!socket.sendTunnelBinary(buf)) throw new Error('relay socket is not connected')
+      },
       bufferedAmount: () => socket.bufferedAmount()
     }
     let sink: UiSink = base

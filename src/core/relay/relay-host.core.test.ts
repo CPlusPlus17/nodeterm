@@ -7,6 +7,7 @@ import { genKeyPair, publicKeyToB64 } from './e2ee'
 import { connectRelay } from './relay-socket'
 import { createTrustGate, deniedFrame, type TrustGate } from './relay-trust'
 import type { RpcRequest } from '../../shared/rpc'
+import type { UiSink } from '../ui-sink-registry'
 
 function fakeAttach() {
   const dispatched: RpcRequest[] = []
@@ -714,5 +715,56 @@ describe('core relay client — a confirm made before the client holds its socke
     expect(opened).toEqual([]) // the host's human has not answered
     hostSession.confirm()
     await vi.waitFor(() => expect(opened.sort()).toEqual(['host', 'peer']))
+  })
+})
+
+describe('core relay host — a session it already closed is not a dead socket', () => {
+  // The real teardown (`attach.detach`) broadcasts on its way out: the presence hub sends its `leave`
+  // diff to EVERY registered sink, the leaver's own included, before that sink is unregistered
+  // (src/server/index.ts teardownClient → presenceHub.leave → platform.broadcast). Found on a real
+  // headless boot (src/server/hosted-e2e.test.ts): the leaver's sink threw 'relay socket is not
+  // connected', and every ordinary disconnect logged a false "[ui-sink] send … threw" strike.
+  it('the leaver’s own teardown broadcast is dropped, not thrown; a peer still connected receives it', async () => {
+    const hostKeys = genKeyPair()
+    const sinks = new Map<number, UiSink>()
+    const threw: string[] = []
+    let next = 1
+    const attach: PeerAttach = {
+      attach: (sink) => { const id = next++; sinks.set(id, sink); return id },
+      detach: (id) => {
+        for (const [to, sink] of [...sinks]) {
+          try {
+            sink.sendText(JSON.stringify({ t: 'ev', channel: 'presence:peer', args: [{ op: 'leave', clientId: id }] }))
+            sink.sendBinary(new Uint8Array([0]))
+          } catch (err) {
+            threw.push(`${to}: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }
+        sinks.delete(id)
+      },
+      dispatch: async (_id, req) => ({ t: 'res', id: req.id, ok: true, result: null }),
+      cast: () => {}
+    }
+    const peers = [0, 1].map(() => {
+      const { hostT, peerT } = transportPair()
+      const frames: string[] = []
+      connectRelayHost({
+        url: 'ws://127.0.0.1/x', token: 't', ourKeys: hostKeys, attach, transport: hostT,
+        autoApprove: () => true, onPeerPending: () => {}, onOpen: () => {}, onClose: () => {}
+      })
+      const client = connectRelayClient({
+        url: 'ws://127.0.0.1/x', token: 't', hostKeyB64: publicKeyToB64(hostKeys.publicKey), ourKeys: genKeyPair(),
+        transport: peerT, autoApprove: true, onSas: () => {}, onApproved: () => {},
+        onFrame: (j) => frames.push(j), onPtyData: () => {}, onClose: () => {}
+      })
+      return { client, frames }
+    })
+    await vi.waitFor(() => expect(sinks.size).toBe(2))
+    peers[0].client.close()
+    expect(threw).toEqual([])
+    expect(sinks.size).toBe(1)
+    await vi.waitFor(() => expect(peers[1].frames.some((f) => f.includes('"op":"leave"'))).toBe(true))
+    peers[1].client.close()
+    expect(threw).toEqual([])
   })
 })

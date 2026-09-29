@@ -294,6 +294,9 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       })
     )
     teardown.push(() => srv.close())
+    // After the boot, so the log sink the server installs is what this spy calls through to.
+    const warn = vi.spyOn(console, 'warn')
+    teardown.push(() => warn.mockRestore())
 
     // ---- 1. The admin socket sets the team up, and hosting starts.
     const init = await admin<AdminInitResult>(dataDir, { cmd: 'init' })
@@ -402,6 +405,8 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       { label: 'Owner', role: 'owner', connected: true },
       { label: '', role: 'viewer', connected: false }
     ])
+    // An ordinary disconnect is not a dead socket: no send to the leaver was counted as a failure.
+    expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('[ui-sink]'))).toEqual([])
     const stillThere = owner.bytes(ownerSessionId)
     spawned[0].onDataCb?.('still running\r\n')
     expect(await step('owner still receives output', stillThere)).toContain('still running')
