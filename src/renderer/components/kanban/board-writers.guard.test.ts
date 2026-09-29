@@ -23,7 +23,8 @@ const BOARD_WRITERS: Record<string, string[]> = {
   'canvas/Canvas.tsx': [
     'onKanbanChange — the per-project board committing a person\'s drag/edit',
     'createNodeInColumn — a person\'s "+ New" in a column',
-    'startIssueAgent — a person\'s "Start with agent" filing the new session under the issue card\'s column',
+    'fileIssueSession — a person\'s "Start with agent" or "Start with agent in a new worktree" filing ' +
+      'the new session under the issue card\'s column',
     'the `assign` control verb — a session moving its OWN card (the issue-bound contract)',
     'autoMoveCardFromPulls — the merge-driven move: a person switched it on for this machine in ' +
       'Settings, and it fires only on a pull request MERGE this machine observed after that (never on ' +
