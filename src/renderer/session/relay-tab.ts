@@ -18,6 +18,7 @@ import type { HostedRole, HostedSessionApi, Project, RelayClientApi } from '@sha
 import { buildRelayApi, type RelayApiHandle } from '../bridge/relay-api'
 import { E_DISCONNECTED } from '../../shared/rpc'
 import { onLocalRelayClose } from '../bridge/relay-local-close'
+import { sanitizeRelayProject } from './relay-ssh'
 import { closedReasonMessage, RelayApprovalError } from '../lib/hostedTeam'
 import { attachHostedOwner } from '../lib/hostedOwner'
 import { useHostedTeams, type HostedTeamInfo } from '../state/hostedTeams'
@@ -138,7 +139,7 @@ export async function openRelayTab(
     const hostProject = ws.projects[0]
     const projectId =
       hostProject && deps.adoptProject
-        ? deps.adoptProject({ ...hostProject, remote: true }).id
+        ? deps.adoptProject(sanitizeRelayProject(hostProject)).id
         : deps.addProject(label).id
     bindProjectToSession(projectId, session.id)
     if (deps.activate !== false) {

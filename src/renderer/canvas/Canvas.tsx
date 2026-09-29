@@ -75,8 +75,10 @@ import {
   useSharedGlyphActive
 } from './SharedGlyphLayer'
 import { SshReconnector } from '../lib/sshReconnect'
+import { projectMayDialSsh, sanitizeRelayMutation } from '../session/relay-ssh'
 import {
   hostAttachmentsFor,
+  planActiveProjectDials,
   connectHostAttachment,
   type SshConnectFn
 } from '../lib/sshAttachments'
@@ -2829,8 +2831,11 @@ export function Canvas() {
     // SSH project: (re)open its ControlMaster and record the controlPath so this project's
     // terminal nodes can run over it. Idempotent in main (a live master is reused), so a tab
     // switch back to a connected project is a no-op. Remote tmux is unaffected by the master.
-    if (project.ssh) {
-      const ssh = project.ssh
+    // A RELAY tab dials nothing (`planActiveProjectDials`): its project and nodes are another
+    // machine's, and connecting them would log THIS machine into a server the host named.
+    const dials = planActiveProjectDials(project)
+    if (dials.own) {
+      const ssh = dials.own
       // SSH remote projects are free (Core). Only phone/relay remote access is Pro-gated.
       window.nodeTerminal.sshProject
         .connect(project.id, ssh.server, ssh.remoteCwd)
@@ -2857,7 +2862,7 @@ export function Canvas() {
     // locally.
     // NOTE: git routing is deliberately NOT armed for an attachment. The project's own cwd is what
     // the Source Control panel is about, and an attached node must not repoint it at another host.
-    for (const attachment of hostAttachmentsFor(project.id, project.nodes, project.ssh?.server)) {
+    for (const attachment of dials.attachments) {
       void connectHostAttachment(
         attachment.scopeId,
         {
@@ -3729,7 +3734,10 @@ export function Canvas() {
     // mount-time local one (the bug). Byte-identical on a local tab (`activeSession.api` IS
     // `window.nodeTerminal`). Re-keyed on the api OBJECT below, in lockstep with the publisher, so a
     // tab switch tears down + re-binds both together (and a local→local switch does neither).
-    return activeSession.api.canvas.onMutation((projectId, mutation) => {
+    const relay = activeSession.source === 'relay'
+    return activeSession.api.canvas.onMutation((projectId, incoming) => {
+      // A relay peer's node never brings a dial-capable SSH connection onto this machine.
+      const mutation = relay ? sanitizeRelayMutation(incoming) : incoming
       hasPeersRef.current = true // proof of a peer, whatever the presence table says
       if (!orderRef.current?.accept(mutation)) return
       if (projectId !== useProjects.getState().activeProjectId) {
@@ -3774,7 +3782,7 @@ export function Canvas() {
       setNodes(flow)
       markDirty()
     })
-  }, [activeSession.api, setNodes, markDirty, publishableLater])
+  }, [activeSession.api, activeSession.source, setNodes, markDirty, publishableLater])
 
   // Record an undo snapshot when the canvas settles (debounced; skips drag frames/loads).
   useEffect(() => {
@@ -15195,7 +15203,8 @@ export function Canvas() {
         if (attached) return connectHostAttachment(scopeId, attached, sshConnect, sshDisconnect)
         const projectId = scopeId
         const project = useProjects.getState().getProject(projectId)
-        if (!project?.ssh) return false
+        // Never a relay tab's endpoint — see session/relay-ssh.ts.
+        if (!project?.ssh || !projectMayDialSsh(project)) return false
         const ssh = project.ssh
         // Same post-connect sequence as the active-project effect: arm remote git routing first
         // (only if this project is still the active tab), then record the connection info.
