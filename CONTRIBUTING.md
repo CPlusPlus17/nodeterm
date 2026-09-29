@@ -1092,6 +1092,15 @@ Managed Codex login terminals are agent-less: core identifies their provider fro
 account list. Before opening one, await `useSettings.getState().flush()` after adding the account.
 The normal 300 ms coalesced save is too late: an unknown id can launch against the system home.
 
+Claude subagent cards come from Claude's native `SubagentStart`/`SubagentStop` whenever a session
+sends them; the `Agent`/`Task` tool pairing stays as the fallback and the task-label source. Both
+shells pass every normalized event, and the `<task-notification>` end, through the one
+`ClaudeSubagentLifecycle` before any consumer, and start the native tail before the child-event
+gate. A consumer that keys subagents by id must honour `supersedes`. A native stop is not always
+the final end (a background child is resumed under the same id), so Eco safety rides the parent
+`Stop`'s `background_tasks` inventory, not the card alone. Measure a CLI change against real
+payloads (`__fixtures__/claude/subagent-hook-payloads.json`) before changing any of this.
+
 Claude child `PreToolUse`/`PostToolUse`/`PostToolUseFailure` hooks must not drive parent state.
 Child `PermissionRequest` and attention `Notification` hooks still reach needs-you and phone
 approvals, including the raw approval summary and deterministic reply ticket. Keep raw summary

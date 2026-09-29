@@ -183,6 +183,40 @@ describe('both shells register a 4-arg raw listener', () => {
     }
   })
 
+  // Same rule, Claude's native SubagentStart/SubagentStop (core/claude-subagent-lifecycle.ts). Five
+  // things must be in BOTH shells, and each one missing is silent: (a) every normalized event goes
+  // through the lifecycle before any consumer (else the tool card and the native card are drawn
+  // twice); (b) the <task-notification> end does too (else it ends nothing in a native session);
+  // (c) SubagentStart starts the child's tail at the DERIVED path; (d) that branch sits BEFORE the
+  // child-event gate, which ignores every agent_id-tagged payload and would swallow it; (e) the
+  // tool-keyed tail is skipped once the session is native, and (f) the lifecycle's release stops
+  // tails.
+  it('both shells route Claude subagent events through the ONE lifecycle, and tail natively', () => {
+    for (const rel of ['src/main/index.ts', 'src/server/agent-status.ts']) {
+      const src = code(rel)
+      expect(src, `${rel}: (a) normalized events bypass the lifecycle`).toMatch(/claudeSubagents\.apply\(e\)/)
+      expect(src, `${rel}: (b) the task-notification end bypasses the lifecycle`).toMatch(
+        /claudeSubagents\.apply\(taskDoneEvent\)/
+      )
+      expect(src, `${rel}: (b) the task-notification end is not labelled`).toMatch(/subagentSignal: 'transcript'/)
+      expect(src, `${rel}: (c) no native tail at the derived path`).toMatch(
+        /subagentTail\.trackFile\(\s*agentChild|subagentTail\.trackFile\(\s*native\.agent_id/
+      )
+      expect(src, `${rel}: (c) the derived path helper is not used`).toMatch(/claudeSubagentTranscriptPath\(/)
+      const nativeAt = src.indexOf("native.hook_event_name === 'SubagentStart' || native.hook_event_name === 'SubagentStop'")
+      const gateAt = src.indexOf('if (ignoreQuestionHook(nodeId, payload)) return')
+      expect(nativeAt, `${rel}: (d) no native branch`).toBeGreaterThan(-1)
+      expect(nativeAt, `${rel}: (d) the native branch sits after the child-event gate`).toBeLessThan(gateAt)
+      expect(src, `${rel}: (e) the tool tail is not skipped for a native session`).toMatch(
+        /claudeSubagents\.isNative\(nodeId, p\.session_id\)/
+      )
+      expect(src, `${rel}: (f) released cards keep their tail`).toMatch(
+        /new ClaudeSubagentLifecycle\(\{\s*onRelease:[\s\S]{0,40}subagentTail\.finish\(key\)/
+      )
+      expect(src, `${rel}: node teardown forgets the lifecycle`).toMatch(/claudeSubagents\.forgetNode\(nodeId\)/)
+    }
+  })
+
   it('both raw listeners carry the codex subagent branch (trackFile + agent_id gate)', () => {
     for (const rel of ['src/main/index.ts', 'src/server/agent-status.ts']) {
       const src = code(rel)
