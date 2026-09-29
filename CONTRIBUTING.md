@@ -415,6 +415,19 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   see. Keep a remote temp's own leaf bounded: extending an already-valid maximum-length target leaf
   with a UUID suffix turns an atomic write into a guaranteed `ENAMETOOLONG` failure.
 
+- **Never write a remote file with `cat > <file>`.** It truncates the file the moment the remote
+  shell starts, and when the ssh channel dies before the body arrives `cat` exits 0 — a reconnect
+  once left a host's canvas shims at 0 bytes with every agent call "succeeding" silently. Use
+  `runRemoteAtomicWrite` / `remoteAtomicWrite` (`src/main/remote-atomic-write.ts`), which checks the
+  byte count before renaming and throws when the write did not land, and for a file that belongs
+  to the user (settings, config.toml, AGENTS.md) use `updateRemoteTextFile`, which also keeps its
+  symlink and mode. A guard test fails on a new bare `cat >`. A remote runner RESOLVES on a
+  non-zero exit, so check the result or use the helper that does.
+
+- **Never write `chmod <mode> -- <file>` into a remote command.** macOS (BSD) chmod stops parsing
+  options at the mode, so the `--` becomes a file operand and the command fails there while passing
+  on Linux. To test it on Linux, put a `POSIXLY_CORRECT=1` wrapper around GNU chmod first on PATH.
+
 - **A write ack is a claim about a WRITE, never about what the remote now holds.** Do not retire
   state that records "the server still needs to be told X" just because the write returned true.
   The SSH mirror's writer acks the 5 s throttle's trailing write **optimistically** — it returns
