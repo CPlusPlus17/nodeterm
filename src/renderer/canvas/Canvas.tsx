@@ -1666,9 +1666,6 @@ export function Canvas() {
   const onCanvasMoveStart = useCallback(() => {
     if (movingClearRef.current) clearTimeout(movingClearRef.current)
     movingClearRef.current = null
-    // Every appearance: freeze the viewport's raster scale for the duration of the move (see the
-    // `.canvas-camera-moving` rule). Before the glass early-return — this is not a glass feature.
-    flowWrapRef.current?.classList.add('canvas-camera-moving')
     if (keepBlurWhileMovingRef.current) return
     flowWrapRef.current?.classList.add('canvas-moving')
   }, [])
@@ -1677,7 +1674,6 @@ export function Canvas() {
     movingClearRef.current = setTimeout(() => {
       movingClearRef.current = null
       flowWrapRef.current?.classList.remove('canvas-moving')
-      flowWrapRef.current?.classList.remove('canvas-camera-moving')
     }, 150)
   }, [])
   useEffect(
