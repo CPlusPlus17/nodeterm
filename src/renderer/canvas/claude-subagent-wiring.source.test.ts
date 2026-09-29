@@ -17,8 +17,9 @@ function between(from: string, to: string): string {
 
 describe('Canvas agent-status listener — Claude native subagents', () => {
   it('a start that supersedes a tool-drawn card hands the old key to the store (one card, not two)', () => {
-    const branch = between("case 'subagent-start':", "case 'subagent-end':")
-    expect(branch).toMatch(/an\.start\(\s*e\.toolUseId,[\s\S]*?\},(\s*\/\/[^\n]*)*\s*e\.supersedes\s*\)/)
+    // Comments stripped first, so one between the arguments does not hide (or fake) the argument.
+    const branch = between("case 'subagent-start':", "case 'subagent-end':").replace(/\/\/[^\n]*/g, '')
+    expect(branch).toMatch(/an\.start\(\s*e\.toolUseId,[\s\S]*?\},\s*e\.supersedes\s*\)/)
   })
 
   it("a Stop that reports live background tasks stamps the node's background-task guard", () => {
