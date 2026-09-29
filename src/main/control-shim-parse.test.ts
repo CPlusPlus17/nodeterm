@@ -16,16 +16,17 @@ import os from 'node:os'
 import path from 'node:path'
 import { CONTROL_SHIM_SCRIPT } from '../core/canvas-control-core'
 import { runNowRequested } from '../shared/control-verbs'
+import { isValidRequestId } from '../core/control-request-ledger'
 
 let dir = ''
 
-/** Run the shim and return the `arg.<name>=<value>` pairs it handed curl, in order. */
-const run = (args: string[]): string[] => {
+/** Run the shim and return every argv element it handed curl, one per line. */
+const runRaw = (args: string[], extraBin?: string): string[] => {
   const log = path.join(dir, 'argv.log')
   fs.writeFileSync(log, '')
   execFileSync('sh', [path.join(dir, 'shim.sh'), ...args], {
     env: {
-      PATH: `${path.join(dir, 'bin')}:${process.env.PATH ?? ''}`,
+      PATH: `${extraBin ? `${extraBin}:` : ''}${path.join(dir, 'bin')}:${process.env.PATH ?? ''}`,
       NODETERM_CANVAS_CONTROL: '1',
       NODETERM_HOOK_PORT: '1',
       NODETERM_NODE_ID: 'n1',
@@ -34,13 +35,13 @@ const run = (args: string[]): string[] => {
     },
     encoding: 'utf8'
   })
-  // One argv element per line; keep only the translated pairs (`nodeId=…` and curl's own flags
-  // are not part of what this file is about).
-  return fs
-    .readFileSync(log, 'utf8')
-    .split('\n')
-    .filter((l) => l.startsWith('arg.'))
+  return fs.readFileSync(log, 'utf8').split('\n')
 }
+
+/** Run the shim and return the `arg.<name>=<value>` pairs it handed curl, in order. */
+// Only the translated pairs: `nodeId=…`, `requestId=…` and curl's own flags are not part of what
+// this file is about.
+const run = (args: string[]): string[] => runRaw(args).filter((l) => l.startsWith('arg.'))
 
 beforeAll(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctlshim-'))
@@ -56,6 +57,44 @@ beforeAll(() => {
 })
 
 afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+// The per-RUN request id: what lets the server recognise the shim's own endpoint-walk re-post as
+// the SAME call rather than a second open (src/core/control-request-ledger.ts). One run = one id,
+// on every POST of that run; two runs = two ids, because a second run is a second call.
+describe('the control shim tags each run with its own request id', () => {
+  const ids = (args: string[], extraBin?: string): string[] =>
+    runRaw(args, extraBin)
+      .filter((l) => l.startsWith('requestId='))
+      .map((l) => l.slice('requestId='.length))
+
+  it('sends exactly one well-formed id per POST, and never as an arg', () => {
+    const got = ids(['open-agent', '--agent', 'claude'])
+    expect(got).toHaveLength(1)
+    expect(isValidRequestId(got[0])).toBe(true)
+    expect(run(['open-agent', '--agent', 'claude'])).toEqual(['arg.agent=claude'])
+  })
+
+  it('two runs get two different ids', () => {
+    const [a] = ids(['open-terminal'])
+    const [b] = ids(['open-terminal'])
+    expect(a).not.toBe(b)
+  })
+
+  it('with no working od (no random source), it still sends a well-formed id', () => {
+    const noOd = path.join(dir, 'no-od')
+    fs.mkdirSync(noOd, { recursive: true })
+    fs.writeFileSync(path.join(noOd, 'od'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    const got = ids(['open-terminal'], noOd)
+    expect(got).toHaveLength(1)
+    expect(got[0]).toMatch(/^cli-\d+-\d+$/)
+    expect(isValidRequestId(got[0])).toBe(true)
+  })
+
+  it('an explicit --request-id rides as an ordinary arg next to the per-run id', () => {
+    expect(run(['open-terminal', '--request-id', 'wave1-a'])).toEqual(['arg.request-id=wave1-a'])
+    expect(ids(['open-terminal', '--request-id', 'wave1-a'])).toHaveLength(1)
+  })
+})
 
 describe('the control shim translates flags', () => {
   it('a --flag followed by another --flag does NOT eat it', () => {

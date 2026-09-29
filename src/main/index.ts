@@ -278,6 +278,7 @@ import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control
 import { issueFlagRefusal } from '../core/canvas-control-core'
 import { afterPrFlagRefusal } from '../shared/pr-wait'
 import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
+import { createControlForwarder } from './control-forward'
 import { initTranscriptIndex, searchTranscripts } from '../core/transcript-index'
 import { initTelemetry } from './telemetry'
 import { initClaudeUsage } from './claude-usage'
@@ -3481,13 +3482,10 @@ app.whenReady().then(async () => {
   // confirm dialog collect itself once this timer has already abandoned the request (main sends
   // no expiry event), and two copies of the deadline is the drift this repo keeps paying for.
   // See @shared/control-confirm.
-  const pendingControl = new Map<
-    string,
-    {
-      resolve: (r: { ok: boolean; message?: string; result?: unknown; error?: string }) => void
-      timer: NodeJS.Timeout
-    }
-  >()
+  // The map and its timer live in `control-forward.ts`, where a timeout answers INDETERMINATE (the
+  // renderer is not cancelled and may still act) and a late answer is handed back to the request
+  // ledger rather than dropped — see that module's header.
+  const controlForwarder = createControlForwarder({ timeoutMs: CONTROL_REQUEST_TIMEOUT_MS })
   // Who owns which agent-opened browser node, THIS app run only. In-memory, never persisted, never
   // read from project.json (Task 4.3/4.4). Consumed by PR 5 (attach/lease), PR 6 (indicator/Stop).
   const browserLedger = new BrowserControlLedger()
@@ -3653,18 +3651,12 @@ app.whenReady().then(async () => {
     (
       _e,
       payload: { requestId: string; ok: boolean; message?: string; result?: unknown; error?: string }
-    ) => {
-      const pending = pendingControl.get(payload.requestId)
-      if (!pending) return
-      clearTimeout(pending.timer)
-      pendingControl.delete(payload.requestId)
-      pending.resolve(payload)
-    }
+    ) => controlForwarder.answer(payload)
   )
   // The `browser` verb resolve round-trip (Task 7.2). Main asks the renderer to resolve a source
   // node's owning project, control-capability and the LIVE per-project capability value; the renderer
-  // answers here. Modelled on `pendingControl`, but its own map with its own short (2s) timeout so a
-  // slow canvas can NEVER consume the 120s pending-control budget.
+  // answers here. Modelled on the control forwarder (`control-forward.ts`), but its own map with its
+  // own short (2s) timeout so a slow canvas can NEVER consume the 120s pending-control budget.
   const pendingBrowserResolve = new Map<string, (r: BrowserResolve) => void>()
   ipcMain.on(
     IPC.browserControlResolveResult,
@@ -3830,7 +3822,7 @@ app.whenReady().then(async () => {
         : { ok: false, error: result.error, message: result.message }
     )
   }
-  hookServer.setControlHandler(async ({ verb, nodeId, args, verified }) => {
+  hookServer.setControlHandler(async ({ verb, nodeId, args, verified, onLateAnswer }) => {
     // `--dry-run` (issue #532) is honoured by the spawn verbs only, and this gate runs FIRST —
     // before the browser intercept, the open-project gates and the renderer forward — because a
     // verb that cannot dry-run must REFUSE rather than silently perform: a `close --dry-run`
@@ -3897,25 +3889,17 @@ app.whenReady().then(async () => {
     }
     const target = getMainWindow()
     if (!target) return { ok: false, error: 'window unavailable' }
-    const requestId = randomUUID()
-    const result = await new Promise<{ ok: boolean; message?: string; result?: unknown; error?: string }>((resolve) => {
-      const timer = setTimeout(() => {
-        pendingControl.delete(requestId)
-        // Name the timeout and say it is retryable. A DENIAL is a different answer with different
-        // guidance (`denied by user`, final, never retried), and the old wording — "no response /
-        // not confirmed" — read as though it covered both, so a caller that had merely waited out
-        // an unanswered dialog treated it as a refusal and gave up.
-        resolve({
-          ok: false,
-          // The dialog is not left behind any more: it carries the same deadline and dismisses
-          // itself (ConfirmState.expiresAt), which is what stops a retry hitting "a confirmation
-          // is already pending" for the rest of the app run.
-          error: `no answer within ${CONTROL_REQUEST_TIMEOUT_MS / 1000}s — the confirmation dialog has been dismissed; safe to retry`
-        })
-      }, CONTROL_REQUEST_TIMEOUT_MS)
-      pendingControl.set(requestId, { resolve, timer })
-      target.webContents.send(IPC.agentControl, { requestId, sourceNodeId: nodeId, verb, args })
-    })
+    // The timeout is NAMED, and what it says depends on the verb (`controlTimeoutError`): a DENIAL
+    // is a different answer (`denied by user`, final), and only a confirm-gated verb, whose dialog
+    // dismisses itself at the same deadline (ConfirmState.expiresAt), may be called safe to retry.
+    // An open is not cancelled by main giving up, so its timeout is indeterminate and its late
+    // answer goes back to the request ledger through `onLateAnswer`.
+    const result = await controlForwarder.forward(
+      verb,
+      (requestId) =>
+        target.webContents.send(IPC.agentControl, { requestId, sourceNodeId: nodeId, verb, args }),
+      onLateAnswer
+    )
     // Record browser ownership the moment an open-browser succeeds — and ONLY when the caller's
     // identity verdict for THIS request was `verified` (main's own verdict, not anything off the
     // wire or project.json). A `legacy`/warned caller may open a browser but owns nothing, so it

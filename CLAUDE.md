@@ -3231,6 +3231,47 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   **A new verb must not DEPEND on the fix**: the shim is rewritten locally every app boot but onto
   an SSH host only inside `RemoteHooks.setup()` (on connect), so an already-connected project keeps
   the old loop with no signal on the wire. Give every flag a value and both loops agree.
+  **A retried call must not open a second node (`--request-id`, `core/control-request-ledger.ts`).**
+  The reply to an open can be lost while the open went through — the agent's own tool call is
+  killed (~2 min for a Bash tool call while a slow host holds the POST), the ssh tunnel drops
+  mid-reply, or the shim's endpoint walk re-posts after a transport that failed AFTER the request
+  was read — and the agent's natural retry used to open a second agent, team or worktree. The
+  verbs that create something (`REQUEST_ID_VERBS`) take `--request-id <id>`, and the shim also
+  sends its own `requestId` form field, generated once per RUN (`od` of `/dev/urandom`, else
+  pid+time), on every POST of that run, so its own re-post is covered for an agent that never read
+  the docs. Rules a refactor must not undo: (1) **the ledger lives in the hook server's `/control/`
+  route** (core), the one place desktop main's forwarder and the Server Edition's
+  `createServerEditionControlHandler` both sit behind — putting it in either shell's handler
+  leaves the other without it; (2) rows are keyed **(verified caller node, id)** only — an
+  unverified caller gets no dedupe rather than a shared bucket, and an explicit id from one is
+  answered with `REQUEST_ID_UNVERIFIED_NOTE`; (3) the row is **claimed before the handler runs**,
+  synchronously after the lookup, so two concurrent POSTs cannot both run; (4) a fingerprint (verb
+  + args minus the id, key order ignored) makes the same id with a different call a
+  `request-id-conflict`; (5) a settled row stores the WHOLE reply and a replay returns it (text:
+  a `replayed:` first line; JSON: `replayed: true`) — a refusal included, so an id never runs
+  twice; (6) a handler that cannot say whether its effect happened answers `indeterminate: true`
+  (desktop main's 120 s wait, now `src/main/control-forward.ts`: the renderer is not cancelled, and
+  an `open-worktree` whose `git worktree add` outlives the wait still completes) or throws, and the
+  row becomes UNKNOWN — refused, never re-run; the forwarder hands a late renderer answer back via
+  the handler's `onLateAnswer`, and settlement only moves up (unknown → answer, never the reverse);
+  (7) an explicit id on a verb outside the set is REFUSED (`request-id-unsupported`), like
+  `--dry-run` — an agent believing its `write` is protected when it is not is the failure the flag
+  exists to end — while a malformed or out-of-set per-run id is silently ignored; (8) a dry run
+  neither claims nor replays. The ledger is **process memory** (24 h, 256 per caller, 4096 in total,
+  in-flight rows never evicted): an app restart between the effect and the retry runs the retry
+  again, which is the case that matters least and costs a store with atomic writes on every call
+  to cover. The timeout sentence is now verb-aware (`controlTimeoutError`): only a confirm-gated
+  verb, whose dialog dismisses itself at the same deadline, is still called "safe to retry". An SSH
+  host keeps the shim it got at its last connect, so until that project reconnects its runs carry
+  no per-run id (an explicit `--request-id` still works through the old loop). Agent-facing text
+  is rendered from `REQUEST_ID_VERBS` / `REQUEST_ID_RETRYABLE` / `REQUEST_ID_OUTCOME_GLOSS`
+  (`requestIdDocLines`). Tests: the ledger alone, the route (both dialects, in flight, conflict,
+  late answer, throw), the Server Edition handler behind it, and the real shim under `/bin/sh`
+  through a proxy that forwards the request and drops the reply — the re-post case, red before.
+  Deliberately NOT in the set: reads (a replay would serve a stale snapshot, and `browser
+  --cookies` would sit in memory for a day), the idempotent-by-nature verbs, and the
+  human-confirmed / rate-limited ones (`write`, `send`, `settings`, `report-issue`) — widening it
+  to those is a separate decision.
   **WHICH CANVAS ANSWERS, and why an open never moves the camera** (`renderer/lib/controlRouting.ts`
   + `renderer/lib/coldOpen.ts`). React Flow holds only the ACTIVE project's nodes, but every other
   open project's tmux sessions keep running, so a control call routinely arrives from a node the
