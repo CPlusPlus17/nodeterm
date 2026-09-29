@@ -6,6 +6,8 @@
 // code with `joinErrorCode` and decides whether trying again can help: only a network failure can.
 // Every other code needs a human (a new code, an unlocked keyring, an owner) or a new day, and
 // retrying it would at best repeat the refusal and at worst spend damped device-token mints.
+// `E_JOIN_BUSY` says nothing about the team at all: another join of OURS for the same team is still
+// running, and it is the one that should finish.
 
 export const JOIN_ERROR_CODES = [
   'E_JOIN_REVOKED',
@@ -13,7 +15,8 @@ export const JOIN_ERROR_CODES = [
   'E_JOIN_RATE',
   'E_JOIN_BAD_CODE',
   'E_JOIN_NETWORK',
-  'E_JOIN_KEY_LOCKED'
+  'E_JOIN_KEY_LOCKED',
+  'E_JOIN_BUSY'
 ] as const
 
 export type JoinErrorCode = (typeof JOIN_ERROR_CODES)[number]

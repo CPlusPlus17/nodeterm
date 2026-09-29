@@ -9,7 +9,8 @@
 // what lets a reconnect confirm our half without a SAS dialog — but only for the exact host key it
 // was recorded against (see hosted-join.ts). It deliberately does NOT live in the desktop's
 // approved-devices store, which counts paired phones.
-import { promises as fs } from 'node:fs'
+import { constants as fsConstants, promises as fs } from 'node:fs'
+import { dirname } from 'node:path'
 import { writeFileAtomic } from '../../core/fs-atomic'
 
 export interface RelayBookmark {
@@ -48,8 +49,16 @@ export class BookmarkStore {
   // (a join persisting its token while an earlier join records its approval) never lose each other.
   private tail: Promise<unknown> = Promise.resolve()
 
-  /** @param file the bookmarks file; public so a refusal can name it (a path, never contents). */
-  constructor(readonly file: string) {}
+  private readonly access: (p: string, mode: number) => Promise<void>
+
+  /** @param file the bookmarks file; public so a refusal can name it (a path, never contents).
+   *  @param io.access test seam for the directory check (`fs.access`). */
+  constructor(
+    readonly file: string,
+    io: { access?: (p: string, mode: number) => Promise<void> } = {}
+  ) {
+    this.access = io.access ?? ((p, mode) => fs.access(p, mode))
+  }
 
   /** The bookmarks on disk, for DISPLAY. A missing or unreadable file reads as none; malformed
    *  entries are dropped. Reading never writes. Never build a write on this: see `readForWrite`. */
@@ -67,8 +76,18 @@ export class BookmarkStore {
    * or does not parse, or holds an entry this build does not understand, rejects: rewriting it from
    * a guess would silently drop other teams' device tokens and approvals (unknown trust state is
    * never overwritten). The refusal names the file, never its contents: they hold tokens.
+   *
+   * It also refuses when no write could LAND: a readable file in a directory this process cannot
+   * write to (a read-only mount, a root-owned data dir) reads fine and then fails every rename. A
+   * join probes this before minting, so such a directory must answer here, not after a device mint
+   * that nothing could keep (every launch would otherwise spend one of the team's damped mints).
    */
   async readForWrite(): Promise<RelayBookmark[]> {
+    try {
+      await this.access(dirname(this.file), fsConstants.W_OK)
+    } catch (err) {
+      throw new Error(`relay bookmarks directory is not writable (${(err as NodeJS.ErrnoException)?.code ?? 'unknown error'}); not writing to it`)
+    }
     let raw: string
     try {
       raw = await fs.readFile(this.file, 'utf-8')

@@ -23,4 +23,10 @@ describe('hosted join error codes', () => {
     expect(JOIN_ERROR_CODES.filter(joinErrorRetries)).toEqual(['E_JOIN_NETWORK'])
     expect(joinErrorRetries(null)).toBe(false)
   })
+
+  it('E_JOIN_BUSY is a code of its own (another attempt of ours is running), and it never retries', () => {
+    expect(JOIN_ERROR_CODES).toContain('E_JOIN_BUSY')
+    expect(joinErrorCode('[E_JOIN_BUSY] Already joining this team; wait for that attempt to finish.')).toBe('E_JOIN_BUSY')
+    expect(joinErrorRetries('E_JOIN_BUSY')).toBe(false)
+  })
 })

@@ -276,7 +276,9 @@ describe('joinHostedTeam', () => {
       'bad-token': 'E_JOIN_REFUSED',
       network: 'E_JOIN_NETWORK',
       revoked: 'E_JOIN_REVOKED',
-      'key-locked': 'E_JOIN_KEY_LOCKED'
+      'key-locked': 'E_JOIN_KEY_LOCKED',
+      // Another join of OURS for the same team is running: says nothing about the team (R39).
+      busy: 'E_JOIN_BUSY'
     }
     for (const [kind, codeName] of Object.entries(expected) as Array<[HostedJoinFailure, string]>) {
       const e = new HostedJoinError(kind)
@@ -488,7 +490,9 @@ describe('R38: never mint a device token the joiner cannot keep', () => {
     await vi.waitFor(() => expect(calls).toEqual(['device']))
     // A boot reconnect racing a manual connect (or a double click): refused, with a code that stops a retry loop.
     const dup = await connectHostedTeam(codeText, deps, io('b')).catch((e: Error) => e)
-    expect(joinErrorCode((dup as Error).message)).toBe('E_JOIN_REFUSED')
+    // Its own code (R39): the renderer must never read "another attempt of yours is running" as a
+    // verdict about the team, and it never retries it.
+    expect(joinErrorCode((dup as Error).message)).toBe('E_JOIN_BUSY')
     expect((dup as Error).message).toMatch(/already joining this team/i)
     release()
     expect(await first).toBe('a')
@@ -496,6 +500,45 @@ describe('R38: never mint a device token the joiner cannot keep', () => {
     // Released once the first finished: a later connect goes ahead (and reuses the kept token).
     expect(await connectHostedTeam(codeText, deps, io('c'))).toBe('c')
     expect(calls.filter((c) => c === 'device')).toHaveLength(1)
+  })
+
+  it('R39: forgetting a team is refused while a join for it is still running (its persist would undo it)', async () => {
+    const s = setup()
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const minted: string[] = []
+    const gated = (async (url: string) => {
+      if (url.endsWith('/v1/relay/device')) {
+        minted.push('device')
+        await gate
+        return new Response(JSON.stringify({ deviceToken: 'DT', hostId: 'H', exp: 1 }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ pairingToken: 'PT', hostId: 'H', relayEndpoint: 'wss://r', exp: 1 }), { status: 200 })
+    }) as unknown as typeof fetch
+    const running = joinHostedTeam(codeText, { ...s.deps, fetch: gated }, events().ev)
+    await vi.waitFor(() => expect(minted).toEqual(['device']))
+    const refused = await removeHostedBookmark(code.hostId, s.store, s.state).catch((e: Error) => e)
+    expect(refused).toBeInstanceOf(Error)
+    expect((refused as Error).message).toMatch(/still joining/i)
+    release()
+    await running
+    // The join's own persist landed, and nothing was removed out from under it.
+    expect((await s.store.list()).map((b) => b.hostId)).toEqual([code.hostId])
+    // Once it finished, forgetting works — token and bookmark both.
+    await removeHostedBookmark(code.hostId, s.store, s.state)
+    expect(await s.store.list()).toEqual([])
+  })
+
+  it('R39: a bookmarks directory no write could land in refuses the join before any mint', async () => {
+    const s = setup()
+    const locked = new BookmarkStore(s.store.file, {
+      access: async () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }) }
+    })
+    const err = await joinHostedTeam(codeText, { ...s.deps, bookmarks: locked }, events().ev).catch((e: Error) => e)
+    expect(joinErrorCode((err as Error).message)).toBe('E_JOIN_REFUSED')
+    expect((err as Error).message).toContain(s.store.file)
+    expect(s.api.count('device')).toBe(0)
+    expect(s.api.count('join')).toBe(0)
   })
 
   it('revoked forgets the in-memory token: the next attempt mints fresh', async () => {

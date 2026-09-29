@@ -44,7 +44,7 @@ import type { JoinErrorCode } from '../../shared/relay-join-errors'
 /** What a hosted join hands the relay client: never a pin store. */
 export type HostedConnectOptions = Omit<ConnectRelayClientOptions, 'pins' | 'transport'>
 
-export type HostedJoinFailure = 'invalid-code' | 'rate-limited' | 'refused' | 'network' | 'bad-token' | 'revoked' | 'key-locked'
+export type HostedJoinFailure = 'invalid-code' | 'rate-limited' | 'refused' | 'network' | 'bad-token' | 'revoked' | 'key-locked' | 'busy'
 
 /** Each failure's stable code. `bad-token` is a refusal: a token the service will not accept even
  *  freshly minted cannot be fixed by retrying, which would only spend damped mints. */
@@ -55,7 +55,8 @@ const CODES: Record<HostedJoinFailure, JoinErrorCode> = {
   'bad-token': 'E_JOIN_REFUSED',
   network: 'E_JOIN_NETWORK',
   revoked: 'E_JOIN_REVOKED',
-  'key-locked': 'E_JOIN_KEY_LOCKED'
+  'key-locked': 'E_JOIN_KEY_LOCKED',
+  busy: 'E_JOIN_BUSY'
 }
 
 const MESSAGES: Record<HostedJoinFailure, string> = {
@@ -65,7 +66,8 @@ const MESSAGES: Record<HostedJoinFailure, string> = {
   network: 'Could not reach the nodeterm service. Check the connection and try again.',
   'bad-token': "The nodeterm service did not accept this device's token for that team.",
   revoked: "This device's relay access was revoked.",
-  'key-locked': 'This device identity could not be loaded.'
+  'key-locked': 'This device identity could not be loaded.',
+  busy: 'Already joining this team; wait for that attempt to finish.'
 }
 
 /** A join that did not reach the relay. `kind` says why; the message is `[<code>] <for the human>`,
@@ -115,12 +117,17 @@ export function createHostedJoinState(): HostedJoinState {
 export const hostedJoinState: HostedJoinState = createHostedJoinState()
 
 /** Forget a team: its in-memory token first (so it is gone even if the file refuses the write), then
- *  its bookmark. */
+ *  its bookmark. Refused — nothing forgotten — while a join for that team is still minting or joining:
+ *  that join persists its bookmark (and caches its token) on its way to the relay, which would bring
+ *  back exactly what was just forgotten, device token included. */
 export function removeHostedBookmark(
   hostId: string,
   bookmarks: Pick<BookmarkStore, 'remove'>,
   state: HostedJoinState = hostedJoinState
 ): Promise<void> {
+  if (state.inflight.has(hostId)) {
+    return Promise.reject(new Error('Still joining this team; forget it once that attempt finishes.'))
+  }
   state.tokens.forget(hostId)
   return bookmarks.remove(hostId)
 }
@@ -164,11 +171,10 @@ export async function joinHostedTeam(codeText: string, deps: HostedJoinDeps, ev:
   const state = deps.state ?? hostedJoinState
   // One join per team at a time, from the first line to the moment the relay client exists. A second
   // one (a boot reconnect racing a manual connect, a double click) would mint a second token, and
-  // its pending request would replace the first at the host. Refused, with a code that stops a
-  // retry loop: the attempt already running is the one that should finish.
-  if (state.inflight.has(code.hostId)) {
-    throw new HostedJoinError('refused', 'Already joining this team; wait for that attempt to finish.')
-  }
+  // its pending request would replace the first at the host. Refused, with a code of its own that
+  // stops a retry loop and says nothing about the team: the attempt already running is the one that
+  // should finish.
+  if (state.inflight.has(code.hostId)) throw new HostedJoinError('busy')
   state.inflight.add(code.hostId)
   try {
     return await joinWithCode(code, deps, ev, state)

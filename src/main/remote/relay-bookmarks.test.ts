@@ -66,6 +66,32 @@ describe('relay bookmarks', () => {
     expect((err as Error).message).not.toContain('SECRET')
   })
 
+  it('R39: a directory no write could land in is refused for writes, and the refusal names why', async () => {
+    // A readable file on a read-only mount: the read succeeds, every write would fail. The probe a
+    // join runs before minting must see that, or each launch spends a device mint it cannot keep.
+    const file = tmpFile()
+    fs.writeFileSync(file, JSON.stringify([b]))
+    const seen: Array<[string, number]> = []
+    const s = new BookmarkStore(file, {
+      access: async (p, mode) => {
+        seen.push([p, mode])
+        throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' })
+      }
+    })
+    const err = await s.readForWrite().catch((e: Error) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/EROFS/)
+    expect(seen).toEqual([[path.dirname(file), fs.constants.W_OK]])
+    await expect(s.upsert({ ...b, hostId: 'H2' })).rejects.toThrow(/EROFS/)
+    // Display is unaffected: reading is still fine.
+    expect(await s.list()).toEqual([b])
+  })
+
+  it('R39: the directory check passes on an ordinary writable directory (the default seam)', async () => {
+    const s = new BookmarkStore(tmpFile())
+    expect(await s.readForWrite()).toEqual([])
+  })
+
   it.skipIf(process.platform === 'win32')('an unreadable file (not a missing one) is refused for writes', async () => {
     // A directory where the file should be: reading it fails with EISDIR, which is not absence.
     const file = tmpFile()
