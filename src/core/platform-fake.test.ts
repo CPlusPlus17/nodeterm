@@ -2,7 +2,13 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { FAKE_PLATFORM_ROOT_ENV, enterFakePlatformRoot, fakePlatform, leaveFakePlatformRoot } from './platform-fake'
+import {
+  FAKE_PLATFORM_ROOT_ENV,
+  enterFakePlatformRoot,
+  fakePlatform,
+  leaveFakePlatformRoot,
+  makeFakeUserDataDir
+} from './platform-fake'
 
 // Read before any test below re-points it: what the vitest run itself set up.
 const runRootAtLoad = process.env[FAKE_PLATFORM_ROOT_ENV]
@@ -52,6 +58,15 @@ describe('fakePlatform userDataDir', () => {
     const p = { ...fakePlatform() }
     expect(path.dirname(p.userDataDir)).toBe(root)
     expect(fs.readdirSync(root)).toHaveLength(1)
+  })
+
+  it('makeFakeUserDataDir: a fresh directory under the run root each call (own CorePlatforms)', () => {
+    const a = makeFakeUserDataDir()
+    const b = makeFakeUserDataDir()
+    expect(a).not.toBe(b)
+    expect(path.dirname(a)).toBe(root)
+    expect(path.dirname(b)).toBe(root)
+    expect(fs.statSync(a).isDirectory()).toBe(true)
   })
 
   it('falls back to the system temp dir when the run root is gone', () => {

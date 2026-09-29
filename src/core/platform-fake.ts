@@ -50,6 +50,16 @@ export interface FakePlatform extends CorePlatform {
 }
 
 /**
+ * A fresh, empty `userDataDir` for a test that builds its OWN `CorePlatform` instead of calling
+ * `fakePlatform()`. It lands under the run root like every `fakePlatform()` directory, so the run's
+ * teardown removes it; a test that `mkdtemp`s in the system temp dir itself leaks one directory per
+ * call for good (canvas-sync.test.ts did, fifteen per run).
+ */
+export function makeFakeUserDataDir(): string {
+  return mkdtempSync(fakeUserDataTemplate())
+}
+
+/**
  * In-memory CorePlatform for tests. Not a mock library — plain recording object.
  *
  * `userDataDir` defaults to a FRESH `mkdtemp` directory, never a fixed path. It used to be the
@@ -70,7 +80,7 @@ export function fakePlatform(overrides: Partial<CorePlatform> = {}): FakePlatfor
   let userDataDir: string | undefined
   const f: FakePlatform = {
     get userDataDir(): string {
-      return (userDataDir ??= mkdtempSync(fakeUserDataTemplate()))
+      return (userDataDir ??= makeFakeUserDataDir())
     },
     appVersion: '0.0.0-test',
     isPackaged: false,
