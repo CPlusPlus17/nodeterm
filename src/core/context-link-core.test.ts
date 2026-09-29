@@ -11,6 +11,7 @@ import {
   CONTEXT_UNREACHABLE_MSG
 } from './context-link-core'
 import { CODEX_SANDBOX_BLOCKED_LINE } from './agents/hook-sandbox-hint-sh'
+import { FOREIGN_ENDPOINT_HINT, OWNER_UNREACHABLE_LEAD } from './agents/hook-endpoint-failover-sh'
 
 describe('buildLinkDoc', () => {
   it('enriches each link with tmux name, injected transcript path, and cwd', () => {
@@ -218,6 +219,17 @@ describe('buildLinkedContextInstructions', () => {
       expect(body).toMatch(/never relink, reinstall or restart nodeterm/)
       expect(body).toContain('network.allow_unix_sockets')
       expect(body).toContain('~/.codex/config.toml')
+    }
+  })
+
+  // Same pin as canvas-control-core.test.ts: the context shim printed the foreign instance's
+  // "No linked nodes" on 2026-09-28/29, and the bodies tell an agent not to retry THAT. The
+  // owner-unreachable sentence that replaces it must be taught as temporary, in its own words.
+  it('both agent-facing texts teach the owner-unreachable failure as temporary', () => {
+    expect(CONTEXT_SHIM_SCRIPT).toContain(`echo "${FOREIGN_ENDPOINT_HINT}" >&2`)
+    for (const body of [buildContextLinkSkillBody('/x/context.sh'), buildLinkedContextInstructions('/x/context.sh')]) {
+      expect(body).toContain(OWNER_UNREACHABLE_LEAD.replace(/\.$/, ''))
+      expect(body).toMatch(/This is temporary: *\n?retry the same *\n?command later/)
     }
   })
 
