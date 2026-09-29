@@ -30,15 +30,16 @@ const toLines = (text: string | string[]): string[] =>
  */
 export function parseLatestUsage(
   text: string | string[]
-): { used: number; model: string | null } | null {
+): { used: number; model: string | null; effort?: string } | null {
   const lines = toLines(text)
   let found = false
   let usedTokens = 0
   let model: string | null = null
+  let effort: string | undefined
   for (let i = lines.length - 1; i >= 0; i--) {
     const s = lines[i].trim()
     if (!s || !s.includes('"usage"') || !s.includes('"assistant"')) continue
-    let o: { type?: string; message?: { model?: string; usage?: Record<string, number> } }
+    let o: { type?: string; effort?: unknown; message?: { model?: string; usage?: Record<string, number> } }
     try {
       o = JSON.parse(s)
     } catch {
@@ -52,13 +53,20 @@ export function parseLatestUsage(
     if (!found) {
       found = true
       usedTokens = used // the LATEST usage — earlier lines are visited only to resolve the model
+      // The reasoning effort of that same request: Claude Code writes a top-level `effort` on each
+      // assistant record it sent with one (`...E!==void 0&&{effort:E}` in the 2.1.283 bundle — the
+      // same field the CLI's own history reader walks). Taken from the LATEST record ONLY, never
+      // carried forward like the model: a record without it means that request had no effort (a
+      // model that does not take one), and an older value would be a stale claim.
+      if (typeof o.effort === 'string' && o.effort) effort = o.effort
     }
     // Same rule as the old forward scan's "carry the prior model forward": the effective model
     // is the nearest usage line AT OR BEFORE the latest one that names it.
     model = o.message.model ?? null
     if (model !== null) break
   }
-  return found ? { used: usedTokens, model } : null
+  if (!found) return null
+  return effort === undefined ? { used: usedTokens, model } : { used: usedTokens, model, effort }
 }
 
 /**
@@ -162,7 +170,7 @@ export interface ContextTailOptions {
    */
   parse?: (
     text: string | string[]
-  ) => { used: number; window?: number | null; model: string | null } | null
+  ) => { used: number; window?: number | null; model: string | null; effort?: string } | null
   /**
    * Re-read the tracked file from byte 0 on every tick instead of tailing an offset.
    *
@@ -181,9 +189,12 @@ interface Tracked {
   used: number
   window: number
   model: string | null
+  /** Reasoning effort of the latest request (claude only — see parseLatestUsage); null = none. */
+  effort: string | null
   // Last pushed snapshot — a push fires only when one of these changes.
   lastUsed: number
   lastModel: string | null
+  lastEffort: string | null
   lastWindow: number
   sessionWindow: number | null
   /** An async read is in flight — the next tick skips this session instead of double-reading. */
@@ -232,6 +243,7 @@ export function createContextTail(
       windowTokens: t.window,
       usedPercent,
       model: t.model,
+      ...(t.effort !== null && { effort: t.effort }),
       windowSource: customParse ? 'transcript' : t.sessionWindow === null ? 'estimate' : 'session-env',
       updatedAt: Date.now()
     }
@@ -291,6 +303,7 @@ export function createContextTail(
           if (latest) {
             t.used = latest.used
             t.model = latest.model ?? t.model
+            t.effort = latest.effort ?? null
             t.parsedWindow = latest.window ?? t.parsedWindow
           }
           if (opts?.onTaskNotification) {
@@ -311,12 +324,13 @@ export function createContextTail(
         t.used > 0 &&
         win !== null &&
         win > 0 &&
-        (t.used !== t.lastUsed || t.model !== t.lastModel || win !== t.lastWindow)
+        (t.used !== t.lastUsed || t.model !== t.lastModel || t.effort !== t.lastEffort || win !== t.lastWindow)
       ) {
         t.window = win
         push(sessionId, t)
         t.lastUsed = t.used
         t.lastModel = t.model
+        t.lastEffort = t.effort
         t.lastWindow = win
       }
     } finally {
@@ -350,8 +364,10 @@ export function createContextTail(
         used: 0,
         window: 0,
         model: null,
+        effort: null,
         lastUsed: 0,
         lastModel: null,
+        lastEffort: null,
         lastWindow: 0,
         sessionWindow: sessionWindow ?? null,
         reading: false,

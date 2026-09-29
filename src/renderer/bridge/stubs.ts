@@ -25,6 +25,10 @@ import {
   type UpdatePolicy
 } from '../../shared/types'
 import { E_UNSUPPORTED } from '../../shared/rpc'
+import { isMacPlatform } from '../../shared/platform-utils'
+import { effectiveBindings, terminalShortcutPolicy } from '../lib/keybindingOverrides'
+import type { ContextElement } from '../lib/keyContext'
+import { createMarkdownToggleSource } from './markdown-toggle-key'
 
 /** Reject with a coded error the RPC layer + renderer recognize (renderer degrades silently). */
 export function unsupported(name: string): Promise<never> {
@@ -125,6 +129,7 @@ export function buildStubApi(): Omit<
   | 'answerPermission'
   | 'ackDone'
   | 'reportHibernated'
+  | 'seedAgentIdentity'
   | 'onAgentWake'
   | 'onRemoteViewers'
   | 'onAgentRefreshNode'
@@ -283,6 +288,15 @@ export function buildStubApi(): Omit<
       read: () => Promise.resolve({ ok: false, rows: [], mem: null }),
       host: () => Promise.resolve(null)
     },
+    wallpaper: {
+      // Superseded by the real WS-backed namespace in ws-bridge (registerWallpaperIpc runs in the
+      // server shell). A RELAY tab keeps this: the wallpaper is this window's own appearance, and
+      // the peer's disk has nothing to say about it. No stills, nothing to load (gradient presets
+      // are pure CSS and need no bridge), and import refuses.
+      listStills: () => Promise.resolve([]),
+      load: () => Promise.resolve(null),
+      importImage: U('wallpaper.importImage')
+    },
     triggers: {
       // Superseded by the real WS-backed namespace in ws-bridge (startTriggerService registers the
       // handlers in the server shell). On the RELAY tab this stub stays in force and REFUSES: the
@@ -437,6 +451,12 @@ export function buildStubApi(): Omit<
       onClosed: noopUnsub,
       disconnect: noop
     },
+    // A browser cannot join a relay host (only the desktop's main process holds a relay client),
+    // so it has joined no hosted team: an empty list is the true answer, not a degrade.
+    relayHosted: {
+      bookmarks: async () => [],
+      removeBookmark: async () => {}
+    },
     handoff: {
       build: U('handoff.build')
     },
@@ -453,7 +473,8 @@ export function buildStubApi(): Omit<
       // Deliberate no-op (not a gap): the recording bit exists to stand the DESKTOP's
       // `before-input-event` intercepts down, and a browser tab has no application menu to steal
       // ⌘W/⌘M/⌘0 back from — nothing intercepts here, so there is nothing to suspend. The
-      // recorder's own preventDefault/stopPropagation is the whole path in this shell.
+      // recorder's own preventDefault/stopPropagation is the whole path in this shell; that also
+      // covers the ⌘M window listener below, which is bubble-phase and skips a prevented event.
       setRecording: noop,
       // Deliberate no-op for the same reason, one step further: the mirror exists so the DESKTOP's
       // intercepts can stand down under `terminal-first`, and there are no intercepts here to
@@ -461,7 +482,20 @@ export function buildStubApi(): Omit<
       // renderer's own dispatcher (`keyDispatchContextFor`), which reads focus directly.
       setTerminalFocused: noop
     },
-    onMarkdownToggle: noopUnsub,
+    // REAL, not a stub: a browser tab has no main process to intercept ⌘/Ctrl+M, so the chord is
+    // matched by a window keydown listener here (bindings, terminal-first stand-down and focus all
+    // read live — see markdown-toggle-key.ts, including why macOS Chrome never delivers ⌘M).
+    // Node-env tests have no window: they get the inert unsubscribe the boot contract requires.
+    onMarkdownToggle:
+      typeof window === 'undefined'
+        ? noopUnsub
+        : createMarkdownToggleSource({
+            target: window,
+            bindings: () => effectiveBindings('node.toggleMarkdown'),
+            isMac: isMacPlatform,
+            policy: terminalShortcutPolicy,
+            activeElement: () => document.activeElement as unknown as ContextElement | null
+          }),
     onCloseNode: noopUnsub,
     // Deliberate no-op (not a gap): a browser tab has no application menu to steal ⌘0, so the
     // renderer's own keydown handler is the whole path there.
@@ -528,6 +562,10 @@ export function buildStubApi(): Omit<
     // resolve round-trip is inert here — the verb is refused by name before it reaches a handler.
     onBrowserControlResolve: noopUnsub,
     sendBrowserControlResolveResult: noop,
+    // The phone Chat verbs are served by the phone relay host, which lives only in the desktop
+    // main process — the Server Edition serves no phone relay, so nothing asks this renderer.
+    onHostChatQuery: noopUnsub,
+    sendHostChatReply: noop,
     // Messaging never runs in the browser: `onAgentControl` above is inert here, so no dispatch
     // can ever reach this. It answers the honest terminal refusal all the same, so a stray call
     // can never look like it delivered.
@@ -558,6 +596,7 @@ export function buildStubApi(): Omit<
     | 'answerPermission'
   | 'ackDone'
   | 'reportHibernated'
+  | 'seedAgentIdentity'
   | 'onAgentWake'
   | 'onRemoteViewers'
   | 'onAgentRefreshNode'

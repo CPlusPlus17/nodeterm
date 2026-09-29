@@ -21,7 +21,8 @@ import { platform } from './platform'
 import { IPC } from '../shared/ipc'
 import type { ContextLinkInfo, ContextLinkMap } from '../shared/types'
 import { type PtyManager } from './pty-manager'
-import { directExecutableInvocation, findInLoginPath } from './exec-path'
+import { findInLoginPath } from './exec-path'
+import { isSafeOpencodeSessionId, runOpencodeExportAt } from './opencode-export'
 import { TMUX_SOCKET } from './tmux-naming'
 import {
   buildContextShimScript,
@@ -222,26 +223,20 @@ async function fetchTranscript(node: LinkDocEntry): Promise<string | null> {
   }
 }
 
+// The id check and the export bounds live in `opencode-export.ts`, shared with the ⌘M chat view's
+// reader. Re-exported so this module's callers are unchanged.
+export { isSafeOpencodeSessionId } from './opencode-export'
+
+// With no timeout a wedged CLI holds the linked agent's read open for good.
+const OPENCODE_EXPORT_TIMEOUT_MS = 60_000
+
 export async function opencodeExportAt(bin: string, sessionId: string): Promise<string | null> {
-  const invocation = directExecutableInvocation(bin, ['export', sessionId])
-  if (!invocation) return null
-  try {
-    const { execFile } = await import('node:child_process')
-    return await new Promise<string | null>((resolve) => {
-      execFile(
-        invocation.executable,
-        invocation.args,
-        { ...invocation.options, encoding: 'utf-8' },
-        (err, stdout) => resolve(err ? null : stdout)
-      )
-    })
-  } catch {
-    return null
-  }
+  const out = await runOpencodeExportAt(bin, sessionId, OPENCODE_EXPORT_TIMEOUT_MS)
+  return out.ok ? out.stdout : null
 }
 
 async function fetchOpencodeExport(node: LinkDocEntry): Promise<string | null> {
-  if (!node.sessionId) return null
+  if (!node.sessionId || !isSafeOpencodeSessionId(node.sessionId)) return null
   if (deps.isRemoteNode?.(node.id)) {
     return deps.runRemoteCommand
       ? await deps.runRemoteCommand(node.id, `opencode export ${shellQuote(node.sessionId)}`)

@@ -11,12 +11,14 @@ import type {
   PtyPressure,
   LogRecord,
   RecycledInfo,
+  RelayClosedReason,
   RelayPeerPending,
   RemoteUsageQuery,
   SessionMemoryQuery,
   UpdateInfo,
   UpdateProgress,
   Workspace,
+  WorkspaceSaveOptions,
   WorkspaceMigrationKind
 } from '../shared/types'
 import type { ClientId, PeerDiff, PeerIdentity, PeerState } from '../shared/presence'
@@ -99,6 +101,7 @@ const api: NodeTerminalApi = {
       ipcRenderer.invoke(IPC.ptySendText, persistKey, text, opts?.enter),
     tmuxStatus: () => ipcRenderer.invoke(IPC.ptyTmuxStatus),
     paneCommand: (persistKey) => ipcRenderer.invoke(IPC.ptyPaneCommand, persistKey),
+    launchHeadless: (req) => ipcRenderer.invoke(IPC.ptyLaunchHeadless, req),
     paneOwner: (persistKey) => ipcRenderer.invoke(IPC.ptyPaneOwner, persistKey),
     terminateForeground: (persistKey, expectedAgentId) =>
       ipcRenderer.invoke(IPC.ptyTerminateForeground, persistKey, expectedAgentId),
@@ -143,7 +146,7 @@ const api: NodeTerminalApi = {
   },
   workspace: {
     load: () => ipcRenderer.invoke(IPC.workspaceLoad),
-    save: (workspace: Workspace) => ipcRenderer.invoke(IPC.workspaceSave, workspace),
+    save: (workspace: Workspace, opts?: WorkspaceSaveOptions) => ipcRenderer.invoke(IPC.workspaceSave, workspace, opts),
     probeFolder: (folder: string) => ipcRenderer.invoke(IPC.workspaceProbeFolder, folder),
     projectFileState: (folder: string) => ipcRenderer.invoke(IPC.workspaceProjectFileState, folder),
     onMigrated: (cb: (kind: WorkspaceMigrationKind) => void) => {
@@ -227,6 +230,12 @@ const api: NodeTerminalApi = {
     moveIssue: (request) => ipcRenderer.invoke(IPC.githubIssuesMove, request),
     createMissingLabels: (projectId) => ipcRenderer.invoke(IPC.githubIssuesCreateLabels, projectId),
     clearCache: (projectId) => ipcRenderer.invoke(IPC.githubIssuesClearCache, projectId),
+    pullStatus: (projectId) => ipcRenderer.invoke(IPC.githubIssuesPullStatus, projectId),
+    chasePulls: (projectId) => ipcRenderer.invoke(IPC.githubIssuesChasePulls, projectId),
+    pullChecks: (projectId, pullNumber) =>
+      ipcRenderer.invoke(IPC.githubIssuesPullChecks, projectId, pullNumber),
+    claimPullAutoMove: (request) => ipcRenderer.invoke(IPC.githubIssuesClaimPullAutoMove, request),
+    notePullWaits: (request) => ipcRenderer.invoke(IPC.githubIssuesNotePullWaits, request),
     projectAvatar: (projectId) => ipcRenderer.invoke(IPC.githubProjectAvatar, projectId),
     onChanged: (projectId, listener) => {
       const channel = IPC.githubIssuesChanged(projectId)
@@ -491,6 +500,11 @@ const api: NodeTerminalApi = {
     read: (q?: SessionMemoryQuery) => ipcRenderer.invoke(IPC.sessionMemory, q),
     host: (q?: SessionMemoryQuery) => ipcRenderer.invoke(IPC.sessionMemoryHost, q)
   },
+  wallpaper: {
+    listStills: () => ipcRenderer.invoke(IPC.wallpaperListStills),
+    load: (w) => ipcRenderer.invoke(IPC.wallpaperLoad, w),
+    importImage: (p) => ipcRenderer.invoke(IPC.wallpaperImport, p)
+  },
   triggers: {
     arm: (projectId, nodeId, spec) => ipcRenderer.invoke(IPC.triggersArm, { projectId, nodeId, spec }),
     disarm: (projectId, nodeId) => ipcRenderer.invoke(IPC.triggersDisarm, { projectId, nodeId }),
@@ -549,8 +563,8 @@ const api: NodeTerminalApi = {
     clearGatewayCredential: () => ipcRenderer.invoke(IPC.agentGatewayCredentialClear)
   },
   chat: {
-    readTranscript: (sessionId, cwd, accountId, nodeId, agentId) =>
-      ipcRenderer.invoke(IPC.chatReadTranscript, sessionId, cwd, accountId, nodeId, agentId),
+    readTranscript: (sessionId, cwd, accountId, nodeId, agentId, page) =>
+      ipcRenderer.invoke(IPC.chatReadTranscript, sessionId, cwd, accountId, nodeId, agentId, page),
     transcriptExists: (sessionId, accountId, nodeId) =>
       ipcRenderer.invoke(IPC.transcriptExists, sessionId, accountId, nodeId)
   },
@@ -645,11 +659,16 @@ const api: NodeTerminalApi = {
     },
     onClosed: (connectionId, listener) => {
       const channel = IPC.relayClientClosed(connectionId)
-      const handler = () => listener()
+      // A hosted host's refusal reason rides the close; a legacy pairing offer sends none.
+      const handler = (_e: unknown, reason?: RelayClosedReason) => listener(reason)
       ipcRenderer.on(channel, handler)
       return () => ipcRenderer.removeListener(channel, handler)
     },
     disconnect: (connectionId) => ipcRenderer.send(IPC.relayClientDisconnect, connectionId)
+  },
+  relayHosted: {
+    bookmarks: () => ipcRenderer.invoke(IPC.relayHostedBookmarks),
+    removeBookmark: (hostId) => ipcRenderer.invoke(IPC.relayHostedBookmarkRemove, hostId)
   },
   handoff: {
     build: (sessionId, agentId, sourceNodeId, cwd, accountId) =>
@@ -788,6 +807,7 @@ const api: NodeTerminalApi = {
     return () => ipcRenderer.removeListener(IPC.agentStatus, handler)
   }, () => ipcRenderer.invoke(IPC.agentSubagentSnapshot), listener),
   reportHibernated: (nodeId, on) => ipcRenderer.send(IPC.agentHibernated, { nodeId, on }),
+  seedAgentIdentity: (entries) => ipcRenderer.send(IPC.agentSeedIdentity, entries),
   onAgentWake: (listener) => {
     const handler = (_e: unknown, nodeId: string) => listener(nodeId)
     ipcRenderer.on(IPC.agentWake, handler)
@@ -828,6 +848,12 @@ const api: NodeTerminalApi = {
     return () => ipcRenderer.removeListener(IPC.browserControlResolve, handler)
   },
   sendBrowserControlResolveResult: (payload) => ipcRenderer.send(IPC.browserControlResolveResult, payload),
+  onHostChatQuery: (listener) => {
+    const handler = (_e: unknown, q: Parameters<typeof listener>[0]) => listener(q)
+    ipcRenderer.on(IPC.hostChatQuery, handler)
+    return () => ipcRenderer.removeListener(IPC.hostChatQuery, handler)
+  },
+  sendHostChatReply: (reply) => ipcRenderer.send(IPC.hostChatReply, reply),
   agentMessage: {
     deliver: (req) => ipcRenderer.invoke(IPC.agentMessageDeliver, req)
   }

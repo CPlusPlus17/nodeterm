@@ -99,7 +99,12 @@ export function createRemoteCodexContext(deps: RemoteCodexContextDeps) {
       bindings.set(nodeId, binding)
       deps.onClear?.(nodeId, sessionId)
     }
-    if (hookPath && binding.ref?.path === hookPath) return 'tracked'
+    if (hookPath && binding.ref?.path === hookPath) {
+      // Already tracked: no lookup, but a hook means the transcript is about to grow — the tail's
+      // same-ref track() resets its idle poll backoff (it does not re-bootstrap).
+      deps.tail.track(binding.tailId, binding.ref)
+      return 'tracked'
+    }
     const current = binding
     const pendingKey = JSON.stringify([nodeId, key, sessionId, hookPath, current.generation])
     const existing = pending.get(pendingKey)

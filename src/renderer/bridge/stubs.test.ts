@@ -59,6 +59,12 @@ describe('bridge stubs', () => {
     }).not.toThrow()
   })
 
+  it('hosted-team bookmarks answer an empty list: a browser cannot join a relay host', async () => {
+    const s = buildStubApi()
+    await expect(s.relayHosted.bookmarks()).resolves.toEqual([])
+    await expect(s.relayHosted.removeBookmark('H')).resolves.toBeUndefined()
+  })
+
   it('boot-path promise members resolve benignly', async () => {
     const s = buildStubApi()
     await expect(s.announcements.fetch()).resolves.toEqual([])

@@ -3,6 +3,7 @@ import { IPC } from '../../shared/ipc'
 import type { NodeTerminalApi } from '../../shared/types'
 import type { FrameTransport } from './frame-transport'
 import { buildRelayApi } from './relay-api'
+import { onLocalRelayClose } from './relay-local-close'
 
 /**
  * The same in-memory `FrameTransport` double used by frame-transport.test.ts: records outbound
@@ -155,5 +156,152 @@ describe('buildRelayApi', () => {
     // Compile-time completeness gate; the runtime assertion just pins that the object exists.
     const _check: NodeTerminalApi = api
     expect(_check).toBeTruthy()
+  })
+})
+
+describe('buildRelayApi — hosted team tabs', () => {
+  let saved: unknown
+  beforeEach(() => {
+    saved = (globalThis as Record<string, unknown>).window
+    ;(globalThis as Record<string, unknown>).window = { nodeTerminal: fakeLocalApi().local }
+  })
+  afterEach(() => {
+    ;(globalThis as Record<string, unknown>).window = saved
+  })
+
+  const methods = (t: FakeTransport): string[] => t.sent.map((f) => JSON.parse(f).method as string)
+  const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
+  it('a Team Access relay tab (no hosted option) takes the OLD path: no hosted api, nothing gated', async () => {
+    const t = new FakeTransport()
+    const handle = buildRelayApi('conn-1', t)
+    expect('hosted' in handle.api).toBe(false)
+    expect(handle.setHostedRole).toBeUndefined()
+    // Editor-only calls still go on the wire exactly as before.
+    handle.api.pty.write('s1', 'ls\r')
+    void handle.api.workspace.save({ version: 2, activeProjectId: '', projects: [] })
+    handle.api.canvas.mutate('p1', { op: 'remove', id: 'n1' } as never)
+    expect(methods(t)).toEqual([IPC.ptyWrite, IPC.workspaceSave, IPC.canvasMut])
+  })
+
+  it('a hosted tab has the hosted verbs, sent as ordinary requests', () => {
+    const t = new FakeTransport()
+    const { api } = buildRelayApi('conn-1', t, { hosted: true })
+    expect(api.hosted).toBeTruthy()
+    void api.hosted!.self()
+    void api.hosted!.pending()
+    void api.hosted!.inviteCode()
+    void api.hosted!.approve('p1', 'editor')
+    void api.hosted!.deny('p2')
+    expect(t.sent.map((f) => JSON.parse(f))).toMatchObject([
+      { t: 'req', method: IPC.relayHostedSelf },
+      { t: 'req', method: IPC.relayHostedPending },
+      { t: 'req', method: IPC.relayHostedInviteCode },
+      { t: 'req', method: IPC.relayHostedApprove, args: ['p1', 'editor'] },
+      { t: 'req', method: IPC.relayHostedDeny, args: ['p2'] }
+    ])
+  })
+
+  it('hosted events reach the subscribers, including ones pushed before anyone subscribed', () => {
+    const t = new FakeTransport()
+    const { api } = buildRelayApi('conn-1', t, { hosted: true })
+    const pending = { pendingId: 'x', sas: '1 2', peerKeyB64: 'K', since: 1 }
+    // An owner replay frame that lands before the tab has subscribed (R25): held, then delivered.
+    t.emit(JSON.stringify({ t: 'ev', channel: IPC.relayHostedPeerPending, args: [pending] }))
+    const seen: unknown[] = []
+    api.hosted!.onPeerPending((p) => seen.push(p))
+    api.hosted!.onPendingClosed((p) => seen.push(p))
+    t.emit(JSON.stringify({ t: 'ev', channel: IPC.relayHostedPendingClosed, args: [{ pendingId: 'x', reason: 'denied' }] }))
+    expect(seen).toEqual([pending, { pendingId: 'x', reason: 'denied' }])
+  })
+
+  it('before the role is known, a hosted tab sends only what a viewer may (fail closed)', async () => {
+    const t = new FakeTransport()
+    const { api } = buildRelayApi('conn-1', t, { hosted: true })
+    api.pty.write('s1', 'rm -rf /\r')
+    api.canvas.mutate('p1', { op: 'remove', id: 'n1' } as never)
+    const save = api.workspace.save({ version: 2, activeProjectId: '', projects: [] })
+    await expect(save).rejects.toMatchObject({ code: 'E_ROLE' })
+    void api.workspace.load()
+    void api.hosted!.self()
+    expect(methods(t)).toEqual([IPC.workspaceLoad, IPC.relayHostedSelf])
+  })
+
+  it('a viewer never sends the autosave, canvas edits, typing or the editor-only probes', async () => {
+    const t = new FakeTransport()
+    const handle = buildRelayApi('conn-1', t, { hosted: true })
+    handle.setHostedRole!('viewer')
+    const { api } = handle
+    api.pty.write('s1', 'x')
+    api.pty.recycle('n1')
+    api.canvas.mutate('p1', { op: 'remove', id: 'n1' } as never)
+    api.presence.chat('hi')
+    const refusals = await Promise.allSettled([
+      api.workspace.save({ version: 2, activeProjectId: '', projects: [] }),
+      api.claude.cliCaps(),
+      api.git.worktreeList('/repo')
+    ])
+    await flush()
+    // Only the viewer-safe calls below reach the wire.
+    void api.pty.create({ persistKey: 'n1', cols: 80, rows: 24 } as never)
+    api.presence.cursor({ x: 1, y: 2 } as never)
+    void api.hosted!.approve('p1', 'viewer') // judged by the host itself
+    expect(methods(t)).toEqual([IPC.ptyCreate, IPC.presenceCursor, IPC.relayHostedApprove])
+    expect(refusals[0]).toMatchObject({ status: 'rejected', reason: { code: 'E_ROLE' } })
+  })
+
+  it('a local refusal is never an UNHANDLED rejection (fire-and-forget callers like ackDone stay quiet)', async () => {
+    const t = new FakeTransport()
+    const handle = buildRelayApi('conn-1', t, { hosted: true })
+    handle.setHostedRole!('viewer')
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      handle.api.ackDone('n1') // `void client.request(...)` inside: nobody catches it
+      await flush()
+      await flush()
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+    expect(unhandled).toEqual([])
+    expect(t.sent).toEqual([])
+    // A caller that does await it still sees the refusal.
+    await expect(handle.api.workspace.save({ version: 2, activeProjectId: '', projects: [] })).rejects.toMatchObject({ code: 'E_ROLE' })
+  })
+
+  it('closing a hosted tab\'s connection is announced locally (main never reports a close we asked for)', () => {
+    const heard = vi.fn()
+    onLocalRelayClose('conn-h', heard)
+    buildRelayApi('conn-h', new FakeTransport(), { hosted: true }).close()
+    expect(heard).toHaveBeenCalledTimes(1)
+    // A Team Access relay tab's close stays exactly what it was.
+    const legacy = vi.fn()
+    onLocalRelayClose('conn-l', legacy)
+    buildRelayApi('conn-l', new FakeTransport()).close()
+    expect(legacy).not.toHaveBeenCalled()
+  })
+
+  it('R41: once its connection closed, a hosted tab\'s requests fail at once instead of waiting forever', async () => {
+    const t = new FakeTransport()
+    const handle = buildRelayApi('conn-1', t, { hosted: true })
+    handle.setHostedRole!('owner')
+    ;(t as unknown as { closeCb: () => void }).closeCb()
+    await expect(handle.api.workspace.load()).rejects.toMatchObject({ code: 'E_DISCONNECTED' })
+    handle.api.pty.write('s1', 'x')
+    expect(t.sent).toEqual([])
+  })
+
+  it('a commenter may also chat; an editor sends everything', () => {
+    const t = new FakeTransport()
+    const handle = buildRelayApi('conn-1', t, { hosted: true })
+    handle.setHostedRole!('commenter')
+    handle.api.presence.chat('hi')
+    handle.api.pty.write('s1', 'x')
+    expect(methods(t)).toEqual([IPC.presenceChat])
+    handle.setHostedRole!('editor')
+    handle.api.pty.write('s1', 'x')
+    handle.api.canvas.mutate('p1', { op: 'remove', id: 'n1' } as never)
+    expect(methods(t)).toEqual([IPC.presenceChat, IPC.ptyWrite, IPC.canvasMut])
   })
 })

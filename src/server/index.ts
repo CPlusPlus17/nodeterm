@@ -55,11 +55,13 @@ import { refreshNodeTokens } from '../core/agents/node-token-service'
 import { armServerNodeIdentity } from './node-identity-arm'
 import { wireServerCodexSharedIdentity } from './codex-shared-identity'
 import {
-  writePendingAnswerLocal,
+  localHeldPermissionIo,
   startPendingSweep,
   isValidPendingId,
   syntheticAnsweredEvent
 } from '../core/agents/pending-approvals'
+import { answerHeldPermission } from '../core/agents/permission-decision'
+import type { AnswerPermissionPayload } from '../shared/agents/permission-answer'
 import { installManagedAgentHooks } from '../core/agents/hooks'
 import { installHooksIntoLocalAccounts } from '../core/claude-accounts-service'
 import {
@@ -68,6 +70,7 @@ import {
   recordAgentEvent,
   ackDone,
   setMirrorSettingsProvider,
+  setMirrorLiveNodesProvider,
   setMirrorServerProvider,
   onInboxActionable,
   onNodeStateChange,
@@ -76,9 +79,11 @@ import {
   type MirrorServer,
   setNodeSessionName,
   setNodeHibernated,
+  seedNodeIdentities,
   sessionNameSweepEntries,
   nodeSessionName
 } from '../core/agent-status-mirror'
+import { mirrorCustomAgents } from '../core/mirror-custom-agents'
 import { createPushNotify, createLiveUpdatePush } from '../core/push-notify'
 import { createGrantsAccessor } from '../core/push-grants'
 import { createAckSweeper } from '../core/ack-sweep'
@@ -102,10 +107,16 @@ import { WhisperModelStore } from '../core/speech/whisper-models'
 import { SpeechService } from '../core/speech/speech-service'
 import { registerSpeechIpc } from '../core/speech/register-ipc'
 import { isPremium, getStoredEntitlement } from '../core/license'
+import { getDeviceId } from '../core/device-id'
+import { createHostedService } from '../core/relay/hosted-service'
+import { startTeamAdmin } from '../core/relay/team-admin'
 
 // Same env-override + default as src/core/check.ts / license.ts / src/main/telemetry.ts — each
 // shell derives it locally rather than sharing an import (src/server must not import src/main).
 const API_BASE = process.env.NODETERM_API_BASE || 'https://api.nodeterm.dev'
+// The hosted team relay's wss endpoint. Same env override + default as the desktop's RELAY_URL
+// (src/main/remote/host-service.ts), derived locally for the same reason as API_BASE.
+const RELAY_URL = process.env.NODETERM_RELAY_URL || 'wss://relay.nodeterm.dev'
 
 /**
  * App version fed to ServerPlatform (surfaced to the renderer as the desktop app's
@@ -309,6 +320,7 @@ export async function startServer(
   const downloadTickets = new DownloadTickets()
   const { gitService } = registerCoreHandlers(platform, {
     getSettings: () => settingsStore.get(),
+    onSettingsChange: (cb) => settingsStore.onChange(cb),
     downloadTickets,
     localProjectCwd: (projectId: string) => workspaceStore.localCwdForProject(projectId)
   })
@@ -448,6 +460,9 @@ export async function startServer(
       void flushAgentStatusMirror()
     })
     .catch(() => {})
+  // Lets the mirror drop an identity-only entry (a session id kept past the 6 h state expiry)
+  // once its node is gone from every project. `undefined` = cannot know = keep, TTL-bounded.
+  setMirrorLiveNodesProvider(() => workspaceStore.knownNodeIds())
   setMirrorSettingsProvider((): MirrorSettings => {
     const s = settingsStore.get()
     return {
@@ -458,7 +473,9 @@ export async function startServer(
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
-        .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) }))
+        .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) })),
+      // Derived binary names only — never the launch command/env (see core/mirror-custom-agents.ts).
+      customAgents: mirrorCustomAgents(s.customAgents)
     }
   })
   // Advertise this install's version/commit/installedAt to the phone (spec: server-update). The
@@ -478,7 +495,11 @@ export async function startServer(
   // of the handlers because the hook-fed path authority is the tail created just above. No remote
   // leg: the Server Edition runs ON the host whose transcripts it reads, so local resolution is
   // the complete answer (an SSH-project node is a desktop-only concept here).
-  registerTranscriptIpc({ pathFor: (sessionId) => contextTail.pathFor(sessionId) })
+  registerTranscriptIpc({
+    pathFor: (sessionId) => contextTail.pathFor(sessionId),
+    // Codex's ⌘M reader takes ITS tail's hook path (claude's `pathFor` must never answer a codex id).
+    codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId)
+  })
   // The context meter's mount-time rehydration, registered beside the read channels and for the
   // same reason: the tails it feeds are the ones created just above. Until this landed the Server
   // Edition had NO handler for `context:ensure` at all — the browser cast it and nothing received
@@ -505,28 +526,29 @@ export async function startServer(
   // answer file is written right there (under os.homedir(), which the hook uses as $HOME). SSH
   // projects are v1-unsupported server-side (no ControlMaster manager here) → false, a documented
   // three-surfaces degrade. pendingId is validated before it becomes a path.
-  platform.handle(
-    IPC.agentAnswerPermission,
-    async (payload: { nodeId: string; pendingId: string; decision: 'allow' | 'deny' }) => {
-      const { nodeId, pendingId, decision } = payload ?? ({} as typeof payload)
-      if (!isValidPendingId(pendingId)) return false
-      if (decision !== 'allow' && decision !== 'deny') return false
-      // An SSH-project node has no reachable ControlMaster here (v1): answer only local nodes.
-      if (workspaceStore.sshProjectIdForNode(nodeId)) return false
-      const ok = await writePendingAnswerLocal(pendingId, decision, os.homedir())
-      // Optimistic flip (parity with desktop): emit the synthetic "answered" transition so the
-      // browser canvas NEEDS YOU badge clears instantly, ahead of the held hook's second POST (an
-      // idempotent duplicate). See docs/hook-reply-approvals.md.
-      if (ok) {
-        const ev = syntheticAnsweredEvent(nodeId, pendingId, decision)
-        if (ev) {
-          platform.broadcast(IPC.agentStatus, ev)
-          recordAgentEvent(ev)
-        }
+  platform.handle(IPC.agentAnswerPermission, async (payload: AnswerPermissionPayload) => {
+    const { nodeId, pendingId } = payload ?? ({} as AnswerPermissionPayload)
+    if (typeof nodeId !== 'string' || !isValidPendingId(pendingId)) return false
+    // An SSH-project node has no reachable ControlMaster here (v1): answer only local nodes.
+    if (workspaceStore.sshProjectIdForNode(nodeId)) return false
+    // Same shared body as the desktop (core/agents/permission-decision.ts), local fs only.
+    const res = await answerHeldPermission(
+      pendingId,
+      { decision: payload.decision, answer: payload.answer },
+      localHeldPermissionIo(pendingId, os.homedir())
+    )
+    // Optimistic flip (parity with desktop): emit the synthetic "answered" transition so the
+    // browser canvas NEEDS YOU badge clears instantly, ahead of the held hook's second POST (an
+    // idempotent duplicate). See docs/hook-reply-approvals.md.
+    if (res.ok && res.decision) {
+      const ev = syntheticAnsweredEvent(nodeId, pendingId, res.decision)
+      if (ev) {
+        platform.broadcast(IPC.agentStatus, ev)
+        recordAgentEvent(ev)
       }
-      return ok
     }
-  )
+    return res.ok
+  })
   // Read-a-finished-session ack (parity with desktop): the browser canvas's unread-clear funnel
   // calls it when the just-read node's latest state is `done`. The mirror resolves the node's done
   // inbox event(s) + re-sends an 'end' live-update so the paired phone dismisses its lingering DONE
@@ -540,6 +562,12 @@ export async function startServer(
   platform.handle(IPC.agentHibernated, (msg: { nodeId?: unknown; on?: unknown }) => {
     if (typeof msg?.nodeId !== 'string' || !msg.nodeId) return
     setNodeHibernated(msg.nodeId, msg.on === true)
+  })
+  // Identity seed (parity with desktop's ipcMain.on(IPC.agentSeedIdentity)): the browser renderer's
+  // persisted agentStatus store fills session ids this server's mirror has none for, so a phone
+  // browsing this host finds an idle node's transcript. Add-only and validated in core.
+  platform.handle(IPC.agentSeedIdentity, (entries: unknown) => {
+    seedNodeIdentities(entries)
   })
   // Phone→host read-acks: the phone drops `~/.nodeterm/acks/<nodeId>.seen` on this host when it READS
   // a finished session. Sweep it (15s cadence, cheap dir-mtime gate) and for each ack: `ackDone`
@@ -687,6 +715,10 @@ export async function startServer(
         ptyManager,
         settings: () => settingsStore.get(),
         boardLog,
+        // `open-agent --issue #N` means the repository this project's board syncs with — the same
+        // answer the issue lane gets from the GitHub host controller.
+        issueRepository: (projectId) =>
+          github.controller.status(projectId).then((view) => view.project?.repository ?? null),
         installAgentIntegrations: config.installHooks !== false
       })
       hookServer.setControlHandler(canvasControl.handler)
@@ -799,6 +831,98 @@ export async function startServer(
     }
   })
 
+  // Hosted team relay (docs/hosted-team-relay.md): this server as the relay host of a team. OFF
+  // unless `team init` created <dataDir>/relay/team.json — with no team, start() answers 'no-team':
+  // no relay listener is opened, and no host key, team.json or device id is written. What EVERY boot
+  // does create is <dataDir>/relay/ (0700) and the listening admin socket in it, relay/admin.sock
+  // (0600, removed again on close), which is how `team init` reaches a server that has no team yet
+  // (hosted-boot.test.ts pins exactly that). Booted HERE: after every handler above is registered (a relay
+  // peer's requests dispatch through them) and after the workspace index is loaded (the access
+  // policy reads it to place a node in a project), and BEFORE the headless return, because a
+  // headless host is exactly where a team is hosted.
+  //
+  // The per-client drops a disconnected client is owed, shared with ws.ts's closed-tab path below so
+  // the two lists cannot drift: its pty subscriptions (a leaked one can strand a session it paused)
+  // and its GitHub issue subscriptions.
+  const dropUiClient = (uiId: number): void => {
+    ptyManager.dropClient(uiId)
+    github.service.dropClient(uiId)
+  }
+  // The ONE teardown for a relay peer, in the order ws.ts uses for a browser: leave presence, hand
+  // back the per-client state, then detach the sink. Idempotent, like ws.ts's.
+  const teardownClient = (uiId: number): void => {
+    presenceHub.leave(uiId)
+    dropUiClient(uiId)
+    platform.detach(uiId)
+  }
+  // A relay peer whose sink proves dead (consecutive throwing sends) is torn down the same way. In
+  // serving mode ws.ts replaces this with its own, equivalent teardown; in headless mode nothing else
+  // would ever set it, and a dead peer would stay in presence and keep its pty subscriptions.
+  platform.setSinkGoneHandler(teardownClient)
+  let hostedDeviceId: string | undefined
+  const hosted = createHostedService({
+    dataDir: config.dataDir,
+    apiBase: API_BASE,
+    relayUrl: RELAY_URL,
+    // Read on first use (a mint, `team info`), never at boot: getDeviceId CREATES <dataDir>/device-id
+    // when absent, and a server with no team must not change on disk.
+    get deviceId(): string {
+      return (hostedDeviceId ??= getDeviceId())
+    },
+    hostLabel: os.hostname(),
+    attach: {
+      attach(sink) {
+        const id = platform.attach(sink)
+        // Join AFTER registering the sink, so the hub's `presence:sync` lands on a live sink (the
+        // order ws.ts uses). A relay peer is a 'desktop' peer, as on the desktop's own relay host.
+        presenceHub.join(id, 'desktop')
+        return id
+      },
+      detach: teardownClient,
+      dispatch: (id, req) => platform.dispatch(id, req),
+      cast: (id, method, args) => platform.cast(id, method, args)
+    },
+    // Memoized in the store: asked once per access decision for every viewer, and a
+    // persistedCanvases() scan re-parses every local project's file (measured 4.5 ms per call at
+    // 20 projects x 100 nodes).
+    projectsOfNode: (nodeId) => workspaceStore.projectIdsForNode(nodeId),
+    // A viewer's terminal frames are judged by the session's node, per frame (`team unshare` must
+    // stop a stream the viewer already joined). One map lookup.
+    nodeOfSession: (sessionId) => ptyManager.nodeOfSession(sessionId),
+    projectCwd: (projectId) => workspaceStore.localCwdForProject(projectId),
+    // TEST ONLY seams (see ServerConfig): never set by resolveConfig, so production dials the relay
+    // and mints against API_BASE with the global fetch.
+    ...(config.relayTestTransport ? { transport: config.relayTestTransport } : {}),
+    ...(config.relayTestFetch ? { fetch: config.relayTestFetch } : {})
+  })
+  // The local admin channel for the `team` CLI, opened BEFORE hosting starts: it is also how this
+  // server learns that another one already runs on this data dir (someone answers on its socket).
+  // Two servers hosting one team would register relay listeners for the same host key and both write
+  // team.json, so a busy socket skips hosting here. Otherwise never fatal: a data dir too long for a
+  // unix socket, or Windows, disables administration — it must not take the rest of the Server
+  // Edition down with it.
+  let otherServerHere = false
+  const teamAdmin = await startTeamAdmin(config.dataDir, hosted).catch((err: unknown) => {
+    if ((err as { code?: unknown } | null)?.code === 'E_ADMIN_SOCKET_BUSY') otherServerHere = true
+    console.error(`[hosted-team] team admin socket disabled: ${err instanceof Error ? err.message : String(err)}`)
+    return { close: async (): Promise<void> => {} }
+  })
+  if (otherServerHere) {
+    console.error(
+      'Hosted team relay: NOT started — another nodeterm server is already running on this data ' +
+        `directory (${config.dataDir}). Stop it, or give this server its own --data-dir.`
+    )
+  } else {
+    const hostedStart = await hosted.start().catch((err: unknown) => {
+      console.error('[hosted-team] start failed:', err)
+      return null
+    })
+    if (hostedStart === 'started') console.log('Hosted team relay: ON (see `team status`).')
+    else if (hostedStart === 'host-key-unreadable') {
+      console.error('Hosted team relay: OFF — the host key could not be read (see above; `team status`).')
+    }
+  }
+
   // Headless notification host: every core service above (incl. the loopback hook server, which
   // is its own listener and MUST run) is booted, but we bind NO public HTTP/WS listener — no
   // renderer serving, no auth surface, no open port. The granted push senders reach the phone over
@@ -811,6 +935,10 @@ export async function startServer(
         // Kill any in-flight setup/archive run: it is a detached process group, so nothing else in
         // this teardown reaches it. Same call, same reason, in the serving branch's close() below.
         projectSetupService.disposeAll()
+        // Stop taking admin commands, then end hosting: every relay peer is torn down (presence,
+        // pty subscriptions) while the pty layer is still up. Same two lines in the serving close().
+        await teamAdmin.close()
+        hosted.stop()
         // Detach PTY clients — tmux sessions keep running (Phase 1 contract).
         sessionReaper.stop()
         pressure.stop()
@@ -844,10 +972,7 @@ export async function startServer(
   const wsServer = attachWsServer(server, {
     platform,
     auth,
-    onClientGone: (uiId) => {
-      ptyManager.dropClient(uiId)
-      github.service.dropClient(uiId)
-    },
+    onClientGone: dropUiClient,
     trustProxy: config.trustProxy
   })
 
@@ -868,6 +993,10 @@ export async function startServer(
       // Kill any in-flight setup/archive run first: it is a detached process group (setsid), so
       // neither the WS teardown nor ptyManager.killAll() below would ever reach it.
       projectSetupService.disposeAll()
+      // Stop taking admin commands, then end hosting while the pty layer is still up (see the
+      // headless close() above).
+      await teamAdmin.close()
+      hosted.stop()
       // Detach PTY clients — tmux sessions keep running (Phase 1 contract; never kill the server).
       sessionReaper.stop()
       pressure.stop()

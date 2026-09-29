@@ -108,6 +108,20 @@ describe('buildRealApi: host platform', () => {
   })
 })
 
+// #925: the Server Edition starts nodes through its own HeadlessNodeFactory, so the browser build
+// has nothing to call. It must REFUSE with the coded error and never reach the wire — a relay tab
+// spreads this same `pty`, so a request here would ask the HOST's core to spawn a session.
+describe('buildRealApi: pty.launchHeadless', () => {
+  it('rejects E_UNSUPPORTED without a request', async () => {
+    const c = fakeClient()
+    const api = buildRealApi(c as never)
+    await expect(
+      api.pty.launchHeadless({ ptyOptions: { persistKey: 'n1', cols: 80, rows: 24 }, command: 'x' })
+    ).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    expect(c.calls).toEqual([])
+  })
+})
+
 describe('buildRealApi: sessionMemory', () => {
   // A real WS namespace, not a stub: the same core service (`startSessionMemoryService`) registers
   // both channels in the server shell, so the browser gets a genuine per-session breakdown of the
@@ -206,5 +220,22 @@ describe('buildClaudeAccountsApi', () => {
       code: E_UNSUPPORTED
     })
     await expect(s.codexAccounts.remove('a1')).rejects.toMatchObject({ code: E_UNSUPPORTED })
+  })
+})
+
+/**
+ * The hosted team verbs belong to a RELAY tab joined by a hosted team's code, never to a Server
+ * Edition browser tab: a browser never joins a relay host (its `relayHosted` stub answers no
+ * bookmarks), and the server it is served from does not answer `relay:hosted:*` to its own browser
+ * (hosted-service intercepts them for relay peers only). So installWsBridge must not spread
+ * `buildHostedApi` — its api has no `hosted` key, and every `api.hosted` check in the renderer takes
+ * its old path there. installWsBridge needs a socket + DOM to run, so this is pinned by source text.
+ */
+describe('buildHostedApi and the Server Edition', () => {
+  it('is never spread into the browser\'s window.nodeTerminal', () => {
+    const src = readFileSync(join(__dirname, 'ws-bridge.ts'), 'utf8')
+    const install = src.slice(src.indexOf('export async function installWsBridge'))
+    expect(install).not.toContain('buildHostedApi')
+    expect(install).not.toMatch(/\bhosted\s*:/)
   })
 })

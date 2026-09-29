@@ -4,10 +4,13 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import type { TranscriptLine, ChatMessage, ChatPart } from '../shared/types'
+import type { TranscriptLine, ChatMessage, ChatPart, ChatCarriedToolResult } from '../shared/types'
 import { transcriptRootFor } from './claude-accounts-core'
 import { linkedClaudeConfigDirFor } from './claude-config-dir'
 import { platform } from './platform'
+import { toolBody } from './chat-tool-body'
+import { ASK_USER_QUESTION_TOOL, readQuestions } from '../shared/agents/permission-answer'
+import { BASH_COMMAND_TOOL, CHAT_TOOL_ARG_MAX } from '../shared/chat-command'
 
 // Transcript root for a managed account (its `projects` dir) or the system default
 // (`~/.claude/projects` when accountId is undefined — bit-for-bit the old behavior). Impure
@@ -38,7 +41,7 @@ function textOf(content: unknown): string {
   return ''
 }
 
-function summarizeResult(content: unknown): string {
+export function summarizeResult(content: unknown): string {
   return textOf(content).split('\n').slice(0, 3).join(' ').slice(0, 500)
 }
 
@@ -46,29 +49,136 @@ function toolArg(input: unknown): string {
   if (!input || typeof input !== 'object') return ''
   const o = input as Record<string, unknown>
   const v = o.command ?? o.file_path ?? o.path ?? o.pattern ?? o.description ?? o.prompt
-  return typeof v === 'string' ? v.slice(0, 200) : ''
+  return typeof v === 'string' ? v.slice(0, CHAT_TOOL_ARG_MAX) : ''
 }
+
+// ── Local-command records ────────────────────────────────────────────────────────────────────────
+// A slash command (`/model`) and a `!` bash-mode line are written by claude as `type:"user"` records
+// whose content is a STRING of tags — measured on real transcripts (2026-09):
+//   <command-name>/model</command-name>\n   <command-message>model</command-message>\n   <command-args></command-args>
+//   <local-command-stdout>Set model to \x1b[1m…\x1b[22m</local-command-stdout>
+//   <bash-input>ls</bash-input>
+//   <bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>        (ONE record, either may be empty)
+// preceded by an `isMeta:true` `<local-command-caveat>` record. A skill invocation writes
+// `<command-message>` BEFORE `<command-name>` (no args), so order is free. Only a record that is
+// EXACTLY such a tag sequence (whitespace between tags) is one; a record that merely mentions a tag
+// inside prose is a normal user message. Never seen as an array text part, so only string content
+// is matched.
+export type LocalCommandRecord =
+  | { kind: 'command'; family: 'slash' | 'bash'; name: string; arg: string }
+  | { kind: 'output'; family: 'slash' | 'bash'; text: string }
+
+const TAG_RE = /<([a-z-]+)>([\s\S]*?)<\/\1>/y
+const SLASH_TAGS = new Set(['command-name', 'command-message', 'command-args'])
+const BASH_INPUT_TAGS = new Set(['bash-input'])
+const SLASH_OUT_TAGS = new Set(['local-command-stdout', 'local-command-stderr'])
+const BASH_OUT_TAGS = new Set(['bash-stdout', 'bash-stderr'])
+
+/** The record as a sequence of whole tags, each at most once; null if anything else is in it. */
+function tagSequence(content: string): Map<string, string> | null {
+  const tags = new Map<string, string>()
+  let i = 0
+  for (;;) {
+    while (i < content.length && /\s/.test(content[i])) i++
+    if (i >= content.length) break
+    TAG_RE.lastIndex = i
+    const m = TAG_RE.exec(content)
+    if (!m || tags.has(m[1])) return null
+    tags.set(m[1], m[2])
+    i = TAG_RE.lastIndex
+  }
+  return tags.size ? tags : null
+}
+
+const onlyFrom = (tags: Map<string, string>, allowed: Set<string>): boolean =>
+  [...tags.keys()].every((k) => allowed.has(k))
+
+/** CSI (`ESC [ … final`), OSC (`ESC ] … BEL|ESC \\`) and two-byte `ESC x` escapes. */
+export function stripAnsi(s: string): string {
+  return s
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b[@-_]/g, '')
+}
+
+/** Output tags → one text: each non-empty part ANSI-stripped + trimmed, joined by `\n`. */
+function outputText(tags: Map<string, string>): string {
+  return [...tags.values()]
+    .map((v) => stripAnsi(v).trim())
+    .filter(Boolean)
+    .join('\n')
+}
+
+/** A command's arg: trimmed, then capped like `toolArg` (the composer's `sentCommand` agrees). */
+const capArg = (v: string | undefined): string => (v ?? '').trim().slice(0, CHAT_TOOL_ARG_MAX)
+
+/**
+ * claude's own meta records — the local-command caveat, skill bodies, injected reminders — are not
+ * something the user said, and are skipped. But an `isMeta` record that STARTS a turn (a peer
+ * hand-back, a scheduled / loop wakeup, an auto-continuation) says where that turn's prompt came
+ * from, and hiding it leaves replies with no prompt between them. Measured: those carry
+ * `promptSource` and/or `origin` / `turnOrigin` (present and not null); the hidden kinds carry none.
+ * Measured too: no `isMeta` record carries a tool_result, so skipping one loses nothing.
+ */
+export function isHiddenMetaRecord(o: {
+  type?: string
+  isMeta?: unknown
+  promptSource?: unknown
+  origin?: unknown
+  turnOrigin?: unknown
+}): boolean {
+  return o.type === 'user' && o.isMeta === true && o.promptSource == null && o.origin == null && o.turnOrigin == null
+}
+
+export function classifyLocalCommand(content: string): LocalCommandRecord | null {
+  const tags = tagSequence(content)
+  if (!tags) return null
+  if (onlyFrom(tags, SLASH_TAGS)) {
+    const name = (tags.get('command-name') ?? '').trim()
+    if (!name) return null
+    return { kind: 'command', family: 'slash', name, arg: capArg(tags.get('command-args')) }
+  }
+  if (onlyFrom(tags, BASH_INPUT_TAGS)) {
+    return { kind: 'command', family: 'bash', name: BASH_COMMAND_TOOL, arg: capArg(tags.get('bash-input')) }
+  }
+  if (onlyFrom(tags, SLASH_OUT_TAGS)) return { kind: 'output', family: 'slash', text: outputText(tags) }
+  if (onlyFrom(tags, BASH_OUT_TAGS)) return { kind: 'output', family: 'bash', text: outputText(tags) }
+  return null
+}
+
+/** The name an output record's tool part gets when there is no command to attach it to. */
+export const COMMAND_OUTPUT_TOOL = 'command output'
 
 // Extract 0..n searchable lines from one raw transcript JSONL line.
 function linesFrom(raw: string): TranscriptLine[] {
-  let o: { type?: string; message?: { content?: unknown } }
+  let o: Parameters<typeof isHiddenMetaRecord>[0] & { message?: { content?: unknown } }
   try {
     o = JSON.parse(raw)
   } catch {
     return []
   }
+  // Same rule as the chat parser: a `null` / scalar line is one skipped line, never a failed read.
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return []
+  // Same rule as the chat parser (see `isHiddenMetaRecord`).
+  if (isHiddenMetaRecord(o)) return []
   const content = o.message?.content
   const out: TranscriptLine[] = []
   if (o.type === 'assistant' && Array.isArray(content)) {
     for (const c of content as Array<{ type?: string; text?: string; name?: string; input?: unknown }>) {
+      if (!c || typeof c !== 'object') continue
       if (c.type === 'text' && c.text) out.push({ role: 'assistant', text: c.text })
       else if (c.type === 'tool_use') {
         const arg = toolArg(c.input)
         out.push({ role: 'tool', text: `$ ${c.name ?? 'tool'}${arg ? ` ${arg}` : ''}` })
+        // A plan / question is prose the user reads in full in the ⌘M view, so it is indexed in
+        // full too — the same treatment an assistant text block gets (the find bar splits lines).
+        const body = toolBody(c.name ?? '', c.input)
+        if (body) out.push({ role: 'tool', text: body })
       }
     }
   } else if (o.type === 'user' && Array.isArray(content)) {
     for (const c of content as Array<{ type?: string; text?: string; content?: unknown }>) {
+      if (!c || typeof c !== 'object') continue
       if (c.type === 'text' && c.text) out.push({ role: 'user', text: c.text })
       else if (c.type === 'tool_result') {
         const s = summarizeResult(c.content)
@@ -76,28 +186,37 @@ function linesFrom(raw: string): TranscriptLine[] {
       }
     }
   } else if (o.type === 'user' && typeof content === 'string') {
-    out.push({ role: 'user', text: content })
+    const cmd = classifyLocalCommand(content)
+    if (cmd?.kind === 'command') out.push({ role: 'tool', text: `$ ${cmd.name}${cmd.arg ? ` ${cmd.arg}` : ''}` })
+    else if (cmd?.kind === 'output') {
+      const s = summarizeResult(cmd.text)
+      if (s) out.push({ role: 'tool', text: s })
+    } else out.push({ role: 'user', text: content })
   }
   return out
 }
 
-// Read the last ~READ_CAP_BYTES of the file as UTF-8 (dropping the partial leading line on a
-// capped read), or the whole file when it's small. Returns undefined if it can't be read.
-export async function readCappedTail(filePath: string): Promise<string | undefined> {
+// Read the last `cap` bytes (default and ceiling READ_CAP_BYTES) of the file as UTF-8 (dropping the
+// partial leading line on a capped read), or the whole file when it's small. Returns undefined if
+// it can't be read.
+export async function readCappedTail(filePath: string, cap: number = READ_CAP_BYTES): Promise<string | undefined> {
+  const limit = Math.min(READ_CAP_BYTES, Math.max(1, Math.floor(cap)))
   try {
     const stat = await fs.promises.stat(filePath)
-    if (stat.size > READ_CAP_BYTES) {
+    if (stat.size > limit) {
       const fd = await fs.promises.open(filePath, 'r')
       try {
-        const start = stat.size - READ_CAP_BYTES
-        const { buffer } = await fd.read({
+        // One LOOKBEHIND byte before the window: when it is a `\n`, the window's first line is
+        // whole and survives the drop below (the remote page reader's rule).
+        const start = stat.size - limit - 1
+        const { buffer, bytesRead } = await fd.read({
           position: start,
-          length: READ_CAP_BYTES,
-          buffer: Buffer.alloc(READ_CAP_BYTES)
+          length: limit + 1,
+          buffer: Buffer.alloc(limit + 1)
         })
-        const s = buffer.toString('utf8')
-        const nl = s.indexOf('\n') // drop the first (partial) line
-        return nl >= 0 ? s.slice(nl + 1) : s
+        const data = buffer.subarray(0, bytesRead)
+        const nl = data.indexOf(0x0a) // drop the first (partial) line
+        return nl >= 0 ? data.subarray(nl + 1).toString('utf8') : ''
       } finally {
         await fd.close()
       }
@@ -128,18 +247,83 @@ export async function readTranscriptLines(filePath: string): Promise<TranscriptL
 // text + tool_use blocks become one message's ordered parts; a later user-line tool_result is
 // correlated back onto its tool part by tool_use_id. User lines that carry only tool_results
 // (no prose) are NOT rendered as bubbles — they're tool output, attached to the tool instead.
-export function parseChatMessages(rawLines: string[]): ChatMessage[] {
+//
+// `paged` switches on the three things only a paged read needs (the legacy result grows only by
+// the optional `at` both paths carry): a `key` per message (its line's absolute byte offset), the `tool_use` id on
+// each tool part, and the list of results whose tool was not among these lines.
+export interface ChatRecordsOut {
+  messages: ChatMessage[]
+  unmatched: Map<string, string>
+  /** PAGED only: `message.model` / `effort` of the newest non-synthetic assistant record (one record). */
+  model?: string
+  effort?: string
+}
+
+/** Longest `model` / `effort` value a paged read reports, in UTF-16 code units (JS `.length`; Swift
+ *  `utf16.count`); anything longer is not a model name. */
+export const CHAT_META_MAX_CHARS = 100
+/** The model claude stamps on a line it wrote itself (an API error, an interrupt) — not a model. */
+const SYNTHETIC_MODEL = '<synthetic>'
+
+/** A string field worth reporting as chat metadata, else undefined. */
+export function metaString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 && v.length <= CHAT_META_MAX_CHARS ? v : undefined
+}
+/** A transcript line's ISO `timestamp` as epoch ms; undefined when absent or not a date string. */
+export function lineTime(v: unknown): number | undefined {
+  if (typeof v !== 'string' || !v) return undefined
+  const t = Date.parse(v)
+  return Number.isFinite(t) ? t : undefined
+}
+
+function parseChatRecords(
+  records: Iterable<{ raw: string; offset: number }>,
+  paged: boolean
+): ChatRecordsOut {
   const messages: ChatMessage[] = []
+  const unmatched = new Map<string, string>()
   const toolById = new Map<string, Extract<ChatPart, { kind: 'tool' }>>()
-  for (const raw of rawLines) {
+  let at: number | undefined
+  // A snapshot of ONE record (paged only): the newest non-synthetic assistant record answers BOTH
+  // fields, and a field it does not state (or states invalidly) is absent — never carried forward
+  // from an older record, which may describe a different model or CLI. Same rule as
+  // `parseLatestUsage` (context-tail.ts). `<synthetic>` lines (API errors, interrupts — measured
+  // with no `effort`) are claude's own, not a model turn, so they are skipped entirely.
+  let model: string | undefined
+  let effort: string | undefined
+  // The tool part of the LAST pushed message when that message is a local command still waiting for
+  // its output record (cleared by any other push, so output attaches only to the record right
+  // before it).
+  let awaitingOutput: { family: 'slash' | 'bash'; part: Extract<ChatPart, { kind: 'tool' }> } | null = null
+  const push = (m: ChatMessage, offset: number): void => {
+    awaitingOutput = null
+    // `at` rides BOTH paths (additive): the time the line was written, for the thread's relative
+    // timestamp. Absent when the line states none — never a made-up time.
+    const withAt = at === undefined ? m : { ...m, at }
+    messages.push(paged ? { ...withAt, key: offset } : withAt)
+  }
+  for (const { raw, offset } of records) {
     if (!raw.trim()) continue
-    let o: { type?: string; message?: { content?: unknown } }
+    let o: Parameters<typeof isHiddenMetaRecord>[0] & {
+      timestamp?: unknown
+      effort?: unknown
+      message?: { content?: unknown; model?: unknown }
+    }
     try {
       o = JSON.parse(raw)
     } catch {
       continue
     }
+    // `null` / a number / a string parse fine and would throw on the reads below, failing the whole
+    // page over one line another program wrote. One bad line costs one line (the Swift port agrees).
+    if (!o || typeof o !== 'object' || Array.isArray(o)) continue
+    if (isHiddenMetaRecord(o)) continue
+    at = lineTime(o.timestamp)
     const content = o.message?.content
+    if (paged && o.type === 'assistant' && o.message?.model !== SYNTHETIC_MODEL) {
+      model = metaString(o.message?.model)
+      effort = metaString(o.effort)
+    }
     if (o.type === 'assistant' && Array.isArray(content)) {
       const parts: ChatPart[] = []
       for (const c of content as Array<{
@@ -149,6 +333,7 @@ export function parseChatMessages(rawLines: string[]): ChatMessage[] {
         id?: string
         input?: unknown
       }>) {
+        if (!c || typeof c !== 'object') continue
         if (c.type === 'text' && c.text) parts.push({ kind: 'text', text: c.text })
         else if (c.type === 'tool_use') {
           const part: Extract<ChatPart, { kind: 'tool' }> = {
@@ -156,11 +341,18 @@ export function parseChatMessages(rawLines: string[]): ChatMessage[] {
             name: c.name ?? 'tool',
             arg: toolArg(c.input)
           }
+          const body = toolBody(part.name, c.input)
+          if (body) part.body = body
+          if (part.name === ASK_USER_QUESTION_TOOL) {
+            const questions = readQuestions(c.input)
+            if (questions) part.questions = questions
+          }
+          if (paged && typeof c.id === 'string' && c.id) part.id = c.id
           parts.push(part)
           if (c.id) toolById.set(c.id, part)
         }
       }
-      if (parts.length) messages.push({ role: 'assistant', parts })
+      if (parts.length) push({ role: 'assistant', parts }, offset)
     } else if (o.type === 'user' && Array.isArray(content)) {
       const parts: ChatPart[] = []
       for (const c of content as Array<{
@@ -169,21 +361,166 @@ export function parseChatMessages(rawLines: string[]): ChatMessage[] {
         tool_use_id?: string
         content?: unknown
       }>) {
+        if (!c || typeof c !== 'object') continue
         if (c.type === 'text' && c.text) parts.push({ kind: 'text', text: c.text })
         else if (c.type === 'tool_result') {
           const tool = c.tool_use_id ? toolById.get(c.tool_use_id) : undefined
+          const s = summarizeResult(c.content)
           if (tool) {
-            const s = summarizeResult(c.content)
             if (s) tool.result = s
+          } else if (paged && s && typeof c.tool_use_id === 'string' && c.tool_use_id) {
+            // Its tool_use is in an OLDER window (claude writes the call before its result, so it
+            // can never be in a newer one). Carried so the renderer can attach it later.
+            unmatched.set(c.tool_use_id, s)
           }
         }
       }
-      if (parts.length) messages.push({ role: 'user', parts })
+      if (parts.length) push({ role: 'user', parts }, offset)
     } else if (o.type === 'user' && typeof content === 'string' && content.trim()) {
-      messages.push({ role: 'user', parts: [{ kind: 'text', text: content }] })
+      const cmd = classifyLocalCommand(content)
+      if (cmd?.kind === 'command') {
+        // The user running a command reads like a tool call — no new role or part kind on the wire.
+        const part: Extract<ChatPart, { kind: 'tool' }> = { kind: 'tool', name: cmd.name, arg: cmd.arg }
+        push({ role: 'assistant', parts: [part] }, offset)
+        awaitingOutput = { family: cmd.family, part }
+      } else if (cmd?.kind === 'output') {
+        const s = summarizeResult(cmd.text)
+        if (!s) continue
+        if (awaitingOutput && awaitingOutput.family === cmd.family) {
+          awaitingOutput.part.result = s
+          awaitingOutput = null
+        } else {
+          push({ role: 'assistant', parts: [{ kind: 'tool', name: COMMAND_OUTPUT_TOOL, arg: '', result: s }] }, offset)
+        }
+      } else {
+        push({ role: 'user', parts: [{ kind: 'text', text: content }] }, offset)
+      }
     }
   }
-  return messages
+  const out: ChatRecordsOut = { messages, unmatched }
+  // Keys only when stated: an absent key, never `model: undefined`, keeps the output deterministic
+  // (and JSON-identical) for the ports locked to it.
+  if (model !== undefined) out.model = model
+  if (effort !== undefined) out.effort = effort
+  return out
+}
+
+export function parseChatMessages(rawLines: string[]): ChatMessage[] {
+  return parseChatRecords(
+    rawLines.map((raw) => ({ raw, offset: 0 })),
+    false
+  ).messages
+}
+
+/** A paged chat read's answer, minus `found` (the caller knows whether anything resolved). */
+export interface ChatWindowParse {
+  messages: ChatMessage[]
+  olderCursor: number | null
+  unmatchedResults: ChatCarriedToolResult[]
+  /** The newest assistant record's model / effort among this window's complete lines. Absent (the
+   *  key, not just the value) when no such record states one. */
+  model?: string
+  effort?: string
+  /**
+   * The window (not starting at 0) held no complete line: one record is bigger than the whole
+   * window. Explicit rather than inferred from "no messages", because a window of complete lines
+   * can legitimately yield no messages (metadata-only records). The reader (`readChatPage`) GROWS
+   * the window on this flag — a pasted screenshot is routinely bigger than a page — and only past
+   * the 5 MB cap takes the `olderCursor` below and skips the record. Never sent over the wire.
+   */
+  noCompleteLine: boolean
+}
+
+/**
+ * Parse one byte window of a transcript. PURE — the local reader and the remote (SSH) leg hand it
+ * the same kind of buffer, so both sides page identically.
+ *
+ * `buf` holds the file's bytes from absolute offset `bufStart` to the window end. When `bufStart`
+ * is not 0, everything up to and including the first `\n` is dropped as a partial line, and
+ * `olderCursor` is the offset right after that newline — where the first COMPLETE line starts,
+ * i.e. the `before` of the next older page. Callers should start `buf` ONE BYTE before the window
+ * they want (`readChatWindow` / `transcriptPageCommand` do): that lookbehind byte is the only way
+ * to recognize a line that begins exactly on the window edge; without it such a line would be
+ * dropped as partial.
+ *
+ * Working in bytes, not a decoded string, is what keeps the offsets exact: a line's key is the
+ * absolute byte offset of its first byte, which a prepend or an append can never change, and a
+ * multi-byte character cut by the window edge only ever lands in the dropped partial line (each
+ * kept line is decoded on its own, from newline to newline).
+ *
+ * A line longer than the whole window leaves no complete line in it: `noCompleteLine` is set, and
+ * `olderCursor` is `bufStart` — strictly older than the window end, so a caller that gives up
+ * (`readChatPage`, only once the window is already at the 5 MB cap) keeps paging and skips that one
+ * record. Answering the window end instead would ask for the identical window forever.
+ */
+export function parseChatWindow(
+  buf: Buffer,
+  bufStart: number,
+  // The record parser for the window's complete lines. Claude's by default; another agent whose
+  // transcript is also append-only JSONL (copilot's `events.jsonl`) passes its own, so the byte
+  // window, the lookbehind and the cursor rules exist exactly once.
+  parseRecords: (records: Iterable<{ raw: string; offset: number }>, paged: true) => ChatRecordsOut = parseChatRecords
+): ChatWindowParse {
+  const end = bufStart + buf.length
+  let from = 0
+  let olderCursor: number | null = null
+  if (bufStart > 0) {
+    const nl = buf.indexOf(0x0a)
+    if (nl < 0 || bufStart + nl + 1 >= end) {
+      return { messages: [], olderCursor: bufStart, unmatchedResults: [], noCompleteLine: true }
+    }
+    from = nl + 1
+    olderCursor = bufStart + from
+  }
+  const records: Array<{ raw: string; offset: number }> = []
+  while (from < buf.length) {
+    const nl = buf.indexOf(0x0a, from)
+    const to = nl < 0 ? buf.length : nl
+    if (to > from) records.push({ raw: buf.toString('utf8', from, to), offset: bufStart + from })
+    from = to + 1
+  }
+  const { messages, unmatched, model, effort } = parseRecords(records, true)
+  return {
+    messages,
+    olderCursor,
+    unmatchedResults: [...unmatched].map(([id, result]) => ({ id, result })),
+    ...(model !== undefined ? { model } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    noCompleteLine: false
+  }
+}
+
+/**
+ * Read one window of a transcript for `parseChatWindow`: at most `maxBytes` ending at `before`
+ * (`null`, or past EOF = the file size), plus one byte of lookbehind when the window does not start
+ * at 0. `start` is the absolute offset of `data[0]` (the lookbehind byte, when there is one); `end`
+ * the window end actually used. Undefined when the file cannot be read.
+ */
+export async function readChatWindow(
+  filePath: string,
+  page: { before: number | null; maxBytes: number }
+): Promise<{ data: Buffer; start: number; end: number } | undefined> {
+  try {
+    const fd = await fs.promises.open(filePath, 'r')
+    try {
+      const { size } = await fd.stat()
+      const end = page.before === null || page.before > size ? size : page.before
+      const windowStart = Math.max(0, end - page.maxBytes)
+      const start = windowStart > 0 ? windowStart - 1 : 0
+      const length = end - start
+      if (length <= 0) return { data: Buffer.alloc(0), start, end }
+      const { buffer, bytesRead } = await fd.read({
+        position: start,
+        length,
+        buffer: Buffer.alloc(length)
+      })
+      return { data: buffer.subarray(0, bytesRead), start, end: start + bytesRead }
+    } finally {
+      await fd.close()
+    }
+  } catch {
+    return undefined
+  }
 }
 
 export async function readChatMessages(filePath: string): Promise<ChatMessage[]> {
@@ -347,6 +684,13 @@ export function setRemoteTranscriptReader(
   remoteReader = fn
 }
 
+// Title polls hit this every 4–15 s per agent node. The name can only change when the transcript
+// does, so (size, mtime) gates the 128 KB tail read. Keyed by the RESOLVED path (the account is
+// already folded into it). Bounded: oldest entries go first. A failed tail read is not cached — a
+// transient error must not pin a null title until the file next changes.
+const TITLE_CACHE_MAX = 500
+const titleCache = new Map<string, { size: number; mtimeMs: number; name: string | null }>()
+
 export async function readSessionName(
   sessionId: string,
   accountId?: string
@@ -361,9 +705,17 @@ export async function readSessionName(
   // Stale cache entries are healed inside resolveTranscriptPath (access-checked per hit).
   const p = await resolveTranscriptPath(sessionId, accountId)
   if (!p) return null
+  const st = await fs.promises.stat(p).catch(() => null)
+  const hit = st ? titleCache.get(p) : undefined
+  if (st && hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.name
   const tail = await readSmallTail(p, TITLE_TAIL_BYTES)
-  if (!tail) return null
-  return pickSessionName(tail)
+  const name = tail ? pickSessionName(tail) : null
+  if (st && tail !== undefined) {
+    titleCache.delete(p)
+    titleCache.set(p, { size: st.size, mtimeMs: st.mtimeMs, name })
+    if (titleCache.size > TITLE_CACHE_MAX) titleCache.delete(titleCache.keys().next().value!)
+  }
+  return name
 }
 
 // Durable resolver by working directory: Claude stores a project's transcripts under

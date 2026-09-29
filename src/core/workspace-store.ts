@@ -6,14 +6,14 @@ import { IPC } from '../shared/ipc'
 import { platform } from './platform'
 import {
   DEFAULT_PROJECT_ID, EMPTY_WORKSPACE,
-  type BridgeLink, type CanvasNodeState, type KanbanColumn, type KanbanLabel, type Project, type Workspace,
+  type BridgeLink, type CanvasNodeState, type KanbanColumn, type KanbanLabel, type Project, type Workspace, type WorkspaceSaveOptions,
   type WorkspaceV1
 } from '../shared/types'
 import {
   PROJECT_DIR, PROJECT_FILE, fileToProject, inlineProjectFileRelPath, isInlineProjectFileId,
   projectToFile, resolveNodes, sameProjectContent,
   sanitizeLoadedClosedSessions, sanitizeNodeTriggers, serializeProjectFile, splitWorkspace,
-  validKanban,
+  sanitizeKanban,
   type IndexEntryV3, type ProjectFileV1, type WorkspaceIndexV3
 } from './workspace-files'
 import { readProjectSettingsFile, writeProjectSettingsFile } from './project-settings-files'
@@ -51,7 +51,21 @@ export interface RemoteWorkspaceIO {
   writeSettings?(projectId: string, ssh: NonNullable<Project['ssh']>, content: string): Promise<boolean>
 }
 
-const projectFilePath = (cwd: string): string => path.join(cwd, PROJECT_DIR, PROJECT_FILE)
+/** cwd -> its project-file path. The path is a pure function of the cwd string, and the hosted
+ *  relay's per-frame access check (`projectIdsForNode` → `canvasInputs`) needs it for every index
+ *  entry on every frame, where `path.join` was most of the cost. Bounded, oldest out: the key set is
+ *  the cwds the index has ever held, which only grows by the user adding folders. */
+const projectFilePaths = new Map<string, string>()
+const PROJECT_FILE_PATHS_CAP = 1024
+const projectFilePath = (cwd: string): string => {
+  let file = projectFilePaths.get(cwd)
+  if (file === undefined) {
+    file = path.join(cwd, PROJECT_DIR, PROJECT_FILE)
+    if (projectFilePaths.size >= PROJECT_FILE_PATHS_CAP) projectFilePaths.delete(projectFilePaths.keys().next().value!)
+    projectFilePaths.set(cwd, file)
+  }
+  return file
+}
 
 /** The data file of one cwd-less ("inline") project: `userData/inline-projects/<id>.json`. Only
  *  ever called with an id `isInlineProjectFileId` has already accepted — workspace.json is
@@ -63,6 +77,9 @@ const inlineFilePath = (projectId: string): string =>
  *  `recentMirrorHashes`). Big enough to cover a burst of throttled writes inside one poll window;
  *  small enough that a server-side revert to genuinely old content still reads as external. */
 const RECENT_MIRROR_CAP = 8
+
+/** `projectIdsForNode`'s answer for an id no project holds (shared, frozen: callers only read it). */
+const NO_PROJECTS: readonly string[] = Object.freeze([])
 
 const contentHash = (content: string): string => createHash('sha256').update(content).digest('hex')
 
@@ -130,6 +147,18 @@ export class WorkspaceStore {
    *  never match isSelfWrite, so every fs event on it read as an external change forever — endless
    *  spurious reloads and conflict bars (field bug 2026-08-10). */
   private lastWritten = new Map<string, string>()
+  /** `lastWritten`'s bytes, parsed once. `save()` compares every folder project's candidate against
+   *  its last write on EVERY autosave; re-parsing each file each time was pure waste. Keyed by the
+   *  raw string, so any `lastWritten.set` elsewhere invalidates it by construction. */
+  private lastWrittenParsed = new Map<string, { raw: string; parsed: ProjectFileV1 }>()
+  /** `projectIdsForNode`'s node → projects map, and the `canvasInputs` snapshot it was built from. */
+  private nodeProjectMemo: { inputs: unknown[]; map: Map<string, readonly string[]> } | null = null
+  /** The index bytes we last wrote and the file's size/mtime/inode right after, so an unchanged
+   *  index is not rewritten on every autosave — but one another writer changed on disk still is.
+   *  The inode is what catches a same-size rewrite on a coarse-mtime filesystem: every writer
+   *  publishes by rename, so any rewrite is a new inode. Any other index write of ours clears it, so
+   *  it only ever describes the last write `save()` made. */
+  private lastIndexWrite: { json: string; size: number; mtimeMs: number; ino: number } | null = null
   /** project id -> rev of the last written/loaded file. */
   private revs = new Map<string, number>()
   /** Entries whose one-time exec migration could NOT run (their project file was unreadable at load).
@@ -206,7 +235,8 @@ export class WorkspaceStore {
 
   registerIpc(): void {
     platform().handle(IPC.workspaceLoad, () => this.load())
-    platform().handle(IPC.workspaceSave, (workspace: Workspace) => this.save(workspace))
+    platform().handle(IPC.workspaceSave, (workspace: Workspace, opts?: WorkspaceSaveOptions) =>
+      this.save(workspace, { localOnly: opts?.localOnly === true }))
     platform().handle(IPC.workspaceProbeFolder, (folder: string) => this.probeFolder(folder))
     platform().handle(IPC.workspaceProjectFileState, (cwd: unknown) =>
       typeof cwd === 'string' && cwd ? this.projectFileState(cwd) : 'unreadable')
@@ -322,7 +352,8 @@ export class WorkspaceStore {
         // and the same trigger shape rule (workspace.json is hand-editable input too).
         // `rest` drops BOTH guarded fields; each is added back below only if it passes its guard.
         const { kanban, closedSessions, layouts, layoutViewports, ...rest } = e.project
-        const base = validKanban(kanban) ? { ...rest, kanban } : rest
+        const admittedKanban = sanitizeKanban(kanban)
+        const base = admittedKanban ? { ...rest, kanban: admittedKanban } : rest
         // An inline project's embedded layouts are hand-editable input exactly like a git-shared
         // file's, and they never pass through `fileToProject` on this branch, so they are
         // sanitized (and their cameras pruned against them) here instead.
@@ -478,6 +509,7 @@ export class WorkspaceStore {
     // next boot reads the old index and repairs again (harmlessly, but forever).
     if (!repaired || !sideline) return
     try {
+      this.lastIndexWrite = null
       await writeAtomic(this.indexPath, JSON.stringify(this.index))
     } catch { /* the next save writes it anyway */ }
   }
@@ -814,6 +846,7 @@ export class WorkspaceStore {
     const index = this.index
     if (!index) return
     this.applySettingsToIndex(index)
+    this.lastIndexWrite = null
     await writeAtomic(this.indexPath, JSON.stringify(index))
   }
 
@@ -933,13 +966,34 @@ export class WorkspaceStore {
    *  projects went blank after tab switching" wipe. */
   private saveChain: Promise<unknown> = Promise.resolve()
 
-  save(workspace: Workspace): Promise<void> {
-    const run = this.saveChain.then(() => this.saveNow(workspace))
+  /**
+   * `localOnly` makes the save durable on THIS machine only: every local file and the index (which
+   * carries each SSH project's cache) are written, but no SSH project is read, reconciled or
+   * mirrored — a changed, already-reconciled entry is marked `unmirrored` instead, so the next
+   * ordinary save pushes it. It exists for the launch write-ahead barrier (`commitLaunchAttempt`):
+   * that save must be on disk before a command is typed, and waiting on two SSH round trips per
+   * save made every new agent node on an SSH project sit on QUEUED for seconds. It still runs on
+   * the FIFO chain, so ordering against every other save is unchanged.
+   */
+  save(workspace: Workspace, opts: WorkspaceSaveOptions = {}): Promise<void> {
+    const run = this.saveChain.then(() => this.saveNow(workspace, opts.localOnly === true))
     this.saveChain = run.catch(() => {})
     return run
   }
 
-  private async saveNow(workspace: Workspace): Promise<void> {
+  /** The parse of `lastWritten.get(file)`, cached per raw string (see `lastWrittenParsed`). Throws
+   *  exactly where the inline `JSON.parse` it replaces did. */
+  private parsedLastWritten(file: string): ProjectFileV1 | null {
+    const raw = this.lastWritten.get(file)
+    if (!raw) return null
+    const hit = this.lastWrittenParsed.get(file)
+    if (hit && hit.raw === raw) return hit.parsed
+    const parsed = JSON.parse(raw) as ProjectFileV1
+    this.lastWrittenParsed.set(file, { raw, parsed })
+    return parsed
+  }
+
+  private async saveNow(workspace: Workspace, localOnly = false): Promise<void> {
     if (!workspace.projects.length && !this.index) {
       // A store that never read the index may not replace a populated one with "no projects":
       // that is the boot-save wipe — load() failed transiently, the renderer hydrated zero
@@ -1029,8 +1083,7 @@ export class WorkspaceStore {
     for (const [cwd, candidate] of files) {
       const projectId = projectIdForCwd.get(cwd) ?? cwd
       const file = projectFilePath(cwd)
-      const prev = this.lastWritten.get(file)
-      const prevParsed = prev ? (JSON.parse(prev) as ProjectFileV1) : null
+      const prevParsed = this.parsedLastWritten(file)
       if (prevParsed && sameProjectContent(prevParsed, candidate)) continue
       if (!prevParsed && candidate.nodes.length === 0 && !(await this.emptyOrAbsentOnDisk(file))) {
         // The local twin of the SSH "never blind-write a file we have not read" rule: an empty
@@ -1070,6 +1123,12 @@ export class WorkspaceStore {
       // Without that record the re-read would hand every just-deleted node straight back on the very
       // write that was supposed to remove it, and no node on an ssh project could ever be closed.
       this.recordLocalDeletions(e.id, previousCache?.nodes, e.cache.nodes)
+      if (localOnly) {
+        // No network. An unreconciled entry is left for the next ordinary save to LOOK first (the
+        // never-blind-write rule is untouched); a reconciled one that changed now owes its mirror.
+        if (changedSinceLoad && this.reconciled.has(e.id)) this.unmirrored.add(e.id)
+        continue
+      }
       if (!this.reconciled.has(e.id)) {
         // Never blind-write a remote file we have not read yet: the first mirror of a fresh or
         // re-added project must LOOK first — an existing lineage on the server may win (adopted,
@@ -1107,8 +1166,29 @@ export class WorkspaceStore {
       this.pendingV2Backup = null
     }
 
-    // Compact index, atomic — same reasoning as the old single-file store.
-    await writeAtomic(this.indexPath, JSON.stringify(index))
+    // Compact index, atomic — same reasoning as the old single-file store. Skipped when the bytes
+    // equal our last write AND the file still has the size/mtime/inode that write left (another
+    // instance sharing this userData rewrote it otherwise). A migration always writes: the v3 flip
+    // is the point of that save.
+    const indexJson = JSON.stringify(index)
+    const last = this.lastIndexWrite
+    const onDisk = !migrating && last?.json === indexJson
+      ? await fs.stat(this.indexPath).catch(() => null)
+      : null
+    const unchanged =
+      !!onDisk &&
+      !!last &&
+      onDisk.size === last.size &&
+      onDisk.mtimeMs === last.mtimeMs &&
+      onDisk.ino === last.ino
+    if (!unchanged) {
+      this.lastIndexWrite = null
+      await writeAtomic(this.indexPath, indexJson)
+      const st = await fs.stat(this.indexPath).catch(() => null)
+      this.lastIndexWrite = st
+        ? { json: indexJson, size: st.size, mtimeMs: st.mtimeMs, ino: st.ino }
+        : null
+    }
     await this.sweepRemovedDataFiles(previousIndex, index)
     this.index = index
 
@@ -1190,6 +1270,7 @@ export class WorkspaceStore {
       const file = inlineFilePath(e.id)
       await fs.rm(file, { force: true }).catch(() => undefined)
       this.lastWritten.delete(file)
+      this.lastWrittenParsed.delete(file)
       this.revs.delete(e.id)
     }
   }
@@ -1299,6 +1380,7 @@ export class WorkspaceStore {
     // Persist the index only when the reconcile moved something — a quiet poll must not churn
     // workspace.json every tick.
     if (adopted || e.cache?.rev !== revBefore) {
+      this.lastIndexWrite = null
       await writeAtomic(this.indexPath, JSON.stringify(this.index))
     }
     return adopted
@@ -1404,6 +1486,23 @@ export class WorkspaceStore {
    * `getNodeTitle`, which now delegates here.
    */
   getNode(nodeId: string): CanvasNodeState | undefined {
+    return this.findNode(nodeId)?.node
+  }
+
+  /**
+   * `getNode`, with the node's cwd as the CANVAS sees it: a local ref's project.json stores node
+   * cwds portable (`./sub`), and this resolves them against the project root exactly as
+   * `fileToProject` / `persistedCanvases` do. For callers that hand the cwd to a resolver keyed on
+   * the absolute path (the phone Chat verbs' transcript read). `getNode` keeps the stored form so
+   * its existing callers are unchanged.
+   */
+  getNodeResolved(nodeId: string): CanvasNodeState | undefined {
+    const hit = this.findNode(nodeId)
+    if (!hit) return undefined
+    return hit.root ? resolveNodes([hit.node], hit.root)[0] : hit.node
+  }
+
+  private findNode(nodeId: string): { node: CanvasNodeState; root?: string } | undefined {
     for (const e of this.index?.entries ?? []) {
       let nodes: CanvasNodeState[] | undefined
       if (e.project) nodes = e.project.nodes
@@ -1419,9 +1518,104 @@ export class WorkspaceStore {
         }
       }
       const node = nodes?.find((n) => n.id === nodeId)
-      if (node) return node
+      // Only a local ref's nodes come off the shared file in portable form.
+      if (node) return { node, root: !e.project && !e.cache && e.cwd ? e.cwd : undefined }
     }
     return undefined
+  }
+
+  /**
+   * EVERY project that holds this node id, in index order ([] = none) — exactly what a
+   * `persistedCanvases` scan answers. All of them, never the first: node ids travel in git-shared
+   * project files, so one id can sit in two projects, and the hosted team's access policy treats a
+   * node as shared only when every project holding it is shared. Memoized, because a hosted-team
+   * relay asks it once per access decision for every viewer (each agent:status event,
+   * subagent-activity chunk, unread-clear, snapshot element, terminal frame) and a
+   * `persistedCanvases()` call re-parses every local project's cached file.
+   *
+   * The memo is validated against the IDENTITY of every input `persistedCanvases` reads
+   * (`canvasInputs`), not a version counter: a counter is only as good as the writers that remember
+   * to bump it, and this class changes those inputs from a dozen places — `lastWritten.set`, index
+   * reassignment, and in-place entry updates (`e.cache = …`, `e.project = …`, `e.id = …` on a
+   * re-key). Every one of them replaces a reference, so a snapshot comparison sees all of them,
+   * including writers added later. The snapshot goes down to the node arrays themselves
+   * (`e.project.nodes`, `e.cache.nodes`) and the inline project's own id, so a writer that swaps
+   * `.nodes` or re-keys `.id` on the SAME entry and project/cache object is seen too. What it cannot
+   * see is an array MUTATED in place (a push into `nodes`): the rule this file keeps is that a
+   * project's node array is replaced, never mutated.
+   */
+  projectIdsForNode(nodeId: string): readonly string[] {
+    const inputs = this.canvasInputs()
+    const memo = this.nodeProjectMemo
+    const fresh =
+      memo !== null && memo.inputs.length === inputs.length && memo.inputs.every((v, i) => v === inputs[i])
+    if (fresh) return memo.map.get(nodeId) ?? NO_PROJECTS
+    const map = new Map<string, string[]>()
+    for (const c of this.persistedCanvases()) {
+      for (const n of c.nodes) {
+        const held = map.get(n.id)
+        if (!held) map.set(n.id, [c.id])
+        else if (!held.includes(c.id)) held.push(c.id)
+      }
+    }
+    for (const held of map.values()) Object.freeze(held)
+    this.nodeProjectMemo = { inputs, map }
+    return map.get(nodeId) ?? NO_PROJECTS
+  }
+
+  /** Every input `persistedCanvases` reads, by identity: the index object, and per entry the entry,
+   *  its id, its inline project with that project's id and node array, its ssh cache with its node
+   *  array, its cwd and the text last written/read for that cwd's project file. A node array is
+   *  compared by reference: it must be replaced, never mutated in place (see `projectIdsForNode`). */
+  private canvasInputs(): unknown[] {
+    const out: unknown[] = [this.index]
+    for (const e of this.index?.entries ?? []) {
+      out.push(
+        e,
+        e.id,
+        e.project,
+        e.project?.id,
+        e.project?.nodes,
+        e.cache,
+        e.cache?.nodes,
+        e.cwd,
+        e.cwd ? this.lastWritten.get(projectFilePath(e.cwd)) : undefined
+      )
+    }
+    return out
+  }
+
+  /**
+   * Every node id in every project the index holds — open, closed and SSH alike — or `undefined`
+   * when that set cannot be known: the index is not loaded, a local ref's project.json has not been
+   * read this run (unavailable folder, corrupt file), or an SSH entry has no offline cache.
+   *
+   * The agent-status mirror uses it to drop an IDENTITY-ONLY entry (a session id kept past the 6 h
+   * state expiry) whose node was deleted while this process was not watching. A wrong "gone" costs
+   * the phone that node's session id, so every doubt answers `undefined` — the mirror then bounds
+   * the entry by its identity TTL alone. Same three-entry-kind scan as `findNode`.
+   * Consequence: ONE permanently unavailable local ref or one never-cached SSH project turns
+   * existence pruning off for EVERY project, leaving only the 30-day identity TTL.
+   * Parses through `parsedLastWritten`, so a mirror flush re-parses no unchanged project.json.
+   */
+  knownNodeIds(): Set<string> | undefined {
+    if (!this.index) return undefined
+    const ids = new Set<string>()
+    for (const e of this.index.entries) {
+      let nodes: CanvasNodeState[] | undefined
+      if (e.project) nodes = e.project.nodes
+      else if (e.cache) nodes = e.cache.nodes
+      else if (e.cwd) {
+        try {
+          nodes = this.parsedLastWritten(projectFilePath(e.cwd))?.nodes
+        } catch {
+          return undefined
+        }
+      }
+      if (!Array.isArray(nodes)) return undefined
+      for (const n of nodes) if (n && typeof n.id === 'string') ids.add(n.id)
+    }
+    return ids
   }
 
   /**

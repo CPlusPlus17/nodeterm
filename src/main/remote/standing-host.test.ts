@@ -78,7 +78,7 @@ vi.mock('./host-service', () => ({
   }
 }))
 
-import { initStandingHost } from './standing-host'
+import { initStandingHost, tokenTtlMs } from './standing-host'
 import { IPC } from '../../shared/ipc'
 
 /** Let the async connectOne() chain (token mint, keypair) settle. */
@@ -290,5 +290,133 @@ describe('standing phone approval lifecycle (#819)', () => {
     release()
     expect(await approval).toEqual({ status: 'saved-disconnected' })
     expect(sessions[0].session.approve).not.toHaveBeenCalled()
+  })
+})
+
+describe('standing host: a refused token mint backs off', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('does NOT re-mint in a tight loop when the API refuses (429)', async () => {
+    // Field evidence (relay API log, 2026-09-25): one free host hit /v1/relay/host-token every
+    // ~175 ms — its own round-trip time — 35k 429s in a day. connectOne()'s `finally` topped the
+    // pool back up on a microtask even after a FAILED mint, so the backoff scheduleReconnect()
+    // had just armed never got a chance to run.
+    vi.useFakeTimers()
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 429, json: async () => ({}) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const host = makeHost()
+    host.syncFromSettings()
+    for (let i = 0; i < 20; i++) await settle()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // The backoff then retries — refusal is not a permanent stop.
+    await vi.advanceTimersByTimeAsync(1000)
+    for (let i = 0; i < 5; i++) await settle()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    host.stop()
+  })
+})
+
+describe('standing host: a listener the relay drops backs off (relay unreachable, API fine)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('re-mints on the backoff, and a successful mint does NOT reset it', async () => {
+    // Relay log, 2026-09-27, a host already on the fixed build: API reachable, relay WS failing for
+    // 2½ minutes. Every mint succeeded (resetting the backoff), every socket died at once, and
+    // onClose re-minted immediately — ~30 mints in 3 s until the API's per-IP limit answered 429.
+    vi.useFakeTimers()
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ pairingToken: 'tok', hostId: 'host', exp: 0 })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const host = makeHost()
+    host.syncFromSettings()
+    for (let i = 0; i < 10; i++) await settle()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const dropNewest = async (): Promise<void> => {
+      sessions.at(-1)!.opts.onClose() // the relay drops the idle listener on its own
+      for (let i = 0; i < 10; i++) await settle()
+    }
+    // Drop #1: nothing immediate, one re-mint after 1 s.
+    await dropNewest()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // Drop #2 right after that SUCCESSFUL mint: the delay grew to 2 s — the mint did not reset it.
+    await dropNewest()
+    await vi.advanceTimersByTimeAsync(1999)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    host.stop()
+  })
+
+  it('a listener that lives to its refresh resets the backoff', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ pairingToken: 'tok', hostId: 'host', exp: 0 })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const host = makeHost()
+    host.syncFromSettings()
+    for (let i = 0; i < 10; i++) await settle()
+    // Two early deaths push the backoff to its third step (4 s)…
+    sessions.at(-1)!.opts.onClose()
+    await vi.advanceTimersByTimeAsync(1000)
+    sessions.at(-1)!.opts.onClose()
+    await vi.advanceTimersByTimeAsync(2000)
+    const before = fetchMock.mock.calls.length
+    // …then the listener holds for a full token lifetime (refresh at 120 − 30 = 90 s).
+    await vi.advanceTimersByTimeAsync(90_000)
+    expect(fetchMock.mock.calls.length).toBe(before + 1) // the refresh re-mint
+    // A drop now waits 1 s again, not 4 s.
+    sessions.at(-1)!.opts.onClose()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(fetchMock.mock.calls.length).toBe(before + 2)
+    host.stop()
+  })
+})
+
+describe('standing host: token refresh is immune to this machine\'s clock error', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('tokenTtlMs measures exp against the SERVER clock (Date header), local clock only as fallback', () => {
+    const serverNow = Date.parse('Sun, 27 Sep 2026 08:00:00 GMT')
+    const exp = serverNow / 1000 + 120
+    const fastLocal = serverNow + 75_000 // this machine's clock 75 s ahead
+    expect(tokenTtlMs(exp, 'Sun, 27 Sep 2026 08:00:00 GMT', fastLocal)).toBe(120_000)
+    expect(tokenTtlMs(exp, null, fastLocal)).toBe(45_000) // no header: the old (skewed) answer
+    expect(tokenTtlMs(exp, 'not a date', fastLocal)).toBe(45_000)
+    expect(tokenTtlMs(0, 'Sun, 27 Sep 2026 08:00:00 GMT', fastLocal)).toBe(120_000) // no exp → default TTL
+  })
+
+  it('a host whose clock is 75 s fast refreshes every ~90 s, not at the 15 s floor', async () => {
+    // Relay log, 2026-09-27: a host re-minting every 15 s (238/hour vs a free limit of 240).
+    vi.useFakeTimers()
+    const serverNow = Date.parse('Sun, 27 Sep 2026 08:00:00 GMT')
+    vi.setSystemTime(serverNow + 75_000)
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ date: new Date(serverNow).toUTCString() }),
+      json: async () => ({ pairingToken: 'tok', hostId: 'host', exp: serverNow / 1000 + 120 })
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const host = makeHost()
+    host.syncFromSettings()
+    for (let i = 0; i < 10; i++) await settle()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetchMock).toHaveBeenCalledTimes(1) // the old code had re-minted 4 times by now
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    host.stop()
   })
 })

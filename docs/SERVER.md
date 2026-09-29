@@ -407,6 +407,16 @@ The following affordances change shape in the browser (no native OS is reachable
   Note also that **Ctrl+Shift+C** (advertised as copy on Linux/Windows) additionally opens
   Chromium's element inspector and a page cannot suppress that; **Ctrl+Insert** is the
   browser-safe copy chord.
+- **Markdown view toggle (⌘/Ctrl+M)** — works in the browser: with no main process to
+  intercept it, the bridge matches the user's `node.toggleMarkdown` binding with its own
+  window keydown listener (`src/renderer/bridge/markdown-toggle-key.ts`) and honors the
+  terminal-first policy like the desktop. **macOS Chrome reserves ⌘M for window
+  minimize** and never delivers it to the page, so on a Mac the default chord does
+  nothing — remap it in Settings → Keyboard Shortcuts, or use the node's right-click
+  "Markdown view". On Linux/Windows the default is Ctrl+M, which under the default
+  app-first policy is taken from a focused terminal exactly as on the desktop (a shell sees
+  Ctrl+M as Enter). Inside a focused Monaco editor Ctrl+M stays Monaco's own "toggle Tab
+  key moves focus" binding; hover the node with focus elsewhere to toggle its preview.
 
 The **backpressure / flow-control** gap noted in the Phase 2 limitations is now
 closed: a flooding PTY is automatically paused based on the WebSocket
@@ -563,6 +573,19 @@ factory had just persisted. On the new channel the browser three-way merges inst
 (`renderer/lib/serverChange.ts`): nodes the server opened are adopted silently, ropes and bridges
 are merged against the last-known disk copy, and unsaved local edits survive. Nothing is asked of
 the user, because both sides of this merge are the same application.
+
+`open-terminal` / `open-agent` accept `--run-now` as a no-op: server opens already start at once,
+headless. `--run-now` together with `--after` is refused, in the desktop's words
+(`RUN_NOW_AFTER_REFUSAL`). `run --node <id>` delivers a node's retained launch (the Run now
+button's job) for the node's creator only. It requires verified identity and resolves the node
+through the ownership record, never by the first id match, because node ids can repeat across
+projects. It refuses an SSH node before its write-ahead claim, and answers a `--project` naming any
+other project as "no node with id". `run`, and every immediate open that carries a launch command,
+deliver through the same echo-verified launcher the desktop's headless start uses
+(`core/headless-launch.ts`), with `release:false`: the server keeps its client attached, which is
+what keeps even a plain-shell session reachable. The deferred `--after` release (`refreshArmed`)
+still pastes with `sendText`. Neither `--run-now` nor `run` unhides a closed project or raises a
+notice, the same as the server's other immediate opens.
 
 Validate upgrades with a disposable `NODETERM_DATA_DIR` and port. Restarting a shared live Server
 service is an explicit operator action; it is not part of a test, repair, or boot-rescue flow.

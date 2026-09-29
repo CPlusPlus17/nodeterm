@@ -3,6 +3,7 @@ import {
   launchesToFire,
   queueControlLaunch,
   controlLaunchState,
+  deliveriesToRetire,
   launchTooltip,
   unmetDeps,
   LAUNCH_STALL_MS,
@@ -217,6 +218,23 @@ describe('launchTooltip — the QUEUED badge never goes silent (#569 item 1)', (
     const t = launchTooltip({ kind: 'failed', attempts: 5, at: 1 }, 'Builder', cmd)
     expect(t).not.toContain('Waiting for Builder')
   })
+
+  it('launchTooltip explains a background start (#925)', () => {
+    expect(launchTooltip({ kind: 'starting', since: 0 }, '', 'claude', undefined, false)).toMatch(
+      /starting in the background/i
+    )
+  })
+
+  it('a background start outranks every other sentence — none of them may offer ▶ mid-start (#925)', () => {
+    for (const t of [
+      launchTooltip({ kind: 'starting', since: 0 }, 'Builder', cmd, 'Builder'),
+      launchTooltip({ kind: 'starting', since: 0 }, 'Builder', cmd, undefined, true)
+    ]) {
+      expect(t).toMatch(/starting in the background/i)
+      expect(t).not.toContain('▶')
+      expect(t).not.toContain('Waiting for Builder')
+    }
+  })
 })
 
 
@@ -255,6 +273,7 @@ describe('control opens retain an unacknowledged launch (#827/#811)', () => {
     expect(controlLaunchState(false, undefined, { state: 'working', dropped: true })).toBe('dropped')
     expect(controlLaunchState(true, { kind: 'failed', attempts: 5, at: 1 })).toBe('failed')
     expect(controlLaunchState(true, { kind: 'stalled', since: 1 })).toBe('stalled')
+    expect(controlLaunchState(true, { kind: 'starting', since: 1 })).toBe('starting')
   })
 })
 
@@ -270,6 +289,32 @@ it('an exhausted delivery stays held on rerender; a stalled terminal may still b
   expect(launchesToFire([node], {}, live, undefined, { new: { kind: 'failed', attempts: 5, at: 1 } })).toEqual([])
   expect(node.data.pendingLaunch?.command).toBe('echo new')
   expect(launchesToFire([node], {}, live, undefined, { new: { kind: 'stalled', since: 1 } })).toEqual([{ id: 'new', command: 'echo new' }])
+})
+
+it('a background start holds the canvas delivery too — core is typing into that pane (#925)', () => {
+  // The headless claim normally makes the node manualOnly first; this is the guard for a live
+  // copy that has not caught up with the claim yet, when the store already says `starting`.
+  const node = armed('new', [])
+  expect(launchesToFire([node], {}, new Set(['new']), undefined, { new: { kind: 'starting', since: 1 } })).toEqual([])
+})
+
+describe('deliveriesToRetire — the Canvas sweep (#925)', () => {
+  const byId = {
+    delivered: { kind: 'failed' as const, attempts: 1, at: 1 },
+    elsewhere: { kind: 'stalled' as const, since: 1 },
+    starting: { kind: 'starting' as const, since: 1 },
+    armed: { kind: 'stalled' as const, since: 1 }
+  }
+
+  it('retires every record whose node is not an armed node on the active canvas', () => {
+    expect(deliveriesToRetire(byId, (id) => id === 'armed')).toEqual(['delivered', 'elsewhere'])
+  })
+
+  it('never retires a start in flight: it runs for a node that is NOT on the active canvas', () => {
+    // Dropping it would re-enable ▶ the moment the user switches to that project, because the
+    // manualOnly claim alone reads as a failed launch.
+    expect(deliveriesToRetire({ starting: byId.starting }, () => false)).toEqual([])
+  })
 })
 
  it('a durable manual-only launch stays held after a reload and unrelated successful hooks', () => {

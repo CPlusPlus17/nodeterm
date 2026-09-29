@@ -183,7 +183,20 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     color: vi.fn(async () => ({ ok: true as const, result: { colored: ['term-target'] } })),
     sticky: vi.fn(async () => ({ ok: true as const, result: { id: 'sticky-new' } })),
     settings: vi.fn(async () => ({ ok: true as const, message: 'settings' })),
+    run: vi.fn(async () => ({ ok: true as const })),
     deliver: vi.fn(async () => ({ ok: true as const, message: 'queued' }))
+  })
+
+  it('routes run to the factory (#925)', async () => {
+    const a = actions()
+    const handler = createServerEditionControlHandler(a)
+    await handler({ verb: 'run', nodeId: 'src', args: { node: 'n1' }, verified: true })
+    expect(a.run).toHaveBeenCalledWith('src', { node: 'n1' }, true)
+    // The shared parser still requires --node before the action is reached.
+    await expect(
+      handler({ verb: 'run', nodeId: 'src', args: {}, verified: true })
+    ).resolves.toEqual({ ok: false, error: 'run requires --node <id>' })
+    expect(a.run).toHaveBeenCalledTimes(1)
   })
 
   it('routes settings to its action, after the shared allowlist parse', async () => {

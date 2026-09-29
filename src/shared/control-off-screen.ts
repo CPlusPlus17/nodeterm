@@ -195,6 +195,7 @@ export function answersOffCanvas(verb: string): boolean {
  *     persisted index, with no live client — see core/remote-end.ts) and drops the node through
  *     the store's `removeNode`. That is the cross-project teardown the sessions sidebar has always
  *     used for a node in a project that is not on screen; `closeStoredNodes` is now the one copy.
+ *   - `run` starts a node's held launch headless through the owner's serialized copy (#925).
  *   - `rename` / `color` have dedicated store writers (`renameNode` / `recolorNode`) that mutate
  *     the serialized node directly, with no round-trip through the serializers.
  *   - `link` writes persisted `bridges`, which `appendCanvasLinks` appends to a non-active project —
@@ -211,6 +212,7 @@ export function answersOffCanvas(verb: string): boolean {
 const STORED_NODE_VERBS: ReadonlySet<string> = new Set([
   'write',
   'close',
+  'run',
   'rename',
   'color',
   'link',

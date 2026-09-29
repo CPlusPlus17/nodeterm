@@ -32,6 +32,8 @@ export const IPC = {
   /** The foreground command of a node's tmux pane (`#{pane_current_command}`) — how the in-place
    *  agent restart sees that the CLI has exited and a shell owns the pane again. */
   ptyPaneCommand: 'pty:pane-command',
+  /** Desktop-only (#925): start a node's session with no viewer and deliver its held launch. */
+  ptyLaunchHeadless: 'pty:launch-headless',
   /** Kernel truth about a node's tmux pane: its root pid, tty, tmux pane id, and the full argv of
    *  its FOREGROUND process group (`PaneOwner`). The name-only `ptyPaneCommand` above cannot tell
    *  an agent from anything else — an npm-installed CLI reports as `node`, and an agent reached
@@ -177,6 +179,12 @@ export const IPC = {
    *  phone can render SLEEPING, and gives main the `isHibernated` signal the delivery queue's
    *  hibernated leg was recorded as missing (agent-messaging.ts). */
   agentHibernated: 'agent:hibernated',
+  /** Renderer → main/server: seed the agent-status mirror with the node identities (agentId +
+   *  sessionId [+ observed account]) this renderer's persisted agentStatus store holds, for nodes
+   *  the mirror has no session for. Arg: `IdentitySeedEntry[]` (`@shared/agent-identity-seed`,
+   *  validated and capped there). Fire-and-forget; add-only — never overrides a hook-fed id. Feeds
+   *  the phone's chat view, which finds a transcript only by the mirror's session id. */
+  agentSeedIdentity: 'agent:seed-identity',
   /** main → renderer: ask the renderer to wake a hibernated node NOW (a phone viewer attached to
    *  its session over the relay). A nudge, never an assertion: the renderer re-reads the flag and
    *  no-ops for a non-hibernated or unmounted node — same contract as `wakeHibernatedNode`. Arg:
@@ -287,6 +295,10 @@ export const IPC = {
   /** The scoped machine's RAM (available/total) — the cheap read behind the system-resource
    *  pill. Safe to poll locally; NOT polled for an SSH scope. */
   sessionMemoryHost: 'session-memory:host',
+  // Canvas wallpaper (core/wallpaper.ts): macOS stills, cached image reads, image import.
+  wallpaperListStills: 'wallpaper:list-stills',
+  wallpaperLoad: 'wallpaper:load',
+  wallpaperImport: 'wallpaper:import',
   // Trigger nodes (issue #493): machine-local arm/disarm + the card's status/run-now.
   triggersArm: 'triggers:arm',
   triggersDisarm: 'triggers:disarm',
@@ -402,6 +414,11 @@ export const IPC = {
   githubIssuesMove: 'githubIssues:move',
   githubIssuesCreateLabels: 'githubIssues:create-labels',
   githubIssuesClearCache: 'githubIssues:clear-cache',
+  githubIssuesPullStatus: 'githubIssues:pull-status',
+  githubIssuesChasePulls: 'githubIssues:chase-pulls',
+  githubIssuesPullChecks: 'githubIssues:pull-checks',
+  githubIssuesClaimPullAutoMove: 'githubIssues:claim-pull-auto-move',
+  githubIssuesNotePullWaits: 'githubIssues:note-pull-waits',
   githubIssuesChanged: (projectId: string) => `githubIssues:changed:${projectId}`,
   githubProjectAvatar: 'github:projectAvatar',
   githubControlStatus: 'githubControl:status',
@@ -525,6 +542,11 @@ export const IPC = {
   // does the CDP work itself; the renderer never runs a CDP command.
   browserControlResolve: 'browser:control-resolve',
   browserControlResolveResult: 'browser:control-resolve-result',
+  // The phone Chat verbs' renderer round-trip (main/remote/host-chat.ts): main asks the renderer —
+  // which owns the agent-status store and the ⌘M send gate — for a node's chat status, or to send
+  // a phone message through that gate; the renderer answers on the reply channel.
+  hostChatQuery: 'host:chat-query',
+  hostChatReply: 'host:chat-reply',
   remoteHostStart: 'remote:host:start',
   remoteHostStop: 'remote:host:stop',
   // Connection approval gate: main → renderer when a client finishes the handshake (carries the
@@ -585,6 +607,26 @@ export const IPC = {
   relayClientApproved: (connectionId: string) => `relay:client:approved:${connectionId}`,
   relayClientFrame: (connectionId: string) => `relay:client:frame:${connectionId}`,
   relayClientClosed: (connectionId: string) => `relay:client:closed:${connectionId}`,
+  // HOSTED team relay (Server Edition, src/core/relay/hosted-service.ts). These ride the relay
+  // tunnel only: the core relay host INTERCEPTS them per session and they are never registered on
+  // the platform, so a browser client (gated by the server password, not a team role) cannot reach
+  // them. `relayHostedPeerPending` / `relayHostedPendingClosed` are events sent to connected OWNERS
+  // only; `relayHostedApprove` (pendingId, role), `relayHostedDeny` (pendingId),
+  // `relayHostedInviteCode` () and `relayHostedPending` () (the open requests, pulled) are
+  // owner-only requests; `relayHostedSelf` () is open to any approved peer and answers its own role.
+  relayHostedPeerPending: 'relay:hosted:peer-pending',
+  relayHostedPendingClosed: 'relay:hosted:pending-closed',
+  relayHostedPending: 'relay:hosted:pending',
+  relayHostedApprove: 'relay:hosted:approve',
+  relayHostedDeny: 'relay:hosted:deny',
+  relayHostedInviteCode: 'relay:hosted:invite-code',
+  relayHostedSelf: 'relay:hosted:self',
+  // The hosted teams THIS desktop has joined (src/main/remote/relay-bookmarks.ts). Unlike the
+  // hosted verbs above, these two never ride the relay: they are raw `ipcMain` handlers in the
+  // desktop main process, invisible to any relay peer. `relayHostedBookmarks` () lists them without
+  // their device tokens; `relayHostedBookmarkRemove` (hostId) forgets one.
+  relayHostedBookmarks: 'relay:hosted:bookmarks',
+  relayHostedBookmarkRemove: 'relay:hosted:bookmark-remove',
   handoffBuild: 'handoff:build',
   // Phone pairing (nodeterm iOS "scan a QR" flow): renderer starts/stops the one-shot LAN
   // listener; main pushes the completion result back over `pairing:done`. The per-device

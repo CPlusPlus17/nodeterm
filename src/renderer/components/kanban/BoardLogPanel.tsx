@@ -1,16 +1,24 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { BoardLogEntry, BoardLogEvent } from '@shared/types'
 import { formatTimeAgo } from '../../lib/usageFormat'
 import { useSession } from '../../session/session'
 import { useProjects } from '../../state/projects'
 import { useBoardLog } from '../../state/boardLog'
+import { collapseFeed } from '../../lib/boardLogCollapse'
 import type { KanbanSession } from './KanbanView'
 
 interface BoardLogPanelProps {
   /** The card/node whose activity this panel shows — feed + composer are scoped to `card.id`.
    *  Only the id is needed, so the canvas node flyout can use this panel without building a
-   *  full KanbanSession. */
+   *  full KanbanSession. A GitHub issue card passes its synthetic board-log id (`issueLogId`). */
   card: Pick<KanbanSession, 'id'>
+  /** Panel heading. Defaults to the session card's "Comments & activity". */
+  title?: string
+  /** Hide the comment composer — the issue card's run history is read-only, because a comment box
+   *  under a GitHub issue reads as "post to GitHub", and this log never leaves the project. */
+  readOnly?: boolean
+  /** Shown when the feed is empty (defaults to nothing). */
+  emptyText?: string
 }
 
 /** The activity sentence WITHOUT the leading author name — the name is rendered separately in
@@ -21,7 +29,8 @@ export function eventBody(e: BoardLogEvent): string {
     case 'card-created':
       return `created this card in ${e.to ?? 'Ungrouped'}`
     case 'card-moved':
-      return `moved this card ${e.from ?? 'Ungrouped'} → ${e.to ?? 'Ungrouped'}`
+      // `title` is the reason when the board moved the card itself ("PR #12 merged").
+      return `moved this card ${e.from ?? 'Ungrouped'} → ${e.to ?? 'Ungrouped'}${e.title ? ` (${e.title})` : ''}`
     case 'column-added':
       return `added column ${e.title ?? ''}`.trimEnd()
     case 'column-renamed':
@@ -46,10 +55,23 @@ export function eventBody(e: BoardLogEvent): string {
       // A loud, human-visible line for a cookie read (the whole point of the trace). `from` names the
       // agent, `to` the domain it read; `title` names the browser node it drove.
       return `read cookies for ${e.to ?? 'a site'}${e.title ? ` via ${e.title}` : ''}`
+    case 'run-started':
+      // The run's fields come from a git-shared file like everything else here: rendered as text
+      // only (React escapes it), and never turned into an action.
+      return `started ${runName(e)} on this issue`
+    case 'run-ended':
+      return `closed ${runName(e)}${e.run?.end ? ` (last state: ${e.run.end})` : ''}`
     default:
       // A newer peer may write event types this build doesn't know — show them neutrally.
       return `updated this card`
   }
+}
+
+/** "Claude session term-1a2b" — the node title when the event recorded one, else the node id. */
+function runName(e: BoardLogEvent): string {
+  const who = typeof e.title === 'string' && e.title ? e.title : 'a session'
+  const id = typeof e.run?.nodeId === 'string' ? ` (${e.run.nodeId})` : ''
+  return `${who}${id}`
 }
 
 /** Absolute, Trello-style stamp ("19 Jul 2026, 22:50") — the feed shows dates, not "2h ago"
@@ -69,7 +91,7 @@ function formatStamp(ts: number): string {
  *  comments + activity feed newest-first. Reads/writes the board log for the ACTIVE project via
  *  its session api — resolved here (not threaded from Canvas). Subscribes on mount, so a teammate's
  *  comment or a board change lands live; unsubscribes on unmount / card swap. */
-export function BoardLogPanel({ card }: BoardLogPanelProps) {
+export function BoardLogPanel({ card, title, readOnly, emptyText }: BoardLogPanelProps) {
   const { api } = useSession()
   const projectId = useProjects((s) => s.activeProjectId)
   const entries = useBoardLog((s) => s.entriesFor(projectId))
@@ -96,10 +118,10 @@ export function BoardLogPanel({ card }: BoardLogPanelProps) {
 
   return (
     <div className="board-log">
-      <div className="board-log__title">Comments & activity</div>
+      <div className="board-log__title">{title ?? 'Comments & activity'}</div>
       {unsupported ? (
         <div className="board-log__hint">Board history needs a project folder</div>
-      ) : (
+      ) : readOnly ? null : (
         <textarea
           className="board-log__composer"
           value={draft}
@@ -118,16 +140,58 @@ export function BoardLogPanel({ card }: BoardLogPanelProps) {
       {!unsupported && error && (
         <div className="board-log__error">Some board history couldn’t be saved.</div>
       )}
-      <div className="board-log__feed">
-        {feed.map((entry) => (
-          <FeedRow key={entry.id} entry={entry} />
-        ))}
-      </div>
+      {!unsupported && feed.length === 0 && emptyText && (
+        <div className="board-log__hint">{emptyText}</div>
+      )}
+      <BoardLogFeed feed={feed} />
     </div>
   )
 }
 
-function FeedRow({ entry }: { entry: BoardLogEntry }) {
+/** The feed itself, newest first. Runs of like events render folded as one "×N" row that expands
+ *  in place (lib/boardLogCollapse — a VIEW; the log is never rewritten). Comments and the audit
+ *  types are always one row each. Which groups are open is component state keyed by the group's
+ *  newest entry id, so a new entry landing on top does not collapse a row the user just opened. */
+export function BoardLogFeed({ feed }: { feed: readonly BoardLogEntry[] }) {
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
+  const items = useMemo(() => collapseFeed(feed), [feed])
+  const toggle = (key: string): void =>
+    setOpen((cur) => {
+      const next = new Set(cur)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  return (
+    <div className="board-log__feed">
+      {items.map((item) => {
+        if (item.kind === 'single') return <FeedRow key={item.entry.id} entry={item.entry} />
+        const expanded = open.has(item.key)
+        const fold = (
+          <button
+            className="board-log__fold"
+            aria-expanded={expanded}
+            title={expanded ? 'Collapse' : `Show all ${item.entries.length}`}
+            onClick={() => toggle(item.key)}
+          >
+            ×{item.entries.length}
+          </button>
+        )
+        return expanded ? (
+          <div key={item.key} className="board-log__group board-log__group--open">
+            {item.entries.map((entry, i) => (
+              <FeedRow key={entry.id} entry={entry} fold={i === 0 ? fold : undefined} />
+            ))}
+          </div>
+        ) : (
+          <FeedRow key={item.key} entry={item.entries[0]} fold={fold} />
+        )
+      })}
+    </div>
+  )
+}
+
+function FeedRow({ entry, fold }: { entry: BoardLogEntry; fold?: React.ReactNode }) {
   const when = formatStamp(entry.ts)
   const whenAgo = formatTimeAgo(entry.ts)
   if (entry.kind === 'event' && entry.event) {
@@ -138,6 +202,7 @@ function FeedRow({ entry }: { entry: BoardLogEntry }) {
           {entry.author.name}
         </span>{' '}
         <span className="board-log__event-body">{eventBody(entry.event)}</span>
+        {fold}
         <span className="board-log__time">{when}</span>
       </div>
     )

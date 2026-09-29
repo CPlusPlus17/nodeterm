@@ -419,6 +419,8 @@ Persistence has two layers:
 - **Live terminal sessions** (tmux): terminals continue where they left off across node
   remounts *and* full app restarts, including running processes. See below.
 
+**Autosave does no unchanged work** (`WorkspaceStore.save`): the parse of each `lastWritten` value is cached per raw string, and `workspace.json` is not rewritten when its bytes equal the store's last write AND the file still has the size+mtime+inode that write left — so another instance's rewrite is still answered (the inode catches a same-size rewrite on a coarse-mtime filesystem: every writer publishes by rename), a store's first save and a v2 migration always write, and every other index writer of ours clears the record.
+
 `settings.json` is a separate store (`core/settings-store.ts`, `state/settings.ts`).
 
 ## Projects (tabs)
@@ -470,7 +472,14 @@ project's nodes only.** The contract:
   work) and latched to the first run, so switching the setting on mid-session never reaches into
   storage and locks a canvas somebody is working on.
 - Before any project switch / add / delete, `commitActiveToStore()` serializes the live
-  React Flow nodes back into the store, so nothing is lost. Then disk is written.
+  React Flow nodes back into the store, so nothing is lost. Then disk is written. The commit is
+  guarded by the epoch tag `nodesProjectIdRef` (`canCommitCanvas`), and **that tag must live in
+  React STATE beside the nodes** (`canvas/nodesEpoch.ts`), never in a ref alone: the load effect's
+  `setNodes(flow)` is a DefaultLane update, every zustand write after it is a SyncLane re-render
+  that skips it, and the render-time `nodesRef` mirror then paired the PREVIOUS project's nodes
+  with the NEW project's tag. A commit in that window wrote an SSH project's 7 nodes over a local
+  project's 18 in its `.nodeterm/project.json` (2026-09-26). `nodesEpoch.test.tsx` reproduces the
+  interleaving with real React (no `act`, which would flush both lanes together and hide it).
 - Switching away unmounts the old project's `TerminalNode`s → their tmux clients detach but
   the sessions keep running; switching back reattaches. tmux session names are per-node-id
   (globally unique), so projects never collide.
@@ -795,7 +804,12 @@ Lifecycle, by intent:
   (250 ms) until a SHELL owns the pane, then echo-deliver `resumeCommand(...)` — the same
   `claude --resume` / `codex resume` the cold restore uses. **Nothing is ever killed**: if the CLI
   has not quit within `RESTART_EXIT_TIMEOUT_MS` (6 s) the run reports `exit-timeout` and leaves the
-  session running. A `working` **or `blocked`** session is refused — `/exit` typed into a
+  session running. **A user-asked restart gets a late window on top** (`RESTART_LATE_EXIT_MS`, 60 s,
+  spent only while the pane still reads): issue #899 was a 19 h cron session whose CLI quit a moment
+  AFTER the 6 s, with nothing left watching — the node sat at a bare shell with no agent and no
+  resume. The Eco sweep and Pause keep the bare 6 s (the sweep is serialized canvas-wide). The
+  exit-timeout notice (`exitTimeoutNotice`) hands over the bare resume line for exactly that
+  late-quit case. A `working` **or `blocked`** session is refused — `/exit` typed into a
   permission prompt would ANSWER it, not quit — and a node is held one-restart-at-a-time until the
   resume line has actually LEFT the pane (an un-submitted line is where a second `/exit` would be
   spliced in). The bulk action runs the same per-node closure sequentially over every idle agent
@@ -864,6 +878,26 @@ unreachable there by construction; a Linux host is expected to have its own. Und
 `scripts/build-tmux.mjs` writes its artifact. If tmux is unavailable from all three,
 `PtyManager` still falls back to a plain shell; `TMUX`/`TMUX_PANE` are stripped from the child env to avoid nesting refusal.
 
+**A session-host session follows its most recently ACTIVE viewer, like tmux's `window-size
+latest`** (issue #914). Under tmux a relay-mirrored phone is its own tmux client, so dismissing its
+keyboard gives it its rows back; on the session host the phone and the desktop node share ONE
+client socket, and the old componentwise minimum held the phone to the desktop node's rows with an
+empty band and no explanation. `latestClaimSize` (`core/pty-size.ts`) picks the claim with the
+highest recency — bumped by an attach, a claim that CHANGES, and a write that is not an emulator's
+automatic answer (`core/terminal-reports.ts`; every attached xterm answers a DA/CPR/OSC query, and
+counting those would hand the session to whoever answered last). Three rules, each load-bearing:
+(1) a viewer that cannot adapt is a CEILING — a pty wider than the phone's screen would wrap into
+garbage there (or, rendered at the pty's size, be clipped to its left ~45 columns), so a relay sink is
+`bounding` unless `pty.attach` said `resizedFrames: true`. The iOS app deliberately does NOT send it:
+it reads `OP.Resized` only to show a "Sized to another screen · Fit this screen" hint, and every
+phone report is ANSWERED (the sink's `sinkShown` is forgotten on each report) because the phone
+clears that hint whenever it sends a size; (2) the real size flows back to every viewer (`SessionHostPty.onSize` →
+`PtyManager.applyBackendSize` → `pty:size`, and `OP.Resized` to the sink), and a session-host
+`Session`'s `applySize` only VOTES; (3) the host's `geometry` push is NEGOTIATED at `hello`
+(`SESSION_HOST_FEATURES`) and sent only to sockets that asked — an older client reads every
+non-`data` push frame as an EXIT. Across app connections the host still takes the minimum. Full
+write-up: `docs/windows-session-host.md` → "Output ordering, flow ownership, and geometry".
+
 ### Cold restore (machine reboot)
 
 tmux only survives an **app** restart — a **machine reboot kills the tmux server**, so every
@@ -887,6 +921,20 @@ session (you can't keep a live OS process across a reboot):
   renderer reads it via `pty.readScrollback` and writes it back into xterm (with a "session
   restored" separator). Warm reattach skips it (tmux already redraws). Deleted with the node in
   `destroySession`.
+  **The periodic capture is paced, serialized and deduplicated** (`snapshotTick`,
+  `core/scrollback-cadence.ts`). A working agent's spinner keeps its session dirty forever, so the
+  old tick spawned a `capture-pane -S -1500` (an ssh exec for a remote node) and rewrote up to
+  256 KB for EVERY busy session, all in the same instant, every 15 s. Now: a dirty session is
+  captured on its first `BUSY_AFTER_TICKS` (4) consecutive dirty ticks, then every
+  `BUSY_EVERY_TICKS`-th (60 s); an off-cadence tick KEEPS the dirty bit, which is what lets
+  detach/quit still take their final capture; an idle tick resets the count. Captures run one at a
+  time on `snapshotChain`, a session whose capture is still queued is never queued twice
+  (`snapshotQueued`), and a failed capture OR a failed disk write re-marks it dirty
+  (`writeScrollbackIfChanged` reports the write; a skipped unchanged capture counts as done). Every write (periodic, detach, quit)
+  goes through `writeScrollbackIfChanged`, which skips a capture whose sha1 matches the last one
+  written; the digest is dropped with the file in `endSession`, so a recreated node always writes.
+  The cost is bounded and deliberate: a continuously busy session's post-reboot replay can be up to
+  ~60 s stale, since the snapshot only serves a machine reboot.
 - **Agent resume** — on a cold start of a node whose `agentId` is in `RESUMABLE_AGENTS`, the
   renderer re-launches the agent CLI: `resumeCommand(agentId, sessionId)` (from the session id
   persisted in `agentStatus` localStorage — `claude --resume`, `codex resume`, `gemini
@@ -1155,7 +1203,31 @@ seed** — the cases are:
   (gated on `persistKey`, on BOTH the screen and resize branches) and the renderer writes
   `CO_ATTACH_MOUSE_SEQ` into the fresh xterm (both `ModalTerminal` and `TerminalNode`). tmux is
   always `mouse on`, so this matches its invariant client state; the enable is idempotent. Was the
-  "can't scroll the kanban card-modal terminal until you press a key" bug.
+  "can't scroll the kanban card-modal terminal until you press a key" bug. **A co-attach joiner
+  ALSO misses tmux's attach-time `\e[?1049h`**, and a renderer reload is a joiner too (it re-joins
+  the SAME still-alive tmux client via `join()`, so tmux never re-attaches it). `join()` therefore
+  sets `coAttachAltScreen` for tmux-backed sessions only — gated on `tmuxBacked && !sessionHost`,
+  never plain-shell/session-host, whose normal-buffer scrollback is their only history — and the
+  renderer writes `CO_ATTACH_ALT_SCREEN_SEQ` **BEFORE** painting (entering the alternate buffer
+  clears the display, so writing it after would erase the paint; TerminalNode skips it once a
+  resync has superseded the seed, since that repaint may already be on screen). **Known
+  limitation of "never plain-shell":** a REMOTE SSH session on a host WITHOUT tmux
+  (`tmuxOrExplain`'s plain login-shell fallback) is still recorded `tmuxBacked` — core cannot tell
+  from here that the remote command degraded — so it too gets the alt switch (and `coAttachMouse`,
+  and `tmuxClient`'s resync re-apply), hiding that shell's normal-buffer scrollback; detecting the
+  degrade is a follow-up. Without it a
+  renderer reload left every terminal on the normal buffer, piling up to 10k lines of scrollback
+  and forcing a layout per output frame — measured 16.1% vs 7.3% CPU for one terminal at
+  20 lines/s, 313 vs 1 forced layouts per 20 s. **A resync repaint loses the same two modes**:
+  `repaintResync`'s `term.reset()` drops ANY terminal — the solo spawn too, not only a joiner —
+  back to the normal buffer and clears mouse tracking, and resyncs happen under backpressure, i.e.
+  on exactly the streaming terminals the alt switch exists for. So every create now reports
+  `PtyCreateResult.tmuxClient` (same `tmuxBacked && !sessionHost` gate, set on spawn AND join), and
+  `repaintResync` writes `CO_ATTACH_ALT_SCREEN_SEQ + CO_ATTACH_MOUSE_SEQ` between the reset and the
+  paint when it is set. Optional on purpose: an older core or relay peer omits it and gets the old
+  behavior (nothing re-applied), never a guess. The recycle banner ("session restarted by another
+  user") is written AFTER the joiner's seed paint for the same reason — written before the alt
+  switch, it sat in a buffer nobody could see.
 
 xterm's own `scrollback` (`xtermScrollback(settings.tmuxScrollback)`, floored at 1000, capped at
 `XTERM_SCROLLBACK_MAX` = 10000) is kept for the sessions tmux does *not* back (a plain shell when
@@ -1229,7 +1301,21 @@ session.
   click-to-rename title, ✦ AI-name, ×. Body has a **hover guard** overlay: dwell
   `settings.panHoverDelay` (default 600 ms) before the terminal takes focus — before that,
   drag = move node, scroll = pan canvas. **Cmd/Ctrl+M** (while hovered) toggles a markdown
-  render of the captured output. Tag chips via `NodeTags`.
+  render of the captured output — `nodes/TerminalMarkdownView.tsx`, which takes a node id + a
+  `capture` function (no React Flow context, so the kanban card modal can reuse it) and owns the
+  lifecycle: capture on mount + a ↻ refresh, a request token that drops stale/late answers, an
+  explicit empty state ('' is an answer; a rejected capture is a failure, not empty), only the
+  LAST `MD_OUTPUT_MAX_LINES` (5000) lines rendered and announced when cut, scrolled to the latest
+  output. Entering the view (output or ChatPanel) blurs the xterm; leaving it restores focus
+  only if the terminal had it on entry AND focus is now nowhere or still inside this node
+  (`terminal/useMdModeFocus.ts`). While the view is open, every "take the keyboard" path (hover
+  dwell, click, sidebar/notification jump) goes through `focusXtermUnlessCovered` and leaves the
+  hidden xterm unfocused — the overlay sits inside the node body, so a dwell over it used to route
+  keystrokes into a pane nobody could see. The body's file DROP / file PASTE handlers (which focus
+  the xterm and paste paths into it) are the other way in, and they stand aside while covered
+  (`terminalOwnsFileInput`): a screenshot pasted into the ChatPanel composer used to be caught in
+  the capture phase and typed as a path into the hidden pane. Both are source-pinned in
+  `useMdModeFocus.test.tsx`. Tag chips via `NodeTags`.
   **Selection + copy is tmux's** (its mouse is on — see the tmux section): drag to select, wheel to
   scroll tmux's history. A drag copies via copy-mode, and tmux emits **OSC 52** to the client, whose
   handler writes the **system clipboard** — the one copy path on every platform *and* over SSH (no
@@ -1291,6 +1377,25 @@ session.
   have no remote fs API with which to verify a token; relay tabs do have a core-bound, jailed fs
   API and therefore support file links. Windows existence matching is case-insensitive and accepts
   both separators; UNC tokens are refused whole before they can be reinterpreted as cwd-relative.
+  **Right-click on a link** opens a link menu (pure `terminal/link-menu.ts`; the listener is
+  `installLinkContextMenu`, beside the Cmd+click fallback and sharing its `linkAtCell` hit-test):
+  Open / Reveal in Explorer / Download / Copy path for a file, Open in browser / canvas browser /
+  Copy link for a URL. The gates are the Explorer's, reused not restated — Download only where
+  `downloadRoute` ≠ `none` (SSH project → scp to this machine, Server Edition → HTTP), never on a
+  desktop LOCAL project; the OS reveal only under `canUseLocalShell`. **The decision is made on the
+  right PRESS, not on `contextmenu`:** tmux 3.x binds `MouseDown3Pane` to its own `display-menu`, so
+  the press is what must be swallowed; a right-click OFF a link stays byte-identical (tmux menu,
+  agent TUI, node menu). A path-shaped token that turns out not to exist still gets a menu ("Not
+  found" + Copy path) — its press was already swallowed, and a silent swallow reads as broken.
+  Downloads report in a `DownloadStrip` floated over the terminal, not in a drawer that may be
+  shut. The kanban card modal gets URL rows only (no file links there) and no "Open in canvas
+  browser" (the node would land under the board).
+  **Home-relative `~/x` tokens** (Claude Code prints its plan file as `~/.claude/plans/<name>.md`)
+  stay `~`-rooted all the way to the fs call and are expanded by the core that OWNS the filesystem
+  — `expandHomePath` in `core/fs-handlers.ts` for desktop/Server Edition, the remote shell for
+  `sshFs` — because the renderer does not know that home. A `~` after a path character (`a~/x`)
+  or `~user/x` is not a home path and yields no link. The relay's jailed `fs.*` calls fs-ops
+  directly and does not expand, so a relay tab's `~` token fails closed (no link).
 - **Agent** (`createAgentNode(agentId, …)`) — a terminal preset that runs an agent CLI as its
   `initialCommand` (runs once on open via `transport.write`, then cleared), with `data.agentId`
   set. Builtins (`claude`/`codex`/`gemini`) come from `AGENT_CONFIG` (clay color etc.).
@@ -1506,7 +1611,35 @@ session.
 
 Monaco is wired in `renderer/editor/monaco-setup.ts` (language workers bundled via Vite
 `?worker` — no CDN; CSP `worker-src` allows them). Markdown rendering is shared in
-`renderer/lib/markdown.ts` (`marked` + DOMPurify sanitize).
+`renderer/lib/markdown.ts` (`marked` + DOMPurify sanitize). Terminal OUTPUT (the ⌘M output view)
+goes through `renderer/lib/terminalOutputMarkdown.ts` instead: a private `Marked` instance with
+`breaks` on (output is line-oriented — without it `ls -l` joined into one paragraph) that renders
+raw-HTML tokens as escaped TEXT (a program's `<stdin>` is not markup; parsed as HTML, DOMPurify
+stripped it) and trims capture-pane's trailing padding. The escape is on the `html` token, never a
+global pre-escape of `<`, which would double-escape code spans/fences.
+
+**A link in rendered markdown must never navigate the app window.** DOMPurify keeps an anchor's
+href as written, and agents write relative links constantly (`[pty-manager.ts](src/core/pty-manager.ts:4100)`).
+A click resolved it against the app document: on the desktop another `file://` path, which the old
+`will-navigate` guard ALLOWED ("any `file://` is ours"), so the main window navigated to a file that
+does not exist and the whole canvas was gone until a reload; in the Server Edition any `<a href>`
+click, relative or http(s), navigated the app's own tab away. Two layers now:
+- **Renderer, every surface** — ONE delegated, document-level click listener installed at boot
+  (`renderer/lib/markdownLinks.ts`, from `boot.tsx`), scoped by `RENDERED_MARKDOWN_CONTAINERS`
+  (`.term-md__content` — terminal ⌘M view + editor Preview, `.term-chat__text` — ChatPanel,
+  `.sticky-node__md` — sticky notes on canvas AND in the kanban card modal). http/https/mailto →
+  `shell.openExternal` (system browser / a new browser tab); `#fragment` and empty href → swallowed;
+  anything else → swallowed + an error toast (`nodeterm:toast` — the only kind Canvas renders).
+  Local links deliberately do NOT open a file: resolving one needs the owning node's cwd AND its
+  filesystem dialect (session source, core platform, SSH/relay — TerminalNode's `pathConvention`),
+  which a document-level handler cannot see; a wrong guess opens the wrong file on the wrong machine.
+  **A new markdown surface must render inside a listed container** — `markdownLinks.test.ts` fails
+  on a component that pipes `renderMarkdown` into `dangerouslySetInnerHTML` outside the list, and on
+  a listed class nothing renders any more.
+- **Main, desktop backstop** — `decideMainFrameNavigation` (`main/navigation-guard.ts`) allows a
+  main-frame navigation ONLY to the entry document itself (scheme + host + decoded pathname; hash
+  and query ignored, so reload and dev HMR work); a safe external scheme goes to the OS; everything
+  else — any other `file://` path, any other dev-server path — is blocked.
 
 ### Webview keep-alive across project switches (browser/web nodes)
 
@@ -1557,6 +1690,12 @@ the wire never see any of it):
   are untouched. The real MiniMap regression tests cover ghost/live transitions, empty bounds,
   removals, grouped geometry and camera interaction. When upgrading React Flow, keep those
   tests: the projection deliberately mirrors the state fields consumed by MiniMap.
+  **A pan/zoom frame takes a transform-only fast path**: when `transform` changed and the node
+  collections did not, only the camera fields are copied and a full re-projection follows
+  `MINIMAP_FULL_SYNC_DEBOUNCE_MS` after the move settles (rebuilding them per frame re-rendered
+  every rectangle; measured 402 forced layouts per 20 s pan vs 1 with the map hidden). Identity
+  checks alone cannot replace the full path: xyflow's `updateNodeInternals` mutates `nodeLookup`
+  IN PLACE and then calls `set({})`, so any update that leaves `transform` alone syncs fully.
 - **Memory bounds** (same posture as park/WebGL: a lever must not end live work): a ghost is
   hidden, so the existing Browser Memory Saver discards its guest after `BROWSER_DISCARD_MS`
   unless loading/audible/agent-driven — `onGuestDiscarded` then drops the entry (a husk would hold
@@ -1568,7 +1707,7 @@ the wire never see any of it):
   both directions. Server Edition: inert (no `<webview>` in a plain browser — ghosts are empty
   husks, nothing to preserve). Mobile: N/A (no canvas).
 
-## Agent support (Claude / Codex / Gemini / Copilot / opencode / Grok / custom)
+## Agent support (Claude / Codex / Antigravity / Gemini / Copilot / opencode / Grok / custom)
 
 **Message scope publication:** desktop `send`/`reply`/`notify` wait for pending active-canvas edits
 to be saved when either endpoint is on that canvas (`renderer/lib/messageScopeSync.ts`). `list`
@@ -1599,8 +1738,10 @@ else, and its context links must keep classifying across restarts).
   `PERMISSION_MODE_CAPABLE`, `MODEL_SWITCH_CAPABLE`, with helpers (`hasHooks`,
   `canBranch`, `canContextLink`, `canChat`, `canRename`, `canReadTitle`, `hasPermissionMode`, …).
   Branch stays **Claude-only** purely by being in only `BRANCH_CAPABLE`. The ⌘M **ChatPanel**
-  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok** since 2026-09: grok's
-  `chat_history.jsonl` gets its own reader, and `chat:read-transcript` routes by agent. That list had
+  transcript view (`CHAT_CAPABLE` / `canChat`) is **claude + grok + gemini + codex + copilot +
+  opencode** since 2026-09: grok's `chat_history.jsonl`, gemini's session file, codex's rollout,
+  copilot's `events.jsonl` and opencode's `opencode export` document each get their own reader, and
+  `chat:read-transcript` routes by agent. That list had
   to be SPLIT to do it — `CHAT_CAPABLE` carried two facts that coincided while claude was its only
   member ("we can render this" and "claude's resolver can locate and parse this file"), and the
   second now lives in `CLAUDE_TRANSCRIPT_READABLE` (claude only). Merging them back is a
@@ -1619,7 +1760,7 @@ else, and its context links must keep classifying across restarts).
   on these helpers — no hardcoded `=== 'claude'`. **Custom agents** (user-defined in Settings,
   `customAgents`) inherit the declared `baseAgent` harness through `capabilityAgentId`; a custom
   agent with no base remains spawn + terminal-title + process status only. Per-agent write-ups:
-  **`docs/grok-agent.md`**, **`docs/gemini-agent.md`**, **`docs/copilot-agent.md`** (there is none for codex — its approval mapping
+  **`docs/grok-agent.md`**, **`docs/gemini-agent.md`**, **`docs/copilot-agent.md`**, **`docs/antigravity-agent.md`** (there is none for codex — its approval mapping
   and every value's reasoning live in `src/shared/agents/approval-mode.ts`);
   the distilled rules are **Adding a new agent** at the end of this section.
 - **Model gateway / switcher** — `settings.modelGateway` stores one gateway root + a NON-SECRET
@@ -1676,6 +1817,161 @@ else, and its context links must keep classifying across restarts).
   harmful. The `auto` permission-mode **version gate is claude's alone** (it is fed by a `claude
   --version` probe), and grok's mode flag must go **BEFORE** its `--` separator, which is
   end-of-options. Full picture, dialect traps and the device checklist: **`docs/grok-agent.md`**.
+- **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads
+  `chat_history.jsonl` into claude's `ChatMessage`/`ChatPart` shapes (no new wire field): typed
+  prompts, assistant text, tool calls (`arg` = the salient argument — `command`, `target_file`, …, in
+  claude's `toolArg` order — else the raw JSON, 200 units) with results summarised like claude's,
+  `web_search` backend calls, harness-injected `synthetic_reason` lines as assistant-side `[reason]`
+  notes, and `model_id`/`reasoning_effort` of the NEWEST assistant record (never carried forward).
+  `reasoning` is hidden. It does NOT page: measured on 1.0.13, the file is rewritten via
+  `.sync.tmp` + rename and `/compact`/`/rewind`/history repair replace lines, so it is one capped
+  whole-file read with no keys and no `at`. Routing is by `capabilityAgentId`, so a custom agent built
+  on grok reaches grok's reader, never claude's cwd fallback. **A remote (SSH) grok node is read on its
+  host** (`core/remote-grok-chat.ts`, one `sh -c` round trip: `$GROK_HOME` if absolute else
+  `$HOME/.grok`, the session found by id across `sessions/*/<id>/`, two matches refused, the
+  paged-transcript window at 5 MiB) — its failures are terminal, never this machine's disk (the
+  hook-derived local map names a wrong-machine path for these nodes). The phone gets it for free:
+  `chat.page` reads through the same deps. Golden fixtures + exact rules for the Swift port:
+  `src/shared/chat-fixtures/grok/`. Not supported: the composer's model/effort labels (grok's `/model`
+  and `/effort` pickers are unmeasured — the TUI needed a login here), plan/question answer cards
+  (claude-only), pre-compaction history, and a local session whose map entry `SessionEnd` retired.
+- **Copilot ⌘M chat view** (`core/copilot-chat.ts`, 2026-09; copilot 1.0.88 measured in BYOK mode
+  against a local fake model, plus the CLI's own `schemas/session-events.schema.json`). Reads
+  `<COPILOT_HOME>/session-state/<id>/events.jsonl` (then the snap package's
+  `~/snap/copilot-cli/common/.copilot`), located STRICTLY by the node's session id and routed by
+  `capabilityAgentId` before anything claude-shaped, so a missing journal is "not found", never
+  claude's cwd-newest or another session. The journal is append-only JSONL (compaction appends), so it
+  PAGES like claude's — `parseChatWindow`/`parseGrowingWindow` take copilot's record parser — and the
+  phone gets the same pages over the relay (`page()` gates only on `canChat`). Shown: typed prompts
+  (`content`, never `transformedContent`; the sources copilot's own timeline hides stay hidden),
+  assistant text, tool calls with results (`Error: …` on failure), a user's `!` shell command as the
+  `!` part, `Error:`/`Warning:`/`Info:` notices, and `model`. Never shown: the system prompt,
+  reasoning, sub-agent events (envelope `agentId` / `data.agentId` / `data.parentToolCallId`). Not
+  supported: remote (SSH) nodes (`unreadable`, "not supported yet" — never this machine's disk),
+  `effort` (not recorded), plan/question answer cards (claude-only), composer model labels (claude's
+  picker commands only). Golden fixtures: `src/shared/chat-fixtures/copilot/` (README "Copilot").
+- **Antigravity** (`agy` 1.2.3 measured on Windows; the 1.2.12 Linux binary read; builtin since
+  2026-09 — Google's replacement for Gemini CLI on personal accounts) — in `AGENT_HOOK_TARGETS`
+  (badge, NEEDS YOU from `ask_question`, a closed set of one, `--after` and triggers) and
+  `RESUMABLE_AGENTS` (`agy --conversation=<id>`, the spelling agy's own exit hint uses; a dead id
+  is ignored by agy, which starts fresh — without it a reboot left a bare shell). Launch is
+  `agy --prompt-interactive '<p>'` via the new optional `AgentConfig.promptFlag` (agy has no
+  positional prompt). Its hooks live in the GLOBAL `~/.gemini/config/hooks.json` under our own
+  `nodeterm-status` bundle, and **each one is a synchronous gate whose stdout agy reads as a
+  decision** — we subscribe `PreToolUse`, so a wrong byte denies tools in every `agy` on the
+  machine, inside nodeterm and outside it. Three rules for whoever touches it:
+  - **The stdout table is written ONCE** (`core/agents/hooks/antigravity-decision.ts`): `PreToolUse`
+    → `{"decision":"ask"}`, `Stop` → `{"decision":""}`, the rest → `{}`, an unknown/empty event →
+    NOTHING. Measured on 1.2.3: silence runs the tool, while `{}`, `{"decision":""}`, any non-JSON
+    byte and exit ≠ 0 DENY it. Never `allow`, never `force_ask`, never `"continue"` on `Stop`. The
+    script answers first and then sends stdout/stderr to `/dev/null`, because hook stdout is also
+    model input (`injectSteps`).
+  - **No quotes in the Windows command.** agy passes it to `cmd /c` with inner `"` escaped as `\"`,
+    which cmd.exe does not understand — the codex form (`cmd.exe /d /c call "…"`) exits 1 = DENY.
+    The command is relative to the hooks.json directory (agy's hook cwd) and guarded:
+    `if exist ..\..\.nodeterm\agent-hooks\antigravity-hook.cmd (call … <Event>) & exit 0`. Test
+    Windows dispatch WITHOUT `windowsVerbatimArguments` — Node's default escaping is agy's.
+  - **AutoRun blocks the install.** agy's `cmd /c` has no `/d`, so a registry `AutoRun` runs first
+    and its output would deny tools; the installer reads the three `Command Processor\AutoRun`
+    values (`reg query`, absence decided by listing the parent key — reg's errors are localized)
+    and installs NOTHING — and withdraws a bundle an earlier launch wrote — if one is set or the
+    registry cannot be read.
+  **The vendor-location fallback also owns launch reachability.** Measured on Windows 11 with agy
+  1.2.7: the vendor installer wrote `%LOCALAPPDATA%\agy\bin` into the user PATH as `REG_SZ`, so the
+  process inherited the percent expression literally and both `where agy` and `cmd /c agy` failed
+  while `%LOCALAPPDATA%\agy\bin\agy.exe` existed and ran. `PtyManager` therefore APPENDS the
+  directory returned by `findAgy()` to the PATH of a LOCAL Antigravity session, and only when no
+  entry already names it (`pathWithAgyDir`) — prepending shadowed the user's own tools on
+  macOS/Linux, where agy sits in a shared directory. The gate uses
+  `capabilityAgentId`, so an Antigravity-based custom agent inherits it; plain terminals and SSH
+  sessions do not. Detecting the binary only for hook installation recreates the original split:
+  a configured badge for an agent the pane cannot launch.
+  **Installed only where `agy` exists** (a file lookup — PATH, then the vendor's install dirs —
+  never a spawn), in two passes per launch: the boot pass may only see the inherited PATH, so a miss
+  there does NOTHING; after the login-shell PATH probe settles, a final pass repeats the lookup and
+  only then withdraws a bundle of ours when agy is not found. An `agy` installed later gets the
+  hook the next time nodeterm opens. **The opt-out is agy's own switch**: `"enabled": false` on our
+  bundle is carried across every rewrite. hooks.json goes through the shared settings transaction
+  (`updateSettingsFile`: a symlinked file keeps its link and mode, writers serialize, a file changed
+  mid-update is not overwritten), and only entries under `.nodeterm/agent-hooks/` are swept as
+  ours. The POSIX command forces exit 0 (`sh <script> || :`) — the answer is printed first, and a
+  later failure (a broken endpoint file) must not turn into a non-zero status next to it. **No SSH
+  hook installer yet** (`LOCAL_ONLY_HOOK_AGENTS` / `hasHooksOverSsh`): on an SSH project an agy node
+  never reports, so `--after` refuses it as a dependency. The event name is not in agy's payloads:
+  the command exports `NODETERM_AGY_EVENT`, the script POSTs `nodeterm_hook_event`, and the hook
+  server merges it after `JSON.parse` — for antigravity ONLY, an empty field deleting a planted
+  value. `newTurn` rides only the
+  `PreInvocation` with `invocationNum === 0` (without it `lastTurnError` is never retired). Cost:
+  on POSIX the POST already runs in the background and the part agy waits for measured 2–40 ms
+  (pinned by a stalled-endpoint test, since a foreground POST plus the failover walk measured ~6 s
+  against the 5 s handler timeout); the ~520 ms per event measured on Windows is Git Bash's fork
+  cost before the backgrounding. Full picture,
+  limits (permission prompt and ESC fire no hook) and the device checklist:
+  **`docs/antigravity-agent.md`**.
+  **No conversation view, and that is deliberate** (not in `CHAT_CAPABLE`): ⌘M shows the rendered
+  terminal output, and the phone's Chat screen answers `unsupported`. The
+  LOCATION is measured: every hook payload names `transcriptPath`, which is
+  `~/.gemini/antigravity-cli/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`,
+  keyed by the id `normalizeAntigravity` already records as `sessionId`. The RECORD SHAPES were never
+  captured; the 1.2.12 binary only describes them in prose. Four facts a parser needs are unknown:
+  the `tool_calls` element keys, how a tool result links back to its call, the serialized enum
+  spelling, and whether a line is rewritten when its step's status changes, which decides between
+  claude's paged read and grok's single capped read. A parser built from that prose would be a rule-14
+  wrong guess, so none ships, not even unwired. The capture recipe is §7.1 and §8.1 of the doc, using
+  `scripts/agy-transcript-shape.mjs`, which dumps shapes and never text. When it lands: locate
+  strictly by id (`brain/` holds every conversation on the machine), and have a remote node answer
+  `remoteOnly` → unreadable like gemini.
+- **Codex in the ⌘M chat view** (2026-09-28; the desktop panel, the kanban card modal, the phone's
+  `chat.page`). `core/codex-chat.ts` reads the rollout with codex's own rules, never claude's
+  resolver. It takes USER text from the UI stream only: `event_msg/user_message` (legacy, ≤ 0.146) or
+  an `item_completed` `UserMessage` (paginated, ≥ 0.151). Model-side `role:user` messages also carry
+  injected context (AGENTS.md, `<environment_context>`, image wrappers), so they are never read.
+  Assistant text and tools come from `response_item`, correlated by `call_id`. The UI copies
+  (`agent_message`, `AgentMessage`) and reasoning are skipped. Failed and interrupted turns become
+  `[error] …` / `[turn aborted…]` notes. A tool result drops codex's `… Output:` preamble. The rollout
+  is append-only, so it pages by byte offset like claude. The locator matches a WHOLE-uuid thread id
+  (`CODEX_THREAD_ID_RE`), because a uuid's last group passes `SESSION_ID_RE` and suffix-matches
+  another thread's file. It searches only the node's own account home, and uses the codex tail's hook
+  path only as a checked hint. An SSH node is read on its host (`main/remote-codex-chat-page.ts`,
+  through the same resolvers as its remote meter) or not at all. Because codex announces no session
+  end, a chat send first asks the kernel (`renderer/lib/chatPaneGate.ts`, `isAgentPane`). After a
+  `/quit` the store still reads `done`, and the message would otherwise run in the shell. **Not
+  supported:** images in prompts, reasoning summaries, the composer's model/effort labels (the
+  `/model` picker is measured for claude only), plan/question answer cards (codex never sets
+  `held`), and a closed REMOTE session's transcript. Record rules and fixtures:
+  `src/shared/chat-fixtures/codex/`.
+- **opencode in the ⌘M chat view** (2026-09-28, opencode 1.18.25 measured) — opencode has NO
+  transcript file (SQLite since 1.18; that database also holds its account tokens and is never
+  opened), so `readChatTranscript` routes `capabilityAgentId(agentId) === 'opencode'` to
+  `core/opencode-chat.ts`, which runs `opencode export <sessionId>` (argv only, no flag an older
+  yargs-strict CLI might refuse) and parses the one JSON document into claude's `ChatMessage` shape:
+  user/assistant text, tool chips (arg by an opencode key order, result = 3 lines / 500 units,
+  `Error: …` on a failed call), `[name] message` for an errored turn, compaction/subtask chips,
+  `at` from `time.created`, `model`/`effort` from the newest assistant's `modelID`/`variant`.
+  Reasoning, `synthetic`/`ignored` text, file/agent parts and step bookkeeping are dropped;
+  unmappable shapes are skipped and counted. **One page, always** (`olderCursor: null`): there are
+  no byte offsets to page by. The page honours the caller's `maxBytes` (the phone asks 256 KB),
+  grows ×4 up to 5 MB like claude's reader when it holds no whole message, and shows a newest
+  message larger than 5 MB TRUNCATED (with a note) rather than as an empty conversation. Refusals: no/unsafe session id runs
+  nothing (a bare `opencode export` opens a picker over the NEWEST sessions — someone else's); an
+  export whose `info.id` is another session is `unreadable`; only `Session not found: <id>` with
+  exit 1 and empty stdout is a clean miss. **Remote (SSH) nodes are refused** (`unreadable`, no
+  export runs) — their sessions are in the host's database and there is no remote leg yet; the
+  panel's copy names both causes an opencode `unreadable` can have. One export costs 1.0–1.7 s and
+  ~320 MB, so `createOpencodeExportGate` runs at most one per session (a caller arriving mid-run
+  gets a FRESH export) and two in total; the panel's hook-driven refreshes are marked
+  `page.background` and spaced ≥ 5 s per session, while an open / ↻ / Retry is immediate (and wakes
+  a sleeping background one). A **change gate** in front of it `stat`s (never opens) opencode's
+  `opencode*.db` + `-wal` in `$XDG_DATA_HOME/opencode` (else `~/.local/share/opencode`, opencode's
+  own xdg-basedir rule) BEFORE exporting, and an unchanged fingerprint answers from a 4-session LRU
+  of parsed exports; no db file found, or `OPENCODE_DB` set, means no caching. The export runs with
+  `cwd: os.tmpdir()` (from a repo cwd opencode writes `<repo>/.git/opencode`; sessions resolve by
+  global id). **It inherits the APP's `process.env`, not the node's shell env**: a user who
+  relocates opencode's data via `XDG_DATA_HOME` / `OPENCODE_*` only in their shell rc gets
+  "Session not found" — an honest miss, not a bug in the reader. Plan/question answer
+  cards stay claude-only (no `body`/`questions` on opencode's `question` tool). Desktop and Server
+  Edition both serve it (core handler); the phone gets it over the relay `chat.page` for free.
+  Fixtures + the exact rules for the iOS port: `src/shared/chat-fixtures/opencode/README.md`.
 - **Gemini + codex parity** (2026-08-09) — brought both up to grok's level in the lists above. Unlike
   grok, **both CLIs are installed** and gemini **ships its own hook reference**
   (`/usr/lib/node_modules/@google/gemini-cli/bundle/docs/hooks/reference.md`), so almost every fact is
@@ -1721,6 +2017,29 @@ else, and its context links must keep classifying across restarts).
     because `/quit --delete` exits *and permanently deletes* the session history, i.e. exactly what the
     restart exists to resume (pinned by its own test).
   Full picture, measurements, gaps and a device checklist: **`docs/gemini-agent.md`**.
+- **Gemini CLI refuses personal Google accounts since 2026-06-18** (free / AI Pro / AI Ultra moved to
+  Antigravity CLI — the `antigravity` agent above; Code Assist Standard/Enterprise, Vertex AI and paid
+  API keys still work, so `gemini` stays a builtin). The refusal happens before any session, so no
+  hook reports it: a gemini-harness node reads its own pane for the CLI's sentence
+  (`renderer/terminal/gemini-retired.ts`, letters-and-digits match because the TUI wraps it in a
+  box) and raises a slim banner — "Open Antigravity" (`nodeterm:open-agent`, an agy node beside it,
+  in its frame) + Google's migration guide. It types and relaunches NOTHING, which is why a phrase
+  match is enough here where `resume-fallback.ts` needs three refusals. `AgentConfig.notice` carries
+  the one-line caveat to the menus/Dock tooltips; it is never read to decide behaviour.
+- **Gemini ⌘M chat view** (2026-09, `core/gemini-chat.ts`) — gemini is in `CHAT_CAPABLE` with its own
+  reader, routed in `readChatTranscript` via `capabilityAgentId` BEFORE anything claude-shaped and
+  located only by the header session id (`locateGemini`, which now reads just the header and honours
+  `GEMINI_CLI_HOME`). Its session file is an UPSERT log, not a message list: one id is rewritten in
+  full as tool results/tokens land, `$rewindTo` truncates, and `$set.messages` replaces the MODEL's
+  context at start, compression and rollback. The thread is the message records upserted by id with
+  rewinds honoured and **`$set.messages` ignored** — honouring it erases the thread at every
+  compression and shows the `<state_snapshot>` as the human's words. Not paged (a record depends on
+  earlier ones): one read under the 5 MB cap, `olderCursor: null`, like grok. Shows typed prompts
+  (`displayContent` over `@file` expansion; `<session_context>`/`<hook_context>` dropped per part),
+  replies, tool calls with results, `[info]`/`[warning]`/`[error]` notes and (paged) the model;
+  thinking is dropped. NOT supported: remote (SSH) nodes (`CHAT_LOCAL_ONLY` → "not supported yet"),
+  plan/question answer cards, the composer's model/effort labels. The phone gets it over the relay
+  unchanged; fixtures and exact rules: `src/shared/chat-fixtures/gemini/`, `docs/gemini-agent.md` §3.
 - **Claude session context capacity (#818)** — the managed hook reports only
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS` from the effective Claude process environment (including
   `--settings` env), never the GUI/server process environment. HookServer validates decimal safe
@@ -1744,7 +2063,20 @@ else, and its context links must keep classifying across restarts).
   with base64, transferring less than 1.6 MiB including alignment/framing; idle replies contain
   only the size/range header. The encoded dd exit status must survive the shell pipeline:
   pipeline success alone can hide a failed read. Short/malformed replies and SSH failures throw,
-  retain the cursor, and back off from 2s to 60s with payload-free diagnostics. Bootstrap and
+  retain the cursor, and back off from 2s to 60s with payload-free diagnostics — logged when a
+  streak starts, when it settles at 60 s and when it recovers, never per retry, and naming only the
+  observed status (`exit 255`, `malformed reply`), never a guessed cause: the runner reports a
+  timeout as status 1. **A transcript that does not exist is not a failure.** Claude creates it on
+  the first prompt while SessionStart already hands over the path (measured on 2.1.283), so every
+  unused remote Claude node used to walk the failure backoff and log a line a minute. The command
+  answers `NODETERM_ABSENT` with status 0 and the tail polls it on the idle cadence; a file that
+  appears after being seen missing is live from byte 0 when its bootstrap window covers all of it.
+  A SEPARATE idle backoff (`idleDelayMs`) stretches the 1 s poll after three consecutive empty successful reads
+  (2/4/8 s, capped at 10 s) and is reset by any data-bearing read and by every same-ref `track()`
+  — i.e. every hook POST for the session, which is what keeps a `<task-notification>` (it rides
+  a UserPromptSubmit hook) at ~1 s latency; never merge it with the failure backoff. That same
+  `track()` also skips the rest of a pending failure wait (the host just reached us) but keeps the
+  failure streak, so a read that fails again goes straight back to 60 s. Bootstrap and
   detected truncation restore usage without replaying historical task notifications/tool results,
   including a historical partial line completed later. A changed remote reference replaces its
   tracking generation so stale in-flight replies cannot publish. Server Edition uses the local
@@ -1901,7 +2233,7 @@ else, and its context links must keep classifying across restarts).
   own gate adds one beside claude's.
 - **State via each agent's hooks → shared 4-state model** — detection uses the agent's own
   hooks, **not** output parsing. `src/shared/agents/normalize.ts` has per-agent normalizers
-  (`normalizeClaude`/`normalizeCodex`/`normalizeGemini`/`normalizeCopilot`/`normalizeOpencode`/`normalizeGrok`) that map each agent's native hook
+  (`normalizeClaude`/`normalizeCodex`/`normalizeGemini`/`normalizeCopilot`/`normalizeOpencode`/`normalizeGrok`/`normalizeAntigravity`) that map each agent's native hook
   events to a `NormalizedAgentEvent` over the shared `AgentState` (`working | waiting | blocked
   | done`) plus subagent/recurring/session kinds. Canvas's listener consumes
   `NormalizedAgentEvent` from `agent:status`, drives the `agentStatus` store, fires throttled
@@ -1955,7 +2287,16 @@ else, and its context links must keep classifying across restarts).
   `settings` block (`claudePermissionMode`/`autoSupported`/`claudeAccounts`) so the phone can
   launch agents with the desktop's permission mode + managed accounts, and SSH slices get their
   **per-host** settings (remote CLI caps + host-matched accounts) injected via
-  `remote-status-push`'s `settingsFor` dep.
+  `remote-status-push`'s `settingsFor` dep. `settings.customAgents` (`[{id, label, baseAgent?,
+  binaries}]`) lets the phone chat with a custom agent: built ONLY by `core/mirror-custom-agents.ts`
+  (one definition for all three providers — local file, which relay `projects.list` also serves,
+  SSH slices, Server Edition), `binaries` = `binariesFor` from the pane-owner predicate, published
+  only when every name fits the plain alphabet `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` (else `[]`) —
+  the builder enforces it because the tokenizer can "name" a slice of a secret (`oauth2:ghp_…` out
+  of a git URL, a quoted env value, a `${env:…}` template). **Never put a custom agent's raw
+  `launchCmd`/`args`/`env` in the mirror** — they carry API keys and the file lands on every SSH
+  host. `binariesFor` resolves a BLANK launch command with a *builtin* `baseAgent` to the base's
+  binaries (what `resolveAgentConfig` actually launches).
 - **Hook installers** — `src/core/agents/hooks/` holds per-agent hook services + an installer
   registry `MANAGED_HOOK_INSTALLERS`. `managed-script.ts` builds the POSIX hook script that
   POSTs to the server (env-gated: a no-op in the user's normal terminals, active only in
@@ -2053,6 +2394,29 @@ terminal opens keep their existing identity policy; Server Edition still require
 for every control verb. Legacy mobile/SSH callers must present this instance’s node token for
 command-bearing opens; this does not add a human-confirm dialog or change mobile transport APIs.
 
+- **Hook-reply answers: plans and questions** (`core/agents/permission-decision.ts`, full write-up in
+  **`docs/hook-reply-approvals.md`**) — the managed hook holds a Claude `PermissionRequest` and polls an
+  answer file. For `ExitPlanMode` / `AskUserQuestion` (`requiresUserInteraction`) Claude **DROPS a bare
+  allow**, so the answer must carry `updatedInput`: plan = `{}` (+ optional session `setMode
+  acceptEdits|default`, never `auto`), question = the request's own `questions` + `answers`. Rules a
+  refactor must not undo: (1) **only core builds decision JSON**, from the pending request file on the
+  agent's host (never renderer-echoed questions), validating every field; (2) the script prints only the
+  fixed words' decisions or a file that passes the strict prefix/size/one-line bound
+  (`isBoundedAnswerContent` is the TS twin — both writers refuse anything the script would ignore);
+  (3) answer content never rides an argv (the answered POST carries the decoded verb; SSH writes go on
+  stdin); (4) a plain `allow` maps to `updatedInput:{}` for a plan and is swallowed (hook keeps
+  holding) for a question — core refuses to write it and the header hides ✓ Approve for that ticket;
+  (5) these two tools hold 540 s (`PERM_WAIT_SECS_INTERACTIVE`) under the explicit `timeout: 600` we
+  write on the PermissionRequest handler — except a subagent's request (payload carries `agent_id`),
+  whose dialog awaits the hook; (6) structured answers are gated on the SCRIPT REVISION: an old script on
+  an SSH host (rewritten only at connect) silently ignores JSON while the write succeeds, so the hook
+  server keeps `held` only for `clientRevision >= MIN_STRUCTURED_ANSWER_REVISION` and core refuses a
+  structured answer (or a plain plan allow) for a ticket it did not record as capable — never a false
+  "answered". The renderer gets `held: {pendingId, toolName, questions?}` on the event/store (kept while blocked
+  OR waiting), separate from the approve/deny `pendingId` the mirror strips from a question;
+  `questions` (a held AskUserQuestion's exact question texts, from the one `readQuestions`) is what
+  the ⌘M answer controls match their card by — absent = unreadable input = no controls. Desktop local + SSH, Server Edition local;
+  relay unchanged; phone keeps `allow`/`deny` (its plan approve now works via the script mapping).
 - **Per-node hook identity** (`src/core/agents/node-auth-*.ts`, `node-token-*.ts`,
   `node-identity-policy.ts` — full write-up in **`docs/node-identity.md`**) — the shared bearer proves
   "a session on this machine", never *which* session, so every node also gets a capability derived
@@ -2268,6 +2632,12 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     over `pty.readSessionName`. `TerminalNode` polls it (~4 s) **only once this node's own sessionId
     is known** and **while the title still auto-tracks** (`data.titleAuto`, default true on agent
     nodes), and adopts it as the `title`. `term.onTitleChange` now feeds the `session` chip only.
+    **A poll of an unchanged transcript reads no bytes**: the local read is gated on the resolved
+    path's (size, mtime) (`titleCache`, bounded at 500, a failed tail read never cached), and the
+    remote one (`main/remote-title-reader.ts`) on the remote context tail's `offsetFor` for the SAME
+    path — that offset is the file size at the tail's last read, so a remote `/rename` lands within
+    the tail's idle backoff (real gaps between idle reads ≈3/5/9/11 s) PLUS one title poll
+    (4–15 s); an untracked session (offset unknown) always reads.
   - **title → session (write):** the moment the user renames the node by hand (header rename box /
     ✦ AI-name / sidebar / command palette → all funnel through `applyManualTitle` or
     `renameSession`), `titleAuto` flips to **false** (polling stops overwriting) and the chosen name
@@ -2294,7 +2664,18 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   would otherwise replay it forever) — a HOOK-fed ref is never dropped that way, since an empty
   read there is usually a transient master hiccup and forgetting it sends the next read local.
   It is generated shell, so `remote-transcript-locate.test.ts` runs it for real under `/bin/sh`
-  against a fake host tree — keep it that way. (2) **The cwd fallback keeps `accountId`** in BOTH
+  against a fake host tree — keep it that way.
+  **A remote node never falls through to this machine** (2026-09-28): the handler decides
+  remoteness from the SHELL's records (`isRemoteNode` dep — live remote pty or
+  `workspaceStore.sshProjectIdForNode`, never a renderer flag) and applies `remoteOnly` to the
+  paged ⌘M read, the legacy read, the find-bar index (`[]`) and `transcriptExists` (`unknown`).
+  The host locate is tri-state (`locateRemoteTranscriptRef`): a CLEAN MISS is `found:false`, a
+  failure to ask is `unreadable` ("Couldn't read the transcript.") — the phone's `chat.page` shares
+  the same deps and the same distinction. Before this, a mounted SSH node whose locate missed (or
+  whose master was down) read THIS machine's resolver, cwd-newest fallback included. `transcriptExists` shares the same locate
+  (`remotePresenceFromLocate`: ref/absent/unreadable → present/absent/unknown, a malformed id
+  `unknown`), so it also works for a node with no live pty. A remote grok node is read on its host
+  by its own leg (`readRemoteGrok`, see the grok chat bullet), with the same absent/unreadable split. (2) **The cwd fallback keeps `accountId`** in BOTH
   `resolveTranscript` and `contextEnsure`; without it a managed-account node fell back to the
   system root and could adopt an unrelated session's newest transcript. (3) **Relay tabs** stay
   local-only (a transcript read over the relay would read the GUEST's disk) and reject with
@@ -2310,6 +2691,179 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   its `contextTail`, the hook-fed path authority). The browser's real reader is
   `buildTranscriptApi` in ws-bridge — deliberately NOT folded into `buildClaudeApi`, which the
   relay shares and must not adopt it.
+  **Paged reads (2026-09).** `chat.readTranscript` takes a trailing optional `page`
+  (`{before?, maxBytes?}`, `shared/chat-page.ts`). Absent = the legacy 5 MB-tail read, byte for byte
+  (result is exactly `{messages, found}`). Present = ONE window of at most `maxBytes` (clamped
+  64 KB…5 MB — it is untrusted IPC/WS input; an invalid `before` REJECTS rather than being coerced
+  to "end of file") ending at byte `before`, and the result adds `olderCursor` (where the window's
+  first complete line starts — the next page's `before`; `null` = reached the start), a per-message
+  `key` (the line's ABSOLUTE byte offset — stable across prepends and appends), `id` on tool parts,
+  and `unmatchedResults` (tool results whose `tool_use` sits in an OLDER window: the newer page is
+  read first, so the renderer holds them until that page arrives). Parsing is the pure
+  `parseChatWindow` over BYTES (a multi-byte char cut by the window edge only lands in the dropped
+  partial line), and every window is read with **one byte of lookbehind** — the only way to know a
+  line begins exactly on the edge; without it that line is dropped as "partial" and lost. A window
+  with **no complete line** (one record bigger than the window — in practice a `type:user` line
+  carrying a pasted screenshot or an image tool_result; 181 lines over 512 KB in 30 days on one
+  host) is flagged `noCompleteLine` and **re-read at the same `before` with ×4 the bytes, up to the 5 MB cap**
+  (`parseGrowingWindow` in `core/transcript-ipc.ts` — local AND SSH leg; a failed re-read is
+  not-found, never the skip). Only a line **longer than 5 MB** is skipped (`olderCursor = window
+  start`, never the window end, which would re-request the identical window forever) — before this,
+  every line bigger than the page vanished, a regression against the legacy 5 MB read. The **SSH leg** is a ranged read
+  (`transcriptPageCommand`, `core/remote-ssh/transcript-window.ts` — size + window in ONE round
+  trip, dd status inside the base64 like the context-tail's window command) instead of pulling the
+  5 MB tail on every open and every turn-end reload; its `{ok:false}` is terminal (never the local
+  disk), and it is tested under a real `/bin/sh` (`transcript-page.realsh.test.ts`). **Grok does not
+  page** (its file is rewritten in place, so offsets are no identity): a paged request gets its whole
+  capped read with `olderCursor: null`, no keys, and the newest record's `model`/`effort`.
+  Server Edition passes `page` through ws-bridge to the same core handler; relay still refuses.
+  **ChatPanel consumes it progressively** (pure state in `renderer/lib/chatPaging.ts`): the first
+  read is a 256 KB tail (`CHAT_TAIL_PAGE_BYTES`, with a "Loading conversation…" row), older 512 KB
+  pages load when the user scrolls within 200 px of the top (or by themselves while the thread is
+  shorter than the viewport — it cannot scroll), one at a time behind their own token, prepended
+  with the scroll position ANCHORED on the scrollHeight delta (the loading row's own appearance
+  included). A turn-end reload / ↻ re-reads only the tail and **merges by key**, keeping the older
+  pages already loaded — unless no rendered message reaches into the new window (the turn wrote
+  more than a whole window, so the bytes in between were never read): then it RESETS to the tail
+  rather than stitch over a hole. Carried tool results are held until their tool's page arrives and
+  dropped at the start of the file. `found:false` on an OLDER page is a failed page load (retry row,
+  thread kept), not a missing transcript; a reload that fails to resolve never blanks a rendered
+  thread — only a read with nothing on screen says "No transcript found". The remote leg's
+  forget-a-located-ref rule lives in `main/remote-transcript-page.ts` (a hook-fed ref is never
+  dropped on a failed read, and a hook event re-marks a located ref as hook-fed). Grok: one
+  unkeyed read, no older pages, no "Beginning of conversation" marker (a capped read cannot know).
+  **Loading surfaces (2026-09).** The lazy ChatPanel chunk suspends into `ChatPanelFallback` at
+  ALL THREE mount sites (canvas node, kanban card modal, closed-transcript dialog — it replaced a
+  `fallback={null}` that left the ⌘M face blank over the terminal): the panel's own shell plus
+  `ChatLoadingStatus`, which ChatPanel's initial "Loading conversation…" row renders too, so the
+  handover is identical DOM (a second row swapped rings and re-announced its `role=status`). Its
+  spinner is the app's ONE spinner, `components/Spinner` / `.nt-spinner` — frozen, not hidden,
+  under `prefers-reduced-motion`; never add a local one. A terminal node's label row ends in a
+  quiet ⌘M hint (`lib/mdViewHint.ts`, id `md-hint`, hideable in Settings → Appearance) naming the
+  EFFECTIVE chord and what it opens on that node; it sits in a zero-basis trailing slot that
+  clips, so it can never add a line to the row (a height flip would refit xterm and SIGWINCH
+  tmux). It is not on the kanban card modal: that header already carries the ⌘M toggle.
+  **The composer sends only in `done` or an unknown state** (`canSendFromChat`,
+  `renderer/lib/chatSendGate.ts`) — never in `waiting`/`blocked`, not just never in `working`:
+  PermissionRequest and AskUserQuestion both normalize to `waiting`, the pane then holds a TUI
+  select dialog this view does not show, and `sendText`'s Enter would ANSWER it ("Yes" is the
+  default highlight). It also refuses any node whose CLI has left the pane — hibernated, paused,
+  dropped, or **exited** (`/exit`/Ctrl+D: `state: undefined` + `sessionEnded`) — because a SHELL
+  owns it and the message would run as a shell command. That test is `agentProcessInPane`
+  (`terminal/live-work.ts`), the same single rule the memory levers use — never a second copy of
+  the flag set — and it ranks above the state (`chatSendRefusal`). Everything is re-read from the
+  store at send time, not only at render. Same trap as the in-place restart's `/exit`. The bar's ↻
+  reloads on demand (beside the empty state's Retry), since a session whose hooks never report
+  `working` never takes the turn-finish reload.
+  **Live progress (2026-09).** While the agent works, a `role=status` row closes the thread (the ONE
+  spinner + the placeholder's own "<agent> is working…"/"waiting for an answer" sentence; optimistic
+  right after a send, bounded by `CHAT_OPTIMISTIC_WORKING_MS`), and every hook event re-reads the
+  tail — throttled (`CHAT_LIVE_RELOAD_MIN_MS`, trailing read guaranteed), single-flight, never for a
+  hidden panel or document (`lib/chatLive.ts`). The trigger is `agentStatus.onHookEvent`, NOT a
+  `stateAt` selector: same-state events refresh `stateAt` in place and notify no zustand subscriber.
+  A live read passes `applyTail(…, {carryUnconfirmed})`, which keeps the trailing unkeyed optimistic
+  send until the tail holds a matching user line (the send's own UserPromptSubmit read races the
+  transcript write); it never resets a failed older page or flips an empty state to "Loading…".
+  Gap: the panel reads the DEFAULT agent-status store, the only one Canvas's hook listener writes, so
+  a relay tab gets neither the row nor live reads until relay status is routed per session.
+  **Plan and question bodies (2026-09).** A tool call is normally a collapsed chip (`name` + a
+  ≤200-char `arg`), which left an `ExitPlanMode` plan — the full markdown the terminal shows as
+  "Here is Claude's plan" — and an `AskUserQuestion` question + options unreadable in ⌘M, the one
+  place meant for reading them. `core/chat-tool-body.ts` (pure) fills the tool part's optional
+  `body` for exactly those two tools (`input.plan`; the questions rendered as markdown), capped at
+  64K characters (never splitting an open code fence or a surrogate pair; model-authored labels are
+  kept to one line with emphasis escaped), degrading to no body (the old chip) on any other shape;
+  ChatPanel shows a part with a body as an expanded "Plan"/"Question" card through `MarkdownText` with its result under it, and
+  the find-bar index (`linesFrom`) indexes the body in full like assistant text.
+  **Answer controls on those cards (2026-09).** Only the card the node's `held` ticket belongs to gets
+  controls (`lib/chatAnswer.ts` `activeAnswerCard`: newest unanswered card of the held tool; a question
+  also needs identical question texts — `held.questions` and the card's `questions` come from the ONE
+  `readQuestions`), and only while the pane is in a dialog state. They send a `PermissionAnswer`
+  through `answerPermission`; a refusal is a quiet retryable error pointing at the terminal. Plan's
+  default button is `restore` — never auto. See docs/hook-reply-approvals.md.
+  **A card answers only the request the THREAD was read for** (`answerCardState`, same rule as
+  iOS #41): `threadHeldFor` = the held ticket at the START of the last applied tail read, keyed by
+  transcript identity. While held moves A → B (a revised plan) plan A's card can still be on screen
+  unanswered, and a tool-name match would approve B from it — so until a read started under B lands,
+  the latest unanswered card of that tool says "Updating… — or answer in the terminal" and nothing
+  is answerable. A held change forces a tail reload (queued behind a read in flight, which started
+  under A and cannot bind B, and behind an older-page fetch, which it never cancels). It is a QUIET
+  read (no "Loading…"), and one path owns it: on working → blocked the turn-end reload does. While a
+  request is unbound it retries with backoff (`rebindRetryDelay`: 2 s doubling to 30 s, reset per
+  request) — card on screen or not; it stops once B surfaces on a new card (a duplicate ticket for the same tool_use keeps a quiet 30 s retry while the agent stays blocked). A read under B that still shows the card A was bound to (same tool id / line offset —
+  the transcript can lag the hook) stays "Updating…": B must surface on a card the thread shows as
+  new. The answer payload carries the BOUND id, re-checked against store and binding at send time.
+  Residuals: the previous-card memory is per MOUNT (a panel opened fresh under B has none, so it
+  binds B to the latest matching card); a re-issued ticket for the SAME tool_use (duplicate hooks)
+  stays "Updating…" and is answered in the terminal; and the whole guarantee assumes Claude writes
+  the tool_use to the transcript before the hook fires.
+  **The thread look (2026-09-26, claude.ai-style)**: the user's message is a neutral rounded bubble
+  on the right (`term-chat__bubble`, a tint lift — never the blue accent), the assistant's is plain
+  full-width text with no bubble. One quiet action row per assistant TURN (`lib/chatThread.ts`
+  `assistantTurnEnds` — a turn is a run of consecutive assistant lines, so a tool-heavy turn gets one
+  row, not one per tool call), hidden until hover/focus and always shown on the latest turn: Copy (the
+  turn's TEXT parts as markdown source, through `window.nodeTerminal.clipboard` — the app channel,
+  which never rejects and bridges to execCommand in the browser) and a relative time from the new
+  optional `ChatMessage.at` (epoch ms from claude's ISO `timestamp`, set by the core parser on BOTH
+  the legacy and paged paths; absent when the line states none — never a made-up time). One
+  60-second `now` tick in ChatPanel drives every row's label. No thumbs / read-aloud / retry (no
+  terminal equivalent). `.term-chat__text` stays the markdown sink the link guard scopes to.
+  **The composer (2026-09-26, claude.ai-style)** is one rounded box — textarea on top, a toolbar
+  under it: "+" attach on the left; model label, muted effort label and a mic on the right (pure
+  decisions in `lib/chatComposer.ts`). Four rules: (1) **attach = paths in the DRAFT, resolved the
+  way a drop onto that node's terminal is** — the mount site passes `pathsForFiles` built on
+  `droppedPaths` with the node's own SSH scope (`dropProjectId` in TerminalNode; `spawn.ssh` in the
+  card modal), so an SSH node's file is uploaded to its HOST and the composer never grows a second
+  resolver; "+" / drop / file-or-screenshot paste all feed it, and nothing is ever sent. (2) **The
+  mic targets THIS composer's textarea, never the pane**: `nodeterm:dictate` carries a per-MOUNT
+  `composerId` (the canvas node and the card modal can both mount one session's composer),
+  `DictationTarget` gained `kind: 'chat-composer'`, and the overlay hands the take over
+  `nodeterm:chat-dictation` (`lib/chatComposerDictation.ts`), saying so if the composer closed
+  mid-take. (3) **The labels read the ContextMeter's store** (`useContextUsage` — ONE reader) and
+  a click TYPES the agent's own picker command (`/model`, `/effort`) through the SAME
+  `chatSendRefusal` gate as a message, re-read at click time, then flips to the terminal
+  (`onShowTerminal`); `sendText` must answer `=== true` to flip. Measured for claude only
+  (`composerPickerCommand`, via `capabilityAgentId`): any other agent shows no label, since a label
+  that opens nothing is a lie. Hidden when the model is unknown; effort hidden with it. (4) **Effort
+  was measured, not assumed** (Claude Code 2.1.283): read = the top-level `effort` the CLI writes on
+  every assistant record it sent with one (`...E!==void 0&&{effort:E}`; its own history reader
+  walks the same field; a transcript flips `medium`→`xhigh` on the first request after `/effort`);
+  change = `/effort` (a `local-jsx` picker, levels `low|medium|high|xhigh|max`). `parseLatestUsage`
+  takes it from the LATEST usage record only — never carried forward, a record without it means
+  that model takes no effort — and both context tails push on an effort-only change
+  (`ContextWindowUsage.effort`, optional: older hosts and other agents simply omit it). Like the
+  model, it lags until the next request. Narrow composers drop effort first, then the model
+  (`composerToolbarLayout`); "+" and the mic stay. No voice-conversation button: there is no
+  terminal equivalent. Surfaces: Desktop + Server Edition identical (dictation and uploads already
+  bridge — `files.saveUpload`, `speech.*`); SSH nodes upload to the host; kanban card modal shares
+  ChatPanel and wires both props; relay tabs keep the panel's existing refusal; mobile N/A.
+  Fix-round rules (same day): the composer is its OWN component (`nodes/ChatComposer.tsx`) so the
+  thread and the composer restyle independently. A label click is an explicit "go to the
+  terminal", so the flip FOCUSES the xterm whatever its entry state was
+  (`requestTerminalFocusOnExit(nodeId)` before the state change, consumed once by the node's
+  `useMdModeFocus` — TerminalNode and ModalTerminal both key it by node id). `/model` and `/effort`
+  open LOCAL pickers that fire NO hook, so the gate still reads `done` while one is on screen: the
+  composer holds a picker command in flight (ref + disabled/`aria-disabled` labels, and Enter is
+  swallowed) from click until the flip or failure — a second click would otherwise paste
+  `/model` + Enter INTO the picker, confirming its highlighted row. **Inherent limitation:**
+  returning to ⌘M while a picker is still open reads `done` too, so a chat send or a label click
+  there would type into it — the pane is not observable from here. Shortcut dictation (keyed chord
+  and hold-to-talk) targets the composer holding the caret before the selected terminal (the pane
+  under the view is hidden) via `composerFromElement`; the dispatcher offers keyed dictation in
+  that one text field (`isChatComposerTarget`). Both are keyed on the composer BOX
+  (`[data-chat-composer-id]`), never on the textarea's `term-chat__input` class — the plan
+  "Revise…" textarea and the question "Other" input share that class and sit outside the box. With
+  focus anywhere else inside `.term-chat` (those fields, the answer buttons) BOTH shortcut paths
+  refuse (`shortcutDictationFocus` → `refuse`): their fallback, the selected terminal, is the hidden
+  pane showing the very plan/question dialog, and typed characters landing there would move its
+  highlight or fill its "Other" field (the overlay types with `enter: false`, so nothing submits).
+  **Every mic that names only a NODE** — the terminal header mic, the card modal's header mic, the
+  Dock mic and the shortcut fallback (selected terminal / open card) — goes through
+  `dictationTargetForNode`: while that node's chat view is up (`.term-chat[data-chat-node-id]`) the
+  take goes to its mounted composer (the card modal's own when the modal is open for that node, so
+  a modal showing the LIVE terminal still targets it), a chat view with no composer refuses, and
+  otherwise it is the terminal as before. Every refusal says so in one `nodeterm:toast`
+  (`announceChatDictationRefusal`, naming the composer mic) instead of a silent dead key.
 - **Subagent visualization** (agents in `SUBAGENT_CAPABLE`) — `subagent-start`/`subagent-end`
   normalized events (from Claude's `PreToolUse`/`PostToolUse` on tool `Agent`/`Task`, correlated
   by `tool_use_id`) drive a transient `state/agentNodes.ts` store. Claude launches subagents
@@ -2558,7 +3112,15 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   that landed while they were busy elsewhere, and once it fades nothing anywhere says it happened. Route **`reopen` (a CLOSED project) cold-writes
   too and does NOT reopen the tab** — closing is the user's explicit "park this, keep it running", so
   restoring the tab *and* activating it is the loudest form of the hijack; the reply names the closure
-  so a caller does not report a session as started. On the cold path `--group`/`--after` ARE resolved
+  so a caller does not report a session as started. **Exception (#925):** `--run-now` (and `run`)
+  restores a closed project's tab WITHOUT activating it (`unhideProject`) and starts the node
+  headless. A session that is running must be findable somewhere more durable than a notice, and
+  not activating it keeps the half of this rule that matters. Two cases keep the tab closed: an SSH
+  project, because its nodes are refused before any claim (`remote-unsupported`), so nothing starts;
+  and the welcome screen (no project active), because un-closing one there would render a canvas
+  with no active project. On the welcome screen the session still starts; the project just stays in
+  Recently closed.
+  On the cold path `--group`/`--after` ARE resolved
   (unlike with `--project`, where the ids would live in another project) against the serialized
   nodes, defaults come from the OWNING project (`projectPermissionMode(owner, …)`, its account,
   its `ssh`), and `--after`'s dep ropes are left to `missingDepRopes` at that project's next load.
@@ -2694,6 +3256,28 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   unsupported cross-project boundary, without probing other projects or exposing their metadata.
   Callers that create and link nodes **in the same tick** must pass their own `lookup` — `setNodes`
   is async, so resolving fresh nodes off `nodesRef` would skip every one as "no such node".
+  **Issue-bound opens (`--issue`, 2026-09-28):** `open-agent`/`open-claude --issue <owner/repo#N |
+  #N>` binds the new session to a GitHub issue exactly like the board's **Start with agent**. The
+  SHAPE is refused by ONE gate, `issueFlagRefusal` (`canvas-control-core.ts`), which desktop MAIN
+  runs in its control handler (desktop main does not run `parseControlRequest` at all — do not move
+  the gate there alone) and the Server Edition runs inside `parseControlRequest`; any other verb
+  carrying `--issue` is refused, not ignored. `#N` is resolved by each shell against the project the
+  node OPENS IN (the `--project` target, the cold-open owner, or `ctlProject`) — the repository its
+  kanban board syncs with, i.e. the GitHub host controller's answer (configured, else detected) —
+  and a project with no GitHub board refuses `#N` and names the full form (`lib/issueFlag.ts`,
+  `HeadlessNodeFactoryDeps.issueRepository`). **On the desktop it is resolved ONCE, at the top of
+  the control handler (`issuePre`), before any open path snapshots the projects store**: the lookup
+  is a host round trip (`git remote`, `gh auth`), and an await inside a path let a tab switch in that
+  window write the node into the wrong project. A full `owner/repo#N` asks nobody. The same
+  placement puts resolution before every path's dry-run branch.
+  `--prompt` replaces the default task after the reference line; `--prompt-file` stays the whole brief. Both
+  generated agent bodies render the contract from `issueBindingDocLines` (the example first prompt
+  is rendered from `issueLaunchPrompt` itself): move your OWN card with `assign` (In Progress on
+  start, In Review on delivery), never close the issue, never Done, `Closes #N` in a PR, and **post
+  to GitHub only when the user asked in that session — otherwise end with a proposed comment**.
+  nodeterm has no automatic post-to-issue path and must not grow one. `list` marks a bound row
+  `issue owner/repo#N`. Server Edition: `open-agent --issue` works under its verified-only,
+  creator-owned rules and writes the run history; `assign` is unsupported there (the skill says so).
   **Dependency edges (`--after`, 2026-07):** `open-terminal`/`open-claude`/`open-agent` accept
   `--after <id,id>`, which opens the node **armed** — `data.pendingLaunch` ({after, command},
   `PendingLaunch` in shared/types) holds the launch the factory built, and Canvas fires it once
@@ -2719,11 +3303,22 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   omit that initial command rather than converting it to durable intent. A parked-project deferral before any input
   retains never-attempted intent and can proceed on activation without a retry timer.
   New intent has `attempted:false`; the writer awaits a workspace save of
-  `attempted:true, manualOnly:true` before input, then rechecks the shell after that save. A warm
+  `attempted:true, manualOnly:true` before input, then rechecks the shell after that save. That
+  save is **`localOnly`** (`WorkspaceStore.save`): durable in this machine's index, with no SSH
+  read/reconcile/mirror — a changed entry is marked `unmirrored` and the next ordinary save pushes
+  it. Awaiting the mirror put two SSH round trips in front of every new agent on an SSH project.
+  A node's own first-open delivery (live `initialCommand`, no deps, no failure record) shows NO
+  QUEUED chip: its `pendingLaunch` is only the write-ahead record, and it carries `manualOnly`
+  from the claim until Enter lands, which painted "⚠ QUEUED" on every freshly opened agent. A warm
   attach may automatically deliver never-attempted intent, preserving long-running `--after`
   graphs through project switches/park expiry. Attempted/legacy-unknown intent stays manual: its
   clearing autosave may have been lost after Enter. Explicit Run now rechecks the foreground shell and
   clears any incomplete line; a refused/throwing/cancelled launch stays held, `manualOnly`.
+  The Server Edition's immediate open and its `run`, and the desktop's headless start (`--run-now` /
+  `run`, below), deliver through the SAME echo-verified writer (`@shared/command-delivery`, moved
+  out of the renderer for this), via the headless launcher `core/headless-launch.ts` (#925): a tmux
+  paste is not immune to zsh's rc-time tty flush (#556) or the canonical-line cap (#706). The
+  Server Edition's deferred `--after` release (`refreshArmed`) still pastes with `sendText`.
   (5) UI `initialCommand` stays until submission; serialization converts unsubmitted UI intent
   into a never-attempted `pendingLaunch`, including a project switch during shell settle. A live
   initialCommand alias on remount cannot reset an attempted marker. Server saves
@@ -2781,8 +3376,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `queued:false` is NOT proof of a running CLI: Server's `deliveredIds` acknowledges terminal
   delivery only. Its initial commands are persisted before attach/send and retained on failure;
   only acknowledged sends clear them. Boot ownership remains fail-closed. Desktop `list` (live
-  and stored projects) names QUEUED / LAUNCH FAILED / DROPPED / AGENT STATUS UNCONFIRMED rather
-  than treating absence of a hook as success. Server v1 still explicitly refuses `list`.
+  and stored projects) names QUEUED / STARTING / LAUNCH FAILED / DROPPED / AGENT STATUS UNCONFIRMED
+  rather than treating absence of a hook as success. Server v1 still explicitly refuses `list`.
   **(8) An armed node must not cold-start its own agent** (found while fixing (7)). The mount-time
   cold-restore relaunch (`fresh && agentId && canResume(...)`) carries a second, independent
   refusal beside the `paused` one (`shouldColdResume`): `!data.pendingLaunch`. A first open is
@@ -2818,6 +3413,79 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   so reporting it as "the error" would be a confident wrong fact. Reading the text, and the
   *failed-to-start* watchdog (a station that never emits ANY hook event — the opposite failure,
   which hangs dependents honestly rather than firing them wrongly), stay open.
+  **Headless start (`--run-now`, `run`, #925):** `open-*` with `--run-now` into a project that is
+  not on screen starts the new node's held launch at once instead of "when next viewed". A node
+  with nothing held (an `open-terminal` without `--cmd`) has nothing to start, and gets the plain
+  cold-open reply. `run --node <id> [--project <id>]` builds nothing: it claims and starts the held
+  launch of a node that already exists, the CLI twin of the QUEUED badge's Run now (like ▶, a `run`
+  that starts the node overrides its `--after` wait). Into a project that IS on screen `--run-now`
+  changes nothing: the mount path already starts the node.
+  - **Flow.** For `--run-now` the renderer first builds the node as a cold open; `run` starts from
+    the node as stored. Either way it then writes an
+    `executor:'core', attempted:true, manualOnly:true` claim to disk BEFORE any spawn (never
+    spawn on an unsaved claim: a failed save restores the original launch and starts nothing,
+    `claim-not-saved`). Desktop main's `pty.launchHeadless` runs core `launchHeadless` on
+    `desktopHeadlessRequest(req)`: `createHeadless` (client 0), then settle a fresh shell (200 ms
+    quiet / 1.5 s silence cap, under an absolute `SETTLE_MAX_MS` = 5 s ceiling that output never
+    extends — nothing cancels this wait, and a pane that keeps painting never goes quiet), then the
+    mounted writer's trust rule (`trustsFreshShell`, `@shared/launch-trust`: a fresh session-host
+    session is trusted without a probe; every other pane must pass `isLaunchShell`, and an unknown
+    answer is `no-shell`, nothing typed), then the echo-verified writer (`@shared/command-delivery`),
+    then `releaseHeadless`.
+  - **The IPC is desktop-only and host-only.** It is registered in `src/main`, not in core
+    `registerIpc`, so a Server Edition browser cannot reach it (ws-bridge declares it
+    `unsupported`), and `IPC.ptyLaunchHeadless` is in `HOST_ONLY_CHANNELS`, so a relay peer that
+    sends the raw request is refused host-side.
+  - **Remote nodes are fenced twice.** The primary fence is the renderer's: `startHeadless`
+    answers `remote-unsupported` before any claim for every node of an SSH project (`project.ssh`)
+    and for a node carrying `ssh` / `sshRemoteTmux`, and leaves its launch exactly as it was. The
+    project is asked, not only the node's flags: a node of an SSH project may carry neither.
+    Behind it is core's belt: `headlessPtyOptions` sets `requireRemote` for an SSH-project
+    (`sshRemoteTmux`) node, and `desktopHeadlessRequest` keeps it while stripping `sshRemote`.
+    So if such a node ever got past the fence, core's `spawnNew` would refuse it (`spawn-failed`)
+    instead of starting a LOCAL `nt-<id>` wearing its identity. `desktopHeadlessRequest` also
+    strips `viewerId` (a create under a viewer id subscribes `(0, viewer)`, while
+    `releaseHeadless` detaches `(0, PRIMARY)`, so client 0 would stay attached forever) and
+    `clearEnv` (a one-shot recycle flag, never a launch option).
+  - **Why release the client.** An invisible client would fight the viewer's window size and
+    keep the session "attached" for the reaper forever.
+  - **No persistent backend** (tmux or session-host): releasing a plain shell would kill it, so the
+    start fails `not-persistent`. In the normal case that happens before any spawn
+    (`persistentSpawnAvailable`). In the race where the backend goes away between that probe and
+    the spawn (tmux switched off in between), the spawn yields a plain shell; the launcher refuses
+    it the same way, before typing anything, and its release kills that shell. Either way the node
+    is handed back exactly as it was, so a cold open degrades to an ordinary queued node.
+  - **Outcome patch.** It lands wherever the node lives at that moment (`savePendingAnywhere`):
+    the live canvas if the user switched there mid-start, otherwise the store copy plus a disk
+    write. `delivered` clears the launch; `not-persistent` restores the original (above); every
+    other launch failure keeps the claim and marks the node failed (amber ⚠ QUEUED, recovered by
+    Run now).
+  - **While starting.** `launchDelivery` holds `starting`: the badge reads STARTING, ▶ is disabled
+    (a click would splice a second copy into the pane), `launchesToFire` skips the node, and
+    `list` names it. Canvas's delivery sweep spares it (`deliveriesToRetire`): the node lives in
+    ANOTHER project by design, so "not armed on this canvas" does not mean "delivered".
+  - **Notice.** A batch that started at least one session raises ONE sticky "Go there" notice
+    (`headlessStartNoticeText`). A launch failure after the claim (`spawn-failed`, `no-shell`,
+    `line-too-long`, `cancelled`) shows on the badge (amber ⚠ QUEUED) and in the reply.
+    `not-persistent`, `claim-not-saved` and `remote-unsupported` show only in the reply: the node
+    reads as it did before the attempt.
+  - **`--run-now` with `--after` is refused on both editions**, before any node is built, with the
+    shared `RUN_NOW_AFTER_REFUSAL` (`@shared/control-verbs`): "start now" and "start when X is
+    done" contradict each other.
+  - **`run` gates.** `run` is verified-only (`requiresVerified`), reaches another project only
+    through `--project` + the existing grant gate (`PROJECT_TARGETABLE_VERBS`), and is
+    `stored-node` off screen. The renderer's `--project` belt is ONE pure resolver,
+    `resolveProjectTarget` (`lib/projectOpen.ts`), shared with the open verbs. A project ON screen
+    never starts headless (`planRunVerb`): `run` there uses the mounted writer (the ▶ path) when
+    the node has one. Without one, a plain queued launch replies `queued` / `starts-when-mounted`,
+    because the mount delivers it; a `manualOnly` or `--after`-armed launch is refused with
+    `run-not-mounted`, because the mount fires neither, and "starts when mounted" would be a
+    promise nobody keeps.
+  - **Server Edition.** It accepts `--run-now` as a no-op (its opens are already immediate) and
+    implements `run` under creator ownership, resolving the node through the ownership record,
+    never by first id match. It neither unhides a closed project nor raises a notice, the same as
+    its other immediate opens. Its immediate open delivers through the same launcher with
+    `release:false`: the attached client is what keeps even a plain shell reachable there.
   **Settings (`settings`, 2026-09):** `settings [--project <id>]` lists, `settings --get <key>`
   reads, `settings --set <key> --value <v> [--project <id>]` asks to change — flags only, because the
   shim drops a positional sub-action for an unlisted verb and an SSH host keeps the shim it got at
@@ -3297,6 +3965,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
      `$HOME` + fake `curl`, the same discipline as the canvas-control shim.
   3. **A read that could not run is `error`, never `unavailable`** — a dead master says nothing
      about whether the account has a subscription, and 'unavailable' silently drops the row.
+  4. **A failed read keeps the last good numbers** (`holdLastGood`, local AND remote): the
+     endpoint answers **429** on a budget every Claude CLI using the same login also spends
+     (measured on a host running 54 `claude` processes: 429 for minutes on end), and replacing
+     the bars with "Could not read usage" made rows flicker for no change in the account. The
+     held snapshot is `status: 'error'` + the old limits + the OLD `updatedAt`, so the debounce
+     must key on the READ's time (`lastFetchAt`/`remoteCache.at`), never on `updatedAt` — keying
+     it on the numbers' age re-reads on every call and hammers the endpoint that said 429.
   Shape: `remoteUsageTargets` (pure) elects ONE connected project per host (several projects share
   a host's `$HOME`) and offers its system `~/.claude` plus every managed account pinned to that
   host. The service (`usage:remote`) caches per target under the usual debounce, evicts targets
@@ -3675,6 +4350,37 @@ colour. MEASURED against the live hook server before the change; both faces are 
   iOS follow-up (@eneskirca), not a desktop one.
 
 
+## Semantic colours (one role per meaning)
+
+Status and accent colours are TOKENS in `styles.css`, never hues at a call site. Two layers:
+the Apple system palette `--sys-red … --sys-gray` (dark values in `:root`, light values in the light
+block) and the ROLES that rules actually name — `--state-working | attention | unread | error |
+success | warning | queued | automation` and `--git-modified | added | deleted | renamed |
+conflict`. A role is a FILL value (glow, dot, stroke, and chip washes via
+`color-mix(in srgb, var(--state-x) N%, transparent)`); text in a status hue keeps the text-safe
+tokens `--danger --warn --caution --success --agent-working`, which the light theme darkens.
+
+- **An appearance re-maps a MEANING by redefining a role**, not by restyling rules. The default look
+  keeps its historical hues (working clay, unread = accent, attention red, warning orange); Liquid
+  Glass maps them to the HIG semantics (see its section).
+- **JS that needs a literal** (xterm find decorations, canvas-drawn sprites, the notch HUD, which does
+  not load styles.css) reads `renderer/lib/palette.ts`; `styles.palette.test.ts` pins `--sys-*` to
+  that table. JS that styles the DOM passes `'var(--role)'` strings (the minimap strokes, the git
+  status letters, kanban priorities). Hex-with-alpha suffixes (`${c}2e`) do not work on a var —
+  use `color-mix`.
+- **Git status colours have ONE table**, `renderer/lib/gitStatusColors.ts`, used by Source Control
+  and the history commit list; an unknown status draws in `--text`.
+- **Minimap strokes are their own tokens, `--mm-working|attention|unread`.** The default look keeps
+  its map language exactly (amber working, red needs-you, CLAY unread) on purpose: an uncoloured
+  node's fallback stroke is the accent blue, so an accent "unread" would vanish into the map (the
+  comment on `nodeStrokeColor` in Canvas.tsx). Under Liquid Glass the tokens map to the state roles,
+  since node fills there are neutral ink and nothing can clash. The palette test pins both.
+- **Left as-is on purpose:** agent brand colours (`AGENT_CONFIG`) on Claude-identity surfaces (the
+  subagent node, the usage pill icon, the mascot), the node colour swatches (`node-colors.ts` is an
+  allowlist — stored project colours must stay valid), node-kind default colours (persisted into
+  project files at creation), kanban label chips (own palette), presence colours, the onboarding
+  scenes, the notch HUD's own stylesheet.
+
 ## Node icons (emoji or picture)
 
 A node may carry `data.icon` (`NodeIcon` in `@shared/node-icon`): `{type:'emoji', value}` or
@@ -3766,6 +4472,303 @@ or browser nodes means adding the draw and the set together, in one change.
   picker), so no new IPC was added and nothing is stubbed. **Mobile**: N/A for v1 — *nodeterm mobile*
   attaches to tmux sessions over the transport protocol and carries no per-node icon concept;
   surfacing one means extending that protocol (follow-up in the iOS repo).
+
+## Desktop wallpaper + Liquid Glass (Settings → Appearance)
+
+Two opt-in choices, both off by default so an update changes nothing on screen:
+`settings.desktopWallpaper` (`none | {preset, id} | {image, path}`, read through
+`normalizeWallpaper` in `@shared/wallpaper` — hand-editable, unknown ⇒ `none`) and the
+**Liquid Glass appearance**, which is the fourth value of `settings.appTheme` (`'liquid-glass'`,
+`isLiquidGlass` in `renderer/lib/appTheme.ts`) rather than a separate switch: it is a look, and its
+light/dark base follows the terminal theme exactly like `auto`. Choosing it with no wallpaper picks
+one (`defaultWallpaper`: the first macOS still, Sonoma Horizon when present, else a gradient) so
+glass never sits over plain black; a wallpaper the user chose is never replaced. The pre-release
+`glassTerminals: true` maps to it once in `settings-store` (only over `auto`).
+
+- **The wallpaper is painted on `.canvas-root`** (`Canvas.tsx`), which spans the whole window —
+  tab bar row included, so Liquid Glass's tab bar is glass over the picture — and is never
+  transformed, so it stays put while the canvas pans and zooms. React Flow's own root goes
+  transparent over it (`.react-flow.has-wallpaper`); the dot grid is faded to 30%, not removed,
+  because snapping still aligns to it. **Settings → Appearance → Show grid dots**
+  (`settings.canvasDots`, default ON in every appearance, read through `showCanvasDots` — only a
+  literal `false` hides them) omits the React Flow `<Background>` entirely; it is display only, and
+  snap-to-grid / align-to-grid keep using `gridSize`. Pure renderer + settings.json, so the Server
+  Edition gets it unchanged. Under Liquid Glass the kanban overlay paints the SAME wallpaper
+  (`useBoardWallpaperStyle`, `background-attachment: fixed` so it lines up with `.canvas-root`) and
+  stays opaque to the canvas below — the covered-canvas animation gate stays valid; other looks keep
+  the board's own background.
+- **`background-image` + longhands, never a `background` shorthand next to `var(--canvas-bg)`.**
+  MEASURED live: Chromium drops a var()-containing value once it passes ~2 MB, and a still's data:
+  URL is ~3 MB, so the shorthand resolved to nothing and the canvas stayed black. The class rule
+  supplies the colour underneath.
+- **Images reach the page as data: URLs from core** (`core/wallpaper.ts`, `wallpaper:*` channels,
+  registered by BOTH shells), so the CSP is untouched and no protocol was added. `load` never
+  reads a renderer-named path: a macOS still is named by its `mac:` id and re-resolved against a fresh scan
+  of `/System/Library/Desktop Pictures` (read at runtime, NEVER bundled — they are Apple's), and an
+  imported image must be a hash-named DIRECT child of `<userData>/wallpapers/` (`cachedImagePath`,
+  the whole jail). `import` is the exception — it copies any image-named regular file the caller
+  names into that cache — which is no wider than the caller's own `fs:read`. Chromium cannot decode HEIC, so macOS converts with `/usr/bin/sips` to a JPEG
+  ≤ 3840px — and `sips -Z` also UPSCALES (measured: 320px → 3840px), so it is passed only when the
+  image is larger. An import is copied untouched unless it must be converted (HEIC, over 3840px or
+  over the 25 MB load cap — re-encoding everything would flatten PNG/WebP alpha); off macOS, HEIC or
+  an over-cap image is refused at import time, where the picker shows the reason.
+- **The cache is pruned on a SAVED change and on import, never at boot.** `SettingsStore.init`
+  answers an unreadable settings.json with the defaults, and pruning against that would delete the
+  image the user chose. Only hash-named full-size files are candidates; thumbnails, temps and
+  foreign files are never touched, nor is a conversion in flight. **The most recent imported image
+  is kept too** (`settings.recentWallpaperImage`, written by `wallpaperChoice` when an image is chosen
+  or left; `wallpapersToKeep` feeds the prune): choosing a preset once deleted it and the "Your image"
+  tile vanished (visual QA H6). Core does not hot-reload in `electron-vite dev` — a prune change
+  needs an app restart to take effect live. A failed renderer load is not
+  cached (the file may appear).
+- **Terminal nodes use their OWN theme's tint** (the chrome fill is for everything else). The node fill is the terminal theme's background at an alpha
+  from `glassTintAlpha` (`renderer/lib/glassContrast.ts`): the smallest alpha at which the theme
+  foreground keeps 4.5:1 over ANY backdrop. Checking white and black suffices because composite
+  luminance is monotone in each backdrop channel — except when the text's luminance falls INSIDE
+  that range, which `worstContrast` fails explicitly; a grey-backdrop sweep pins it per theme. The
+  0.95 design ceiling yields to the guarantee: Solarized Dark gets 0.985, and Solarized Light — under
+  4.5:1 even opaque — gets 1. The tint is per node (project theme override included) and the glass
+  header takes the TERMINAL foreground for its text tokens, since it sits on the terminal's tint.
+  **ANSI palette colours are NOT protected** (only the foreground is): protecting all 16 at
+  min(3, own opaque contrast) forces alpha 1 on every built-in theme, because slots like `black` on
+  a dark theme sit at ~1.3:1 and any translucency moves some backdrop onto them. Decided: keep the
+  glass (foreground-only guarantee); the blur softens bright spots, and the Settings copy says
+  coloured output can fade.
+- **xterm paints no background under glass**: the theme background keeps its RGB at alpha 0
+  (`glassTheme`, memoised per theme so `applyLiveOptions`' identity compare stays a no-op) plus
+  `allowTransparency`, so the WebGL atlas is rasterised without a baked-in background. Both toggle
+  LIVE through `applyLiveOptions` (the addon rebuilds its atlas on any option change); the card
+  modal passes glass too (`useTerminalGlass`, shared with TerminalNode, sets the same
+  `--term-glass-*` tint on `.kanban-modal__termwrap--glass`; its DOM renderer keeps app-painted cell
+  backgrounds opaque); the settings preview never does. Glass stands down while a shared glyph grid is
+  mounted (it paints text BELOW the nodes, so a tint would cover it), and, only when **Keep blur while
+  moving** is off, the blur is dropped while the camera moves (`.canvas-moving`, toggled by
+  `onMoveStart`/`onMoveEnd` via classList so a pan does not re-render Canvas) — the tint alone
+  carries the contrast guarantee.
+- **App-painted cell backgrounds become glass** (`terminal/glass-cell-backgrounds.ts`). addon-webgl
+  0.18.0 paints every background rectangle at alpha 1 (`RectangleRenderer._updateRectangle`,
+  `$a = 1`), so full-screen TUIs read as slabs: Grok's `48;2;20;20;20` screen fill, Codex's composer,
+  Claude's bubble — and, worse, every DIM/ITALIC/hyperlink run on the DEFAULT bg, because those flags
+  live in the bg word and the run gets a theme-background rectangle at alpha 1 (Codex's all-dim
+  header box). No xterm option exists, so the private method is wrapped on the shared prototype
+  (installed from `acquireWebgl`, original kept under a `Symbol.for` key so a hot reload never
+  double-wraps; fail-open). `classifyRun`: inverse → stock opaque; attribute-only (default bg) → the
+  theme bg's alpha (0 under glass); rendered bg ≠ the buffer cell's raw bg = a renderer override
+  (selection, block cursor, search/decoration) → stock opaque; else an app PANEL → `glassPanelFill`.
+  **A panel is a vibrancy LIFT or SINK of the glass, never the panel colour at the node's tint
+  alpha** — that first version stacked a second tint on the node's own, and #3a3a3a over a bright
+  wallpaper read as a dark smudge. Overlay alpha = `PANEL_K`(1) × OKLab distance(panel, theme bg),
+  clamped [0.04, 0.22], dead zone < 0.02 (= draw nothing), INDEPENDENT of the slider (Claude's
+  #3a3a3a on #1e1e1e → 0.11, Grok's #141414 → 0.044). Colour: the panel's own hue when OKLab chroma
+  > 0.04, else white (lift) / black (sink). A move TOWARD the text (dark-theme lift, light-theme
+  sink) at or right of the Readable tick uses the glass composite over the extreme backdrop
+  (`B·t + white·(1−t)`) instead of pure white — the lift then never passes the glass's own worst
+  case, so the theme fg keeps exactly the plain glass's 4.5:1; left of the tick it slides toward pure
+  white by `(4.5 − glassWorst)/3.5`, continuous at the tick. Text check over the WHOLE run (the fg
+  the renderer passes is only the first cell's): inverted-polarity text (dark text on a light bar,
+  dark theme) must keep min(4.5, its opaque contrast) or the panel stays opaque; other text, while
+  the guarantee is on, must fare no worse than on plain glass; glyphs under 3:1 on the opaque panel
+  are decoration. **Polarity is judged against the PANEL, not the theme bg** (#303030 text is lighter
+  than #1e1e1e yet dark on a #e4e4e4 bar — judged by the theme, that bar went translucent at 1.00:1).
+  **One verdict per panel colour per terminal** (`panelVerdicts`): fill computed once, each text
+  colour checked once, opaque sticks (a multi-row light box never stripes), reset on alpha or theme
+  bg/fg change — addon-webgl rebuilds every row on any cell change, cursor blink included. Capped at
+  `PANEL_VERDICTS_MAX` (4096) colours, cleared past it (truecolor images add thousands). A colour
+  that turns opaque mid-pass re-runs `updateBackgrounds` once (also wrapped), so the rows already
+  drawn in that pass do not stay translucent on an idle screen — `term.refresh` would not do it: the
+  addon calls `updateBackgrounds` only when a model cell changed. The wrap
+  body after the stock rectangle is try/caught per call (fail open per frame, not only at install). Reduce Transparency (t = 1) → opaque. Written premultiplied as `(c·√k, √k)` — the
+  canvas is premultiplied and the addon blends alpha with SRC_ALPHA, so this stores exactly `(c·k, k)`.
+  Only terminals registered through `setGlassCellAlpha` (TerminalNode, `glassOn` only) are touched —
+  others are byte-identical; an alpha change calls `term.clearTextureAtlas()` because backgrounds
+  only rebuild for changed cells — through `scheduleGlassCellAlpha`, which debounces a change between
+  two glass alphas by 150 ms (a slider drag streams 0.01 steps and each rebuild wipes the SHARED glyph
+  atlas); glass on/off is immediate. The test pins addon-webgl 0.18.0 and every private name, and
+  sweeps both default themes to prove the Readable guarantee on panels. Ceilings: Increase Contrast
+  does not strengthen panels (it pins the node to Tinted already); the DOM-renderer fallback keeps
+  explicit backgrounds opaque (inline truecolor `background-color`).
+- **Liquid Glass chrome** (`:root[data-nt-glass='on']`, set by App.tsx only for that appearance, so
+  every other look is byte-identical). ONE chrome fill, `--glass-chrome-bg` = the resolved `--panel`
+  at `glassChromeAlpha(--text, --panel, 4.5, highlights)` — **dark 0.74, light 0.745** on the shipped
+  palettes. `highlights` (`glassChromeHighlights`) are the washes that stack on the SAME fill — the ink
+  lift (`GLASS_LIFT_ALPHA` 0.14: hover rows, the active tab) and the accent selection
+  (`GLASS_SELECT_MIX` 0.3) — each with the `--text-strong` ink styles.css gives highlighted states, so
+  a highlighted row keeps 4.5:1 exactly like a plain one (plain fill alone: dark 0.70; the active tab
+  then measured 3.9:1, visual QA round 2 N2). A new highlight wash on glass owes an entry there and
+  `--text-strong` ink. The
+  app's `--text` is itself TRANSLUCENT (`rgba(var(--tint-rgb), 0.85)`), so the ink moves with the
+  backdrop and the white/black endpoint argument does not hold; the backdrop is SAMPLED (6×6×6 grid +
+  grey ramp) and the test re-checks a fine sweep against the real tokens of both themes. App.tsx
+  reads the tokens with the glass attribute removed first (harmless now that the tokens stay
+  solid under glass; it keeps the solver independent of the gate). `--muted` has no guarantee
+  (0.9 dark / 0.965 light would be needed). **Glass is OPT-IN per surface** (Slice D, visual QA
+  round 3): the surface TOKENS (`--panel`, `--panel-header`, `--panel-2`, `--surface-*`,
+  `--tabbar-bg`) keep their SOLID theme colours under glass, so any panel, menu, popover or tooltip
+  that is not listed is opaque. They used to be redefined to the fill, and every unlisted floating
+  surface became see-through with no blur — round 2 fixed five named ones and this file claimed
+  "those five were the only traps"; round 3 found six more (Explorer and Source Control drawers,
+  the context-menu flyout, the node and card-modal label pickers, the Members picker, tooltips).
+  The translucent fill is handed out only by the two lists at the end of styles.css (plus the node
+  kinds), each WITH a blur; a new glass surface goes in one of them. A piece INSIDE a glass surface
+  that painted a token paints a lift, the input-well sink or nothing (find bar, markdown bar,
+  session chips/fields, Settings sidebar, hover rows); small buttons keep their solid colour.
+  **Never translucent without a working blur** (visual QA round 2 N1): an element with its own
+  `backdrop-filter` (or filter, opacity < 1, mask, clip-path, blend mode) is a BACKDROP ROOT — a
+  blur on anything inside it samples only the root's pixels, so a menu that pops out of it, or
+  covers sharp content inside it, shows that content crisp through its tint. So: (a) a container
+  that HOSTS pop-out menus keeps its glass on a `::before` layer (fill, hairline, blur) and is no
+  backdrop root — `.dock`, `.dock-menu`, `.dock-menu__sub`, and every `.ctx-menu` that does not
+  scroll (a scrolling menu cannot host a flyout, and a `::before` would scroll away with its rows);
+  (b) a popover INSIDE a glass node or the card modal (`.ctx-popover`, `.color-popover`,
+  `.label-picker`, `.kanban-meta__picker`; the host is its root) is simply not listed, so it is
+  opaque — and all four paint ONE solid token, `--panel` (the colour the glass fill is `--panel` at
+  an alpha of), with the glass hairline and one shadow (visual QA round 4 N4-M1: they were five
+  greys); they keep the theme placeholder, not the glass one (N4-M2). Every MODAL dialog is glass
+  (Remote access, Publish, consent, the GitHub issue modal and the mobile-launch card joined the
+  text list); (c) in-flow pieces that only stack on their own blurred parent (node header, card-modal
+  terminal) are fine. **Two guards.** `styles.glass-traps.test.ts` fails when a rule paints a glass
+  fill (`--glass-chrome-bg`, `--glass-control-bg`, `--term-glass-bg`, `--term-glass-header-bg`) on
+  a selector with no `backdrop-filter` in that rule or in a blur rule for the same element or its
+  `::before` (in-flow exceptions are named with a reason), and when a surface token is redefined
+  under the gate. It cannot see DOM nesting, so `scripts/glass-trap-probe.mjs` is the live half:
+  run it against a dev build with remote debugging (`node scripts/glass-trap-probe.mjs --port
+  9333`) with each overlay open; it lists every visible surface with background alpha < 0.9 whose
+  blur is ineffective (none behind it, floating over a blurred/solid ancestor's content, or a blur
+  escaping its backdrop root) and exits 1 on any. Slice D ran it over 27 states (dock menus,
+  context menu + flyout, popovers, tab menu, palette, drawers, phone, help, Settings + theme menu,
+  sessions, RAM, usage, label pickers, tooltips, kanban, card modal + pickers): 0 traps — at REST.
+  **Glass never fades** (visual QA round 4, N4-H1): opacity < 1 makes an element a backdrop root, so
+  a scrim fading its opacity turned the palette/dialog/drawer inside it into clear glass for the
+  120–160 ms of every open, and a `::before`-hosted menu fading its own opacity did the same. Under
+  glass scrims fade their `background-color`, glass surfaces enter by transform only (Remote access
+  pops like its siblings), tooltips appear without motion and the focus-mode dock slides. The glass
+  entrances sit in a no-preference query; under Reduce Motion the default-look `animation: none` list
+  covers most surfaces, and a gated reduce rule covers the kanban card modal and its scrim (also the
+  GitHub issue modal's), whose `kanban-fade`/`kanban-pop` opacity fades otherwise ran on glass (code
+  review 7 #1). Both guards see motion: the static test fails on an opacity keyframe
+  (`@-webkit-keyframes` too) or transition (a shorthand with no property name is `all`) on any glass
+  surface, blurred `::before` layer, or scrim (the scrim list is the probe's exported `SCRIMS`)
+  unless, in BOTH motion preferences, a rule overrides it — a gated rule, or a later default-look rule
+  on the same selector; an override inside a media query counts only for the preference it names
+  (the kanban modal passed because its only override sat in a no-preference query). A fade selector
+  is matched when it can hit the same element as a surface (either covers the other, or they share a
+  subject class). It reads the LAST backdrop-filter declaration, lets a later unconditional rule on
+  the same element cancel a blur, counts `background-image` as a paint and matches coverage on the
+  full selector (`:not()`/`:hover` kept). The probe runs a second pass that replays every finite
+  animation, seeks every finite RUNNING animation to half its duration and scans (a blur inside a
+  see-through backdrop root, or a blurred surface fading its own opacity, is a trap), inspects
+  `::after`, gradient fills and mask-border roots. It never calls `pause()`/`play()` — on a CSS
+  animation they install a play-state override, and an infinite animation then ignores the idle
+  gate — since one synchronous evaluate cannot see the timeline advance, a seek freezes the frame and
+  a seek back restores it; replayed elements get their `animation-name` re-set once more and lose a
+  `style` attribute they did not have, and the pass verifies its own restoration. It exits 2 — never
+  0 — when it checked nothing, the page does not answer within 20 s, or it left state behind. Slice E: 0 traps at rest and mid-animation, dark and light
+  (palette, context menu, Explorer, Remote access, label picker, Settings, sessions). Node blur
+  pauses during camera moves; chrome is static and keeps it. **Left opaque, deliberately:** Monaco, `<webview>` and `<video>` bodies (another
+  renderer's surface), sticky notes (the colour is the note), and the `surface-sunken` wells
+  (`bg-bg` inputs are a sink/lift of the page on glass). **Kanban**: header strip + columns are
+  text-surface glass, cards a `--glass-lift-hover` lift WITHOUT their own blur, column/header dots
+  neutral rings, status chips ink on a hue wash, drop target + reorder line neutral ink.
+  **Two chrome fills (slider scope)**: `--glass-chrome-bg` for TEXT surfaces never drops below the
+  readable alpha (and `--glass-text-blur` below the tick's blur); `--glass-control-bg` for the small
+  floating CONTROLS (tab bar, dock, zoom, toolbar buttons, minimap, pills, sessions toggle) follows
+  the slider down to `glassControlClearAlpha` — at least 0.35 and enough for 3:1 icons over every
+  sampled backdrop after the control blur's `brightness(--glass-control-dim)`: dark 0.35, light 0.57
+  (brightening cannot lift near-black water; round 2 H4) — and `--glass-control-blur` dims (dark, ×0.7) or
+  brightens (light, ×1.3) their backdrop left of the tick — both from `glassChromeAlphas`. A new
+  floating container goes in ONE of the two lists. **Highlights** are `--glass-lift(-hover)` (theme
+  ink 14%/10%) or `--glass-select` (accent 30%) for THE selection, with `--text-strong` ink — never
+  `--panel*`, a solid band on glass (visual QA H1/H2; round 2 N5: dock/zoom/sessions-row hovers and
+  the default Button) — the hover lift carries `--text-strong` too (`--text` on it is 4.1:1). The
+  readable alpha is solved for every accent swatch (Yellow needs 0.825 dark; bound 0.85). Segmented
+  controls select with a neutral lifted thumb, so the one filled accent
+  per view is the primary action (N12). `::placeholder` is `--glass-placeholder` (0.78 dark / 0.85
+  light, 4.5:1 on the fill and never above `--text`, pinned by glassContrast.test.ts; the dark floor
+  is 0.77); light has no room below `--text` at 4.5:1, so TYPED text in chrome fields is
+  `--text-strong` and an empty field still reads empty (round 3 NM1). A placeholder ranks below
+  secondary text (macOS: tertiary), so on dark glass the modal dialogs raise `--muted` to 0.82 (4.9:1
+  worst case) and Remote access's hard-coded 0.55 lines take it (visual QA round 5, N5-M2); light
+  cannot, and keeps the typed-text rule. The RAM panel's hard-coded 0.45–0.6 secondary lines take
+  `--muted` (N5-L2). Destructive menu items (`.ctx-item.danger`) draw an
+  ink label and keep red only on the icon; their hover is the ordinary lift (N5-M1: the red label was
+  2.7–2.8:1 on dark glass). OK-range usage/context meters are
+  neutral ink under glass (M1: green already means unread/success) — the fills are inline literals
+  shared with the notch HUD, so the rule matches the serialised `rgb(48, 209, 88)`. Under glass `--muted` is 0.7 dark / 0.8 light and `--muted-2` = `--muted`. The minimap draws node rectangles in translucent theme ink
+  (inline node colours overridden with `!important`), keeping the working/attention/unread strokes.
+- **No window accents under Liquid Glass.** A terminal window's per-node colour arrives as INLINE
+  styles (`borderTopColor`, the colour dot's background), so the overrides carry `!important`: a
+  neutral `--glass-edge` border, the dot as a neutral ring (it is still the colour-picker button),
+  neutral resize handles. State survives without the colour: selection is an ink (`--text`) outline,
+  unread keeps its `--state-unread` border + glow, working/attention keep their `::after` glows and
+  header badges. The sessions list and the kanban board keep node colours. `styles.liquid-glass.test.ts`
+  pins the gate and every neutralising override.
+- **Glass palette** (HIG color.md › Liquid Glass color). The block at the end of styles.css
+  redefines only ROLES (see **Semantic colours**): working = the accent (no longer Claude clay),
+  needs-you = orange, finished-unseen = green, warning = yellow, error = red — one hue per meaning,
+  and orange means only "needs you" (`--warn` becomes `--caution`, the text-safe yellow). The glows,
+  minimap strokes, sidebar signals and badges follow with no rule of their own. Status labels on a
+  glass header are ink over a tinted chip (`-webkit-text-fill-color: var(--text)` with the chip
+  mixed from `currentColor`), not coloured text. `styles.palette.test.ts` pins the mapping and that
+  no two meanings resolve to the same colour, in both themes.
+- **Glass slider + refraction** (Settings → Appearance, shown only under Liquid Glass; iOS 26's
+  Clear ↔ Tinted). `settings.glassTint` is a slider POSITION, not an alpha (`null` = the Readable
+  tick, read through `resolveGlassSlider`): every surface has its own readable alpha, so each maps
+  the position through three points — `GLASS_CLEAR_ALPHA` 0.2 at Clear (terminal nodes; chrome controls 0.35, text surfaces never below readable — see Liquid Glass chrome), its OWN computed readable
+  alpha at `GLASS_READABLE_TICK` (0.7), `max(readable, 0.95)` at Tinted (`glassSliderAlpha`). At the
+  tick every surface is exactly at the alpha `glassTintAlpha`/`glassChromeAlpha` computed, and every
+  alpha right of it is higher — so Readable→Tinted keeps 4.5:1; left of the tick the row says the
+  guarantee is off. Measured: chrome dark 0.20 / 0.70 / 0.95, chrome light 0.20 / 0.745 / 0.95,
+  nodeterm-dark 0.20 / 0.675 / 0.95 (Clear / Readable / Tinted). App.tsx sets `--glass-t` (blur
+  16→28px on chrome and × 0.85 = 13.6→23.8px on terminal nodes via `--glass-term-blur`; saturation
+  `--glass-sat` 180% at Clear → 150% from the Readable tick to Tinted, text surfaces a flat 150% —
+  round 2 N9: 1.6–2.0 turned glass olive or pink over bright wallpapers). **Refraction** is ONE shared SVG filter
+  (`components/GlassRefraction.tsx`, `#nt-refract`: a 256² edge-lens displacement map generated once,
+  `primitiveUnits="objectBoundingBox"` so one filter fits every element), referenced from
+  `--glass-blur` as `url(#nt-refract)` — no per-node filters. **It runs LAST in the chain**
+  (`blur() saturate() url()`) and composites over its SourceGraphic so its output is opaque: first in
+  the chain (plus an in-filter soft blur with default edgeMode) it let Chromium show a 20–40px band of
+  SHARP backdrop inside every glass rim at every slider value (visual QA C1). Measured on an empty
+  `.ctx-menu` over terminal text, rim-band high-frequency energy 2.55 → 0.20 (Clear), 1.90 → 0.07
+  (Readable) = the interior's. **Terminal glass flattens luminance**: `--glass-term-blur` adds
+  `contrast(calc(1 - var(--glass-t)))` (1 at Clear, 0.3 at Readable, 0 at Tinted) — a blurred photo
+  under a big pane read as smudges; empty glass at Readable over the lake photo went 2.2:1 → 1.28:1
+  brightness swing. It keeps the backdrop a backdrop colour, so the guarantee is untouched. The status
+  chip wash is sized at the Readable tick for every slider position (the wash only grows with alpha).
+  App.tsx sets `data-theme`, `data-nt-glass` and the glass custom properties in LAYOUT effects, so no
+  frame paints the attribute without its fill. Its scale is `0.025 × (1 − t)`; it moves
+  backdrop pixels, never the tint, so it cannot touch contrast. Glass NODES carry a 1px rim light instead of a sheen: a
+  masked-ring `::before` (anchored to the React Flow wrapper), brightest top-left; a surface-wide
+  diagonal sheen was tried and washed the pane out. Refraction scale max is 0.025 (was 0.06). Node blur+refraction pause while the camera moves
+  (`.canvas-moving`) ONLY when **Keep blur while moving** is off (`settings.glassBlurWhileMoving`,
+  default ON, read through `keepGlassBlurWhileMoving` — only a literal `false` pauses): on, Canvas
+  never adds the class, so the glass stays live through a pan at a GPU cost; chrome keeps both always. MEASURED on the live dev build (CDP computed style):
+  Chromium keeps `url("#nt-refract") blur(…) saturate(…)` on the tab bar, dock, sessions sidebar,
+  minimap, zoom controls and terminal nodes.
+- **Needs-you on glass is an INNER light** (the user's pick, "variant B"): the outer red `::after`
+  halo is hidden and a `::before` on the React Flow wrapper paints an inset rim light in
+  `--state-attention` (orange) that breathes 0.35 → 1 over 2.4 s — `pointer-events: none`, above the
+  glass body (z 5), and fading out ~36px inside the rim so terminal text stays readable. It reads
+  `--nt-anim-state` (the covered-canvas pause), holds static-lit when the window is idle and static
+  at 0.7 under Reduce Motion. The default look keeps its outer glow.
+- **Accessibility outranks the slider** (HIG liquid-glass.md, like iOS). `lib/useGlassA11y.ts`
+  reads `prefers-reduced-transparency` and `prefers-contrast: more` (one subscription, Electron and
+  browser alike) and `glassSurfaceAlpha` applies them to every tint alpha: **Reduce Transparency**
+  = alpha 1, no blur, no refraction filter in the DOM, no rim light, and the slider row is disabled
+  with the reason; **Increase Contrast** = the slider pins to Tinted, `--glass-edge` goes to 0.5,
+  terminal borders thicken and the `--sys-*` palette takes HIG's increased-contrast columns
+  (`SYSTEM_COLORS.darkContrast|lightContrast`, pinned to the CSS). The alpha half lives in JS
+  because the fills are INLINE custom properties a media query cannot override. **Reduce Motion**
+  holds the three state glows static-lit (the idle gate's values) and stops the minimap and badge
+  pulses, in every appearance — the state still reads, nothing breathes.
+- **Agent TUIs after a live switch to a light terminal theme** keep the dark palette they latched at
+  launch. A/B, nodeterm Light, Readable glass vs opaque Light, same frames: Codex composer 1.25:1 vs
+  dark-on-black (unreadable both), Codex model line 1.6 vs 1.41, Claude dim status 1.96 vs 2.86, Grok
+  identical — the apps' colours, not the glass (app colours are outside the guarantee). Left as is;
+  restart agents after a theme switch.
+- **Surfaces.** Desktop: full. Server Edition: gradients + glass; the stills list is empty (not
+  macOS) and "Choose image…" is hidden (a picker there browses the SERVER's disk). Relay tabs keep
+  a stub (no stills, import refused). Mobile: N/A (no canvas). Kanban: the board paints the wallpaper under Liquid Glass (see Liquid Glass chrome).
+
 ## Keybindings (registry, overrides, dispatch)
 
 Every user-facing chord is a registry command, and the whole engine is **one module**:
@@ -3783,12 +4786,23 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   instead of watching it vanish on the next launch. The write path is raw and the gates read the
   sanitized map, so a dropped hand-edit is invisible in the UI but still on disk until a UI write
   or Reset replaces the map.
-- **Dispatch has exactly two owners.** The renderer's is ONE window `keydown` listener in
-  `Canvas.tsx`, on the **bubble** phase — the Settings recorder's `stopPropagation` on an armed
+- **Dispatch has exactly two owners per shell.** The renderer's is ONE window `keydown` listener
+  in `Canvas.tsx`, on the **bubble** phase — the Settings recorder's `stopPropagation` on an armed
   capture depends on that, and moving it to capture would let a recorded chord fire the command it
-  is being bound to. The main process's is `src/main/keydown-intercept.ts`, a **closed allowlist**
-  of chords it must steal back from the application menu before the page ever sees them.
+  is being bound to. On the desktop the other is `src/main/keydown-intercept.ts`, a **closed
+  allowlist** of chords it must steal back from the application menu before the page ever sees
+  them. The **Server Edition** has no main process, so for `node.toggleMarkdown` ONLY the bridge's
+  `renderer/bridge/markdown-toggle-key.ts` stands in for that intercept — still one owner per
+  shell, never both — and it runs on the bubble phase for the same recorder reason. **The Canvas
+  dispatcher must never gain a `node.toggleMarkdown` handler**: in the browser it would toggle
+  every hovered node twice, and on the desktop it would duplicate main's forward. (`node.close`
+  has no browser owner at all: the browser keeps ⌘W.)
 - **Invariants**
+  - **A bare letter or Space is only ever a `board`-scope binding.** `board` commands resolve only
+    while a board is up and carry neither `allowWhileTyping` nor `allowInTerminal` — that pair of
+    refusals is what makes a bare key a command rather than a character stolen from the user, so a
+    `board` row must never gain either flag, and no other scope may be given bare letters
+    (`normalizeBindingForCommand`). `board` shares the `global` conflict bucket with app/canvas.
   - **Never read `settings.speech.shortcut`.** The dictation chord is `dictationBinding()` (the
     first effective `speech.dictation` binding); the legacy field is a **downgrade mirror only**,
     written by `setKeybindingOverride` so an older build still finds the user's chord.
@@ -3802,7 +4816,8 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     swallows its chord app-wide with the recorder reporting no conflict.
   - **Dictation has its own conflict bucket** (`conflictBucket` — `speech.dictation` is never in
     `global`), because it never competes at dispatch: the resolver skips it and its own keyed
-    listener claims the chord FIRST **in plain app focus only**, which is precedence, not ambiguity.
+    listener claims the chord FIRST **in plain app focus or the ⌘M composer box** (`isChatComposerTarget`),
+    which is precedence, not ambiguity.
     Overlap policy is deliberately asymmetric — the LOAD path PERMITS a shared chord (legacy
     settings.json files contain them and `sanitizeKeybindingOverrides` would otherwise strip the
     user's own binding with the migrated one), while the Settings UI REFUSES to create one
@@ -3832,10 +4847,29 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     dispatcher, whose main-intercepted command cases deliberately have no renderer handlers.
     `terminalChordBubbles` must therefore refuse every `MAIN_INTERCEPTED_COMMAND_IDS` command; if
     it returned true for `node.close`, xterm would withhold `^W` while the unclaimed event bubbled
-    to Canvas. One predicate, two main-process consumers are pinned in `keydown-intercept.test.ts`
+    to Canvas. **`node.toggleMarkdown` is the one exception and BUBBLES**: in the Server Edition its
+    owner is a WINDOW keydown listener in the bridge (`bridge/markdown-toggle-key.ts`, below), which
+    xterm would otherwise starve by writing `\r` and cancelling the event. It changes nothing on the
+    desktop — under app-first main claims the chord above the page, under terminal-first the
+    resolver already refuses it, and main has no terminal-focus stand-down for it. One predicate,
+    two main-process consumers are pinned in `keydown-intercept.test.ts`
     (including a source-level wiring pin, since the menu leg lives against a real Menu in index.ts),
     and `keybindingOverrides.test.ts` pins the renderer-to-xterm hand-off through
     `terminalKeyAction`.
+  - **The Server Edition's ⌘/Ctrl+M is the bridge's own window listener**
+    (`renderer/bridge/markdown-toggle-key.ts`, wired as `onMarkdownToggle` in `bridge/stubs.ts`):
+    a browser has no `before-input-event`, so the stub used to be `noopUnsub` and the chord did
+    nothing there. It mirrors the intercept — effective `node.toggleMarkdown` bindings read per
+    keystroke, `policyStandsDown` (now in `shared/keybindings.ts`, re-exported by
+    `keydown-intercept.ts`, so both shells run ONE predicate) with focus read from the DOM via
+    `isTerminalTarget` — plus a `defaultPrevented` event is left alone. **A held-key auto-repeat
+    is claimed but never re-toggles, in BOTH shells**: the browser listener preventDefaults it and
+    forwards nothing, and `keydownIntercept` answers `{action: null}` for a repeated toggle-markdown
+    chord (still swallowed, so the repeat cannot fall through to the menu's Minimize) — the same
+    shape as the held ⌘0. Bubble phase for the recorder's sake, installed only
+    while subscribed. It cannot double-fire on desktop (only `buildStubApi` reaches it; the relay
+    tab takes `onMarkdownToggle` from the local preload). macOS Chrome reserves ⌘M for minimize,
+    so the default chord only reaches a Mac browser tab after a remap (docs/SERVER.md).
   - **ShortcutsPanel is DERIVED from the registry, never a hand-written list.**
     `buildShortcutSections` iterates `COMMAND_DEFINITIONS` — one section per `CommandGroup` in
     registry source order, the label from `def.title`, and EVERY one of the command's EFFECTIVE
@@ -4301,7 +5335,7 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   **PULL REQUEST cards are harvested from the issue poll, not fetched** (2026-09-01, read-only):
   `/repos/{repo}/issues` returns pull requests too — `client.listIssues` used to `continue` past
   them — so keeping them costs ZERO extra requests and inherits the incremental `since` watermark,
-  the ETags, the 60 s poll and the cache snapshot the issue lane already has. The alternative was
+  the heartbeat ETag (below), the 60 s poll and the cache snapshot the issue lane already has. The alternative was
   measured and rejected: **`/repos/{repo}/pulls` IGNORES `since`** (a day-old `since` returned the
   same 100 items as none), each item is ~25 KB against ~7 KB, and it would be a second
   ETag/paging/cache lineage — for `head`/`base` and nothing else (mergeable, reviews and checks are
@@ -4322,6 +5356,216 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   dropped, so only a full reconciliation may clear it. **(3)** the `pulls` source is `readOnly` in
   the registry: no drag, no move control, and its page reports `readOnly: true` on the wire rather
   than trusting every consumer to remember.
+  **Sync foundation: what a poll costs, what a failure means, what a write needs** (2026-09-28,
+  `core/github/*`; Desktop and Server Edition identical — all of it is core). Seven rules:
+  **(1) A poll that finds nothing spends nothing.** Before each pass, `client.issuesHeartbeat` asks
+  for the single most recently updated item (`state=all&sort=updated&direction=desc&per_page=1`)
+  with `If-None-Match`; a 304 skips the scan. MEASURED against this repo (read-only `gh api`):
+  twenty 304s moved `x-ratelimit-used` by **0**, the next 200 by 1; five plain 200s by 5. The `since`
+  scan could never do this itself — `since` moves every pass, so its URL (and any ETag) never
+  repeats, and the snapshot's `etags` map was declared and always written empty. The validator is
+  the one read BEFORE the scan (a change landing mid-scan stays "new"), it is persisted in
+  `snapshot.etags.heartbeat` (a restart does not pay a full read), and a 304 NEVER skips a full
+  reconciliation (a deletion or transfer does not move the top item) or an incomplete repository.
+  It covers pull requests by construction: same endpoint, same `updated_at` the scan filters on.
+  **A 304 still prompts the board to re-read** (an empty delta, served from the local cache, no
+  GitHub cost) exactly as every successful refresh always did: a page is not only issues — read
+  only, the mapping approval and the completion column are derived by the host at query time, and
+  the first version, which emitted nothing on a 304, left a board read only after its user
+  approved the mapping (review of #1001). Approve and revoke also notify the project's open boards
+  at once (`service.notifyProject`). **Unknown `state_reason` values decode as no reason**: GitHub
+  added `duplicate` (one of cli/cli's last 100 closed issues, measured 2026-09-29), and the strict
+  decoder failed that repository's whole scan as malformed — it never synced.
+  **The credential check is conditional too** (`createTokenValidator`): every poll re-resolves the
+  credential (30 s memo, 60 s poll), and each resolve was an unconditional `GET /user` — one real
+  request per poll even after the heartbeat. With `If-None-Match` an unchanged identity is a free
+  304 (MEASURED: ten conditional reads, +0), and a bogus token presenting a valid validator still
+  gets 401. Idle polling now costs zero quota. **(2) The budget is read from every response and
+  acted on before GitHub refuses.** `client.onRateLimit` reports `x-ratelimit-*` from 200, 304 and
+  errors alike to `GitHubRequestCoordinator.noteRateSample`, keyed by the credential's identity
+  (the host builds the client from token + userId); within one window the LOWEST reading wins. A
+  spent `core` budget blocks new requests at once. Below `backgroundFloor(limit)` = max(100, 10%)
+  the BACKGROUND poll stops until the window resets — the budget is the whole account's (`gh`, the
+  browser, other tools) — while a refresh the user asks for still runs within its own floors.
+  **Every wait is capped** (`MAX_RATE_WAIT_MS`, 10 s in TOTAL): past it the request is refused at
+  once with its retry time, instead of holding one of four read slots and an IPC call for up to an
+  hour. The page and the Settings status carry the `throttle`; both say "held until HH:MM"
+  (`lib/githubSyncStatus.ts`), and subscribers are prompted once per deadline, not per skipped
+  minute. Do NOT add a `/rate_limit` probe: measured for the same token in the same second it
+  answered 5000 left / used 0 with a different reset time than the response headers (4968 / 32) —
+  the headers are the truth. **(3) Throttled is not signed out.** `classifyGitHubFailure`
+  (`core/github/failure.ts`) is the ONE classifier: only a 401 or a non-rate-limit 403 is
+  `unauthorized`; network, timeout, 5xx and malformed bodies are `unreachable`; limits are
+  `rate-limited`. Token validation is tri-state (`TokenValidation`); the resolver keeps the last
+  credential GitHub vouched for — SAME token only — through an unknown answer, and with none throws
+  a `GitHubReachabilityError` rather than returning the null that every caller reads as "sign in".
+  Auto does not fall through to the saved token when the CLI's token merely could not be checked
+  (that would switch identities for the length of an outage). **`gh auth status` is never run**:
+  measured on gh 2.45 with GitHub unreachable it printed "The token in hosts.yml is invalid";
+  `gh auth token` only reads the local store and our own classified `/user` check decides.
+  Settings says "GitHub could not be reached to check the sign-in" and keeps the last confirmed
+  sign-in on screen; `saveToken` refuses an unchecked token without calling it invalid.
+  **(4) A close carries its reason.** `UpdateIssueInput.stateReason`: the close confirm offers
+  Completed / Not planned (Completed preselected — GitHub's default), a reopen sends `reopened`.
+  It rides ONLY with a state change (the "send `state` only when it changes" rule stands), the
+  client refuses a reason of the wrong kind, and a close GitHub recorded with a different reason is
+  not reported as confirmed. **(5) Writes need an approval that covers the column mapping.** The
+  mapping (which label a column applies, which column closes) is in the git-shared project.json,
+  so a pulled commit could re-aim writes under an approval given for something else. An approval
+  records `githubMappingDigest(repository, completionColumnId, columnMappings)` — column ORDER and
+  titles excluded (they change nothing GitHub sees; `config.revision` includes order and would make
+  every column drag revoke writes). Moves and "Create missing labels" require the digest to match
+  (`context.mappingApproved`); READS stay on the repository approval, since the mapping only decides
+  what a write does. A mismatch makes the board read only and says why (`page.mappingNotApproved`);
+  Settings offers "Approve column labels". **Upgrade:** an approval from before this change has no
+  digest — it keeps reading and must be approved once more before the board writes. Pinning the
+  on-disk mapping at first load was rejected: it would silently trust whatever a `git pull`
+  delivered between the upgrade and that load. **(6) Revoke deletes the cache.** The plaintext
+  issue cache (bodies included) is removed by the same bounded path as "Clear cached data", AFTER
+  the revoke is recorded — a failed delete is reported (`revoked-cache-kept`), never left approved.
+  The cache file is per (identity, repository), so another project on this machine bound to the
+  same repository re-fetches too. **(7) Every client that leaves releases its subscription.** The
+  service polls every 60 s per subscribed repository; the desktop window now releases on `closed`,
+  `render-process-gone` and `did-navigate` (`main/renderer-client-release.ts` — not
+  `did-start-navigation`, which also fires for a navigation the guard blocks), beside the relay
+  peers and Server Edition sockets that already did. **Mobile: N/A** — the phone's board carries
+  session cards only (the `githubIssues:*` channels are served to relay TABS, never the phone
+  dialect), so nothing there can read a throttle as signed out; surfacing GitHub cards on the phone
+  would need this whole contract carried over the relay.
+  **Pull request CI, mergeability and links** (2026-09-29; core `graphql-pulls.ts` +
+  `pull-status-tracker.ts`, shared `github-pull-status.ts` + `kanban-pull-links.ts`, renderer
+  `lib/pullLinks.ts` / `lib/pullAutoMove.ts` / `lib/pullChase.ts`). The issues harvest cannot say a
+  PR's head, checks or mergeability, so ONE GraphQL read per repository adds them: every open PR's
+  `headRefName`/`headRefOid`/`isCrossRepository`/`isDraft`/`mergeable`/`mergeStateStatus`, the head
+  commit's `statusCheckRollup`, `closingIssuesReferences`, plus the 30 most recently merged/closed
+  PRs (so a branch link survives the merge). MEASURED on this repository (60 open PRs): **1 point**
+  of the separate `graphql` budget, ~18 KB; the per-PR checks read (modal open only) is also 1.
+  **When it runs:** after a heartbeat that reported a change, on a user refresh, on the first
+  heartbeat of an app run, when the last read failed or the budget skipped one (`owed`) — never on a
+  304 otherwise. A finished check run does NOT move the heartbeat, so an UNDECIDED PR (mergeable
+  UNKNOWN or rollup PENDING/EXPECTED — measured: 40 of 50 open PRs read UNKNOWN on a first read, all
+  settled 20 s later, because the first read is what starts GitHub's computation) is CHASED at
+  30 s / 1 min / 2 min / 5 min, at most 12 reads per episode, and only while a board is VISIBLE: the
+  renderer asks (`githubIssues.chasePulls`) every 15 s while `document.visibilityState` is visible,
+  and the host answers from a map — schedule, cap and the synchronous `claimChase` live in core, and
+  no context (credential chain) is resolved unless a read is due. A new undecided PR or a new head
+  starts a new episode; the same stuck PR does not restart the count. **Semantics, each a shipped
+  bug somewhere:** a null rollup is "no checks" and renders NOTHING (never a tick); only
+  `mergeStateStatus === 'CLEAN'` is "Ready to merge" (MERGEABLE+BLOCKED is real: 2 of 31 here);
+  a rollup counts only at the current `headRefOid`, and a CI result is never carried from an older
+  head; a failed read keeps the last snapshot marked stale (`pullStatusFreshness`, greyed after
+  15 min); a FORBIDDEN/INSUFFICIENT_SCOPES answer for the rollup or mergeability HIDES that region
+  (`access`), which is not the same as a null rollup. Enum values (`mergeable`, rollup `state`,
+  `mergeStateStatus`) decode LENIENTLY: a value GitHub adds later claims nothing and is not chased,
+  and an unrecognised rollup state is `UNRECOGNIZED`, never `null` ("no checks") — one new value
+  must not fail every read of the repository (it happened with `state_reason: duplicate`). **Budget:** GitHub meters `graphql` apart from
+  `core`, and so does the coordinator now — `throttle(identity, at, resource)`, a primary limit is
+  tagged with its resource (`GitHubClientError.resource`, from `x-ratelimit-resource`, or GraphQL's
+  200-with-`RATE_LIMITED`) and holds only that resource; an untagged (secondary) limit still holds
+  the identity. A spent graphql budget (the user's own `gh pr list` spends it) must not stall REST
+  issue sync. **Links:** PR → issue = GitHub's own `closingIssuesReferences` (same repository only),
+  deliberately NOT unlinkable on the board — GitHub closes the issue at merge whatever the board
+  shows. PR → session card = the PR's head equals `data.worktree.branch` of the card's nearest bound
+  group (`worktreeBranchOf`, no git read; a stale binding still names the branch, which is exactly
+  when its PR merges); a FORK PR never links (36 of 50 open PRs here are forks). Unlinking writes a
+  git-shared tombstone in `ProjectKanban.pullLinks` — a BOARD-LEVEL field on purpose: every card-meta
+  setter rebuilds `meta[]` entries from a fixed field list, so a field added there is erased by the
+  next member/due/label edit. On an SSH project NO card carries a worktree branch
+  (`kanbanSessionsFrom` leaves it off where the cards are built), so the card face, the move and
+  the modal — which states the worktree reason — cannot disagree. PR → issue → session card: a session started on an issue (`data.issueRef`, below) links to
+  every PR whose `closingIssuesReferences` name that issue, matched against the pull board's own
+  `repository` (a `closes` number means nothing in another repository); here a FORK PR does count —
+  GitHub's "Closes #N" is meaningful wherever it comes from. The host memory remembers what a PR
+  closed while open, so the link survives the merge that should move the card; the same tombstones
+  apply, and an issue-bound card on an SSH project still links this way (only the branch half needs
+  a worktree group).
+  **What this machine observed lives on the HOST** (`core/github/pull-memory.ts`, persisted beside
+  the issue cache per identity + repository, deleted with it): every PR it has seen, its head, its
+  lifecycle, whether it was seen open, and `mergedSeenAt` — the first time it was seen merged AFTER
+  being seen open (an OBSERVED merge). The read lists only 50 open + 30 recent PRs, so without it a
+  closed-unmerged PR's block would expire once 30 newer PRs closed; remembered PRs stay on the pull
+  board (closed ones until unlinked, merges for 30 days) and an unlisted one takes its lifecycle
+  from the REST harvest. The first version kept a per-card "seen" map in settings.json instead, and
+  review found three failures in that shape: the planner's output exceeded the sanitizer's bounds so
+  the hook rewrote settings in a loop until React threw; the block expired; and two Server Edition
+  tabs both moved the card while a background tab's settings write reverted another tab's changes.
+  **Merge-driven move — session cards only, OFF by default.** The switch, the target column and
+  `armedAt` are MACHINE-LOCAL (`settings.kanbanPullAutoMove.projects[projectId]`, written ONLY by
+  the user's own Settings action): it makes this machine write the shared board on its own, so a
+  switch in the project file would make every clone move and commit cards nobody on that machine
+  asked for. Per-card opt-out is board content (`pullLinks.noAutoMove`). Guards in order
+  (`decidePullAutoMove`): opted out → never; any linked PR open/draft → wait; any closed unmerged →
+  blocked until the user unlinks it; already in target → nothing; no linked merge with
+  `mergedSeenAt >= armedAt` → no move (arming never sweeps old merges; `armedAt` is taken from the
+  HOST's clock via the pull board's `now`, because `mergedSeenAt` is stamped there and a Server
+  Edition browser's clock can be off). Each planned move must then win the host's one-time CLAIM
+  (`githubIssues:claim-pull-auto-move`, persisted in the same memory, keyed by project + card + PR
+  set) — the first ask across every window wins, and a card dragged back is not moved again for the
+  same merges. **The claim is refused unless THIS card was noted waiting on one of those PRs while it
+  was open** (`githubIssues:note-pull-waits`; the host records a note only for a PR it holds as open
+  itself): `mergedSeenAt` is a fact about the PR, and without the per-card note a card that first
+  appeared after the merge — a follow-up terminal in the same group, a teammate's card by git pull,
+  an issue-bound session started later — would win a fresh claim and jump to Done. It is then
+  applied as a compare-and-set on the column
+  the decision saw (`applyPullAutoMove`, run by Canvas against the store's latest board), writing
+  ONE `card-moved` board-log line whose `title` names the PRs. The planner writes nothing; it runs
+  only while the board is open and never on a stale snapshot. **GitHub issue cards are never
+  auto-moved** — GitHub already closes them when a `Closes #N` PR merges, and a second writer would
+  race it and could clobber `state_reason`.
+  Surfaces: Desktop + Server Edition identical (core + renderer; `githubIssues:pull-status`,
+  `:chase-pulls`, `:pull-checks`, `:claim-pull-auto-move` are registered by the shared core handlers
+  and served to relay tabs through the project-scope table; a relay tab never auto-moves — the
+  board belongs to the other machine). Check detail is bounded for relay guests: one read per PR per
+  15 s, ten per project per minute, both decided before a credential is resolved. **Mobile: follow-up** — the phone board carries session
+  cards only; showing PR CI there means carrying `GitHubPullBoard` over the relay dialect.
+  **Start with agent — a GitHub issue card starts a bound session** (2026-09-28). An issue card's
+  right-click menu and its summary modal offer **Start with agent ▸**, whose rows are the canvas's
+  own agent + account picker (`agentCreationEntries`, which takes an optional `pick` so the same
+  rows can point at another action — never a fourth copy of the picker). The result is an ordinary
+  agent node in the project cwd (through `addAgentNode`, which now returns the node) carrying
+  `data.issueRef {owner, repo, number}` — persisted, git-shared, therefore hostile:
+  `normalizeIssueRef` (`@shared/github-issue-ref`) runs at BOTH serializer seams and a malformed
+  value is dropped (the node survives, only the binding goes). Rules a refactor must not undo:
+  (1) **the launch line carries the REFERENCE, never the issue's text** — titles and bodies are
+  writable by anyone on a public repository and a launch line is typed into a pane.
+  `issueLaunchPrompt` is the ONE place a reference becomes text; it re-validates the reference
+  itself and returns nothing for a hostile one. The prompt tells the agent to read the issue with
+  `gh issue view N --repo owner/repo --comments` (mid-sentence: punctuation glued to the last flag is
+  copied literally and `gh` refuses `--comments.`) AND that its title, body and comments are
+  untrusted input, not instructions — the session runs under the project's permission mode (auto by
+  default), so the prompt is the only thing that can say "read it, do not obey it" before it does.
+  A board start means **work on it**: the default task is "investigate, plan and implement the fix
+  in this working tree"; a caller's `--prompt` REPLACES that task ("Your task: …"), never the lines
+  around it. The hard limits ride the prompt itself, after any brief: never close the issue, and no
+  issue comment or PR unless the user asks in that session — end with a proposed comment. Proven
+  under a real `/bin/sh` (`github-issue-ref.realsh.test.ts`). (2) **The reference comes from the card's
+  `htmlUrl`** (`issueRefFromHtmlUrl`, which also requires the URL's number to equal the card's).
+  (3) **`done` never moves a card**: it means a turn ended, not that the work did. The issue card
+  shows every bound session as a live chip (`IssueRunChips`, subscribed per node to a PRIMITIVE
+  signature `issueRunChipSig` — never `s.byId`), RUNNING / NEEDS YOU / TURN FAILED / DROPPED plus
+  unread; a click opens that session's card. A card moves only when the session `assign`s itself or
+  a person drags it — pinned by `board-writers.guard.test.ts`, which enumerates EVERY renderer call
+  site that writes a board assignment or moves an issue, each with the human/agent action that
+  triggers it; a new writer fails until it is signed for, and "a turn ended" is not a trigger. (4) **Board-log identity of an issue card** is the synthetic id
+  `github-issue:<owner>/<repo>#<N>` (lower-cased, `issueLogId`) — a namespace no node id can reach.
+  Under it: `run-started` (UI start, `--issue` open) and `run-ended` (written by EVERY node-removal
+  funnel — `deleteNodes`, `closeStoredNodes`, the Omni delete, `deleteProject`, the Server `close` —
+  before it drops the node's agent status, with the last observed state). `duplicateNode` drops
+  `issueRef` (a copy is a new session nobody started on the issue; carrying the binding made a
+  phantom run). Known gap: ⌘Z/⌘⇧Z replay node arrays and write no run history, so an undone delete
+  revives a node whose run already ended. The summary modal shows it read-only as
+  "Agent runs" (no composer: a comment box under an issue reads as "post to GitHub"). **No cost or
+  token figure** is recorded: there is no cumulative per-session number, and a context-window
+  reading is not one. (5) The new session card is filed under the issue card's column (the same
+  unpruned direct write `createNodeInColumn` uses); the node header, the session card AND the card
+  modal's header show a `#N` chip (`IssueRefChip`; the modal's closes itself and makes the same
+  request) that opens the issue on the board (`openIssueOnBoard` →
+  `viewMode.requestedIssue`) ONLY when that board has GitHub sync — otherwise straight to GitHub,
+  rather than flipping the project's persisted view to a board that cannot show it — and the board
+  itself falls back to GitHub when the issue is not on a fetched page. Never a dead click. No "start in a new worktree" UI yet: compose `open-worktree` + `open-agent --group --issue`
+  (the skill says how). Surfaces: Desktop + Server Edition (renderer + core); Omni board shows no
+  issue lanes; **Mobile does not render the binding** — `issueRef` reaches the phone inside the
+  project file, and nodeterm-ios ignores the unknown field (follow-up there).
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,
   2026-08-30 — the same membership-plus-one-leaf discipline `AGENT_CONFIG` uses): each entry declares
   its filter `label`, its `placement` (`assignment` = the board's own persisted assignments,
@@ -4376,9 +5620,22 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   cards edit their text in the modal (live both ways).
   The modal header carries the terminal node's actions (search via `useTerminalSearch`+
   `FindBar` on the modal xterm; dictate via the same `nodeterm:dictate` event — `.dictation`
-  overlay z is 60, ABOVE the modal scrim; ✦ `pty.generateName` through the modal rename funnel).
+  overlay z is 60, ABOVE the modal scrim; ✦ `pty.generateName` through the modal rename funnel;
+  and the **⌘M view** — a header toggle (`IconMarkdown`) plus the chord, which lays the SAME face
+  the canvas node shows over the live viewer: `ChatPanel` when `canChat(created agent)` and the
+  session id is known, else `TerminalMarkdownView`. Three rules: the state is MODAL-LOCAL and per OPENING
+  (never `data.mdMode` — that would flip the canvas node under the board too); the viewer
+  stays MOUNTED underneath (covered, not swapped, so its co-attach never detaches/re-attaches) and
+  gets the same focus hand-off as the node (`ModalTerminal`'s `covered` → `useMdModeFocus`); and the
+  chord reaches the modal through `window.nodeTerminal.onMarkdownToggle` only while it is the top
+  dialog, while the canvas terminal AND editor nodes' own subscriptions refuse the chord whenever a
+  board is up (`lib/markdownChord.ts` `canvasOwnsMarkdownChord` — a hover flag can go stale under
+  the opaque board, so one press could otherwise flip both). The header also carries the node's
+  pause chips — DROPPED, PAUSED and SLEEPING (Eco, with the refused-wake sentence) — each clicking
+  through the same `wakeHibernatedNode` trigger as the canvas chip. The overlay sits at z 5 in the pane, BELOW the
+  sheet's resize handles (z 6/7, issue #389) — pinned in `styles.kanban.test.ts`.
   **The 💬 icon means COMMENTS on both surfaces** (repurposed from the markdown view — ⌘M still
-  toggles markdown/chat on the canvas node): on a terminal node it opens a right-side comments
+  toggles markdown/chat on the canvas node, and on the card modal): on a terminal node it opens a right-side comments
   flyout (`.term-node__comments`, a sibling of the overflow:hidden root, hosting BoardLogPanel
   with `card: Pick<KanbanSession,'id'>`); in the modal it collapses/reopens the panel, which is
   OPEN BY DEFAULT there. Under the modal header sits the **card metadata strip** (`CardMetaBar.tsx`): Members (assign) —
@@ -4451,6 +5708,121 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   ~15 KB under the 128 KB ceiling. **Both verbs announce their write on `workspaceExternalChange`
   and that is not optional**: the renderer holds its own board and the next whole-workspace save
   serializes THAT, so a change the renderer never heard about is one the next autosave reverts.
+  **Board model + UX (2026-09).** Three tiers, and a new board feature must pick one: a board
+  FACT is shared content in `project.kanban` (optional, sanitized, ignored harmlessly by an older
+  build); a DISPLAY preference is per-user localStorage (`state/kanbanDisplay.ts`,
+  `nodeterm.kanbanDisplay`, per project); a filter on LIVE agent state is component state only.
+  - **`sanitizeKanban` (`core/workspace-files.ts`) is the shape rule now**, applied on all three
+    seams — `fileToProject`, the store's inline-project branch (which bypasses it) and
+    `projectToFile` on the way OUT (the two-seam rule `sanitizeLayouts` follows). It is
+    `validKanban` plus per-entry repairs, never inventions: a column that is not an object with
+    string `id` + `title` is dropped (React cannot render an object title — a render throw
+    boot-loops the app, the view choice persists), a non-string `category` is dropped, a malformed
+    assignment is dropped, a card's `assignees` that is not a list is dropped (entries without a
+    string name + colour filtered), every other field round-trips, and a clean board comes back BY
+    IDENTITY so a well-formed file is never rewritten. **Readers do not trust the load path alone**:
+    `cardAssignees` (`@shared/kanban-labels`) is the one reader of `meta[].assignees` — the board,
+    the card, the member filter, the log diff and the handoff pings all go through it, because an
+    `assignees: 5` iterated raw threw during render (a boot loop) and inside the `assign` verb.
+  - **Lifecycle category** (`KanbanColumn.category?: unstarted|started|done|closed`,
+    `@shared/kanban-category`). Every reader goes through `columnCategory`: an unknown STRING reads
+    as absent but is KEPT in the file (dropping it would erase a newer build's value on an older
+    teammate's save); a non-string never reaches a comparison. The default board carries
+    unstarted/started/done on every seeding surface (`defaultBoardColumns`, shared by
+    `defaultKanban` and the relay's `ensureProjectBoard`/label seeding). It drives the header
+    progress (`boardProgress`: live cards in done+closed columns over EVERY live card, Ungrouped
+    included; null when no column is done/closed — a number over an undefined "complete" would be
+    invented), hides `closed` columns behind a per-user toggle (default hidden), and gives the GitHub
+    completion column its default (`defaultCompletionColumnId`: first done, else first closed, else
+    the last column — the pre-category default, so an uncategorized board is unchanged). **A
+    category change on a column that holds cards is never silent**: it is a claim about every card
+    in the column (they start counting as finished, or leave view when it becomes closed), so
+    `categoryChangeImpact` gates a `ConfirmDialog` naming the count and the consequence; an empty
+    column changes at once. Confirm rather than refuse: refusing would only make the user empty
+    the column first, which is friction, not safety. Set from the column's ⋯ menu / header
+    right-click on the per-project board; Omni shows no column menu.
+  - **An unanchored card move lands at the TOP** (`assignNode`): no `before`, or a `before` naming
+    a card outside the destination column. An agent's `assign` into a long Done column used to
+    append at the bottom and read as "disappeared". A POSITIONAL drop still says where it landed —
+    below the last card or on the column body passes `AT_COLUMN_END` explicitly (both board views).
+    The relay's `projects.setCardColumn` follows the same rule; the `assign` help in BOTH agent
+    bodies says so (`canvas-control-core.test.ts` pins it).
+  - **Status chips** (Running / Needs you / Unread, `lib/kanbanStatusChips.ts`) read the store
+    through a derived primitive signature (`statusChipSig`) — never `byId`, the `armedDepSig` rule —
+    and are NEVER persisted (component state, reset on project switch): a filter on
+    second-by-second state that survived a restart shows a wrong board. The card badge and the chips
+    share ONE rule, `cardBadge`, so a chip cannot select cards whose badge says something else. They
+    narrow session cards only (like local labels); they AND with the label filter and OR within
+    themselves.
+  - **Board-log folding is a VIEW** (`lib/boardLogCollapse.ts`, `BoardLogFeed`): consecutive events
+    by the same author (name AND colour) of the same type within two minutes of the run's NEWEST row
+    render as one "×N" row that expands in place; the jsonl is never rewritten. The window is
+    anchored, not chained, so a ×N never spans more than two minutes. Comments never fold, and
+    neither do `agent-message` / `agent-read-cookies` (audit rows) or an issue's `run-started` /
+    `run-ended` history (each row names a different session) — `NEVER_COLLAPSE`.
+  - **Keyboard**: registry scope `board` (group Board) — Space opens the focused/hovered card,
+    J/K + ArrowDown/Up walk board order (the session cards on screen, column by column, Ungrouped
+    first; GitHub cards excluded), ArrowLeft/Right jump to the same row of the neighbouring
+    non-empty column; in the card modal J/K step the modal. `board` resolves only while a board is
+    up and has no `allowWhileTyping`/`allowInTerminal`, which is the ONLY reason
+    `normalizeBindingForCommand` lets it bind a bare letter or Space (the card modal's terminal,
+    the comment box and the chat composer keep every key). Dispatch stays in Canvas's one
+    listener; the mounted per-project board answers through `lib/boardKeys.ts` and DECLINES (the
+    key falls through) when the focused control uses the key (`keyOwnedByControl`: Space on a
+    button/link/checkbox, anything in a `<select>` or ARIA composite), when any dialog other than
+    its own card modal is open, or when a card menu is up. Two pre-existing bugs this had to fix:
+    the canvas's CAPTURE-phase space-to-pan `preventDefault`ed every non-typing Space even while a
+    board covered the canvas (so no board button could be pressed with Space) — `spacePanKeydown`
+    now takes `canvasCovered`; and a `Space` binding could never match because `e.key` is `' '`
+    (`normalizeKey` maps it to `SPACE`). The Settings recorder captures a bare key only for a
+    command that may have one (`board` scope or `allowBareKey`).
+  - **Rank strings** (`KanbanAssignment.rank?`, `@shared/kanban-rank` + `@shared/kanban-order`).
+    Order within a column = rank; an entry without a valid one (every pre-rank board, an older
+    build's move — its `assignNode` rebuilds the moved entry without the field — a hand edit) sits
+    right after the entry before it in the ARRAY, ties keep array order. Keys are base-62
+    fractional-index strings with an integer head, so the board's DEFAULT (top insert) is a
+    decrement: a thousand top inserts stay four characters (a digits-only midpoint scheme grows a
+    character every few). **A move never throws**: ~1.3k inserts into ONE gap grow a key past
+    `RANK_MAX_LENGTH` (256), and only then is the destination column re-keyed evenly as one
+    contiguous block (`rebalanceColumn`) — the one rebalance this scheme does. A rank STRING readers
+    cannot use is kept in the file (like an unknown category) and re-keyed by the next write into
+    that column; a non-string is dropped. A card assigned twice (a clean git merge can do that)
+    keeps its FIRST assignment everywhere — `sanitizeKanban`, `columnOrder` and `placeAssignment`
+    (which removes every copy of the moved card, as the pre-rank `assignNode` did). **Every write goes
+    through `placeAssignment`** (renderer `assignNode` AND the relay's `setProjectCardColumn`), which
+    also keeps the array in rank order so a build that ignores `rank` shows the same column — the
+    brief's two goals ("a move is a one-line diff" and "keep writing the array in rank order") pull
+    against each other, and the resolution is to move as little as the second allows: a
+    cross-column move whose array slot already sits between its new neighbours changes ONE entry in
+    place (two lines: `columnId` + `rank`); otherwise its block moves next to its successor; a
+    reorder WITHIN a column always moves a block (the array must change for an old build to see
+    it). A destination column is repaired first when it must be — missing/invalid/colliding ranks
+    re-keyed in the order it was already showing (only those entries change; a board's first write
+    into an unranked column ranks it once), an array that disagrees re-slotted within the column's
+    own positions. MEASURED with `git merge-file` (`core/kanban-rank-merge.test.ts`): two
+    ADJACENT cards filed into Done concurrently conflict under array-only placement and merge
+    cleanly with ranks; two NON-adjacent ones merged cleanly either way, so do not claim more than
+    that. The file's own `rev`/`savedAt` header still conflicts on any concurrent save — untouched.
+  - **Saved views** (`kanban.views: [{id, name, query}]`, `@shared/kanban-views`) are SHARED
+    content: a query carries source, labels, members and columns (the member and column filters are
+    board filters of their own). `viewQuery` is the ONLY builder and reads only those four, so the
+    status chips can never enter a view. The ACTIVE view and "show closed" are per user
+    (`kanbanDisplay`), restored on entering the board; a view a teammate deleted is ignored.
+    Deleting a view confirms (it goes for everyone). `sanitizeViews` runs inside `sanitizeKanban`,
+    keeps query fields it does not know, and `KANBAN_VIEW_SOURCES` is pinned to the renderer's
+    source registry (the shared sanitizer cannot import it).
+  - **Handoff pings** (`lib/handoffPings.ts`): the `assign` verb notifies a card's ASSIGNEE (this
+    machine's presence name) when an agent files it into a `done` column or a `started` column past
+    the board's first — never on routine moves, and not for needs-you (the existing agent-status
+    alert already covers every agent node). Same consent, background-only rule and per-node
+    cooldown as the turn-end alert, and a handoff ping arms a one-shot FOLD so the Stop hook that
+    follows seconds later is not a second notification for the same moment. v1 is agent-driven
+    moves only: a teammate's move arriving by git, or the phone's relay move, pings nobody.
+  **Phone** (nodeterm-ios): must at least not break on `category`, `rank` or `views` (extra JSON
+  keys its board decoder ignores). The relay-served move now lands at the top with a rank, while
+  the phone's direct-SSH writer (`KanbanBoardWriter`) still appends without one — the next desktop
+  write into that column ranks it, and array order already shows it correctly. `KanbanDefaults`
+  should gain the three categories. All three are the iOS follow-up, not desktop work.
 - **Omni Kanban (global swimlanes)** (`components/kanban/GlobalKanbanView.tsx`; one swimlane per open project; `state/viewMode.ts` `globalKanban` (localStorage `nodeterm.globalKanban`, machine-local, like `viewByProject`) + `settings.omniKanbanEnabled` (feature gate, default OFF, `settings.json`) / `omniKanbanAsDefault` (when true, `view.kanbanToggle` — Cmd+Shift+B — opens Omni; otherwise per-project; `view.globalKanbanToggle` registry command — unbound, remappable — always opens Omni when enabled); `TabBar` and the menu IPC `onToggleKanban` share one `performKanbanToggle` decision, and `isGlobalKanbanOpen()` is the single gate (fail-closed, static import of `useSettings` — the earlier `require` failed open in the packaged renderer). The active project's lane is derived from serialized `p.nodes` via `toKanbanSessionState` — the persisted-state counterpart to `toKanbanSession` — and is committed (`commitActiveToStore`) before the overlay mounts so live React Flow edits are not stale; `pendingLaunch` never becomes `initialCommand` in the modal (the DAG launch must fire only when dependencies report done, and the canvas `TerminalNode` already delivers `initialCommand` via `writeWhenShellReady` after the `nodeterm:create-node` project switch). Active-project edits (rename / sticky / browser nav) route through Canvas live nodes (`setNodes` + `markDirty`), non-active through the store + `writeDisk`; delete uses `ConfirmDialog` (not `confirm`) and SSH-aware teardown (`transport.destroy` locally vs `sshProject.killSessions` with `everySocket` for a remote owner, plus `agentStatus` / `agentNodes` / `webviewKeepAlive` cleanup). The top bar's project pills and Cmd/Ctrl+1..9 (`nodeterm:swimlane-jump`) jump to the lane; header hint shows the correct mod (`Cmd` on Mac, `Ctrl` elsewhere). Server Edition works as-is, Mobile N/A.
 - **Settings** (`SettingsPage.tsx`, ⚙ / ⌘,): font/cursor (live to xterm + Monaco), default
   shell, grid + snap, **default node size** (`defaultNodeWidth`/`defaultNodeHeight` — new
@@ -4718,6 +6090,29 @@ glow that says "this agent finished while you were away" is still on screen when
 look for it. `hud.css` is deliberately excluded: the notch HUD's window is never focused, so the
 shared gate would freeze it permanently rather than while nobody is looking.
 
+**The working glow is BOUNDED; the unread and attention glows are not.** The idle gate only helps an
+unfocused window, and an agent mid-turn in a FOCUSED one kept `nt-working-glow` looping for the
+whole turn — MEASURED (production build, M2, focused): one visible working node cost **+3 points
+total CPU and ~25 style recalcs/s** for as long as it ran. It now runs 4 cycles of 2.6 s (~10 s) and
+rests at `opacity: 0.7`, the same static-lit value the idle gate and Reduce Motion already hold it
+at; the keyframes start and end at 0.7, so the settle is seamless. A new turn re-adds `.working`,
+which restarts the pulse — and so does anything else that re-applies the animation: a window
+refocus (the idle gate sets `animation: none`, so lifting it starts the shorthand afresh) and a node
+remount (a project switch, a park re-adopt) each replay the four pulses. Still bounded every time. Unread and attention stay infinite on purpose — they exist to pull the
+eye, and the idle gate covers the unfocused case. `styles.animation-gate.test.ts` pins the bounded
+shorthand, the resting opacity and the keyframe endpoints.
+
+**A camera move freezes the viewport's raster scale, and only for the move.** `onCanvasMoveStart`
+adds `canvas-camera-moving` to the flow wrapper in EVERY appearance (before the glass-only
+early-return — it is not a glass feature), and `.canvas-camera-moving .react-flow__viewport` sets
+`will-change: transform`, so the compositor scales the already-rastered layer instead of
+re-rasterising every node's DOM at each intermediate zoom. MEASURED (12 WebGL terminals, 60 Hz
+synthetic wheel zoom, M2, production build): **41–48% → 30–36%** total CPU, GPU process **22% →
+15%**. It MUST stay transient: `onCanvasMoveEnd` removes the class 150 ms after the move settles so
+text re-rasters sharp at the final scale — a permanent `will-change` on the viewport leaves every
+terminal blurry after a zoom. `canvas/camera-moving.test.ts` pins both halves (the rule is scoped
+to the class, and no bare `.react-flow__viewport` rule carries `will-change`).
+
 ## Remote access (phone relay) — free, not Pro
 
 - Phone relay remote access ("Reach this Mac from anywhere") is a **Core (free) feature** as of
@@ -4732,6 +6127,39 @@ shared gate would freeze it permanently rather than while nobody is looking.
   `POST /v1/relay/host-token` / `/v1/relay/device` must admit deviceId (no-entitlement) mints, and
   the relay server may rate-limit free hosts independently — a client-side gate must NOT be
   reintroduced to work around a backend refusal (fix the backend policy instead).
+- **The phone's Chat screen verbs** (`chat.page` / `chat.status` / `chat.send` / `agent.answer`,
+  `host-service.ts` `handleChat` → `main/remote/host-chat.ts`, spec + exact error strings in
+  `docs/mobile-chat-view.md` §3.2). Four rules a refactor must not undo: (1) **the phone sends only a
+  node id**; cwd/account/agent/session are resolved from THIS machine's records
+  (`WorkspaceStore.getNodeResolved` + the mirror). The session id is asked of the RENDERER's
+  agent-status store first (what ⌘M reads; after a restart a hook-fed id lives only there), the
+  mirror / minted id only as a fallback; the cwd rides only for a REMOTE node with a known id, so a
+  local known-but-dead id — or no id at all — reads NOTHING rather than claude's cwd-newest fallback
+  (a stranger's session). An SSH-project node is read REMOTE-ONLY (`remoteOnly`): over its live
+  pty's master, else its PROJECT's (`remoteTargetForNode` — an idle tab or any node after a restart
+  has no pty, and resolving through the pty alone sent it to THIS machine's disk), and a remote read
+  that cannot happen is `unreadable` ⇒ "Could not read the transcript.", never `found:false`. Only
+  chat-capable agents are served (`canChat(capabilityAgentId(agent))`); (2) **the send gate is the host mirror's, then the renderer's** — refused
+  first when the mirror says working/waiting/blocked or holds a question/approval ticket (renderer
+  state is transient after a reload), then an IPC round-trip (`host:chat-query` /
+  `host:chat-reply`, sender-checked to the main window) answered from the agent-status store and the
+  ⌘M composer's `chatSendRefusal` at send time plus "no held request". A renderer that does not
+  answer FAILS CLOSED: status is an error; `'refused'` (with a `reason`) means nothing was typed
+  (no window, a gate, past `startBy`, or `busy` — one send per node in flight until it SETTLES),
+  while a send whose outcome the desktop cannot confirm (no answer in time, or a `sendText` that
+  rejected after starting — it may or may not have been typed) is `'unconfirmed'`, never `'refused'`,
+  which would invite the phone to resend and type the prompt twice. `ChatStatus` carries the mirror's
+  view too (`hostRefuses`/`refusal`, `version: 1`): after a restart the window's `state` is null while
+  the mirror may still hold a live dialog, and the phone must see the lock the send applies; (3) **text is capped raw (64000) then stripped of ESC + C0/C1** (`\n`/`\t` kept) and
+  rides `pty.sendText` (stdin into tmux, never argv); `'sent'` only for `sendText === true`;
+  (4) **`agent.answer` is the desktop answer path** — `answerHeldPermission` over the SAME
+  `heldPermissionIoFor` (local fs or the SSH ControlMaster) and the in-process structured-ticket
+  gate, and the `pendingId` must be THIS node's (a mirror approval ticket for it, or the renderer's
+  `held.pendingId`), else `false` with no I/O and no answered event on the wrong node. The `chat`
+  dependency is OPTIONAL at every hop, so a dropped hop compiles and ships the verbs
+  inert ("not served"); `host-chat-wiring.test.ts` pins the chain at source level. Served only to an
+  approved phone; Team-access relay guests never reach them (`relay-host.ts` serves no phone
+  dialect). Server Edition: N/A (no phone relay; the bridge subscription is inert).
 - **A Windows desktop pairs relay-only — no SSH key, and do not "fix" that by writing one.** The
   phone's direct-SSH path is POSIX sh + tmux end to end (nodeterm-ios `HostCommands`, `TmuxBinary`,
   the typed `tmux new-session -A` attach, workspace paths with no `%APPDATA%` candidate). Windows
@@ -4747,6 +6175,106 @@ shared gate would freeze it permanently rather than while nobody is looking.
   would then refuse every admin key in it). Relay attach on Windows rests on the session host
   being packaged (#575, shipped by #579): without that bundle `pty.attach` spawns a new plain shell
   instead of joining the node's session, while `sessionExists` still answers "warm".
+
+## Hosted team relay (Server Edition as a relay host)
+
+A Server Edition core can host a team over the E2EE relay: a standing listener on the tunnel
+dialect, owner approval, roles, a `team` admin CLI, and desktops joining with a
+`nodeterm://join?code=…` code. Operator guide, roles table, join-error table, limitations and the
+device checklist: **`docs/hosted-team-relay.md`**. The relay mechanism moved to `src/core/relay/`
+(`src/main/remote/` keeps re-export shims), and Team Access and the hosted team run the SAME
+`connectRelayHost`: a host that passes no `RelayHostHooks` (the desktop) takes the unhooked path.
+The invariants, each with its reason:
+
+- **Roles are enforced in core, deny-by-default in BOTH directions** (`core/relay/access-policy.ts`).
+  A Viewer/Commenter reaches a method only if `VIEW`/`COMMENT` lists it, and receives an event only
+  if `VIEW_EVENTS` does: the core broadcasts to every attached client (the debug log, whole project
+  documents), so an allow-by-default filter would hand a viewer whatever nobody remembered to list.
+  **"Read" is not "safe"**: relay peers were fully trusted, so every VIEW entry carries its own
+  argument check. `fs:*` is realpath-jailed to a shared project's realpathed cwd; `git:diff` jails
+  the FILE too (`--no-index` diffs any file on the host); a `git:show-file` ref starting with `-`
+  is an option (`--output=` writes a file); **every git read also needs the shared root holding
+  the cwd to be the top of its OWN repository** (a `.git` dir holding `HEAD`, or a worktree's
+  `.git` file; git skips an empty `.git` dir): `git show <ref>:<p>` resolves `<p>` against the
+  repository's top level and `git status`/`log` report the whole repository, so from a shared
+  `repo/shared/` a Viewer read `repo/secret/key.txt` (measured, C1) — a monorepo subfolder gets no
+  git panel; `pty:create` is cut down to a whitelist, because
+  `sshRemote`'s args run `ssh` on the host during the existence probe. A non-editor's terminal
+  frames (output, resync, size, exit) are judged per frame by the session's node
+  (`PtyManager.nodeOfSession`), because a subscription outlives `team unshare`. Editors pass untouched
+  (Editor is shell access). The UI mirror (`@shared/hosted-access.ts`, `bridge/hosted-gate.ts`) is
+  convenience; `access-policy.guard.test.ts` pins it equal and fails on any relay-API channel
+  nobody classified.
+- **The role is read from `team.json` on every message, never cached on a session**, so a removal
+  or promotion applies to the next message. A session with NO team entry is served nothing: that
+  is the window between a removal's write and its kill. The one exception is `pinFailed` (both
+  humans approved but the pin write failed), served as Viewer. The renderer, by contrast, reads the
+  role once per connection; that is UX only.
+- **A viewer's size never votes, and a viewer's create is join-only.** `sizeVote: false` (a
+  non-voting re-join also WITHDRAWS an earlier vote under the same subscriber key) and `pty:resize`
+  rewritten to `(null, null)`: a small window must not shrink everyone's terminal. `joinOnly`
+  asks the STRICT exact-target probe (`has-session -t =nt-<id>`), refuses when it cannot tell, and
+  reattaches without `-D`. The folded probe reads a tmux error as "exists", which is the safe answer
+  for an owner and would let a viewer's `new-session -A` CREATE the session.
+- **The host key is never silently regenerated** (`host-key.ts`). Its public key IS the team's
+  address (`hostId`), so a new key orphans every bookmark and sends every teammate back through
+  first-join approval. Unreadable ⇒ hosting stays off with `host-key-unreadable`; only
+  `team rotate-key` replaces it.
+- **`team.json` is not the phone's pin file.** Push's `hasPairedPhone` counts the entries of
+  `remote-approved-devices.json`, so a teammate pinned there would read as a paired phone. The same
+  rule on the joiner: `hosted-join.ts` runs the core relay client with NO pin store, and the
+  joiner-side pin is the bookmark's `approvedAt` (valid only for the exact host key it was recorded
+  with).
+- **The admin channel is a 0600 unix socket in a 0700 directory, with no token**
+  (`core/relay/team-admin.ts`). Filesystem permissions are the whole gate, so there is nothing to
+  leak into a pane's environment. The root of trust is the core's unix user, which also means an
+  Editor's shell can run `team add-owner`. With no team, the socket serves only
+  `init`/`status`/`info`. The `relay:hosted:*` verbs are intercepted inside the relay session and
+  never registered on the platform, so a Server Edition browser client cannot call them. An
+  interceptor bypasses `access` and every jail, so each one judges the CALLER's own session key.
+- **LOCAL confirms have exactly three call sites on the host side:** the Team Access dialog
+  (`relay:host:confirm`), `autoApprove` for a key `team.json` pins, and an owner's
+  `relay:hosted:approve`. The joiner side has two: the human's `relay:client:confirm`, and the
+  bookmark auto-confirm. The one remote confirm still arrives only on the encrypted tunnel. A new
+  local confirm is a design change; the comment in `relay-trust.ts` lists all five.
+- **Nothing is served before mutual approval.** Frames that arrive between approval and open (while
+  the pin is being written) are HELD, at most `HELD_FRAMES_MAX` (256), then served through the same
+  checks. Refusing them would fail a new teammate's first `workspace:load`, which routinely lands
+  inside the host's pin write. Pending join requests go to connected OWNERS only (never a
+  broadcast), at most one per device key and 16 at once, and expire after 10 minutes. A deny or
+  expiry that lands during the pin write wins.
+- **The scheduler's backoff resets only on proof the relay leg works** (an idle listener held to
+  its refresh, or a completed handshake) or on a fresh `start()`, never on a successful mint. With
+  the API up and the relay down every mint succeeds and every socket dies, and a reset-on-mint
+  re-minted at round-trip speed (relay log, 2026-09-27). Successful mints are also capped at 200
+  per rolling hour, whatever asks for them (the backend's free limit is 240).
+- **A join code is enough to take hosting offline (R44), and only the backend can close that.**
+  `POST /v1/relay/host-token` takes the code's `hostDeviceId` + `hostPublicKeyB64` with no proof of
+  the host's secret key, and the backend damps host tokens and device mints per that device id. So a
+  code holder, a removed teammate included, can spend the host's hourly mints, the team's daily
+  device mints and the 16 pending slots. `team rotate-key` alone does not help (it keeps the device
+  id); recovery is a fresh `<dataDir>/device-id` + `team rotate-key` + fresh codes (the doc's
+  troubleshooting list). Proof-of-possession on that endpoint is a `nodeterm-server` follow-up.
+- **The joiner never mints a device token it cannot keep.** Device mints are damped per HOST device
+  id, so one team shares 10 a day. It probes the bookmarks file before minting and sends a PER-TEAM
+  device id (`<machine id>:<hostId>`), because the backend will not re-register one id for a second
+  host. Every failure carries a stable `[E_JOIN_…]` code, which is the only part of an error that
+  survives Electron IPC. Only `E_JOIN_NETWORK` and `E_JOIN_THROTTLED` (at least 60 s) retry
+  unattended. A drop the host did not explain retries 5 times (1/2/4/8/15 s), then stops and says so.
+
+**Known limitations** (full list in the doc): non-editors still receive cross-project presence and
+`context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still
+pauses the shared pty through Stage 2 backpressure; canvas edits made in a hosted tab are not
+written to the host, because a relay tab never saves the host workspace and the reflector persists
+nothing (ruling R42). Workaround: keep a Server Edition browser tab open on the host's core; it
+applies each reflected mutation, marks itself dirty and saves. Edits made while no browser tab is
+attached are lost. Kanban, bridge and rope edits made in a relay tab are never propagated or saved
+at all, because `canvas:mut` carries nodes only; that predates this feature.
+
+**Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab).
+Server Edition is the host (the `team` CLI; its browser clients cannot approve and are not hosted
+peers). Mobile is N/A for v1: the phone still speaks the legacy dialect, and the host it would join
+now exists in core. The iOS follow-up is the tunnel-dialect migration.
 
 ## Speech / dictation (desktop + server)
 

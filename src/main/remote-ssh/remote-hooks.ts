@@ -9,9 +9,9 @@ import { legacyEndpointMigration } from './legacy-hook-endpoint'
 // simply runs without status). Takes an INJECTED runner so the flow is unit-testable without real
 // ssh/electron.
 import { childArgs, hookForwardArgs, hookForwardCancelArgs, remoteEndpointFileContents } from '../../core/remote-ssh/control-master'
-import { CLAUDE_HOOK_EVENTS, GEMINI_HOOK_EVENTS } from '@shared/agents/hook-events'
+import { CLAUDE_HOOK_EVENTS, GEMINI_HOOK_EVENTS, type ManagedHookEvent } from '@shared/agents/hook-events'
 import { GROK_EVENTS } from '../../core/agents/hooks/grok'
-import { GROK_HOOK_FILE, isSafeRemoteGrokHome } from '../../core/agents/grok-paths'
+import { GROK_HOOK_FILE, REMOTE_GROK_HOME_PROBE, resolveReportedGrokHome } from '../../core/agents/grok-paths'
 import { isSafeNodeId, isSafeRemoteHome } from '../../core/remote-safety'
 import { hookServer } from '../../core/agents/hook-server'
 import { updateRemoteSettingsFile } from '../../core/agents/hooks/remote-settings-file'
@@ -54,6 +54,7 @@ import {
   mergeInstructionsBlock
 } from '../../core/context-link-core'
 import { posixQuote, type SshConnection } from '../../shared/ssh'
+import { describeTunnelProbe } from './tunnel-repair'
 
 /** POSIX dirname of an absolute remote path. `path.dirname` would apply the LOCAL separator
  *  rules, which is wrong the moment the desktop is Windows and the host is Linux. */
@@ -102,7 +103,7 @@ export interface RemoteRunner {
 // here and had drifted: claude was missing StopFailure/PermissionRequest (an errored remote turn
 // stuck on "working"), and gemini was subscribed to CLAUDE's event names, which it never fires —
 // so remote gemini nodes reported nothing at all.
-const AGENT_TARGETS: { agentId: string; config: string; events: readonly string[] }[] = [
+const AGENT_TARGETS: { agentId: string; config: string; events: readonly ManagedHookEvent[] }[] = [
   { agentId: 'claude', config: '.claude/settings.json', events: CLAUDE_HOOK_EVENTS },
   { agentId: 'gemini', config: '.gemini/settings.json', events: GEMINI_HOOK_EVENTS }
 ]
@@ -128,10 +129,16 @@ export class RemoteHooks {
    * run, which is a tunnel that cannot deliver, not an unknown. The caller repairs by re-running
    * `setup()`, which is idempotent and re-verifies end-to-end.
    */
-  async tunnelAlive(projectId: string, conn: SshConnection, controlPath: string, token: string): Promise<boolean> {
+  async tunnelAlive(
+    projectId: string,
+    conn: SshConnection,
+    controlPath: string,
+    token: string
+  ): Promise<{ alive: boolean; detail: string }> {
     const spec = this.specs.get(projectId)
-    if (!spec || !token) return false
-    return this.verifyTunnel(conn, controlPath, spec.sock, token)
+    if (!spec) return { alive: false, detail: 'no forward registered for this project in this app run' }
+    if (!token) return { alive: false, detail: 'no hook token' }
+    return this.probeTunnel(conn, controlPath, spec.sock, token)
   }
 
   async setup(
@@ -433,7 +440,7 @@ export class RemoteHooks {
     controlPath: string,
     home: string,
     remoteDir: string,
-    target: { agentId: string; config: string; events: readonly string[] }
+    target: { agentId: string; config: string; events: readonly ManagedHookEvent[] }
   ): Promise<void> {
     try {
       const script = `${remoteDir}/agent-hooks/${target.agentId}.sh`
@@ -550,15 +557,11 @@ export class RemoteHooks {
   ): Promise<void> {
     try {
       const { stdout: rawHome } = await this.r.run(
-        childArgs(conn, controlPath, 'printf %s "${GROK_HOME:-}"')
+        childArgs(conn, controlPath, REMOTE_GROK_HOME_PROBE)
       )
-      // Trim at the READ site: isSafeRemoteGrokHome judges the exact string we would go on to
-      // interpolate into a remote command line, so it (correctly) refuses an untrimmed value.
-      const reported = rawHome.trim()
-      // `|| '/'`: a host that genuinely reports `/` means `/`, and letting the strip leave `''`
-      // would make `grokHome` a value no host ever said.
-      const stripped = reported.replace(/\/+$/, '') || '/'
-      const grokHome = isSafeRemoteGrokHome(reported) ? stripped : `${home}/.grok`
+      // The ONE rule (trim at the read site, isSafeRemoteGrokHome, strip trailing slashes) the
+      // remote chat reader applies too, so the hook and the reader agree on grok's root.
+      const grokHome = resolveReportedGrokHome(rawHome) ?? `${home}/.grok`
       // Joined so the separator is never doubled (`//hooks` is implementation-defined in POSIX).
       const config = `${grokHome.replace(/\/$/, '')}/hooks/${GROK_HOOK_FILE}`
       const script = `${remoteDir}/agent-hooks/grok.sh`
@@ -928,6 +931,16 @@ export class RemoteHooks {
     sock: string,
     token: string
   ): Promise<boolean> {
+    return (await this.probeTunnel(conn, controlPath, sock, token)).alive
+  }
+
+  /** `verifyTunnel` with the reason kept: the watchdog logs WHY a live tunnel stopped answering. */
+  private async probeTunnel(
+    conn: SshConnection,
+    controlPath: string,
+    sock: string,
+    token: string
+  ): Promise<{ alive: boolean; detail: string }> {
     try {
       const cmd =
         `curl -s -m 5 -o /dev/null -w '%{http_code}' -X POST --unix-socket ${posixQuote(sock)} ` +
@@ -946,9 +959,10 @@ export class RemoteHooks {
         childArgs(conn, controlPath, cmd),
         curlHeaderConfigLine('x-nodeterm-hook-token', token)
       )
-      return r.code === 0 && r.stdout.trim() === '204'
-    } catch {
-      return false
+      const alive = r.code === 0 && r.stdout.trim() === '204'
+      return { alive, detail: alive ? 'ok' : describeTunnelProbe(r.code, r.stdout) }
+    } catch (e) {
+      return { alive: false, detail: `probe threw: ${e instanceof Error ? e.message : String(e)}` }
     }
   }
 
