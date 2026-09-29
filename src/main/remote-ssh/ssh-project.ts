@@ -73,7 +73,7 @@ import { askpassServer } from './ssh-askpass'
 import { appSshAgent } from './ssh-agent'
 import { probeAgentSockToPin } from '../../core/remote-ssh/agent-probe'
 import { sessionName } from '../../core/tmux-naming'
-import { remoteAtomicWrite } from '../remote-atomic-write'
+import { remoteAtomicWrite, runRemoteAtomicWrite } from '../remote-atomic-write'
 import { isBoundedAnswerContent, PENDING_REQUEST_MAX_BYTES } from '../../core/agents/permission-decision'
 import { buildCodexLauncherScript } from '../../core/codex-identity-proxy'
 import {
@@ -959,13 +959,11 @@ export class SshProjectManager {
             // write (mkdir perms, disk full, …) must leave it undefined so `remoteTmuxCommand`
             // never passes `-f <missing-conf>` (which makes tmux refuse to start → terminal dies).
             // The invocation-owned temp also keeps an older valid config intact if ssh drops.
-            const confWrite = remoteAtomicWrite(confPath)
-            const w = await this.r.run(
-              childArgs(conn, controlPath, confWrite.command),
-              // Lead-pane width applies on the host too: an agent team spawned in a remote
-              // session squeezes the lead exactly like a local one. 0/absent ⇒ pre-feature conf.
-              remoteTmuxConf(50000, this.r.leadPaneWidth?.() ?? 0)
-            )
+            // Lead-pane width applies on the host too: an agent team spawned in a remote
+            // session squeezes the lead exactly like a local one. 0/absent ⇒ pre-feature conf.
+            // The size check inside the write keeps an old conf intact if the body never arrives.
+            const confWrite = remoteAtomicWrite(confPath, remoteTmuxConf(50000, this.r.leadPaneWidth?.() ?? 0))
+            const w = await this.r.run(childArgs(conn, controlPath, confWrite.command), confWrite.stdin)
             if (w.code === 0) {
               // source-file is best-effort (pushes options into a warm server); ignore its result.
               await this.r.run(childArgs(conn, controlPath, `${remoteTmuxPathPrologue()}tmux -L ${RMT_TMUX_SOCKET} source-file ${posixQuote(confPath)}`))
@@ -1649,19 +1647,21 @@ export class SshProjectManager {
         if (c.controlPath !== controlPath) continue
         // Refuse a path that is not under a known-safe home shape — belt to the builder's braces.
         if (/[\0\n\r'"`$\\]/.test(remotePath) || !remotePath.startsWith('/')) return
-        const dir = remotePath.slice(0, remotePath.lastIndexOf('/'))
-        await this.r.run(
-          childArgs(
-            c.conn,
-            c.controlPath,
-            `umask 077; mkdir -p ${posixQuote(dir)} && cat > ${posixQuote(remotePath)}`
-          ),
-          content
+        // Atomic AND complete: the remote command polls for this file and sources it the moment
+        // it exists, so a `cat >` straight at the name could be sourced half-written, and a channel
+        // that died before the body arrived left it empty with `cat` still exiting 0.
+        await runRemoteAtomicWrite(
+          (cmd, stdin) => this.r.run(childArgs(c.conn, c.controlPath, cmd), stdin),
+          remotePath,
+          content,
+          { restrictPermissions: true, mode: '600' }
         )
         return
       }
-    } catch {
-      /* fail-open: never let an env write reach a pty spawn */
+    } catch (e) {
+      // Fail-open: never let an env write reach a pty spawn. The agent then launches without its
+      // env and fails loudly in its own pane; this line says why.
+      console.warn(`[ssh-project] session env not staged: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
@@ -1799,16 +1799,14 @@ export class SshProjectManager {
     if (!c) return
     const file = this.statusFilePath(projectId, c)
     this.statusPushed.add(projectId)
-    await this.r
-      .run(
-        childArgs(
-          c.conn,
-          c.controlPath,
-          remoteAtomicWrite(file, { restrictPermissions: true }).command
-        ),
-        json
-      )
-      .catch(() => {})
+    try {
+      // The size check keeps the phone's last good doc if the body never arrives: an empty file
+      // there is not "no agents", it is a document the phone cannot parse.
+      const write = remoteAtomicWrite(file, json, { restrictPermissions: true })
+      await this.r.run(childArgs(c.conn, c.controlPath, write.command), write.stdin)
+    } catch {
+      /* best-effort, see above */
+    }
   }
 
   /**
@@ -1905,17 +1903,14 @@ export class SshProjectManager {
     if (!/^[A-Za-z0-9_-]+$/.test(pendingId)) return false
     if (typeof content !== 'string' || !isBoundedAnswerContent(content)) return false
     const file = `${this.pendingDirFor(c)}/${pendingId}.answer`
-    const { code } = await this.r
-      .run(
-        childArgs(
-          c.conn,
-          c.controlPath,
-          remoteAtomicWrite(file, { restrictPermissions: true }).command
-        ),
-        content
-      )
-      .catch(() => ({ code: 1, stdout: '' }))
-    return code === 0
+    try {
+      // The hook polls for this file, so it must never see a truncated answer under its name.
+      const write = remoteAtomicWrite(file, content, { restrictPermissions: true })
+      const { code } = await this.r.run(childArgs(c.conn, c.controlPath, write.command), write.stdin)
+      return code === 0
+    } catch {
+      return false
+    }
   }
 
   /**
@@ -2123,26 +2118,26 @@ export class SshProjectManager {
     // multiplexed ssh child, body on stdin). CodeQL note: this file-data→network write is confined
     // to the authenticated SSH transport, and the payload is our OWN executable bundle, never a
     // credential (Property 1). `chmod 700` — owner-only, executable code.
-    const writeRelay = await this.r.run(
-      childArgs(
-        conn,
-        controlPath,
-        `umask 077; mkdir -p ${posixQuote(dir)} && cat > ${posixQuote(relay)} && chmod 700 ${posixQuote(relay)}`
-      ),
-      source
-    )
-    if (writeRelay.code !== 0) return null
-    // The launcher embeds the app-server start command (absolute node + codex only, no secret). Same
-    // SSH-tunnel-confined write; still only executable code.
-    const writeLauncher = await this.r.run(
-      childArgs(
-        conn,
-        controlPath,
-        `umask 077; cat > ${posixQuote(launcher)} && chmod 700 ${posixQuote(launcher)}`
-      ),
-      buildCodexLauncherScript(remoteCodexAppServerStartCommand(runtime, codex))
-    )
-    return writeLauncher.code === 0 ? { launcher, relay, runtime, codex } : null
+    //
+    // Both go through the atomic, size-checked write: a running Codex node executes these files, so
+    // a `cat >` that the channel cut short (it truncates first) left every Codex node on the host
+    // launching an empty or half-written launcher until the next connect.
+    const runCmd = (cmd: string, stdin: string) => this.r.run(childArgs(conn, controlPath, cmd), stdin)
+    try {
+      await runRemoteAtomicWrite(runCmd, relay, source, { restrictPermissions: true, mode: '700' })
+      // The launcher embeds the app-server start command (absolute node + codex only, no secret).
+      // Same SSH-tunnel-confined write; still only executable code.
+      await runRemoteAtomicWrite(
+        runCmd,
+        launcher,
+        buildCodexLauncherScript(remoteCodexAppServerStartCommand(runtime, codex)),
+        { restrictPermissions: true, mode: '700' }
+      )
+    } catch (e) {
+      console.warn(`[ssh-project] codex runtime not installed on the host: ${e instanceof Error ? e.message : String(e)}`)
+      return null
+    }
+    return { launcher, relay, runtime, codex }
   }
 
   /** Ensure one app-server is live for the system account plus each named managed account, and

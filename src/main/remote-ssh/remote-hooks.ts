@@ -14,8 +14,12 @@ import { GROK_EVENTS } from '../../core/agents/hooks/grok'
 import { GROK_HOOK_FILE, REMOTE_GROK_HOME_PROBE, resolveReportedGrokHome } from '../../core/agents/grok-paths'
 import { isSafeNodeId, isSafeRemoteHome } from '../../core/remote-safety'
 import { hookServer } from '../../core/agents/hook-server'
-import { updateRemoteSettingsFile } from '../../core/agents/hooks/remote-settings-file'
-import { remoteAtomicWrite } from '../remote-atomic-write'
+import {
+  updateRemoteSettingsFile,
+  updateRemoteSettingsFileResult,
+  updateRemoteTextFile
+} from '../../core/agents/hooks/remote-settings-file'
+import { remoteAtomicWrite, runRemoteAtomicWrite, type RemoteAtomicWriteOptions } from '../remote-atomic-write'
 import { curlHeaderConfigLine } from '../../core/agents/hook-curl-config-sh'
 import { buildManagedScript } from '../../core/agents/hooks/managed-script'
 import {
@@ -39,7 +43,7 @@ import {
   buildManagedCommand as buildCodexManagedCommand,
   type HooksConfig as CodexHooksConfig
 } from '../../core/agents/hooks/codex'
-import { upsertHookTrustEntriesInContent } from '../../core/agents/hooks/codex-trust'
+import { upsertHookTrustEntriesInContent, type CodexTrustEntry } from '../../core/agents/hooks/codex-trust'
 import { ensureFullscreenTui } from '../../core/agents/hooks/claude-tui'
 import {
   CONTROL_SHIM_SCRIPT,
@@ -56,11 +60,15 @@ import {
 import { posixQuote, type SshConnection } from '../../shared/ssh'
 import { describeTunnelProbe } from './tunnel-repair'
 
-/** POSIX dirname of an absolute remote path. `path.dirname` would apply the LOCAL separator
- *  rules, which is wrong the moment the desktop is Windows and the host is Linux. */
-function dirnameOf(p: string): string {
-  const i = p.lastIndexOf('/')
-  return i > 0 ? p.slice(0, i) : '/'
+/**
+ * Every install step in this file fails OPEN for the connect — a host that cannot take a hook must
+ * not cost the user their terminals — but never SILENTLY. A failed write here once looked exactly
+ * like a successful one, and agents then ran against empty shims for a whole session. The message
+ * names the step and the error; a `RemoteWriteError` names only the path and the exit status, never
+ * file contents.
+ */
+function warnNotInstalled(what: string, e: unknown): void {
+  console.warn(`[remote-hooks] ${what} not installed on the host: ${e instanceof Error ? e.message : String(e)}`)
 }
 
 /**
@@ -226,14 +234,14 @@ export class RemoteHooks {
       // never pointed at a socket that answers nothing. The file carries the hook bearer. A
       // direct `cat > endpoint` both exposed partial bytes and preserved an old permissive mode;
       // publish a new 0600 inode through an invocation-owned temp instead.
-      const endpointWrite = remoteAtomicWrite(endpoint, {
-        restrictPermissions: true,
-        chmod600: true,
-        makeParent: false
-      })
+      const endpointWrite = remoteAtomicWrite(
+        endpoint,
+        remoteEndpointFileContents(sock, hook.token, hook.version, `${remoteDir}/node-tokens`),
+        { restrictPermissions: true, mode: '600', makeParent: false }
+      )
       const endpointResult = await this.r.run(
         childArgs(conn, controlPath, endpointWrite.command),
-        remoteEndpointFileContents(sock, hook.token, hook.version, `${remoteDir}/node-tokens`)
+        endpointWrite.stdin
       )
       if (endpointResult.code !== 0) {
         await this.r.run(hookForwardCancelArgs(conn, controlPath, sock, hook.port)).catch(() => {})
@@ -383,15 +391,12 @@ export class RemoteHooks {
         try {
           // chmod on the TMP, so the mode is right before the name exists; `mv` within one dir is
           // a rename, which carries the tmp's 0600 over whatever the destination's mode was.
-          const write = remoteAtomicWrite(filePath, {
-            restrictPermissions: true,
-            chmod600: true,
-            makeParent: false
-          })
-          const w = await this.r.run(
-            childArgs(conn, controlPath, write.command),
-            `${token}\n` // newline-terminated: the client reads it with `head -n 1`
+          const write = remoteAtomicWrite(
+            filePath,
+            `${token}\n`, // newline-terminated: the client reads it with `head -n 1`
+            { restrictPermissions: true, mode: '600', makeParent: false }
           )
+          const w = await this.r.run(childArgs(conn, controlPath, write.command), write.stdin)
           // The runner RESOLVES on a non-zero exit — a failed write is a `code`, not a throw, and
           // reading only the throw is how this failure stayed invisible.
           wrote = w.code === 0
@@ -445,19 +450,15 @@ export class RemoteHooks {
     try {
       const script = `${remoteDir}/agent-hooks/${target.agentId}.sh`
       const config = `${home}/${target.config}`
-      await this.r.run(
-        childArgs(
-          conn,
-          controlPath,
-          `mkdir -p ${posixQuote(`${remoteDir}/agent-hooks`)} && cat > ${posixQuote(script)} && chmod 755 ${posixQuote(script)}`
-        ),
-        buildManagedScript(target.agentId, REMOTE_IDENTITY_ROOT)
-      )
+      await this.writeOwnedFile(conn, controlPath, script, buildManagedScript(target.agentId, REMOTE_IDENTITY_ROOT), {
+        mode: '755'
+      })
       await updateRemoteSettingsFile(config,
         (cmd, stdin) => this.r.run(childArgs(conn, controlPath, cmd), stdin),
         (cfg) => mergeManagedHook(cfg, buildManagedHookCommand(script), target.events))
-    } catch {
-      /* fail-open: this agent's remote sessions run without status hooks */
+    } catch (e) {
+      // Fail-open for the connect, not silent: this agent's remote sessions run without status hooks.
+      warnNotInstalled(`${target.agentId} status hook`, e)
     }
   }
 
@@ -469,14 +470,9 @@ export class RemoteHooks {
   ): Promise<void> {
     try {
       const script = `${remoteDir}/agent-hooks/codex.sh`
-      await this.r.run(
-        childArgs(
-          conn,
-          controlPath,
-          `mkdir -p ${posixQuote(`${remoteDir}/agent-hooks`)} && cat > ${posixQuote(script)} && chmod 755 ${posixQuote(script)}`
-        ),
-        buildManagedScript('codex', REMOTE_IDENTITY_ROOT)
-      )
+      await this.writeOwnedFile(conn, controlPath, script, buildManagedScript('codex', REMOTE_IDENTITY_ROOT), {
+        mode: '755'
+      })
       // POSIX explicitly: the platform argument is the HOST's, never this desktop's. A Windows
       // desktop writes a `.cmd` command locally (issue #567) and must not put one on a Linux server.
       const command = buildCodexManagedCommand(script, 'linux')
@@ -494,44 +490,34 @@ export class RemoteHooks {
         )
       )
       const sourcePath = canonRaw.trim() || hooksFile
+      const runCmd = (cmd: string, stdin?: string) => this.r.run(childArgs(conn, controlPath, cmd), stdin)
 
-      // Read the current hooks.json. `|| echo '{}'` only fires when the file is MISSING, so a
-      // present-but-malformed file reaches JSON.parse and throws → we skip (never clobber it).
-      const { stdout: hooksRaw } = await this.r.run(
-        childArgs(conn, controlPath, `cat ${posixQuote(hooksFile)} 2>/dev/null || echo '{}'`)
-      )
-      let existing: CodexHooksConfig | null
-      try {
-        const parsed = JSON.parse(hooksRaw || '{}') as unknown
-        existing =
-          parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-            ? (parsed as CodexHooksConfig)
-            : null
-      } catch {
-        existing = null
-      }
-      const built = buildCodexHooksAndTrust(existing, command, sourcePath)
-      if (!built) return // missing is fine ({}); unparseable/odd shape → leave the host's file alone
+      // hooks.json and config.toml are the USER's files, so both go through the guarded
+      // transaction: symlinks kept, mode kept, exactly-the-body-arrived and the-file-is-still-what-
+      // we-read both checked before anything is published. A missing file merges as `{}`; a
+      // present-but-malformed one fails the parse and is left alone (never clobbered), and so is
+      // an odd shape `buildCodexHooksAndTrust` refuses.
+      // A holder, not a `let`: TS narrows a closure-assigned `let` back to its initial `null`.
+      const trust: { entries: CodexTrustEntry[] | null } = { entries: null }
+      const hooks = await updateRemoteSettingsFileResult(hooksFile, runCmd, (cfg) => {
+        const built = buildCodexHooksAndTrust(cfg as CodexHooksConfig, command, sourcePath)
+        if (!built) return cfg
+        trust.entries = built.trustEntries
+        return built.config as Record<string, unknown>
+      })
+      // Trust only a handler hooks.json now carries: a failed write leaves nothing to trust.
+      const entries = trust.entries
+      if (hooks === 'failed' || !entries) return
 
-      await this.r.run(
-        childArgs(conn, controlPath, `mkdir -p ${posixQuote(codexHome)} && cat > ${posixQuote(hooksFile)}`),
-        `${JSON.stringify(built.config, null, 2)}\n`
-      )
-
-      // Trust LAST: read config.toml, line-merge our trust blocks (preserving all other content),
-      // write back only if it changed. `|| true` so a missing config.toml reads as empty.
-      const { stdout: tomlRaw } = await this.r.run(
-        childArgs(conn, controlPath, `cat ${posixQuote(configToml)} 2>/dev/null || true`)
-      )
-      const nextToml = upsertHookTrustEntriesInContent(tomlRaw, built.trustEntries)
-      if (nextToml !== tomlRaw) {
-        await this.r.run(
-          childArgs(conn, controlPath, `mkdir -p ${posixQuote(codexHome)} && cat > ${posixQuote(configToml)}`),
-          nextToml
-        )
-      }
-    } catch {
-      /* fail-open: the remote codex session simply runs without status hooks */
+      // Trust LAST: line-merge our trust blocks (preserving all other content), write back only if
+      // it changed. A missing config.toml reads as empty; 600 because it can hold credentials.
+      await updateRemoteTextFile(configToml, runCmd, (before) => {
+        const raw = before ?? ''
+        const next = upsertHookTrustEntriesInContent(raw, entries)
+        return next === raw ? null : next
+      })
+    } catch (e) {
+      warnNotInstalled('codex status hook', e)
     }
   }
 
@@ -566,14 +552,9 @@ export class RemoteHooks {
       const config = `${grokHome.replace(/\/$/, '')}/hooks/${GROK_HOOK_FILE}`
       const script = `${remoteDir}/agent-hooks/grok.sh`
 
-      await this.r.run(
-        childArgs(
-          conn,
-          controlPath,
-          `mkdir -p ${posixQuote(`${remoteDir}/agent-hooks`)} && cat > ${posixQuote(script)} && chmod 755 ${posixQuote(script)}`
-        ),
-        buildManagedScript('grok', REMOTE_IDENTITY_ROOT)
-      )
+      await this.writeOwnedFile(conn, controlPath, script, buildManagedScript('grok', REMOTE_IDENTITY_ROOT), {
+        mode: '755'
+      })
       // `|| echo '{}'` fires ONLY when the file is missing — still the read that distinguishes a
       // missing file from an unreadable one. An unreadable one is then HEALED, not preserved: this
       // file is ours by name and we rewrite it wholesale, so there is no user content to lose.
@@ -587,14 +568,11 @@ export class RemoteHooks {
         cfg = {}
       }
       const merged = mergeManagedHook(cfg, buildManagedHookCommand(script), GROK_EVENTS)
-      // The `$(dirname …)` is QUOTED: a valid $GROK_HOME may contain spaces, which would otherwise
-      // word-split into two mkdir args, leave the directory absent, and fail the quoted `cat >`.
-      await this.r.run(
-        childArgs(conn, controlPath, `mkdir -p "$(dirname ${posixQuote(config)})" && cat > ${posixQuote(config)}`),
-        JSON.stringify(merged, null, 2)
-      )
-    } catch {
-      /* fail-open: the remote grok session simply runs without status hooks */
+      // The parent is created by the atomic write as ONE quoted argument, so a valid $GROK_HOME
+      // containing spaces still installs (an unquoted `$(dirname …)` split it into two mkdir args).
+      await this.writeOwnedFile(conn, controlPath, config, JSON.stringify(merged, null, 2))
+    } catch (e) {
+      warnNotInstalled('grok status hook', e)
     }
   }
 
@@ -609,24 +587,17 @@ export class RemoteHooks {
       const copilotHome = await this.resolveCopilotHome(conn, controlPath, home)
       const config = `${copilotHome.replace(/\/$/, '')}/hooks/${COPILOT_HOOK_FILE}`
       const script = `${remoteDir}/agent-hooks/copilot.sh`
-      await this.r.run(
-        childArgs(
-          conn,
-          controlPath,
-          `mkdir -p ${posixQuote(`${remoteDir}/agent-hooks`)} && cat > ${posixQuote(script)} && chmod 755 ${posixQuote(script)}`
-        ),
-        buildManagedScript('copilot', REMOTE_IDENTITY_ROOT)
-      )
-      await this.r.run(
-        childArgs(
-          conn,
-          controlPath,
-          `mkdir -p "$(dirname ${posixQuote(config)})" && cat > ${posixQuote(config)}`
-        ),
+      await this.writeOwnedFile(conn, controlPath, script, buildManagedScript('copilot', REMOTE_IDENTITY_ROOT), {
+        mode: '755'
+      })
+      await this.writeOwnedFile(
+        conn,
+        controlPath,
+        config,
         `${JSON.stringify(buildCopilotHookConfig(buildManagedHookCommand(script)), null, 2)}\n`
       )
-    } catch {
-      /* fail-open: the remote copilot session simply runs without status hooks */
+    } catch (e) {
+      warnNotInstalled('copilot status hook', e)
     }
   }
 
@@ -666,15 +637,14 @@ export class RemoteHooks {
       const config = `${accountDir}/settings.json`
       const events = AGENT_TARGETS.find((t) => t.agentId === 'claude')?.events ?? []
       // Idempotently (re)write the shared hook script — setup() may not have run (fail-open) yet.
-      await this.r.run(
-        childArgs(conn, controlPath, `mkdir -p ${posixQuote(`${remoteDir}/agent-hooks`)} && cat > ${posixQuote(script)} && chmod 755 ${posixQuote(script)}`),
-        buildManagedScript('claude', REMOTE_IDENTITY_ROOT)
-      )
+      await this.writeOwnedFile(conn, controlPath, script, buildManagedScript('claude', REMOTE_IDENTITY_ROOT), {
+        mode: '755'
+      })
       await updateRemoteSettingsFile(config,
         (cmd, stdin) => this.r.run(childArgs(conn, controlPath, cmd), stdin),
         (cfg) => mergeManagedHook(cfg, buildManagedHookCommand(script), events))
-    } catch {
-      /* fail-open: the account session simply runs without status hooks */
+    } catch (e) {
+      warnNotInstalled('claude status hook for a managed account', e)
     }
   }
 
@@ -723,8 +693,10 @@ export class RemoteHooks {
       for (const t of targets) {
         await this.mergeRemoteInstructions(conn, controlPath, t.pathExpr, block, mergeCanvasControlBlock, t.prelude)
       }
-    } catch {
-      /* fail-open: the remote agent simply runs without canvas control */
+    } catch (e) {
+      // Fail-open for the connect, never silent: a shim that did not land is an agent whose canvas
+      // calls fail, and this line is the only place that says why.
+      warnNotInstalled('canvas control', e)
     }
   }
 
@@ -751,8 +723,8 @@ export class RemoteHooks {
         'manage-nodeterm-canvas',
         buildCanvasSkillBody(shim)
       )
-    } catch {
-      /* fail-open */
+    } catch (e) {
+      warnNotInstalled('a managed-account skill', e)
     }
   }
 
@@ -787,8 +759,8 @@ export class RemoteHooks {
       for (const t of targets) {
         await this.mergeRemoteInstructions(conn, controlPath, t.pathExpr, block, mergeInstructionsBlock, t.prelude)
       }
-    } catch {
-      /* fail-open: the remote agent simply runs without context link */
+    } catch (e) {
+      warnNotInstalled('context link', e)
     }
   }
 
@@ -809,8 +781,8 @@ export class RemoteHooks {
         'get-linked-context',
         buildContextLinkSkillBody(shim)
       )
-    } catch {
-      /* fail-open */
+    } catch (e) {
+      warnNotInstalled('a managed-account skill', e)
     }
   }
 
@@ -820,11 +792,7 @@ export class RemoteHooks {
     shim: string,
     body: string
   ): Promise<void> {
-    const q = posixQuote(shim)
-    await this.r.run(
-      childArgs(conn, controlPath, `mkdir -p ${posixQuote(dirnameOf(shim))} && cat > ${q} && chmod 755 ${q}`),
-      body
-    )
+    await this.writeOwnedFile(conn, controlPath, shim, body, { mode: '755' })
   }
 
   private async writeRemoteSkill(
@@ -834,10 +802,34 @@ export class RemoteHooks {
     name: string,
     body: string
   ): Promise<void> {
-    const skill = `${configDir}/skills/${name}/SKILL.md`
-    await this.r.run(
-      childArgs(conn, controlPath, `mkdir -p ${posixQuote(dirnameOf(skill))} && cat > ${posixQuote(skill)}`),
-      body
+    await this.writeOwnedFile(conn, controlPath, `${configDir}/skills/${name}/SKILL.md`, body)
+  }
+
+  /**
+   * Publish one file WE own on the host — a hook script, a canvas/context shim, a skill, our own
+   * grok/copilot hook config. Every one of these used to be `cat > <file>`, which truncates the
+   * file the moment the remote shell starts: an ssh channel that died before the body arrived left
+   * it EMPTY, and `cat` still exited 0. That is how a host ended up with 0-byte `nodeterm.sh` and
+   * `context.sh` after a reconnect, on which every agent's canvas call exited 0 with no output.
+   *
+   * Now: an empty body is refused before any ssh, the body goes to a sibling temp, the host checks
+   * that exactly its byte count arrived, and only then is it renamed over the previous file (which
+   * is otherwise left exactly as it was). A write that did not land THROWS a `RemoteWriteError` —
+   * the runner resolves on a non-zero exit, and awaiting it and moving on is what made the failure
+   * silent. The caller's catch logs it and skips the steps that depend on the file.
+   */
+  private writeOwnedFile(
+    conn: SshConnection,
+    controlPath: string,
+    path: string,
+    body: string,
+    options: RemoteAtomicWriteOptions = {}
+  ): Promise<void> {
+    return runRemoteAtomicWrite(
+      (cmd, stdin) => this.r.run(childArgs(conn, controlPath, cmd), stdin),
+      path,
+      body,
+      options
     )
   }
 
@@ -857,19 +849,21 @@ export class RemoteHooks {
     merge: (existing: string, block: string) => string,
     prelude = ''
   ): Promise<void> {
-    try {
-      const { stdout: existing } = await this.r.run(
-        childArgs(conn, controlPath, `${prelude}cat ${pathExpr} 2>/dev/null || true`)
-      )
-      const merged = merge(existing, block)
-      if (merged === existing) return
-      await this.r.run(
-        childArgs(conn, controlPath, `${prelude}mkdir -p "$(dirname ${pathExpr})" && cat > ${pathExpr}`),
-        merged
-      )
-    } catch {
-      /* fail-open: one unwritable instruction file must never break the connect */
-    }
+    // These are the USER's instruction files (often a dotfile symlink), so they get the same
+    // guarded transaction as settings.json: the link and the mode are kept, and nothing is
+    // published unless exactly the merged body arrived and the file still holds what we read. The
+    // old `cat … || true` then `cat >` read an UNREADABLE file as empty and replaced the user's
+    // text with our block alone. Never throws; a failure is logged and leaves the file as it was.
+    await updateRemoteTextFile(
+      { pathExpr, prelude, label: pathExpr },
+      (cmd, stdin) => this.r.run(childArgs(conn, controlPath, cmd), stdin),
+      (before) => {
+        const existing = before ?? ''
+        const merged = merge(existing, block)
+        return merged === existing ? null : merged
+      },
+      { createMode: '644' }
+    )
   }
 
   /**
