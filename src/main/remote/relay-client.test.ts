@@ -278,9 +278,22 @@ describe('relay client — the frame pipe (tunnel ↔ renderer)', () => {
     )
   })
 
+  /** Open a session through the host the way a relay tab does: a `pty:create` req whose answer
+   *  names the host session id. Only such ids are delivered to onPtyData. */
+  const createOnHost = async (p: ReturnType<typeof pairHostAndClient>, reqId: number, sessionId: string) => {
+    p.client.send(JSON.stringify({ t: 'req', id: reqId, method: 'pty:create', args: [{ cols: 80, rows: 24 }] }))
+    await vi.waitFor(() =>
+      expect(p.frames.map((j) => JSON.parse(j))).toContainEqual(
+        expect.objectContaining({ t: 'res', id: reqId, ok: true, result: expect.objectContaining({ sessionId }) })
+      )
+    )
+  }
+
   it('forwards a host pty:data BINARY frame to onPtyData (decoded), not to onFrame', async () => {
+    platform.handle('pty:create', async () => ({ sessionId: 's1', fresh: false }))
     const p = pairHostAndClient()
     await p.openMutually()
+    await createOnHost(p, 1, 's1')
     const id = p.host.clientId()!
 
     // The host streams pty output to this client; the peer sink turns it into a BINARY tunnel frame.
@@ -289,6 +302,35 @@ describe('relay client — the frame pipe (tunnel ↔ renderer)', () => {
     await vi.waitFor(() => expect(p.ptyData).toEqual([{ sessionId: 's1', data: 'hello world' }]))
     // pty:data must not leak onto the JSON frame pipe.
     expect(p.frames.some((j) => j.includes('hello world'))).toBe(false)
+  })
+
+  it('DROPS host pty output for a session this connection never created (a local-shaped pty-1)', async () => {
+    platform.handle('pty:create', async () => ({ sessionId: 'pty-7', fresh: false }))
+    const p = pairHostAndClient()
+    await p.openMutually()
+    const id = p.host.clientId()!
+
+    // Before any create: nothing is delivered, whatever id the host names.
+    platform.sendTo(id, 'pty:data:pty-1', 'FAKE PROMPT $ ')
+    await createOnHost(p, 3, 'pty-7')
+    platform.sendTo(id, 'pty:data:pty-1', '\x1b]52;c;ZXZpbA==\x07')
+    platform.sendTo(id, 'pty:data:pty-2', 'nope')
+    platform.sendTo(id, 'pty:data:pty-7', 'real output')
+
+    await vi.waitFor(() => expect(p.ptyData).toEqual([{ sessionId: 'pty-7', data: 'real output' }]))
+  })
+
+  it('a FAILED pty:create allows nothing', async () => {
+    platform.handle('pty:create', async () => {
+      throw new Error('no')
+    })
+    const p = pairHostAndClient()
+    await p.openMutually()
+    p.client.send(JSON.stringify({ t: 'req', id: 4, method: 'pty:create', args: [{}] }))
+    await vi.waitFor(() => expect(p.frames.some((j) => JSON.parse(j).id === 4)).toBe(true))
+    platform.sendTo(p.host.clientId()!, 'pty:data:pty-1', 'x')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(p.ptyData).toEqual([])
   })
 })
 
