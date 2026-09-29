@@ -71,6 +71,7 @@ import type { PeerIdentity } from '../../shared/presence'
 import type { PaneOwner } from '../../shared/agents/pane-owner-predicate'
 import { buildStubApi, unsupported } from './stubs'
 import { sanitizeStationNotices } from '@shared/station-notice'
+import { sanitizeOutcomeRecords } from '@shared/station-outcome'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 import { encodePcmForWire } from './speech-encode'
 import { type FrameTransport, WebSocketFrameTransport } from './frame-transport'
@@ -694,6 +695,24 @@ export function buildStationNoticeApi(client: RpcClient): Pick<NodeTerminalApi, 
 }
 
 /**
+ * The Server Edition's station task outcomes — REAL, for the same reason as station notices: the
+ * server's canvas-control runtime records `report-outcome` and honours `--after-success` headlessly,
+ * and a browser tab's QUEUED badge and `list` must say what the server knows. Kept out of
+ * `buildAgentApi`, which relay tabs share.
+ */
+export function buildStationOutcomeApi(client: RpcClient): Pick<NodeTerminalApi, 'stationOutcome'> {
+  return {
+    stationOutcome: {
+      list: () =>
+        (client.request(IPC.stationOutcomeList) as Promise<unknown>).then(sanitizeOutcomeRecords, () => []),
+      onChanged: (cb) =>
+        client.subscribe(IPC.stationOutcomeChanged, ((records: unknown) =>
+          cb(sanitizeOutcomeRecords(records))) as Listener)
+    }
+  }
+}
+
+/**
  * Build the top-level agent-event subscriptions (`onAgentStatus` / `onSubagentActivity`) over an
  * RpcClient. These mirror the preload's `.on(channel, …)` → `client.subscribe(channel, …)` split:
  * each takes a listener and returns an unsubscribe. Declared against its `NodeTerminalApi` slice so
@@ -1214,6 +1233,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildFilesApi(client),
     ...buildAgentApi(client),
     ...buildStationNoticeApi(client),
+    ...buildStationOutcomeApi(client),
     ...buildCanvasApi(client),
     ...buildPresenceApi(client),
     ...buildSpeechApi(client),

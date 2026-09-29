@@ -80,6 +80,13 @@ import {
   type AgentMessagingDeps
 } from '../core/agents/agent-messaging'
 import { registerStationNoticeIpc, StationNoticeMonitor } from '../core/agents/station-notice'
+import {
+  StationOutcomeStore,
+  clearOutcomesAfterControl,
+  handleReportOutcome,
+  registerStationOutcomeIpc
+} from '../core/station-outcome-store'
+import { afterSuccessFlagRefusal } from '../shared/station-outcome'
 import { stationRecipient } from '../shared/station-notice'
 import type { RemoteLogExec } from '../core/board-log'
 import type { PtyCreateOptions, TranscriptPresence } from '../shared/types'
@@ -333,12 +340,12 @@ import {
   RELAY_URL
 } from './remote/host-service'
 import { initStandingHost } from './remote/standing-host'
-import { killRelayHostsByPeerKey } from './remote/relay-host'
 import { initRelayHost } from './remote/relay-host-service'
-import { createRevoker } from './remote/revocation'
-import { loadApprovedDevices, saveApprovedDevices, updateApprovedDevices } from './remote/approved-devices'
+import { PIN_ROLES, phonePins, retireLegacyPinFile } from './remote/approved-devices'
+import { revokeAllPhones, revokePeerKey } from './remote/peer-revoke'
 import { publicKeyToB64 } from './remote/e2ee'
 import { connectRelayClient, type RelayClientSession } from './remote/relay-client'
+import { relayPtyDataKey } from '../shared/relay-pty-channel'
 import { decodeOffer } from './remote/pairing'
 import { isJoinCode } from '../core/relay/join-code'
 import { connectHostedTeam, removeHostedBookmark } from './remote/hosted-join'
@@ -1703,6 +1710,10 @@ app.whenReady().then(async () => {
     relayEndpoint: RELAY_URL,
     apiBase: RELAY_API_BASE,
     relayAllowed
+  }, {
+    // A phone "Remove" must also revoke its RELAY trust: unpin and cut its live relay sessions.
+    // Which pin is that phone's is unknowable here, so every phone pin goes (peer-revoke.ts).
+    revokePhoneRelayTrust: revokeAllPhones
   })
   ipcMain.handle(IPC.pairingStart, () =>
     pairingService.start((result) => {
@@ -1727,18 +1738,12 @@ app.whenReady().then(async () => {
 
   // Revoking a bridged PEER must CUT THE LIVE SESSION, not just unpin it (revocation.ts): unpinning
   // refuses only the NEXT handshake, while the open relay socket keeps full shell access — "the
-  // person I just removed is still sitting in my terminal, typing". `killByPeerKey` closes every
-  // live session with that key, and each close runs the peer teardown (presence leave →
-  // PtyManager.dropClient → sink prune). Host-security control plane, so it stays on raw ipcMain:
-  // a remote peer must never be able to revoke anyone.
-  const peerRevoker = createRevoker({
-    load: loadApprovedDevices,
-    save: saveApprovedDevices,
-    update: updateApprovedDevices,
-    onRevoke: (peerKeyB64) => killRelayHostsByPeerKey(peerKeyB64)
-  })
+  // person I just removed is still sitting in my terminal, typing". `revokePeerKey` (peer-revoke.ts)
+  // is the one primitive: it unpins the key from every role store and closes every live session it
+  // holds on every host surface (standing phone host, interactive phone host, Team Access). Host-
+  // security control plane, so it stays on raw ipcMain: a remote peer must never be able to revoke.
   ipcMain.handle(IPC.remoteRevokePeer, (_e, peerKeyB64: string) =>
-    peerRevoker.revoke(String(peerKeyB64))
+    revokePeerKey(String(peerKeyB64), PIN_ROLES)
   )
 
   ipcMain.on(IPC.shellReveal, (_e, p: string) => {
@@ -1946,6 +1951,13 @@ app.whenReady().then(async () => {
   // "queued" about a message that has since landed or lapsed.
   messagingDeps.onQueuedResult = (req, outcome) => stationNotices.onQueuedResult(req, outcome)
   registerStationNoticeIpc(corePlatform, () => stationNotices)
+  // Station task outcomes (`report-outcome`, src/core/station-outcome-store.ts): what each station
+  // said about its OWN task, read by the renderer's `--after-success` gate. Held here, in main, so a
+  // renderer reload does not lose it; pushed whole to the window on every change.
+  const stationOutcomes = new StationOutcomeStore((records) =>
+    sendToMain(IPC.stationOutcomeChanged, records)
+  )
+  registerStationOutcomeIpc(corePlatform, () => stationOutcomes)
 
   ipcMain.handle(IPC.dialogSelectFolder, async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
@@ -2217,7 +2229,7 @@ app.whenReady().then(async () => {
   // phone silenced every SSH-only phone on this Mac: host mode fans out over the backend's
   // `relay_devices` rows, where an SSH-only phone has no row at all. The per-device exclusion that
   // would prevent the reverse cost (a phone that is paired AND granted gets two pushes) is not
-  // expressible here — a grant is keyed by the phone's deviceId, `loadApprovedDevices` stores only
+  // expressible here — a grant is keyed by the phone's deviceId, `phonePins` stores only
   // NaCl box pubkeys, and nothing on this machine maps one to the other. See the long note on
   // `resolveSendTarget` in core/push-notify.ts.
   const pushGrants = createGrantsAccessor()
@@ -2255,7 +2267,11 @@ app.whenReady().then(async () => {
   let pushHasPairedPhone = false
   const refreshPushIdentity = async (): Promise<void> => {
     try {
-      pushHasPairedPhone = (await loadApprovedDevices()).pubkeys.length > 0
+      // A relay-approved phone pin, OR a paired phone that has not re-approved over the relay since
+      // the pin stores were split (approved-devices.ts retires the old mixed file, so every phone
+      // re-prompts SAS once — push must not go silent in the meantime).
+      pushHasPairedPhone =
+        (await phonePins.load()).pubkeys.length > 0 || (await pairingService.listDevices()).length > 0
     } catch {
       pushHasPairedPhone = false
     }
@@ -3842,6 +3858,23 @@ app.whenReady().then(async () => {
     // exists in the board's repository is the renderer's question (`resolvePrWaitFor`).
     const afterPrRefusal = afterPrFlagRefusal(verb, args)
     if (afterPrRefusal) return { ok: false, error: afterPrRefusal, message: afterPrRefusal }
+    // `--after-success` / `--success-deadline`, and the refused `--after <id>:ok` form: same
+    // placement, same reason. Whether a named station exists and can report is the renderer's.
+    const afterSuccessRefusal = afterSuccessFlagRefusal(verb, args)
+    if (afterSuccessRefusal) return { ok: false, error: afterSuccessRefusal, message: afterSuccessRefusal }
+    // A station's report about ITSELF: recorded in main's store, board-logged on its own card, and
+    // never forwarded — there is no canvas work in it, and the renderer hears the store's push.
+    if (verb === 'report-outcome') {
+      return handleReportOutcome(
+        { nodeId, args, verified },
+        {
+          store: stationOutcomes,
+          now: () => Date.now(),
+          projectIdOfNode,
+          appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry)
+        }
+      )
+    }
     // `browser` is answered in MAIN and never forwarded to the renderer's agent-control dispatch:
     // the debugger handle and the CDP allowlist are main-side, and the renderer is the more
     // attackable half. Every other verb still round-trips to the renderer below.
@@ -3930,6 +3963,10 @@ app.whenReady().then(async () => {
           return { ok: false, error: OPEN_PROJECT_GRANT_CAP, message: OPEN_PROJECT_GRANT_CAP }
         }
       }
+      // New work handed to a station through canvas control withdraws its outcome report — the
+      // "new task" rule in src/core/station-outcome-store.ts. On the answer (prompt or late), and
+      // only on success.
+      clearOutcomesAfterControl(stationOutcomes, verb, args, answer, nodeId)
       return answer
     }
     // The timeout is NAMED, and what it says depends on the verb and on whether the request ledger
@@ -4263,11 +4300,18 @@ app.whenReady().then(async () => {
   ipcMain.on(IPC.agentSeedIdentity, (_e, entries: unknown) => {
     seedNodeIdentities(entries)
   })
+  // Retire the pre-split mixed pin file BEFORE the standing host can read anything (approved-devices.ts
+  // explains why nothing in it is carried over). The standing host reads only the phone store, so
+  // even a failed retire cannot auto-admit a legacy key — this is for downgrade safety and tidiness.
+  void retireLegacyPinFile().then(
+    (n) => { if (n > 0) console.info(`[relay] retired ${n} legacy pin(s); phones re-approve by SAS once`) },
+    (err) => console.warn('[relay] could not retire the legacy pin file:', (err as Error)?.message)
+  )
   initRemoteHost(win, ptyManager, listProjectsOutput, hostBridge)
   // NEW interactive relay host (Stage 4): a connecting peer desktop becomes a first-class
   // CorePlatform client of this desktop after mutual SAS approval. Runs BESIDE initRemoteHost (the
   // phone still uses the legacy flow). Inert until `relay:host:start` — a solo user pays nothing.
-  // Revocation reaches its sessions via `killRelayHostsByPeerKey` (peerRevoker, above).
+  // Revocation reaches its sessions via the peer-revoke.ts registry (relay-host.ts registers).
   initRelayHost(win, corePlatform, {
     // A project-scoped seat is judged message by message against THIS core's own records: which
     // projects hold a node (persisted canvases), which node a live session runs, and the project's
@@ -4341,8 +4385,10 @@ app.whenReady().then(async () => {
         onApproved: () => sendTo(IPC.relayClientApproved(connectionId)),
         // An inbound rpc frame from the host (res/ev) → the renderer's RpcClient.
         onFrame: (json) => sendTo(IPC.relayClientFrame(connectionId), json),
-        // pty output arrives on the SAME per-session channel a local pty uses (ws-bridge binary path).
-        onPtyData: (sessionId, data) => sendTo(IPC.ptyData(sessionId), data),
+        // pty output rides a NAMESPACED per-session channel, never the bare host id: host ids are
+        // `pty-<n>` like local ones, and a bare id would land the host's output in a LOCAL xterm
+        // (shared/relay-pty-channel.ts). The relay tab subscribes on the same key.
+        onPtyData: (sessionId, data) => sendTo(IPC.ptyData(relayPtyDataKey(connectionId, sessionId)), data),
         onClose: () => {
           relayClients.delete(connectionId)
           sendTo(IPC.relayClientClosed(connectionId))
@@ -4449,7 +4495,13 @@ app.whenReady().then(async () => {
     loadCodexRelayBundle,
     // Lead-pane width (issue #119) for the remote tmux conf, read at connect time so the host
     // carries the value the user last saved. 0 (the default) keeps the conf byte-identical.
-    () => settingsStore.get().tmuxLeadPaneWidth
+    () => settingsStore.get().tmuxLeadPaneWidth,
+    // The managed Claude accounts pinned to a host, whose config dirs there hold their own copies of
+    // the canvas/context skills — kept current by the connect-time agent-tools check. Read per
+    // check, so an account added mid-run is included. A pending account has no finished login and
+    // is skipped; the refresh re-validates every id before it becomes a path.
+    (hostKey) =>
+      (settingsStore.get().claudeAccounts ?? []).filter((a) => a.host === hostKey && !a.pending).map((a) => a.id)
   )
   // Pre-warm the ControlMasters of OPEN SSH projects, in the background, one host at a time.
   //

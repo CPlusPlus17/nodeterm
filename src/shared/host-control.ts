@@ -74,6 +74,9 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.agentBoardCommentDeliver,
   IPC.stationNoticeDropped,
   IPC.stationNoticeList,
+  // Unscoped: every project's station outcomes and their notes. A relay guest bound to one project
+  // must not read another's, and a relay tab's launch loop is refused anyway (its stub is inert).
+  IPC.stationOutcomeList,
   // The host's settings. `settings:save` is the dangerous half: `modelGateway.baseUrl` is the TRUST
   // ANCHOR `agent:discover-models` uses to decide whether it may resolve the stored
   // `${secret:model-gateway-api-key}` (core/agent-env-ipc.ts), so a peer that could save settings

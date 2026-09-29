@@ -4,7 +4,13 @@ import os from 'os'
 import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { quoteRemotePath } from '../shared/ssh'
-import { remoteAtomicWrite, REMOTE_WRITE_SHORT_BODY, RemoteWriteError, runRemoteAtomicWrite } from './remote-atomic-write'
+import {
+  remoteAtomicWrite,
+  REMOTE_WRITE_NO_DIR,
+  REMOTE_WRITE_SHORT_BODY,
+  RemoteWriteError,
+  runRemoteAtomicWrite
+} from './remote-atomic-write'
 
 const SHELL =
   process.platform === 'win32'
@@ -270,6 +276,25 @@ describe('remoteAtomicWrite', { timeout: REAL_SHELL_TIMEOUT_MS }, () => {
       expect(readdirSync(root)).toEqual(['nodeterm.sh'])
     }
   )
+
+  it.skipIf(!SHELL)('requireDir: writes only into a directory that ALREADY exists — never brings one back', () => {
+    // A managed account's skill is refreshed only while the account's dir is on the host; the
+    // parent `mkdir -p` must not resurrect a dir removed after the caller looked.
+    const root = mkdtempSync(path.join(os.tmpdir(), 'nt-remote-requiredir-'))
+    roots.push(root)
+    const account = `${shellPath(root)}/acc`
+    const target = `${account}/skills/x/SKILL.md`
+    const write = remoteAtomicWrite(target, 'skill\n', { requireDir: account })
+
+    const refused = spawnSync(SHELL!, ['-c', write.command], { input: write.stdin, encoding: 'utf8' })
+    expect(refused.status).toBe(REMOTE_WRITE_NO_DIR)
+    expect(readdirSync(root)).toEqual([])
+    expect(new RemoteWriteError(target, REMOTE_WRITE_NO_DIR).message).toContain('no longer exists')
+
+    mkdirSync(path.join(root, 'acc'))
+    execFileSync(SHELL!, ['-c', write.command], { input: write.stdin })
+    expect(readFileSync(path.join(root, 'acc/skills/x/SKILL.md'), 'utf8')).toBe('skill\n')
+  })
 
   it('refuses an empty body before any command exists, unless the caller allows one', () => {
     expect(() => remoteAtomicWrite('/h/.nodeterm/nodeterm.sh', '')).toThrow(/empty body/)

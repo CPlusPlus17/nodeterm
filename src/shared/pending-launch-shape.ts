@@ -13,6 +13,7 @@
 
 import type { PendingLaunch } from './types'
 import { normalizePrWaitHold } from './pr-wait'
+import { normalizeSuccessWaitHold } from './station-outcome'
 
 const KNOWN = new Set([
   'after',
@@ -23,6 +24,7 @@ const KNOWN = new Set([
   'awaitWorking',
   'awaitSetupGroup',
   'afterPr',
+  'afterSuccess',
   'promptFile'
 ])
 
@@ -61,6 +63,8 @@ export function normalizePendingLaunch(value: unknown): PendingLaunch | undefine
   }
   const afterPr = normalizePrWaitHold(v.afterPr)
   if (afterPr) out.afterPr = afterPr
+  const afterSuccess = normalizeSuccessWaitHold(v.afterSuccess)
+  if (afterSuccess) out.afterSuccess = afterSuccess
   if (manual) out.manualOnly = true
   return out as unknown as PendingLaunch
 }

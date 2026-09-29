@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { normalizePendingLaunch } from './pending-launch-shape'
 import { INVALID_PR_WAIT_HOLD } from './pr-wait'
+import { INVALID_SUCCESS_WAIT_HOLD } from './station-outcome'
 
 describe('normalizePendingLaunch — the held launch as a hostile project file carries it', () => {
   it('absent, null and non-objects are no hold', () => {
@@ -35,6 +36,15 @@ describe('normalizePendingLaunch — the held launch as a hostile project file c
   it('non-string dependency ids are dropped AND the hold turns manual — the dep set is not what was armed', () => {
     const out = normalizePendingLaunch({ after: ['a', 7, { id: 'b' }], command: 'x' })
     expect(out).toMatchObject({ after: ['a'], manualOnly: true })
+  })
+
+  it('a success wait round-trips, and a malformed one stays a hold that never fires by itself', () => {
+    const hold = { after: ['a'], command: 'x', afterSuccess: { deps: ['a'], deadlineAt: 9 } }
+    expect(normalizePendingLaunch(hold)).toEqual(hold)
+    const out = normalizePendingLaunch({ after: ['a'], command: 'x', afterSuccess: { deps: ['a'] } })
+    expect(out?.afterSuccess).toEqual(INVALID_SUCCESS_WAIT_HOLD)
+    // Absent stays absent: a node that never asked for a success wait gets none.
+    expect(normalizePendingLaunch({ after: [], command: 'x' })).not.toHaveProperty('afterSuccess')
   })
 
   it('a malformed PR wait stays a hold that never fires by itself', () => {

@@ -54,6 +54,7 @@ import {
 import { SshChildGate } from '../../core/remote-ssh/ssh-child-gate'
 import { claudeVersionProbeCommand, parseClaudeVersionProbe } from '../../core/remote-ssh/claude-version-probe'
 import { RemoteHooks } from './remote-hooks'
+import type { AgentToolsTrigger } from './agent-tools-freshness'
 import {
   recordTunnelRepair,
   shouldAttemptTunnelRepair,
@@ -185,6 +186,11 @@ interface Runners {
   /** Mints this instance's per-node token, or null when there is no node-auth secret at all
    *  (legacy everywhere). Resolved per pass so one connect's tokens all come from one secret. */
   nodeTokenMinter?: () => ((nodeId: string) => string) | null
+  /** The managed Claude accounts pinned to this host (`sshHostKey`), whose config dirs on the host
+   *  carry their own copies of the canvas/context skills. Read per check, so an account added or
+   *  removed mid-run is picked up. Absent ⇒ no account dirs are checked (their skills are then
+   *  only ever written when the account is added). */
+  claudeAccountIdsForHost?: (hostKey: string) => string[]
 }
 
 /** Backoff after a FAILED remote claude probe (no markers = claude not found on that attempt).
@@ -515,6 +521,11 @@ export class SshProjectManager {
         this.tunnelRepair.delete(projectId)
         this.tunnelProbeFailures.delete(projectId)
         this.hookTunnelHealth(projectId, true)
+        // Free once this run has confirmed the host (the check's own cadence); otherwise this is
+        // where a host the connect-time check could not confirm gets looked at again.
+        if (existing.remoteHome && existing.hookEndpointPath) {
+          this.refreshAgentTools(existing.conn, existing.controlPath, existing.remoteHome, 'reuse')
+        }
         return
       }
       const failures = (this.tunnelProbeFailures.get(projectId) ?? 0) + 1
@@ -543,6 +554,12 @@ export class SshProjectManager {
       existing.hookEndpointPath = res.endpointPath
       this.tunnelProbeFailures.delete(projectId)
       this.hookTunnelHealth(projectId, true)
+      // The agent tools are gated on a verified tunnel, so a host whose tunnel failed at connect
+      // never got them; and a tunnel that died may have died with a master another desktop
+      // rebuilt. Look now.
+      if (existing.remoteHome) {
+        this.refreshAgentTools(existing.conn, existing.controlPath, existing.remoteHome, 'repair')
+      }
       // Same contract as the establish path: hook events lost while the tunnel was down are gone
       // for good, so the working agents need a resync. Fire-and-forget behind a catch — a repair
       // job must never surface to the user as a dead SSH project.
@@ -554,6 +571,27 @@ export class SshProjectManager {
     } catch {
       // fail-open: the reuse returns whatever it already had, exactly as before this repair existed
     }
+  }
+
+  /**
+   * Bring the host's canvas/context shims, skills (system + this host's managed accounts) and
+   * instruction blocks up to this build — rewriting only what differs (RemoteHooks.refreshAgentTools
+   * owns the probe and the cadence). Fire-and-forget on every caller: it is several remote round
+   * trips at most, pure best-effort, and must never delay or fail a connect.
+   */
+  private refreshAgentTools(
+    conn: SshConnection,
+    controlPath: string,
+    remoteHome: string,
+    trigger: AgentToolsTrigger
+  ): void {
+    let accounts: string[] = []
+    try {
+      accounts = this.r.claudeAccountIdsForHost?.(sshHostKey(conn)) ?? []
+    } catch {
+      // a settings read that throws costs the account dirs this check, nothing else
+    }
+    void this.remoteHooks.refreshAgentTools(conn, controlPath, remoteHome, accounts, trigger).catch(() => {})
   }
 
   startWatchdog(intervalMs = MASTER_WATCHDOG_MS): void {
@@ -980,9 +1018,12 @@ export class SshProjectManager {
         // canvas control as unavailable. Not awaited: it is several remote round-trips of pure
         // best-effort setup, and holding the connect on them would delay every terminal.
         if (remoteHome && hookEndpointPath) {
-          // ONE chain, not two: both merge into the same instruction files, and two writers racing
-          // on one file cannot both publish (see RemoteHooks.installAgentTools).
-          void this.remoteHooks.installAgentTools(conn, controlPath, remoteHome)
+          // ONE chain, not two: canvas control and context link merge into the same instruction
+          // files, and two writers racing on one file cannot both publish (see
+          // RemoteHooks.installAgentTools) — the check applies them group by group, in order. It
+          // writes only what differs from this build; a master just came up, so it always looks,
+          // and an app update's new docs reach the host here, on the first connect after the relaunch.
+          this.refreshAgentTools(conn, controlPath, remoteHome, 'connect')
           // Per-node tokens for every node of this project (the endpoint file written just above
           // is what tells the host's hook script where to find them, which is also why this is
           // gated on `hookEndpointPath`: a token nothing can be pointed at is a wasted round-trip).
@@ -2694,7 +2735,10 @@ export function initSshProject(
   codexRelaySource?: () => Promise<string>,
   /** Current `settings.tmuxLeadPaneWidth` for the remote tmux conf (issue #119). Injected by
    *  main/index.ts because the settings store lives there; absent ⇒ 0 ⇒ pre-feature conf. */
-  leadPaneWidth?: () => number
+  leadPaneWidth?: () => number,
+  /** The managed Claude accounts pinned to a host (see Runners.claudeAccountIdsForHost). Injected
+   *  for the same reason: the settings store lives in main/index.ts. */
+  claudeAccountIdsForHost?: (hostKey: string) => string[]
 ): SshProjectManager {
   const ssh = sshBin()
   const scp = scpBin()
@@ -2822,6 +2866,7 @@ export function initSshProject(
     getHook: () => ({ port: hookServer.getPort(), token: hookServer.getToken(), version: hookServer.getVersion() }),
     codexRelaySource,
     leadPaneWidth,
+    claudeAccountIdsForHost,
     // Per-node identity for REMOTE nodes. Both come from the same module the local materialiser
     // uses, so one canvas cannot be judged by two different rules depending on where it runs.
     nodeIdsForProject: (projectId) => nodeIdsForCanvas(projectId),

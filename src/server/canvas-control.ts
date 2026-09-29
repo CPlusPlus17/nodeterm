@@ -12,6 +12,11 @@ import {
 } from '../core/agents/agent-messaging'
 import { paneOwnerProject } from '../core/agents/pane-ownership'
 import { StationNoticeMonitor } from '../core/agents/station-notice'
+import {
+  StationOutcomeStore,
+  clearOutcomesAfterControl,
+  handleReportOutcome
+} from '../core/station-outcome-store'
 import { stationRecipientFromOwner } from '../shared/station-notice'
 import {
   mirrorEntry,
@@ -88,6 +93,8 @@ export interface ServerCanvasControl {
   onAgentEvent(event: NormalizedAgentEvent): void
   /** Station-failure notices for the stations agents opened during THIS server run. */
   stationNotices: StationNoticeMonitor
+  /** What each station reported about its own task in THIS server run (`report-outcome`). */
+  stationOutcomes: StationOutcomeStore
   installSkillInto(configDir: string): void
   stop(): void
 }
@@ -176,6 +183,10 @@ export async function initServerCanvasControl(
     installHooksIntoLocalAccounts(deps.settings().claudeAccounts ?? [], installSkillInto)
   }
 
+  // Station task outcomes: built before the factory, which reads them for `--after-success`.
+  const stationOutcomes = new StationOutcomeStore((records) =>
+    platform().broadcast(IPC.stationOutcomeChanged, records)
+  )
   const factory = new HeadlessNodeFactory({
     workspaceStore: deps.workspaceStore,
     ptyManager: deps.ptyManager,
@@ -191,6 +202,7 @@ export async function initServerCanvasControl(
       deps.codexSharedIdentity ?? (() => codexIdentityCaps().then((caps) => caps.shared)),
     stateOf: nodeState,
     agentIdOf: (nodeId) => mirrorEntry(nodeId)?.agentId,
+    outcomeOf: (nodeId) => stationOutcomes.get(nodeId),
     // NOT `workspaceExternalChange`. That channel means "somebody else wrote this file" and the
     // renderer answers it with `decideExternalChange`, which compares the whole project shell —
     // and `ropes` is part of it, so every headless spawn (one appended `ctrl-…` rope) read as a
@@ -266,6 +278,22 @@ export async function initServerCanvasControl(
     color: (sourceNodeId, args) => factory.color(sourceNodeId, args),
     sticky: (sourceNodeId, args) => factory.sticky(sourceNodeId, args),
     run: (sourceNodeId, args, verified) => factory.run(sourceNodeId, args, verified),
+    // A station's report about ITSELF (core/station-outcome-store.ts, the same handler the desktop
+    // runs). A report can release an armed dependent, so the factory re-evaluates its arms.
+    reportOutcome: (sourceNodeId, args, verified) =>
+      handleReportOutcome(
+        { nodeId: sourceNodeId, args, verified },
+        {
+          store: stationOutcomes,
+          now: () => Date.now(),
+          projectIdOfNode: (id) => {
+            const ids = deps.workspaceStore.projectIdsForNode(id)
+            return ids.length === 1 ? ids[0] : undefined
+          },
+          appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry),
+          onRecorded: () => void factory.refreshArmed()
+        }
+      ),
     settings: async (sourceNodeId, args) =>
       serverSettingsControl(
         {
@@ -286,14 +314,22 @@ export async function initServerCanvasControl(
   // restart clears it, so an owner request or browser view is the only cold-spawn authority.
   await factory.start()
 
+  const baseHandler = createServerEditionControlHandler(actions)
   return {
-    handler: createServerEditionControlHandler(actions),
+    // New work handed to a station (`send` / `reply` / `run` aimed at it) withdraws its outcome
+    // report — the "new task" rule in core/station-outcome-store.ts, applied after the answer.
+    handler: async (req) => {
+      const reply = await baseHandler(req)
+      clearOutcomesAfterControl(stationOutcomes, req.verb, req.args, reply, req.nodeId)
+      return reply
+    },
     onAgentEvent: (event) => {
       onMessagingAgentEvent(event, queue)
       factory.onAgentEvent(event)
       stationNotices.onAgentEvent(event)
     },
     stationNotices,
+    stationOutcomes,
     installSkillInto,
     stop: () => {
       factory.stop()

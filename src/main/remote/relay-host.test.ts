@@ -51,15 +51,36 @@ vi.mock('../main-window', () => ({
 // The on-disk pin store, in memory (relay-trust's default load/save path).
 import { emptyApprovedDevices, type ApprovedDevices } from './approved-devices-core'
 let disk: ApprovedDevices = emptyApprovedDevices()
-vi.mock('./approved-devices', () => ({
-  updateApprovedDevices: async (update: (s: ApprovedDevices) => ApprovedDevices) => { disk = update(disk) },
-  loadApprovedDevices: async () => disk,
-  saveApprovedDevices: async (s: ApprovedDevices) => {
-    disk = s
+// Per-role pin stores (approved-devices.ts), in memory. The 'guest' store — the one this module
+// must write — is `disk`; every other role lives in `otherPins`, so a pin landing in the WRONG
+// store is visible to the assertions instead of indistinguishable from the right one.
+const otherPins: Record<string, ApprovedDevices> = {}
+vi.mock('./approved-devices', () => {
+  const mem = (role: string) => {
+    const get = (): ApprovedDevices => (role === 'guest' ? disk : (otherPins[role] ??= { pubkeys: [] }))
+    const set = (s: ApprovedDevices): void => {
+      if (role === 'guest') disk = s
+      else otherPins[role] = s
+    }
+    return {
+      load: async () => get(),
+      save: async (s: ApprovedDevices) => set(s),
+      update: role === 'guest' ? async (u: (s: ApprovedDevices) => ApprovedDevices) => set(u(get())) : async (u: (s: ApprovedDevices) => ApprovedDevices) => set(u(get()))
+    }
   }
-}))
+  const stores: Record<string, ReturnType<typeof mem>> = { phone: mem('phone'), guest: mem('guest'), joinedHost: mem('joinedHost') }
+  return {
+    PIN_ROLES: ['phone', 'guest', 'joinedHost'],
+    phonePins: stores.phone,
+    guestPins: stores.guest,
+    joinedHostPins: stores.joinedHost,
+    pinStore: (r: string) => stores[r],
+    retireLegacyPinFile: async () => 0
+  }
+})
 
 import { connectRelayHost, killRelayHostsByPeerKey, type RelayHostSession } from './relay-host'
+import { revokePeerKey } from './peer-revoke'
 import { connectRelay, type RelayTransport } from './relay-socket'
 import { createTrustGate, type TrustGate } from './relay-trust'
 import { genKeyPair, publicKeyToB64 } from './e2ee'
@@ -200,6 +221,7 @@ function openHostAgainstFakeRelay(opts?: {
   })
 
   peerGate = createTrustGate({
+    role: 'guest',
     peerKeyB64: peerSocket.peerPublicKeyB64()!,
     sessionId: 'peer-side',
     sas: () => peerSocket.sas(),
@@ -237,6 +259,7 @@ beforeEach(() => {
   h.sent = []
   h.clientIds = [1] // the main window (a webContents client)
   disk = emptyApprovedDevices()
+  for (const k of Object.keys(otherPins)) delete otherPins[k]
   flow = []
   gone = []
   capture = 'CURRENT SCREEN'
@@ -647,6 +670,20 @@ describe('relay host — teardown mirrors src/server/ws.ts', () => {
     expect(presenceHub.peers().some((pe) => pe.clientId === id)).toBe(false)
     // A stranger's key cuts nothing.
     killRelayHostsByPeerKey('some-other-key')
+  })
+
+  it('the shared revoke primitive (peer-revoke.ts) reaches Team Access sessions and unpins the guest', async () => {
+    const s = openHostAgainstFakeRelay()
+    await s.openMutually()
+    const id = s.session.clientId()!
+    await vi.waitFor(() => expect(disk.pubkeys).toEqual([s.peerKeyB64])) // pinned as a GUEST
+    expect(otherPins.phone?.pubkeys ?? []).toEqual([]) // never as a phone
+
+    expect(await revokePeerKey(s.peerKeyB64, ['guest'])).toEqual({ persisted: true, killed: true })
+
+    expect(disk.pubkeys).toEqual([])
+    expect(peerRegistry().ids()).not.toContain(id)
+    expect(gone).toEqual([id])
   })
 })
 

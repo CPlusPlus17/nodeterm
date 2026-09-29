@@ -40,6 +40,7 @@ import { guardMiddleClickPaste } from '../terminal/middle-click'
 import { patchTerminalScale } from '../terminal/scale-fix'
 import { focusedNodeId, subscribeFocusedNode, focusSurfaceEl } from '../state/focusNode'
 import { parseOsc52 } from '../terminal/osc52'
+import { createOsc52Notice, dispatchOsc52Toast, handleOsc52Write } from '../terminal/osc52-policy'
 import { activateUnicode11 } from '../terminal/unicode-width'
 import {
   createFileLinkProvider,
@@ -187,8 +188,10 @@ import {
   restartSessionId,
   RESTART_EXIT_TIMEOUT_MS,
   RESTART_LATE_EXIT_MS,
+  settleRecycledNode,
   type ExitPhaseOutcome,
   type PauseOutcome,
+  type RecyclePatch,
   type ResumePhaseOutcome
 } from '../terminal/agent-restart'
 import { coldResumeDecision, shouldProbeTranscript } from '../terminal/cold-resume-session'
@@ -231,7 +234,14 @@ import { useCodexIdentity, codexSharedIdentity, codexFallbackText } from '../sta
 import { codexApprovalCaps } from '../state/codexCli'
 import { useAgentStatus, agentStatusForApi, inferInterruptAfterSettle } from '../state/agentStatus'
 import { useLaunchDelivery } from '../state/launchDelivery'
-import { erroredDeps, launchTooltip } from '../lib/pendingLaunch'
+import { erroredDeps, launchTooltip, successDepFacts } from '../lib/pendingLaunch'
+import {
+  normalizeSuccessWaitHold,
+  successWaitExpired,
+  successWaitStatus,
+  successWaitSummary
+} from '@shared/station-outcome'
+import { useStationOutcomes } from '../state/stationOutcomes'
 import { StationFailedChip } from '../components/StationFailedChip'
 import { prHoldExpired, prHoldSummary } from '../lib/prWait'
 import { pullBoardFor, useGitHubIssues } from '../state/githubIssues'
@@ -241,6 +251,7 @@ import { PresenceChips } from '../components/PresenceChips'
 import { useAgentNodes } from '../state/agentNodes'
 import { useTerminalFocus } from '../state/terminalFocus'
 import { useProjects } from '../state/projects'
+import { markWorkspaceDirty } from '../state/workspaceDirty'
 import { isGlobalKanbanOpen, isKanbanOpen, isOmniKanbanEnabled, openIssueOnBoard, useViewMode, viewFor } from '../state/viewMode'
 import { useSshConn } from '../state/sshConn'
 import { useWorktrees } from '../state/worktrees'
@@ -2053,9 +2064,17 @@ export function TerminalNode({
     !observedLaunchDelivery &&
     !(pendingLaunch?.after?.length) &&
     !pendingLaunch?.awaitSetupGroup &&
-    !pendingLaunch?.afterPr
+    !pendingLaunch?.afterPr &&
+    !pendingLaunch?.afterSuccess
+  // Through the shape rule, memoized on the raw value: a malformed hold (a peer's mutation, a
+  // hand-edited file) reads as an unreadable, expired hold rather than throwing during render.
+  const rawSuccessHold = pendingLaunch?.afterSuccess
+  const successHold = useMemo(() => normalizeSuccessWaitHold(rawSuccessHold), [rawSuccessHold])
+  // The stations a `--after-success` wait names are ALSO in `after`; the tooltip speaks of them in
+  // the success sentence, so the plain list leaves them out rather than naming them twice.
+  const successDepIds = successHold && !successHold.invalid ? successHold.deps : []
   const pendingWaitingOn = [
-    ...(pendingLaunch?.after ?? []).map(
+    ...(pendingLaunch?.after ?? []).filter((depId) => !successDepIds.includes(depId)).map(
       (depId) => ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId
     ),
     // The other thing a launch can be held on: this worktree's project setup script. Named, or the
@@ -2096,6 +2115,47 @@ export function TerminalNode({
         deadline: prHold.invalid ? 'the project file holds an unreadable one' : new Date(prHold.deadlineAt).toLocaleString()
       }
     : undefined
+  // `--after-success`: where the wait stands, from the same facts the launch loop judges (the
+  // stations' reports, their turn state, whether they still exist). A PRIMITIVE signature per store,
+  // selected only for a node that has such a wait, so no other node re-renders on a report or a
+  // hook event.
+  const successOutcomeSig = useStationOutcomes((s) =>
+    successDepIds.map((d) => {
+      const r = Object.prototype.hasOwnProperty.call(s.byId, d) ? s.byId[d] : undefined
+      return r ? `${d}:${r.outcome}:${r.at}` : `${d}:-`
+    }).join('|')
+  )
+  const successStateSig = useAgentStatus((s) =>
+    successDepIds.map((d) => `${d}:${s.byId[d]?.state ?? '-'}:${s.byId[d]?.lastTurnError ? 'e' : ''}`).join('|')
+  )
+  const [, setSuccessClock] = useState(0)
+  useEffect(() => {
+    if (!successHold || successWaitExpired(successHold, Date.now())) return
+    const t = setTimeout(
+      () => setSuccessClock((v) => v + 1),
+      Math.min(successHold.deadlineAt - Date.now() + 50, 2 ** 31 - 1)
+    )
+    return () => clearTimeout(t)
+  }, [successHold])
+  const successTooltip = useMemo(() => {
+    if (!successHold) return undefined
+    const live = new Set(successDepIds.filter((d) => !!getNode(d)))
+    const facts = (d: string) =>
+      successDepFacts(d, useAgentStatus.getState().byId, live, useStationOutcomes.getState().byId)
+    const name = (d: string) => ((getNode(d) as CanvasNode | undefined)?.data.title as string) || d
+    return {
+      status: successWaitStatus(successHold, facts, Date.now()),
+      summary: successHold.invalid
+        ? 'a success wait that could not be read'
+        : successWaitSummary(successHold, facts, name),
+      deadline: successHold.invalid
+        ? 'the project file holds an unreadable one'
+        : new Date(successHold.deadlineAt).toLocaleString()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the two signatures are the triggers
+  }, [successHold, successOutcomeSig, successStateSig, getNode])
+  const successExpired = successTooltip?.status === 'expired'
+  const successBlocked = successTooltip?.status === 'blocked'
   const pendingErroredOn = erroredDepIds
     ? erroredDepIds
         .split(',')
@@ -3090,12 +3150,19 @@ export function TerminalNode({
       // The emulator's own Cmd+C / Ctrl+Shift+C chords (below) stay for a selection xterm owns.
       // WRITE-ONLY — `parseOsc52` returns null for a `?` read query so a remote program can never
       // read the local clipboard. Returning true swallows the sequence (also the read query).
+      // A RELAY tab's stream is another person's core: its writes are refused (osc52-policy.ts —
+      // paste-jacking). Local and SSH-project terminals (source 'local') are untouched.
+      const osc52Notice = createOsc52Notice()
       term.parser.registerOscHandler(52, (data) => {
         const text = parseOsc52(data)
         if (text !== null) {
-          window.nodeTerminal.clipboard.writeText(text)
-          // Through the registry, never a captured setState: this handler outlives a park.
-          copySubs.get(termKey)?.(text)
+          handleOsc52Write(text, session.source, {
+            write: (t) => window.nodeTerminal.clipboard.writeText(t),
+            // Through the registry, never a captured setState: this handler outlives a park.
+            notifyCopied: (t) => copySubs.get(termKey)?.(t),
+            shouldNotify: osc52Notice,
+            toast: dispatchOsc52Toast
+          })
         }
         return true
       })
@@ -4176,7 +4243,7 @@ export function TerminalNode({
     }
     const unregisterRestart = registerAgentRestart(
       id,
-      guardConcurrentRestart(id, async (targetAgentId?: AgentId, targetModel?: string, restartShell?: boolean, clearEnv?: boolean, beforeRecycle?: () => Promise<Record<string, unknown> | void>) => {
+      guardConcurrentRestart(id, async (targetAgentId?: AgentId, targetModel?: string, restartShell?: boolean, clearEnv?: boolean, beforeRecycle?: () => Promise<RecyclePatch | void>) => {
         const st = useAgentStatus.getState().byId[id]
         const currentNode = getNode(id)
         const agentSessionId = restartSessionId(st?.sessionId, currentNode?.data.agentSessionId)
@@ -4274,6 +4341,9 @@ export function TerminalNode({
         // to another core/settings store, and recycling here would respawn against this Mac's env.
         if (restartShell) {
           if (session.source === 'relay') return 'not-eligible'
+          // Read NOW, before the first await: this node is on the active canvas at call time, and
+          // the project may be switched while the CLI quits (see `settleRecycledNode`).
+          const ownerProjectId = owningProjectId()
           const exited = await performExitPhase({
             agentId: target,
             sessionId: agentSessionId,
@@ -4289,11 +4359,19 @@ export function TerminalNode({
           // still brings the conversation back (on whatever account the node is bound to).
           const patch = beforeRecycle ? await beforeRecycle().catch(() => undefined) : undefined
           transport.recycle(id)
-          updateNodeData(id, (node) => ({
-            ...(patch ?? {}),
+          settleRecycledNode({
+            onCanvas: !!getNode(id),
             agentId: target,
-            respawnNonce: ((node.data.respawnNonce as number | undefined) ?? 0) + 1
-          }))
+            patch: patch ?? undefined,
+            updateLive: (rebind) =>
+              updateNodeData(id, (node) => ({
+                ...rebind,
+                respawnNonce: ((node.data.respawnNonce as number | undefined) ?? 0) + 1
+              })),
+            updateStored: (rebind) => useProjects.getState().rebindNode(ownerProjectId, id, rebind),
+            dropPark: () => disposeParkedTerminal(termKey),
+            markDirty: markWorkspaceDirty
+          })
           return 'restarted'
         }
         // Built HERE, not inside the choreography: the shared assembly builder is the single funnel
@@ -5957,12 +6035,22 @@ export function TerminalNode({
         {pendingLaunch && !firstOpenInFlight && (
           <span
             className={`term-node__status term-node__status--queued nodrag${
-              (launchDelivery || prExpired) && !startingNow ? ' term-node__status--queued-warn' : ''
+              (launchDelivery || prExpired || successExpired || successBlocked) && !startingNow
+                ? ' term-node__status--queued-warn'
+                : ''
             }`}
-            title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip)}
+            title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip, successTooltip)}
           >
             <span className="term-node__status-dot" />
-            {startingNow ? 'STARTING' : launchDelivery ? '⚠ QUEUED' : prExpired ? '⚠ EXPIRED' : 'QUEUED'}
+            {startingNow
+              ? 'STARTING'
+              : launchDelivery
+                ? '⚠ QUEUED'
+                : prExpired || successExpired
+                  ? '⚠ EXPIRED'
+                  : successBlocked
+                    ? '⚠ BLOCKED'
+                    : 'QUEUED'}
             <button
               className="term-node__queued-run"
               disabled={session.source === 'relay' || startingNow}

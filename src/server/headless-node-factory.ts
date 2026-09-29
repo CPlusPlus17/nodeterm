@@ -37,6 +37,17 @@ import { assembleLaunchCommand } from '../shared/agents/launch'
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { oneLine } from '../shared/one-line'
 import { RUN_NOW_AFTER_REFUSAL, runNowRequested } from '../shared/control-verbs'
+import {
+  RUN_NOW_AFTER_SUCCESS_REFUSAL,
+  normalizeSuccessWaitHold,
+  parseAfterSuccessArg,
+  parseSuccessDeadlineArg,
+  successDepRefusal,
+  successWaitSatisfied,
+  type StationOutcomeRecord,
+  type SuccessDepFacts,
+  type SuccessWaitHold
+} from '../shared/station-outcome'
 import { isRemoteSessionNode } from '../shared/worktree'
 import { issueLaunchPrompt, resolveIssueArg, type IssueRef } from '../shared/github-issue-ref'
 import { runEndedEvent, runStartedEvent } from '../shared/issue-runs'
@@ -110,6 +121,9 @@ export interface HeadlessNodeFactoryDeps {
   /** Hook-mirror lookups. A stored agentId wins; these cover a plain terminal running an agent. */
   stateOf(nodeId: string): AgentState | undefined
   agentIdOf?(nodeId: string): string | undefined
+  /** A station's latest task report (`report-outcome`, core's store) — what `--after-success` waits
+   *  on. Absent = no report is ever known, so a success wait never releases on its own. */
+  outcomeOf?(nodeId: string): StationOutcomeRecord | undefined
   env?: Record<string, string | undefined>
   now?: () => number
   publishNode?: (projectId: string, node: CanvasNodeState) => void
@@ -712,6 +726,27 @@ export class HeadlessNodeFactory {
     return target
   }
 
+  private now(): number {
+    return this.deps.now?.() ?? Date.now()
+  }
+
+  /** What a success wait knows about one station, from the same facts this edition's `--after`
+   *  reads (the mirror's `done`, the `awaitWorking` fresh-spawn rule), plus its report. */
+  private successFacts(
+    project: Project,
+    depId: string,
+    observed?: Pick<NormalizedAgentEvent, 'nodeId' | 'state'>
+  ): SuccessDepFacts {
+    const exists = project.nodes.some((candidate) => candidate.id === depId)
+    const state = observed?.nodeId === depId ? observed.state : this.deps.stateOf(depId)
+    const reported = this.deps.outcomeOf?.(depId)
+    return {
+      exists,
+      turnDone: exists && !this.awaitingFirstWorking.has(depId) && state === 'done',
+      ...(reported ? { outcome: reported } : {})
+    }
+  }
+
   private resolveAfter(
     project: Project,
     raw: string | undefined,
@@ -1238,13 +1273,46 @@ export class HeadlessNodeFactory {
         // `run-now` (#925) is a no-op, since a server open already delivers immediately; only its
         // pairing with `--after` is refused, just below.
         verb === 'open-terminal'
-          ? new Set(['count', 'cwd', 'cmd', 'after', 'project', 'run-now'])
-          : new Set(['agent', 'count', 'cwd', 'prompt', 'after', 'project', 'model', 'issue', 'run-now'])
+          ? new Set(['count', 'cwd', 'cmd', 'after', 'after-success', 'success-deadline', 'project', 'run-now'])
+          : new Set([
+              'agent',
+              'count',
+              'cwd',
+              'prompt',
+              'after',
+              'after-success',
+              'success-deadline',
+              'project',
+              'model',
+              'issue',
+              'run-now'
+            ])
       )
       if (flagError) return { ok: false, error: `${verb}: ${flagError}` }
       // "Start now" and "start when X is done" contradict each other: refused in the desktop's
       // words, before anything is created, rather than silently opening an armed node.
       if (runNowRequested(args) && args.after) return { ok: false, error: RUN_NOW_AFTER_REFUSAL }
+      if (runNowRequested(args) && args['after-success'] !== undefined) {
+        return { ok: false, error: RUN_NOW_AFTER_SUCCESS_REFUSAL }
+      }
+      // `--after-success` (@shared/station-outcome): the shape was checked in `parseControlRequest`;
+      // re-parsed here with the same grammar. The ids are folded into `after` — a success wait is
+      // `--after` plus the station's report — so the existence, status-reporting and creator checks
+      // below apply to them unchanged; the hold adds the report.
+      const successParsed =
+        args['after-success'] !== undefined ? parseAfterSuccessArg(args['after-success']) : undefined
+      if (successParsed && !successParsed.ok) return { ok: false, error: `${verb}: ${successParsed.error}` }
+      const successIds = successParsed?.ok ? successParsed.ids : []
+      const successDeadline = parseSuccessDeadlineArg(args['success-deadline'])
+      if (!successDeadline.ok) return { ok: false, error: `${verb}: ${successDeadline.error}` }
+      const afterArg = successIds.length
+        ? [
+            ...new Set([
+              ...(args.after ?? '').split(',').map((id) => id.trim()).filter(Boolean),
+              ...successIds
+            ])
+          ].join(',')
+        : args.after
       if (!verified) {
         return {
           ok: false,
@@ -1260,10 +1328,21 @@ export class HeadlessNodeFactory {
       }
       const target = this.resolveTarget(workspace, source, verb, args, verified)
       if ('ok' in target) return target
-      const after = this.resolveAfter(target, args.after, verb)
+      const after = this.resolveAfter(target, afterArg, verb)
       if (!Array.isArray(after)) return after
       const unownedAfter = this.unownedMutation(sourceNodeId, after)
       if (unownedAfter) return this.ownershipRefusal(verb, sourceNodeId, unownedAfter)
+      // A success wait is only as good as the station's ability to REPORT: only an agent with canvas
+      // control has `report-outcome`, so waiting on anything else could only end at the deadline.
+      for (const depId of successIds) {
+        const dep = target.nodes.find((candidate) => candidate.id === depId)
+        if (!dep || !sourceCanControl(dep, this.deps.agentIdOf)) {
+          return { ok: false, error: successDepRefusal(verb, depId) }
+        }
+      }
+      const successHold: SuccessWaitHold | undefined = successIds.length
+        ? { deps: successIds, deadlineAt: this.now() + successDeadline.ms }
+        : undefined
       // `--issue`: resolved against the project the node OPENS IN, before anything is written. The
       // shape gate already ran in `parseControlRequest`; this re-parses with the same grammar.
       let issueRef: IssueRef | undefined
@@ -1318,7 +1397,10 @@ export class HeadlessNodeFactory {
       for (const [depId, state] of afterStates) {
         if (state === 'working') this.awaitingFirstWorking.delete(depId)
       }
-      const mustWait = after.some((depId) => afterStates.get(depId) !== 'done')
+      const mustWait =
+        after.some((depId) => afterStates.get(depId) !== 'done') ||
+        (!!successHold &&
+          !successWaitSatisfied(successHold, (d) => this.successFacts(target, d), this.now()))
       const awaitWorking = after.filter((depId) =>
         afterStates.get(depId) !== 'done' &&
         afterStates.get(depId) !== 'working' &&
@@ -1372,7 +1454,8 @@ export class HeadlessNodeFactory {
               executor: 'server' as const,
               attempted: !mustWait,
               ...(!mustWait ? { manualOnly: true } : {}),
-              ...(awaitWorking.length ? { awaitWorking: [...awaitWorking] } : {})
+              ...(awaitWorking.length ? { awaitWorking: [...awaitWorking] } : {}),
+              ...(successHold ? { afterSuccess: successHold } : {})
             }
           : undefined
         const node: CanvasNodeState = {
@@ -1485,7 +1568,7 @@ export class HeadlessNodeFactory {
               .map((node) => ({ id: node.id, reason: reasons[node.id], retained: !!node.pendingLaunch })),
             verb
           ),
-          result: { ids, id: ids[0], after, ...launchResult, reasons }
+          result: { ids, id: ids[0], after, ...launchResult, reasons, ...(successHold ? { afterSuccess: successHold.deps } : {}) }
         }
       }
       return {
@@ -1494,8 +1577,16 @@ export class HeadlessNodeFactory {
           `opened ${count} ${verb === 'open-agent' ? `${agentId} session` : 'terminal'}(s): ` +
           ids.join(', ') +
           (queuedIds.length ? `; queued: ${queuedIds.join(', ')}` : '') +
-          (deliveredIds.length ? '; launch delivered; agent startup is not confirmed' : ''),
-        result: { ids, id: ids[0], after, ...launchResult, ...(issueRef ? { issue: `${issueRef.owner}/${issueRef.repo}#${issueRef.number}` } : {}) }
+          (deliveredIds.length ? '; launch delivered; agent startup is not confirmed' : '') +
+          (successHold ? `; waits for a reported success from: ${successHold.deps.join(', ')}` : ''),
+        result: {
+          ids,
+          id: ids[0],
+          after,
+          ...launchResult,
+          ...(issueRef ? { issue: `${issueRef.owner}/${issueRef.repo}#${issueRef.number}` } : {}),
+          ...(successHold ? { afterSuccess: successHold.deps } : {})
+        }
       }
     })
   }
@@ -1620,6 +1711,18 @@ export class HeadlessNodeFactory {
               : this.deps.stateOf(depId) === 'done'
           })
           if (!ready) continue
+          // `--after-success`: every named station also REPORTED success. The persisted hold is
+          // hand-editable input, so it is re-validated here — a malformed one never fires.
+          const successHold = normalizeSuccessWaitHold(pending.afterSuccess)
+          if (
+            successHold &&
+            !successWaitSatisfied(
+              successHold,
+              (d) => this.successFacts(project, d, observed),
+              this.now()
+            )
+          )
+            continue
           // `sessionExists` is a probe, whereas `createHeadless` is attach-or-create. Never call
           // the latter from boot/event reconciliation: a dead node stays dormant until its owner
           // explicitly opens it or a user views it. A probe failure also stays dormant because an

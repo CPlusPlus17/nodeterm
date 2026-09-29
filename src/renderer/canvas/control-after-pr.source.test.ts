@@ -105,7 +105,7 @@ describe('the launch loop judges the wait on the ACTIVE project’s pull request
   })
 
   it('re-runs when a waited-on pull request changes, off a PRIMITIVE signature', () => {
-    expect(src).toMatch(/\}, \[nodes, armedDepSig, armedSetupSig, armedPrSig, launchNudge\]\)/)
+    expect(src).toMatch(/\}, \[nodes, armedDepSig, armedSetupSig, armedPrSig, armedSuccessSig, launchNudge\]\)/)
     const sig = slice('const armedPrSig = useGitHubIssues((s) => {', '})')
     expect(sig).toContain('prHoldReports(')
     expect(sig).toContain("sig +=")
@@ -133,7 +133,7 @@ describe('the node badge', () => {
   })
 
   it('reads EXPIRED and hands the PR wait to the tooltip', () => {
-    expect(node).toMatch(/prExpired \? '⚠ EXPIRED'/)
-    expect(node).toMatch(/launchTooltip\([^)]*prTooltip\)/)
+    expect(node).toMatch(/prExpired \|\| successExpired\s*\?\s*'⚠ EXPIRED'/)
+    expect(node).toMatch(/launchTooltip\([^)]*prTooltip, successTooltip\)/)
   })
 })

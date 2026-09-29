@@ -1217,6 +1217,25 @@ describe('pendingLaunch at the serializer seams (a held launch is hostile input 
     expect(flow[0].data.pendingLaunch).toMatchObject({ after: [], manualOnly: true })
   })
 
+  it('round-trips a success-held launch (--after-success)', () => {
+    const hold = {
+      after: ['b1'],
+      command: 'claude',
+      attempted: false,
+      afterSuccess: { deps: ['b1'], deadlineAt: 5 }
+    }
+    const flow = nodeStatesToFlow([state(hold)])
+    expect(flow[0].data.pendingLaunch).toEqual(hold)
+    expect(flowToNodeStates(flow)[0].pendingLaunch).toEqual(hold)
+  })
+
+  it('a malformed success wait loads as the invalid hold, on the way in and on the way out', () => {
+    const flow = nodeStatesToFlow([state({ after: ['b1'], command: 'c', afterSuccess: { deps: 'b1' } })])
+    expect((flow[0].data.pendingLaunch as { afterSuccess?: { invalid?: true } }).afterSuccess?.invalid).toBe(true)
+    const out = flowToNodeStates([live({ after: [], command: 'c', afterSuccess: ['b1'] })])
+    expect(out[0].pendingLaunch?.afterSuccess?.invalid).toBe(true)
+  })
+
   it('a malformed PR wait loads as the invalid hold, on the way in and on the way out', () => {
     const flow = nodeStatesToFlow([state({ after: [], command: 'c', afterPr: { waits: 'all' } })])
     expect((flow[0].data.pendingLaunch as { afterPr?: { invalid?: true } }).afterPr?.invalid).toBe(true)

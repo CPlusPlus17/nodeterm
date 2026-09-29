@@ -443,6 +443,11 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   the relay, so a key that works locks it onto a path that cannot work. CLAUDE.md, "Remote access",
   has the details.
 
+- **Relay pins are per role, and a revoke is one call.** Pin a peer only through its role's store
+  in `src/main/remote/approved-devices.ts` (`phonePins` is the only one anything auto-admits from —
+  never write a desktop peer there), and revoke only through `src/main/remote/peer-revoke.ts`, which
+  unpins AND closes every live session on every host. A new host that serves relay peers must
+  `registerPeerSessionKiller`, or revoking a device leaves its shell open. CLAUDE.md, "Remote access".
 - **A relay channel that names a project needs a row in `relay-project-scope.ts`.** A relay guest
   bound to one shared project must never reach another, and the jail is keyed on channel class:
   anything named `githubIssues:*`, `board-log:*` or `projects.*` is refused on a scoped session
@@ -497,6 +502,15 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   to the user (settings, config.toml, AGENTS.md) use `updateRemoteTextFile`, which also keeps its
   symlink and mode. A guard test fails on a new bare `cat >`. A remote runner RESOLVES on a
   non-zero exit, so check the result or use the helper that does.
+
+- **A new agent-facing doc on an SSH host goes into the agent-tools plan.** The canvas/context
+  shims, their skills and our instruction-file blocks are listed once in `remote-hooks.ts`
+  (`canvasControlArtifacts` and its siblings); the installers AND the connect-time freshness check
+  (`RemoteHooks.refreshAgentTools`) read that list, so a host is brought up to your build's bytes
+  on the next connect. A shim, skill or block written from anywhere else is written once and never
+  checked again — hosts then keep the old text across app updates. This is ONLY for those docs:
+  hook scripts and hook config stay in `setup()`'s ordered chain, and the endpoint file and node
+  tokens carry credentials — never put them on a freshness cadence.
 
 - **Never write `chmod <mode> -- <file>` into a remote command.** macOS (BSD) chmod stops parsing
   options at the mode, so the `--` becomes a file operand and the command fails there while passing
@@ -759,10 +773,15 @@ retry anywhere, ask what the clock actually starts on and where its exhaustion b
 in the git-shared `.nodeterm/project.json`, so `normalizePendingLaunch`
 (`src/shared/pending-launch-shape.ts`) runs at both serializer seams: an `after` that is not a list
 used to throw inside the canvas's dependency-signature selector. Its rule, and the rule for any new
-gate you add (the `--after-pr` pull request wait is the latest): a value it cannot read turns the
+gate you add (the `--after-success` wait is the latest): a value it cannot read turns the
 hold `manualOnly` or never-satisfied, never "no gate" — dropping it would start the node early, and
 a dependent that has launched cannot un-launch. A new gate field also goes in that module's `KNOWN`
-set, and `launchesToFire` must treat a missing context for it as closed.
+set, and `launchesToFire` must treat a missing context for it as closed. If both shells evaluate the
+gate (the Server Edition's headless factory releases its own held launches), put the evaluation in
+`src/shared` beside the shape, as `@shared/station-outcome` does, so the desktop and the server
+cannot disagree about when a dependent starts. And never let a gate read its "satisfied" from a
+file: a success a git commit can claim releases every dependent waiting on it — the station's
+report lives in a transient core store, and its board-log line is display only.
 
 **Never move the user's view on a background agent's say-so.** Canvas-control requests route by
 SOURCE, and React Flow holds only the ACTIVE project's nodes — so the dispatch used to travel to the

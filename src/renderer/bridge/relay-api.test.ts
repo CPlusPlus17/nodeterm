@@ -1,3 +1,4 @@
+import { relayPtyDataKey } from '../../shared/relay-pty-channel'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { IPC } from '../../shared/ipc'
 import type { NodeTerminalApi } from '../../shared/types'
@@ -123,7 +124,7 @@ describe('buildRelayApi', () => {
     expect(typeof api.dialog.selectFile).toBe('function')
   })
 
-  it('delegates pty.onData to the LOCAL per-session channel, not the RpcClient', () => {
+  it('delegates pty.onData to a NAMESPACED local channel, not the RpcClient', () => {
     const { local, ptyOnData } = fakeLocalApi()
     ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
     const t = new FakeTransport()
@@ -131,7 +132,9 @@ describe('buildRelayApi', () => {
 
     const listener = (): void => {}
     const unsub = api.pty.onData('sess-1', listener)
-    expect(ptyOnData).toHaveBeenCalledWith('sess-1', listener)
+    // On the connection's NAMESPACED key — never the bare host id, which is a local pty's channel.
+    expect(ptyOnData).toHaveBeenCalledWith(relayPtyDataKey('conn-1', 'sess-1'), listener)
+    expect(ptyOnData).not.toHaveBeenCalledWith('sess-1', listener)
     expect(unsub).toBe(LOCAL_ONDATA_UNSUB)
     // No frame was sent for a subscription — proof it did not route through the relay transport.
     expect(t.sent).toHaveLength(0)
