@@ -10,8 +10,7 @@ import fs from 'fs'
 import path from 'path'
 import { findExecutableSync } from '../../exec-path'
 import { NativeMux, WINDOWS_OPENSSH_AGENT_PIPE, type ExecResult } from './native-mux'
-import { parseSshG, sshGArgs } from './ssh-config'
-import type { SshTarget } from './ssh-argv'
+import { parseSshG, sshGArgs, type HostQuery } from './ssh-config'
 import { runSshArgv, useNativeSsh } from './native-invoke'
 
 export { useNativeSsh }
@@ -35,11 +34,17 @@ function sshForConfig(): string {
   )
 }
 
-function resolveHost(t: SshTarget) {
+function resolveHost(t: HostQuery) {
   return new Promise<ReturnType<typeof parseSshG>>((resolve, reject) => {
-    execFile(sshForConfig(), sshGArgs(t), { timeout: 5_000, windowsHide: true }, (err, stdout) => {
+    let args: string[]
+    try {
+      args = sshGArgs(t)
+    } catch (e) {
+      return reject(e)
+    }
+    execFile(sshForConfig(), args, { timeout: 5_000, windowsHide: true }, (err, stdout) => {
       if (err && !stdout) {
-        return reject(new Error(`ssh -G failed for ${t.user}@${t.host}: ${err.message}`))
+        return reject(new Error(`ssh -G failed for ${t.user ? `${t.user}@` : ''}${t.host}: ${err.message}`))
       }
       try {
         resolve(parseSshG(stdout))
