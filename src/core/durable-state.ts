@@ -33,7 +33,7 @@
 //     which the owners state for their fact.
 //
 // Pure `src/core`: no electron. The clock and the timer are injectable so tests drive it.
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { renameAtomicSync, tempNameFor, writeFileAtomic } from './fs-atomic'
 
@@ -119,17 +119,30 @@ export class DurableFactFile<T> {
   /** Read and sanitize the file. Synchronous (boot), never throws; absent ⇒ `[]` silently. */
   load(): T[] {
     let text: string
+    let fd: number | undefined
     try {
-      const st = statSync(this.path)
+      // Stat and read the SAME open file, so what was checked is what is read.
+      fd = openSync(this.path, 'r')
+      const st = fstatSync(fd)
       if (!st.isFile() || st.size > DURABLE_STATE_MAX_BYTES) {
+        closeSync(fd)
+        fd = undefined
         this.setAside(`not a regular file under ${DURABLE_STATE_MAX_BYTES} bytes`)
         return []
       }
-      text = readFileSync(this.path, 'utf-8')
+      text = readFileSync(fd, 'utf-8')
+      if (text.length > DURABLE_STATE_MAX_BYTES) {
+        closeSync(fd)
+        fd = undefined
+        this.setAside(`not a regular file under ${DURABLE_STATE_MAX_BYTES} bytes`)
+        return []
+      }
     } catch (e) {
       if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT')
         this.warn(`[durable-state] ${this.spec.kind}: could not read ${this.path} (${String(e)}); starting empty`)
       return []
+    } finally {
+      if (fd !== undefined) closeSync(fd)
     }
     let parsed: unknown
     try {
