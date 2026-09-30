@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { PUSH_WEBHOOK_TOKEN_ENV, pushWebhookCurlExample, pushWebhookErrorText, type PushWebhookError } from './push-webhook'
+import {
+  PUSH_WEBHOOK_TOKEN_ENV,
+  pushWebhookCurlExample,
+  pushWebhookErrorText,
+  pushWebhookPowerShellExample,
+  type PushWebhookError
+} from './push-webhook'
 
 describe('pushWebhookCurlExample', () => {
   it('reads the token from the environment and hands it to curl on stdin, never argv', () => {
@@ -26,6 +32,14 @@ describe('pushWebhookCurlExample', () => {
 })
 
 it('every error has a sentence', () => {
-  const all: PushWebhookError[] = ['dev-build', 'no-host-key', 'no-paired-phone', 'refused', 'rate-limited', 'unreachable']
+  const all: PushWebhookError[] = ['dev-build', 'no-host-key', 'no-paired-phone', 'refused', 'bad-request', 'rate-limited', 'unreachable']
   for (const e of all) expect(pushWebhookErrorText(e).length).toBeGreaterThan(10)
+})
+
+it('the PowerShell example makes the request in-process and reads the token from the environment', () => {
+  const ex = pushWebhookPowerShellExample('https://api.test')
+  expect(ex).toContain('Invoke-RestMethod')
+  expect(ex).toContain(`$env:${PUSH_WEBHOOK_TOKEN_ENV}`)
+  expect(ex).not.toMatch(/curl/i)
+  expect(ex).toContain("'https://api.test/v1/push/webhook'")
 })

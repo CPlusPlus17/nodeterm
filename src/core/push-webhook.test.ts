@@ -55,6 +55,7 @@ function client(server: ReturnType<typeof fakeServer>, over: Partial<Parameters<
     fetch: server.fetch,
     apiBase: 'https://api.test',
     loadHost: async () => host,
+    hasPairedPhone: async () => true,
     isPackaged: () => true,
     env: {},
     ...over
@@ -91,10 +92,12 @@ describe('push webhook client', () => {
     expect(await client(fakeServer({ paired: false })).mint()).toEqual({ ok: false, error: 'no-paired-phone' })
     expect(await client(fakeServer({ status: 429 })).status()).toEqual({ ok: false, error: 'rate-limited' })
     expect(await client(fakeServer({ status: 502 })).status()).toEqual({ ok: false, error: 'unreachable' })
+    expect(await client(fakeServer({ status: 400 })).status()).toEqual({ ok: false, error: 'bad-request' })
     const throwing = createPushWebhookClient({
       fetch: (async () => { throw new Error('offline') }) as unknown as typeof fetch,
       apiBase: 'https://api.test',
       loadHost: async () => host,
+      hasPairedPhone: async () => true,
       isPackaged: () => true
     })
     expect(await throwing.status()).toEqual({ ok: false, error: 'unreachable' })
@@ -104,8 +107,29 @@ describe('push webhook client', () => {
 
   it('an unpackaged build without an API override calls nothing', async () => {
     const s = fakeServer()
-    const c = createPushWebhookClient({ fetch: s.fetch, loadHost: async () => host, isPackaged: () => false, env: {} })
+    const c = createPushWebhookClient({ fetch: s.fetch, loadHost: async () => host, hasPairedPhone: async () => true, isPackaged: () => false, env: {} })
     expect(await c.status()).toEqual({ ok: false, error: 'dev-build' })
     expect(s.calls).toHaveLength(0)
   })
+})
+
+it('with no paired phone it neither reads the host key nor calls the backend', async () => {
+  const s = fakeServer()
+  let keyReads = 0
+  const c = client(s, {
+    hasPairedPhone: async () => false,
+    loadHost: async () => {
+      keyReads++
+      return host
+    }
+  })
+  for (const r of [await c.status(), await c.mint(), await c.revoke()]) {
+    expect(r).toEqual({ ok: false, error: 'no-paired-phone' })
+  }
+  expect(keyReads).toBe(0)
+  expect(s.calls).toHaveLength(0)
+  // A failed local check reads as "no phone", never as permission to call.
+  const failing = client(s, { hasPairedPhone: async () => { throw new Error('unreadable') } })
+  expect(await failing.status()).toEqual({ ok: false, error: 'no-paired-phone' })
+  expect(s.calls).toHaveLength(0)
 })

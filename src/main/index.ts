@@ -1759,6 +1759,10 @@ app.whenReady().then(async () => {
   // not kept by this process (core/push-webhook.ts).
   const pushWebhook = createPushWebhookClient({
     isPackaged: () => app.isPackaged,
+    // The same local check the host-mode push path uses (refreshPushIdentity below): no paired
+    // phone ⇒ the host key is not read (a first read creates it) and the backend is not called.
+    hasPairedPhone: async () =>
+      (await phonePins.load()).pubkeys.length > 0 || (await pairingService.listDevices()).length > 0,
     loadHost: async () => {
       const kp = await loadOrCreateKeyPair()
       return { hostDeviceId: getDeviceId(), publicKey: kp.publicKey, secretKey: kp.secretKey, label: hostname() }

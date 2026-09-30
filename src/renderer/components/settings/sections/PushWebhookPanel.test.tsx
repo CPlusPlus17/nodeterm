@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { PushWebhookPanel } from './PushWebhookPanel'
+import { PushWebhookPanel, resetPushWebhookStatusCache } from './PushWebhookPanel'
 import type { PushWebhookResult, PushWebhookTokenInfo, PushWebhookMinted } from '@shared/push-webhook'
 
 const TOKEN = 'ntwh_' + 'Z'.repeat(43)
@@ -42,6 +42,7 @@ async function click(label: string): Promise<void> {
 }
 
 beforeEach(() => {
+  resetPushWebhookStatusCache()
   status = vi.fn(async () => ({ ok: true as const, value: null }))
   mint = vi.fn(async () => ({ ok: true as const, value: { ...INFO, token: TOKEN } }))
   revoke = vi.fn(async () => ({ ok: true as const, value: true as const }))
@@ -69,16 +70,25 @@ describe('PushWebhookPanel', () => {
     await click('Create webhook token')
     expect(host.textContent).toContain(TOKEN)
     expect(host.textContent).toContain('won’t be shown again')
-    await click('Copy')
+    const reveal = host.querySelector('[data-testid="webhook-token-reveal"]')!
+    await act(async () => {
+      Array.from(reveal.querySelectorAll('button')).find((b) => b.textContent === 'Copy')!.click()
+    })
     expect(writeText).toHaveBeenCalledWith(TOKEN)
 
-    // The example never embeds the token — it reads the env var and pipes the header on stdin.
-    const pre = host.querySelector('pre')!.textContent!
-    expect(pre).not.toContain(TOKEN)
-    expect(pre).toContain('https://api.test/v1/push/webhook')
-    expect(pre).toContain('--config -')
+    // Neither example embeds the token: sh pipes the header on stdin, PowerShell stays in-process.
+    const sh = host.querySelector('[data-testid="webhook-example-sh"] pre')!.textContent!
+    const ps = host.querySelector('[data-testid="webhook-example-powershell"] pre')!.textContent!
+    for (const ex of [sh, ps]) {
+      expect(ex).not.toContain(TOKEN)
+      expect(ex).toContain('https://api.test/v1/push/webhook')
+    }
+    expect(sh).toContain('--config -')
+    expect(ps).toContain('Invoke-RestMethod')
 
-    await click('Done')
+    await act(async () => {
+      Array.from(reveal.querySelectorAll('button')).find((b) => b.textContent === 'Done')!.click()
+    })
     expect(document.body.innerHTML).not.toContain(TOKEN)
     expect(host.textContent).toContain('ntwh_ZZZZ…')
     // Nothing kept it: not local storage, not session storage.
@@ -120,4 +130,29 @@ describe('PushWebhookPanel', () => {
     await click('Create webhook token')
     expect(host.textContent).toContain('Pair a phone with remote access first')
   })
+})
+
+it('a remount reuses the last status instead of calling the backend again', async () => {
+  let calls = 0
+  status = async () => {
+    calls++
+    return { ok: true, value: INFO }
+  }
+  await render()
+  act(() => root.unmount())
+  host.remove()
+  await render()
+  expect(calls).toBe(1)
+  expect(host.textContent).toContain('ntwh_ZZZZ…')
+  // A revoke replaces the remembered answer, so the next mount does not show a dead token.
+  await click('Revoke')
+  const confirmBtn = Array.from(document.body.querySelectorAll('button')).filter((b) => b.textContent === 'Revoke').pop()!
+  await act(async () => {
+    confirmBtn.click()
+  })
+  act(() => root.unmount())
+  host.remove()
+  await render()
+  expect(calls).toBe(1)
+  expect(button('Create webhook token')).toBeTruthy()
 })

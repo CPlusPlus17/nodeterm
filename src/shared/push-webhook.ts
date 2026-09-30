@@ -32,6 +32,8 @@ export type PushWebhookError =
   | 'no-paired-phone'
   /** The backend refused the ownership proof. */
   | 'refused'
+  /** The backend could not read the request (a 400) — this build and the server disagree. */
+  | 'bad-request'
   | 'rate-limited'
   /** Network error, timeout, 5xx or an answer we could not read. */
   | 'unreachable'
@@ -59,7 +61,9 @@ export function pushWebhookErrorText(error: PushWebhookError): string {
     case 'no-paired-phone':
       return 'Pair a phone with remote access first — the webhook pushes to the phones paired with this machine.'
     case 'refused':
-      return 'The server refused this machine’s identity. Try again; if it keeps failing, re-pair your phone.'
+      return 'The server did not accept this machine’s proof of its remote-access key. Try again; if it keeps failing, report it.'
+    case 'bad-request':
+      return 'The server could not read the request — this version of nodeterm and the server disagree. Update nodeterm and try again.'
     case 'rate-limited':
       return 'Too many requests — wait a minute and try again.'
     case 'unreachable':
@@ -73,12 +77,31 @@ export function pushWebhookErrorText(error: PushWebhookError): string {
  * through `ps`, and a CI runner is exactly such a machine. `printf` is a shell builtin in sh, bash
  * and zsh, so the token is not on its argv either.
  */
+function webhookUrl(apiBase: string): string {
+  return apiBase.replace(/\/+$/, '') + PUSH_WEBHOOK_PATH
+}
+
 export function pushWebhookCurlExample(apiBase: string = PUSH_WEBHOOK_DEFAULT_API_BASE): string {
-  const url = apiBase.replace(/\/+$/, '') + PUSH_WEBHOOK_PATH
+  const url = webhookUrl(apiBase)
   return [
     `printf 'header = "Authorization: Bearer %s"\\n' "$${PUSH_WEBHOOK_TOKEN_ENV}" |`,
     `  curl -fsS --config - -H 'Content-Type: application/json' \\`,
     `    -d '{"title":"Build finished","body":"main is green"}' \\`,
     `    ${url}`
+  ].join('\n')
+}
+
+/**
+ * The PowerShell counterpart (Windows has no `sh`). `Invoke-RestMethod` is a cmdlet, so the request
+ * — header included — is made inside the PowerShell process: no child process, no argv for `ps` to
+ * show. (`curl.exe` from PowerShell would need the header on stdin too, and Windows PowerShell 5.1
+ * mangles the double quotes of a JSON argument to native programs.)
+ */
+export function pushWebhookPowerShellExample(apiBase: string = PUSH_WEBHOOK_DEFAULT_API_BASE): string {
+  return [
+    `Invoke-RestMethod -Method Post -Uri '${webhookUrl(apiBase)}' \``,
+    `  -Headers @{ Authorization = "Bearer $env:${PUSH_WEBHOOK_TOKEN_ENV}" } \``,
+    `  -ContentType 'application/json' \``,
+    `  -Body '{"title":"Build finished","body":"main is green"}'`
   ].join('\n')
 }

@@ -43,6 +43,10 @@ export interface PushWebhookClientDeps {
   apiBase?: string
   /** Throws when the key cannot be read (keyring locked). */
   loadHost: () => Promise<PushWebhookHost>
+  /** Is a phone paired with this machine at all? Asked BEFORE anything else: with no phone there
+   *  is nobody to push to, and neither the host key (whose first read CREATES it) nor the backend
+   *  (which would receive our device id and public key) is touched just because a page was viewed. */
+  hasPairedPhone: () => Promise<boolean>
   /** false ⇒ the call is refused as 'dev-build' unless an api base override is configured. */
   isPackaged: () => boolean
   env?: Record<string, string | undefined>
@@ -83,6 +87,7 @@ function isTokenInfo(v: unknown): v is PushWebhookTokenInfo {
 function errorFor(status: number, body: unknown): PushWebhookError {
   const code = body && typeof body === 'object' ? (body as { error?: unknown }).error : undefined
   if (status === 409 && code === 'no_paired_phone') return 'no-paired-phone'
+  if (status === 400) return 'bad-request'
   if (status === 403) return 'refused'
   if (status === 429) return 'rate-limited'
   return 'unreachable'
@@ -114,6 +119,13 @@ export function createPushWebhookClient(deps: PushWebhookClientDeps): PushWebhoo
 
   async function call(action: PushWebhookAction, path: string): Promise<PushWebhookResult<unknown>> {
     if (!deps.isPackaged() && !env.NODETERM_API_BASE && !deps.apiBase) return { ok: false, error: 'dev-build' }
+    let paired = false
+    try {
+      paired = await deps.hasPairedPhone()
+    } catch {
+      paired = false
+    }
+    if (!paired) return { ok: false, error: 'no-paired-phone' }
     let host: PushWebhookHost
     try {
       host = await deps.loadHost()

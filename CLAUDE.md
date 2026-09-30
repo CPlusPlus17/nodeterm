@@ -7364,34 +7364,57 @@ nodeterm-server (`src/routes/push-webhook.ts`, `src/lib/host-proof.ts`); the des
   base64url), stored server-side only as its SHA-256 (a fast hash is right for a high-entropy
   token), returned `Cache-Control: no-store`. The panel holds it in component state until "Done";
   it is never written to settings.json, storage or a log (the panel test asserts local/session
-  storage). There is no "show again" — Rotate mints a new one and revokes the old in one
-  transaction (one live token per host).
-- **The example never puts the token on argv.** `pushWebhookCurlExample` reads
+  storage). There is no "show again" — Rotate mints a new one and revokes the old. One live token
+  per host is enforced by a partial UNIQUE index on the backend (`host_id WHERE revoked_at IS
+  NULL`), not by the mint's transaction: under READ COMMITTED two concurrent first mints each see
+  no live row and both insert.
+- **Viewing the page calls nothing without a paired phone.** The client asks `hasPairedPhone` (the
+  same local check as `pushHasPairedPhone`: a phone pin or a registry device) BEFORE reading the
+  host key or the network: the first read of `remote-host-key.json` CREATES it, and a status call
+  sends the device id + public key to the backend — neither may happen because someone opened
+  Settings → Phone. A failed local check reads as "no phone". And settings search unmounts and
+  remounts every row, so the panel reuses its last status answer for 5 minutes
+  (`STATUS_REUSE_MS`, module state) instead of spending a challenge + status round trip per remount
+  against a per-IP budget that everyone behind one NAT shares.
+- **The example never puts the token on argv.** `pushWebhookCurlExample` (labelled `sh`) reads
   `$NODETERM_WEBHOOK_TOKEN` and feeds the header to `curl --config -` through `printf` (a shell
-  builtin), the house rule for every credential we generate. `shared/push-webhook.test.ts` runs the
+  builtin), the house rule for every credential we generate. Windows has no `sh`, so there is a
+  `PowerShell` twin (`pushWebhookPowerShellExample`): `Invoke-RestMethod` makes the request
+  in-process, so there is no child argv at all (and PowerShell 5.1 mangles JSON quotes passed to
+  `curl.exe`). `shared/push-webhook.test.ts` runs the
   example under a real `/bin/sh` with a recording curl and asserts the token reached stdin and not
   argv.
 - **The push is labelled and inert.** Subtitle `Webhook · <hostname>`, its own `thread-id`, the
   phone's existing no-action category `AGENT_DONE`, and an `nt` block with `kind: 'webhook'` and no
   `nodeId`, so a tap opens the Inbox and nothing else: no Allow/Deny buttons, no deep link, no URL
-  opened. Title is one line (≤ 120 code points), body ≤ 500; C0/C1 controls and `\p{Cf}` (bidi,
-  zero-width) are stripped. nodeterm mobile needs no release for it (read against its push handler:
-  unknown `kind` + no `nodeId` routes to a plain Inbox open).
+  opened. Title is one line (≤ 120 code points), body ≤ 500; C0/C1 controls, lone surrogates and
+  the bidi/zero-width controls are stripped — NOT all of `\p{Cf}`, which holds ZWJ and the tag
+  characters (👨‍💻, subdivision flags) — and a payload over APNs' 4096 bytes is refused with a 413
+  rather than answered `sent: 0` (lone surrogates JSON-escape to 6 bytes each; measured 4103 bytes
+  before they were stripped).
+- **KNOWN GAP — needs an iOS release (@eneskirca).** The phone shows these pushes without a release
+  (unknown `kind` + no `nodeId` routes to a plain Inbox open), EXCEPT while its Inbox sheet is open:
+  `PushPresentation.shouldSuppressBanner` suppresses every push then (the live feed is assumed to
+  show it), so `willPresent` presents nothing — no banner, no sound, no Notification Center entry —
+  and a webhook message never appears in the Inbox feed. It is lost. The fix is phone-side: do not
+  suppress `nt.kind == "webhook"`.
 - **Budgets:** 10 per minute per token, 60 per hour per HOST (keyed by hostId, so rotating does not
   reset it), 20 mints per host per day, plus per-IP shields. Fan-out = exactly a host-mode
   `/v1/push/notify`: this host's live relay pairings with a live APNs registration, minus phones
   that muted this host.
 - **Relay-paired phones only.** An SSH-granted phone (push grants) has no row the backend can tie to
   this host, so it does not receive webhook pushes; minting with no live pairing answers
-  `no_paired_phone` and the panel says so.
+  `no_paired_phone` and the panel says so. The desktop refuses before calling at all when it knows
+  of no paired phone, so a token left live after every phone is unpaired cannot be revoked from
+  here until a phone is paired again (it sends to nobody meanwhile).
 - **No canvas-control verb.** An agent already has hook-driven pushes, and a verb would need the
   desktop to hold the token, which it deliberately does not.
 
 Surfaces: Desktop full. **Server Edition: N/A** — it has no relay host key or paired-phone
 registry (same degrade as `push-notify.ts`); the bridge answers `E_UNSUPPORTED` and the row is
 hidden in a browser tab. IPC is under `pairing:` so `HOST_ONLY_CHANNEL_PREFIXES` keeps it off the
-relay. **Mobile:** no change needed; an iOS follow-up could give `kind: 'webhook'` its own Inbox
-row and tap target.
+relay. **Mobile:** the Inbox-open gap above needs an iOS release; an iOS follow-up could also give
+`kind: 'webhook'` its own Inbox row and tap target.
 
 ## Hosted team relay (Server Edition as a relay host)
 
