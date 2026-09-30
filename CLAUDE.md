@@ -1361,6 +1361,19 @@ session.
   PTY write has no image receipt. Never synthesize that key or fall back between routes.
   The macOS shortcuts reference explains both keys; its Server Edition copy explicitly
   says Ctrl+V cannot transfer the viewer's clipboard to the host. SSH keeps remote uploads.
+  **The path paste has a receipt for claude, and only for claude** (`terminal/image-paste-confirm.ts`,
+  both surfaces through `pasteWithImageReceipt`). MEASURED on Claude Code 2.1.285 (bracketed paste,
+  captures in `terminal/__fixtures__/claude-image-paste.json`): a path to an existing
+  png/jpg/jpeg/gif/webp (any case) becomes `[Image #N]` in the composer within ~60 ms; bmp, svg,
+  heic, tiff and a missing file stay text; `N` keeps counting for the session and does NOT reset
+  when the composer is cleared. So the receipt reads OUR xterm buffer (the emulator, not tmux) for
+  placeholder numbers ABOVE the highest one on screen before the paste (the counter only rises,
+  so an older placeholder scrolling into view cannot confirm it; with none on screen, two pastes
+  inside ~60 ms can still confirm each other), up to 3 s: "Image attached", else
+  "Pasted the path — not confirmed as an image" (`.term-paste-pill`, top-right so it never covers
+  the copy pill or the agent's bottom-left input line). Only when a claude CLI is in the pane
+  (`agentProcessInPane`); every other agent was not measured and gets the paste with no receipt
+  either way — nothing is claimed on its behalf. A terminal disposed mid-wait reports nothing.
   **Copying now says so**: the OSC 52 handler floats a transient `Copied N lines` pill over the
   terminal's BOTTOM-RIGHT corner (`.term-copy-pill`, the same class on the canvas node and the
   kanban card modal — one session seen twice must not speak in two voices; bottom-right because
@@ -1940,6 +1953,40 @@ else, and its context links must keep classifying across restarts).
   harmful. The `auto` permission-mode **version gate is claude's alone** (it is fed by a `claude
   --version` probe), and grok's mode flag must go **BEFORE** its `--` separator, which is
   end-of-options. Full picture, dialect traps and the device checklist: **`docs/grok-agent.md`**.
+- **Grok NEEDS YOU is confirmed against grok's own event log** (`core/agents/grok-permission-gate.ts`,
+  inside the hook server, so both shells get it from one place). MEASURED on grok 1.0.13
+  (2026-09-30, interactive TUI against a local fake chat_completions model, fixture
+  `shared/agents/__fixtures__/grok/permission-events.json`): the `permission_prompt` notification is
+  genuine (fired 1–20 ms after grok writes `permission_requested` to `<session dir>/events.jsonl`),
+  but grok is silent about the ANSWER — approve fires no hook until the approved tool FINISHES (the
+  capture's 10 s command read NEEDS YOU for 10 s), a dismissed dialog (Ctrl+C) fires none at all
+  (the only later hook is `idle_prompt` 60 s on, which the mirror deliberately never lets clear a
+  `blocked` node — a stuck badge until the next prompt), and a rejection fires `permission_denied`
+  then cancels the turn with no Stop (RUNNING for 60 s). `events.jsonl` records all three:
+  `permission_resolved {decision: allow|deny|cancelled}` and `turn_ended {outcome: cancelled}`. The
+  gate ties each notification to ONE `permission_requested` written within 5 s before it and
+  publishes what the file says: still pending ⇒ `blocked` + a bounded 1 s watch (a `stat` per tick
+  while nothing changes); answered ⇒ `working` (unverified — a file read is not a hook POST — including when the
+  answer is already on disk as the hook is read); a
+  cancelled turn ⇒ `done` + `interrupted`. **The trap it is shaped around**: a SUBAGENT's prompt
+  fires with the PARENT's `sessionId` while its request is in the CHILD's `events.jsonl` — reading
+  the parent's file alone would find the parent's older, already-approved request and publish
+  "answered" over an open child dialog. Candidates are the sessions this node's hooks named
+  (children post their own ids), zero or several matches publish the hook unchanged, and every new
+  prompt ends the previous watch (the replay found that exact race: the parent's spawn approval
+  landed 90 ms before the child's prompt). The candidate set CAN miss the real request — a child's
+  prompt may reach us before any of the child's own hooks, or a second request's line may not be
+  on disk yet — and the older request found instead is then already answered. **The load-bearing
+  rule is therefore: a request answered BEFORE the notification fired is never taken as its
+  answer** (`resolvedTs < notifiedAt` ⇒ the hook is published unchanged, nothing watched): a
+  notification cannot be about a dialog that closed before it. Every capture resolves after its
+  notification (fastest 216 ms). Review of #1065 found that hole; tests A/B pin it. Closed sets throughout; an unknown decision, unreadable
+  file or unparsable timestamp is today's behaviour, never a guess. Per-node ordering is kept (a
+  confirm read holds that node's later hooks, ≤ 500 ms; polls run off that chain and discard a read
+  that straddled a newer hook). A listener that throws costs that ONE event (as it did inside the
+  hook server's try/catch before), never the node's delivery chain. A remote (SSH) grok node's file is on its host, so it reads "cannot
+  tell" and behaves exactly as before — a remote leg is a follow-up. Unmeasured: `events.jsonl`'s
+  shape on other grok versions (a changed shape degrades to today's behaviour).
 - **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads
   `chat_history.jsonl` into claude's `ChatMessage`/`ChatPart` shapes (no new wire field): typed
   prompts, assistant text, tool calls (`arg` = the salient argument — `command`, `target_file`, …, in

@@ -222,6 +222,8 @@ import { mdViewHint } from '../lib/mdViewHint'
 import { Tooltip } from '../components/Tooltip'
 import { useTerminalSearch } from '../terminal/useTerminalSearch'
 import { useCopyFeedback } from '../terminal/useCopyFeedback'
+import { pasteWithImageReceipt } from '../terminal/image-paste-confirm'
+import { usePasteReceipt } from '../terminal/usePasteReceipt'
 import { ContextMeter } from '../components/ContextMeter'
 import { isZoomModifierHeld } from '../lib/zoomModifier'
 import { isHidden } from '../lib/ui-visibility'
@@ -1494,6 +1496,7 @@ export function TerminalNode({
   // Overlay while dropped files upload to an SSH host (scp is seconds-long with zero feedback);
   // doubles as a brief "Upload failed" flash when nothing made it.
   const [uploadNote, setUploadNote] = useState<{ text: string; failed?: boolean } | null>(null)
+  const pasteReceipt = usePasteReceipt()
   const uploadNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => {
     if (uploadNoteTimer.current) clearTimeout(uploadNoteTimer.current)
@@ -5565,7 +5568,17 @@ export function TerminalNode({
     if (opts.raiseWindow) window.nodeTerminal.focusWindow()
     term.focus()
     useTerminalFocus.getState().remember(id)
-    term.paste(paths.join(' ') + ' ')
+    // A pasted image is only reported as attached once the agent's own pane shows it (claude's
+    // `[Image #N]`); otherwise the receipt says the path went in, unconfirmed.
+    const st = agentStatusStore.getState().byId[id]
+    const paneAgent = agentId ?? st?.agentId
+    pasteWithImageReceipt(
+      term,
+      paths.join(' ') + ' ',
+      paths,
+      agentProcessInPane(paneAgent, st) ? paneAgent : undefined,
+      pasteReceipt.report
+    )
     useAgentStatus.getState().setActive(id, true)
     presence.reportFocus(id)
   }
@@ -6352,6 +6365,11 @@ export function TerminalNode({
         {copy.feedback && (
           <div className={`term-copy-pill term-copy-pill--${copy.feedback.kind}`}>
             {copy.feedback.label}
+          </div>
+        )}
+        {pasteReceipt.receipt && (
+          <div className={`term-paste-pill${pasteReceipt.receipt.ok ? '' : ' term-paste-pill--warn'}`}>
+            {pasteReceipt.receipt.text}
           </div>
         )}
         {/* Downloads started from a link's right-click menu, reported on the terminal they were

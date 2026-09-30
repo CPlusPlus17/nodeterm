@@ -259,7 +259,11 @@ describe('both shells register a 4-arg raw listener', () => {
     // gate reading a field nothing writes — silently, and identically on both shells, which is
     // exactly the failure the parity assertion above cannot see.
     const hs = readFileSync(join(root, 'src/core/agents/hook-server.ts'), 'utf8')
-    expect(hs).toMatch(/this\.listener\(\{\s*\.\.\.normalized,\s*verified/)
+    expect(hs).toMatch(/const labelled = normalized\s*\?\s*\{\s*\.\.\.normalized,\s*verified/)
+    // Grok events reach the same listener through the permission gate, which receives the
+    // LABELLED event — so `verified` rides a gated grok event exactly as it rides every other.
+    expect(hs).toMatch(/this\.grokGate\(\)\.handle\(nodeId, payload, labelled\)/)
+    expect(hs).toMatch(/this\.listener\(labelled\)/)
   })
 
   it('the src/core mirror is the consumer, on both shells', () => {
