@@ -56,6 +56,17 @@ export interface NormalizedAgentEvent {
   // true only for a genuine new turn (Claude UserPromptSubmit), so the renderer can
   // clear per-turn fan-out without clearing on every mid-turn tool event.
   newTurn?: boolean
+  /**
+   * Claude only, on the `UserPromptSubmit` that opens a turn: the CLI's own id for that turn
+   * (`prompt_id`). Claude writes the SAME id as `promptId` on every transcript record of the
+   * turn, including the `[Request interrupted by user]` marker it appends when the user presses
+   * Esc / Ctrl+C — the one trace an interrupted turn leaves, because no hook fires for it
+   * (measured on 2.1.285, `__fixtures__/claude/interrupt-capture.json`). The status mirror keeps
+   * this id so a marker can be matched to exactly the turn it ends (`recordTurnInterrupt`), never
+   * to an older one read back from the transcript. `''` when the prompt event has no usable id (none,
+   * or not a plain token) — which CLEARS the mirror's id; absent on every other event.
+   */
+  turnId?: string
   sessionId?: string
   lastMessage?: string
   // blocked (Claude PermissionRequest) only: the deterministic-approval ticket the managed hook
@@ -180,6 +191,14 @@ export interface RawHookEnvelope {
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task'])
 const RECURRING_TOOLS = new Set(['Skill', 'CronCreate', 'ScheduleWakeup'])
 
+/** A Claude turn id (`prompt_id`, a uuid today) as a plain bounded token, else nothing. */
+const TURN_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
+function turnIdOf(v: unknown): { turnId: string } {
+  // '' = "a prompt opened a turn, but with no usable id": the mirror then FORGETS the previous
+  // turn's id instead of keeping it, so no marker can be matched to a turn that has ended.
+  return { turnId: typeof v === 'string' && TURN_ID_RE.test(v) ? v : '' }
+}
+
 interface ClaudePayload {
   /** SubagentStart/SubagentStop: the child. Any other event: the child that produced it. */
   agent_id?: unknown
@@ -200,6 +219,8 @@ interface ClaudePayload {
   is_interrupt?: boolean
   last_assistant_message?: string
   prompt?: string
+  /** The CLI's id for the turn this event belongs to (see `NormalizedAgentEvent.turnId`). */
+  prompt_id?: unknown
   tool_name?: string
   tool_use_id?: string
   tool_input?: {
@@ -372,9 +393,9 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
     // genuine user turn — flagging it newTurn would clear the subagent fan-out at the exact moment
     // one of the cards completes.
     if (isInjectedSubagentPrompt(p.prompt ?? '')) {
-      return { ...base, kind: 'state', state: 'working' }
+      return { ...base, kind: 'state', state: 'working', ...turnIdOf(p.prompt_id) }
     }
-    return { ...base, kind: 'state', state: 'working', task: p.prompt, newTurn: true }
+    return { ...base, kind: 'state', state: 'working', task: p.prompt, newTurn: true, ...turnIdOf(p.prompt_id) }
   }
   if (ev === 'Stop') {
     const backgroundTaskIds = liveBackgroundTaskIds(p.background_tasks)
@@ -430,6 +451,10 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
     // while a turn runs, which makes it the ONE signal that rescues a node stuck on `working` when
     // no turn-end hook ever fired — the Esc-during-a-tool-call case, where Claude aborts the tool
     // and returns to "Interrupted · What should Claude do instead?" without running Stop.
+    // MEASURED on 2.1.285: it does NOT follow an interrupted turn (it came 60 s after a normal Stop,
+    // and not in 80 s after an Esc). The interrupt is now ended from the transcript's marker
+    // instead (`recordTurnInterrupt`, core/agent-status-mirror.ts); this rescue stays for any CLI
+    // build that does send it.
     //
     // Marked `idle` (and `interrupted`, since nothing was accomplished) so consumers can apply the
     // narrow rule this needs: it may only move a node that is still WORKING. It also fires after a

@@ -134,6 +134,6 @@ describe('the node badge', () => {
 
   it('reads EXPIRED and hands the PR wait to the tooltip', () => {
     expect(node).toMatch(/prExpired \|\| successExpired\s*\?\s*'⚠ EXPIRED'/)
-    expect(node).toMatch(/launchTooltip\([^)]*prTooltip, successTooltip\)/)
+    expect(node).toMatch(/launchTooltip\([^)]*prTooltip, successTooltip, pendingInterruptedOn\)/)
   })
 })

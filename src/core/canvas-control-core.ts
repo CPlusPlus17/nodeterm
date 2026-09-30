@@ -775,7 +775,9 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  their work with get-linked-context when it wakes — nothing to `link`. Use it for "B needs what',
     '  A produced" instead of polling. A station whose turn ended on an API error does NOT release its',
     '  dependents even though it is idle (`list` marks it LAST TURN ERRORED); nudge or retry it, or',
-    '  run the armed node yourself. Only',
+    '  run the armed node yourself. The same holds for a Claude station whose last turn the user',
+    '  interrupted (Esc / Ctrl+C; `list` marks it LAST TURN INTERRUPTED): a finished next turn releases',
+    '  it. Only',
     `  status-reporting agent nodes (${statusAgents}, or custom agents based on them) may be waited on; a plain terminal never`,
     '  reports finishing, so waiting on one is refused.',
     '  AN OPEN NEVER SWITCHES THE USER\'S VIEW. If your own project is not the one on screen, the',
@@ -1310,6 +1312,9 @@ Verbs:
   it is idle, but it produced nothing, so do not read its output or build on it. The marker
   is on the row on purpose — a fan-out of seven stations should cost one call to learn this,
   not seven. It clears itself the moment that station completes another turn.
+  A row ending **LAST TURN INTERRUPTED** is a Claude station whose last turn the user stopped
+  (Esc / Ctrl+C) before it finished: idle, but its work is unfinished. It clears itself when
+  that station finishes another turn.
 - \`help\` — print the verb list. The shim answers this itself, without reaching the app, so it
   is also what to run when you are unsure whether the control endpoint is alive.
 - \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
@@ -1330,6 +1335,9 @@ Verbs:
   though it is idle: it reached idle immediately and produced nothing, so firing would start
   the chain on bad ground. \`list\` marks it LAST TURN ERRORED. Nudge or retry that station —
   one successful turn releases everything armed behind it — or run the armed node yourself.
+  The same holds for a Claude station whose last turn the user INTERRUPTED (Esc / Ctrl+C):
+  it is idle but did not finish, so its dependents stay held (\`list\` marks it LAST TURN
+  INTERRUPTED) until it finishes a turn, or until you run the armed node yourself.
   \`--project <id>\` opens the node(s) in another project instead of yours. It accepts exactly
   two things — any other id is refused: your OWN project id, which behaves exactly as if the flag
   were omitted; or an id \`open-project\` returned to YOU

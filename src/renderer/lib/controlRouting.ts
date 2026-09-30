@@ -225,6 +225,7 @@ export function storedNodeListing(
       id: n.id, kind: n.kind ?? 'terminal', title: n.title ?? '',
       ...(issue ? { issue } : {}),
       ...(status?.lastTurnError ? { lastTurnErrored: true } : {}),
+      ...(status?.lastTurnInterrupted && !status.lastTurnError ? { lastTurnInterrupted: true } : {}),
       ...(launchState ? { launchState } : {}),
       ...(launchState === 'queued' && prHold && !prHold.invalid ? { prWait: formatPrWaits(prHold) } : {}),
       ...(successWait ? { successWait } : {}),
@@ -262,6 +263,7 @@ export function controlListingText(rows: ReturnType<typeof storedNodeListing>): 
     (n.successWait ? ` — needs success from: ${n.successWait}` : '') +
     (n.outcome ? ` — REPORTED ${n.outcome === 'succeeded' ? 'SUCCESS' : 'FAILURE'}${n.outcomeNote ? ` ("${n.outcomeNote}")` : ''}` : '') +
     (n.outcomeSuperseded ? ' (before new work queued for it; not counted until it reports again)' : '') +
-    (n.lastTurnErrored ? ' — LAST TURN ERRORED' : '')
+    (n.lastTurnErrored ? ' — LAST TURN ERRORED' : '') +
+    (n.lastTurnInterrupted ? ' — LAST TURN INTERRUPTED' : '')
   ).join('\n')
 }
