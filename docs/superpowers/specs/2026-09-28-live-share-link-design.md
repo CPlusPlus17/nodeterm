@@ -54,7 +54,7 @@ Success means:
 | D6 | Limits | Expiry choices 15 min / **1 h (default)** / 8 h / 24 h, **max 24 h**, no extension. **10** concurrent viewers per link, **5** active links per machine, **50** creations per license per 24 h (server). Per-viewer bandwidth ~256 KB/s sustained, then one keyframe per second at most. Commenter: 1 message / 2 s, 500 chars. |
 | D7 | Lifetime buyers / Pro lapse | Lifetime ($299, Apple non-consumable surfaced to the desktop as an `apple:` license) is **included with no extra cap**: the limits are structural, not quotas. Creation checks the license is **live** (keygen validate / live Apple row; `free:` and companion tokens refused). A lapse lets open links **run out their term** (≤ 24 h); host re-mints check only the token and the link row. |
 | D8 | App restart | Links **survive restarts**. Active links (secret included) are persisted, `safeStorage`-encrypted on the desktop and in a 0600 file on the Server Edition, and resume at launch. |
-| D9 | Surfaces | **Desktop and Server Edition** can create links (one core service, both shells register it). **Mobile** opens links in Safari in v1; creating/revoking from the phone is a follow-up for nodeterm-ios. Kanban card, card modal and sessions sidebar carry the action and the indicator (mandatory, CLAUDE.md). |
+| D9 | Surfaces | **Desktop** creates links. The **Server Edition** registers the same core service, but it has no license layer yet (`initLicense` is desktop-only), so create answers `unsupported` with honest copy until a server license layer lands (follow-up); nothing is hosted there. **Mobile** opens links in Safari in v1; creating/revoking from the phone is a follow-up for nodeterm-ios. Kanban card, card modal and sessions sidebar carry the action and the indicator (mandatory, CLAUDE.md). |
 | D10 | Architecture | **Approach 1** (below): the narrowest new relay role on the existing core relay host. |
 
 ## Non-goals (v1)
@@ -217,10 +217,14 @@ protocol.**
 - **Revoke:** delete and write the record first, then end the sessions with `end{revoked}`, then a
   best-effort server revoke. Local revoke is complete even offline, because the host is the only
   listener.
-- **Node gone:** on every workspace-store change and before every join, the registry asks
-  `projectIdsForNode(nodeId)`. An empty answer ends the link with `node-gone` and revokes it
-  server-side. This covers a node removed by the canvas authority on a peer's op, which the local
-  renderer's delete funnel never sees.
+- **Node gone:** on every workspace-store change and before every join, the registry asks whether
+  the node is `present`, `absent` or `unknown`: present = some project holds it
+  (`projectIdsForNode`); absent = the store has a complete read of every project (`knownNodeIds()`)
+  and the id is not in it; anything else is unknown. Only **absent** ends the link with `node-gone`
+  and revokes it server-side — an empty answer during the launch-time workspace load, or for a node
+  in an unreadable project, is not evidence the node is gone. Create requires `present`. This covers
+  a node removed by the canvas authority on a peer's op, which the local renderer's delete funnel
+  never sees.
 - **Link state is never canvas content.** No field on `CanvasNodeState`, `ProjectKanban` or any
   `CanvasMutation`: canvas sync would carry it to teammates and the canvas authority would write it
   into the git-shared `project.json`. It lives in the registry and in a transient renderer store.
@@ -497,7 +501,9 @@ only calls `requireProOr`, which today has zero callers.)
 - **Desktop:** full.
 - **Server Edition:** the same renderer; the ws-bridge gets a real `watchLink` API member (not a stub),
   backed by the same core service. Its browser clients are the host's own user, not relay peers, so
-  the host-only prefix does not refuse them.
+  the host-only prefix does not refuse them. Until the Server Edition has a license layer, create
+  answers `unsupported` ("Live links need a Pro license on this server — not available in the Server
+  Edition yet"), list answers `[]`, and the action shows that sentence instead of an Upgrade button.
 - **Relay tab:** the API stub refuses; the menu row is disabled with its reason.
 - **Mobile:** no UI in v1; links open in Safari. Follow-up for nodeterm-ios below.
 
@@ -586,7 +592,7 @@ only calls `requireProOr`, which today has zero callers.)
 10. The 11th concurrent viewer sees the "offline or at its limit" message.
 11. `yes` in the shared terminal with a throttled viewer: the owner's terminal stays smooth.
 12. Text copied in tmux does not appear in the viewer's decoded stream (debug flag).
-13. A Server Edition creates a link from its browser UI.
+13. A Server Edition browser tab offers the action and gets the honest `unsupported` answer (no dead Upgrade button).
 14. The chip appears on all four surfaces; Kick and chat work both ways.
 15. **A viewer stays connected for more than 2 minutes without a drop** — whether production ends a
     bridged socket at its token's lifetime is unverified (the same open question as hosted checklist
