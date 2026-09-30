@@ -1,11 +1,15 @@
 // The relay's wire rules, restated without Node so the browser can speak them. The SOURCE of truth
 // is src/core/relay/relay-socket.ts + e2ee.ts + src/shared/rpc.ts, and two tests pin this copy to it:
-// - src/core/watch-link/wire.test.ts compares against the originals directly: the seq header, the
-//   sealed box (both directions), the pty frame, the tunnel JSON, and the HKDF info string + salt
-//   order (against e2ee's deriveSessionKey). An edit to any of those in the originals fails it.
-// - TAG_*, ROLE_* and NONCE_BYTES are module-private in relay-socket.ts, so nothing compares them
-//   directly; src/core/watch-link/client.test.ts pins them END TO END, by running the client that
-//   uses them against the real host-role relay socket.
+// - src/core/watch-link/wire.test.ts compares against the originals directly: the sealed box (both
+//   directions), the pty frame, the tunnel JSON, the HKDF info string + salt order (against e2ee's
+//   deriveSessionKey), and NONCE_BYTES against e2ee's randomSessionNonce. An edit to any of those in
+//   the originals fails it.
+// - The seq header, TAG_*, ROLE_* and the nonce length the host accepts are module-private in
+//   relay-socket.ts, so nothing compares them directly; src/core/watch-link/client.test.ts pins them
+//   END TO END, by running the client that uses them against the real host-role relay socket. Its
+//   past-seq-255 case is what catches a byte-swapped seq word. The one thing it cannot reach is the
+//   order of the two seq words (only a seq past 2^32 would show it), and wire.test.ts pins that
+//   layout to a literal copied from relay-socket.ts's private withHeader.
 // Both tests live in core because they import core modules the web tsconfig project cannot see.
 //
 // Sealed box: nonce(24) ‖ nacl.box.after(plain). Plain: [role:1][seqHi u32 LE][seqLo u32 LE][tag:1][body].

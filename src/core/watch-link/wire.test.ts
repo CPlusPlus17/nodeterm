@@ -4,7 +4,7 @@ import nacl from 'tweetnacl'
 import { encodePtyData, encodeArgs, parseRpcMessage } from '../../shared/rpc'
 import { decrypt, deriveSessionKey, encrypt, randomSessionNonce } from '../relay/e2ee'
 import { hkdfSha256 } from '../../shared/watch-link/hkdf'
-import { sealBox, openBox, withHeader, readHeader, encodePtyFrame, decodePtyFrame, parseTunnelJson, RELAY_SESSION_INFO } from '../../shared/watch-link/wire'
+import { sealBox, openBox, withHeader, readHeader, encodePtyFrame, decodePtyFrame, parseTunnelJson, NONCE_BYTES, RELAY_SESSION_INFO } from '../../shared/watch-link/wire'
 import { sanitizeChatText, sanitizeChatName, isWatchEndReason, WATCH_CHAT_CAST, WATCH_EVENT_PREFIX } from '../../shared/watch-link/protocol'
 import { concatBytes, utf8 } from '../../shared/watch-link/bytes'
 
@@ -19,6 +19,9 @@ describe('the wire rules match the relay they were copied from', () => {
     // This one derives the relay's session key from its own code: salt = hostNonce ‖ clientNonce.
     const base = nacl.randomBytes(32), hn = randomSessionNonce(), cn = randomSessionNonce()
     expect(await hkdfSha256(base, concatBytes(hn, cn), utf8(RELAY_SESSION_INFO), 32)).toEqual(deriveSessionKey(base, hn, cn))
+  })
+  it("the session nonce is as long as e2ee's randomSessionNonce", () => {
+    expect(randomSessionNonce()).toHaveLength(NONCE_BYTES)
   })
   it('a box sealed here opens with e2ee.decrypt and vice versa', () => {
     const key = nacl.randomBytes(32), plain = utf8('hello')
