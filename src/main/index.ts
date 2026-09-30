@@ -2300,6 +2300,9 @@ app.whenReady().then(async () => {
       ...(localCodexCaps?.approvalValues
         ? { codexApprovalValues: localCodexCaps.approvalValues }
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
+      // Only a SEEN `true`: a phone-launched plain Codex TUI must carry `--no-daemon` too, or it
+      // joins the auto-started shared app-server and runs as another node (shared/agents/codex-daemon).
+      ...(localCodexCaps?.noDaemon === true ? { codexNoDaemon: true } : {}),
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
         .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) })),
@@ -2505,11 +2508,15 @@ app.whenReady().then(async () => {
         claudePermissionMode: s.claudePermissionMode,
         // The phone launches claude on the REMOTE host — its CLI is the gate, never the local one.
         autoSupported: sshProjectManager?.remoteAutoPermFor(projectId) === true,
-        // `codexApprovalValues` is deliberately ABSENT from an SSH slice. Same rule one agent over:
-        // the session runs the HOST's codex, there is no remote codex probe yet (claude has one, at
-        // connect), and publishing this machine's vocabulary for another machine's binary is the
-        // cross-host guess the whole gate exists to prevent. Absent ⇒ the baseline vocabulary ⇒
-        // Manual degrades honestly instead of a value the host may have removed.
+        // `codexApprovalValues` is deliberately ABSENT from an SSH slice: the session runs the HOST's
+        // codex, the only remote codex probe asks about `--no-daemon` (not the approval vocabulary),
+        // and publishing this machine's vocabulary for another machine's binary is the cross-host
+        // guess the whole gate exists to prevent. Absent ⇒ the baseline vocabulary ⇒ Manual
+        // degrades honestly instead of a value the host may have removed.
+        //
+        // `codexNoDaemon` IS the host's own answer (core/remote-ssh/codex-no-daemon-probe.ts), so it
+        // may ride — only as a seen `true`.
+        ...(sshProjectManager?.remoteCodexNoDaemonFor(projectId) ? { codexNoDaemon: true as const } : {}),
         ...(home && hostKey
           ? {
               claudeAccounts: (s.claudeAccounts ?? [])

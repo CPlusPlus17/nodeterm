@@ -486,6 +486,9 @@ export async function startServer(
       ...(localCodexCaps?.approvalValues
         ? { codexApprovalValues: localCodexCaps.approvalValues }
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
+      // Only a SEEN `true`: a phone-launched plain Codex TUI must carry `--no-daemon` too, or it
+      // joins the auto-started shared app-server and runs as another node (shared/agents/codex-daemon).
+      ...(localCodexCaps?.noDaemon === true ? { codexNoDaemon: true } : {}),
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
         .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) })),
