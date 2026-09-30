@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { hkdfSync } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import nacl from 'tweetnacl'
 import { encodePtyData, encodeArgs, parseRpcMessage } from '../../shared/rpc'
 import { decrypt, deriveSessionKey, encrypt, randomSessionNonce } from '../relay/e2ee'
@@ -19,6 +21,15 @@ describe('the wire rules match the relay they were copied from', () => {
     // This one derives the relay's session key from its own code: salt = hostNonce ‖ clientNonce.
     const base = nacl.randomBytes(32), hn = randomSessionNonce(), cn = randomSessionNonce()
     expect(await hkdfSha256(base, concatBytes(hn, cn), utf8(RELAY_SESSION_INFO), 32)).toEqual(deriveSessionKey(base, hn, cn))
+  })
+  it("the session-key vectors nodeterm-web tests against are the relay's deriveSessionKey", () => {
+    const vectors = JSON.parse(readFileSync(join(__dirname, '../../shared/watch-link/vectors.json'), 'utf8').replace(/\r\n/g, '\n'))
+    const hex = (h: string): Uint8Array => Uint8Array.from(Buffer.from(h, 'hex'))
+    expect(vectors.sessionKeys.length).toBeGreaterThan(0)
+    for (const v of vectors.sessionKeys) {
+      const key = deriveSessionKey(hex(v.baseKeyHex), hex(v.hostNonceHex), hex(v.clientNonceHex))
+      expect(Buffer.from(key).toString('hex')).toBe(v.sessionKeyHex)
+    }
   })
   it("the session nonce is as long as e2ee's randomSessionNonce", () => {
     expect(randomSessionNonce()).toHaveLength(NONCE_BYTES)

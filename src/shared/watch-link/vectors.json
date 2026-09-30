@@ -40,5 +40,21 @@
       "data": "a\u001b[31mb",
       "hex": "010007736573732dc3a9611b5b33316d62"
     }
+  ],
+  "sessionKeys": [
+    {
+      "baseKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "hostNonceHex": "202122232425262728292a2b2c2d2e2f",
+      "clientNonceHex": "303132333435363738393a3b3c3d3e3f",
+      "info": "nodeterm-relay-session-v2",
+      "sessionKeyHex": "84cad65c51ad66339182b498586645dbe43473d759450a1eabcc883463f076e2"
+    },
+    {
+      "baseKeyHex": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "hostNonceHex": "ffffffffffffffffffffffffffffffff",
+      "clientNonceHex": "00000000000000000000000000000000",
+      "info": "nodeterm-relay-session-v2",
+      "sessionKeyHex": "b981020481a96beea9f8d84ad0821080833f37f1b8dd46bbbad8eb9350ac2543"
+    }
   ]
 }
