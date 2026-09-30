@@ -217,6 +217,20 @@ describe('idle', () => {
   })
 })
 
+describe('a rejecting save overlay (D8)', () => {
+  it('fails closed: save() rejects and the file keeps its bytes', async () => {
+    const store = new WorkspaceStore()
+    await store.save(ws([project({ cwd: projRoot, nodes: [node('a')] })]))
+    const before = await fs.readFile(projectFile(), 'utf-8')
+    const indexBefore = JSON.stringify(await readIndex())
+    store.setContentAuthority({ overlaySave: async () => { throw new Error('overlay down') }, overlayLoad: async (w) => w })
+    // The stale copy the overlay exists to overrule: it must not be written instead.
+    await expect(store.save(ws([project({ cwd: projRoot, name: 'stale', nodes: [node('stale')] })]))).rejects.toThrow('overlay down')
+    expect(await fs.readFile(projectFile(), 'utf-8')).toBe(before)
+    expect(JSON.stringify(await readIndex())).toBe(indexBefore)
+  })
+})
+
 describe('the load overlay', () => {
   it('rewrites the load result only; the file is untouched', async () => {
     const store = new WorkspaceStore()

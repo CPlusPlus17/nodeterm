@@ -1182,6 +1182,13 @@ export class WorkspaceStore {
    * (never written over — a file mid-merge is left for the user), an I/O error, a cwd-less file
    * whose disk rev is ahead of ours (another instance wrote it), or an empty canvas over a
    * populated file this store has never read. The last two are the save path's own rules.
+   *
+   * An outside edit the watcher has NOT processed yet (inside its debounce) is not merged: the file
+   * is read from disk, so the edit's other fields survive, but its CONTENT is replaced by the
+   * authority's, which has not seen the edit; and `lastWritten` then records the bytes written, so
+   * the watcher's pending event reads the file as a self-write and the edit is never adopted. A
+   * save does exactly the same (it writes the whole project and records it). The rev never goes
+   * below the one on disk.
    */
   writeProjectContent(projectId: string, content: CanvasContent): Promise<boolean> {
     const run = this.saveChain.then(() => this.writeProjectContentNow(projectId, content))
@@ -1285,6 +1292,9 @@ export class WorkspaceStore {
     // stale) copy of it. Applied BEFORE the split, so every leg below — the project file, the data
     // file, the index cache — writes the overlaid content. The authority reads the current content
     // through `readProjectContent`, which does not queue on `saveChain`: this code runs ON it.
+    // FAILS CLOSED: a rejecting overlay rejects the save before any leg below has written a byte
+    // (the project file, the data file and the index are all written after this line). Never catch
+    // it and write the workspace as handed: that is the stale copy the overlay exists to overrule.
     if (this.contentAuthority) workspace = await this.contentAuthority.overlaySave(workspace)
     const savedAt = new Date().toISOString()
     const previousIndex = this.index
