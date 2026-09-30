@@ -73,6 +73,20 @@ describe('hosted team boot wiring (source)', () => {
       expect(body.indexOf('workspaceStore.setContentAuthority(null)')).toBeGreaterThan(stop)
     }
     expect(src.match(/canvasAuthority\?\.stop\(\)/g)?.length).toBe(2)
+    // N3: once the authority has stopped (and is detached), a save is written un-overlaid, so every
+    // save must be in before it stops. Both closes wait for the saves already queued (`idle`); the
+    // serving close ends its browser WebSockets first, so no new one can arrive.
+    for (const at of closes) {
+      const body = src.slice(at, src.indexOf('await ptyManager.killAll()', at))
+      const idle = body.indexOf('await workspaceStore.idle()')
+      expect(idle, 'await workspaceStore.idle()').toBeGreaterThan(-1)
+      expect(idle).toBeLessThan(body.indexOf('await canvasAuthority?.stop()'))
+    }
+    const serving = src.slice(closes[1], src.indexOf('await canvasAuthority?.stop()', closes[1]))
+    const terminate = serving.indexOf('for (const client of wsServer.clients) client.terminate()')
+    expect(terminate, 'browser WebSockets end before the authority stops').toBeGreaterThan(-1)
+    expect(terminate).toBeLessThan(serving.indexOf('await workspaceStore.idle()'))
+    expect(src.match(/for \(const client of wsServer\.clients\) client\.terminate\(\)/g)?.length).toBe(1)
   })
 
   it('the canvas authority exists only where this process owns the team, and adopts at boot (R12a)', () => {

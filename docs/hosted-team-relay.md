@@ -369,6 +369,9 @@ bumps `rev` like a save, and the file is byte-identical to a save's apart from `
 A failed write keeps every op and retries
 after 1 s, 2 s, 4 s and so on, capped at 30 s. Both server shutdown paths write what is pending
 before they exit, so a crash loses only what was not written yet: normally at most the last 5 s.
+Before the authority stops, the shutdown ends the browser connections and waits for the saves
+already queued (`WorkspaceStore.idle`): a save that ran after the authority was detached would be
+written un-overlaid, over its final write.
 Viewers can watch a terminal an Editor opened once its node is written, because node membership is
 read from the saved canvas.
 

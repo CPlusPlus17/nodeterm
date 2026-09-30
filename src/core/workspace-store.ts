@@ -1100,6 +1100,16 @@ export class WorkspaceStore {
    * save made every new agent node on an SSH project sit on QUEUED for seconds. It still runs on
    * the FIFO chain, so ordering against every other save is unchanged.
    */
+  /**
+   * Resolves once every write queued on `saveChain` so far (saves, content writes, reconciles) has
+   * finished, landed or failed; never rejects. The Server Edition's close awaits it BEFORE it stops
+   * the content authority: a browser save still queued behind a slow write would otherwise run after
+   * the authority was detached and write its stale content un-overlaid over the final flush.
+   */
+  idle(): Promise<void> {
+    return this.saveChain.then(() => undefined)
+  }
+
   save(workspace: Workspace, opts: WorkspaceSaveOptions = {}): Promise<void> {
     const run = this.saveChain.then(() => this.saveNow(workspace, opts.localOnly === true))
     this.saveChain = run.catch(() => {})

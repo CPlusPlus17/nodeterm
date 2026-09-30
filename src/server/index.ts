@@ -1011,6 +1011,8 @@ export async function startServer(
         canvasControl?.stop()
         workspaceWatcher.dispose()
         await contextLink.stop()
+        // Every save already queued lands while the authority still governs (see the serving close).
+        await workspaceStore.idle()
         // Write what the canvas authority still owes, then detach it from the reflector and the store.
         await canvasAuthority?.stop()
         setReflectedListener(null)
@@ -1066,6 +1068,13 @@ export async function startServer(
       // headless close() above).
       await teamAdmin.close()
       hosted.stop()
+      // End the browser WebSockets next, BEFORE the canvas authority stops (N3). Once it has stopped
+      // and been detached, a save from a still-attached tab is written un-overlaid, over its final
+      // flush. Ending the sockets stops new saves; the `idle()` below lets the ones already queued
+      // land while it still governs. (Upgraded WebSockets are not ordinary HTTP connections:
+      // server.close() waits for them but does not end them, so this is also what keeps a client
+      // close racing shutdown from hanging the Server Edition, or its tests.)
+      for (const client of wsServer.clients) client.terminate()
       // Detach PTY clients — tmux sessions keep running (Phase 1 contract; never kill the server).
       sessionReaper.stop()
       pressure.stop()
@@ -1073,6 +1082,8 @@ export async function startServer(
       canvasControl?.stop()
       workspaceWatcher.dispose()
       await contextLink.stop()
+      // Every save already queued lands while the authority still governs, then it writes what it owes.
+      await workspaceStore.idle()
       // Write what the canvas authority still owes (see the headless close() above).
       await canvasAuthority?.stop()
       setReflectedListener(null)
@@ -1083,10 +1094,7 @@ export async function startServer(
       await speechService.shutdown()
       // Close the loopback hook-server listener (it would otherwise die with the process anyway).
       hookServer.stop()
-      // Upgraded WebSockets are not ordinary HTTP connections: server.close() waits for them but
-      // does not end them. Own the WS lifecycle explicitly so a client close racing shutdown
-      // cannot hang the Server Edition (or its tests) forever.
-      for (const client of wsServer.clients) client.terminate()
+      // The WebSockets were ended at the top; close the WS server itself, then the HTTP server.
       await new Promise<void>((resolve) => wsServer.close(() => resolve()))
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()))

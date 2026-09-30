@@ -178,6 +178,45 @@ describe('the save overlay', () => {
   })
 })
 
+// N3: the Server Edition's close stops the authority and detaches it. A browser save queued before
+// that (still on `saveChain`, behind a slow write) would otherwise run AFTER the detach and write its
+// stale content un-overlaid over the final flush. The shell awaits `idle()` first.
+describe('idle', () => {
+  it('resolves only once every write queued so far has landed, still overlaid', async () => {
+    const store = new WorkspaceStore()
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    store.setContentAuthority({
+      overlaySave: async (w) => {
+        await held
+        return { ...w, projects: w.projects.map((p) => (p.id === 'P' ? { ...p, nodes: [node('b')] } : p)) }
+      },
+      overlayLoad: async (w) => w
+    })
+    const save = store.save(ws([project({ cwd: projRoot, nodes: [node('a')] })]))
+    let idle = false
+    const idled = store.idle().then(() => {
+      idle = true
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(idle).toBe(false)
+    release()
+    await idled
+    // Detached only now, as the shell does once the authority has stopped: nothing queued is left
+    // to be written un-overlaid.
+    store.setContentAuthority(null)
+    await save
+    expect(ids((await readJson(projectFile())).nodes)).toEqual(['b'])
+  })
+
+  it('never rejects, even when a queued write failed', async () => {
+    const store = new WorkspaceStore()
+    store.setContentAuthority({ overlaySave: async () => { throw new Error('overlay down') }, overlayLoad: async (w) => w })
+    await expect(store.save(ws([project({ cwd: projRoot })]))).rejects.toThrow('overlay down')
+    await expect(store.idle()).resolves.toBeUndefined()
+  })
+})
+
 describe('the load overlay', () => {
   it('rewrites the load result only; the file is untouched', async () => {
     const store = new WorkspaceStore()
