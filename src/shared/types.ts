@@ -648,7 +648,9 @@ export interface CanvasState {
 }
 
 /**
- * A minimal change to a canvas node list: replace-or-append a node by id, or drop one by id.
+ * A minimal change to a canvas: replace-or-append a node by id, or drop one by id — and, on the team
+ * canvas-sync path, the same for one persisted edge (`edge-*`) or one board item (`kb-*`, see
+ * `KanbanOp` below and @shared/kanban-ops).
  * Used for the client's optimistic edits and host-side diffing (see `applyMutation`/`diffToMutations`).
  *
  * `src` and `seq` exist ONLY on the team canvas-sync path (`canvas:mut`), and they are what makes
@@ -658,15 +660,94 @@ export interface CanvasState {
  *    that echo is the ACK that tells the sender where its edit landed in the total order).
  *  - `seq` is stamped by the reflector (src/core/canvas-sync.ts) and is the TOTAL ORDER. It is
  *    server-authoritative: a client-supplied `seq` is overwritten at ingest, never trusted.
+ *  - `seen` is the sender's CAUSAL stamp: the highest `seq` it had applied at the moment it cast.
+ *    It answers the one question `seq` alone cannot — "did this client already know about the
+ *    delete?" — which is what lets a delete beat a concurrent drag frame instead of being
+ *    resurrected by it (canvas-order's rule 4). Client-supplied; the reflector clamps it below the
+ *    order it is being given, which is hygiene and changes no verdict (see `stampMutation`). A
+ *    mutation without it is judged exactly as before, so an unstamped peer degrades rather than
+ *    breaks.
  *  - `origin: 'core'` is ALSO reflector-authoritative: a client-supplied one is deleted at ingest.
  *    The core adds it only on a copy that came from an OWNER client (or the core itself) and goes to
  *    an owner client, and it is the ONE thing that lets a receiver take the node's machine-local
- *    `pendingLaunch` as sent (@shared/node-exec `mutationTrustsLaunch`).
- * The relay's host↔client mirror (src/main/remote) uses the same vocabulary and simply omits both.
+ *    `pendingLaunch` as sent (@shared/node-exec `mutationTrustsLaunch`). It means something only on
+ *    a node `upsert`; every other op may carry it (the reflector vouches per recipient, not per op)
+ *    and ignores it.
+ * The legacy relay host's canvas mirror (`canvas:state` / `canvas:mutate`: src/main/remote/
+ * host-service.ts and canvas-sync.ts, which stayed there when the relay transport moved to
+ * src/core/relay) uses the same vocabulary and simply omits these stamps.
  */
 export type CanvasMutation =
-  | { op: 'upsert'; node: CanvasNodeState; src?: string; seq?: number; origin?: 'core' }
-  | { op: 'remove'; id: string; src?: string; seq?: number; origin?: 'core' }
+  | { op: 'upsert'; node: CanvasNodeState; src?: string; seq?: number; seen?: number; origin?: 'core' }
+  | { op: 'remove'; id: string; src?: string; seq?: number; seen?: number; origin?: 'core' }
+  | {
+      op: 'edge-upsert'
+      kind: CanvasEdgeKind
+      edge: BridgeLink
+      src?: string
+      seq?: number
+      seen?: number
+      origin?: 'core'
+    }
+  | {
+      op: 'edge-remove'
+      kind: CanvasEdgeKind
+      id: string
+      src?: string
+      seq?: number
+      seen?: number
+      origin?: 'core'
+    }
+  | (KanbanOp & MutationStamp)
+
+/** The node and edge half of `CanvasMutation` — all a canvas SCENE diff (`diffToMutations`) ever
+ *  produces. Their order keys are project-independent (node and edge ids are globally unique), so
+ *  the ordering API accepts them without a project id; any value that MAY be a board op must name
+ *  its project (see `mutationKey`). */
+export type SceneMutation = Exclude<CanvasMutation, { op: `kb-${string}` }>
+
+/** Stamp fields every canvas mutation may carry (see canvas-order): the sender tag, the reflector's
+ *  total order, the sender's causal position, and the core's per-recipient vouching (`origin`).
+ *  Documented on `CanvasMutation` above. */
+export interface MutationStamp {
+  src?: string
+  seq?: number
+  seen?: number
+  origin?: 'core'
+}
+
+/**
+ * The board half of the `canvas:mut` vocabulary (@shared/kanban-ops): one op per board ITEM, so two
+ * people editing one board converge item by item instead of last-writer-wins on the whole `kanban`
+ * block. Keys live in one `k:` space (`kanbanOpKey`); only a column / label / view REMOVAL is a
+ * rule-4 deletion — `kb-card-remove` and `kb-meta-remove` set a card's placement / metadata to
+ * "none", an ordinary last-writer-wins value (`isKanbanDeletion`). `github` and `pullLinks` are
+ * outside the vocabulary and never cast.
+ */
+export type KanbanOp =
+  | { op: 'kb-column'; column: KanbanColumn }
+  | { op: 'kb-column-remove'; id: string }
+  | { op: 'kb-column-order'; ids: string[] }
+  | { op: 'kb-card'; assignment: KanbanAssignment }
+  | { op: 'kb-card-remove'; nodeId: string }
+  | { op: 'kb-meta'; meta: KanbanCardMeta }
+  | { op: 'kb-meta-remove'; nodeId: string }
+  | { op: 'kb-label'; label: KanbanLabel }
+  | { op: 'kb-label-remove'; id: string }
+  | { op: 'kb-label-order'; ids: string[] }
+  | { op: 'kb-view'; view: KanbanSavedView }
+  | { op: 'kb-view-remove'; id: string }
+
+/**
+ * Which persisted edge list a mutation addresses — `bridges` (context links, which an agent can
+ * actually READ through) or `ropes` (display-only "spawned by" lineage). They are two arrays on
+ * the project with two different meanings, so the kind travels with the mutation; the ORDER,
+ * however, is keyed on the edge id alone (canvas-order's `e:<id>`), because one id is one edge and
+ * two clients must never end up holding it as both a bridge and a rope. The apply agrees
+ * (`applyEdgeMutationToScene`: an upsert takes the id out of the other list, a remove drops it from
+ * both), and so does the diff (an id that moved lists casts its upsert and no remove).
+ */
+export type CanvasEdgeKind = 'bridge' | 'rope'
 
 /** Canvas pan/zoom state. */
 export interface Viewport {
@@ -2965,6 +3046,24 @@ export interface CanvasApi {
   onMutation(listener: (projectId: string, mutation: CanvasMutation) => void): () => void
 }
 
+/**
+ * Which of this core's projects a canvas authority governs (the Server Edition hosting a team,
+ * docs/hosted-team-relay.md). The authority writes a governed project's content only from the ops it
+ * hears, so a client must publish its canvas ops for such a project even when nobody else is
+ * attached — the solo gate is overridden for it. The desktop runs no authority and governs nothing.
+ */
+export interface CanvasAuthorityApi {
+  /** true = this core may govern projects, and which ones is known only once `governed()` answers:
+   *  until then a client publishes for EVERY project on it (the Server Edition). false = known in
+   *  advance, so nothing is assumed (the desktop and a Team Access tab govern nothing; a hosted
+   *  relay tab answers from its own bindings). */
+  readonly assumeAllUntilAnswered: boolean
+  /** The governed project ids right now. Never rejects: "unknown" is the empty list. */
+  governed(): Promise<string[]>
+  /** Fires with the NEW governed set whenever it changes (a share or unshare). Returns unsubscribe. */
+  onChanged(listener: (ids: string[]) => void): () => void
+}
+
 /** One searchable line extracted from a Claude session transcript. */
 export interface TranscriptLine {
   role: 'user' | 'assistant' | 'tool'
@@ -3932,6 +4031,8 @@ export interface NodeTerminalApi {
   triggers: TriggersApi
   context: ContextApi
   canvas: CanvasApi
+  /** Which projects publish their canvas ops even when alone (see CanvasAuthorityApi). */
+  canvasAuthority: CanvasAuthorityApi
   codex: CodexApi
   claude: ClaudeApi
   grok: GrokApi

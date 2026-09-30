@@ -809,6 +809,27 @@ export function buildCanvasApi(client: RpcClient): Pick<NodeTerminalApi, 'canvas
 }
 
 /**
+ * Build the `canvasAuthority` namespace over an RpcClient: a REAL implementation for the Server
+ * Edition browser, whose core may run the canvas authority (docs/hosted-team-relay.md). A server
+ * that does not answer (an older one, a failure) governs nothing, so the tab keeps the solo gate
+ * rather than rejecting. Deliberately NOT part of `buildCanvasApi`, which the relay tab shares: a
+ * relay tab answers from its own connection (relay-api.ts) and never asks the host over the wire.
+ */
+export function buildCanvasAuthorityApi(client: RpcClient): Pick<NodeTerminalApi, 'canvasAuthority'> {
+  const ids = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  return {
+    canvasAuthority: {
+      // A Server Edition core governs the projects its hosted team shares, and says which only when
+      // asked: until it answers, a client publishes for every project (collab-sync `followGoverned`).
+      assumeAllUntilAnswered: true,
+      governed: () => client.request(IPC.canvasAuthority).then(ids, () => []),
+      onChanged: (listener) => client.subscribe(IPC.canvasAuthorityChanged, ((v: unknown) => listener(ids(v))) as Listener)
+    }
+  }
+}
+
+/**
  * Build the `presence` namespace over an RpcClient, mirroring the preload's invoke(→request) /
  * send(→cast) / on(→subscribe) split member-for-member: `hello` is the only request (its response
  * is how a client learns its OWN clientId), cursor/focus/chat/project are casts, and the two event
@@ -1254,6 +1275,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildStationOutcomeApi(client),
     ...buildStationHandoverApi(client),
     ...buildCanvasApi(client),
+    ...buildCanvasAuthorityApi(client),
     ...buildPresenceApi(client),
     ...buildSpeechApi(client),
     ...buildUsageApi(client),

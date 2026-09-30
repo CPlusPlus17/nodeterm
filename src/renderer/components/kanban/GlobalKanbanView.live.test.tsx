@@ -116,7 +116,7 @@ describe('Omni overview — the active lane is the live canvas', () => {
   })
 
   it('a board write keeps the assignment of a live card the store has not seen yet', () => {
-    const board = { ...defaultKanban(), assignments: [] as ProjectKanban['assignments'] }
+    const board = { ...defaultKanban('p1'), assignments: [] as ProjectKanban['assignments'] }
     const col = board.columns[0].id
     board.assignments = [{ nodeId: 'fresh', columnId: col }]
     const p1 = { ...project('p1', [sticky('a', 'x')]), kanban: board } as Project

@@ -181,8 +181,10 @@ export function carryLocalNodeExec(
   return out
 }
 
-/** `sanitizeInboundNode` for a whole mutation (the stamps — `src`, `seq` — are preserved).
- *  `keepLaunch` is for the reflector alone, and only for an OWNER sender (see `stripCastNodeExec`). */
+/** `sanitizeInboundNode` for a whole mutation (the stamps — `src`, `seq`, `seen` — are preserved).
+ *  Only `upsert` carries a node; every other op (`remove`, the edge ops and the board ops, which
+ *  carry no node) passes through untouched. `keepLaunch` is for the reflector alone, and only for an
+ *  OWNER sender (see `stripCastNodeExec`). */
 export function sanitizeInboundMutation<T extends CanvasMutation>(m: T, keepLaunch = false): T {
   if (m.op !== 'upsert') return m
   const up = m as unknown as { node: CanvasNodeState }

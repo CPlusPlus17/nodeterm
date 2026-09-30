@@ -96,7 +96,7 @@ async function render(opts: {
   await act(async () => {
     root.render(
       <KanbanView
-        board={opts.board ?? { ...defaultKanban(), github: { columnMappings: [] } }}
+        board={opts.board ?? { ...defaultKanban('p'), github: { columnMappings: [] } }}
         sessions={opts.sessions ?? [bound]}
         onChange={opts.onChange ?? noop}
         onOpenNode={noop}
@@ -211,7 +211,7 @@ describe('KanbanView — GitHub issue ↔ session binding', () => {
   })
 
   it('an issue the board cannot show opens on GitHub instead of doing nothing', async () => {
-    await render({ board: defaultKanban() })
+    await render({ board: defaultKanban('p') })
     await act(async () => {
       useViewMode.getState().requestIssue({ owner: 'other', repo: 'repo', number: 7 })
     })

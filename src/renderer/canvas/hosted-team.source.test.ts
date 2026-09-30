@@ -63,7 +63,16 @@ describe('hosted team glue in Canvas', () => {
   })
 
   it('a read-only role never publishes canvas edits, and the rule is false for every non-hosted tab', () => {
-    expect(src).toContain('shouldPublish: () => hasPeersRef.current && !isHostedReadOnly(activeSession.id)')
+    // ONE gate for the node publisher and the kanban publisher (Task 6): the read-only refusal lives
+    // in `shouldPublishFor`, and the node publisher asks it for the active project.
+    const start = src.indexOf('const shouldPublishFor = (projectId: string): boolean =>')
+    expect(start).toBeGreaterThan(-1)
+    const gate = src.slice(start, src.indexOf('const pub = createCanvasPublisher(', start))
+    // The peer check, OR a project the host's canvas authority governs (authority-gate-wiring.test.ts).
+    expect(gate).toContain('shouldPublish(hasPeersRef.current, governedRef.current, projectId) &&')
+    expect(gate).toContain('!isHostedReadOnly(activeSession.id)')
+    expect(src).toContain('shouldPublish: () => shouldPublishFor(useProjects.getState().activeProjectId)')
+    expect(src).toContain('shouldPublish: (projectId) => shouldPublishFor(projectId)')
   })
 
   it('the canvas turns read-only only for a hosted Viewer/Commenter (a spread: nothing new otherwise)', () => {

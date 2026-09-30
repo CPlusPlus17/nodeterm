@@ -492,6 +492,15 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   credentials, license or pairing belongs in `src/shared/host-control.ts` instead — refused to every
   relay peer.
 
+- **A change to canvas content that does not travel as a `canvas:mut` op is lost on a hosted core —
+  route new content edits through the op vocabulary (`src/shared/canvas-content.ts`).** On a Server
+  Edition hosting a team, the canvas authority writes a shared project's nodes, edges and board
+  from the ops it hears, and overlays every save with that content, so a content change that reaches
+  the core only inside a save is dropped from disk. A renderer write into a project that is NOT on
+  screen goes through the projects store, whose node and edge writers run inside `ownWrite` so the
+  write is cast (`canvas/stored-publish.ts`); a new store writer of that kind must use `ownWrite`
+  too. Deep version: CLAUDE.md § Hosted team relay.
+
 - **Normalize BOTH sides of a path comparison, through one function.** A marker normalized where
   it is built and matched raw where it is used is a no-op on the machine you wrote it on and a
   silent defect on Windows. That is issue #558: the managed-hook marker was folded to `/` while
@@ -946,6 +955,16 @@ on `hydrated` (the first-launch consent dialog and `settings.rememberCanvasLock`
 examples). If the same effect also WRITES, latch its first run: otherwise switching the setting on
 mid-session applies stored state to whatever the user is doing right then, which is a different
 feature from the one they asked for.
+
+**Canvas's `nodesRef` / `nodesProjectIdRef` are the LATEST pair, not the rendered one.** During a
+project switch a zustand write re-renders Canvas at SyncLane before the load's DefaultLane
+`setNodes` lands, so for a moment the ref names the incoming project while the render's `nodes`
+are still the outgoing one's (`canvas/nodesEpoch.ts`). Event-time code (commits, the `canvas:mut`
+receive path, creates) reads the refs; code that pairs the tag with the RENDERED `nodes` (a
+render-time publish, an effect keyed on `nodes`) reads `renderedProjectId`. A peer op goes live
+only when `liveCanvasHolds` says React Flow has that project, and its `setNodes` is functional
+(`rebaseOnLatest`). `nodesEpoch.test.tsx` reproduces the window with real React; never wrap it in
+`act`, which flushes both lanes together and hides it.
 
 Maximize placement and refocusing must use the same measured usable rectangle
 (`measureMaximizeInsets`): pinned side panels plus persistent top controls and bottom dock.

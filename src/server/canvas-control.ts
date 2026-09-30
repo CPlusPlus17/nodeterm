@@ -258,6 +258,9 @@ export async function initServerCanvasControl(
     // up suspends autosave, so it latched on, and "Keep my version" then wrote the browser's edge
     // state over the ropes this factory had just persisted. These writes are OURS; the renderer
     // merges them (renderer/lib/serverChange.ts) and is never asked to choose.
+    // The CONTENT of each write (nodes, edges) travels separately, as canvas ops the factory casts
+    // through the reflector BEFORE every save (its `castAndSave`; no `publishMutation` here = the
+    // reflector). On a project the canvas authority governs, only what it heard as ops is written.
     publishProject: (project: Project) => platform().broadcast(IPC.workspaceServerChange, project),
     issueRepository: deps.issueRepository,
     // An issue card's run history lives in the same board log the messaging trace writes to.

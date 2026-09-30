@@ -100,8 +100,11 @@ describe('every open path attaches the wait through withPrHold', () => {
 describe('the launch loop judges the wait on the ACTIVE project’s pull request status', () => {
   const effect = (): string => slice('const ready = launchesToFire(', '}, [nodes, armedDepSig')
 
+  // The board of the project the effect's `nodes` belong to — `renderedProjectId`, not the ref: the
+  // ref is the LATEST installed epoch and, in a project switch's window, already names the incoming
+  // project while `nodes` are still the outgoing one's (useNodesEpoch, Task 3).
   it('passes the board and the clock to launchesToFire', () => {
-    expect(effect()).toMatch(/\{ board: pullBoardFor\(useGitHubIssues\.getState\(\), nodesProjectIdRef\.current \?\? ''\), now: Date\.now\(\) \}/)
+    expect(effect()).toMatch(/\{ board: pullBoardFor\(useGitHubIssues\.getState\(\), renderedProjectId \?\? ''\), now: Date\.now\(\) \}/)
   })
 
   it('re-runs when a waited-on pull request changes, off a PRIMITIVE signature', () => {

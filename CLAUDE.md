@@ -287,7 +287,11 @@ Persistence has two layers:
   one-time renderer note). Outside edits (git pull/sync) are detected by
   `core/workspace-watcher.ts` → silent reload, or a Reload/Keep-mine conflict bar when dirty; they
   ride `workspace:external-change`, and so do the phone's `appendRemoteNode` and the SSH
-  reconcile, which really are "another device".
+  reconcile, which really are "another device". The exception is a project a hosted Server Edition
+  shares with its team: the canvas authority adopts that outside edit and publishes it as
+  `canvas:mut` ops, with no `workspace:external-change`, then sends the persisted project on
+  `workspace:server-change` so its non-content fields (name, permission default, capability flags…)
+  reach the tabs too (see **Hosted team relay**).
   **A write this core made ITSELF rides `workspace:server-change` instead** — today that is Server
   Edition headless canvas control (`server/canvas-control.ts`) — and the renderer three-way merges
   it against the store baseline (`renderer/lib/serverChange.ts`: incoming nodes adopted silently,
@@ -480,6 +484,15 @@ project's nodes only.** The contract:
   with the NEW project's tag. A commit in that window wrote an SSH project's 7 nodes over a local
   project's 18 in its `.nodeterm/project.json` (2026-09-26). `nodesEpoch.test.tsx` reproduces the
   interleaving with real React (no `act`, which would flush both lanes together and hide it).
+  **The refs are the LATEST pair, not the last rendered one**: the tag ref is written only by
+  `installEpoch`, and a render copies its `nodes` into `nodesRef` only when that state CHANGED and
+  the render belongs to the installed epoch. An unconditional mirror rewound both refs to the
+  outgoing project in that window, and a peer's `canvas:mut` for the incoming (active) project was
+  applied to the outgoing nodes and queued after the load — the canvas ended on A's nodes plus the
+  op, tagged B, and the next commit wrote them into B. So the receive path routes by
+  `liveCanvasHolds` (tag AND active id; otherwise the store) and queues a FUNCTIONAL update
+  (`rebaseOnLatest`). Consequence for readers: code pairing the tag with the RENDERED `nodes`
+  (a render-time publish, an effect keyed on `nodes`) reads `renderedProjectId`, never the ref.
 - Switching away unmounts the old project's `TerminalNode`s → their tmux clients detach but
   the sessions keep running; switching back reattaches. tmux session names are per-node-id
   (globally unique), so projects never collide.
@@ -1471,7 +1484,11 @@ session.
   a frame among its siblings, carrying its subtree. `nodeStatesToFlow`/`groupsFirst` emit frames
   **depth-first from the root** — a flat "groups first" sort is not enough once two groups compare
   equal — and that persisted order is also the downgrade contract (a pre-nesting build's stable
-  sort leaves it alone, so a nested tree still hydrates parent-first and renders there).
+  sort leaves it alone, so a nested tree still hydrates parent-first and renders there). The order
+  has ONE definition (`groupsFirstBy`, `src/shared/node-order.ts`), and the shared op reducer
+  (`applyCanvasMutation`) re-sorts with it on an append or a `parentId` change — the same two points
+  the live React Flow apply does — because a governed Server Edition project's file is written from
+  the canvas authority's array, not from React Flow's.
   **A frame that gains a child bigger than itself is re-fitted, ancestors included**
   (`fitGroupToChildren` up the chain): a wrapper created at `(minX-28, minY-62)` relative to its
   parent is routinely negative, and `extent:'parent'` would make React Flow clamp it into an
@@ -3762,7 +3779,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   owner→owner leg is load-bearing: it is how two Server Edition tabs agree a launch was claimed, and
   how a headless delivery's clear reaches the browser, so nothing types it twice. Our OWN writes
   into a background project go through `applyOwnNodeMutation` (unstripped — a cold open keeps its
-  launch, a patch to `undefined` clears it); `applyNodeMutation` is the peer path. Load-bearing
+  launch, a patch to `undefined` clears it); `applyNodeMutation` is the peer path (the one reducer,
+  `applyCanvasOp`). On a Server Edition that governs a shared project, the canvas authority hears
+  every op WITHOUT its launch and a save's exec carry is what writes it (see **Shared canvas
+  authority**). Load-bearing
   details: (1) **an unknown agent state is NOT "satisfied"** — right after a fan-out no upstream has
   emitted a hook event yet, and reading "no news" as "finished" would fire every dependent
   instantly; a **deleted** dep IS satisfied (it can never report); and a dep that is `done` with a
@@ -7341,14 +7361,68 @@ The invariants, each with its reason:
   survives Electron IPC. Only `E_JOIN_NETWORK` and `E_JOIN_THROTTLED` (at least 60 s) retry
   unattended. A drop the host did not explain retries 5 times (1/2/4/8/15 s), then stops and says so.
 
+**Shared canvas authority** (doc section of that name; ordering rules in `docs/team-presence.md`).
+`canvas:mut` carries nodes, edges (`edge-*`) and board items (`kb-*`, `shared/kanban-ops.ts`).
+
+- **On the Server Edition, only the canvas authority writes a shared project's content**
+  (`core/canvas-authority.ts`: nodes, bridges, ropes, board items; only in the process that owns the
+  team). A client's whole-workspace save is a stale copy of every canvas it holds, so saves AND
+  loads pass through the authority's overlay (`WorkspaceStore.setContentAuthority`), and an outside
+  edit (a `git pull`) is adopted and published as ops instead of `workspace:external-change`, whose
+  conflict bar would offer "Keep mine" over it; the persisted project follows on
+  `workspace:server-change` (silent merge), or a stale tab's autosave would revert the pulled
+  non-content fields, `defaultPermissionMode` and the capability flags included. It writes 1 s
+  after the last op, at most 5 s after the first. The consequence for code: **a content change that is not cast as an op is dropped by
+  the next overlaid save.** That is why server canvas control casts a diff of the whole content
+  before every save (`castAndSave`, never a per-verb list, which drifts), and why a hosted relay
+  peer may not `workspace:save` at all (refused for every role). One exception: a node too large
+  to travel as an op is taken from saves. **Exec fields never enter the authority's state** —
+  `shell`, `ssh.extraArgs`, and `pendingLaunch`, which the reflector strips from what it hands the
+  authority even on an owner's op: a save carries this machine's own values onto the overlaid nodes
+  (`carryLocalNodeExec`), and that carry is how an armed `--after` node — and server canvas
+  control's claim/clear of its launch (`savePatches` → `castAndSave`) — reaches the index's
+  `localExec` on a governed project. For the same reason the authority's outside-edit diff is
+  published UNTRUSTED (`publishCanvasMutation(id, m, { trusted: false })`): vouched as a core write,
+  its launch-less upserts read as "cleared" on every owner tab, and a git pull cancelled queued
+  `--after` launches. **Server canvas control delivers only what landed**: `open` and
+  `run` launch nothing when their write-ahead `castAndSave` was refused (canvas control stopping),
+  and `refreshArmed` types a held command only when `savePatches` says both that the save landed and
+  that its claim applied to the fresh read (a teammate may have deleted, re-armed or claimed the node
+  since the verb looked); `NodePatch.apply` answers whether it landed.
+- **One reducer, `applyCanvasOp`** (`shared/canvas-content.ts`), applies an op to the authority's
+  state and to every client's STORED copy of a project (background projects, and every board op).
+  Two appliers is how an authority and its clients silently diverge. The only other applier OF A
+  RECEIVED OP patches the active project's live React Flow array for node ops
+  (`applyMutationToFlow`), because a trip through the serializers would wipe the selection; live
+  edge ops go through the reducer's own edge applier, `applyEdgeMutationToScene`. THIS renderer's
+  own node writes into a background project are not received ops and take `applyOwnNodeMutation`
+  (unstripped: the held launch is ours to set or clear — see the `pendingLaunch` paragraph). **The
+  node publisher never casts them** (it diffs React Flow, and a load is ADOPTED as its baseline), so
+  every own writer of the projects store (`applyOwnNodeMutation`, `appendCanvasLinks`, and the
+  sessions sidebar's `renameNode` / `recolorNode` / `removeNode` / `moveNodeToGroup` / …) runs
+  through `ownWrite`, which hands a lazy diff of the project's nodes and edges to
+  `setStoredCanvasPublishHook`; Canvas casts it only for a GOVERNED project that is not the one React
+  Flow holds (`canvas/stored-publish.ts`). Without it a ⌘⇧T reopen or a cold open into an off-screen
+  shared project was dropped from disk by the next overlaid save, and a sidebar close killed the
+  session while the overlay put the node back. An ungoverned project casts nothing new.
+- **The solo-gate trap.** The publisher casts nothing while no teammate is attached, and on a governed
+  project that loses every edit. The gate is `shouldPublishFor` = `(hasPeers || governed) && sameCore
+  && !readOnly`: a Server Edition tab publishes every project until its first `canvas:authority`
+  answer and re-asks on reconnect, and neither our own echo nor a src-less core op proves a peer
+  (`provesPeer`). The desktop answers `[]`, so it is unchanged.
+- **Prune removals are never cast** (`diffKanbanOps`' `liveNodeIds`). Every board commit prunes the
+  cards of nodes that are not live locally, and a client whose node op has not arrived yet would
+  otherwise cast the removal of a fresh card for everyone. `liveNodeIds` is one project's nodes
+  (React Flow's for the rendered project, the Omni board's live lane included). Card and meta
+  removals are last-writer-wins VALUES; only node, edge, column, label and view removals are rule-4
+  deletions.
+
 **Known limitations** (full list in the doc): non-editors still receive cross-project presence and
 `context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still
-pauses the shared pty through Stage 2 backpressure; canvas edits made in a hosted tab are not
-written to the host, because a relay tab never saves the host workspace and the reflector persists
-nothing (ruling R42). Workaround: keep a Server Edition browser tab open on the host's core; it
-applies each reflected mutation, marks itself dirty and saves. Edits made while no browser tab is
-attached are lost. Kanban, bridge and rope edits made in a relay tab are never propagated or saved
-at all, because `canvas:mut` carries nodes only; that predates this feature.
+pauses the shared pty through Stage 2 backpressure; the canvas authority's own limits (a project's
+non-content fields stay last writer wins between tabs, the share-time window, oversized nodes, board
+edits to another core, load-time repairs that are never cast, the card modal's comments on a relay
+tab) are under "Known limits" in the doc.
 
 **Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab).
 Server Edition is the host (the `team` CLI; its browser clients cannot approve and are not hosted

@@ -150,9 +150,11 @@ describe('the brief file is checked when the launch is DELIVERED (#1014 review)'
     expect(missing).toContain('markBriefMissing(f.id')
     // Typing happens only on the "present" branch.
     expect(missing).toMatch(/return deliverHeld\(\)/)
-    // …on the node's own project, with the local fs (the rule itself: `launchBriefPresent`).
+    // …on the node's own project, with the local fs (the rule itself: `launchBriefPresent`). The
+    // node's own project is the RENDERED epoch (`renderedProjectId`), the one its `nodes` came from —
+    // the ref is the latest installed epoch and may already name the next project (useNodesEpoch).
     const effect = slice('const briefPresent = ', 'const ready = launchesToFire(')
     expect(effect).toContain('launchBriefPresent(')
-    expect(effect).toContain('getProject(nodesProjectIdRef.current')
+    expect(effect).toContain('getProject(renderedProjectId')
   })
 })

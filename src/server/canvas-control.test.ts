@@ -142,7 +142,10 @@ describe('initServerCanvasControl', () => {
     }
     const store = {
       load: vi.fn(async () => workspace),
-      save: vi.fn(async () => undefined),
+      // A store keeps what it is handed: the factory edits a private copy of what it loaded.
+      save: vi.fn(async (next: Workspace) => {
+        Object.assign(workspace, structuredClone(next))
+      }),
       persistedCanvases: () => [{ id: 'p1', nodes: workspace.projects[0].nodes }],
       // No strict true flag and no machine-local `kept` ack: capability is off by default.
       capabilityProjectFor: () => ({})
@@ -271,7 +274,10 @@ describe('initServerCanvasControl', () => {
     }
     const store = {
       load: vi.fn(async () => workspace),
-      save: vi.fn(async () => undefined),
+      // A store keeps what it is handed: the factory edits a private copy of what it loaded.
+      save: vi.fn(async (next: Workspace) => {
+        Object.assign(workspace, structuredClone(next))
+      }),
       persistedCanvases: () => [{ id: 'p1', nodes: workspace.projects[0].nodes }],
       capabilityProjectFor: () => ({
         agentMessaging: true,
@@ -389,7 +395,10 @@ describe('initServerCanvasControl', () => {
     }
     const store = {
       load: vi.fn(async () => workspace),
-      save: vi.fn(async () => undefined),
+      // A store keeps what it is handed: the factory edits a private copy of what it loaded.
+      save: vi.fn(async (next: Workspace) => {
+        Object.assign(workspace, structuredClone(next))
+      }),
       persistedCanvases: () => [{ id: 'p1', nodes: workspace.projects[0].nodes }],
       capabilityProjectFor: () => ({ agentMessaging: false, capabilityAck: {} })
     } as unknown as WorkspaceStore

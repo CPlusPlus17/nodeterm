@@ -4,6 +4,7 @@ import { IPC } from '../../shared/ipc'
 import type { NodeTerminalApi } from '../../shared/types'
 import type { FrameTransport } from './frame-transport'
 import { buildRelayApi } from './relay-api'
+import { bindProjectToSession, createSession, resetSessionsForTest } from '../session/session'
 import { onLocalRelayClose } from './relay-local-close'
 
 /**
@@ -306,5 +307,45 @@ describe('buildRelayApi — hosted team tabs', () => {
     handle.api.pty.write('s1', 'x')
     handle.api.canvas.mutate('p1', { op: 'remove', id: 'n1' } as never)
     expect(methods(t)).toEqual([IPC.presenceChat, IPC.ptyWrite, IPC.canvasMut])
+  })
+})
+
+describe('buildRelayApi — canvasAuthority (which projects publish even when alone)', () => {
+  let saved: unknown
+  beforeEach(() => {
+    saved = (globalThis as Record<string, unknown>).window
+    resetSessionsForTest()
+  })
+  afterEach(() => {
+    ;(globalThis as Record<string, unknown>).window = saved
+    resetSessionsForTest()
+  })
+
+  it('a HOSTED tab: every project bound to its own connection is governed, asked of nobody over the wire', async () => {
+    ;(globalThis as Record<string, unknown>).window = { nodeTerminal: fakeLocalApi().local }
+    const t = new FakeTransport()
+    const { api } = buildRelayApi('conn-1', t, { hosted: true })
+    const other = buildRelayApi('conn-2', new FakeTransport(), { hosted: true }).api
+    expect(await api.canvasAuthority.governed()).toEqual([])
+    bindProjectToSession('p-team', createSession('relay', api, 'Team').id)
+    bindProjectToSession('p-elsewhere', createSession('relay', other, 'Other team').id)
+    // Its host governs everything it shares, and a hosted tab holds only shared projects.
+    expect(await api.canvasAuthority.governed()).toEqual(['p-team'])
+    expect(typeof api.canvasAuthority.onChanged(() => {})).toBe('function')
+    // Answered from its own bindings, at once: nothing is assumed governed before that.
+    expect(api.canvasAuthority.assumeAllUntilAnswered).toBe(false)
+    expect(t.sent).toEqual([])
+  })
+
+  it('a Team Access tab governs nothing: its host (a desktop) runs no authority', async () => {
+    const local = fakeLocalApi().local as unknown as Record<string, unknown>
+    local.canvasAuthority = { assumeAllUntilAnswered: false, governed: async () => [], onChanged: () => () => {} }
+    ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+    const t = new FakeTransport()
+    const { api } = buildRelayApi('conn-1', t)
+    bindProjectToSession('p-peer', createSession('relay', api, 'Peer').id)
+    expect(await api.canvasAuthority.governed()).toEqual([])
+    expect(api.canvasAuthority.assumeAllUntilAnswered).toBe(false)
+    expect(t.sent).toEqual([])
   })
 })
