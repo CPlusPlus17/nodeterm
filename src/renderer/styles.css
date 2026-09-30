@@ -8086,6 +8086,15 @@ button.group-node__setup:disabled {
 /* Non-Claude provider segments read one step quieter than the Claude numbers, so a long pill
    still scans as "Claude first, others after" without needing separate icons per provider. */
 .usage-pill__provider .usage-pill__num { color: rgba(var(--tint-rgb), 0.75); font-size: 11px; }
+/* The managed account the pill describes (the project's "Use for new sessions" default). */
+.usage-pill__account {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: rgba(var(--tint-rgb), 0.6);
+}
 .usage-pill__dim,
 .sysres-pill__dim { color: rgba(var(--tint-rgb), 0.5); }
 .usage-pill__pulse,

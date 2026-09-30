@@ -40,6 +40,11 @@ import { systemAccountDisplay } from '../state/workspace'
  *  gap (or clip a corner en route elsewhere) without the panel flickering shut. */
 const USAGE_HOVER_CLOSE_MS = 220
 
+/** How often the collapsed pill re-asks for a MANAGED default account's snapshot. Only the system
+ *  account is polled + pushed by the service; the service caches managed reads for its own
+ *  debounce, so a re-ask inside that window is free. */
+const DEFAULT_ACCOUNT_POLL_MS = 5 * 60 * 1000
+
 /**
  * A single limit row in the popover: bar, "% left"/"% used", reset countdown. The bar's fill
  * honours the display mode (`barFillPercent`) so it tracks the same quantity as the number
@@ -399,6 +404,14 @@ export function UsageIndicator({
       ),
     [claudeAccounts, scopeHostKey]
   )
+  // The validated "Use for new sessions" account (undefined = system) — the identity the collapsed
+  // pill describes. Same validation as the rows' ✓: a stale id falls back to the system account.
+  const defaultAccountId =
+    projectDefaultId && eligibleAccounts.some((a) => a.id === projectDefaultId)
+      ? projectDefaultId
+      : undefined
+  const defaultAccountLabel = eligibleAccounts.find((a) => a.id === defaultAccountId)?.label
+
   // One rule for every row, local and remote alike — `accountRowAction` (pure, tested) decides
   // default/offer/none; this pair just turns its answer into props. Absent handler / no project =
   // pure readout, exactly as before. null = the System row (clears the override).
@@ -516,6 +529,25 @@ export function UsageIndicator({
     }
   }, [open, accounts, scope.kind])
 
+  // The LOCAL managed default's snapshot, kept fresh while the popover is CLOSED too — the pill
+  // spells it out. (The popover's per-account fetch above only runs while open.)
+  const localDefaultId = scope.kind === 'local' ? defaultAccountId : undefined
+  useEffect(() => {
+    if (!localDefaultId) return
+    let cancelled = false
+    const load = (): void => {
+      void window.nodeTerminal.usage.fetch(localDefaultId).then((u) => {
+        if (!cancelled) setAcctUsage((m) => ({ ...m, [localDefaultId]: u }))
+      })
+    }
+    load()
+    const timer = window.setInterval(load, DEFAULT_ACCOUNT_POLL_MS)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [localDefaultId])
+
   // Close the popover on an outside click.
   useEffect(() => {
     if (!open) return
@@ -553,7 +585,9 @@ export function UsageIndicator({
     providers: providers.filter((p) => !hidden.has(p.provider)),
     // Its own switch, not Claude's: hiding the local rows must not silently take the SSH hosts
     // down with them, and vice versa.
-    remote: remote.filter(r => !hidden.has(r.provider === 'codex' ? 'codex' : 'claude-remote'))
+    remote: remote.filter(r => !hidden.has(r.provider === 'codex' ? 'codex' : 'claude-remote')),
+    defaultAccountId,
+    defaultUsage: localDefaultId && !hidden.has('claude') ? (acctUsage[localDefaultId] ?? null) : null
   })
   const claudeUsage = scoped.claude
   const visibleProviders = scoped.providers
@@ -564,7 +598,17 @@ export function UsageIndicator({
   // Claude alone, which is what this did, left a Codex-only user with no pill at all.
   const enabled = enabledProviders([...visibleProviders,
     ...visibleRemote.flatMap(r => r.provider === 'codex' ? [r.usage] : [])])
-  if (!hasAnyUsage(claudeUsage, visibleProviders, visibleRemote)) return null
+  if (!hasAnyUsage(claudeUsage, visibleProviders, visibleRemote) && scoped.pillLimits.length === 0)
+    return null
+  // Name the identity when the pill shows a managed account, so its numbers are never read as the
+  // system account's. The system identity stays unlabelled — exactly the pill as it always was.
+  const pillAccountLabel =
+    scoped.pillAccountId === null
+      ? null
+      : scope.kind === 'local'
+        ? defaultAccountLabel
+        : visibleRemote.find((r) => r.provider !== 'codex' && r.accountId === scoped.pillAccountId)
+            ?.label
 
   // On an SSH project these are the HOST's limits — same shape, same labels, read somewhere else.
   const limits = scoped.pillLimits
@@ -597,7 +641,12 @@ export function UsageIndicator({
           .catch((): RemoteAccountUsage[] => [])
         if (remoteScope.current === requestedScope) setRemote(rows)
       } else {
-        setUsage(await window.nodeTerminal.usage.refresh())
+        const [sys, def] = await Promise.all([
+          window.nodeTerminal.usage.refresh(),
+          localDefaultId ? window.nodeTerminal.usage.refresh(localDefaultId) : Promise.resolve(null)
+        ])
+        setUsage(sys)
+        if (localDefaultId && def) setAcctUsage((m) => ({ ...m, [localDefaultId]: def }))
       }
     } finally {
       setRefreshing(false)
@@ -612,6 +661,18 @@ export function UsageIndicator({
   } else {
     pillBody = (
       <>
+        {pillAccountLabel && (
+          <span
+            className="usage-pill__account"
+            title={
+              scoped.pillAccountId === defaultAccountId
+                ? 'Account used for new sessions in this project'
+                : 'Account these limits belong to'
+            }
+          >
+            {pillAccountLabel}
+          </span>
+        )}
         {primary && (
           <span className="usage-pill__minibar" aria-hidden>
             <span
