@@ -765,6 +765,54 @@ Lifecycle, by intent:
   The refusal is **only** in `spawnNew` — a co-attach JOIN to a live session for that node id is
   still correct. An offline node reports itself to `SshReconnector`, so the canvas heals itself;
   `retryNow` (banner Reconnect / node Reconnect) skips the backoff and clears the refuse window.
+- **Codex's auto-started shared daemon: every nodeterm Codex TUI runs `--no-daemon`** (2026-09-30).
+  From codex-cli **0.157.0** the `daemon_auto_start` feature is `stable, true` (0.156.1:
+  `experimental, false`; 0.148.0: no such feature): a plain `codex` TUI no longer runs in-process
+  but starts, or JOINS, ONE background `app-server` per `CODEX_HOME`, and that daemon keeps the
+  environment of the pane that STARTED it and outlives it. The daemon is what spawns tool shells and
+  hook processes, and nodeterm tells a node apart by environment (`buildPtyEnv`). MEASURED on
+  0.159.2 (private `CODEX_HOME`, private tmux socket, `env -i`): pane A (`NODETERM_NODE_ID=node-A`)
+  started the daemon; in pane B (`node-B`) the tool shell printed `node-A` and every hook process
+  logged `node-A` — pane B's status, canvas-control verbs and context-link reads were pane A's.
+  `--no-daemon` put pane C back on `node-C` in both; `-c features.daemon_auto_start=false` did NOT
+  (it still joins a RUNNING daemon); there is no environment switch. Transcript and the three help
+  pages: `src/core/__fixtures__/codex-daemon/`. Rules a refactor must not undo:
+  - **Feature-detected, fail open.** `core/codex-cli.ts` `codexNoDaemonFrom` reads the flag off the
+    option-header lines of the same memoized `codex --help` the approval vocabulary uses;
+    `CodexCliCaps.noDaemon` rides the existing `ApprovalCaps` bag (`codexNoDaemon`) that every launch
+    site already threads, and `withCodexNoDaemon` (`shared/agents/codex-daemon.ts`) appends it in
+    BOTH assemblers — fresh launch and resume (cold restore, restart, restart-with-model, account
+    switch, transfer, headless Server opens, custom agents whose `baseAgent` is codex, a launch-
+    command override). Only a literal `true` emits it: clap exits on an unknown option, so an
+    unprobed, remote-unknown or older CLI gets the line it always got.
+  - **Never beside `--remote`** — measured: `ERROR: --no-daemon cannot be used with --remote.` The
+    managed launcher (`buildCodexLauncherScript`) therefore STRIPS it before its own
+    `codex --remote unix:// resume` and routes every plain-codex fallback through `nt_exec_plain`,
+    which keeps it, or ADDS it when the codex about to run advertises it (the SSH launcher's host was
+    never probed from here). This matters beyond the fallback node itself: a daemon started by a
+    plain pane carries that pane's `NODETERM_NODE_ID`, and the thread-identity prelude only resolves
+    a tool shell whose `NODETERM_NODE_ID` is EMPTY — so one plain launch used to poison every managed
+    thread of that account too. Our own start stays the scrubbed `nt_start_app_server` (#350).
+  - **SSH: the HOST's binary is asked.** `core/remote-ssh/codex-no-daemon-probe.ts` runs one
+    marker-delimited `codex --help` through the login shell after connect (off the connect path, like
+    the claude probe) and publishes `{hostKey: user@host, supported}` on a `connected` event and on a
+    reused connect's result; the renderer keeps it per host (`useSshConn.codexNoDaemonByHost`) and
+    `codexApprovalCaps(remote)` reads it. Before it lands a remote line carries nothing.
+  - `codex exec` (commit messages), `login`, `mcp` and `app-server` take no such flag and are not
+    TUI clients of the daemon. The phone gets `MirrorSettings.codexNoDaemon` (iOS reader: follow-up,
+    @eneskirca). opencode was checked the same way: no published release has `serve --service`
+    (latest 1.18.33 and the `dev` channel), and a plain TUI leaves no process behind.
+  - **Residual, stated:** a `codex` the user TYPES by hand in a nodeterm plain terminal carries that
+    node's `NODETERM_NODE_ID` and, on 0.157+, can still start the account's daemon with it — until
+    that daemon restarts, managed threads' tool shells then keep the leaked id (the prelude skips a
+    set one). Changing the prelude to prefer the thread record over a set id was rejected: a
+    bind-refused fallback pane legitimately runs a thread another node's record names.
+  - **Device checklist:** (a) macOS desktop, npm codex ≥ 0.157: two Codex nodes, each RUNNING badge
+    and `nodeterm list` line on its own node; (b) standalone codex with shared identity: a node
+    whose launcher fell back still reports as itself; (c) SSH project on a host with codex ≥ 0.157:
+    the second remote Codex node's badge is its own after the probe landed (and flagless before);
+    (d) Windows native codex: whether the daemon exists there at all is unmeasured — the flag rides
+    only if its `--help` lists it.
 - **A shared Codex daemon restart is NOT a terminal-session restart.** tmux survives, and the Codex
   rollout/thread survives, but every `codex --remote unix://` TUI attached to that account's one
   app-server socket exits together. `buildCodexLauncherScript` therefore stays in the pane as a

@@ -672,6 +672,16 @@ loop an unrelated client error, and never replay the original prompt after recon
 responsive daemon before invoking lifecycle repair; stale PID bookkeeping is not permission to kill
 working sessions. See `docs/shared-codex-node-identity.md`.
 
+**A plain Codex TUI must not join Codex's own auto-started daemon.** From codex-cli 0.157.0 a
+plain `codex` starts (or joins) ONE background app-server per `CODEX_HOME` that keeps the
+environment of the pane that STARTED it, so every later node's hooks and tool shells run with the
+first node's `NODETERM_NODE_ID` (measured on 0.159.2). Every nodeterm codex line therefore ends in
+`--no-daemon` when the CLI that will run it advertised the flag — added in the two assemblers
+(`shared/agents/launch.ts` via `withCodexNoDaemon`), fed by `ApprovalCaps.codexNoDaemon`. A new
+codex launch site goes through those assemblers and threads the caps; never type a bare `codex` line
+yourself. The flag must never meet `--remote` (codex refuses the pair), which is why the managed
+launcher strips it. See CLAUDE.md "Codex's auto-started shared daemon".
+
 **Credentials never ride argv — local or SSH.** Not a tmux `-e` pair, not `curl -H`, not a remote
 command string. `/proc/<pid>/cmdline` is mode 444 on a stock Linux, and a remote command line is argv
 on the host too: we shipped the hook bearer that way and any other account on the machine could read

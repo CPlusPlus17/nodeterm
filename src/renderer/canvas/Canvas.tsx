@@ -16163,6 +16163,8 @@ export function Canvas() {
       // The remote claude probe runs AFTER connect (its login shell is slow) and pushes its answer
       // on a later `connected` event — record it so this project's next Claude launch can use
       // `--permission-mode auto`. Absent = nothing new to record (keep omitting the flag).
+      // The host's `codex --help` answer: may a remote Codex TUI carry `--no-daemon`?
+      if (e.remoteCodexNoDaemon) useSshConn.getState().setRemoteCodexNoDaemon(e.remoteCodexNoDaemon)
       if (e.claudeAutoPermissionMode !== undefined) {
         useSshConn
           .getState()

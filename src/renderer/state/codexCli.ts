@@ -17,6 +17,8 @@ import {
   type CodexCliCaps
 } from '@shared/types'
 import type { ApprovalCaps } from '@shared/agents/approval-mode'
+import { sshHostKey } from '@shared/ssh'
+import { useSshConn } from './sshConn'
 
 const CAPS_WAIT_MS = 3000
 
@@ -58,7 +60,23 @@ export function codexCliCapsNow(): CodexCliCaps {
  * to the baseline and the mode degrades honestly instead of guessing across machines.
  */
 export function codexApprovalCaps(remote?: unknown): ApprovalCaps {
-  return { codexApprovalValues: remote ? null : caps.approvalValues }
+  return remote
+    ? { codexApprovalValues: null, codexNoDaemon: remoteCodexNoDaemon(remote) }
+    : { codexApprovalValues: caps.approvalValues, codexNoDaemon: caps.noDaemon ?? null }
+}
+
+/**
+ * `--no-daemon` for a REMOTE session is the one codex fact we DO ask the host for: the SSH connect
+ * probes the host's own `codex --help` (core/remote-ssh/codex-no-daemon-probe.ts) and publishes the
+ * answer per `user@host`. `remote` is whatever the caller holds — an `SshConnection` (`data.ssh`) or
+ * a project's `{ server, remoteCwd }`; a bare `true` (or no probe yet) cannot name a host and
+ * answers unknown, i.e. no flag, i.e. the line this has always sent.
+ */
+function remoteCodexNoDaemon(remote: unknown): boolean | null {
+  const r = remote as { host?: unknown; user?: unknown; server?: { host?: unknown; user?: unknown } }
+  const conn = typeof r?.host === 'string' ? r : r?.server
+  if (!conn || typeof conn.host !== 'string' || typeof conn.user !== 'string') return null
+  return useSshConn.getState().remoteCodexNoDaemon(sshHostKey({ host: conn.host, user: conn.user })) || null
 }
 
 /** Test seam: drop the memo (and optionally preload a known answer). */
