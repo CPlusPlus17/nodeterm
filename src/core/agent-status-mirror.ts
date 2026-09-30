@@ -231,6 +231,15 @@ export interface MirrorSettings {
    */
   codexApprovalValues?: string[]
   /**
+   * THIS host's `codex` accepts `--no-daemon` — present only as `true`, when its own `--help` said
+   * so. A reader launching a plain Codex TUI must then add the flag: from codex-cli 0.157.0 the TUI
+   * otherwise starts or joins ONE shared app-server per CODEX_HOME that keeps the environment of the
+   * pane that started it, so the new session's hooks and tool shells run as another node (measured on
+   * 0.159.2; see shared/agents/codex-daemon.ts). Never together with `--remote` (codex refuses).
+   * Absent = unknown = emit nothing: clap exits on an unknown option.
+   */
+  codexNoDaemon?: true
+  /**
    * The user's custom agents (Settings → Agents), reduced to what a phone needs to chat with one:
    * which builtin harness it inherits (the chat capability follows `baseAgent`) and which binary
    * names its pane runs as (the pane-owner check before a send). Built ONLY by

@@ -222,6 +222,8 @@ import { mdViewHint } from '../lib/mdViewHint'
 import { Tooltip } from '../components/Tooltip'
 import { useTerminalSearch } from '../terminal/useTerminalSearch'
 import { useCopyFeedback } from '../terminal/useCopyFeedback'
+import { pasteWithImageReceipt } from '../terminal/image-paste-confirm'
+import { usePasteReceipt } from '../terminal/usePasteReceipt'
 import { ContextMeter } from '../components/ContextMeter'
 import { isZoomModifierHeld } from '../lib/zoomModifier'
 import { isHidden } from '../lib/ui-visibility'
@@ -232,7 +234,7 @@ import { liveProjectJumpTarget } from '../lib/projectJump'
 import { pushSessionRename } from '../lib/sessionRename'
 import { useSettings } from '../state/settings'
 import { useCodexIdentity, codexSharedIdentity, codexFallbackText } from '../state/codexIdentity'
-import { codexApprovalCaps } from '../state/codexCli'
+import { ensureCodexLaunchCaps } from '../state/codexCli'
 import { useAgentStatus, agentStatusForApi, inferInterruptAfterSettle } from '../state/agentStatus'
 import { useLaunchDelivery } from '../state/launchDelivery'
 import { erroredDeps, handedOverDeps, holdReason, interruptedDeps, launchTooltip } from '../lib/pendingLaunch'
@@ -1495,6 +1497,7 @@ export function TerminalNode({
   // Overlay while dropped files upload to an SSH host (scp is seconds-long with zero feedback);
   // doubles as a brief "Upload failed" flash when nothing made it.
   const [uploadNote, setUploadNote] = useState<{ text: string; failed?: boolean } | null>(null)
+  const pasteReceipt = usePasteReceipt()
   const uploadNoteTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => () => {
     if (uploadNoteTimer.current) clearTimeout(uploadNoteTimer.current)
@@ -4094,7 +4097,10 @@ export function TerminalNode({
               // Which `--ask-for-approval` values the codex that will run this node actually has.
               // Same remoteness question `shared` just answered: an SSH node runs the HOST's codex,
               // which this machine's probe never saw.
-              approvalCaps: codexApprovalCaps(data.ssh || data.sshRemoteTmux),
+              approvalCaps: await ensureCodexLaunchCaps(
+                capabilityAgentId(agentId),
+                data.ssh || data.sshRemoteTmux || session.source === 'relay'
+              ),
               // The launch-command override rides the relaunch too, so a wrapper user's node comes
               // back through its wrapper after a reboot — the moment env/account setup matters.
               // Scoped to the OWNING project (`warmOwningProjectId`) so a project-level wrapper does
@@ -4159,7 +4165,10 @@ export function TerminalNode({
                     permissionMode: mode,
                     model: data.agentModel,
                     sharedIdentity: shared,
-                    approvalCaps: codexApprovalCaps(data.ssh || data.sshRemoteTmux),
+                    approvalCaps: await ensureCodexLaunchCaps(
+                capabilityAgentId(agentId),
+                data.ssh || data.sshRemoteTmux || session.source === 'relay'
+              ),
                     launchCmdOverride: agentLaunchOverride(agentId, ownerProjectId)
                   },
                   agentEnvSnapshot()
@@ -4411,7 +4420,10 @@ export function TerminalNode({
             customAgent: customTarget,
             sessionId: agentSessionId,
             permissionMode: await ensureActivePermissionMode(target),
-            approvalCaps: codexApprovalCaps(data.ssh || data.sshRemoteTmux),
+            approvalCaps: await ensureCodexLaunchCaps(
+                capabilityAgentId(target),
+                data.ssh || data.sshRemoteTmux || session.source === 'relay'
+              ),
             model: selectedModel ?? undefined,
             // The launch-command override rides the restart too (the global layer is undefined for
             // a custom target, which already owns its launchCmd) — it is a property of how the
@@ -4563,7 +4575,10 @@ export function TerminalNode({
             customAgent,
             sessionId: agentSessionId,
             permissionMode: await ensureActivePermissionMode(agentId),
-            approvalCaps: codexApprovalCaps(data.ssh || data.sshRemoteTmux),
+            approvalCaps: await ensureCodexLaunchCaps(
+                capabilityAgentId(agentId),
+                data.ssh || data.sshRemoteTmux || session.source === 'relay'
+              ),
             sharedIdentity: false,
             // The launch-command override lives on the user's own PATH (or is an absolute path),
             // not in a generated launcher dir, so it rides the wake too — project layer included.
@@ -5567,7 +5582,17 @@ export function TerminalNode({
     if (opts.raiseWindow) window.nodeTerminal.focusWindow()
     term.focus()
     useTerminalFocus.getState().remember(id)
-    term.paste(paths.join(' ') + ' ')
+    // A pasted image is only reported as attached once the agent's own pane shows it (claude's
+    // `[Image #N]`); otherwise the receipt says the path went in, unconfirmed.
+    const st = agentStatusStore.getState().byId[id]
+    const paneAgent = agentId ?? st?.agentId
+    pasteWithImageReceipt(
+      term,
+      paths.join(' ') + ' ',
+      paths,
+      agentProcessInPane(paneAgent, st) ? paneAgent : undefined,
+      pasteReceipt.report
+    )
     useAgentStatus.getState().setActive(id, true)
     presence.reportFocus(id)
   }
@@ -6366,6 +6391,11 @@ export function TerminalNode({
         {copy.feedback && (
           <div className={`term-copy-pill term-copy-pill--${copy.feedback.kind}`}>
             {copy.feedback.label}
+          </div>
+        )}
+        {pasteReceipt.receipt && (
+          <div className={`term-paste-pill${pasteReceipt.receipt.ok ? '' : ' term-paste-pill--warn'}`}>
+            {pasteReceipt.receipt.text}
           </div>
         )}
         {/* Downloads started from a link's right-click menu, reported on the terminal they were

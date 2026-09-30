@@ -765,6 +765,93 @@ Lifecycle, by intent:
   The refusal is **only** in `spawnNew` — a co-attach JOIN to a live session for that node id is
   still correct. An offline node reports itself to `SshReconnector`, so the canvas heals itself;
   `retryNow` (banner Reconnect / node Reconnect) skips the backoff and clears the refuse window.
+- **Codex's auto-started shared daemon: every nodeterm Codex TUI runs `--no-daemon`** (2026-09-30).
+  From codex-cli **0.157.0** the `daemon_auto_start` feature is `stable, true` (0.156.1:
+  `experimental, false`; 0.148.0: no such feature): a plain `codex` TUI no longer runs in-process
+  but starts, or JOINS, ONE background `app-server` per `CODEX_HOME`, and that daemon keeps the
+  environment of the pane that STARTED it and outlives it. The daemon is what spawns tool shells and
+  hook processes, and nodeterm tells a node apart by environment (`buildPtyEnv`). MEASURED on
+  0.159.2 (private `CODEX_HOME`, private tmux socket, `env -i`): pane A (`NODETERM_NODE_ID=node-A`)
+  started the daemon; in pane B (`node-B`) the tool shell printed `node-A` and every hook process
+  logged `node-A` — pane B's status, canvas-control verbs and context-link reads were pane A's.
+  `--no-daemon` put pane C back on `node-C` in both; `-c features.daemon_auto_start=false` did NOT
+  (it still joins a RUNNING daemon); there is no environment switch. Transcript and the three help
+  pages: `src/core/__fixtures__/codex-daemon/`. Rules a refactor must not undo:
+  - **Feature-detected, fail open.** `core/codex-cli.ts` `codexNoDaemonFrom` reads the flag off the
+    option-header lines of the same memoized `codex --help` the approval vocabulary uses;
+    `CodexCliCaps.noDaemon` rides the existing `ApprovalCaps` bag (`codexNoDaemon`) that every launch
+    site already threads, and `withCodexNoDaemon` (`shared/agents/codex-daemon.ts`) appends it in
+    BOTH assemblers — fresh launch and resume (cold restore, restart, restart-with-model, account
+    switch, transfer, headless Server opens, custom agents whose `baseAgent` is codex, a launch-
+    command override). Only a literal `true` emits it: clap exits on an unknown option, so an
+    unprobed, remote-unknown or older CLI gets the line it always got.
+  - **Await the answer before building a line — the race is the bug.** After a reboot every Codex
+    node cold-restores in the same tick; a node that builds its line before the probe lands launches
+    flagless, starts the shared daemon with ITS env, and every other node joins it. On a
+    shared-identity machine `codex app-server daemon version` reports such a daemon `running`
+    (verified in review), so the managed launcher adopts it too. So TerminalNode's four codex sites
+    (cold restore, its fresh fallback, restart, wake) `await ensureCodexLaunchCaps(...)`
+    (`renderer/state/codexCli.ts`, 3 s bound, fail open to the old line): local waits for the local
+    probe, SSH waits for that host's answer to arrive in `useSshConn`, non-codex agents and relay
+    tabs never wait. Pinned at source level by `nodes/codex-launch-caps-wiring.test.ts`.
+    `createAgentNode` (a NEW node) is synchronous and still reads the landed answer — a node created
+    inside the first ~second after boot can miss it; stated, not fixed.
+  - **A relay tab never gets this machine's answer.** Its pane runs the HOST's codex; the guest's
+    `true` typed into a host older than 0.156 dies on the unknown option. `codexApprovalCaps(remote,
+    projectId)` treats a relay-bound project (checked through `registerCodexRelayProjectCheck`,
+    registered by the projects store to avoid an import cycle) or a node's
+    `session.source === 'relay'` as remote-with-no-probe: no flag, baseline vocabulary.
+  - **One detection rule, two spellings.** `CODEX_NO_DAEMON_HELP_RE` / `_ERE`
+    (`shared/agents/codex-daemon.ts`): an option header at indent <= 6 followed by whitespace or end
+    of line, so a future `--no-daemon-x` is not this flag. TS reader, launcher and remote probe all
+    use it; a test runs the ERE through real `grep -E` beside the regex.
+  - **Never beside `--remote`** — measured: `ERROR: --no-daemon cannot be used with --remote.` The
+    managed launcher (`buildCodexLauncherScript`) therefore STRIPS it before its own
+    `codex --remote unix:// resume` and routes every plain-codex fallback through `nt_exec_plain`,
+    which keeps it, or ADDS it when the codex about to run advertises it (the SSH launcher's host was
+    never probed from here). This matters beyond the fallback node itself: a daemon started by a
+    plain pane carries that pane's `NODETERM_NODE_ID`, and the thread-identity prelude only resolves
+    a tool shell whose `NODETERM_NODE_ID` is EMPTY — so one plain launch used to poison every managed
+    thread of that account too. Our own start stays the scrubbed `nt_start_app_server` (#350).
+  - **SSH: the HOST's binary is asked.** `core/remote-ssh/codex-no-daemon-probe.ts` runs one
+    marker-delimited `codex --help` through the login shell after connect (off the connect path, like
+    the claude probe) and publishes `{hostKey, supported}` on a `connected` event and on a reused
+    connect's result; the renderer keeps it per host (`useSshConn.codexNoDaemonByHost`). **The key
+    is `user@host:port`** (`codexProbeHostKey`), NOT `sshHostKey`: two containers behind one machine
+    (`root@localhost:2222` on 0.159, `:2223` on 0.148) are two binaries, and a portless key let the
+    last probe answer for both. The SSH mirror slice carries the host's `true` to the phone.
+  - `codex exec` (commit messages), `login`, `mcp` and `app-server` take no such flag and are not
+    TUI clients of the daemon. The phone gets `MirrorSettings.codexNoDaemon`, local and per SSH slice (iOS
+    reader: follow-up, @eneskirca). opencode was checked the same way: no published release has `serve --service`
+    (latest 1.18.33 and the `dev` channel), and a plain TUI leaves no process behind.
+  - **Residuals, stated:** (1) a `codex` TYPED into a pane rather than launched by us — by hand in a
+    plain terminal, or by an agent through `open-terminal --cmd codex` / `write` — carries that
+    node's `NODETERM_NODE_ID` and, on 0.157+, can still start the account's daemon with it; managed
+    threads' tool shells then keep the leaked id (the prelude skips a set one). Changing the prelude
+    to prefer the thread record over a set id was rejected: a bind-refused fallback pane legitimately
+    runs a thread another node's record names. (2) A launch-command override or custom `launchCmd`
+    that runs a DIFFERENT codex than PATH's (`npx @openai/codex@0.148.0`) is given the flag from
+    PATH's probe and dies on it; the fix there is the user's (drop the pin or add the flag to their
+    own command) — we cannot probe an arbitrary command line. (3) The Windows argv planner
+    (`core/agent-launch.ts`) carries the flag but has no production caller today; Windows native
+    Codex is unmeasured.
+  - **Machines that ran a pre-fix build keep the mis-attribution until they recycle.** Panes already
+    joined to the daemon stay joined across a warm reattach (the TUI process is still the old one); a
+    daemon started before the fix keeps its first pane's env, and so does its `pid-update-loop`
+    process (verified in review), so managed threads keep using it. We deliberately do NOT kill it:
+    every unsupervised plain client attached to it would die with it. Recovery, in order: restart
+    each Codex node (node menu → Restart, or close and reopen), then from a shell WITHOUT any
+    `NODETERM_*` variables run `codex app-server daemon restart` (one per account: set that
+    account's `CODEX_HOME`).
+  - **Device checklist:** (a) macOS desktop, npm codex ≥ 0.157: two Codex nodes, each RUNNING badge
+    and `nodeterm list` line on its own node; (b) standalone codex with shared identity: a node
+    whose launcher fell back still reports as itself; (c) SSH project on a host with codex ≥ 0.157:
+    the second remote Codex node's badge is its own after the probe landed (and flagless before);
+    (d) Windows native codex: whether the daemon exists there at all is unmeasured — the flag rides
+    only if its `--help` lists it; (e) reboot a Mac with 5+ Codex nodes: after cold restore each
+    badge is its own (the bounded wait); (f) an upgraded machine: after the recovery steps above,
+    `ps eww` on the daemon shows no `NODETERM_NODE_ID`; (g) two SSH projects on one host at
+    different ports with different codex versions: only the newer one's lines carry the flag.
 - **A shared Codex daemon restart is NOT a terminal-session restart.** tmux survives, and the Codex
   rollout/thread survives, but every `codex --remote unix://` TUI attached to that account's one
   app-server socket exits together. `buildCodexLauncherScript` therefore stays in the pane as a
@@ -1361,6 +1448,19 @@ session.
   PTY write has no image receipt. Never synthesize that key or fall back between routes.
   The macOS shortcuts reference explains both keys; its Server Edition copy explicitly
   says Ctrl+V cannot transfer the viewer's clipboard to the host. SSH keeps remote uploads.
+  **The path paste has a receipt for claude, and only for claude** (`terminal/image-paste-confirm.ts`,
+  both surfaces through `pasteWithImageReceipt`). MEASURED on Claude Code 2.1.285 (bracketed paste,
+  captures in `terminal/__fixtures__/claude-image-paste.json`): a path to an existing
+  png/jpg/jpeg/gif/webp (any case) becomes `[Image #N]` in the composer within ~60 ms; bmp, svg,
+  heic, tiff and a missing file stay text; `N` keeps counting for the session and does NOT reset
+  when the composer is cleared. So the receipt reads OUR xterm buffer (the emulator, not tmux) for
+  placeholder numbers ABOVE the highest one on screen before the paste (the counter only rises,
+  so an older placeholder scrolling into view cannot confirm it; with none on screen, two pastes
+  inside ~60 ms can still confirm each other), up to 3 s: "Image attached", else
+  "Pasted the path — not confirmed as an image" (`.term-paste-pill`, top-right so it never covers
+  the copy pill or the agent's bottom-left input line). Only when a claude CLI is in the pane
+  (`agentProcessInPane`); every other agent was not measured and gets the paste with no receipt
+  either way — nothing is claimed on its behalf. A terminal disposed mid-wait reports nothing.
   **Copying now says so**: the OSC 52 handler floats a transient `Copied N lines` pill over the
   terminal's BOTTOM-RIGHT corner (`.term-copy-pill`, the same class on the canvas node and the
   kanban card modal — one session seen twice must not speak in two voices; bottom-right because
@@ -1940,6 +2040,40 @@ else, and its context links must keep classifying across restarts).
   harmful. The `auto` permission-mode **version gate is claude's alone** (it is fed by a `claude
   --version` probe), and grok's mode flag must go **BEFORE** its `--` separator, which is
   end-of-options. Full picture, dialect traps and the device checklist: **`docs/grok-agent.md`**.
+- **Grok NEEDS YOU is confirmed against grok's own event log** (`core/agents/grok-permission-gate.ts`,
+  inside the hook server, so both shells get it from one place). MEASURED on grok 1.0.13
+  (2026-09-30, interactive TUI against a local fake chat_completions model, fixture
+  `shared/agents/__fixtures__/grok/permission-events.json`): the `permission_prompt` notification is
+  genuine (fired 1–20 ms after grok writes `permission_requested` to `<session dir>/events.jsonl`),
+  but grok is silent about the ANSWER — approve fires no hook until the approved tool FINISHES (the
+  capture's 10 s command read NEEDS YOU for 10 s), a dismissed dialog (Ctrl+C) fires none at all
+  (the only later hook is `idle_prompt` 60 s on, which the mirror deliberately never lets clear a
+  `blocked` node — a stuck badge until the next prompt), and a rejection fires `permission_denied`
+  then cancels the turn with no Stop (RUNNING for 60 s). `events.jsonl` records all three:
+  `permission_resolved {decision: allow|deny|cancelled}` and `turn_ended {outcome: cancelled}`. The
+  gate ties each notification to ONE `permission_requested` written within 5 s before it and
+  publishes what the file says: still pending ⇒ `blocked` + a bounded 1 s watch (a `stat` per tick
+  while nothing changes); answered ⇒ `working` (unverified — a file read is not a hook POST — including when the
+  answer is already on disk as the hook is read); a
+  cancelled turn ⇒ `done` + `interrupted`. **The trap it is shaped around**: a SUBAGENT's prompt
+  fires with the PARENT's `sessionId` while its request is in the CHILD's `events.jsonl` — reading
+  the parent's file alone would find the parent's older, already-approved request and publish
+  "answered" over an open child dialog. Candidates are the sessions this node's hooks named
+  (children post their own ids), zero or several matches publish the hook unchanged, and every new
+  prompt ends the previous watch (the replay found that exact race: the parent's spawn approval
+  landed 90 ms before the child's prompt). The candidate set CAN miss the real request — a child's
+  prompt may reach us before any of the child's own hooks, or a second request's line may not be
+  on disk yet — and the older request found instead is then already answered. **The load-bearing
+  rule is therefore: a request answered BEFORE the notification fired is never taken as its
+  answer** (`resolvedTs < notifiedAt` ⇒ the hook is published unchanged, nothing watched): a
+  notification cannot be about a dialog that closed before it. Every capture resolves after its
+  notification (fastest 216 ms). Review of #1065 found that hole; tests A/B pin it. Closed sets throughout; an unknown decision, unreadable
+  file or unparsable timestamp is today's behaviour, never a guess. Per-node ordering is kept (a
+  confirm read holds that node's later hooks, ≤ 500 ms; polls run off that chain and discard a read
+  that straddled a newer hook). A listener that throws costs that ONE event (as it did inside the
+  hook server's try/catch before), never the node's delivery chain. A remote (SSH) grok node's file is on its host, so it reads "cannot
+  tell" and behaves exactly as before — a remote leg is a follow-up. Unmeasured: `events.jsonl`'s
+  shape on other grok versions (a changed shape degrades to today's behaviour).
 - **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads
   `chat_history.jsonl` into claude's `ChatMessage`/`ChatPart` shapes (no new wire field): typed
   prompts, assistant text, tool calls (`arg` = the salient argument — `command`, `target_file`, …, in
