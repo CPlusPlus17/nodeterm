@@ -5,7 +5,7 @@ import net, { type AddressInfo } from 'net'
 import path from 'path'
 import { Server, utils, type Connection } from 'ssh2'
 import { NativeMux } from './native-mux'
-import { runSshArgv, startNativeMaster, useNativeSsh } from './native-invoke'
+import { runSshArgv, spawnSshArgvStream, startNativeMaster, useNativeSsh } from './native-invoke'
 import {
   checkMasterArgs,
   childArgs,
@@ -103,7 +103,7 @@ describe('native-invoke', () => {
     const m = mux()
     expect((await runSshArgv(m, checkMasterArgs(conn(), CP()))).code).toBe(255)
     const master = startNativeMaster(m, masterArgs(conn(), CP()))
-    const exitCode = new Promise<number | null>((r) => master.on('exit', r))
+    const exitCode = new Promise<number | null>((r) => master.on('exit', (c) => r(c as number | null)))
     for (let i = 0; i < 100 && (await runSshArgv(m, checkMasterArgs(conn(), CP()))).code !== 0; i++) {
       await new Promise((r) => setTimeout(r, 20))
     }
@@ -150,6 +150,47 @@ describe('native-invoke', () => {
       expect(streamForwards.has(remoteSock)).toBe(false)
     } finally {
       local.close()
+    }
+  })
+
+  it('a streaming child (the setup runner): output as it arrives, then close with the status', async () => {
+    const child = spawnSshArgvStream(mux(), childArgs(conn(), CP(), 'setup.sh'))
+    let out = ''
+    let err = ''
+    child.stdout.on('data', (d: Buffer) => (out += d.toString()))
+    child.stderr.on('data', (d: Buffer) => (err += d.toString()))
+    const code = await new Promise<number>((r) => child.on('close', r))
+    expect(err).toBe('')
+    expect(code).toBe(0)
+    expect(out).toBe('ran: setup.sh\n')
+  })
+
+  it('a streaming child killed before it opens closes with 255 and runs nothing', async () => {
+    const child = spawnSshArgvStream(mux(), childArgs(conn(), CP(), 'setup.sh'))
+    child.kill('SIGKILL')
+    const code = await new Promise<number>((r) => child.on('close', r))
+    expect(code).toBe(255)
+  })
+
+  it('a streaming child killed before its open FAILS never writes to its ended pipes', async () => {
+    // CI caught this as an uncaught ERR_STREAM_WRITE_AFTER_END: kill() closed the child, then the
+    // connection failed and the error path wrote to the ended stderr.
+    const failing = new NativeMux({
+      defaultAgent: () => undefined,
+      resolveHost: () => new Promise((_r, reject) => setTimeout(() => reject(new Error('late failure')), 30))
+    })
+    muxes.push(failing)
+    const uncaught: unknown[] = []
+    const onErr = (e: unknown): void => void uncaught.push(e)
+    process.on('uncaughtException', onErr)
+    try {
+      const child = spawnSshArgvStream(failing, childArgs(conn(), path.join(dir, 'late.sock'), 'x'))
+      child.kill('SIGKILL')
+      expect(await new Promise<number>((r) => child.on('close', r))).toBe(255)
+      await new Promise((r) => setTimeout(r, 80)) // past the late failure
+      expect(uncaught).toEqual([])
+    } finally {
+      process.off('uncaughtException', onErr)
     }
   })
 

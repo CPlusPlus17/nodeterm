@@ -1,3 +1,5 @@
+import { nativeMux, setNativePassphrasePrompt, useNativeSsh } from '../../core/remote-ssh/native/native-runtime'
+import { runScpArgv, runSshArgv, startNativeMaster } from '../../core/remote-ssh/native/native-invoke'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { createHash, randomUUID } from 'crypto'
@@ -2795,9 +2797,19 @@ export function initSshProject(
   ipcMain.handle(IPC.sshPassphraseSubmit, (_e, requestId: string, value: string | null) =>
     resolvePassphrasePrompt(requestId, value)
   )
+  // WINDOWS (and NODETERM_NATIVE_SSH=1): OpenSSH cannot multiplex there, so every runner below is
+  // served by the in-process transport instead (core/remote-ssh/native/). The manager does not
+  // know: it still builds OpenSSH argv and reads OpenSSH-shaped answers. Decided ONCE here, at
+  // boot, so a single app run never mixes the two transports for one ControlPath.
+  const native = useNativeSsh()
+  if (native) {
+    setNativePassphrasePrompt(async (identityFile, req) =>
+      (await promptForPassphrase({ identityFile, retry: req.retry, target: req.target })) ?? null
+    )
+  }
   const mgr = new SshProjectManager({
     userDataDir: app.getPath('userData'),
-    spawnMaster: (args, env) => {
+    spawnMaster: native ? (args) => startNativeMaster(nativeMux(), args) : (args, env) => {
       // Capture the master's stderr (stdin/stdout stay ignored) so a failed connect can report the
       // real ssh error instead of a generic timeout. Buffer is capped so a chatty host can't grow it
       // unbounded; the master is long-lived and mostly silent, so this holds only the connect-time
@@ -2835,7 +2847,9 @@ export function initSshProject(
       ...(askpassScriptPath ? askpassServer.envFor(identityFile, askpassScriptPath) : {}),
       ...appSshAgent.env()
     }),
-    ensureAgent: () => appSshAgent.start(),
+    // No app-private ssh-agent on the native transport: Windows' ssh-agent is a service and has no
+    // `-a <socket>`, and the native transport authenticates in-process (agent pipe, then key files).
+    ensureAgent: native ? async () => {} : () => appSshAgent.start(),
     // The `ssh -G` probe that honors a config-level `IdentityAgent SSH_AUTH_SOCK` (issue #427):
     // shared with the pty spawn path in core, so the master and the fallback children can never
     // disagree about which agent a host is routed at.
@@ -2845,10 +2859,13 @@ export function initSshProject(
     // real project connects).
     onIdle: () => appSshAgent.scheduleStop(),
     onTunnelVerified,
-    askpassWasCancelled: (masterPid) => askpassServer.wasCancelledBy(masterPid),
-    askpassIsPrompting: () => askpassServer.isPromptingAny(),
-    askpassAsked: (masterPid) => askpassServer.askedBy(masterPid),
-    runSync: (args) => {
+    // Native: a declined passphrase is reported in the master's own error text (native-mux.ts), and
+    // the "key held only in your system agent" hint is about the app-private agent, which the
+    // native transport does not use — so answer "asked" to keep that hint off.
+    askpassWasCancelled: native ? () => false : (masterPid) => askpassServer.wasCancelledBy(masterPid),
+    askpassIsPrompting: native ? () => false : () => askpassServer.isPromptingAny(),
+    askpassAsked: native ? () => true : (masterPid) => askpassServer.askedBy(masterPid),
+    runSync: native ? (args) => void runSshArgv(nativeMux(), args) : (args) => {
       // Quit path only (disconnectAll). Bounded hard: `before-quit` is blocked while this runs, and
       // an unreachable host must not add seconds to every quit.
       try {
@@ -2864,7 +2881,14 @@ export function initSshProject(
     // Mux control commands and the terminals themselves are never queued (see ssh-child-gate.ts).
     run: (args, stdin) =>
       sshChildGate.run(args, () =>
-        new Promise<{ code: number; stdout: string }>((resolve) => {
+        native
+          ? // Still gated: sshd's MaxSessions bounds channels on ONE connection just as it bounds
+            // mux clients on a ControlMaster.
+            runSshArgv(nativeMux(), args, { stdin, timeoutMs: 15000 }).then((r) => ({
+              code: r.timedOut ? 1 : (r.code ?? 1),
+              stdout: r.stdout.toString('utf-8')
+            }))
+          : new Promise<{ code: number; stdout: string }>((resolve) => {
           // 16 MB ceiling: remote transcript reads pull up to REMOTE_TRANSCRIPT_CAP (5 MB) via
           // RemoteFile; the default 1 MB maxBuffer would kill the child and silently break the
           // remote context meter / subagent transcript / content search for large transcripts.
@@ -2895,7 +2919,9 @@ export function initSshProject(
     // Deliberately NOT through `sshChildGate`: after a sleep the gate is typically full of children
     // hung on the very master this probes, and queueing behind them would time the queue.
     probe: (args, timeoutMs) =>
-      new Promise((resolve) => {
+      native
+        ? runSshArgv(nativeMux(), args, { timeoutMs }).then((r) => (r.timedOut ? 'timeout' : 'answered'))
+        : new Promise((resolve) => {
         execFile(
           ssh,
           args,
@@ -2904,7 +2930,9 @@ export function initSshProject(
         )
       }),
     runScp: (args) =>
-      new Promise((resolve) => {
+      native
+        ? runScpArgv(nativeMux(), args).then((r) => ({ code: r.code }))
+        : new Promise((resolve) => {
         // Same reason as `run`: scp re-authenticates when the master socket is gone.
         execFile(scp, args, { maxBuffer: 1024 * 1024, env: { ...process.env, ...appSshAgent.env() } }, (err) =>
           resolve({ code: err ? 1 : 0 })

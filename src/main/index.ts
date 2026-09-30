@@ -19,6 +19,7 @@ import { IPC } from '../shared/ipc'
 // in-memory and redacted at its push boundary; the panel/IPC side is gated on the setting.
 const logBuffer = new LogBuffer()
 installLogSink(logBuffer)
+import { nativeMux, useNativeSsh } from '../core/remote-ssh/native/native-runtime'
 import { writeFilesToClipboard } from './clipboard-files'
 import { pickProjectIcon } from './project-icon-upload'
 import { allowGuestNavigation } from './webview-nav'
@@ -4832,7 +4833,10 @@ app.whenReady().then(async () => {
         hasLiveRef: (projectId) => !!mgr.refForProject(projectId),
         busy: (projectId) => inFlight.has(projectId),
         // Reuse-only gate: no socket file ⇒ no master to adopt ⇒ this project is left alone.
-        hasControlSocket: (projectId) => existsSync(controlPathFor(projectId))
+        // Native transport (Windows): there is no socket FILE, and a connection never outlives the
+        // app run — ask the transport whether it holds one for this path.
+        hasControlSocket: (projectId) =>
+          useNativeSsh() ? nativeMux().check(controlPathFor(projectId)) : existsSync(controlPathFor(projectId))
       })
       for (const projectId of plan.poll) {
         inFlight.add(projectId)
