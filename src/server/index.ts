@@ -20,6 +20,7 @@ import { registerAgentEnvIpc } from '../core/agent-env-ipc'
 import { PtyManager } from '../core/pty-manager'
 import { registerCoreHandlers } from './handlers'
 import { registerGitHubIntegration } from '../core/github/integration'
+import { registerBoardDispatchReportIpc } from '../core/board-dispatch-report'
 import { runGitHubCliCommand } from '../core/github/credentials'
 import {
   registerServerGitHubControl,
@@ -389,6 +390,8 @@ export async function startServer(
     run: runGitHubCliCommand
   })
   registerServerGitHubControl(platform, github.controller)
+  // A browser tab's board dispatch reports its queue here, for the `issues` control verb (display only).
+  const boardDispatchReports = registerBoardDispatchReportIpc(platform)
 
   // Board-log: same CorePlatform registrar as desktop, but the Server Edition has no SSH projects
   // (terminals are local), so the router only ever resolves a local folder cwd or unsupported —
@@ -747,6 +750,11 @@ export async function startServer(
         // answer the issue lane gets from the GitHub host controller.
         issueRepository: (projectId) =>
           github.controller.status(projectId).then((view) => view.project?.repository ?? null),
+        // `issues` / `prs`: the board's GitHub lane from the service's cache (no GitHub request).
+        githubRead: {
+          snapshot: (projectId) => github.service.controlSnapshot(projectId),
+          dispatch: (projectId) => boardDispatchReports.forProject(projectId)
+        },
         installAgentIntegrations: config.installHooks !== false,
         // The durable orchestration facts follow hook-endpoint ownership, like the request ledger.
         ownsDurableState: hookStartupWarning === null

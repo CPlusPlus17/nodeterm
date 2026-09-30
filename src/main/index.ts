@@ -123,6 +123,12 @@ import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
 import { makeSshSetupRunner } from './remote-ssh/ssh-setup-runner'
 import { registerGitHubIntegration } from '../core/github/integration'
+import {
+  answerGitHubRead,
+  GITHUB_READ_VERBS,
+  resolveGitHubReadProject
+} from '../core/github/control-read'
+import { registerBoardDispatchReportIpc } from '../core/board-dispatch-report'
 import { releaseOnRendererDeparture } from './renderer-client-release'
 import { runGitHubCliCommand } from '../core/github/credentials'
 import {
@@ -141,7 +147,8 @@ import { fetchCheck } from '../core/check'
 import {
   hookServer,
   OPEN_PROJECT_CONTROL_REFUSAL,
-  REPORT_ISSUE_CONTROL_REFUSAL
+  REPORT_ISSUE_CONTROL_REFUSAL,
+  GITHUB_READ_CONTROL_REFUSAL
 } from '../core/agents/hook-server'
 import { reportIssue } from '../core/github/report-issue-service'
 import { ReportLedgerStore } from '../core/github/report-ledger'
@@ -1795,6 +1802,8 @@ app.whenReady().then(async () => {
     run: runGitHubCliCommand
   })
   dropGitHubClient = (id) => github.service.dropClient(id)
+  // What the renderer's board dispatch holds, reported for the `issues` control verb (display only).
+  const boardDispatchReports = registerBoardDispatchReportIpc(corePlatform)
   // Machine-local record of what has already been reported, per project — never git-shared, or a
   // cloned repo could hand this machine a pre-loaded "already reported" ledger.
   const reportLedger = new ReportLedgerStore(app.getPath('userData'))
@@ -4007,6 +4016,27 @@ app.whenReady().then(async () => {
         granted: projectGrantedTo(nodeId, args.project)
       })
       if (gate !== 'allow') return { ok: false, error: gate.refuse, message: gate.refuse }
+    }
+    // `issues` / `prs`: the board's GitHub lane for agents, READ-ONLY and answered in MAIN from the
+    // GitHub service's cache (core/github/control-read.ts) — no GitHub request, no canvas, never
+    // forwarded. After the `--project` gate above, so a targeted read is own-or-granted.
+    if (GITHUB_READ_VERBS.has(verb)) {
+      // A second guard behind the route's `requiresVerified`, like open-project's: the project read
+      // is resolved from the caller's node, so an unverified caller must never reach it.
+      if (!verified) return { ok: false, error: GITHUB_READ_CONTROL_REFUSAL, message: GITHUB_READ_CONTROL_REFUSAL }
+      const resolved = resolveGitHubReadProject({
+        verb,
+        callerProjectId: projectIdOfNode(nodeId),
+        targetProjectId: args.project,
+        grantsOtherProjects: true
+      })
+      if ('refuse' in resolved) return { ok: false, error: resolved.refuse, message: resolved.refuse }
+      return answerGitHubRead(verb, resolved.projectId, args, {
+        snapshot: (id) => github.service.controlSnapshot(id),
+        agentState: (id) => nodeState(id),
+        dispatch: (id) => boardDispatchReports.forProject(id),
+        now: () => Date.now()
+      })
     }
     const target = getMainWindow()
     if (!target) return { ok: false, error: 'window unavailable' }

@@ -680,8 +680,17 @@ export function buildFilesApi(
  * station-notice.ts). Kept OUT of `buildAgentApi` on purpose: that builder is spread into relay
  * tabs too, and a relay tab's stations are the host's to report, never this browser's.
  */
-export function buildStationNoticeApi(client: RpcClient): Pick<NodeTerminalApi, 'stationNotice'> {
+export function buildStationNoticeApi(
+  client: RpcClient
+): Pick<NodeTerminalApi, 'stationNotice' | 'boardDispatch'> {
   return {
+    // Same host-only class as the DROPPED report beside it: this tab's own dispatcher state, read by
+    // the server's `issues` control verb (core/board-dispatch-report.ts). Never spread into a relay tab.
+    boardDispatch: {
+      report: (entries) => {
+        void client.request(IPC.boardDispatchReport, entries).catch(() => undefined)
+      }
+    },
     stationNotice: {
       list: () =>
         (client.request(IPC.stationNoticeList) as Promise<unknown>).then(sanitizeStationNotices, () => []),

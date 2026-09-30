@@ -583,6 +583,9 @@ export function buildStubApi(): Omit<
         result: { kind: 'notPermitted', reason: 'unsupported-edition' }
       })
     },
+    // Board-dispatch report: the Server Edition's `buildStationNoticeApi` carries the real one, and a
+    // relay tab keeps this no-op (its board is the host's).
+    boardDispatch: { report: noop },
     // Inert by default: the Server Edition overrides it with the real bridge
     // (`buildStationNoticeApi`), and a relay tab keeps this — its stations belong to the host's core.
     stationNotice: {

@@ -249,3 +249,45 @@ describe('GitHubIssueService pull status', () => {
     }
   })
 })
+
+describe('GitHubIssueService.controlSnapshot — the read behind the `issues` / `prs` control verbs', () => {
+  function readOnlyHarness() {
+    const client = new PullClient()
+    let contexts = 0
+    const service = new GitHubIssueService({
+      cache: new GitHubIssueCache(userDataDir),
+      coordinator: new GitHubRequestCoordinator({ now: () => 1_000_000 }),
+      // The credential chain: every resolve is counted. The cache read must never take it.
+      contextForProject: async () => { contexts += 1; return context(client) },
+      projectContextForCache: async () => {
+        const { client: _c, credentialGeneration: _g, userId: _u, ...cacheContext } = context(client)
+        return cacheContext
+      },
+      now: () => 1_000_000,
+      setInterval: () => 1,
+      clearInterval: () => undefined
+    })
+    return { client, service, contexts: () => contexts }
+  }
+
+  it('before any fetch: no snapshot, and not one request or credential resolve', async () => {
+    const h = readOnlyHarness()
+    const snapshot = await h.service.controlSnapshot('project-1')
+    expect(snapshot).toMatchObject({ repository: 'o/r', hasSnapshot: false, partial: false, items: [] })
+    await flush()
+    expect([h.client.heartbeats, h.client.statusReads, h.client.checkReads, h.contexts()]).toEqual([0, 0, 0, 0])
+  })
+
+  it('after the board fetched: the cached items and pull status, with no further request', async () => {
+    const h = readOnlyHarness()
+    await h.service.subscribe(7, { projectId: 'project-1' })
+    await vi.waitFor(() => expect(h.client.statusReads).toBe(1))
+    await flush()
+    const before = [h.client.heartbeats, h.client.statusReads, h.client.checkReads, h.contexts()]
+    const snapshot = await h.service.controlSnapshot('project-1')
+    expect(snapshot.hasSnapshot).toBe(true)
+    expect(snapshot.pullBoard.pulls[0]).toMatchObject({ number: 1, ci: 'passed' })
+    await flush()
+    expect([h.client.heartbeats, h.client.statusReads, h.client.checkReads, h.contexts()]).toEqual(before)
+  })
+})

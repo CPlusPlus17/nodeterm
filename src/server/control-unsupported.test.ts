@@ -185,6 +185,7 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     settings: vi.fn(async () => ({ ok: true as const, message: 'settings' })),
     run: vi.fn(async () => ({ ok: true as const })),
     reportOutcome: vi.fn(async () => ({ ok: true as const, message: 'recorded' })),
+    githubRead: vi.fn(async () => ({ ok: true as const, message: 'lane' })),
     deliver: vi.fn(async () => ({ ok: true as const, message: 'queued' }))
   })
 
@@ -203,6 +204,21 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
       handler({ verb: 'report-outcome', nodeId: 'src', args: {}, verified: true })
     ).resolves.toEqual({ ok: false, error: 'report-outcome requires --outcome succeeded|failed' })
     expect(a.reportOutcome).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes issues / prs to the GitHub read action, after the shared parse and the identity gate', async () => {
+    const a = actions()
+    const handler = createServerEditionControlHandler(a)
+    await expect(handler({ verb: 'issues', nodeId: 'src', args: { state: 'all' }, verified: true }))
+      .resolves.toEqual({ ok: true, message: 'lane' })
+    expect(a.githubRead).toHaveBeenCalledWith('issues', 'src', { state: 'all' })
+    await handler({ verb: 'prs', nodeId: 'src', args: {}, verified: true })
+    expect(a.githubRead).toHaveBeenLastCalledWith('prs', 'src', {})
+    await expect(handler({ verb: 'prs', nodeId: 'src', args: { state: 'draft' }, verified: true }))
+      .resolves.toMatchObject({ ok: false, error: expect.stringContaining('--state') })
+    await expect(handler({ verb: 'issues', nodeId: 'src', args: {}, verified: false }))
+      .resolves.toMatchObject({ ok: false, error: expect.stringContaining('identity-refused') })
+    expect(a.githubRead).toHaveBeenCalledTimes(2)
   })
 
   it('refuses the --after <id>:ok form and a malformed --after-success before any action', async () => {
@@ -468,6 +484,7 @@ describe('the enabled Server Edition handler, behind the request ledger', () => 
       settings: vi.fn(),
       run: vi.fn(),
       reportOutcome: vi.fn(),
+      githubRead: vi.fn(),
       deliver: vi.fn()
     })
     hookServer.setControlHandler(handler)

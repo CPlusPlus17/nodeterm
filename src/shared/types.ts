@@ -4240,6 +4240,13 @@ export interface NodeTerminalApi {
      *  browser and relay bridges answer `notPermitted: unsupported-edition`. */
     deliverBoardComment(req: BoardCommentDeliverRequest): Promise<AgentMessageReply>
   }
+  /** Board dispatch (#1051): the renderer REPORTS its in-memory dispatch map to core, replaced
+   *  whole on each change, so the read-only `issues` control verb can show it beside an issue
+   *  (@shared/board-dispatch-report). Display only. Desktop and Server Edition are real; a relay
+   *  tab's board is the host's, so there it is inert. */
+  boardDispatch: {
+    report(entries: import('./board-dispatch-report').BoardDispatchReportEntry[]): void
+  }
   /** Station-failure notices (@shared/station-notice, src/core/agents/station-notice.ts): the
    *  chips on an orchestrator whose stations stopped, and the renderer's DROPPED verdicts, which
    *  are the one trigger fact core cannot measure. Desktop and Server Edition are real; a relay

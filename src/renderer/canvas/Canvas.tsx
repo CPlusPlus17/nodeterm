@@ -318,6 +318,7 @@ import {
 } from '../lib/coldOpen'
 import { stampOpenedBy, withOpenedBy } from '../lib/stationOpener'
 import { installStationNoticeWiring } from '../lib/stationNoticeWiring'
+import { installBoardDispatchReportWiring } from '../lib/boardDispatchReportWiring'
 import { applyStickyWrite, parseStickyArgs, resolveStickyRef } from '@shared/sticky-write'
 import {
   unavailableRecovery,
@@ -10655,6 +10656,8 @@ export function Canvas() {
   // Station task outcomes (`report-outcome`): core's store mirrored for the `--after-success` gate.
   useEffect(() => installStationOutcomeWiring(window.nodeTerminal), [])
   useEffect(() => installStationHandoverWiring(window.nodeTerminal), [])
+  // Board dispatch's in-memory queue, reported to core for the `issues` control verb (display only).
+  useEffect(() => installBoardDispatchReportWiring(window.nodeTerminal), [])
 
   // Session board cards are derived LIVE from the canvas nodes; the board stores only assignments.
   // Only while the board is OPEN: `nodes` gets a fresh identity on every drag frame, so a closed
