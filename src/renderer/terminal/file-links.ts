@@ -23,6 +23,8 @@
 //     genuinely cannot distinguish a repainted wrap from prose that exactly fills the row),
 //     gated tightly and capped at MAX_JOIN_ROWS, and the regex still has to match across the
 //     seam for a link to result.
+// A third kind — an agent TUI wrapping its own prose under a hanging indent — is NOT joined into
+// the paragraph: it is offered as extra readings that existence decides (`hangingReadings`).
 import type { ILink, ILinkHandler, ILinkProvider, Terminal } from '@xterm/xterm'
 import { linkOpenIntent } from './link-hover'
 
@@ -525,6 +527,138 @@ export function paragraphContaining(view: BufferView, row: number): Paragraph | 
   return { text, startRow: start, rows: r - start + 1, cellStart, cellEnd }
 }
 
+// ── Hanging-indent wraps ───────────────────────────────────────────────────────────────────────
+// A third way a token spans rows, and the one agent TUIs use for prose: the CLI wraps its reply
+// itself, at a word boundary or after a `/`, and indents every continuation row under the bullet
+// (Codex: a 2-space hanging indent). Nothing in the buffer marks it — no wrapped flag, the row is
+// not full, the next row starts with spaces — so neither join above fires, and a path wrapped
+// that way linked neither half. Unlike those joins it is NOT one reading of the text: the seam may
+// have eaten a space (`My\n  Docs`) or nothing (`feature-x/\n  docs`), and an indented row after a
+// short one is just as often a new list item. So it never replaces the paragraph; it adds READINGS
+// (`hangingReadings`) whose tokens are offered BEFORE the plain paragraph's, and existence decides
+// — the model the rest of this file already follows for overlapping tokens.
+
+/** Widest hanging indent treated as a continuation (a bullet, a number, a nested bullet). */
+const MAX_HANGING_INDENT = 8
+
+/** Cells a row's content occupies, trailing blanks excluded. */
+function contentCells(cells: BufferCell[], cols: number): number {
+  let n = Math.min(cells.length, cols)
+  while (n > 0 && isBlank(cells[n - 1]) && cells[n - 1].width !== 0) n--
+  return n
+}
+
+/**
+ * Whether `row` ends a paragraph that the TUI wrapped onto an indented `row + 1`: the next row is
+ * indented by 1..MAX_HANGING_INDENT blanks and then has text, `row` has text, and the next row's
+ * first word would NOT have fit after it — the one thing a word-wrapper's break always leaves
+ * behind, and what an ordinary indented list after a short line does not. Returns the indent
+ * (in cells), or 0.
+ */
+function hangingIndentAfter(view: BufferView, row: number): number {
+  if (continuesOnNextRow(view, row)) return 0
+  const cur = rowCells(view, row)
+  const next = rowCells(view, row + 1)
+  if (!cur || !next) return 0
+  const used = contentCells(cur, view.cols)
+  if (used === 0) return 0
+  let indent = 0
+  while (indent < next.length && isBlank(next[indent]) && next[indent].width !== 0) indent++
+  if (indent === 0 || indent > MAX_HANGING_INDENT || indent >= next.length) return 0
+  let word = indent
+  while (word < next.length && !isBlank(next[word])) word++
+  return used + 1 + (word - indent) > view.cols ? indent : 0
+}
+
+/** A paragraph built across hanging seams, and where in its text each seam sits. */
+export interface HangingReading {
+  paragraph: Paragraph
+  /** Text index of each seam: the joining space (`' '` reading), or the first unit after it. */
+  seams: number[]
+}
+
+/**
+ * The hanging-indent readings of the text around `row`: the plain paragraphs chained across every
+ * hanging seam (bounded by MAX_JOIN_ROWS in total), once with each seam read as NOTHING and once
+ * as ONE SPACE. Empty when `row` sits on no hanging seam. A seam's indent cells are not text, and
+ * the `' '` reading's space shares the cell of the unit before it.
+ */
+export function hangingReadings(view: BufferView, row: number): HangingReading[] {
+  const first = paragraphContaining(view, row)
+  if (!first) return []
+  const chain: Array<{ p: Paragraph; indent: number }> = [{ p: first, indent: 0 }]
+  let rows = first.rows
+  // Up: the paragraph ending just above this one's first row, if it hangs into it.
+  for (;;) {
+    const top = chain[0].p
+    if (top.startRow === 0) break
+    const indent = hangingIndentAfter(view, top.startRow - 1)
+    if (!indent) break
+    const prev = paragraphContaining(view, top.startRow - 1)
+    if (!prev || rows + prev.rows > MAX_JOIN_ROWS) break
+    chain[0].indent = indent
+    chain.unshift({ p: prev, indent: 0 })
+    rows += prev.rows
+  }
+  // Down.
+  for (;;) {
+    const bottom = chain[chain.length - 1].p
+    const last = bottom.startRow + bottom.rows - 1
+    const indent = hangingIndentAfter(view, last)
+    if (!indent) break
+    const next = paragraphContaining(view, last + 1)
+    if (!next || next.startRow !== last + 1 || rows + next.rows > MAX_JOIN_ROWS) break
+    chain.push({ p: next, indent })
+    rows += next.rows
+  }
+  if (chain.length < 2) return []
+  const startRow = chain[0].p.startRow
+  return (['', ' '] as const).map((seam) => {
+    let text = ''
+    const cellStart: number[] = []
+    const cellEnd: number[] = []
+    const seams: number[] = []
+    for (const { p, indent } of chain) {
+      const base = (p.startRow - startRow) * view.cols
+      let from = 0
+      if (indent) {
+        // The indent is `indent` blank cells, one text unit each (blanks are never wide).
+        from = indent
+        seams.push(text.length)
+        if (seam) {
+          // The eaten space owns no cell of its own: it sits on the cell of the unit before it,
+          // so the indent is never part of a link (and never claims a click).
+          text += seam
+          cellStart.push(cellEnd[cellEnd.length - 1] ?? base)
+          cellEnd.push(cellEnd[cellEnd.length - 1] ?? base)
+        }
+      }
+      text += p.text.slice(from)
+      for (let i = from; i < p.text.length; i++) {
+        cellStart.push(base + p.cellStart[i])
+        cellEnd.push(base + p.cellEnd[i])
+      }
+    }
+    const rowsSpanned = chain[chain.length - 1].p.startRow + chain[chain.length - 1].p.rows - startRow
+    return { paragraph: { text, startRow, rows: rowsSpanned, cellStart, cellEnd }, seams }
+  })
+}
+
+/** Does the token at `startIndex..+len` run across one of `seams`? Only those tokens are new —
+ *  the rest are already the plain paragraph's. */
+function crossesSeam(seams: number[], startIndex: number, len: number): boolean {
+  return seams.some((s) => startIndex < s && s < startIndex + len)
+}
+
+/** Does the token cover `cell` with one of its own units? Stricter than `tokenCovers`, which
+ *  takes the whole cell span — across a hanging seam that span includes the trailing blanks of
+ *  one row and the indent of the next, and a click there is not a click on the path. */
+function tokenOwnsCell(p: Paragraph, startIndex: number, len: number, cell: number): boolean {
+  for (let i = startIndex; i < startIndex + len; i++)
+    if (cell >= p.cellStart[i] && cell <= p.cellEnd[i]) return true
+  return false
+}
+
 /** ILink range (1-based, inclusive) for a token at `startIndex..+len` of a paragraph. */
 function tokenRange(
   p: Paragraph,
@@ -546,18 +680,38 @@ function tokenCovers(p: Paragraph, startIndex: number, len: number, cell: number
 }
 
 /**
- * Among links resolved from OVERLAPPING candidates (a spaced path and its pieces), keep the first
- * in preference order and drop any later one that overlaps a kept one. Candidates arrive sorted by
- * start, longer first, so a spaced path that exists wins over its fragments.
+ * Among links resolved from OVERLAPPING candidates (a spaced path and its pieces, a hanging-seam
+ * reading and the plain one), keep the first in preference order and drop any later one that
+ * overlaps a kept one. Overlap is in absolute buffer cells (`first..last`), because candidates may
+ * come from different readings of the text. Within a reading candidates arrive sorted by start,
+ * longer first, so a spaced path that exists wins over its fragments; hanging readings come first,
+ * so a path wrapped under a bullet wins over the directory its first row happens to name.
  */
-function dropShadowed<T extends { startIndex: number; len: number }>(found: T[]): T[] {
+function dropShadowed<T extends { first: number; last: number }>(found: T[]): T[] {
   const kept: T[] = []
   for (const f of found) {
-    if (kept.some((k) => f.startIndex < k.startIndex + k.len && k.startIndex < f.startIndex + f.len))
-      continue
+    if (kept.some((k) => f.first <= k.last && k.first <= f.last)) continue
     kept.push(f)
   }
   return kept
+}
+
+/** Every file-token candidate of the text around `row`, in preference order: the tokens of each
+ *  hanging reading that cross a seam (bare filenames excluded — a word split by a wrap is not
+ *  what that join exists for), then the plain paragraph's. */
+function fileCandidates(
+  view: BufferView,
+  row: number,
+  plain: Paragraph,
+  convention: PathConventionOpts
+): Array<{ p: Paragraph; t: FileToken }> {
+  const out: Array<{ p: Paragraph; t: FileToken }> = []
+  for (const { paragraph, seams } of hangingReadings(view, row)) {
+    for (const t of matchFileTokens(paragraph.text, convention))
+      if (!t.bare && crossesSeam(seams, t.startIndex, t.text.length)) out.push({ p: paragraph, t })
+  }
+  for (const t of matchFileTokens(plain.text, convention)) out.push({ p: plain, t })
+  return out
 }
 
 /** xterm link provider for file paths. Register once per terminal with a reachable filesystem. */
@@ -576,23 +730,23 @@ export function createFileLinkProvider(term: Terminal, deps: FileLinkDeps): ILin
         callback(undefined)
         return
       }
-      const tokens = matchFileTokens(logical.text, convention)
-      if (!tokens.length) {
+      const candidates = fileCandidates(bufferView(term), bufferLineNumber - 1, logical, convention)
+      if (!candidates.length) {
         callback(undefined)
         return
       }
       const cols = term.cols
       void Promise.all(
-        tokens.map(async (t): Promise<(ILink & { startIndex: number; len: number }) | null> => {
+        candidates.map(async ({ p, t }): Promise<(ILink & { first: number; last: number }) | null> => {
           const found = await findExistingPath(t.path, convention, deps)
           if (!found.found) return null
           const { abs, dir } = found
           const sink = deps.hoverSink
           return {
-            startIndex: t.startIndex,
-            len: t.text.length,
+            first: p.startRow * cols + p.cellStart[t.startIndex],
+            last: p.startRow * cols + p.cellEnd[t.startIndex + t.text.length - 1],
             text: t.text,
-            range: tokenRange(logical, cols, t.startIndex, t.text.length),
+            range: tokenRange(p, cols, t.startIndex, t.text.length),
             activate: (event: MouseEvent) => {
               const intent = linkOpenIntent(event)
               if (intent === 'none') return
@@ -616,7 +770,7 @@ export function createFileLinkProvider(term: Terminal, deps: FileLinkDeps): ILin
         })
       ).then((links) => {
         const real = dropShadowed(links.filter((l) => !!l)).map(
-          ({ startIndex: _s, len: _l, ...link }): ILink => link
+          ({ first: _f, last: _l, ...link }): ILink => link
         )
         callback(real.length ? real : undefined)
       })
@@ -810,10 +964,16 @@ export function linkAtCell(
   const convention = deps.convention ? deps.convention() : { windows: deps.windows }
   if (!convention) return null
   // Every candidate under the cell, in preference order: the first is the hit, the rest its
-  // fallbacks (the pieces of a spaced path that may not exist).
-  const under = matchFileTokens(logical.text, convention).filter((t) =>
-    inRange(t.startIndex, t.text.length)
-  )
+  // fallbacks (the pieces of a spaced path that may not exist). A hanging-seam reading's tokens
+  // come first — the same order the provider uses, so hover and click agree — and claim only the
+  // cells their own text sits on.
+  const under = fileCandidates(bufferView(term), row, logical, convention)
+    .filter(({ p, t }) =>
+      p === logical
+        ? inRange(t.startIndex, t.text.length)
+        : tokenOwnsCell(p, t.startIndex, t.text.length, (row - p.startRow) * term.cols + col)
+    )
+    .map(({ t }) => t)
   const [t, ...others] = under
   if (!t) return null
   const abs = resolveFileToken(t.path, deps.getCwd(), convention)
