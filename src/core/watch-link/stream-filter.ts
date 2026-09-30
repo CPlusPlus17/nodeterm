@@ -19,8 +19,16 @@
 //   ESC, and takes an 8-bit introducer as a string start: `ESC \n ]52;…` is still an OSC 52.
 // - An 8-bit introducer inside a string starts a new string of ITS kind (an OSC turned DCS no longer
 //   ends at BEL), with a fresh count toward the cap.
-// Where xterm ENDS a string on something this parser does not (CAN, SUB, other C1 controls), the
-// viewer misses a little text until the next terminator; it never sees more than the owner.
+// Where xterm ENDS a string on something this parser does not (CAN, SUB, other C1 controls, and a
+// non-ASCII char, U+00A0 and up, inside SOS/PM/APC or a DCS before its final byte: ERROR → GROUND),
+// the viewer misses a little text until the next terminator; it never sees more than the owner.
+//
+// A viewer that joins a RUNNING session (`midStream`) cannot know where in the stream its first byte
+// falls: inside an OSC 52, or right after an ESC the previous read ended on (`]52;c;…` would then
+// read as text, the whole clipboard). So it starts as if an unknown string had just begun: nothing
+// is shown until the next ESC, ST or 8-bit introducer, where xterm's state is known again whatever
+// it was (ESCAPE, GROUND, a new string). The cost is the text between the join and the first
+// escape: the viewer misses it until those cells are painted again.
 //
 // The output guarantee the caller relies on: no push emits an 8-bit introducer or ends on ESC, and
 // every ESC it emits is followed by a char that leaves ESCAPE without starting a string. So the
@@ -49,12 +57,25 @@ function isC0Executable(c: number): boolean {
   return c <= 0x17 || c === 0x19 || (c >= 0x1c && c <= 0x1f)
 }
 
-export interface StreamFilter {
-  push(chunk: string): string
-  reset(): void
+export interface StreamFilterOptions {
+  /**
+   * The first byte may fall anywhere in the stream. Every viewer that co-attaches to a running
+   * session must set it, and so must every `reset()` onto a session that is already running;
+   * without it a join inside a string, or right after an ESC, sends the string's payload as text.
+   * Starts exactly as if an 8-bit DCS introducer had just been read: nothing is shown until the
+   * next ESC (an `ESC \` ST is dropped), ST or 8-bit introducer; BEL does not end it (the unknown
+   * string may be a DCS or APC, where BEL is data); the cap counts from the join.
+   */
+  midStream?: boolean
 }
 
-export function createStreamFilter(maxStringChars = 1_048_576): StreamFilter {
+export interface StreamFilter {
+  push(chunk: string): string
+  /** Forget the current sequence, for a new pty session; `midStream` as for `createStreamFilter`. */
+  reset(opts?: StreamFilterOptions): void
+}
+
+export function createStreamFilter(maxStringChars = 1_048_576, opts?: StreamFilterOptions): StreamFilter {
   // 'esc' is ESCAPE after a plain ESC; 'stringEsc' is ESCAPE after the ESC that ended a string,
   // where `ESC \` is that string's ST and is dropped with it.
   let mode: 'text' | 'esc' | 'string' | 'stringEsc' = 'text'
@@ -65,11 +86,18 @@ export function createStreamFilter(maxStringChars = 1_048_576): StreamFilter {
     osc = introducer === 0x5d || introducer === 0x9d
     len = 0
   }
-  return {
-    reset() {
+  const start = (o: StreamFilterOptions | undefined): void => {
+    if (o?.midStream) enterString(0x90)
+    else {
       mode = 'text'
       osc = false
       len = 0
+    }
+  }
+  start(opts)
+  return {
+    reset(o) {
+      start(o)
     },
     push(chunk) {
       if (mode === 'text' && !TEXT_SPECIAL.test(chunk)) return chunk

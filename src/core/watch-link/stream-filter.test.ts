@@ -10,8 +10,9 @@ const run = (chunks: string[], max?: number): string => {
 
 // The filter's rules, one UTF-16 unit at a time and without a fast path: the oracle the fuzz test
 // holds the production parser to.
-function oneCharAtATime(input: string, max: number): string {
-  let mode: 'text' | 'esc' | 'string' | 'stringEsc' = 'text'
+function oneCharAtATime(input: string, max: number, midStream: boolean): string {
+  // midStream: as if an 8-bit DCS introducer had just been read.
+  let mode: 'text' | 'esc' | 'string' | 'stringEsc' = midStream ? 'string' : 'text'
   let osc = false
   let len = 0
   let out = ''
@@ -170,7 +171,7 @@ describe('createStreamFilter', () => {
     expect(f.push(']visible')).toBe(']visible')
   })
 
-  it('output never carries a string introducer, whatever the input and however it is chunked', () => {
+  it('output never carries a string introducer, whatever the input, start and chunking', () => {
     // Why this is enough: in xterm.js a string state (OSC/DCS/SOS/PM/APC) is entered only from
     // ESCAPE on ] P X ^ _, or anywhere on an 8-bit introducer; ESCAPE is entered only by ESC and is
     // left by any char except C0 executables, DEL and ESC. So if no push emits an 8-bit introducer
@@ -200,16 +201,17 @@ describe('createStreamFilter', () => {
       let input = ''
       for (let i = rand(60); i > 0; i--) input += ALPHABET[rand(ALPHABET.length)]
       const cap = [2, 5, 1_048_576][rand(3)]
+      const midStream = rand(2) === 1
       // Cut anywhere, a surrogate pair included: the cap counts UTF-16 units, so nothing depends on it.
       const cuts = [0, input.length]
       for (let k = rand(5); k > 0; k--) cuts.push(rand(input.length + 1))
       cuts.sort((x, y) => x - y)
       const chunks = cuts.slice(1).map((end, i) => input.slice(cuts[i], end))
 
-      const f = createStreamFilter(cap)
+      const f = createStreamFilter(cap, { midStream })
       const outs = chunks.map((c) => f.push(c))
       for (const out of outs) {
-        const ctx = JSON.stringify({ input, chunks, cap, out })
+        const ctx = JSON.stringify({ input, chunks, cap, midStream, out })
         expect(INTRO_8.test(out), ctx).toBe(false)
         expect(out.endsWith(ESC), ctx).toBe(false)
         for (let i = out.indexOf(ESC); i !== -1; i = out.indexOf(ESC, i + 1)) {
@@ -218,7 +220,82 @@ describe('createStreamFilter', () => {
       }
       // However it is chunked, the result is the char-by-char statement of the same rules: the
       // parser's slicing and fast path neither drop, reorder nor add a char.
-      expect(outs.join(''), JSON.stringify({ chunks, cap })).toBe(oneCharAtATime(input, cap))
+      expect(outs.join(''), JSON.stringify({ chunks, cap, midStream })).toBe(oneCharAtATime(input, cap, midStream))
     }
+  })
+})
+
+describe('createStreamFilter, joined mid-stream', () => {
+  // A watcher co-attaches to a RUNNING session, so its first byte can land anywhere: inside an OSC 52,
+  // or right after an ESC that the previous read ended on. A filter that starts in text would print
+  // the rest of that string, or read `]52;…` as text.
+  const mid = (chunks: string[], max?: number): string => {
+    const f = createStreamFilter(max, { midStream: true })
+    return chunks.map((c) => f.push(c)).join('')
+  }
+
+  it('a join at any offset never prints a byte of a string, and resyncs at the next escape', () => {
+    // Text is lowercase, spaces and `ESC [ m`; every string's payload is from a disjoint alphabet
+    // (uppercase, digits, `=;]\`), so any payload byte in the output is visible as such.
+    const STREAM = [
+      'pre ', `${ESC}[m`, 'one ',
+      `${ESC}]52;C;U0VDUkVUQQ==${BEL}`, 'mid ',
+      `${ESC}]52;C;U0VDUkVUQg==${ESC}\\`, 'two ',
+      `${ESC}PQDATA${BEL}MORE${ESC}\\`, 'three ',
+      `${ESC}_GAPC${BEL}HIDDEN${ESC}\\`, 'four ',
+      `\x9d52;C;U0VDUkVUQw==\x9c`, 'five ',
+      `\x90QDATA${BEL}MORE\x9c`,
+      `${ESC}[m`, 'tail'
+    ].join('')
+    const resync = STREAM.lastIndexOf(ESC)
+    for (let k = 0; k <= STREAM.length; k++) {
+      const rest = STREAM.slice(k)
+      for (const out of [mid([rest]), mid([rest.slice(0, 3), rest.slice(3)])]) {
+        expect(out, `join at ${k}`).toMatch(/^[a-z \x1b[]*$/)
+        if (k <= resync) expect(out.endsWith(`${ESC}[mtail`), `join at ${k}: ${JSON.stringify(out)}`).toBe(true)
+      }
+    }
+  })
+
+  it('a join right after a lone trailing ESC does not print the OSC 52 that ESC started', () => {
+    const rest = `]52;c;c2VjcmV0${BEL}rest${ESC}[mtail`
+    expect(mid([rest])).toBe(`${ESC}[mtail`)
+    // What a filter starting in text would have sent: the whole clipboard.
+    expect(run([rest])).toContain('c2VjcmV0')
+  })
+
+  it('a join into plain text loses only the text up to the first ESC', () => {
+    expect(mid(['hello world', ` ${ESC}[1mbold${ESC}[m after`])).toBe(`${ESC}[1mbold${ESC}[m after`)
+  })
+
+  it('starts as an unknown string: ST, ESC-ST and 8-bit introducers end it, BEL does not', () => {
+    expect(mid([`DATA${ESC}\\after`])).toBe('after')
+    expect(mid([`DATA${ESC}`, `\\after`])).toBe('after')
+    expect(mid(['DATA\x9cafter'])).toBe('after')
+    // It may be a DCS or APC, where BEL is data.
+    expect(mid([`DATA${BEL}more${ESC}[mafter`])).toBe(`${ESC}[mafter`)
+    // An 8-bit introducer starts a string of ITS kind: this one is an OSC, which BEL ends.
+    expect(mid([`DATA\x9d52;c;x${BEL}after`])).toBe('after')
+  })
+
+  it('the cap counts from the join, on creation and on reset', () => {
+    const f = createStreamFilter(5, { midStream: true })
+    expect(f.push('12345')).toBe('')
+    expect(f.push('6789')).toBe('789')
+
+    const g = createStreamFilter(10)
+    expect(g.push(`a${ESC}]12345678`)).toBe('a')
+    g.reset({ midStream: true })
+    expect(g.push('1234567890')).toBe('')
+    expect(g.push('Xab')).toBe('ab')
+  })
+
+  it('reset({ midStream }) drops what was being read and starts as a join', () => {
+    const f = createStreamFilter()
+    expect(f.push('a')).toBe('a')
+    f.reset({ midStream: true })
+    expect(f.push(`b${ESC}[mc`)).toBe(`${ESC}[mc`)
+    f.reset()
+    expect(f.push('d')).toBe('d')
   })
 })
