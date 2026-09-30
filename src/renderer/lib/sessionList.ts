@@ -1,5 +1,6 @@
 import type { AgentNodeStatus } from '../state/agentStatus'
 import type { AgentId } from '@shared/agents/config'
+import type { AgentState } from '@shared/agents/normalize'
 import type { NodeKind, ObservedClaudeAccount } from '@shared/types'
 import type { NodeIcon } from '@shared/node-icon'
 import { hasUsage } from '@shared/agents/config'
@@ -210,8 +211,26 @@ export function sessionStatusKind(state: AgentNodeStatus['state']): StatusKind {
 }
 
 /** Human-readable age of the current state. No timestamp means genuinely unknown, not "just now". */
-export function sessionStateAgeLabel(updatedAt: number | undefined, nowMs: number): string | undefined {
-  return updatedAt === undefined ? undefined : relativeTime(updatedAt, nowMs)
+export function sessionStateAgeLabel(
+  updatedAt: number | undefined,
+  nowMs: number,
+  restored = false
+): string | undefined {
+  if (updatedAt === undefined) return undefined
+  // A restored clock is the LAST HOOK EVENT from before the restart, not the start of a live state
+  // (there is no live state yet) — so it must not read like the in-run "entered this state" age.
+  return restored ? `seen ${relativeTime(updatedAt, nowMs)}` : relativeTime(updatedAt, nowMs)
+}
+
+/** The age label's tooltip, restored or live. Pure, so the wording is pinned beside the label. */
+export function sessionStateAgeTitle(
+  label: string,
+  restored: boolean,
+  lastSeenState?: AgentState
+): string {
+  if (!restored) return `Entered this state ${label}`
+  const what = lastSeenState ? ` (${STATE_LABEL[sessionStatusKind(lastSeenState)]})` : ''
+  return `Last hook event ${label.replace(/^seen /, '')}${what}, before nodeterm restarted. The current state is unknown until the agent reports again.`
 }
 
 /**
@@ -234,8 +253,16 @@ export interface SessionRowVM {
   isAgent: boolean
   statusKind: StatusKind
   stateLabel: string
-  /** When the current live state began. Transient; absent when no transition has been observed. */
+  /**
+   * The row's clock: when the current live state began (`lastEventAt`) or — for a node that has not
+   * reported in this run — when its last hook event landed before the restart (`lastSeen.at`). Sort
+   * key within a section, and the age label. Absent when neither is known.
+   */
   statusUpdatedAt?: number
+  /** `statusUpdatedAt` came from the persisted "last seen" clock, not from this run. */
+  statusClockRestored?: boolean
+  /** The state that restored clock was for (display only — never the row's live state). */
+  lastSeenState?: AgentState
   unread: boolean
   session?: string
   loop?: { kind: 'loop' | 'schedule' | 'cron'; count: number }
@@ -308,7 +335,11 @@ function toRow(
     isAgent: !!n.agentId,
     statusKind,
     stateLabel: STATE_LABEL[statusKind],
-    statusUpdatedAt: status?.lastEventAt,
+    // Live clock first; the persisted one only while this run has seen nothing for the node.
+    statusUpdatedAt: status?.lastEventAt ?? status?.lastSeen?.at,
+    ...(status?.lastEventAt === undefined && status?.lastSeen
+      ? { statusClockRestored: true, lastSeenState: status.lastSeen.state }
+      : {}),
     unread: !!status?.unread,
     session: status?.session,
     // A dismissed cron/schedule entry is retained as a fact (the hibernation guard reads it) but

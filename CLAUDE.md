@@ -852,7 +852,10 @@ Lifecycle, by intent:
   Eco defers the Phase-2 viewer release until the node hibernates (hard cap idle+offscreen), but
   ONLY when the idle clock is known (`idleKnown` — `lastEventAt` is transient, so after an app
   restart nothing can hibernate and deferring would make Eco a memory regression). Eco is
-  structurally inert for sessions with no turn in the current app run — documented follow-up.
+  structurally inert for sessions with no turn in the current app run, and that is now a DECISION,
+  not a follow-up: the persisted `agentStatus.lastSeen` clock (see **Status-grouped sessions**) is
+  deliberately never an idle proof — see "A restored clock is not an idle proof" in
+  `terminal/hibernation-policy.ts`.
   The deferral is also unaware of `paused`: a deep-paused node's freshly recycled shell keeps its
   xterm alive until the hard cap, waiting for a hibernation that (being already exited, or having
   no CLI to exit) can never come — a second documented follow-up.
@@ -2901,6 +2904,35 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   another user prompt. Within each section rows sort newest-first by `lastEventAt`, the transition
   clock (same-state hook freshness is `stateAt`), and show its short relative age. Missing clocks
   stay last with no made-up timestamp. A click may clear the glow but cannot move the row.
+  **The clock survives an app restart as "last seen", never as a state** (`agentStatus.lastSeen`,
+  `{at, state}`). `lastEventAt`/`stateAt`/`state` are transient, so before this every row after a
+  restart sorted as "no clock" and lost its age. `lastSeen` is the time of the LAST hook event (a
+  same-state one included) and the state it asserted, persisted in the SAME localStorage record as
+  `unread`/`sessionId` — chosen over the core mirror because the sidebar already reads this store,
+  the mirror expires state after 6 h and identity later, and reading it would need a new IPC leg for
+  a display fact. Rules a refactor must not undo:
+  - **Restored as a clock only.** Load fills `lastSeen` and nothing else: `state` stays unknown (the
+    hook server was down with the app, so a turn may have started or ended in between), and
+    `lastEventAt` stays unset. The row reads `lastEventAt ?? lastSeen.at`, marks itself
+    `statusClockRestored` only while `lastEventAt` is unset, and the label says `seen 3h ago` with a
+    tooltip naming the state it was last seen in and that the current state is unknown. The first
+    live hook event replaces it with the ordinary in-run clock.
+  - **Eco never reads it** (so `idleKnown` and `planHibernation` are unchanged). Even a proven-idle
+    prompt after boot would not be enough: the background-task stamp and the subagent cards Eco
+    also needs are transient and cannot be rebuilt after a restart, and `/exit` kills both
+    silently. A session becomes a candidate again from its next live `done`.
+  - **Bounded and cheap.** Same-state events update it in place (no re-render) and save on a 2 s
+    trailing debounce plus `pagehide`, never per tool event. At most `LAST_SEEN_MAX` (1000) newest
+    clocks are written, a clock older than 90 days or more than 5 min in the future is refused on
+    load (hand-editable input — a future stamp would pin a row to the top), an unknown `state` keeps
+    the time and drops the state. Measured: ~47 bytes per clock, 1000 entries 188 KB vs 141 KB and
+    1.6 ms vs 0.9 ms per `JSON.stringify` on this dev host.
+  - **It cannot create a row**: rows come from canvas nodes, never from the status table, and
+    `remove(id)` (every node-deletion path) drops the clock with the entry, a pending debounced save
+    included. Tests: `state/agentStatus.lastSeen.test.ts`.
+  - Surfaces: Desktop full; Server Edition per browser profile (localStorage, like `unread`); relay
+    tabs keep a keyless store and persist nothing; kanban has no clock-ordered view, so nothing to
+    wire there; Mobile N/A (its own state).
 - **Session name ⇄ node title** — **two lists, because the two directions are separate facts**:
   `TITLE_READ_CAPABLE` (`canReadTitle` — claude, **codex**, grok, **gemini**) is the READ leg,
   `RENAME_CAPABLE` (`canRename` — claude, grok) the WRITE leg, and **read ⊇ write** is an invariant
