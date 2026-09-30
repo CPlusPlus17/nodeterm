@@ -353,6 +353,34 @@ describe('storedNodeListing', () => {
   })
 })
 
+describe('storedNodeListing — a dependent held by work handed to its station (core/station-handover.ts)', () => {
+  it('names the station whose `done` is from before the work just handed to it', () => {
+    const nodes = [
+      { id: 'st', kind: 'terminal', title: 'Builder', agentId: 'claude' },
+      { id: 'd', kind: 'terminal', title: 'Reviewer', agentId: 'claude', pendingLaunch: { after: ['st'], command: 'claude go' } },
+      // Hostile shapes are read, never thrown on.
+      { id: 'bad', kind: 'terminal', title: 'Bad', pendingLaunch: { after: 'st', command: 'x' } }
+    ]
+    const statuses = { st: { state: 'done' as const }, d: {}, bad: {} }
+    const handovers = { st: { nodeId: 'st', since: 5 } }
+    const rows = storedNodeListing(nodes, statuses, {}, 0, {}, handovers)
+    expect(rows[1]).toMatchObject({ launchState: 'queued', handoverWait: 'st "Builder"' })
+    expect(rows[2]).not.toHaveProperty('handoverWait')
+    expect(controlListingText(rows).split('\n')[1]).toBe(
+      'd [terminal] Reviewer — QUEUED — waiting for st "Builder" to finish the work handed to it'
+    )
+    // Only background tasks left running: named as such.
+    const bg = storedNodeListing(nodes, statuses, {}, 0, {}, { st: { nodeId: 'st', background: true } })
+    expect(bg[1]).toMatchObject({ backgroundWait: 'st "Builder"' })
+    expect(bg[1]).not.toHaveProperty('handoverWait')
+    expect(controlListingText(bg).split('\n')[1]).toBe(
+      'd [terminal] Reviewer — QUEUED — waiting for st "Builder" to finish the tasks still running in its background'
+    )
+    // Nothing handed over: the row is what it always was.
+    expect(storedNodeListing(nodes, statuses, {}, 0, {}, {})[1]).not.toHaveProperty('handoverWait')
+  })
+})
+
 describe('the off-screen disposition table (the verbs that used to travel)', () => {
   it('the verbs that act on existing nodes are answered from the store, not by travelling', () => {
     // The field report: the user was typing in another project, a background agent issued a

@@ -86,6 +86,10 @@ import {
   handleReportOutcome,
   registerStationOutcomeIpc
 } from '../core/station-outcome-store'
+import {
+  StationHandoverTracker,
+  registerStationHandoverIpc
+} from '../core/station-handover'
 import { afterSuccessFlagRefusal } from '../shared/station-outcome'
 import { stationRecipient } from '../shared/station-notice'
 import type { RemoteLogExec } from '../core/board-log'
@@ -1962,7 +1966,17 @@ app.whenReady().then(async () => {
   // A `send` / `reply` hands a station new work — decided by when the message REACHES its pane (a
   // queued one marks the station "work pending" until it lands), never by when the control answer
   // comes back. The messaging service reports those moments; the store applies the rule.
-  messagingDeps.onHandover = (ev) => stationOutcomes.onHandover(ev)
+  // The same hand-over moments also hold plain `--after` (src/core/station-handover.ts): a station
+  // handed new work is not "done" until a turn that started after the hand-over has ended. Pushed
+  // whole to the window, whose launch loop reads it.
+  const stationHandovers = new StationHandoverTracker((records) =>
+    sendToMain(IPC.stationHandoverChanged, records)
+  )
+  registerStationHandoverIpc(corePlatform, () => stationHandovers)
+  messagingDeps.onHandover = (ev) => {
+    stationOutcomes.onHandover(ev)
+    stationHandovers.onHandover(ev)
+  }
 
   ipcMain.handle(IPC.dialogSelectFolder, async () => {
     const result = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
@@ -2915,6 +2929,9 @@ app.whenReady().then(async () => {
       // event ENRICHED for a needs-you edge (a question strips its pendingId), so the canvas keys off
       // the same single source of truth as the mirror/phone. Then broadcast the enriched event.
       const enriched = recordAgentEvent(out) ?? out
+      // The hand-over tracker FIRST: it stamps when a station's turn starts and ends, and the
+      // messaging queue below may flush new work into the station on this very `done`.
+      stationHandovers.onAgentEvent(enriched)
       sendToMain(IPC.agentStatus, enriched)
       // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
       notchHudOnAgentEvent(enriched)
@@ -3860,6 +3877,9 @@ app.whenReady().then(async () => {
     )
   }
   hookServer.setControlHandler(async ({ verb, nodeId, args, verified, onLateAnswer }) => {
+    // When the request ARRIVED — before a `write` / `run` typed anything. The hand-over tracker
+    // stamps the new work with it, so a turn the typed text starts is always later.
+    const requestAt = Date.now()
     // `--dry-run` (issue #532) is honoured by the spawn verbs only, and this gate runs FIRST —
     // before the browser intercept, the open-project gates and the renderer forward — because a
     // verb that cannot dry-run must REFUSE rather than silently perform: a `close --dry-run`
@@ -3988,6 +4008,8 @@ app.whenReady().then(async () => {
       // only on success. `send` / `reply` go through `messagingDeps.onHandover` instead: their
       // answer can be `queued`, long before the message reaches the pane.
       clearOutcomesAfterControl(stationOutcomes, verb, args, answer, nodeId)
+      // …and holds plain `--after` on that station until a turn after it ends.
+      stationHandovers.noteControlAnswer(verb, args, answer, nodeId, requestAt)
       return answer
     }
     // The timeout is NAMED, and what it says depends on the verb and on whether the request ledger

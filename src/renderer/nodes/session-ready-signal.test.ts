@@ -102,7 +102,7 @@ describe('the QUEUED badge carries the delivery state (source pins)', () => {
     // arguments name an `--after-pr` wait and an `--after-success` wait (with their deadlines)
     // beside the stations.
     expect(src).toContain(
-      "launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip, successTooltip, pendingInterruptedOn)"
+      "launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip, successTooltip, pendingInterruptedOn, pendingHandedOverOn)"
     )
   })
 

@@ -877,6 +877,14 @@ const api: NodeTerminalApi = {
       ipcRenderer.on(IPC.stationOutcomeChanged, handler)
       return () => ipcRenderer.removeListener(IPC.stationOutcomeChanged, handler)
     }
+  },
+  stationHandover: {
+    list: () => ipcRenderer.invoke(IPC.stationHandoverList),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, records: Parameters<typeof cb>[0]) => cb(records)
+      ipcRenderer.on(IPC.stationHandoverChanged, handler)
+      return () => ipcRenderer.removeListener(IPC.stationHandoverChanged, handler)
+    }
   }
 }
 

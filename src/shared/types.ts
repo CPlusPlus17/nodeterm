@@ -4148,4 +4148,12 @@ export interface NodeTerminalApi {
     list(): Promise<import('./station-outcome').StationOutcomeRecord[]>
     onChanged(cb: (records: import('./station-outcome').StationOutcomeRecord[]) => void): () => void
   }
+  /** Stations with unfinished HANDED-OVER work (src/core/station-handover.ts) — what plain
+   *  `--after` reads so it never releases on a `done` from before that work arrived. Desktop and
+   *  Server Edition are real; a relay tab's stations belong to the host's core, so there it is
+   *  inert (and its launch delivery is refused anyway). */
+  stationHandover: {
+    list(): Promise<import('./station-handover').StationHandoverRecord[]>
+    onChanged(cb: (records: import('./station-handover').StationHandoverRecord[]) => void): () => void
+  }
 }
