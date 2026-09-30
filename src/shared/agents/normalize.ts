@@ -1,7 +1,12 @@
 import type { AgentId } from './config'
 import type { ObservedClaudeAccount } from '../types'
 import { ASK_USER_QUESTION_TOOL, isSafeToolName, readQuestions, type HeldPermission } from './permission-answer'
-import { isClaudeAgentId, isInjectedSubagentPrompt, liveBackgroundTaskIds } from './claude-subagents'
+import {
+  isClaudeAgentId,
+  isInjectedSubagentPrompt,
+  liveBackgroundSubagentIds,
+  liveBackgroundTaskIds
+} from './claude-subagents'
 
 export type AgentState = 'working' | 'waiting' | 'blocked' | 'done'
 
@@ -114,6 +119,9 @@ export interface NormalizedAgentEvent {
    * `liveBackgroundTaskIds`.
    */
   backgroundTaskIds?: string[]
+  /** The async SUBAGENTS among `backgroundTaskIds` (`liveBackgroundSubagentIds`) — the only
+   *  background work plain `--after` holds on. Present exactly when `backgroundTaskIds` is. */
+  backgroundSubagentIds?: string[]
   /** Host-observed start time for display-only renderer reload replay. */
   subagentStartedAt?: number
   // grok StopCancelled only: normalized state-less so the mirror can make the session-aware badge
@@ -378,13 +386,15 @@ export function normalizeClaude(env: RawHookEnvelope): NormalizedAgentEvent | nu
   }
   if (ev === 'Stop') {
     const backgroundTaskIds = liveBackgroundTaskIds(p.background_tasks)
+    const backgroundSubagentIds = liveBackgroundSubagentIds(p.background_tasks)
     return {
       ...base,
       kind: 'state',
       state: 'done',
       interrupted: p.is_interrupt === true,
       lastMessage: p.last_assistant_message,
-      ...(backgroundTaskIds ? { backgroundTaskIds } : {})
+      ...(backgroundTaskIds ? { backgroundTaskIds } : {}),
+      ...(backgroundSubagentIds ? { backgroundSubagentIds } : {})
     }
   }
   // The turn died on an API/model error — Claude Code skips the normal Stop hook here,

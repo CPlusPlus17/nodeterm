@@ -14,41 +14,54 @@
  *     is when that delivery attempt STARTED;
  *   - a queued message that ends WITHOUT landing (expired, refused on flush): still a hand-over,
  *     at the moment it settled. The orchestrator handed new work and armed a dependent believing it
- *     would be done; releasing that dependent on the older task's `done` is the bug this closes. It
- *     ends with the station's next completed turn (a person may paste the task by hand), or by ▶;
- *   - `write` / `run` succeeding (`noteControlAnswer`), at the time the REQUEST arrived — before any
- *     byte was typed, so a turn the typed text starts is always later.
+ *     would be done; releasing that dependent on the older task's `done` is the bug this closes. The
+ *     turn the station was on at the expiry does not end it — only a turn STARTED after it does, and
+ *     nothing starts one unless the station is given work again (a resend, a person typing the task
+ *     by hand). ▶ / `run` start the dependent anyway;
+ *   - `write` succeeding (`noteControlAnswer`), stamped when the renderer STARTED TYPING
+ *     (`typedAt` in its answer) — never at the request, which waits on a human confirm first: a turn
+ *     that started while the dialog was open (a background child's task-notification) is not an
+ *     answer to text not typed yet. A write into a station that was BLOCKED or WAITING when the
+ *     request arrived is not a hand-over at all: it answers the prompt, and the same turn goes on;
+ *   - `run` succeeding: it starts the named node's held launch, stamped when the request arrived
+ *     (no confirm), before anything was typed.
  *
  * WHEN IT ENDS: a `done` for a turn that STARTED at or after the newest hand-over, with nothing
  * still queued. "Started" is the first active state (working / waiting / blocked) after the
- * station was last idle, stamped by this module's own clock as events arrive — tracked for every
- * station, handed over or not, because a delivered prompt can start (and even finish) its turn
- * before the delivery's `landed` event is emitted. A turn already in progress when the work landed
- * does not end it: the typed text is answered by a LATER turn (if the CLI folds it into the
- * current turn instead, the hold lasts until the next turn — the holding direction, with ▶ and
- * `run` as the way out).
+ * station was last idle, or any genuine new turn (`newTurn`: after an Esc interrupt core may never
+ * see the idle the renderer infers) — stamped by this module's own clock as events arrive, for
+ * every station, handed over or not, because a delivered prompt can start (and even finish) its
+ * turn before the delivery's `landed` event is emitted. The idle-prompt rescue (`idle: true`) is a
+ * turn end only for a station still `working` (the reduceEntry rule): it also fires under an open
+ * permission prompt, and taking it as idle there would let the approval's `working` stamp a fake
+ * turn start inside the SAME turn. A turn already in progress when the work landed does not end
+ * it: the typed text is answered by a LATER turn (if the CLI folds it into the current turn
+ * instead, the hold lasts until the next turn — the holding direction, with ▶ and `run` as the way
+ * out).
  *
- * BACKGROUND WORK is the second kind of unfinished work, and it holds the same way. Claude's `Stop`
- * carries `background_tasks` — every background task of the session still running at that turn end
- * (background shells, async subagents; `NormalizedAgentEvent.backgroundTaskIds`). A turn that ends
- * with such a task running has not finished the station's work: the output the dependent is armed
- * to read is still being produced (measured live, 2026-09-30: an agent's turn ended while its test
- * suite ran in a background shell, and the node armed `--after` it fired before anything was
- * pushed). So a `done` whose inventory lists a live task holds the station, and only a later
- * `done` whose inventory is PRESENT and EMPTY releases it. Three decisions:
+ * BACKGROUND SUBAGENTS are the second kind of unfinished work. Claude's `Stop` carries
+ * `background_tasks` — every background task still running at that turn end — and a turn that ends
+ * with one running has not finished what a dependent is armed to read (measured live, 2026-09-30:
+ * an agent's turn ended while its work went on in the background, and the node armed `--after` it
+ * fired before anything was pushed). Only async SUBAGENTS hold
+ * (`NormalizedAgentEvent.backgroundSubagentIds`, `type: 'subagent'`): a child ENDS, and its
+ * task-notification wakes the parent into another turn, so a later `Stop` with it gone reliably
+ * comes. A background SHELL does not hold — a dev server, a file watcher, `tail -f` may never end
+ * and do not reliably wake the station, so holding on one held the dependent forever (the review
+ * of #1052 measured three turns ending with the same dev server listed). A station whose
+ * dependent needs a shell's result is told to wait for it before ending its turn. Rules:
  *   - an ABSENT inventory is "unknown", never "none" — and it changes nothing: a CLI too old to send
  *     the field never sets the hold (today's behaviour, exactly), and a `done` without one (the
  *     idle-prompt rescue, a `StopFailure`, another agent) neither sets nor clears it;
- *   - the hold is not cleared by a turn STARTING (the tasks may well outlive it) — only by a turn
- *     end that says they are gone, or by `SessionEnd` (the CLI exited, taking its tasks with it;
- *     waiting on a session that will never report again would strand the dependent);
- *   - a background task that finishes WITHOUT waking the station for another turn leaves the hold
- *     up until the station's next turn end. That is the holding direction, and ▶ / `run` end it.
- *
+ *   - the hold is not cleared by a turn STARTING (the child may well outlive it) — only by a turn
+ *     end that says no subagent is left, or by `SessionEnd` (the CLI exited, taking its children
+ *     with it; waiting on a session that will never report again would strand the dependent).
+
  * NOT a hand-over: a board comment (a person steering), a station notice (the app telling an
  * orchestrator something), a person typing in the pane. Deliberately the same set #1042 counts.
  *
- * Bounded (the oldest station with nothing handed over is evicted first) and DURABLE ACROSS A
+ * Bounded (past STATION_HANDOVER_MAX_TRACKED the oldest station with nothing held is evicted;
+ * only when EVERY tracked station holds is the oldest held one dropped) and DURABLE ACROSS A
  * RESTART (`HANDOVER_FACT`, `<userData>/orchestration-state/station-handovers.json`, through
  * core/durable-state.ts). Without it an app restart forgot every hold, and a dependent armed on a
  * station that had just been handed its next task fired on the first `done` after the restart —
@@ -66,6 +79,8 @@
  *   - a hold is not bound to a session: a station respawned into a new session still owes the work
  *     it was handed, and its next completed turn ends the hold as usual.
  * Loaded by each shell after the station reports and before the delivery queue.
+ * The recent state `history` (what a confirm-delayed `write` answers) is NOT stored: it spans one
+ * confirm dialog, and after a restart the request it described is gone.
  */
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { IPC } from '../shared/ipc'
@@ -86,9 +101,15 @@ export const HANDOVER_CONTROL_VERBS: ReadonlySet<string> = new Set(['write', 'ru
 
 const ACTIVE: ReadonlySet<AgentState> = new Set<AgentState>(['working', 'waiting', 'blocked'])
 
+/** How many recent state changes a station keeps, to answer "what was it doing when that request
+ *  arrived?" across a confirm dialog. A handful covers a prompt answered and re-asked. */
+const STATE_HISTORY = 8
+
 interface StationTrack {
   /** The last state seen. `undefined` until the first event. */
   state?: AgentState
+  /** Recent state changes, oldest first: what `stateAt` reads. */
+  history?: Array<{ state: AgentState; at: number }>
   /** When the current (or last) turn started: the first active state after an idle one. */
   turnStartedAt?: number
   /** `send` / `reply` entries still queued for this station. */
@@ -203,6 +224,25 @@ export class StationHandoverTracker {
     return cur
   }
 
+  private setState(t: StationTrack, state: AgentState): void {
+    if (t.state !== state) {
+      const h = (t.history ??= [])
+      h.push({ state, at: this.now() })
+      if (h.length > STATE_HISTORY) h.shift()
+    }
+    t.state = state
+  }
+
+  /** The station's state at `at`, from its recent history; unknown when older than the history. */
+  private stateAt(t: StationTrack, at: number): AgentState | undefined {
+    let out: AgentState | undefined
+    for (const e of t.history ?? []) {
+      if (e.at > at) break
+      out = e.state
+    }
+    return out
+  }
+
   /** Has the turn answering the hand-over already ended? */
   private settle(t: StationTrack): void {
     if (
@@ -229,7 +269,7 @@ export class StationHandoverTracker {
    *  `refreshArmed`, the messaging queue's flush on `done`). Events without a state are ignored. */
   onAgentEvent(
     event: Pick<NormalizedAgentEvent, 'nodeId' | 'state'> &
-      Partial<Pick<NormalizedAgentEvent, 'backgroundTaskIds' | 'sessionPhase'>>
+      Partial<Pick<NormalizedAgentEvent, 'backgroundSubagentIds' | 'sessionPhase' | 'newTurn' | 'idle'>>
   ): void {
     if (!event?.nodeId || !isSafeNodeId(event.nodeId)) return
     // The CLI exited: its background tasks died with it, and it will never report them finished.
@@ -243,19 +283,26 @@ export class StationHandoverTracker {
     }
     const state = event.state
     if (typeof state !== 'string') return
+    // The idle-prompt rescue (`idle: true`) is a turn end ONLY for a station still `working` — the
+    // reduceEntry rule. It also fires while a permission prompt is up, and taking it there as
+    // idle would let the approval's `working` stamp a turn start in the middle of the SAME turn.
+    if (event.idle === true && this.byId.get(event.nodeId)?.state !== 'working') return
     const t = this.touch(event.nodeId)
     if (ACTIVE.has(state)) {
-      const started = !t.state || !ACTIVE.has(t.state)
+      // A genuine new turn (`newTurn`) starts one whatever came before: after an Esc interrupt the
+      // renderer infers the idle, but core may never see one, and the next real turn must count.
+      const started = !t.state || !ACTIVE.has(t.state) || event.newTurn === true
       if (started) t.turnStartedAt = this.now()
-      t.state = state
+      this.setState(t, state)
       // A held station's turn start is what ends its hold: it must survive a restart too.
       if (started && holds(t)) this.persist()
       return
     }
-    t.state = state
+    this.setState(t, state)
     if (state === 'done') {
-      // Only a PRESENT inventory speaks about background work; an absent one is unknown.
-      if (Array.isArray(event.backgroundTaskIds)) t.background = event.backgroundTaskIds.length > 0
+      // Only a PRESENT inventory speaks about background work; an absent one is unknown. Only
+      // background SUBAGENTS hold (see liveBackgroundSubagentIds and the header).
+      if (Array.isArray(event.backgroundSubagentIds)) t.background = event.backgroundSubagentIds.length > 0
       this.settle(t)
       this.changed()
     }
@@ -293,19 +340,42 @@ export class StationHandoverTracker {
 
   /**
    * One finished `write` / `run`. Run by each shell's control handler on the answer (prompt or
-   * late), and only on success: a refused write handed nothing. `requestAt` is when the request
-   * ARRIVED, before any byte was typed. A caller naming itself is not handed work by anyone.
+   * late), and only on success: a refused write handed nothing. A caller naming itself is not
+   * handed work by anyone.
+   *
+   * WHEN the work landed:
+   *   - `run` (no confirm): `requestAt`, when the request ARRIVED — before its held launch was typed.
+   *   - `write`: when the renderer STARTED TYPING (`result.result.typedAt`), not the request time. A
+   *     write waits on a human confirm first, and a turn that started while the dialog was open (a
+   *     background child's task-notification, say) is not an answer to text not yet typed. A
+   *     `typedAt` outside [requestAt, now] is not believed, and the answer time stands in: later
+   *     errs toward holding.
+   * A station that was BLOCKED or WAITING when the request arrived is not handed work: the text
+   * answers its prompt, and the same turn simply continues (no new turn will ever start for it).
    */
   noteControlAnswer(
     verb: string,
     args: Record<string, string | undefined>,
-    result: { ok: boolean },
+    result: { ok: boolean; result?: unknown },
     callerNodeId: string,
     requestAt: number
   ): void {
     if (!result.ok || !HANDOVER_CONTROL_VERBS.has(verb) || typeof args.node !== 'string') return
+    const now = this.now()
+    let at = requestAt
+    if (verb === 'write') {
+      const typedAt = (result.result as { typedAt?: unknown } | undefined)?.typedAt
+      at =
+        typeof typedAt === 'number' && typedAt >= requestAt && typedAt <= now
+          ? typedAt
+          : Math.max(requestAt, now)
+    }
     for (const id of args.node.split(',').map((s) => s.trim())) {
-      if (id && id !== callerNodeId && isSafeNodeId(id)) this.markHandedOver(id, requestAt)
+      if (!id || id === callerNodeId || !isSafeNodeId(id)) continue
+      const t = this.byId.get(id)
+      const was = t ? this.stateAt(t, requestAt) : undefined
+      if (was === 'blocked' || was === 'waiting') continue
+      this.markHandedOver(id, at)
     }
   }
 

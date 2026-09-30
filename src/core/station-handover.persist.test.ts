@@ -65,11 +65,11 @@ describe('station hand-over holds across a restart', () => {
   it('background work survives too, and a present empty inventory clears it', () => {
     const d = disk()
     const a = new StationHandoverTracker(() => {}, () => 1, d.durable)
-    a.onAgentEvent({ nodeId: 'st1', state: 'done', backgroundTaskIds: ['b1'] })
+    a.onAgentEvent({ nodeId: 'st1', state: 'done', backgroundSubagentIds: ['b1'] })
     const b = new StationHandoverTracker(() => {}, () => 2, d.durable)
     b.loadFromDisk()
     expect(b.isHandedOver('st1')).toBe(true)
-    b.onAgentEvent({ nodeId: 'st1', state: 'done', backgroundTaskIds: [] })
+    b.onAgentEvent({ nodeId: 'st1', state: 'done', backgroundSubagentIds: [] })
     expect(b.isHandedOver('st1')).toBe(false)
   })
 

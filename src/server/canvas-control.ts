@@ -207,10 +207,17 @@ export async function initServerCanvasControl(
   )
   // Stations with unfinished handed-over work (core/station-handover.ts): built before the factory,
   // whose plain `--after` holds on them — the same tracker, fed the same events, as the desktop.
-  // Durable like the reports; loaded in the same order as the desktop (reports, hand-overs, queue).
+  // Every change re-evaluates the factory's arms: a hold can end on an event `refreshArmed` is not
+  // otherwise run for (a SessionEnd clearing a background-subagent hold). `factory` is assigned
+  // below, before any event can reach the tracker. Durable like the reports; loaded in the same
+  // order as the desktop (reports, hand-overs, queue).
+  let factoryRef: HeadlessNodeFactory | undefined
   const handoversFile = new DurableFactFile(HANDOVER_FACT, { userDataDir: platform().userDataDir })
   const stationHandovers = new StationHandoverTracker(
-    (records) => platform().broadcast(IPC.stationHandoverChanged, records),
+    (records) => {
+      platform().broadcast(IPC.stationHandoverChanged, records)
+      void factoryRef?.refreshArmed()
+    },
     Date.now,
     handoversFile
   )
@@ -245,6 +252,8 @@ export async function initServerCanvasControl(
     // An issue card's run history lives in the same board log the messaging trace writes to.
     appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry)
   })
+
+  factoryRef = factory
 
   const messaging: AgentMessagingDeps = {
     paneOwner: (nodeId) => deps.ptyManager.paneOwner(nodeId),

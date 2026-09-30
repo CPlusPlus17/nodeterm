@@ -1524,16 +1524,19 @@ describe('--after-success + report-outcome: a dependent that waits for a reporte
     const flat = body.replace(/\s+/g, ' ')
     expect(flat).toContain('Reusing a station with `--after` (new work resets the wait)')
     expect(flat).toContain(
-      'a `send` / `reply` aimed at it (queued or delivered), or a `write` / `run` into it — does not count as finished for `--after` until a turn that STARTED after that work arrived has ended'
+      'a `send` / `reply` aimed at it (queued or delivered), a `write` into it, or a `run` starting its held launch — does not count as finished for `--after` until a turn that STARTED after that work arrived has ended'
     )
     expect(flat).toContain("Its earlier `done` (the previous task) releases nothing")
     expect(flat).toContain('while a `send` / `reply` is still QUEUED for it nothing releases at all')
-    expect(flat).toContain('A queued message that expires unread still holds')
+    expect(flat).toContain('A queued message that EXPIRES unread still holds')
+    expect(flat).toContain('only a turn started AFTER the expiry does')
+    expect(flat).toContain("A `write` that only answers the station's open prompt")
     expect(flat).toContain('hand it the next task FIRST, then open the dependent `--after` it')
     expect(flat).toContain('"waiting for <station> to finish the work handed to it"')
     expect(flat).toContain("A person typing in the station's pane is not a hand-over")
-    expect(flat).toContain('A turn that ENDS with background tasks still running')
-    expect(flat).toContain('waits for a later turn end that reports none')
+    expect(flat).toContain('A turn that ENDS with a background SUBAGENT still running')
+    expect(flat).toContain('waits for a later turn end that reports none left')
+    expect(flat).toContain('A background SHELL (a dev server, a watcher, a long test run) does NOT hold')
     expect(flat).toContain('"waiting for <station> to finish the tasks still running in its background"')
   })
 

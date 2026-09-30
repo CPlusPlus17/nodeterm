@@ -263,20 +263,25 @@ function afterHandoverDocLines(): string[] {
   return [
     'Reusing a station with `--after` (new work resets the wait):',
     '- A station handed new work through canvas control — a `send` / `reply` aimed at it (queued or',
-    '  delivered), or a `write` / `run` into it — does not count as finished for `--after` until a turn',
-    '  that STARTED after that work arrived has ended. Its earlier `done` (the previous task) releases',
-    '  nothing, and while a `send` / `reply` is still QUEUED for it nothing releases at all. A queued',
-    '  message that expires unread still holds: the next turn the station finishes ends it.',
+    '  delivered), a `write` into it, or a `run` starting its held launch — does not count as finished',
+    '  for `--after` until a turn that STARTED after that work arrived has ended. Its earlier `done` (the',
+    '  previous task) releases nothing, and while a `send` / `reply` is still QUEUED for it nothing',
+    '  releases at all. A `write` that only answers the station\'s open prompt (a permission or a',
+    '  question) is not new work. A queued message that EXPIRES unread still holds, and the turn the',
+    '  station was on when it expired does not end that: only a turn started AFTER the expiry does, and',
+    '  nothing starts one unless the station is given work again — send the task again, or start the',
+    '  dependent yourself with `run`.',
     '- So to reuse a station, hand it the next task FIRST, then open the dependent `--after` it — opened',
     '  first, the dependent would start at once on the previous task\'s output. `list` marks such a',
     '  dependent "waiting for <station> to finish the work handed to it". A person typing in the',
     "  station's pane is not a hand-over. `run` (or the user's ▶) always starts a held node anyway.",
-    '- A turn that ENDS with background tasks still running (a background shell, an async subagent —',
-    '  Claude reports them when its turn ends) has not finished either: `--after` on that station waits',
-    '  for a later turn end that reports none (`list`: "waiting for <station> to finish the tasks still',
-    '  running in its background"). If YOU are the station, do not end your turn with background work',
-    '  whose result a dependent needs; wait for it, then finish. Agents that do not report background',
-    '  tasks release on their turn end as before.'
+    '- A turn that ENDS with a background SUBAGENT still running (Claude reports them when its turn',
+    '  ends) has not finished either: `--after` on that station waits for a later turn end that reports',
+    '  none left — the subagent\'s result wakes the station for that turn (`list`: "waiting for',
+    '  <station> to finish the tasks still running in its background"). A background SHELL (a dev',
+    '  server, a watcher, a long test run) does NOT hold: it may never end. So if YOU are the station and',
+    '  a dependent needs a background shell\'s result, wait for it before you end your turn. Agents that',
+    '  do not report background tasks release on their turn end as before.'
   ]
 }
 

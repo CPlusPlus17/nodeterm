@@ -56,6 +56,13 @@ describe('Server Edition', () => {
     )
     expect(serverIndex).toContain('registerStationHandoverIpc(platform, () => canvasControl?.stationHandovers ?? null)')
   })
+
+  it('re-evaluates the factory\'s arms on EVERY tracker change (a SessionEnd clears a hold too)', () => {
+    const at = serverControl.indexOf('const stationHandovers = new StationHandoverTracker(')
+    const publish = serverControl.slice(at, serverControl.indexOf('})', at))
+    expect(publish).toContain('void factoryRef?.refreshArmed()')
+    expect(serverControl).toContain('factoryRef = factory')
+  })
 })
 
 describe('renderer', () => {
@@ -64,6 +71,12 @@ describe('renderer', () => {
     const call = canvas.slice(canvas.indexOf('const ready = launchesToFire('))
     expect(call.slice(0, call.indexOf('.filter('))).toContain('useStationHandovers.getState().byId')
     expect(canvas).toContain('armedHandoverSig')
+    // A `write` is stamped when the renderer STARTED TYPING, after the human's confirm.
+    const write = canvas.slice(canvas.indexOf('const runWrite = async (): Promise<void> => {'))
+    const body = write.slice(0, write.indexOf('\n            }\n'))
+    expect(body.indexOf('typedAt = Date.now()')).toBeGreaterThan(-1)
+    expect(body.indexOf('typedAt = Date.now()')).toBeLessThan(body.indexOf('api.pty.sendText('))
+    expect(body).toContain('result: { typedAt }')
     expect(canvas.match(/useStationOutcomes\.getState\(\)\.byId, useStationHandovers\.getState\(\)\.byId\)/g)).toHaveLength(2)
   })
 })
