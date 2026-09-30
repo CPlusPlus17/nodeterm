@@ -852,7 +852,10 @@ Lifecycle, by intent:
   Eco defers the Phase-2 viewer release until the node hibernates (hard cap idle+offscreen), but
   ONLY when the idle clock is known (`idleKnown` — `lastEventAt` is transient, so after an app
   restart nothing can hibernate and deferring would make Eco a memory regression). Eco is
-  structurally inert for sessions with no turn in the current app run — documented follow-up.
+  structurally inert for sessions with no turn in the current app run, and that is now a DECISION,
+  not a follow-up: the persisted `agentStatus.lastSeen` clock (see **Status-grouped sessions**) is
+  deliberately never an idle proof — see "A restored clock is not an idle proof" in
+  `terminal/hibernation-policy.ts`.
   The deferral is also unaware of `paused`: a deep-paused node's freshly recycled shell keeps its
   xterm alive until the hard cap, waiting for a hibernation that (being already exited, or having
   no CLI to exit) can never come — a second documented follow-up.
@@ -2901,6 +2904,49 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   another user prompt. Within each section rows sort newest-first by `lastEventAt`, the transition
   clock (same-state hook freshness is `stateAt`), and show its short relative age. Missing clocks
   stay last with no made-up timestamp. A click may clear the glow but cannot move the row.
+  **The clock survives an app restart as "last seen", never as a state** (`agentStatus.lastSeen`,
+  `{at, state}`). `lastEventAt`/`stateAt`/`state` are transient, so before this every row after a
+  restart sorted as "no clock" and lost its age. `lastSeen` is the time of the LAST hook event (a
+  same-state one included) and the state it asserted, persisted beside the agentStatus record under
+  its OWN small key (`nodeterm.agentStatus.lastSeen`) — chosen over the core mirror because the
+  sidebar already reads this store,
+  the mirror expires state after 6 h and identity later, and reading it would need a new IPC leg for
+  a display fact. Rules a refactor must not undo:
+  - **Restored as a clock only.** Load fills `lastSeen` and nothing else: `state` stays unknown (the
+    hook server was down with the app, so a turn may have started or ended in between), and
+    `lastEventAt` stays unset. Load marks the clock `restored` (transient, never written); the row
+    reads `lastEventAt ?? lastSeen.at` and its `statusClock` is `transition` / `seen` (a hook event
+    this run but no transition yet) / `restored`. Only `restored` says "before nodeterm restarted"
+    (`seen 3h ago`, tooltip naming the state it was last seen in). **The first event after a restart
+    is usually a SAME-state one** (a cold-restore `--resume` fires SessionStart = `state: undefined`
+    on an entry whose state is already unknown), so the store's in-place fast path must not take it:
+    it replaces the entry (the row loses `restored` and re-sorts at once) without stamping
+    `lastEventAt` (an unknown state is not an idle clock).
+  - **Eco never reads it** (so `idleKnown` and `planHibernation` are unchanged). Even a proven-idle
+    prompt after boot would not be enough: the background-task stamp and the subagent cards Eco
+    also needs are transient and cannot be rebuilt after a restart, and `/exit` kills both
+    silently. A session becomes a candidate again from its next live `done`.
+  - **Its own key, so the main table's write cadence is unchanged.** State events still write
+    nothing to `nodeterm.agentStatus`. That matters twice: the main table carries `loop.items` (up to
+    100 × 4000 chars per loop node — 428 KB and ~2.1 ms per stringify with one full loop, measured in
+    review), and on the Server Edition every tab rewrites its whole in-memory table, so a periodic
+    rewrite would let tab B undo tab A's `clearUnread`/`hibernated` within seconds. A first version
+    stored the clock inside that table on a 2 s THROTTLE and rewrote it every 2 s while any agent
+    worked. The clock key is saved on a real TRAILING debounce (5 s quiet, `LAST_SEEN_SAVE_MAX_WAIT_MS`
+    30 s at most while never quiet) plus `pagehide`: 2 Hz hook events for 10 s = ONE write. Measured:
+    ~59 bytes per clock, 1000 clocks = 59 KB and 0.7 ms per `JSON.stringify` on this dev host. Two
+    Server Edition tabs still race on the CLOCK key (last writer wins), which costs only display.
+  - **Bounded.** At most `LAST_SEEN_MAX` (1000) newest clocks are written; a clock older than 90 days
+    or more than 5 min in the future is refused on load (hand-editable input — a future stamp would
+    pin a row to the top); an unknown `state` keeps the time and drops the state; an unreadable clock
+    key costs the clocks, never the table.
+  - **It cannot create a row**: rows come from canvas nodes, never from the status table.
+    `remove(id)` writes the clock key at once, a pending debounced save included; a deletion path
+    that bypasses `remove` (e.g. `reloadActiveProject` dropping nodes) leaves a clock that simply
+    ages out. Tests: `state/agentStatus.lastSeen.test.ts`.
+  - Surfaces: Desktop full; Server Edition per browser profile (localStorage, like `unread`); relay
+    tabs keep a keyless store and persist nothing; kanban has no clock-ordered view, so nothing to
+    wire there; Mobile N/A (its own state).
 - **Session name ⇄ node title** — **two lists, because the two directions are separate facts**:
   `TITLE_READ_CAPABLE` (`canReadTitle` — claude, **codex**, grok, **gemini**) is the READ leg,
   `RENAME_CAPABLE` (`canRename` — claude, grok) the WRITE leg, and **read ⊇ write** is an invariant
@@ -4998,6 +5044,101 @@ principle. Per-agent write-ups: `docs/grok-agent.md`, `docs/gemini-agent.md`.
     `KEY=secret` leaks it into the pane/history. SIGTERM the pane's foreground non-shell process
     group (a typed `/exit` can land in the agent composer as prompt text), recycle the persistent
     session, and let cold restore resume with the new model under the newly injected environment.
+
+## Open recent (resume a past agent conversation from its history)
+
+Past conversations live in each CLI's own history, and nodeterm used to resume only what a node
+remembered. "Open recent" lists them — the start screen's **Recent conversations** (grouped by the
+folder each ran in) and a **Recent conversations** section of ⌘K — and one click resumes one.
+Reader: `core/recent-conversations.ts` (`recent-conversations:list`, registered by BOTH shells);
+plan: the pure `renderer/lib/recentConversations.ts`; execution: Canvas `resumeRecentConversation`.
+
+- **Which agents, and why only those** (`RECENT_CONVERSATION_AGENTS`, `@shared/recent-conversations`):
+  claude (system root + every LOCAL settled managed and linked account — `claudeAccountsSnapshot`),
+  codex (system `CODEX_HOME` + the managed homes whose ids the renderer sends; core re-validates
+  each through `codexHomeForAccount`, which throws outside the id alphabet), gemini, grok, copilot.
+  Each is in `RESUMABLE_AGENTS` AND has a measured on-disk shape. **opencode is out**: its history is
+  a SQLite database we never open, and the only reader is `opencode export` (one spawn, ~1.5 s,
+  ~320 MB per session). **antigravity is out**: its record shapes were never captured. An agent
+  outside the list contributes no rows — nothing guesses at a layout.
+- **Measured shapes the reader depends on** (dev host, 2026-09-30): codex `session_meta` carries
+  `id`, `cwd` and `thread_source` — a spawned child says `"subagent"` with a `source: {subagent:…}`
+  object (4 of 62 rollouts here) and is SKIPPED, a user's own thread says `"user"`; that first line
+  also carries the whole base instructions (tens of KB), which is why the head read is 512 KB.
+  gemini's project dir holds `.project_root` = the absolute cwd, and its header says `kind: "main"`;
+  a session holding only harness `<session_context>` (no prompt, no title) is not a conversation
+  and is skipped (all 3 gemini sessions on this host). grok's session group is the URL-encoded cwd;
+  a group that does not re-encode to its own name (grok's slug+hash form for a long cwd) keeps a
+  null cwd rather than a guessed one. copilot's `session.start` names `context.cwd`, and its
+  `sessionId` must equal the directory it sits in.
+- **Bounded**: per root only the newest `PER_ROOT` (25) files by mtime are OPENED; every other
+  file costs a stat, and stats run in parallel capped at `STAT_CONCURRENCY` (32) — the first version
+  awaited them one by one, which review measured at 2.8–4.0 s warm for 10,000 transcripts on every
+  ⌘K. Codex walks its dated tree newest-first and stats at most 100. Each open is a 512 KB head plus,
+  for a claude/gemini title, a 128 KB tail; the parse is cached by (path, size, mtime), and the whole
+  answer is REUSED for `RESULT_REUSE_MS` (10 s, keyed by the exact roots + limit, concurrent callers
+  share one read). Measured (fixture trees, this host): 300 files 45 ms cold / 17 ms warm, 3,000 →
+  209 / 356 ms, 10,000 → 630 / 617 ms; the real dev-host history (313 claude transcripts, 62 codex
+  rollouts) 227 ms cold, 20 ms cached, 46 rows. Read on demand only — once per start-screen
+  appearance and per palette open, never a timer. (`core/transcript-index.ts` was not reused: it is
+  claude-only and carries no account per entry.)
+- **Title = display text, never a command.** The agent's own session name where it has one (claude
+  `custom-title`/`ai-title` via `pickSessionName`, gemini `update_topic` via `pickGeminiTitle`, grok
+  `summary.json`), else the first thing the user typed (the agent's own chat parser; a `<…>` harness
+  wrapper is not a prompt). Every title goes through `untrustedLine` (no control, bidi or zero-width
+  characters, one line, capped at 120). Every file the reader opens is `lstat`ed first and must be a
+  regular file — transcripts, gemini's `.project_root` and grok's `summary.json` alike — so a symlink
+  planted in a history dir is never followed. Only the SESSION ID reaches a pane, re-validated
+  three times: `SAFE_SESSION_ID` at read, `canResumeWith` in the plan, and `createAgentNode`, which
+  THROWS on an id the resume grammar refuses rather than silently starting a fresh conversation.
+- **The resume funnel is the factory's own**: `createAgentNode`'s trailing `resumeSessionId` builds
+  the line with `assembleResumeCommand` — the assembler cold restore uses, so a launch override,
+  custom args, codex's launcher, `withPermissionMode` and the gateway model all apply — mints no id,
+  and persists the RESUMED id as `agentSessionId`. The ⌘K transcript-search hit now uses the same
+  path; before, it replaced the command by hand and kept a freshly minted id the node never ran, so
+  its cold restore after a reboot resumed nothing — and it passed no account, so a hit from a
+  managed/linked root resumed under the system login. `TranscriptHit.accountId` (from the index root
+  that holds the file) now travels with it, refused if that account is gone or not local.
+- **The account is the one that holds the history**, never the project default: a conversation in a
+  managed account's config dir resumed under the system login answers "No conversation found".
+  `boundAccountId` still decides binding; the plan REFUSES when that account is gone, pending or
+  host-pinned (`RESUME_REFUSALS.accountGone`). A codex rollout HARDLINKED into a second home by
+  "Switch Codex account" is one inode seen twice with the same mtime: `mergeRecent` credits the tie
+  to the MANAGED account's copy. That is usually the account it was switched TO; a switch back to
+  the system login is credited wrongly, which costs nothing — both homes hold the same file, so the
+  resume finds it under either.
+- **Where it resumes** (`planResume`):
+  - A node already holding the session is FOCUSED — two CLIs on one transcript interleave it. A node
+    holds exactly ONE session: its live hook id, ELSE its persisted `agentSessionId` — never both.
+    `agentSessionId` is the launch-minted id and nothing rewrites it from hooks, so after `/clear`
+    (live B) the node no longer holds A, and A must stay resumable (`closedHistory` uses the same
+    `live || persisted`).
+  - A folder that no longer exists (`cwdState: 'absent'`, a definite ENOENT/ENOTDIR from core — a
+    failed stat is `unknown` and proceeds) is REFUSED: opening it would RECREATE it (the store
+    mkdirs `<cwd>/.nodeterm`), and a removed worktree is the common case; a later
+    `git worktree add` at that path would then fail.
+  - Else the MOST SPECIFIC local owner of the folder: a worktree-bound group frame whose
+    `worktree.path` is the folder or an ancestor (the node opens inside that frame), or the local
+    project whose cwd is the folder or an ANCESTOR — segment-wise (`containsDir`), longest wins,
+    then active > open > closed (reopened). A conversation in `/repo/packages/app` resumes in the
+    `/repo` project; it does not mint a second project with a `project.json` inside the repository.
+    The node's cwd is always the conversation's own folder (the CLI keys the transcript by it).
+  - **Never an SSH project or a relay tab**: this is this machine's history, and those cwds are on
+    another machine. `openFolderProject`/`openOrAdoptFolder` now skip relay tabs too — a relay tab
+    carries the HOST's cwd, and the same path on two machines used to switch to it and do nothing.
+  - No owner → "Open folder & resume" through `openOrAdoptFolder` (the same probe/adopt rules as
+    "Open folder…"); the ⌘K row says "Open folder & resume: …", never a bare "Resume". A resume into
+  another project lands via `pendingResumeRef`, consumed by the project-load effect beside
+  `pendingFocusRef`, and RE-PLANS at creation (a node may have taken the session meanwhile).
+  Refused rows stay on the start screen, disabled with the reason; the palette omits them (no
+  disabled state there).
+- **Surfaces.** Desktop: this machine's history. **Server Edition**: its own host's history — the
+  machine the browser's sessions run on (real ws-bridge leg). **SSH projects: local history only in
+  v1** — a remote host's transcripts would need a remote leg over the ControlMaster, and a local
+  conversation is never resumed into an SSH project. **Relay tabs**: the list stays LOCAL (relay-api
+  spreads `...local`), and `recent-conversations:list` is `HOST_ONLY` so a peer can never list the
+  host's history (titles are prompts the host's user typed, in every project). **Mobile**: follow-up
+  in nodeterm-ios — "open recent" on the phone needs this list over the relay dialect.
 
 ## Session memory (the RAM pill + the per-session panel)
 
@@ -7471,6 +7612,84 @@ does not survive a real canvas. `canvas/camera-moving.test.ts` pins the absence.
   would then refuse every admin key in it). Relay attach on Windows rests on the session host
   being packaged (#575, shipped by #579): without that bundle `pty.attach` spawns a new plain shell
   instead of joining the node's session, while `sessionExists` still answers "warm".
+
+## Push webhook (a script or CI job rings the paired phone)
+
+Settings → Phone → **Push webhook** mints a per-host bearer token; anything that can run `curl`
+then pushes a plain-text notification to the phones relay-paired with this machine
+(`POST https://api.nodeterm.dev/v1/push/webhook`, `{"title","body"}`). Agents already push through
+their hooks; this is for the jobs that have no agent in the loop. The backend half lives in
+nodeterm-server (`src/routes/push-webhook.ts`, `src/lib/host-proof.ts`); the desktop half is
+`core/push-webhook.ts` (client), `shared/push-webhook.ts` (types, copy, the example) and
+`PushWebhookPanel.tsx`. Rules a change must keep:
+
+- **Minting, reading and revoking need the relay host SECRET key, not the public identity.** Every
+  other host-authenticated backend route accepts `(hostDeviceId, hostPublicKeyB64)`, and both are
+  known to every paired phone; for a send that only lets the holder reach phones that already
+  trust the host, but a webhook token is DURABLE — whoever can mint or revoke one can keep a live
+  token or silently cut the owner's CI alerts. So each management call is a challenge: the server
+  answers with an ephemeral X25519 key (derived from its own secret + the challenge, so no state
+  and any instance verifies), and main returns `HMAC-SHA256(X25519(hostSecret, ephemeral),
+  context)` with `context` = domain, challenge, action, host device id. The key never leaves main;
+  a proof for `status` cannot be spent on `revoke`; a challenge lives 5 min and is single-use per
+  process. `webhookProofContext` and the server's `proofContext` are ONE wire contract — change
+  both. `core/push-webhook.test.ts` verifies the desktop's NaCl `scalarMult` proof against Node's
+  own X25519 (the server's primitive), so the two cannot drift silently.
+- **The token is shown ONCE and kept nowhere on this side.** 256 random bits (`ntwh_` + 43
+  base64url), stored server-side only as its SHA-256 (a fast hash is right for a high-entropy
+  token), returned `Cache-Control: no-store`. The panel holds it in component state until "Done";
+  it is never written to settings.json, storage or a log (the panel test asserts local/session
+  storage). There is no "show again" — Rotate mints a new one and revokes the old. One live token
+  per host is enforced by a partial UNIQUE index on the backend (`host_id WHERE revoked_at IS
+  NULL`), not by the mint's transaction: under READ COMMITTED two concurrent first mints each see
+  no live row and both insert.
+- **Viewing the page calls nothing without a paired phone.** The client asks `hasPairedPhone` (the
+  same local check as `pushHasPairedPhone`: a phone pin or a registry device) BEFORE reading the
+  host key or the network: the first read of `remote-host-key.json` CREATES it, and a status call
+  sends the device id + public key to the backend — neither may happen because someone opened
+  Settings → Phone. A failed local check reads as "no phone". And settings search unmounts and
+  remounts every row, so the panel reuses its last status answer for 5 minutes
+  (`STATUS_REUSE_MS`, module state) instead of spending a challenge + status round trip per remount
+  against a per-IP budget that everyone behind one NAT shares.
+- **The example never puts the token on argv.** `pushWebhookCurlExample` (labelled `sh`) reads
+  `$NODETERM_WEBHOOK_TOKEN` and feeds the header to `curl --config -` through `printf` (a shell
+  builtin), the house rule for every credential we generate. Windows has no `sh`, so there is a
+  `PowerShell` twin (`pushWebhookPowerShellExample`): `Invoke-RestMethod` makes the request
+  in-process, so there is no child argv at all (and PowerShell 5.1 mangles JSON quotes passed to
+  `curl.exe`). `shared/push-webhook.test.ts` runs the
+  example under a real `/bin/sh` with a recording curl and asserts the token reached stdin and not
+  argv.
+- **The push is labelled and inert.** Subtitle `Webhook · <hostname>`, its own `thread-id`, the
+  phone's existing no-action category `AGENT_DONE`, and an `nt` block with `kind: 'webhook'` and no
+  `nodeId`, so a tap opens the Inbox and nothing else: no Allow/Deny buttons, no deep link, no URL
+  opened. Title is one line (≤ 120 code points), body ≤ 500; C0/C1 controls, lone surrogates and
+  the bidi/zero-width controls are stripped — NOT all of `\p{Cf}`, which holds ZWJ and the tag
+  characters (👨‍💻, subdivision flags) — and a payload over APNs' 4096 bytes is refused with a 413
+  rather than answered `sent: 0` (lone surrogates JSON-escape to 6 bytes each; measured 4103 bytes
+  before they were stripped).
+- **KNOWN GAP — needs an iOS release (@eneskirca).** The phone shows these pushes without a release
+  (unknown `kind` + no `nodeId` routes to a plain Inbox open), EXCEPT while its Inbox sheet is open:
+  `PushPresentation.shouldSuppressBanner` suppresses every push then (the live feed is assumed to
+  show it), so `willPresent` presents nothing — no banner, no sound, no Notification Center entry —
+  and a webhook message never appears in the Inbox feed. It is lost. The fix is phone-side: do not
+  suppress `nt.kind == "webhook"`.
+- **Budgets:** 10 per minute per token, 60 per hour per HOST (keyed by hostId, so rotating does not
+  reset it), 20 mints per host per day, plus per-IP shields. Fan-out = exactly a host-mode
+  `/v1/push/notify`: this host's live relay pairings with a live APNs registration, minus phones
+  that muted this host.
+- **Relay-paired phones only.** An SSH-granted phone (push grants) has no row the backend can tie to
+  this host, so it does not receive webhook pushes; minting with no live pairing answers
+  `no_paired_phone` and the panel says so. The desktop refuses before calling at all when it knows
+  of no paired phone, so a token left live after every phone is unpaired cannot be revoked from
+  here until a phone is paired again (it sends to nobody meanwhile).
+- **No canvas-control verb.** An agent already has hook-driven pushes, and a verb would need the
+  desktop to hold the token, which it deliberately does not.
+
+Surfaces: Desktop full. **Server Edition: N/A** — it has no relay host key or paired-phone
+registry (same degrade as `push-notify.ts`); the bridge answers `E_UNSUPPORTED` and the row is
+hidden in a browser tab. IPC is under `pairing:` so `HOST_ONLY_CHANNEL_PREFIXES` keeps it off the
+relay. **Mobile:** the Inbox-open gap above needs an iOS release; an iOS follow-up could also give
+`kind: 'webhook'` its own Inbox row and tap target.
 
 ## Hosted team relay (Server Edition as a relay host)
 

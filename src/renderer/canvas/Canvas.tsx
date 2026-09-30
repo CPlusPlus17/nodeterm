@@ -465,6 +465,7 @@ import {
   capabilityAgentId,
   createdAgentId,
   resumeCommand,
+  canResumeWith,
   vanillaEnvStripPattern,
   AGENT_CONFIG,
   BUILTIN_AGENT_IDS,
@@ -477,6 +478,18 @@ import { encodeUtf8Base64, launchPromptFor } from '../lib/promptSpill'
 import { parseTeamSpec } from '../lib/teamSpec'
 import { relativeTime } from '../lib/relativeTime'
 import { AgentIcon } from '../lib/agentIcons'
+import type { RecentConversation } from '@shared/recent-conversations'
+import {
+  heldSessions,
+  localCodexAccountIds,
+  worktreeGroups,
+  planResume,
+  folderLabel,
+  recentTitle,
+  resumeActionLabel,
+  RESUME_REFUSALS,
+  type ResumeContext
+} from '../lib/recentConversations'
 import { nodeIconDialog } from '../components/NodeIconPicker'
 import { applyIconChoice } from '../lib/nodeIconChoice'
 import type { NodeIcon } from '@shared/node-icon'
@@ -1558,6 +1571,8 @@ export function Canvas() {
   const [closedTranscript, setClosedTranscript] = useState<ClosedSessionEntry | null>(null)
   // Node to center once its project finishes loading (cross-project notification click).
   const pendingFocusRef = useRef<string | null>(null)
+  // "Open recent": a conversation to resume once the project it belongs to is on the canvas.
+  const pendingResumeRef = useRef<{ projectId: string; conv: RecentConversation } | null>(null)
   // One-shot: the next active-project load keeps the CURRENT camera instead of applying the
   // project's saved viewport. Set by reloadActiveProject (in-place external-change reload).
   const preserveViewportRef = useRef(false)
@@ -3148,6 +3163,12 @@ export function Canvas() {
         setResumeProject(project)
       } else {
         setResumeProject(null)
+      }
+      // Finish an "Open recent" resume that had to land on this project first.
+      const pendingResume = pendingResumeRef.current
+      if (pendingResume && pendingResume.projectId === project.id) {
+        pendingResumeRef.current = null
+        resumeCreateRef.current(pendingResume.conv)
       }
       // Consume a cross-project focus request (notification click on a background node).
       const pending = pendingFocusRef.current
@@ -7215,6 +7236,9 @@ export function Canvas() {
   /** Latest `travelToNode`, for the agent-control handler's off-canvas notice. Travel to a NODE is
    *  the user's own click on the notice's "Go there" button, not something a verb does. */
   const travelToNodeRef = useRef<(nodeId: string) => void>(() => {})
+  // "Open recent": the resume-node creator, published by the callback below so the project-load
+  // effect (declared earlier) can finish a resume that had to switch projects first.
+  const resumeCreateRef = useRef<(conv: RecentConversation) => void>(() => {})
   // #925 headless start: one in-flight set for the whole canvas (one start per node at a time),
   // shared by `open-* --run-now` and `run`. The two below are published beside travelToNodeRef's
   // assignment, for the same reason: the agent-control effect mounts ONCE.
@@ -11650,8 +11674,20 @@ export function Canvas() {
       // No live node — open a resume node in the active project, using the transcript's cwd. The
       // resume line goes through that project's launch command, like every other launch it owns.
       const activeId = useProjects.getState().activeProjectId
-      const cmd = resumeCommand('claude', hit.sessionId, false, agentLaunchOverride('claude', activeId))
-      if (!cmd) return
+      if (!canResumeWith('claude', hit.sessionId)) return
+      const hitAccount = hit.accountId
+      if (
+        hitAccount &&
+        !(useSettings.getState().settings.claudeAccounts ?? []).some(
+          (a) => a.id === hitAccount && !a.host && !a.pending
+        )
+      ) {
+        setNotice({ kind: 'error', text: RESUME_REFUSALS.accountGone })
+        return
+      }
+      // The factory's resume path: the same assembler cold restore uses (launch override, permission
+      // flag), and the node persists THIS id — not a freshly minted one it never ran — so a later
+      // cold restore resumes the same conversation.
       const node = createAgentNode(
         'claude',
         nodesRef.current.length,
@@ -11659,15 +11695,15 @@ export function Canvas() {
         viewCenter(),
         undefined,
         undefined,
+        // The account whose root holds this transcript — the system login would not find it. A
+        // hit naming an account that has since been removed or is not local is refused.
+        hitAccount,
+        activePermissionMode('claude'),
+        activeId,
         undefined,
         undefined,
-        activeId
+        hit.sessionId
       )
-      // The resume command replaces (never wraps) the factory's command, so it is flagged once.
-      node.data = {
-        ...node.data,
-        initialCommand: withPermissionMode(cmd, 'claude', activePermissionMode())
-      }
       node.selected = true
       setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), node])
       markDirty()
@@ -16243,7 +16279,9 @@ export function Canvas() {
     async (folder: string): Promise<void> => {
       commitActiveToStore()
       // A folder maps to one project: reuse the already-registered one first…
-      const existing = useProjects.getState().projects.find((p) => p.cwd === folder)
+      // A relay tab carries the HOST's cwd: the same path on two machines must not route a local
+      // folder to another machine's tab (openFolderProject applies the same rule).
+      const existing = useProjects.getState().projects.find((p) => p.cwd === folder && !p.remote)
       if (existing) {
         useProjects.getState().openFolderProject(folder)
         // An `unavailable` placeholder never recovers on its own: a save emits a header-only ref
@@ -16565,6 +16603,159 @@ export function Canvas() {
     travelToNodeRef.current = travelToNode
   })
 
+  // ── "Open recent": resume a past agent conversation from its CLI's own history ──────────────
+  // The list is THIS machine's (window.nodeTerminal: the desktop's core, or the Server Edition's
+  // host), read on demand — one read per welcome-screen appearance and per palette open, never a
+  // timer. `ok:false` shows nothing rather than "no conversations". The plan is the pure
+  // `planResume` (lib/recentConversations.ts); this only executes it.
+  const [recentConvs, setRecentConvs] = useState<RecentConversation[] | null>(null)
+  const refreshRecentConvs = useCallback(() => {
+    const codexAccountIds = localCodexAccountIds(useSettings.getState().settings.codexAccounts ?? [])
+    return window.nodeTerminal.recentConversations
+      .list({ codexAccountIds })
+      .then((r) => setRecentConvs(r.ok ? r.items : null))
+      .catch(() => setRecentConvs(null))
+  }, [])
+
+  const resumeContext = useCallback((): ResumeContext => {
+    const { projects, activeProjectId: active } = useProjects.getState()
+    const byId = useAgentStatus.getState().byId
+    const settings = useSettings.getState().settings
+    const live = canCreateOnCanvas(nodesProjectIdRef.current, active) ? nodesRef.current : []
+    return {
+      projects,
+      activeProjectId: active,
+      held: heldSessions(projects, active, live as never, (id) => byId[id]?.sessionId),
+      worktreeGroups: worktreeGroups(projects, active, live as never),
+      claudeAccounts: settings.claudeAccounts ?? [],
+      codexAccounts: settings.codexAccounts ?? []
+    }
+  }, [])
+
+
+  /** Create the resume node in the ACTIVE project. Re-plans first: between the click and now a node
+   *  may have taken the session, or its account may have been removed. */
+  const createRecentResumeNode = useCallback(
+    (conv: RecentConversation): void => {
+      const active = useProjects.getState().activeProjectId
+      if (!canCreateOnCanvas(nodesProjectIdRef.current, active)) {
+        setNotice({ kind: 'error', text: CANVAS_NOT_ACTIVE_NOTICE })
+        return
+      }
+      const plan = planResume(conv, resumeContext())
+      if (plan.kind === 'focus') {
+        travelToNode(plan.nodeId)
+        return
+      }
+      if (plan.kind === 'refuse') {
+        setNotice({ kind: 'error', text: plan.reason })
+        return
+      }
+      if (plan.kind !== 'resume' || plan.projectId !== active) return
+      let node: CanvasNode
+      try {
+        node = createAgentNode(
+          conv.agentId,
+          nodesRef.current.length,
+          conv.cwd ?? undefined,
+          emptyNodePos(),
+          undefined,
+          undefined,
+          // The account whose config dir HOLDS this history — never the project default, or the CLI
+          // would look for the conversation under another login and answer "No conversation found".
+          conv.accountId,
+          activePermissionMode(conv.agentId),
+          active,
+          undefined,
+          undefined,
+          conv.sessionId
+        )
+      } catch {
+        setNotice({ kind: 'error', text: RESUME_REFUSALS.unsafeId })
+        return
+      }
+      if (conv.titleSource === 'name' && conv.title) node.data = { ...node.data, title: conv.title }
+      node.selected = true
+      // Inside the worktree-bound frame that owns the folder, when there is one (its branch's work).
+      const placed =
+        plan.groupId && nodesRef.current.some((n) => n.id === plan.groupId)
+          ? parentInto(node, plan.groupId)
+          : node
+      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), placed])
+      markDirty()
+      goToNode(placed)
+      setWelcomeOpen(false)
+    },
+    [resumeContext, travelToNode, emptyNodePos, parentInto, setNodes, markDirty, goToNode]
+  )
+  useEffect(() => {
+    resumeCreateRef.current = createRecentResumeNode
+  })
+
+  /** Land on `projectId`, then resume there (now if the canvas already holds it). */
+  const resumeWhenLanded = useCallback(
+    (projectId: string, conv: RecentConversation) => {
+      if (
+        projectId === useProjects.getState().activeProjectId &&
+        canCreateOnCanvas(nodesProjectIdRef.current, projectId)
+      ) {
+        createRecentResumeNode(conv)
+        return
+      }
+      pendingResumeRef.current = { projectId, conv }
+    },
+    [createRecentResumeNode]
+  )
+
+  const resumeRecentConversation = useCallback(
+    (conv: RecentConversation) => {
+      const plan = planResume(conv, resumeContext())
+      switch (plan.kind) {
+        case 'focus':
+          setWelcomeOpen(false)
+          travelToNode(plan.nodeId)
+          return
+        case 'refuse':
+          setNotice({ kind: 'error', text: plan.reason })
+          return
+        case 'resume':
+          resumeWhenLanded(plan.projectId, conv)
+          if (plan.reopen) reopenProject(plan.projectId)
+          else switchProject(plan.projectId)
+          return
+        case 'open-folder':
+          void openOrAdoptFolder(plan.folder)
+            .then(() => {
+              setWelcomeOpen(false)
+              const landed = useProjects
+                .getState()
+                .projects.find((p) => !p.ssh && !p.remote && p.cwd === plan.folder)
+              if (landed) resumeWhenLanded(landed.id, conv)
+            })
+            .catch((err: unknown) =>
+              setNotice({
+                kind: 'error',
+                text: `Could not open ${plan.folder}: ${stripIpcPrefix(err instanceof Error ? err.message : String(err))}`
+              })
+            )
+          return
+      }
+    },
+    [resumeContext, travelToNode, resumeWhenLanded, reopenProject, switchProject, openOrAdoptFolder]
+  )
+
+  const recentActionFor = useCallback(
+    (conv: RecentConversation): { label: string; disabled?: string } => {
+      const plan = planResume(conv, resumeContext())
+      const label = resumeActionLabel(
+        plan,
+        (id) => useProjects.getState().getProject(id)?.name ?? 'project'
+      )
+      return plan.kind === 'refuse' ? { label, disabled: plan.reason } : { label }
+    },
+    [resumeContext]
+  )
+
   // #925: start held launches headless in a project that is not on screen (`open-* --run-now`),
   // and `run --node` (the CLI twin of a QUEUED node's Run now). Wiring only: the flow and every
   // refusal live in lib/headlessRun. Published every render for the same reason as above.
@@ -16815,6 +17006,11 @@ export function Canvas() {
       stale = true
     }
   }, [welcomeVisible, closedProjects])
+
+  // "Open recent": one read per welcome-screen appearance and per palette open.
+  useEffect(() => {
+    if (welcomeVisible || paletteOpen) void refreshRecentConvs()
+  }, [welcomeVisible, paletteOpen, refreshRecentConvs])
 
   const now = useMemo(() => Date.now(), [transcriptHits])
   const transcriptCommands = useMemo<Command[]>(
@@ -17190,10 +17386,32 @@ export function Canvas() {
   // at the call site rebuilt the whole list (JSX icons for every node + project) on every Canvas
   // render while the palette was open. `nodes` is a dep because the list reads nodesRef.current;
   // capture-cache refreshes arrive via buildCommands' own identity (bufferCache is its dep).
+  // "Open recent" rows in the palette: searchable by title, agent and folder. Capped — the list is
+  // one read of up to 60, and a palette with nothing typed should not be all history.
+  const recentCommands = useMemo<Command[]>(() => {
+    if (!paletteOpen || !recentConvs) return []
+    const at = Date.now()
+    // A refused row is OMITTED here (the palette has no disabled state — a dead search result is
+    // worse than none); the welcome screen shows it disabled with its reason instead.
+    return recentConvs.slice(0, 30).flatMap((conv): Command[] => {
+      const action = recentActionFor(conv)
+      if (action.disabled) return []
+      return [{
+        id: `recent:${conv.agentId}:${conv.sessionId}`,
+        // The row says what it will DO — "Open folder & resume" opens a new project first.
+        label: `${action.label}: ${recentTitle(conv)}`,
+        hint: [folderLabel(conv.cwd), relativeTime(conv.lastActiveAt, at)].join(' · '),
+        section: 'Recent conversations',
+        icon: <AgentIcon agentId={conv.agentId} />,
+        run: () => resumeRecentConversation(conv)
+      }]
+    })
+  }, [paletteOpen, recentConvs, recentActionFor, resumeRecentConversation])
+
   const paletteCommands = useMemo(
-    () => (paletteOpen ? buildCommands() : []),
+    () => (paletteOpen ? [...buildCommands(), ...recentCommands] : []),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- nodes stands in for nodesRef.current
-    [paletteOpen, buildCommands, nodes]
+    [paletteOpen, buildCommands, recentCommands, nodes]
   )
 
   // The palette's chord appears as a bare chip in two places (the cluster's search button and the
@@ -17772,6 +17990,9 @@ export function Canvas() {
             sessionCounts={closedSessionBadges ?? undefined}
             onReopen={reopenProject}
             onDeleteClosed={requestDeleteClosed}
+            recentConversations={recentConvs ?? undefined}
+            recentActionFor={recentActionFor}
+            onResumeRecent={resumeRecentConversation}
             onClose={hasProjects ? () => setWelcomeOpen(false) : undefined}
             overBoard={kanbanOpen}
           />

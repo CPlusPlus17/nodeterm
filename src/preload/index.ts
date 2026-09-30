@@ -2,6 +2,7 @@ import { subscribeAgentReplay } from '../shared/agent-replay-subscription'
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import { IPC } from '../shared/ipc'
 import { resolveUiScale } from '../shared/ui-scale'
+import type { RecentConversationsRequest } from '../shared/recent-conversations'
 import type {
   CanvasMutation,
   CanvasState,
@@ -509,6 +510,10 @@ const api: NodeTerminalApi = {
     forward: (req: DevPortForwardRequest) => ipcRenderer.invoke(IPC.devPortsForward, req),
     unforward: (req: { projectId: string; localPort: number }) => ipcRenderer.invoke(IPC.devPortsUnforward, req)
   },
+  recentConversations: {
+    list: (req?: RecentConversationsRequest) =>
+      ipcRenderer.invoke(IPC.recentConversationsList, req)
+  },
   wallpaper: {
     listStills: () => ipcRenderer.invoke(IPC.wallpaperListStills),
     load: (w) => ipcRenderer.invoke(IPC.wallpaperLoad, w),
@@ -702,7 +707,11 @@ const api: NodeTerminalApi = {
     probeSsh: () => ipcRenderer.invoke(IPC.pairingProbeSsh),
     openRemoteLoginSettings: () => ipcRenderer.invoke(IPC.pairingOpenRemoteLoginSettings),
     listDevices: () => ipcRenderer.invoke(IPC.pairingListDevices),
-    revokeDevice: (id) => ipcRenderer.invoke(IPC.pairingRevokeDevice, id)
+    revokeDevice: (id) => ipcRenderer.invoke(IPC.pairingRevokeDevice, id),
+    webhookStatus: () => ipcRenderer.invoke(IPC.pairingWebhookStatus),
+    webhookMint: () => ipcRenderer.invoke(IPC.pairingWebhookMint),
+    webhookRevoke: () => ipcRenderer.invoke(IPC.pairingWebhookRevoke),
+    webhookEndpoint: () => ipcRenderer.invoke(IPC.pairingWebhookEndpoint)
   },
   // Team presence. `hello` is the only request (its response is how this client learns its OWN
   // ClientId, without which it would draw its own cursor as a peer's); the publishers are
