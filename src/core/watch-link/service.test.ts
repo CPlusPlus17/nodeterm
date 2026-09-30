@@ -6,6 +6,7 @@ import {
   createWatchLinkService,
   registerWatchLinkIpc,
   sendToOwners,
+  shutdownWithin,
   workspaceNodeState,
   type WatchLinkNodeState,
   type WatchLinkService,
@@ -106,6 +107,7 @@ interface Opts {
   workspaceReady?: () => Promise<unknown>
   unsupported?: boolean
   persistTimeoutMs?: number
+  workspaceWaitMs?: number
   now?: () => number
 }
 function service(o: Opts = {}) {
@@ -130,6 +132,7 @@ function service(o: Opts = {}) {
     createHost: hosts.createHost,
     ...(o.unsupported ? { unsupported: true } : {}),
     ...(o.persistTimeoutMs ? { persistTimeoutMs: o.persistTimeoutMs } : {}),
+    ...(o.workspaceWaitMs ? { workspaceWaitMs: o.workspaceWaitMs } : {}),
     ...(o.now ? { now: o.now } : {})
   })
   services.push(s)
@@ -155,7 +158,7 @@ const flush = async (n = 20) => {
   for (let i = 0; i < n; i++) await Promise.resolve()
 }
 /** A store that records every save and answers the outcomes a test chose. */
-function fakeStore(o: { load?: () => Promise<WatchLinkRecord[]>; save?: (r: readonly WatchLinkRecord[]) => Promise<SaveOutcome> } = {}) {
+function fakeStore(o: { load?: () => Promise<WatchLinkRecord[]>; save?: (r: readonly WatchLinkRecord[]) => Promise<SaveOutcome>; opaque?: number } = {}) {
   const saves: WatchLinkRecord[][] = []
   let discarded = 0
   const store: Store = {
@@ -166,7 +169,8 @@ function fakeStore(o: { load?: () => Promise<WatchLinkRecord[]>; save?: (r: read
     },
     discardOpaque: () => {
       discarded++
-    }
+    },
+    opaqueCount: () => o.opaque ?? 0
   }
   return { store, saves, discarded: () => discarded }
 }
@@ -195,7 +199,7 @@ describe('createWatchLinkService — create', () => {
     expect(await t.s.create(req({ nodeId: '../x' }))).toEqual(bad)
     expect(await t.s.create(req({ nodeId: 12 }))).toEqual(bad)
     expect(await t.s.create(req({ label: '' }))).toEqual(bad)
-    expect(await t.s.create(req({ label: '\u0007‮ ' }))).toEqual(bad)
+    expect(await t.s.create(req({ label: '\u0007\u202e ' }))).toEqual(bad)
     expect(await t.s.create(req({ label: 5 }))).toEqual(bad)
     expect(await t.s.create(null)).toEqual(bad)
     expect(await t.s.create('x')).toEqual(bad)
@@ -211,7 +215,7 @@ describe('createWatchLinkService — create', () => {
 
   it('cleans the label and title: controls and bidi overrides stripped, capped in UTF-16 units without splitting a pair', async () => {
     const t = service()
-    const r = await t.s.create(req({ label: ' A‮da\u0000‏ ', title: `x⁦${'😀'.repeat(50)}` }))
+    const r = await t.s.create(req({ label: ' A\u202eda\u0000\u200f ', title: `x\u2066${'😀'.repeat(50)}` }))
     if (!r.ok) throw new Error(r.error)
     expect(r.link.label).toBe('Ada')
     expect(r.link.title).toBe(`x${'😀'.repeat(39)}`) // 1 + 78 units; one more pair would be 81 > 80
@@ -307,6 +311,47 @@ describe('createWatchLinkService — create', () => {
     expect(t.hosts.made.map((h) => h.record.linkId)).toEqual(['Link000000000000000001', 'Link000000000000000002'])
   })
 
+  it('links the keychain could not unseal this run count against the cap (R46/M3)', async () => {
+    const f = fakeStore({ opaque: 3 })
+    const t = service({ store: f.store })
+    expect((await t.s.create(req())).ok).toBe(true)
+    expect((await t.s.create(req())).ok).toBe(true)
+    expect(await t.s.create(req())).toEqual({ ok: false, error: 'limit-machine' }) // 2 + 3 opaque = 5
+    expect(t.calls.filter((c) => c === 'create')).toHaveLength(2)
+  })
+
+  it('a node that leaves every project while the record is being written: node-missing, revoked, off disk (R46/M4)', async () => {
+    const held = deferred<SaveOutcome>()
+    let saves = 0
+    const f = fakeStore({ save: () => (++saves === 1 ? held.promise : Promise.resolve('saved')) })
+    const t = service({ store: f.store })
+    const creating = t.s.create(req())
+    await vi.waitFor(() => expect(saves).toBe(1))
+    t.nodes.set('n1', 'absent') // deleted during the write; no workspace change could see this record
+    held.resolve('saved')
+    expect(await creating).toEqual({ ok: false, error: 'node-missing' })
+    expect(t.calls).toContain('revoke Link000000000000000001')
+    expect(t.hosts.made).toEqual([])
+    expect(t.s.list()).toEqual([])
+    expect(f.saves.at(-1)).toEqual([]) // the list without it, queued behind the write that carried it
+  })
+
+  it('a create is not blocked by a workspace load that never finishes: init decides after its own bound (R46/M5)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const f = fakeStore({ load: async () => [record({ nodeId: 'n2' })] })
+    const t = service({
+      store: f.store,
+      workspaceReady: () => new Promise(() => {}),
+      workspaceWaitMs: 20,
+      nodes: new Map([['n1', 'present'], ['n2', 'unknown']])
+    })
+    expect((await t.s.create(req())).ok).toBe(true)
+    expect(t.s.list().map((l) => l.nodeId).sort()).toEqual(['n1', 'n2']) // the resumed link is kept (unknown)
+    expect(t.calls.filter((c) => c.startsWith('revoke '))).toEqual([])
+    expect(warn.mock.calls.filter(([l]) => /did not finish loading/.test(String(l)))).toHaveLength(1)
+    warn.mockRestore()
+  })
+
   it('waits for init: a create during the boot load counts the resumed links and never hosts one twice (G11)', async () => {
     const loading = deferred<WatchLinkRecord[]>()
     const f = fakeStore({ load: () => loading.promise })
@@ -324,10 +369,15 @@ describe('createWatchLinkService — create', () => {
   })
 
   it('a create waiting on an init that never settles is bounded too', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const f = fakeStore({ load: () => new Promise(() => {}) })
-    const t = service({ store: f.store, persistTimeoutMs: 20 })
+    const t = service({ store: f.store, persistTimeoutMs: 20, workspaceWaitMs: 20 })
+    expect(await t.s.create(req())).toEqual({ ok: false, error: 'persist-failed' })
     expect(await t.s.create(req())).toEqual({ ok: false, error: 'persist-failed' })
     expect(t.calls).not.toContain('create')
+    // Diagnosable, once: it is the links file that did not load, not a failed write.
+    expect(warn.mock.calls.filter(([l]) => /links file did not load/.test(String(l)))).toHaveLength(1)
+    warn.mockRestore()
   })
 
   it('the Server Edition (unsupported): create answers unsupported, list is empty, nothing is loaded or hosted (R43)', async () => {
@@ -396,7 +446,7 @@ describe('createWatchLinkService — ending a link', () => {
 
   it('Stop all reaches the server even when the boot load hangs (a stop never waits on the disk)', async () => {
     const f = fakeStore({ load: () => new Promise(() => {}) })
-    const t = service({ store: f.store, persistTimeoutMs: 20 })
+    const t = service({ store: f.store, persistTimeoutMs: 20, workspaceWaitMs: 20 })
     await t.s.revokeAll()
     await t.s.revoke('Link000000000000000001')
     expect(t.calls).toEqual(['revokeAll'])
@@ -642,12 +692,13 @@ describe('createWatchLinkService — the host seams', () => {
     const r = await t.s.create(req({ role: 'commenter' }))
     if (!r.ok) throw new Error('create failed')
     const h = t.hosts.made[0]
-    h.deps.onChat({ id: 'x', name: 'E‮ve', text: 'hi⁦ there', at: 1, from: 'viewer' })
+    h.deps.onChat({ id: 'x', name: 'E\u202eve\u061c', text: 'hi\u2066 there \u{1F468}\u200d\u{1F469}', at: 1, from: 'viewer' })
     const chat = t.emitted.find(([ch]) => ch === IPC.watchLinkChat)
-    expect(chat?.[1]).toEqual([r.link.linkId, { id: 'x', name: 'Eve', text: 'hi there', at: 1, from: 'viewer' }])
-    h.chat = [{ id: 'y', name: '‏Mal', text: 'a‪b', at: 2, from: 'viewer' }]
+    // Bidi (ALM included) gone; the ZWJ joining an emoji sequence stays.
+    expect(chat?.[1]).toEqual([r.link.linkId, { id: 'x', name: 'Eve', text: 'hi there \u{1F468}\u200d\u{1F469}', at: 1, from: 'viewer' }])
+    h.chat = [{ id: 'y', name: '\u200fMal', text: 'a\u202ab', at: 2, from: 'viewer' }]
     expect(t.s.chatHistory(r.link.linkId)).toEqual([{ id: 'y', name: 'Mal', text: 'ab', at: 2, from: 'viewer' }])
-    h.viewers = [{ viewerId: 'v-1', name: 'E‮ve', joinedAt: 5 }]
+    h.viewers = [{ viewerId: 'v-1', name: 'E\u202eve', joinedAt: 5 }]
     expect(t.s.list()[0].viewers).toEqual([{ viewerId: 'v-1', name: 'Eve', joinedAt: 5 }])
   })
 
@@ -662,6 +713,41 @@ describe('createWatchLinkService — the host seams', () => {
     expect(t.s.kick('Nope000000000000000000', 'v-1')).toBe(false)
     expect(t.s.sendChat('Nope000000000000000000', 'x')).toBeNull()
     expect(t.s.chatHistory('Nope000000000000000000')).toEqual([])
+  })
+})
+
+describe('state pushes are coalesced (R46/M7)', () => {
+  it('one push per end, although the stopped host also reports a change; one push for a whole shutdown', async () => {
+    const t = service()
+    for (const nodeId of ['n1', 'n2', 'n1']) expect((await t.s.create(req({ nodeId }))).ok).toBe(true)
+    // Like the real link host: `stop` reports a change.
+    for (const h of t.hosts.made) {
+      const deps = h.deps
+      h.stopped = new Proxy(h.stopped, {
+        get: (arr, k) => (k === 'push' ? (...a: string[]) => (deps.onChange(), arr.push(...a)) : Reflect.get(arr, k))
+      })
+    }
+    const before = t.states().length
+    await t.s.revoke(t.s.list()[0].linkId)
+    await flush()
+    expect(t.states().length - before).toBe(1)
+    expect(t.states().at(-1)).toHaveLength(2)
+    await t.s.shutdown()
+    await flush()
+    expect(t.states().length - before).toBe(2)
+  })
+})
+
+describe('shutdownWithin (R46/M6)', () => {
+  it('answers at the bound when the last write hangs, at once when it lands, and nothing for no service', async () => {
+    const hung = { shutdown: () => new Promise<void>(() => {}) } as unknown as WatchLinkService
+    const t0 = Date.now()
+    await shutdownWithin(hung, 30)
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(25)
+    const quick = { shutdown: vi.fn(async () => {}) } as unknown as WatchLinkService
+    await shutdownWithin(quick, 60_000) // would time the test out if it waited for the bound
+    expect((quick as unknown as { shutdown: ReturnType<typeof vi.fn> }).shutdown).toHaveBeenCalledTimes(1)
+    await shutdownWithin(null, 60_000)
   })
 })
 
@@ -739,4 +825,15 @@ describe('createWatchLinkService — real store', () => {
     await t.store.load() // queued behind the revoke's write
     expect(JSON.parse(readFileSync(t.file, 'utf8')).links).toEqual([])
   })
+})
+
+// A sanitizer whose character class renders as `[-]` cannot be reviewed by reading it (R46/M1): the
+// owner-side files spell every bidi and zero-width character as an escape.
+describe('no literal bidi or zero-width characters in the live-link owner sources', () => {
+  const LITERAL = new RegExp('[\\u061c\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff]')
+  for (const f of ['service.ts', 'service.test.ts', 'pty-seam.ts', '../../shared/watch-link-types.ts', '../../shared/presence.ts']) {
+    it(f, () => {
+      expect(LITERAL.test(readFileSync(join(__dirname, f), 'utf8'))).toBe(false)
+    })
+  }
 })

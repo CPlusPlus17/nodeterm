@@ -381,6 +381,21 @@ describe('opaque entries (a sealed secret this run cannot unseal)', () => {
     expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([sealedEntry])
   })
 
+  it('opaqueCount() counts the ones still carried: not past their expiry, not discarded', async () => {
+    const f = file()
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).save([rec(), other])).toBe('saved')
+    let t = EXPIRES_AT - 1
+    const s = new WatchLinkStore({ file: f, seal, unseal: locked, now: () => t })
+    expect(s.opaqueCount()).toBe(0)
+    await s.load()
+    expect(s.opaqueCount()).toBe(2)
+    t = EXPIRES_AT
+    expect(s.opaqueCount()).toBe(0)
+    t = EXPIRES_AT - 1
+    s.discardOpaque()
+    expect(s.opaqueCount()).toBe(0)
+  })
+
   it('discardOpaque() drops them from the next save ("Stop all": the server revoked them)', async () => {
     const f = file()
     expect(await new WatchLinkStore({ file: f, seal, unseal }).save([rec()])).toBe('saved')
@@ -404,5 +419,78 @@ describe('opaque entries (a sealed secret this run cannot unseal)', () => {
     expect(await s.load()).toEqual([])
     expect(await s.save([])).toBe('saved')
     expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([])
+  })
+})
+
+// Ruling R45: when the keychain starts refusing to SEAL mid-run, the links this run already holds a
+// sealed form of — read at boot, or sealed by an earlier write — are written with that ciphertext; only
+// a link that was never sealed is left out ('memory-only'). Writing no live link at all lost every
+// link loaded fine at boot, and writing nothing would keep a link stopped offline on disk (hosted again
+// at the next launch). A link no longer in the list is still dropped.
+describe('a keychain that stops sealing mid-run (R45)', () => {
+  const a = rec({ linkId: 'AaaaEfGhIjKlMnOpQrStUv', secret: new Uint8Array(32).fill(1) })
+  const b = rec({ linkId: 'BbbbEfGhIjKlMnOpQrStUv', secret: new Uint8Array(32).fill(2) })
+  const c = rec({ linkId: 'CcccEfGhIjKlMnOpQrStUv', secret: new Uint8Array(32).fill(3) })
+  const switchable = () => {
+    const state = { refuse: false }
+    const flaky = (b: Buffer) => {
+      if (state.refuse) throw new Error('keychain locked')
+      return seal(b)
+    }
+    return { state, flaky }
+  }
+  const ids = (f: string) => (JSON.parse(readFileSync(f, 'utf8')).links as { linkId: string }[]).map((e) => e.linkId)
+
+  it('boot-loaded links survive it with the ciphertext they were read with; a revoked one is gone; a new one is not written', async () => {
+    const f = file()
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).save([a, b])).toBe('saved')
+    const before = JSON.parse(readFileSync(f, 'utf8')).links
+    const k = switchable()
+    const s = new WatchLinkStore({ file: f, seal: k.flaky, unseal })
+    expect(await s.load()).toEqual([a, b])
+    k.state.refuse = true
+    expect(await s.save([a, b])).toBe('saved') // everything it holds is on disk: nothing is memory-only
+    expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual(before)
+    expect(await s.save([a])).toBe('saved') // b stopped: gone from the file, not resurrected
+    expect(ids(f)).toEqual([a.linkId])
+    expect(await s.save([a, c])).toBe('memory-only') // c was never sealed: left out, a kept
+    expect(ids(f)).toEqual([a.linkId])
+    // Next launch, keychain back: a resumes; b (stopped) and c (never written) do not.
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).load()).toEqual([a])
+  })
+
+  it('a link sealed by an earlier write this run survives it too', async () => {
+    const f = file()
+    const k = switchable()
+    const s = new WatchLinkStore({ file: f, seal: k.flaky, unseal })
+    expect(await s.save([c])).toBe('saved')
+    k.state.refuse = true
+    expect(await s.save([c, b])).toBe('memory-only')
+    expect(ids(f)).toEqual([c.linkId])
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).load()).toEqual([c])
+  })
+
+  it('a sealed form is reused only for the SAME secret', async () => {
+    const f = file()
+    const k = switchable()
+    const s = new WatchLinkStore({ file: f, seal: k.flaky, unseal })
+    expect(await s.save([a])).toBe('saved')
+    k.state.refuse = true
+    expect(await s.save([{ ...a, secret: new Uint8Array(32).fill(9) }])).toBe('memory-only')
+    expect(ids(f)).toEqual([])
+  })
+
+  it('never re-seals a secret it already holds sealed (the file does not churn on every write)', async () => {
+    const f = file()
+    let seals = 0
+    const counting = (b: Buffer) => {
+      seals++
+      return seal(b)
+    }
+    const s = new WatchLinkStore({ file: f, seal: counting, unseal })
+    await s.save([a])
+    await s.save([a, b])
+    await s.save([a, b])
+    expect(seals).toBe(2)
   })
 })

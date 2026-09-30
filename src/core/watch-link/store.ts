@@ -1,9 +1,9 @@
 // Active live links survive an app restart (spec D8). The secret is sealed through the platform's
 // secret seam: Electron safeStorage on the desktop, and ABSENT on the Server Edition by design
 // (headless, no keychain: raw bytes in a 0600 file, the same rule as its node secrets). On the
-// desktop there is no plaintext fallback: if sealing throws, no live link is written (the file keeps
-// only the opaque entries below) and links live in memory for this run; a raw secret found on a
-// desktop is refused, never adopted.
+// desktop there is no plaintext fallback: if sealing throws, a link that was never sealed is not
+// written (it lives in memory for this run; see R45 below for the ones that were); a raw secret found
+// on a desktop is refused, never adopted.
 //
 // What is sealed is the BASE64 TEXT of the secret, never its bytes. The desktop seam is a string
 // seam (`safeStorage.encryptString(b.toString('utf8'))` / `Buffer.from(decryptString(b), 'utf8')`),
@@ -32,6 +32,11 @@
 // until its own `expiresAt` passes; the first write after that drops it. A sealed secret that unseals
 // but is malformed, and a raw secret found on a desktop, are not opaque: they are dropped as before.
 // `discardOpaque()` is for "Stop all", whose server revoke has ended every link of the license.
+//
+// A KEYCHAIN THAT STOPS SEALING MID-RUN (controller ruling R45). The store keeps the sealed form of
+// every secret it read or sealed this run and reuses it on every write (it never re-seals), so when
+// `seal` starts throwing only a link it NEVER sealed is left out (reported 'memory-only'); links read
+// at boot and links sealed earlier stay on disk, and a link no longer in the list is still dropped.
 import { promises as fs } from 'node:fs'
 import { renameAtomic, writeFileAtomic } from '../fs-atomic'
 import { LINK_ID_RE } from '../../shared/watch-link/link'
@@ -62,6 +67,12 @@ export class WatchLinkStoreUnreadable extends Error {
     super(message, options)
     this.name = 'WatchLinkStoreUnreadable'
   }
+}
+
+/** A secret's base64 text and the sealed text the file holds for it. */
+interface SealedForm {
+  secret: string
+  sealed: string
 }
 
 interface FileEntry {
@@ -105,6 +116,9 @@ export class WatchLinkStore {
   /** Valid entries whose sealed secret this run could not unseal (R42), carried back on every write
    *  until their own `expiresAt`. Set by each `load()`. */
   private opaque: FileEntry[] = []
+  /** The sealed form of every secret this run read or sealed, by link id (R45): reused on every
+   *  write, so a keychain that starts refusing mid-run costs only a link it never sealed. */
+  private sealedForms = new Map<string, SealedForm>()
 
   constructor(
     private readonly o: {
@@ -119,6 +133,14 @@ export class WatchLinkStore {
   /** Forget every opaque entry: the next write leaves them out ("Stop all" revoked them server-side). */
   discardOpaque(): void {
     this.opaque = []
+  }
+
+  /** How many opaque entries are still carried (not past their own expiry): links this machine holds
+   *  but cannot host this run. They count against the per-machine cap (R46), or a run with a locked
+   *  keychain could create five more and the next launch would find ten. */
+  opaqueCount(): number {
+    const t = (this.o.now ?? Date.now)()
+    return this.opaque.filter((e) => e.expiresAt > t).length
   }
 
   load(): Promise<WatchLinkRecord[]> {
@@ -162,6 +184,7 @@ export class WatchLinkStore {
 
     const out: WatchLinkRecord[] = []
     const opaque: FileEntry[] = []
+    const sealedForms = new Map<string, SealedForm>()
     for (const e of Array.isArray(links) ? (links.slice(0, MAX_ENTRIES) as Partial<FileEntry>[]) : []) {
       if (!e || !str(e.linkId, 22) || !LINK_ID_RE.test(e.linkId)) continue
       // `isSafeNodeId` does not check the type: `12` and `["n1"]` pass its regex by coercion.
@@ -178,9 +201,11 @@ export class WatchLinkStore {
         continue
       }
       if (!secret) continue
+      if (sealed) sealedForms.set(e.linkId, { secret: Buffer.from(secret).toString('base64'), sealed: e.secret })
       out.push({ linkId: e.linkId, nodeId: e.nodeId, role: e.role, label: e.label, title: e.title, createdAt: e.createdAt, expiresAt: e.expiresAt, secret })
     }
     this.opaque = opaque
+    this.sealedForms = sealedForms
     return out
   }
 
@@ -225,20 +250,31 @@ export class WatchLinkStore {
   }
 
   async save(records: readonly WatchLinkRecord[]): Promise<SaveOutcome> {
-    let links: FileEntry[] = []
+    const links: FileEntry[] = []
     let outcome: SaveOutcome = 'saved'
+    // Only the records in THIS list keep a cached sealed form: a stopped link's goes with it.
+    const sealedNext = new Map<string, SealedForm>()
     try {
       for (const r of records) {
         const text = Buffer.from(r.secret).toString('base64')
         let secret = text
         if (this.o.seal) {
-          try {
-            secret = this.o.seal(Buffer.from(text, 'utf8')).toString('base64')
-          } catch {
-            // The keychain refused: no plaintext fallback. Write no live link, keep them in memory.
-            outcome = 'memory-only'
-            break
+          const known = this.sealedForms.get(r.linkId)
+          if (known && known.secret === text) {
+            // Never re-sealed: the form read at boot or sealed earlier this run is still valid, and a
+            // keychain that has started refusing must not cost a link it already holds sealed (R45).
+            secret = known.sealed
+          } else {
+            try {
+              secret = this.o.seal(Buffer.from(text, 'utf8')).toString('base64')
+            } catch {
+              // The keychain refused and this link was never sealed: no plaintext fallback. It is left
+              // out of the file (it lives in memory this run); every other link is written.
+              outcome = 'memory-only'
+              continue
+            }
           }
+          sealedNext.set(r.linkId, { secret: text, sealed: secret })
         }
         links.push({
           linkId: r.linkId, nodeId: r.nodeId, role: r.role, label: r.label, title: r.title,
@@ -249,7 +285,7 @@ export class WatchLinkStore {
       // Not a seal failure (a malformed record): leave the old file exactly as it is.
       return 'failed'
     }
-    if (outcome === 'memory-only') links = []
+    if (this.o.seal) this.sealedForms = sealedNext
     // Everything above ran synchronously at call time, so the chain is extended in call order. The
     // opaque entries are joined at WRITE time: a save issued while a load was still reading carries
     // what that load found.

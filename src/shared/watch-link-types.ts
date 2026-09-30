@@ -3,6 +3,7 @@
 // viewer's protocol — that is src/shared/watch-link/ (vendored byte for byte into nodeterm-web), and
 // this file must stay out of that directory.
 import type { WatchChatMessage, WatchLinkRole } from './watch-link/protocol'
+import { BIDI_CONTROL_CHARS } from './presence'
 export type { WatchChatMessage, WatchLinkRole }
 
 /** The expiry choices, in seconds: 15 min, 1 h (the default), 8 h, 24 h. No other value is accepted. */
@@ -109,14 +110,12 @@ export interface WatchLinkApi {
 }
 
 /**
- * Directional formatting characters: LRM/RLM, the embeddings and overrides (U+202A–E) and the
- * isolates (U+2066–9). The vendored chat sanitizer strips C0/C1 but not these, and a name or a title
- * carrying an RLO reorders whatever the owner's UI draws after it. Stripped from every string the
- * owner side shows that someone else wrote: a viewer's chat name and text, and the link's label and
- * title (a title can come from a git-shared node title).
+ * Strip the directional formatting characters (ALM, LRM/RLM, the embeddings and overrides, the
+ * isolates — @shared/presence's ONE definition) from a string the owner side shows that someone else
+ * wrote: a viewer's chat name and text, and the link's label and title (a title can come from a
+ * git-shared node title). The vendored chat sanitizer strips C0/C1 but not these, and an RLO reorders
+ * whatever the owner's UI draws after it. Only bidi: a ZWJ that joins an emoji sequence survives.
  */
-export const BIDI_CONTROLS = /[‎‏‪-‮⁦-⁩]/g
-
 export function stripBidiControls(s: string): string {
-  return s.replace(BIDI_CONTROLS, '')
+  return s.replace(BIDI_CONTROL_CHARS, '')
 }

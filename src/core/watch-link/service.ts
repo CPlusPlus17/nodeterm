@@ -63,15 +63,18 @@ import type { RelayTransport } from '../relay/relay-socket'
 
 /** setTimeout's own ceiling (a longer delay fires at once). A link lives ≤ 24 h, far below it. */
 const MAX_DELAY_MS = 2_147_483_647
-/** The longest a create waits for its local write (or for the boot load it must count). */
+/** The longest a create waits for its local write (or for the links file's boot load). */
 export const PERSIST_TIMEOUT_MS = 10_000
+/** The longest `init()` waits for the boot workspace load before deciding with the nodes it cannot
+ *  place yet read as unknown (which keeps their links: the safe side). */
+export const WORKSPACE_READY_TIMEOUT_MS = 10_000
 
 export type WatchLinkNodeState = 'present' | 'absent' | 'unknown'
 
 export interface WatchLinkServiceDeps {
   api: WatchLinkApiClient
   relayUrl: string
-  store: Pick<WatchLinkStore, 'load' | 'save' | 'discardOpaque'>
+  store: Pick<WatchLinkStore, 'load' | 'save' | 'discardOpaque' | 'opaqueCount'>
   /** The stored Pro entitlement token, or null. Travels only in the API client's JSON body. */
   entitlement(): string | null
   /** False in a build that may not relay (an unpackaged dev build): no create, and resumed links
@@ -93,6 +96,8 @@ export interface WatchLinkServiceDeps {
   clearTimeout?(h: unknown): void
   /** TEST ONLY. */
   persistTimeoutMs?: number
+  /** TEST ONLY. */
+  workspaceWaitMs?: number
   /** TEST ONLY. */
   createHost?: typeof createLinkHost
   /** TEST ONLY: the relay transport the link hosts dial. */
@@ -188,6 +193,10 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
   const clearT = deps.clearTimeout ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>))
   const createHost = deps.createHost ?? createLinkHost
   const persistTimeoutMs = deps.persistTimeoutMs ?? PERSIST_TIMEOUT_MS
+  const workspaceWaitMs = deps.workspaceWaitMs ?? WORKSPACE_READY_TIMEOUT_MS
+  // A wait on init covers init's own (bounded) workspace wait plus the links file's load: init's
+  // bound always fires first, so a slow workspace never reads as a failed write.
+  const initWaitMs = workspaceWaitMs + persistTimeoutMs
   const unsupported = deps.unsupported === true
 
   const records = new Map<string, WatchLinkRecord>()
@@ -209,6 +218,12 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
 
   const fail = (error: CreateWatchLinkError): CreateWatchLinkResult => ({ ok: false, error })
   const warn = (line: string): void => console.warn(`[watch-link] ${line}`)
+  const warned = new Set<string>()
+  const warnOnce = (kind: string, line: string): void => {
+    if (warned.has(kind)) return
+    warned.add(kind)
+    warn(line)
+  }
   const persistentNow = (): boolean => !storeLatched && !sealRefused
 
   function safeEmit(channel: string, ...args: unknown[]): void {
@@ -279,7 +294,27 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
     }
   }
   const list = (): WatchLinkView[] => (unsupported ? [] : [...records.values()].map(viewOf))
-  const emitState = (): void => safeEmit(IPC.watchLinkState, list())
+  // Coalesced (R46/M7): ending a link stops its host, whose `stop` reports a change, and then the end
+  // reports its own; a shutdown stops every host. One push per synchronous burst — each push carries
+  // every link's URL, and the list is read when the push goes out, so it is never stale.
+  let statePending = false
+  const emitState = (): void => {
+    if (statePending) return
+    statePending = true
+    queueMicrotask(() => {
+      statePending = false
+      safeEmit(IPC.watchLinkState, list())
+    })
+  }
+  /** Links this machine holds but cannot host this run (sealed, keychain locked) — they count against
+   *  the cap like any link (R46/M3). */
+  const opaqueHeld = (): number => {
+    try {
+      return deps.store.opaqueCount()
+    } catch {
+      return 0
+    }
+  }
 
   /** Write the current records. Called, not awaited, wherever the owner must not wait on the disk;
    *  the store snapshots at call time and serializes its writes, so disk order is call order. */
@@ -430,10 +465,14 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
   async function runInit(): Promise<void> {
     if (unsupported) return
     if (deps.workspaceReady) {
-      try {
-        await deps.workspaceReady()
-      } catch {
-        // A failed load leaves nodes unknown, which keeps every link: the safe side.
+      // A failed load leaves nodes unknown, which keeps every link: the safe side. A load that does
+      // not finish (a stalled mount) is waited for no longer than WORKSPACE_READY_TIMEOUT_MS (R46/M5).
+      const ready = await within(
+        Promise.resolve().then(() => deps.workspaceReady!()).then(() => 'ready', () => 'failed'),
+        workspaceWaitMs
+      )
+      if (ready === TIMEOUT) {
+        warn(`the workspace did not finish loading within ${workspaceWaitMs} ms; resuming links whose node cannot be placed yet`)
       }
     }
     let loaded: WatchLinkRecord[] = []
@@ -487,10 +526,13 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       if (!deps.relayAllowed()) return fail('relay-unavailable')
       // The resumed links count against the cap, and init must never start a host for a link a
       // create already started (G11). Bounded: a hung disk answers, it does not hang the dialog.
-      if ((await within(init(), persistTimeoutMs)) === TIMEOUT) return fail('persist-failed')
+      if ((await within(init(), initWaitMs)) === TIMEOUT) {
+        warnOnce('init-timeout', `the live-links file did not load within ${initWaitMs} ms`)
+        return fail('persist-failed')
+      }
       if (stopped) return fail('unsupported')
       if (nodeStateOf(req.nodeId) !== 'present') return fail('node-missing')
-      if (records.size + creating >= MAX_LINKS_PER_MACHINE) return fail('limit-machine')
+      if (records.size + creating + opaqueHeld() >= MAX_LINKS_PER_MACHINE) return fail('limit-machine')
       const ent = deps.entitlement()
       if (!ent) return fail('not-entitled')
       creating++
@@ -528,6 +570,13 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
           revokeServer(record.linkId)
           return fail(stopped ? 'unsupported' : 'persist-failed')
         }
+        // The node may have left every project while the record was being written — a workspace
+        // change could not see this record then (it is not a link yet). Absent now: undo it (R46/M4).
+        if (nodeStateOf(record.nodeId) === 'absent') {
+          void persist()
+          revokeServer(record.linkId)
+          return fail('node-missing')
+        }
         records.set(record.linkId, record)
         start(record)
         emitState()
@@ -545,14 +594,14 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
 
     async revoke(linkId) {
       if (unsupported || typeof linkId !== 'string') return
-      await within(init(), persistTimeoutMs) // no link exists before init; a hung load must not hang the stop
+      await within(init(), initWaitMs) // no link exists before init; a hung load must not hang the stop
       end(linkId, 'revoked', { serverRevoke: true, notify: false })
     },
 
     async revokeAll() {
       if (unsupported) return
       // Bounded like revoke: on a disk that hangs, "Stop all" still reaches the server below.
-      await within(init(), persistTimeoutMs)
+      await within(init(), initWaitMs)
       const gone = [...records.keys()].map(drop)
       // "Stop all" revokes every link of the license server-side, the ones this run cannot unseal too.
       try {
@@ -629,6 +678,25 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
         () => undefined
       )
     }
+  }
+}
+
+/**
+ * `shutdown()` bounded: the service's last write may hang on a stalled disk, and a shell's close must
+ * not (R46/M6). The Server Edition awaits this in both close paths; the desktop races its own 1.5 s
+ * flush instead. The timer is cleared (and never holds the process) either way.
+ */
+export async function shutdownWithin(s: WatchLinkService | null, ms: number): Promise<void> {
+  if (!s) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const bound = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+  try {
+    await Promise.race([s.shutdown(), bound])
+  } finally {
+    clearTimeout(timer)
   }
 }
 

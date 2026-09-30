@@ -118,6 +118,7 @@ import {
   createWatchLinkService,
   registerWatchLinkIpc,
   sendToOwners,
+  shutdownWithin,
   workspaceNodeState,
   type WatchLinkService
 } from '../core/watch-link/service'
@@ -131,6 +132,8 @@ const API_BASE = process.env.NODETERM_API_BASE || 'https://api.nodeterm.dev'
 // The hosted team relay's wss endpoint. Same env override + default as the desktop's RELAY_URL
 // (src/main/remote/host-service.ts), derived locally for the same reason as API_BASE.
 const RELAY_URL = process.env.NODETERM_RELAY_URL || 'wss://relay.nodeterm.dev'
+/** How long close() waits for the live-link service's last write (the desktop races 1.5 s). */
+const WATCH_LINKS_STOP_MS = 2_000
 
 /**
  * App version fed to ServerPlatform (surfaced to the renderer as the desktop app's
@@ -1056,8 +1059,9 @@ export async function startServer(
         // pty subscriptions) while the pty layer is still up. Same two lines in the serving close().
         await teamAdmin.close()
         hosted.stop()
-        // Stop the live-link hosts while the pty layer is still up (their viewers leave cleanly).
-        await watchLinks?.shutdown()
+        // Stop the live-link hosts while the pty layer is still up (their viewers leave cleanly),
+        // bounded: the links file's last write must not hold the close on a stalled disk.
+        await shutdownWithin(watchLinks, WATCH_LINKS_STOP_MS)
         // Detach PTY clients — tmux sessions keep running (Phase 1 contract).
         sessionReaper.stop()
         pressure.stop()
@@ -1123,7 +1127,7 @@ export async function startServer(
       await teamAdmin.close()
       hosted.stop()
       // Stop the live-link hosts while the pty layer is still up (see the headless close() above).
-      await watchLinks?.shutdown()
+      await shutdownWithin(watchLinks, WATCH_LINKS_STOP_MS)
       // End the browser WebSockets next, BEFORE the canvas authority stops (N3). Once it has stopped
       // and been detached, a save from a still-attached tab is written un-overlaid, over its final
       // flush. Ending the sockets stops new saves; the `idle()` below lets the ones already queued
