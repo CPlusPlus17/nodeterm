@@ -45,7 +45,7 @@ const flipLetter = (c: string): string => LETTERS[(LETTERS.indexOf(c) + 1) % LET
 // other C1, and non-ASCII (U+00A0 is where xterm's NON_ASCII_PRINTABLE starts).
 const SINGLES = [
   '\x00', '\t', '\n', '\r', BEL, '\x18', '\x1a', '\x19', '\x1c', '\x7f', ESC, ']', 'P', 'X', '^', '_', '[',
-  '\\', ';', '0', '9', ' ', '(', 'é', ' ', '🙂', '\x85', '\x99', '\x9b', '\x9c', '\x9d', '\x90', '\x98',
+  '\\', ';', '0', '9', ' ', '(', 'é', '\u00a0', '🙂', '\x85', '\x99', '\x9b', '\x9c', '\x9d', '\x90', '\x98',
   '\x9e', '\x9f'
 ]
 const SNIPPETS = [
@@ -68,7 +68,7 @@ function randomStream(rand: (n: number) => number): string[] {
 }
 
 function filterInChunks(text: string, cuts: number[], midStream: boolean): string[] {
-  const f = createStreamFilter(undefined, { midStream })
+  const f = createStreamFilter({ midStream })
   const outs: string[] = []
   let from = 0
   for (const to of [...cuts, text.length]) {
@@ -122,6 +122,33 @@ describe('createStreamFilter against xterm 5.5', () => {
     for (const [src, start, end] of blocks) {
       expect(block(fixture, start, end), `re-copy ${start} from the installed xterm`).toBe(block(src, start, end))
     }
+  })
+
+  it("the model's walk is parse()'s: the lines of it that step() stands for are unchanged", () => {
+    // step() is not a copy but a statement of these lines of EscapeSequenceParser.parse()'s sync
+    // loop, so an upgrade that changes only parse() must reach this test too.
+    const parser = read(join(XTERM_PARSER, 'EscapeSequenceParser.ts'))
+    const loop = block(parser, '// continue with main sync loop', 'this.currentState = transition & TableAccess.TRANSITION_STATE_MASK;')
+    const actionCase = (action: string): string => {
+      const i = loop.indexOf(`case ParserAction.${action}:`)
+      const j = loop.indexOf('case ParserAction.', i + 1)
+      return i === -1 ? `<missing case ${action}>` : loop.slice(i, j === -1 ? loop.length : j)
+    }
+    const lines = (text: string, line: string): number => text.split('\n').filter((l) => l.trim() === line).length
+    // The table lookup and the state it moves to.
+    expect(lines(loop, 'transition = this._transitions.table[this.currentState << TableAccess.INDEX_STATE_SHIFT | (code < 0xa0 ? code : NON_ASCII_PRINTABLE)];')).toBe(1)
+    expect(loop.endsWith('this.currentState = transition & TableAccess.TRANSITION_STATE_MASK;')).toBe(true)
+    // An OSC or DCS ended by ESC goes to ESCAPE, not the table's GROUND; nothing else is patched.
+    const escPatch = 'if (code === 0x1b) transition |= ParserState.ESCAPE;'
+    expect(lines(actionCase('OSC_END'), escPatch)).toBe(1)
+    expect(lines(actionCase('DCS_UNHOOK'), escPatch)).toBe(1)
+    expect(lines(loop, escPatch)).toBe(2)
+    // The read-ahead loops stop exactly where the table would leave the state they are in.
+    expect(lines(actionCase('PRINT'), 'if (j >= length || (code = data[j]) < 0x20 || (code > 0x7e && code < NON_ASCII_PRINTABLE)) {')).toBe(1)
+    expect(lines(actionCase('PRINT'), 'if (++j >= length || (code = data[j]) < 0x20 || (code > 0x7e && code < NON_ASCII_PRINTABLE)) {')).toBe(3)
+    expect(lines(actionCase('PARAM'), '} while (++i < length && (code = data[i]) > 0x2f && code < 0x3c);')).toBe(1)
+    expect(lines(actionCase('DCS_PUT'), 'if (j >= length || (code = data[j]) === 0x18 || code === 0x1a || code === 0x1b || (code > 0x7f && code < NON_ASCII_PRINTABLE)) {')).toBe(1)
+    expect(lines(actionCase('OSC_PUT'), 'if (j >= length || (code = data[j]) < 0x20 || (code > 0x7f && code < NON_ASCII_PRINTABLE)) {')).toBe(1)
   })
 
   it('nothing xterm hides reaches the output, from the start of a stream', () => {

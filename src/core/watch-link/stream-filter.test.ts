@@ -1,24 +1,33 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createStreamFilter } from './stream-filter'
 
 const ESC = '\x1b'
 const BEL = '\x07'
-const run = (chunks: string[], max?: number): string => {
-  const f = createStreamFilter(max)
+const run = (chunks: string[]): string => {
+  const f = createStreamFilter()
   return chunks.map((c) => f.push(c)).join('')
 }
+// One string pushed in pieces of `size` chars, the way a pty delivers a large write.
+const pushInPieces = (text: string, size: number, midStream = false): string => {
+  const f = createStreamFilter({ midStream })
+  let out = ''
+  for (let i = 0; i < text.length; i += size) out += f.push(text.slice(i, i + size))
+  return out
+}
+// 2 MiB of base64, the shape of a large OSC 52.
+const BIG = 'QUJD'.repeat(512 * 1024)
 
 // The filter's rules, one UTF-16 unit at a time and without a fast path: the oracle the fuzz test
 // holds the production parser to.
-function oneCharAtATime(input: string, max: number, midStream: boolean): string {
+function oneCharAtATime(input: string, midStream: boolean): string {
   // midStream: as if an 8-bit DCS introducer had just been read.
   let mode: 'text' | 'esc' | 'string' | 'stringEsc' = midStream ? 'string' : 'text'
   let osc = false
-  let len = 0
   let out = ''
   const start = (ch: string): 'string' => {
     osc = ch === ']' || ch === '\x9d'
-    len = 0
     return 'string'
   }
   for (let i = 0; i < input.length; i++) {
@@ -33,10 +42,6 @@ function oneCharAtATime(input: string, max: number, midStream: boolean): string 
       if (ch === '\x9c' || (ch === BEL && osc)) mode = 'text'
       else if (ch === ESC) mode = 'stringEsc'
       else if (intro8) mode = start(ch)
-      else if (++len > max) {
-        mode = 'text'
-        len = 0
-      }
     } else if (']PX^_'.includes(ch) || intro8) mode = start(ch)
     else if (ch === ESC) mode = 'esc'
     else if (n <= 0x17 || n === 0x19 || (n >= 0x1c && n <= 0x1f)) out += ch
@@ -76,12 +81,42 @@ describe('createStreamFilter', () => {
     expect(run([`a${ESC}]52;c;xx${ESC}[31mred`])).toBe(`a${ESC}[31mred`)
   })
 
-  it('keeps swallowing an unterminated string until the cap, then resumes text', () => {
-    const f = createStreamFilter(10)
-    expect(f.push(`a${ESC}]52;c;`)).toBe('a')
-    expect(f.push('12345')).toBe('')
-    // The 11th swallowed char ('6') trips the cap and is dropped with the rest; text resumes after it.
-    expect(f.push('67890XYZ')).toBe('7890XYZ')
+  // No length cap: xterm has none, so any cap would show a viewer bytes the owner's screen did not
+  // (measured: a 900 KB tmux copy is one 1.2 MB OSC 52). The sizes and push sizes are a pty's.
+  it('a 2 MiB OSC 52, BEL- or ST-terminated, is swallowed whole in 64 KiB or 4 KiB pushes', () => {
+    for (const end of [BEL, `${ESC}\\`, '\x9c']) {
+      for (const size of [65536, 4096]) {
+        expect(pushInPieces(`a${ESC}]52;c;${BIG}${end}b${ESC}[mc`, size), `${JSON.stringify(end)} / ${size}`).toBe(
+          `ab${ESC}[mc`
+        )
+      }
+    }
+  })
+
+  it('a 2 MiB DCS is swallowed whole, a BEL in its data included', () => {
+    const half = BIG.slice(0, BIG.length / 2)
+    for (const size of [65536, 4096]) {
+      expect(pushInPieces(`a${ESC}Pq${half}${BEL}${half}${ESC}\\b`, size)).toBe('ab')
+      expect(pushInPieces(`a\x90q${half}${BEL}${half}\x9cb`, size)).toBe('ab')
+    }
+  })
+
+  it("is swallowed whole even past xterm's own 10,000,000-char payload limit", () => {
+    // xterm stops handing a string that long to its handler but stays in it until the terminator.
+    const huge = 'QUJD'.repeat(4 * 1024 * 1024)
+    expect(pushInPieces(`a${ESC}]52;c;${huge}${BEL}b`, 65536)).toBe('ab')
+  })
+
+  it('the string branch counts nothing, so no length can end a string (source)', () => {
+    // The tests above catch a cap up to the longest string they push (16 MiB); a cap past that
+    // would need a longer test to see. A cap needs a counter and a comparison, and the branch that
+    // reads a string's payload has neither.
+    const src = readFileSync(join(__dirname, 'stream-filter.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const start = src.indexOf("} else if (mode === 'string') {")
+    const branch = src.slice(start, src.indexOf('} else {', start)).replace(/\/\/.*$/gm, '')
+    expect(start).toBeGreaterThan(-1)
+    expect(branch).toContain('.exec(chunk)')
+    expect(branch).not.toMatch(/\+\+|--|\+=|-=|[<>]/)
   })
 
   it('reset forgets a half-read sequence', () => {
@@ -89,15 +124,6 @@ describe('createStreamFilter', () => {
     expect(f.push(`a${ESC}]52;c;`)).toBe('a')
     f.reset()
     expect(f.push('visible')).toBe('visible')
-  })
-
-  it('gives up only past 1 MiB by default: a string of exactly 1 MiB is still swallowed whole', () => {
-    const cap = 1_048_576
-    // `52;c;` counts too: the string's payload starts right after the introducer.
-    const payload = '52;c;' + 'A'.repeat(cap - 5)
-    expect(run([`x${ESC}]${payload}${BEL}y`])).toBe('xy')
-    // One more char trips the cap; it is dropped and text resumes after it.
-    expect(run([`x${ESC}]${payload}Ztail`])).toBe('xtail')
   })
 
   it('a keyframe screen (capture-pane -e) loses its OSC 8 links and keeps the link text', () => {
@@ -157,11 +183,8 @@ describe('createStreamFilter', () => {
   it('an 8-bit introducer inside a string starts a new string of its own kind', () => {
     // OSC → DCS: the BEL is now DCS data, not a terminator.
     expect(run([`a${ESC}]0;t\x90q${BEL}hidden\x9cb`])).toBe('ab')
-    // ...and it starts a fresh count toward the cap.
-    const f = createStreamFilter(10)
-    expect(f.push(`a${ESC}]` + '12345678')).toBe('a')
-    expect(f.push('\x9d' + '12345678')).toBe('')
-    expect(f.push(`${BEL}b`)).toBe('b')
+    // DCS → OSC: and now it is one.
+    expect(run([`a${ESC}Pq\x9d0;t${BEL}b`])).toBe('ab')
   })
 
   it('reset also forgets a pending ESC', () => {
@@ -200,18 +223,17 @@ describe('createStreamFilter', () => {
     for (let iter = 0; iter < 4000; iter++) {
       let input = ''
       for (let i = rand(60); i > 0; i--) input += ALPHABET[rand(ALPHABET.length)]
-      const cap = [2, 5, 1_048_576][rand(3)]
       const midStream = rand(2) === 1
-      // Cut anywhere, a surrogate pair included: the cap counts UTF-16 units, so nothing depends on it.
+      // Cut anywhere, a surrogate pair included: nothing in the filter counts or splits on one.
       const cuts = [0, input.length]
       for (let k = rand(5); k > 0; k--) cuts.push(rand(input.length + 1))
       cuts.sort((x, y) => x - y)
       const chunks = cuts.slice(1).map((end, i) => input.slice(cuts[i], end))
 
-      const f = createStreamFilter(cap, { midStream })
+      const f = createStreamFilter({ midStream })
       const outs = chunks.map((c) => f.push(c))
       for (const out of outs) {
-        const ctx = JSON.stringify({ input, chunks, cap, midStream, out })
+        const ctx = JSON.stringify({ input, chunks, midStream, out })
         expect(INTRO_8.test(out), ctx).toBe(false)
         expect(out.endsWith(ESC), ctx).toBe(false)
         for (let i = out.indexOf(ESC); i !== -1; i = out.indexOf(ESC, i + 1)) {
@@ -220,7 +242,7 @@ describe('createStreamFilter', () => {
       }
       // However it is chunked, the result is the char-by-char statement of the same rules: the
       // parser's slicing and fast path neither drop, reorder nor add a char.
-      expect(outs.join(''), JSON.stringify({ chunks, cap, midStream })).toBe(oneCharAtATime(input, cap, midStream))
+      expect(outs.join(''), JSON.stringify({ chunks, midStream })).toBe(oneCharAtATime(input, midStream))
     }
   })
 })
@@ -229,8 +251,8 @@ describe('createStreamFilter, joined mid-stream', () => {
   // A watcher co-attaches to a RUNNING session, so its first byte can land anywhere: inside an OSC 52,
   // or right after an ESC that the previous read ended on. A filter that starts in text would print
   // the rest of that string, or read `]52;…` as text.
-  const mid = (chunks: string[], max?: number): string => {
-    const f = createStreamFilter(max, { midStream: true })
+  const mid = (chunks: string[]): string => {
+    const f = createStreamFilter({ midStream: true })
     return chunks.map((c) => f.push(c)).join('')
   }
 
@@ -278,16 +300,19 @@ describe('createStreamFilter, joined mid-stream', () => {
     expect(mid([`DATA\x9d52;c;x${BEL}after`])).toBe('after')
   })
 
-  it('the cap counts from the join, on creation and on reset', () => {
-    const f = createStreamFilter(5, { midStream: true })
-    expect(f.push('12345')).toBe('')
-    expect(f.push('6789')).toBe('789')
+  it('a join into the tail of a 2 MiB OSC 52 swallows all of it', () => {
+    const tail = BIG.slice(12345)
+    for (const size of [65536, 4096]) {
+      expect(pushInPieces(`${tail}${BEL}rest${ESC}[mafter`, size, true)).toBe(`${ESC}[mafter`)
+      expect(pushInPieces(`${tail}${ESC}\\after`, size, true)).toBe('after')
+    }
+  })
 
-    const g = createStreamFilter(10)
-    expect(g.push(`a${ESC}]12345678`)).toBe('a')
+  it('reset({ midStream }) inside an OSC forgets that it was one: BEL no longer ends it', () => {
+    const g = createStreamFilter()
+    expect(g.push(`a${ESC}]0;t`)).toBe('a')
     g.reset({ midStream: true })
-    expect(g.push('1234567890')).toBe('')
-    expect(g.push('Xab')).toBe('ab')
+    expect(g.push(`x${BEL}y${ESC}[mz`)).toBe(`${ESC}[mz`)
   })
 
   it('reset({ midStream }) drops what was being read and starts as a join', () => {

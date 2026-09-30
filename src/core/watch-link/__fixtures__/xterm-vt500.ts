@@ -7,7 +7,7 @@
 //                                                                       VT500_TRANSITION_TABLE
 // `stream-filter.xterm.test.ts` compares each block with that source, so an xterm upgrade that
 // changes the table fails there instead of silently testing the filter against an old model.
-// Only the code after the END marker is ours.
+// Only the code after the END marker is ours; the lines of `parse()` it models are pinned there too.
 //
 // The copied blocks: Copyright (c) 2017-2018 The xterm.js authors. MIT license.
 
@@ -233,7 +233,8 @@ const STRING_STATES = new Set<number>([
 // PARAM, OSC_PUT, DCS_PUT) only take codes whose table entry keeps the state they are in, and an
 // OSC or DCS ended by ESC goes to ESCAPE although the table says GROUND
 // (`transition |= ParserState.ESCAPE`). An ERROR (a non-ASCII code in SOS/PM/APC or a DCS header)
-// goes to GROUND with the default error handler, as the table says.
+// goes to GROUND with the default error handler, as the table says. The lines of parse() this
+// stands for are pinned in `stream-filter.xterm.test.ts`.
 function step(state: number, code: number): number {
   let transition = VT500_TRANSITION_TABLE.table[state << TableAccess.INDEX_STATE_SHIFT | (code < 0xa0 ? code : NON_ASCII_PRINTABLE)]
   const action = transition >> TableAccess.TRANSITION_ACTION_SHIFT
