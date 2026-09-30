@@ -41,11 +41,18 @@ export interface VisibleCapture {
   screen: string
   /** The pane's cursor at capture time, 0-based (`#{cursor_x}`, `#{cursor_y}`); null when unread. */
   cursor: { x: number; y: number } | null
+  /**
+   * There is NO capture: the backend has no visible-only one, or the capture failed. Set only by
+   * `unavailableCapture()`; a real capture of an empty pane never carries it. The difference matters
+   * (controller ruling R36): a viewer paints a keyframe as reset + clear, so an empty keyframe sent for
+   * "no capture" would erase everything the stream had drawn. The link host sends no keyframe for it.
+   */
+  unavailable?: true
 }
 
-/** A session with no visible-only capture, or one that failed: an empty screen, nothing known. */
+/** A session with no visible-only capture, or one that failed: nothing to paint, nothing known. */
 export function unavailableCapture(): VisibleCapture {
-  return { screen: '', cursor: null }
+  return { screen: '', cursor: null, unavailable: true }
 }
 
 export function visibleCaptureRoute(

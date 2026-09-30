@@ -122,8 +122,14 @@ describe('parseVisibleCapture', () => {
 })
 
 describe('unavailableCapture', () => {
-  it('is an empty screen with nothing known', () => {
-    expect(unavailableCapture()).toEqual({ screen: '', cursor: null })
+  it('is NO capture: flagged, with an empty screen and nothing known', () => {
+    expect(unavailableCapture()).toEqual({ screen: '', cursor: null, unavailable: true })
+  })
+
+  it('a real capture of an empty pane is not "no capture" (R36): it carries no flag', () => {
+    expect(parseVisibleCapture('0 0\n')).toEqual({ screen: '', cursor: { x: 0, y: 0 } })
+    expect(parseVisibleCapture('')).toEqual({ screen: '', cursor: null })
+    expect('unavailable' in parseVisibleCapture('\n\n0 0\n')).toBe(false)
   })
 
   it('is a fresh object each time (a caller may mutate what it was handed)', () => {

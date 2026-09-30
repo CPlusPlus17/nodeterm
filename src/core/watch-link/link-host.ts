@@ -33,6 +33,13 @@
 // keyframe needs a capture STARTED after it asked. A per-viewer sequence makes sure an older result
 // is never painted after a newer one, and streaming resumes only on the newest.
 //
+// NO CAPTURE IS NOT AN EMPTY SCREEN (R36). A backend with no visible-only capture (the Windows session
+// host, a direct Windows pty, a plain shell) and a capture that failed answer `unavailable`, and then
+// NO keyframe is sent: the viewer paints a keyframe as reset + clear, so an empty one would erase what
+// the stream had drawn. The viewer follows the stream instead (at the join it still gets meta), and a
+// throttled viewer resumes streaming without a repaint. Residual: on such a backend a throttled
+// viewer shows gaps until the application repaints them.
+//
 // SIZE. A viewer never sizes anything. Its meta carries the joined session's CURRENT size (R25). A
 // watcher's OWN tmux client (spawned when no owner Session is held) attaches with `ignore-size`, but
 // tmux honours that only while some client WITHOUT the flag is attached to the server (measured,
@@ -98,8 +105,9 @@ export const FULL_STATUS_POLL_MS = 5 * 60_000
 export const CHAT_MIN_INTERVAL_MS = 2_000
 export const CHAT_HISTORY_MAX = 200
 export const KEYFRAME_MIN_INTERVAL_MS = 1_000
-/** Rejoin delays, by attempt. The last repeats (R26: an instant-exit loop climbs to the 30 s cap). */
-export const REJOIN_BACKOFF_MS = [2_000, 4_000, 8_000, 15_000, 30_000]
+/** Rejoin delays, by attempt. The last repeats: an instant-exit loop climbs to 15 s (R26, R35), and a
+ *  viewer waiting for a terminal to start sees it within 15 s. */
+export const REJOIN_BACKOFF_MS = [2_000, 4_000, 8_000, 15_000]
 /** A joined session that stayed up this long (from its join keyframe) resets the rejoin backoff. */
 export const REJOIN_STABLE_MS = 30_000
 /** An unsettled mid-stream filter gets one more keyframe this long after the join (R23). */
@@ -206,12 +214,14 @@ interface Conn {
   bucket: TokenBucket
   /** The current session's mid-stream filter has left its unknown start state. */
   settled: boolean
-  /** Take one more keyframe when it does (it had not when the join keyframe was painted). */
+  /** Take one more keyframe when it does (it had not when the join keyframe was delivered). */
   followUpOnSettle: boolean
-  /** The current session's first keyframe was painted. */
-  painted: boolean
+  /** The current session's first keyframe step is done: painted, or skipped because there was no
+   *  capture (R36). From here the viewer streams. */
+  joinKeyframeDone: boolean
   kfSeq: number
   kfDelivered: number
+  /** When the last keyframe step was done (painted or skipped): keyframes and resumes are ≤ 1/s. */
   lastKeyframeAt: number
   keyframeTimer: unknown
   settleTimer: unknown
@@ -229,16 +239,27 @@ interface CaptureSlot {
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** The session a join attached to, if it answered one (a refused join may still have attached). */
+function joinedSessionId(r: unknown): string | null {
+  const sid = r && typeof r === 'object' ? (r as { sessionId?: unknown }).sessionId : undefined
+  return typeof sid === 'string' && sid ? sid : null
+}
+
+/** A usable join, or null. A join without a valid size is REFUSED, never given a guessed one (R20, R37):
+ *  a wiring slip then shows as "waiting", loudly, instead of a viewer laid out at a wrong size for the
+ *  rest of the session (its join-time `pty:size` was already recorded as shown and is not resent). */
 function normalizeJoin(r: unknown): WatchJoin | null {
-  if (!r || typeof r !== 'object') return null
+  const sessionId = joinedSessionId(r)
+  if (sessionId === null) return null
   const o = r as Partial<WatchJoin>
-  if (typeof o.sessionId !== 'string' || !o.sessionId) return null
-  const dim = (n: unknown, d: number): number => (Number.isInteger(n) && (n as number) > 0 ? (n as number) : d)
-  return { sessionId: o.sessionId, cols: dim(o.cols, 80), rows: dim(o.rows, 24), altScreen: o.altScreen === true }
+  const dim = (n: unknown): boolean => Number.isInteger(n) && (n as number) > 0
+  if (!dim(o.cols) || !dim(o.rows)) return null
+  return { sessionId, cols: o.cols as number, rows: o.rows as number, altScreen: o.altScreen === true }
 }
 
 function normalizeCapture(c: unknown): VisibleCapture {
   if (!c || typeof c !== 'object' || typeof (c as VisibleCapture).screen !== 'string') return unavailableCapture()
+  if ((c as VisibleCapture).unavailable === true) return unavailableCapture()
   const cur = (c as VisibleCapture).cursor
   const ok = !!cur && Number.isInteger(cur.x) && Number.isInteger(cur.y) && cur.x >= 0 && cur.y >= 0
   return { screen: (c as VisibleCapture).screen, cursor: ok ? { x: cur!.x, y: cur!.y } : null }
@@ -301,6 +322,9 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     return true
   }
   function dropStalled(c: Conn): void {
+    // While stopping, the scheduler may still be running (the end notices go out first): closing now
+    // would re-mint a listener on a full link. `stop` closes every viewer a moment later anyway (R37).
+    if (stopped) return
     warn(null, 'a viewer stopped draining its socket; closed it', `backlog over ${VIEWER_BACKLOG_CLOSE} bytes`)
     c.session?.close()
     ended(c)
@@ -417,19 +441,24 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       sessionOver(c)
       return
     }
-    const kf: WatchKeyframe = {
-      sessionId: sid,
-      // A FRESH filter: the capture starts in ground state, and carries OSC 8 links verbatim (R9).
-      screen: createStreamFilter().push(cap.screen),
-      altScreen: c.altScreen,
-      ...(cap.cursor ? { cursor: { x: cap.cursor.x, y: cap.cursor.y } } : {})
+    // No capture (R36): nothing is painted — an empty keyframe would erase what the stream drew — but
+    // the step still counts as done, so the viewer streams (it must not wait for a keyframe that never
+    // comes) and the next request waits out the minimum interval like a painted one.
+    if (!cap.unavailable) {
+      const kf: WatchKeyframe = {
+        sessionId: sid,
+        // A FRESH filter: the capture starts in ground state, and carries OSC 8 links verbatim (R9).
+        screen: createStreamFilter().push(cap.screen),
+        altScreen: c.altScreen,
+        ...(cap.cursor ? { cursor: { x: cap.cursor.x, y: cap.cursor.y } } : {})
+      }
+      if (!send(c, WATCH_EVENT.keyframe, kf)) return
     }
-    if (!send(c, WATCH_EVENT.keyframe, kf)) return
     c.kfDelivered = seq
     c.lastKeyframeAt = deps.now()
     if (seq === c.kfSeq) c.streaming = true
-    if (!c.painted) {
-      c.painted = true
+    if (!c.joinKeyframeDone) {
+      c.joinKeyframeDone = true
       c.followUpOnSettle = !c.settled
       clearTimer(c.stableTimer)
       c.stableTimer = deps.setTimeout(() => {
@@ -498,17 +527,20 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.joining = true
     const clientId = c.clientId
     let res: WatchJoin | null = null
+    let attached: string | null = null
     try {
-      res = normalizeJoin(await deps.pty.join(clientId, record.nodeId, c.viewerId))
+      const raw = await deps.pty.join(clientId, record.nodeId, c.viewerId)
+      attached = joinedSessionId(raw)
+      res = normalizeJoin(raw)
+      if (!res && attached !== null) warn(c, 'a join answered no valid size; refused', `session ${attached}`)
     } catch (err) {
       warn(c, 'joining the node session failed', errorText(err))
     } finally {
       c.joining = false
     }
-    if (c.ended || stopped) {
-      if (res) leave(clientId, res.sessionId, c.viewerId, c)
-      return
-    }
+    // Refused, or this viewer went away meanwhile: never stay subscribed to what the join attached.
+    if (attached !== null && (!res || c.ended || stopped)) leave(clientId, attached, c.viewerId, c)
+    if (c.ended || stopped) return
     // An exit that raced the join was delivered before this viewer knew its session id, and dropped.
     if (res && !aliveOf(c, res.sessionId)) {
       leave(clientId, res.sessionId, c.viewerId, c)
@@ -525,7 +557,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.sessionId = sid
     c.altScreen = res.altScreen
     c.streaming = false
-    c.painted = false
+    c.joinKeyframeDone = false
     c.settled = false
     c.followUpOnSettle = false
     c.waiting = false
@@ -653,7 +685,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       bucket: createTokenBucket({ ratePerSec: RATE, burst: BURST, now: deps.now }),
       settled: false,
       followUpOnSettle: false,
-      painted: false,
+      joinKeyframeDone: false,
       kfSeq: 0,
       kfDelivered: 0,
       lastKeyframeAt: -Infinity,

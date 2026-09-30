@@ -29,7 +29,7 @@ import {
   type WatchPty
 } from './link-host'
 import type { HostTokenResult } from './api'
-import type { VisibleCapture } from './capture-route'
+import { unavailableCapture, type VisibleCapture } from './capture-route'
 import type { WatchLinkRecord } from './store'
 import type { UiSink } from '../ui-sink-registry'
 
@@ -200,6 +200,13 @@ async function openViewer(t: Setup, n = 0): Promise<Viewer> {
   await vi.waitFor(() => expect(v.keyframes().length).toBeGreaterThanOrEqual(1))
   return v
 }
+/** Open the n-th listener's viewer and wait for its meta (a no-capture backend sends no keyframe). */
+async function openViewerMeta(t: Setup, n = 0): Promise<Viewer> {
+  await vi.waitFor(() => expect(t.peers.length).toBeGreaterThan(n))
+  const v = viewer(t.peers[n], t.keys)
+  await vi.waitFor(() => expect(v.named(WATCH_EVENT.meta).length).toBeGreaterThanOrEqual(1))
+  return v
+}
 const pty = (sink: UiSink, sid: string, data: string): void => sink.sendBinary(encodePtyData(sid, data))
 const ptyEvent = (sink: UiSink, channel: string, ...args: unknown[]): void =>
   sink.sendText(JSON.stringify({ t: 'ev', channel, args }))
@@ -244,7 +251,7 @@ describe('createLinkHost — a viewer session', () => {
     })
   })
 
-  it('a keyframe of a backend with no visible capture is an empty screen, and altScreen follows the join', async () => {
+  it("a REAL capture of an empty screen still sends a keyframe with screen '' (R36), and altScreen follows the join", async () => {
     const t = setup({
       join: () => ({ sessionId: 's1', cols: 80, rows: 24, altScreen: false }),
       capture: () => ({ screen: '', cursor: null })
@@ -415,7 +422,7 @@ describe('createLinkHost — joining, waiting, rejoining', () => {
       await clock.flush()
     }
     await exitCurrent()
-    const expected = [2_000, 4_000, 8_000, 15_000, 30_000, 30_000]
+    const expected = [2_000, 4_000, 8_000, 15_000, 15_000, 15_000]
     for (const d of expected) {
       await clock.advance(d)
       await exitCurrent()
@@ -423,7 +430,7 @@ describe('createLinkHost — joining, waiting, rejoining', () => {
     const deltas = t.joinTimes.slice(1).map((x, i) => x - t.joinTimes[i])
     expect(deltas).toEqual(expected)
     // This one stays up for REJOIN_STABLE_MS from its join keyframe: the backoff resets.
-    await clock.advance(30_000)
+    await clock.advance(15_000)
     await vi.waitFor(() => expect(v.keyframes().map((k) => k.sessionId)).toContain(`s${n}`))
     await clock.advance(REJOIN_STABLE_MS)
     ptyEvent(sink, IPC.ptyExit(`s${n}`), 0)
@@ -433,7 +440,7 @@ describe('createLinkHost — joining, waiting, rejoining', () => {
     expect(t.joinTimes).toHaveLength(before + 1)
   })
 
-  it('a join that throws is "waiting" and backs off; a capture that throws is an empty keyframe', async () => {
+  it('a join that throws is "waiting" and backs off; a capture that throws sends NO keyframe and the viewer streams (R36)', async () => {
     const clock = manualClock()
     let fail = true
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -453,8 +460,35 @@ describe('createLinkHost — joining, waiting, rejoining', () => {
     await vi.waitFor(() => expect(v.named(WATCH_EVENT.waiting)).toHaveLength(1))
     fail = false
     await clock.advance(REJOIN_BACKOFF_MS[0])
-    await vi.waitFor(() => expect(v.keyframes()).toHaveLength(1))
-    expect(v.keyframes()[0]).toEqual({ sessionId: 's1', screen: '', altScreen: true })
+    await vi.waitFor(() => expect(v.named(WATCH_EVENT.meta)).toHaveLength(1))
+    await clock.flush()
+    expect(v.keyframes()).toEqual([])
+    pty(t.sink(), 's1', `${ESC}[Hstreams`)
+    expect(v.log.pty).toEqual([`${ESC}[Hstreams`])
+    expect(warn).toHaveBeenCalled()
+  })
+
+  it('a join answering no valid size is REFUSED — left, waiting, retried — never given a guessed size', async () => {
+    const clock = manualClock()
+    let size = { cols: 0, rows: 24 }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = setup({ clock, join: () => ({ sessionId: 's1', ...size, altScreen: true }) })
+    t.host.start()
+    await vi.waitFor(() => expect(t.peers).toHaveLength(1))
+    const v = viewer(t.peers[0], t.keys)
+    await vi.waitFor(() => expect(v.named(WATCH_EVENT.waiting)).toHaveLength(1))
+    expect(v.named(WATCH_EVENT.meta)).toEqual([])
+    expect(t.left).toEqual([`s1/${t.host.viewers()[0].viewerId}`])
+    expect(t.calls).not.toContain('capture:s1')
+    for (const bad of [{ cols: 80, rows: Number.NaN }, { cols: 80.5, rows: 24 }, { cols: -1, rows: 24 }]) {
+      size = bad
+      await clock.advance(60_000)
+    }
+    expect(v.named(WATCH_EVENT.meta)).toEqual([])
+    size = { cols: 132, rows: 40 }
+    await clock.advance(60_000)
+    await vi.waitFor(() => expect(v.named(WATCH_EVENT.meta)).toHaveLength(1))
+    expect(v.named(WATCH_EVENT.meta)[0]).toMatchObject({ cols: 132, rows: 40 })
     expect(warn).toHaveBeenCalled()
   })
 
@@ -628,6 +662,69 @@ describe('createLinkHost — keyframes and the stream', () => {
     expect(v.log.pty).toEqual([])
   })
 
+  it('a backend with NO visible capture never gets a watch:keyframe — join, 2 s bound, settle follow-up, throttle — and keeps streaming (R36)', async () => {
+    const clock = manualClock()
+    let buffered = 0
+    const t = setup({ clock, capture: () => unavailableCapture(), buffered: () => buffered })
+    t.host.start()
+    const v = await openViewerMeta(t)
+    await clock.flush()
+    const captures = () => t.calls.filter((c) => c === 'capture:s1').length
+    expect(captures()).toBe(1)
+    expect(v.keyframes()).toEqual([])
+    const sink = t.sink()
+    pty(sink, 's1', 'lost') // mid-stream: swallowed until the first escape
+    await clock.advance(SETTLE_BOUND_MS) // the 2 s bound: a capture, nothing sent
+    expect(captures()).toBe(2)
+    expect(v.keyframes()).toEqual([])
+    pty(sink, 's1', `${ESC}[Ha`) // settles; streaming, with no keyframe ever sent
+    expect(v.log.pty).toEqual([`${ESC}[Ha`])
+    await clock.advance(1_000) // the settle follow-up: a capture, nothing sent, still streaming
+    expect(captures()).toBe(3)
+    pty(sink, 's1', 'b')
+    // Throttled: dropped while over budget, then streaming RESUMES without a keyframe.
+    buffered = 600 * 1024
+    pty(sink, 's1', 'dropped')
+    buffered = 0
+    pty(sink, 's1', 'still-dropped')
+    await clock.advance(1_000)
+    expect(captures()).toBe(4)
+    pty(sink, 's1', 'resumed')
+    expect(v.log.pty).toEqual([`${ESC}[Ha`, 'b', 'resumed'])
+    expect(v.keyframes()).toEqual([])
+    expect(v.log.events.map((e) => e[0]).filter((c) => c === WATCH_EVENT.keyframe)).toEqual([])
+  })
+
+  it('a FAILED capture on a capture-capable backend sends no keyframe, and the stream resumes (R36)', async () => {
+    const clock = manualClock()
+    let buffered = 0
+    let fail = false
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const t = setup({
+      clock,
+      buffered: () => buffered,
+      capture: () => {
+        if (fail) throw new Error('ssh: master gone')
+        return { screen: 'SCREEN', cursor: null }
+      }
+    })
+    t.host.start()
+    const v = await openViewer(t)
+    const sink = t.sink()
+    fail = true
+    pty(sink, 's1', `${ESC}[H`) // settles: the follow-up capture fails
+    await clock.advance(1_000)
+    expect(v.keyframes()).toHaveLength(1)
+    pty(sink, 's1', 'a')
+    buffered = 600 * 1024
+    pty(sink, 's1', 'dropped') // throttled; its repaint capture fails too
+    buffered = 0
+    await clock.advance(1_000)
+    pty(sink, 's1', 'b')
+    expect(v.keyframes()).toHaveLength(1)
+    expect(v.log.pty).toEqual([`${ESC}[H`, 'a', 'b'])
+  })
+
   it("one capture per session is shared by the link's viewers joining it together (R27)", async () => {
     const clock = manualClock()
     const releases: ((c: VisibleCapture) => void)[] = []
@@ -790,9 +887,37 @@ describe('createLinkHost — ending', () => {
     expect(status).toHaveBeenCalledTimes(1)
     expect(t.gone).toEqual([])
     state = 'revoked'
+    // On a FULL link any viewer ending while the scheduler still runs would re-mint a listener: the
+    // revoke's stop must end them only after the scheduler stopped (F1, R37).
+    const minted = t.mints()
     await clock.advance(FULL_STATUS_POLL_MS)
     expect(status).toHaveBeenCalledTimes(2)
     expect(t.gone).toEqual(['revoked'])
     for (const v of vs) expect(v.named(WATCH_EVENT.end)).toEqual([{ reason: 'revoked' }])
+    await clock.advance(60_000)
+    expect(t.mints()).toBe(minted)
+    expect(t.peers).toHaveLength(MAX_VIEWERS_PER_LINK)
+  })
+
+  it('stop on a full link with a viewer over 8 MiB behind mints nothing; that viewer is closed without an end (R37)', async () => {
+    const clock = manualClock()
+    const buffered: number[] = []
+    const t = setup({ clock, buffered: (i) => buffered[i] ?? 0 })
+    t.host.start()
+    const vs: Viewer[] = []
+    for (let i = 0; i < MAX_VIEWERS_PER_LINK; i++) vs.push(await openViewer(t, i))
+    await clock.flush()
+    const minted = t.mints()
+    buffered[3] = 9 * 1024 * 1024
+    t.host.stop('revoked')
+    await clock.advance(60_000)
+    expect(t.mints()).toBe(minted)
+    expect(vs[3].named(WATCH_EVENT.end)).toEqual([])
+    await vi.waitFor(() => expect(vs[3].log.closed).toBe(1))
+    vs.forEach((v, i) => {
+      if (i !== 3) expect(v.named(WATCH_EVENT.end)).toEqual([{ reason: 'revoked' }])
+    })
+    expect(t.sinks.size).toBe(0)
+    expect(t.left).toHaveLength(MAX_VIEWERS_PER_LINK)
   })
 })
