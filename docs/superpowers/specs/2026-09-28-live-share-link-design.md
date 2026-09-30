@@ -182,7 +182,10 @@ Host → viewer:
 
 - `ev watch:meta {v: 1, role, label, title, expiresAt, cols, rows}`
 - pty output as binary `encodePtyData` frames; `ev pty:size:<sid>`
-- `ev watch:keyframe {sessionId, screen, altScreen}` — the visible screen and whether tmux paints on the alternate screen
+- `ev watch:keyframe {sessionId, screen, altScreen, cursor?}` — the visible screen, whether tmux paints on
+  the alternate screen, and the host's cursor (`{x, y}`, 0-based). The cursor is needed because tmux's
+  following stream moves the cursor relative to where it believes the tty cursor is, and a capture trims
+  trailing blanks, so a keyframe without it offsets every typed character until a full redraw.
 - `ev watch:chat {id, name, text, at, from: 'viewer' | 'sharer'}`
 - `ev watch:end {reason}`, `reason ∈ revoked | expired | node-gone | session-ended |
   host-stopping | kicked`
@@ -289,6 +292,11 @@ are handled. An unterminated string sequence is swallowed until its terminator; 
 does the parser give up and return to text (a lower cap would print the tail of a large OSC 52
 payload, i.e. the clipboard, as text). The parser is reset only when the viewer moves to a new pty
 session, never on a keyframe.
+
+**Keyframes are filtered too.** `capture-pane -e` emits OSC 8 hyperlinks verbatim (measured, tmux 3.4),
+so every keyframe's screen passes a FRESH filter before it is sent (fresh because the session's stream
+filter is mid-stream state). The viewer also swallows OSC 8 at its own parser and uses an inert link
+handler: xterm's default (`linkHandler: null`) still opens an OSC 8 link after a `confirm()`.
 
 ### Commenter chat
 
