@@ -63,6 +63,8 @@ export const IPC = {
    *  (`present | absent | unknown`) — see `TranscriptPresence`. The one caller that ACTS on a
    *  negative is cold restore, so "we could not look" must never read as "it is gone". */
   transcriptExists: 'transcript:exists',
+  /** "Open recent": the newest agent conversations on THIS machine's disk (core/recent-conversations.ts). */
+  recentConversationsList: 'recent-conversations:list',
   claudeAccountsAdd: 'claude-accounts:add',
   claudeAccountsWaitLogin: 'claude-accounts:wait-login',
   claudeAccountsCancelWait: 'claude-accounts:cancel-wait',

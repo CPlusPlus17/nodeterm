@@ -4999,6 +4999,73 @@ principle. Per-agent write-ups: `docs/grok-agent.md`, `docs/gemini-agent.md`.
     group (a typed `/exit` can land in the agent composer as prompt text), recycle the persistent
     session, and let cold restore resume with the new model under the newly injected environment.
 
+## Open recent (resume a past agent conversation from its history)
+
+Past conversations live in each CLI's own history, and nodeterm used to resume only what a node
+remembered. "Open recent" lists them — the start screen's **Recent conversations** (grouped by the
+folder each ran in) and a **Recent conversations** section of ⌘K — and one click resumes one.
+Reader: `core/recent-conversations.ts` (`recent-conversations:list`, registered by BOTH shells);
+plan: the pure `renderer/lib/recentConversations.ts`; execution: Canvas `resumeRecentConversation`.
+
+- **Which agents, and why only those** (`RECENT_CONVERSATION_AGENTS`, `@shared/recent-conversations`):
+  claude (system root + every LOCAL settled managed and linked account — `claudeAccountsSnapshot`),
+  codex (system `CODEX_HOME` + the managed homes whose ids the renderer sends; core re-validates
+  each through `codexHomeForAccount`, which throws outside the id alphabet), gemini, grok, copilot.
+  Each is in `RESUMABLE_AGENTS` AND has a measured on-disk shape. **opencode is out**: its history is
+  a SQLite database we never open, and the only reader is `opencode export` (one spawn, ~1.5 s,
+  ~320 MB per session). **antigravity is out**: its record shapes were never captured. An agent
+  outside the list contributes no rows — nothing guesses at a layout.
+- **Measured shapes the reader depends on** (dev host, 2026-09-30): codex `session_meta` carries
+  `id`, `cwd` and `thread_source` — a spawned child says `"subagent"` with a `source: {subagent:…}`
+  object (4 of 62 rollouts here) and is SKIPPED, a user's own thread says `"user"`; that first line
+  also carries the whole base instructions (tens of KB), which is why the head read is 512 KB.
+  gemini's project dir holds `.project_root` = the absolute cwd, and its header says `kind: "main"`;
+  a session holding only harness `<session_context>` (no prompt, no title) is not a conversation
+  and is skipped (all 3 gemini sessions on this host). grok's session group is the URL-encoded cwd;
+  a group that does not re-encode to its own name (grok's slug+hash form for a long cwd) keeps a
+  null cwd rather than a guessed one. copilot's `session.start` names `context.cwd`, and its
+  `sessionId` must equal the directory it sits in.
+- **Bounded**: per root only the newest `PER_ROOT` (25) files by mtime are OPENED (the rest cost a
+  stat; codex walks its dated tree newest-first and stats at most 100), each open is a 512 KB head
+  plus, for a claude/gemini title, a 128 KB tail, and the parse is cached by (path, size, mtime).
+  Measured on the dev host (313 claude transcripts, 62 codex rollouts): 227 ms cold, 20 ms cached,
+  46 rows. Read on demand only — once per start-screen appearance and per palette open, never a timer.
+- **Title = display text, never a command.** The agent's own session name where it has one (claude
+  `custom-title`/`ai-title` via `pickSessionName`, gemini `update_topic` via `pickGeminiTitle`, grok
+  `summary.json`), else the first thing the user typed (the agent's own chat parser; a `<…>` harness
+  wrapper is not a prompt). Every title goes through `untrustedLine` (no control, bidi or zero-width
+  characters, one line, capped at 120). A transcript is `lstat`ed and must be a regular file — a
+  symlink planted in a history dir is never read. Only the SESSION ID reaches a pane, re-validated
+  three times: `SAFE_SESSION_ID` at read, `canResumeWith` in the plan, and `createAgentNode`, which
+  THROWS on an id the resume grammar refuses rather than silently starting a fresh conversation.
+- **The resume funnel is the factory's own**: `createAgentNode`'s trailing `resumeSessionId` builds
+  the line with `assembleResumeCommand` — the assembler cold restore uses, so a launch override,
+  custom args, codex's launcher, `withPermissionMode` and the gateway model all apply — mints no id,
+  and persists the RESUMED id as `agentSessionId`. The ⌘K transcript-search hit now uses the same
+  path; before, it replaced the command by hand and kept a freshly minted id the node never ran, so
+  its cold restore after a reboot resumed nothing.
+- **The account is the one that holds the history**, never the project default: a conversation in a
+  managed account's config dir resumed under the system login answers "No conversation found".
+  `boundAccountId` still decides binding; the plan REFUSES when that account is gone, pending or
+  host-pinned (`RESUME_REFUSALS.accountGone`).
+- **Where it resumes** (`planResume`): a node already holding the session (its live hook id, else
+  its persisted `agentSessionId`, live canvas first, then every stored project) is FOCUSED — two CLIs
+  on one transcript interleave it. Else a LOCAL folder project whose cwd equals the conversation's
+  (active first, then open, then closed → reopened). **Never an SSH project or a relay tab**: this
+  is this machine's history, and those cwds are on another machine. No project → "Open folder &
+  resume" through `openOrAdoptFolder` (the same probe/adopt rules as "Open folder…"). A resume into
+  another project lands via `pendingResumeRef`, consumed by the project-load effect beside
+  `pendingFocusRef`, and RE-PLANS at creation (a node may have taken the session meanwhile).
+  Refused rows stay on the start screen, disabled with the reason; the palette omits them (no
+  disabled state there).
+- **Surfaces.** Desktop: this machine's history. **Server Edition**: its own host's history — the
+  machine the browser's sessions run on (real ws-bridge leg). **SSH projects: local history only in
+  v1** — a remote host's transcripts would need a remote leg over the ControlMaster, and a local
+  conversation is never resumed into an SSH project. **Relay tabs**: the list stays LOCAL (relay-api
+  spreads `...local`), and `recent-conversations:list` is `HOST_ONLY` so a peer can never list the
+  host's history (titles are prompts the host's user typed, in every project). **Mobile**: follow-up
+  in nodeterm-ios — "open recent" on the phone needs this list over the relay dialect.
+
 ## Session memory (the RAM pill + the per-session panel)
 
 A bottom-left **RAM pill** (`components/SystemResourcePill.tsx`) beside the usage pill, and the

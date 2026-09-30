@@ -263,6 +263,7 @@ import {
   locateRemoteTranscriptCommand,
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
+import { registerRecentConversationsIpc } from '../core/recent-conversations'
 import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
 import { createReadRemoteGrokChat } from '../core/remote-grok-chat'
 import { createHostChat, mirrorChatSendRefusal } from './remote/host-chat'
@@ -2890,6 +2891,8 @@ app.whenReady().then(async () => {
     })
   }
   registerTranscriptIpc(transcriptIpcDeps)
+  // "Open recent": this machine's agent histories (both shells register it — core/recent-conversations.ts).
+  registerRecentConversationsIpc()
 
   initTranscriptIndex(() => settingsStore.get().claudeAccounts ?? [])
   corePlatform.handle(IPC.transcriptSearch, (query: string) => searchTranscripts(query))
