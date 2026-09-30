@@ -497,9 +497,9 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   Edition hosting a team, the canvas authority writes a shared project's nodes, edges and board
   from the ops it hears, and overlays every save with that content, so a content change that reaches
   the core only inside a save is dropped from disk. A renderer write into a project that is NOT on
-  screen goes through the projects store's `applyOwnNodeMutation` / `appendCanvasLinks`, whose
-  publish hook casts it (`canvas/stored-publish.ts`); a new store writer of that kind must call the
-  hook too. Deep version: CLAUDE.md § Hosted team relay.
+  screen goes through the projects store, whose node and edge writers run inside `ownWrite` so the
+  write is cast (`canvas/stored-publish.ts`); a new store writer of that kind must use `ownWrite`
+  too. Deep version: CLAUDE.md § Hosted team relay.
 
 - **Normalize BOTH sides of a path comparison, through one function.** A marker normalized where
   it is built and matched raw where it is used is a no-op on the machine you wrote it on and a

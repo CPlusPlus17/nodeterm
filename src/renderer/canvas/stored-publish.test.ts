@@ -114,6 +114,38 @@ describe('own writes into a stored project are cast (N2)', () => {
     expect(useProjects.getState().getProject('G')?.nodes.map((n) => n.id)).toEqual(['g1', 'g3'])
   })
 
+  // The same hole, every other store writer: the sessions sidebar renames, recolours, moves,
+  // duplicates and CLOSES nodes of a project that is not on screen through the store. On a governed
+  // project a close killed the tmux session while the overlay put the node back on disk.
+  it('every other own store writer is cast too: close, rename, recolour, move, duplicate, rebind', () => {
+    const w = wire()
+    const st = () => useProjects.getState()
+    st().applyOwnNodeMutation('G', { op: 'upsert', node: node('frame', 0, { kind: 'group' } as never) })
+    w.casts.length = 0
+    st().renameNode('G', 'g1', 'Renamed')
+    st().recolorNode('G', 'g1', '#123456')
+    st().rebindNode('G', 'g1', { agentId: 'codex' as never })
+    st().moveNodeToGroup('G', 'g1', 'frame')
+    st().duplicateNode('G', 'g1')
+    st().removeNode('G', 'g1')
+    const ops = w.casts.map(([id, m]) => {
+      expect(id).toBe('G')
+      return m
+    })
+    const upserts = ops.filter((m): m is Extract<CanvasMutation, { op: 'upsert' }> => m.op === 'upsert')
+    expect(upserts[0].node).toMatchObject({ id: 'g1', title: 'Renamed', titleAuto: false })
+    expect(upserts[1].node).toMatchObject({ id: 'g1', color: '#123456' })
+    expect(upserts[2].node).toMatchObject({ id: 'g1', agentId: 'codex' })
+    expect(upserts[3].node).toMatchObject({ id: 'g1', parentId: 'frame' })
+    expect(upserts[4].node.id).not.toBe('g1') // the duplicate
+    expect(ops.at(-1)).toEqual({ op: 'remove', id: 'g1' })
+    expect(ops).toHaveLength(6)
+    // …and an ungoverned project still casts nothing from any of them.
+    st().renameNode('U', 'u1', 'x')
+    st().removeNode('U', 'u1')
+    expect(w.casts).toHaveLength(6)
+  })
+
   it('with no hook registered (no Canvas bound), a store write casts nothing and still applies', () => {
     useProjects.getState().applyOwnNodeMutation('G', { op: 'upsert', node: node('g4') })
     expect(useProjects.getState().getProject('G')?.nodes.map((n) => n.id)).toEqual(['g1', 'g4'])

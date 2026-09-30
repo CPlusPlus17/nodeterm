@@ -7386,10 +7386,13 @@ The invariants, each with its reason:
   own node writes into a background project are not received ops and take `applyOwnNodeMutation`
   (unstripped: the held launch is ours to set or clear — see the `pendingLaunch` paragraph). **The
   node publisher never casts them** (it diffs React Flow, and a load is ADOPTED as its baseline), so
-  that store path and `appendCanvasLinks` hand every write to `setStoredCanvasPublishHook`, which
-  Canvas casts only for a GOVERNED project that is not the one React Flow holds
-  (`canvas/stored-publish.ts`): without it a ⌘⇧T reopen or a cold open into an off-screen shared
-  project was dropped from disk by the next overlaid save. An ungoverned project casts nothing new.
+  every own writer of the projects store (`applyOwnNodeMutation`, `appendCanvasLinks`, and the
+  sessions sidebar's `renameNode` / `recolorNode` / `removeNode` / `moveNodeToGroup` / …) runs
+  through `ownWrite`, which hands a lazy diff of the project's nodes and edges to
+  `setStoredCanvasPublishHook`; Canvas casts it only for a GOVERNED project that is not the one React
+  Flow holds (`canvas/stored-publish.ts`). Without it a ⌘⇧T reopen or a cold open into an off-screen
+  shared project was dropped from disk by the next overlaid save, and a sidebar close killed the
+  session while the overlay put the node back. An ungoverned project casts nothing new.
 - **The solo-gate trap.** The publisher casts nothing while no teammate is attached, and on a governed
   project that loses every edit. The gate is `shouldPublishFor` = `(hasPeers || governed) && sameCore
   && !readOnly`: a Server Edition tab publishes every project until its first `canvas:authority`

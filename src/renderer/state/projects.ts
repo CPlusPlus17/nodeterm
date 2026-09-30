@@ -8,6 +8,7 @@ import type {
   NavStop,
   Project,
   ProjectKanban,
+  SceneMutation,
   Viewport,
   Workspace
 } from '@shared/types'
@@ -23,6 +24,7 @@ import {
   type CanvasLayout
 } from '@shared/canvas-layout'
 import { applyCanvasOp as applyCanvasOpTo, contentOf } from '@shared/canvas-content'
+import { diffToMutations, type CanvasScene } from '@shared/canvas-mutations'
 import { applyOwnCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
 import { markWorkspaceDirty } from './workspaceDirty'
 import { folderName } from '../lib/projectOpen'
@@ -423,21 +425,44 @@ export function setKanbanPublishHook(hook: KanbanPublishHook | null): void {
 }
 
 /**
- * Publishes a node or edge write THIS renderer made into a project's STORED copy
- * (`applyOwnNodeMutation`, `appendCanvasLinks`): a ⌘⇧T / "Recently closed" reopen into a project that
- * is not on screen, a cold open, an off-canvas display node, a headless start's launch patch. The node
+ * Publishes the node and edge writes THIS renderer makes into a project's STORED copy — every own
+ * store writer: `applyOwnNodeMutation` and `appendCanvasLinks` (a ⌘⇧T / "Recently closed" reopen
+ * into a project that is not on screen, a cold open, an off-canvas display node or link, a headless
+ * start's launch patch) and the sessions sidebar's `renameNode` / `recolorNode` / `rebindNode` /
+ * `removeNode` / `duplicateNode` / `moveNodeToGroup` / `reorderNode` / `reorderGroup`. The node
  * publisher never sees these writes: it diffs React Flow, and a stored project's nodes enter React
  * Flow only through a load, which it ADOPTS as its baseline rather than casting. On a project a
  * Server Edition canvas authority governs that was data loss, because the save overlay replaces the
- * stored content with what the authority heard as ops (docs/hosted-team-relay.md). Called AFTER the
- * store write, once per op actually written. Same one-owner rule as the board hook: a peer's op is
- * applied with `applyCanvasOp`, which never calls it, so nothing received is published again.
+ * stored content with what the authority heard as ops (docs/hosted-team-relay.md): a reopened node
+ * vanished from disk, and a sidebar close killed the session while the node came back.
+ *
+ * Called AFTER the write with `ops`, which diffs the project's nodes and edges before and after it
+ * (`diffToMutations`, the publisher's own diff, so no writer keeps a list of its own that drifts).
+ * LAZY: a hook that casts nothing for this project never pays for the diff. Node order is not in
+ * the op vocabulary, so a pure reorder yields no op. Same one-owner rule as the board hook: a peer's
+ * op is applied with `applyCanvasOp`, which never calls it, so nothing received is published again.
  */
-export type StoredCanvasPublishHook = (projectId: string, m: CanvasMutation) => void
+export type StoredCanvasPublishHook = (projectId: string, ops: () => readonly SceneMutation[]) => void
 let storedCanvasPublishHook: StoredCanvasPublishHook | null = null
 /** Canvas registers this once per core binding and clears it (`null`) on teardown. */
 export function setStoredCanvasPublishHook(hook: StoredCanvasPublishHook | null): void {
   storedCanvasPublishHook = hook
+}
+
+const sceneOf = (p: Project): CanvasScene => ({
+  nodes: Array.isArray(p.nodes) ? p.nodes : [],
+  bridges: p.bridges ?? [],
+  ropes: p.ropes ?? []
+})
+
+/** Run one own write into a stored project, then hand what it changed to the publish hook. */
+function ownWrite(get: () => ProjectsState, projectId: string, write: () => void): void {
+  const before = get().getProject(projectId)
+  write()
+  const hook = storedCanvasPublishHook
+  const after = get().getProject(projectId)
+  if (!hook || !before || !after || before === after) return
+  hook(projectId, () => diffToMutations(sceneOf(before), sceneOf(after)))
 }
 
 export const useProjects = create<ProjectsState>((set, get) => ({
@@ -648,13 +673,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   appendCanvasLinks(projectId, links) {
-    // The edges actually appended, per kind: what the publish hook casts (a re-link casts nothing).
-    const added: { bridge: BridgeLink[]; rope: BridgeLink[] } = { bridge: [], rope: [] }
-    const add = (
-      kind: 'bridge' | 'rope',
-      existing: BridgeLink[] | undefined,
-      incoming: BridgeLink[] | undefined
-    ) => {
+    const add = (existing: BridgeLink[] | undefined, incoming: BridgeLink[] | undefined) => {
       if (!incoming?.length) return existing
       const kept = existing ?? []
       const seenId = new Set(kept.map((e) => e.id))
@@ -666,21 +685,17 @@ export const useProjects = create<ProjectsState>((set, get) => ({
         seenPair.add(pair)
         return true
       })
-      added[kind] = fresh
       return fresh.length ? [...kept, ...fresh] : existing
     }
-    const p = get().projects.find((x) => x.id === projectId)
-    if (!p) return
-    const next = {
-      ...p,
-      bridges: add('bridge', p.bridges, links.bridges),
-      ropes: add('rope', p.ropes, links.ropes)
-    }
-    set((s) => ({
-      projects: s.projects.map((x) => (x.id === projectId ? next : x))
-    }))
-    for (const kind of ['bridge', 'rope'] as const)
-      for (const edge of added[kind]) storedCanvasPublishHook?.(projectId, { op: 'edge-upsert', kind, edge })
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: s.projects.map((p) =>
+          p.id === projectId
+            ? { ...p, bridges: add(p.bridges, links.bridges), ropes: add(p.ropes, links.ropes) }
+            : p
+        )
+      }))
+    )
   },
 
   applyCanvasOp(projectId, mutation) {
@@ -713,112 +728,128 @@ export const useProjects = create<ProjectsState>((set, get) => ({
 
   applyOwnNodeMutation(projectId, mutation) {
     if (!get().projects.some((p) => p.id === projectId)) return false
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
-        applyOwnCanvasMutation(nodes, mutation)
-      )
-    }))
-    // A node op only: `applyOwnCanvasMutation` writes nothing for any other family.
-    if (mutation.op === 'upsert' || mutation.op === 'remove') storedCanvasPublishHook?.(projectId, mutation)
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          applyOwnCanvasMutation(nodes, mutation)
+        )
+      }))
+    )
     return true
   },
 
   renameNode(projectId, nodeId, title) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
-        // An explicit rename means the user owns the name now: stop auto-tracking the session.
-        nodes.map((n) => (n.id === nodeId ? { ...n, title, titleAuto: false } : n))
-      )
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          // An explicit rename means the user owns the name now: stop auto-tracking the session.
+          nodes.map((n) => (n.id === nodeId ? { ...n, title, titleAuto: false } : n))
+        )
+      }))
+    )
   },
 
   recolorNode(projectId, nodeId, color) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
-        nodes.map((n) => (n.id === nodeId ? { ...n, color } : n))
-      )
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          nodes.map((n) => (n.id === nodeId ? { ...n, color } : n))
+        )
+      }))
+    )
   },
 
   rebindNode(projectId, nodeId, patch) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
-        nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n))
-      )
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n))
+        )
+      }))
+    )
   },
 
   removeNode(projectId, nodeId) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) =>
-        nodes.filter((n) => n.id !== nodeId)
-      )
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          nodes.filter((n) => n.id !== nodeId)
+        )
+      }))
+    )
   },
 
   duplicateNode(projectId, nodeId) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) => {
-        const src = nodes.find((n) => n.id === nodeId)
-        if (!src) return nodes
-        const copy: CanvasNodeState = {
-          ...src,
-          id: `${src.kind}-${Math.random().toString(36).slice(2, 10)}`,
-          title: `${src.title} copy`,
-          position: { x: src.position.x + 24, y: src.position.y + 24 }
-        }
-        return [...nodes, copy]
-      })
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) => {
+          const src = nodes.find((n) => n.id === nodeId)
+          if (!src) return nodes
+          const copy: CanvasNodeState = {
+            ...src,
+            id: `${src.kind}-${Math.random().toString(36).slice(2, 10)}`,
+            title: `${src.title} copy`,
+            position: { x: src.position.x + 24, y: src.position.y + 24 }
+          }
+          return [...nodes, copy]
+        })
+      }))
+    )
   },
 
   moveNodeToGroup(projectId, nodeId, groupId) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) => {
-        const node = nodes.find((n) => n.id === nodeId)
-        if (!node) return nodes
-        if ((node.parentId ?? null) === groupId) return nodes
-        // A frame may be moved into another frame, but never into itself or its own subtree.
-        if (groupId === nodeId || (groupId && stateIsDescendant(nodes, groupId, nodeId))) {
-          return nodes
-        }
-        const next = repositionState(node, groupId, nodes)
-        if (next === node) return nodes // target group missing / not a group
-        return nodes.map((n) => (n.id === nodeId ? next : n))
-      })
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) => {
+          const node = nodes.find((n) => n.id === nodeId)
+          if (!node) return nodes
+          if ((node.parentId ?? null) === groupId) return nodes
+          // A frame may be moved into another frame, but never into itself or its own subtree.
+          if (groupId === nodeId || (groupId && stateIsDescendant(nodes, groupId, nodeId))) {
+            return nodes
+          }
+          const next = repositionState(node, groupId, nodes)
+          if (next === node) return nodes // target group missing / not a group
+          return nodes.map((n) => (n.id === nodeId ? next : n))
+        })
+      }))
+    )
   },
 
   reorderNode(projectId, draggedId, beforeId) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) => {
-        if (draggedId === beforeId) return nodes
-        const dragged = nodes.find((n) => n.id === draggedId)
-        const before = nodes.find((n) => n.id === beforeId)
-        if (!dragged || !before || dragged.kind === 'group') return nodes
-        const targetParent = before.parentId ?? null
-        const moved =
-          (dragged.parentId ?? null) === targetParent
-            ? dragged
-            : repositionState(dragged, targetParent, nodes)
-        const without = nodes.filter((n) => n.id !== draggedId)
-        const idx = without.findIndex((n) => n.id === beforeId)
-        return [...without.slice(0, idx), moved, ...without.slice(idx)]
-      })
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) => {
+          if (draggedId === beforeId) return nodes
+          const dragged = nodes.find((n) => n.id === draggedId)
+          const before = nodes.find((n) => n.id === beforeId)
+          if (!dragged || !before || dragged.kind === 'group') return nodes
+          const targetParent = before.parentId ?? null
+          const moved =
+            (dragged.parentId ?? null) === targetParent
+              ? dragged
+              : repositionState(dragged, targetParent, nodes)
+          const without = nodes.filter((n) => n.id !== draggedId)
+          const idx = without.findIndex((n) => n.id === beforeId)
+          return [...without.slice(0, idx), moved, ...without.slice(idx)]
+        })
+      }))
+    )
   },
 
   reorderGroup(projectId, draggedId, parentId, beforeId) {
-    set((s) => ({
-      projects: mapProjectNodes(s.projects, projectId, (nodes) => {
-        const dragged = nodes.find((node) => node.id === draggedId)
-        const before = beforeId ? nodes.find((node) => node.id === beforeId) : undefined
-        if (!dragged || dragged.kind !== 'group' || (beforeId && before?.kind !== 'group')) {
-          return nodes
-        }
-        return reorderGroupWithinParent(nodes, draggedId, parentId, beforeId)
-      })
-    }))
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) => {
+          const dragged = nodes.find((node) => node.id === draggedId)
+          const before = beforeId ? nodes.find((node) => node.id === beforeId) : undefined
+          if (!dragged || dragged.kind !== 'group' || (beforeId && before?.kind !== 'group')) {
+            return nodes
+          }
+          return reorderGroupWithinParent(nodes, draggedId, parentId, beforeId)
+        })
+      }))
+    )
   },
 
   reorderProject(draggedId, beforeId) {

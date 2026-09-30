@@ -335,10 +335,11 @@ whole-workspace saves still write them.
 1. **Ops**: from Editors' hosted tabs, from the server's own browser tabs, and from server canvas
    control, which diffs everything a verb changed and casts each op before it saves (`castAndSave`,
    `src/server/headless-node-factory.ts`). A tab also casts what it writes into a governed project
-   it is not showing (a ⌘⇧T or "Recently closed" reopen, a cold open, an off-canvas node or link):
-   those writes go to its projects store, not its canvas, so the store hands each one to the publish
-   hook (`src/renderer/canvas/stored-publish.ts`). Without the cast the next overlaid save would
-   drop them.
+   it is not showing (a ⌘⇧T or "Recently closed" reopen, a cold open, an off-canvas node or link, a
+   rename, move, duplicate or close from the sessions sidebar): those writes go to its projects
+   store, not its canvas, so the store hands each one to the publish hook
+   (`src/renderer/canvas/stored-publish.ts`). Without the cast the next overlaid save would drop
+   them, and a sidebar close would end the session while the node stayed on disk.
 2. **Saves.** Before a whole-workspace save is written, a governed project's content is replaced by
    the authority's (`overlaySave`). The board is overlaid field by field: its items (columns, cards,
    metadata, labels, views) come from the authority, `github` and `pullLinks` from the save. This
@@ -434,6 +435,9 @@ it is a new way to use it.
 - **Board edits reach only the active tab's core.** A client casts only to the core its active tab
   is on. An edit on the Omni board to a lane of a project on another core (a hosted lane while a
   local tab is active, or the reverse) is not cast, so on a hosted core it is not written either.
+- **Node order is not synced.** The sessions sidebar's order is the node list's order, and no op
+  carries an order change, so on a governed project a reorder stays on the screen that made it: the
+  file keeps the authority's order (the order it read, with nodes it hears about later appended).
 - **Load-time repairs are not cast.** What a client derives while it loads a project (a missing
   `--after` dependency rope it heals, a legacy node migrated to its current shape) becomes that
   client's baseline and is never cast, so on a governed project it never reaches disk: every load

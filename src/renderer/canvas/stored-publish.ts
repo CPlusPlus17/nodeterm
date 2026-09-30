@@ -1,10 +1,11 @@
-// Casts the node and edge writes THIS renderer makes into a project's STORED copy — the projects
-// store's `applyOwnNodeMutation` / `appendCanvasLinks`, which call the store's publish hook
+// Casts the node and edge writes THIS renderer makes into a project's STORED copy — every own
+// writer of the projects store (`applyOwnNodeMutation`, `appendCanvasLinks`, the sessions sidebar's
+// rename / recolour / move / duplicate / close …), which call its publish hook
 // (`setStoredCanvasPublishHook`). The node publisher cannot: it diffs React Flow, and a stored
 // project's nodes enter React Flow only through a load, which it adopts as its baseline. So a ⌘⇧T
-// reopen, a cold open, an off-canvas display node or a headless start's launch patch into a project
-// that is not on screen was never cast, and on a project a Server Edition canvas authority governs
-// the next save overlay dropped it from disk (docs/hosted-team-relay.md).
+// reopen, a cold open, an off-canvas display node, a headless start's launch patch or a sidebar
+// action on a project that is not on screen was never cast, and on a project a Server Edition
+// canvas authority governs the next save overlay dropped it from disk (docs/hosted-team-relay.md).
 //
 // The rule lives here rather than in Canvas so it is tested without a canvas:
 //  - ONLY A GOVERNED PROJECT. The authority is what drops an un-cast write; an ungoverned project's
@@ -32,9 +33,10 @@ export interface StoredCanvasPublisherDeps {
 }
 
 export function createStoredCanvasPublisher(deps: StoredCanvasPublisherDeps): StoredCanvasPublishHook {
-  return (projectId, m) => {
+  return (projectId, ops) => {
     if (deps.renderedProjectId() === projectId) return
     if (!deps.isGoverned(projectId) || !deps.shouldPublish(projectId)) return
-    deps.send(projectId, m)
+    // Only now is the write diffed: a project that casts nothing never pays for it.
+    for (const m of ops()) deps.send(projectId, m)
   }
 }
