@@ -441,16 +441,23 @@ removed from the address bar (the link must stay copyable).
 
 ### Entry points
 
-All go through `requireProOr('Live links', …)`. That is the UX; the server is the gate.
+All go through `requireProOr('Sharing a live link is a Pro feature', …)`, after the availability
+check below (a Server Edition tab or a relay tab never sees an Upgrade dialog). That is the UX; the
+server is the gate.
 
 - **Node context menu** (terminal and agent nodes): "Share live link…". The sessions sidebar row
   shares the `selectionItems` builder; the kanban card menu gets the same row from the same builder.
   Hideable from Settings → Appearance as `live-link` (`HIDEABLE_MENU_ITEMS`).
 - **Card modal header:** a "Share live link" action on terminal cards.
-- **Command palette:** "Manage live links" (opens the Settings section) and "Stop all live links".
+- **Command palette:** "Manage live links" (opens the Settings section) and "Stop all live links
+  (every machine on this license)". Stop all revokes every link of the license, other machines
+  included, so both entry points (palette and Settings) confirm first.
 - **Disabled with a reason, never hidden:**
   - relay-tab node: "Live links are created on the machine that runs this terminal."
-  - unpackaged build (`relayAllowed()` false): "Live links need the installed app."
+  - Server Edition tab: the R43 sentence ("Live links need a Pro license on this server — not
+    available in the Server Edition yet"), no Upgrade button.
+  - unpackaged build (`relayAllowed()` false): "Live links need the installed app." — shown when
+    Create is pressed (the renderer has no `relayAllowed` probe; a dev-build-only case).
   - 5 active links: "Stop a live link first — 5 can be active at once."
 - Creating a link does not need the node on screen (`joinOnly` attaches in core), so the Omni
   board's cards of other projects can create links too.
