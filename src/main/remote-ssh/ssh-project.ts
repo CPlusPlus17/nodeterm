@@ -20,7 +20,8 @@ import type {
   ClaudeSessionCopyResult,
   DownloadResult,
   SshPassphraseRequest,
-  SshProjectStatusEvent
+  SshProjectStatusEvent,
+  RemoteCodexNoDaemon
 } from '../../shared/types'
 import {
   parseRemoteSessionCopy,
@@ -55,6 +56,8 @@ import {
 } from '../../core/remote-ssh/control-master'
 import { SshChildGate } from '../../core/remote-ssh/ssh-child-gate'
 import { claudeVersionProbeCommand, parseClaudeVersionProbe } from '../../core/remote-ssh/claude-version-probe'
+import { codexNoDaemonProbeCommand, parseCodexNoDaemonProbe } from '../../core/remote-ssh/codex-no-daemon-probe'
+import { codexProbeHostKey } from '../../shared/agents/codex-daemon'
 import { RemoteHooks } from './remote-hooks'
 import type { AgentToolsTrigger } from './agent-tools-freshness'
 import {
@@ -307,6 +310,7 @@ export interface ConnectResult {
   codexCliPath?: string
   claudeAutoPermissionMode?: boolean
   remoteClaudeVersion?: string | null
+  remoteCodexNoDaemon?: RemoteCodexNoDaemon
 }
 
 /**
@@ -407,6 +411,8 @@ interface Conn {
   /** The probed remote `claude --version` output. `null` = the probe ran and found no claude
    * (feeds the tab-menu hint); undefined = not probed yet. */
   remoteClaudeVersion?: string | null
+  /** This host's `codex` takes `--no-daemon` (probed after connect); undefined = not probed. */
+  remoteCodexNoDaemon?: RemoteCodexNoDaemon
 }
 
 /**
@@ -813,7 +819,8 @@ export class SshProjectManager {
           codexRelayRuntimePath: existing.codexRelayRuntimePath,
           codexCliPath: existing.codexCliPath,
           claudeAutoPermissionMode: existing.claudeAutoPermissionMode,
-          remoteClaudeVersion: existing.remoteClaudeVersion
+          remoteClaudeVersion: existing.remoteClaudeVersion,
+          remoteCodexNoDaemon: existing.remoteCodexNoDaemon
         }
       }
       this.emitStatus({ projectId, status: 'reconnecting' })
@@ -1101,6 +1108,11 @@ export class SshProjectManager {
         // log line. Internals are already try/catch-guarded, but `this.r.onStatus` (IPC send) can
         // still throw if the window is torn down mid-probe, that must never surface here.
         if (entry) void this.probeClaudeAutoPermissionMode(projectId, entry).catch(() => {})
+        // Same shape for the host's codex: may a remote Codex TUI carry `--no-daemon`? (From
+        // 0.157.0 it otherwise joins an auto-started shared app-server that runs every later node
+        // as the first one — shared/agents/codex-daemon.ts.) Unawaited and swallowed for the same
+        // reasons; until it lands, remote Codex lines stay exactly as they were.
+        if (entry) void this.probeRemoteCodexNoDaemon(projectId, entry).catch(() => {})
         return {
           controlPath,
           hookEndpointPath,
@@ -1111,7 +1123,8 @@ export class SshProjectManager {
           codexRelayRuntimePath: entry?.codexRelayRuntimePath,
           codexCliPath: entry?.codexCliPath,
           claudeAutoPermissionMode: entry?.claudeAutoPermissionMode,
-          remoteClaudeVersion: entry?.remoteClaudeVersion
+          remoteClaudeVersion: entry?.remoteClaudeVersion,
+          remoteCodexNoDaemon: entry?.remoteCodexNoDaemon
         }
       }
       const alive = master.exited ? !master.exited() : undefined
@@ -1800,6 +1813,11 @@ export class SshProjectManager {
 
   /** The connection's cached remote `--permission-mode auto` capability (undefined = not
    *  probed / not connected). Feeds the agent-status settings block the phone reads. */
+  /** This connection's host codex takes `--no-daemon` — `true` only when its own probe said so. */
+  remoteCodexNoDaemonFor(projectId: string): boolean {
+    return this.conns.get(projectId)?.remoteCodexNoDaemon?.supported === true
+  }
+
   remoteAutoPermFor(projectId: string): boolean | undefined {
     return this.conns.get(projectId)?.claudeAutoPermissionMode
   }
@@ -2493,6 +2511,27 @@ export class SshProjectManager {
   }
 
   /**
+   * One remote `codex --help` (login shell, marker-delimited — `codex-no-daemon-probe.ts`), pushed
+   * as a `connected` event once it lands. No retries: an unknown answer only means the remote line
+   * stays as it has always been (no `--no-daemon`), and the next connect asks again.
+   */
+  private async probeRemoteCodexNoDaemon(projectId: string, entry: Conn): Promise<void> {
+    let supported: boolean | null = null
+    try {
+      const { stdout } = await this.r.run(childArgs(entry.conn, entry.controlPath, codexNoDaemonProbeCommand()))
+      supported = parseCodexNoDaemonProbe(stdout)
+    } catch {
+      supported = null
+    }
+    if (supported === null || this.conns.get(projectId) !== entry) return
+    const hostKey = codexProbeHostKey(entry.conn)
+    if (!hostKey) return
+    const answer: RemoteCodexNoDaemon = { hostKey, supported }
+    entry.remoteCodexNoDaemon = answer
+    this.emitStatus({ projectId, status: 'connected', remoteCodexNoDaemon: answer })
+  }
+
+  /**
    * Probe the remote CLI's `--permission-mode auto` support AFTER the connect resolves, then push
    * the answer into the live conn + the renderer (a `connected` status event carrying it).
    *
@@ -2723,6 +2762,14 @@ export function resolvePassphrasePrompt(requestId: string, value: string | null)
  *  not hand a host two budgets. */
 const sshChildGate = new SshChildGate()
 
+/** In-process listeners for every project status event (beside the renderer push). Used by the
+ *  dev-port forward registry to forget a disconnected project's forwards. */
+const sshStatusListeners = new Set<(e: SshProjectStatusEvent) => void>()
+export function onSshProjectStatus(listener: (e: SshProjectStatusEvent) => void): () => void {
+  sshStatusListeners.add(listener)
+  return () => sshStatusListeners.delete(listener)
+}
+
 export function initSshProject(
   onConnected?: (projectId: string) => void,
   askpassScriptPath?: string,
@@ -2900,6 +2947,13 @@ export function initSshProject(
     nodeIdsForProject: (projectId) => nodeIdsForCanvas(projectId),
     nodeTokenMinter: () => remoteNodeTokenMinter(),
     onStatus: (e) => {
+      for (const listener of [...sshStatusListeners]) {
+        try {
+          listener(e)
+        } catch {
+          // an in-process listener must never break the status push to the UI
+        }
+      }
       // sendToMain resolves the window AT SEND TIME (see main-window.ts): the `win` captured here
       // is destroyed and recreated by a macOS close/reopen, and sending to the stale reference is
       // silently dropped. The try/catch is the other half: webContents.send THROWS when the render

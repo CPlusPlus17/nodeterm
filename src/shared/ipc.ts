@@ -63,6 +63,8 @@ export const IPC = {
    *  (`present | absent | unknown`) — see `TranscriptPresence`. The one caller that ACTS on a
    *  negative is cold restore, so "we could not look" must never read as "it is gone". */
   transcriptExists: 'transcript:exists',
+  /** "Open recent": the newest agent conversations on THIS machine's disk (core/recent-conversations.ts). */
+  recentConversationsList: 'recent-conversations:list',
   claudeAccountsAdd: 'claude-accounts:add',
   claudeAccountsWaitLogin: 'claude-accounts:wait-login',
   claudeAccountsCancelWait: 'claude-accounts:cancel-wait',
@@ -330,6 +332,12 @@ export const IPC = {
   /** The scoped machine's RAM (available/total) — the cheap read behind the system-resource
    *  pill. Safe to poll locally; NOT polled for an SSH scope. */
   sessionMemoryHost: 'session-memory:host',
+  /** Dev-server ports (core/dev-ports-service.ts): which TCP ports each node's session listens on
+   *  (ownership by process tree, one round trip per host), and the same-port SSH forward that makes
+   *  `http://localhost:<port>` reach an SSH project's host. Desktop only; host-only for relay peers. */
+  devPortsScan: 'dev-ports:scan',
+  devPortsForward: 'dev-ports:forward',
+  devPortsUnforward: 'dev-ports:unforward',
   // Canvas wallpaper (core/wallpaper.ts): macOS stills, cached image reads, image import.
   wallpaperListStills: 'wallpaper:list-stills',
   wallpaperLoad: 'wallpaper:load',
@@ -672,6 +680,12 @@ export const IPC = {
   pairingProbeSsh: 'pairing:probe-ssh',
   pairingOpenRemoteLoginSettings: 'pairing:open-remote-login-settings',
   pairingListDevices: 'pairing:listDevices',
+  // Push webhook management (core/push-webhook.ts). Under `pairing:` so HOST_ONLY_CHANNEL_PREFIXES
+  // keeps them off the relay: minting a token that pushes to the host's phones is the host's call.
+  pairingWebhookStatus: 'pairing:webhook-status',
+  pairingWebhookMint: 'pairing:webhook-mint',
+  pairingWebhookRevoke: 'pairing:webhook-revoke',
+  pairingWebhookEndpoint: 'pairing:webhook-endpoint',
   pairingRevokeDevice: 'pairing:revokeDevice',
   // Dictation (desktop/server). speechProgress is a main/server → renderer broadcast of
   // { id, pct } while a whisper model downloads (WhisperModelStore.onProgress).

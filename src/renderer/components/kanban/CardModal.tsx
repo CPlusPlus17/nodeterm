@@ -21,6 +21,8 @@ import { isRemoteSessionNode } from '@shared/worktree'
 import { AccountChip, useAccountChip } from '../AccountChip'
 import { IssueRefChip } from '../IssueRefChip'
 import { TeamProgressChip } from '../TeamProgressChip'
+import { PortsChip } from '../PortsChip'
+import { useProjects } from '../../state/projects'
 import type { TeamStation } from '../../lib/teamProgress'
 import { sessionNameRepeatsTitle } from '../../lib/cardRedundancy'
 import type { IssueRef } from '@shared/github-issue-ref'
@@ -73,6 +75,9 @@ interface CardModalProps {
   board: ProjectKanban
   onChangeBoard: (next: ProjectKanban) => void
   onClose: () => void
+  /** The card's project, when its node is on the LIVE canvas (the active project): the Ports chip
+   *  is drawn only then, because "Open in browser node" places the page beside the node there. */
+  portsProjectId?: string
   /** Secondary action: close the modal, switch to canvas, focus the node. */
   onOpenCanvas: () => void
   /** Rename funnel (same as the sidebar's). */
@@ -100,7 +105,7 @@ interface CardModalProps {
  *  canvas under it) stay mounted. Terminal cards carry the node header's actions too:
  *  search / dictate / AI-name / the ⌘M view — ChatPanel or the output markdown, the same face the
  *  canvas node shows (the node itself is hidden under the board). */
-export function CardModal({ session, columnTitle, board, onChangeBoard, onClose, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel }: CardModalProps) {
+export function CardModal({ session, columnTitle, board, onChangeBoard, onClose, portsProjectId, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel }: CardModalProps) {
   const { api } = useSession()
   const idRef = useRef<string>()
   if (!idRef.current) idRef.current = nextDialogId()
@@ -124,6 +129,7 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
   // and the canvas node header use). The card carries it on its detail line; the modal, which
   // hides the node, carries it here so the session's name is never two views away.
   const sessionName = useAgentStatus((st) => st.byId[session.id]?.session)
+  const portsRemote = useProjects((s) => !!(portsProjectId && s.getProject(portsProjectId)?.ssh))
   const accountChip = useAccountChip(session.spawn.accountId, observedAccount)
   const [naming, setNaming] = useState(false)
   // Comments & activity panel: OPEN by default in the modal; the header 💬 collapses it. The
@@ -243,7 +249,7 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
 
   const nameWithAi = async () => {
     setNaming(true)
-    const r = await api.pty.generateName(session.id, session.spawn.cwd ?? '')
+    const r = await api.pty.generateName(session.id, session.spawn.cwd ?? '', session.spawn.accountId)
     setNaming(false)
     if (r.ok) onRename(r.message)
   }
@@ -373,6 +379,19 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
           <span className="kanban-modal__column">{columnTitle ?? 'Ungrouped'}</span>
           {isTerminal && onOpenIssue && <IssueRefChip issueRef={session.issueRef} onOpen={onOpenIssue} />}
           {isTerminal && team && team.length > 0 && onTravel && <TeamProgressChip stations={team} onTravel={onTravel} />}
+          {/* The same Ports chip as the canvas node header. Opening a port places the browser node
+              beside this node ON THE CANVAS, so the modal hands over to the canvas to show it. */}
+          {isTerminal && portsProjectId && (
+            <PortsChip
+              nodeId={session.id}
+              projectId={portsProjectId}
+              remote={portsRemote}
+              onOpenUrl={(url) => {
+                window.dispatchEvent(new CustomEvent('nodeterm:open-url-node', { detail: { url, sourceNodeId: session.id } }))
+                onOpenCanvas()
+              }}
+            />
+          )}
           {isTerminal && sessionName && !sessionNameRepeatsTitle(sessionName, session.title) && (
             <span className="kanban-card__session kanban-modal__session" title={sessionName}>
               {sessionName}

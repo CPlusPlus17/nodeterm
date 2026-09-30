@@ -26,6 +26,7 @@ import {
 import { applyCanvasOp as applyCanvasOpTo, contentOf } from '@shared/canvas-content'
 import { diffToMutations, type CanvasScene } from '@shared/canvas-mutations'
 import { applyOwnCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
+import { registerCodexRelayProjectCheck } from './codexCli'
 import { markWorkspaceDirty } from './workspaceDirty'
 import { folderName } from '../lib/projectOpen'
 // One order-independent key for an edge's endpoints — the SAME rule `hiddenLinkIds` uses, so a
@@ -493,7 +494,8 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   openFolderProject(folder) {
-    const existing = get().projects.find((p) => p.cwd === folder)
+    // Never a relay tab: it carries the HOST's cwd, and the same path can exist on both machines.
+    const existing = get().projects.find((p) => p.cwd === folder && !p.remote)
     if (existing) {
       // reopenProject also clears `closed` — an "Open folder" on a previously closed
       // project must bring its tab back, not activate an invisible project.
@@ -1091,3 +1093,8 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     return { version: 2, activeProjectId, projects: projects.filter((p) => !p.remote) }
   }
 }))
+
+// Codex launch caps must know a relay tab when they see one: its sessions run on ANOTHER machine's
+// codex, which this machine's probe never saw (see `codexApprovalCaps`). Registered here rather
+// than imported there, because this store imports workspace.ts, which imports codexCli.ts.
+registerCodexRelayProjectCheck((id) => useProjects.getState().getProject(id)?.remote === true)

@@ -82,6 +82,10 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.stationOutcomeList,
   // Same class: which of the host's stations (any project) have work handed to them.
   IPC.stationHandoverList,
+  // "Open recent": the host's conversation history — titles are prompts the host's user typed, in
+  // every project. A relay tab lists its OWN machine's history (relay-api keeps it `...local`), so
+  // no legitimate peer asks the host for this.
+  IPC.recentConversationsList,
   // The host's settings. `settings:save` is the dangerous half: `modelGateway.baseUrl` is the TRUST
   // ANCHOR `agent:discover-models` uses to decide whether it may resolve the stored
   // `${secret:model-gateway-api-key}` (core/agent-env-ipc.ts), so a peer that could save settings
@@ -95,7 +99,12 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.agentDiscoverModels,
   IPC.agentGatewayCredentialStatus,
   IPC.agentGatewayCredentialSave,
-  IPC.agentGatewayCredentialClear
+  IPC.agentGatewayCredentialClear,
+  // Dev-server ports: a scan lists the host's listening ports, and a forward binds a port on the
+  // HOST machine's loopback over one of its SSH masters. Neither is a peer's to ask for.
+  IPC.devPortsScan,
+  IPC.devPortsForward,
+  IPC.devPortsUnforward
 ])
 
 /** What a refused peer is told. One wording, so the two shells answer identically. */

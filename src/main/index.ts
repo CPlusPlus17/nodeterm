@@ -142,7 +142,12 @@ import {
   MODEL_GATEWAY_SECRET_FILE,
   ModelGatewayCredentialService
 } from '../core/model-gateway-credentials'
-import { generateCommitMessage, generateGroupName, generateTerminalName } from '../core/commit-message'
+import {
+  claudeAccountEnv,
+  generateCommitMessage,
+  generateGroupName,
+  generateTerminalName
+} from '../core/commit-message'
 import { initUpdater } from './updater'
 import { fetchCheck } from '../core/check'
 import {
@@ -232,10 +237,13 @@ import { createSessionReaper } from '../core/session-budget'
 import { initKeepAwake } from './keep-awake'
 import type { KeepAwakeTracker } from '../core/keep-awake'
 import { startSessionMemoryService, sshScopePredicate } from '../core/session-memory-service'
+import { startDevPortsService } from '../core/dev-ports-service'
 import { createMemoryPressureMonitor } from '../core/memory-pressure'
 import { createPtyPressureMonitor } from '../core/pty-pressure'
 import { registerPtmxLimitHandler } from './ptmx-limit'
 import { getDeviceId } from '../core/device-id'
+import { createPushWebhookClient } from '../core/push-webhook'
+import { PUSH_WEBHOOK_DEFAULT_API_BASE } from '../shared/push-webhook'
 import { initRemoteStatusPush } from './remote-ssh/remote-status-push'
 import { initCanvasSync } from '../core/canvas-sync'
 import { retainUntilDismissed } from './notifications'
@@ -264,6 +272,7 @@ import {
   locateRemoteTranscriptCommand,
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
+import { registerRecentConversationsIpc } from '../core/recent-conversations'
 import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
 import { createReadRemoteGrokChat } from '../core/remote-grok-chat'
 import { createHostChat, mirrorChatSendRefusal } from './remote/host-chat'
@@ -361,7 +370,8 @@ import { initStandingHost } from './remote/standing-host'
 import { initRelayHost } from './remote/relay-host-service'
 import { PIN_ROLES, phonePins, retireLegacyPinFile } from './remote/approved-devices'
 import { revokeAllPhones, revokePeerKey } from './remote/peer-revoke'
-import { publicKeyToB64 } from './remote/e2ee'
+import { publicKeyToB64, type KeyPair } from './remote/e2ee'
+import { popProverFor } from '../core/relay/relay-pop'
 import { connectRelayClient, type RelayClientSession } from './remote/relay-client'
 import { relayPtyDataKey } from '../shared/relay-pty-channel'
 import { decodeOffer } from './remote/pairing'
@@ -369,7 +379,7 @@ import { isJoinCode } from '../core/relay/join-code'
 import { connectHostedTeam, removeHostedBookmark } from './remote/hosted-join'
 import { BookmarkStore, publicBookmark } from './remote/relay-bookmarks'
 import { loadOrCreatePeerKeyPair } from './remote/peer-identity'
-import { initSshProject } from './remote-ssh/ssh-project'
+import { initSshProject, onSshProjectStatus } from './remote-ssh/ssh-project'
 import { resyncProjectAgents, RESYNC_TRANSCRIPT_TAIL_BYTES } from './remote-ssh/agent-resync'
 import { setGitRemoteResolver, type GitRemoteRef } from '../core/remote-ssh/remote-git'
 import { SshFs, sshAppendArgs, sshTailArgs, sshSizeArgs, sshWriteArgs } from './ssh-fs'
@@ -1514,12 +1524,27 @@ app.whenReady().then(async () => {
   const localNamingCwd = (keys: string[], cwd: string): string =>
     keys.some((k) => ptyManager.sshRemoteForNode(k)) ? '' : cwd
 
-  corePlatform.handle(IPC.ptyGenerateName, async (persistKey: string, cwd: string) =>
-    generateTerminalName(
-      await ptyManager.captureSession(persistKey),
-      localNamingCwd([persistKey], cwd),
-      settingsStore.get()
-    )
+  // The naming agent runs under the NODE's managed Claude account (same resolution as the pty
+  // spawn: a known, non-pending local account whose dir exists), else the system `~/.claude`.
+  // Without this every ✦ request went out as the system login — which may be logged out or
+  // expired even while the node's own account works fine.
+  const namingEnv = (accountId?: string): NodeJS.ProcessEnv | undefined => {
+    if (!accountId) return undefined
+    const acct = settingsStore.get().claudeAccounts.find((a) => a.id === accountId)
+    if (!acct || acct.pending || acct.host) return undefined
+    const dir = claudeConfigDirFor(accountId)
+    return existsSync(dir) ? claudeAccountEnv(process.env, dir) : undefined
+  }
+
+  corePlatform.handle(
+    IPC.ptyGenerateName,
+    async (persistKey: string, cwd: string, accountId?: string) =>
+      generateTerminalName(
+        await ptyManager.captureSession(persistKey),
+        localNamingCwd([persistKey], cwd),
+        settingsStore.get(),
+        namingEnv(accountId)
+      )
   )
 
   corePlatform.handle(IPC.ptyGenerateGroupName, async (memberKeys: string[], cwd: string) => {
@@ -1753,6 +1778,24 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle(IPC.pairingListDevices, () => pairingService.listDevices())
   ipcMain.handle(IPC.pairingRevokeDevice, (_e, id: string) => pairingService.revokeDevice(id))
+  // Push webhook management. The proof of ownership is made HERE with the relay host secret key,
+  // which never reaches the renderer; the minted token passes through to it exactly once and is
+  // not kept by this process (core/push-webhook.ts).
+  const pushWebhook = createPushWebhookClient({
+    isPackaged: () => app.isPackaged,
+    // The same local check the host-mode push path uses (refreshPushIdentity below): no paired
+    // phone ⇒ the host key is not read (a first read creates it) and the backend is not called.
+    hasPairedPhone: async () =>
+      (await phonePins.load()).pubkeys.length > 0 || (await pairingService.listDevices()).length > 0,
+    loadHost: async () => {
+      const kp = await loadOrCreateKeyPair()
+      return { hostDeviceId: getDeviceId(), publicKey: kp.publicKey, secretKey: kp.secretKey, label: hostname() }
+    }
+  })
+  ipcMain.handle(IPC.pairingWebhookStatus, () => pushWebhook.status())
+  ipcMain.handle(IPC.pairingWebhookMint, () => pushWebhook.mint())
+  ipcMain.handle(IPC.pairingWebhookRevoke, () => pushWebhook.revoke())
+  ipcMain.handle(IPC.pairingWebhookEndpoint, () => process.env.NODETERM_API_BASE || PUSH_WEBHOOK_DEFAULT_API_BASE)
 
   // Revoking a bridged PEER must CUT THE LIVE SESSION, not just unpin it (revocation.ts): unpinning
   // refuses only the NEXT handshake, while the open relay socket keeps full shell access — "the
@@ -2280,6 +2323,9 @@ app.whenReady().then(async () => {
       ...(localCodexCaps?.approvalValues
         ? { codexApprovalValues: localCodexCaps.approvalValues }
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
+      // Only a SEEN `true`: a phone-launched plain Codex TUI must carry `--no-daemon` too, or it
+      // joins the auto-started shared app-server and runs as another node (shared/agents/codex-daemon).
+      ...(localCodexCaps?.noDaemon === true ? { codexNoDaemon: true } : {}),
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
         .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) })),
@@ -2337,6 +2383,9 @@ app.whenReady().then(async () => {
     remoteGrants.markDead(grant)
   }
   let pushHostKeyB64: string | null = null
+  // The same key pair, kept so push can prove possession of it (relay-pop.ts). Only a prover closed
+  // over it ever leaves this scope (`popProverFor`); the secret key itself is never passed on.
+  let pushHostKeys: KeyPair | null = null
   let pushHasPairedPhone = false
   const refreshPushIdentity = async (): Promise<void> => {
     try {
@@ -2353,10 +2402,13 @@ app.whenReady().then(async () => {
     // a Keychain ACL prompt even though there is nobody to notify.
     if (!pushHasPairedPhone) {
       pushHostKeyB64 = null
+      pushHostKeys = null
       return
     }
     try {
-      pushHostKeyB64 = publicKeyToB64((await loadOrCreateKeyPair()).publicKey)
+      const kp = await loadOrCreateKeyPair()
+      pushHostKeys = kp
+      pushHostKeyB64 = publicKeyToB64(kp.publicKey)
     } catch {
       // Keyring locked / transient read error: keep the last-known key (never clobber identity).
     }
@@ -2415,7 +2467,9 @@ app.whenReady().then(async () => {
             hostDeviceId: getDeviceId(),
             hostPublicKeyB64: pushHostKeyB64,
             hostLabel: hostname(),
-            hasPairedPhone: pushHasPairedPhone
+            hasPairedPhone: pushHasPairedPhone,
+            // Host-mode push proves possession of the host key through a hostAuth session.
+            prove: pushHostKeys ? popProverFor(pushHostKeys) : undefined
           }
         : null,
     // Granted-mode fallback (unpaired / no relay identity → push to SSH-dropped grants; see the
@@ -2454,7 +2508,9 @@ app.whenReady().then(async () => {
             hostDeviceId: getDeviceId(),
             hostPublicKeyB64: pushHostKeyB64,
             hostLabel: hostname(),
-            hasPairedPhone: pushHasPairedPhone
+            hasPairedPhone: pushHasPairedPhone,
+            // Host-mode push proves possession of the host key through a hostAuth session.
+            prove: pushHostKeys ? popProverFor(pushHostKeys) : undefined
           }
         : null,
     getGrants: allPushGrants,
@@ -2485,11 +2541,15 @@ app.whenReady().then(async () => {
         claudePermissionMode: s.claudePermissionMode,
         // The phone launches claude on the REMOTE host — its CLI is the gate, never the local one.
         autoSupported: sshProjectManager?.remoteAutoPermFor(projectId) === true,
-        // `codexApprovalValues` is deliberately ABSENT from an SSH slice. Same rule one agent over:
-        // the session runs the HOST's codex, there is no remote codex probe yet (claude has one, at
-        // connect), and publishing this machine's vocabulary for another machine's binary is the
-        // cross-host guess the whole gate exists to prevent. Absent ⇒ the baseline vocabulary ⇒
-        // Manual degrades honestly instead of a value the host may have removed.
+        // `codexApprovalValues` is deliberately ABSENT from an SSH slice: the session runs the HOST's
+        // codex, the only remote codex probe asks about `--no-daemon` (not the approval vocabulary),
+        // and publishing this machine's vocabulary for another machine's binary is the cross-host
+        // guess the whole gate exists to prevent. Absent ⇒ the baseline vocabulary ⇒ Manual
+        // degrades honestly instead of a value the host may have removed.
+        //
+        // `codexNoDaemon` IS the host's own answer (core/remote-ssh/codex-no-daemon-probe.ts), so it
+        // may ride — only as a seen `true`.
+        ...(sshProjectManager?.remoteCodexNoDaemonFor(projectId) ? { codexNoDaemon: true as const } : {}),
         ...(home && hostKey
           ? {
               claudeAccounts: (s.claudeAccounts ?? [])
@@ -2891,6 +2951,8 @@ app.whenReady().then(async () => {
     })
   }
   registerTranscriptIpc(transcriptIpcDeps)
+  // "Open recent": this machine's agent histories (both shells register it — core/recent-conversations.ts).
+  registerRecentConversationsIpc()
 
   initTranscriptIndex(() => settingsStore.get().claudeAccounts ?? [])
   corePlatform.handle(IPC.transcriptSearch, (query: string) => searchTranscripts(query))
@@ -3122,6 +3184,8 @@ app.whenReady().then(async () => {
   // run after a project has connected.
   startSessionMemoryService({
     tmuxBin: () => ptyManager.getTmuxBin(),
+    // Zellij-backed sessions are not in the tmux sweep; the panel says how many it did not measure.
+    unmeasuredSessions: () => ptyManager.zellijSessionCount(),
     remote: {
       // Identity, not liveness: a DISCONNECTED SSH project is still someone else's machine, and
       // `connectedHosts()` alone would answer "local" for it — exactly the window the service's
@@ -3151,6 +3215,41 @@ app.whenReady().then(async () => {
         }
       }
     }
+  })
+  // Dev-server ports (CLAUDE.md → Dev-server ports). Same identity predicate and the same
+  // exit-code-gated runner shape as session memory above; forwarding rides the project's master.
+  const devPorts = startDevPortsService({
+    tmuxBin: () => ptyManager.getTmuxBin(),
+    remote: {
+      isRemoteProject: sshScopePredicate({
+        sshProjectIds: () => workspaceStore.sshProjectIds(),
+        connectedProjectIds: () =>
+          (sshProjectManager?.connectedHosts() ?? []).map((h) => h.projectId)
+      }),
+      run: async (projectId, command) => {
+        const mgr = sshProjectManager
+        const ref = mgr?.refForProject(projectId)
+        if (!mgr || !ref) return null
+        try {
+          // The script always ends with an unconditional echo: a non-zero code is ssh itself failing.
+          const { code, stdout } = await mgr.sshRun(childArgs(ref.conn, ref.controlPath, command))
+          return code === 0 ? stdout : null
+        } catch {
+          return null
+        }
+      },
+      forward: {
+        refForProject: (projectId) => sshProjectManager?.refForProject(projectId),
+        run: (args) =>
+          sshProjectManager ? sshProjectManager.sshRun(args) : Promise.resolve({ code: -1, stdout: '' })
+      }
+    }
+  })
+  // A node's session ending (delete, recycle) takes its dev server with it — cancel its forwards.
+  ptyManager.onSessionEnded((nodeId) => void devPorts.registry?.nodeEnded(nodeId))
+  // A master that went away took its listeners with it; forget them so the menu offers again.
+  onSshProjectStatus((e) => {
+    if (e.status !== 'connected' && e.status !== 'connecting') devPorts.registry?.projectDisconnected(e.projectId)
   })
   const ackSweeper = createAckSweeper({
     handlers: { ackDone, onUnreadClear: (id) => sendToMain(IPC.agentUnreadClear, id) }

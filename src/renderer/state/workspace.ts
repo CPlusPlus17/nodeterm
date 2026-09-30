@@ -12,11 +12,12 @@ import { DEFAULT_SETTINGS } from '@shared/types'
 import type { AgentId, AgentPermissionMode, BuiltinAgentId } from '@shared/agents/config'
 import {
   agentConfig,
+  canResumeWith,
   capabilityAgentId,
   FALLBACK_AGENT_COLOR,
   supportsSessionIdFlag
 } from '@shared/agents/config'
-import { assembleLaunchCommand } from '@shared/agents/launch'
+import { assembleLaunchCommand, assembleResumeCommand } from '@shared/agents/launch'
 import { agentAccountColor } from '@shared/agents/account-color'
 import { boundAccountId } from '@shared/agents/account-binding'
 import { agentEnvSnapshot } from '../lib/agentEnv'
@@ -637,7 +638,15 @@ export function createAgentNode(
    *  brief survives the single-line typed delivery. Validated by the caller
    *  (`promptFilePathError` + an existence check) — the factory trusts it. Trailing/optional so
    *  every existing caller is unchanged. */
-  promptFile?: string
+  promptFile?: string,
+  /** RESUME this provider session instead of starting a new one ("Open recent", a transcript-search
+   *  hit). The line comes from the SAME resume assembler cold restore uses (`assembleResumeCommand`:
+   *  launch override, custom args, codex launcher, permission flag, model), no id is minted, and the
+   *  node persists THIS id as `agentSessionId`, so a later cold restore resumes the same
+   *  conversation. An id the resume grammar refuses (`resumeCommandWith` re-validates it against
+   *  SAFE_SESSION_ID) yields NO node-level resume: the caller must check `canResumeWith` first —
+   *  this factory never silently starts a fresh conversation under a resume request, it throws. */
+  resumeSessionId?: string
 ): CanvasNode {
   const { label, color: agentColor } = resolveAgent(agentId)
   // ONE binding decision, shared with the phone-registration path (core/project-node-append) so
@@ -686,7 +695,7 @@ export function createAgentNode(
   // synchronous against a warmed per-cwd memo (see grokSessionIds.ts for why the first mint in a
   // fresh cwd is deliberately unchecked), and `mintFreeGrokSessionId` returns undefined rather than
   // a taken id — which degrades to the pre-minting command line instead of a dead terminal.
-  const mintedSessionId = !sessionIdFlagSupported
+  const mintedSessionId = resumeSessionId !== undefined || !sessionIdFlagSupported
     ? undefined
     : capabilityAgentId(agentId) === 'grok'
       ? (ensureGrokTakenIds(cwd ?? ''), mintFreeGrokSessionId(grokTakenIdsNow(cwd ?? ''), uuid))
@@ -701,7 +710,22 @@ export function createAgentNode(
   const customAgent = agentConfig(agentId)
     ? undefined
     : useSettings.getState().settings.customAgents.find((c) => c.id === agentId)
-  const { command: initialCommand, missingEnv } = assembleLaunchCommand(
+  const resumeInputs = {
+    agentId,
+    customAgent,
+    launchCmdOverride,
+    sessionId: resumeSessionId,
+    permissionMode,
+    model,
+    sharedIdentity: codexSharedIdentity(ssh),
+    approvalCaps: codexApprovalCaps(ssh)
+  }
+  if (resumeSessionId !== undefined && !canResumeWith(capabilityAgentId(agentId), resumeSessionId)) {
+    throw new Error(`createAgentNode: refusing to resume ${agentId} session ${JSON.stringify(resumeSessionId)}`)
+  }
+  const { command: initialCommand, missingEnv } = resumeSessionId !== undefined
+    ? assembleResumeCommand(resumeInputs, agentEnvSnapshot())
+    : assembleLaunchCommand(
     {
       agentId,
       customAgent,
@@ -722,7 +746,7 @@ export function createAgentNode(
       // Which `--ask-for-approval` values this node's codex actually has. Same `ssh` truthiness as
       // the line above, and for a related reason: a remote session runs the HOST's codex, so the
       // local probe must not speak for it (it falls back to the baseline vocabulary instead).
-      approvalCaps: codexApprovalCaps(ssh),
+      approvalCaps: codexApprovalCaps(ssh, projectId),
       // A model picked at creation (e.g. Transfer-to-agent-with-model). `withAgentModel` appends
       // `--model <value>` for a switch-capable agent and no-ops otherwise, so the line stays
       // byte-identical when no model is chosen.
@@ -757,6 +781,8 @@ export function createAgentNode(
       // Persisted alongside the node (unlike initialCommand, which is consumed on first open), so
       // a cold restore months later still knows which conversation this node owns.
       ...(mintedSessionId ? { agentSessionId: mintedSessionId } : {}),
+      // A resumed conversation's own id: what cold restore falls back to before a hook names one.
+      ...(resumeSessionId !== undefined ? { agentSessionId: resumeSessionId.trim() } : {}),
       // A model chosen at creation (Transfer-to-agent-with-model). Persisted so cold-restore and
       // later restarts keep it; `withAgentModel` re-applies it on relaunch. Only stamped when set.
       ...(model ? { agentModel: model } : {}),
