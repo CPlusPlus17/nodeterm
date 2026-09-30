@@ -589,7 +589,8 @@ const api: NodeTerminalApi = {
     readTranscript: (sessionId, cwd, accountId, nodeId, agentId, page) =>
       ipcRenderer.invoke(IPC.chatReadTranscript, sessionId, cwd, accountId, nodeId, agentId, page),
     transcriptExists: (sessionId, accountId, nodeId) =>
-      ipcRenderer.invoke(IPC.transcriptExists, sessionId, accountId, nodeId)
+      ipcRenderer.invoke(IPC.transcriptExists, sessionId, accountId, nodeId),
+    catalog: (nodeId, agentId, accountId, cwd) => ipcRenderer.invoke(IPC.chatCatalog, nodeId, agentId, accountId, cwd)
   },
   claudeAccounts: {
     add: (ctx) => ipcRenderer.invoke(IPC.claudeAccountsAdd, ctx),

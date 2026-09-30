@@ -3635,9 +3635,62 @@ body,
   gap: 6px;
 }
 .term-chat__compose {
+  position: relative;
   flex: 0 0 auto;
   padding: 8px;
   border-top: 1px solid rgba(var(--tint-rgb), 0.08);
+}
+/* The composer's `/` and `@` completion menu (ChatComposer), floating ABOVE the composer box. A solid
+   token, not a glass fill: it sits inside a glass node, which is a backdrop root (Liquid Glass). */
+.term-chat__complete {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% - 4px);
+  z-index: 8;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid rgba(var(--tint-rgb), 0.14);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.term-chat__complete-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.term-chat__complete-item.is-active {
+  background: rgba(var(--tint-rgb), 0.1);
+  color: var(--text-strong);
+}
+.term-chat__complete-name {
+  flex: 0 0 auto;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+  color: var(--text-strong);
+}
+.term-chat__complete-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.term-chat__complete-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--muted);
 }
 /* The claude.ai-style composer (ChatPanel): ONE rounded box holding the textarea on top and a
    compact toolbar under it — "+" attach on the left; model label, muted effort label and the mic

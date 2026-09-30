@@ -615,6 +615,7 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
                                 projectId: session.spawn.sshRemoteTmux ? nodeUploadScope(session.spawn.ssh) : ''
                               })
                             }
+                            sshProjectId={session.spawn.sshRemoteTmux ? nodeUploadScope(session.spawn.ssh) : undefined}
                             onShowTerminal={() => {
                               // The picker just opened in the live viewer needs the keyboard.
                               requestTerminalFocusOnExit(session.id)

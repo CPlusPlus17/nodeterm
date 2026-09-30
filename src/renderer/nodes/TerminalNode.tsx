@@ -6611,6 +6611,9 @@ export function TerminalNode({
                     projectId: data.sshRemoteTmux ? dropProjectId() : ''
                   })
                 }
+                // `@` lists this node's files where they live: the host's for an SSH node, over the
+                // same project scope the attach above uploads through.
+                sshProjectId={data.sshRemoteTmux ? dropProjectId() : undefined}
                 onShowTerminal={() => {
                   // An explicit "go to the terminal": the picker just opened there needs the keyboard.
                   requestTerminalFocusOnExit(id)

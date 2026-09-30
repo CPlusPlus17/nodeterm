@@ -106,6 +106,7 @@ import { wireAgentStatus } from './agent-status'
 import { initServerContextLink } from './context-link'
 import { createServerWorkspaceWatcher, outsideEditPublisher } from './workspace-external-watch'
 import { registerTranscriptIpc } from '../core/transcript-ipc'
+import { registerChatCatalogIpc } from '../core/chat-catalog'
 import { registerRecentConversationsIpc } from '../core/recent-conversations'
 import { registerContextEnsureIpc } from '../core/context-ensure'
 import { IPC } from '@shared/ipc'
@@ -526,6 +527,11 @@ export async function startServer(
     // Codex's ⌘M reader takes ITS tail's hook path (claude's `pathFor` must never answer a codex id).
     codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId)
   })
+  // The ⌘M composer's `/` catalog. No remote leg, for the reason above: this process runs on the
+  // host whose command and skill folders a node's agent reads. An SSH-project node in this store is
+  // still someone ELSE's machine: named remote here, it answers built-ins + `partial`, never this
+  // server's own ~/.claude.
+  registerChatCatalogIpc({ isRemoteNode: (nodeId) => !!workspaceStore.sshProjectIdForNode(nodeId) })
   // "Open recent": the SERVER host's agent histories — the machine the browser's sessions run on.
   registerRecentConversationsIpc()
   // The context meter's mount-time rehydration, registered beside the read channels and for the

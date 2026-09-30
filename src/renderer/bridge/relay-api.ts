@@ -169,7 +169,9 @@ export function buildRelayApi(
 
     // ── Deferred over the relay in v1 — documented degrades (a clean refusal, not a wrong-machine
     //    silent no-op): ──
-    // `chat` is now just readTranscript + transcriptExists (the SDK chat node was removed). It has
+    // `chat` is readTranscript + transcriptExists + catalog (the SDK chat node was removed). `catalog`
+    // rejects like `readTranscript` (the stub's E_UNSUPPORTED): the composer then offers the shared
+    // built-in table alone, never this machine's command folders under the peer's node. It has
     // no relay builder: reading a transcript over the relay would read THIS machine's transcript,
     // not the host's, so `readTranscript` refuses with E_UNSUPPORTED instead. `transcriptExists`
     // takes the stub's `'unknown'` for the same reason and the opposite shape — its consumer acts
