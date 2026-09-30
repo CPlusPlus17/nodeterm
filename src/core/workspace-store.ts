@@ -1092,15 +1092,6 @@ export class WorkspaceStore {
   private saveChain: Promise<unknown> = Promise.resolve()
 
   /**
-   * `localOnly` makes the save durable on THIS machine only: every local file and the index (which
-   * carries each SSH project's cache) are written, but no SSH project is read, reconciled or
-   * mirrored — a changed, already-reconciled entry is marked `unmirrored` instead, so the next
-   * ordinary save pushes it. It exists for the launch write-ahead barrier (`commitLaunchAttempt`):
-   * that save must be on disk before a command is typed, and waiting on two SSH round trips per
-   * save made every new agent node on an SSH project sit on QUEUED for seconds. It still runs on
-   * the FIFO chain, so ordering against every other save is unchanged.
-   */
-  /**
    * Resolves once every write queued on `saveChain` so far (saves, content writes, reconciles) has
    * finished, landed or failed; never rejects. The Server Edition's close awaits it BEFORE it stops
    * the content authority: a browser save still queued behind a slow write would otherwise run after
@@ -1110,6 +1101,15 @@ export class WorkspaceStore {
     return this.saveChain.then(() => undefined)
   }
 
+  /**
+   * `localOnly` makes the save durable on THIS machine only: every local file and the index (which
+   * carries each SSH project's cache) are written, but no SSH project is read, reconciled or
+   * mirrored — a changed, already-reconciled entry is marked `unmirrored` instead, so the next
+   * ordinary save pushes it. It exists for the launch write-ahead barrier (`commitLaunchAttempt`):
+   * that save must be on disk before a command is typed, and waiting on two SSH round trips per
+   * save made every new agent node on an SSH project sit on QUEUED for seconds. It still runs on
+   * the FIFO chain, so ordering against every other save is unchanged.
+   */
   save(workspace: Workspace, opts: WorkspaceSaveOptions = {}): Promise<void> {
     const run = this.saveChain.then(() => this.saveNow(workspace, opts.localOnly === true))
     this.saveChain = run.catch(() => {})

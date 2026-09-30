@@ -241,4 +241,3 @@ it('a peer op landing while a local edit is still queued keeps both', async () =
   await settle()
   expect(seen.at(-1)?.state).toEqual(['A-node', 'A-local', 'A-peer'])
 })
-

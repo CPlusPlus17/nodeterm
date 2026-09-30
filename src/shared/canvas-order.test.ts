@@ -475,12 +475,6 @@ describe('createCanvasOrder', () => {
     })
   })
 
-  // THE RE-CREATION GATE (port map §6.5). Rule 4 judges an upsert by what its sender had applied
-  // when it cast (`seen`). Our OWN remove is applied locally at once, but it enters `seen` only when
-  // its echo comes back — so a re-creation of the same id cast before that echo (a link deleted and
-  // redrawn, a node deleted and ⌘Z'd, inside one round trip) carries a `seen` below the remove and
-  // every peer drops it as a stale frame, while we keep showing it: a split. The caller holds such a
-  // re-creation back while our remove is unacked; this is the question it asks.
   // D4: `reset()` keeps our causal position for a same-core reconnect, but after a REAL restart the
   // kept value sat above every seq the new core handed out until its counter caught up, so every
   // cast read as "never stale" for that whole stretch. The first seq heard after a reset says which
@@ -520,6 +514,12 @@ describe('createCanvasOrder', () => {
     })
   })
 
+  // THE RE-CREATION GATE (port map §6.5). Rule 4 judges an upsert by what its sender had applied
+  // when it cast (`seen`). Our OWN remove is applied locally at once, but it enters `seen` only when
+  // its echo comes back — so a re-creation of the same id cast before that echo (a link deleted and
+  // redrawn, a node deleted and ⌘Z'd, inside one round trip) carries a `seen` below the remove and
+  // every peer drops it as a stale frame, while we keep showing it: a split. The caller holds such a
+  // re-creation back while our remove is unacked; this is the question it asks.
   describe('a pending local remove (the re-creation gate)', () => {
     it('reports a pending local remove until its echo returns', () => {
       const o = createCanvasOrder('a')
