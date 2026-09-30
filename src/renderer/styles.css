@@ -11217,7 +11217,7 @@ button.pull-checks__name {
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
   line-height: 1.5;
   cursor: pointer;
