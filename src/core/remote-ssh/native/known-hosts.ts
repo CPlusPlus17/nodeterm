@@ -42,6 +42,10 @@ function globMatch(pattern: string, name: string): boolean {
 
 function hashedMatch(entry: string, name: string): boolean {
   // |1|base64(salt)|base64(hmac-sha1(salt, name))
+  // HMAC-SHA1 is not our choice: it is what OpenSSH's HashKnownHosts writes, and we only READ the
+  // user's existing entries — any other algorithm could never match them. The input is a host name
+  // (the hash only hides it from someone reading the file), not a secret. CodeQL's weak-crypto
+  // alert on this line was reviewed and dismissed as a false positive for that reason.
   const parts = entry.split('|')
   if (parts.length !== 4 || parts[1] !== '1') return false
   try {
