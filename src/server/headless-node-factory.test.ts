@@ -2333,11 +2333,166 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
         return { version: null, autoPermissionMode: false, fullscreenTui: false, sessionIdFlag: false }
       }
     })
-    await factory.openAgent('term-source', { agent: 'claude', prompt: 'hello' }, true)
+    const reply = await factory.openAgent('term-source', { agent: 'claude', prompt: 'hello' }, true)
     expect(cast).toEqual([])
     expect(save).not.toHaveBeenCalled()
     expect(broadcast).toEqual([])
     expect(warn.mock.calls.some((c) => String(c[0]).includes('canvas control stopped'))).toBe(true)
+    // A refused creation save is a failure BEFORE any launch: no orphan agent session (D3).
+    expect(pty.creates).toEqual([])
+    expect(pty.sends).toEqual([])
+    expect(reply).toMatchObject({ ok: false, error: expect.stringContaining('open-agent-not-saved') })
+    warn.mockRestore()
+  })
+
+  // D3: a second phase delivers ONLY what its write and its claim both landed. The claim's fresh read
+  // can find the node gone or re-armed by a teammate, and a stopping factory refuses every save.
+  it('run: stopped before its claim is saved, nothing is started and the launch stays queued (D3)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const factory = new HeadlessNodeFactory(deps())
+    const load = store.load.bind(store)
+    vi.spyOn(store, 'load').mockImplementation(async (o) => {
+      factory.stop()
+      return load(o)
+    })
+    const reply = await factory.run('term-source', { node: 'term-held' }, true)
+    expect(reply).toMatchObject({ ok: false, error: expect.stringContaining('run-not-saved') })
+    expect(pty.creates).toEqual([])
+    expect(pty.sends).toEqual([])
+    vi.mocked(store.load).mockRestore()
+    expect(await indexed('term-held')).toMatchObject({ command: 'printf held' })
+    expect((await indexed('term-held'))?.attempted).toBeUndefined()
+    warn.mockRestore()
+  })
+
+  it('refreshArmed: stopped before its claim is saved, nothing is typed (D3)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const factory = new HeadlessNodeFactory(deps())
+    pty.live.add('term-armed')
+    const exists = pty.sessionExists.bind(pty)
+    vi.spyOn(pty, 'sessionExists').mockImplementation(async (id) => {
+      if (id === 'term-armed') factory.stop()
+      return exists(id)
+    })
+    await factory.refreshArmed({ nodeId: 'term-dep', state: 'done' })
+    expect(pty.sends).toEqual([])
+    warn.mockRestore()
+  })
+
+  it('refreshArmed: a node a teammate deleted between the look and the claim is never typed into (D3)', async () => {
+    const factory = new HeadlessNodeFactory(deps())
+    pty.live.add('term-armed')
+    const exists = pty.sessionExists.bind(pty)
+    vi.spyOn(pty, 'sessionExists').mockImplementation(async (id) => {
+      if (id === 'term-armed') clientCast({ op: 'remove', id: 'term-armed' })
+      return exists(id)
+    })
+    await factory.refreshArmed({ nodeId: 'term-dep', state: 'done' })
+    factory.stop()
+    expect(pty.sends).toEqual([])
+    await authority.flushAll()
+    expect(onDisk('term-armed')).toBeUndefined()
+  })
+
+  it('refreshArmed: a node re-armed with another command meanwhile is not typed the old one (D3)', async () => {
+    const factory = new HeadlessNodeFactory(deps())
+    pty.live.add('term-armed')
+    const exists = pty.sessionExists.bind(pty)
+    vi.spyOn(pty, 'sessionExists').mockImplementation(async (id) => {
+      if (id !== 'term-armed') return exists(id)
+      const ws = await store.load({ sideline: false })
+      ws.projects[0].nodes.find((n) => n.id === 'term-armed')!.pendingLaunch = held('printf other', ['term-dep'])
+      await store.save(ws)
+      return exists(id)
+    })
+    await factory.refreshArmed({ nodeId: 'term-dep', state: 'done' })
+    factory.stop()
+    expect(pty.sends).toEqual([])
+    // The teammate's arm is left exactly as they wrote it: not claimed by the old command's pass.
+    const after = await indexed('term-armed')
+    expect(after).toMatchObject({ command: 'printf other' })
+    expect(after?.manualOnly).toBeUndefined()
+  })
+
+  it('refreshArmed: a launch someone else claimed meanwhile is not typed a second time (D3)', async () => {
+    const factory = new HeadlessNodeFactory(deps())
+    pty.live.add('term-armed')
+    const exists = pty.sessionExists.bind(pty)
+    vi.spyOn(pty, 'sessionExists').mockImplementation(async (id) => {
+      if (id !== 'term-armed') return exists(id)
+      const ws = await store.load({ sideline: false })
+      const n = ws.projects[0].nodes.find((x) => x.id === 'term-armed')!
+      n.pendingLaunch = { ...n.pendingLaunch!, manualOnly: true, attempted: true }
+      await store.save(ws)
+      return exists(id)
+    })
+    await factory.refreshArmed({ nodeId: 'term-dep', state: 'done' })
+    factory.stop()
+    expect(pty.sends).toEqual([])
+  })
+
+  describe('with another patch of the same pass landing in the same save (D3)', () => {
+    // The save LANDS here: term-held (first in canvas order) records a dependency's first working
+    // turn, which changes the file, so only the claim's own verdict can say that term-armed's claim
+    // did not apply.
+    const evidenceBeforeClaim = async (): Promise<void> => {
+      const ws = await store.load({ sideline: false })
+      const nodes = ws.projects[0].nodes
+      nodes.find((n) => n.id === 'term-held')!.pendingLaunch = {
+        ...held('printf held', ['term-dep']),
+        awaitWorking: ['term-dep']
+      }
+      nodes.find((n) => n.id === 'term-armed')!.pendingLaunch = held('printf armed')
+      await store.save(ws)
+    }
+
+    it('a deleted node is not typed into', async () => {
+      await evidenceBeforeClaim()
+      const factory = new HeadlessNodeFactory(deps())
+      pty.live.add('term-armed')
+      const exists = pty.sessionExists.bind(pty)
+      vi.spyOn(pty, 'sessionExists').mockImplementation(async (id) => {
+        if (id === 'term-armed') clientCast({ op: 'remove', id: 'term-armed' })
+        return exists(id)
+      })
+      await factory.refreshArmed({ nodeId: 'term-dep', state: 'working' })
+      factory.stop()
+      expect(pty.sends).toEqual([])
+      // The other patch of that save did land.
+      expect((await indexed('term-held'))?.awaitWorking).toBeUndefined()
+    })
+
+    it('a launch someone else claimed is not typed a second time', async () => {
+      await evidenceBeforeClaim()
+      const factory = new HeadlessNodeFactory(deps())
+      pty.live.add('term-armed')
+      const exists = pty.sessionExists.bind(pty)
+      vi.spyOn(pty, 'sessionExists').mockImplementation(async (id) => {
+        if (id !== 'term-armed') return exists(id)
+        const ws = await store.load({ sideline: false })
+        const n = ws.projects[0].nodes.find((x) => x.id === 'term-armed')!
+        n.pendingLaunch = { ...n.pendingLaunch!, manualOnly: true, attempted: true }
+        await store.save(ws)
+        return exists(id)
+      })
+      await factory.refreshArmed({ nodeId: 'term-dep', state: 'working' })
+      factory.stop()
+      expect(pty.sends).toEqual([])
+      expect((await indexed('term-held'))?.awaitWorking).toBeUndefined()
+    })
+  })
+
+  it('close: a close whose save is refused (stopping) says so instead of reporting success (D3)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const factory = new HeadlessNodeFactory(deps())
+    const destroy = pty.destroySession.bind(pty)
+    vi.spyOn(pty, 'destroySession').mockImplementation(async (c, id, o) => {
+      factory.stop()
+      return destroy(c, id, o)
+    })
+    const reply = await factory.close('term-source', { node: 'term-held' }, true)
+    expect(reply).toMatchObject({ ok: false, error: expect.stringContaining('close-not-saved') })
+    expect(broadcast).toEqual([])
     warn.mockRestore()
   })
 

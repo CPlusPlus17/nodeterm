@@ -368,31 +368,48 @@ function addEdge(list: BridgeLink[], source: string, target: string, prefix: str
 interface NodePatch {
   projectId: string
   nodeId: string
-  apply(node: CanvasNodeState): void
+  /** Apply to the fresh node. true = it LANDED: the node was in the state this patch is for (see
+   *  each patch for which). A caller that delivers on the strength of a patch asks this, because the
+   *  fresh read can find the node deleted, or re-armed, by a teammate since the verb looked. */
+  apply(node: CanvasNodeState): boolean
+}
+
+/** What `savePatches` did: whether the save landed, and per patch whether it applied to the fresh
+ *  read. A patch LANDED only when both are true. */
+interface PatchSave {
+  saved: boolean
+  applied: boolean[]
 }
 
 /** The held launch this verb owns, by its command: a patch never touches a launch someone replaced. */
 const ownLaunch = (node: CanvasNodeState, command: string): boolean => node.pendingLaunch?.command === command
 
-/** The launch was delivered: the hold is gone. */
+/** The launch was delivered: the hold is gone. Lands when the hold was still this verb's own. */
 function clearLaunch(projectId: string, nodeId: string, command: string): NodePatch {
   return {
     projectId,
     nodeId,
     apply: (node) => {
-      if (ownLaunch(node, command)) delete node.pendingLaunch
+      if (!ownLaunch(node, command)) return false
+      delete node.pendingLaunch
+      return true
     }
   }
 }
 
-/** The launch is claimed (or failed): only an explicit Run now may deliver it now. */
+/** The launch is claimed (or failed): only an explicit Run now may deliver it now. Lands only when
+ *  THIS patch claimed it: the hold was this verb's own AND nobody had claimed it yet (a launch already
+ *  `manualOnly` on the fresh read was claimed by someone else, and delivering it again would type the
+ *  command twice). */
 function claimLaunch(projectId: string, nodeId: string, command: string, attempted: boolean): NodePatch {
   return {
     projectId,
     nodeId,
     apply: (node) => {
-      if (ownLaunch(node, command))
-        node.pendingLaunch = { ...node.pendingLaunch!, manualOnly: true, ...(attempted ? { attempted: true } : {}) }
+      if (!ownLaunch(node, command)) return false
+      const unclaimed = node.pendingLaunch!.manualOnly !== true
+      node.pendingLaunch = { ...node.pendingLaunch!, manualOnly: true, ...(attempted ? { attempted: true } : {}) }
+      return unclaimed
     }
   }
 }
@@ -404,10 +421,11 @@ function dropAwaitWorking(projectId: string, nodeId: string, command: string, de
     nodeId,
     apply: (node) => {
       const held = node.pendingLaunch
-      if (!held || !ownLaunch(node, command) || !held.awaitWorking?.includes(depId)) return
+      if (!held || !ownLaunch(node, command) || !held.awaitWorking?.includes(depId)) return false
       const rest = held.awaitWorking.filter((id) => id !== depId)
       const { awaitWorking: _awaitWorking, ...kept } = held
       node.pendingLaunch = rest.length ? { ...kept, awaitWorking: rest } : kept
+      return true
     }
   }
 }
@@ -739,15 +757,19 @@ export class HeadlessNodeFactory {
    * So re-read, re-apply ONLY this verb's own patches to the nodes that still exist (a node deleted
    * meanwhile stays deleted), and save only if that changed anything. The patches must be idempotent:
    * every call re-applies all of them, so a later save still carries an earlier one.
+   *
+   * Answers per patch whether it applied to the fresh read, and whether the save landed: a caller
+   * that delivers on the strength of a claim must see BOTH (a stopping factory refuses the save, and
+   * the node may be gone or re-armed since the verb looked).
    */
-  private async savePatches(patches: readonly NodePatch[]): Promise<boolean> {
-    if (!patches.length) return false
+  private async savePatches(patches: readonly NodePatch[]): Promise<PatchSave> {
+    if (!patches.length) return { saved: false, applied: [] }
     const workspace = await this.loadForEdit()
-    for (const patch of patches) {
+    const applied = patches.map((patch) => {
       const node = workspace.projects.find((p) => p.id === patch.projectId)?.nodes.find((n) => n.id === patch.nodeId)
-      if (node) patch.apply(node)
-    }
-    return this.castAndSave(workspace, { onlyIfChanged: true })
+      return node ? patch.apply(node) : false
+    })
+    return { saved: await this.castAndSave(workspace, { onlyIfChanged: true }), applied }
   }
 
   /** The PERSISTED projects to browsers (`workspace:server-change`), re-read after the save — never
@@ -1072,6 +1094,10 @@ export class HeadlessNodeFactory {
         }
       }
 
+      // Each id's project, read NOW: a factory stopped while the panes die clears the ownership
+      // ledger, and the steps below must still know where each node lives.
+      const ownerProject = new Map(ids.map((id) => [id, this.ownership.ownerOf(id)!.projectId]))
+
       // Kill terminal panes first: the durable canvas must never lose a session whose outcome is
       // unknown. Frames have no PTY; closing one is the desktop `ungroup` transform followed by
       // removal of the frame alone, regardless of who owns its members.
@@ -1083,7 +1109,7 @@ export class HeadlessNodeFactory {
 
       // Run history first (it awaits), from the read the checks above used.
       for (const id of ids) {
-        const projectId = this.ownership.ownerOf(id)!.projectId
+        const projectId = ownerProject.get(id)!
         const target = workspace.projects.find((p) => p.id === projectId)?.nodes.find((node) => node.id === id)
         if (!target?.issueRef) continue
         // A run ends when its node is CLOSED — never when a turn ends.
@@ -1101,7 +1127,7 @@ export class HeadlessNodeFactory {
       const current = await this.loadForEdit()
       const touched = new Set<string>()
       for (const id of ids) {
-        const projectId = this.ownership.ownerOf(id)!.projectId
+        const projectId = ownerProject.get(id)!
         const project = current.projects.find((candidate) => candidate.id === projectId)
         const target = project?.nodes.find((node) => node.id === id)
         if (!project || !target) continue
@@ -1119,15 +1145,23 @@ export class HeadlessNodeFactory {
         touched.add(project.id)
       }
 
-      if (touched.size) {
-        await this.castAndSave(current)
-        await this.publishPersisted(touched)
-      }
+      // A refused save (canvas control is stopping) removed nothing from the canvas: say so, rather
+      // than report a close whose nodes are still on disk.
+      const saved = touched.size ? await this.castAndSave(current) : true
+      if (saved && touched.size) await this.publishPersisted(touched)
 
       for (const id of ids) {
         this.ownership.forget(id)
         this.attached.delete(id)
         this.awaitingFirstWorking.delete(id)
+      }
+      if (!saved) {
+        return {
+          ok: false,
+          error:
+            `close-not-saved: the sessions of ${ids.join(', ')} were ended, but the canvas could not be ` +
+            'written (canvas control is stopping); the nodes stay on the canvas'
+        }
       }
       return {
         ok: true,
@@ -1342,9 +1376,15 @@ export class HeadlessNodeFactory {
           error: `run-remote-unsupported: ${id} is an SSH node; the Server Edition cannot start it`
         }
       }
-      // Write-ahead, exactly as open() does before its own delivery.
+      // Write-ahead, exactly as open() does before its own delivery. Nothing is started unless the
+      // claim landed: a refused save (canvas control is stopping) leaves the launch queued as it was.
       node.pendingLaunch = { ...held, attempted: true, manualOnly: true }
-      await this.castAndSave(workspace)
+      if (!(await this.castAndSave(workspace))) {
+        return {
+          ok: false,
+          error: `run-not-saved: ${id} was not started: the canvas could not be written (canvas control is stopping); its launch stays queued`
+        }
+      }
       const launched = await this.launch(project, node, held.command)
       // As open() does: an agent this spawned fresh has not had its first real turn yet, so a
       // later `--after` on it must not be released by the CLI's boot `done` blip.
@@ -1645,7 +1685,15 @@ export class HeadlessNodeFactory {
       target.nodes.push(...created)
       target.ropes = ropes
       target.bridges = bridges
-      await this.castAndSave(workspace)
+      // Creation is written BEFORE anything is launched, and a refused save (canvas control is
+      // stopping) is a failure here: a launch into a node that is not on the canvas is an orphan
+      // agent session nobody can see.
+      if (!(await this.castAndSave(workspace))) {
+        return {
+          ok: false,
+          error: `${verb}-not-saved: nothing was opened: the canvas could not be written (canvas control is stopping)`
+        }
+      }
       for (const node of created) {
         this.ownership.record(node.id, { sourceNodeId, projectId: target.id })
       }
@@ -1898,8 +1946,12 @@ export class HeadlessNodeFactory {
           // Persist the attempt BEFORE input. A failed/uncertain send (or a crash before its
           // acknowledgement save) must never be replayed by an unrelated hook.
           patch(claimLaunch(project.id, node.id, command, true))
-          await this.savePatches(patches)
+          const claim = await this.savePatches(patches)
           unsaved = false
+          // Type ONLY what this pass claimed on disk: the save landed (a stopping factory refuses it)
+          // and the claim applied to the fresh read (a teammate may have deleted the node, re-armed it
+          // with another command, or claimed it, since the look above).
+          if (!claim.saved || !claim.applied[patches.length - 1]) continue
           if (!isLaunchShell(await this.deps.ptyManager.paneCommand(node.id).catch(() => null))) continue
           if ((await this.deps.ptyManager.sendText(node.id, command).catch(() => false)) !== true) continue
           patch(clearLaunch(project.id, node.id, command))

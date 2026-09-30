@@ -7369,7 +7369,11 @@ The invariants, each with its reason:
   authority even on an owner's op: a save carries this machine's own values onto the overlaid nodes
   (`carryLocalNodeExec`), and that carry is how an armed `--after` node — and server canvas
   control's claim/clear of its launch (`savePatches` → `castAndSave`) — reaches the index's
-  `localExec` on a governed project.
+  `localExec` on a governed project. **Server canvas control delivers only what landed**: `open` and
+  `run` launch nothing when their write-ahead `castAndSave` was refused (canvas control stopping),
+  and `refreshArmed` types a held command only when `savePatches` says both that the save landed and
+  that its claim applied to the fresh read (a teammate may have deleted, re-armed or claimed the node
+  since the verb looked); `NodePatch.apply` answers whether it landed.
 - **One reducer, `applyCanvasOp`** (`shared/canvas-content.ts`), applies an op to the authority's
   state and to every client's STORED copy of a project (background projects, and every board op).
   Two appliers is how an authority and its clients silently diverge. The only other applier OF A
