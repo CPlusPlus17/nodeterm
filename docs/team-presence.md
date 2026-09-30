@@ -499,8 +499,10 @@ They are in the vocabulary now, and everything around them is the node machinery
   waits. What it does not cover: (1) a baseline taken while the solo gate is closed (`shouldPublish`
   false) is not rebased, so an owed item swallowed there syncs only when it next changes — the gate
   closes on an open publisher only when a hosted role drops to read-only; (2) a round trip to
-  another project with any emit there (A → B → A): the emit in B forgets the owed node (it is not on
-  B's canvas), and the load that returns to A adopts A's whole scene, so a held edge is not cast
+  another project (A → B → A), which in practice is almost ANY visit to B: an emit keeps owed only
+  the nodes of the scene it diffs, and the publisher emits on every change to B's `nodes` state
+  (React Flow's own measure and selection updates included, not only an edit), so the owed A node is
+  forgotten there; the load that returns to A adopts A's whole scene, so a held edge is not cast
   after the node is trimmed until the edge itself changes; (3) a `remove` that was itself refused (no
   active project) and then adopted over is not retried. None of the three is a regression — the
   publisher behaved the same way before holds existed.

@@ -121,7 +121,8 @@ describe('stampMutation', () => {
   })
 
   // Unstamped is judged exactly as before rule 4: never stale, so an unstamped upsert ordered after a
-  // remove IS applied over it (canvas-order `supersededByRemove`). Hygiene, like the clamp above.
+  // remove IS applied over it (canvas-order `supersededByRemove`). Not protection either: omitting
+  // `seen` gets the same verdict.
   it('drops a non-integer / negative `seen`, degrading to unstamped (judged as before rule 4)', () => {
     for (const bad of [-1, 1.5, NaN, Infinity, '5', null]) {
       expect(
