@@ -650,7 +650,7 @@ import { registerWorkspaceDirty } from '../state/workspaceDirty'
 import { snapNodeToGrid } from '../lib/nodeSizing'
 import { snapResizeChanges } from '../lib/resizeSnap'
 import { canClearDirty, canCommitCanvas, canCreateOnCanvas, liveCanvasHolds } from '../state/persistGuards'
-import { rebaseOnLatest, useNodesEpoch } from './nodesEpoch'
+import { mirrorLatest, rebaseOnLatest, useNodesEpoch } from './nodesEpoch'
 import { boardLiveNodeIds, createKanbanPublisher } from './kanban-sync'
 import { createStoredCanvasPublisher } from './stored-publish'
 import { isHidden } from '../lib/ui-visibility'
@@ -1234,12 +1234,9 @@ export function Canvas() {
   // SyncLane re-render and the setter a DefaultLane one (see nodesEpoch.ts). So the render-time
   // mirror only copies the state when the STATE changed; an unconditional copy put the previous
   // project's edges back into the ref in exactly the window the synchronous write closes.
+  // It is gated on the epoch as well, beside the node mirror (`mirrorLatest`, below `useNodesEpoch`).
   const linkEdgesRef = useRef<Edge[]>(linkEdges)
   const linkEdgesMirroredRef = useRef<Edge[]>(linkEdges)
-  if (linkEdgesMirroredRef.current !== linkEdges) {
-    linkEdgesMirroredRef.current = linkEdges
-    linkEdgesRef.current = linkEdges
-  }
   // "Spawned by" ropes drawn from a control-capable agent to the nodes it opens via the
   // `nodeterm` CLI (see the onAgentControl effect) and from browser popups to their opener.
   // Merged only at the <ReactFlow> prop and never turned into context links, but PERSISTED
@@ -1248,10 +1245,6 @@ export function Canvas() {
   // Same latest-not-rendered mirror as linkEdgesRef above, for the same three writers.
   const controlEdgesRef = useRef<Edge[]>(controlEdges)
   const controlEdgesMirroredRef = useRef<Edge[]>(controlEdges)
-  if (controlEdgesMirroredRef.current !== controlEdges) {
-    controlEdgesMirroredRef.current = controlEdges
-    controlEdgesRef.current = controlEdges
-  }
   const [dirty, setDirty] = useState(false)
   // Bumped only when a save finished with `dirty` still set (an edit raced it). It exists purely to
   // give the debounced-autosave effect a dependency that CHANGES in that case — `dirty` stays true
@@ -1721,6 +1714,14 @@ export function Canvas() {
    * empty `useNodesState([])` can never be committed as some project's canvas.
    */
   const { nodesRef, nodesProjectIdRef, renderedProjectId, installEpoch } = useNodesEpoch(nodes)
+  // The two edge refs' render-time mirrors (declared beside their state, above), under the node
+  // mirror's two conditions: the state CHANGED, and this render belongs to the latest epoch. Without
+  // the second, a discrete `setLinkEdges(fn)` in a switch window renders fn(the OUTGOING project's
+  // edges) and the mirror put them in the ref under the incoming project's tag, so the edge publisher
+  // diffed the incoming project against them and cast spurious `edge-remove`s into it (D4).
+  const inLatestEpoch = renderedProjectId === nodesProjectIdRef.current
+  mirrorLatest(linkEdges, linkEdgesMirroredRef, linkEdgesRef, inLatestEpoch)
+  mirrorLatest(controlEdges, controlEdgesMirroredRef, controlEdgesRef, inLatestEpoch)
   /**
    * The project whose webview nodes the NEXT load must retire into the keep-alive pool. Separate
    * from `nodesProjectIdRef` on purpose: the epoch tag is invalidated on the load effect's
@@ -4075,11 +4076,11 @@ export function Canvas() {
       if (provesPeer(mutation, canvasSrcRef.current)) hasPeersRef.current = true
       const order = orderRef.current
       if (!order) return
-      const key = mutationKey(mutation, projectId)
-      const held = order.hasPendingRemove(key)
+      // Counted over EVERY key, before and after: an echo of ours releases its own key's gate, and
+      // also any EARLIER remove of ours whose echo was lost on the way back (canvas-order, FIFO).
+      const heldBefore = order.pendingRemoveCount()
       const apply = order.accept(mutation, projectId)
-      const released = held && !order.hasPendingRemove(key)
-      if (released) queueMicrotask(releaseHeld)
+      if (order.pendingRemoveCount() < heldBefore) queueMicrotask(releaseHeld)
       if (!apply) return
       // ---- the board (kanban) ----
       // Into the projects STORE, for the active project and a background one alike: the board, the

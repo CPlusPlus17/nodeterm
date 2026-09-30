@@ -405,8 +405,11 @@ independently on each client from the already-broadcast `agent:status` stream; a
   what rule 4's `seen` stamps). A reconnect to the SAME core also resets, and a first cast stamped
   `seen: 0` there — ⌘Z of a node deleted before the drop — was a stale frame to every peer holding
   the tombstone. After a real restart the kept value is above every new `seq`, so our casts read as
-  "never stale": the pre-rule-4 verdict, not a split. (The reflector clamps it to `seq - 1`, which
-  changes no verdict here; see the note on the clamp under rule 4.)
+  "never stale": the pre-rule-4 verdict, not a split. That window is bounded: the first stamped `seq`
+  heard after a reset re-bases the position when it is at or below it (the core restarted and its
+  counter began again), and leaves it alone when it is above it (the same core carried on). (The
+  reflector clamps it to `seq - 1`, which changes no verdict here; see the note on the clamp under
+  rule 4.)
 - **A cast the reflector would refuse is never made** — the publisher validates with the **same**
   predicate the reflector's ingest uses (`isCanvasMutation`, moved to `src/shared/canvas-mutations.ts`
   so both ends share one verdict) *before* recording a pending entry and *before* casting. A refusal
@@ -878,8 +881,12 @@ our `seen` only when its echo comes back, so a re-creation of the same id cast b
 deleted and redrawn, a node deleted and ⌘Z'd, inside one round trip — carried a `seen` below the
 remove: every peer dropped it as a stale frame while we kept showing it, and the next whole-file save
 became last-writer-wins on disk. Canvas's send callback now refuses any non-remove op for a key with a
-remove of ours in flight (counted per key, not TTL-bound — a late ack is exactly when it matters, and a
-lost one comes with a reconnect, whose `reset` clears it). The refusal keeps the op owed in the
+remove of ours in flight (counted per key, not TTL-bound — a late ack is exactly when it matters). A
+LOST ack does not come with a reconnect: the ui sink drops a single message and keeps the connection
+(`SINK_FAILURE_LIMIT`). Our echoes come back in the order we cast (FIFO), so the echo of a LATER cast
+of ours proves an earlier one was lost, and releases that remove's gate too; Canvas compares the total
+count of pending removes across each `accept` to see it. A reset still clears everything. The
+refusal keeps the op owed in the
 publisher, and an adopt in that window keeps an owed EDGE owed as well as an owed node (a teammate's
 op is usually what arrives during that round trip). Nothing else would ever cast it — our echo is an
 ack and changes no React state — so the echo that clears the gate re-publishes, after the handler and

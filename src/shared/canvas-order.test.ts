@@ -460,6 +460,45 @@ describe('createCanvasOrder', () => {
   // redrawn, a node deleted and ⌘Z'd, inside one round trip) carries a `seen` below the remove and
   // every peer drops it as a stale frame, while we keep showing it: a split. The caller holds such a
   // re-creation back while our remove is unacked; this is the question it asks.
+  // D4: `reset()` keeps our causal position for a same-core reconnect, but after a REAL restart the
+  // kept value sat above every seq the new core handed out until its counter caught up, so every
+  // cast read as "never stale" for that whole stretch. The first seq heard after a reset says which
+  // one it was.
+  describe('the causal position after a reset (D4)', () => {
+    it('a first seq at or below it means the core restarted: the position drops to that seq', () => {
+      const me = createCanvasOrder('me')
+      me.accept(up('n2', 0, 'x', 40)) // the old core had reached 40
+      me.reset()
+      me.accept(up('n3', 0, 'x', 2)) // the NEW core's first op
+      const stale = me.stamp(up('n1', 1, 'me', 0)) // a drag frame, cast in ignorance of…
+      expect(stale.seen).toBe(2)
+      // …a teammate's delete the new core ordered at 3: every peer drops the frame, as it would have
+      // before the restart. With the kept 40 it read as "never stale" and resurrected the node.
+      const peer = createCanvasOrder('peer')
+      expect(peer.accept(rm('n1', 'x', 3))).toBe(true)
+      expect(peer.accept({ ...stale, seq: 4 })).toBe(false)
+    })
+
+    it('a first seq above it is the same core carrying on: the position is kept, then rises', () => {
+      const me = createCanvasOrder('me')
+      me.accept(up('n2', 0, 'x', 40))
+      me.reset()
+      expect(me.stamp(up('n1', 1, 'me', 0)).seen).toBe(40) // nothing heard yet: kept
+      me.accept(up('n3', 0, 'x', 41))
+      expect(me.stamp(up('n1', 1, 'me', 0)).seen).toBe(41)
+    })
+
+    it('only the FIRST stamped seq after a reset decides; an unstamped op does not', () => {
+      const me = createCanvasOrder('me')
+      me.accept(up('n2', 0, 'x', 40))
+      me.reset()
+      me.accept(up('n3', 0, 'x', 0)) // unstamped: says nothing about the counter
+      me.accept(up('n4', 0, 'x', 5)) // the new core
+      me.accept(up('n5', 0, 'x', 2)) // a straggler after it moves nothing back
+      expect(me.stamp(up('n1', 1, 'me', 0)).seen).toBe(5)
+    })
+  })
+
   describe('a pending local remove (the re-creation gate)', () => {
     it('reports a pending local remove until its echo returns', () => {
       const o = createCanvasOrder('a')
@@ -510,6 +549,45 @@ describe('createCanvasOrder', () => {
       o.accept(rm('n1', 'me', 2)) // the old echo straggling in
       o.onLocal(rm('n1', 'me', 0))
       expect(o.hasPendingRemove('n:n1')).toBe(true) // a later remove still counts from one
+    })
+
+    // D4: a single `canvas:mut` can be dropped on its way back with the connection kept (the ui
+    // sink's SINK_FAILURE_LIMIT), so "a lost echo comes with a reconnect" was false and the gate
+    // stuck for the session. Echoes come back in the order we cast (FIFO), so the echo of a LATER
+    // cast of ours proves every earlier one that has not arrived was lost.
+    it('the echo of a LATER cast of ours releases an earlier remove whose echo was lost (D4)', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(rm('n1', 'me', 0)) // its echo is dropped on the way back
+      o.onLocal(up('n2', 1, 'me', 0))
+      expect(o.hasPendingRemove('n:n1')).toBe(true)
+      expect(o.pendingRemoveCount()).toBe(1)
+      o.accept(up('n2', 1, 'me', 8)) // the next echo of ours arrives
+      expect(o.hasPendingRemove('n:n1')).toBe(false)
+      expect(o.pendingRemoveCount()).toBe(0)
+    })
+
+    it('an echo of an EARLIER cast never releases a later remove, and a peer’s op releases nothing (D4)', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(up('n2', 1, 'me', 0))
+      o.onLocal(rm('n1', 'me', 0))
+      o.accept(up('n2', 1, 'me', 8)) // the echo of the cast BEFORE the remove
+      expect(o.hasPendingRemove('n:n1')).toBe(true)
+      o.accept(up('n3', 1, 'peer', 9))
+      o.accept(rm('n4', 'peer', 10))
+      expect(o.hasPendingRemove('n:n1')).toBe(true)
+      o.accept(rm('n1', 'me', 11)) // its own echo
+      expect(o.hasPendingRemove('n:n1')).toBe(false)
+    })
+
+    it('counts per cast: a lost remove releases its own count only (D4)', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(rm('n1', 'me', 0)) // lost
+      o.onLocal(rm('n1', 'me', 0)) // arrives
+      o.onLocal(up('n9', 1, 'me', 0)) // arrives
+      o.accept(rm('n1', 'me', 5)) // FIFO: the FIRST n1 cast's echo — the second n1 is still in flight
+      expect(o.hasPendingRemove('n:n1')).toBe(true)
+      o.accept(up('n9', 1, 'me', 6)) // …and this one proves the second n1 echo lost
+      expect(o.hasPendingRemove('n:n1')).toBe(false)
     })
 
     it('isRemoveOp is the order’s own remove predicate, nodes and edges alike', () => {

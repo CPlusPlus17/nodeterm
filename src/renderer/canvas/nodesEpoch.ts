@@ -63,6 +63,25 @@ export function rebaseOnLatest<N>(base: N[], next: N[], apply: (ns: N[]) => N[])
   return (ns) => (ns === base ? next : apply(ns))
 }
 
+/**
+ * The render-time mirror of one more piece of canvas state into its LATEST ref, under the two
+ * conditions `useNodesEpoch` applies to `nodesRef`: copy only when the state CHANGED (a render that
+ * skipped a pending update must not undo a synchronous write), and only when this render belongs to
+ * the latest epoch (`inLatestEpoch` = the render's `renderedProjectId` equals the tag ref), so a
+ * discrete update rendered on top of the OUTGOING project's state never lands under the incoming
+ * project's tag. Canvas's two edge lists use it.
+ */
+export function mirrorLatest<T>(
+  state: T,
+  mirrored: MutableRefObject<T>,
+  latest: MutableRefObject<T>,
+  inLatestEpoch: boolean
+): void {
+  if (state === mirrored.current || !inLatestEpoch) return
+  mirrored.current = state
+  latest.current = state
+}
+
 export function useNodesEpoch<N>(nodes: N[]): NodesEpoch<N> {
   const [renderedProjectId, setRenderedProjectId] = useState<string | null>(null)
   const nodesRef = useRef<N[]>(nodes)

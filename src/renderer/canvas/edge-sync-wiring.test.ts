@@ -38,11 +38,18 @@ describe('edge ref render-time mirror', () => {
   // setLinkEdges/setControlEdges (see nodesEpoch.ts). An unconditional `ref = state` mirror in that
   // render put the previous project's edges back into the ref right after the load effect had
   // assigned the new ones — reopening the window the synchronous assignment closes.
-  it('mirrors the edge state into the ref only when the state changed', () => {
-    expect(src).toMatch(/if \(linkEdgesMirroredRef\.current !== linkEdges\) \{\n\s*linkEdgesMirroredRef\.current = linkEdges\n\s*linkEdgesRef\.current = linkEdges/)
-    expect(src).toMatch(/if \(controlEdgesMirroredRef\.current !== controlEdges\) \{\n\s*controlEdgesMirroredRef\.current = controlEdges\n\s*controlEdgesRef\.current = controlEdges/)
+  // …and only in a render of the LATEST epoch, like the node mirror (D4): a discrete edge update in
+  // a switch window renders on the outgoing project's edges. Behaviour in nodesEpoch.test.tsx, which
+  // runs `mirrorLatest` in a replica of this render; these pin that Canvas calls it that way.
+  it('mirrors the edge state into the ref only when the state changed, in the latest epoch', () => {
+    expect(src).toContain('const inLatestEpoch = renderedProjectId === nodesProjectIdRef.current')
+    expect(src).toContain('mirrorLatest(linkEdges, linkEdgesMirroredRef, linkEdgesRef, inLatestEpoch)')
+    expect(src).toContain('mirrorLatest(controlEdges, controlEdgesMirroredRef, controlEdgesRef, inLatestEpoch)')
+    // After the epoch pair exists, never before it.
+    expect(src.indexOf('mirrorLatest(linkEdges')).toBeGreaterThan(src.indexOf('= useNodesEpoch(nodes)'))
     expect(src).not.toMatch(/^ {2}linkEdgesRef\.current = linkEdges$/m)
     expect(src).not.toMatch(/^ {2}controlEdgesRef\.current = controlEdges$/m)
+    expect(src).not.toMatch(/if \(linkEdgesMirroredRef\.current !== linkEdges\)/)
   })
 })
 

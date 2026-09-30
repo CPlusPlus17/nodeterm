@@ -99,6 +99,14 @@ export const PENDING_TTL_MS = 5000
 export const REMOVED_MAX = 512
 
 /**
+ * How many of our own casts the FIFO record behind the re-creation gate's release keeps (see
+ * `hasPendingRemove`). A cast leaves it the moment its echo, or a later one, comes back, so it only
+ * grows while the core answers nothing at all — and then the oldest entry is simply forgotten (the
+ * behaviour before the release existed: that remove's gate waits for its own echo or a reset).
+ */
+export const LOCAL_CASTS_MAX = 4096
+
+/**
  * The THING a mutation addresses — the key everything below orders by.
  *
  * Nodes and edges live in ONE key space with a prefix, not two maps: a node id and an edge id are
@@ -208,16 +216,23 @@ export interface CanvasOrder {
    * lands, when `stamp` puts the remove in its `seen`.
    *
    * Counted per key, not a flag: two removes in flight (delete, undo, delete) release on the second
-   * ack. Not TTL-bound, unlike rule 2's suppression: a late ack is exactly when the gate matters, and
-   * a lost one comes with a reconnect, whose `reset` clears it.
+   * ack. Not TTL-bound, unlike rule 2's suppression: a late ack is exactly when the gate matters. A
+   * LOST ack does not come with a reconnect: one `canvas:mut` can be dropped on its way back while
+   * the connection stays up (the ui sink's per-message failure limit). So a remove is also released
+   * when the echo of a LATER cast of ours arrives: echoes come back in the order we cast them (FIFO),
+   * so that echo proves the earlier one is not coming. A reset still clears everything.
    *
    * The PROJECT rides in the key: callers build it with `mutationKey(m, projectId)` — the same
    * function `onLocal` keys with — so the gate is project-scoped wherever a key is. (Only a
    * remove-class op can open the gate, and none of those has a project-scoped key today.)
    */
   hasPendingRemove(key: string): boolean
+  /** How many of our remove-class casts are unacked, over every key: a caller that holds re-creations
+   *  compares it across an `accept`, because an echo can release a DIFFERENT key's gate (FIFO). */
+  pendingRemoveCount(): number
   /** Forget the per-connection order state on a genuine reconnect (see `createReconnectWatch`) —
-   *  everything except our causal position (`lastSeq`, what `stamp` puts in `seen`). */
+   *  everything except our causal position (`lastSeq`, what `stamp` puts in `seen`), which the first
+   *  stamped `seq` heard after it re-bases if the core restarted. */
   reset(): void
 }
 
@@ -270,6 +285,13 @@ export function createCanvasOrder(
   /** The re-creation gate (`hasPendingRemove`): per key, how many of our remove-class casts are
    *  still unacked. Kept apart from `pending`, which counts EVERY cast of ours for the key. */
   const pendingRemoves = new Map<string, number>()
+  /** The sum of `pendingRemoves`, for `pendingRemoveCount`. */
+  let pendingRemoveTotal = 0
+  /** Our own casts in the order we made them, `{ key, remove }` — what an echo is matched against
+   *  (FIFO) to prove an earlier echo was lost. Capped at LOCAL_CASTS_MAX. */
+  const casts: Array<{ key: string; remove: boolean }> = []
+  /** Set by `reset`: the next stamped `seq` says whether the core restarted (see `accept`). */
+  let rebase = false
   /**
    * The highest `seq` we have applied or deliberately dropped, across ALL nodes — our causal
    * position in the total order, and what `stamp` puts on every mutation we cast. Global, not per
@@ -278,6 +300,15 @@ export function createCanvasOrder(
    * It survives `reset()` (see there): a same-core reconnect must not rewind it.
    */
   let lastSeq = 0
+
+  /** Draw down one pending remove of `key` (an echo, or proof its echo was lost). */
+  const releaseRemove = (key: string): void => {
+    const r = pendingRemoves.get(key)
+    if (r === undefined) return
+    pendingRemoveTotal--
+    if (r <= 1) pendingRemoves.delete(key)
+    else pendingRemoves.set(key, r - 1)
+  }
 
   const noteRemoved = (id: string, seq: number): void => {
     removed.delete(id) // re-insert so the Map's iteration order stays the LRU order
@@ -333,7 +364,13 @@ export function createCanvasOrder(
       } else {
         pending.set(id, { count: 1, since: now() })
       }
-      if (isRemove(m)) pendingRemoves.set(id, (pendingRemoves.get(id) ?? 0) + 1)
+      const remove = isRemove(m)
+      if (remove) {
+        pendingRemoves.set(id, (pendingRemoves.get(id) ?? 0) + 1)
+        pendingRemoveTotal++
+      }
+      casts.push({ key: id, remove })
+      if (casts.length > LOCAL_CASTS_MAX) casts.shift()
       // A fresh local edit IS an optimistic value on our canvas again, so rule 1 is sound for this
       // node once more and an older echo of ours must not be replayed over it. (This one's own echo
       // will be dropped as the ack it is; it carries what we already show.)
@@ -347,6 +384,14 @@ export function createCanvasOrder(
       // `seq` 0 means an unstamped mutation (no reflector in the path) — never treat it as stale.
       const current = seq === 0 || seq > highest
       if (seq > highest) seen.set(id, seq)
+      // After a reset, the first STAMPED seq says which reconnect it was: at or below our position,
+      // the core restarted and its counter began again, so our position is that seq (kept, it would
+      // make every cast read "never stale" until the new counter caught up); above it, the same core
+      // carried on and the position simply rises below.
+      if (rebase && seq > 0) {
+        rebase = false
+        if (seq <= lastSeq) lastSeq = seq
+      }
       // Our causal position for the mutations WE cast next (rule 4). Advanced for EVERYTHING we
       // process — our own echo included, and a straggler too: both prove the order has reached at
       // least that far, and "what did this client know" says nothing about who sent it.
@@ -374,12 +419,14 @@ export function createCanvasOrder(
           superseded.delete(id) // every cast of ours is accounted for; the node is settled
         }
         // The re-creation gate: this remove is now in our `seen` (above), so a re-creation of the
-        // key stamped from here on carries it. Only an entry we are tracking is drawn down — an echo
-        // straggling in after a reset must not push a later remove's count below one.
-        const r = isRemove(m) ? pendingRemoves.get(id) : undefined
-        if (r !== undefined) {
-          if (r <= 1) pendingRemoves.delete(id)
-          else pendingRemoves.set(id, r - 1)
+        // key stamped from here on carries it. Matched against our casts in the order we made them:
+        // this echo is the one for the FIRST cast of this key still recorded, and every cast recorded
+        // before it has had its echo lost (FIFO) — a remove among them will never be acked, so its
+        // gate is released too. An echo we have no record of (straggling in after a reset) releases
+        // nothing, so it cannot push a later remove's count below one.
+        const at = casts.findIndex((c) => c.key === id)
+        if (at !== -1) {
+          for (const c of casts.splice(0, at + 1)) if (c.remove) releaseRemove(c.key)
         }
         return repair
       }
@@ -407,11 +454,17 @@ export function createCanvasOrder(
       return (pendingRemoves.get(key) ?? 0) > 0
     },
 
+    pendingRemoveCount() {
+      return pendingRemoveTotal
+    },
+
     reset() {
       seen.clear()
       pending.clear()
       superseded.clear()
       pendingRemoves.clear()
+      pendingRemoveTotal = 0
+      casts.length = 0
       // The core may have restarted at seq 0 — a `removed` entry stamped with the OLD counter would
       // then outrank every new mutation and blackhole that node.
       removed.clear()
@@ -419,10 +472,12 @@ export function createCanvasOrder(
       // clientId, `seq` carrying on), and zeroing it stamped our first cast after it `seen: 0` — a
       // ⌘Z of a node deleted before the drop was then a stale frame to every peer holding the
       // tombstone, and our own echo of it is no repair: a persistent split. If the core REALLY
-      // restarted, the kept value is above every `seq` it hands out, so our casts read as "never
-      // stale" there (`supersededByRemove`: it is ≥ every new tombstone) — the pre-rule-4 verdict. A
-      // degrade, never a split. The reflector's clamp to `seq - 1` (canvas-sync `stampMutation`)
-      // changes no verdict here; it is hygiene.
+      // restarted, the kept value is above every `seq` it hands out, so until we hear from it our
+      // casts read as "never stale" there (`supersededByRemove`: it is ≥ every new tombstone) — the
+      // pre-rule-4 verdict, a degrade, never a split. It is BOUNDED: the first stamped `seq` we hear
+      // after this re-bases the position (`rebase`, in `accept`). The reflector's clamp to `seq - 1`
+      // (canvas-sync `stampMutation`) changes no verdict here; it is hygiene.
+      rebase = true
     }
   }
 }

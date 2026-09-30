@@ -34,14 +34,16 @@ describe('the re-creation gate (canvas-order hasPendingRemove)', () => {
 
   // Held = owed, but nothing re-publishes on its own: our echo is an ack, it changes no React state,
   // so the [nodes] publish effect never runs. The release has to publish.
-  it('our own remove coming back releases what the gate held', () => {
+  // Counted over EVERY key (D4): an echo of ours also releases an EARLIER remove whose echo was lost
+  // (canvas-order, FIFO), which is a different key than the one this echo addresses.
+  it('our own remove coming back — or a later echo proving it lost — releases what the gate held', () => {
     const body = receiveHandler()
-    const held = body.indexOf('const held = order.hasPendingRemove(key)')
+    const before = body.indexOf('const heldBefore = order.pendingRemoveCount()')
     const accept = body.indexOf('order.accept(mutation, projectId)')
-    expect(held).toBeGreaterThan(-1)
-    expect(held).toBeLessThan(accept) // asked BEFORE the ack draws the count down
-    expect(body).toMatch(/const released = held && !order\.hasPendingRemove\(key\)/)
-    expect(body).toMatch(/if \(released\) queueMicrotask\(releaseHeld\)/)
+    expect(before).toBeGreaterThan(-1)
+    expect(before).toBeLessThan(accept) // asked BEFORE the ack draws the count down
+    expect(body).toMatch(/if \(order\.pendingRemoveCount\(\) < heldBefore\) queueMicrotask\(releaseHeld\)/)
+    expect(body).not.toContain('const released = held')
   })
 
   // RULING R4: one order serves every loaded project, and a board's two order ops are per-project
@@ -53,7 +55,6 @@ describe('the re-creation gate (canvas-order hasPendingRemove)', () => {
     expect(send).toContain('order.onLocal(stamped, projectId)')
     expect(send).not.toMatch(/order\.onLocal\(stamped\)/)
     const recv = receiveHandler()
-    expect(recv).toContain('const key = mutationKey(mutation, projectId)')
     expect(recv).toContain('order.accept(mutation, projectId)')
     expect(recv).not.toMatch(/order\.accept\(mutation\)/)
   })

@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { create } from 'zustand'
 import { afterEach, beforeEach, expect, it } from 'vitest'
-import { rebaseOnLatest, useNodesEpoch } from './nodesEpoch'
+import { mirrorLatest, rebaseOnLatest, useNodesEpoch } from './nodesEpoch'
 import { canCommitCanvas, liveCanvasHolds } from '../state/persistGuards'
 
 // The field bug (2026-09-26): a project switch loaded project B, but a zustand store the load
@@ -23,6 +23,8 @@ const useOther = create<{ n: number }>(() => ({ n: 0 }))
 /** One render: the `nodes` STATE it rendered, and the ref pair as that render left it. */
 interface Seen { state: string[]; nodes: string[]; epoch: string | null }
 let seen: Seen[] = []
+/** Per render: the edge ref (Canvas's `linkEdgesRef`) and the tag it sat beside. */
+let edgeSeen: Array<{ edges: string[]; epoch: string | null }> = []
 let root: ReturnType<typeof createRoot> | null = null
 /** The projects store: each project's serialized nodes. */
 let store: Record<string, string[]> = {}
@@ -32,15 +34,22 @@ let live: {
   nodesRef: { current: string[] }
   nodesProjectIdRef: { current: string | null }
   setNodes: (next: string[] | ((ns: string[]) => string[])) => void
+  setEdges: (next: string[] | ((es: string[]) => string[])) => void
 } | null = null
 
 function Canvas() {
   const active = useActive((s) => s.id)
   useOther((s) => s.n)
   const [nodes, setNodes] = useState<string[]>([])
-  const { nodesRef, nodesProjectIdRef, installEpoch } = useNodesEpoch(nodes)
+  const [edges, setEdges] = useState<string[]>([])
+  const { nodesRef, nodesProjectIdRef, renderedProjectId, installEpoch } = useNodesEpoch(nodes)
+  // Canvas's edge lists: a latest ref beside the state, mirrored under the node mirror's rule.
+  const edgesRef = useRef<string[]>(edges)
+  const edgesMirroredRef = useRef<string[]>(edges)
+  mirrorLatest(edges, edgesMirroredRef, edgesRef, renderedProjectId === nodesProjectIdRef.current)
   seen.push({ state: nodes, nodes: nodesRef.current, epoch: nodesProjectIdRef.current })
-  live = { nodesRef, nodesProjectIdRef, setNodes }
+  edgeSeen.push({ edges: edgesRef.current, epoch: nodesProjectIdRef.current })
+  live = { nodesRef, nodesProjectIdRef, setNodes, setEdges }
   useEffect(() => {
     loaded = { id: active, at: seen.length }
     const saved = active ? store[active] : undefined
@@ -52,6 +61,10 @@ function Canvas() {
     }
     const flow = [...saved]
     setNodes(flow)
+    // The load writes the edge ref synchronously beside its setter, as Canvas's does.
+    const flowEdges = [`${active}-edge`]
+    edgesRef.current = flowEdges
+    setEdges(flowEdges)
     installEpoch(active, flow)
     // Canvas subscribes to stores its load effect writes; each write is a SyncLane re-render.
     useOther.setState((s) => ({ n: s.n + 1 }))
@@ -108,6 +121,7 @@ async function mount() {
   root.render(<Canvas />)
   await until(() => seen.at(-1)?.epoch === 'A' && seen.at(-1)?.nodes[0] === 'A-node')
   seen = []
+  edgeSeen = []
 }
 
 beforeEach(() => {
@@ -184,6 +198,24 @@ it('a discrete update in the switch window never puts the outgoing nodes under t
   expect(store.B.every((n) => n.startsWith('B-'))).toBe(true)
 })
 
+// D4: the edge refs follow the node mirror's epoch rule. A discrete `setLinkEdges(fn)` in the switch
+// window renders fn(the OUTGOING project's edges) — a CHANGED array — and a mirror that copied it put
+// A's edges under B's tag, so Canvas's edge publisher diffed B against them and cast spurious
+// `edge-remove`s into B.
+it('a discrete edge update in the switch window never puts the outgoing edges under the incoming tag (D4)', async () => {
+  await mount()
+  useActive.setState({ id: 'B' })
+  await untilWindow('B')
+  flushSync(() => live?.setEdges((es) => [...es, es[0].replace('-edge', '-local')]))
+  await until(() => seen.at(-1)?.epoch === 'B' && !!seen.at(-1)?.state.includes('B-node'))
+  await settle()
+  for (const e of edgeSeen) {
+    if (e.epoch === null) continue
+    expect(e.edges.every((x) => x.startsWith(`${e.epoch}-`)), JSON.stringify(e)).toBe(true)
+  }
+  expect(edgeSeen.at(-1)).toEqual({ edges: ['B-edge', 'B-local'], epoch: 'B' })
+})
+
 // Route by the TAG, not only by the active id: a peer's op for the active project belongs on React
 // Flow only if React Flow holds that project. After a bail-out (an unknown project) the previous
 // nodes stay mounted with the tag cleared; the op must not be mixed into them.
@@ -209,3 +241,4 @@ it('a peer op landing while a local edit is still queued keeps both', async () =
   await settle()
   expect(seen.at(-1)?.state).toEqual(['A-node', 'A-local', 'A-peer'])
 })
+
