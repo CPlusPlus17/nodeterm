@@ -263,6 +263,7 @@ import {
   locateRemoteTranscriptCommand,
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
+import { readChatCatalog, registerChatCatalogIpc, type ChatCatalogDeps } from '../core/chat-catalog'
 import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
 import { createReadRemoteGrokChat } from '../core/remote-grok-chat'
 import { createHostChat, mirrorChatSendRefusal } from './remote/host-chat'
@@ -2890,6 +2891,19 @@ app.whenReady().then(async () => {
     })
   }
   registerTranscriptIpc(transcriptIpcDeps)
+  // The ⌘M composer's `/` catalog. Core reads a local node's folders itself; the one thing this shell
+  // adds is the remote leg — ONE ssh round trip over the node's master (the same resolution the
+  // transcript legs above use), so an SSH node's commands and skills are the HOST's.
+  // Named: the phone's `chat.status` catalog (hostBridge.chat) reads through the same deps.
+  const chatCatalogDeps: ChatCatalogDeps = {
+    isRemoteNode: isRemoteTranscriptNode,
+    runRemote: async (nodeId, cmd) => {
+      const rt = sshTargetForNode(nodeId)
+      if (!rt || !sshProjectManager) return null
+      return sshProjectManager.sshRun(childArgs(rt.conn, rt.controlPath, cmd))
+    }
+  }
+  registerChatCatalogIpc(chatCatalogDeps)
 
   initTranscriptIndex(() => settingsStore.get().claudeAccounts ?? [])
   corePlatform.handle(IPC.transcriptSearch, (query: string) => searchTranscripts(query))
@@ -4352,6 +4366,7 @@ app.whenReady().then(async () => {
       hostSendRefusal: (nodeId) => mirrorChatSendRefusal(mirrorEntry(nodeId)),
       knownTickets: pendingTicketsFor,
       readTranscript: (q, rawPage) => readChatTranscript(q, rawPage, transcriptIpcDeps),
+      catalog: (q) => readChatCatalog(q, chatCatalogDeps),
       answerIo: heldPermissionIoFor,
       isStructuredTicket,
       onAnswered: (nodeId, pendingId, decision) => {

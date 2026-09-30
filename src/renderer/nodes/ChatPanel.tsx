@@ -79,6 +79,12 @@ interface ChatPanelProps {
    * see is worse than none).
    */
   onShowTerminal?: () => void
+  /**
+   * An SSH node's project scope (the same one `pathsForFiles` uploads through): the composer's `@`
+   * list is the HOST's files, read over that project's master. Absent = the session's own file
+   * index (this machine, or a relay peer's core).
+   */
+  sshProjectId?: string
 }
 
 /**
@@ -166,7 +172,8 @@ export function ChatPanel({
   title,
   hint,
   pathsForFiles,
-  onShowTerminal
+  onShowTerminal,
+  sshProjectId
 }: ChatPanelProps) {
   // This node's core api (stable for the session — the chat transcript and the tmux session
   // both live on the core this panel's project belongs to).
@@ -929,6 +936,9 @@ export function ChatPanel({
           sendUnconfirmed={optimistic}
           pathsForFiles={pathsForFiles}
           onShowTerminal={onShowTerminal}
+          cwd={cwd}
+          accountId={accountId}
+          sshProjectId={sshProjectId}
         />
       )}
     </div>

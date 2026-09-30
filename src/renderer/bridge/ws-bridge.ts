@@ -1,3 +1,4 @@
+import type { ChatCatalog } from '@shared/chat-catalog'
 import type { NormalizedAgentEvent } from '../../shared/agents/normalize'
 import { subscribeAgentReplay } from '../../shared/agent-replay-subscription'
 import type { DesktopWallpaper, WallpaperStill } from '../../shared/wallpaper'
@@ -1098,7 +1099,11 @@ export function buildTranscriptApi(
             accountId,
             nodeId
           ) as Promise<TranscriptPresence>
-        ).catch(() => 'unknown' as const)
+        ).catch(() => 'unknown' as const),
+      // REAL: the server registers `registerChatCatalogIpc` and runs on the machine whose command
+      // and skill folders these are. The reply is re-checked in the composer (sanitizeChatCatalog).
+      catalog: (nodeId, agentId, accountId, cwd) =>
+        client.request(IPC.chatCatalog, nodeId, agentId, accountId, cwd) as Promise<ChatCatalog>
     },
     claudeReadTranscript: (sessionId, cwd, accountId, nodeId) =>
       client.request(

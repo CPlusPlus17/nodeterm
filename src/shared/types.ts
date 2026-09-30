@@ -3232,6 +3232,16 @@ export interface ChatApi {
     accountId?: string,
     nodeId?: string
   ): Promise<TranscriptPresence>
+
+  /**
+   * The ⌘M composer's `/` catalog for a node: its agent's measured built-in slash commands, custom
+   * command files and skills (core/chat-catalog.ts). An SSH-project node's files are read on its
+   * HOST (`nodeId` — remoteness is the shell's own record, never this call's). A relay tab REJECTS
+   * (E_UNSUPPORTED — the peer's files are not this machine's to read, and the relay does not carry
+   * the channel); the composer then offers the shared built-in table alone, and every caller must
+   * treat any rejection the same way.
+   */
+  catalog(nodeId: string, agentId: string, accountId?: string, cwd?: string): Promise<import('./chat-catalog').ChatCatalog>
 }
 
 /** Optional SSH context for account ops. When `projectId` names a connected SSH project, the

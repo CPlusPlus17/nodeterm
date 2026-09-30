@@ -18,6 +18,7 @@ import type { ChatTranscriptResult } from '../../shared/types'
 import type { ChatHostRefusal, ChatSendOutcome, RendererChatStatus } from '../../shared/mobile-chat'
 import { canChat, capabilityAgentId } from '../../shared/agents/config'
 import type { ChatReadQuery } from '../../core/transcript-ipc'
+import { sanitizeChatCatalog, type ChatCatalog } from '../../shared/chat-catalog'
 import {
   answerHeldPermission,
   type HeldPermissionIo
@@ -59,6 +60,9 @@ export interface HostChatDeps {
    *  and reported on every status: why the mirror refuses, or null. Renderer state is transient (a
    *  reload or a desktop restart wipes it), the mirror is not — defense in depth, never the only gate. */
   hostSendRefusal(nodeId: string): ChatHostRefusal | null
+  /** The composer's `/` catalog (`readChatCatalog` with the shell's deps bound), for a phone that
+   *  asks for it on `chat.status`. Absent = the field is never added. */
+  catalog?(q: { nodeId: string; agentId?: string; accountId?: string; cwd?: string }): Promise<ChatCatalog>
   /** The approval tickets the host's mirror holds for this node (`pendingTicketsFor`). */
   knownTickets(nodeId: string): string[]
   /** How long a status query may take, and how long a send has to START (the renderer refuses a
@@ -163,7 +167,7 @@ export function createHostChat(deps: HostChatDeps): HostChatOps {
       return { ...result, version: 1, ...(sessionId ? { sessionId } : {}) }
     },
 
-    async status(nodeId) {
+    async status(nodeId, opts) {
       const node = deps.lookupNode(nodeId)
       if (!node) return null
       const answered = await withTimeout(deps.renderer.status({ nodeId, agentId: node.agentId }), timeoutMs)
@@ -175,12 +179,25 @@ export function createHostChat(deps: HostChatDeps): HostChatOps {
       // null) while the mirror may still hold a live dialog, and `chat.send` refuses on it — the
       // phone must see the same lock the send will apply.
       const refusal = deps.hostSendRefusal(nodeId)
+      // Only when asked, and never at the status's expense: a catalog that fails to build (a host
+      // that did not answer) drops the field. Re-checked before it leaves the machine.
+      let catalog: ChatCatalog | undefined
+      if (opts?.catalog && deps.catalog) {
+        try {
+          catalog = sanitizeChatCatalog(
+            await deps.catalog({ nodeId, agentId: node.agentId, accountId: node.accountId, cwd: node.cwd })
+          )
+        } catch {
+          catalog = undefined
+        }
+      }
       return {
         version: 1 as const,
         ...answered,
         structuredAnswers,
         hostRefuses: refusal !== null,
-        ...(refusal ? { refusal } : {})
+        ...(refusal ? { refusal } : {}),
+        ...(catalog ? { catalog } : {})
       }
     },
 

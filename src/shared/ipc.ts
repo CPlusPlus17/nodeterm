@@ -59,6 +59,8 @@ export const IPC = {
   ptyRaiseDeviceLimit: 'pty:raise-device-limit',
   claudeReadTranscript: 'claude:read-transcript',
   chatReadTranscript: 'chat:read-transcript',
+  // The ⌘M composer's `/` catalog for a node: built-ins, custom commands, skills (core/chat-catalog.ts).
+  chatCatalog: 'chat:catalog',
   /** Does a claude-shaped transcript exist for this session id? Tri-state
    *  (`present | absent | unknown`) — see `TranscriptPresence`. The one caller that ACTS on a
    *  negative is cold restore, so "we could not look" must never read as "it is gone". */

@@ -385,7 +385,10 @@ export function buildStubApi(): Omit<
       // restore awaits this on the boot path, and its whole contract is that anything it cannot
       // judge is `unknown` ⇒ resume exactly as before. A rejection here would be a second way of
       // saying the same thing that every caller would have to remember to catch.
-      transcriptExists: () => Promise.resolve('unknown' as const)
+      transcriptExists: () => Promise.resolve('unknown' as const),
+      // Rejects: a surface with no catalog reader (relay tabs) falls back to the shared built-in
+      // table in the composer, which is the honest subset — never another machine's files.
+      catalog: U('chat.catalog')
     },
     claudeAccounts: {
       add: U('claudeAccounts.add'),

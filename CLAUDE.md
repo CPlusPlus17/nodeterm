@@ -3163,6 +3163,65 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   a modal showing the LIVE terminal still targets it), a chat view with no composer refuses, and
   otherwise it is the terminal as before. Every refusal says so in one `nodeterm:toast`
   (`announceChatDictationRefusal`, naming the composer mic) instead of a silent dead key.
+- **The composer completes `/` and `@` (2026-09-30).** Typing `/` at the START of the message (after
+  optional whitespace — every CLI measured reads `/x` mid-sentence as text) opens a menu of the
+  node's CATALOG; `@` at the start of a word opens the node's files. Arrows move, Enter/Tab ACCEPT,
+  Esc closes the menu only (CardModal's capture-phase Esc already stands aside inside
+  `.term-chat__compose`). **Accepting only inserts text** (`/name ` / `@path `): nothing is typed into
+  the pane, and the send is still the composer's own gated Enter (`chatSendRefusal`) — completing
+  `/clear` then pressing Enter is exactly typing it. **Enter accepts only when accepting CHANGES the
+  draft**: a fully typed `/model` with the menu still open is a message and Enter sends it (the
+  first version swallowed it, and `ChatPanel.live.test.tsx` caught the regression). Pure decisions in
+  `renderer/lib/chatComposerComplete.ts`; the wire shape, sanitizer, measured tables and ranking in
+  `@shared/chat-catalog`; the builder in `core/chat-catalog.ts` behind `chat:catalog`
+  (`registerChatCatalogIpc`, registered by BOTH shells). Rules a refactor must not undo:
+  - **Built-ins are only what was MEASURED** (2026-09-30): claude 2.1.285, codex 0.156.1 and opencode
+    1.18.25 by typing `/` in each TUI inside a private tmux server and paging the whole menu; gemini
+    0.61.0 (no login on the measuring host) from its shipped `docs/reference/commands.md` ∩ the names
+    its built-in loader registers; grok 1.0.13 (no login either) from the command reference embedded
+    in its binary. Plan-, login- and experiment-gated entries are left out. Any other agent (copilot,
+    antigravity, a custom agent with no base) has no table and gets `@` only; a custom agent inherits
+    its base's table through `capabilityAgentId`. The descriptions are our own words.
+  - **Custom commands and skills: claude and gemini only**, at the measured locations. claude:
+    `<configDir>/commands/**/*.md` + `<cwd>/.claude/commands/**/*.md` (measured: a subfolder is a
+    `dir:name` namespace; description = frontmatter `description`, else the first body line) and
+    `<configDir>/skills/*/SKILL.md` + `<cwd>/.claude/skills/*/SKILL.md` (measured: the frontmatter
+    `name` WINS over the folder name, the folder is the fallback, `user-invocable: false` is not
+    offered). `<configDir>` is the bound account's dir (`claudeConfigDirFor`, linked accounts
+    included), which REPLACES `~/.claude` — never both, and a malformed account id yields NO user
+    root, never the system dir in its place (another identity's commands). gemini:
+    `~/.gemini/commands/**/*.toml` + `<cwd>/.gemini/commands/**/*.toml` (its shipped
+    custom-commands reference). Precedence project > user > built-in, deduped by name. Other agents'
+    custom locations were not measured, so they list none — a guessed location offers commands the
+    CLI does not have.
+  - **Names and descriptions are hostile data** (a project's `.claude/commands` is whatever the
+    repository holds): a name passes `catalogName` (closed alphabet `[A-Za-z0-9][A-Za-z0-9._:-]*`,
+    ≤ 64, never trimmed) or the entry is dropped; a description is one line with C0/C1 and `\p{Cf}`
+    (bidi, zero-width) removed, capped at 160 code points. The renderer re-runs
+    `sanitizeChatCatalog` on every reply and renders both as text nodes. `@` never offers a path with
+    whitespace, a control or format character, or one failing `isSafeQuickOpenRelPath`.
+  - **Cost: nothing is polled.** A composer asks on its first `/` (or `@`) and reuses the answer for
+    `CATALOG_REUSE_MS` (30 s). Core caches every directory listing by the directory's mtime and
+    every file head (first 4 KB) by (mtime, size), so an unchanged tree costs stats, no reads. Per
+    root at most 200 files, commands 3 levels deep.
+  - **`@` is the existing quick-open index**, not a new walker: `files.quickOpen(cwd)` on the
+    session's api (this machine, or a relay peer's core) or `sshFs.quickOpen(scope, cwd)` for an SSH
+    node — gitignore-aware, capped, traversal-guarded — rooted at the node's cwd, ranked by the
+    quick-open fuzzy ranker. The SSH scope is the one the composer's attach already uploads through
+    (`nodeUploadScope`), passed as ChatPanel's `sshProjectId` from both mount sites.
+  - **An SSH node's catalog is read on its HOST, in ONE round trip** (`remoteCatalogCommand`, run over
+    the node's master by the desktop's `runRemote`; tested under a real `/bin/sh` against a fake host
+    tree). A remote node whose host cannot be asked — or a shell with no remote leg — answers
+    built-ins + `partial`, never this machine's folders. Every file's bytes pass `tr -d '\036'`, so a
+    hostile file cannot forge a record boundary. Remoteness is the shell's own record
+    (`isRemoteTranscriptNode`), never an argument.
+  - **Surfaces.** Desktop full (local + SSH). Server Edition full, local only (real ws-bridge
+    `chat.catalog`; it runs on the host it reads). Relay tabs: `chat.catalog` REJECTS (stub) and the
+    composer offers the shared built-in table alone; `@` uses the peer's own quick-open index, which
+    is the right machine. Kanban card modal: the same ChatPanel/composer. **Mobile**: `chat.status`
+    carries the same catalog as an OPTIONAL field when the phone sends `catalog: true`
+    (docs/mobile-chat-view.md); an older phone never asks. Adopting it in nodeterm mobile is an iOS
+    follow-up.
 - **Subagent visualization** (agents in `SUBAGENT_CAPABLE`) — `subagent-start`/`subagent-end`
   normalized events drive a transient `state/agentNodes.ts` store. For Claude they come from
   **Claude's own `SubagentStart`/`SubagentStop` hooks** whenever a session sends them (2026-09,
