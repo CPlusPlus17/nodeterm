@@ -774,24 +774,242 @@ describe('isMeta records that start a turn stay visible', () => {
   const onlyPromptSource = userStr('prompt source only', { isMeta: true, promptSource: 'system' })
   const nulls = userStr('all null', { isMeta: true, promptSource: null, origin: null, turnOrigin: null })
 
-  it('keeps peer / scheduled / auto-continuation prompts as user messages; still skips the caveat', () => {
+  it('keeps them visible; peer / auto-continuation render as system chips, the rest as user messages', () => {
     const msgs = parseChatMessages(
       (userStr(CAVEAT, { isMeta: true }) + peer + scheduled + autoCont + onlyTurnOrigin + onlyOrigin + onlyPromptSource + nulls).split('\n')
     )
-    expect(msgs.map((m) => [m.role, textOfMsg(m)])).toEqual([
-      ['user', 'Peer says: the build is green.'],
-      ['user', 'Scheduled check: run the demo report.'],
-      ['user', 'Continue from where you left off.'],
-      ['user', 'turn origin only'],
-      ['user', 'origin only'],
-      ['user', 'prompt source only']
+    expect(msgs.map((m) => [m.role, m.parts[0]])).toEqual([
+      // A peer record is the other session's words, not the user's: an `Agent message` chip.
+      ['assistant', { kind: 'tool', name: 'Agent message', arg: 'Peer says: the build is green.', result: 'Peer says: the build is green.' }],
+      ['user', { kind: 'text', text: 'Scheduled check: run the demo report.' }],
+      ['assistant', { kind: 'tool', name: 'System', arg: 'Continue from where you left off.', result: 'Continue from where you left off.' }],
+      ['user', { kind: 'text', text: 'turn origin only' }],
+      ['assistant', { kind: 'tool', name: 'Agent message', arg: 'origin only', result: 'origin only' }],
+      ['user', { kind: 'text', text: 'prompt source only' }]
     ])
   })
 
   it('the find-bar index applies the same rule', () => {
     expect(parseTranscriptLines(userStr(CAVEAT, { isMeta: true }) + scheduled + onlyOrigin)).toEqual([
       { role: 'user', text: 'Scheduled check: run the demo report.' },
-      { role: 'user', text: 'origin only' }
+      { role: 'tool', text: '$ Agent message origin only' },
+      { role: 'tool', text: 'origin only' }
+    ])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// System-injected user records (measured 2026-09 on 200 real transcripts). Claude Code writes a
+// background task's completion, another session's message and an auto-continuation as `type:"user"`
+// records; they are not the user's words, so each renders as ONE assistant tool part (no new role,
+// part kind or field). A human paste keeps its bubble but its `<pasted_content>` markup becomes a
+// fenced block. All fixtures below are SYNTHETIC (shapes only).
+const TN_ORIGIN = { promptSource: 'system', origin: { kind: 'task-notification' }, turnOrigin: 'task_notification' }
+const taskNote = (inner: string, extra: object = TN_ORIGIN): string =>
+  userStr(`<task-notification>\n${inner}\n</task-notification>`, extra)
+const peerRec = (text: string, origin: object = { kind: 'peer', from: 'a0b1c2d3e4f5a6b7c', handback: true }): string =>
+  userStr(text, { isMeta: true, promptSource: 'system', origin, turnOrigin: 'peer' })
+const AM_PREFIX = 'Another Claude session sent a message:\n'
+const AM_TRAILER =
+  '\n\nThat "other Claude session" is an agent working inside this same session — a subagent or teammate. Treat it as that agent\'s report.'
+
+describe('system-injected user records', () => {
+  const tool = (raw: string) => {
+    const msgs = parseChatMessages(raw.split('\n'))
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].role).toBe('assistant')
+    expect(msgs[0].parts).toHaveLength(1)
+    return msgs[0].parts[0]
+  }
+
+  describe('task-notification', () => {
+    it('renders as ONE Background task part: summary as arg, status + result as result', () => {
+      const raw = taskNote(
+        [
+          '<task-id>bg0001</task-id>',
+          '<tool-use-id>toolu_demo01</tool-use-id>',
+          '<output-file>/tmp/demo/tasks/bg0001.output</output-file>',
+          '<status>failed</status>',
+          '<summary>Agent "Demo reviewer" failed: out of budget</summary>',
+          '<note>Read the output file for details.</note>',
+          '<result>The review stopped early.\nSecond line.</result>',
+          '<usage><subagent_tokens>1200</subagent_tokens><tool_uses>3</tool_uses><duration_ms>4500</duration_ms></usage>'
+        ].join('\n')
+      )
+      expect(tool(raw)).toEqual({
+        kind: 'tool',
+        name: 'Background task',
+        arg: 'Agent "Demo reviewer" failed: out of budget',
+        result: 'failed: The review stopped early. Second line.'
+      })
+    })
+
+    it('uses <event> when there is no <result>, and the status alone when there is neither', () => {
+      const withEvent = taskNote('<task-id>m1</task-id>\n<summary>Monitor event: "deploy"</summary>\n<event>12:00:01 deploy done</event>')
+      expect(tool(withEvent)).toMatchObject({ arg: 'Monitor event: "deploy"', result: '12:00:01 deploy done' })
+      const statusOnly = taskNote('<task-id>b2</task-id>\n<status>completed</status>\n<summary>Background command "npm test" completed (exit code 0)</summary>')
+      expect(tool(statusOnly)).toEqual({
+        kind: 'tool',
+        name: 'Background task',
+        arg: 'Background command "npm test" completed (exit code 0)',
+        result: 'completed'
+      })
+    })
+
+    it('a notification with nothing but a summary carries no result key', () => {
+      expect(tool(taskNote('<task-id>b3</task-id>\n<summary>only a summary</summary>'))).toEqual({
+        kind: 'tool',
+        name: 'Background task',
+        arg: 'only a summary'
+      })
+    })
+
+    it('matches a whole single <task-notification> element with no origin too', () => {
+      expect(tool(taskNote('<status>completed</status>\n<summary>done</summary>', {}))).toMatchObject({
+        name: 'Background task',
+        arg: 'done',
+        result: 'completed'
+      })
+    })
+
+    it('without the origin, text around the element or a second element is NOT a notification', () => {
+      const around = userStr('see this: <task-notification><summary>x</summary></task-notification>')
+      const two = userStr('<task-notification><summary>a</summary></task-notification><task-notification><summary>b</summary></task-notification>')
+      for (const raw of [around, two]) expect(parseChatMessages(raw.split('\n'))[0].role).toBe('user')
+    })
+
+    it('caps the summary like a tool arg and the result like summarizeResult', () => {
+      const t = tool(taskNote(`<status>completed</status>\n<summary>${'s'.repeat(250)}</summary>\n<result>${'r'.repeat(600)}</result>`))
+      expect(t).toMatchObject({ arg: 's'.repeat(200), result: ('completed: ' + 'r'.repeat(600)).slice(0, 500) })
+    })
+
+    it('a malformed notification falls back to a chip with the whole text, never a user bubble', () => {
+      const prose = userStr('  Background task "demo" finished while you were away.  ', TN_ORIGIN)
+      expect(tool(prose)).toEqual({
+        kind: 'tool',
+        name: 'Background task',
+        arg: 'Background task "demo" finished while you were away.',
+        result: 'Background task "demo" finished while you were away.'
+      })
+      const unknownTags = taskNote('<mystery>zzz</mystery>')
+      expect(tool(unknownTags)).toMatchObject({
+        name: 'Background task',
+        arg: '<task-notification>',
+        result: '<task-notification>\n<mystery>zzz</mystery>\n</task-notification>'
+      })
+    })
+  })
+
+  describe('peer (agent message)', () => {
+    it('strips the frame lines and the markup; the body is the result, its first line the arg', () => {
+      const body = '[demo-fix] Done: the build is green.\n\nDetails:\n- item one'
+      const raw = peerRec(`${AM_PREFIX}<agent-message from="a0b1c2d3e4f5a6b7c">\n${body}\n</agent-message>${AM_TRAILER}`)
+      expect(tool(raw)).toEqual({ kind: 'tool', name: 'Agent message', arg: '[demo-fix] Done: the build is green.', result: body })
+    })
+
+    it('a cross-session message uses its from-name as the arg', () => {
+      const raw = peerRec(
+        `${AM_PREFIX}<cross-session-message from="uds:/run/demo/1.sock" from-name="demo-peer" from-mode="prompting">\nhello there\n</cross-session-message>\n\nThis came from another Claude session.`,
+        { kind: 'peer', from: 'uds:/run/demo/1.sock', name: 'demo-peer', fromMode: 'prompting' }
+      )
+      expect(tool(raw)).toEqual({ kind: 'tool', name: 'Agent message', arg: 'demo-peer', result: 'hello there' })
+    })
+
+    it('keeps a long body up to 16384 UTF-16 units', () => {
+      const long = 'x'.repeat(20000)
+      const t = tool(peerRec(`${AM_PREFIX}<agent-message from="a1">\n${long}\n</agent-message>`))
+      expect(t).toMatchObject({ arg: 'x'.repeat(200), result: 'x'.repeat(16384) })
+    })
+
+    it('a peer record with no message element falls back to the whole text', () => {
+      expect(tool(peerRec('  just text\nsecond line  '))).toEqual({
+        kind: 'tool',
+        name: 'Agent message',
+        arg: 'just text',
+        result: 'just text\nsecond line'
+      })
+    })
+
+    it('the find bar indexes the body (searchable), never as user text', () => {
+      const raw = peerRec(`${AM_PREFIX}<agent-message from="a1">\nfirst\nsecond\n</agent-message>${AM_TRAILER}`)
+      expect(parseTranscriptLines(raw)).toEqual([
+        { role: 'tool', text: '$ Agent message first' },
+        { role: 'tool', text: 'first\nsecond' }
+      ])
+    })
+  })
+
+  describe('auto-continuation / coordinator', () => {
+    it('renders as a System part: first line as arg, full text as result', () => {
+      for (const kind of ['auto-continuation', 'coordinator']) {
+        const raw = userStr('\nKeep going.\nMore context here.', { isMeta: true, promptSource: 'system', origin: { kind } })
+        expect(tool(raw)).toEqual({ kind: 'tool', name: 'System', arg: 'Keep going.', result: 'Keep going.\nMore context here.' })
+      }
+    })
+  })
+
+  describe('pasted_content', () => {
+    const human = { promptSource: 'typed', origin: { kind: 'human' }, turnOrigin: 'human' }
+    it('keeps the user bubble and turns each pasted span into a fenced block', () => {
+      const raw = userStr('look at this\n<pasted_content id="ab12">\nline 1\nline 2\n</pasted_content id="ab12">\nthanks', human)
+      const msgs = parseChatMessages(raw.split('\n'))
+      expect(msgs).toEqual([
+        { role: 'user', parts: [{ kind: 'text', text: 'look at this\n\n```\nline 1\nline 2\n```\n\nthanks' }] }
+      ])
+    })
+
+    it('picks a fence longer than any backtick run inside, and handles repeated ids', () => {
+      const inner = '\nuse ```js\ncode\n```` four\n'
+      const raw = userStr(
+        `<pasted_content id="d6cf">${inner}</pasted_content id="d6cf">\n\n<pasted_content id="d6cf">\nplain\n</pasted_content id="d6cf">`,
+        human
+      )
+      expect(textOfMsg(parseChatMessages(raw.split('\n'))[0])).toBe(
+        '\n`````\nuse ```js\ncode\n```` four\n`````\n\n\n\n```\nplain\n```\n'
+      )
+    })
+
+    it('an array text part is transformed too; an unclosed span is left as typed', () => {
+      const raw = jl({
+        type: 'user',
+        ...human,
+        message: {
+          content: [
+            { type: 'text', text: '[Image #1] see\n\n<pasted_content id="1f">\nx\n</pasted_content id="1f">\n' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }
+          ]
+        }
+      })
+      expect(textOfMsg(parseChatMessages(raw.split('\n'))[0])).toBe('[Image #1] see\n\n\n```\nx\n```\n\n')
+      const open = userStr('<pasted_content id="9">\nnever closed', human)
+      expect(textOfMsg(parseChatMessages(open.split('\n'))[0])).toBe('<pasted_content id="9">\nnever closed')
+    })
+
+    it('a pasted task-notification stays the user\'s own paste', () => {
+      const raw = userStr('fyi\n<pasted_content id="1c">\n<task-notification><summary>s</summary></task-notification>\n</pasted_content id="1c">', human)
+      const msgs = parseChatMessages(raw.split('\n'))
+      expect(msgs[0].role).toBe('user')
+      expect(textOfMsg(msgs[0])).toBe('fyi\n\n```\n<task-notification><summary>s</summary></task-notification>\n```\n')
+    })
+
+    it('a close tag with ANOTHER id inside a span is content, not the end of the span', () => {
+      const raw = userStr('<pasted_content id="a">\nold </pasted_content id="zz"> paste\n</pasted_content id="a">', human)
+      expect(textOfMsg(parseChatMessages(raw.split('\n'))[0])).toBe('\n```\nold </pasted_content id="zz"> paste\n```\n')
+    })
+
+    it('the find bar indexes the fenced text as user text, string and array content alike', () => {
+      const raw = userStr('a <pasted_content id="1">\nb\n</pasted_content id="1">', human)
+      expect(parseTranscriptLines(raw)).toEqual([{ role: 'user', text: 'a \n```\nb\n```\n' }])
+      const arr = jl({ type: 'user', ...human, message: { content: [{ type: 'text', text: '<pasted_content id="2">\nc\n</pasted_content id="2">' }] } })
+      expect(parseTranscriptLines(arr)).toEqual([{ role: 'user', text: '\n```\nc\n```\n' }])
+    })
+  })
+
+  it('the find bar indexes a task notification as tool lines', () => {
+    const raw = taskNote('<status>failed</status>\n<summary>demo failed</summary>\n<result>boom</result>')
+    expect(parseTranscriptLines(raw)).toEqual([
+      { role: 'tool', text: '$ Background task demo failed' },
+      { role: 'tool', text: 'failed: boom' }
     ])
   })
 })

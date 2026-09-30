@@ -149,6 +149,132 @@ export function classifyLocalCommand(content: string): LocalCommandRecord | null
 /** The name an output record's tool part gets when there is no command to attach it to. */
 export const COMMAND_OUTPUT_TOOL = 'command output'
 
+// ── System-injected user records ─────────────────────────────────────────────────────────────────
+// Claude Code writes several things that are NOT the user's words as `type:"user"` records. Measured
+// on 200 real transcripts (2026-09), user records without a tool_result, by `origin.kind`:
+//   task-notification  (promptSource "system")  `<task-notification>…</task-notification>` string —
+//                      a background task / agent / monitor finished. Child tags seen: task-id (0..n),
+//                      tool-use-id, output-file, status, summary, note, result, event, task-type,
+//                      usage (nested), worktree; each optional.
+//   peer               (isMeta, "system")  "Another Claude session sent a message:\n" + ONE
+//                      `<agent-message from="…">` (a subagent hand-back) or `<cross-session-message
+//                      from="…" from-name="…" from-mode="…">` element + a fixed instruction trailer.
+//   auto-continuation / coordinator  (isMeta)  plain text.
+// Each renders as ONE assistant tool part — the #991 local-command pattern: no new role, part kind
+// or field, so a v1 decoder (the phone) reads it as an ordinary tool chip. A human paste
+// (`<pasted_content id="…">…</pasted_content id="…">` inside typed text) stays the user's bubble.
+// Only STRING content is classified: none of these kinds was ever measured with array content.
+export const BACKGROUND_TASK_TOOL = 'Background task'
+export const AGENT_MESSAGE_TOOL = 'Agent message'
+export const SYSTEM_TOOL = 'System'
+/** Cap on a system record's full-text `result` (an agent report is long and useful), UTF-16 units. */
+export const SYSTEM_RESULT_MAX = 16384
+
+export interface SystemRecord {
+  name: string
+  arg: string
+  /** '' = no result (the part carries no `result` key). */
+  result: string
+}
+
+const originKind = (origin: unknown): string | undefined => {
+  if (!origin || typeof origin !== 'object') return undefined
+  const k = (origin as { kind?: unknown }).kind
+  return typeof k === 'string' ? k : undefined
+}
+
+/** The first line of the trimmed text, trimmed, capped like a tool arg. */
+const firstLine = (text: string): string => capArg(text.trim().split('\n')[0])
+const capResult = (text: string): string => text.trim().slice(0, SYSTEM_RESULT_MAX)
+const fallback = (name: string, content: string): SystemRecord => ({
+  name,
+  arg: firstLine(content),
+  result: capResult(content)
+})
+
+const WHOLE_TASK_NOTIFICATION = /^\s*<task-notification>([\s\S]*)<\/task-notification>\s*$/
+/** The whole string is exactly ONE `<task-notification>` element (whitespace around it only). */
+export function isWholeTaskNotification(content: string): boolean {
+  const m = WHOLE_TASK_NOTIFICATION.exec(content)
+  return !!m && !m[1].includes('<task-notification>') && !m[1].includes('</task-notification>')
+}
+
+/** The first `<name>…</name>` in `text` (non-greedy), trimmed; '' when absent. */
+function tagText(text: string, name: string): string {
+  const m = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)
+  return m ? m[1].trim() : ''
+}
+
+function taskNotification(content: string): SystemRecord {
+  const summary = tagText(content, 'summary')
+  const status = tagText(content, 'status')
+  const body = tagText(content, 'result') || tagText(content, 'event')
+  if (!summary && !status && !body) return fallback(BACKGROUND_TASK_TOOL, content)
+  const text = status && body ? `${status}: ${body}` : status || body
+  return { name: BACKGROUND_TASK_TOOL, arg: summary.slice(0, CHAT_TOOL_ARG_MAX), result: summarizeResult(text) }
+}
+
+const PEER_ELEMENT = /<(agent-message|cross-session-message)(\s[^>]*)?>([\s\S]*)<\/\1>/
+const FROM_NAME = /(?:^|\s)from-name="([^"]*)"/
+
+function peerMessage(content: string): SystemRecord {
+  const m = PEER_ELEMENT.exec(content)
+  if (!m) return fallback(AGENT_MESSAGE_TOOL, content)
+  const body = m[3].trim()
+  const fromName = (FROM_NAME.exec(m[2] ?? '')?.[1] ?? '').trim()
+  return { name: AGENT_MESSAGE_TOOL, arg: fromName ? capArg(fromName) : firstLine(body), result: capResult(body) }
+}
+
+/**
+ * A system-injected user record (see above) as the tool part it renders as, or null for anything
+ * else (which keeps its current treatment). `content` is the record's string content.
+ */
+export function classifySystemRecord(origin: unknown, content: string): SystemRecord | null {
+  const kind = originKind(origin)
+  if (kind === 'task-notification' || isWholeTaskNotification(content)) return taskNotification(content)
+  if (kind === 'peer') return peerMessage(content)
+  if (kind === 'auto-continuation' || kind === 'coordinator') return fallback(SYSTEM_TOOL, content)
+  return null
+}
+
+/** A system record's tool part (`result` only when non-empty). */
+function systemPart(r: SystemRecord): Extract<ChatPart, { kind: 'tool' }> {
+  const part: Extract<ChatPart, { kind: 'tool' }> = { kind: 'tool', name: r.name, arg: r.arg }
+  if (r.result) part.result = r.result
+  return part
+}
+
+// `( id="…"|)` rather than an optional group: the close tag's `\1` must match the open tag's id
+// attribute (or its absence), and a backreference to a group that did not participate fails in ICU
+// (the Swift port's regex engine) while JS matches it as empty.
+const PASTED_CONTENT = /<pasted_content( id="[^"]*"|)>([\s\S]*?)<\/pasted_content\1>/g
+
+/**
+ * Every `<pasted_content id="X">…</pasted_content id="X">` span in typed text → its content as a
+ * fenced code block: `\n` + fence + `\n` + content + `\n` + fence + `\n`, where the content loses
+ * ONE leading and ONE trailing `\n` (claude wraps it in both) and the fence is backticks, one longer
+ * than the longest backtick run inside it (at least three). Text around the spans is kept as typed;
+ * an unclosed span is left alone.
+ */
+export function expandPastedContent(text: string): string {
+  if (!text.includes('<pasted_content')) return text
+  return text.replace(PASTED_CONTENT, (_m, _id: string, inner: string) => {
+    let body = inner.startsWith('\n') ? inner.slice(1) : inner
+    if (body.endsWith('\n')) body = body.slice(0, -1)
+    let longest = 0
+    for (const run of body.match(/`+/g) ?? []) longest = Math.max(longest, run.length)
+    const fence = '`'.repeat(Math.max(3, longest + 1))
+    return `\n${fence}\n${body}\n${fence}\n`
+  })
+}
+
+/** A tool part as find-bar lines: `$ name arg`, then its result when it has one. */
+function toolLines(name: string, arg: string, result: string): TranscriptLine[] {
+  const out: TranscriptLine[] = [{ role: 'tool', text: `$ ${name}${arg ? ` ${arg}` : ''}` }]
+  if (result) out.push({ role: 'tool', text: result })
+  return out
+}
+
 // Extract 0..n searchable lines from one raw transcript JSONL line.
 function linesFrom(raw: string): TranscriptLine[] {
   let o: Parameters<typeof isHiddenMetaRecord>[0] & { message?: { content?: unknown } }
@@ -179,19 +305,23 @@ function linesFrom(raw: string): TranscriptLine[] {
   } else if (o.type === 'user' && Array.isArray(content)) {
     for (const c of content as Array<{ type?: string; text?: string; content?: unknown }>) {
       if (!c || typeof c !== 'object') continue
-      if (c.type === 'text' && c.text) out.push({ role: 'user', text: c.text })
+      if (c.type === 'text' && c.text) out.push({ role: 'user', text: expandPastedContent(c.text) })
       else if (c.type === 'tool_result') {
         const s = summarizeResult(c.content)
         if (s) out.push({ role: 'tool', text: s })
       }
     }
   } else if (o.type === 'user' && typeof content === 'string') {
+    // A system-injected record indexes as the tool part the chat view shows (its body stays
+    // searchable — an agent's report is worth finding), never as the user's own text.
+    const sys = content.trim() ? classifySystemRecord(o.origin, content) : null
+    if (sys) return toolLines(sys.name, sys.arg, sys.result)
     const cmd = classifyLocalCommand(content)
     if (cmd?.kind === 'command') out.push({ role: 'tool', text: `$ ${cmd.name}${cmd.arg ? ` ${cmd.arg}` : ''}` })
     else if (cmd?.kind === 'output') {
       const s = summarizeResult(cmd.text)
       if (s) out.push({ role: 'tool', text: s })
-    } else out.push({ role: 'user', text: content })
+    } else out.push({ role: 'user', text: expandPastedContent(content) })
   }
   return out
 }
@@ -362,7 +492,7 @@ function parseChatRecords(
         content?: unknown
       }>) {
         if (!c || typeof c !== 'object') continue
-        if (c.type === 'text' && c.text) parts.push({ kind: 'text', text: c.text })
+        if (c.type === 'text' && c.text) parts.push({ kind: 'text', text: expandPastedContent(c.text) })
         else if (c.type === 'tool_result') {
           const tool = c.tool_use_id ? toolById.get(c.tool_use_id) : undefined
           const s = summarizeResult(c.content)
@@ -377,6 +507,13 @@ function parseChatRecords(
       }
       if (parts.length) push({ role: 'user', parts }, offset)
     } else if (o.type === 'user' && typeof content === 'string' && content.trim()) {
+      // Not the user's words (a background task's completion, another session's message, an
+      // auto-continuation): one assistant tool part, like a local command.
+      const sys = classifySystemRecord(o.origin, content)
+      if (sys) {
+        push({ role: 'assistant', parts: [systemPart(sys)] }, offset)
+        continue
+      }
       const cmd = classifyLocalCommand(content)
       if (cmd?.kind === 'command') {
         // The user running a command reads like a tool call — no new role or part kind on the wire.
@@ -393,7 +530,7 @@ function parseChatRecords(
           push({ role: 'assistant', parts: [{ kind: 'tool', name: COMMAND_OUTPUT_TOOL, arg: '', result: s }] }, offset)
         }
       } else {
-        push({ role: 'user', parts: [{ kind: 'text', text: content }] }, offset)
+        push({ role: 'user', parts: [{ kind: 'text', text: expandPastedContent(content) }] }, offset)
       }
     }
   }
