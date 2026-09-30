@@ -8890,6 +8890,8 @@ button.group-node__setup:disabled {
 .ss-meta__cwd { font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ss-meta__ssh { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }
 .ss-meta__state-age { margin-left: auto; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+/* A clock restored from before the restart: a record of the past, drawn quieter than a live age. */
+.ss-meta__state-age--restored { font-style: italic; }
 .ss-ctx { font-size: 9.5px; padding: 0 5px; border-radius: 4px; color: #000; font-weight: 600; flex: 0 0 auto; }
 /* Out of FLOW, not merely invisible. Both buttons already appeared only on hover, yet they held
    46px of a 253px line — measured — away from the name at every other moment. Floated over the
