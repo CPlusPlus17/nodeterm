@@ -486,15 +486,18 @@ import {
   normalizeIssueRef,
   type IssueRef
 } from '@shared/github-issue-ref'
-import { sanitizeBoardDispatch, type BoardDispatchProject } from '@shared/board-dispatch'
+import { dispatchBinding, sanitizeBoardDispatch, type BoardDispatchProject } from '@shared/board-dispatch'
 import {
   DISPATCH_DRAIN_MS,
   DISPATCH_REFUSAL_TEXT,
   decideDispatch,
+  dispatchableAgent,
   moveWithdrawsDispatch,
   occupiesSlot,
   queueToDrop,
-  queueToStart
+  queueToStart,
+  recheckQueued,
+  type QueuedCardFact
 } from '../lib/boardDispatch'
 import { dispatchEntry, useBoardDispatch, type DispatchCardEntry } from '../state/boardDispatch'
 import type { GitHubIssueCardView as DispatchIssueCard } from '@shared/github-issues'
@@ -682,6 +685,7 @@ import {
   RUN_NOW_AFTER_REFUSAL
 } from '@shared/control-verbs'
 import {
+  claimForHeadless,
   headlessStartNoticeText,
   mergeRunNow,
   planRunVerb,
@@ -10511,25 +10515,28 @@ export function Canvas() {
   // (@shared/board-dispatch); the queue is transient (state/boardDispatch). The run itself is
   // exactly "Start with agent": `issueRef` binding, the reference-only launch prompt,
   // `fileIssueSession` (card filed + `run-started`). On screen it goes through `addAgentNode`; for a
-  // project that is not on screen (a queued run whose slot freed later) it is a cold open plus the
-  // #925 headless start.
+  // project that is not on screen (a queued run whose slot freed later, or a project switch during
+  // the move's round trip) it is a cold open, already CLAIMED, plus the #925 headless start — so no
+  // dispatched node is ever left armed to start on its own later (the kill switch could not reach it).
 
   /** Every node of a project as the dispatcher needs it: the live canvas for the active project,
-   *  the stored copy for any other. */
+   *  the stored copy for any other. `pending` = a launch that will start BY ITSELF. */
   const dispatchNodesOf = useCallback(
     (projectId: string): Array<{ id: string; issueRef?: unknown; pending: boolean }> => {
       const st = useProjects.getState()
+      const selfStarting = (p: unknown): boolean =>
+        !!p && typeof p === 'object' && !(p as PendingLaunch).manualOnly
       if (st.activeProjectId === projectId && nodesProjectIdRef.current === projectId) {
         return nodesRef.current.map((n) => ({
           id: n.id,
           issueRef: n.data.issueRef,
-          pending: !!n.data.pendingLaunch
+          pending: selfStarting(n.data.pendingLaunch)
         }))
       }
       return (st.getProject(projectId)?.nodes ?? []).map((n) => ({
         id: n.id,
         issueRef: n.issueRef,
-        pending: !!n.pendingLaunch
+        pending: selfStarting(n.pendingLaunch)
       }))
     },
     []
@@ -10564,14 +10571,31 @@ export function Canvas() {
     [dispatchNodesOf]
   )
 
-  const dispatchAgentKnown = (agentId: string): boolean =>
-    !!agentConfig(agentId) || useSettings.getState().settings.customAgents.some((c) => c.id === agentId)
+  const dispatchAgentOk = (agentId: string): boolean =>
+    dispatchableAgent(
+      agentId,
+      !!agentConfig(agentId) || useSettings.getState().settings.customAgents.some((c) => c.id === agentId)
+    )
 
-  /** Start one dispatched run. Never throws; every failure lands on the card. */
+  /** The consent binding of a project's dispatch column as it is NOW (repository from the issue's
+   *  own reference — the board's repository). */
+  const dispatchBindingNow = (project: Project | undefined, columnId: string, ref: IssueRef | undefined) =>
+    dispatchBinding(
+      ref ? `${ref.owner}/${ref.repo}` : undefined,
+      project?.kanban?.columns.find((c) => c.id === columnId)?.title,
+      project?.kanban?.github?.columnMappings.find((m) => m.columnId === columnId)?.label
+    )
+
+  /** The project's run may start from here now: always on screen; off screen only where a headless
+   *  launcher exists (the desktop — the browser's renderer has none). */
+  const dispatchStartableNow = (projectId: string): boolean =>
+    !isBrowserRuntime() || useProjects.getState().activeProjectId === projectId
+
+  /** Start one dispatched run. Called ONLY by dispatchOnUserMove and drainDispatchQueue (pinned by
+   *  board-dispatch.guard.test). Never throws; every failure lands on the card. */
   const dispatchStart = useCallback(
     async (entry: DispatchCardEntry, config: BoardDispatchProject): Promise<void> => {
-      const board = useBoardDispatch.getState()
-      board.put({ ...entry, status: 'starting' })
+      useBoardDispatch.getState().put({ ...entry, status: 'starting' })
       const fail = (reason: string): void =>
         useBoardDispatch.getState().put({ ...entry, status: 'refused', reason })
       try {
@@ -10580,8 +10604,9 @@ export function Canvas() {
         const agentId = config.agentId as AgentId
         const st = useProjects.getState()
         const project = st.getProject(entry.projectId)
-        if (!project) return fail('The project is no longer open on this machine.')
+        if (!project) return fail(DISPATCH_REFUSAL_TEXT['project-gone'])
         if (project.ssh) return fail(DISPATCH_REFUSAL_TEXT['remote-project'])
+        if (project.closed) return fail(DISPATCH_REFUSAL_TEXT['project-closed'])
         let nodeId: string
         if (st.activeProjectId === project.id && canCreateOnCanvas(nodesProjectIdRef.current, project.id)) {
           const created = addAgentNode(agentId, undefined, undefined, config.accountId, prompt, {
@@ -10591,6 +10616,9 @@ export function Canvas() {
           fileIssueSession(entry.columnId, entry.ref, created, agentId)
           nodeId = created.node.id
         } else {
+          // Callers never send an off-screen start to a runtime without a headless launcher; this
+          // is the belt, so nothing is ever left armed there.
+          if (!dispatchStartableNow(project.id)) return fail('Open the project to dispatch this issue.')
           // Not on screen: a cold open into the stored project (the control verbs' path), then the
           // headless start. Defaults come from THAT project, never the one on screen.
           const settings = useSettings.getState().settings
@@ -10630,35 +10658,34 @@ export function Canvas() {
           const h = (node.height as number) ?? 440
           const at = nextFreePosition(stored, { width: w, height: h })
           node.position = { x: at.x - w / 2, y: at.y - h / 2 }
+          // Written ALREADY CLAIMED (the #925 write-ahead claim, manualOnly): in the same tick as the
+          // node, so there is no window in which opening the project could auto-start it beside the
+          // headless start, and whatever the headless start answers, the node never becomes armed
+          // to start by itself later — past a Pause, past a restart.
+          const [armed] = flowToNodeStates([armForColdOpen(node)])
           st.applyOwnNodeMutation(project.id, {
             op: 'upsert',
-            node: flowToNodeStates([armForColdOpen(node)])[0]
+            node: armed.pendingLaunch ? { ...armed, pendingLaunch: claimForHeadless(armed.pendingLaunch) } : armed
           })
           fileIssueSession(entry.columnId, entry.ref, { node, projectId: project.id }, agentId)
-          await writeDisk()
           nodeId = node.id
           const held = useProjects.getState().getProject(project.id)?.nodes.find((n) => n.id === nodeId)
-          // The Server Edition has no headless launcher (`pty.launchHeadless` is desktop-only): the
-          // armed node starts when that project is next viewed, and the notice says so.
-          if (held?.pendingLaunch && isBrowserRuntime()) {
-            setNotice({
-              kind: 'info',
-              sticky: true,
-              text: `Dispatched #${entry.number} in "${project.name}". It starts when you open that project.`,
-              action: { label: 'Go there', run: () => travelToNodeRef.current(nodeId) }
-            })
-          } else if (held?.pendingLaunch) {
+          if (held?.pendingLaunch) {
             const fresh = useProjects.getState().getProject(project.id) ?? project
             const batch = await startNodesHeadlessRef.current(fresh, [held])
             const outcome = batch.outcomes[0]
             if (outcome && !outcome.started) {
+              // Every failure leaves the pre-claimed launch waiting for Run now (never armed): the
+              // node keeps the issue's one run until it is run or closed.
               setNotice({
-                kind: 'info',
+                kind: 'error',
                 sticky: true,
-                text: `Dispatched #${entry.number} in "${project.name}", but it could not start in the background (${outcome.reason}). It starts when you open that project.`,
+                text: `Dispatched #${entry.number} in "${project.name}", but it could not start (${outcome.reason}). Use Run now on its node, or close the node to dispatch the issue again.`,
                 action: { label: 'Go there', run: () => travelToNodeRef.current(nodeId) }
               })
             }
+          } else {
+            void writeDisk()
           }
         }
         const done = useBoardDispatch.getState()
@@ -10700,7 +10727,8 @@ export function Canvas() {
           dispatch,
           project: project ? { remote: !!project.ssh, relay: !!project.remote } : undefined,
           completionColumnId: project?.kanban?.github?.completionColumnId,
-          agentKnown: dispatchAgentKnown(config.agentId),
+          bindingNow: dispatchBindingNow(project, config.columnId, ref),
+          agentDispatchable: dispatchAgentOk(config.agentId),
           boundRuns: key ? dispatchBoundRuns(key) : 0,
           queuedOrStarting: current?.status === 'queued' || current?.status === 'starting',
           occupying: dispatchOccupying(projectId)
@@ -10726,7 +10754,9 @@ export function Canvas() {
         'queued',
         now
       )
-      if (decision.kind === 'queue') {
+      // Over the cap — or a project that left the screen during the move's round trip in a runtime
+      // that cannot start it off screen (the drain starts it when it is shown again).
+      if (decision.kind === 'queue' || !dispatchStartableNow(projectId)) {
         useBoardDispatch.getState().put(entry)
         return
       }
@@ -10735,7 +10765,36 @@ export function Canvas() {
     [dispatchBoundRuns, dispatchOccupying, dispatchStart]
   )
 
-  /** Start what the queue's free slots allow, and drop entries whose project stopped dispatching. */
+  /** The card as the host's issue list for the dispatch column holds it now (a local read of the
+   *  host's cache — no GitHub request). A failed read is `unreadable`, never absence. */
+  const dispatchReadCard = useCallback(
+    async (projectId: string, columnId: string, number: number): Promise<QueuedCardFact> => {
+      try {
+        let cursor: string | undefined
+        for (let page = 0; page < 10; page++) {
+          const res = await api.githubIssues.query({
+            projectId,
+            columnId,
+            pageSize: 50,
+            search: String(number),
+            ...(cursor ? { cursor } : {})
+          })
+          const hit = res.items.find((i) => i.number === number)
+          if (hit) return { kind: 'found', state: hit.state, columnId: hit.columnId }
+          if (!res.nextCursor) return { kind: 'absent' }
+          cursor = res.nextCursor
+        }
+        return { kind: 'unreadable' }
+      } catch {
+        return { kind: 'unreadable' }
+      }
+    },
+    [api]
+  )
+
+  /** Start what the queue's free slots allow, re-checking each issue first; drop entries whose
+   *  project stopped dispatching. Called ONLY by the drain timer below. */
+  const dispatchRechecking = useRef(new Set<string>())
   const drainDispatchQueue = useCallback(() => {
     const dispatch = sanitizeBoardDispatch(useSettings.getState().settings.boardDispatch)
     const queue = useBoardDispatch.getState().queue()
@@ -10745,27 +10804,59 @@ export function Canvas() {
       useBoardDispatch.getState().put({
         ...entry,
         status: 'refused',
-        reason: dispatch.paused ? DISPATCH_REFUSAL_TEXT.paused : 'Dispatch was switched off for this project.'
+        reason: DISPATCH_REFUSAL_TEXT[dispatch.paused ? 'paused' : 'switched-off']
       })
     }
-    for (const e of queueToStart(useBoardDispatch.getState().queue(), dispatch, dispatchOccupying)) {
-      const entry = useBoardDispatch.getState().byKey[e.key]
-      const config = dispatch.projects[e.projectId]
-      if (!entry || !config) continue
-      // The issue may have gained a run by hand while it waited.
-      if (dispatchBoundRuns(e.key) > 0) {
-        useBoardDispatch.getState().remove(e.key)
-        continue
-      }
-      void dispatchStart(entry, config)
+    const candidates = queueToStart(
+      useBoardDispatch.getState().queue().filter((e) => !dispatchRechecking.current.has(e.key)),
+      dispatch,
+      dispatchOccupying,
+      (e) => dispatchStartableNow(e.projectId)
+    )
+    for (const e of candidates) {
+      dispatchRechecking.current.add(e.key)
+      void (async () => {
+        try {
+          const project = useProjects.getState().getProject(e.projectId)
+          const config = dispatch.projects[e.projectId]
+          const card = config ? await dispatchReadCard(e.projectId, config.columnId, e.number) : ({ kind: 'unreadable' } as const)
+          // Everything re-read AFTER the await: settings, the project and the queue entry itself.
+          const now = sanitizeBoardDispatch(useSettings.getState().settings.boardDispatch)
+          const cfg = now.projects[e.projectId]
+          const entry = useBoardDispatch.getState().byKey[e.key]
+          if (!entry || entry.status !== 'queued') return
+          const verdict = recheckQueued({
+            config: cfg,
+            paused: now.paused,
+            project: project ? { remote: !!project.ssh, relay: !!project.remote, closed: !!project.closed } : undefined,
+            bindingNow: cfg ? dispatchBindingNow(useProjects.getState().getProject(e.projectId), cfg.columnId, e.ref) : undefined,
+            agentDispatchable: cfg ? dispatchAgentOk(cfg.agentId) : false,
+            card
+          })
+          if (verdict.kind === 'wait') return
+          if (verdict.kind === 'drop') {
+            useBoardDispatch.getState().put({ ...entry, status: 'refused', reason: DISPATCH_REFUSAL_TEXT[verdict.reason] })
+            return
+          }
+          // The issue may have gained a run by hand while it waited.
+          if (dispatchBoundRuns(e.key) > 0) {
+            useBoardDispatch.getState().remove(e.key)
+            return
+          }
+          if (cfg) await dispatchStart(entry, cfg)
+        } finally {
+          dispatchRechecking.current.delete(e.key)
+        }
+      })()
     }
-  }, [dispatchOccupying, dispatchBoundRuns, dispatchStart])
+  }, [dispatchOccupying, dispatchBoundRuns, dispatchStart, dispatchReadCard])
   const drainDispatchQueueRef = useRef(drainDispatchQueue)
   useEffect(() => {
     drainDispatchQueueRef.current = drainDispatchQueue
   })
   // Re-checked on a short timer ONLY while something is queued (a slot frees when a run's turn
-  // ends, which no single store change says cheaply), and on every settings change (pause, off).
+  // ends, which no single store change says cheaply), on every settings change (pause, off), and
+  // on a project switch (the browser starts only the project on screen).
   const dispatchQueued = useBoardDispatch((s) => Object.values(s.byKey).some((e) => e.status === 'queued'))
   const boardDispatchSettings = useSettings((s) => s.settings.boardDispatch)
   useEffect(() => {
@@ -10773,7 +10864,7 @@ export function Canvas() {
     drainDispatchQueueRef.current()
     const timer = setInterval(() => drainDispatchQueueRef.current(), DISPATCH_DRAIN_MS)
     return () => clearInterval(timer)
-  }, [dispatchQueued, boardDispatchSettings])
+  }, [dispatchQueued, boardDispatchSettings, activeProjectId])
 
   // ---- GitHub issue → agent session in its OWN worktree ("Start with agent in a new worktree ▸") ----
   /** The reuse-or-new question, when the issue already has a worktree (or its branch exists). */

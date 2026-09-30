@@ -6313,19 +6313,21 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   project file, and nodeterm-ios ignores the unknown field (follow-up there).
   **Board dispatch — a card THIS person moves into the dispatch column starts its own run**
   (2026-09-30; `@shared/board-dispatch` consent, `renderer/lib/boardDispatch.ts` decisions,
-  `state/boardDispatch.ts` queue, wired in Canvas `dispatchOnUserMove`). The run is exactly "Start
-  with agent" — `issueRef` binding, the reference-only `issueLaunchPrompt`, `fileIssueSession`
-  (card filed + `run-started`) — only nobody clicked it. The hard question is WHO may trigger a run
-  on this machine, and the answer shapes everything else:
+  `state/boardDispatch.ts` queue, wired in Canvas `dispatchOnUserMove` / `drainDispatchQueue`). The
+  run is exactly "Start with agent" — `issueRef` binding, the reference-only `issueLaunchPrompt`,
+  `fileIssueSession` (card filed + `run-started`) — only nobody clicked it. The hard question is WHO
+  may trigger a run on this machine, and the answer shapes everything else:
   - **The trigger is the person's own move in this app**, never a fact that arrives from outside.
     `decideDispatch` answers `ignore` for every origin but `'user-move'`, and the only caller that
     says `'user-move'` is the board's move-result path (`KanbanView.moveIssueByUser` →
     `onIssueMoved`, reached only from `requestGitHubMove` and the close/reopen confirm). A label
     set on GitHub (by anyone — on a public repository, ANYONE) reaches this app only as a refreshed
     page, and a board change arriving by `git pull` only as a new project file; neither has a path
-    in. `lib/board-dispatch.guard.test.ts` pins the whole chain line by line — a new caller of
-    `decideDispatch`, a second `origin: 'user-move'`, or `onIssueMoved` fired from anywhere else
-    fails it. A move GitHub did not CONFIRM (`stale`, `failed`, `read-only`, …) is not a dispatch.
+    in. A move GitHub did not CONFIRM (`stale`, `failed`, `read-only`, …) is not a dispatch.
+    `lib/board-dispatch.guard.test.ts` pins the WHOLE chain: `decideDispatch`'s one caller,
+    `onIssueMoved`'s one firing site, `dispatchStart`'s two callers (after `decideDispatch` in
+    `dispatchOnUserMove`, after `recheckQueued` in the drain), and that a `'queued'` entry — which
+    the drain starts without asking `decideDispatch` again — is created only in `dispatchOnUserMove`.
   - **Why not a label with an actor allowlist** (the other design considered): it works from a
     phone, but it needs one issue-events read per candidate issue (budget), compares an actor
     against a credential that can change under it, and today the poll runs only while a board is
@@ -6334,39 +6336,66 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   - **Consent is machine-local** (`settings.boardDispatch`, the `kanbanPullAutoMove` / trigger arm
     store tier), never `.nodeterm/project.json`: a switch in the project file would let a pull
     request make every clone start agents. Per project: the column, the agent, an optional account
-    (absent = the project default through the same funnel as "New <agent>"), and a cap (1–8,
-    default 2). Read through `sanitizeBoardDispatch`: an unreadable entry is OFF, an unreadable cap
-    is 1, the kill switch (`paused`) is on only for a literal `true`. `boardDispatch` is in
+    (absent = the project default through the same funnel as "New <agent>"), a cap (1–8, **default
+    1**: dispatched runs are told to implement the fix in the project's own working tree, so two at
+    once are two agents editing one checkout), and a **binding**.
+  - **The consent binds what the column MEANS, not just its id** (`dispatchBinding`: repository +
+    column title + its GitHub label). Titles and labels live in the git-shared project file, and
+    titles are deliberately outside `githubMappingDigest` — so without it a pulled commit swapping
+    the titles of "Agent" and "In Progress" would turn the person's routine drag into "In Progress"
+    into a dispatch, and re-pointing the board at another repository (which needs only a mapping
+    re-approval) would carry the dispatch switch along. Any difference refuses (`consent-stale`, on
+    the card and in Settings) until the person presses "Re-confirm this column". Choosing a column
+    binds; changing the agent or the cap does not re-bind. An entry without a binding is OFF.
+  - Read through `sanitizeBoardDispatch`: an unreadable entry is OFF, an unreadable cap is 1, the
+    kill switch (`paused`) is on only for a literal `true`. `boardDispatch` is in
     `SETTINGS_VERB_FORBIDDEN` — an agent that could switch the dispatcher on would grant itself more
     agents, and the name pattern does not catch the key, so the set is its only fence. Model: the
     same gateway default `addAgentNode` applies; there is no per-project model.
+  - **Only agents that report their state through hooks** (`dispatchableAgent` →
+    `hasHooks(capabilityAgentId(…))`, the `--after` rule) are offered or accepted. The cap counts
+    sessions by hook state; a hookless custom agent never reports, so after the startup grace its
+    slot would free and the cap would admit one more run every two minutes.
   - **Bounds.** One run per issue: a bound session that still exists in ANY project, or a dispatch
     already queued/starting, refuses the next with a reason on the card. The cap counts this
-    project's bound sessions that are `working`/`waiting`/`blocked`, hold a launch, or were started
-    by dispatch within `DISPATCH_STARTUP_GRACE_MS` (no hook yet) — `done` frees the slot (the cap
-    limits concurrent WORK; an idle agent spends nothing), and an unknown state from before a
-    restart does not hold one, or the cap would stay pinned. Over the cap, the dispatch QUEUES; the
-    queue is drained on a 5 s timer that runs only while something is queued, oldest first. Moving
-    a queued card out of the column withdraws it. The kill switch (Settings → GitHub Issues → Pause
-    all dispatch) refuses new dispatches and drops the queue; running sessions are not touched.
+    project's bound sessions that are `working`/`waiting`/`blocked`, hold a launch that will start
+    BY ITSELF (a `manualOnly` one waiting for Run now does not), or were started by dispatch within
+    `DISPATCH_STARTUP_GRACE_MS` (no hook yet) — `done` frees the slot (the cap limits concurrent
+    WORK), and an unknown state from before a restart does not hold one, or the cap would stay
+    pinned. Over the cap the dispatch QUEUES; the drain runs on a 5 s timer only while something is
+    queued. **Every queued entry is re-asked before it starts** (`recheckQueued`): kill switch,
+    still switched on, project still open/local/not closed, binding unchanged, agent still
+    dispatchable, and the issue still OPEN and still in the dispatch column (read from the host's
+    issue cache with `githubIssues.query` — no GitHub request; an unreadable answer waits, it is
+    never evidence). A teammate closing or moving the issue while it waited drops it with its
+    reason. Moving a queued card out of the column withdraws it. The kill switch refuses new
+    dispatches and drops the queue; running sessions are not touched.
+  - **No dispatched node is ever left armed to start on its own.** The off-screen path writes the
+    node ALREADY CLAIMED (`claimForHeadless`: `manualOnly`, in the same tick as the node — no window
+    in which opening the project would auto-start it beside the headless start), then runs the #925
+    headless start. Whatever it answers, a node that did not start waits for Run now; a Pause or a
+    restart can therefore never be outrun by a held launch that fires on view. The failure notice
+    says exactly that (Run now, or close the node to dispatch the issue again — it keeps the issue's
+    one run until then).
   - **The queue is in memory, on purpose**: a queue that survived a restart would start agents at
     boot with nobody there. A restart drops it silently, and the drag (or Start with agent) can be
-    repeated.
+    repeated. Each renderer keeps its own queue, so **two Server Edition tabs on one project can
+    each run up to the cap** (known; one tab per project is the supported use).
   - **The card says what happened** (`DispatchChip`): "Queued for an agent (#2)", "Dispatching an
     agent…", or "Not dispatched: <reason>" (`DISPATCH_REFUSAL_TEXT`). A started run shows as the
     ordinary run chip.
-  - **Where it runs: the renderer**, because the trigger is a UI gesture core never sees. When the
-    dispatch is on screen (it always is at trigger time — the board is the active project's) it is
-    `addAgentNode`. A queued run whose slot frees while its project is NOT on screen is a cold open
-    into the stored project (the control verbs' path: `armForColdOpen`, `applyOwnNodeMutation`,
-    `writeDisk`) plus the #925 headless start, which raises its "Go there" notice; a headless start
-    that fails leaves the node queued to start on view and says so. **Server Edition**: on-screen
-    dispatch works; an off-screen one is written as an armed node that starts when that project is
-    next viewed (it has no headless launcher) and the notice says so. **SSH projects: refused by
-    name** (the headless launcher is local-only). **Relay tabs: refused** (the board is the host's).
-    **Mobile: N/A** (the phone board carries no issue cards). Never auto-posts to GitHub, never
-    closes an issue, never moves a card on a turn `done` — the existing rules; the dispatch column
-    may not be the completion column.
+  - **Where it runs: the renderer**, because the trigger is a UI gesture core never sees. On screen
+    it is `addAgentNode`. Off screen — a queued run whose slot freed later, or a project switch
+    during the move's GitHub round trip — it is a cold open into the stored project (the control
+    verbs' path) plus the headless start, which raises its "Go there" notice. A CLOSED project's
+    queued run is dropped, not started (the headless start would unhide its tab). **Server
+    Edition**: the browser renderer's `pty.launchHeadless` is unsupported (the server's own
+    headless launcher serves canvas control, not a browser tab), so a dispatch there starts only
+    for the project ON SCREEN; an off-screen one stays queued (still subject to Pause) until that
+    project is shown. **SSH projects: refused by name** (the headless launcher is local-only).
+    **Relay tabs: refused** (the board is the host's). **Mobile: N/A** (the phone board carries no
+    issue cards). Never auto-posts to GitHub, never closes an issue, never moves a card on a turn
+    `done` — the existing rules; the dispatch column may not be the completion column.
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,
   2026-08-30 — the same membership-plus-one-leaf discipline `AGENT_CONFIG` uses): each entry declares
   its filter `label`, its `placement` (`assignment` = the board's own persisted assignments,

@@ -140,9 +140,12 @@ fires while typing or in a terminal.
 
 Anything that **starts an agent by itself** (board dispatch is the first) takes its consent from
 machine-local settings and its trigger from a gesture the person made in this app — never from a
-label, a column or a file that can arrive from GitHub or a `git pull`. Board dispatch's one
-trigger is `KanbanView.moveIssueByUser` → `onIssueMoved`; `lib/board-dispatch.guard.test.ts`
-fails if anything else reaches `decideDispatch` with `origin: 'user-move'`.
+label, a column or a file that can arrive from GitHub or a `git pull` — and its consent binds what
+it consented to (board dispatch binds repository + column title + label, not a bare column id).
+Board dispatch's one trigger is `KanbanView.moveIssueByUser` → `onIssueMoved` → `decideDispatch`,
+and a run starts only through `dispatchStart`, from that decision or from the queue drain after
+`recheckQueued`; `lib/board-dispatch.guard.test.ts` fails if a new caller of any link in that
+chain appears, or if anything but `dispatchOnUserMove` creates a queued entry.
 
 A card chip that reads agent state subscribes to a **primitive signature** of the nodes it shows
 (`teamProgressSig`, `issueRunChipSig`), never to the whole `agentStatus.byId` map — that map changes

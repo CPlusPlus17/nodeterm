@@ -14,7 +14,10 @@
 // nothing, because no project is switched on.
 
 export const BOARD_DISPATCH_MAX_CONCURRENT = 8
-export const BOARD_DISPATCH_DEFAULT_CONCURRENT = 2
+/** One by default: a dispatched run is told to implement the fix IN THIS WORKING TREE, and two at
+ *  once would be two agents editing one checkout. Raise it only for a project whose issues do not
+ *  collide (or whose agents work in their own worktrees). */
+export const BOARD_DISPATCH_DEFAULT_CONCURRENT = 1
 
 export interface BoardDispatchProject {
   /** The column a card must be dragged INTO. A column deleted since then dispatches nothing. */
@@ -25,6 +28,15 @@ export interface BoardDispatchProject {
   accountId?: string
   /** Live runs this project may have at once; further dispatches queue. 1..8. */
   maxConcurrent: number
+  /**
+   * What the person consented to, not just which id: the repository and the column's TITLE and
+   * GitHub LABEL at the moment they chose it (`dispatchBinding`). The column's title and label live
+   * in the git-shared project file (and titles are deliberately outside the GitHub mapping
+   * approval), so a pulled commit could otherwise turn the person's routine drag into "In Progress"
+   * into a dispatch by swapping two titles, or re-point the board at another repository. Any
+   * difference refuses until the person re-confirms in Settings.
+   */
+  binding: string
 }
 
 export interface BoardDispatch {
@@ -64,8 +76,11 @@ export function sanitizeBoardDispatch(raw: unknown): BoardDispatch {
       : null
     if (!projectKey(projectId) || !entry) continue
     if (!projectKey(entry.columnId) || !safeId(entry.agentId)) continue
+    // No binding = nothing was consented to that can be checked: OFF.
+    if (typeof entry.binding !== 'string' || !entry.binding || entry.binding.length > 2048) continue
     projects[projectId] = {
       columnId: entry.columnId,
+      binding: entry.binding,
       agentId: entry.agentId,
       ...(safeId(entry.accountId) ? { accountId: entry.accountId } : {}),
       maxConcurrent: clampConcurrent(entry.maxConcurrent)
@@ -80,4 +95,18 @@ export function pruneBoardDispatch(value: BoardDispatch, liveProjectIds: Readonl
     paused: value.paused,
     projects: Object.fromEntries(Object.entries(value.projects).filter(([id]) => liveProjectIds.has(id)))
   }
+}
+
+/**
+ * The consent binding for a dispatch column: repository (case-insensitive, as GitHub names are),
+ * the column's title and the label it maps to on GitHub. `undefined` when any part is unknown —
+ * which can never match a stored binding, so an unknown refuses.
+ */
+export function dispatchBinding(
+  repository: string | undefined,
+  columnTitle: string | undefined,
+  columnLabel: string | undefined
+): string | undefined {
+  if (!repository || columnTitle === undefined || !columnLabel) return undefined
+  return JSON.stringify([repository.trim().toLowerCase(), columnTitle, columnLabel])
 }

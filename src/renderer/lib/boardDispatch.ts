@@ -17,9 +17,20 @@
 // (another column, a project that is not switched on, a move GitHub did not confirm), which say
 // nothing.
 
-import type { BoardDispatch } from '@shared/board-dispatch'
+import type { BoardDispatch, BoardDispatchProject } from '@shared/board-dispatch'
 import type { AgentState } from '@shared/agents/normalize'
 import { issueKey, issueRefFromHtmlUrl, type IssueRef } from '@shared/github-issue-ref'
+import { capabilityAgentId, hasHooks, type AgentId } from '@shared/agents/config'
+
+/**
+ * Which agents may be dispatched: one that exists on this machine AND reports its state through
+ * hooks (resolved through its base harness, like `--after`). The cap counts sessions by their hook
+ * state; a hookless agent never reports `done` nor `working`, so after the startup grace its slot
+ * would free and the cap would admit one more run every two minutes.
+ */
+export function dispatchableAgent(agentId: string, exists: boolean): boolean {
+  return exists && hasHooks(capabilityAgentId(agentId as AgentId))
+}
 
 export type DispatchOrigin = 'user-move' | 'sync'
 
@@ -43,8 +54,12 @@ export interface DispatchContext {
   dispatch: BoardDispatch
   project: DispatchProjectFacts | undefined
   completionColumnId?: string
-  /** Whether the configured agent still exists on this machine (a custom agent may be deleted). */
-  agentKnown: boolean
+  /** `dispatchBinding` of the repository + dispatch column as they are NOW; must equal the one the
+   *  person consented to (`BoardDispatchProject.binding`). */
+  bindingNow: string | undefined
+  /** The configured agent still exists on this machine AND reports its state through hooks
+   *  (`dispatchableAgent`) — a hookless agent never reports `done`, so the cap could not hold. */
+  agentDispatchable: boolean
   /** Sessions bound to this issue that still exist, in any project. */
   boundRuns: number
   /** This issue is already queued or starting. */
@@ -55,6 +70,11 @@ export interface DispatchContext {
 
 export type DispatchRefusal =
   | 'paused'
+  | 'project-gone'
+  | 'project-closed'
+  | 'consent-stale'
+  | 'not-in-column'
+  | 'switched-off'
   | 'remote-project'
   | 'relay'
   | 'completion-column'
@@ -82,17 +102,21 @@ export function decideDispatch(trigger: DispatchTrigger, ctx: DispatchContext): 
   if (trigger.toColumnId === null || trigger.toColumnId !== config.columnId) return { kind: 'ignore' }
   if (!LANDED.has(trigger.moveStatus)) return { kind: 'ignore' }
   if (ctx.dispatch.paused) return { kind: 'refuse', reason: 'paused' }
-  if (!ctx.project || ctx.project.relay) return { kind: 'refuse', reason: 'relay' }
+  if (!ctx.project) return { kind: 'refuse', reason: 'project-gone' }
+  if (ctx.project.relay) return { kind: 'refuse', reason: 'relay' }
   if (ctx.project.remote) return { kind: 'refuse', reason: 'remote-project' }
   // A dispatch column that closes the issue would start work on an issue the same move closed.
   if (ctx.completionColumnId && ctx.completionColumnId === config.columnId) {
     return { kind: 'refuse', reason: 'completion-column' }
   }
+  // The column's meaning (title, label) and the repository must still be what the person agreed
+  // to: all three can change under the consent through a pulled project file.
+  if (!ctx.bindingNow || ctx.bindingNow !== config.binding) return { kind: 'refuse', reason: 'consent-stale' }
   if (trigger.issue.state !== 'open') return { kind: 'refuse', reason: 'issue-closed' }
   const ref = issueRefFromHtmlUrl(trigger.issue.htmlUrl, trigger.issue.number)
   const key = issueKey(ref)
   if (!ref || !key) return { kind: 'refuse', reason: 'no-reference' }
-  if (!ctx.agentKnown) return { kind: 'refuse', reason: 'agent-unavailable' }
+  if (!ctx.agentDispatchable) return { kind: 'refuse', reason: 'agent-unavailable' }
   // At most one run per issue: an existing bound session (whatever its state) or one already on
   // its way. A second drag of the same card is a no-op that says so.
   if (ctx.queuedOrStarting) return { kind: 'refuse', reason: 'already-queued' }
@@ -111,12 +135,19 @@ export function moveWithdrawsDispatch(trigger: DispatchTrigger, dispatch: BoardD
 
 export const DISPATCH_REFUSAL_TEXT: Record<DispatchRefusal, string> = {
   paused: 'Dispatch is paused on this machine.',
+  'project-gone': 'The project is no longer open on this machine.',
+  'project-closed': 'The project was closed.',
+  'consent-stale':
+    'The dispatch column, its GitHub label or the repository changed since dispatch was switched on. Re-confirm it in Settings → GitHub Issues.',
+  'not-in-column': 'The issue left the dispatch column while it waited.',
+  'switched-off': 'Dispatch was switched off for this project.',
   'remote-project': 'Dispatch runs only on local projects for now (this is an SSH project).',
   relay: 'Dispatch is managed on the host of this shared project.',
   'completion-column': 'The dispatch column is also the completion column, which closes the issue.',
   'issue-closed': 'The issue is closed.',
   'no-reference': "The issue's GitHub address could not be read.",
-  'agent-unavailable': 'The dispatch agent is not available on this machine. Choose one in Settings.',
+  'agent-unavailable':
+    'The dispatch agent is not available on this machine, or does not report its status. Choose one in Settings.',
   'already-running': 'This issue already has a session. Close it to dispatch again.',
   'already-queued': 'This issue is already queued or starting.'
 }
@@ -131,7 +162,8 @@ export const DISPATCH_STARTUP_GRACE_MS = 120_000
 
 export interface RunSlotFact {
   state?: AgentState
-  /** The node still holds a launch (queued, starting). */
+  /** The node holds a launch that will start BY ITSELF (not a `manualOnly` one waiting for Run
+   *  now — that node is not going to spend anything until a person asks). */
   pending: boolean
   /** When dispatch started it, in this app run. */
   startedAt?: number
@@ -169,14 +201,17 @@ export interface DispatchQueueEntry {
 export function queueToStart(
   queue: readonly DispatchQueueEntry[],
   dispatch: BoardDispatch,
-  occupying: (projectId: string) => number
+  occupying: (projectId: string) => number,
+  /** Whether this entry may start NOW (the browser starts only the project on screen: it has no
+   *  headless launcher). A skipped entry stays queued and takes no slot. */
+  startable: (entry: DispatchQueueEntry) => boolean = () => true
 ): DispatchQueueEntry[] {
   if (dispatch.paused) return []
   const free = new Map<string, number>()
   const out: DispatchQueueEntry[] = []
   for (const entry of [...queue].sort((a, b) => a.queuedAt - b.queuedAt)) {
     const config = dispatch.projects[entry.projectId]
-    if (!config) continue
+    if (!config || !startable(entry)) continue
     if (!free.has(entry.projectId)) free.set(entry.projectId, config.maxConcurrent - occupying(entry.projectId))
     const left = free.get(entry.projectId)!
     if (left <= 0) continue
@@ -189,4 +224,46 @@ export function queueToStart(
 /** Queue entries whose project no longer dispatches (switched off, or the machine paused it). */
 export function queueToDrop(queue: readonly DispatchQueueEntry[], dispatch: BoardDispatch): DispatchQueueEntry[] {
   return queue.filter((e) => dispatch.paused || !dispatch.projects[e.projectId])
+}
+
+// ── Re-checking a queued dispatch before it starts ────────────────────────────────────────────
+
+export type QueuedCardFact =
+  | { kind: 'found'; state: 'open' | 'closed'; columnId: string | null }
+  /** The host's issue list for the dispatch column does not hold it. */
+  | { kind: 'absent' }
+  /** The host could not be asked (a failed read is never evidence of absence). */
+  | { kind: 'unreadable' }
+
+export interface RecheckInput {
+  config: BoardDispatchProject | undefined
+  paused: boolean
+  project: (DispatchProjectFacts & { closed: boolean }) | undefined
+  bindingNow: string | undefined
+  agentDispatchable: boolean
+  card: QueuedCardFact
+}
+
+export type RecheckVerdict = { kind: 'start' } | { kind: 'wait' } | { kind: 'drop'; reason: DispatchRefusal }
+
+/**
+ * A queued dispatch can wait for hours behind a full cap; by then the issue may be closed or moved
+ * by a teammate, the agent deleted, the column re-titled. Everything `decideDispatch` checked about
+ * the ISSUE and the CONSENT is asked again right before the run starts. Only an unreadable card
+ * waits (and is asked again on the next drain); every other change drops the entry with its reason.
+ */
+export function recheckQueued(input: RecheckInput): RecheckVerdict {
+  if (input.paused) return { kind: 'drop', reason: 'paused' }
+  if (!input.config) return { kind: 'drop', reason: 'switched-off' }
+  if (!input.project) return { kind: 'drop', reason: 'project-gone' }
+  if (input.project.relay) return { kind: 'drop', reason: 'relay' }
+  if (input.project.remote) return { kind: 'drop', reason: 'remote-project' }
+  if (input.project.closed) return { kind: 'drop', reason: 'project-closed' }
+  if (!input.bindingNow || input.bindingNow !== input.config.binding) return { kind: 'drop', reason: 'consent-stale' }
+  if (!input.agentDispatchable) return { kind: 'drop', reason: 'agent-unavailable' }
+  if (input.card.kind === 'unreadable') return { kind: 'wait' }
+  if (input.card.kind === 'absent') return { kind: 'drop', reason: 'not-in-column' }
+  if (input.card.state !== 'open') return { kind: 'drop', reason: 'issue-closed' }
+  if (input.card.columnId !== input.config.columnId) return { kind: 'drop', reason: 'not-in-column' }
+  return { kind: 'start' }
 }

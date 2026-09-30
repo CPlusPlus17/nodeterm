@@ -21,9 +21,34 @@ const src = files(ROOT).map((p) => ({ p: p.slice(ROOT.length + 1), text: readFil
 
 function sitesOf(pattern: RegExp): string[] {
   return src.flatMap(({ p, text }) =>
-    text.split('\n').flatMap((line) => (pattern.test(line) && !/^\s*(\/\/|\*)/.test(line) ? [p] : []))
+    text.split('\n').flatMap((line) => (pattern.test(line) && !/^\s*(\/\/|\/?\*)/.test(line) ? [p] : []))
   )
 }
+
+const CANVAS = () => src.find((f) => f.p === 'canvas/Canvas.tsx')!.text
+
+/** The body of a top-level `const <name> = useCallback(` in Canvas: up to the next 2-space `const`. */
+function bodyOf(name: string): { start: number; end: number } {
+  const text = CANVAS()
+  const start = text.indexOf(`  const ${name} = useCallback`)
+  expect(start, name).toBeGreaterThan(-1)
+  const next = text.slice(start + 1).search(/\n {2}const /)
+  return { start, end: next === -1 ? text.length : start + 1 + next }
+}
+
+/** Offsets of non-comment lines matching `pattern` in Canvas. */
+function canvasHits(pattern: RegExp): number[] {
+  const text = CANVAS()
+  const out: number[] = []
+  let at = 0
+  for (const line of text.split('\n')) {
+    if (pattern.test(line) && !/^\s*(\/\/|\/?\*)/.test(line)) out.push(at)
+    at += line.length + 1
+  }
+  return out
+}
+
+const inside = (offset: number, r: { start: number; end: number }) => offset >= r.start && offset < r.end
 
 describe('board dispatch: the trigger is the person\'s own move, and nothing else', () => {
   it("only Canvas's dispatchOnUserMove asks decideDispatch, and only with origin 'user-move'", () => {
@@ -39,7 +64,7 @@ describe('board dispatch: the trigger is the person\'s own move, and nothing els
     const canvas = src.find((f) => f.p === 'canvas/Canvas.tsx')!.text
     const uses = canvas
       .split('\n')
-      .filter((l) => /dispatchOnUserMove\b/.test(l) && !/const dispatchOnUserMove/.test(l) && !/^\s*(\/\/|\*)/.test(l))
+      .filter((l) => /dispatchOnUserMove\b/.test(l) && !/const dispatchOnUserMove/.test(l) && !/^\s*(\/\/|\/?\*)/.test(l))
     expect(uses.map((l) => l.trim())).toEqual(['onIssueMoved={dispatchOnUserMove}'])
   })
 
@@ -55,6 +80,35 @@ describe('board dispatch: the trigger is the person\'s own move, and nothing els
       'void moveIssueByUser(issue, columnId)',
       'void moveIssueByUser(issue, columnId, closeReason)'
     ])
+  })
+
+  it('dispatchStart is called only from dispatchOnUserMove (after decideDispatch) and the queue drain', () => {
+    const calls = canvasHits(/\bdispatchStart\(/).filter((o) => !CANVAS().startsWith('  const dispatchStart', o))
+    const onMove = bodyOf('dispatchOnUserMove')
+    const drain = bodyOf('drainDispatchQueue')
+    expect(calls).toHaveLength(2)
+    expect(calls.filter((o) => inside(o, onMove))).toHaveLength(1)
+    expect(calls.filter((o) => inside(o, drain))).toHaveLength(1)
+    // Inside dispatchOnUserMove the start comes AFTER the decision.
+    const text = CANVAS()
+    expect(text.indexOf('decideDispatch(', onMove.start)).toBeLessThan(calls.find((o) => inside(o, onMove))!)
+    // And the drain starts nothing without re-asking recheckQueued first.
+    expect(text.indexOf('recheckQueued(', drain.start)).toBeGreaterThan(drain.start)
+    expect(text.indexOf('recheckQueued(', drain.start)).toBeLessThan(calls.find((o) => inside(o, drain))!)
+  })
+
+  it("a 'queued' entry — which the drain starts — is created only by dispatchOnUserMove", () => {
+    // Every line that PUTS a 'queued' status (not a comparison) must sit inside dispatchOnUserMove.
+    const puts = canvasHits(/'queued'/).filter((o) => {
+      const line = CANVAS().slice(o, CANVAS().indexOf('\n', o))
+      return !/[=!]==\s*'queued'|'queued'\s*[=!]==/.test(line)
+    })
+    const onMove = bodyOf('dispatchOnUserMove')
+    expect(puts.length).toBeGreaterThan(0)
+    expect(puts.every((o) => inside(o, onMove))).toBe(true)
+    // Nobody else in the renderer writes the dispatch store.
+    expect(sitesOf(/useBoardDispatch\.getState\(\)\.put\(|\.put\(\s*dispatchEntry/).every((p) => p === 'canvas/Canvas.tsx')).toBe(true)
+    expect(sitesOf(/useBoardDispatch\.setState/)).toEqual([])
   })
 
   it('the refresh / sync code never reaches the dispatcher', () => {

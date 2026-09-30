@@ -13,11 +13,13 @@ import { prunePullAutoMove, sanitizeKanbanPullAutoMove } from '@shared/kanban-pu
 import {
   BOARD_DISPATCH_DEFAULT_CONCURRENT,
   BOARD_DISPATCH_MAX_CONCURRENT,
+  dispatchBinding,
   pruneBoardDispatch,
   sanitizeBoardDispatch,
   type BoardDispatchProject
 } from '@shared/board-dispatch'
 import { AGENT_CONFIG, BUILTIN_AGENT_IDS } from '@shared/agents/config'
+import { dispatchableAgent } from '../../../lib/boardDispatch'
 import { markWorkspaceDirty } from '../../../state/workspaceDirty'
 import { SAVE_DEBOUNCE_MS } from '../../../lib/savePersistence'
 import { SettingsSection } from '../SettingsSection'
@@ -177,7 +179,17 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
   /** Machine-local on purpose (see @shared/board-dispatch): a repository can never switch this on
    *  for anyone. `patch: null` switches the project off, `undefined` leaves it as it is (the kill
    *  switch alone). Every write prunes vanished projects. */
+  const [dispatchNotice, setDispatchNotice] = useState('')
+  /** What the person consents to when they pick a column: the repository and the column's title
+   *  and GitHub label as they are NOW (@shared/board-dispatch `binding`). */
+  const dispatchBindingFor = (columnId: string): string | undefined =>
+    dispatchBinding(
+      repository,
+      board?.columns.find((column) => column.id === columnId)?.title,
+      githubConfig?.columnMappings.find((mapping) => mapping.columnId === columnId)?.label
+    )
   const setDispatch = (patch: Partial<BoardDispatchProject> | null | undefined, paused?: boolean): void => {
+    setDispatchNotice('')
     const live = new Set(useProjects.getState().projects.map((item) => item.id))
     const current = pruneBoardDispatch(
       sanitizeBoardDispatch(useSettings.getState().settings.boardDispatch), live)
@@ -187,23 +199,36 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
       const base: BoardDispatchProject = projects[projectId] ?? {
         columnId: '',
         agentId: 'claude',
-        maxConcurrent: BOARD_DISPATCH_DEFAULT_CONCURRENT
+        maxConcurrent: BOARD_DISPATCH_DEFAULT_CONCURRENT,
+        binding: ''
       }
       const next = { ...base, ...patch }
       if (!next.accountId) delete next.accountId
-      if (next.columnId) projects[projectId] = next
+      // Choosing (or re-confirming) a column is the consent: bind it to what the column means now.
+      // Changing only the agent or the cap keeps the binding the person gave.
+      if (patch.columnId !== undefined || patch.binding !== undefined) {
+        const binding = dispatchBindingFor(next.columnId)
+        if (!binding) {
+          setDispatchNotice('That column has no GitHub label or the repository is not known yet, so dispatch cannot be switched on for it.')
+          return
+        }
+        next.binding = binding
+      }
+      if (next.columnId && next.binding) projects[projectId] = next
     }
     updateSettings({ boardDispatch: { paused: paused ?? current.paused, projects } })
   }
+  // Only agents that report their state through hooks: the cap counts sessions by that state.
   const dispatchAgentOptions = [
     ...BUILTIN_AGENT_IDS.map((id) => ({ id: id as string, label: AGENT_CONFIG[id].label })),
     ...customAgents.map((agent) => ({ id: agent.id, label: agent.label }))
-  ]
+  ].filter((agent) => dispatchableAgent(agent.id, true))
   const dispatchAccountOptions = dispatchConfig?.agentId === 'claude'
     ? claudeAccounts.filter((a) => !a.host && !a.pending).map((a) => ({ id: a.id, label: a.label }))
     : dispatchConfig?.agentId === 'codex'
       ? codexAccounts.filter((a) => !a.host && !a.pending).map((a) => ({ id: a.id, label: a.label }))
       : []
+  const dispatchStale = !!dispatchConfig && dispatchBindingFor(dispatchConfig.columnId) !== dispatchConfig.binding
 
   /** `GitHubHostController.status(projectId)` MASKS the auth block for a project that is not
    *  approved on this machine (`ghAuthenticated: false, activeProvider: null, tokenPresent: false`)
@@ -721,6 +746,16 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                   </Select>
                 }
               />
+              {dispatchNotice && <p role="status" className="text-[13px] text-warn">{dispatchNotice}</p>}
+              {dispatchStale && dispatchConfig && (
+                <div className="flex flex-wrap items-center gap-2" role="status">
+                  <p className="text-[13px] text-warn">
+                    The dispatch column, its GitHub label or the repository changed since you switched this on
+                    (possibly through a pulled project file). Nothing dispatches until you confirm it again.
+                  </p>
+                  <Button onClick={() => setDispatch({ binding: '' })}>Re-confirm this column</Button>
+                </div>
+              )}
               {dispatchConfig && (
                 <>
                   <FieldRow
@@ -759,7 +794,7 @@ export function GitHubIssuesSection({ isActive }: { isActive: boolean }): React.
                   <FieldRow
                     label="Runs at once"
                     htmlFor="github-dispatch-cap"
-                    description="Sessions of this project that are working or waiting on you. More dispatches wait in a queue shown on their cards."
+                    description="Sessions of this project that are working or waiting on you. More dispatches wait in a queue shown on their cards. Dispatched runs work in the project's own folder, so more than one at a time means several agents editing one checkout."
                     control={
                       <Select
                         id="github-dispatch-cap"
