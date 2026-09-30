@@ -7866,7 +7866,8 @@ The invariants, each with its reason:
     `POP_REFUSED_MESSAGE` (it names `team rotate-key`); the desktop shows ONE dialog with
     `POP_REFUSED_MESSAGE_DESKTOP`, which must never name `team rotate-key` (Server Edition only).
   - **Push uses a 15-minute `hostAuth` session from `/v1/push/host-auth`**, re-proven after 10
-    minutes on the client's clock, one per stream (`core/push-notify.ts` `createHostAuthCache`). An
+    minutes on the client's clock (at once if that clock has stepped back since: a negative age is
+    expired), one per stream (`core/push-notify.ts` `createHostAuthCache`). An
     old-backend verdict is cached 10 minutes; failed proofs back off 0/5/15/60 s (a hold further out
     than 60 s is a backward clock step and is ignored); overlapping flushes share one proof; a proof
     that throws is a failure, never a rejection. A batch that cannot be proven is DROPPED, never sent

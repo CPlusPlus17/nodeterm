@@ -2074,6 +2074,30 @@ describe('host-mode push proves possession of the host key (hostAuth session)', 
     h.stop()
   })
 
+  it.each<[string, { challenge?: Route }, string | undefined, string | undefined]>([
+    ['session', {}, 'HA-1', 'HA-2'],
+    ['old-backend verdict', { challenge: () => bare(404) }, undefined, undefined]
+  ])(
+    'a backward wall-clock step expires a cached %s: the next get() proves again',
+    async (_label, r, first, second) => {
+      // A negative age is no evidence of freshness. Read as "fresh", a clock stepped back an hour kept
+      // the same session for that hour PLUS the 10 minutes, past the server's 15-minute TTL.
+      route(r)
+      const cache = createHostAuthCache({
+        apiBase: 'https://api.nodeterm.dev',
+        fetchImpl: fetchMock as unknown as typeof fetch,
+        now: () => clock
+      })
+      clock = 60 * MIN
+      await expect(cache.get(PROVEN)).resolves.toBe(first)
+      expect(cache.onFile(PROVEN)).toBe(true)
+      clock = 0 // the wall clock steps back an hour
+      expect(cache.onFile(PROVEN)).toBe(false)
+      await expect(cache.get(PROVEN)).resolves.toBe(second)
+      expect(callsTo('/v1/relay/challenge')).toHaveLength(2)
+    }
+  )
+
   it('a cached legacy verdict refused by a host latched elsewhere re-proves and re-posts in the SAME batch', async () => {
     // The backend predated the proof when this sender asked, so it holds "legacy" for 10 minutes.
     // Meanwhile the host latched through another path (the standing host's proven mint, or the

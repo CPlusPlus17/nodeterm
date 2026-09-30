@@ -318,7 +318,14 @@ export function createHostAuthCache(d: { apiBase: string; fetchImpl: typeof fetc
   }
 
   const keyOf = (id: PushHostIdentity): string => `${id.hostPublicKeyB64}\n${id.hostDeviceId}`
-  const onFile = (key: string): boolean => !!cached && cached.key === key && d.now() - cached.at < HOST_AUTH_REPROVE_MS
+  // A NEGATIVE age is a wall clock that stepped back since the entry was cached, and is read as
+  // expired: taken as fresh, a step back of an hour would serve the same session (or old-backend
+  // verdict) for that hour plus the 10 minutes, past the server's 15-minute TTL.
+  const onFile = (key: string): boolean => {
+    if (!cached || cached.key !== key) return false
+    const age = d.now() - cached.at
+    return age >= 0 && age < HOST_AUTH_REPROVE_MS
+  }
 
   return {
     invalidate() {

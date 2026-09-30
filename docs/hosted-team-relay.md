@@ -745,7 +745,9 @@ proves again.
 - **Desktop host-mode push** (`src/core/push-notify.ts`). Push stops nothing: a batch that cannot
   be proven is dropped, like a network error, and the phone still has the agent-status mirror.
   - The `hostAuth` session is good for 15 minutes on the server, and the client proves again after
-    10 minutes on its own clock. notify and live-update each hold their own.
+    10 minutes on its own clock, or at once if that clock has stepped back since (a cached session
+    or old-backend verdict with a negative age is expired). notify and live-update each hold their
+    own.
   - A backend without the proof (challenge 404/405, or no host-auth route) is remembered for 10
     minutes, so it costs one challenge per 10 minutes rather than one per batch.
   - Failed proofs back off 0, 5, 15, then 60 s between attempts, since every attempt spends the
