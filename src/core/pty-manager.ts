@@ -33,6 +33,7 @@ import {
   type RemoteSessionEnv,
   remotePasteDelivery,
   remoteCapturePaneArgs,
+  remoteCaptureVisibleArgs,
   remotePaneCommandArgs,
   remotePaneCwdArgs,
   remoteSessionAgeArgs,
@@ -54,6 +55,13 @@ import { recordPendingRemoteKill, type PendingRemoteKill } from './pending-remot
 import { probeAgentSockToPin } from './remote-ssh/agent-probe'
 import { parsePaneCursor } from './pane-cursor'
 import { classifyPaneCwd } from './pane-cwd'
+import {
+  localCaptureVisibleArgs,
+  parseVisibleCapture,
+  unavailableCapture,
+  visibleCaptureRoute,
+  type VisibleCapture
+} from './watch-link/capture-route'
 import {
   recordFreshSpawnOwner,
   forgetPaneOwner,
@@ -4406,6 +4414,74 @@ export class PtyManager {
     if (session.sessionHost) return sessionHostCapture(sessionName(key), true)
     if (session.sshRemote) return this.captureSession(key)
     return this.captureSnapshot(key)
+  }
+
+  /**
+   * A live link's keyframe: the VISIBLE screen of a session, with the cursor and the alternate-screen
+   * flag read in the same tmux invocation — never history. Which backends get one, the exact target
+   * and the parse are `watch-link/capture-route.ts`. The session host (scrollback only), a direct
+   * Windows pane and a plain shell get `unavailableCapture()`, as does any failure — a dead
+   * ControlMaster, tmux's own "can't find session" for an exact-target miss.
+   */
+  async captureVisible(sessionId: string): Promise<VisibleCapture> {
+    const session = this.sessions.get(sessionId)
+    const key = session ? session.persistKey ?? session.indexKey : undefined
+    if (!session || !key) return unavailableCapture()
+    const route = visibleCaptureRoute(session, !!this.tmuxPath)
+    const target = sessionName(key)
+    try {
+      if (route === 'ssh' && session.sshRemote) {
+        // A remote node is captured on its HOST or not at all: never falls through to local tmux.
+        const ssh = findSsh()
+        if (!ssh) return unavailableCapture()
+        const { stdout } = await runAsync(
+          ssh,
+          remoteCaptureVisibleArgs(session.sshRemote.conn, session.sshRemote.controlPath, target),
+          { encoding: 'utf-8', maxBuffer: 8 * 1024 * 1024 }
+        )
+        return parseVisibleCapture(stdout)
+      }
+      if (route === 'tmux' && this.tmuxPath) {
+        const { stdout } = await runAsync(this.tmuxPath, localCaptureVisibleArgs(TMUX_SOCKET, target), {
+          encoding: 'utf-8',
+          maxBuffer: 8 * 1024 * 1024
+        })
+        return parseVisibleCapture(stdout)
+      }
+    } catch {
+      return unavailableCapture()
+    }
+    return unavailableCapture()
+  }
+
+  /**
+   * Join a node's RUNNING session as a live link's viewer: never spawns (`joinOnly`), never votes on
+   * the shared pty's size (`sizeVote: false`). Both are forced AFTER the caller's options, so nothing
+   * a caller passes can turn either off.
+   */
+  joinAsWatcher(
+    clientId: ClientId,
+    opts: {
+      persistKey: string
+      viewerId: string
+      cols: number
+      rows: number
+      sshRemote?: PtyCreateOptions['sshRemote']
+      requireRemote?: boolean
+    }
+  ): Promise<PtyCreateResult> {
+    return this.create(clientId, { ...opts, joinOnly: true, sizeVote: false })
+  }
+
+  /**
+   * The size a live link should report for a node: what its pty runs at now (the session host's
+   * authoritative size first, else the size pushed into the pty), or what it ran at when its last
+   * client was released. A copy; undefined when this process never ran the node.
+   */
+  watchSizeFor(persistKey: string): { cols: number; rows: number } | undefined {
+    const live = this.liveSessionForPersistKey(persistKey)
+    const size = live?.backendSize ?? live?.appliedSize ?? this.released.get(persistKey)?.size
+    return size ? { cols: size.cols, rows: size.rows } : undefined
   }
 
   /**

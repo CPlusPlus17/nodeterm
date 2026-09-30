@@ -20,6 +20,7 @@ import {
 import { sanitizePasteText } from '../paste-injection'
 import { canControlCanvas } from '../../shared/agents/config'
 import { COMBINED_PANE_MARKER, PANE_OWNER_FMT, PS_FOREGROUND_FLAGS } from '../agents/pane-owner'
+import { VISIBLE_CAPTURE_FORMAT, exactPaneTarget } from '../watch-link/capture-route'
 // Dependency-free (no node-pty): safe to import from these pure builders.
 
 /** Dedicated remote tmux socket so an SSH project never collides with the user's own tmux. */
@@ -516,6 +517,25 @@ export function remoteCapturePaneArgs(conn: SshConnection, controlPath: string, 
     conn,
     controlPath,
     tmuxCmd(`tmux -L ${RMT_TMUX_SOCKET} capture-pane -p -e -t ${sessionId} -S ${full ? '-' : '-200'}`)
+  )
+}
+/**
+ * The VISIBLE screen of a remote session, with SGR, and nothing above it — a live link's keyframe
+ * must never carry history, and `remoteCapturePaneArgs` always adds `-S`. The cursor line rides the
+ * SAME tmux invocation (see `watch-link/capture-route.ts` for why, and for the measured exact-target
+ * spelling). Every piece that the REMOTE shell would otherwise read is single-quoted: tmux's `;`
+ * separator (bare, it would end the tmux command and run `display-message` as a shell command), the
+ * `=name:` target and the `#{…}` format. Proven under a real /bin/sh in capture-visible.realsh.test.ts.
+ */
+export function remoteCaptureVisibleArgs(conn: SshConnection, controlPath: string, sessionId: string): string[] {
+  const target = posixQuote(exactPaneTarget(sessionId))
+  return childArgs(
+    conn,
+    controlPath,
+    tmuxCmd(
+      `tmux -L ${RMT_TMUX_SOCKET} capture-pane -p -e -t ${target} ';' ` +
+        `display-message -p -t ${target} ${posixQuote(VISIBLE_CAPTURE_FORMAT)}`
+    )
   )
 }
 /**

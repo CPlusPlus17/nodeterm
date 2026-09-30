@@ -1,0 +1,102 @@
+// A live link's KEYFRAME: the visible screen of a node's session, never the history above it.
+//
+// Pure: no tmux, no ssh, no PtyManager. `PtyManager.captureVisible` runs the argv built here (locally,
+// or over the ControlMaster through `remoteCaptureVisibleArgs`) and parses the reply here.
+//
+// Which backend gets one (`visibleCaptureRoute`): the session host's capture is ~200 lines of
+// scrollback and a direct Windows pane has no visible-only read, so both get NO keyframe (the viewer
+// starts from the live stream) rather than history. A plain shell has no tmux to ask.
+//
+// The screen, the cursor and the alternate-screen flag are read in ONE tmux invocation
+// (`capture-pane … ; display-message …`), so all three describe the same instant: a cursor read in a
+// second round trip could describe a screen that has since scrolled.
+//
+// The target is EXACT (`exactPaneTarget`). Node ids end in a counter, so `nt-x-1` is a prefix of
+// `nt-x-12`, and tmux resolves a bare target by fnmatch then PREFIX on a miss: a bare target would
+// capture ANOTHER node's screen and send it to this link's viewers. Measured on tmux 3.4, with only
+// `nt-x-12` alive:
+//   capture-pane -t nt-x-1     → 12's screen, exit 0          (the trap)
+//   capture-pane -t =nt-x-1    → "can't find pane", exit 1    (also for =nt-x-12: `=name` alone never
+//                                                             resolves a target-PANE)
+//   capture-pane -t =nt-x-1:   → "can't find session", exit 1
+//   capture-pane -t =nt-x-12:  → 12's screen, exit 0          (exact AND resolves)
+//   display-message -t =nt-x-1: → exit 0, every format EMPTY
+// and the combined `capture-pane -t =nt-x-1: ; display-message …` stops at the failed capture: exit 1,
+// nothing on stdout. So an exact miss is a failed command, which the caller reads as unavailable.
+
+export interface VisibleCapture {
+  /** The visible screen with SGR, byte-identical to what `capture-pane -p -e` prints on its own
+   *  (one `\n`-terminated line per row); '' when there is none. Never history. */
+  screen: string
+  /** The pane's cursor at capture time, 0-based (`#{cursor_x}`, `#{cursor_y}`); null when unread. */
+  cursor: { x: number; y: number } | null
+  /** Whether the pane's application is on the alternate screen (`#{alternate_on}`); null when unread. */
+  altScreen: boolean | null
+}
+
+/** A session with no visible-only capture, or one that failed: an empty screen, nothing known. */
+export function unavailableCapture(): VisibleCapture {
+  return { screen: '', cursor: null, altScreen: null }
+}
+
+export function visibleCaptureRoute(
+  s: { sessionHost?: unknown; nativeWindowsPane?: unknown; sshRemote?: unknown; tmuxBacked?: boolean },
+  tmuxAvailable: boolean
+): 'none' | 'ssh' | 'tmux' {
+  if (s.sessionHost || s.nativeWindowsPane) return 'none'
+  if (s.sshRemote) return 'ssh'
+  return tmuxAvailable && s.tmuxBacked ? 'tmux' : 'none'
+}
+
+/** The tmux format read beside the screen: cursor column, cursor row, alternate screen (0/1). */
+export const VISIBLE_CAPTURE_FORMAT = '#{cursor_x} #{cursor_y} #{alternate_on}'
+
+/** "Exactly this session, its active pane" — the only spelling that is exact AND resolves for a
+ *  target-pane command (see the measurement at the top of this file). */
+export function exactPaneTarget(sessionName: string): string {
+  return `=${sessionName}:`
+}
+
+/**
+ * The local tmux argv (after the binary): visible screen with SGR, then the cursor line, in one
+ * invocation. The `;` is tmux's own command separator, passed as its own argv element (no shell).
+ * No `-S`: capture-pane without it starts at the first VISIBLE row.
+ */
+export function localCaptureVisibleArgs(socket: string, sessionName: string): string[] {
+  const target = exactPaneTarget(sessionName)
+  return [
+    '-L',
+    socket,
+    'capture-pane',
+    '-p',
+    '-e',
+    '-t',
+    target,
+    ';',
+    'display-message',
+    '-p',
+    '-t',
+    target,
+    VISIBLE_CAPTURE_FORMAT
+  ]
+}
+
+const CURSOR_LINE = /^(\d+) (\d+) ([01])$/
+
+/**
+ * Split the combined reply: the LAST line is the cursor line when it has exactly the format's shape,
+ * and everything before it is the screen. Anything else (no such line, an older tmux that printed
+ * something different) leaves the whole output as the screen and the cursor unknown.
+ */
+export function parseVisibleCapture(stdout: string): VisibleCapture {
+  const body = stdout.replace(/\r?\n$/, '')
+  const cut = body.lastIndexOf('\n')
+  const last = cut === -1 ? body : body.slice(cut + 1)
+  const m = CURSOR_LINE.exec(last)
+  if (!m) return { screen: stdout, cursor: null, altScreen: null }
+  return {
+    screen: cut === -1 ? '' : body.slice(0, cut + 1),
+    cursor: { x: Number(m[1]), y: Number(m[2]) },
+    altScreen: m[3] === '1'
+  }
+}
