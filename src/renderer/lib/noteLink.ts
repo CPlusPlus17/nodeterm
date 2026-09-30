@@ -49,6 +49,14 @@ export function edgeToBridge(e: Pick<Edge, 'id' | 'source' | 'target' | 'data'>)
   return data && hasReader(data) ? { ...b, reader: data.reader as string } : b
 }
 
+/** Is `reader` (null = both read) the link's CURRENT direction, for the edge menu's ✓? Keyed on the
+ *  reader's PRESENCE, not `reader ?? null`: a present-but-malformed reader (`null`, a number, a
+ *  string naming neither endpoint) authorizes NOBODY, so it must not be shown as "both read" — that
+ *  would tick and disable the one choice that repairs it. Such a link ticks no option at all. */
+export function isCurrentLinkDirection(bridge: BridgeLink, reader: string | null): boolean {
+  return reader === null ? !hasReader(bridge) : hasReader(bridge) && bridge.reader === reader
+}
+
 function hasReader(o: { reader?: unknown }): boolean {
   return 'reader' in o && o.reader !== undefined
 }

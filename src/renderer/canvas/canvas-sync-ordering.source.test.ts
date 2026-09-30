@@ -94,7 +94,9 @@ describe('render-time readers pair the rendered nodes with the rendered epoch', 
   // already names the incoming project while this render's `nodes` are still the outgoing one's.
   // The context-link map (which authorizes context reads) must not pair A's links with B's id.
   it('the context-link sync takes the rendered epoch', () => {
-    expect(src).toContain('useContextLinkSync({ projectId: renderedProjectId, nodes, edges: linkEdges })')
+    expect(src).toContain('useContextLinkSync({ projectId: renderedProjectId, nodes, edges: linkBridges })')
+    // …built from the RENDERED linkEdges (one-way readers ride edge.data, issue #852).
+    expect(src).toContain('const linkBridges = useMemo(() => linkEdges.map(edgeToBridge), [linkEdges])')
     expect(src).not.toContain('useContextLinkSync({ projectId: nodesProjectIdRef.current')
   })
 

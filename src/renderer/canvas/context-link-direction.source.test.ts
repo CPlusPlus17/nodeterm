@@ -15,14 +15,14 @@ describe('one-way context links — Canvas wiring (source pins)', () => {
   it('never rebuilds a bridge edge field-by-field (that drops the reader)', () => {
     expect(src).not.toMatch(/\(\{ id: b\.id, source: b\.source, target: b\.target \}\)/)
     expect(src).not.toMatch(/linkEdgesRef\.current\.map\(\(e\) => \(\{ id: e\.id, source: e\.source, target: e\.target \}\)\)/)
-    expect(src).toContain('setLinkEdges((project.bridges ?? []).map(bridgeToEdge))')
+    expect(src).toContain('const loadedBridges: Edge[] = (project.bridges ?? []).map(bridgeToEdge)')
     expect(src).toContain('linkEdgesRef.current.map(edgeToBridge)')
     expect(src).toContain('liveBridges: linkEdgesRef.current.map(edgeToBridge)')
-    expect(src).toContain('setLinkEdges(plan.bridges.map(bridgeToEdge))')
+    expect(src).toContain('const bridges: Edge[] = plan.bridges.map(bridgeToEdge)')
   })
 
   it('publishes the link map from reader-carrying bridges', () => {
-    expect(src).toMatch(/useContextLinkSync\(\{ projectId: nodesProjectIdRef\.current, nodes, edges: linkBridges \}\)/)
+    expect(src).toMatch(/useContextLinkSync\(\{ projectId: renderedProjectId, nodes, edges: linkBridges \}\)/)
   })
 
   it('draws the arrowhead on the reading side only for a one-way link', () => {
@@ -57,5 +57,18 @@ describe('one-way context links — Canvas wiring (source pins)', () => {
     const body = src.slice(start, start + 1500)
     expect(body).toContain('contextLinkForEdge(')
     expect(body).toContain('controlEdgesRef.current')
+  })
+
+  it('team sync casts and applies bridges WITH their reader (a flip must not widen on a peer)', () => {
+    // No bridge list may be flattened to three ids on its way to or from the wire.
+    expect(src).not.toMatch(/bridges\.map\(toBridgeLink\)/)
+    expect(src).not.toMatch(/prevBridges\.map\(toBridgeLink\)/)
+    const pub = src.slice(src.indexOf('const publishableLater = useCallback('))
+    expect(pub.slice(0, 2500)).toContain('bridges: bridges.map(edgeToBridge)')
+    const apply = src.slice(src.indexOf('if (isEdgeMutation(mutation)) {'))
+    const body = apply.slice(0, 4000)
+    expect(body).toContain('bridges: prevBridges.map(edgeToBridge)')
+    // A held bridge is reused only while its reader is unchanged.
+    expect(body).toContain('edgeToBridge(held).reader === b.reader')
   })
 })

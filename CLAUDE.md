@@ -4911,7 +4911,12 @@ bridges enter live state only via `appendBridgeEdges`) and the server
   discovery note a new link sends; losing access sends nothing, like removing a link. Note: the
   premise "every submit triggers a full read" does not hold — nothing reads on submit; the linked
   agent reads only when it decides to run the skill/shim. What one-way removes is the other side's
-  PERMISSION and its discovery note.
+  PERMISSION and its discovery note. **Team sync carries it too**: an `edge-upsert` of kind
+  `bridge` keeps `reader` through the diff, the shape gate, the reflector's sanitize and the peer's
+  apply (`edgeFields`/`sameEdge` in `shared/canvas-mutations.ts`), and a flip alone is a change. A
+  three-id copy there never cast a flip and landed a cast one-way link on the peer as both-read,
+  which the peer then saved and published back. A malformed reader on the wire REFUSES the op
+  (never dropped — dropping widens), and a rope never carries one.
   **Note links:** a sticky note can be connected to ANY terminal node (one-way, sticky →
   terminal). On connect, agent sessions get a one-shot idle-gated push of the note text
   (`buildNotePushMessage`, single-line, truncated at 2000 chars); plain terminals get no

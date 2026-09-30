@@ -603,7 +603,7 @@ import { answerHostedRequest, type HostedAnswer } from '../lib/hostedOwner'
 import { headRequest, type QueuedRequest } from '../lib/hostedPendingQueue'
 import { useHostedPending } from '../state/hostedPending'
 import { hostedInfoFor, isHostedReadOnly, useHostedTeams } from '../state/hostedTeams'
-import { appendBridgeEdges, bridgeToEdge, buildContextLinkNote, contextLinkForEdge, buildNotePushMessage, classifyLink, edgeToBridge, gainedReaders, hiddenLinkIds, linkIdsCoveredByRopes, linkReadPairs, pairKey, planBridges, withLinkReader, type LinkEndpoint } from '../lib/noteLink'
+import { appendBridgeEdges, bridgeToEdge, buildContextLinkNote, contextLinkForEdge, buildNotePushMessage, classifyLink, edgeToBridge, gainedReaders, hiddenLinkIds, isCurrentLinkDirection, linkIdsCoveredByRopes, linkReadPairs, pairKey, planBridges, withLinkReader, type LinkEndpoint } from '../lib/noteLink'
 import {
   deliveriesToRetire,
   launchesToFire,
@@ -3454,7 +3454,9 @@ export function Canvas() {
         publishableScene(
           {
             nodes: flowToNodeStates(flow, retainInitial),
-            bridges: bridges.map(toBridgeLink),
+            // Bridges keep their one-way `reader` (issue #852): a peer applies what is cast, and a
+            // three-id bridge would widen a one-way link back to both-read on every teammate.
+            bridges: bridges.map(edgeToBridge),
             ropes: ropes.map(toBridgeLink)
           },
           ephIds
@@ -4382,7 +4384,7 @@ export function Canvas() {
         // gate above keys on (`mutationKey` leaves the kind out).
         const prevBridges = linkEdgesRef.current
         const prevRopes = controlEdgesRef.current
-        const base = { bridges: prevBridges.map(toBridgeLink), ropes: prevRopes.map(toBridgeLink) }
+        const base = { bridges: prevBridges.map(edgeToBridge), ropes: prevRopes.map(toBridgeLink) }
         const next = applyEdgeMutationToScene(base, mutation)
         // Nothing to do — a remove for an edge we do not have, or the edge we already hold (every
         // Server Edition tab re-casts a server-written edge): no setState, no markDirty, no save.
@@ -4397,9 +4399,13 @@ export function Canvas() {
         }
         if (next.bridges !== base.bridges) {
           // No `type`: a bridge carries none in state — `displayEdges` makes every link `floating`.
-          const edges = next.bridges.map(
-            (b) => keep(prevBridges, b) ?? { id: b.id, source: b.source, target: b.target }
-          )
+          // A bridge is also kept only while its one-way `reader` (issue #852) is unchanged: a peer
+          // flipping the direction must reach this canvas, not be swallowed as "same three ids".
+          const edges = next.bridges.map((b) => {
+            const held = keep(prevBridges, b)
+            if (!held) return bridgeToEdge(b)
+            return edgeToBridge(held).reader === b.reader ? held : { ...bridgeToEdge(b), selected: held.selected }
+          })
           linkEdgesRef.current = edges
           setLinkEdges(edges)
         }
@@ -4732,7 +4738,7 @@ export function Canvas() {
       const a = titleOf(link.source)
       const b = titleOf(link.target)
       const option = (label: string, reader: string | null) => {
-        const active = (current.reader ?? null) === reader
+        const active = isCurrentLinkDirection(current, reader)
         return {
           label: `${active ? '✓ ' : ''}${label}`,
           onClick: () => setReader(reader),

@@ -13,7 +13,8 @@ import {
   bridgeToEdge,
   contextLinkForEdge,
   edgeToBridge,
-  linkReadPairs
+  linkReadPairs,
+  isCurrentLinkDirection
 } from './noteLink'
 import type { CanvasNodeState } from '@shared/types'
 
@@ -488,3 +489,23 @@ describe('contextLinkForEdge (issue #852 review P2b)', () => {
   })
 })
 
+
+// The edge menu's ✓ (issue #852). A malformed reader authorizes nobody, so it must not read as
+// "both read" — that ticked and DISABLED the one option that repairs the link.
+describe('isCurrentLinkDirection', () => {
+  const base = { id: 'x', source: 'a', target: 'b' }
+  it('ticks both-read only for a reader-less bridge', () => {
+    expect(isCurrentLinkDirection(base, null)).toBe(true)
+    expect(isCurrentLinkDirection({ ...base, reader: 'a' }, null)).toBe(false)
+    expect(isCurrentLinkDirection({ ...base, reader: 'a' }, 'a')).toBe(true)
+    expect(isCurrentLinkDirection({ ...base, reader: 'a' }, 'b')).toBe(false)
+  })
+  it('ticks nothing for a malformed reader (null / non-string / names neither endpoint)', () => {
+    for (const reader of [null, 7, 'zzz'] as unknown as string[]) {
+      const bad = { ...base, reader }
+      expect(isCurrentLinkDirection(bad, null)).toBe(false)
+      expect(isCurrentLinkDirection(bad, 'a')).toBe(false)
+      expect(isCurrentLinkDirection(bad, 'b')).toBe(false)
+    }
+  })
+})
