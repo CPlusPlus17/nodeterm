@@ -122,13 +122,33 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   ]).finally(() => clearTimeout(timer))
 }
 
+const CP1252 = new TextDecoder('windows-1252')
+
+/**
+ * `decodeURIComponent`, except it never throws. On Windows the shims run under Git Bash but post
+ * through a NATIVE curl, which reads its argv in the ANSI code page: `--data-urlencode "arg.prompt=é"`
+ * goes out as `%E9`, not `%C3%A9`. `decodeURIComponent` rejects that with a URIError, which escaped
+ * the request handler and came back as an empty 204 — the shim exited 1 with no message, and every
+ * `open-claude --prompt` holding one accented letter failed silently. Bytes that are not UTF-8 are
+ * read as windows-1252, the code page that produced them; characters outside it were already lost
+ * to `?` by the argv conversion, before the request existed.
+ */
+function decodeFormComponent(s: string): string {
+  try {
+    return decodeURIComponent(s)
+  } catch {
+    const latin1 = s.replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) => String.fromCharCode(parseInt(hex, 16)))
+    return CP1252.decode(Buffer.from(latin1, 'latin1'))
+  }
+}
+
 // Parses application/x-www-form-urlencoded bodies (what the managed script posts).
 function parseForm(body: string): Record<string, string> {
   const out: Record<string, string> = {}
   for (const pair of body.split('&')) {
     const i = pair.indexOf('=')
     if (i < 0) continue
-    out[decodeURIComponent(pair.slice(0, i))] = decodeURIComponent(pair.slice(i + 1).replace(/\+/g, ' '))
+    out[decodeFormComponent(pair.slice(0, i))] = decodeFormComponent(pair.slice(i + 1).replace(/\+/g, ' '))
   }
   return out
 }
