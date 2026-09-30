@@ -22,6 +22,19 @@ const PTY_CLOSED_PREFIX = 'pty:closed:'
 /** A recycled session id is dead too (the node respawns under a NEW session id), so its
  *  backpressure bookkeeping must be pruned exactly like an exited/closed one. */
 const PTY_RECYCLED_PREFIX = 'pty:recycled:'
+/** How the registry treats one client. Both default to the historical behaviour.
+ *  - `quiet`: never enumerated for a broadcast (`broadcastIds`) — reachable by an addressed
+ *    `sendTo` only. A live link's viewer is one: canvas ops, presence and agent status are not
+ *    its business. `ids()` still lists it, and `quietIds()` names it, because the pty reaper must
+ *    count it as watching (pty-reap.ts `liveClientIds`).
+ *  - `selfPaced`: the sink paces itself. The registry takes no pause ticket for it (a stranger's
+ *    slow socket must never freeze the owner's terminal) and never drops or resyncs its output
+ *    (the watcher's stream filter must see every frame — src/core/watch-link/watcher-policy.ts). */
+export interface SinkOptions {
+  quiet?: boolean
+  selfPaced?: boolean
+}
+
 /** Watermarks match the renderer terminal's own flow control. */
 const WS_HIGH_WATER = 1_000_000
 const WS_LOW_WATER = 256_000
@@ -90,6 +103,9 @@ type Desync = { attempts: number; nextAttemptAt: number }
  */
 export class UiSinkRegistry {
   private sinks = new Map<number, UiSink>()
+  /** Only the clients registered with an option set; empty for every client of today, so the
+   *  hot paths (`broadcastIds`, `sendTo`) pay one `size` read or one map miss. */
+  private options = new Map<number, SinkOptions>()
   private paused = new Set<string>()
   private flowController?: (
     uiId: number,
@@ -130,23 +146,42 @@ export class UiSinkRegistry {
   private failures = new Map<number, number>()
   private onSinkGone?: (id: number) => void
 
-  register(id: number, sink: UiSink): void {
+  register(id: number, sink: UiSink, opts: SinkOptions = {}): void {
     this.sinks.set(id, sink)
+    // A copy, so a caller mutating its options object later cannot change how this sink is served.
+    if (opts.quiet || opts.selfPaced)
+      this.options.set(id, { quiet: !!opts.quiet, selfPaced: !!opts.selfPaced })
+    else this.options.delete(id)
   }
 
   has(id: number): boolean {
     return this.sinks.has(id)
   }
 
-  /** How many sinks are registered. The zero-peer fast path a shell's `broadcast` checks BEFORE
-   *  calling `ids()`, so a solo desktop user allocates no array per broadcast. */
+  /** How many sinks are registered (quiet ones included). The zero-peer fast path a shell's
+   *  `broadcast` checks BEFORE calling `broadcastIds()`, so a solo desktop user allocates no array
+   *  per broadcast. */
   get size(): number {
     return this.sinks.size
   }
 
-  /** Every registered sink, in registration order (Map preserves insertion order). */
+  /** Every registered sink, quiet ones included, in registration order (Map preserves insertion
+   *  order). A fan-out wants `broadcastIds()`. */
   ids(): number[] {
     return [...this.sinks.keys()]
+  }
+
+  /** The sinks a broadcast reaches: every one but the quiet ones, in registration order. */
+  broadcastIds(): number[] {
+    if (this.options.size === 0) return this.ids()
+    return this.ids().filter((id) => !this.options.get(id)?.quiet)
+  }
+
+  /** The quiet sinks, in registration order. Nothing is ever broadcast to them, but they are live
+   *  clients: the pty reaper counts them as watching (pty-reap.ts `liveClientIds`). */
+  quietIds(): number[] {
+    if (this.options.size === 0) return []
+    return this.ids().filter((id) => this.options.get(id)?.quiet)
   }
 
   /** The shell's full teardown for a sink that has proven dead (== what its socket-close handler
@@ -181,6 +216,7 @@ export class UiSinkRegistry {
   unregister(id: number): void {
     this.sinks.delete(id)
     this.failures.delete(id)
+    this.options.delete(id)
     const prefix = `${id} `
     for (const key of this.paused) if (key.startsWith(prefix)) this.paused.delete(key)
     // Same for the drop-and-redraw state: a departing client leaves none behind (and an in-flight
@@ -194,6 +230,13 @@ export class UiSinkRegistry {
     if (!sink) return
     if (channel.startsWith(PTY_DATA_PREFIX)) {
       const sessionId = channel.slice(PTY_DATA_PREFIX.length)
+      // A self-paced sink is handed every frame and nothing else: no drop, so no desync and no
+      // resync (the only way into either is `dropOrDesync`), and no pause ticket. It keeps its own
+      // parser in step with the pty and does its own drop-and-redraw (watcher-policy.ts).
+      if (this.options.get(uiId)?.selfPaced) {
+        this.deliver(uiId, () => sink.sendBinary(encodePtyData(sessionId, String(args[0] ?? ''))))
+        return
+      }
       // Bounded memory: read the socket backlog BEFORE queueing more, so the ceiling can refuse.
       if (this.dropOrDesync(uiId, sessionId, sink.bufferedAmount?.() ?? 0)) return
       // A throwing sink must not unwind into the pty read loop, and a sink we could not write to
@@ -276,6 +319,7 @@ export class UiSinkRegistry {
     //    entry cannot disturb their loop — a later `sendTo` for an evicted id is simply a miss.
     this.sinks.delete(uiId)
     this.failures.delete(uiId)
+    this.options.delete(uiId)
     if (this.onSinkGone) this.onSinkGone(uiId) // full teardown (leave + dropClient + unregister)
     else this.unregister(uiId) // nothing wired: at least leave none of OUR state behind
   }
