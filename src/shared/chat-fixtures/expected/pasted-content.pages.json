@@ -70,7 +70,7 @@
             }
           ],
           "at": 1790362805000,
-          "key": 2218
+          "key": 2222
         },
         {
           "role": "user",
@@ -81,29 +81,106 @@
             }
           ],
           "at": 1790362806000,
-          "key": 2610
+          "key": 2614
         },
         {
           "role": "user",
           "parts": [
             {
               "kind": "text",
-              "text": "\n```\nold </pasted_content id=\"zz\"> paste\n```\n"
+              "text": "\n```\nold </pasted_content id=\"00ff\"> paste\n```\n"
             }
           ],
           "at": 1790362807000,
-          "key": 3050
+          "key": 3058
         },
         {
           "role": "user",
           "parts": [
             {
               "kind": "text",
-              "text": "<pasted_content id=\"9\">\nnever closed"
+              "text": "\n```\n\n```\n"
             }
           ],
           "at": 1790362808000,
-          "key": 3461
+          "key": 3477
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "\n```\nx\n<pasted_content id=\"aaaa\">\ny\n```\n\nz\n</pasted_content id=\"aaaa\">"
+            }
+          ],
+          "at": 1790362809000,
+          "key": 3857
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "<pasted_content>\nno id\n</pasted_content>"
+            }
+          ],
+          "at": 1790362810000,
+          "key": 4305
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "<pasted_content id=\"AB12\">\nupper case\n</pasted_content id=\"AB12\">"
+            }
+          ],
+          "at": 1790362811000,
+          "key": 4666
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "<pasted_content id=\"ab123\">\nfive digits\n</pasted_content id=\"ab123\">"
+            }
+          ],
+          "at": 1790362812000,
+          "key": 5056
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "<pasted_content id=\"ab12\">no newline after the open\n</pasted_content id=\"ab12\">"
+            }
+          ],
+          "at": 1790362813000,
+          "key": 5449
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "<pasted_content id=\"ab12\">\nno newline before the close</pasted_content id=\"ab12\">"
+            }
+          ],
+          "at": 1790362814000,
+          "key": 5852
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "kind": "text",
+              "text": "<pasted_content id=\"0009\">\nnever closed"
+            }
+          ],
+          "at": 1790362815000,
+          "key": 6257
         },
         {
           "role": "assistant",
@@ -113,8 +190,8 @@
               "text": "Noted."
             }
           ],
-          "at": 1790362809000,
-          "key": 3819
+          "at": 1790362816000,
+          "key": 6618
         }
       ],
       "olderCursor": null,

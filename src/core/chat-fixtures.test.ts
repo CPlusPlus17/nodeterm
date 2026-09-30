@@ -447,6 +447,10 @@ function systemRecords(): string {
     tn(['<task-id>a1</task-id>', '<task-id>a2</task-id>', '<status>killed</status>', `<summary>${'Long summary '.repeat(20)}</summary>`]),
     // A whole element with NO origin: matched by content.
     tn(['<status>stopped</status>', '<summary>Demo watcher stopped</summary>'], {}),
+    // The same whole element sent by a HUMAN (typed or pasted unwrapped): stays a user message,
+    // whether the record says so by origin or only by promptSource.
+    tn(['<status>completed</status>', '<summary>pasted by hand</summary>'], { promptSource: 'typed', origin: { kind: 'human' }, turnOrigin: 'human' }),
+    tn(['<status>completed</status>', '<summary>typed, no origin</summary>'], { promptSource: 'typed' }),
     // Malformed: origin says task-notification, no known tag → whole text as the chip.
     tn(['<mystery>zzz</mystery>']),
     { ...user('  Background task "demo" finished while you were away.  '), ...TN },
@@ -491,18 +495,27 @@ function pastedContent(): string {
     // Array content: an image beside the typed text.
     {
       ...user([
-        text('[Image #1] compare\n\n<pasted_content id="1f">\nx = 1\n</pasted_content id="1f">\n'),
+        text('[Image #1] compare\n\n<pasted_content id="001f">\nx = 1\n</pasted_content id="001f">\n'),
         { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }
       ]),
       ...HUMAN
     },
     assistant([text('Compared.')]),
     // A pasted task-notification is the user's own paste, not a notification.
-    { ...user('fyi\n<pasted_content id="1c">\n<task-notification><summary>s</summary></task-notification>\n</pasted_content id="1c">'), ...HUMAN },
+    { ...user('fyi\n<pasted_content id="001c">\n<task-notification><summary>s</summary></task-notification>\n</pasted_content id="001c">'), ...HUMAN },
     // A close tag with another id inside a span is content: the span ends at ITS OWN id.
-    { ...user('<pasted_content id="a">\nold </pasted_content id="zz"> paste\n</pasted_content id="a">'), ...HUMAN },
+    { ...user('<pasted_content id="000a">\nold </pasted_content id="00ff"> paste\n</pasted_content id="000a">'), ...HUMAN },
+    // An empty paste; a same-id open nested inside a span (the span ends at the FIRST close).
+    { ...user('<pasted_content id="abcd">\n\n</pasted_content id="abcd">'), ...HUMAN },
+    { ...user('<pasted_content id="aaaa">\nx\n<pasted_content id="aaaa">\ny\n</pasted_content id="aaaa">\nz\n</pasted_content id="aaaa">'), ...HUMAN },
+    // Not the CLI's grammar: each is left exactly as typed.
+    { ...user('<pasted_content>\nno id\n</pasted_content>'), ...HUMAN },
+    { ...user('<pasted_content id="AB12">\nupper case\n</pasted_content id="AB12">'), ...HUMAN },
+    { ...user('<pasted_content id="ab123">\nfive digits\n</pasted_content id="ab123">'), ...HUMAN },
+    { ...user('<pasted_content id="ab12">no newline after the open\n</pasted_content id="ab12">'), ...HUMAN },
+    { ...user('<pasted_content id="ab12">\nno newline before the close</pasted_content id="ab12">'), ...HUMAN },
     // Unclosed: left as typed.
-    { ...user('<pasted_content id="9">\nnever closed'), ...HUMAN },
+    { ...user('<pasted_content id="0009">\nnever closed'), ...HUMAN },
     assistant([text('Noted.')])
   ])
 }

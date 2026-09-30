@@ -872,6 +872,32 @@ describe('system-injected user records', () => {
       })
     })
 
+    it('a HUMAN who types or pastes exactly one element keeps their bubble', () => {
+      const el = '<task-notification>\n<status>completed</status>\n<summary>x</summary>\n</task-notification>'
+      for (const extra of [
+        { promptSource: 'typed', origin: { kind: 'human' }, turnOrigin: 'human' },
+        { origin: { kind: 'human' } },
+        { promptSource: 'typed' },
+        { promptSource: 'queued' },
+        { promptSource: 'suggestion_accepted' }
+      ]) {
+        const msgs = parseChatMessages(userStr(el, extra).split('\n'))
+        expect(msgs).toEqual([{ role: 'user', parts: [{ kind: 'text', text: el }] }])
+        expect(parseTranscriptLines(userStr(el, extra))).toEqual([{ role: 'user', text: el }])
+      }
+      // An explicit task-notification origin still wins over a human-looking promptSource.
+      expect(tool(userStr(el, { promptSource: 'typed', origin: { kind: 'task-notification' } }))).toMatchObject({ name: 'Background task' })
+    })
+
+    it('whitespace around a whole element is allowed (JS \\s)', () => {
+      expect(tool(userStr('\n\t <task-notification><summary>w</summary></task-notification>\n ', {}))).toMatchObject({ arg: 'w' })
+    })
+
+    it('a tag is the FIRST open up to the first close after it', () => {
+      const raw = taskNote('<summary>first</summary>\n<note><summary>second</summary></note>')
+      expect(tool(raw)).toMatchObject({ arg: 'first' })
+    })
+
     it('without the origin, text around the element or a second element is NOT a notification', () => {
       const around = userStr('see this: <task-notification><summary>x</summary></task-notification>')
       const two = userStr('<task-notification><summary>a</summary></task-notification><task-notification><summary>b</summary></task-notification>')
@@ -913,6 +939,21 @@ describe('system-injected user records', () => {
         { kind: 'peer', from: 'uds:/run/demo/1.sock', name: 'demo-peer', fromMode: 'prompting' }
       )
       expect(tool(raw)).toEqual({ kind: 'tool', name: 'Agent message', arg: 'demo-peer', result: 'hello there' })
+    })
+
+    it('the element is the first open followed by `>` or JS whitespace, up to the LAST close', () => {
+      // `<agent-messages>` is another tag; a tab separates attributes; a quoted close tag is body.
+      const raw = peerRec(
+        `${AM_PREFIX}<agent-messages> no </agent-messages>\n<agent-message\tfrom-name="tabbed">\nsee </agent-message> here\n</agent-message>${AM_TRAILER}`
+      )
+      expect(tool(raw)).toEqual({ kind: 'tool', name: 'Agent message', arg: 'tabbed', result: 'see </agent-message> here' })
+    })
+
+    it('the EARLIER element kind wins; from-name must start the attribute', () => {
+      const raw = peerRec(
+        `${AM_PREFIX}<cross-session-message data-from-name="wrong" from-name="right">\nquoting <agent-message>inner</agent-message>\n</cross-session-message>`
+      )
+      expect(tool(raw)).toEqual({ kind: 'tool', name: 'Agent message', arg: 'right', result: 'quoting <agent-message>inner</agent-message>' })
     })
 
     it('keeps a long body up to 16384 UTF-16 units', () => {
@@ -975,34 +1016,117 @@ describe('system-injected user records', () => {
         ...human,
         message: {
           content: [
-            { type: 'text', text: '[Image #1] see\n\n<pasted_content id="1f">\nx\n</pasted_content id="1f">\n' },
+            { type: 'text', text: '[Image #1] see\n\n<pasted_content id="001f">\nx\n</pasted_content id="001f">\n' },
             { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }
           ]
         }
       })
       expect(textOfMsg(parseChatMessages(raw.split('\n'))[0])).toBe('[Image #1] see\n\n\n```\nx\n```\n\n')
-      const open = userStr('<pasted_content id="9">\nnever closed', human)
-      expect(textOfMsg(parseChatMessages(open.split('\n'))[0])).toBe('<pasted_content id="9">\nnever closed')
+      const open = userStr('<pasted_content id="0009">\nnever closed', human)
+      expect(textOfMsg(parseChatMessages(open.split('\n'))[0])).toBe('<pasted_content id="0009">\nnever closed')
     })
 
     it('a pasted task-notification stays the user\'s own paste', () => {
-      const raw = userStr('fyi\n<pasted_content id="1c">\n<task-notification><summary>s</summary></task-notification>\n</pasted_content id="1c">', human)
+      const raw = userStr('fyi\n<pasted_content id="001c">\n<task-notification><summary>s</summary></task-notification>\n</pasted_content id="001c">', human)
       const msgs = parseChatMessages(raw.split('\n'))
       expect(msgs[0].role).toBe('user')
       expect(textOfMsg(msgs[0])).toBe('fyi\n\n```\n<task-notification><summary>s</summary></task-notification>\n```\n')
     })
 
+    it('only the CLI\'s own grammar is a span: 4 lowercase hex id, newline after the open and before the close', () => {
+      for (const typed of [
+        '<pasted_content>\nx\n</pasted_content>',
+        '<pasted_content id="AB12">\nx\n</pasted_content id="AB12">',
+        '<pasted_content id="ab123">\nx\n</pasted_content id="ab123">',
+        '<pasted_content id="ab1">\nx\n</pasted_content id="ab1">',
+        '<pasted_content id="ab12">x\n</pasted_content id="ab12">',
+        '<pasted_content id="ab12">\nx</pasted_content id="ab12">',
+        '<pasted_content id="ab12">\n</pasted_content id="ab12">'
+      ]) {
+        expect(textOfMsg(parseChatMessages(userStr(typed, human).split('\n'))[0])).toBe(typed)
+      }
+    })
+
+    it('an empty paste is an empty block; a nested same-id open ends at the FIRST close', () => {
+      const empty = userStr('<pasted_content id="abcd">\n\n</pasted_content id="abcd">', human)
+      expect(textOfMsg(parseChatMessages(empty.split('\n'))[0])).toBe('\n```\n\n```\n')
+      const nested = userStr(
+        '<pasted_content id="aaaa">\nx\n<pasted_content id="aaaa">\ny\n</pasted_content id="aaaa">\nz\n</pasted_content id="aaaa">',
+        human
+      )
+      expect(textOfMsg(parseChatMessages(nested.split('\n'))[0])).toBe(
+        '\n```\nx\n<pasted_content id="aaaa">\ny\n```\n\nz\n</pasted_content id="aaaa">'
+      )
+    })
+
+    it('a close marker not followed by `">` is content', () => {
+      const raw = userStr('<pasted_content id="ab12">\nx\n</pasted_content id="ab12"oops\n</pasted_content id="ab12">', human)
+      expect(textOfMsg(parseChatMessages(raw.split('\n'))[0])).toBe('\n```\nx\n</pasted_content id="ab12"oops\n```\n')
+    })
+
     it('a close tag with ANOTHER id inside a span is content, not the end of the span', () => {
-      const raw = userStr('<pasted_content id="a">\nold </pasted_content id="zz"> paste\n</pasted_content id="a">', human)
-      expect(textOfMsg(parseChatMessages(raw.split('\n'))[0])).toBe('\n```\nold </pasted_content id="zz"> paste\n```\n')
+      const raw = userStr('<pasted_content id="000a">\nold </pasted_content id="00ff"> paste\n</pasted_content id="000a">', human)
+      expect(textOfMsg(parseChatMessages(raw.split('\n'))[0])).toBe('\n```\nold </pasted_content id="00ff"> paste\n```\n')
     })
 
     it('the find bar indexes the fenced text as user text, string and array content alike', () => {
-      const raw = userStr('a <pasted_content id="1">\nb\n</pasted_content id="1">', human)
+      const raw = userStr('a <pasted_content id="0001">\nb\n</pasted_content id="0001">', human)
       expect(parseTranscriptLines(raw)).toEqual([{ role: 'user', text: 'a \n```\nb\n```\n' }])
-      const arr = jl({ type: 'user', ...human, message: { content: [{ type: 'text', text: '<pasted_content id="2">\nc\n</pasted_content id="2">' }] } })
+      const arr = jl({ type: 'user', ...human, message: { content: [{ type: 'text', text: '<pasted_content id="0002">\nc\n</pasted_content id="0002">' }] } })
       expect(parseTranscriptLines(arr)).toEqual([{ role: 'user', text: '\n```\nc\n```\n' }])
     })
+  })
+
+  it('a non-string text part is passed through as before, never a thrown read', () => {
+    const raw = jl({ type: 'user', message: { content: [{ type: 'text', text: 5 }, { type: 'text', text: 'ok' }] } })
+    expect(() => parseChatMessages(raw.split('\n'))).not.toThrow()
+    expect(parseChatMessages(raw.split('\n'))[0].parts).toEqual([
+      { kind: 'text', text: 5 },
+      { kind: 'text', text: 'ok' }
+    ])
+    expect(() => parseTranscriptLines(raw)).not.toThrow()
+    expect(parseTranscriptLines(raw)).toEqual([
+      { role: 'user', text: 5 },
+      { role: 'user', text: 'ok' }
+    ])
+  })
+
+  describe('parsing stays linear on unclosed markup (the main process parses these)', () => {
+    // 4 MB: a linear scan takes a few ms; a quadratic one takes minutes (1 MB of unclosed opens:
+    // 13–169 s, measured on the regex version). Even the mildest quadratic slip — re-scanning a list
+    // from the start, `continue` where `return` is correct — costs ~0.5–1 s at 1 MB, V8's indexOf
+    // being fast, and ×16 at 4 MB is well past the bound.
+    const SIZE = 4 * 1024 * 1024
+    const fill = (unit: string): string => unit.repeat(Math.ceil(SIZE / unit.length))
+    const hex4 = (i: number): string => (i % 65536).toString(16).padStart(4, '0')
+    // Generous on purpose (a loaded CI box), and still an order of magnitude under any quadratic time.
+    const BOUND_MS = 1500
+    const cases: Array<[string, string]> = [
+      ['unclosed paste opens, one id', userStr(fill('<pasted_content id="0a1b">\nx'), { origin: { kind: 'human' } })],
+      [
+        'unclosed paste opens, every id distinct',
+        userStr(Array.from({ length: Math.ceil(SIZE / 29) }, (_, i) => `<pasted_content id="${hex4(i)}">\nx`).join(''), {})
+      ],
+      ['paste closes with no opens', userStr(fill('\n</pasted_content id="0a1b">'), {})],
+      [
+        'paste closes BEFORE many unclosed opens of the same id',
+        userStr(fill('\n</pasted_content id="0a1b">') + fill('<pasted_content id="0a1b">\nx'), {})
+      ],
+      // A close exists, but only BEFORE every open, and each open's `>` is far away at the end.
+      ['a close before many open tags whose `>` is at the end (peer)', peerRec(`</agent-message>${fill('<agent-message a')}>`)],
+      ['unclosed agent-message opens (peer)', peerRec(fill('<agent-message a'))],
+      ['agent-message opens with no close (peer)', peerRec(fill('<agent-message>x'))],
+      ['unclosed summary (task-notification)', userStr(fill('<summary>'), TN_ORIGIN)],
+      ['many close tags then whitespace', userStr(`<task-notification>${fill('</task-notification>   ')}x`, {})]
+    ]
+    for (const [name, raw] of cases) {
+      it(name, () => {
+        const t0 = performance.now()
+        parseChatMessages([raw.trimEnd()])
+        parseTranscriptLines(raw)
+        expect(performance.now() - t0).toBeLessThan(BOUND_MS)
+      }, 60_000)
+    }
   })
 
   it('the find bar indexes a task notification as tool lines', () => {
