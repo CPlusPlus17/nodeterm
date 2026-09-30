@@ -283,6 +283,7 @@ describe('renderMessageOutcome', () => {
       { kind: 'targetNotAgentPane', observed: 'bash' },
       { kind: 'targetNotPasteAware' },
       { kind: 'targetGone' },
+      { kind: 'targetNotStarted' },
       { kind: 'notPermitted', reason: 'switch-off' }
     ]
     for (const o of samples) {
@@ -538,10 +539,19 @@ describe('a target that has not started yet (launch held off screen)', () => {
 
   it('is queued, then delivered once the spawn proves ownership', async () => {
     const { deps, start } = unstarted()
-    const queue = createDeliveryQueue(deps, { schedule: () => () => {} })
+    const waits: number[] = []
+    const queue = createDeliveryQueue(deps, {
+      schedule: (ms) => {
+        waits.push(ms)
+        return () => {}
+      }
+    })
     deps.queue = queue
     const { outcome } = await deliverFromControl(req(), deps)
     expect(outcome.kind).toBe('queued')
+    // The start waits for a person to open the project: 5 minutes lost the message in the field.
+    expect(outcome.kind === 'queued' && outcome.ttlMs).toBe(24 * 60 * 60 * 1000)
+    expect(waits).toEqual([24 * 60 * 60 * 1000])
     expect(deps.rec.sent).toHaveLength(0)
     start()
     await queue.onTargetIdle('b1')

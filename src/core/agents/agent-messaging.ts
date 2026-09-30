@@ -58,6 +58,7 @@ import {
 } from '../../shared/board-comment'
 import {
   DeliveryQueue,
+  QUEUE_PERSIST_TTL_MAX,
   type DeliveryQueueDeps,
   type PersistedQueueEntry,
   type QueuedDeliveryRequest
@@ -871,9 +872,18 @@ const QUEUE_ON_BUSY: ReadonlySet<AgentMessageOutcome['kind']> = new Set([
   'targetBusy',
   'targetNotIdleUnknown',
   // Opened with its launch held (not on screen, no `--run-now`): flushed on its first idle after
-  // the launch lands. Its TTL runs as for any queued message, so a project nobody opens expires it.
-  'targetNotStarted'
+  // the launch lands, with the long TTL below — the start waits for a person to open the project.
+  'targetNotStarted',
+  // Its session has a node identity but has not posted a verified status yet — in practice a CLI
+  // started a moment ago (`--run-now`, `run`) that has not sent its first hook. A retry cannot
+  // help until it does, and its first verified `done` is exactly what flushes the queue.
+  'targetStatusStale'
 ])
+
+/** How long a message to a target that has not STARTED waits (`targetNotStarted`). The start
+ *  waits for a person to open the project, which can be hours away; 5 minutes lost the message in
+ *  the field. The queue caps it at the longest TTL a restored entry may claim. */
+const NOT_STARTED_TTL_MS = QUEUE_PERSIST_TTL_MAX
 
 /**
  * One control-verb delivery, end to end, WITH deliver-on-idle: attempt it (`runDelivery`), and when
@@ -915,7 +925,7 @@ async function deliverWithQueue(
   const queue = deps.queue
   if (queue) {
     const ident = requestIdentity(req)
-    const queued = (hibernated: boolean): Promise<AgentMessageOutcome> =>
+    const queued = (hibernated: boolean, ttlMs?: number): Promise<AgentMessageOutcome> =>
       queue.enqueue(
         {
           ...req,
@@ -925,9 +935,12 @@ async function deliverWithQueue(
           sourceTitle: ident.sourceTitle,
           body: ident.body
         },
-        { hibernated }
+        { hibernated, ...(ttlMs !== undefined ? { ttlMs } : {}) }
       )
-    if (QUEUE_ON_BUSY.has(outcome.kind)) return answer(await queued(false))
+    if (QUEUE_ON_BUSY.has(outcome.kind))
+      return answer(
+        await queued(false, outcome.kind === 'targetNotStarted' ? NOT_STARTED_TTL_MS : undefined)
+      )
     if (req.verb === 'board-comment' && BOARD_QUEUE_ON.has(outcome.kind)) {
       const held = await queued(false)
       // Held by the pair window, not by the target's turn: nothing will report "idle" when the
