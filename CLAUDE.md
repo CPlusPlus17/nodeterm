@@ -7839,12 +7839,22 @@ The invariants, each with its reason:
   asked for, so a code holder could spend the host's hourly mints. Now the host-token mint (desktop
   phone relay and Server Edition hosted mint) and the desktop's host-mode push first take a
   challenge from `/v1/relay/challenge` and send a proof. Rules a refactor must not undo:
-  - **`src/core/relay/relay-pop.ts` is the ONLY proof computation**, and it refuses an all-zero
-    shared secret (a low-order server key gives every caller the same secret). Its bytes are pinned
-    by `relay-pop-vector.json`, mirrored byte for byte in nodeterm-server: a protocol change changes
-    both.
+  - **`src/core/relay/relay-pop.ts` is the ONLY computation of the relay PoP proof** (the
+    host-token mint and push host-auth), and it refuses an all-zero shared secret (a low-order
+    server key gives every caller the same secret). Its bytes are pinned by `relay-pop-vector.json`,
+    mirrored byte for byte in nodeterm-server: a protocol change changes both. The push webhook's
+    management proof (`core/push-webhook.ts` `webhookProof`, § Push webhook) is a SEPARATE,
+    independent proof of the same host key, with its own challenge route
+    (`/v1/push/webhook/challenge`), its own context string and its own wire contract (nodeterm-server
+    `src/lib/host-proof.ts`). Do not fold either one into the other; the all-zero refusal here does
+    not cover it.
   - **A request goes out unproven ONLY when the challenge answered 404/405** (a backend that
-    predates the proof). Never after a transient failure (5xx, 429, network, an unusable challenge):
+    predates the proof). **One exception, push only:** a challenge answered 200 followed by
+    `/v1/push/host-auth` answering 404 also posts unproven, and that verdict is cached 10 minutes like
+    a 404/405 one (`push-notify.ts` `establish`). One backend registers both routes or neither, so
+    this happens only in a redeploy window; push stops nothing, and the backend gates the unproven
+    post regardless (a latched host's is refused, which forgets the verdict, and the host proves
+    again). Never after a transient failure (5xx, 429, network, an unusable challenge):
     the backend LATCHES a host at its first valid proof and refuses an unproven request from it
     (`403 pop_required`; every host after `POP_REQUIRED_AFTER`, default 2027-01-01), so an
     unproven mint there would stop hosting. Conversely, a `pop_required` answer to a mint sent

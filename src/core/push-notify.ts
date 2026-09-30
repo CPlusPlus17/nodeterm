@@ -220,7 +220,11 @@ async function postJson(
 // gets (`hostAuth`) to every host-mode post until it re-proves. Push never stops anything, so nothing
 // here is terminal: a batch that cannot be proven is DROPPED, exactly like a network error, because an
 // unproven send from a latched host is refused anyway. Only a challenge answered 404/405 means "this
-// backend predates the proof" (relay-pop.ts), and only then does the post go out legacy.
+// backend predates the proof" (relay-pop.ts), and only then does the post go out legacy — with ONE
+// exception, push's own: a 200 challenge whose host-auth post answers 404 (see `establish`), cached for
+// 10 minutes like the 404/405 verdict. One backend registers both routes or neither, so that answer
+// comes only from a redeploy window; push stops nothing, and the backend gates the unproven post
+// regardless (a latched host's is refused, which forgets the verdict — see postHostMode).
 
 // The server's session TTL is 15 min; re-prove on OUR clock, well inside it, so a skewed clock or a
 // long batch window never presents an expired session.

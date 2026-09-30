@@ -1,7 +1,10 @@
 // Proof that this process holds a relay host's X25519 secret key (hosted relay, R44 — see
 // docs/hosted-team-relay.md). The backend issues a challenge plus a one-off X25519 key; the proof is
-// an HMAC keyed by the shared secret. The ONLY place a proof is computed. Its bytes are pinned by
-// relay-pop-vector.json, which nodeterm-server carries too (test/fixtures/relay-pop-vector.json).
+// an HMAC keyed by the shared secret. The ONLY place this proof (host-token mint, push host-auth) is
+// computed. Its bytes are pinned by relay-pop-vector.json, which nodeterm-server carries too
+// (test/fixtures/relay-pop-vector.json). The push webhook's management proof (core/push-webhook.ts
+// `webhookProof`) is a separate protocol with its own challenge route and wire contract: never fold
+// it into this one.
 import { createHmac } from 'node:crypto'
 import nacl from 'tweetnacl'
 
@@ -52,8 +55,9 @@ export type ChallengeResult =
   | { ok: false; unsupported: false; status?: number }
 
 /** Only 404/405 means "this backend predates PoP" — the one case a caller may send an unproven
- *  request. Every other failure is transient and must go to the caller's backoff: an unproven
- *  request from a LATCHED host is refused (403) and would stop hosting. */
+ *  request (push adds one more: a host-auth 404 after a 200 challenge, see push-notify.ts). Every
+ *  other failure is transient and must go to the caller's backoff: an unproven request from a
+ *  LATCHED host is refused (403) and would stop hosting. */
 export async function fetchPopChallenge(d: {
   apiBase: string
   hostPublicKeyB64: string

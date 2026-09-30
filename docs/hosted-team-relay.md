@@ -26,7 +26,7 @@ every message**. The desktop's UI only mirrors it.
 | Hosted service | `src/core/relay/hosted-service.ts` | Composes the host key, team store, scheduler and access policy; holds pending join requests; answers the `relay:hosted:*` verbs. |
 | Standing listener | `hosted-scheduler.ts` + `host-token.ts` | A pure scheduler over injected mint / open / timers. |
 | Host identity | `host-key.ts` | `<dataDir>/relay/host-key.json`, 0600, plaintext secret (headless Linux has no keyring). |
-| Host key proof | `relay-pop.ts` + `relay-pop-vector.json` | The only place a proof of the host key is computed. See [Host key proof of possession](#host-key-proof-of-possession). |
+| Host key proof | `relay-pop.ts` + `relay-pop-vector.json` | The only place the relay PoP proof (host-token mint, push host-auth) is computed. See [Host key proof of possession](#host-key-proof-of-possession). The push webhook's management proof is a separate protocol (`src/core/push-webhook.ts`). |
 | Membership | `team-store.ts` | `<dataDir>/relay/team.json`, 0600, single writer. |
 | Role policy | `access-policy.ts` | `VIEW`, `COMMENT`, `EDITOR_ONLY`, `VIEW_EVENTS`; the guard test is `access-policy.guard.test.ts`. |
 | Admin channel | `team-admin.ts` (socket) + `src/server/team-cli.ts` (CLI) | `<dataDir>/relay/admin.sock`, 0600 in a 0700 directory. |
@@ -644,9 +644,10 @@ The human `team status` reads `state`, `idle` and `lastError` together:
 
 ## Host key proof of possession
 
-The fix for R44 (see [Threat notes](#threat-notes)). It covers every request that trusts a relay
-host key: the Server Edition's hosted mint, the desktop phone relay's mint, and the desktop's
-host-mode push. It is enforced by nodeterm-server; this repository holds the client half.
+The fix for R44 (see [Threat notes](#threat-notes)). It covers the Server Edition's hosted mint, the
+desktop phone relay's mint, and the desktop's host-mode push. (The push webhook's management routes
+prove the same key through a protocol of their own; see below.) It is enforced by nodeterm-server;
+this repository holds the client half.
 
 **The exchange.**
 
@@ -662,10 +663,18 @@ host-mode push. It is enforced by nodeterm-server; this repository holds the cli
    already accepted, and an all-zero shared secret, and answers any proof that does not verify with
    `403 {"error":"pop_invalid"}`.
 
-`src/core/relay/relay-pop.ts` is the only place the client computes a proof, and it also refuses an
-all-zero shared secret (a low-order server key gives every caller the same secret). The bytes are
-pinned by `src/core/relay/relay-pop-vector.json`, which nodeterm-server carries byte for byte as
-`test/fixtures/relay-pop-vector.json`. A protocol change changes both.
+`src/core/relay/relay-pop.ts` is the only place the client computes this proof (for the host-token
+mint and push host-auth), and it also refuses an all-zero shared secret (a low-order server key gives
+every caller the same secret). The bytes are pinned by `src/core/relay/relay-pop-vector.json`, which
+nodeterm-server carries byte for byte as `test/fixtures/relay-pop-vector.json`. A protocol change
+changes both.
+
+The push webhook's management routes (minting, reading and revoking a webhook token) also prove
+possession of the host key, through a separate and independent protocol: `webhookProof` in
+`src/core/push-webhook.ts`, with its own challenge route (`/v1/push/webhook/challenge`), its own
+context string and its own wire contract (nodeterm-server's `src/lib/host-proof.ts`). It shares
+nothing with this proof but the key. Do not route it through `relay-pop.ts`, and do not assume the
+all-zero refusal above covers it.
 
 **The latch and the cutoff.** The first valid proof for a host **latches** it (the backend records
 its host id). From then on, a request for that host without a proof is refused
@@ -703,6 +712,13 @@ neither limit.
 means "this backend predates the proof", and only then does a request go out unproven. Any other
 challenge failure is transient: the request is not sent, and the caller backs off. An unproven
 request from a latched host is refused, and for a mint that refusal would stop hosting.
+
+There is one exception, and only push has it: a challenge answered 200 followed by
+`/v1/push/host-auth` answering 404 is also read as a backend without the proof, so the post goes out
+unproven and that verdict is cached for 10 minutes. One backend registers both routes or neither, so
+this answer comes only from a redeploy window. Push stops nothing, and the backend gates the
+unproven post regardless: a latched host's post is refused, which forgets the verdict, and the host
+proves again.
 
 - **Server Edition hosted mint** (`host-token.ts`, `hosted-scheduler.ts`). The challenge, the mint
   and the mint's body read share one 8 s timer. A challenge answered 429 waits at least 60 s
