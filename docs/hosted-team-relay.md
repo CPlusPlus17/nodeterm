@@ -749,7 +749,14 @@ proves again.
     or old-backend verdict with a negative age is expired). notify and live-update each hold their
     own.
   - A backend without the proof (challenge 404/405, or no host-auth route) is remembered for 10
-    minutes, so it costs one challenge per 10 minutes rather than one per batch.
+    minutes. While that backend accepts the host's posts, the proof costs one challenge per 10
+    minutes (plus the host-auth post, when the challenge answered 200) rather than one per batch.
+    A post it refuses with a 403 forgets the verdict (see below), and an old backend refuses every
+    post from a host with no live pairing (`403 forbidden`). While it does, **every batch** costs
+    the challenge plus the post: one request more per batch than before the proof existed, and
+    live-update can flush once a second. That case ends once the backend with the proof is
+    deployed: its host-auth refuses such a host `forbidden` instead, which is backed off like any
+    other failed proof, and no post goes out.
   - Failed proofs back off 0, 5, 15, then 60 s between attempts, since every attempt spends the
     per-IP challenge budget the mint needs too. A hold further out than 60 s can only be a clock
     that stepped back, and is ignored.
@@ -760,8 +767,9 @@ proves again.
     was already on file from an earlier batch, the likely cause is that the host latched since
     (through the phone relay's mint, or the other push stream): the batch proves at once and, if that
     yields a session, is re-posted **once** with it; otherwise it is dropped. A verdict fetched in the
-    same batch is not fetched again, so an old backend that refuses this host costs the same two
-    requests per batch it always did.
+    same batch is not fetched again, so an old backend that refuses this host costs two requests per
+    batch (the challenge and the post), not three. That is still one more than before the proof
+    existed (see the bullet on a backend without the proof).
   - The Server Edition pushes only in granted mode (per-grant bearer tokens, no host identity), so
     there is nothing to prove there.
 

@@ -256,7 +256,11 @@ export interface HostAuthCache {
 /**
  * One hostAuth session per sender (notify and live-update each own one: they are independent streams
  * and each re-proves at most every 10 minutes). The "old backend" verdict is cached the same way, so
- * a backend without the routes costs one challenge per 10 minutes rather than one per batch. The
+ * a backend without the routes that ACCEPTS the host's posts costs one challenge per 10 minutes rather
+ * than one per batch. One that refuses them (403 forbidden: no live pairing) costs a challenge on every
+ * batch, because each refused unproven post forgets the verdict (postHostMode) — one request per batch
+ * more than before the proof existed, until the backend with the proof is deployed and its host-auth
+ * `forbidden` is backed off instead. The
  * challenge, the host-auth post and its body read share ONE `FETCH_TIMEOUT_MS` timer: nothing else
  * bounds a stalled challenge, and the batch waits on it. Concurrent `get`s share the proof in flight.
  */

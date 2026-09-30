@@ -2169,9 +2169,10 @@ describe('host-mode push proves possession of the host key (hostAuth session)', 
     h.stop()
   })
 
-  it('an old backend that refuses every host notify (403 forbidden) costs what it always did: challenge + notify per batch', async () => {
+  it('an old backend that refuses every host notify (403 forbidden) costs challenge + notify per batch, never a third request', async () => {
     // The verdict each batch posts under was asked for in that same batch, so a 403 is no sign the
-    // host latched since: nothing is re-asked, and the request count per batch does not grow.
+    // host latched since: nothing is re-asked, and the batch stays at two requests. That is one more
+    // than before the proof existed (notify alone), because each refused post forgets the verdict.
     route({ challenge: () => bare(404), notify: () => bare(403) })
     const { h, send } = notify()
     for (let i = 1; i <= 3; i++) {
