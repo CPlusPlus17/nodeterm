@@ -7338,6 +7338,61 @@ does not survive a real canvas. `canvas/camera-moving.test.ts` pins the absence.
   being packaged (#575, shipped by #579): without that bundle `pty.attach` spawns a new plain shell
   instead of joining the node's session, while `sessionExists` still answers "warm".
 
+## Push webhook (a script or CI job rings the paired phone)
+
+Settings → Phone → **Push webhook** mints a per-host bearer token; anything that can run `curl`
+then pushes a plain-text notification to the phones relay-paired with this machine
+(`POST https://api.nodeterm.dev/v1/push/webhook`, `{"title","body"}`). Agents already push through
+their hooks; this is for the jobs that have no agent in the loop. The backend half lives in
+nodeterm-server (`src/routes/push-webhook.ts`, `src/lib/host-proof.ts`); the desktop half is
+`core/push-webhook.ts` (client), `shared/push-webhook.ts` (types, copy, the example) and
+`PushWebhookPanel.tsx`. Rules a change must keep:
+
+- **Minting, reading and revoking need the relay host SECRET key, not the public identity.** Every
+  other host-authenticated backend route accepts `(hostDeviceId, hostPublicKeyB64)`, and both are
+  known to every paired phone; for a send that only lets the holder reach phones that already
+  trust the host, but a webhook token is DURABLE — whoever can mint or revoke one can keep a live
+  token or silently cut the owner's CI alerts. So each management call is a challenge: the server
+  answers with an ephemeral X25519 key (derived from its own secret + the challenge, so no state
+  and any instance verifies), and main returns `HMAC-SHA256(X25519(hostSecret, ephemeral),
+  context)` with `context` = domain, challenge, action, host device id. The key never leaves main;
+  a proof for `status` cannot be spent on `revoke`; a challenge lives 5 min and is single-use per
+  process. `webhookProofContext` and the server's `proofContext` are ONE wire contract — change
+  both. `core/push-webhook.test.ts` verifies the desktop's NaCl `scalarMult` proof against Node's
+  own X25519 (the server's primitive), so the two cannot drift silently.
+- **The token is shown ONCE and kept nowhere on this side.** 256 random bits (`ntwh_` + 43
+  base64url), stored server-side only as its SHA-256 (a fast hash is right for a high-entropy
+  token), returned `Cache-Control: no-store`. The panel holds it in component state until "Done";
+  it is never written to settings.json, storage or a log (the panel test asserts local/session
+  storage). There is no "show again" — Rotate mints a new one and revokes the old in one
+  transaction (one live token per host).
+- **The example never puts the token on argv.** `pushWebhookCurlExample` reads
+  `$NODETERM_WEBHOOK_TOKEN` and feeds the header to `curl --config -` through `printf` (a shell
+  builtin), the house rule for every credential we generate. `shared/push-webhook.test.ts` runs the
+  example under a real `/bin/sh` with a recording curl and asserts the token reached stdin and not
+  argv.
+- **The push is labelled and inert.** Subtitle `Webhook · <hostname>`, its own `thread-id`, the
+  phone's existing no-action category `AGENT_DONE`, and an `nt` block with `kind: 'webhook'` and no
+  `nodeId`, so a tap opens the Inbox and nothing else: no Allow/Deny buttons, no deep link, no URL
+  opened. Title is one line (≤ 120 code points), body ≤ 500; C0/C1 controls and `\p{Cf}` (bidi,
+  zero-width) are stripped. nodeterm mobile needs no release for it (read against its push handler:
+  unknown `kind` + no `nodeId` routes to a plain Inbox open).
+- **Budgets:** 10 per minute per token, 60 per hour per HOST (keyed by hostId, so rotating does not
+  reset it), 20 mints per host per day, plus per-IP shields. Fan-out = exactly a host-mode
+  `/v1/push/notify`: this host's live relay pairings with a live APNs registration, minus phones
+  that muted this host.
+- **Relay-paired phones only.** An SSH-granted phone (push grants) has no row the backend can tie to
+  this host, so it does not receive webhook pushes; minting with no live pairing answers
+  `no_paired_phone` and the panel says so.
+- **No canvas-control verb.** An agent already has hook-driven pushes, and a verb would need the
+  desktop to hold the token, which it deliberately does not.
+
+Surfaces: Desktop full. **Server Edition: N/A** — it has no relay host key or paired-phone
+registry (same degrade as `push-notify.ts`); the bridge answers `E_UNSUPPORTED` and the row is
+hidden in a browser tab. IPC is under `pairing:` so `HOST_ONLY_CHANNEL_PREFIXES` keeps it off the
+relay. **Mobile:** no change needed; an iOS follow-up could give `kind: 'webhook'` its own Inbox
+row and tap target.
+
 ## Hosted team relay (Server Edition as a relay host)
 
 A Server Edition core can host a team over the E2EE relay: a standing listener on the tunnel

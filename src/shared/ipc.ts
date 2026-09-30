@@ -672,6 +672,12 @@ export const IPC = {
   pairingProbeSsh: 'pairing:probe-ssh',
   pairingOpenRemoteLoginSettings: 'pairing:open-remote-login-settings',
   pairingListDevices: 'pairing:listDevices',
+  // Push webhook management (core/push-webhook.ts). Under `pairing:` so HOST_ONLY_CHANNEL_PREFIXES
+  // keeps them off the relay: minting a token that pushes to the host's phones is the host's call.
+  pairingWebhookStatus: 'pairing:webhook-status',
+  pairingWebhookMint: 'pairing:webhook-mint',
+  pairingWebhookRevoke: 'pairing:webhook-revoke',
+  pairingWebhookEndpoint: 'pairing:webhook-endpoint',
   pairingRevokeDevice: 'pairing:revokeDevice',
   // Dictation (desktop/server). speechProgress is a main/server → renderer broadcast of
   // { id, pct } while a whisper model downloads (WhisperModelStore.onProgress).
