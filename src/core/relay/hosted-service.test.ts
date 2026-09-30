@@ -84,6 +84,7 @@ function world(opts: WorldOpts = {}) {
   }
   const peersT: RelayTransport[] = []
   let mints = 0
+  let challenges = 0
   const armed: Armed[] = []
   const timerDeps: Pick<HostedServiceDeps, 'setTimeout' | 'clearTimeout'> = opts.recordTimers
     ? {
@@ -101,7 +102,13 @@ function world(opts: WorldOpts = {}) {
     // Terminal sessions: 'sess-shared' runs n-shared (project P), 'sess-other' runs n-other (Q).
     nodeOfSession: opts.nodeOfSession ?? ((sid) => (sid === 'sess-shared' ? 'n-shared' : sid === 'sess-other' ? 'n-other' : undefined)),
     projectCwd: () => '/srv/app',
-    fetch: (async () => { mints++; return new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 }) }) as typeof fetch,
+    // Routed by URL: the key-proof challenge answers 404 (a pre-proof backend, so the legacy mint
+    // follows), and only host-token calls count as mints.
+    fetch: (async (u: string | URL | Request) => {
+      if (String(u).endsWith('/v1/relay/challenge')) { challenges++; return new Response('{}', { status: 404 }) }
+      mints++
+      return new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 })
+    }) as typeof fetch,
     transport: () => { const { hostT, peerT } = transportPair(); peersT.push(peerT); return hostT },
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.monotonicNow ? { monotonicNow: opts.monotonicNow } : {}),
@@ -155,7 +162,7 @@ function world(opts: WorldOpts = {}) {
   }
   const teamOnDisk = (): Array<{ pubkeyB64: string; role: string; addedBy: string; addedAt: string; label: string }> =>
     JSON.parse(fs.readFileSync(path.join(dataDir, 'relay', 'team.json'), 'utf-8')).peers
-  return { svc, join, rawPeer, sinks, dispatched, casts, dataDir, armed, teamOnDisk, mints: () => mints }
+  return { svc, join, rawPeer, sinks, dispatched, casts, dataDir, armed, teamOnDisk, mints: () => mints, challenges: () => challenges }
 }
 
 async function ownerOnline(w: ReturnType<typeof world>, ownerKeys = genKeyPair()) {
@@ -896,6 +903,15 @@ describe('hosted service — lifecycle', () => {
     await new Promise((r) => setTimeout(r, 30))
     expect(w.mints()).toBe(1)
     expect(w.svc.status().scheduler?.idle).toBe(1)
+  })
+
+  it('the hosted mint holds the host key: it asks for a key-proof challenge before every mint', async () => {
+    const w = world()
+    await w.svc.init()
+    expect(await w.svc.start()).toBe('started')
+    await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
+    expect(w.challenges()).toBe(1)
+    expect(w.mints()).toBe(1)
   })
 
   it('stop cuts every session and pending request; start brings hosting back', async () => {

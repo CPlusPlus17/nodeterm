@@ -1,6 +1,10 @@
 // src/core/relay/hosted-scheduler.test.ts
 import { describe, it, expect } from 'vitest'
+import nacl from 'tweetnacl'
 import { createHostedScheduler, type MintResult, type SchedulerStatus } from './hosted-scheduler'
+import { mintHostToken } from './host-token'
+import { POP_REFUSED_MESSAGE } from './relay-pop'
+import { createTestPopServer } from './relay-pop.test-server'
 
 // Flush with macrotask turns, not a fixed count of microtasks: how many awaits an async mint takes
 // is an implementation detail the tests must not pin.
@@ -405,5 +409,46 @@ describe('hosted scheduler', () => {
     const before = h.mintCalls()
     await h.advance(HOUR)
     expect(h.mintCalls() - before).toBeLessThanOrEqual(200)
+  })
+
+  // --- relay proof of possession (relay-pop.ts) ---
+
+  it('a PoP refusal stops with backend-refused and the proof message', async () => {
+    const h = harness([{ ok: false, kind: 'refused', status: 403, reason: 'pop_required' }])
+    h.s.start(); await flush()
+    expect(h.s.status()).toMatchObject({ state: 'backend-refused', lastError: POP_REFUSED_MESSAGE })
+    expect(h.timers).toHaveLength(0)
+  })
+
+  it('a pop_required answer to an unproven mint (challenge 404 mid-redeploy) backs off and proves on the retry', async () => {
+    // The real mint against a fake API: while the backend redeploys its proxy answers the challenge
+    // 404, the unproven mint lands on the fresh backend and earns pop_required. That must be a retry,
+    // never backend-refused — and the retry asks for a fresh challenge and proves.
+    const keys = nacl.box.keyPair()
+    const pub = Buffer.from(keys.publicKey).toString('base64')
+    const pop = createTestPopServer()
+    let redeploying = true
+    const urls: string[] = []
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+    const f = (async (u: string, init: RequestInit) => {
+      urls.push(u)
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      if (u.endsWith('/v1/relay/challenge')) return redeploying ? json(404, {}) : json(200, pop.issue(pub, 'host-token'))
+      if (!pop.verify({ hostPublicKeyB64: pub, purpose: 'host-token', subject: String(body.deviceId ?? ''), popChallenge: body.popChallenge, popProof: body.popProof }))
+        return json(403, { error: 'pop_required' })
+      return json(200, { pairingToken: 'T', hostId: 'H', exp: 0 })
+    }) as typeof fetch
+    const mint = () => mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: pub, hostSecretKey: keys.secretKey, fetch: f })
+    const h = harness([mint, mint])
+    h.s.start(); await flush()
+    expect(h.s.status()).toMatchObject({ state: 'running', lastError: 'network (403)' })
+    expect(h.timers).toHaveLength(1) // the backoff owns the next mint
+    expect(h.opened).toHaveLength(0)
+    redeploying = false
+    await h.advance(1000); await flush()
+    expect(h.opened).toHaveLength(1)
+    expect(urls.map((u) => u.replace('https://api', ''))).toEqual([
+      '/v1/relay/challenge', '/v1/relay/host-token', '/v1/relay/challenge', '/v1/relay/host-token'
+    ])
   })
 })

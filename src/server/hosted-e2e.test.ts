@@ -50,6 +50,7 @@ import { transportPair } from '../core/relay/transport-pair'
 import { connectRelayClient, type RelayClientSession } from '../core/relay/relay-client'
 import { decodeJoinCode, type JoinCode } from '../core/relay/join-code'
 import { genKeyPair, publicKeyToB64, type KeyPair } from '../core/relay/e2ee'
+import { createTestPopServer } from '../core/relay/relay-pop.test-server'
 import type { RelayTransport } from '../core/relay/relay-socket'
 import { IPC } from '../shared/ipc'
 import { mutationKey } from '../shared/canvas-order'
@@ -385,14 +386,29 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       listeners.push(peerT)
       return hostT
     }
-    // The host-token API. A token good for an hour, so no listener refresh lands mid-test.
-    const mints: Array<{ url: string; body: { deviceId?: string; hostPublicKeyB64?: string } }> = []
+    // The host-token API, proof of possession included: a byte-exact mirror of the backend issues
+    // the challenge and refuses a mint whose proof does not verify, so a host that stopped proving it
+    // holds its key (or proved the wrong thing) never gets a listener. A token good for an hour, so
+    // no listener refresh lands mid-test.
+    const popServer = createTestPopServer()
+    const mints: Array<{ url: string; body: Record<string, unknown> }> = []
     const relayTestFetch = (async (url: string | URL | Request, init?: RequestInit) => {
-      mints.push({ url: String(url), body: JSON.parse(String(init?.body ?? '{}')) })
-      return new Response(
-        JSON.stringify({ pairingToken: 'relay-token', hostId: 'H', exp: Math.floor(Date.now() / 1000) + 3600 }),
-        { status: 200, headers: { date: new Date().toUTCString() } }
-      )
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+      const json = (status: number, payload: unknown) =>
+        new Response(JSON.stringify(payload), { status, headers: { date: new Date().toUTCString() } })
+      if (String(url).endsWith('/v1/relay/challenge')) {
+        return json(200, popServer.issue(String(body.hostPublicKeyB64), body.purpose as 'host-token'))
+      }
+      mints.push({ url: String(url), body })
+      const proven = popServer.verify({
+        hostPublicKeyB64: String(body.hostPublicKeyB64),
+        purpose: 'host-token',
+        subject: typeof body.deviceId === 'string' ? body.deviceId : '',
+        popChallenge: body.popChallenge,
+        popProof: body.popProof
+      })
+      if (!proven) return json(403, { error: 'pop_invalid' })
+      return json(200, { pairingToken: 'relay-token', hostId: 'H', exp: Math.floor(Date.now() / 1000) + 3600 })
     }) as typeof fetch
     // The mint's production twin of the relay trap above: if `relayTestFetch` stopped being plumbed
     // through, the mint would fall back to the global fetch — which refuses here instead of minting
@@ -462,10 +478,15 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
     const owner = teammate(code, await step('first listener', listeners.next()), ownerKeys, true)
     teardown.push(() => owner.c.close())
     await step('owner approved', owner.approved)
-    // The host minted that listener's token for THIS host key, through the seam.
+    // The host minted that listener's token for THIS host key, through the seam, proving it holds it.
     expect(mints[0]).toMatchObject({
       url: expect.stringMatching(/\/v1\/relay\/host-token$/),
-      body: { hostPublicKeyB64: code.hostPublicKeyB64, deviceId: code.hostDeviceId }
+      body: {
+        hostPublicKeyB64: code.hostPublicKeyB64,
+        deviceId: code.hostDeviceId,
+        popChallenge: expect.any(String),
+        popProof: expect.any(String)
+      }
     })
 
     // Even the owner cannot save the host's workspace over the relay: shared content travels as

@@ -12,11 +12,14 @@
 //  - at most MINT_BUDGET_PER_HOUR successful mints in any rolling hour, whatever asks for them. The
 //    backend's free limit is 240/h, the 15 s backoff ceiling alone reaches exactly 240/h, and a peer
 //    joining and leaving every 10 s asks for 360/h — so no per-path rule can hold the line on its own;
-//  - a 429 waits at least 60 s (longer if Retry-After says so); a 402/403 stops minting;
+//  - a 429 waits at least 60 s (longer if Retry-After says so); a 402/403 stops minting (a refused
+//    key proof names itself in `lastError`; a 403 host-token.ts judges transient arrives as
+//    `network` and backs off);
 //  - while a backoff timer is armed it owns the next mint: nothing else may mint early.
 // Everything the injected deps can throw is caught: a scheduler that swallowed an exception would sit
 // in 'running' with no listener and no timer, i.e. hosting silently dead until a restart.
 import type { MintResult } from './host-token'
+import { POP_REFUSED_MESSAGE } from './relay-pop'
 export type { MintResult } from './host-token'
 
 const REFRESH_LEAD_MS = 30_000
@@ -182,7 +185,8 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
       if (r.ok) mints.push(now()) // counted even if we were stopped meanwhile: the backend counted it
       if (state !== 'running') return
       if (!r.ok) {
-        lastError = threw ?? (r.kind + (r.status ? ` (${r.status})` : ''))
+        // A key-proof refusal says what to do about it (update, or `team rotate-key`); `refused (403)` would not.
+        lastError = threw ?? (r.reason ? POP_REFUSED_MESSAGE : r.kind + (r.status ? ` (${r.status})` : ''))
         if (r.kind === 'refused') {
           state = 'backend-refused'
           emit()
