@@ -26,6 +26,7 @@ import {
   agentLaunchProgram,
   resumeCommand,
   hasHooksOverSsh,
+  readsScreenDialogs,
   LOCAL_ONLY_HOOK_AGENTS,
   reportsSessionEnd
 } from './config'
@@ -453,5 +454,12 @@ describe('title read vs rename write', () => {
   it('a custom agent claims neither', () => {
     expect(canReadTitle('custom:abc')).toBe(false)
     expect(canRename('custom:abc')).toBe(false)
+  })
+})
+
+describe('readsScreenDialogs — whose own dialogs the chat view can see on screen', () => {
+  it('is claude only: its reader would read every other CLI\'s screen as a permanent dialog', () => {
+    expect(readsScreenDialogs('claude')).toBe(true)
+    for (const id of BUILTIN_AGENT_IDS.filter((a) => a !== 'claude')) expect(readsScreenDialogs(id)).toBe(false)
   })
 })

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from './chatLive'
+import {
+  CHAT_LIVE_RELOAD_MIN_MS,
+  CHAT_OPTIMISTIC_WORKING_MS,
+  chatActivity,
+  planLiveReload,
+  shouldPollScreen
+} from './chatLive'
 
 describe('chatActivity — the status row at the end of the ⌘M thread', () => {
   it('a working agent shows the working row', () => {
@@ -50,5 +56,29 @@ describe('planLiveReload — throttled, single-flight, visible-only tail refresh
     expect(CHAT_LIVE_RELOAD_MIN_MS).toBeLessThanOrEqual(2000)
     expect(CHAT_OPTIMISTIC_WORKING_MS).toBeGreaterThan(0)
     expect(CHAT_OPTIMISTIC_WORKING_MS).toBeLessThanOrEqual(30_000)
+  })
+})
+
+describe('shouldPollScreen — reading the pane for the agent\'s own dialogs', () => {
+  const base = { readable: true, readOnly: false, remote: false, refusal: null } as const
+
+  it('polls a local pane of a readable agent, idle or working', () => {
+    expect(shouldPollScreen(base)).toBe(true)
+    expect(shouldPollScreen({ ...base, refusal: 'working' })).toBe(true)
+  })
+
+  it('never polls a remote pane: every read would be a network round trip', () => {
+    expect(shouldPollScreen({ ...base, remote: true })).toBe(false)
+  })
+
+  it('not for an agent whose screen we cannot read, nor a read-only transcript', () => {
+    expect(shouldPollScreen({ ...base, readable: false })).toBe(false)
+    expect(shouldPollScreen({ ...base, readOnly: true })).toBe(false)
+  })
+
+  it('not while a hook-reported dialog or a shell-owned pane already stands the composer down', () => {
+    for (const refusal of ['dialog', 'asleep', 'paused', 'dropped', 'exited'] as const) {
+      expect(shouldPollScreen({ ...base, refusal })).toBe(false)
+    }
   })
 })

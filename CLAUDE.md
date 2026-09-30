@@ -3353,6 +3353,17 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   store at send time, not only at render. Same trap as the in-place restart's `/exit`. The bar's ↻
   reloads on demand (beside the empty state's Retry), since a session whose hooks never report
   `working` never takes the turn-finish reload.
+  **The agent's OWN dialogs are read off the screen** (`shared/agents/claude-screen.ts`, claude
+  only — `SCREEN_DIALOG_READABLE`). The folder-trust prompt, `/model` and one-time setup questions
+  fire NO hook, so the state gate above reads `done` while one owns the keyboard, and a paste into
+  it was swallowed while its Enter answered the dialog (the trust prompt's default is "No, exit").
+  A send therefore goes through `pty.sendChatPrompt`, where core captures the pane first and
+  refuses (`ChatPromptBlocked`, nothing written, the draft kept) when the bottom of the screen is a
+  dialog footer or has no input box; an empty or unreadable capture is NOT evidence and sends as
+  before. A LOCAL pane is also polled every 2 s while the view is visible, to disable the composer
+  and show the dialog's lines; SSH and relay panes are not polled (a round trip per read) and rely
+  on the send-time check. Another CLI's layout would read as a permanent dialog, so an agent joins
+  the list only with its own measured reader.
   **Live progress (2026-09).** While the agent works, a `role=status` row closes the thread (the ONE
   spinner + the placeholder's own "<agent> is working…"/"waiting for an answer" sentence; optimistic
   right after a send, bounded by `CHAT_OPTIMISTIC_WORKING_MS`), and every hook event re-reads the
