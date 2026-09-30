@@ -36,6 +36,7 @@ import { Client, createAgent, utils, type Channel, type ClientChannel, type Conn
 import type { ParsedSsh, ReverseForward, SshOptions, SshTarget } from './ssh-argv'
 import { parseProxyJump, type HostQuery, type JumpSpec, type ResolvedHost } from './ssh-config'
 import { acceptNewHostKey } from './known-hosts'
+import { addKeyToAgent, type AgentAddResult } from './agent-add'
 
 /** Result of one remote command, in the shape execFile callers already handle. */
 export interface ExecResult {
@@ -57,6 +58,14 @@ export interface NativeMuxDeps {
   /** Default agent when the config names none (`SSH_AUTH_SOCK` / Windows' openssh-ssh-agent pipe). */
   defaultAgent?(): string | undefined
   readFile?(p: string): Buffer | null
+  /**
+   * Whether (and how) to load a key the user just unlocked with a passphrase into `agentPath` —
+   * the native transport's `AddKeysToAgent`. null = do not. Absent = never. Asked only after the
+   * connection authenticated WITH that key; the add itself is fire-and-forget and fail-open.
+   */
+  agentAdd?(req: { agentPath: string; host: ResolvedHost; identityFile: string }): { lifetimeSec?: number } | null
+  /** Test seam: the agent add (agent-add.ts's addKeyToAgent). */
+  addKeyToAgent?: typeof addKeyToAgent
   /** Test seam: the TCP (or proxy) socket to run the protocol over. */
   connectSocket?(host: string, port: number, timeoutMs: number): Promise<net.Socket>
   log?(line: string): void
@@ -147,7 +156,8 @@ export class NativeMux {
    * Keys unlocked with a passphrase during this process, so an overflow connection (never
    * interactive) can authenticate without asking again. Held only while some connection is alive —
    * the "decrypted key in memory for the connection's life" tradeoff of this transport on Windows,
-   * where there is no app-private ssh-agent to hold it instead.
+   * where there is no app-private ssh-agent to hold it instead. (The Windows OpenSSH agent service
+   * would PERSIST it, so the key reaches that agent only on an explicit opt-in — agent-add.ts.)
    */
   private unlocked = new Map<string, ParsedKey>()
 
@@ -635,6 +645,7 @@ export class NativeMux {
         client.removeListener('error', onErr)
         client.removeListener('close', onClose)
         resolve()
+        this.maybeAddToAgent(host, auth.succeeded())
       }
       const onErr = (e: Error & { level?: string }): void => {
         client.removeListener('ready', onReady)
@@ -662,6 +673,30 @@ export class NativeMux {
   }
 
   /**
+   * After a connection authenticated with a key the user just typed the passphrase for, load it
+   * into the host's agent when the policy says so (the POSIX path gets the same from OpenSSH's
+   * `AddKeysToAgent`). Never awaited and never throws: the connection is already up, and the agent
+   * only saves the NEXT connection a prompt.
+   */
+  private maybeAddToAgent(host: ResolvedHost, offer: UnlockedOffer | null): void {
+    if (!offer?.agentPath || !this.deps.agentAdd) return
+    let decision: { lifetimeSec?: number } | null = null
+    try {
+      decision = this.deps.agentAdd({ agentPath: offer.agentPath, host, identityFile: offer.file })
+    } catch {
+      decision = null
+    }
+    if (!decision) return
+    const add = this.deps.addKeyToAgent ?? addKeyToAgent
+    void Promise.resolve()
+      .then(() => add(offer.agentPath as string, offer.key, offer.file, { lifetimeSec: decision?.lifetimeSec }))
+      .catch((): AgentAddResult => 'error')
+      .then((r) => {
+        if (r !== 'added') this.deps.log?.(`[native-ssh] could not add ${offer.file} to the ssh agent (${r}); it will ask for the passphrase again next time`)
+      })
+  }
+
+  /**
    * The publickey sequence: the agent first (filtered to the pinned key under IdentitiesOnly, so a
    * big agent cannot burn the server's MaxAuthTries), then each identity file, asking for a
    * passphrase when one is encrypted and prompting is allowed.
@@ -672,7 +707,7 @@ export class NativeMux {
     options: SshOptions,
     mode: { interactive: boolean },
     cancelled: { value: boolean }
-  ): { next(): Promise<unknown> } {
+  ): { next(): Promise<unknown>; succeeded(): UnlockedOffer | null } {
     const username = host.user
     const identitiesOnly = options.identitiesOnly ?? host.identitiesOnly
     const files = target.identityFile ? [target.identityFile] : host.identityFiles
@@ -685,6 +720,8 @@ export class NativeMux {
     })
     const agentPath = resolveAgentPath(target.identityAgent ?? host.identityAgent, this.deps.defaultAgent?.())
     const steps: (() => Promise<unknown | null>)[] = []
+    // The key file behind the LAST method handed to ssh2 — on 'ready' that is the one that worked.
+    let last: UnlockedOffer | null = null
     if (agentPath) {
       steps.push(async () => {
         if (!identitiesOnly) return { type: 'agent', username, agent: agentPath }
@@ -696,6 +733,7 @@ export class NativeMux {
     for (const file of files) {
       steps.push(async () => {
         const cachedKey = this.unlocked.get(file)
+        // Unlocked earlier this run: its agent add (if any) was decided then.
         if (cachedKey) return { type: 'publickey', username, key: cachedKey }
         const data = read(file)
         if (!data) return null
@@ -717,7 +755,7 @@ export class NativeMux {
         if (key instanceof Error) return null
         const parsed = Array.isArray(key) ? key[0] : key
         if (prompted) this.unlocked.set(file, parsed)
-        return { type: 'publickey', username, key: parsed }
+        return { type: 'publickey', username, key: parsed, [UNLOCKED]: prompted ? { file, key: parsed, agentPath } : undefined }
       })
     }
     let i = 0
@@ -725,13 +763,28 @@ export class NativeMux {
       async next() {
         while (i < steps.length) {
           const step = steps[i++]
-          const auth = await step()
-          if (auth) return auth
+          const auth = (await step()) as ({ [UNLOCKED]?: UnlockedOffer } & Record<string, unknown>) | null
+          if (auth) {
+            last = auth[UNLOCKED] ?? null
+            delete auth[UNLOCKED]
+            return auth
+          }
         }
+        last = null
         return false
-      }
+      },
+      succeeded: () => last
     }
   }
+}
+
+const UNLOCKED = Symbol('unlocked-offer')
+
+/** A key the user unlocked with a passphrase during this connect, and the agent the host uses. */
+interface UnlockedOffer {
+  file: string
+  key: ParsedKey
+  agentPath: string | undefined
 }
 
 /** Which agent to use: an explicit config value wins; `SSH_AUTH_SOCK`-style references and an

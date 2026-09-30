@@ -12,6 +12,7 @@ import { findExecutableSync } from '../../exec-path'
 import { NativeMux, WINDOWS_OPENSSH_AGENT_PIPE, type ExecResult } from './native-mux'
 import { parseSshG, sshGArgs, type HostQuery } from './ssh-config'
 import { runSshArgv, useNativeSsh } from './native-invoke'
+import { decideAgentAdd } from './agent-add'
 
 export { useNativeSsh }
 
@@ -22,6 +23,13 @@ let passphrasePrompt: PassphrasePrompt | null = null
 /** Main installs its passphrase dialog here (the same one the askpass relay raises on POSIX). */
 export function setNativePassphrasePrompt(fn: PassphrasePrompt | null): void {
   passphrasePrompt = fn
+}
+
+let windowsAgentOptIn: () => boolean = () => false
+
+/** Main installs the `settings.windowsSshAgentAddKeys` reader here (read at each unlock). */
+export function setNativeWindowsAgentOptIn(fn: () => boolean): void {
+  windowsAgentOptIn = fn
 }
 
 /** The ssh binary, used only for `ssh -G` (config evaluation), never as a transport here. */
@@ -73,6 +81,15 @@ export function nativeMux(): NativeMux {
       resolveHost,
       defaultAgent,
       askPassphrase: (f, req) => (passphrasePrompt ? passphrasePrompt(f, req) : Promise.resolve(null)),
+      agentAdd: ({ agentPath, host }) => {
+        let optIn = false
+        try {
+          optIn = windowsAgentOptIn() === true
+        } catch {
+          optIn = false
+        }
+        return decideAgentAdd({ agentPath, addKeysToAgent: host.addKeysToAgent, windowsAgentOptIn: optIn })
+      },
       log: (line) => console.warn(line)
     })
   }
