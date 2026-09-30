@@ -107,6 +107,8 @@ describe('WatchLinkStore', () => {
       rawEntry({ nodeId: '../x', linkId: 'A1CdEfGhIjKlMnOpQrStUv' }),
       rawEntry({ nodeId: 'a b', linkId: 'A2CdEfGhIjKlMnOpQrStUv' }),
       rawEntry({ nodeId: 'x'.repeat(129), linkId: 'A3CdEfGhIjKlMnOpQrStUv' }),
+      rawEntry({ nodeId: 12, linkId: 'A4CdEfGhIjKlMnOpQrStUv' }),
+      rawEntry({ nodeId: ['n1'], linkId: 'A5CdEfGhIjKlMnOpQrStUv' }),
       rawEntry()
     ])
     expect(await new WatchLinkStore({ file: f }).load()).toEqual([rec()])
@@ -148,6 +150,21 @@ describe('WatchLinkStore', () => {
     expect(readFileSync(join(dirname(f), aside[0]), 'utf8')).toBe('{nope')
     expect(await s.save([rec()])).toBe('saved')
     expect(await s.load()).toEqual([rec()])
+  })
+
+  it('sets aside JSON that is not an object ([] or null) and stays writable', async () => {
+    for (const body of ['[]', 'null']) {
+      const f = file()
+      writeFileSync(f, body)
+      const s = new WatchLinkStore({ file: f })
+      expect(await s.load()).toEqual([])
+      expect(existsSync(f)).toBe(false)
+      const aside = readdirSync(dirname(f)).filter((n) => n.startsWith('watch-links.json.corrupt-'))
+      expect(aside).toHaveLength(1)
+      expect(readFileSync(join(dirname(f), aside[0]), 'utf8')).toBe(body)
+      expect(await s.save([rec()])).toBe('saved')
+      expect(await s.load()).toEqual([rec()])
+    }
   })
 
   describe('never writes over a file it could not read', () => {
@@ -196,6 +213,43 @@ describe('WatchLinkStore', () => {
       const s = new WatchLinkStore({ file: f })
       await expect(s.load()).rejects.toBeInstanceOf(WatchLinkStoreUnreadable)
       await expectLatched(s, f, before)
+    })
+
+    it('a save issued while load() is pending waits for it (real {"v":2} file)', async () => {
+      const f = file()
+      writeLinks(f, [rawEntry()], 2)
+      const before = readFileSync(f, 'utf8')
+      const s = new WatchLinkStore({ file: f })
+      const loading = s.load()
+      const saving = s.save([])
+      await expect(loading).rejects.toBeInstanceOf(WatchLinkStoreUnreadable)
+      expect(await saving).toBe('failed')
+      expect(readFileSync(f, 'utf8')).toBe(before)
+    })
+
+    it('a save issued while a slow read is held waits for its verdict', async () => {
+      const f = file()
+      expect(await new WatchLinkStore({ file: f }).save([rec()])).toBe('saved')
+      const before = readFileSync(f, 'utf8')
+      let release!: () => void
+      const gate = new Promise<void>((r) => { release = r })
+      const eacces = Object.assign(new Error('EACCES: permission denied, open'), { code: 'EACCES' })
+      const open = vi.spyOn(fsp, 'open').mockImplementationOnce(async () => {
+        await gate // the read is still in flight when the save arrives
+        throw eacces
+      })
+      const writes = vi.mocked(writeFileAtomic).mock.calls.length
+      const s = new WatchLinkStore({ file: f })
+      const loading = s.load()
+      const saving = s.save([])
+      for (let i = 0; i < 10; i++) await Promise.resolve() // microtasks only, no timers
+      expect(vi.mocked(writeFileAtomic).mock.calls.length).toBe(writes) // nothing written yet
+      release()
+      await expect(loading).rejects.toBeInstanceOf(WatchLinkStoreUnreadable)
+      open.mockRestore()
+      expect(await saving).toBe('failed')
+      expect(vi.mocked(writeFileAtomic).mock.calls.length).toBe(writes)
+      expect(readFileSync(f, 'utf8')).toBe(before)
     })
 
     it('an unparseable file that cannot be set aside rejects and latches the store', async () => {

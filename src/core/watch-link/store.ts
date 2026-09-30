@@ -16,10 +16,13 @@
 // next boot or a newer build. JSON that does not parse is set aside as `<file>.corrupt-<ts>` and the
 // store starts empty; if the set-aside fails, the same latch applies.
 //
-// Saves are SERIALIZED: each write waits for the previous one to finish. Two overlapping atomic
-// writes can still complete out of order, and the older snapshot would then be what stays on disk —
-// a revoked link resurrected at the next boot. The snapshot is taken (and sealed) when `save` is
-// CALLED, so disk order is call order; a failed write never breaks the chain for the next save.
+// Loads and saves are SERIALIZED, in call order, on one chain: each waits for the previous one to
+// settle. Two overlapping atomic writes can still complete out of order, and the older snapshot would
+// then be what stays on disk — a revoked link resurrected at the next boot. And a save issued while a
+// load is still reading must not run before that load's verdict: it would write over a file the load
+// is about to refuse (a slow EACCES/EIO, a newer build's version), or land between reading a corrupt
+// file and setting it aside. The snapshot is taken (and sealed) when `save` is CALLED, so disk order
+// is call order; a failed load or write never breaks the chain for what follows.
 import { promises as fs } from 'node:fs'
 import { renameAtomic, writeFileAtomic } from '../fs-atomic'
 import { LINK_ID_RE } from '../../shared/watch-link/link'
@@ -69,6 +72,7 @@ export const MAX_FILE_BYTES = 1024 * 1024
 /** Entries past this are dropped on read. */
 export const MAX_ENTRIES = 200
 const SECRET_BYTES = 32
+const noop = (): void => {}
 
 const str = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
@@ -85,14 +89,20 @@ function decodeSecret(text: string): Uint8Array | null {
 }
 
 export class WatchLinkStore {
-  /** The previous save's write, settled either way: the next write starts only after it. */
+  /** The previous load or write, settled either way: the next one starts only after it. */
   private writing: Promise<void> = Promise.resolve()
   /** False once `load()` found a file it could not read: never write over it this run. */
   private writable = true
 
   constructor(private readonly o: { file: string; seal?: (b: Buffer) => Buffer; unseal?: (b: Buffer) => Buffer }) {}
 
-  async load(): Promise<WatchLinkRecord[]> {
+  load(): Promise<WatchLinkRecord[]> {
+    const loading = this.writing.then(() => this.read())
+    this.writing = loading.then(noop, noop)
+    return loading
+  }
+
+  private async read(): Promise<WatchLinkRecord[]> {
     let text: string
     try {
       const handle = await fs.open(this.o.file, 'r')
@@ -127,12 +137,14 @@ export class WatchLinkStore {
 
     const out: WatchLinkRecord[] = []
     for (const e of Array.isArray(links) ? (links.slice(0, MAX_ENTRIES) as Partial<FileEntry>[]) : []) {
-      if (!e || !str(e.linkId, 22) || !LINK_ID_RE.test(e.linkId) || !isSafeNodeId(e.nodeId)) continue
+      if (!e || !str(e.linkId, 22) || !LINK_ID_RE.test(e.linkId)) continue
+      // `isSafeNodeId` does not check the type: `12` and `["n1"]` pass its regex by coercion.
+      if (typeof e.nodeId !== 'string' || !isSafeNodeId(e.nodeId)) continue
       if (e.role !== 'viewer' && e.role !== 'commenter') continue
       if (!str(e.label, 40) || !str(e.title, 80) || !num(e.createdAt) || !num(e.expiresAt) || typeof e.secret !== 'string') continue
       const secret = this.readSecret(e.secret, e.sealed === true)
       if (!secret) continue
-      out.push({ linkId: e.linkId, nodeId: e.nodeId as string, role: e.role, label: e.label, title: e.title, createdAt: e.createdAt, expiresAt: e.expiresAt, secret })
+      out.push({ linkId: e.linkId, nodeId: e.nodeId, role: e.role, label: e.label, title: e.title, createdAt: e.createdAt, expiresAt: e.expiresAt, secret })
     }
     return out
   }
