@@ -34,6 +34,8 @@ import {
   remotePasteDelivery,
   remoteCapturePaneArgs,
   remoteCaptureVisibleArgs,
+  remoteTmuxWatcherArgs,
+  remoteWindowSizeArgs,
   remotePaneCommandArgs,
   remotePaneCwdArgs,
   remoteSessionAgeArgs,
@@ -62,6 +64,13 @@ import {
   visibleCaptureRoute,
   type VisibleCapture
 } from './watch-link/capture-route'
+import {
+  localWatcherAttachArgs,
+  localWindowSizeArgs,
+  parseTmuxVersion,
+  parseWindowSize,
+  supportsWatcherClient
+} from './watch-link/watcher-client'
 import {
   recordFreshSpawnOwner,
   forgetPaneOwner,
@@ -631,6 +640,18 @@ function releaseSpawnSlotOnOutput(session: Session | undefined, release: SpawnSl
   }
 }
 
+/**
+ * Marks a create as a live link WATCHER's (`joinAsWatcher`), and nothing else sets it. A symbol, not a
+ * `PtyCreateOptions` field: that type is the `pty:create` wire payload, and a symbol cannot arrive over
+ * IPC, the WS bridge or the relay — so no renderer, browser tab or peer can ask for a watcher client
+ * (or opt out of one). Object spread copies it, so it survives spawnNew's option rewrites.
+ */
+const WATCHER_CLIENT: unique symbol = Symbol('nodeterm.watcherClient')
+type WatcherCreateOptions = PtyCreateOptions & { readonly [WATCHER_CLIENT]?: true }
+function isWatcherCreate(options: PtyCreateOptions): boolean {
+  return (options as WatcherCreateOptions)[WATCHER_CLIENT] === true
+}
+
 interface Session {
   proc: pty.IPty
   nativeWindowsPane?: NativeWindowsPane
@@ -746,6 +767,13 @@ interface Session {
    * already branches on `sshRemote`.
    */
   sessionHost?: boolean
+  /**
+   * A live link watcher's OWN tmux client (`attach-session -E -f ignore-size,read-only`, spawned by
+   * `joinAsWatcher` when no Session was held). Never indexed, and invisible to the persistKey lookups
+   * (`sessionByPersistKey`, `liveSessionForNode`): it is read-only, so an owner joining it, or a
+   * background write going through it, would lose every keystroke. Only watchers ever reach it.
+   */
+  watcherClient?: boolean
 }
 
 /** Sinks for a detached session whose output is served somewhere other than the renderer
@@ -1186,7 +1214,9 @@ export class PtyManager {
     // enforced (so the pane is not left to reflow), and whether this node's tmux was REMOTE (so it
     // is never shadowed against our local socket). The `Session` holding both goes with `forget`
     // below; this is the record that survives it.
-    if (session.persistKey)
+    // Not for a watcher's own client: its size is whatever it was spawned at, never the size an owner
+    // enforced, and a later shadow would push that size into the pane (`shadowAttach`).
+    if (session.persistKey && !session.watcherClient)
       this.released.set(session.persistKey, {
         sessionId,
         size: session.appliedSize,
@@ -2073,6 +2103,7 @@ export class PtyManager {
     const hit = indexed ? this.sessions.get(indexed) : undefined
     if (indexed && hit) return [indexed, hit]
     for (const [id, s] of this.sessions) {
+      if (s.watcherClient) continue
       if (s.persistKey === persistKey || s.nodeId === persistKey) return [id, s]
     }
     return undefined
@@ -2239,8 +2270,15 @@ export class PtyManager {
     options: PtyCreateOptions,
     persistKey: string
   ): Promise<PtyCreateResult> | undefined {
-    const existingId = this.byPersistKey.get(persistKey)
-    const existing = existingId ? this.sessions.get(existingId) : undefined
+    let existingId = this.byPersistKey.get(persistKey)
+    let existing = existingId ? this.sessions.get(existingId) : undefined
+    // A second live link viewer of a node no owner Session is held for shares the first viewer's own
+    // tmux client (unindexed, see `watcherClient`) rather than opening another — each one is a tmux
+    // client, and over SSH an ssh channel against the host's MaxSessions. Only a watcher may join it.
+    if ((!existingId || !existing) && isWatcherCreate(options)) {
+      existingId = this.watcherClientSessionId(persistKey)
+      existing = existingId ? this.sessions.get(existingId) : undefined
+    }
     if (!existingId || !existing) return undefined
     // The joining VIEW's composite key: a second client, OR the SAME client's second view (the
     // kanban card modal). Either way it is a distinct subscriber of the one shared session/pty.
@@ -2411,6 +2449,12 @@ export class PtyManager {
     // create. Fails closed: a viewer never starts anything. One refusal value for both reasons —
     // the renderer's sentence claims only that no running terminal was found.
     if (options.joinOnly && (fresh || freshUnverified || joinOnlyLocalVerdict === 'unknown'))
+      return { sessionId: '', fresh: false, unavailable: 'join-only' }
+    // A watcher's own LOCAL client needs client flags (tmux >= 3.2). Without them it would either fail
+    // to attach or — worse, spelled without the flags — resize the owner's window. Refused the same
+    // way as a session that cannot be confirmed. Over SSH the host's version is unknown here: the
+    // flags are passed and an old remote tmux rejects them (see `remoteTmuxWatcherArgs`).
+    if (isWatcherCreate(options) && !options.sshRemote && !(await this.localTmuxSupportsWatcherClient()))
       return { sessionId: '', fresh: false, unavailable: 'join-only' }
     // Ensure the login-shell PATH is resolved (prewarmed in init(); usually already settled)
     // so the session env below picks it up — awaiting keeps the event loop free either way.
@@ -2683,10 +2727,19 @@ export class PtyManager {
     }
   })
 
+  /** A live link watcher's own tmux client for this node, if one is running (see `watcherClient`). */
+  private watcherClientSessionId(persistKey: string): string | undefined {
+    for (const [id, session] of this.sessions) {
+      if (session.watcherClient && session.persistKey === persistKey) return id
+    }
+    return undefined
+  }
+
   /** Find the live session registered under a node id (persistKey), if any. */
   private sessionByPersistKey(persistKey: string): Session | undefined {
     for (const session of this.sessions.values()) {
-      if (session.persistKey === persistKey) return session
+      // A watcher's read-only client is not the node's session for anyone (see `watcherClient`).
+      if (session.persistKey === persistKey && !session.watcherClient) return session
     }
     return undefined
   }
@@ -3021,7 +3074,9 @@ export class PtyManager {
     // pre-flight above is the one thing that CAN, which is exactly why it runs before this.)
     // The shared background-write client goes too, for the same reason, when it is this node's
     // session it happens to be attached to.
-    if (options.persistKey) {
+    // A watcher's own client is not a painter: read-only and ignore-size, it neither types nor sizes,
+    // so a background-write client may stay attached beside it.
+    if (options.persistKey && !isWatcherCreate(options)) {
       // The other half of the swap log (see `shadowAttach`), and only when there is really
       // something to retire: a painter arriving at a session no control client held swapped
       // nothing, and a line per terminal anyone opens is noise in the report it exists for.
@@ -3313,7 +3368,18 @@ export class PtyManager {
     // holds the ssh client. Only when BOTH sshRemote and persistKey are set and ssh resolves —
     // otherwise this falls through to the unchanged local-tmux / plain-shell branches below.
     const remoteSsh = options.sshRemote && options.persistKey ? findSsh() : null
-    if (options.sshRemote && options.persistKey && remoteSsh) {
+    if (isWatcherCreate(options) && options.sshRemote && options.persistKey && remoteSsh) {
+      // A live link watcher's own client on the host: attach-only, read-only, size-neutral, no env
+      // (see `remoteTmuxWatcherArgs`). Nothing the owner's branch below does — tokens, hook/account
+      // env, the session-env file, `markPresent` — belongs to a client that creates nothing.
+      file = remoteSsh
+      if (process.env.NODETERM_APP_AGENT_SOCK) env.SSH_AUTH_SOCK = process.env.NODETERM_APP_AGENT_SOCK
+      args = remoteTmuxWatcherArgs(
+        options.sshRemote.conn,
+        options.sshRemote.controlPath,
+        sessionName(options.persistKey)
+      )
+    } else if (options.sshRemote && options.persistKey && remoteSsh) {
       file = remoteSsh
       // The remote twin of the local `ensureNodeToken` above: materialise THIS node's token on the
       // host before the attach. The connect path writes one for every node the canvas had AT
@@ -3475,6 +3541,10 @@ export class PtyManager {
           '-t',
           sessionName(options.persistKey)
         ]
+      } else if (isWatcherCreate(options)) {
+        // A live link watcher's own client: attach-only, `-E`, `ignore-size,read-only`, exact target
+        // (see `watch-link/watcher-client.ts`). No `-f <conf>`: attach never starts a server.
+        args = localWatcherAttachArgs(TMUX_SOCKET, sessionName(options.persistKey))
       } else {
       // The hook-server env (port/token/node id/agent id) is passed explicitly via `-e`
       // (one `-e KEY=VALUE` per key) since the shared tmux server can't rely on inherited env.
@@ -3656,7 +3726,7 @@ export class PtyManager {
       // The spawn's claim went to the backend unbounded (a renderer view adapts to any size).
       appliedBounding: false,
       nodeId: options.persistKey,
-      indexKey: options.persistKey && !sinks ? options.persistKey : undefined,
+      indexKey: options.persistKey && !sinks && !isWatcherCreate(options) ? options.persistKey : undefined,
       onData: sinks?.onData,
       onExit: sinks?.onExit,
       onSinkSize: sinks?.onSize,
@@ -3677,7 +3747,8 @@ export class PtyManager {
       unwatchedSince: null,
       pausedBy: new Set<string>(),
       accountFallback,
-      sessionHost: useSessionHost
+      sessionHost: useSessionHost,
+      ...(isWatcherCreate(options) ? { watcherClient: true } : {})
     }
     // Both shared timers are armed by the first session that needs them: the scrollback snapshots
     // and the idle reap are both about tmux-backed sessions and nothing else.
@@ -4456,22 +4527,115 @@ export class PtyManager {
   }
 
   /**
-   * Join a node's RUNNING session as a live link's viewer: never spawns (`joinOnly`), never votes on
-   * the shared pty's size (`sizeVote: false`). Both are forced AFTER the caller's options, so nothing
-   * a caller passes can turn either off.
+   * Join a node's RUNNING session as a live link's viewer. It never starts one (`joinOnly`: a session
+   * that cannot be confirmed is refused `unavailable: 'join-only'`), and it never sizes one, at either
+   * layer:
+   *  - in this process it casts no size vote (`sizeVote: false`) — joining a held Session leaves the
+   *    pty at its owners' size;
+   *  - when no Session is held and it has to spawn its OWN tmux client, that client is
+   *    `attach-session -E -f ignore-size,read-only` on the exact target (see
+   *    `watch-link/watcher-client.ts`): tmux's `window-size latest` does not count it, it never
+   *    creates, never strips the session env, and cannot type. It is spawned at the window's CURRENT
+   *    size (`readWindowSize`), so what it paints is what the owner sees. A local tmux older than 3.2
+   *    has no client flags: refused.
+   * Only the named fields are forwarded, and the watcher rules are set after them. A remote node is
+   * never watched through the local tmux (`requireRemote` whenever `sshRemote` is given).
    */
-  joinAsWatcher(
+  async joinAsWatcher(
     clientId: ClientId,
     opts: {
       persistKey: string
       viewerId: string
-      cols: number
-      rows: number
+      cols?: number
+      rows?: number
       sshRemote?: PtyCreateOptions['sshRemote']
       requireRemote?: boolean
     }
   ): Promise<PtyCreateResult> {
-    return this.create(clientId, { ...opts, joinOnly: true, sizeVote: false })
+    const { persistKey, viewerId, sshRemote } = opts
+    // The Session a watcher create would JOIN (`join` reads the index). With none, it spawns its own
+    // client, which must be sized to the window it will show.
+    const indexedId = this.byPersistKey.get(persistKey)
+    const held = indexedId ? this.sessions.get(indexedId) : undefined
+    const given =
+      Number.isInteger(opts.cols) && Number.isInteger(opts.rows) && opts.cols! > 0 && opts.rows! > 0
+        ? { cols: opts.cols!, rows: opts.rows! }
+        : undefined
+    const size =
+      (held && given) ||
+      (await this.readWindowSize(persistKey, sshRemote)) ||
+      given ||
+      this.watchSizeFor(persistKey) || { cols: 80, rows: 24 }
+    const options: WatcherCreateOptions = {
+      persistKey,
+      viewerId,
+      cols: size.cols,
+      rows: size.rows,
+      ...(sshRemote ? { sshRemote } : {}),
+      ...(opts.requireRemote || sshRemote ? { requireRemote: true } : {}),
+      joinOnly: true,
+      sizeVote: false,
+      [WATCHER_CLIENT]: true
+    }
+    return this.create(clientId, options)
+  }
+
+  /**
+   * The CURRENT size of a node's tmux window (`#{window_width} #{window_height}`, exact target), read
+   * from tmux rather than from memory: with no Session held there is nothing to remember it from.
+   * Local, or over the ControlMaster for an SSH node (never the local tmux for a remote node).
+   * undefined on any failure or an exact-target miss (tmux answers exit 0 with empty formats).
+   */
+  async readWindowSize(
+    persistKey: string,
+    sshRemote?: PtyCreateOptions['sshRemote']
+  ): Promise<{ cols: number; rows: number } | undefined> {
+    const target = sessionName(persistKey)
+    try {
+      if (sshRemote) {
+        const ssh = findSsh()
+        if (!ssh) return undefined
+        const { stdout } = await runAsync(ssh, remoteWindowSizeArgs(sshRemote.conn, sshRemote.controlPath, target), {
+          encoding: 'utf-8'
+        })
+        return parseWindowSize(stdout)
+      }
+      if (!this.tmuxPath) return undefined
+      const { stdout } = await runAsync(this.tmuxPath, localWindowSizeArgs(TMUX_SOCKET, target), {
+        encoding: 'utf-8',
+        timeout: PROBE_TIMEOUT_MS
+      })
+      return parseWindowSize(stdout)
+    } catch {
+      return undefined
+    }
+  }
+
+  /** `tmux -V` for the LOCAL binary, asked once per binary path (a watcher client needs >= 3.2). */
+  private watcherTmuxProbe: { path: string; ok: Promise<boolean> } | null = null
+  /** The refusal is logged once per app run, not once per viewer. */
+  private watcherTmuxRefusalLogged = false
+
+  private localTmuxSupportsWatcherClient(): Promise<boolean> {
+    const tmuxPath = this.tmuxPath
+    if (!tmuxPath) return Promise.resolve(false)
+    if (this.watcherTmuxProbe?.path === tmuxPath) return this.watcherTmuxProbe.ok
+    const ok = this.confirmedProcessRun(tmuxPath, ['-V'], { timeout: PROBE_TIMEOUT_MS, encoding: 'utf-8' })
+      .then((res) => String((res as { stdout?: unknown })?.stdout ?? ''))
+      .catch(() => '')
+      .then((stdout) => {
+        const supported = supportsWatcherClient(parseTmuxVersion(stdout))
+        if (!supported && !this.watcherTmuxRefusalLogged) {
+          this.watcherTmuxRefusalLogged = true
+          const seen = stdout.trim().slice(0, 40) || 'unknown'
+          console.warn(
+            `[pty] live link watchers refused: the local tmux (${seen}) has no client flags; tmux 3.2 or newer is needed`
+          )
+        }
+        return supported
+      })
+    this.watcherTmuxProbe = { path: tmuxPath, ok }
+    return ok
   }
 
   /**

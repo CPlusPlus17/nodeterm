@@ -1,5 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform, type FakePlatform } from './platform-fake'
 import { IPC } from '../shared/ipc'
 import type { PtyCreateOptions, PtyCreateResult } from '../shared/types'
@@ -12,7 +11,11 @@ import type { PtyCreateOptions, PtyCreateResult } from '../shared/types'
  */
 
 interface FakePty {
+  file: string
   args: string[]
+  cols: number
+  rows: number
+  writes: string[]
   onDataCb?: (d: string) => void
   onExitCb?: (e: { exitCode: number }) => void
   resizes: Array<{ cols: number; rows: number }>
@@ -25,8 +28,16 @@ vi.mock('./session-host-backend', async () =>
 )
 
 vi.mock('node-pty', () => ({
-  spawn: (_file: string, args: string[], _opts: unknown) => {
-    const p: FakePty = { args: [...(args ?? [])], resizes: [], killed: false }
+  spawn: (file: string, args: string[], opts: { cols: number; rows: number }) => {
+    const p: FakePty = {
+      file,
+      args: [...(args ?? [])],
+      cols: opts.cols,
+      rows: opts.rows,
+      writes: [],
+      resizes: [],
+      killed: false
+    }
     spawned.push(p)
     return {
       onData: (cb: (d: string) => void) => {
@@ -35,7 +46,7 @@ vi.mock('node-pty', () => ({
       onExit: (cb: (e: { exitCode: number }) => void) => {
         p.onExitCb = cb
       },
-      write: () => {},
+      write: (d: string) => p.writes.push(d),
       resize: (cols: number, rows: number) => p.resizes.push({ cols, rows }),
       pause: () => {},
       resume: () => {},
@@ -52,21 +63,44 @@ vi.mock('./pty-devices', async (importOriginal) => ({
   readPtyDevices: () => ({ ceiling: 511, inUse: 8 })
 }))
 
+// `ssh` is found or not per test (`findSsh` memoizes per module, hence `vi.resetModules` below).
+const ssh = vi.hoisted(() => ({ path: '/usr/bin/ssh' as string | null }))
+vi.mock('./exec-path', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./exec-path')>()
+  return {
+    ...real,
+    findExecutableSync: (bin: string, fallbacks?: string[]) =>
+      bin === 'ssh' ? ssh.path : real.findExecutableSync(bin, fallbacks)
+  }
+})
+vi.mock('./remote-ssh/agent-probe', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./remote-ssh/agent-probe')>()),
+  probeAgentSockToPin: async () => undefined
+}))
+
 const OWNER = 1
 const WATCHER = 7
+const VIEWER = 2
 const REFUSED: PtyCreateResult = { sessionId: '', fresh: false, unavailable: 'join-only' }
 
 let fake: FakePlatform
 
-beforeEach(() => {
+let platformModule: typeof import('./platform')
+
+beforeEach(async () => {
   spawned.length = 0
+  ssh.path = '/usr/bin/ssh'
+  // A fresh module graph per test (`findSsh` memoizes per module), so the platform the manager
+  // reads is the one initialised here — imported AFTER the reset, never the static copy.
+  vi.resetModules()
+  platformModule = await import('./platform')
   fake = fakePlatform()
-  initPlatform(fake)
+  platformModule.initPlatform(fake)
   vi.useFakeTimers()
 })
 afterEach(() => {
   vi.useRealTimers()
-  resetPlatformForTests()
+  platformModule.resetPlatformForTests()
 })
 
 type ConfirmedProcessRun = (file: string, args: readonly string[], opts?: object) => Promise<unknown>
@@ -85,13 +119,29 @@ function hasSession(live: string[], args: readonly string[]): boolean {
   return live.some((s) => s === target || s.startsWith(target))
 }
 
-/** A tmux-backed manager whose probes answer from `live` without touching a tmux socket. */
-async function tmuxManager(live: string[]) {
+/** Every `tmux -V` the manager asked (the watcher client's version probe). */
+const versionAsks: string[] = []
+
+/** A tmux-backed manager whose probes answer from `live` without touching a tmux socket. `version`
+ *  is what `tmux -V` answers; `window` what the window-size read answers. */
+async function tmuxManager(
+  live: string[],
+  { version = 'tmux 3.4\n', window }: { version?: string; window?: { cols: number; rows: number } } = {}
+) {
+  versionAsks.length = 0
   const confirmedProcessRun: ConfirmedProcessRun = async (_file, args) => {
+    if (args[0] === '-V') {
+      versionAsks.push(version)
+      return { stdout: version, stderr: '' }
+    }
     if (hasSession(live, args)) return { stdout: '', stderr: '' }
     throw Object.assign(new Error("can't find session"), { code: 1 })
   }
   const m = await manager({ confirmedProcessRun })
+  vi.spyOn(
+    m as unknown as { readWindowSize: (k: string) => Promise<unknown> },
+    'readWindowSize'
+  ).mockResolvedValue(window)
   ;(m as unknown as { tmuxPath: string }).tmuxPath = '/usr/bin/tmux'
   vi.spyOn(
     m as unknown as { tmuxSessionExists: (k: string) => Promise<boolean> },
@@ -143,16 +193,196 @@ describe('joinAsWatcher', () => {
     expect(sizes[0].args[0]).toEqual({ cols: 120, rows: 40 })
   })
 
-  it('warm-reattaches a running tmux session as a mirror (no -D), never creating one', async () => {
+  it('with no Session held, spawns its OWN client: attach-session -E -f ignore-size,read-only, exact target', async () => {
     const m = await tmuxManager(['nt-n1'])
     const w = await m.joinAsWatcher(WATCHER, WATCH)
     expect(w.unavailable).toBeUndefined()
     expect(w.fresh).toBe(false)
     expect(spawned).toHaveLength(1)
-    expect(spawned[0].args).toContain('-A')
-    expect(spawned[0].args).not.toContain('-D')
+    expect(spawned[0].file).toBe('/usr/bin/tmux')
+    expect(spawned[0].args).toEqual([
+      '-L',
+      'node-terminal',
+      'attach-session',
+      '-E',
+      '-f',
+      'ignore-size,read-only',
+      '-t',
+      '=nt-n1:'
+    ])
   })
 
+  it('control: a hosted Viewer (joinOnly, not a watcher) keeps its new-session -A mirror, byte-identical', async () => {
+    await tmuxManager(['nt-n1'])
+    await create(VIEWER, { joinOnly: true, sizeVote: false })
+    expect(spawned[0].args).toContain('new-session')
+    expect(spawned[0].args).toContain('-A')
+    expect(spawned[0].args).not.toContain('attach-session')
+    expect(versionAsks).toEqual([]) // no version probe on that path either
+  })
+
+  it('spawns its client at the window CURRENT size, not the caller-reported one', async () => {
+    const m = await tmuxManager(['nt-n1'], { window: { cols: 132, rows: 43 } })
+    await m.joinAsWatcher(WATCHER, WATCH)
+    expect([spawned[0].cols, spawned[0].rows]).toEqual([132, 43])
+  })
+
+  it('an unreadable window size falls back to the caller size, then to the last known size', async () => {
+    const m = await tmuxManager(['nt-n1', 'nt-n2', 'nt-n3'])
+    await m.joinAsWatcher(WATCHER, WATCH)
+    expect([spawned[0].cols, spawned[0].rows]).toEqual([40, 10])
+    // No caller size, no read, and a watcher's own client is not a size source → the default.
+    await m.joinAsWatcher(WATCHER + 1, { persistKey: 'n2', viewerId: 'watch-s2' })
+    expect([spawned[1].cols, spawned[1].rows]).toEqual([80, 24])
+    // With an owner's released size on record, that is the fallback.
+    const { sessionId } = await create(OWNER, { cols: 132, rows: 43, persistKey: 'n3' })
+    kill(OWNER, sessionId) // the last subscriber out releases it: no Session is held for n3 now
+    await m.joinAsWatcher(WATCHER + 2, { persistKey: 'n3', viewerId: 'watch-s3' })
+    expect(spawned.at(-1)!.args).toContain('attach-session')
+    expect([spawned.at(-1)!.cols, spawned.at(-1)!.rows]).toEqual([132, 43])
+  })
+
+  it('reads the window size only when it has to', async () => {
+    const m = await tmuxManager(['nt-n1'], { window: { cols: 132, rows: 43 } })
+    const read = (m as unknown as { readWindowSize: ReturnType<typeof vi.fn> }).readWindowSize
+    await create(OWNER, { cols: 120, rows: 40 })
+    await m.joinAsWatcher(WATCHER, WATCH) // a live Session is held and the caller gave a size
+    expect(read).not.toHaveBeenCalled()
+    await m.joinAsWatcher(WATCHER + 1, { persistKey: 'n1', viewerId: 'watch-s2' }) // no caller size
+    expect(read).toHaveBeenCalledTimes(1)
+  })
+
+  it('local tmux < 3.2 has no client flags: FAIL CLOSED, nothing spawned, logged once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const m = await tmuxManager(['nt-n1'], { version: 'tmux 3.1c\n' })
+    expect(await m.joinAsWatcher(WATCHER, WATCH)).toEqual(REFUSED)
+    expect(await m.joinAsWatcher(WATCHER, WATCH)).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+    expect(versionAsks).toHaveLength(1) // memoized
+    const lines = warn.mock.calls.filter((c) => String(c[0]).includes('live link'))
+    expect(lines).toHaveLength(1)
+    expect(String(lines[0][0])).toContain('3.2')
+    warn.mockRestore()
+  })
+
+  it('an unreadable local tmux version fails closed too', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const m = await tmuxManager(['nt-n1'], { version: 'tmux master\n' })
+    expect(await m.joinAsWatcher(WATCHER, WATCH)).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+    warn.mockRestore()
+  })
+
+  it('the version is probed once, however many watchers spawn', async () => {
+    const m = await tmuxManager(['nt-n1', 'nt-n2'])
+    await m.joinAsWatcher(WATCHER, WATCH)
+    await m.joinAsWatcher(WATCHER + 1, { ...WATCH, persistKey: 'n2', viewerId: 'watch-s2' })
+    expect(spawned).toHaveLength(2)
+    expect(versionAsks).toHaveLength(1)
+  })
+
+  it("a second viewer of the same node shares the first viewer's client instead of opening another", async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const a = await m.joinAsWatcher(WATCHER, WATCH)
+    const b = await m.joinAsWatcher(WATCHER + 1, { ...WATCH, viewerId: 'watch-s2' })
+    expect(b.sessionId).toBe(a.sessionId)
+    expect(spawned).toHaveLength(1)
+  })
+
+  it("a watcher client's release never overwrites the owner's released size (a shadow would push it)", async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const own = await create(OWNER, { cols: 132, rows: 43 })
+    kill(OWNER, own.sessionId)
+    expect(m.watchSizeFor('n1')).toEqual({ cols: 132, rows: 43 })
+    const w = await m.joinAsWatcher(WATCHER, WATCH) // no Session held → its own client, at 40x10
+    expect([spawned.at(-1)!.cols, spawned.at(-1)!.rows]).toEqual([40, 10])
+    m.kill(WATCHER, w.sessionId, 'watch-s1') // the watcher's own view: its client is released
+    expect(spawned.at(-1)!.killed).toBe(true)
+    expect(m.watchSizeFor('n1')).toEqual({ cols: 132, rows: 43 })
+  })
+
+  it("the watcher's client is never the node's Session for anyone else: the owner spawns its own", async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    const a = await create(OWNER, { cols: 120, rows: 40 })
+    expect(a.sessionId).not.toBe(w.sessionId)
+    expect(spawned).toHaveLength(2)
+    expect(spawned[1].args).toContain('new-session')
+    expect(spawned[1].args).toContain('-D')
+  })
+
+  it("a watcher's client is not a painter: it does not retire the node's background-write clients", async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const shadow = vi.spyOn(m as unknown as { shadowDispose: (k: string) => void }, 'shadowDispose')
+    const shared = vi.spyOn(m as unknown as { sharedDisposeOn: (k: string) => void }, 'sharedDisposeOn')
+    await m.joinAsWatcher(WATCHER, WATCH)
+    expect(shadow).not.toHaveBeenCalled()
+    expect(shared).not.toHaveBeenCalled()
+    // Control: an owner's painter does retire them.
+    await create(OWNER, { cols: 120, rows: 40 })
+    expect(shadow).toHaveBeenCalledWith('n1')
+  })
+
+  it("a background write never goes into the watcher's read-only client", async () => {
+    const m = await tmuxManager(['nt-n1'])
+    await m.joinAsWatcher(WATCHER, WATCH)
+    await m.backgroundWrite('n1', 'echo hi\r')
+    expect(spawned[0].writes).toEqual([])
+  })
+
+  it('forwards only the named fields — nothing else a caller passes reaches create()', async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const spy = vi.spyOn(m as unknown as { create: (...a: unknown[]) => Promise<unknown> }, 'create')
+    await m.joinAsWatcher(WATCHER, { ...WATCH, shell: 'sh', agentId: 'claude', accountId: 'a1' } as never)
+    const passed = spy.mock.calls[0][1] as Record<string, unknown>
+    expect(Object.keys(passed).sort()).toEqual(['cols', 'joinOnly', 'persistKey', 'rows', 'sizeVote', 'viewerId'])
+    expect(passed.joinOnly).toBe(true)
+    expect(passed.sizeVote).toBe(false)
+  })
+})
+
+describe('joinAsWatcher over SSH', () => {
+  const SSH_REMOTE = { controlPath: '/tmp/nt-test-cm', conn: { host: 'h', user: 'u' }, remoteCwd: '/srv/app' }
+
+  async function sshManager(verdict: 'present' | 'absent' | 'unknown') {
+    const m = await tmuxManager([])
+    vi.spyOn(
+      m as unknown as { remoteSessionVerdict: () => Promise<string> },
+      'remoteSessionVerdict'
+    ).mockResolvedValue(verdict)
+    return m
+  }
+
+  it('spawns a tty-allocating ssh child that ATTACHES with the watcher flags, no local version probe', async () => {
+    const m = await sshManager('present')
+    const w = await m.joinAsWatcher(WATCHER, { ...WATCH, sshRemote: SSH_REMOTE })
+    expect(w.unavailable).toBeUndefined()
+    expect(spawned).toHaveLength(1)
+    expect(spawned[0].file).toBe('/usr/bin/ssh')
+    expect(spawned[0].args[0]).toBe('-t')
+    const remote = spawned[0].args.at(-1)!
+    expect(remote).toContain("attach-session -E -f 'ignore-size,read-only' -t '=nt-n1:'")
+    expect(remote).not.toContain('new-session')
+    expect(versionAsks).toEqual([])
+  })
+
+  it('a remote session the host says is gone: refused, nothing spawned', async () => {
+    const m = await sshManager('absent')
+    expect(await m.joinAsWatcher(WATCHER, { ...WATCH, sshRemote: SSH_REMOTE })).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+  })
+
+  it('a remote node with no ssh binary is NEVER watched through the local tmux', async () => {
+    ssh.path = null
+    const m = await sshManager('present')
+    const w = await m.joinAsWatcher(WATCHER, { ...WATCH, sshRemote: SSH_REMOTE })
+    expect(w.sessionId).toBe('')
+    expect(w.unavailable).toBe('ssh')
+    expect(spawned).toHaveLength(0)
+  })
+})
+
+describe('joinAsWatcher (continued)', () => {
   it('the join-only, non-voting rules are FORCED — a caller cannot turn them off', async () => {
     const m = await manager()
     const smuggled = { ...WATCH, joinOnly: false, sizeVote: true } as never

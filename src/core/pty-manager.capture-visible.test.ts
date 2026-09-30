@@ -190,3 +190,57 @@ describe('captureVisible — SSH project', () => {
     expect(await m.captureVisible('sess-1')).toEqual(unavailableCapture())
   })
 })
+
+describe('readWindowSize — the size a watcher client is spawned at', () => {
+  async function bare(tmux: string | null = '/usr/bin/tmux') {
+    const { PtyManager } = await import('./pty-manager')
+    const mgr = new PtyManager() as unknown as {
+      tmuxPath: string | null
+      readWindowSize(k: string, ssh?: unknown): Promise<unknown>
+    }
+    mgr.tmuxPath = tmux
+    return mgr
+  }
+
+  it('asks the local tmux for exactly this session and parses the reply', async () => {
+    script.answer = () => ({ stdout: '120 39\n' })
+    const m = await bare()
+    expect(await m.readWindowSize(NODE)).toEqual({ cols: 120, rows: 39 })
+    expect(calls).toEqual([
+      {
+        file: '/usr/bin/tmux',
+        args: ['-L', TMUX_SOCKET, 'display-message', '-p', '-t', TARGET, '#{window_width} #{window_height}']
+      }
+    ])
+  })
+
+  it('asks the REMOTE tmux over the ControlMaster for an SSH node', async () => {
+    script.answer = () => ({ stdout: '100 30\n' })
+    const m = await bare(null)
+    expect(await m.readWindowSize(NODE, SSH_REMOTE)).toEqual({ cols: 100, rows: 30 })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].file).toBe('/usr/bin/ssh')
+    expect(calls[0].args.at(-1)).toContain(
+      `tmux -L ${RMT_TMUX_SOCKET} display-message -p -t '${TARGET}' '#{window_width} #{window_height}'`
+    )
+  })
+
+  it('an exact-target miss (every format empty), a failure or no tmux is undefined', async () => {
+    script.answer = () => ({ stdout: ' \n' })
+    expect(await (await bare()).readWindowSize(NODE)).toBeUndefined()
+    script.answer = () => {
+      throw Object.assign(new Error('no server running'), { code: 1 })
+    }
+    expect(await (await bare()).readWindowSize(NODE)).toBeUndefined()
+    calls.length = 0
+    expect(await (await bare(null)).readWindowSize(NODE)).toBeUndefined()
+    expect(calls).toEqual([])
+  })
+
+  it('a remote node with no ssh binary is undefined — never read from the local tmux', async () => {
+    ssh.path = null
+    const m = await bare()
+    expect(await m.readWindowSize(NODE, SSH_REMOTE)).toBeUndefined()
+    expect(calls).toEqual([])
+  })
+})
