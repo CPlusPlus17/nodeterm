@@ -429,10 +429,6 @@ it is a new way to use it.
 - **Board edits reach only the active tab's core.** A client casts only to the core its active tab
   is on. An edit on the Omni board to a lane of a project on another core (a hosted lane while a
   local tab is active, or the reverse) is not cast, so on a hosted core it is not written either.
-- **The Omni board and a brand-new node.** While the Omni board is open, removing the card of a node
-  created moments ago in the project on screen is not cast (teammates keep the card). For that
-  project only, the nodes that are both on the canvas and in the stored copy count as live then,
-  which can only ever cast fewer removals.
 - **The card modal's comments on a relay tab** (`BoardLogPanel`) still read and write the local core's
   board log, not the host's, because the modal renders outside the tab's session. This predates the
   authority; it is a follow-up.

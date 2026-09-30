@@ -64,8 +64,9 @@ describe('kanban sync wiring', () => {
     expect(body).toContain('boardLiveNodeIds({')
     expect(body).toMatch(/rendered: nodesProjectIdRef\.current === projectId \? nodesRef\.current\.map\(\(n\) => n\.id\) : null/)
     expect(body).toMatch(/stored: \(useProjects\.getState\(\)\.getProject\(projectId\)\?\.nodes \?\? \[\]\)\.map\(\(n\) => n\.id\)/)
-    // R6: while the Omni board is open its lanes prune against the STORED nodes.
-    expect(body).toContain('omniOpen: isGlobalKanbanOpen()')
+    // N4: no Omni term — the Omni board's active lane prunes against React Flow too.
+    expect(body).not.toContain('omniOpen')
+    expect(body).not.toContain('isGlobalKanbanOpen')
   })
 
   // R7: the solo path (~20 Hz while dragging) asks the cheap question first.

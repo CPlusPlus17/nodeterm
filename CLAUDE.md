@@ -7398,7 +7398,7 @@ The invariants, each with its reason:
 - **Prune removals are never cast** (`diffKanbanOps`' `liveNodeIds`). Every board commit prunes the
   cards of nodes that are not live locally, and a client whose node op has not arrived yet would
   otherwise cast the removal of a fresh card for everyone. `liveNodeIds` is one project's nodes
-  (for the rendered project, React Flow ∩ store while the Omni board is open). Card and meta
+  (React Flow's for the rendered project, the Omni board's live lane included). Card and meta
   removals are last-writer-wins VALUES; only node, edge, column, label and view removals are rule-4
   deletions.
 

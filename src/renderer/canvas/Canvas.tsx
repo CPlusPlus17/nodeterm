@@ -3878,14 +3878,13 @@ export function Canvas() {
      * (`boardLiveNodeIds`): the project React Flow holds answers from the epoch pair (`nodesRef` is
      * that project's canvas exactly while `nodesProjectIdRef` names it — useNodesEpoch), every other
      * project from its stored copy (a project mid-load is still the store's until the load installs
-     * it) — and while the Omni board is open, whose lanes prune against the stored copy, the rendered
-     * project answers from React Flow ∩ store (ruling R6).
+     * it). The Omni board's active lane prunes against React Flow too (`globalKanbanLive`), so it
+     * needs no case of its own.
      */
     const liveNodeIdsFor = (projectId: string): ReadonlySet<string> =>
       boardLiveNodeIds({
         rendered: nodesProjectIdRef.current === projectId ? nodesRef.current.map((n) => n.id) : null,
-        stored: (useProjects.getState().getProject(projectId)?.nodes ?? []).map((n) => n.id),
-        omniOpen: isGlobalKanbanOpen()
+        stored: (useProjects.getState().getProject(projectId)?.nodes ?? []).map((n) => n.id)
       })
     /**
      * THE ONE CAST on canvas:mut, for every family this Canvas publishes — nodes and edges (the
