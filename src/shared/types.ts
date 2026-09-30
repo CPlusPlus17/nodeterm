@@ -1874,6 +1874,17 @@ export interface Settings {
    * terminal. Logic: `renderer/terminal/copy-on-select.ts`.
    */
   copyOnSelect: boolean
+  /**
+   * Windows SSH projects: after a key is unlocked with its passphrase, also load it into the
+   * Windows OpenSSH agent service, so later connections (and the user's own `ssh`) do not prompt
+   * again. OFF by default because that agent STORES the key — DPAPI-encrypted in
+   * `HKCU\Software\OpenSSH\Agent\Keys`, surviving service restarts — until it is removed
+   * (`ssh-add -d` / `-D`), and it refuses a lifetime constraint (measured on windows-latest,
+   * OpenSSH_for_Windows_9.5p2), so there is no "for this session only". A host whose own
+   * `~/.ssh/config` says `AddKeysToAgent yes` gets the add without this switch: that user already
+   * asked OpenSSH for exactly this. Logic: `core/remote-ssh/native/agent-add.ts`.
+   */
+  windowsSshAgentAddKeys: boolean
   /** Plain mouse wheel zooms the canvas (no Cmd/Ctrl needed). On macOS a two-finger trackpad
    *  scroll keeps panning independently (see canvas/wheel-gesture.ts), so mouse and trackpad
    *  coexist; elsewhere this still trades away scroll-to-pan, so it stays opt-in. */
@@ -2245,6 +2256,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openMarkdownPreviewMigrated: true,
   terminalMiddleClickPaste: false,
   copyOnSelect: false,
+  windowsSshAgentAddKeys: false,
   wheelZoom: false,
   wheelZoomSpeed: 1,
   trackpadPan: true,

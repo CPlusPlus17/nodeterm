@@ -39,6 +39,12 @@ export interface ResolvedHost {
   strictHostKeyChecking: string
   /** Seconds, or undefined for none. */
   connectTimeout?: number
+  /**
+   * The config's `AddKeysToAgent`, as `ssh -G` prints it: `false` / `true` / `ask` / `confirm`, a
+   * lifetime in seconds, or `confirm <seconds>`. Parsed by `parseAddKeysToAgent` (agent-add.ts);
+   * kept raw here so an unknown spelling reads as "not asked for", never as yes.
+   */
+  addKeysToAgent?: string
 }
 
 /** `~` / `%d` expansion for path-valued options. `ssh -G` leaves `~` unexpanded. */
@@ -95,7 +101,8 @@ export function parseSshG(out: string, home: string = os.homedir()): ResolvedHos
     userKnownHostsFiles: words('userknownhostsfile'),
     globalKnownHostsFiles: words('globalknownhostsfile'),
     strictHostKeyChecking: single.get('stricthostkeychecking') ?? 'ask',
-    connectTimeout: Number.isFinite(timeout) && timeout > 0 ? timeout : undefined
+    connectTimeout: Number.isFinite(timeout) && timeout > 0 ? timeout : undefined,
+    addKeysToAgent: single.get('addkeystoagent')
   }
 }
 

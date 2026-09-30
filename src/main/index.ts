@@ -19,7 +19,7 @@ import { IPC } from '../shared/ipc'
 // in-memory and redacted at its push boundary; the panel/IPC side is gated on the setting.
 const logBuffer = new LogBuffer()
 installLogSink(logBuffer)
-import { nativeMux, useNativeSsh } from '../core/remote-ssh/native/native-runtime'
+import { nativeMux, setNativeWindowsAgentOptIn, useNativeSsh } from '../core/remote-ssh/native/native-runtime'
 import { writeFilesToClipboard } from './clipboard-files'
 import { pickProjectIcon } from './project-icon-upload'
 import { allowGuestNavigation } from './webview-nav'
@@ -4658,6 +4658,9 @@ app.whenReady().then(async () => {
     // Forgetting a team also forgets the device token this app run holds for it in memory.
     ipcMain.handle(IPC.relayHostedBookmarkRemove, async (_e, hostId: string) => removeHostedBookmark(String(hostId), bookmarks))
   }
+  // Windows SSH projects: the opt-in to keep passphrase-unlocked keys in the Windows OpenSSH agent
+  // (core/remote-ssh/native/agent-add.ts). Read at each unlock, so a toggle applies to the next one.
+  setNativeWindowsAgentOptIn(() => settingsStore.get().windowsSshAgentAddKeys === true)
   sshProjectManager = initSshProject(
     (projectId) => {
       // On (re)connect, reconcile the server's .nodeterm/project.json with our offline cache by rev.
