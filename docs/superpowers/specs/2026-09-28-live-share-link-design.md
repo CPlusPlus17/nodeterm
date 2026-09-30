@@ -113,7 +113,7 @@ Success means:
 | Protocol + keys + browser client | `src/shared/watch-link/` | Link encode/parse, key derivation from `S`, message types, and the browser relay client (tweetnacl + WebCrypto only, no Node APIs). Test vectors in `vectors.json`. nodeterm-web keeps a byte-identical copy. |
 | Registry | `src/core/watch-link/registry.ts` | Active links, limits, lifecycle (create / revoke / revoke-all / expire / node gone), persistence, owner state events. |
 | Link host | `src/core/watch-link/link-host.ts` | One `hosted-scheduler` per link; each listener runs `connectRelayHost`; attaches viewer sessions, sends keyframe + meta, relays chat. |
-| Watcher policy | `src/core/watch-link/watcher-policy.ts` | The `RelayHostHooks` for a viewer session: `access` (refuse everything except a Commenter's chat cast) and `wrapSink` (deliver only this session's pty channels and `watchLink:*` events). |
+| Watcher policy | `src/core/watch-link/watcher-policy.ts` | The `RelayHostHooks` for a viewer session: `access` (refuse everything except a Commenter's chat cast) and `wrapSink` (deliver only this session's pty channels and `watch:*` events). |
 | Output filter | `src/core/watch-link/stream-filter.ts` | Stateful per-session parser that removes string-type escape sequences from the watcher's pty stream. |
 | Backend client | `src/core/watch-link/api.ts` | create / host-token / status / revoke / revoke-all calls. |
 | Existing-code changes | `ui-sink-registry.ts`, both platforms, `pty-manager.ts`, `hosted-scheduler.ts`, `host-control.ts` | Registry client options `quiet` and `selfPaced`, `quietClientIds()` for the reaper, `captureVisible(sessionId)`, scheduler `maxBridged`, `watchLink:` host-only prefix. |
@@ -174,17 +174,21 @@ upgrade themselves. Different roles need different links.
 
 ### Messages inside the tunnel (`rpc.ts` framing)
 
+The viewer protocol's namespace is **`watch:`**, never `watchLink:`: the owner's IPC is `watchLink:*`,
+which `relay-host` refuses from every peer as host-only before any policy runs, so a viewer cast in
+that namespace could never arrive.
+
 Host → viewer:
 
-- `ev watchLink:meta {v: 1, role, label, title, expiresAt, cols, rows}`
+- `ev watch:meta {v: 1, role, label, title, expiresAt, cols, rows}`
 - pty output as binary `encodePtyData` frames; `ev pty:size:<sid>`
 - `ev watch:keyframe {sessionId, screen, altScreen}` — the visible screen and whether tmux paints on the alternate screen
-- `ev watchLink:chat {id, name, text, at, from: 'viewer' | 'sharer'}`
-- `ev watchLink:end {reason}`, `reason ∈ revoked | expired | node-gone | session-ended |
+- `ev watch:chat {id, name, text, at, from: 'viewer' | 'sharer'}`
+- `ev watch:end {reason}`, `reason ∈ revoked | expired | node-gone | session-ended |
   host-stopping | kicked`
-- `ev watchLink:waiting {}` — the node has no running session right now
+- `ev watch:waiting {}` — the node has no running session right now
 
-Viewer → host: `cast watchLink:chat {name, text}` (Commenter only), `trust:confirm`, keepalive.
+Viewer → host: `cast watch:chat {name, text}` (Commenter only), `trust:confirm`, keepalive.
 Everything else is refused by the watcher policy. **There is no input, resize or flow message in the
 protocol.**
 
@@ -254,10 +258,10 @@ protocol.**
 
    With no keyframe the viewer starts from the live stream and the page says "Waiting for the
    terminal to redraw…" until output arrives.
-4. `watchLink:meta`, then the live stream.
+4. `watch:meta`, then the live stream.
 
 If the join answers `unavailable: 'join-only'`, or the session later sends `pty:exit` /
-`pty:recycled`, the viewer gets `watchLink:waiting` and the host joins again when a session for that
+`pty:recycled`, the viewer gets `watch:waiting` and the host joins again when a session for that
 node appears.
 
 ### Backpressure — a viewer never slows the owner
@@ -513,7 +517,7 @@ only calls `requireProOr`, which today has zero callers.)
   (deny-by-default); the pty join is `joinOnly` + `sizeVote: false`; a watcher never takes a pause
   ticket.
 - **Isolation from the canvas:** a watcher is a quiet client (absent from `broadcast()` and `clientIds()`), and its sink
-  filter passes only its session's pty channels and `watchLink:*` events. Canvas ops, presence,
+  filter passes only its session's pty channels and `watch:*` events. Canvas ops, presence,
   agent status and context updates cannot reach it by either path.
 - **Residual — no forward secrecy**, as for the relay today: a recorded session plus a later-leaked
   `S` is plaintext. `S` is deleted from the registry on revoke/expiry; lifetime ≤ 24 h.
