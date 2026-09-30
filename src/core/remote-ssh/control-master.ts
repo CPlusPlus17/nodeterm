@@ -771,6 +771,36 @@ export function hookForwardCancelArgs(conn: SshConnection, controlPath: string, 
   return ['-O', 'cancel', '-R', fwdSpec(remoteSock, hookPort), '-o', `ControlPath=${controlPath}`, ...portArgs(conn), target(conn)]
 }
 /**
+ * A dev-server LOCAL forward over the existing master (`ssh -O forward -L`): this machine's
+ * `127.0.0.1:<localPort>` → the host's `<target>:<remotePort>`. The local side binds loopback ONLY
+ * — never `*` or a LAN address, which would publish someone's unfinished app to the network the
+ * laptop is on. An IPv6 target is bracketed, which is how ssh's `-L` grammar takes it.
+ * `toAddr` must already be a validated IP literal (core/dev-ports.ts `forwardTarget`).
+ */
+function localFwdSpec(localPort: number, toAddr: string, remotePort: number): string {
+  const host = toAddr.includes(':') ? `[${toAddr}]` : toAddr
+  return `127.0.0.1:${localPort}:${host}:${remotePort}`
+}
+export function localForwardArgs(
+  conn: SshConnection,
+  controlPath: string,
+  localPort: number,
+  toAddr: string,
+  remotePort: number
+): string[] {
+  return ['-O', 'forward', '-L', localFwdSpec(localPort, toAddr, remotePort), '-o', `ControlPath=${controlPath}`, ...portArgs(conn), target(conn)]
+}
+/** The exact spec `localForwardArgs` opened — ssh matches a cancel against it verbatim. */
+export function localForwardCancelArgs(
+  conn: SshConnection,
+  controlPath: string,
+  localPort: number,
+  toAddr: string,
+  remotePort: number
+): string[] {
+  return ['-O', 'cancel', '-L', localFwdSpec(localPort, toAddr, remotePort), '-o', `ControlPath=${controlPath}`, ...portArgs(conn), target(conn)]
+}
+/**
  * tmux `-e KEY=VALUE` pairs injecting the remote hook endpoint file + node id + protocol version,
  * plus the agent identity. The identity pair matters: the local path's `hookServer.buildPtyEnv`
  * sets NODETERM_AGENT_ID and gates NODETERM_CANVAS_CONTROL on `canControlCanvas`, and a remote

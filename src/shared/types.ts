@@ -4035,6 +4035,7 @@ export interface NodeTerminalApi {
   githubControl: import('./github-issues').GitHubControlApi
   usage: UsageApi
   sessionMemory: SessionMemoryApi
+  devPorts: import('./dev-ports').DevPortsApi
   wallpaper: import('./wallpaper').WallpaperApi
   triggers: TriggersApi
   context: ContextApi

@@ -1,4 +1,5 @@
 import { reportTextDelivery } from '../lib/textDelivery'
+import { useDevPortScanner } from './useDevPortScanner'
 import { TEXT_NOT_SUBMITTED } from '@shared/text-delivery'
 import { VisibleMiniMap } from './VisibleMiniMap'
 import { MinimapDock } from './MinimapDock'
@@ -1915,6 +1916,13 @@ export function Canvas() {
   // tab switch. Reading presence imperatively via `.store.getState()`/`.subscribe` (never a reactive
   // `usePresence(sel)` hook) is the PERF CONTRACT: a peer's 20 Hz cursor never re-renders Canvas.
   const activeSession = sessionForProject(activeProjectId || '')
+  // Dev-server ports of the project on screen (CLAUDE.md → Dev-server ports): a primitive of its
+  // terminal ids, so a drag or an edit does not re-run the scanner's effects.
+  const devPortTerminalSig = useMemo(
+    () => nodes.filter((n) => n.type === 'terminal').map((n) => n.id).join(','),
+    [nodes]
+  )
+  useDevPortScanner(activeProjectId || '', devPortTerminalSig)
   const activePresence = presenceForProject(activeProjectId || '')
   // The active tab's hosted team, when it is one (undefined for every other tab). A role below Editor
   // makes the canvas read-only in the UI; the host enforces the role either way.

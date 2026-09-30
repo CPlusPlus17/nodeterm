@@ -260,6 +260,7 @@ import { NodeColorSwatches } from '../components/NodeColorSwatches'
 import { AccountChip, useAccountChip } from '../components/AccountChip'
 import { IssueRefChip } from '../components/IssueRefChip'
 import { TeamProgressChip } from '../components/TeamProgressChip'
+import { PortsChip } from '../components/PortsChip'
 import { useTeamStations } from '../state/teamStations'
 import { sessionNameRepeatsTitle } from '../lib/cardRedundancy'
 import { effectiveAccountId } from '../lib/accountChip'
@@ -1770,6 +1771,7 @@ export function TerminalNode({
   // node (`isRemoteSessionNode` — an SSH-project terminal carries `data.ssh`/`data.sshRemoteTmux`).
   // The affordance is absent, not merely refused on click.
   const sshProject = useProjects((s) => !!s.projects.find((p) => p.id === s.activeProjectId)?.ssh)
+  const portsProjectId = useProjects((s) => s.activeProjectId)
   // The project's SSH endpoint, as two primitives: the project object is rebuilt on every node
   // serialization, so selecting `ssh.server` itself would re-render this node on each canvas edit.
   const projectSshHost = useProjects((s) => s.getProject(s.activeProjectId)?.ssh?.server.host)
@@ -5917,6 +5919,18 @@ export function TerminalNode({
               (url) => void api.shell.openExternal(url)
             )
           }}
+        />
+        {/* Dev servers this session listens on (CLAUDE.md → Dev-server ports). On an SSH project a
+            row forwards the SAME port over the project's master before opening it. The card modal
+            draws the same component. */}
+        <PortsChip
+          nodeId={id}
+          projectId={portsProjectId}
+          remote={sshProject}
+          onOpenUrl={(url) =>
+            window.dispatchEvent(new CustomEvent('nodeterm:open-url-node', { detail: { url, sourceNodeId: id } }))
+          }
+          menuZIndex={60}
         />
         {/* The stations this session opened, and how far along they are — the same ring its board
             card and card modal draw (lib/teamProgress). A row travels to that station. */}

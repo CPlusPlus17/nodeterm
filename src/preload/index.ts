@@ -23,6 +23,7 @@ import type {
 } from '../shared/types'
 import type { ClientId, PeerDiff, PeerIdentity, PeerState } from '../shared/presence'
 import type { ProjectConsentRequest, ProjectSetupEvent } from '../shared/project-settings'
+import type { DevPortForwardRequest, DevPortsQuery } from '../shared/dev-ports'
 
 // Fan a single ipcRenderer listener per channel out to many renderer subscribers. Without
 // this, every node that subscribes (e.g. Cmd+M markdown toggle on each terminal/editor) adds
@@ -500,6 +501,13 @@ const api: NodeTerminalApi = {
   sessionMemory: {
     read: (q?: SessionMemoryQuery) => ipcRenderer.invoke(IPC.sessionMemory, q),
     host: (q?: SessionMemoryQuery) => ipcRenderer.invoke(IPC.sessionMemoryHost, q)
+  },
+  // Forwarded verbatim for the same reason as sessionMemory: `remote` is OR-ed with the core's own
+  // claim, and a forward request carries only node + port — the host-side address is decided in core.
+  devPorts: {
+    scan: (q?: DevPortsQuery) => ipcRenderer.invoke(IPC.devPortsScan, q),
+    forward: (req: DevPortForwardRequest) => ipcRenderer.invoke(IPC.devPortsForward, req),
+    unforward: (req: { projectId: string; localPort: number }) => ipcRenderer.invoke(IPC.devPortsUnforward, req)
   },
   wallpaper: {
     listStills: () => ipcRenderer.invoke(IPC.wallpaperListStills),

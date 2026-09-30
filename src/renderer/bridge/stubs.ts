@@ -276,6 +276,17 @@ export function buildStubApi(): Omit<
       cookieProviders: () => Promise.resolve({}),
       onUpdate: noopUnsub
     },
+    devPorts: {
+      // Deliberately NOT superseded by a WS namespace: the Server Edition does not serve dev ports
+      // (its browser tab has no <webview> browser node, and a page the viewer opened would load on
+      // the viewer's machine, where the server's port is not). A relay tab shares this surface for
+      // the other reason — its sessions live on the host. `unsupported` is the honest answer on
+      // both, and the chip is not drawn.
+      scan: () => Promise.resolve({ ok: false, reason: 'unsupported', nodes: {} }),
+      forward: () =>
+        Promise.resolve({ ok: false, reason: 'unsupported', message: 'Port forwarding is not available here.' }),
+      unforward: () => Promise.resolve(false)
+    },
     sessionMemory: {
       // Superseded by the real WS-backed namespace in ws-bridge (the core session-memory service
       // runs in the server shell too), so nothing reaches these in a live browser session. Kept
