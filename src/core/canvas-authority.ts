@@ -81,8 +81,11 @@ export interface CanvasAuthority {
   overlaySave(ws: Workspace): Promise<Workspace>
   /** Governed projects' content fields replaced by the authority's (the store's load hook). */
   overlayLoad(ws: Workspace): Promise<Workspace>
-  /** A project re-read after an outside edit (a git pull, a hand edit). */
-  adoptOutsideEdit(project: Project): Promise<void>
+  /** A project re-read after an outside edit (a git pull, a hand edit): its content is adopted and
+   *  the difference published as ops. Answers the project exactly as a load now returns it (the
+   *  edit's own non-content fields, overlaid with the authority's content), for the shell to send to
+   *  every client on `workspace:server-change`; null = nothing was adopted. */
+  adoptOutsideEdit(project: Project): Promise<Project | null>
   /** The shared set changed: flush and release what left it, adopt what joined it. */
   sharedChanged(): void
   /** Write every dirty project now. */
@@ -419,10 +422,10 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
       return { ...ws, projects }
     },
 
-    async adoptOutsideEdit(project: Project): Promise<void> {
-      if (!overlayable(project) || !governs(project.id)) return
+    async adoptOutsideEdit(project: Project): Promise<Project | null> {
+      if (!overlayable(project) || !governs(project.id)) return null
       const g = await adopt(project.id)
-      if (!g || !governs(project.id) || governed.get(project.id) !== g) return
+      if (!g || !governs(project.id) || governed.get(project.id) !== g) return null
       const before = g.content
       // ADOPT the edit, then re-apply what disk does not have yet on top of it (rule 3).
       let after = governedContent(project)
@@ -433,6 +436,10 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
       for (const m of diffContent(before, after, project.id)) deps.publish(project.id, m)
       // Disk already has the edit. It is owed a write only if our unflushed ops must go over it.
       if (g.unflushed.length) markDirty(project.id, g)
+      // The ops carry the content; the edit's OTHER fields (name, colour, icon, layouts, the
+      // permission default, the capability flags, the board's github mapping) reach no client
+      // through them. Answered as a load would answer it, so the shell can send it whole.
+      return overlayProject(project, g, 'load')
     },
 
     sharedChanged(): void {

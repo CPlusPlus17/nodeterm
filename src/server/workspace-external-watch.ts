@@ -52,22 +52,34 @@ export function createServerWorkspaceWatcher(
  * (docs/hosted-team-relay.md). It is NOT also broadcast as `workspace:external-change`: that event
  * raises the Reload/Keep-mine conflict bar on a dirty canvas, and "Keep mine" would write a stale
  * copy over the shared project. Every other project keeps the whole-project broadcast. `authority`
- * is read on every edit (it is created later in boot, and absent when another server owns the data
+ * is read on every edit (it is created later in boot, and absent when another server owns this data
  * directory).
  *
- * Residual: a governed outside edit's NON-content fields (name, colour, icon, layouts) reach no
- * client live; clients see them on their next load.
+ * The ops carry only the content. The edit's other fields (name, colour, icon, layouts, the
+ * permission default, the capability flags, the board's `github` mapping and `pullLinks`) follow as
+ * the persisted project on `workspace:server-change` (`serverChange`), the channel and three-way
+ * merge server canvas control already uses: the renderer adopts it without a conflict bar, so a tab
+ * that still held the old copy saves the pulled values instead of writing its own back. Some of
+ * those fields are security-relevant (a pull that drops a `bypassPermissions` default or turns a
+ * capability off must not be undone by the next autosave). The ops go out first, so a client
+ * merging the project already holds its content.
  */
 export function outsideEditPublisher(
   authority: () => Pick<CanvasAuthority, 'governs' | 'adoptOutsideEdit'> | null,
-  broadcast: (project: Project) => void
+  broadcast: (project: Project) => void,
+  serverChange: (project: Project) => void
 ): (project: Project) => void {
   return (project) => {
     const a = authority()
     if (a?.governs(project.id)) {
-      void a.adoptOutsideEdit(project).catch((error: unknown) => {
-        console.warn('[nodeterm-server] the canvas authority could not adopt an outside edit', error)
-      })
+      void a
+        .adoptOutsideEdit(project)
+        .then((persisted) => {
+          if (persisted) serverChange(persisted)
+        })
+        .catch((error: unknown) => {
+          console.warn('[nodeterm-server] the canvas authority could not adopt an outside edit', error)
+        })
       return
     }
     broadcast(project)

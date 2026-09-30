@@ -407,6 +407,28 @@ describe('canvas authority — outside edits', () => {
     expect(h.writes[0].content.kanban?.assignments).toEqual([{ nodeId: 'a', columnId: 'kx' }])
   })
 
+  it('11f. answers the project as a load now returns it: the edit\'s own fields, the authority\'s content (R15)', async () => {
+    const h = harness({ disk: { P: content([node('a'), node('b')]) } })
+    await h.authority.overlayLoad(ws(project({ nodes: [node('a'), node('b')] })))
+    h.cast({ op: 'upsert', node: node('c') })
+    await settle()
+    const persisted = await h.authority.adoptOutsideEdit(
+      project({
+        name: 'Renamed',
+        defaultPermissionMode: 'manual',
+        nodes: [node('a', { shell: '/bin/zsh' }), node('d')]
+      })
+    )
+    expect(persisted).not.toBeNull()
+    // The non-content fields come from the edit: they are what a stale tab would otherwise revert.
+    expect(persisted?.name).toBe('Renamed')
+    expect(persisted?.defaultPermissionMode).toBe('manual')
+    // The content is the authority's: the edit with the unflushed op re-applied on top.
+    expect(ids(persisted?.nodes ?? [])).toEqual(['a', 'd', 'c'])
+    // This machine's exec rides from the edit's own copy, exactly as on a load.
+    expect(shellOf(byId(persisted?.nodes ?? [], 'a'))).toBe('/bin/zsh')
+  })
+
   it('11d. an unavailable or relay project is never adopted as an outside edit', async () => {
     const h = harness({ disk: { P: content([node('a'), node('b')]) } })
     await h.authority.overlayLoad(ws(project({ nodes: [node('a'), node('b')] })))

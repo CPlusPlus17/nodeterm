@@ -350,7 +350,12 @@ whole-workspace saves still write them.
 4. **Outside edits.** A `git pull` or hand edit of a governed `.nodeterm/project.json`, seen by the
    server's file watcher, is adopted: the authority re-applies the ops it has not written yet on top,
    publishes the difference as `canvas:mut` ops, and broadcasts no `workspace:external-change`, so no
-   client gets the Reload / Keep mine bar (`src/server/workspace-external-watch.ts`).
+   client gets the Reload / Keep mine bar (`src/server/workspace-external-watch.ts`). The edit's other
+   fields (name, colour, icon, layouts, the permission default, the capability flags, the board's
+   `github` and `pullLinks`) follow right after the ops, as the persisted project on
+   `workspace:server-change`, the channel server canvas control uses. The browser merges it without
+   a bar, so a tab that still held the old values saves the pulled ones instead of writing its own
+   back.
 
 **Writing.** A governed project is written 1 s after its last op, and at most 5 s after the first op
 not yet written, through the store's atomic content write (`WorkspaceStore.writeProjectContent`: it
@@ -397,10 +402,11 @@ it is a new way to use it.
 
 ### Known limits
 
-- **An outside edit's other fields are not delivered live.** A pulled change to a governed project's
-  name, colour, icon or layouts reaches no client until that client loads again. A Server Edition
-  browser tab that saves before it reloads writes its own copies back over the pulled ones: those
-  fields are still whole-file, last writer wins.
+- **A project's other fields are last writer wins.** Name, colour, icon, layouts, the permission
+  default, the capability flags and the board's `github`/`pullLinks` are not ops. A pulled change to
+  them reaches every browser tab (`workspace:server-change`), but two tabs editing one of them at the
+  same time still overwrite each other on save, as before the authority. A desktop joined over the
+  relay does not save the host's workspace at all.
 - **The share-time window.** An edit a client made just before `team share` (not yet cast because it
   was alone, or cast but not yet saved) is not in what the authority reads from disk, and that
   client's next save is overlaid, so the edit can be lost from disk. It stays on that client's screen

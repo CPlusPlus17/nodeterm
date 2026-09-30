@@ -159,7 +159,8 @@ describe('Server Edition external workspace watcher', () => {
         debounceMs: 20,
         publish: outsideEditPublisher(
           () => authority,
-          (p) => fake.broadcast(IPC.workspaceExternalChange, p)
+          (p) => fake.broadcast(IPC.workspaceExternalChange, p),
+          (p) => fake.broadcast(IPC.workspaceServerChange, p)
         )
       })
 
@@ -198,9 +199,99 @@ describe('Server Edition external workspace watcher', () => {
     }
   })
 
+  it('a GOVERNED outside edit\'s other fields reach clients on workspace:server-change, and a stale tab\'s next save keeps them (R15)', async () => {
+    const a = node('term-a', 0)
+    const governedProject: Project = {
+      id: 'project-g',
+      name: 'Governed',
+      color: '#0a84ff',
+      cwd: projectDir,
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [a],
+      defaultPermissionMode: 'bypassPermissions'
+    }
+    const store = new WorkspaceStore()
+    await store.save({ version: 2, activeProjectId: governedProject.id, projects: [governedProject] })
+    initCanvasSync()
+    fake.clients.push(1)
+    const authority = createCanvasAuthority({
+      sharedProjectIds: () => new Set([governedProject.id]),
+      readContent: (id) => store.readProjectContent(id),
+      writeContent: (id, c) => store.writeProjectContent(id, c),
+      publish: (id, m) => {
+        publishCanvasMutation(id, m)
+      },
+      setTimer: () => null,
+      clearTimer: () => {},
+      log: () => {}
+    })
+    store.setContentAuthority(authority)
+    setReflectedListener((id, m) => authority.onReflected(id, m))
+    try {
+      authority.sharedChanged()
+      await authority.flushAll()
+      fake.sent.length = 0
+      watcher = createServerWorkspaceWatcher(store, {
+        debounceMs: 20,
+        publish: outsideEditPublisher(
+          () => authority,
+          (p) => fake.broadcast(IPC.workspaceExternalChange, p),
+          (p) => fake.broadcast(IPC.workspaceServerChange, p)
+        )
+      })
+
+      // A git pull renames the project and TIGHTENS its permission default (and moves a node).
+      const file = path.join(projectDir, '.nodeterm', 'project.json')
+      const edited = JSON.parse(await fs.readFile(file, 'utf8')) as {
+        rev: number
+        updatedAt: string
+        name: string
+        defaultPermissionMode?: string
+        nodes: CanvasNodeState[]
+      }
+      edited.rev += 1
+      edited.updatedAt = new Date(Date.now() + 1_000).toISOString()
+      edited.name = 'Renamed'
+      edited.defaultPermissionMode = 'manual'
+      edited.nodes = edited.nodes.map((n) => ({ ...n, position: { x: 500, y: 0 } }))
+      await fs.writeFile(file, JSON.stringify(edited), 'utf8')
+
+      await vi.waitFor(() => {
+        expect(fake.sent.some((e) => e.channel === IPC.workspaceServerChange)).toBe(true)
+      }, { timeout: 3_000, interval: 20 })
+      const changes = fake.sent.filter((e) => e.channel === IPC.workspaceServerChange)
+      expect(changes).toHaveLength(1)
+      const incoming = changes[0].args[0] as Project
+      expect(incoming.id).toBe(governedProject.id)
+      expect(incoming.name).toBe('Renamed')
+      expect(incoming.defaultPermissionMode).toBe('manual')
+      expect(incoming.nodes.map((n) => n.position.x)).toEqual([500])
+      // Still no conflict bar: the content travelled as ops, the rest merges silently.
+      expect(fake.sent.filter((e) => e.channel === IPC.workspaceExternalChange)).toEqual([])
+      // The ops went out BEFORE the project, so a client merging it already holds the content.
+      const lastOp = fake.sent.map((e) => e.channel).lastIndexOf(IPC.canvasMut)
+      expect(lastOp).toBeGreaterThanOrEqual(0)
+      expect(lastOp).toBeLessThan(fake.sent.findIndex((e) => e.channel === IPC.workspaceServerChange))
+
+      // A tab that still held the OLD copy adopts the incoming project (`replaceProject`, which is
+      // what the renderer does with workspace:server-change) and saves: the pulled values stay.
+      const tabCopy: Project = incoming
+      await store.save({ version: 2, activeProjectId: tabCopy.id, projects: [tabCopy] })
+      const onDisk = JSON.parse(await fs.readFile(file, 'utf8')) as { name: string; defaultPermissionMode?: string }
+      expect(onDisk.name).toBe('Renamed')
+      expect(onDisk.defaultPermissionMode).toBe('manual')
+      await authority.stop()
+    } finally {
+      setReflectedListener(null)
+      store.setContentAuthority(null)
+    }
+  })
+
   it('with no authority (another server owns this data dir), every outside edit is broadcast', () => {
     const sent: Project[] = []
-    const route = outsideEditPublisher(() => null, (p) => sent.push(p))
+    const route = outsideEditPublisher(() => null, (p) => sent.push(p), () => {
+      throw new Error('an ungoverned edit is never a server change')
+    })
     const p = { id: 'x', name: 'x', color: '#000', viewport: { x: 0, y: 0, zoom: 1 }, nodes: [] } as Project
     route(p)
     expect(sent).toEqual([p])

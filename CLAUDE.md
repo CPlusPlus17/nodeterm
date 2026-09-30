@@ -289,7 +289,9 @@ Persistence has two layers:
   ride `workspace:external-change`, and so do the phone's `appendRemoteNode` and the SSH
   reconcile, which really are "another device". The exception is a project a hosted Server Edition
   shares with its team: the canvas authority adopts that outside edit and publishes it as
-  `canvas:mut` ops, with no `workspace:external-change` (see **Hosted team relay**).
+  `canvas:mut` ops, with no `workspace:external-change`, then sends the persisted project on
+  `workspace:server-change` so its non-content fields (name, permission default, capability flags…)
+  reach the tabs too (see **Hosted team relay**).
   **A write this core made ITSELF rides `workspace:server-change` instead** — today that is Server
   Edition headless canvas control (`server/canvas-control.ts`) — and the renderer three-way merges
   it against the store baseline (`renderer/lib/serverChange.ts`: incoming nodes adopted silently,
@@ -7355,8 +7357,10 @@ The invariants, each with its reason:
   team). A client's whole-workspace save is a stale copy of every canvas it holds, so saves AND
   loads pass through the authority's overlay (`WorkspaceStore.setContentAuthority`), and an outside
   edit (a `git pull`) is adopted and published as ops instead of `workspace:external-change`, whose
-  conflict bar would offer "Keep mine" over it. It writes 1 s after the last op, at most 5 s after
-  the first. The consequence for code: **a content change that is not cast as an op is dropped by
+  conflict bar would offer "Keep mine" over it; the persisted project follows on
+  `workspace:server-change` (silent merge), or a stale tab's autosave would revert the pulled
+  non-content fields, `defaultPermissionMode` and the capability flags included. It writes 1 s
+  after the last op, at most 5 s after the first. The consequence for code: **a content change that is not cast as an op is dropped by
   the next overlaid save.** That is why server canvas control casts a diff of the whole content
   before every save (`castAndSave`, never a per-verb list, which drifts), and why a hosted relay
   peer may not `workspace:save` at all (refused for every role). One exception: a node too large
@@ -7388,9 +7392,9 @@ The invariants, each with its reason:
 
 **Known limitations** (full list in the doc): non-editors still receive cross-project presence and
 `context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still
-pauses the shared pty through Stage 2 backpressure; the canvas authority's own limits (outside edits
-of name/colour/icon/layouts, the share-time window, oversized nodes, board edits to another core,
-the card modal's comments on a relay tab) are under "Known limits" in the doc.
+pauses the shared pty through Stage 2 backpressure; the canvas authority's own limits (a project's
+non-content fields stay last writer wins between tabs, the share-time window, oversized nodes, board
+edits to another core, the card modal's comments on a relay tab) are under "Known limits" in the doc.
 
 **Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab).
 Server Edition is the host (the `team` CLI; its browser clients cannot approve and are not hosted

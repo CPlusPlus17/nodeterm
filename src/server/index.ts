@@ -711,11 +711,13 @@ export async function startServer(
     installAgentIntegrations: config.installHooks !== false
   })
   // A governed project's outside edit goes to the canvas authority, which publishes the difference
-  // as canvas ops; every other project keeps the whole-project `workspace:external-change`.
+  // as canvas ops and then the persisted project on `workspace:server-change` (its non-content
+  // fields); every other project keeps the whole-project `workspace:external-change`.
   const workspaceWatcher = createServerWorkspaceWatcher(workspaceStore, {
     publish: outsideEditPublisher(
       () => canvasAuthority,
-      (project) => platform.broadcast(IPC.workspaceExternalChange, project)
+      (project) => platform.broadcast(IPC.workspaceExternalChange, project),
+      (project) => platform.broadcast(IPC.workspaceServerChange, project)
     )
   })
   // Every load()/save() is a canvas change as far as links are concerned: a browser drawing a
