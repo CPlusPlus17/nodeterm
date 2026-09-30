@@ -524,8 +524,10 @@ export async function startServer(
     codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId)
   })
   // The ⌘M composer's `/` catalog. No remote leg, for the reason above: this process runs on the
-  // host whose command and skill folders a node's agent reads.
-  registerChatCatalogIpc()
+  // host whose command and skill folders a node's agent reads. An SSH-project node in this store is
+  // still someone ELSE's machine: named remote here, it answers built-ins + `partial`, never this
+  // server's own ~/.claude.
+  registerChatCatalogIpc({ isRemoteNode: (nodeId) => !!workspaceStore.sshProjectIdForNode(nodeId) })
   // The context meter's mount-time rehydration, registered beside the read channels and for the
   // same reason: the tails it feeds are the ones created just above. Until this landed the Server
   // Edition had NO handler for `context:ensure` at all — the browser cast it and nothing received

@@ -52,6 +52,10 @@ describe('parsers', () => {
     expect(commandNameFromRel('../x.md', '.md')).toBeNull()
     expect(commandNameFromRel('x.txt', '.md')).toBeNull()
     expect(commandNameFromRel('a\u001b[31m.md', '.md')).toBeNull()
+    // Measured (2.1.285 loader): a SKILL.md inside commands names its FOLDER; one at the top names nothing.
+    expect(commandNameFromRel('review/SKILL.md', '.md')).toBe('review')
+    expect(commandNameFromRel('git/pr/skill.md', '.md')).toBe('git:pr')
+    expect(commandNameFromRel('SKILL.md', '.md')).toBeNull()
   })
 
   it('reads flat frontmatter and leaves a file without it as body', () => {
@@ -121,6 +125,43 @@ describe('claude, local', () => {
     expect(names(c)).not.toContain('a:b:c:deep')
   })
 
+  it('a PROJECT root follows no symlink: a committed link cannot leak a file outside the project', async () => {
+    const outside = testTmpDir('catalog-outside-')
+    write(path.join(outside, 'creds'), 'https://alice:ghp_SECRET@github.com\n')
+    write(path.join(outside, 'skill/SKILL.md'), '---\nname: leaked-skill\ndescription: ghp_SECRET2\n---\n')
+    write(path.join(outside, 'cmds/stolen.md'), 'ghp_SECRET3')
+    write(path.join(proj, '.claude/commands/real.md'), 'fine')
+    fs.symlinkSync(path.join(outside, 'creds'), path.join(proj, '.claude/commands/notes.md'))
+    fs.symlinkSync(path.join(outside, 'cmds'), path.join(proj, '.claude/commands/sub'))
+    fs.mkdirSync(path.join(proj, '.claude/skills'), { recursive: true })
+    fs.symlinkSync(path.join(outside, 'skill'), path.join(proj, '.claude/skills/lnk'))
+    write(path.join(proj, '.claude/skills/own/x'), '')
+    fs.symlinkSync(path.join(outside, 'skill/SKILL.md'), path.join(proj, '.claude/skills/own/SKILL.md'))
+    const c = await buildLocalCatalog({ agentId: 'claude', accountId: undefined, cwd: proj }, { home })
+    expect(names(c)).toContain('real')
+    expect(JSON.stringify(c)).not.toMatch(/SECRET/)
+    expect(names(c)).not.toContain('notes')
+    expect(names(c)).not.toContain('sub:stolen')
+    expect(names(c)).not.toContain('leaked-skill')
+  })
+
+  it('a project whose .claude is a link OUT of the project lists nothing from it', async () => {
+    const outside = testTmpDir('catalog-outside-')
+    write(path.join(outside, 'commands/x.md'), 'ghp_SECRET')
+    fs.symlinkSync(outside, path.join(proj, '.claude'))
+    const c = await buildLocalCatalog({ agentId: 'claude', accountId: undefined, cwd: proj }, { home })
+    expect(names(c)).not.toContain('x')
+  })
+
+  it('a USER root still follows links (how shared skills reach an account dir)', async () => {
+    const shared = testTmpDir('catalog-shared-')
+    write(path.join(shared, 'sk/SKILL.md'), '---\nname: shared-skill\ndescription: d\n---\n')
+    fs.mkdirSync(path.join(home, '.claude/skills'), { recursive: true })
+    fs.symlinkSync(path.join(shared, 'sk'), path.join(home, '.claude/skills/sk'))
+    const c = await buildLocalCatalog({ agentId: 'claude', accountId: undefined, cwd: proj }, { home })
+    expect(names(c)).toContain('shared-skill')
+  })
+
   it('a bound account REPLACES ~/.claude as the user root', async () => {
     registerClaudeAccountsSource(() => [{ id: 'acc1', label: 'Work', createdAt: 0 }])
     write(path.join(f.userDataDir, 'claude-accounts/acc1/commands/work-only.md'), 'from the account')
@@ -166,18 +207,20 @@ describe('other agents', () => {
     expect(byName(c, 'compress')?.kind).toBe('builtin')
   })
 
-  it('codex, grok, opencode: built-ins only — their custom locations were not measured', async () => {
+  it('codex, opencode: built-ins only — their custom locations were not measured', async () => {
     write(path.join(proj, '.claude/commands/nope.md'), 'x')
-    for (const agentId of ['codex', 'grok', 'opencode']) {
+    for (const agentId of ['codex', 'opencode']) {
       const c = await buildLocalCatalog({ agentId, accountId: undefined, cwd: proj }, { home })
       expect(c.entries.every((e) => e.kind === 'builtin')).toBe(true)
       expect(c.entries.length).toBeGreaterThan(5)
     }
   })
 
-  it('an agent with no measured table gets nothing', async () => {
-    const c = await buildLocalCatalog({ agentId: 'copilot', accountId: undefined, cwd: proj }, { home })
-    expect(c.entries).toEqual([])
+  it('an agent with no measured table gets nothing (grok 1.0.44 could not be measured)', async () => {
+    for (const agentId of ['copilot', 'grok']) {
+      const c = await buildLocalCatalog({ agentId, accountId: undefined, cwd: proj }, { home })
+      expect(c.entries).toEqual([])
+    }
   })
 })
 
@@ -205,6 +248,36 @@ describe('remote (one ssh round trip)', () => {
     expect(all.find((e) => e.name === 'review')?.scope).toBe('user')
     expect(all.find((e) => e.name === 'a:b')?.scope).toBe('project')
     expect(partial).toBe(false)
+  })
+
+  it('the remote leg follows no link in a PROJECT root either (real /bin/sh)', () => {
+    const host = testTmpDir('catalog-host-')
+    const cwd = path.join(host, 'repo')
+    write(path.join(host, 'secret/creds'), 'https://alice:ghp_SECRET@github.com\n')
+    write(path.join(host, 'secret/sk/SKILL.md'), '---\nname: leaked\ndescription: ghp_SECRET2\n---\n')
+    write(path.join(host, 'secret/cmds/stolen.md'), 'ghp_SECRET3')
+    write(path.join(cwd, '.claude/commands/real.md'), 'fine')
+    fs.symlinkSync(path.join(host, 'secret/creds'), path.join(cwd, '.claude/commands/notes.md'))
+    fs.symlinkSync(path.join(host, 'secret/cmds'), path.join(cwd, '.claude/commands/sub'))
+    fs.mkdirSync(path.join(cwd, '.claude/skills/own'), { recursive: true })
+    fs.symlinkSync(path.join(host, 'secret/sk'), path.join(cwd, '.claude/skills/lnk'))
+    fs.symlinkSync(path.join(host, 'secret/sk/SKILL.md'), path.join(cwd, '.claude/skills/own/SKILL.md'))
+    // A second project whose whole .claude points out of it.
+    const cwd2 = path.join(host, 'repo2')
+    fs.mkdirSync(cwd2, { recursive: true })
+    write(path.join(host, 'secret/dotclaude/commands/x.md'), 'ghp_SECRET4')
+    fs.symlinkSync(path.join(host, 'secret/dotclaude'), path.join(cwd2, '.claude'))
+    for (const dir of [cwd, cwd2]) {
+      const roots = catalogRoots({ agentId: 'claude', accountId: undefined, cwd: dir }, { remote: true })
+      const out = execFileSync('/bin/sh', ['-c', remoteCatalogCommand(roots)], {
+        env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: path.join(host, 'nohome') },
+        encoding: 'utf8'
+      })
+      expect(out).not.toMatch(/SECRET/)
+      const n = parseRemoteCatalog(out, roots).perRoot.flat().map((e) => e.name)
+      if (dir === cwd) expect(n).toEqual(['real'])
+      else expect(n).toEqual([])
+    }
   })
 
   it('a remote node is read on its host only; a host that cannot be asked is built-ins + partial', async () => {

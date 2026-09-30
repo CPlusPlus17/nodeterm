@@ -6,6 +6,7 @@ import {
   builtinSlashCommands,
   catalogDescription,
   catalogName,
+  isInteractiveBuiltin,
   rankCatalog,
   sanitizeChatCatalog,
   type ChatCatalogEntry
@@ -101,7 +102,8 @@ describe('the shared catalog', () => {
   })
 
   it('every measured table holds valid, unique names; a custom agent inherits its base', () => {
-    expect([...BUILTIN_CATALOG_AGENTS].sort()).toEqual(['claude', 'codex', 'gemini', 'grok', 'opencode'])
+    // grok is deliberately absent: 1.0.44 could not be measured (browser sign-in) on the measuring host.
+    expect([...BUILTIN_CATALOG_AGENTS].sort()).toEqual(['claude', 'codex', 'gemini', 'opencode'])
     for (const a of BUILTIN_CATALOG_AGENTS) {
       const list = builtinSlashCommands(a)
       expect(list.length).toBeGreaterThan(0)
@@ -109,6 +111,7 @@ describe('the shared catalog', () => {
       expect(new Set(list.map((x) => x.name)).size).toBe(list.length)
     }
     expect(builtinSlashCommands('copilot')).toEqual([])
+    expect(builtinSlashCommands('grok')).toEqual([])
     expect(builtinSlashCommands(undefined)).toEqual([])
     expect(builtinSlashCommands('constructor')).toEqual([])
   })
@@ -116,5 +119,37 @@ describe('the shared catalog', () => {
   it('the picker commands the composer toolbar types are in claude’s measured table', () => {
     const n = builtinSlashCommands('claude').map((x) => x.name)
     expect(n).toEqual(expect.arrayContaining(['model', 'effort']))
+  })
+
+  it('built-ins that open a TUI dialog are tagged; unknown means dialog, only the measured no-dialog ones are not', () => {
+    const tag = (a: string, n: string) => builtinSlashCommands(a).find((x) => x.name === n)?.interactive
+    for (const n of ['model', 'effort', 'rewind', 'resume', 'config', 'permissions', 'mcp', 'hooks', 'memory', 'plugin', 'theme', 'tasks']) {
+      expect(tag('claude', n)).toBe(true)
+    }
+    for (const n of ['clear', 'compact', 'init', 'recap']) expect(tag('claude', n)).toBeUndefined()
+    expect(tag('codex', 'model')).toBe(true)
+    expect(tag('gemini', 'compress')).toBeUndefined()
+    expect(tag('opencode', 'models')).toBe(true)
+  })
+
+  it('isInteractiveBuiltin reads the SENT text: typed or completed, with or without arguments, never a custom command', () => {
+    expect(isInteractiveBuiltin('claude', '/rewind')).toBe(true)
+    expect(isInteractiveBuiltin('claude', '  /model sonnet ')).toBe(true)
+    expect(isInteractiveBuiltin('claude', '/compact')).toBe(false)
+    expect(isInteractiveBuiltin('claude', '/git:commit')).toBe(false)
+    expect(isInteractiveBuiltin('claude', 'please /rewind')).toBe(false)
+    expect(isInteractiveBuiltin('claude', '/Rewind')).toBe(false)
+    expect(isInteractiveBuiltin('grok', '/model')).toBe(false)
+    expect(isInteractiveBuiltin(undefined, '/model')).toBe(false)
+  })
+
+  it('the interactive tag survives a wire, only as a literal true', () => {
+    const c = sanitizeChatCatalog({
+      entries: [
+        { name: 'a', description: '', kind: 'builtin', scope: 'builtin', interactive: true },
+        { name: 'b', description: '', kind: 'builtin', scope: 'builtin', interactive: 'yes' }
+      ]
+    })
+    expect(c.entries.map((e) => e.interactive)).toEqual([true, undefined])
   })
 })

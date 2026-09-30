@@ -119,17 +119,21 @@ export function ChatComposer({
   const labels = composerLabels({ agentId, model: usage?.model, effort: usage?.effort, width: composerWidth })
 
   // ── Completion (`/` and `@`) ─────────────────────────────────────────────────────────────────
-  // The trigger follows the caret; the lists are fetched on the first `/` or `@` of this mount and
-  // reused for CATALOG_REUSE_MS (nothing is fetched while nobody types a trigger). Until the core
-  // catalog answers — and for good on a surface that has none (a relay tab) — the `/` menu shows the
-  // shared built-in table for this agent.
+  // The trigger is DERIVED at render from the draft and the caret — and the caret is only known for
+  // the exact draft it was read with (`caretSnap.value`). Any change to the draft that did not come
+  // through this textarea (the send clearing it after its async pane check, dictation, an attach,
+  // an accept) leaves the snapshot describing another text, so the menu is closed until the user
+  // types or moves the caret again; an accept can therefore never replace a range of a draft it did
+  // not see. A disabled composer derives nothing. The lists are fetched on the first `/` or `@` of
+  // this mount and reused for CATALOG_REUSE_MS (nothing is fetched while nobody types a trigger).
+  // Until the core catalog answers — and for good on a surface that has none (a relay tab) — the `/`
+  // menu shows the shared built-in table for this agent.
   const listboxId = useId()
-  const [trigger, setTrigger] = useState<CompletionTrigger | null>(null)
-  const triggerRef = useRef<CompletionTrigger | null>(null)
-  const closeMenu = useCallback(() => {
-    triggerRef.current = null
-    setTrigger(null)
-  }, [])
+  const [caretSnap, setCaretSnap] = useState<{ value: string; start: number; end: number } | null>(null)
+  const trigger: CompletionTrigger | null =
+    !disabled && caretSnap && caretSnap.value === value ? completionTriggerAt(value, caretSnap.start, caretSnap.end) : null
+  const lastTokenRef = useRef<string | null>(null)
+  const closeMenu = useCallback(() => setCaretSnap(null), [])
   const [activeIdx, setActiveIdx] = useState(0)
   const [dismissedAt, setDismissedAt] = useState<number | null>(null)
   const [catalog, setCatalog] = useState<ChatCatalogEntry[]>(() => builtinSlashCommands(agentId))
@@ -177,23 +181,26 @@ export function ChatComposer({
   )
   const syncTrigger = useCallback(
     (text: string, caret: number, selEnd: number) => {
+      setCaretSnap({ value: text, start: caret, end: selEnd })
       const t = disabled ? null : completionTriggerAt(text, caret, selEnd)
-      const prev = triggerRef.current
       // A new token starts at the top of its list; typing within the same token keeps the place.
-      if (!t || !prev || prev.start !== t.start || prev.kind !== t.kind) setActiveIdx(0)
-      triggerRef.current = t
-      setTrigger(t)
+      const token = t ? `${t.kind}:${t.start}` : null
+      if (token !== lastTokenRef.current) setActiveIdx(0)
+      lastTokenRef.current = token
       if (t) ensureLists(t.kind)
     },
     [disabled, ensureLists]
   )
+  // A composer that cannot flip to the terminal (no `onShowTerminal`) does not offer a built-in that
+  // opens a dialog there: the dialog would be invisible and the next Enter would answer it.
+  const offered = onShowTerminal ? catalog : catalog.filter((e) => !e.interactive)
   const items: CompletionItem[] =
-    trigger && dismissedAt !== trigger.start ? completionItems(trigger, catalog, fileIndex) : []
+    trigger && dismissedAt !== trigger.start ? completionItems(trigger, offered, fileIndex) : []
   const menuOpen = items.length > 0
   const active = Math.min(activeIdx, Math.max(0, items.length - 1))
 
   const accept = (item: CompletionItem) => {
-    if (!trigger) return
+    if (!trigger || disabled) return
     const next = applyCompletion(value, trigger, item.value)
     onChange(next.text)
     closeMenu()
@@ -360,9 +367,11 @@ export function ChatComposer({
       }
       // Enter accepts only when accepting CHANGES the draft: a fully typed `/model` (the highlighted
       // item is exactly what is already there) is a message, and Enter sends it as before.
+      // A bare `@` (no query yet) is not a choice either: "hello @" + Enter sends. Tab still accepts.
       const typedExactly =
         !!trigger && value.slice(trigger.start, trigger.end) === (trigger.kind === 'slash' ? '/' : '@') + items[active].value
-      if ((e.key === 'Enter' && !e.shiftKey && !typedExactly) || e.key === 'Tab') {
+      const bareAt = trigger?.kind === 'file' && !trigger.query
+      if ((e.key === 'Enter' && !e.shiftKey && !typedExactly && !bareAt) || e.key === 'Tab') {
         e.preventDefault()
         accept(items[active])
         return

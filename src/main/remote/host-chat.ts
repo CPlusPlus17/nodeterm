@@ -63,6 +63,10 @@ export interface HostChatDeps {
   /** The composer's `/` catalog (`readChatCatalog` with the shell's deps bound), for a phone that
    *  asks for it on `chat.status`. Absent = the field is never added. */
   catalog?(q: { nodeId: string; agentId?: string; accountId?: string; cwd?: string }): Promise<ChatCatalog>
+  /** How long the catalog may take before the status goes out WITHOUT it. An SSH node's catalog is
+   *  an ssh round trip (and the child gate's queue) on a master that may be half dead; `chat.status`
+   *  must never wait on that. Default `HOST_CHAT_CATALOG_TIMEOUT_MS`. */
+  catalogTimeoutMs?: number
   /** The approval tickets the host's mirror holds for this node (`pendingTicketsFor`). */
   knownTickets(nodeId: string): string[]
   /** How long a status query may take, and how long a send has to START (the renderer refuses a
@@ -92,6 +96,7 @@ export function mirrorChatSendRefusal(
 export const HOST_CHAT_BUSY_CAP_MS = 30_000
 
 export const HOST_CHAT_RENDERER_TIMEOUT_MS = 3000
+export const HOST_CHAT_CATALOG_TIMEOUT_MS = 4000
 export const HOST_CHAT_SEND_TIMEOUT_MS = 15_000
 
 const TIMED_OUT = Symbol('timed-out')
@@ -184,9 +189,11 @@ export function createHostChat(deps: HostChatDeps): HostChatOps {
       let catalog: ChatCatalog | undefined
       if (opts?.catalog && deps.catalog) {
         try {
-          catalog = sanitizeChatCatalog(
-            await deps.catalog({ nodeId, agentId: node.agentId, accountId: node.accountId, cwd: node.cwd })
+          const built = await withTimeout(
+            deps.catalog({ nodeId, agentId: node.agentId, accountId: node.accountId, cwd: node.cwd }),
+            deps.catalogTimeoutMs ?? HOST_CHAT_CATALOG_TIMEOUT_MS
           )
+          catalog = built === TIMED_OUT ? undefined : sanitizeChatCatalog(built)
         } catch {
           catalog = undefined
         }

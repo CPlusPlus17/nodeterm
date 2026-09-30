@@ -17,6 +17,14 @@ export interface ChatCatalogEntry {
   description: string
   kind: ChatCatalogKind
   scope: ChatCatalogScope
+  /**
+   * A built-in that opens a DIALOG or picker in the agent's TUI (`/model`, `/rewind`, `/resume`, …).
+   * The ⌘M view cannot see that dialog, and the agent state still reads `done` while it is up, so the
+   * next message's Enter would ANSWER it (confirm its highlighted row). After such a command is sent
+   * the panel flips to the terminal (ChatPanel's send), and a composer that cannot flip does not
+   * offer it. Built-ins only; a custom command or skill is a prompt, never a dialog.
+   */
+  interactive?: true
 }
 
 export interface ChatCatalog {
@@ -74,7 +82,13 @@ export function sanitizeChatCatalog(raw: unknown): ChatCatalog {
     if (!name || typeof r.kind !== 'string' || !KINDS.has(r.kind) || typeof r.scope !== 'string' || !SCOPES.has(r.scope)) {
       continue
     }
-    out.push({ name, description: catalogDescription(r.description), kind: r.kind as ChatCatalogKind, scope: r.scope as ChatCatalogScope })
+    out.push({
+      name,
+      description: catalogDescription(r.description),
+      kind: r.kind as ChatCatalogKind,
+      scope: r.scope as ChatCatalogScope,
+      ...(r.interactive === true ? { interactive: true as const } : {})
+    })
   }
   return { version: 1, entries: out, ...(rec?.partial === true ? { partial: true } : {}) }
 }
@@ -82,23 +96,23 @@ export function sanitizeChatCatalog(raw: unknown): ChatCatalog {
 type Builtin = readonly [name: string, description: string]
 
 /**
- * Built-in slash commands per base harness — ONLY what was measured against the installed CLI on
- * 2026-09-30, and only the general-purpose ones (plan-, login- and experiment-gated entries are
- * left out: a command the user's CLI does not accept is worse than one they have to type). The
- * descriptions are ours, not copied. How each list was measured:
+ * Built-in slash commands per base harness — ONLY what was measured against the installed CLI, by
+ * typing `/` in its interactive TUI inside a private tmux server and paging the whole menu, and
+ * only the general-purpose ones (plan-, login- and experiment-gated entries are left out: a command
+ * the user's CLI does not accept is worse than one they have to type). The descriptions are ours.
  *
- * - claude 2.1.285: typed `/` in the interactive TUI (private tmux server) and paged the whole
- *   menu; cross-checked against the command objects in the binary.
- * - codex 0.156.1: the same, in its TUI.
- * - opencode 1.18.25: the same, on a fresh session (its menu lists 17 commands there).
- * - gemini 0.61.0: its TUI would not start without a login on the measuring host, so the list is
- *   the intersection of the shipped command reference (bundle/docs/reference/commands.md) and the
- *   commands its built-in loader registers.
- * - grok 1.0.13: no login on the measuring host either; the list is the command reference embedded
- *   in the binary (`### /name` sections and the command table).
+ * - claude 2.1.285, codex 0.156.1, opencode 1.18.25 (fresh session: 17 commands) — 2026-09-30.
+ * - gemini 0.62.0 — 2026-09-30, with a throwaway HOME and a dummy API key (the menu is client-side;
+ *   no request was made). Every entry below is in that menu.
+ * - grok: NOT listed. 1.0.44 would not start past its browser sign-in on the measuring host, and a
+ *   list copied from docs is a guess about the binary the user runs.
  *
- * Any other agent (copilot, antigravity, a custom agent with no base) gets no built-ins — it still
- * gets `@` file completion. A custom agent built on one of these inherits its base's list.
+ * Any other agent (grok, copilot, antigravity, a custom agent with no base) gets no built-ins — it
+ * still gets `@` file completion. A custom agent built on one of these inherits its base's list.
+ *
+ * `SAFE` names the built-ins that run at once with no dialog; every OTHER built-in is treated as
+ * `interactive` (see ChatCatalogEntry). Over-tagging costs a flip to the terminal after the send;
+ * under-tagging lets the next message answer a dialog nobody can see — so unknown means dialog.
  */
 const BUILTINS: Readonly<Record<string, readonly Builtin[]>> = Object.freeze({
   claude: [
@@ -193,27 +207,6 @@ const BUILTINS: Readonly<Record<string, readonly Builtin[]>> = Object.freeze({
     ['theme', 'Change the theme'],
     ['tools', 'List available tools']
   ],
-  grok: [
-    ['btw', 'Send an aside without interrupting'],
-    ['compact', 'Compress the conversation to free context'],
-    ['context', 'Show context usage'],
-    ['copy', 'Copy the last response'],
-    ['effort', 'Set the reasoning effort'],
-    ['exit', 'Exit the CLI'],
-    ['export', 'Export the conversation'],
-    ['help', 'Browse commands and shortcuts'],
-    ['hooks', 'Manage hooks'],
-    ['memory', 'Manage memory'],
-    ['model', 'Switch models or reasoning effort'],
-    ['new', 'Start a fresh session'],
-    ['plan', 'Plan mode'],
-    ['rename', 'Rename the session'],
-    ['resume', 'Resume a previous session'],
-    ['rewind', 'Rewind to an earlier turn'],
-    ['settings', 'Open settings'],
-    ['skills', 'Manage skills'],
-    ['usage', 'Show usage']
-  ],
   opencode: [
     ['agents', 'Switch agent'],
     ['connect', 'Connect a provider'],
@@ -233,12 +226,45 @@ const BUILTINS: Readonly<Record<string, readonly Builtin[]>> = Object.freeze({
   ]
 })
 
+const SAFE: Readonly<Record<string, ReadonlySet<string>>> = Object.freeze({
+  claude: new Set(['clear', 'compact', 'init', 'recap', 'reload-skills', 'security-review']),
+  codex: new Set(['clear', 'compact', 'init', 'new', 'recap']),
+  gemini: new Set(['clear', 'compress', 'init']),
+  opencode: new Set(['new'])
+})
+
+function baseWithTable(agentId: string | undefined): string | null {
+  if (!agentId) return null
+  const base = capabilityAgentId(agentId)
+  return Object.prototype.hasOwnProperty.call(BUILTINS, base) ? base : null
+}
+
 /** The measured built-ins for a node's agent (through a custom agent's base harness), or `[]`. */
 export function builtinSlashCommands(agentId: string | undefined): ChatCatalogEntry[] {
-  if (!agentId) return []
-  const base = capabilityAgentId(agentId)
-  if (!Object.prototype.hasOwnProperty.call(BUILTINS, base)) return []
-  return BUILTINS[base].map(([name, description]) => ({ name, description, kind: 'builtin', scope: 'builtin' }))
+  const base = baseWithTable(agentId)
+  if (!base) return []
+  const safe = SAFE[base]
+  return BUILTINS[base].map(([name, description]) => ({
+    name,
+    description,
+    kind: 'builtin' as const,
+    scope: 'builtin' as const,
+    ...(safe?.has(name) ? {} : { interactive: true as const })
+  }))
+}
+
+/**
+ * Does this SENT text open a dialog in the agent's TUI — a built-in of that agent tagged
+ * `interactive`, typed from the menu or by hand, with or without arguments (a flip after
+ * `/model sonnet` costs nothing; a missed dialog costs the next message)? Case-sensitive like the
+ * CLIs' own lookup.
+ */
+export function isInteractiveBuiltin(agentId: string | undefined, text: string): boolean {
+  const base = baseWithTable(agentId)
+  if (!base) return false
+  const m = /^\/([A-Za-z0-9._:-]+)(?:\s|$)/.exec(text.trim())
+  if (!m) return false
+  return BUILTINS[base].some(([name]) => name === m[1]) && !SAFE[base]?.has(m[1])
 }
 
 /** Every agent id with a built-in table (tests walk it). */

@@ -20,7 +20,7 @@
 // then again only after the renderer's short freshness window). Locally every directory listing is
 // cached by the directory's mtime and every file head by (mtime, size), so an unchanged tree costs
 // one `stat` per entry and no reads.
-import { promises as fsp } from 'fs'
+import { constants as fsConstants, promises as fsp } from 'fs'
 import os from 'os'
 import path from 'path'
 import { IPC } from '../shared/ipc'
@@ -52,6 +52,16 @@ export interface CatalogRoot {
   scope: Exclude<ChatCatalogScope, 'builtin'>
   /** A local absolute path, or (remote) a path the remote shell resolves — `~/…` or absolute. */
   dir: string
+  /**
+   * PROJECT roots only: the node's cwd. A project's command and skill folders are whatever the
+   * repository holds, and a symlink committed there (`notes.md -> ~/.git-credentials`) would put the
+   * first line of a file OUTSIDE the project into the menu — and into the phone's catalog. So for a
+   * project root no symlink is followed at any level (entries are lstat'ed, files opened
+   * O_NOFOLLOW; remotely `find -P` and `[ -L ]`), and the root itself must resolve inside `within`.
+   * User roots (the person's own config dir) are followed: that is how shared system skills reach
+   * an account dir.
+   */
+  within?: string
 }
 
 export interface ChatCatalogQuery {
@@ -83,15 +93,15 @@ export function catalogRoots(q: ChatCatalogQuery, opts: { remote: boolean; home?
       }
     } else configDir = opts.remote ? '~/.claude' : path.join(home, '.claude')
     if (cwd) {
-      roots.push({ kind: 'md-commands', scope: 'project', dir: join(cwd, '.claude', 'commands') })
-      roots.push({ kind: 'skills', scope: 'project', dir: join(cwd, '.claude', 'skills') })
+      roots.push({ kind: 'md-commands', scope: 'project', dir: join(cwd, '.claude', 'commands'), within: cwd })
+      roots.push({ kind: 'skills', scope: 'project', dir: join(cwd, '.claude', 'skills'), within: cwd })
     }
     if (configDir) {
       roots.push({ kind: 'md-commands', scope: 'user', dir: join(configDir, 'commands') })
       roots.push({ kind: 'skills', scope: 'user', dir: join(configDir, 'skills') })
     }
   } else if (base === 'gemini') {
-    if (cwd) roots.push({ kind: 'toml-commands', scope: 'project', dir: join(cwd, '.gemini', 'commands') })
+    if (cwd) roots.push({ kind: 'toml-commands', scope: 'project', dir: join(cwd, '.gemini', 'commands'), within: cwd })
     roots.push({ kind: 'toml-commands', scope: 'user', dir: opts.remote ? '~/.gemini/commands' : path.join(home, '.gemini', 'commands') })
   }
   return roots
@@ -126,10 +136,18 @@ function firstBodyLine(body: string): string {
   return ''
 }
 
-/** `git/commit.md` → `git:commit`. Null when any segment is not a typeable name. */
+/** `git/commit.md` → `git:commit`. Null when any segment is not a typeable name. A `SKILL.md` inside
+ *  a claude commands folder names its FOLDER (`review/SKILL.md` → `review`, measured against the
+ *  2.1.285 loader: a file matching `skill.md`, any case, takes the joined folder path); one at the
+ *  top of the root has no folder and is no command. */
 export function commandNameFromRel(rel: string, ext: '.md' | '.toml'): string | null {
   const norm = rel.replace(/\\/g, '/')
   if (!norm.toLowerCase().endsWith(ext)) return null
+  if (ext === '.md' && /(^|\/)skill\.md$/i.test(norm)) {
+    const dirs = norm.split('/').slice(0, -1)
+    if (!dirs.length || dirs.some((p) => !p || p === '.' || p === '..')) return null
+    return catalogName(dirs.join(':'))
+  }
   const parts = norm.slice(0, -ext.length).split('/')
   if (parts.some((p) => !p || p === '.' || p === '..')) return null
   return catalogName(parts.join(':'))
@@ -193,39 +211,47 @@ export function resetChatCatalogCache(): void {
   headCache.clear()
 }
 
-/** A directory's entries (symlinks followed), from cache while the directory's mtime is unchanged.
- *  `null` = the directory does not exist; a failure other than absence throws (→ `partial`). */
-async function listLocalDir(dir: string): Promise<{ name: string; dir: boolean }[] | null> {
+/** A directory's entries, from cache while the directory's mtime is unchanged. `follow` = symlinks
+ *  are followed (user roots); otherwise a symlink is no entry at all and the directory itself must
+ *  not be one (project roots). `null` = the directory does not exist (or is a refused link); a
+ *  failure other than absence throws (→ `partial`). */
+async function listLocalDir(dir: string, follow: boolean): Promise<{ name: string; dir: boolean }[] | null> {
   let st
   try {
-    st = await fsp.stat(dir)
+    st = await (follow ? fsp.stat(dir) : fsp.lstat(dir))
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT' || (e as NodeJS.ErrnoException).code === 'ENOTDIR') return null
     throw e
   }
   if (!st.isDirectory()) return null
-  const hit = dirCache.get(dir)
+  const key = `${follow ? 'f' : 'n'}:${dir}`
+  const hit = dirCache.get(key)
   if (hit && hit.mtimeMs === st.mtimeMs) return hit.entries
   const names = (await fsp.readdir(dir)).sort().slice(0, CATALOG_ROOT_MAX_FILES * 2)
   const entries: { name: string; dir: boolean }[] = []
   for (const name of names) {
     try {
-      const s = await fsp.stat(path.join(dir, name))
+      const s = await (follow ? fsp.stat(path.join(dir, name)) : fsp.lstat(path.join(dir, name)))
       if (s.isDirectory()) entries.push({ name, dir: true })
       else if (s.isFile()) entries.push({ name, dir: false })
     } catch {
       /* a dangling link is no entry */
     }
   }
-  bounded(dirCache, dir, { mtimeMs: st.mtimeMs, entries })
+  bounded(dirCache, key, { mtimeMs: st.mtimeMs, entries })
   return entries
 }
 
-async function readLocalHead(file: string): Promise<string | null> {
+// Absent on Windows, where a project symlink is rare and needs privilege to create; the lstat'ed
+// listing above is the guard there.
+const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0
+
+async function readLocalHead(file: string, follow: boolean): Promise<string | null> {
   try {
     // Open FIRST and stat the handle: the (mtime, size) the cache is keyed on then describes the very
-    // bytes read, never a file swapped in between a path stat and the open.
-    const fh = await fsp.open(file, 'r')
+    // bytes read, never a file swapped in between a path stat and the open. A project file is opened
+    // O_NOFOLLOW, so a symlink swapped in after the listing fails the open instead of being read.
+    const fh = await fsp.open(file, follow ? fsConstants.O_RDONLY : fsConstants.O_RDONLY | O_NOFOLLOW)
     try {
       const st = await fh.stat()
       if (!st.isFile()) return null
@@ -247,7 +273,21 @@ async function readLocalHead(file: string): Promise<string | null> {
 /** The (rel, file) pairs a root holds: `<name>/SKILL.md` for skills, command files up to the depth
  *  cap otherwise. Bounded by `CATALOG_ROOT_MAX_FILES`. */
 async function localRootFiles(root: CatalogRoot): Promise<{ rel: string; file: string }[] | null> {
-  const top = await listLocalDir(root.dir)
+  const follow = root.within === undefined
+  if (!follow) {
+    // The root must resolve inside the project (`.claude -> /elsewhere` leaves it). A root that does
+    // not exist is simply absent.
+    let real: string
+    let realWithin: string
+    try {
+      real = await fsp.realpath(root.dir)
+      realWithin = await fsp.realpath(root.within!)
+    } catch {
+      return null
+    }
+    if (real !== realWithin && !real.startsWith(realWithin.endsWith(path.sep) ? realWithin : realWithin + path.sep)) return null
+  }
+  const top = await listLocalDir(root.dir, follow)
   if (!top) return null
   const out: { rel: string; file: string }[] = []
   if (root.kind === 'skills') {
@@ -265,7 +305,7 @@ async function localRootFiles(root: CatalogRoot): Promise<{ rel: string; file: s
       const r = rel ? `${rel}/${e.name}` : e.name
       if (e.dir) {
         if (depth + 1 >= CATALOG_COMMAND_MAX_DEPTH) continue
-        const sub = await listLocalDir(path.join(dir, e.name)).catch(() => null)
+        const sub = await listLocalDir(path.join(dir, e.name), follow).catch(() => null)
         if (sub) await walk(path.join(dir, e.name), r, sub, depth + 1)
       } else if (e.name.toLowerCase().endsWith(ext)) out.push({ rel: r, file: path.join(dir, e.name) })
     }
@@ -288,7 +328,7 @@ export async function buildLocalCatalog(q: ChatCatalogQuery, opts: { home?: stri
       }
       const out: ChatCatalogEntry[] = []
       for (const f of files ?? []) {
-        const text = await readLocalHead(f.file)
+        const text = await readLocalHead(f.file, root.within === undefined)
         if (text === null) continue
         const e = entryFor(root, f.rel, text)
         if (e) out.push(e)
@@ -315,16 +355,24 @@ const RS = '\u001e'
 export function remoteCatalogCommand(roots: readonly CatalogRoot[]): string {
   const parts = roots.map((root, i) => {
     const d = quoteRemotePath(root.dir)
+    const project = root.within !== undefined
     const emit = `printf '\\036F ${i} %s\\n' "$r"; head -c ${CATALOG_HEAD_BYTES} "$f" 2>/dev/null | tr -d '\\036'; printf '\\n'`
+    // A PROJECT root must resolve inside the node's cwd (`pwd -P` of both — POSIX, BSD and GNU alike),
+    // and nothing under it is followed: `find -P`, and `[ -L ]` on the skill folder and its SKILL.md.
+    // A user root follows links (`find -L`; the glob follows a linked skill folder).
+    const inside = project
+      ? `w=$(cd ${quoteRemotePath(root.within!)} 2>/dev/null && pwd -P) && r0=$(cd "$d" 2>/dev/null && pwd -P) && case "$r0/" in "$w"/*) true;; *) false;; esac`
+      : 'true'
+    const noLinks = project ? `[ -L "\${f%/SKILL.md}" ] && continue; [ -L "$f" ] && continue; ` : ''
     if (root.kind === 'skills') {
       return (
-        `d=${d}; if [ -d "$d" ]; then n=0; for f in "$d"/*/SKILL.md; do [ -f "$f" ] || continue; ` +
+        `d=${d}; if [ -d "$d" ] && ${inside}; then n=0; for f in "$d"/*/SKILL.md; do ${noLinks}[ -f "$f" ] || continue; ` +
         `n=$((n+1)); [ "$n" -le ${CATALOG_ROOT_MAX_FILES} ] || break; r=\${f%/SKILL.md}; r=\${r##*/}; ${emit}; done; fi`
       )
     }
     const ext = root.kind === 'md-commands' ? '*.md' : '*.toml'
     return (
-      `d=${d}; if [ -d "$d" ]; then { find -L "$d" -maxdepth ${CATALOG_COMMAND_MAX_DEPTH} -type f -name ${posixQuote(ext)} 2>/dev/null || printf '\\036E ${i}\\n'; } ` +
+      `d=${d}; if [ -d "$d" ] && ${inside}; then { find ${project ? '-P' : '-L'} "$d" -maxdepth ${CATALOG_COMMAND_MAX_DEPTH} -type f -name ${posixQuote(ext)} 2>/dev/null || printf '\\036E ${i}\\n'; } ` +
       `| head -n ${CATALOG_ROOT_MAX_FILES} | while IFS= read -r f; do case "$f" in "$(printf '\\036')"E*) printf '%s\\n' "$f"; continue;; esac; r=\${f#"$d"/}; ${emit}; done; fi`
     )
   })

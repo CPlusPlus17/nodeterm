@@ -3221,16 +3221,29 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `renderer/lib/chatComposerComplete.ts`; the wire shape, sanitizer, measured tables and ranking in
   `@shared/chat-catalog`; the builder in `core/chat-catalog.ts` behind `chat:catalog`
   (`registerChatCatalogIpc`, registered by BOTH shells). Rules a refactor must not undo:
-  - **Built-ins are only what was MEASURED** (2026-09-30): claude 2.1.285, codex 0.156.1 and opencode
-    1.18.25 by typing `/` in each TUI inside a private tmux server and paging the whole menu; gemini
-    0.61.0 (no login on the measuring host) from its shipped `docs/reference/commands.md` ∩ the names
-    its built-in loader registers; grok 1.0.13 (no login either) from the command reference embedded
-    in its binary. Plan-, login- and experiment-gated entries are left out. Any other agent (copilot,
-    antigravity, a custom agent with no base) has no table and gets `@` only; a custom agent inherits
-    its base's table through `capabilityAgentId`. The descriptions are our own words.
+  - **Built-ins are only what was MEASURED** (2026-09-30), by typing `/` in each TUI inside a private
+    tmux server and paging the whole menu: claude 2.1.285, codex 0.156.1, opencode 1.18.25, gemini
+    0.62.0 (throwaway HOME + a dummy API key — the menu is client-side). **grok has no table**: 1.0.44
+    would not start past its browser sign-in on the measuring host, and a list copied from docs is a
+    guess about the binary the user runs. Plan-, login- and experiment-gated entries are left out.
+    Any other agent (grok, copilot, antigravity, a custom agent with no base) gets `@` only; a custom
+    agent inherits its base's table through `capabilityAgentId`. The descriptions are our own words.
+  - **A built-in that opens a DIALOG in the TUI is `interactive`, and sending one flips to the
+    terminal.** `/model`, `/rewind`, `/resume`, `/config`, `/permissions`, … open a picker the ⌘M view
+    cannot see while the state still reads `done` — the next message's Enter would ANSWER it (confirm
+    the highlighted row), the hazard the toolbar labels already guard. So every built-in is tagged
+    `interactive` EXCEPT a per-agent `SAFE` set of measured no-dialog commands (claude
+    `clear compact init recap reload-skills security-review`, codex `clear compact init new recap`,
+    gemini `clear compress init`, opencode `new`) — unknown means dialog, because over-tagging costs a
+    flip and under-tagging costs a wrong answer. `ChatPanel.send` calls `onShowTerminal` after a send
+    confirmed `=== true` whose text `isInteractiveBuiltin` (menu-completed OR typed by hand, with or
+    without arguments); a composer with no `onShowTerminal` does not offer those entries at all. The
+    phone gets the tag in its catalog and owes the same rule.
   - **Custom commands and skills: claude and gemini only**, at the measured locations. claude:
     `<configDir>/commands/**/*.md` + `<cwd>/.claude/commands/**/*.md` (measured: a subfolder is a
-    `dir:name` namespace; description = frontmatter `description`, else the first body line) and
+    `dir:name` namespace; description = frontmatter `description`, else the first body line; a
+    `SKILL.md` inside a commands folder names its FOLDER, `review/SKILL.md` → `review`, per the 2.1.285
+    loader) and
     `<configDir>/skills/*/SKILL.md` + `<cwd>/.claude/skills/*/SKILL.md` (measured: the frontmatter
     `name` WINS over the folder name, the folder is the fallback, `user-invocable: false` is not
     offered). `<configDir>` is the bound account's dir (`claudeConfigDirFor`, linked accounts
@@ -3240,12 +3253,25 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     custom-commands reference). Precedence project > user > built-in, deduped by name. Other agents'
     custom locations were not measured, so they list none — a guessed location offers commands the
     CLI does not have.
+  - **A PROJECT root follows no symlink, at any level** (`CatalogRoot.within`). A cloned repository's
+    `.claude/commands/notes.md -> ~/.git-credentials` otherwise put the token-bearing first line in
+    the menu and in the phone's catalog (reproduced in review, both legs). Locally entries are
+    lstat'ed and files opened `O_NOFOLLOW`; remotely `find -P` and `[ -L ]` on the skill folder and
+    its SKILL.md; and the root itself must resolve inside the cwd (realpath / `pwd -P`), so a
+    `.claude` linked out of the project lists nothing. USER roots (the person's own config dir) are
+    followed — that is how shared system skills reach an account dir.
   - **Names and descriptions are hostile data** (a project's `.claude/commands` is whatever the
     repository holds): a name passes `catalogName` (closed alphabet `[A-Za-z0-9][A-Za-z0-9._:-]*`,
     ≤ 64, never trimmed) or the entry is dropped; a description is one line with C0/C1 and `\p{Cf}`
     (bidi, zero-width) removed, capped at 160 code points. The renderer re-runs
     `sanitizeChatCatalog` on every reply and renders both as text nodes. `@` never offers a path with
     whitespace, a control or format character, or one failing `isSafeQuickOpenRelPath`.
+  - **The menu is DERIVED from the draft plus a caret snapshot taken for that exact draft**
+    (`caretSnap.value === value`), never kept as its own state. A draft changed outside the textarea
+    — ChatPanel clearing it after the async send, dictation, an attach — invalidates the snapshot and
+    closes the menu (reproduced in review: send `/compact`, the Enter's keyup re-armed the menu from the
+    old text, and Tab then turned the emptied draft back into `/compact `). A disabled composer derives
+    nothing. A bare `@` is not a choice: Enter sends `hello @`, Tab still accepts.
   - **Cost: nothing is polled.** A composer asks on its first `/` (or `@`) and reuses the answer for
     `CATALOG_REUSE_MS` (30 s). Core caches every directory listing by the directory's mtime and
     every file head (first 4 KB) by (mtime, size), so an unchanged tree costs stats, no reads. Per
@@ -3266,7 +3292,12 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     composer offers the shared built-in table alone; `@` uses the peer's own quick-open index, which
     is the right machine. Kanban card modal: the same ChatPanel/composer. **Mobile**: `chat.status`
     carries the same catalog as an OPTIONAL field when the phone sends `catalog: true`
-    (docs/mobile-chat-view.md); an older phone never asks. Adopting it in nodeterm mobile is an iOS
+    (docs/mobile-chat-view.md); an older phone never asks. It is bounded
+    (`HOST_CHAT_CATALOG_TIMEOUT_MS`, 4 s, then the status goes out WITHOUT it — `chat.status` is the
+    relay's status poll and must never wait on an ssh round trip to a half-dead master), and a client
+    asks once per composer open, not on every poll. The Server Edition names an SSH-project node
+    remote (`workspaceStore.sshProjectIdForNode`), so it answers built-ins + `partial` there instead of
+    reading the server's own `~/.claude`. Adopting it in nodeterm mobile is an iOS
     follow-up.
 - **Subagent visualization** (agents in `SUBAGENT_CAPABLE`) — `subagent-start`/`subagent-end`
   normalized events drive a transient `state/agentNodes.ts` store. For Claude they come from

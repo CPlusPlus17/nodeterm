@@ -51,9 +51,11 @@ afterEach(async () => {
   host.remove()
 })
 
-function Harness({ disabled = false }: { disabled?: boolean }) {
+let setDraft: (v: string) => void
+function Harness({ disabled = false, noTerminal = false, clearOnSend = false }: { disabled?: boolean; noTerminal?: boolean; clearOnSend?: boolean }) {
   const [value, setValue] = useState('')
   draft = () => value
+  setDraft = setValue
   return (
     <ChatComposer
       nodeId="n1"
@@ -61,11 +63,16 @@ function Harness({ disabled = false }: { disabled?: boolean }) {
       agentLabel="Agent"
       value={value}
       onChange={setValue}
-      onSend={onSend}
+      onSend={() => {
+        onSend()
+        // ChatPanel clears the draft only AFTER its async pane check and send.
+        if (clearOnSend) setTimeout(() => setValue(''), 40)
+      }}
       placeholder="Message"
       disabled={disabled}
       onWriteRefused={() => {}}
       cwd="/proj"
+      onShowTerminal={noTerminal ? undefined : () => {}}
     />
   )
 }
@@ -94,8 +101,18 @@ async function key(k: string): Promise<KeyboardEvent> {
   return ev
 }
 
-async function mount(disabled = false): Promise<void> {
-  await act(async () => root.render(<Harness disabled={disabled} />))
+async function mount(disabled = false, extra: { noTerminal?: boolean; clearOnSend?: boolean } = {}): Promise<void> {
+  await act(async () => root.render(<Harness disabled={disabled} {...extra} />))
+}
+async function keyup(k: string): Promise<void> {
+  await act(async () => {
+    ta().dispatchEvent(new KeyboardEvent('keyup', { key: k, bubbles: true }))
+  })
+}
+async function tick(): Promise<void> {
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 80))
+  })
 }
 
 describe('ChatComposer completion', () => {
@@ -177,5 +194,57 @@ describe('ChatComposer completion', () => {
     await act(async () => root.render(<Harness disabled />))
     await type('/co')
     expect(options()).toEqual([])
+  })
+
+  it('a draft cleared AFTER the send (ChatPanel\'s async clear) closes the menu — Tab cannot resurrect the command', async () => {
+    await mount(false, { clearOnSend: true })
+    await type('/compact')
+    await key('Enter')
+    // The Enter's own keyup re-syncs from the still-full textarea, then the draft clears.
+    await keyup('Enter')
+    await tick()
+    expect(draft()).toBe('')
+    expect(options()).toEqual([])
+    const tab = await key('Tab')
+    expect(tab.defaultPrevented).toBe(false)
+    expect(draft()).toBe('')
+    expect(onSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('text appended from outside (dictation, attach) closes the menu, so an accept never replaces a range it did not see', async () => {
+    await mount()
+    await type('/co')
+    expect(options().length).toBeGreaterThan(0)
+    await act(async () => setDraft('/co and some dictated words'))
+    expect(options()).toEqual([])
+    await key('Tab')
+    expect(draft()).toBe('/co and some dictated words')
+  })
+
+  it('a composer that becomes disabled with the menu open closes it and accepts nothing', async () => {
+    await mount()
+    await type('/co')
+    await act(async () => root.render(<Harness disabled />))
+    expect(options()).toEqual([])
+    expect(host.querySelector('.term-chat__complete')).toBeNull()
+  })
+
+  it('a bare `@` is not a choice: Enter sends "hello @"; Tab still accepts', async () => {
+    await mount()
+    await type('hello @')
+    expect(options().length).toBeGreaterThan(0)
+    await key('Enter')
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(draft()).toBe('hello @')
+  })
+
+  it('without a way to show the terminal, built-ins that open a TUI dialog are not offered', async () => {
+    // The shared table (what a relay tab gets, and what core's catalog carries for built-ins).
+    api.chat.catalog.mockRejectedValue(new Error('no catalog here'))
+    await mount(false, { noTerminal: true })
+    await type('/mod')
+    expect(options().some((t) => t.startsWith('/model'))).toBe(false)
+    await type('/comp')
+    expect(options().some((t) => t.startsWith('/compact'))).toBe(true)
   })
 })

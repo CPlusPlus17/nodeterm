@@ -24,6 +24,7 @@ import { GROK_AMBIGUOUS_SESSION_MESSAGE, isGrokAmbiguousSessionError } from '@sh
 import { Spinner } from '../components/Spinner'
 import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
 import { sentCommand } from '@shared/chat-command'
+import { isInteractiveBuiltin } from '@shared/chat-catalog'
 import { capabilityAgentId, chatReadsLocalOnly } from '@shared/agents/config'
 import { ChatLoadingStatus } from './ChatPanelFallback'
 import { answerCardState, answerRebindPending, rebindRetryDelay, type BoundAnswerCard } from '../lib/chatAnswer'
@@ -704,6 +705,14 @@ export function ChatPanel({
     setThread((t) => ({ ...t, messages: [...t.messages, { role: 'user', parts: [{ kind: 'text', text }] }] }))
     setOptimistic(true)
     setInput('')
+    // A built-in that opens a dialog in the TUI (`/rewind`, `/resume`, `/model`, …) is now on screen
+    // THERE, invisible from here, and the state still reads `done`: the next message's Enter would
+    // answer it. Go to the terminal — the same hand-off the toolbar's model/effort labels make.
+    // Only after the send was confirmed (`ok === true` above): nothing opened otherwise.
+    if (onShowTerminal && isInteractiveBuiltin(agentId, text)) {
+      onShowTerminal()
+      return
+    }
     // A local command (`/model`, `!ls`) fires no hook: schedule ONE live tail read, one throttle
     // interval out (claude writes the command record once the command ran), so its confirmation
     // retires the working row instead of the 15 s timeout. A read already in flight defers it.
@@ -719,7 +728,7 @@ export function ChatPanel({
       }
       commandReadTimerRef.current = setTimeout(fire, CHAT_LIVE_RELOAD_MIN_MS)
     }
-  }, [api, input, nodeId, agentId])
+  }, [api, input, nodeId, agentId, onShowTerminal])
 
   // The scheduled command read belongs to THIS transcript and this mount.
   useEffect(

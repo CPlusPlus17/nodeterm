@@ -214,6 +214,12 @@ describe('host-chat status', () => {
     expect(s2).toMatchObject({ version: 1, state: 'done' })
     expect(s2).not.toHaveProperty('catalog')
   })
+  it('a catalog that does not answer in time is DROPPED — the status never waits on a half-dead master', async () => {
+    const d = deps({ catalog: vi.fn(() => new Promise<never>(() => {})), catalogTimeoutMs: 20 })
+    const s = await createHostChat(d).status('n1', { catalog: true })
+    expect(s).toMatchObject({ version: 1, state: 'done' })
+    expect(s).not.toHaveProperty('catalog')
+  })
   it('unknown node ⇒ null, renderer never asked', async () => {
     const d = deps()
     expect(await createHostChat(d).status('nope')).toBeNull()
