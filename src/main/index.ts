@@ -360,7 +360,8 @@ import { initStandingHost } from './remote/standing-host'
 import { initRelayHost } from './remote/relay-host-service'
 import { PIN_ROLES, phonePins, retireLegacyPinFile } from './remote/approved-devices'
 import { revokeAllPhones, revokePeerKey } from './remote/peer-revoke'
-import { publicKeyToB64 } from './remote/e2ee'
+import { publicKeyToB64, type KeyPair } from './remote/e2ee'
+import { popProverFor } from '../core/relay/relay-pop'
 import { connectRelayClient, type RelayClientSession } from './remote/relay-client'
 import { relayPtyDataKey } from '../shared/relay-pty-channel'
 import { decodeOffer } from './remote/pairing'
@@ -2336,6 +2337,9 @@ app.whenReady().then(async () => {
     remoteGrants.markDead(grant)
   }
   let pushHostKeyB64: string | null = null
+  // The same key pair, kept so push can prove possession of it (relay-pop.ts). Only a prover closed
+  // over it ever leaves this scope (`popProverFor`); the secret key itself is never passed on.
+  let pushHostKeys: KeyPair | null = null
   let pushHasPairedPhone = false
   const refreshPushIdentity = async (): Promise<void> => {
     try {
@@ -2352,10 +2356,13 @@ app.whenReady().then(async () => {
     // a Keychain ACL prompt even though there is nobody to notify.
     if (!pushHasPairedPhone) {
       pushHostKeyB64 = null
+      pushHostKeys = null
       return
     }
     try {
-      pushHostKeyB64 = publicKeyToB64((await loadOrCreateKeyPair()).publicKey)
+      const kp = await loadOrCreateKeyPair()
+      pushHostKeys = kp
+      pushHostKeyB64 = publicKeyToB64(kp.publicKey)
     } catch {
       // Keyring locked / transient read error: keep the last-known key (never clobber identity).
     }
@@ -2414,7 +2421,9 @@ app.whenReady().then(async () => {
             hostDeviceId: getDeviceId(),
             hostPublicKeyB64: pushHostKeyB64,
             hostLabel: hostname(),
-            hasPairedPhone: pushHasPairedPhone
+            hasPairedPhone: pushHasPairedPhone,
+            // Host-mode push proves possession of the host key through a hostAuth session.
+            prove: pushHostKeys ? popProverFor(pushHostKeys) : undefined
           }
         : null,
     // Granted-mode fallback (unpaired / no relay identity → push to SSH-dropped grants; see the
@@ -2453,7 +2462,9 @@ app.whenReady().then(async () => {
             hostDeviceId: getDeviceId(),
             hostPublicKeyB64: pushHostKeyB64,
             hostLabel: hostname(),
-            hasPairedPhone: pushHasPairedPhone
+            hasPairedPhone: pushHasPairedPhone,
+            // Host-mode push proves possession of the host key through a hostAuth session.
+            prove: pushHostKeys ? popProverFor(pushHostKeys) : undefined
           }
         : null,
     getGrants: allPushGrants,

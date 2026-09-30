@@ -14,6 +14,7 @@
 
 import type { InboxEvent, NodeStateChange, NodeNowChange } from './agent-status-mirror'
 import type { PushGrant } from './push-grants'
+import { fetchPopChallenge, popRefusalOf, type PopProver } from './relay/relay-pop'
 
 const DEFAULT_API_BASE = 'https://api.nodeterm.dev'
 // Batch actionable events landing close together into one POST (≤10 events/call per the contract).
@@ -41,6 +42,9 @@ export interface PushHostIdentity {
   hostPublicKeyB64: string
   hostLabel: string
   hasPairedPhone: boolean
+  /** Proves possession of the host key for a PoP-enabled backend (relay-pop.ts). The secret stays in
+   *  the prover's closure; absent ⇒ host-mode push stays legacy. */
+  prove?: PopProver
 }
 
 /** The per-event body the backend `/v1/push/notify` expects (a subset of InboxEvent). */
@@ -209,6 +213,171 @@ async function postJson(
   }
 }
 
+// ---- Host-mode proof of possession: the hostAuth session ------------------------------------
+// A PoP-enabled backend latches a host the first time it proves it holds its key, and from then on
+// refuses an unproven host-mode notify or live-update (403 pop_required). The host proves once —
+// `/v1/relay/challenge` (purpose `push`) then `POST /v1/push/host-auth` — and attaches the session it
+// gets (`hostAuth`) to every host-mode post until it re-proves. Push never stops anything, so nothing
+// here is terminal: a batch that cannot be proven is DROPPED, exactly like a network error, because an
+// unproven send from a latched host is refused anyway. Only a challenge answered 404/405 means "this
+// backend predates the proof" (relay-pop.ts), and only then does the post go out legacy.
+
+// The server's session TTL is 15 min; re-prove on OUR clock, well inside it, so a skewed clock or a
+// long batch window never presents an expired session.
+const HOST_AUTH_REPROVE_MS = 10 * 60_000
+// Earliest next proving attempt after the Nth failure in a row (the last entry repeats). The first
+// retry is free — a blip costs one batch, not the next minute — but a backend that keeps refusing
+// (no live pairing, a proof it never accepts, its own 429) is asked once a minute, not once a batch:
+// the live-update stream flushes up to once a second, and every attempt spends the per-IP
+// /v1/relay/challenge budget the relay host-token mint needs too.
+const HOST_AUTH_RETRY_MS = [0, 5_000, 15_000, 60_000]
+
+export interface HostAuthCache {
+  /** The session token to attach, undefined for legacy (no prover, or an old backend), or 'drop'
+   *  when a failure means this batch must not go out unproven. Never '' — the backend reads an
+   *  empty `hostAuth` as present-but-invalid. */
+  get(identity: PushHostIdentity): Promise<string | undefined | 'drop'>
+  /** Forget the session (or the old-backend verdict): the next batch proves again. */
+  invalidate(): void
+}
+
+/**
+ * One hostAuth session per sender (notify and live-update each own one: they are independent streams
+ * and each re-proves at most every 10 minutes). The "old backend" verdict is cached the same way, so
+ * a backend without the routes costs one challenge per 10 minutes rather than one per batch. The
+ * challenge, the host-auth post and its body read share ONE `FETCH_TIMEOUT_MS` timer: nothing else
+ * bounds a stalled challenge, and the batch waits on it. Concurrent `get`s share the proof in flight.
+ */
+export function createHostAuthCache(d: { apiBase: string; fetchImpl: typeof fetch; now: () => number }): HostAuthCache {
+  // token undefined = the backend predates the proof (challenge 404/405, or no host-auth route).
+  let cached: { key: string; token: string | undefined; at: number } | null = null
+  let inflight: { key: string; result: Promise<string | undefined | 'drop'> } | null = null
+  let failures = 0
+  let retryAt = 0
+
+  async function establish(id: PushHostIdentity, prove: PopProver): Promise<string | undefined | 'drop'> {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+    try {
+      const ch = await fetchPopChallenge({
+        apiBase: d.apiBase,
+        hostPublicKeyB64: id.hostPublicKeyB64,
+        purpose: 'push',
+        fetch: d.fetchImpl,
+        signal: ctrl.signal
+      })
+      // Never unproven after a transient failure: a latched host's unproven send is refused.
+      if (!ch.ok) return ch.unsupported ? undefined : 'drop'
+      let popProof: string
+      try {
+        popProof = prove({
+          challenge: ch.challenge,
+          serverPublicKeyB64: ch.serverPublicKeyB64,
+          purpose: 'push',
+          subject: id.hostDeviceId
+        })
+      } catch {
+        return 'drop' // a server key the proof cannot use (malformed, or low-order)
+      }
+      let res: Response
+      try {
+        res = await d.fetchImpl(`${d.apiBase}/v1/push/host-auth`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            hostDeviceId: id.hostDeviceId,
+            hostPublicKeyB64: id.hostPublicKeyB64,
+            popChallenge: ch.challenge,
+            popProof
+          }),
+          signal: ctrl.signal
+        })
+      } catch {
+        return 'drop'
+      }
+      if (res.status === 404) return undefined // a backend with the challenge but no session route
+      if (!res.ok) return 'drop' // 403 forbidden (no live pairing) / pop_invalid, 429, 5xx
+      const json = (await res.json().catch(() => null)) as { hostAuth?: unknown } | null
+      if (!json || typeof json.hostAuth !== 'string' || !json.hostAuth) return 'drop'
+      return json.hostAuth
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  return {
+    invalidate() {
+      cached = null
+    },
+    async get(id) {
+      if (!id.prove) return undefined
+      const key = `${id.hostPublicKeyB64}\n${id.hostDeviceId}`
+      if (cached && cached.key === key && d.now() - cached.at < HOST_AUTH_REPROVE_MS) return cached.token
+      if (inflight && inflight.key === key) return inflight.result
+      if (d.now() < retryAt) return 'drop'
+      const result = establish(id, id.prove)
+      inflight = { key, result }
+      try {
+        const r = await result
+        if (r === 'drop') {
+          failures++
+          retryAt = d.now() + HOST_AUTH_RETRY_MS[Math.min(failures, HOST_AUTH_RETRY_MS.length) - 1]
+        } else {
+          failures = 0
+          retryAt = 0
+          cached = { key, token: r, at: d.now() }
+        }
+        return r
+      } finally {
+        if (inflight?.result === result) inflight = null
+      }
+    }
+  }
+}
+
+/** Read a JSON body within `ms` (null past it, or on a body that is not JSON). A response body can
+ *  stall after its headers, and `postJson`'s timer stops at the headers. */
+async function jsonWithin(res: Response, ms: number): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      res.json().catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms)
+      })
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/**
+ * The host-mode post, shared by notify and live-update: attach the session when there is one (the
+ * field only when it is a non-empty string), and forget it when the backend refuses it. The refusal
+ * is read ONLY from a 403 to a post that carried a session: an unproven post's body is never
+ * read — a 403 there (a latched host behind an old-backend verdict, or no live pairing) just
+ * forgets the verdict, so the next batch asks for a challenge again.
+ */
+async function postHostMode(
+  fetchImpl: typeof fetch,
+  cache: HostAuthCache,
+  url: string,
+  host: PushHostIdentity,
+  payload: Record<string, unknown>
+): Promise<void> {
+  const hostAuth = await cache.get(host)
+  if (hostAuth === 'drop') return
+  const res = await postJson(fetchImpl, url, {
+    hostDeviceId: host.hostDeviceId,
+    hostPublicKeyB64: host.hostPublicKeyB64,
+    hostLabel: host.hostLabel,
+    ...payload,
+    ...(hostAuth ? { hostAuth } : {})
+  })
+  if (!res || res.status !== 403 || !host.prove) return
+  if (!hostAuth || popRefusalOf(403, await jsonWithin(res, FETCH_TIMEOUT_MS))) cache.invalidate()
+}
+
 export interface PushNotifyDeps {
   /** Subscribe to actionable inbox events. In production this is `onInboxActionable`. */
   subscribe: (cb: (e: InboxEvent) => void) => () => void
@@ -292,6 +461,9 @@ export function createPushNotify(deps: PushNotifyDeps): PushNotifyHandle {
   const now = deps.now ?? Date.now
   const batchWindowMs = deps.batchWindowMs ?? DEFAULT_BATCH_WINDOW_MS
   const throttleMs = deps.throttleMs ?? DEFAULT_THROTTLE_MS
+
+  // This sender's own hostAuth session (the host-mode proof of possession, above).
+  const hostAuth = createHostAuthCache({ apiBase, fetchImpl, now })
 
   const buffer: PushNotifyEvent[] = []
   // Presence-aware hold queue: while the user is present, accepted alerts wait here (with the mirror
@@ -406,13 +578,9 @@ export function createPushNotify(deps: PushNotifyDeps): PushNotifyHandle {
 
     const url = `${apiBase}/v1/push/notify`
     if (target.host) {
-      // Relay-identity body — byte-identical to the pre-grants shape.
-      await postJson(fetchImpl, url, {
-        hostDeviceId: target.host.hostDeviceId,
-        hostPublicKeyB64: target.host.hostPublicKeyB64,
-        hostLabel: target.host.hostLabel,
-        events
-      })
+      // Relay-identity body — byte-identical to the pre-grants shape when no prover is set, and
+      // carrying `hostAuth` once the host has proven possession of its key.
+      await postHostMode(fetchImpl, hostAuth, url, target.host, { events })
     }
     // …and the grants, in the SAME flush (see resolveSendTarget: a paired phone must not silence
     // the SSH-only ones). PER HOST: each event goes only under the grants swept from the host its
@@ -573,6 +741,9 @@ export function createLiveUpdatePush(deps: LiveUpdateDeps): LiveUpdateHandle {
   const now = deps.now ?? Date.now
   const batchWindowMs = deps.batchWindowMs ?? DEFAULT_LIVE_BATCH_WINDOW_MS
   const coalesceMs = deps.coalesceMs ?? DEFAULT_LIVE_COALESCE_MS
+
+  // Its own hostAuth session, independent of notify's (each re-proves at most every 10 minutes).
+  const hostAuth = createHostAuthCache({ apiBase, fetchImpl, now })
 
   const buffer: LiveUpdateItem[] = []
   // Per-node coalescing of activity/context ticks.
@@ -752,13 +923,9 @@ export function createLiveUpdatePush(deps: LiveUpdateDeps): LiveUpdateHandle {
 
     const url = `${apiBase}/v1/push/live-update`
     if (target.host) {
-      // Relay-identity body — byte-identical to the pre-grants shape.
-      await postJson(fetchImpl, url, {
-        hostDeviceId: target.host.hostDeviceId,
-        hostPublicKeyB64: target.host.hostPublicKeyB64,
-        hostLabel: target.host.hostLabel,
-        updates
-      })
+      // Relay-identity body — byte-identical to the pre-grants shape when no prover is set, and
+      // carrying `hostAuth` once the host has proven possession of its key.
+      await postHostMode(fetchImpl, hostAuth, url, target.host, { updates })
     }
     // …and the grants, in the SAME flush (see resolveSendTarget), PER HOST exactly like notify:
     // an update goes only under the grants swept from its node's host. One POST per live grant,
