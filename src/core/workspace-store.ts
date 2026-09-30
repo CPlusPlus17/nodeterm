@@ -325,6 +325,17 @@ export class WorkspaceStore {
   private index: WorkspaceIndexV3 | null = null
   /** Optional hook fired after every load()/save() — the watcher re-syncs its watch set (Task 5). */
   onPersist?: () => void
+  /**
+   * Some load in THIS run found no readable workspace.json — missing (deleted, a first run, a crash
+   * between the corrupt-file set-aside and the next write), unreadable, or unparsable — so whatever
+   * index this run holds afterwards may have been rebuilt from NOTHING: the renderer's unconditional
+   * boot save writes an EMPTY index over the set-aside file while every project's own
+   * `.nodeterm/project.json` still holds its nodes. `knownNodeIds` then answers undefined for the rest
+   * of the run (controller ruling R44): a live link would otherwise read every node as gone and be
+   * revoked server-side a second after launch — irreversibly. The cost: node-gone and the mirror's
+   * existence pruning wait for the next launch with a readable index (links still end at their expiry).
+   */
+  private indexRebuiltThisRun = false
   /** The content authority, when this process runs one (Server Edition hosting a team). */
   private contentAuthority: ContentAuthorityHooks | null = null
 
@@ -390,6 +401,7 @@ export class WorkspaceStore {
     try {
       raw = await fs.readFile(this.indexPath, 'utf-8')
     } catch {
+      this.indexRebuiltThisRun = true // R44: see the field
       // No index. Usually a first run — but it is also what a crash BETWEEN the sideline rename
       // below and the next index write leaves behind, and that case owes the user the note. Only
       // this branch pays for the readdir, and only for a load that may touch disk anyway.
@@ -400,6 +412,7 @@ export class WorkspaceStore {
     try {
       parsed = JSON.parse(raw)
     } catch {
+      this.indexRebuiltThisRun = true // R44: see the field
       // Same rule as a corrupt project.json: sideline the only copy so the boot flow's
       // unconditional save cannot replace it with an empty index. Read-only callers must not
       // mutate the disk (sideline: false).
@@ -1891,10 +1904,12 @@ export class WorkspaceStore {
    * the entry by its identity TTL alone. Same three-entry-kind scan as `findNode`.
    * Consequence: ONE permanently unavailable local ref or one never-cached SSH project turns
    * existence pruning off for EVERY project, leaving only the 30-day identity TTL.
+   * Also undefined for the rest of a run whose index was rebuilt from nothing (`indexRebuiltThisRun`,
+   * R44): an empty index written over a lost workspace.json is not a read of the projects it lost.
    * Parses through `parsedLastWritten`, so a mirror flush re-parses no unchanged project.json.
    */
   knownNodeIds(): Set<string> | undefined {
-    if (!this.index) return undefined
+    if (!this.index || this.indexRebuiltThisRun) return undefined
     const ids = new Set<string>()
     for (const e of this.index.entries) {
       let nodes: CanvasNodeState[] | undefined

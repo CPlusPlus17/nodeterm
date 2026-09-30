@@ -2347,4 +2347,25 @@ describe('knownNodeIds — every node id in every project, or undefined when it 
     await fresh.load()
     expect(fresh.knownNodeIds()).toBeUndefined()
   })
+  // R44: a lost workspace.json is rebuilt from nothing — the renderer's boot save writes an EMPTY
+  // index while every project.json still holds its nodes. Read as complete, it said every node was
+  // gone (a live link revoked a second after launch).
+  it('stays undefined for the rest of a run whose index was lost or corrupt, whatever is saved after', async () => {
+    await new WorkspaceStore().save(ws([project({ id: 'p-local', cwd: projRoot })]))
+    for (const lose of ['corrupt', 'deleted'] as const) {
+      const index = path.join(userData, 'workspace.json')
+      if (lose === 'corrupt') await fs.writeFile(index, '{nope')
+      else await fs.rm(index, { force: true })
+      const store = new WorkspaceStore()
+      await store.load()
+      await store.save(ws([]))
+      expect(store.knownNodeIds()).toBeUndefined()
+      await store.save(ws([project({ id: 'p-local', cwd: projRoot })]))
+      expect(store.knownNodeIds()).toBeUndefined()
+      // The next run reads a readable index again, and answers.
+      const next = new WorkspaceStore()
+      await next.load()
+      expect([...(next.knownNodeIds() ?? [])]).toEqual(['term-1'])
+    }
+  })
 })
