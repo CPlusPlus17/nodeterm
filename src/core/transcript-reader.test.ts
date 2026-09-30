@@ -4,7 +4,8 @@ import {
   parseTranscriptLines,
   pickSessionName,
   readSessionName,
-  setRemoteTranscriptReader
+  setRemoteTranscriptReader,
+  TASK_NOTIFIED_RESULT
 } from './transcript-reader'
 import type { TranscriptLine } from '../shared/types'
 
@@ -856,12 +857,24 @@ describe('system-injected user records', () => {
       })
     })
 
-    it('a notification with nothing but a summary carries no result key', () => {
-      expect(tool(taskNote('<task-id>b3</task-id>\n<summary>only a summary</summary>'))).toEqual({
+    it('a notification with nothing but a summary still reads as finished: a neutral result', () => {
+      // No result would render as a tool still running (the phone's pending icon, "No result yet").
+      // Neutral, not "done": a summary-only notification is often a START ("… started").
+      const raw = taskNote('<task-id>b3</task-id>\n<summary>Background agent "demo" started</summary>')
+      expect(tool(raw)).toEqual({
         kind: 'tool',
         name: 'Background task',
-        arg: 'only a summary'
+        arg: 'Background agent "demo" started',
+        result: 'notified'
       })
+      expect(TASK_NOTIFIED_RESULT).toBe('notified')
+      expect(parseTranscriptLines(raw)).toEqual([
+        { role: 'tool', text: '$ Background task Background agent "demo" started' },
+        { role: 'tool', text: 'notified' }
+      ])
+      // A status alone is the result, as before; the marker is only for NEITHER status nor body.
+      expect(tool(taskNote('<status>running</status>\n<summary>s</summary>'))).toMatchObject({ result: 'running' })
+      expect(tool(taskNote('<summary>s</summary>\n<event>e</event>'))).toMatchObject({ result: 'e' })
     })
 
     it('matches a whole single <task-notification> element with no origin too', () => {
@@ -881,7 +894,9 @@ describe('system-injected user records', () => {
         { promptSource: 'queued' },
         { promptSource: 'suggestion_accepted' },
         { promptSource: 'sdk' },
-        { promptSource: 'some-future-human-source' }
+        { promptSource: 'some-future-human-source' },
+        // A present null is not "unset": the allowlist asks `=== undefined`.
+        { promptSource: null }
       ]) {
         const msgs = parseChatMessages(userStr(el, extra).split('\n'))
         expect(msgs).toEqual([{ role: 'user', parts: [{ kind: 'text', text: el }] }])

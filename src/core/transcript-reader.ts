@@ -176,6 +176,13 @@ export const COMMAND_OUTPUT_TOOL = 'command output'
 export { BACKGROUND_TASK_TOOL, AGENT_MESSAGE_TOOL, SYSTEM_TOOL, expandPastedContent }
 /** Cap on a system record's full-text `result` (an agent report is long and useful), UTF-16 units. */
 export const SYSTEM_RESULT_MAX = 16384
+/**
+ * The `result` of a task-notification with a summary but neither a status nor a body. Without one the
+ * part has no `result` and renders as a tool still running (the phone shows a pending icon and "No
+ * result yet"). Neutral on purpose, not "done": such a notification is often a START
+ * ("Background agent … started").
+ */
+export const TASK_NOTIFIED_RESULT = 'notified'
 
 export interface SystemRecord {
   name: string
@@ -231,7 +238,8 @@ function taskNotification(content: string): SystemRecord {
   const status = tagText(content, 'status')
   const body = tagText(content, 'result') || tagText(content, 'event')
   if (!summary && !status && !body) return fallback(BACKGROUND_TASK_TOOL, content)
-  const text = status && body ? `${status}: ${body}` : status || body
+  // Neither a status nor a body: the neutral marker, so the chip reads as finished, not running.
+  const text = status && body ? `${status}: ${body}` : status || body || TASK_NOTIFIED_RESULT
   return { name: BACKGROUND_TASK_TOOL, arg: summary.slice(0, CHAT_TOOL_ARG_MAX), result: summarizeResult(text) }
 }
 

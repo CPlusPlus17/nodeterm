@@ -441,7 +441,7 @@ function systemRecords(): string {
     ]),
     // A monitor event: no status, <event> stands in for the result.
     tn(['<task-id>mondemo1</task-id>', '<summary>Monitor event: "demo deploy"</summary>', '<event>12:00:01 deploy done</event>']),
-    // A summary alone: no `result` key.
+    // A summary alone: neither a status nor a body, so the neutral `notified` result.
     tn(['<task-id>bgdemo03</task-id>', '<summary>Background agent "demo" started</summary>']),
     // Repeated task-id, a summary over the 200-unit cap.
     tn(['<task-id>a1</task-id>', '<task-id>a2</task-id>', '<status>killed</status>', `<summary>${'Long summary '.repeat(20)}</summary>`]),
