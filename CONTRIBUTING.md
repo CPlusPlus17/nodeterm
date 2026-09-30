@@ -448,6 +448,12 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   test forces that: without one, the event simply never arrives. Deep version: CLAUDE.md § Hosted
   team relay.
 
+- **A change to canvas content that does not travel as a `canvas:mut` op is lost on a hosted core —
+  route new content edits through the op vocabulary (`src/shared/canvas-content.ts`).** On a Server
+  Edition hosting a team, the canvas authority writes a shared project's nodes, edges and board
+  from the ops it hears, and overlays every save with that content, so a content change that reaches
+  the core only inside a save is dropped from disk. Deep version: CLAUDE.md § Hosted team relay.
+
 - **Normalize BOTH sides of a path comparison, through one function.** A marker normalized where
   it is built and matched raw where it is used is a no-op on the machine you wrote it on and a
   silent defect on Windows. That is issue #558: the managed-hook marker was folded to `/` while

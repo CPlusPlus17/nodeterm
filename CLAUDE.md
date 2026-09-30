@@ -6708,14 +6708,42 @@ The invariants, each with its reason:
   survives Electron IPC. Only `E_JOIN_NETWORK` and `E_JOIN_THROTTLED` (at least 60 s) retry
   unattended. A drop the host did not explain retries 5 times (1/2/4/8/15 s), then stops and says so.
 
+**Shared canvas authority** (doc section of that name; ordering rules in `docs/team-presence.md`).
+`canvas:mut` carries nodes, edges (`edge-*`) and board items (`kb-*`, `shared/kanban-ops.ts`).
+
+- **On the Server Edition, only the canvas authority writes a shared project's content**
+  (`core/canvas-authority.ts`: nodes, bridges, ropes, board items; only in the process that owns the
+  team). A client's whole-workspace save is a stale copy of every canvas it holds, so saves AND
+  loads pass through the authority's overlay (`WorkspaceStore.setContentAuthority`), and an outside
+  edit (a `git pull`) is adopted and published as ops instead of `workspace:external-change`, whose
+  conflict bar would offer "Keep mine" over it. It writes 1 s after the last op, at most 5 s after
+  the first. The consequence for code: **a content change that is not cast as an op is dropped by
+  the next overlaid save.** That is why server canvas control casts a diff of the whole content
+  before every save (`castAndSave`, never a per-verb list, which drifts), and why a hosted relay
+  peer may not `workspace:save` at all (refused for every role). One exception: a node too large
+  to travel as an op is taken from saves.
+- **One reducer, `applyCanvasOp`** (`shared/canvas-content.ts`), applies an op to the authority's
+  state and to every client's STORED copy of a project (background projects, and every board op).
+  Two appliers is how an authority and its clients silently diverge. The only other applier patches
+  the active project's live React Flow array for node ops (`applyMutationToFlow`), because a trip
+  through the serializers would wipe the selection; live edge ops go through the reducer's own edge
+  applier, `applyEdgeMutationToScene`.
+- **The solo-gate trap.** The publisher casts nothing while no teammate is attached, and on a governed
+  project that loses every edit. The gate is `shouldPublishFor` = `(hasPeers || governed) && sameCore
+  && !readOnly`: a Server Edition tab publishes every project until its first `canvas:authority`
+  answer and re-asks on reconnect, and neither our own echo nor a src-less core op proves a peer
+  (`provesPeer`). The desktop answers `[]`, so it is unchanged.
+- **Prune removals are never cast** (`diffKanbanOps`' `liveNodeIds`). Every board commit prunes the
+  cards of nodes that are not live locally, and a client whose node op has not arrived yet would
+  otherwise cast the removal of a fresh card for everyone. `liveNodeIds` is one project's nodes
+  (React Flow ∩ store while the Omni board is open). Card and meta removals are last-writer-wins
+  VALUES; only node, edge, column, label and view removals are rule-4 deletions.
+
 **Known limitations** (full list in the doc): non-editors still receive cross-project presence and
 `context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still
-pauses the shared pty through Stage 2 backpressure; canvas edits made in a hosted tab are not
-written to the host, because a relay tab never saves the host workspace and the reflector persists
-nothing (ruling R42). Workaround: keep a Server Edition browser tab open on the host's core; it
-applies each reflected mutation, marks itself dirty and saves. Edits made while no browser tab is
-attached are lost. Kanban, bridge and rope edits made in a relay tab are never propagated or saved
-at all, because `canvas:mut` carries nodes only; that predates this feature.
+pauses the shared pty through Stage 2 backpressure; the canvas authority's own limits (outside edits
+of name/colour/icon/layouts, the share-time window, oversized nodes, board edits to another core,
+the card modal's comments on a relay tab) are under "Known limits" in the doc.
 
 **Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab).
 Server Edition is the host (the `team` CLI; its browser clients cannot approve and are not hosted

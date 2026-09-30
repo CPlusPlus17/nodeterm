@@ -30,9 +30,10 @@ every message**. The desktop's UI only mirrors it.
 | Role policy | `access-policy.ts` | `VIEW`, `COMMENT`, `EDITOR_ONLY`, `VIEW_EVENTS`; the guard test is `access-policy.guard.test.ts`. |
 | Admin channel | `team-admin.ts` (socket) + `src/server/team-cli.ts` (CLI) | `<dataDir>/relay/admin.sock`, 0600 in a 0700 directory. |
 | Server boot | `src/server/index.ts` (search "Hosted team relay") | Booted in headless AND serving mode, after every handler is registered and the workspace index is loaded. |
+| Canvas authority | `src/core/canvas-authority.ts`; store seams in `src/core/workspace-store.ts`; wired in `src/server/index.ts` | The one writer of a shared project's canvas content. See [Shared canvas authority](#shared-canvas-authority). |
 | Desktop joiner | `src/main/remote/hosted-join.ts`, `relay-bookmarks.ts`; core `join-code.ts`, `join-token.ts` | Runs the core relay client with **no pin store**. |
 | Renderer | `lib/hostedJoin.ts`, `lib/hostedAttempts.ts`, `lib/hostedOwner.ts`, `lib/hostedPendingQueue.ts`, `components/HostedApprovalDialog.tsx`, `bridge/hosted-gate.ts`, `bridge/relay-local-close.ts`, `@shared/hosted-access.ts` | Every hosted branch sits behind a join code, a hosted api or a hosted role, so a Team Access tab and a local tab take their old paths (`canvas/hosted-team.source.test.ts`). |
-| End-to-end test | `src/server/hosted-e2e.test.ts` | A real headless server boot, the real admin socket, access policy, `PtyManager`, git handlers (a real repository) and trust gates, with an in-process relay and a fake token API. |
+| End-to-end test | `src/server/hosted-e2e.test.ts` | A real headless server boot, the real admin socket, access policy, `PtyManager`, git handlers (a real repository) and trust gates, with an in-process relay and a fake token API. It also checks that shared canvas edits are written with no browser attached and survive a restart. |
 
 ## Setup over SSH
 
@@ -98,22 +99,6 @@ default, so you reach it through an SSH tunnel. The password seeds only when non
 on the same data directory still serves the UI, but it skips hosting ("Hosted team relay: NOT
 started — another nodeterm server is already running on this data directory …") and disables its
 agent hooks.
-
-To keep the UI running instead (the route [Limitations](#limitations-v1) needs for saving canvas
-edits), switch the unit to serving mode with a drop-in rather than by editing the unit:
-
-```bash
-mkdir -p ~/.config/systemd/user/nodeterm-server.service.d
-printf '[Service]\nEnvironment=NODETERM_HEADLESS=\n' \
-  > ~/.config/systemd/user/nodeterm-server.service.d/serving.conf
-systemctl --user daemon-reload && systemctl --user restart nodeterm-server
-```
-
-An empty `NODETERM_HEADLESS` is not headless. A drop-in is parsed after the unit and the later
-assignment wins, and the installer (re-run daily by its auto-update) rewrites only the `.service`
-file, never its `.d/` directory, so the drop-in survives updates. For a root install the directory
-is `/etc/systemd/system/nodeterm-server.service.d/`, with plain `systemctl`. If no password exists
-yet, the first boot prints a one-time setup URL to the journal.
 
 A joiner's tab shows **one** project: the first shared project in the host's workspace order
 (`openRelayTab` adopts `projects[0]` of the narrowed workspace). With nothing shared, even an owner
@@ -326,6 +311,109 @@ unapproved after 2.5 s, the tab says "Waiting for an owner of X to approve this 
   from an owner's desktop. The only way the CLI admits a device is `team add-owner`, which makes it
   an owner.
 
+## Shared canvas authority
+
+On the server that owns the team, the **canvas authority** (`src/core/canvas-authority.ts`) is the
+one writer of every shared project's canvas **content**: its nodes, bridges, ropes and board items
+(columns, cards, card metadata, labels, saved views). Clients send edits, never content. Every edit
+travels as a `canvas:mut` op, which the core's reflector places in one total order (`seq`); the
+authority hears each op right after that stamp, judges it with the same ordering rules every client
+uses (`src/shared/canvas-order.ts`: the highest `seq` wins per item, and a causal delete, see
+`docs/team-presence.md`), and applies it through the same reducer (`applyCanvasOp`,
+`src/shared/canvas-content.ts`).
+
+**What is governed.** Every project in `team.json`'s `sharedProjects`, and nothing else. A project
+that is not shared, a server with no team, and a server that found another one on its data directory
+(it creates no authority) are saved as before; so is every desktop's canvas. A shared project's other
+fields (name, colour, icon, layouts, the board's `github` mapping and `pullLinks`) are not governed:
+whole-workspace saves still write them.
+
+**Its four inputs:**
+
+1. **Ops**: from Editors' hosted tabs, from the server's own browser tabs, and from server canvas
+   control, which diffs everything a verb changed and casts each op before it saves (`castAndSave`,
+   `src/server/headless-node-factory.ts`).
+2. **Saves.** Before a whole-workspace save is written, a governed project's content is replaced by
+   the authority's (`overlaySave`). The board is overlaid field by field: its items (columns, cards,
+   metadata, labels, views) come from the authority, `github` and `pullLinks` from the save. This
+   machine's exec fields (`shell`, `ssh.extraArgs`) are carried over from the save's copy of each
+   node, since the authority's own state holds none. A stale copy cannot write content back, with
+   one exception, the oversized node below.
+3. **Loads**, overlaid the same way (`overlayLoad`), so a client that loads sees every op the
+   authority applied, written to disk or not.
+4. **Outside edits.** A `git pull` or hand edit of a governed `.nodeterm/project.json`, seen by the
+   server's file watcher, is adopted: the authority re-applies the ops it has not written yet on top,
+   publishes the difference as `canvas:mut` ops, and broadcasts no `workspace:external-change`, so no
+   client gets the Reload / Keep mine bar (`src/server/workspace-external-watch.ts`).
+
+**Writing.** A governed project is written 1 s after its last op, and at most 5 s after the first op
+not yet written, through the store's atomic content write (`WorkspaceStore.writeProjectContent`: the
+same file a save writes, apart from `rev` and `savedAt`). A failed write keeps every op and retries
+after 1 s, 2 s, 4 s and so on, capped at 30 s. Both server shutdown paths write what is pending
+before they exit, so a crash loses only what was not written yet: normally at most the last 5 s.
+Viewers can watch a terminal an Editor opened once its node is written, because node membership is
+read from the saved canvas.
+
+**When it adopts.** At boot, once `team.json` is loaded, every shared project is read, so an outside
+edit that lands before any op still has a baseline to compare with. `team share` adopts the project;
+`team unshare` writes what is pending, then lets it go (it is saved the old way again). The server's
+browser tabs are told the new governed set (`canvas:authority-changed`). A shared project whose file
+cannot be read stays governed, so its clients keep publishing, but the authority writes nothing for
+it and saves of it pass through unchanged until it can be read. The journal says so once:
+"[canvas-authority] project <id> is shared, but its content could not be read …". `team share` does
+not check the id, so a shared id that is not a project on this core logs the same line.
+
+**Publishing when alone.** A client normally casts nothing while no teammate is attached. On a
+governed project that would lose every edit, so a client publishes whenever the project is governed:
+a Server Edition browser tab asks its core (`canvas:authority`), publishes for every project until
+the first answer arrives, and asks again on reconnect; a hosted relay tab treats every project it
+holds as governed. The desktop answers that it governs nothing, so a desktop publishes exactly as
+before.
+
+**Relay peers cannot save the host's workspace.** A `workspace:save` from a hosted relay peer is
+refused for every role, owners included, with `E_ROLE`: "A hosted team cannot save the host's
+workspace over the relay; edits travel as canvas operations". A whole-workspace save from a peer is a
+stale copy of every canvas it holds. No desktop flow sends one: the desktop's canvas saves go to its
+own local core.
+
+**The oversized-node exception.** A node too large to travel as an op (over `MUTATION_MAX_BYTES`,
+256,000 bytes; in practice a sticky note with a pasted document in it) can only reach the core inside
+a save, so a save may contribute that node. It sits outside the total order; its limits are listed
+below.
+
+**Bridges grant reads.** On the Server Edition, which agent sessions may read each other's context
+(Context Link) is derived from the saved `bridges` of every canvas (`src/server/context-link.ts`). A
+link an Editor draws in a hosted tab is now saved, so it lets the two agents it joins read each
+other's conversation on the host. An Editor already has a shell there, so this is no new power, but
+it is a new way to use it.
+
+### Known limits
+
+- **An outside edit's other fields are not delivered live.** A pulled change to a governed project's
+  name, colour, icon or layouts reaches no client until that client loads again. A Server Edition
+  browser tab that saves before it reloads writes its own copies back over the pulled ones: those
+  fields are still whole-file, last writer wins.
+- **The share-time window.** An edit a client made just before `team share` (not yet cast because it
+  was alone, or cast but not yet saved) is not in what the authority reads from disk, and that
+  client's next save is overlaid, so the edit can be lost from disk. It stays on that client's screen
+  until it reloads. The window is short: a client saves 800 ms after its last change.
+- **Oversized nodes.** A node too large to travel as an op is taken from saves, with three
+  consequences. A client's save issued before that client applied a `remove` of such a node still
+  carries it, so the node is written back and stays until someone removes it again (the other
+  clients see it only after they reload). An outside edit of such a node reaches no client (the op
+  is refused as too large), and the next client save can put the client's older copy back. Two
+  clients holding different copies of one such node replace each other's on every save.
+- **Board edits reach only the active tab's core.** A client casts only to the core its active tab
+  is on. An edit on the Omni board to a lane of a project on another core (a hosted lane while a
+  local tab is active, or the reverse) is not cast, so on a hosted core it is not written either.
+- **The Omni board and a brand-new node.** While the Omni board is open, removing the card of a node
+  created moments ago is not cast (teammates keep the card). For the project on screen, only nodes
+  that are both on the canvas and in the stored copy count as live then, which can only ever cast
+  fewer removals.
+- **The card modal's comments on a relay tab** (`BoardLogPanel`) still read and write the local core's
+  board log, not the host's, because the modal renders outside the tab's session. This predates the
+  authority; it is a follow-up.
+
 ## Status and troubleshooting
 
 `team status --json` returns:
@@ -476,23 +564,7 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   pauses the shared pty for every subscriber until that backlog drains below 256 KB or the peer
   leaves. Past 8 MB its output is dropped (redrawn later) and the pause is handed back
   (`ui-sink-registry.ts`).
-- **Canvas edits in a hosted tab are not saved on the host.** A relay tab never writes the host's
-  workspace (it would replace the whole host index with one project), and the core's canvas
-  reflector persists nothing. So nodes a teammate adds, moves or deletes are live for everyone
-  connected, but are not in the host's project file: a teammate who connects later, or everyone
-  after a host restart, sees the saved canvas. A terminal an Editor starts that way keeps running
-  on the host, but Viewers cannot watch it, because node membership is read from the saved canvas.
-  **Workaround (verified in code, not yet run; device checklist item 12):** run the service in
-  serving mode with the drop-in from setup step 1, and keep a Server Edition browser tab open on it
-  through an SSH tunnel. The one-off serving run in step 1 is not enough: it ends by restarting the
-  headless unit. The reflector sends every mutation to every attached client, and a browser's canvas
-  applies it and marks itself dirty (to its store for a background project, to the live canvas for
-  the active one), so its own autosave writes the edit. Edits made while no browser tab is attached,
-  including across a service restart, are lost. This is a v1 limitation (ruling R42); a server-side
-  persister belongs to sub-project 2.
-- **Kanban, bridge and rope edits made in a relay tab are never propagated or saved.** `canvas:mut`
-  carries nodes only (an upsert or a remove), so project-level state (`kanban`, `bridges`, `ropes`)
-  never leaves the tab. This predates the hosted relay; it holds for Team Access relay tabs too.
+- **Shared canvas edits:** see [Known limits](#known-limits) under Shared canvas authority.
 - **No git for Viewers in a subfolder of a larger repository.** Viewers and Commenters get the git
   panel only for a project that is the top folder of its own repository (or a worktree's). A
   monorepo subfolder shows its files but refuses every git read (see [Roles](#roles)).
@@ -583,8 +655,15 @@ on a Mac and a second desktop as a teammate. Record `team status --json` at each
     is `~/Library/Application Support/node-terminal/remote-peer-key.json` (the setup step 2 command
     prints the key), and `ls ~/Library/Application\ Support/*/remote-peer-key.json` finds no other
     copy.
-12. **Canvas edits survive with a browser tab attached (R42 workaround).** With the service in
-    serving mode (the setup step 1 drop-in) and a Server Edition browser tab open on it, a teammate
-    adds and moves a node in their hosted tab. After `systemctl --user restart nodeterm-server`, a
-    reconnected teammate (and the browser tab) still sees the node where it was moved. Repeat with no
-    browser tab attached: the edit is lost, as documented.
+12. **Edits persist with no browser attached.** With the service headless and no Server Edition tab
+    open, an Editor adds a node, moves another, draws a link and moves a card in a shared project.
+    Wait 5 s, then `systemctl --user restart nodeterm-server`: after the reconnect every edit is
+    still there, and in the project's `.nodeterm/project.json`.
+13. **A `git pull` during a drag.** While a teammate drags a node of a shared project, pull (or hand
+    edit) that project's `.nodeterm/project.json` on the host with a change to another node. No
+    client shows the Reload / Keep mine bar, the pulled change appears on every client, and the
+    teammate's node stays where they dropped it.
+14. **Two cards at once.** Two teammates move two different cards of one shared board at the same
+    moment. Both moves stay, on both screens and after a service restart.
+15. **A Windows joiner.** A teammate on a Windows desktop joins, moves a card and adds a column; both
+    are still there after a service restart.
