@@ -231,6 +231,7 @@ export function spawnSshArgvStream(mux: NativeMux, argv: string[]): NativeStream
       ch.pipe(child.stdout, { end: false })
       ch.stderr.pipe(child.stderr, { end: false })
       ch.on('close', () => finish(channelExit(ch).code ?? 255))
+      if (channelExit(ch).closed) queueMicrotask(() => finish(channelExit(ch).code ?? 255))
       ch.on('error', () => {})
       ch.end()
     },

@@ -61,6 +61,8 @@ export class NativeSshPty {
         ch.on('data', (d: Buffer) => this.emitData(out.write(d)))
         ch.stderr.on('data', (d: Buffer) => this.emitData(err.write(d)))
         ch.on('close', () => this.exit(channelExit(ch).code ?? 255))
+        // Closed before we got here (a remote side that exited at once): report it now.
+        if (channelExit(ch).closed) queueMicrotask(() => this.exit(channelExit(ch).code ?? 255))
         ch.on('error', () => {})
         if (this.paused) ch.pause()
         for (const q of this.queue.splice(0)) ch.write(q)

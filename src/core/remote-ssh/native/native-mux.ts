@@ -68,6 +68,24 @@ interface Conn {
   alive: boolean
   closed: Promise<string>
   forwards: Map<string, ReverseForward>
+  target: SshTarget
+  options: SshOptions
+  /** Channels open on this connection right now. */
+  channels: number
+  /** The server refused a channel here (its MaxSessions): skip it until one closes. */
+  full: boolean
+}
+
+/**
+ * Connections a group may grow to when the server refuses channels (MaxSessions — 10 on a stock
+ * sshd). OpenSSH's answer to the same refusal is a full login per refused client with no bound at
+ * all; this one is bounded so a runaway cannot trip the host's MaxStartups.
+ */
+export const MAX_OVERFLOW_CONNECTIONS = 12
+
+/** ssh2's error for a channel the server refused to open (MaxSessions reached). */
+function isChannelRefused(e: unknown): boolean {
+  return e instanceof Error && /Channel open failure/i.test(e.message)
 }
 
 function targetKey(t: SshTarget): string {
@@ -98,7 +116,20 @@ function defaultConnectSocket(host: string, port: number, timeoutMs: number): Pr
 }
 
 export class NativeMux {
+  /** The PRIMARY connection per ControlPath — the one -O check/exit and forwards speak about. */
   private conns = new Map<string, Conn>()
+  /**
+   * Extra connections a ControlPath grew because its primary's server refused channels. They live
+   * and die with the primary, exactly as mux clients die with their ControlMaster.
+   */
+  private overflow = new Map<string, Conn[]>()
+  /**
+   * Keys unlocked with a passphrase during this process, so an overflow connection (never
+   * interactive) can authenticate without asking again. Held only while some connection is alive —
+   * the "decrypted key in memory for the connection's life" tradeoff of this transport on Windows,
+   * where there is no app-private ssh-agent to hold it instead.
+   */
+  private unlocked = new Map<string, ParsedKey>()
 
   constructor(private deps: NativeMuxDeps) {}
 
@@ -114,6 +145,7 @@ export class NativeMux {
     this.conns.delete(controlPath)
     c.alive = false
     c.client.end()
+    this.endOverflow(controlPath)
     await Promise.race([c.closed, new Promise((r) => setTimeout(r, 2000))])
     return true
   }
@@ -124,7 +156,76 @@ export class NativeMux {
       this.conns.delete(cp)
       c.alive = false
       c.client.end()
+      this.endOverflow(cp)
     }
+    this.unlocked.clear()
+  }
+
+  /** Connections a ControlPath has open (primary + overflow) — diagnostics and tests. */
+  connectionCount(controlPath: string): number {
+    return (this.conns.get(controlPath)?.alive ? 1 : 0) + (this.overflow.get(controlPath)?.length ?? 0)
+  }
+
+  private endOverflow(controlPath: string): void {
+    for (const o of this.overflow.get(controlPath) ?? []) {
+      o.alive = false
+      o.client.end()
+    }
+    this.overflow.delete(controlPath)
+  }
+
+  /**
+   * Open a channel on the ControlPath's group: the first connection not known to be full; on a
+   * refusal, mark it full and move on, growing an overflow connection when every one is. `open`
+   * is the ssh2 call that opens the channel on a given client.
+   */
+  private async openOn<T extends NodeJS.EventEmitter>(
+    controlPath: string,
+    primary: Conn,
+    open: (client: Client, cb: (err: Error | undefined, ch: T) => void) => void,
+    /** Runs INSIDE ssh2's callback, before any await: a consumer attached later can miss the
+     *  channel's exit and close, which may arrive in the same read as the open confirmation. */
+    onOpen?: (ch: T) => void
+  ): Promise<T> {
+    for (let attempt = 0; attempt <= MAX_OVERFLOW_CONNECTIONS + 1; attempt++) {
+      if (!primary.alive) throw new Error(noMasterMessage(controlPath))
+      const group = [primary, ...(this.overflow.get(controlPath) ?? [])].filter((c) => c.alive)
+      let conn = group.find((c) => !c.full)
+      if (!conn) {
+        const extra = this.overflow.get(controlPath) ?? []
+        if (extra.length >= MAX_OVERFLOW_CONNECTIONS) {
+          throw new Error('ssh: channel open failed: the server refused more sessions (MaxSessions)')
+        }
+        conn = this.open(`${controlPath}#${extra.length + 1}`, primary.target, primary.options, { interactive: false })
+        const added = conn
+        extra.push(added)
+        this.overflow.set(controlPath, extra)
+        void added.closed.then(() => {
+          const list = this.overflow.get(controlPath)
+          if (list) this.overflow.set(controlPath, list.filter((o) => o !== added))
+        })
+      }
+      await conn.ready
+      const c = conn
+      try {
+        return await new Promise<T>((resolve, reject) =>
+          open(c.client, (err, ch) => {
+            if (err) return reject(err)
+            c.channels++
+            ch.once('close', () => {
+              c.channels--
+              c.full = false
+            })
+            onOpen?.(ch)
+            resolve(ch)
+          })
+        )
+      } catch (e) {
+        if (!isChannelRefused(e)) throw e
+        c.full = true
+      }
+    }
+    throw new Error('ssh: channel open failed')
   }
 
   /**
@@ -170,7 +271,24 @@ export class NativeMux {
       }
       if (!conn) throw new Error(cp ? noMasterMessage(cp) : 'ssh: no connection')
       await conn.ready
-      return await this.runCommand(conn, p.command ?? '', io)
+      const c = conn
+      let result!: Promise<ExecResult>
+      const start = (ch: ClientChannel): void => {
+        recordExit(ch)
+        result = this.collect(ch, io)
+      }
+      if (cp && !oneOff) {
+        await this.openOn<ClientChannel>(cp, c, (client, cb) => client.exec(p.command ?? '', cb), start)
+      } else {
+        await new Promise<void>((resolve, reject) =>
+          c.client.exec(p.command ?? '', (err, ch) => {
+            if (err) return reject(err)
+            start(ch)
+            resolve()
+          })
+        )
+      }
+      return await result
     } catch (e) {
       return fail(e)
     } finally {
@@ -202,19 +320,16 @@ export class NativeMux {
     }
     const conn = this.conns.get(cp)!
     await conn.ready
-    return new Promise((resolve, reject) => {
-      const cb = (err: Error | undefined, ch: ClientChannel): void => {
-        if (err) return reject(err)
-        recordExit(ch)
-        resolve(ch)
+    const ptyOpts = pty ? { cols: pty.cols, rows: pty.rows, term: pty.term ?? 'xterm-256color' } : undefined
+    return this.openOn<ClientChannel>(cp, conn, (client, cb) => {
+      // recordExit runs INSIDE ssh2's callback, before anything can be awaited (see recordExit).
+      const done = (err: Error | undefined, ch: ClientChannel): void => {
+        if (!err) recordExit(ch)
+        cb(err, ch)
       }
-      if (!pty) {
-        conn.client.exec(p.command ?? '', cb)
-        return
-      }
-      const ptyOpts = { cols: pty.cols, rows: pty.rows, term: pty.term ?? 'xterm-256color' }
-      if (p.command) conn.client.exec(p.command, { pty: ptyOpts }, cb)
-      else conn.client.shell(ptyOpts, cb)
+      if (!ptyOpts) client.exec(p.command ?? '', done)
+      else if (p.command) client.exec(p.command, { pty: ptyOpts }, done)
+      else client.shell(ptyOpts, done)
     })
   }
 
@@ -233,9 +348,12 @@ export class NativeMux {
     const c = conn
     try {
       await c.ready
-      const s = await new Promise<SFTPWrapper>((resolve, reject) =>
-        c.client.sftp((err, sftp) => (err ? reject(err) : resolve(sftp)))
-      )
+      const s =
+        controlPath && !oneOff
+          ? await this.openOn<SFTPWrapper>(controlPath, c, (client, cb) => client.sftp(cb))
+          : await new Promise<SFTPWrapper>((resolve, reject) =>
+              c.client.sftp((err, sftp) => (err ? reject(err) : resolve(sftp)))
+            )
       if (oneOff) s.on('close', () => c.client.end())
       return s
     } catch (e) {
@@ -267,38 +385,31 @@ export class NativeMux {
 
   // ---------------------------------------------------------------------------------------------
 
-  private runCommand(conn: Conn, command: string, io: { stdin?: string | Buffer; timeoutMs?: number }): Promise<ExecResult> {
+  /** Drain an exec channel into an ExecResult (stdin written, timeout enforced). */
+  private collect(ch: ClientChannel, io: { stdin?: string | Buffer; timeoutMs?: number }): Promise<ExecResult> {
     return new Promise((resolve) => {
-      conn.client.exec(command, (err, ch) => {
-        if (err) return resolve(fail(err))
-        const out: Buffer[] = []
-        const errOut: Buffer[] = []
-        let code: number | null = null
-        let signal: string | null = null
-        let timedOut = false
-        let timer: ReturnType<typeof setTimeout> | undefined
-        if (io.timeoutMs && io.timeoutMs > 0) {
-          timer = setTimeout(() => {
-            timedOut = true
-            ch.close()
-          }, io.timeoutMs)
-        }
-        ch.on('data', (d: Buffer) => out.push(d))
-        ch.stderr.on('data', (d: Buffer) => errOut.push(d))
-        ch.on('exit', (c: number | null, s?: string) => {
-          code = c
-          signal = s ?? null
-        })
-        ch.on('close', () => {
-          if (timer) clearTimeout(timer)
-          // A channel that closed with no exit status was cut off (connection dropped, or our own
-          // timeout): report it the way a mux'd ssh does, 255.
-          if (code === null && signal === null) code = 255
-          resolve({ code, signal, stdout: Buffer.concat(out), stderr: Buffer.concat(errOut), timedOut })
-        })
-        if (io.stdin !== undefined) ch.end(io.stdin)
-        else ch.end()
+      const out: Buffer[] = []
+      const errOut: Buffer[] = []
+      let timedOut = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+      if (io.timeoutMs && io.timeoutMs > 0) {
+        timer = setTimeout(() => {
+          timedOut = true
+          ch.close()
+        }, io.timeoutMs)
+      }
+      ch.on('data', (d: Buffer) => out.push(d))
+      ch.stderr.on('data', (d: Buffer) => errOut.push(d))
+      ch.on('close', () => {
+        if (timer) clearTimeout(timer)
+        const { code: c, signal } = channelExit(ch)
+        // A channel that closed with no exit status was cut off (connection dropped, or our own
+        // timeout): report it the way a mux'd ssh does, 255.
+        const code = c === null && signal === null ? 255 : c
+        resolve({ code, signal, stdout: Buffer.concat(out), stderr: Buffer.concat(errOut), timedOut })
       })
+      if (io.stdin !== undefined) ch.end(io.stdin)
+      else ch.end()
     })
   }
 
@@ -312,7 +423,11 @@ export class NativeMux {
       ready: Promise.resolve(),
       alive: true,
       closed,
-      forwards: new Map()
+      forwards: new Map(),
+      target,
+      options,
+      channels: 0,
+      full: false
     }
     let lastError = ''
     client.on('error', (e: Error & { level?: string }) => {
@@ -321,7 +436,12 @@ export class NativeMux {
     })
     client.on('close', () => {
       conn.alive = false
-      if (this.conns.get(controlPath) === conn) this.conns.delete(controlPath)
+      if (this.conns.get(controlPath) === conn) {
+        this.conns.delete(controlPath)
+        // The group dies with its primary, as mux clients die with their ControlMaster.
+        this.endOverflow(controlPath)
+      }
+      if (this.conns.size === 0) this.unlocked.clear()
       resolveClosed(lastError || 'connection closed')
     })
     client.on('unix connection', (info: UNIXConnectionDetails, accept: () => Channel) => {
@@ -441,13 +561,17 @@ export class NativeMux {
     }
     for (const file of files) {
       steps.push(async () => {
+        const cachedKey = this.unlocked.get(file)
+        if (cachedKey) return { type: 'publickey', username, key: cachedKey }
         const data = read(file)
         if (!data) return null
         let key = utils.parseKey(data)
+        let prompted = false
         if (key instanceof Error && /encrypted|passphrase/i.test(key.message)) {
           if (!mode.interactive || options.batchMode || !this.deps.askPassphrase) return null
           // Up to three tries, like ssh's NumberOfPasswordPrompts default.
           for (let i = 0; i < 3 && key instanceof Error; i++) {
+            prompted = true
             const pass = await this.deps.askPassphrase(file, { retry: i > 0, target: `${target.user}@${target.host}` })
             if (pass === null) {
               cancelled.value = true
@@ -457,7 +581,9 @@ export class NativeMux {
           }
         }
         if (key instanceof Error) return null
-        return { type: 'publickey', username, key: Array.isArray(key) ? key[0] : key }
+        const parsed = Array.isArray(key) ? key[0] : key
+        if (prompted) this.unlocked.set(file, parsed)
+        return { type: 'publickey', username, key: parsed }
       })
     }
     let i = 0
@@ -519,7 +645,7 @@ function filteredAgent(agentPath: string, pubFiles: Buffer[]): ReturnType<typeof
   return base
 }
 
-const exits = new WeakMap<ClientChannel, { code: number | null; signal: string | null }>()
+const exits = new WeakMap<ClientChannel, { code: number | null; signal: string | null; closed: boolean }>()
 
 /**
  * Record a channel's exit status the moment it is opened, synchronously. The open confirmation and
@@ -529,17 +655,21 @@ const exits = new WeakMap<ClientChannel, { code: number | null; signal: string |
  * the reconnector after a terminal that simply ended.
  */
 function recordExit(ch: ClientChannel): void {
-  const rec = { code: null as number | null, signal: null as string | null }
+  const rec = { code: null as number | null, signal: null as string | null, closed: false }
   exits.set(ch, rec)
   ch.on('exit', (code: number | null, signal?: string) => {
     rec.code = code
     rec.signal = signal ?? null
   })
+  ch.once('close', () => {
+    rec.closed = true
+  })
 }
 
-/** The exit status recorded for a channel from `channel()` / `shell()` (null until it arrives). */
-export function channelExit(ch: ClientChannel): { code: number | null; signal: string | null } {
-  return exits.get(ch) ?? { code: null, signal: null }
+/** The exit status recorded for a channel from `channel()` / `shell()` (null until it arrives),
+ *  and whether it has already closed — a consumer that attached late checks this first. */
+export function channelExit(ch: ClientChannel): { code: number | null; signal: string | null; closed: boolean } {
+  return exits.get(ch) ?? { code: null, signal: null, closed: false }
 }
 
 function fail(e: unknown): ExecResult {
