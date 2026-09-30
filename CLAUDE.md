@@ -7694,9 +7694,12 @@ nodeterm-server (`src/routes/push-webhook.ts`, `src/lib/host-proof.ts`); the des
 `core/push-webhook.ts` (client), `shared/push-webhook.ts` (types, copy, the example) and
 `PushWebhookPanel.tsx`. Rules a change must keep:
 
-- **Minting, reading and revoking need the relay host SECRET key, not the public identity.** Every
-  other host-authenticated backend route accepts `(hostDeviceId, hostPublicKeyB64)`, and both are
-  known to every paired phone; for a send that only lets the holder reach phones that already
+- **Minting, reading and revoking need the relay host SECRET key, not the public identity.** Other
+  host-authenticated backend routes accept `(hostDeviceId, hostPublicKeyB64)` alone — except, since
+  R44, for a LATCHED host (one that has proven its key once; every host after
+  `POP_REQUIRED_AFTER`), whose host-token mint also needs a relay PoP proof and whose host-mode
+  notify / live-update need a `hostAuth` session (§ Hosted team relay). Both fields are known to
+  every paired phone; for a send that only lets the holder reach phones that already
   trust the host, but a webhook token is DURABLE — whoever can mint or revoke one can keep a live
   token or silently cut the owner's CI alerts. So each management call is a challenge: the server
   answers with an ephemeral X25519 key (derived from its own secret + the challenge, so no state
