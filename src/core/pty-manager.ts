@@ -34,6 +34,7 @@ import {
   remotePasteDelivery,
   remoteCapturePaneArgs,
   remotePaneCommandArgs,
+  remotePaneCwdArgs,
   remoteSessionAgeArgs,
   parseSessionAge,
   remotePaneOwnerCombinedArgs,
@@ -47,6 +48,8 @@ import {
   type RemoteNodeOwnerResolver
 } from './remote-end'
 import { RemoteSessionIndex, type SessionVerdict } from './remote-ssh/remote-session-index'
+import { isSshProgram, nativeExecFileAsync, nativeMux, useNativeSsh } from './remote-ssh/native/native-runtime'
+import { NativeSshPty } from './remote-ssh/native/native-pty'
 import { remotePtySpawnGate, type SpawnSlot } from './remote-ssh/pty-spawn-gate'
 import type { SshConnection } from '../shared/ssh'
 import { recordPendingRemoteKill, type PendingRemoteKill } from './pending-remote-kills'
@@ -78,6 +81,25 @@ import {
   runPasteDelivery
 } from './tmux-naming'
 import { encodeSendKeysHex } from './tmux-control'
+import {
+  ZELLIJ_NESTING_ENV,
+  zellijAttachArgs,
+  zellijCapture,
+  zellijConf,
+  zellijForegroundCommand,
+  zellijKillSession,
+  zellijSendText,
+  zellijSessionState,
+  zellijWriteChars,
+  zellijSocketFits,
+  zellijSocketPath,
+  TYPICAL_SESSION_NAME,
+  loginShellArgs,
+  parseZellijSessionList,
+  type ZellijRun,
+  type ZellijSessionState
+} from './zellij-backend'
+import { normalizeSessionBackend } from '../shared/session-backend'
 import { releasePty, type ReleasablePty } from './pty-release'
 import { terminateWindowsProcessTree } from '../session-host/windows-process-tree'
 import { effectiveSize, type PtySize } from './pty-size'
@@ -212,10 +234,17 @@ const PROBE_TIMEOUT_MS = 6_000
  * just as invisible. Callers may still pass their own `timeout` for the rare op that needs longer.
  */
 const runAsync = ((file: string, args: readonly string[], opts?: object) =>
-  execFileAsync(file, args as string[], {
-    timeout: PROC_TIMEOUT_MS,
-    ...(opts ?? {})
-  } as never)) as unknown as typeof execFileAsync
+  // An ssh side-call on the native transport (Windows; see remote-ssh/native/native-mux.ts) runs
+  // over the project's one connection instead of spawning an ssh that cannot multiplex there.
+  // Same result and error shape as execFile, so no caller below changes.
+  isSshProgram(file) && useNativeSsh()
+    ? nativeExecFileAsync(args, {
+        timeout: ((opts as { timeout?: number } | undefined)?.timeout ?? PROC_TIMEOUT_MS)
+      })
+    : execFileAsync(file, args as string[], {
+        timeout: PROC_TIMEOUT_MS,
+        ...(opts ?? {})
+      } as never)) as unknown as typeof execFileAsync
 
 /** Narrow child-process seam for strict tmux probes/confirmed teardown. Production delegates to
  * the same bounded runner above; focused tests inject a stateful fake so hidden dual-backend
@@ -240,6 +269,9 @@ type ConfirmedProcessRun = (
  * would take the main process down instead of failing this one call.
  */
 function runWithStdin(file: string, args: readonly string[], input: string): Promise<unknown> {
+  if (isSshProgram(file) && useNativeSsh()) {
+    return nativeExecFileAsync(args, { timeout: PROC_TIMEOUT_MS, input })
+  }
   const p = execFileAsync(file, args as string[], { timeout: PROC_TIMEOUT_MS } as never)
   const child = (p as unknown as { child: import('child_process').ChildProcess }).child
   const stdin = child.stdin
@@ -736,6 +768,10 @@ interface Session {
    * `captureForResync`, the final kill in `destroySession`) branches on this the same way it
    * already branches on `sshRemote`.
    */
+  /** Held by a Zellij session (zellij-backend.ts) rather than tmux. `tmuxBacked` is ALSO true for it —
+   *  that field answers "does releasing this client destroy anything", and for Zellij it does not —
+   *  so every path that would talk to the tmux socket asks this first. */
+  zellij?: boolean
   sessionHost?: boolean
 }
 
@@ -966,6 +1002,18 @@ export class PtyManager {
   private counter = 0
   private tmuxPath: string | null = null
   private confPath = ''
+  /** The optional Zellij backend (zellij-backend.ts). `undefined` = not looked up yet. */
+  private zellijPathMemo: string | null | undefined
+  private zellijConfPath = ''
+  private zellijConfWritten = ''
+  /**
+   * Node ids whose session this process knows to live in ZELLIJ — recorded when a create picked
+   * Zellij, or a probe (`sessionExists`, `listNodetermSessions`) found one. It is how the paths that
+   * start from a node id alone (capture, paste, the relay host's detached attach, a delete with no
+   * live client) route to the right backend. Never persisted: after a restart it refills from the
+   * renderer's creates and the probes, and a node absent from it is asked of tmux exactly as before.
+   */
+  private zellijKeys = new Set<string>()
   private getSettings: () => Settings = () => DEFAULT_SETTINGS
 
   /**
@@ -986,6 +1034,9 @@ export class PtyManager {
    * exactly as it did before it existed.
    */
   private readProjectSpawnOverrides: ProjectSpawnOverridesReader | null = null
+  /** In-flight project-settings reads, per project, joined by concurrent spawns. See
+   *  `projectSpawnOverrides`. Entries are removed when the read settles — this is not a cache. */
+  private overridesInFlight = new Map<string, Promise<ProjectSpawnOverrides | null>>()
   /** "Which SSH host owns this node?", from the persisted index — see `setRemoteNodeOwner`. */
   private remoteNodeOwner: RemoteNodeOwnerResolver | null = null
   /** ONE shared snapshot interval for all persisted sessions — a per-session interval spawned
@@ -1064,8 +1115,11 @@ export class PtyManager {
       controlSpawn?: ControlSpawn
       confirmedProcessRun?: ConfirmedProcessRun
       runtimePlatform?: NodeJS.Platform
+      /** The Zellij binary (tests point this at a sandboxed release binary); absent = look it up. */
+      zellijBin?: string | null
     } = {}
   ) {
+    if (deps.zellijBin !== undefined) this.zellijPathMemo = deps.zellijBin
     this.controlSpawn = deps.controlSpawn
     this.confirmedProcessRun = deps.confirmedProcessRun ?? runAsync
     this.runtimePlatform = deps.runtimePlatform ?? os.platform()
@@ -1234,6 +1288,8 @@ export class PtyManager {
     // about, so a node that is never wanted again costs nothing.
     if (live) this.shadows.delete(persistKey)
     if (this.sessionByPersistKey(persistKey)) return null
+    // A control-mode client is a tmux client; a Zellij session has nothing of the kind to hold.
+    if (this.zellijKeys.has(persistKey)) return null
     const known = this.released.get(persistKey)
     // A remote (SSH-project) node's tmux server is on the FAR host, reached over that project's
     // ControlMaster on the `nodeterm-rmt` socket. A local `-C attach -t nt-<id>` here would find
@@ -1441,6 +1497,10 @@ export class PtyManager {
       return true
     }
     const settings = this.getSettings()
+    if (this.zellijKeys.has(persistKey)) {
+      const run = settings.tmuxEnabled ? this.zellijRun() : null
+      return run ? zellijWriteChars(run, sessionName(persistKey), data) : false
+    }
     if (!this.tmuxPath || !settings.tmuxEnabled) return false
     // The kill switch, and the reason it sits BELOW tier 1: the painter is the session's own pty,
     // which exists with or without this feature — gating it would turn "no control clients" into
@@ -1628,10 +1688,29 @@ export class PtyManager {
   ): Promise<ProjectSpawnOverrides | null> {
     const read = this.readProjectSpawnOverrides
     if (!read || !options.ownerProjectId) return null
+    const projectId = options.ownerProjectId
+    // COALESCE concurrent reads for one project. A project switch mounts every node in one tick,
+    // and for an SSH project each read is an ssh round trip for the host's settings.json, paced by
+    // the per-master child gate — MEASURED (41-terminal SSH project): those reads spread the
+    // terminals' arrival at the spawn gate over ~1.3 s, in node order, so the on-screen ones came
+    // last. Joining an IN-FLIGHT read only (nothing is cached past its settle) keeps every
+    // freshness property the per-spawn read had: a create that starts after it settles reads anew.
+    let shared = this.overridesInFlight.get(projectId)
+    if (!shared) {
+      const p = Promise.resolve()
+        .then(() => read(projectId))
+        .finally(() => {
+          if (this.overridesInFlight.get(projectId) === p) this.overridesInFlight.delete(projectId)
+        })
+      this.overridesInFlight.set(projectId, p)
+      shared = p
+    }
+    // Each spawn gets its own copy: the answer is shared, the object must not be.
+    const mine = shared.then((o) => (o ? { ...o, ...(o.env ? { env: { ...o.env } } : {}) } : o))
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([
-        read(options.ownerProjectId),
+        mine,
         new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), PROJECT_OVERRIDES_TIMEOUT_MS)
           // Never hold the process open for a settings read nobody is waiting on any more.
@@ -1846,6 +1925,7 @@ export class PtyManager {
     )
     platform().handle(IPC.ptyTmuxStatus, () => this.tmuxStatus())
     platform().handle(IPC.ptyPaneCommand, (persistKey: string) => this.paneCommand(persistKey))
+    platform().handle(IPC.ptyPaneCwd, (persistKey: string) => this.paneCwd(persistKey))
     // Registered HERE, beside its name-only sibling, rather than in either shell: core owns both
     // reads, so the desktop and the Server Edition are served by one line and cannot drift.
     platform().handle(IPC.ptyPaneOwner, (persistKey: string) => this.paneOwner(persistKey))
@@ -1859,6 +1939,8 @@ export class PtyManager {
     // Re-probe when unavailable: the banner polls this while its install command runs, and a
     // successful probe here is what makes new sessions tmux-backed without a restart.
     if (!this.tmuxPath) this.ensureTmux()
+    // Same re-probe promise for Zellij: installed while the app runs ⇒ picked up here.
+    if (this.zellijPathMemo === null) this.zellijPathMemo = undefined
     const available = !!this.tmuxPath
     const hint = available
       ? null
@@ -1871,10 +1953,22 @@ export class PtyManager {
       persistence: {
         enabled: this.getSettings().tmuxEnabled,
         backend:
-          this.runtimePlatform !== 'win32' && available
-            ? 'tmux'
-            : sessionHostSupported() ? 'session-host' : null
-      }
+          // Zellij when it is selected AND found: that is where a new local terminal goes.
+          this.zellijSelected() && this.zellijBin() && this.zellijSocketFitsFor(TYPICAL_SESSION_NAME)
+            ? 'zellij'
+            : this.runtimePlatform !== 'win32' && available
+              ? 'tmux'
+              : sessionHostSupported() ? 'session-host' : null
+      },
+      ...(this.runtimePlatform !== 'win32'
+        ? {
+            zellij: {
+              available: !!this.zellijBin(),
+              selected: normalizeSessionBackend(this.getSettings().sessionBackend) === 'zellij',
+              ...(this.zellijSocketFitsFor(TYPICAL_SESSION_NAME) ? {} : { socketTooLong: true })
+            }
+          }
+        : {})
     }
   }
 
@@ -2014,6 +2108,9 @@ export class PtyManager {
    */
   persistentSpawnAvailable(): boolean {
     if (this.tmuxPath && this.getSettings().tmuxEnabled) return true
+    // A machine with no tmux whose setting picks Zellij still creates a persistent session.
+    if (this.zellijSelected() && this.zellijBin() && this.zellijSocketFitsFor(TYPICAL_SESSION_NAME))
+      return true
     return this.hostBackendEligible()
   }
 
@@ -2377,7 +2474,29 @@ export class PtyManager {
     // IS its probe, see above), so it is refused there too rather than sent a round trip that could
     // create. Fails closed: a viewer never starts anything. One refusal value for both reasons —
     // the renderer's sentence claims only that no running terminal was found.
-    if (options.joinOnly && (fresh || freshUnverified || joinOnlyLocalVerdict === 'unknown'))
+    // The optional Zellij backend — see `decideZellij` for the rule ("the backend follows the
+    // session that exists"). Asked only for a LOCAL persistent node whose tmux session is not there:
+    // a warm tmux session is reattached exactly as before, and SSH projects keep the remote tmux.
+    const zellijChoice =
+      !options.sshRemote &&
+      options.persistKey &&
+      !warmWindowsBackend &&
+      this.runtimePlatform !== 'win32' &&
+      this.getSettings().tmuxEnabled &&
+      !(tmuxBacked && !fresh)
+        ? await this.decideZellij(options.persistKey)
+        : undefined
+    if (zellijChoice?.use) fresh = zellijChoice.fresh
+    // Zellij could not be asked about this node: it may be live there, so never COLD in tmux.
+    else if (zellijChoice?.state === 'unknown') fresh = false
+    // A join-only create on Zellij needs a session we SAW live; anything else could create one.
+    const joinRefused = zellijChoice?.use
+      ? zellijChoice.state !== 'live'
+      : fresh ||
+        freshUnverified ||
+        joinOnlyLocalVerdict === 'unknown' ||
+        zellijChoice?.state === 'unknown'
+    if (options.joinOnly && joinRefused)
       return { sessionId: '', fresh: false, unavailable: 'join-only' }
     // Ensure the login-shell PATH is resolved (prewarmed in init(); usually already settled)
     // so the session env below picks it up — awaiting keeps the event loop free either way.
@@ -2429,11 +2548,20 @@ export class PtyManager {
     // trip. Local spawns are not gated: there is no connection to overrun.
     const spawnSlot =
       options.sshRemote && options.persistKey
-        ? await remotePtySpawnGate.acquire(options.sshRemote.controlPath)
+        ? await remotePtySpawnGate.acquire(options.sshRemote.controlPath, {
+            background: options.onScreen === false
+          })
         : null
     let sessionId: string
     try {
-      sessionId = this.spawnSession(options, clientId, undefined, warmWindowsBackend, projectOverrides)
+      sessionId = this.spawnSession(
+        options,
+        clientId,
+        undefined,
+        warmWindowsBackend,
+        projectOverrides,
+        zellijChoice?.use === true
+      )
     } catch (err) {
       // A spawn that never happened must not hold a slot until the settle deadline — the next node
       // in the queue is waiting on it.
@@ -2509,7 +2637,12 @@ export class PtyManager {
     // cwd lives on the host (its probe would need a remote round trip — deliberately out of v1).
     // Failure/unknowable ⇒ absent ⇒ no banner: the flag is only ever raised on tmux's own answer.
     const staleCwd =
-      !fresh && tmuxBacked && !options.sshRemote && !spawned?.sessionHost && options.persistKey
+      !fresh &&
+      tmuxBacked &&
+      !options.sshRemote &&
+      !spawned?.sessionHost &&
+      !spawned?.zellij &&
+      options.persistKey
         ? await this.paneCwdStale(options.persistKey)
         : false
     return {
@@ -2724,9 +2857,198 @@ export class PtyManager {
     )
   }
 
+  /**
+   * The `zellij` binary, POSIX only (there is no Zellij backend on Windows: the session host owns
+   * persistence there). Same lookup shape as `findSsh`: the login-shell PATH, then the usual install
+   * locations a GUI app's minimal PATH misses (Homebrew, a cargo install). A miss is memoized only
+   * once the async PATH probe has settled, and `tmuxStatus` re-asks, so installing Zellij while the
+   * app runs reaches NEW terminals without a restart — the same promise the tmux probe makes.
+   */
+  private zellijBin(): string | null {
+    if (this.runtimePlatform === 'win32') return null
+    if (this.zellijPathMemo !== undefined) return this.zellijPathMemo
+    let home = ''
+    try {
+      home = os.homedir()
+    } catch {
+      // no home: the fixed paths are still checked
+    }
+    const found = findExecutableSync('zellij', [
+      '/opt/homebrew/bin/zellij',
+      '/usr/local/bin/zellij',
+      '/usr/bin/zellij',
+      ...(home ? [path.join(home, '.cargo', 'bin', 'zellij'), path.join(home, '.local', 'bin', 'zellij')] : [])
+    ])
+    if (found || shellPathNow() !== undefined) this.zellijPathMemo = found
+    return found
+  }
+
+  /** A bound, bounded runner for the Zellij CLI, or null when there is no binary. The nesting
+   *  variables are stripped so an app launched from inside Zellij never aims an action at the
+   *  session it was launched from. */
+  private zellijRun(): ZellijRun | null {
+    const bin = this.zellijBin()
+    if (!bin) return null
+    const env = { ...process.env } as Record<string, string>
+    for (const k of ZELLIJ_NESTING_ENV) delete env[k]
+    return async (args) => {
+      const { stdout, stderr } = await runAsync(bin, args, {
+        env,
+        encoding: 'utf-8',
+        maxBuffer: 50 * 1024 * 1024,
+        timeout: PROBE_TIMEOUT_MS
+      })
+      return { stdout: String(stdout), stderr: String(stderr) }
+    }
+  }
+
+  /** `#{pane_current_command}` for a Zellij session, from one `ps` read (zellijForegroundCommand
+   *  has the measurement). `ps -A -o pid=,ppid=,tpgid=,comm=,args=` is POSIX-shaped on Linux and
+   *  macOS alike. null on any failure — "not a shell yet", the refusing answer. */
+  private async zellijPaneCommand(name: string): Promise<string | null> {
+    if (!this.zellijBin()) return null
+    try {
+      const { stdout } = await runAsync('ps', ['-A', '-o', 'pid=,ppid=,tpgid=,comm=,args='], {
+        encoding: 'utf-8',
+        maxBuffer: 16 * 1024 * 1024,
+        timeout: PROBE_TIMEOUT_MS
+      })
+      return zellijForegroundCommand(String(stdout), name)
+    } catch {
+      return null
+    }
+  }
+
+  /** Whether this machine's setting asks for Zellij for NEW local sessions (persistence on, POSIX). */
+  private zellijSelected(): boolean {
+    const s = this.getSettings()
+    return (
+      this.runtimePlatform !== 'win32' &&
+      s.tmuxEnabled &&
+      normalizeSessionBackend(s.sessionBackend) === 'zellij'
+    )
+  }
+
+  /** Is this node's session a Zellij one? A LIVE session answers for itself; with none, the ids a
+   *  create or probe recorded (`zellijKeys`). */
+  private isZellij(persistKey: string, live?: Session): boolean {
+    return live ? live.zellij === true : this.zellijKeys.has(persistKey)
+  }
+
+  /** Write `<userData>/zellij.kdl` when its content changed (it is generated, like tmux.conf). */
+  private ensureZellijConf(): string {
+    if (!this.zellijConfPath) this.zellijConfPath = path.join(platform().userDataDir, 'zellij.kdl')
+    const conf = zellijConf()
+    if (this.zellijConfWritten !== conf) {
+      try {
+        fs.writeFileSync(this.zellijConfPath, conf)
+        this.zellijConfWritten = conf
+      } catch (error) {
+        console.warn('[pty] could not write zellij.kdl', error instanceof Error ? error.message : error)
+      }
+    }
+    return this.zellijConfPath
+  }
+
+  /**
+   * THE BACKEND FOLLOWS THE SESSION THAT EXISTS. Called for a local persistent node whose tmux
+   * session is NOT there (a warm tmux session always wins and never reaches here). A live Zellij
+   * session is reattached whatever the setting now says — switching the setting must not strand a
+   * running agent in one multiplexer while cold-restore relaunches it in the other — and only a
+   * node with NO session anywhere is created in the backend the setting picks.
+   *
+   *  - `live`    → Zellij, warm (`fresh: false`).
+   *  - `zombie`  → killed first (see `zellijSessionState`), then treated as absent.
+   *  - `unknown` → Zellij only if selected, and then WARM: Zellij could not be asked, and the
+   *                fail-safe direction is never to cold-restore into a pane that may be live.
+   *  - `absent`  → Zellij only if selected, cold.
+   */
+  private async decideZellij(
+    persistKey: string
+  ): Promise<{ use: boolean; fresh: boolean; state: ZellijSessionState }> {
+    const run = this.zellijProbeRun()
+    if (!run) {
+      this.zellijKeys.delete(persistKey)
+      return { use: false, fresh: true, state: 'absent' }
+    }
+    const name = sessionName(persistKey)
+    let state = await zellijSessionState(run, name)
+    if (state === 'zombie') {
+      await zellijKillSession(run, name)
+      state = 'absent'
+    }
+    // Creating needs a socket path Zellij will accept; over the limit it refuses with exit 1 and
+    // the node would open as an exited terminal. Fall back to tmux instead (Settings says so).
+    const canCreate = this.zellijSocketFitsFor(name)
+    const selected = this.zellijSelected() && canCreate
+    const use = state === 'live' || (selected && (state === 'absent' || state === 'unknown'))
+    if (use) this.zellijKeys.add(persistKey)
+    else this.zellijKeys.delete(persistKey)
+    // `unknown` is WARM whatever the setting says: a node that may be live in Zellij must never be
+    // cold-started — snapshot replayed, agent `--resume`d a second time — in a new tmux shell.
+    return { use, fresh: state === 'absent', state }
+  }
+
+  /** The Zellij runner for PROBES of nodes we know nothing about. Only when Zellij is in play on this
+   *  machine — selected now, or used before (our `zellij.kdl` exists: it is written only when a
+   *  Zellij painter is created) — so a tmux user who merely has Zellij installed pays nothing: no
+   *  `list-sessions` per cold create, no `kill-session` per delete. */
+  private zellijProbeRun(): ZellijRun | null {
+    if (!this.getSettings().tmuxEnabled) return null
+    if (!this.zellijSelected()) {
+      try {
+        if (!fs.existsSync(path.join(platform().userDataDir, 'zellij.kdl'))) return null
+      } catch {
+        return null
+      }
+    }
+    return this.zellijRun()
+  }
+
+  /** Would Zellij accept the IPC socket for `name` in this environment (zellijSocketPath)? */
+  private zellijSocketFitsFor(name: string): boolean {
+    const env = process.env as Record<string, string | undefined>
+    return zellijSocketFits(
+      zellijSocketPath(env, os.tmpdir(), process.getuid?.() ?? 0, name),
+      this.runtimePlatform
+    )
+  }
+
+  /**
+   * Live `nt-*` Zellij sessions on this machine (null = could not tell / Zellij not in play). The
+   * session-memory panel measures tmux only, so it says how many it could NOT measure rather than
+   * "no sessions are running" over a machine full of Zellij ones.
+   */
+  async zellijSessionCount(): Promise<number | null> {
+    const run = this.zellijProbeRun()
+    if (!run) return 0
+    try {
+      const listing = parseZellijSessionList((await run(['list-sessions', '-n'])).stdout)
+      return listing.ok ? [...listing.live].filter((n) => isSessionName(n)).length : null
+    } catch (error) {
+      const text = error && typeof error === 'object' ? String((error as { stdout?: unknown }).stdout ?? '') : ''
+      return text.includes('No active zellij sessions found') ? 0 : null
+    }
+  }
+
   async sessionExists(persistKey: string): Promise<boolean> {
     if (this.liveSessionForPersistKey(persistKey)) return true
     const probes: Promise<boolean>[] = []
+    // A Zellij session is a session: the relay host asks this before attaching a phone to a node,
+    // and a "no" there would CREATE a tmux session beside the running Zellij one. `unknown` folds
+    // Only a PARSED listing that shows the session live answers "yes": an `unknown` here would say
+    // every node on the machine exists (the phone's End session then always reports "still
+    // running", and a relay attach never cold-restores). A live answer records the id so the
+    // attach routes to Zellij.
+    const zellij = this.zellijProbeRun()
+    if (zellij) {
+      probes.push(
+        zellijSessionState(zellij, sessionName(persistKey)).then((state) => {
+          if (state === 'live') this.zellijKeys.add(persistKey)
+          return state === 'live'
+        })
+      )
+    }
     if (this.tmuxPath) probes.push(this.tmuxSessionExists(persistKey))
     // Same "would this machine ever choose the host backend" predicate the spawn path uses, and it
     // has to be here rather than only there: `hasSession` goes through `request()`, which
@@ -2843,6 +3165,13 @@ export class PtyManager {
    */
   async captureSnapshot(persistKey: string): Promise<string> {
     const live = this.liveSessionForPersistKey(persistKey)
+    if (this.isZellij(persistKey, live)) {
+      // The visible screen with its SGR, like `capture-pane -e` without `-S`.
+      const run = this.zellijRun()
+      return run
+        ? zellijCapture(run, sessionName(persistKey), { ansi: true, viewport: true })
+        : ''
+    }
     if (live?.sessionHost) {
       try {
         return await sessionHostCapture(sessionName(persistKey), false)
@@ -2918,7 +3247,11 @@ export class PtyManager {
     warmWindowsBackend?: 'session-host' | 'tmux',
     /** What the OWNING project contributes (see `projectSpawnOverrides`) — already resolved,
      *  because this function is synchronous. Null on every path with no proven project owner. */
-    overrides?: ProjectSpawnOverrides | null
+    overrides?: ProjectSpawnOverrides | null,
+    /** `create()`'s Zellij decision. Absent on the detached (relay host) paths, which fall back to
+     *  what this process knows about the node (`zellijKeys`) — a phone attaching to a Zellij node
+     *  must join that session, never create a tmux one beside it. */
+    zellijBackend?: boolean
   ): string {
     // PRE-FLIGHT — refuse before node-pty is touched, not after it fails.
     //
@@ -3245,6 +3578,16 @@ export class PtyManager {
     // Unlike the installed-binary probe, this records the backend selected for THIS generation.
     // A Windows profile may coexist with an MSYS/Cygwin tmux on PATH and must not inherit it.
     let useLocalTmux = false
+    // Set by the Zellij branch below; see zellij-backend.ts.
+    let useLocalZellij = false
+    const zellijBin =
+      !options.sshRemote &&
+      options.persistKey &&
+      warmWindowsBackend === undefined &&
+      settings.tmuxEnabled &&
+      (zellijBackend ?? this.zellijKeys.has(options.persistKey))
+        ? this.zellijBin()
+        : null
 
     // Resolve the session program. A bare 'ssh' is resolved to an absolute path because GUI
     // apps don't inherit the shell PATH; its args come from options.shellArgs.
@@ -3412,6 +3755,24 @@ export class PtyManager {
       attachExistingHost = true
       file = ''
       args = []
+    } else if (zellijBin && options.persistKey) {
+      // Zellij: the painter is a Zellij CLIENT that creates-or-attaches `nt-<id>`. No `-e` list:
+      // a Zellij session is its own server process forked by this client, so `env` — hook env,
+      // account scope, gateway, project and custom-agent values, all merged above — IS the
+      // session's environment, and no value ever sits on an argv (measured in zellij-backend.ts).
+      // The nesting variables go so an app launched from inside Zellij is not refused.
+      for (const k of ZELLIJ_NESTING_ENV) delete env[k]
+      file = zellijBin
+      args = zellijAttachArgs(
+        this.ensureZellijConf(),
+        sessionName(options.persistKey),
+        localSessionShell,
+        // tmux starts its own default shell as a LOGIN shell when neither the node nor the setting
+        // names a program; mirror that so the same rc files run under either backend.
+        program || settings.defaultShell ? localSessionArgs : loginShellArgs(localSessionShell)
+      )
+      useLocalZellij = true
+      this.zellijKeys.add(options.persistKey)
     } else if (this.tmuxPath && settings.tmuxEnabled && options.persistKey) {
       // attach-or-create the persistent session for this node.
       // `-A` = attach-or-create. `-D` = detach OTHER clients on attach. We use `-D` ONLY for the
@@ -3556,13 +3917,22 @@ export class PtyManager {
           )) as unknown as pty.IPty
     } else {
       try {
-        proc = pty.spawn(file, args, {
-          name: 'xterm-256color',
-          cols: options.cols,
-          rows: options.rows,
-          cwd,
-          env
-        })
+        proc =
+          !!(options.sshRemote && options.persistKey && remoteSsh) && useNativeSsh()
+            ? // The remote terminal as a pty CHANNEL on the project's one native connection: no ssh
+              // process (it could not multiplex on Windows). See remote-ssh/native/native-pty.ts.
+              (new NativeSshPty(nativeMux(), args, {
+                cols: options.cols,
+                rows: options.rows,
+                name: 'xterm-256color'
+              }) as unknown as pty.IPty)
+            : pty.spawn(file, args, {
+                name: 'xterm-256color',
+                cols: options.cols,
+                rows: options.rows,
+                cwd,
+                env
+              })
       } catch (err) {
         // node-pty surfaces the underlying failure as a bare "posix_spawnp failed." with no errno.
         // Two different field causes wear that same message, so BOTH are measured before anything is
@@ -3585,7 +3955,7 @@ export class PtyManager {
     // marked remote — otherwise destroy/capture would target a remote tmux that was never spawned
     // and silently leak the local session.
     const remote = options.sshRemote && options.persistKey && remoteSsh ? options.sshRemote : undefined
-    const tmuxBacked = useLocalTmux
+    const tmuxBacked = useLocalTmux || useLocalZellij
     // `useSessionHost` is exactly "did the branch selection above pick the session-host backend",
     // so it needs no re-derivation here — session-host-backed sessions survive losing their
     // client exactly like tmux-backed ones do, for the same reason: the underlying pty lives in a
@@ -3642,7 +4012,8 @@ export class PtyManager {
       unwatchedSince: null,
       pausedBy: new Set<string>(),
       accountFallback,
-      sessionHost: useSessionHost
+      sessionHost: useSessionHost,
+      ...(useLocalZellij ? { zellij: true } : {})
     }
     // Both shared timers are armed by the first session that needs them: the scrollback snapshots
     // and the idle reap are both about tmux-backed sessions and nothing else.
@@ -4313,6 +4684,10 @@ export class PtyManager {
   async captureSession(persistKey: string, full = false): Promise<string> {
     const live = this.liveSessionForPersistKey(persistKey)
     if (live?.nativeWindowsPane) return live.nativeWindowsPane.capture(full)
+    if (this.isZellij(persistKey, live)) {
+      const run = this.zellijRun()
+      return run ? zellijCapture(run, sessionName(persistKey), { full, tailLines: 200 }) : ''
+    }
     // Remote (ssh-project) node: there is no local tmux session — capture from the REMOTE tmux
     // over the project's ControlMaster (mirrors snapshotScrollback / destroySession).
     const sshRemote = live?.sshRemote
@@ -4408,7 +4783,7 @@ export class PtyManager {
         )
         return parsePaneCursor(stdout)
       }
-      if (session.sessionHost) return undefined
+      if (session.sessionHost || session.zellij) return undefined
       if (!this.tmuxPath) return undefined
       const { stdout } = await runAsync(this.tmuxPath, [
         '-L',
@@ -4453,6 +4828,13 @@ export class PtyManager {
     sshRemote?: NonNullable<PtyCreateOptions['sshRemote']>,
     sessionHost = false
   ): Promise<boolean> {
+    if (!sshRemote && this.zellijKeys.has(persistKey)) {
+      const run = this.zellijRun()
+      if (!run) return false
+      const text = await zellijCapture(run, sessionName(persistKey), { ansi: true, tailLines: 1500 })
+      // '' is "no capture" (session gone, Zellij unreachable): keep the last good snapshot.
+      return text ? await this.writeScrollbackIfChanged(persistKey, text) : false
+    }
     if (sshRemote) {
       // Remote (ssh-project) node: capture from the REMOTE tmux over the project's ControlMaster.
       const ssh = findSsh()
@@ -4542,6 +4924,12 @@ export class PtyManager {
     // A direct (non-persistent) Windows PTY has no session-host entry and no tmux: it is typed
     // into through the pane itself. Routing it to the session host below failed every time.
     if (live?.nativeWindowsPane) return live.nativeWindowsPane.sendText(text, enter)
+    if (this.isZellij(persistKey, live)) {
+      // `action paste` applies the pane's own bracketed-paste state — the `paste-buffer -p`
+      // contract — then Enter as a second write. See zellijSendText.
+      const run = this.zellijRun()
+      return run ? zellijSendText(run, target, text, enter) : false
+    }
     const sshRemote = live?.sshRemote
     try {
       if (sshRemote) {
@@ -4584,6 +4972,7 @@ export class PtyManager {
   async paneCommand(persistKey: string): Promise<string | null> {
     const target = sessionName(persistKey)
     const live = this.liveSessionForPersistKey(persistKey)
+    if (this.isZellij(persistKey, live)) return this.zellijPaneCommand(target)
     const sshRemote = live?.sshRemote
     if (sshRemote) {
       const ssh = findSsh()
@@ -4622,6 +5011,53 @@ export class PtyManager {
   }
 
   /**
+   * The live working directory of a node's pane (`#{pane_current_path}` — the cwd of the pane's
+   * foreground process, e.g. the agent CLI), by persistKey. File links resolve a relative path
+   * against the node's LAUNCH cwd first; this is the second candidate, for output printed relative
+   * to wherever the pane has since moved (`cd`, or an agent started from another directory).
+   *
+   * Same dispatch and failure contract as `paneCommand`: the SSH branch asks the REMOTE tmux over
+   * the project's ControlMaster, and every unknown — no live session, no tmux, the session-host
+   * backend (it tracks no cwd), a failed query — is null, never a throw.
+   */
+  async paneCwd(persistKey: string): Promise<string | null> {
+    const target = sessionName(persistKey)
+    const live = this.liveSessionForPersistKey(persistKey)
+    // No Zellij equivalent of `#{pane_current_path}` is used: unknown, and file links fall back to
+    // the launch cwd (ZELLIJ_BACKEND_GAPS). Never asked of the tmux socket, which would be a guess.
+    if (this.isZellij(persistKey, live)) return null
+    const sshRemote = live?.sshRemote
+    if (sshRemote) {
+      const ssh = findSsh()
+      if (!ssh) return null
+      try {
+        const { stdout } = await runAsync(
+          ssh,
+          remotePaneCwdArgs(sshRemote.conn, sshRemote.controlPath, target)
+        )
+        return stdout.trim() || null
+      } catch {
+        return null
+      }
+    }
+    if (live?.sessionHost || !this.tmuxPath) return null
+    try {
+      const { stdout } = await runAsync(this.tmuxPath, [
+        '-L',
+        TMUX_SOCKET,
+        'display-message',
+        '-p',
+        '-t',
+        target,
+        '#{pane_current_path}'
+      ])
+      return stdout.trim() || null
+    } catch {
+      return null
+    }
+  }
+
+  /**
    * How many SECONDS ago was this node's tmux session created — on the machine that holds it?
    *
    * The late cold-start check (`PtyCreateResult.freshUnverified`). When the freshness read could
@@ -4642,6 +5078,7 @@ export class PtyManager {
   async sessionAgeSeconds(persistKey: string): Promise<number | null> {
     const target = sessionName(persistKey)
     const live = this.liveSessionForPersistKey(persistKey)
+    if (this.isZellij(persistKey, live)) return null
     const sshRemote = live?.sshRemote
     if (sshRemote) {
       const ssh = findSsh()
@@ -4688,6 +5125,9 @@ export class PtyManager {
    */
   async terminateForeground(persistKey: string, expectedAgentId?: string): Promise<boolean> {
     if (typeof persistKey !== 'string' || !persistKey || persistKey.length > REF_MAX_LEN) return false
+    // Refused on Zellij (ZELLIJ_BACKEND_GAPS): a signal aimed at a process group read off `ps`
+    // without the pane-owner proof the tmux leg has would be a guess at which process to kill.
+    if (this.isZellij(persistKey, this.liveSessionForPersistKey(persistKey))) return false
     // Identity gate: prove the expected harness owns the foreground group before signalling it.
     // `paneOwner` reads the full argv (local or over the project's ControlMaster) and is null on
     // any uncertainty, which `isAgentPane` maps to `unknown` → refuse.
@@ -4779,6 +5219,9 @@ export class PtyManager {
   async paneOwner(persistKey: string): Promise<PaneOwner | null> {
     const target = sessionName(persistKey)
     const live = this.liveSessionForPersistKey(persistKey)
+    // Agent messaging is refused into a Zellij pane (ZELLIJ_BACKEND_GAPS): null = "could not
+    // prove the owner", which every messaging gate already reads as a refusal.
+    if (this.isZellij(persistKey, live)) return null
     if (live?.nativeWindowsPane) return live.nativeWindowsPane.owner()
     const sshRemote = live?.sshRemote
     try {
@@ -4855,6 +5298,7 @@ export class PtyManager {
   async sendEnvelope(persistKey: string, envelope: string, expected?: PaneOwner): Promise<boolean> {
     if (envelope.length === 0) return false
     const live = this.liveSessionForPersistKey(persistKey)
+    if (this.isZellij(persistKey, live)) return false
     if (live?.nativeWindowsPane) return live.nativeWindowsPane.sendEnvelope(envelope, expected)
     const target = sessionName(persistKey)
     if (this.sessionHostOwns(persistKey, live)) {
@@ -4892,6 +5336,7 @@ export class PtyManager {
 
   async envelopePasteReady(persistKey: string): Promise<boolean> {
     const live = this.liveSessionForPersistKey(persistKey)
+    if (this.isZellij(persistKey, live)) return false
     if (live?.nativeWindowsPane) return live.nativeWindowsPane.pasteAware()
     if (this.sessionHostOwns(persistKey, live)) return sessionHostMessagePasteReady(sessionName(persistKey))
     // Existing tmux path frames in paste-buffer -p.
@@ -4930,8 +5375,22 @@ export class PtyManager {
     const hostSessions = this.hostBackendEligible()
       ? sessionHostListSessions().catch(() => [] as string[])
       : Promise.resolve([] as string[])
-    const [tmux, host] = await Promise.all([tmuxSessions, hostSessions])
-    return [...new Set([...tmux, ...host])]
+    const zellijRun = this.zellijProbeRun()
+    const zellijSessions = zellijRun
+      ? zellijRun(['list-sessions', '-n'])
+          .then(({ stdout }) => {
+            const listing = parseZellijSessionList(stdout)
+            if (!listing.ok) return [] as string[]
+            const ours = [...listing.live].filter((name) => isSessionName(name))
+            // Remembered so the relay host's attach for one of these joins the Zellij session
+            // instead of creating a tmux one beside it.
+            for (const name of ours) this.zellijKeys.add(name.slice('nt-'.length))
+            return ours
+          })
+          .catch(() => [] as string[])
+      : Promise.resolve([] as string[])
+    const [tmux, host, zellij] = await Promise.all([tmuxSessions, hostSessions, zellijSessions])
+    return [...new Set([...tmux, ...host, ...zellij])]
   }
 
   /**
@@ -5104,8 +5563,9 @@ export class PtyManager {
     // let the renderer apply the new profile. Legacy fire-and-forget recycle keeps its historical
     // cleanup-first behavior through endSession's default parameter.
     const sourceSessionHost = !!live?.sessionHost || confirmedSessionHost
+    const sourceZellij = !!live?.zellij || (!live && this.zellijKeys.has(persistKey))
     const sourceTmux =
-      confirmedTmux || (!!live?.tmuxBacked && !live.sessionHost && !live.sshRemote)
+      confirmedTmux || (!!live?.tmuxBacked && !live.sessionHost && !live.zellij && !live.sshRemote)
     // These flags describe independent old backends, not one preferred winner. In particular, a
     // discovered hidden host/tmux generation must not make an indexed direct PTY stop being plain:
     // dropping that local mapping without taskkill/onExit proof leaks the silent process.
@@ -5207,6 +5667,18 @@ export class PtyManager {
           abandonConfirmedRecycle(probeError)
         }
         if (tmuxStillExists) abandonConfirmedRecycle(error)
+      }
+    }
+
+    // Zellij, independently, with the same proof rule as tmux: the kill's acknowledgement or a
+    // re-probe that no longer finds a LIVE session. `unknown` is not proof and abandons.
+    if (sourceZellij) {
+      const run = this.zellijRun()
+      if (!run) abandonConfirmedRecycle(new Error('Zellij is not available to end this session.'))
+      else if (!(await zellijKillSession(run, hostName))) {
+        const state = await zellijSessionState(run, hostName)
+        if (state === 'live' || state === 'unknown')
+          abandonConfirmedRecycle(new Error('Could not end the Zellij session before restarting it.'))
       }
     }
 
@@ -5584,7 +6056,17 @@ export class PtyManager {
           }
         }
       }
+      // Zellij too, by exact name, whenever Zellij is in play here — not only for a node this process
+      // knows to be Zellij-backed: a delete after an app restart, for a node never mounted since,
+      // holds no live session and no record, and skipping it would leave the session running with
+      // nothing on screen. `kill-session` matches exactly and answers "no such session" for a tmux
+      // node, so the extra call ends nothing it should not. Remote nodes never have one.
+      if (remoteEnd.kind === 'none') {
+        const run = this.isZellij(persistKey, dying) ? this.zellijRun() : this.zellijProbeRun()
+        if (run) await zellijKillSession(run, sessionName(persistKey))
+      }
     }
+    this.zellijKeys.delete(persistKey)
     for (const listener of this.sessionEndedListeners) {
       try {
         listener(persistKey)

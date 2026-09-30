@@ -6,6 +6,7 @@ import { parseTeamArgv, runTeamCli, describeStatus, teamArgv } from './team-cli'
 import { startTeamAdmin, adminSocketPath, type AdminStatusResult } from '../core/relay/team-admin'
 import { genKeyPair, publicKeyToB64 } from '../core/relay/e2ee'
 import type { HostedService, HostedStatus } from '../core/relay/hosted-service'
+import { POP_REFUSED_MESSAGE } from '../core/relay/relay-pop'
 
 const KEY = publicKeyToB64(genKeyPair().publicKey)
 
@@ -111,6 +112,16 @@ describe('describeStatus', () => {
     expect(text).toMatch(/refused/)
     expect(text).toMatch(/403/)
     expect(text).toMatch(/restart/)
+  })
+
+  it('a refused key proof prints its advice on its own line, and says how hosting comes back', () => {
+    const lines = describeStatus(idleStatus({ state: 'backend-refused', idle: 0, lastError: POP_REFUSED_MESSAGE }))
+    expect(lines[0]).toBe('Hosting: STOPPED — the nodeterm API refused to issue relay tokens.')
+    expect(lines[1]).toBe(`  ${POP_REFUSED_MESSAGE}`)
+    expect(lines[2]).toBe('  Hosting stays off until nodeterm is updated or the key is rotated.')
+    const text = lines.join('\n')
+    expect(text).not.toMatch(/\.\)\./) // no "…replaced.)." double punctuation
+    expect(text).not.toMatch(/until the service restarts/) // `team rotate-key` restarts hosting in place
   })
 
   it('off states say why, and still list the members', () => {

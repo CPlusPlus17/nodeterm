@@ -223,4 +223,38 @@ describe('bridge clipboard', () => {
     expect(ev.detail.message).not.toMatch(/plain http/i)
     expect(ev.detail.message).toMatch(/copy/i)
   })
+
+  // Issue #759: copy-on-select writes on EVERY completed drag, so a failure toast per drag would
+  // be unusable. The quiet path still tries both routes — it only withholds the banner.
+  it('quiet: still falls back to execCommand, but raises no toast when that fails', () => {
+    const { doc } = fakeDocument(() => false)
+    const dispatchEvent = vi.fn()
+    vi.stubGlobal('navigator', {})
+    vi.stubGlobal('document', doc)
+    vi.stubGlobal('window', { dispatchEvent, isSecureContext: false })
+    buildStubApi().clipboard.writeText('hi', { quiet: true })
+    expect(doc.execCommand).toHaveBeenCalledWith('copy')
+    expect(dispatchEvent).not.toHaveBeenCalled()
+  })
+
+  it('quiet: a rejected Clipboard API falls back without a toast either', async () => {
+    const { doc } = fakeDocument(() => false)
+    const dispatchEvent = vi.fn()
+    const writeText = vi.fn().mockRejectedValue(new Error('NotAllowedError'))
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    vi.stubGlobal('document', doc)
+    vi.stubGlobal('window', { dispatchEvent, isSecureContext: true })
+    buildStubApi().clipboard.writeText('hi', { quiet: true })
+    await vi.waitFor(() => expect(doc.execCommand).toHaveBeenCalledWith('copy'))
+    expect(dispatchEvent).not.toHaveBeenCalled()
+  })
+})
+
+describe('bridge stubs: canvasAuthority', () => {
+  it('governs nothing and assumes nothing by default (only the Server Edition bridge overrides it)', async () => {
+    const s = buildStubApi()
+    expect(s.canvasAuthority.assumeAllUntilAnswered).toBe(false)
+    expect(await s.canvasAuthority.governed()).toEqual([])
+    expect(typeof s.canvasAuthority.onChanged(() => {})).toBe('function')
+  })
 })

@@ -1,6 +1,10 @@
 // src/core/relay/hosted-scheduler.test.ts
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import nacl from 'tweetnacl'
 import { createHostedScheduler, type MintResult, type SchedulerStatus } from './hosted-scheduler'
+import { mintHostToken } from './host-token'
+import { POP_REFUSED_MESSAGE } from './relay-pop'
+import { createTestPopServer } from './relay-pop.test-server'
 
 // Flush with macrotask turns, not a fixed count of microtasks: how many awaits an async mint takes
 // is an implementation detail the tests must not pin.
@@ -405,5 +409,192 @@ describe('hosted scheduler', () => {
     const before = h.mintCalls()
     await h.advance(HOUR)
     expect(h.mintCalls() - before).toBeLessThanOrEqual(200)
+  })
+
+  // --- relay proof of possession (relay-pop.ts) ---
+
+  const popRefused = (reason: 'pop_required' | 'pop_invalid' = 'pop_invalid'): MintResult =>
+    ({ ok: false, kind: 'refused', status: 403, reason })
+
+  it.each(['pop_required', 'pop_invalid'] as const)(
+    'two %s refusals in a row stop with backend-refused and the proof message; the first backs off',
+    async (reason) => {
+      const h = harness([popRefused(reason), popRefused(reason)])
+      h.s.start(); await flush()
+      // The first is transient (a POP_SECRET rotation mid challenge→mint looks exactly like this),
+      // and says so: an operator reading `team status` must not see a bare `network (403)`.
+      expect(h.s.status()).toMatchObject({
+        state: 'running',
+        lastError: `key proof refused once (${reason}) — retrying with a fresh challenge`
+      })
+      expect(h.timers).toHaveLength(1) // the backoff owns the next mint (a fresh challenge)
+      await h.advance(1000)
+      expect(h.mintCalls()).toBe(2)
+      expect(h.s.status()).toMatchObject({ state: 'backend-refused', lastError: POP_REFUSED_MESSAGE })
+      expect(h.timers).toHaveLength(0)
+    }
+  )
+
+  it.each<[string, MintResult]>([
+    ['a 503', { ok: false, kind: 'network', status: 503 }],
+    ['a 429', { ok: false, kind: 'rate-limited', status: 429 }],
+    ['a bad response', { ok: false, kind: 'bad-response' }]
+  ])('a transient failure between two refusals does not reset the count: refusal, %s, refusal stops', async (_label, transient) => {
+    // Only a successful mint (or start()) proves the key is accepted. Resetting on a transient
+    // failure would let a backend that refuses every proof, behind a flaky challenge, loop forever.
+    const h = harness([popRefused(), transient, popRefused()])
+    h.s.start(); await flush()
+    expect(h.s.status().state).toBe('running')
+    await h.advance(1000) // the backoff → the transient failure
+    expect(h.mintCalls()).toBe(2)
+    expect(h.s.status().state).toBe('running')
+    await h.advance(60_000) // the next backoff step (or the 429's 60 s floor) → refused again
+    expect(h.mintCalls()).toBe(3)
+    expect(h.s.status()).toMatchObject({ state: 'backend-refused', lastError: POP_REFUSED_MESSAGE })
+    expect(h.timers).toHaveLength(0)
+  })
+
+  it('each key-proof refusal is logged with its kind: warn on the first, error on the terminal one', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const h = harness([popRefused('pop_required'), popRefused('pop_invalid')])
+      h.s.start(); await flush()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0][0])).toContain('pop_required')
+      expect(error).not.toHaveBeenCalled()
+      await h.advance(1000)
+      expect(h.s.status().state).toBe('backend-refused')
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(error).toHaveBeenCalledTimes(1)
+      expect(String(error.mock.calls[0][0])).toContain('pop_invalid')
+    } finally {
+      warn.mockRestore()
+      error.mockRestore()
+    }
+  })
+
+  it('a refusal that is not a key proof (402) logs nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const h = harness([{ ok: false, kind: 'refused', status: 402 }])
+      h.s.start(); await flush()
+      expect(h.s.status()).toMatchObject({ state: 'backend-refused', lastError: 'refused (402)' })
+      expect(warn).not.toHaveBeenCalled()
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+      error.mockRestore()
+    }
+  })
+
+  it('one PoP refusal then a successful mint: hosting keeps running', async () => {
+    const h = harness([popRefused(), ok()])
+    h.s.start(); await flush()
+    await h.advance(1000)
+    expect(h.s.status()).toMatchObject({ state: 'running', idle: 1 })
+    expect(h.opened).toHaveLength(1)
+  })
+
+  it('a successful mint resets the count: refusal, success, refusal is still transient', async () => {
+    const h = harness([popRefused(), ok(), popRefused(), popRefused()])
+    h.s.start(); await flush()
+    await h.advance(1000) // retry → success
+    expect(h.opened).toHaveLength(1)
+    h.opened[0].ev.onBridged(); await flush() // bridged → a replacement is minted, and refused
+    expect(h.mintCalls()).toBe(3)
+    expect(h.s.status().state).toBe('running') // the first refusal since the success
+    await h.advance(1000)
+    expect(h.mintCalls()).toBe(4)
+    expect(h.s.status().state).toBe('backend-refused') // the second in a row
+  })
+
+  it('start() resets the count: a refusal before a stop does not make the next one terminal', async () => {
+    const h = harness([popRefused(), popRefused()])
+    h.s.start(); await flush()
+    expect(h.s.status().state).toBe('running')
+    h.s.stop()
+    h.s.start(); await flush()
+    expect(h.mintCalls()).toBe(2)
+    expect(h.s.status().state).toBe('running') // the first refusal of THIS run
+  })
+
+  it('a POP_SECRET rotated between the challenge and the mint: the real mint backs off, re-challenges and proves', async () => {
+    // Backend A issues the challenge, backend B (the new secret) verifies the mint: an honest host
+    // earns pop_invalid once. Stopping there would stop every host mid-mint at the rotation.
+    const keys = nacl.box.keyPair()
+    const pub = Buffer.from(keys.publicKey).toString('base64')
+    const oldSecret = createTestPopServer('old-secret-'.padEnd(40, 'o'))
+    const newSecret = createTestPopServer('new-secret-'.padEnd(40, 'n'))
+    let issuer = oldSecret
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+    const f = (async (u: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      if (u.endsWith('/v1/relay/challenge')) {
+        const c = issuer.issue(pub, 'host-token')
+        issuer = newSecret // the rotation lands right after the first challenge
+        return json(200, c)
+      }
+      const proven = newSecret.verify({ hostPublicKeyB64: pub, purpose: 'host-token', subject: String(body.deviceId ?? ''), popChallenge: body.popChallenge, popProof: body.popProof })
+      return proven ? json(200, { pairingToken: 'T', hostId: 'H', exp: 0 }) : json(403, { error: 'pop_invalid' })
+    }) as typeof fetch
+    const mint = () => mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: pub, hostSecretKey: keys.secretKey, fetch: f })
+    const h = harness([mint, mint])
+    h.s.start(); await flush()
+    expect(h.s.status().state).toBe('running')
+    await h.advance(1000); await flush()
+    expect(h.opened).toHaveLength(1)
+    expect(h.s.status().state).toBe('running')
+  })
+
+  it('a pop_required answer to an unproven mint (challenge 404 mid-redeploy) backs off and proves on the retry', async () => {
+    // The real mint against a fake API: while the backend redeploys its proxy answers the challenge
+    // 404, the unproven mint lands on the fresh backend and earns pop_required. That must be a retry,
+    // never backend-refused — and the retry asks for a fresh challenge and proves.
+    const keys = nacl.box.keyPair()
+    const pub = Buffer.from(keys.publicKey).toString('base64')
+    const pop = createTestPopServer()
+    let redeploying = true
+    const urls: string[] = []
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+    const f = (async (u: string, init: RequestInit) => {
+      urls.push(u)
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      if (u.endsWith('/v1/relay/challenge')) return redeploying ? json(404, {}) : json(200, pop.issue(pub, 'host-token'))
+      if (!pop.verify({ hostPublicKeyB64: pub, purpose: 'host-token', subject: String(body.deviceId ?? ''), popChallenge: body.popChallenge, popProof: body.popProof }))
+        return json(403, { error: 'pop_required' })
+      return json(200, { pairingToken: 'T', hostId: 'H', exp: 0 })
+    }) as typeof fetch
+    const mint = () => mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: pub, hostSecretKey: keys.secretKey, fetch: f })
+    const h = harness([mint, mint])
+    h.s.start(); await flush()
+    expect(h.s.status()).toMatchObject({ state: 'running', lastError: 'network (403)' })
+    expect(h.timers).toHaveLength(1) // the backoff owns the next mint
+    expect(h.opened).toHaveLength(0)
+    redeploying = false
+    await h.advance(1000); await flush()
+    expect(h.opened).toHaveLength(1)
+    expect(urls.map((u) => u.replace('https://api', ''))).toEqual([
+      '/v1/relay/challenge', '/v1/relay/host-token', '/v1/relay/challenge', '/v1/relay/host-token'
+    ])
+  })
+
+  it('a rate-limited challenge (429, shared per-IP limit) waits the 60 s floor before the next mint', async () => {
+    const keys = nacl.box.keyPair()
+    const pub = Buffer.from(keys.publicKey).toString('base64')
+    let challenges = 0
+    const f = (async (u: string) => {
+      if (u.endsWith('/v1/relay/challenge')) { challenges++; return new Response('{}', { status: 429 }) }
+      throw new Error('no mint may follow a refused challenge')
+    }) as typeof fetch
+    const mint = () => mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: pub, hostSecretKey: keys.secretKey, fetch: f })
+    const h = harness([mint, mint])
+    h.s.start(); await flush()
+    expect(h.s.status()).toMatchObject({ state: 'running', lastError: 'rate-limited (429)' })
+    await h.advance(59_999)
+    expect(challenges).toBe(1)
+    await h.advance(1)
+    expect(challenges).toBe(2)
   })
 })

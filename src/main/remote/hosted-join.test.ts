@@ -5,7 +5,6 @@
 // runs the real core client against the real hosted service over an in-process transport.
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { joinHostedTeam, connectHostedTeam, removeHostedBookmark, createHostedJoinState, HostedJoinError, type HostedJoinDeps, type HostedJoinEvents, type HostedConnectOptions, type HostedJoinFailure } from './hosted-join'
 import { joinErrorCode, joinRetryAfterMs } from '../../shared/relay-join-errors'
@@ -19,8 +18,10 @@ import { transportPair } from '../../core/relay/transport-pair'
 import type { PeerAttach } from '../../core/relay/relay-host'
 import type { RelayTransport } from '../../core/relay/relay-socket'
 import { IPC } from '../../shared/ipc'
+import { relayPtyDataKey } from '../../shared/relay-pty-channel'
+import { testTmpDir } from '../../core/test-tmp'
 
-const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-join-'))
+const tmpDir = () => testTmpDir('hosted-join-')
 const pub = (k: KeyPair) => publicKeyToB64(k.publicKey)
 
 function codeFor(hostKeys: KeyPair, over: Partial<JoinCode> = {}): JoinCode {
@@ -385,8 +386,10 @@ describe('connectHostedTeam (the relay:client:connect leg for a join code)', () 
       [IPC.relayClientSas('c1'), '123 456'],
       [IPC.relayClientApproved('c1')],
       [IPC.relayClientFrame('c1'), '{"t":"res"}'],
-      [IPC.ptyData('p1'), 'out']
+      // NAMESPACED: the host's `p1` must never land on a local pty's `pty:data:p1` channel.
+      [IPC.ptyData(relayPtyDataKey('c1', 'p1')), 'out']
     ])
+    expect(x.sent.some(([ch]) => ch === IPC.ptyData('p1'))).toBe(false)
   })
 
   it('a close carries the host\'s refusal reason and unregisters the session', async () => {
@@ -672,7 +675,13 @@ function hostedWorld() {
   const svc = createHostedService({
     dataDir: dir, apiBase: 'https://api', relayUrl: 'ws://127.0.0.1/r', deviceId: 'host-dev', hostLabel: 'box',
     attach, projectsOfNode: () => ['P'], nodeOfSession: () => undefined, projectCwd: () => '/srv/app',
-    fetch: (async () => new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 })) as typeof fetch,
+    // Routed by URL: the hosted mint asks for a key-proof challenge first (relay-pop.ts). A 404 is a
+    // pre-proof backend, so the legacy mint follows; answering it with a token body would read as a
+    // malformed challenge and no listener would ever open.
+    fetch: (async (u: string | URL | Request) =>
+      String(u).endsWith('/v1/relay/challenge')
+        ? new Response('{}', { status: 404 })
+        : new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 })) as typeof fetch,
     transport: () => { const { hostT, peerT } = transportPair(); peersT.push(peerT); return hostT }
   })
   live.push({ svc, dir })

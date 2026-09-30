@@ -20,6 +20,7 @@ import { registerAgentEnvIpc } from '../core/agent-env-ipc'
 import { PtyManager } from '../core/pty-manager'
 import { registerCoreHandlers } from './handlers'
 import { registerGitHubIntegration } from '../core/github/integration'
+import { registerBoardDispatchReportIpc } from '../core/board-dispatch-report'
 import { runGitHubCliCommand } from '../core/github/credentials'
 import {
   registerServerGitHubControl,
@@ -51,6 +52,9 @@ import os from 'os'
 import { hookServer } from '../core/agents/hook-server'
 import { serverEditionControlHandler } from './control-unsupported'
 import { initServerCanvasControl, type ServerCanvasControl } from './canvas-control'
+import { registerStationNoticeIpc } from '../core/agents/station-notice'
+import { registerStationOutcomeIpc } from '../core/station-outcome-store'
+import { registerStationHandoverIpc } from '../core/station-handover'
 import { refreshNodeTokens } from '../core/agents/node-token-service'
 import { armServerNodeIdentity } from './node-identity-arm'
 import { wireServerCodexSharedIdentity } from './codex-shared-identity'
@@ -96,11 +100,14 @@ import { codexCliCaps } from '../core/codex-cli'
 import type { CodexCliCaps } from '../shared/types'
 import { claudeConfigDirFor, registerClaudeAccountsSource } from '../core/claude-config-dir'
 import { presenceHub } from '../core/presence/hub'
-import { initCanvasSync } from '../core/canvas-sync'
+import { initCanvasSync, publishCanvasMutation, setReflectedListener } from '../core/canvas-sync'
+import { createCanvasAuthority, type CanvasAuthority } from '../core/canvas-authority'
 import { wireAgentStatus } from './agent-status'
 import { initServerContextLink } from './context-link'
-import { createServerWorkspaceWatcher } from './workspace-external-watch'
+import { createServerWorkspaceWatcher, outsideEditPublisher } from './workspace-external-watch'
 import { registerTranscriptIpc } from '../core/transcript-ipc'
+import { registerChatCatalogIpc } from '../core/chat-catalog'
+import { registerRecentConversationsIpc } from '../core/recent-conversations'
 import { registerContextEnsureIpc } from '../core/context-ensure'
 import { IPC } from '@shared/ipc'
 import { WhisperModelStore } from '../core/speech/whisper-models'
@@ -275,6 +282,13 @@ export async function startServer(
   // Canvas sync: reflect each browser tab's node mutations to the other attached tabs, so every
   // client converges on the same node set (and no tab writes back a node another tab deleted).
   initCanvasSync()
+  // The canvas authority (docs/hosted-team-relay.md): the one writer of the content of every project
+  // shared with a hosted team. Created further down, and only where this process owns the team (not
+  // when another server holds this data dir); read late by everything below that needs it. Until
+  // then — and forever on a server that does not own the team — nothing is governed.
+  let canvasAuthority: CanvasAuthority | null = null
+  // A client asks which projects are governed, to publish its ops for them even when it is alone.
+  platform.handle(IPC.canvasAuthority, () => canvasAuthority?.governedIds() ?? [])
   // Team presence (hello / cursor / focus / chat). The hub itself is joined per WebSocket in
   // ws.ts; this only registers the RPC surface. Presence is transient — nothing is persisted.
   presenceHub.registerIpc()
@@ -378,6 +392,8 @@ export async function startServer(
     run: runGitHubCliCommand
   })
   registerServerGitHubControl(platform, github.controller)
+  // A browser tab's board dispatch reports its queue here, for the `issues` control verb (display only).
+  const boardDispatchReports = registerBoardDispatchReportIpc(platform)
 
   // Board-log: same CorePlatform registrar as desktop, but the Server Edition has no SSH projects
   // (terminals are local), so the router only ever resolves a local folder cwd or unsupported —
@@ -471,6 +487,9 @@ export async function startServer(
       ...(localCodexCaps?.approvalValues
         ? { codexApprovalValues: localCodexCaps.approvalValues }
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
+      // Only a SEEN `true`: a phone-launched plain Codex TUI must carry `--no-daemon` too, or it
+      // joins the auto-started shared app-server and runs as another node (shared/agents/codex-daemon).
+      ...(localCodexCaps?.noDaemon === true ? { codexNoDaemon: true } : {}),
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
         .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) })),
@@ -488,6 +507,14 @@ export async function startServer(
   // Set after the initial workspace load when the opt-in flag is on. The status listener is wired
   // now so the runtime, once present, consumes the exact same normalized stream as the UI/mirror.
   let canvasControl: ServerCanvasControl | null = null
+  // Station-failure notices: registered whether or not canvas control comes up, so a browser tab's
+  // `list` answers "none" rather than an unknown channel. Only the canvas-control runtime has a
+  // creator ledger, so only it has stations to report.
+  registerStationNoticeIpc(platform, () => canvasControl?.stationNotices ?? null)
+  // Station task outcomes: registered for the same reason — a browser tab's `list` gets "none"
+  // rather than an unknown channel when canvas control is off.
+  registerStationOutcomeIpc(platform, () => canvasControl?.stationOutcomes ?? null)
+  registerStationHandoverIpc(platform, () => canvasControl?.stationHandovers ?? null)
   const { contextTail, geminiContextTail, codexContextTail } = wireAgentStatus(platform, {
     onEvent: (event) => canvasControl?.onAgentEvent(event)
   })
@@ -500,6 +527,13 @@ export async function startServer(
     // Codex's ⌘M reader takes ITS tail's hook path (claude's `pathFor` must never answer a codex id).
     codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId)
   })
+  // The ⌘M composer's `/` catalog. No remote leg, for the reason above: this process runs on the
+  // host whose command and skill folders a node's agent reads. An SSH-project node in this store is
+  // still someone ELSE's machine: named remote here, it answers built-ins + `partial`, never this
+  // server's own ~/.claude.
+  registerChatCatalogIpc({ isRemoteNode: (nodeId) => !!workspaceStore.sshProjectIdForNode(nodeId) })
+  // "Open recent": the SERVER host's agent histories — the machine the browser's sessions run on.
+  registerRecentConversationsIpc()
   // The context meter's mount-time rehydration, registered beside the read channels and for the
   // same reason: the tails it feeds are the ones created just above. Until this landed the Server
   // Edition had NO handler for `context:ensure` at all — the browser cast it and nothing received
@@ -691,7 +725,16 @@ export async function startServer(
     canvases: () => workspaceStore.persistedCanvases(),
     installAgentIntegrations: config.installHooks !== false
   })
-  const workspaceWatcher = createServerWorkspaceWatcher(workspaceStore)
+  // A governed project's outside edit goes to the canvas authority, which publishes the difference
+  // as canvas ops and then the persisted project on `workspace:server-change` (its non-content
+  // fields); every other project keeps the whole-project `workspace:external-change`.
+  const workspaceWatcher = createServerWorkspaceWatcher(workspaceStore, {
+    publish: outsideEditPublisher(
+      () => canvasAuthority,
+      (project) => platform.broadcast(IPC.workspaceExternalChange, project),
+      (project) => platform.broadcast(IPC.workspaceServerChange, project)
+    )
+  })
   // Every load()/save() is a canvas change as far as links are concerned: a browser drawing a
   // bridge edge reaches us as the workspace save it triggers. It also refreshes the local-ref
   // watcher set, so projects added or removed while the server runs get the same hand-edit path.
@@ -719,7 +762,14 @@ export async function startServer(
         // answer the issue lane gets from the GitHub host controller.
         issueRepository: (projectId) =>
           github.controller.status(projectId).then((view) => view.project?.repository ?? null),
-        installAgentIntegrations: config.installHooks !== false
+        // `issues` / `prs`: the board's GitHub lane from the service's cache (no GitHub request).
+        githubRead: {
+          snapshot: (projectId) => github.service.controlSnapshot(projectId),
+          dispatch: (projectId) => boardDispatchReports.forProject(projectId)
+        },
+        installAgentIntegrations: config.installHooks !== false,
+        // The durable orchestration facts follow hook-endpoint ownership, like the request ledger.
+        ownsDurableState: hookStartupWarning === null
       })
       hookServer.setControlHandler(canvasControl.handler)
     } catch (error) {
@@ -826,6 +876,8 @@ export async function startServer(
   // complete before the server serves — not that it precedes this line.
   startSessionMemoryService({
     tmuxBin: () => ptyManager.getTmuxBin(),
+    // Zellij-backed sessions are not in the tmux sweep; the panel says how many it did not measure.
+    unmeasuredSessions: () => ptyManager.zellijSessionCount(),
     remote: {
       isRemoteProject: sshScopePredicate({ sshProjectIds: () => workspaceStore.sshProjectIds() })
     }
@@ -890,6 +942,18 @@ export async function startServer(
     // stop a stream the viewer already joined). One map lookup.
     nodeOfSession: (sessionId) => ptyManager.nodeOfSession(sessionId),
     projectCwd: (projectId) => workspaceStore.localCwdForProject(projectId),
+    // A share or unshare: the authority adopts what joined and writes + releases what left, then every
+    // client hears the new governed set (a client alone on a newly shared canvas must start publishing).
+    // RESIDUAL, the share-time window (docs/hosted-team-relay.md): an edit a client made just before
+    // the share — not yet published (it was alone) or published but not yet saved — is not in what the
+    // authority adopts from disk here, and that client's next save is overlaid with the authority's
+    // content, so the edit can be lost from disk (it stays on that client's screen until a reload).
+    // The save debounce is 800 ms and `team share` is an admin action; the client-side mount window
+    // is closed separately (collab-sync `followGoverned`, Canvas.tsx `governedRef`).
+    onSharedChange: () => {
+      canvasAuthority?.sharedChanged()
+      platform.broadcast(IPC.canvasAuthorityChanged, canvasAuthority?.governedIds() ?? [])
+    },
     // TEST ONLY seams (see ServerConfig): never set by resolveConfig, so production dials the relay
     // and mints against API_BASE with the global fetch.
     ...(config.relayTestTransport ? { transport: config.relayTestTransport } : {}),
@@ -913,6 +977,26 @@ export async function startServer(
         `directory (${config.dataDir}). Stop it, or give this server its own --data-dir.`
     )
   } else {
+    // This process owns the team, so it owns the shared projects' content. Wired BEFORE hosting
+    // starts, so no relay peer's op can reach the reflector before the authority listens to it.
+    // `sharedProjectIds` is read on every call (the team store is the one source).
+    const authority = createCanvasAuthority({
+      sharedProjectIds: () => hosted.sharedProjectIds(),
+      readContent: (id) => workspaceStore.readProjectContent(id),
+      writeContent: (id, content) => workspaceStore.writeProjectContent(id, content),
+      // UNTRUSTED: the authority's state holds no launch, so its outside-edit diff must not speak
+      // for one. Vouched, an owner tab would read each upsert's missing `pendingLaunch` as "the core
+      // cleared it" and a git pull would cancel every queued `--after` it touched.
+      publish: (id, m) => {
+        publishCanvasMutation(id, m, { trusted: false })
+      },
+      log: (message) => console.warn(`[canvas-authority] ${message}`)
+    })
+    canvasAuthority = authority
+    workspaceStore.setContentAuthority(authority)
+    // Synchronous and in seq order (canvas-sync.ts): the authority's own published diff echoes back
+    // through here while it is still publishing.
+    setReflectedListener((id, m) => authority.onReflected(id, m))
     const hostedStart = await hosted.start().catch((err: unknown) => {
       console.error('[hosted-team] start failed:', err)
       return null
@@ -921,6 +1005,11 @@ export async function startServer(
     else if (hostedStart === 'host-key-unreadable') {
       console.error('Hosted team relay: OFF — the host key could not be read (see above; `team status`).')
     }
+    // Adopt every shared project NOW, once: `start()` has loaded the team file (the shared set is not
+    // known before it), and the index load above has run. An outside edit adopted lazily would read
+    // the edited file as its own baseline and publish no difference at all, so every shared project
+    // needs its baseline before the watcher can hand one over.
+    authority.sharedChanged()
   }
 
   // Headless notification host: every core service above (incl. the loopback hook server, which
@@ -946,6 +1035,12 @@ export async function startServer(
         canvasControl?.stop()
         workspaceWatcher.dispose()
         await contextLink.stop()
+        // Every save already queued lands while the authority still governs (see the serving close).
+        await workspaceStore.idle()
+        // Write what the canvas authority still owes, then detach it from the reflector and the store.
+        await canvasAuthority?.stop()
+        setReflectedListener(null)
+        workspaceStore.setContentAuthority(null)
         await ptyManager.killAll()
         // Same native hazard as the desktop app: a whisper transcribe still running when the
         // node env is torn down aborts the process. See SpeechService.shutdown.
@@ -997,6 +1092,13 @@ export async function startServer(
       // headless close() above).
       await teamAdmin.close()
       hosted.stop()
+      // End the browser WebSockets next, BEFORE the canvas authority stops (N3). Once it has stopped
+      // and been detached, a save from a still-attached tab is written un-overlaid, over its final
+      // flush. Ending the sockets stops new saves; the `idle()` below lets the ones already queued
+      // land while it still governs. (Upgraded WebSockets are not ordinary HTTP connections:
+      // server.close() waits for them but does not end them, so this is also what keeps a client
+      // close racing shutdown from hanging the Server Edition, or its tests.)
+      for (const client of wsServer.clients) client.terminate()
       // Detach PTY clients — tmux sessions keep running (Phase 1 contract; never kill the server).
       sessionReaper.stop()
       pressure.stop()
@@ -1004,16 +1106,19 @@ export async function startServer(
       canvasControl?.stop()
       workspaceWatcher.dispose()
       await contextLink.stop()
+      // Every save already queued lands while the authority still governs, then it writes what it owes.
+      await workspaceStore.idle()
+      // Write what the canvas authority still owes (see the headless close() above).
+      await canvasAuthority?.stop()
+      setReflectedListener(null)
+      workspaceStore.setContentAuthority(null)
       await ptyManager.killAll()
       // Same native hazard as the desktop app: a whisper transcribe still running when the node
       // env is torn down aborts the process. See SpeechService.shutdown.
       await speechService.shutdown()
       // Close the loopback hook-server listener (it would otherwise die with the process anyway).
       hookServer.stop()
-      // Upgraded WebSockets are not ordinary HTTP connections: server.close() waits for them but
-      // does not end them. Own the WS lifecycle explicitly so a client close racing shutdown
-      // cannot hang the Server Edition (or its tests) forever.
-      for (const client of wsServer.clients) client.terminate()
+      // The WebSockets were ended at the top; close the WS server itself, then the HTTP server.
       await new Promise<void>((resolve) => wsServer.close(() => resolve()))
       await new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()))

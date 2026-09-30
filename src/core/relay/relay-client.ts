@@ -35,6 +35,7 @@ import {
 } from './relay-trust'
 import type { KeyPair } from './e2ee'
 import { decodePtyData } from '../../shared/rpc'
+import { createRelayPtyGate } from '../../shared/relay-pty-channel'
 
 export interface RelayClientSession {
   /** The 6-digit SAS both humans compare, or null before the key is derived. */
@@ -70,7 +71,10 @@ export interface ConnectRelayClientOptions {
   /** An inbound rpc.ts TEXT frame from the host (a `res`/`ev`) → forward to the renderer. Trust frames
    *  are consumed by the gate BEFORE this and never delivered here. */
   onFrame(json: string): void
-  /** An inbound pty:data BINARY frame → forward as pty output (mirrors the ws-bridge binary path). */
+  /** An inbound pty:data BINARY frame → forward as pty output (mirrors the ws-bridge binary path).
+   *  Only ever called for a HOST session id this connection created (its `pty:create` answer named
+   *  it); output for any other id is dropped here. The id is the HOST's: the caller must never
+   *  deliver it on a local per-session channel as-is (see shared/relay-pty-channel.ts). */
   onPtyData(sessionId: string, data: string): void
   /** The relay socket dropped (host/relay gone). */
   onClose(): void
@@ -107,6 +111,9 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
   // refuses the swap — this is the second, independent check.
   let sessionPeerKey: string | null = null
   let keySwapped = false
+  // The host sessions this connection opened. A hostile host can name ANY session id in a binary
+  // frame; only the ids a `pty:create` answer handed us are delivered (shared/relay-pty-channel.ts).
+  const ptyGate = createRelayPtyGate()
 
   const session: RelayClientSession = {
     sas: () => gate?.sas() ?? null,
@@ -123,6 +130,7 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
     },
     send: (json) => {
       if (!opened || closed || !socket) return false
+      ptyGate.noteOutbound(json)
       return socket.sendTunnelText(json)
     },
     isOpen: () => opened,
@@ -166,7 +174,9 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
     if (kind === 'binary') {
       // Binary is pty output only (mirrors the ws-bridge binary path). Anything undecodable is dropped.
       const decoded = decodePtyData(payload)
-      if (decoded) opts.onPtyData(decoded.sessionId, decoded.data)
+      // Dropped unless this connection opened that session — a frame for any other id (a local-
+      // shaped `pty-1`, a session another guest opened) never leaves this function.
+      if (decoded && opened && ptyGate.allows(decoded.sessionId)) opts.onPtyData(decoded.sessionId, decoded.data)
       return
     }
     const json = new TextDecoder().decode(payload)
@@ -179,6 +189,7 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
     }
     // Trust frames are consumed here and NEVER forwarded to the renderer's RPC client.
     if (gate?.onTunnelText(json)) return
+    ptyGate.noteInbound(json)
     opts.onFrame(json)
   }
 

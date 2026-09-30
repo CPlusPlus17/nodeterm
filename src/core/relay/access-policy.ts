@@ -25,6 +25,8 @@ import { decodePtyDataSessionId } from '../../shared/rpc'
 import type { TeamRole } from './team-store'
 import type { AccessDecision } from './relay-host'
 import type { UiSink } from '../ui-sink-registry'
+import { stripSharedNodeExec } from '../../shared/node-exec'
+import type { CanvasNodeState } from '../../shared/types'
 
 export interface AccessContext {
   role: TeamRole
@@ -87,7 +89,7 @@ function sharedRoots(ctx: AccessContext): string[] {
 
 /** `p` is `root` or below it. Relative-path based, so a sibling like `/srv/app2` is not inside
  *  `/srv/app`, a root of `/` contains everything, and a path on another Windows drive is outside. */
-function within(root: string, p: string): boolean {
+export function within(root: string, p: string): boolean {
   const rel = path.relative(root, p)
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel))
 }
@@ -291,6 +293,8 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.ptySessionAge,
   IPC.ptySendText,
   IPC.ptyPaneOwner,
+  // A host filesystem path, not a view of the terminal — a viewer's file links keep the node cwd.
+  IPC.ptyPaneCwd,
   IPC.ptyTerminateForeground,
   IPC.ptyReadSessionName,
   // Workspace, project settings and setup: writes, probes of arbitrary folders, trust, scripts.
@@ -556,8 +560,54 @@ export function filterOutboundEvent(json: string, ctx: AccessContext, subagentOw
  * through unchanged. Wire it into the host's `narrowResponse` hook.
  */
 export function narrowResponseForRole(method: string, result: unknown, ctx: AccessContext): unknown {
-  if (isEditor(ctx.role) || method !== IPC.agentSubagentSnapshot) return result
+  if (isEditor(ctx.role)) return result
+  if (method === IPC.workspaceLoad) return redactWorkspaceExec(result)
+  if (method !== IPC.agentSubagentSnapshot) return result
   return Array.isArray(result) ? result.filter((e) => sharedNode(field(e, 'nodeId'), ctx)) : []
+}
+
+/**
+ * A Project document with its nodes' exec-enabling fields removed (`stripSharedNodeExec`,
+ * shared/node-exec.ts: the session program, ssh options — and, with the held-launch work, a held
+ * `pendingLaunch`'s command text). A peer that is not allowed to run commands has no business
+ * reading the command lines this machine holds for later. Anything that does not look like a
+ * project passes unchanged (it carries no nodes to strip).
+ */
+export function redactProjectExec(project: unknown): unknown {
+  if (project === null || typeof project !== 'object' || Array.isArray(project)) return project
+  const nodes = (project as { nodes?: unknown }).nodes
+  if (!Array.isArray(nodes)) return project
+  return { ...(project as object), nodes: stripSharedNodeExec(nodes as CanvasNodeState[]) }
+}
+
+/** `workspace:load`'s result with every project's exec fields removed (see `redactProjectExec`). */
+export function redactWorkspaceExec(ws: unknown): unknown {
+  if (ws === null || typeof ws !== 'object' || Array.isArray(ws)) return ws
+  const projects = (ws as { projects?: unknown }).projects
+  if (!Array.isArray(projects)) return ws
+  return { ...(ws as object), projects: projects.map(redactProjectExec) }
+}
+
+/** The two events that carry a WHOLE Project document (VIEW_EVENTS admits them for a shared project). */
+const PROJECT_DOC_EVENTS: ReadonlySet<string> = new Set([IPC.workspaceExternalChange, IPC.workspaceServerChange])
+
+/**
+ * The event JSON a peer may see, after `filterOutboundEvent` has admitted it: a whole-project event
+ * has its nodes' exec fields removed; every other event is returned as-is (same string). Never
+ * throws; an event it cannot parse is returned unchanged (the filter already judged it).
+ */
+export function redactOutboundEvent(json: string): string {
+  let m: unknown
+  try {
+    m = JSON.parse(json)
+  } catch {
+    return json
+  }
+  const channel = field(m, 't') === 'ev' ? field(m, 'channel') : undefined
+  if (typeof channel !== 'string' || !PROJECT_DOC_EVENTS.has(channel)) return json
+  const args = field(m, 'args')
+  if (!Array.isArray(args) || args.length === 0) return json
+  return JSON.stringify({ ...(m as object), args: [redactProjectExec(args[0]), ...args.slice(1)] })
 }
 
 /**
@@ -595,7 +645,16 @@ export function wrapSinkForRole(sink: UiSink, ctxFor: () => AccessContext): UiSi
   }
   return {
     sendText: (json) => {
-      if (decide(() => filterOutboundEvent(json, ctxFor(), owners))) sink.sendText(json)
+      // Editors are shell access and get the document as it is; anyone else gets it without the
+      // exec fields (redactOutboundEvent). Decided inside `decide`, so a throw drops the event.
+      let out: string | null = null
+      decide(() => {
+        const ctx = ctxFor()
+        if (!filterOutboundEvent(json, ctx, owners)) return false
+        out = isEditor(ctx.role) ? json : redactOutboundEvent(json)
+        return true
+      })
+      if (out !== null) sink.sendText(out)
     },
     sendBinary: (buf) => {
       if (decide(() => filterOutboundBinary(buf, ctxFor()))) sink.sendBinary(buf)

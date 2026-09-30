@@ -22,6 +22,9 @@
 //    that pin is still being written wins: the write is skipped, or taken back. A peer that merely
 //    drops meanwhile keeps its pin — both humans did approve. A key that already has an entry when
 //    the pin is written (a racing `team add-owner`) keeps it: the approval writes nothing.
+//  - A relay peer never saves the host's workspace (`workspace:save` is refused for every role): the
+//    host's canvas authority writes shared projects' content from canvas ops alone, and the share
+//    set it governs is read through `sharedProjectIds()` and announced by `onSharedChange`.
 //  - The scheduler hears about EVERY session end. The core fires `onClose` only for ends the shell
 //    did not ask for; every end this service causes (deny, expiry, removal, a listener the
 //    scheduler closes) runs the same `ended` bookkeeping, at most once per session.
@@ -57,6 +60,13 @@ const HOSTED_PREFIX = 'relay:hosted:'
 const JOIN_LABEL_MAX = 60
 
 const NOT_A_MEMBER = 'You are not a member of this team.'
+
+/** A relay peer never saves the host's workspace, whatever its role: a whole-workspace save is a
+ *  stale copy of every canvas it holds, and the host's canvas authority is the one writer of a
+ *  shared project's content, fed by ops (docs/hosted-team-relay.md). The desktop's own canvas saves
+ *  go to its LOCAL core, so no relay tab flow depends on this request. */
+export const RELAY_WORKSPACE_SAVE_REFUSED =
+  "A hosted team cannot save the host's workspace over the relay; edits travel as canvas operations"
 
 /** A device waiting for an owner. The renderer's type IS this one (one definition, in shared). */
 export type HostedPending = SharedHostedPending
@@ -96,6 +106,9 @@ export interface HostedServiceDeps {
   monotonicNow?: () => number
   setTimeout?(fn: () => void, ms: number): unknown
   clearTimeout?(handle: unknown): void
+  /** Called after every successful `share` (on or off), once the team file holds the new set. The
+   *  Server Edition's canvas authority adopts and releases projects here. */
+  onSharedChange?(): void
 }
 
 export interface HostedInfo { relayEndpoint: string; hostId: string; hostPublicKeyB64: string; hostDeviceId: string; label: string }
@@ -118,6 +131,8 @@ export interface HostedService {
   addOwner(pubkeyB64: string, label: string): Promise<void>
   remove(pubkeyB64: string, force: boolean): Promise<'removed' | 'last-owner' | 'unknown'>
   share(projectId: string, on: boolean): Promise<void>
+  /** The projects shared with the team right now, read from the team store on every call. */
+  sharedProjectIds(): ReadonlySet<string>
   info(): HostedInfo | null
   joinCode(): string | null
   status(): HostedStatus
@@ -448,6 +463,8 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
             if (typeof method === 'string' && method.startsWith(HOSTED_PREFIX)) {
               return { allow: false, message: 'That is answered by the hosted team service only.' }
             }
+            // Before the role: an owner is refused too (E_ROLE, like every access refusal).
+            if (method === IPC.workspaceSave) return { allow: false, message: RELAY_WORKSPACE_SAVE_REFUSED }
             const role = standing(c, s)
             if (role === null) return { allow: false, message: NOT_A_MEMBER }
             return decideAccess(kind, method, args, ctxWith(role))
@@ -535,7 +552,15 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
     const s = createHostedScheduler(
       {
         mint: () =>
-          mintHostToken({ apiBase: deps.apiBase, deviceId: deps.deviceId, hostPublicKeyB64: addr.hostPublicKeyB64, fetch: deps.fetch, now: wallNow }),
+          mintHostToken({
+            apiBase: deps.apiBase,
+            deviceId: deps.deviceId,
+            hostPublicKeyB64: addr.hostPublicKeyB64,
+            // Proves this process holds the host key (relay-pop.ts); the key never leaves it.
+            hostSecretKey: hostKeys.secretKey,
+            fetch: deps.fetch,
+            now: wallNow
+          }),
         open: (token, ev) => openListener(hostKeys, token, ev),
         setTimeout: (fn, ms) => setT(fn, ms),
         clearTimeout: (h) => clearT(h)
@@ -589,6 +614,15 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
     },
     async share(projectId, on) {
       await team.update((d) => setShared(d, projectId, on))
+      // The share landed; a failing listener must not report it as failed to the admin.
+      try {
+        deps.onSharedChange?.()
+      } catch (err) {
+        console.warn(`[hosted-team] the shared-projects listener failed: ${errorMessage(err)}`)
+      }
+    },
+    sharedProjectIds() {
+      return new Set(team.current().sharedProjects)
     },
     info() {
       if (!keys) return null

@@ -58,7 +58,7 @@ afterEach(() => {
   }
 })
 
-type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectsOfNode' | 'nodeOfSession' | 'killPeer'>> & {
+type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectsOfNode' | 'nodeOfSession' | 'killPeer' | 'onSharedChange'>> & {
   recordTimers?: boolean
   dataDir?: string
 }
@@ -74,6 +74,7 @@ function world(opts: WorldOpts = {}) {
     detach: (id) => { sinks.delete(id) },
     dispatch: async (_id, req) => {
       dispatched.push(req.method)
+      if (req.method === IPC.ptyCreate) return { t: 'res', id: req.id, ok: true, result: { sessionId: 'sess-shared', fresh: false } }
       if (req.method === IPC.agentSubagentSnapshot) {
         return { t: 'res', id: req.id, ok: true, result: [{ nodeId: 'n-shared', task: 'shared task' }, { nodeId: 'n-other', task: 'SECRET other task' }] }
       }
@@ -83,6 +84,7 @@ function world(opts: WorldOpts = {}) {
   }
   const peersT: RelayTransport[] = []
   let mints = 0
+  let challenges = 0
   const armed: Armed[] = []
   const timerDeps: Pick<HostedServiceDeps, 'setTimeout' | 'clearTimeout'> = opts.recordTimers
     ? {
@@ -100,11 +102,18 @@ function world(opts: WorldOpts = {}) {
     // Terminal sessions: 'sess-shared' runs n-shared (project P), 'sess-other' runs n-other (Q).
     nodeOfSession: opts.nodeOfSession ?? ((sid) => (sid === 'sess-shared' ? 'n-shared' : sid === 'sess-other' ? 'n-other' : undefined)),
     projectCwd: () => '/srv/app',
-    fetch: (async () => { mints++; return new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 }) }) as typeof fetch,
+    // Routed by URL: the key-proof challenge answers 404 (a pre-proof backend, so the legacy mint
+    // follows), and only host-token calls count as mints.
+    fetch: (async (u: string | URL | Request) => {
+      if (String(u).endsWith('/v1/relay/challenge')) { challenges++; return new Response('{}', { status: 404 }) }
+      mints++
+      return new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 })
+    }) as typeof fetch,
     transport: () => { const { hostT, peerT } = transportPair(); peersT.push(peerT); return hostT },
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.monotonicNow ? { monotonicNow: opts.monotonicNow } : {}),
     ...(opts.killPeer ? { killPeer: opts.killPeer } : {}),
+    ...(opts.onSharedChange ? { onSharedChange: opts.onSharedChange } : {}),
     ...timerDeps
   })
   live.push({ svc, dataDir })
@@ -153,7 +162,7 @@ function world(opts: WorldOpts = {}) {
   }
   const teamOnDisk = (): Array<{ pubkeyB64: string; role: string; addedBy: string; addedAt: string; label: string }> =>
     JSON.parse(fs.readFileSync(path.join(dataDir, 'relay', 'team.json'), 'utf-8')).peers
-  return { svc, join, rawPeer, sinks, dispatched, casts, dataDir, armed, teamOnDisk, mints: () => mints }
+  return { svc, join, rawPeer, sinks, dispatched, casts, dataDir, armed, teamOnDisk, mints: () => mints, challenges: () => challenges }
 }
 
 async function ownerOnline(w: ReturnType<typeof world>, ownerKeys = genKeyPair()) {
@@ -675,6 +684,12 @@ describe('hosted service — unshare stops a terminal a viewer is already watchi
     const eSink = [...w.sinks.values()].at(-1)!
     const size = (n: number) => JSON.stringify({ t: 'ev', channel: IPC.ptySize('sess-shared'), args: [{ cols: n, rows: n }] })
     const exit = JSON.stringify({ t: 'ev', channel: IPC.ptyExit('sess-shared'), args: [0] })
+    // Both opened the shared terminal: the relay client delivers output only for a session its own
+    // `pty:create` answer named (shared/relay-pty-channel.ts).
+    for (const [g, id] of [[viewer, 50], [editor, 60]] as const) {
+      g.req(id, IPC.ptyCreate, [{ persistKey: 'n-shared', cols: 80, rows: 24 }])
+      await vi.waitFor(() => expect(g.res(id)?.result?.sessionId).toBe('sess-shared'))
+    }
     // Both are watching the shared terminal (the PtyManager sends to its subscribers' sinks).
     for (const s of [vSink, eSink]) {
       s.sendBinary(encodePtyData('sess-shared', 'before'))
@@ -890,6 +905,15 @@ describe('hosted service — lifecycle', () => {
     expect(w.svc.status().scheduler?.idle).toBe(1)
   })
 
+  it('the hosted mint holds the host key: it asks for a key-proof challenge before every mint', async () => {
+    const w = world()
+    await w.svc.init()
+    expect(await w.svc.start()).toBe('started')
+    await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
+    expect(w.challenges()).toBe(1)
+    expect(w.mints()).toBe(1)
+  })
+
   it('stop cuts every session and pending request; start brings hosting back', async () => {
     const w = world()
     const owner = await ownerOnline(w)
@@ -962,5 +986,65 @@ describe('hosted service — lifecycle', () => {
     expect(hosted).toHaveLength(9)
     expect(hosted).toEqual(expect.arrayContaining([IPC.relayHostedBookmarks, IPC.relayHostedBookmarkRemove]))
     for (const ch of hosted) expect(ch).toMatch(/^relay:hosted:/)
+  })
+})
+
+describe('hosted service — the canvas authority seam (docs/hosted-team-relay.md)', () => {
+  it('sharedProjectIds() follows share/unshare, and onSharedChange fires after each write', async () => {
+    const seen: string[][] = []
+    // The callback reads the accessor: it must already answer with the NEW set when it is told.
+    let svc: HostedService | null = null
+    const w = world({ onSharedChange: () => seen.push([...svc!.sharedProjectIds()].sort()) })
+    svc = w.svc
+    await w.svc.init()
+    expect([...w.svc.sharedProjectIds()]).toEqual([])
+    await w.svc.share('P', true)
+    expect([...w.svc.sharedProjectIds()]).toEqual(['P'])
+    await w.svc.share('Q', true)
+    await w.svc.share('P', false)
+    expect([...w.svc.sharedProjectIds()]).toEqual(['Q'])
+    expect(seen).toEqual([['P'], ['P', 'Q'], ['Q']])
+  })
+
+  it('a share whose write failed tells nobody', async () => {
+    let told = 0
+    const w = world({ onSharedChange: () => told++ })
+    await w.svc.init()
+    disk.failTeamWrite = true
+    await expect(w.svc.share('P', true)).rejects.toThrow('disk full')
+    expect(told).toBe(0)
+    expect([...w.svc.sharedProjectIds()]).toEqual([])
+  })
+
+  it('a relay workspace:save is refused for every role, with E_ROLE and the reason, and never reaches the store', async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    const editor = await approvedGuest(w, owner, 'editor', 5)
+    const viewer = await approvedGuest(w, owner, 'viewer', 6)
+    const ws = { version: 2, activeProjectId: 'P', projects: [{ id: 'P', nodes: [] }] }
+    owner.req(21, IPC.workspaceSave, [ws])
+    editor.req(22, IPC.workspaceSave, [ws])
+    viewer.req(23, IPC.workspaceSave, [ws])
+    owner.req(24, IPC.workspaceLoad) // positive control: the owner's other requests still dispatch
+    await vi.waitFor(() => expect(owner.res(24)).toBeDefined())
+    await vi.waitFor(() => expect(editor.res(22)).toBeDefined())
+    await vi.waitFor(() => expect(viewer.res(23)).toBeDefined())
+    const refusal = {
+      ok: false,
+      error: {
+        code: 'E_ROLE',
+        message: "A hosted team cannot save the host's workspace over the relay; edits travel as canvas operations"
+      }
+    }
+    expect(owner.res(21)).toMatchObject(refusal)
+    expect(editor.res(22)).toMatchObject(refusal)
+    expect(viewer.res(23)).toMatchObject(refusal)
+    expect(w.dispatched).not.toContain(IPC.workspaceSave)
+    expect(w.dispatched).toContain(IPC.workspaceLoad)
+    // A cast of it is dropped too.
+    owner.cast(IPC.workspaceSave, [ws])
+    owner.req(25, IPC.relayHostedSelf)
+    await vi.waitFor(() => expect(owner.res(25)).toBeDefined())
+    expect(w.casts).not.toContain(IPC.workspaceSave)
   })
 })

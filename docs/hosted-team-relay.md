@@ -26,13 +26,15 @@ every message**. The desktop's UI only mirrors it.
 | Hosted service | `src/core/relay/hosted-service.ts` | Composes the host key, team store, scheduler and access policy; holds pending join requests; answers the `relay:hosted:*` verbs. |
 | Standing listener | `hosted-scheduler.ts` + `host-token.ts` | A pure scheduler over injected mint / open / timers. |
 | Host identity | `host-key.ts` | `<dataDir>/relay/host-key.json`, 0600, plaintext secret (headless Linux has no keyring). |
+| Host key proof | `relay-pop.ts` + `relay-pop-vector.json` | The only place the relay PoP proof (host-token mint, push host-auth) is computed. See [Host key proof of possession](#host-key-proof-of-possession). The push webhook's management proof is a separate protocol (`src/core/push-webhook.ts`). |
 | Membership | `team-store.ts` | `<dataDir>/relay/team.json`, 0600, single writer. |
 | Role policy | `access-policy.ts` | `VIEW`, `COMMENT`, `EDITOR_ONLY`, `VIEW_EVENTS`; the guard test is `access-policy.guard.test.ts`. |
 | Admin channel | `team-admin.ts` (socket) + `src/server/team-cli.ts` (CLI) | `<dataDir>/relay/admin.sock`, 0600 in a 0700 directory. |
 | Server boot | `src/server/index.ts` (search "Hosted team relay") | Booted in headless AND serving mode, after every handler is registered and the workspace index is loaded. |
+| Canvas authority | `src/core/canvas-authority.ts`; store seams in `src/core/workspace-store.ts`; wired in `src/server/index.ts` | The one writer of a shared project's canvas content. See [Shared canvas authority](#shared-canvas-authority). |
 | Desktop joiner | `src/main/remote/hosted-join.ts`, `relay-bookmarks.ts`; core `join-code.ts`, `join-token.ts` | Runs the core relay client with **no pin store**. |
 | Renderer | `lib/hostedJoin.ts`, `lib/hostedAttempts.ts`, `lib/hostedOwner.ts`, `lib/hostedPendingQueue.ts`, `components/HostedApprovalDialog.tsx`, `bridge/hosted-gate.ts`, `bridge/relay-local-close.ts`, `@shared/hosted-access.ts` | Every hosted branch sits behind a join code, a hosted api or a hosted role, so a Team Access tab and a local tab take their old paths (`canvas/hosted-team.source.test.ts`). |
-| End-to-end test | `src/server/hosted-e2e.test.ts` | A real headless server boot, the real admin socket, access policy, `PtyManager`, git handlers (a real repository) and trust gates, with an in-process relay and a fake token API. |
+| End-to-end test | `src/server/hosted-e2e.test.ts` | A real headless server boot, the real admin socket, access policy, `PtyManager`, git handlers (a real repository) and trust gates, with an in-process relay and a fake token API. It also checks that shared canvas edits are written with no browser attached and survive a restart. |
 
 ## Setup over SSH
 
@@ -98,22 +100,6 @@ default, so you reach it through an SSH tunnel. The password seeds only when non
 on the same data directory still serves the UI, but it skips hosting ("Hosted team relay: NOT
 started — another nodeterm server is already running on this data directory …") and disables its
 agent hooks.
-
-To keep the UI running instead (the route [Limitations](#limitations-v1) needs for saving canvas
-edits), switch the unit to serving mode with a drop-in rather than by editing the unit:
-
-```bash
-mkdir -p ~/.config/systemd/user/nodeterm-server.service.d
-printf '[Service]\nEnvironment=NODETERM_HEADLESS=\n' \
-  > ~/.config/systemd/user/nodeterm-server.service.d/serving.conf
-systemctl --user daemon-reload && systemctl --user restart nodeterm-server
-```
-
-An empty `NODETERM_HEADLESS` is not headless. A drop-in is parsed after the unit and the later
-assignment wins, and the installer (re-run daily by its auto-update) rewrites only the `.service`
-file, never its `.d/` directory, so the drop-in survives updates. For a root install the directory
-is `/etc/systemd/system/nodeterm-server.service.d/`, with plain `systemctl`. If no password exists
-yet, the first boot prints a one-time setup URL to the journal.
 
 A joiner's tab shows **one** project: the first shared project in the host's workspace order
 (`openRelayTab` adopts `projects[0]` of the narrowed workspace). With nothing shared, even an owner
@@ -326,6 +312,148 @@ unapproved after 2.5 s, the tab says "Waiting for an owner of X to approve this 
   from an owner's desktop. The only way the CLI admits a device is `team add-owner`, which makes it
   an owner.
 
+## Shared canvas authority
+
+On the server that owns the team, the **canvas authority** (`src/core/canvas-authority.ts`) is the
+one writer of every shared project's canvas **content**: its nodes, bridges, ropes and board items
+(columns, cards, card metadata, labels, saved views). A client's edits reach it as `canvas:mut`
+ops; a Server Edition tab still sends whole-workspace saves too, but the content in them is
+overlaid with the authority's (input 2), and only a node too large to travel as an op is taken from
+them. The core's reflector places every op in one total order (`seq`); the authority hears each op
+right after that stamp, judges it with the same ordering rules every client
+uses (`src/shared/canvas-order.ts`: the highest `seq` wins per item, and a causal delete, see
+`docs/team-presence.md`), and applies it through the same reducer (`applyCanvasOp`,
+`src/shared/canvas-content.ts`).
+
+**What is governed.** Every project in `team.json`'s `sharedProjects`, and nothing else. A project
+that is not shared, a server with no team, and a server that found another one on its data directory
+(it creates no authority) are saved as before; so is every desktop's canvas. A shared project's other
+fields (name, colour, icon, layouts, the board's `github` mapping and `pullLinks`) are not governed:
+whole-workspace saves still write them.
+
+**Its four inputs:**
+
+1. **Ops**: from Editors' hosted tabs, from the server's own browser tabs, and from server canvas
+   control, which diffs everything a verb changed and casts each op before it saves (`castAndSave`,
+   `src/server/headless-node-factory.ts`). A tab also casts what it writes into a governed project
+   it is not showing (a ⌘⇧T or "Recently closed" reopen, a cold open, an off-canvas node or link, a
+   rename, move, duplicate or close from the sessions sidebar): those writes go to its projects
+   store, not its canvas, so the store hands each one to the publish hook
+   (`src/renderer/canvas/stored-publish.ts`). Without the cast the next overlaid save would drop
+   them, and a sidebar close would end the session while the node stayed on disk.
+2. **Saves.** Before a whole-workspace save is written, a governed project's content is replaced by
+   the authority's (`overlaySave`). The board is overlaid field by field: its items (columns, cards,
+   metadata, labels, views) come from the authority, `github` and `pullLinks` from the save. This
+   machine's exec fields (`shell`, `ssh.extraArgs`, and a held launch, `pendingLaunch`) are carried
+   over from the save's copy of each node, since the authority's own state holds none. That carry
+   is the ONLY way a launch reaches disk on a governed project: the reflector hands the authority
+   every op without its launch, so an armed `--after` node, and server canvas control's
+   claim/clear of its launch (`savePatches`), land in the index's machine-local `localExec`
+   through the save that follows the cast. A stale copy cannot write content back, with one
+   exception, the oversized node below.
+3. **Loads**, overlaid the same way (`overlayLoad`), so a client that loads sees every op the
+   authority applied, written to disk or not.
+4. **Outside edits.** A `git pull` or hand edit of a governed `.nodeterm/project.json`, seen by the
+   server's file watcher, is adopted: the authority re-applies the ops it has not written yet on top,
+   publishes the difference as `canvas:mut` ops (untrusted: its state holds no launch, so the ops
+   speak for none and every owner tab keeps an armed node's `pendingLaunch`; vouched, a pull that only
+   moved an `--after` node would cancel its launch), and broadcasts no `workspace:external-change`, so no
+   client gets the Reload / Keep mine bar (`src/server/workspace-external-watch.ts`). The edit's other
+   fields (name, colour, icon, layouts, the permission default, the capability flags, the board's
+   `github` and `pullLinks`) follow right after the ops, as the persisted project on
+   `workspace:server-change`, the channel server canvas control uses. The browser merges it without
+   a bar, so a tab that still held the old values saves the pulled ones instead of writing its own
+   back.
+
+**Writing.** A governed project is written 1 s after its last op, and at most 5 s after the first op
+not yet written, through the store's atomic content write (`WorkspaceStore.writeProjectContent`: it
+bumps `rev` like a save, and the file is byte-identical to a save's apart from `rev` and `savedAt`).
+A failed write keeps every op and retries
+after 1 s, 2 s, 4 s and so on, capped at 30 s. The journal says so once when a failure streak
+begins and once when a write lands again, not on every retry. Both server shutdown paths write what
+is pending before they exit, so a crash loses only what was not written yet: normally at most the
+last 5 s.
+Before the authority stops, the shutdown ends the browser connections and waits for the saves
+already queued (`WorkspaceStore.idle`): a save that ran after the authority was detached would be
+written un-overlaid, over its final write.
+Viewers can watch a terminal an Editor opened once its node is written, because node membership is
+read from the saved canvas.
+
+**When it adopts.** At boot, once `team.json` is loaded, every shared project is read, so an outside
+edit that lands before any op still has a baseline to compare with. `team share` adopts the project;
+`team unshare` writes what is pending, then lets it go (it is saved the old way again). The server's
+browser tabs are told the new governed set (`canvas:authority-changed`). A shared project whose file
+cannot be read stays governed, so its clients keep publishing, but the authority writes nothing for
+it and saves of it pass through unchanged until it can be read. The journal says so once:
+"[canvas-authority] project <id> is shared, but its content could not be read …". `team share` does
+not check the id, so a shared id that is not a project on this core logs the same line. When an
+outside edit makes the file readable again (a pull that resolves conflict markers), the authority
+adopts the edited file as its first baseline, so it has no difference to publish as ops: the project
+is sent whole on `workspace:external-change` instead, as for an ungoverned project.
+
+**Publishing when alone.** A client normally casts nothing while no teammate is attached. On a
+governed project that would lose every edit, so a client publishes whenever the project is governed:
+a Server Edition browser tab asks its core (`canvas:authority`), publishes for every project until
+the first answer arrives, and asks again on reconnect; a hosted relay tab treats every project it
+holds as governed. The desktop answers that it governs nothing, so a desktop publishes exactly as
+before.
+
+**Relay peers cannot save the host's workspace.** A `workspace:save` from a hosted relay peer is
+refused for every role, owners included, with `E_ROLE`: "A hosted team cannot save the host's
+workspace over the relay; edits travel as canvas operations". A whole-workspace save from a peer is a
+stale copy of every canvas it holds. No desktop flow sends one: the desktop's canvas saves go to its
+own local core.
+
+**The oversized-node exception.** A node too large to travel as an op (its upsert op, serialized, is
+longer than `MUTATION_MAX_BYTES`: `JSON.stringify(op).length` over 256,000, about 250 KB; in
+practice a sticky note with a pasted document in it) can only reach the core inside a save, so a
+save may contribute that node. It sits outside the total order; its limits are listed
+below.
+
+**Bridges grant reads.** On the Server Edition, which agent sessions may read each other's context
+(Context Link) is derived from the saved `bridges` of every canvas (`src/server/context-link.ts`). A
+link an Editor draws in a hosted tab is now saved, so it lets the two agents it joins read each
+other's conversation on the host. An Editor already has a shell there, so this is no new power, but
+it is a new way to use it.
+
+### Known limits
+
+- **A project's other fields are last writer wins.** Name, colour, icon, layouts, the permission
+  default, the capability flags and the board's `github`/`pullLinks` are not ops. A pulled change to
+  them reaches every browser tab (`workspace:server-change`), but two tabs editing one of them at the
+  same time still overwrite each other on save, as before the authority. A desktop joined over the
+  relay does not save the host's workspace at all.
+- **The share-time window.** An edit a client made just before `team share` (not yet cast because it
+  was alone, or cast but not yet saved) is not in what the authority reads from disk, and that
+  client's next save is overlaid, so the edit can be lost from disk. It stays on that client's screen
+  until it reloads. The window is short: a client saves 800 ms after its last change.
+- **Oversized nodes.** A node too large to travel as an op is taken from saves, with three
+  consequences. A client's save issued before that client applied a `remove` of such a node still
+  carries it, so the node is written back and stays until someone removes it again (the other
+  clients see it only after they reload). An outside edit of such a node reaches no client (the op
+  is refused as too large), and the next client save can put the client's older copy back. Two
+  clients holding different copies of one such node replace each other's on every save.
+- **Board edits reach only the active tab's core.** A client casts only to the core its active tab
+  is on. An edit on the Omni board to a lane of a project on another core (a hosted lane while a
+  local tab is active, or the reverse) is not cast, so on a hosted core it is not written either.
+- **Node order is not synced.** The sessions sidebar's order is the node list's order, and no op
+  carries an order change, so on a governed project a reorder stays on the screen that made it: the
+  file keeps the authority's order (the order it read, with nodes it hears about later appended).
+  What IS guaranteed is parent-first: the reducer re-sorts with the shared `groupsFirst`
+  (`src/shared/node-order.ts`) whenever an op appends a node or changes its `parentId`, so every
+  frame the authority writes precedes its descendants, as a normal save's does. That is the
+  downgrade contract (a build that predates nested frames still hydrates the file parent-first). A
+  file that was already out of that order when the authority read it keeps it until one of those
+  ops touches it.
+- **Load-time repairs are not cast.** What a client derives while it loads a project (a missing
+  `--after` dependency rope it heals, a legacy node migrated to its current shape) becomes that
+  client's baseline and is never cast, so on a governed project it never reaches disk: every load
+  derives it again. The repairs are deterministic, so this costs nothing visible, but a repair that
+  must persist on a shared project has to be cast.
+- **The card modal's comments on a relay tab** (`BoardLogPanel`) still read and write the local core's
+  board log, not the host's, because the modal renders outside the tab's session. This predates the
+  authority; it is a follow-up.
+
 ## Status and troubleshooting
 
 `team status --json` returns:
@@ -334,8 +462,8 @@ unapproved after 2.5 s, the tab says "Waiting for an owner of X to approve this 
 |---|---|
 | `enabled` | A scheduler is running (hosting is on). |
 | `off` | `null` while hosting is on; otherwise `{reason}`: `no-team` (run `team init`), `no-host-key`, `host-key-unreadable` (with `detail`, the loader's sentence), or `stopped`. |
-| `scheduler.state` | `running`, `stopped`, or `backend-refused` (a 402/403 from `/v1/relay/host-token`: minting stops until the service restarts; `team init` does not restart it). |
-| `scheduler.lastError` | The most recent failure **since the relay leg was last proven to work**, not a current fault: `network`, `network (<status>)`, `rate-limited (429)`, `refused (402)` / `refused (403)`, `bad-response`, `mint failed: …`, `relay closed the idle listener`, `open failed: …`, or `mint budget`. It clears when an idle listener holds its registration to its refresh, or when a peer completes a handshake. |
+| `scheduler.state` | `running`, `stopped`, or `backend-refused`: a 402/403 from `/v1/relay/host-token`, or a 403 `pop_required`/`pop_invalid` (the relay refused this host's key proof) on two mints in a row, each with a fresh challenge. Minting stops until the service restarts or `team rotate-key` runs; `team init` does not restart it. |
+| `scheduler.lastError` | The most recent failure **since the relay leg was last proven to work**, not a current fault: `network`, `network (<status>)`, `rate-limited (429)`, `refused (402)` / `refused (403)`, `bad-response`, `mint failed: …`, `relay closed the idle listener`, `open failed: …`, `mint budget`, `key proof refused once (<kind>) — retrying with a fresh challenge` (the first key-proof refusal; `<kind>` is `pop_invalid` or `pop_required`), or, with `backend-refused`, "The relay refused this host's key proof — update nodeterm, or run `team rotate-key` if the key was replaced." It clears when an idle listener holds its registration to its refresh, or when a peer completes a handshake. |
 | `scheduler.mintsLastHour` | Host tokens minted in the last (rolling) hour. The scheduler never mints more than **200** in an hour (counted per running service, so a restart starts over); the backend's free limit is 240. |
 | `scheduler.idle` / `scheduler.bridged` | Idle listeners (the target is one) / sessions joined or awaiting approval. |
 | `peers[]` | `{label, role, connected}`. No keys: find them in `team.json`. |
@@ -347,6 +475,8 @@ The human `team status` reads `state`, `idle` and `lastError` together:
 |---|---|
 | `Hosting: OFF — …` | `off.reason`, spelled out. For `host-key-unreadable` it is the loader's sentence. |
 | `Hosting: STOPPED — the nodeterm API refused to issue relay tokens (…)` | `backend-refused`. Restart the service once the backend side is fixed. |
+| `Hosting: STOPPED — the nodeterm API refused to issue relay tokens.`, then the key-proof sentence on a line of its own, then `Hosting stays off until nodeterm is updated or the key is rotated.` | `backend-refused` after two key-proof refusals in a row. See "Hosting refused by the relay's key proof" below. |
+| `Last error:` (or the `Earlier failure …` line) reading `key proof refused once (<kind>) — retrying with a fresh challenge` | One key-proof refusal. The next mint asks for a fresh challenge; a second refusal in a row stops hosting. |
 | `Hosting: ON — listening for teammates.` | An idle listener is registered. An "Earlier failure" line under it is history, not a fault. |
 | `Hosting: ON, but not reachable yet — retrying. Last error: …` | No idle listener and a recent failure: minting or the relay is failing, with backoff. |
 | `Hosting: ON — opening a listener.` | Starting up. |
@@ -363,6 +493,9 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   every socket dies, and resetting on the mint re-minted at round-trip speed (relay log,
   2026-09-27).
 - A 429 waits at least 60 s (longer if `Retry-After` says so).
+- Every mint first asks the backend for a challenge and carries a proof that this process holds the
+  host key. A challenge that fails for any reason but 404/405 mints nothing and backs off. See
+  [Host key proof of possession](#host-key-proof-of-possession).
 
 **Common situations:**
 
@@ -387,9 +520,37 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   and restarts the service: live tabs drop and reconnect, and pending requests are lost.
 - **Windows:** the admin channel is a unix socket, so both ends refuse by name. A team cannot be
   created on a Windows Server Edition in v1.
-- **Hosting knocked offline by a join code** (see [Threat notes](#threat-notes)). `team status`
-  shows `rate-limited (429)` as the last error, or teammates read "Too many join attempts … today".
-  Give the host a new device id **and** a new key, then new codes:
+- **Hosting refused by the relay's key proof, or knocked offline by a join code** (see
+  [Host key proof of possession](#host-key-proof-of-possession) and [Threat notes](#threat-notes)).
+
+  *Refused by the key proof.* `team status` says `Hosting: STOPPED` and prints "The relay refused
+  this host's key proof — update nodeterm, or run `team rotate-key` if the key was replaced." on a
+  line of its own. The backend refused this host's proof on two mints in a row, each with a fresh
+  challenge; a single refusal only retries. The service log names the kind (`pop_invalid` or
+  `pop_required`):
+
+  - `pop_invalid`: the backend checked the proof and it failed. A single one can be a `POP_SECRET`
+    rotation, or two backend instances with different secrets, landing between a challenge and its
+    mint. Two in a row point at the backend (every instance must carry the same `POP_SECRET`) or at
+    a nodeterm bug: update nodeterm, and if it persists, run `team rotate-key` and hand out new codes.
+  - `pop_required`: the host proved its key once, so the backend latched it, and it is now refused a
+    mint that carries no proof. The current nodeterm does not stop on that: it mints without a proof
+    only when the challenge route answers 404/405, and reads `pop_required` there as a backend coming
+    back mid-redeploy. So a latched host that stops on it runs an **older nodeterm**, which never
+    proves; its `team status` shows `refused (403)` instead (a downgrade, or a copy of this data
+    directory under an older build). Update nodeterm. `team rotate-key` and new codes also bring it
+    back, because a new key is not latched, but only until `POP_REQUIRED_AFTER`.
+
+  `team rotate-key` restarts hosting in place, and so does the service restart that comes with an
+  update.
+
+  *Knocked offline by a join code.* With a PoP-enabled backend, a host that has proven its key has
+  its host-token budget keyed by that proof, so a code holder cannot spend it. What a code holder
+  can still spend is the **16 pending join slots** and the team's **10 daily device mints**:
+  teammates read "Too many join attempts for this team today. Try again tomorrow.", or, while 16
+  requests are waiting, "An owner declined the request." A host that has never proven (an older nodeterm, or a backend with
+  `POP_SECRET` unset) is exposed to all of R44, and `team status` may show `rate-limited (429)`.
+  Either way, give the host a new device id **and** a new key, then new codes:
 
   ```bash
   systemctl --user stop nodeterm-server        # `systemctl stop …` for a root install
@@ -438,24 +599,40 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   written) are held (at most 256), then served through the same checks.
 - **A leaked join code cannot let anyone in**: every device still needs an owner's approval. At most
   16 requests wait at once, one per device key, each for 10 minutes; the 17th is refused.
-- **A join code is enough to take hosting offline** (ruling R44). The code carries the host's device
-  id and public key (`hosted-service.ts` `info()`), and those are exactly what the backend's
-  `POST /v1/relay/host-token` takes: `{deviceId, hostPublicKeyB64}` (`host-token.ts`), with no proof
-  that the caller holds the host's secret key. Its free-tier limit (240 host tokens an hour, a fixed
-  window) is keyed by the `deviceId` sent, and the team's device mints (`POST /v1/relay/device`, 10 a
-  day) by the host device id. So anyone holding a code, a teammate you removed included, can:
-  - spend the host's hourly host-token budget, so the host's own mints are refused with 429 and
-    hosting stays down until the window resets;
-  - register listeners under the team's address. A joiner paired with one of them fails its
-    handshake (only the real host has the secret key), so nothing is exposed, but that join fails;
-  - open join requests with throwaway device keys until the 16 pending slots are full;
-  - spend the team's 10 daily device mints, so a new teammate reads "Too many join attempts … today".
+- **A join code no longer takes hosting offline, once the host has proven its key** (ruling R44).
+  The code carries the host's device id and public key (`hosted-service.ts` `info()`), and those
+  were all `POST /v1/relay/host-token` asked for. A backend with `POP_SECRET` set now asks for a
+  proof that the caller holds the host's secret key: a challenge from `POST /v1/relay/challenge`,
+  answered with an HMAC keyed by an X25519 shared secret (`relay-pop.ts`). The first valid proof
+  **latches** the host, and from then on a mint without one is refused `403 pop_required`; after
+  `POP_REQUIRED_AFTER` (default `2027-01-01T00:00:00Z`) every host must prove, latched or not. The
+  full mechanism is under [Host key proof of possession](#host-key-proof-of-possession). For a
+  latched host, it closes two of the four things a code holder, a teammate you removed included,
+  could do:
+  - **Spend the host's hourly host-token budget.** Closed: a proven mint is charged to the proven
+    host in a budget window of its own, and an unproven mint for a latched host is refused before
+    it reaches that budget.
+  - **Register decoy listeners under the team's address.** Closed: a code holder can no longer mint
+    a host token for a latched host. The relay broker also admits only pairing tokens
+    (`typ: 'pair'`), closes a listener no peer has joined at its token's `exp + 30 s`, and keeps at
+    most 8 pending listeners per host, evicting the oldest, so a decoy minted before the latch is
+    gone within 150 s of its mint, and a stale set of them can never keep the host's fresh listener
+    out.
 
-  `team remove` does not stop this, and neither does `team rotate-key` on its own: it changes the
-  address, not the device id the budgets are keyed by. Recovery: "Hosting knocked offline by a join
-  code" under [Status and troubleshooting](#status-and-troubleshooting). The real fix is on the
-  backend (proof that the caller holds the host key before `/v1/relay/host-token` mints), a
-  follow-up in `nodeterm-server`.
+  Two stay open, because the routes behind them take no proof:
+  - **Open join requests with throwaway device keys** until the 16 pending slots are full.
+  - **Spend the team's 10 daily device mints** (`POST /v1/relay/device`, keyed by the host device
+    id), so a new teammate reads "Too many join attempts … today".
+
+  And one gap before the latch: until a host has proven once, and before the cutoff, a code holder
+  can still mint legacy host tokens for it and register up to 8 listeners under its address,
+  evicting the host's own idle listener through the cap. A current nodeterm proves on its first mint
+  against a PoP-enabled backend, so the gap closes the first time the host mints after the backend
+  enables PoP; it stays open for a host running an older nodeterm, and for every host while
+  `POP_SECRET` is unset. `team remove` does not stop the open items, and `team rotate-key` alone
+  does not either: the device mints are keyed by the device id, not the address. Recovery is
+  "Hosting refused by the relay's key proof, or knocked offline by a join code" under
+  [Status and troubleshooting](#status-and-troubleshooting).
 - **A pinned device key is a long-lived credential**, like an SSH key: a stolen laptop gets in
   until `team remove`. A removed key's live sessions are cut and told `removed`, and until the kill
   lands a session with no team entry is served nothing.
@@ -464,6 +641,176 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   nonces exchanged in the handshake (`e2ee.ts`), so whoever later obtains either secret key can
   decrypt a recorded session. This predates the hosted relay.
 - **The host key is never silently regenerated.** Only `team rotate-key` replaces it.
+
+## Host key proof of possession
+
+The fix for R44 (see [Threat notes](#threat-notes)). It covers the Server Edition's hosted mint, the
+desktop phone relay's mint, and the desktop's host-mode push. (The push webhook's management routes
+prove the same key through a protocol of their own; see below.) It is enforced by nodeterm-server;
+this repository holds the client half.
+
+**The exchange.**
+
+1. `POST /v1/relay/challenge {hostPublicKeyB64, purpose}`, where `purpose` is `host-token` or
+   `push`. The backend answers `{challenge, serverPublicKeyB64, exp}`: a challenge sealed with its
+   `POP_SECRET` (host id, purpose, a random nonce, a 60 s expiry) and a one-off X25519 public key
+   derived from that nonce. Nothing is stored per challenge.
+2. The client computes the X25519 shared secret of the host's secret key and that one-off key, and
+   sends `popChallenge` and `popProof`: an HMAC-SHA256, keyed by that shared secret, over the
+   challenge, the purpose, a subject and the host public key. The subject is the mint's `deviceId`
+   (`''` when the desktop mints with a Pro entitlement), or the host device id for push.
+3. The backend recomputes it. It refuses a challenge more than 5 s past its expiry, a nonce it has
+   already accepted, and an all-zero shared secret, and answers any proof that does not verify with
+   `403 {"error":"pop_invalid"}`.
+
+`src/core/relay/relay-pop.ts` is the only place the client computes this proof (for the host-token
+mint and push host-auth), and it also refuses an all-zero shared secret (a low-order server key gives
+every caller the same secret). The bytes are pinned by `src/core/relay/relay-pop-vector.json`, which
+nodeterm-server carries byte for byte as `test/fixtures/relay-pop-vector.json`. A protocol change
+changes both.
+
+The push webhook's management routes (minting, reading and revoking a webhook token) also prove
+possession of the host key, through a separate and independent protocol: `webhookProof` in
+`src/core/push-webhook.ts`, with its own challenge route (`/v1/push/webhook/challenge`), its own
+context string and its own wire contract (nodeterm-server's `src/lib/host-proof.ts`). It shares
+nothing with this proof but the key. Do not route it through `relay-pop.ts`, and do not assume the
+all-zero refusal above covers it.
+
+**The latch and the cutoff.** The first valid proof for a host **latches** it (the backend records
+its host id). From then on, a request for that host without a proof is refused
+`403 {"error":"pop_required"}`. A host that has never proven stays on the legacy path until
+`POP_REQUIRED_AFTER` (default `2027-01-01T00:00:00Z`); after that, every host must prove. With
+`POP_SECRET` unset or shorter than 32 characters, the backend logs `[api] POP_SECRET unset or
+shorter than 32 characters — relay proof-of-possession is DISABLED` at boot, registers neither
+`/v1/relay/challenge` nor `/v1/push/host-auth`, and serves every host the legacy way, latched or
+not. It never fails to boot over it.
+
+**What a proof buys.**
+
+- `POST /v1/relay/host-token`: a proven mint is charged to the proven host id, in an hourly window
+  of its own (240 an hour, the same size as the legacy window, which stays keyed by the `deviceId`
+  sent). A caller who knows only the device id, or the host id printed in every join code, cannot
+  spend it.
+- `POST /v1/push/host-auth {hostDeviceId, hostPublicKeyB64, popChallenge, popProof}` (purpose
+  `push`, subject the host device id): once the backend has checked that the host has a live
+  pairing (else `403 forbidden`), a valid proof latches the host too and earns a `hostAuth` session
+  good for 15 minutes. Host-mode `POST /v1/push/notify` and `/v1/push/live-update` carry it. A
+  latched host's post without one is refused `pop_required`, and one with an expired or foreign
+  session `pop_invalid`. Both checks run after the pairing check and before the send budget, so a
+  refused post spends nothing.
+- Each route has its own per-IP limit: `/v1/relay/challenge` 120 a minute (so the challenge a
+  proven mint needs never spends the 30-a-minute bucket `/v1/relay/host-token` uses),
+  `/v1/push/host-auth` 30 a minute.
+
+**The relay broker.** nodeterm-server's relay broker admits only pairing tokens (`typ: 'pair'`),
+closes a host listener no peer has joined at its token's `exp + 30 s`, keeps at most 8 pending
+listeners per host (a new one evicts the oldest), and never expires or evicts a bridged socket. A
+real host keeps one idle listener and replaces it 30 s before its token expires, so it meets
+neither limit.
+
+**What the clients do.** One rule runs through all three: only a challenge answered **404 or 405**
+means "this backend predates the proof", and only then does a request go out unproven. Any other
+challenge failure is transient: the request is not sent, and the caller backs off. An unproven
+request from a latched host is refused, and for a mint that refusal would stop hosting.
+
+There is one exception, and only push has it: a challenge answered 200 followed by
+`/v1/push/host-auth` answering 404 is also read as a backend without the proof, so the post goes out
+unproven and that verdict is cached for 10 minutes. One backend registers both routes or neither, so
+this answer comes only from a redeploy window. Push stops nothing, and the backend gates the
+unproven post regardless: a latched host's post is refused, which forgets the verdict, and the host
+proves again.
+
+- **Server Edition hosted mint** (`host-token.ts`, `hosted-scheduler.ts`). The challenge, the mint
+  and the mint's body read share one 8 s timer. A challenge answered 429 waits at least 60 s
+  (`rate-limited (429)`); a 2xx that is not a usable challenge, or a server key the proof cannot
+  use, is `bad-response`; anything else is `network` or `network (<status>)`. A `pop_required`
+  answer to the one unproven mint (after a 404/405 challenge) is read as `network (403)`, not as a
+  refusal: a reverse proxy answers 404 while the backend redeploys, and the mint that follows can
+  land on the fresh backend. A **key-proof refusal** (`pop_invalid`, or `pop_required` on a proven
+  mint) stops hosting only when it is the **second in a row**, each with a fresh challenge. The
+  first only backs off and retries, because a `POP_SECRET` rotation, or two backend instances with
+  different secrets, inside one challenge-then-mint pair can refuse an honest host once. A transient failure
+  between the two does not reset the count; only a successful mint or a restart does. After the
+  first, `team status` shows `key proof refused once (<kind>) — retrying with a fresh challenge`;
+  after the second, hosting is `backend-refused` and `team status` prints "The relay refused this
+  host's key proof — update nodeterm, or run `team rotate-key` if the key was replaced." on a line
+  of its own. Both are logged with their kind (a warning, then an error).
+- **Desktop phone relay** (`src/main/remote/standing-host.ts`). The same challenge, proof and
+  404/405 rule, and the same "second refusal in a row" rule. The first refusal is logged and phone
+  access retries with its reconnect backoff. The second stops phone access and shows one dialog,
+  titled "Remote access stopped", that reads "The relay refused this computer's key proof — update
+  nodeterm; if it persists after updating, contact support." followed by "Phone access is off. Turn
+  it back on in Settings → Phone after updating." The desktop's text never mentions
+  `team rotate-key`, which exists only in the Server Edition.
+- **Desktop host-mode push** (`src/core/push-notify.ts`). Push stops nothing: a batch that cannot
+  be proven is dropped, like a network error, and the phone still has the agent-status mirror.
+  - The `hostAuth` session is good for 15 minutes on the server, and the client proves again after
+    10 minutes on its own clock, or at once if that clock has stepped back since (a cached session
+    or old-backend verdict with a negative age is expired). notify and live-update each hold their
+    own.
+  - A backend without the proof (challenge 404/405, or no host-auth route) is remembered for 10
+    minutes. While that backend accepts the host's posts, the proof costs one challenge per 10
+    minutes (plus the host-auth post, when the challenge answered 200) rather than one per batch.
+    A post it refuses with a 403 forgets the verdict (see below), and an old backend refuses every
+    post from a host with no live pairing (`403 forbidden`). While it does, **every batch** costs
+    the challenge plus the post: one request more per batch than before the proof existed, and
+    live-update can flush once a second. That case ends once the backend runs with the proof on
+    (`POP_SECRET` set): its host-auth refuses such a host `forbidden` instead, which is backed off like any
+    other failed proof, and no post goes out.
+  - Failed proofs back off 0, 5, 15, then 60 s between attempts, since every attempt spends the
+    per-IP challenge budget the mint needs too. A hold further out than 60 s can only be a clock
+    that stepped back, and is ignored.
+  - Overlapping flushes share one proof in flight. The challenge and the host-auth post share one
+    8 s timer. A proof that throws is dropped and backed off like any other failure.
+  - A proven post answered `403 pop_invalid`/`pop_required` forgets the session, and the next batch
+    proves again. An unproven post answered 403 forgets the "old backend" verdict. When that verdict
+    was already on file from an earlier batch, the likely cause is that the host latched since
+    (through the phone relay's mint, or the other push stream): the batch proves at once and, if that
+    yields a session, is re-posted **once** with it; otherwise it is dropped. A verdict fetched in the
+    same batch is not fetched again, so an old backend that refuses this host costs two requests per
+    batch (the challenge and the post), not three. That is still one more than before the proof
+    existed (see the bullet on a backend without the proof).
+  - The Server Edition pushes only in granted mode (per-grant bearer tokens, no host identity), so
+    there is nothing to prove there.
+
+**Rollout.** Clients and backend may ship in either order: a client that finds no challenge route
+mints and pushes as before, and a backend with the proof on serves a host that has never proven the
+legacy way until the cutoff. The backend goes first anyway, because the proof protects nothing
+until it is on:
+
+1. Deploy nodeterm-server.
+2. The operator (@eneskirca) sets `POP_SECRET` in Dokploy: at least 32 characters, the same on
+   every backend instance. `POP_REQUIRED_AFTER` is optional (an ISO date; one that does not parse is
+   logged and the default is used).
+3. Check that the boot log does **not** say `relay proof-of-possession is DISABLED`.
+4. Ship the clients. A host latches the first time it mints (or pushes) with a current nodeterm.
+
+Rotating `POP_SECRET` voids every challenge and `hostAuth` session in flight: a mint in that window
+is refused once and retried, and push proves again on its next batch.
+
+**Residuals.**
+
+- Before a host has proven once, and before the cutoff, a code holder can still mint legacy host
+  tokens for it and evict its idle listener through the cap (see [Threat notes](#threat-notes)).
+- The team's 10 daily device mints and the 16 pending join slots are still open to a code holder.
+- The backend remembers accepted nonces per process, so with several backend instances, or across
+  a restart, one proof could be accepted once per process inside its challenge's 65 s. Replaying it
+  still takes the proof itself, which only the TLS endpoint sees.
+- A NUL character in `hostDeviceId` is now refused with a 400 on the push routes. Other request
+  fields that reach a database query may still answer 500 for one; a sweep of the rest of the
+  backend is a nodeterm-server follow-up.
+- A desktop whose timers run more than about 60 s late (sleep, App Nap) has its idle listener
+  expired by the relay: the refresh runs 30 s before the token expires and the relay closes an idle
+  listener 30 s after. It recovers through the reconnect backoff. A Server Edition in the same
+  state logs `relay closed the idle listener` and backs off the same way.
+- After the desktop stops on a key-proof refusal, the Settings switch still reads on, so turning
+  phone access back on means switching it off and on, or restarting the app (an update restarts
+  it). The stop also ends any phone session in progress.
+
+**Surfaces.** Desktop: the phone relay mint and host-mode push prove. Server Edition: the hosted
+mint proves; its push is granted mode and has nothing to prove. Mobile: not applicable. The phone
+is never a relay host, mints no host tokens and sends no host-mode push; its device and join tokens
+are unchanged.
 
 ## Limitations (v1)
 
@@ -476,23 +823,7 @@ The human `team status` reads `state`, `idle` and `lastError` together:
   pauses the shared pty for every subscriber until that backlog drains below 256 KB or the peer
   leaves. Past 8 MB its output is dropped (redrawn later) and the pause is handed back
   (`ui-sink-registry.ts`).
-- **Canvas edits in a hosted tab are not saved on the host.** A relay tab never writes the host's
-  workspace (it would replace the whole host index with one project), and the core's canvas
-  reflector persists nothing. So nodes a teammate adds, moves or deletes are live for everyone
-  connected, but are not in the host's project file: a teammate who connects later, or everyone
-  after a host restart, sees the saved canvas. A terminal an Editor starts that way keeps running
-  on the host, but Viewers cannot watch it, because node membership is read from the saved canvas.
-  **Workaround (verified in code, not yet run; device checklist item 12):** run the service in
-  serving mode with the drop-in from setup step 1, and keep a Server Edition browser tab open on it
-  through an SSH tunnel. The one-off serving run in step 1 is not enough: it ends by restarting the
-  headless unit. The reflector sends every mutation to every attached client, and a browser's canvas
-  applies it and marks itself dirty (to its store for a background project, to the live canvas for
-  the active one), so its own autosave writes the edit. Edits made while no browser tab is attached,
-  including across a service restart, are lost. This is a v1 limitation (ruling R42); a server-side
-  persister belongs to sub-project 2.
-- **Kanban, bridge and rope edits made in a relay tab are never propagated or saved.** `canvas:mut`
-  carries nodes only (an upsert or a remove), so project-level state (`kanban`, `bridges`, `ropes`)
-  never leaves the tab. This predates the hosted relay; it holds for Team Access relay tabs too.
+- **Shared canvas edits:** see [Known limits](#known-limits) under Shared canvas authority.
 - **No git for Viewers in a subfolder of a larger repository.** Viewers and Commenters get the git
   panel only for a project that is the top folder of its own repository (or a worktree's). A
   monorepo subfolder shows its files but refuses every git read (see [Roles](#roles)).
@@ -572,9 +903,9 @@ on a Mac and a second desktop as a teammate. Record `team status --json` at each
    OFF — the host key could not be read", `team status` says why, `team init` refuses, and the key
    file is left as it was.
 8. **Long session.** A teammate stays connected for over an hour without the tab greying. The host
-   never refreshes a bridged session, and the relay broker's source checks a token only when a
-   socket joins, but whether production ends a bridged socket at its token's lifetime is unverified
-   (the comments in `hosted-scheduler.ts` and `standing-host.ts` say so). This item settles it.
+   never refreshes a bridged session, and nodeterm-server's relay broker never expires or evicts a
+   bridged socket (it closes only a listener no peer has joined, at its token's `exp + 30 s`). This
+   item confirms that against the deployed relay.
 9. **Viewer size.** A Viewer with a small window does not shrink the Editor's terminal.
 10. **Two owners.** With two owners connected, one approves a request; the other owner's dialog
     closes with "Another owner answered this request."
@@ -583,8 +914,29 @@ on a Mac and a second desktop as a teammate. Record `team status --json` at each
     is `~/Library/Application Support/node-terminal/remote-peer-key.json` (the setup step 2 command
     prints the key), and `ls ~/Library/Application\ Support/*/remote-peer-key.json` finds no other
     copy.
-12. **Canvas edits survive with a browser tab attached (R42 workaround).** With the service in
-    serving mode (the setup step 1 drop-in) and a Server Edition browser tab open on it, a teammate
-    adds and moves a node in their hosted tab. After `systemctl --user restart nodeterm-server`, a
-    reconnected teammate (and the browser tab) still sees the node where it was moved. Repeat with no
-    browser tab attached: the edit is lost, as documented.
+12. **Edits persist with no browser attached.** With the service headless and no Server Edition tab
+    open, an Editor adds a node, moves another, draws a link and moves a card in a shared project.
+    Wait 5 s, then `systemctl --user restart nodeterm-server`: after the reconnect every edit is
+    still there, and in the project's `.nodeterm/project.json`.
+13. **A `git pull` during a drag.** While a teammate drags a node of a shared project, pull (or hand
+    edit) that project's `.nodeterm/project.json` on the host with a change to another node. No
+    client shows the Reload / Keep mine bar, the pulled change appears on every client, and the
+    teammate's node stays where they dropped it.
+14. **Two cards at once.** Two teammates move two different cards of one shared board at the same
+    moment. Both moves stay, on both screens and after a service restart.
+15. **A Windows joiner.** A teammate on a Windows desktop joins, moves a card and adds a column; both
+    are still there after a service restart.
+16. **Key proof against production.** With nodeterm-server deployed and `POP_SECRET` set (its boot
+    log does not say `relay proof-of-possession is DISABLED`):
+    1. The hosted core's first mint carries `popChallenge`/`popProof`, and `team status` stays
+       running (`Hosting: ON — listening for teammates.`, no key-proof line).
+    2. A second machine joins with the code.
+    3. A host-token request without a proof for that host now answers `403 pop_required`. Take the
+       join code's `hostDeviceId` and `hostPublicKeyB64` from `node $APP team info --json`, then:
+
+       ```bash
+       curl -sS -w ' %{http_code}\n' -X POST https://api.nodeterm.dev/v1/relay/host-token \
+         -H 'content-type: application/json' \
+         -d '{"deviceId":"<hostDeviceId>","hostPublicKeyB64":"<hostPublicKeyB64>"}'
+       # {"error":"pop_required"} 403
+       ```

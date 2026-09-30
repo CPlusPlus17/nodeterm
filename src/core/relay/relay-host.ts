@@ -53,6 +53,7 @@ import {
 import { IPC } from '../../shared/ipc'
 import { scopeWorkspaceToProject } from '../../shared/relay-workspace-scope'
 import { outOfProjectScope } from './relay-project-scope'
+import { HOST_ONLY_REFUSAL, isHostOnlyChannel } from '../../shared/host-control'
 import type { Workspace } from '../../shared/types'
 
 /**
@@ -201,8 +202,15 @@ const live = new Set<RelayHostSession>()
 /** Cut every live session with this peer key. The revoker's `onRevoke` (src/main/index.ts). With a
  *  reason, the peer is told why over the encrypted tunnel first (`deny`); without one it is closed. */
 export function killRelayHostsByPeerKey(peerKeyB64: string, reason?: TrustDeniedReason): void {
+  killRelayHostsWhere((key) => key === peerKeyB64, reason)
+}
+
+/** Cut every live session (bridged or still awaiting mutual approval) whose peer key satisfies
+ *  `match`. A session whose key is not known yet is never matched. */
+export function killRelayHostsWhere(match: (peerKeyB64: string) => boolean, reason?: TrustDeniedReason): void {
   for (const session of [...live]) {
-    if (session.peerKeyB64() !== peerKeyB64) continue
+    const key = session.peerKeyB64()
+    if (!key || !match(key)) continue
     if (reason) session.deny(reason)
     else session.close()
   }
@@ -437,6 +445,17 @@ export function connectRelayHost(opts: ConnectRelayHostOptions): RelayHostSessio
    *  Live frames and held ones (see `held`) both come through here, so they meet the same checks. */
   const serve = (m: RpcRequest | RpcCast): void => {
     if (clientId === null) return
+    // HOST-ONLY channels (shared/host-control.ts) are refused to EVERY relay peer, before any hook
+    // or dispatch — here, in core, so the Server Edition's hosted peers meet the same list the
+    // desktop's platform dispatch already enforced (a hosted Editor passes every role check).
+    if ((m.t === 'req' || m.t === 'cast') && isHostOnlyChannel(m.method)) {
+      if (m.t === 'req') {
+        socket.sendTunnelText(
+          JSON.stringify({ t: 'res', id: m.id, ok: false, error: { code: 'E_FORBIDDEN', message: HOST_ONLY_REFUSAL } })
+        )
+      }
+      return
+    }
     if (m.t === 'req') {
       // A hook may answer the request itself — it then never reaches a scope check or the core.
       // Every hook call below is guarded: a throw is ANSWERED (E_HANDLER), never let into the

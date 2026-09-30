@@ -8,7 +8,7 @@
 // `approvedAt` is the JOINER-SIDE pin: set once both humans approved this device on that host, it is
 // what lets a reconnect confirm our half without a SAS dialog — but only for the exact host key it
 // was recorded against (see hosted-join.ts). It deliberately does NOT live in the desktop's
-// approved-devices store, which counts paired phones.
+// phone pin store (approved-devices.ts), which counts paired phones.
 import { constants as fsConstants, promises as fs } from 'node:fs'
 import { dirname } from 'node:path'
 import { writeFileAtomic } from '../../core/fs-atomic'
