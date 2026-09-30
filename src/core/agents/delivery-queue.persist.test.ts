@@ -4,6 +4,7 @@ import {
   DELIVERY_QUEUE_TTL_MS,
   QUEUE_FACT,
   QUEUE_PERSIST_BODY_MAX,
+  QUEUE_PERSIST_BYTES_BUDGET,
   restoredBindingVerdict,
   sanitizePersistedQueueEntry,
   type CancelTimer,
@@ -13,7 +14,9 @@ import {
   type QueuedDeliveryRequest
 } from './delivery-queue'
 import type { AgentMessageOutcome } from './agent-message-decide'
-import { DurableFactFile } from '../durable-state'
+import { DURABLE_STATE_MAX_BYTES, DurableFactFile } from '../durable-state'
+import { restoreDeliveryQueue } from './agent-messaging'
+import fs from 'node:fs'
 import { testTmpDir } from '../test-tmp'
 
 /**
@@ -24,7 +27,13 @@ import { testTmpDir } from '../test-tmp'
  * for; a board comment and a station notice are never replayed into a pane.
  */
 
-function instance(opts: { now: () => number; binding: (id: string) => QueueBinding | undefined; outcome?: AgentMessageOutcome }) {
+function instance(opts: {
+  now: () => number
+  binding: (id: string) => QueueBinding | undefined
+  outcome?: AgentMessageOutcome
+  trace?: DeliveryQueueDeps['trace']
+  onDeliver?: (req: QueuedDeliveryRequest) => void
+}) {
   const delivered: QueuedDeliveryRequest[] = []
   const expired: { req: QueuedDeliveryRequest; queuedForMs: number }[] = []
   const flushed: { req: QueuedDeliveryRequest; outcome: AgentMessageOutcome }[] = []
@@ -35,13 +44,16 @@ function instance(opts: { now: () => number; binding: (id: string) => QueueBindi
   const deps: DeliveryQueueDeps = {
     now: opts.now,
     deliver: async (req) => {
+      opts.onDeliver?.(req)
       delivered.push(req)
       return opts.outcome ?? { kind: 'delivered', traceId: 'd', traced: 'memory', receipt: 'observed', signal: 'newTurn' }
     },
-    trace: async (input) => {
-      traced.push(input.outcome)
-      return { traceId: `t${traced.length}`, traced: 'memory' }
-    },
+    trace:
+      opts.trace ??
+      (async (input) => {
+        traced.push(input.outcome)
+        return { traceId: `t${traced.length}`, traced: 'memory' }
+      }),
     onExpired: (req, info) => expired.push({ req, queuedForMs: info.queuedForMs }),
     onFlushed: (req, outcome) => flushed.push({ req, outcome }),
     onQueued: (req) => queued.push(req),
@@ -197,5 +209,93 @@ describe('delivery queue across a restart', () => {
     await b.queue.restore(new DurableFactFile(QUEUE_FACT, { userDataDir: dir }).load())
     await b.queue.onTargetIdle('st1')
     expect(b.delivered.map((r) => r.body)).toEqual(['next task'])
+  })
+
+  it('the written file stays under the load limit however much is queued; nothing is silently dropped (review repro)', async () => {
+    const dir = testTmpDir('nt-queue-budget-')
+    const file = new DurableFactFile(QUEUE_FACT, { userDataDir: dir, debounceMs: 1 })
+    const a = instance({ now: () => 1000, binding: () => ({ sessionId: 's' }) })
+    for (let t = 0; t < 5; t++)
+      for (let i = 0; i < 16; i++)
+        await a.queue.enqueue(req({ targetNodeId: `st${t}`, body: `${t}-${i}-` + 'x'.repeat(250_000) }))
+    file.save(a.saved())
+    await file.flush()
+    expect(fs.statSync(file.path).size).toBeLessThan(DURABLE_STATE_MAX_BYTES)
+    const loaded = new DurableFactFile(QUEUE_FACT, { userDataDir: dir }).load()
+    expect(loaded).toHaveLength(80)
+    const full = loaded.filter((e) => !e.bodyOmitted)
+    expect(full.length).toBeGreaterThan(0)
+    expect(full.reduce((n, e) => n + JSON.stringify(e).length, 0)).toBeLessThanOrEqual(QUEUE_PERSIST_BYTES_BUDGET)
+    // Every reduced entry is ENDED loudly at restore, the full ones wait for their target.
+    const b = instance({ now: () => 2000, binding: () => ({ sessionId: 's' }) })
+    await b.queue.restore(loaded)
+    expect(b.expired).toHaveLength(80 - full.length)
+    expect(b.expired.length + [0, 1, 2, 3, 4].reduce((n, t) => n + b.queue.depth(`st${t}`), 0)).toBe(80)
+  })
+
+  it('lapsed entries never enter the live lists: a flush during an expiry\'s await delivers nothing of them', async () => {
+    const a = instance({ now: () => 1000, binding: () => ({ sessionId: 's' }) })
+    await a.queue.enqueue(req({ verb: 'board-comment', sourceNodeId: 'board-comment:c1', projectId: 'p1' }))
+    await a.queue.enqueue(req({ body: 'x'.repeat(QUEUE_PERSIST_BODY_MAX + 1) }))
+    let release = (): void => {}
+    let b!: ReturnType<typeof instance>
+    const stalled = new Promise<void>((r) => (release = r))
+    b = instance({
+      now: () => 2000,
+      binding: () => ({ sessionId: 's' }),
+      trace: async () => {
+        await b.queue.onTargetIdle('st1') // a `done` arriving while the expiry is being reported
+        await stalled
+        return { traceId: 't', traced: 'memory' }
+      }
+    })
+    const restoring = b.queue.restore(onDisk(a.saved()))
+    await new Promise((r) => setTimeout(r, 0))
+    release()
+    await restoring
+    expect(b.delivered).toEqual([])
+    expect(b.expired).toHaveLength(2)
+  })
+
+  it('lapsed entries take no capacity: 16 deliverable ones all come back beside an expired one', async () => {
+    const entries: PersistedQueueEntry[] = [
+      { req: req({ verb: 'board-comment', sourceNodeId: 'board-comment:c1' }), enqueuedAt: 1000, ttlMs: DELIVERY_QUEUE_TTL_MS, queuedTraceId: 't' },
+      ...Array.from({ length: 16 }, (_, i) => ({
+        req: req({ body: `m${i}` }),
+        enqueuedAt: 1000,
+        ttlMs: DELIVERY_QUEUE_TTL_MS,
+        queuedTraceId: `t${i}`,
+        binding: { sessionId: 's' }
+      }))
+    ]
+    const b = instance({ now: () => 2000, binding: () => ({ sessionId: 's' }) })
+    await b.queue.restore(onDisk(entries))
+    expect(b.queue.depth('st1')).toBe(16)
+    expect(b.expired.map((e) => e.req.verb)).toEqual(['board-comment'])
+  })
+
+  it('an entry is written off disk BEFORE its delivery attempt (at most once across a crash)', async () => {
+    let onDiskDuringDelivery: PersistedQueueEntry[] | null = null
+    let a!: ReturnType<typeof instance>
+    a = instance({ now: () => 1000, binding: () => ({ sessionId: 's' }), onDeliver: () => (onDiskDuringDelivery = a.saved()) })
+    await a.queue.enqueue(req())
+    expect(a.saved()).toHaveLength(1)
+    await a.queue.onTargetIdle('st1')
+    expect(onDiskDuringDelivery).toEqual([])
+  })
+
+  it('restoreDeliveryQueue reports no expiry until `ready` (the desktop workspace index) has resolved', async () => {
+    const a = instance({ now: () => 1000, binding: () => ({ sessionId: 's' }) })
+    await a.queue.enqueue(req())
+    const b = instance({ now: () => 1000 + DELIVERY_QUEUE_TTL_MS + 1, binding: () => ({ sessionId: 's' }) })
+    let loaded = (): void => {}
+    const ready = new Promise<void>((r) => (loaded = r))
+    const disk = onDisk(a.saved())
+    const done = restoreDeliveryQueue(b.queue, { load: () => disk }, { ready })
+    await new Promise((r) => setTimeout(r, 5))
+    expect(b.expired).toEqual([])
+    loaded()
+    await done
+    expect(b.expired).toHaveLength(1)
   })
 })

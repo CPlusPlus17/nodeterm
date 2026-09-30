@@ -730,7 +730,9 @@ export async function startServer(
         // answer the issue lane gets from the GitHub host controller.
         issueRepository: (projectId) =>
           github.controller.status(projectId).then((view) => view.project?.repository ?? null),
-        installAgentIntegrations: config.installHooks !== false
+        installAgentIntegrations: config.installHooks !== false,
+        // The durable orchestration facts follow hook-endpoint ownership, like the request ledger.
+        ownsDurableState: hookStartupWarning === null
       })
       hookServer.setControlHandler(canvasControl.handler)
     } catch (error) {

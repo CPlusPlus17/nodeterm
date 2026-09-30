@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { DURABLE_STATE_MAX_BYTES } from './durable-state'
 import {
+  CONTROL_REQUEST_REPLIES_BUDGET,
   CONTROL_REQUEST_REPLY_MAX_BYTES,
   ControlRequestLedger,
   REQUEST_LEDGER_TTL_MS,
@@ -71,5 +73,25 @@ describe('ControlRequestLedger persistence', () => {
     expect(sanitizeLedgerRow({ ...base, reply: { ok: 'yes' } })).toMatchObject({ state: 'unknown' })
     expect(sanitizeLedgerRow({ ...base, reply: undefined })).toMatchObject({ state: 'unknown' })
     expect(sanitizeLedgerRow(null)).toBeNull()
+  })
+
+  it('stays under the file limit when every row carries a maximal reply: the rows past the budget are UNKNOWN', () => {
+    const a = new ControlRequestLedger({ now: () => 0 })
+    const big = 'y'.repeat(CONTROL_REQUEST_REPLY_MAX_BYTES - 200)
+    for (let i = 0; i < 4096; i++) {
+      const d = a.begin(`n${i % 16}`, `r${i}`, fp)
+      if (d.kind === 'run') d.claim.settle({ ok: true, message: big })
+    }
+    const rows = a.exportRows()
+    expect(rows).toHaveLength(4096)
+    expect(JSON.stringify(rows).length).toBeLessThan(DURABLE_STATE_MAX_BYTES)
+    const settled = rows.filter((r) => r.state === 'settled')
+    expect(settled.length).toBeGreaterThan(0)
+    expect(JSON.stringify(settled.map((r) => r.reply)).length).toBeLessThanOrEqual(CONTROL_REQUEST_REPLIES_BUDGET + settled.length)
+    // The oldest keep their reply; a row past the budget is still refused after a restart.
+    expect(rows[0].state).toBe('settled')
+    const last = rows[rows.length - 1]
+    expect(last.state).toBe('unknown')
+    expect(restarted([last], 1).begin(last.caller, last.requestId, fp)).toMatchObject({ outcome: 'request-outcome-unknown' })
   })
 })

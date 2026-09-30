@@ -91,6 +91,13 @@ export interface ServerCanvasControlDeps {
    * specifically exercising the install and has redirected `HOME` to a scratch directory first.
    */
   installAgentIntegrations: boolean
+  /**
+   * Does this process own the hook endpoint (`hookServer.startForApp()` returned no warning)? The
+   * durable orchestration facts (queue, station reports, hand-over holds) belong to the owning
+   * instance, like the request ledger: a second instance on the same data dir must neither restore
+   * them nor overwrite their files. Absent = owns (every test, and a caller that did not ask).
+   */
+  ownsDurableState?: boolean
 }
 
 export interface ServerCanvasControl {
@@ -221,6 +228,10 @@ export async function initServerCanvasControl(
     Date.now,
     handoversFile
   )
+  if (deps.ownsDurableState === false) {
+    outcomesFile.standDown()
+    handoversFile.standDown()
+  }
   stationOutcomes.loadFromDisk()
   stationHandovers.loadFromDisk()
   const factory = new HeadlessNodeFactory({
@@ -287,6 +298,7 @@ export async function initServerCanvasControl(
   // this edition's creator ledger is process-local, so a restored message whose caller→target proof
   // did not survive the restart is refused `caller-not-owner` at flush — with its sender told.
   const queueFile = new DurableFactFile(QUEUE_FACT, { userDataDir: platform().userDataDir })
+  if (deps.ownsDurableState === false) queueFile.standDown()
   const queue = createDeliveryQueue(messaging, { durable: queueFile })
   messaging.queue = queue
 

@@ -1969,10 +1969,11 @@ app.whenReady().then(async () => {
   // renderer reload does not lose it; pushed whole to the window on every change.
   // Durable across an app restart too (station-outcomes.json), each report bound to the session
   // that made it; `loadFromDisk()` runs below, after the status mirror it compares against.
+  const stationOutcomesFile = new DurableFactFile(OUTCOME_FACT, { userDataDir: corePlatform.userDataDir })
   const stationOutcomes = new StationOutcomeStore(
     (records) => sendToMain(IPC.stationOutcomeChanged, records),
     {
-      durable: new DurableFactFile(OUTCOME_FACT, { userDataDir: corePlatform.userDataDir }),
+      durable: stationOutcomesFile,
       sessionOf: (id) => {
         const m = mirrorEntry(id)
         return m ? { sessionId: m.sessionId, agentId: m.agentId } : undefined
@@ -1987,10 +1988,11 @@ app.whenReady().then(async () => {
   // handed new work is not "done" until a turn that started after the hand-over has ended. Pushed
   // whole to the window, whose launch loop reads it. Durable (station-handovers.json), loaded below
   // between the reports and the queue.
+  const stationHandoversFile = new DurableFactFile(HANDOVER_FACT, { userDataDir: corePlatform.userDataDir })
   const stationHandovers = new StationHandoverTracker(
     (records) => sendToMain(IPC.stationHandoverChanged, records),
     Date.now,
-    new DurableFactFile(HANDOVER_FACT, { userDataDir: corePlatform.userDataDir })
+    stationHandoversFile
   )
   registerStationHandoverIpc(corePlatform, () => stationHandovers)
   messagingDeps.onHandover = (ev) => {
@@ -2016,6 +2018,13 @@ app.whenReady().then(async () => {
   // listeners (setListener/setRawListener/setControlHandler) attach later, which the server
   // tolerates — early hook POSTs are simply dropped, never mis-routed.
   const hookStartupWarning = await hookServer.startForApp()
+  // The durable orchestration facts belong to the instance that owns the hook endpoint, exactly
+  // like the request ledger (which `hookServer.start()` only loads when it wins the endpoint). A
+  // second instance on the same userData that lost it must neither restore them — it would expire,
+  // and tell senders about, messages the owning instance still holds — nor overwrite their files.
+  if (hookStartupWarning) {
+    for (const f of [deliveryQueueFile, stationOutcomesFile, stationHandoversFile]) f.standDown()
+  }
   // ---- Node identity (src/core/agents/node-auth-secret.ts) ------------------------------------
   // One secret does two jobs: it arms the hook server's per-node capability (closing the "shared
   // bearer can name any sibling node" hole) and it signs the codex thread → node records the hook
@@ -2118,7 +2127,13 @@ app.whenReady().then(async () => {
   // sender told, every message whose TTL ran out while the app was down.
   stationOutcomes.loadFromDisk()
   stationHandovers.loadFromDisk()
-  void restoreDeliveryQueue(messagingDeps.queue, deliveryQueueFile)
+  // The queue waits for the workspace INDEX: an entry that lapsed while the app was down is expired
+  // here, and its sender leg (board-log line in the sender's project) resolves projects through the
+  // index, which nothing else has loaded yet at this point of boot (the renderer's own
+  // `workspace.load` comes later). Read-only load (`sideline: false`), like the relay path's.
+  void restoreDeliveryQueue(messagingDeps.queue, deliveryQueueFile, {
+    ready: workspaceStore.load({ sideline: false })
+  })
 
   /** The one display-title rule for everything the HOST sends out (push alerts, Live Activity
    *  updates, the notch capsule): the live session name unless the node was hand-renamed. */

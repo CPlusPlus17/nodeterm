@@ -190,6 +190,38 @@ export interface PersistedQueueEntry {
 
 /** A body larger than this is not written; its entry is expired at restore (sender told). */
 export const QUEUE_PERSIST_BODY_MAX = 256 * 1024
+/** JSON bytes of FULL entries a snapshot writes before the rest go out reduced (`snapshot`). Half
+ *  the file limit: a reduced entry is a few hundred bytes, so 1024 of them fit in the other half. */
+export const QUEUE_PERSIST_BYTES_BUDGET = 8 * 1024 * 1024
+
+/** A reduced entry keeps only what its expiry needs to be routed and traced. */
+const REDUCED_STRING_MAX = 200
+const REDUCED_EXTRAS_MAX = 4
+
+function clip(v: string): string {
+  return v.length > REDUCED_STRING_MAX ? v.slice(0, REDUCED_STRING_MAX) : v
+}
+
+/** The request of an entry written without its body: short fields only, never a message text. */
+function reducedRequest(req: QueuedDeliveryRequest): QueuedDeliveryRequest {
+  const out: QueuedDeliveryRequest = {
+    verb: typeof req.verb === 'string' ? clip(req.verb) : req.verb,
+    sourceNodeId: clip(req.sourceNodeId),
+    targetNodeId: req.targetNodeId,
+    sourceTitle: clip(req.sourceTitle),
+    body: ''
+  }
+  let extras = 0
+  for (const [k, v] of Object.entries(req)) {
+    if (k in out || extras >= REDUCED_EXTRAS_MAX) continue
+    if (typeof v === 'number' || typeof v === 'boolean' || (typeof v === 'string' && v.length <= REDUCED_STRING_MAX)) {
+      out[k] = v
+      extras++
+    }
+  }
+  return out
+}
+
 /** At most this many entries on disk. `DELIVERY_QUEUE_CAPACITY` per target bounds it in practice. */
 export const QUEUE_PERSIST_MAX = 1024
 /** The longest TTL a restored entry may claim — a hand-edited `ttlMs` must not keep one forever. */
@@ -383,6 +415,9 @@ export class DeliveryQueue {
       // must not flush the same entry twice. It goes back on failure, at the FRONT, preserving order.
       list.shift()
       entry.cancelTimer()
+      // Written off disk BEFORE the attempt (claim before effect): a crash mid-delivery then loses
+      // this one message rather than typing it twice after the next boot. At most once.
+      this.persist()
       // A restored entry goes only into the session it was queued for (see the header).
       const verdict = entry.restored
         ? restoredBindingVerdict(entry.binding, this.deps.bindingOf?.(nodeId))
@@ -453,6 +488,11 @@ export class DeliveryQueue {
     if (list.length === 0) this.queues.delete(nodeId)
     entry.cancelTimer()
     this.persist()
+    await this.reportExpired(entry)
+  }
+
+  /** Trace `expired` and tell the sender — the two legs every expiry owes. */
+  private async reportExpired(entry: QueueEntry): Promise<void> {
     const queuedForMs = this.deps.now() - entry.enqueuedAt
     const t = await this.deps.trace({
       sourceNodeId: entry.req.sourceNodeId,
@@ -467,17 +507,29 @@ export class DeliveryQueue {
   /** Every queued entry as it is written to disk, oldest first per target. */
   snapshot(): PersistedQueueEntry[] {
     const out: PersistedQueueEntry[] = []
+    // The file is set aside WHOLE at load past DURABLE_STATE_MAX_BYTES, so the write is budgeted:
+    // once the full entries reach QUEUE_PERSIST_BYTES_BUDGET (JSON bytes, oldest first per target),
+    // the rest are written REDUCED — no body, only short fields — which restore turns into an
+    // expiry the sender hears about. Never a file the next boot throws away with every message in it.
+    let used = 0
     for (const list of this.queues.values()) {
       for (const e of list) {
-        const omit = e.req.body.length > QUEUE_PERSIST_BODY_MAX
-        out.push({
-          req: omit ? { ...e.req, body: '' } : e.req,
+        const base = {
           enqueuedAt: e.enqueuedAt,
           ttlMs: e.ttlMs,
           queuedTraceId: e.queuedTraceId,
-          ...(e.binding ? { binding: e.binding } : {}),
-          ...(omit ? { bodyOmitted: true as const } : {})
-        })
+          ...(e.binding ? { binding: e.binding } : {})
+        }
+        const full: PersistedQueueEntry = { req: e.req, ...base }
+        const size = e.req.body.length > QUEUE_PERSIST_BODY_MAX ? Infinity : JSON.stringify(full).length
+        if (used + size <= QUEUE_PERSIST_BYTES_BUDGET) {
+          used += size
+          out.push(full)
+          continue
+        }
+        const reduced: PersistedQueueEntry = { req: reducedRequest(e.req), ...base, bodyOmitted: true }
+        used += JSON.stringify(reduced).length
+        out.push(reduced)
       }
     }
     return out
@@ -494,7 +546,6 @@ export class DeliveryQueue {
     const now = this.deps.now()
     const lapsed: QueueEntry[] = []
     for (const p of entries) {
-      const list = this.queues.get(p.req.targetNodeId) ?? []
       // A clock that went backwards must not stretch the wait past one full TTL.
       const age = Math.max(0, now - p.enqueuedAt)
       const remaining = Math.min(p.ttlMs, p.ttlMs - age)
@@ -507,20 +558,28 @@ export class DeliveryQueue {
         restored: true,
         ...(p.binding ? { binding: p.binding } : {})
       }
-      list.push(entry)
-      this.queues.set(p.req.targetNodeId, list)
       this.deps.onQueued?.(entry.req)
+      // Capacity counts only what is really re-queued: a lapsed entry never takes a slot.
       const deliverable =
         remaining > 0 &&
         !p.bodyOmitted &&
         RESTORABLE_VERBS.has(String(p.req.verb)) &&
-        list.length <= this.capacity
-      if (deliverable) {
-        entry.cancelTimer = this.schedule(remaining, () => void this.expire(p.req.targetNodeId, entry))
-      } else lapsed.push(entry)
+        this.depth(p.req.targetNodeId) < this.capacity
+      if (!deliverable) {
+        // Never inserted into the live lists: a flush running during one of the expiries below
+        // must not be able to deliver a board comment or an empty (body-omitted) entry.
+        lapsed.push(entry)
+        continue
+      }
+      const list = this.queues.get(p.req.targetNodeId) ?? []
+      list.push(entry)
+      this.queues.set(p.req.targetNodeId, list)
+      entry.cancelTimer = this.schedule(remaining, () => void this.expire(p.req.targetNodeId, entry))
     }
+    // The lapsed entries' ends are reported BEFORE the file drops them: a crash in between reports
+    // one twice at the next boot, never not at all.
+    for (const entry of lapsed) await this.reportExpired(entry)
     this.persist()
-    for (const entry of lapsed) await this.expire(entry.req.targetNodeId, entry)
   }
 
   private persist(): void {

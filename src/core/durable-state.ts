@@ -1,15 +1,16 @@
 // Orchestration facts that must outlive the process that learned them.
 //
-// WHY THIS EXISTS. Three facts a canvas-control orchestration leans on lived only in process
+// WHY THIS EXISTS. Four facts a canvas-control orchestration leans on lived only in process
 // memory, so an app (or Server Edition) restart erased them while the thing they described kept
 // going:
 //   - a `send` answered `queued` (the sender was told it would be delivered) was silently lost;
 //   - a station's `report-outcome` vanished, so every `--after-success` dependent read BLOCKED;
-//   - the `--request-id` ledger emptied, so a retry after a restart re-ran an open that happened.
+//   - the `--request-id` ledger emptied, so a retry after a restart re-ran an open that happened;
+//   - the plain-`--after` hand-over hold was forgotten, so a dependent fired on a stale `done`.
 // Each owner keeps its own rules (what a restart MEANS for that fact is decided next to the fact —
-// delivery-queue.ts, station-outcome-store.ts, control-request-ledger.ts); this module is only the
-// storage all of them share, so a new fact is one more `DurableFactSpec`, not a fourth copy of the
-// read / sanitize / write / flush dance.
+// delivery-queue.ts, station-outcome-store.ts, station-handover.ts, control-request-ledger.ts);
+// this module is only the storage all of them share, so a new fact is one more `DurableFactSpec`,
+// not another copy of the read / sanitize / write / flush dance.
 //
 // THE RULES, each for a reason:
 //   - One file per fact kind under `<userData>/orchestration-state/`, MACHINE-LOCAL. Never
@@ -24,9 +25,16 @@
 //     is not JSON, too large, or not an envelope is set aside as `<file>.corrupt` (one copy, replaced
 //     each time) and the fact starts empty with a warning. Loading NEVER throws: a boot that dies on
 //     a bad orchestration file would take the whole app with it.
-//   - Written through `writeFileAtomic` (and `renameAtomicSync` for the synchronous flush at
-//     quit) — never a bare rename, see fs-atomic.ts. Mode 0600: a queued message's body is the
-//     user's text.
+//   - Written as a unique `wx` temp then `renameAtomicSync` — never a bare rename, see
+//     fs-atomic.ts. Mode 0600: a queued message's body is the user's text.
+//   - A synchronous flush (quit) is never overwritten by an OLDER async write still in flight: it
+//     bumps a generation, and the async path checks the generation and renames in one synchronous
+//     step, dropping its temp when it is stale.
+//   - Every OWNER must keep its serialized file under `DURABLE_STATE_MAX_BYTES` — a file past it is
+//     set aside WHOLE at load. The queue and the ledger enforce a byte budget on what they write
+//     (bodies / replies past it are written in their refusal-safe reduced form).
+//   - `standDown()` for a process that does not own the fact (a second instance on the same
+//     userData that lost the hook endpoint): it neither reads nor writes the file.
 //   - Saves are COALESCED (`debounceMs`, a short window — every control call can touch the
 //     ledger), at most one write in flight, and the LATEST snapshot always wins. `flushSync` writes
 //     whatever is pending before the process exits; a crash inside the window loses that window,
@@ -35,12 +43,13 @@
 // Pure `src/core`: no electron. The clock and the timer are injectable so tests drive it.
 import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { renameAtomicSync, tempNameFor, writeFileAtomic } from './fs-atomic'
+import { promises as fsp } from 'node:fs'
+import { renameAtomicSync, tempNameFor } from './fs-atomic'
 
 /** Where every durable orchestration fact lives, relative to userData. */
 export const DURABLE_STATE_DIR = 'orchestration-state'
 
-/** A file larger than this is not ours (every owner caps its records far below it). */
+/** A file larger than this is set aside at load. Every owner budgets its writes below it. */
 export const DURABLE_STATE_MAX_BYTES = 16 * 1024 * 1024
 
 /** How long saves are coalesced. Short: a claimed request-id row should reach disk before the call
@@ -95,6 +104,9 @@ export class DurableFactFile<T> {
   private cancelTimer: (() => void) | null = null
   private writing: Promise<void> | null = null
   private disposed = false
+  /** Bumped by every synchronous flush; an async write started before it drops its rename. */
+  private generation = 0
+  private stoodDown = false
 
   constructor(
     private readonly spec: DurableFactSpec<T>,
@@ -118,6 +130,7 @@ export class DurableFactFile<T> {
 
   /** Read and sanitize the file. Synchronous (boot), never throws; absent ⇒ `[]` silently. */
   load(): T[] {
+    if (this.stoodDown) return []
     let text: string
     let fd: number | undefined
     try {
@@ -209,6 +222,8 @@ export class DurableFactFile<T> {
     const snap = this.pending
     if (!snap) return
     this.pending = null
+    // Any async write still in flight carries an OLDER snapshot: it must not rename over this one.
+    this.generation++
     try {
       this.ensureDir()
       const tmp = tempNameFor(this.path)
@@ -224,6 +239,23 @@ export class DurableFactFile<T> {
     }
   }
 
+  /**
+   * This process does not own the fact (a second instance on the same userData that lost the hook
+   * endpoint to the first): never read or write the file again. `load()` answers `[]` from here on,
+   * so it neither restores (and expires) messages the owning instance holds nor overwrites its file.
+   */
+  standDown(): void {
+    if (this.cancelTimer) {
+      this.cancelTimer()
+      this.cancelTimer = null
+    }
+    this.pending = null
+    this.disposed = true
+    this.stoodDown = true
+    this.generation++
+    liveFiles.delete(this)
+  }
+
   /** Stop accepting saves after flushing (shutdown). */
   dispose(): void {
     this.flushSync()
@@ -237,11 +269,23 @@ export class DurableFactFile<T> {
     const snap = this.pending
     if (!snap) return
     this.pending = null
+    const generation = this.generation
     this.writing = (async (): Promise<void> => {
+      const tmp = tempNameFor(this.path)
       try {
         this.ensureDir()
-        await writeFileAtomic(this.path, this.serialize(snap), { mode: 0o600 })
+        // Same shape as `writeFileAtomic` (unique `wx` temp, then the retrying rename), split so the
+        // generation check and the rename happen in ONE synchronous step: a `flushSync` that ran
+        // while the temp was being written has put a NEWER snapshot on disk, and this older one
+        // must not land on top of it. Checked and renamed with nothing able to run in between.
+        await fsp.writeFile(tmp, this.serialize(snap), { encoding: 'utf-8', flag: 'wx', mode: 0o600 })
+        if (generation !== this.generation) {
+          rmSync(tmp, { force: true })
+          return
+        }
+        renameAtomicSync(tmp, this.path)
       } catch (e) {
+        rmSync(tmp, { force: true })
         this.warn(`[durable-state] ${this.spec.kind}: save failed (${String(e)})`)
       }
     })()

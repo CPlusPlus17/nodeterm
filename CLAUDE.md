@@ -7469,10 +7469,29 @@ spec, never a fourth copy of the read / sanitize / write / flush code.
   lists are capped, and a file that is not JSON / too large (16 MB) / not an envelope is set aside as
   `<file>.corrupt` (one copy) and the fact starts EMPTY with a warning. **Loading never throws** — a
   bad orchestration file must not take the boot with it.
-- **Writes** go through `writeFileAtomic` (the fs-atomic guard applies), coalesced over 50 ms, one
-  in flight, latest snapshot wins; `flushAllDurableFactsSync()` runs on the desktop's second
-  `before-quit` pass, `hookServer.stop()` flushes the ledger, and the Server Edition's canvas-control
-  `stop()` disposes its two files. A **crash** inside the 50 ms window loses that window.
+- **Writes** are a unique `wx` temp then `renameAtomicSync` (the fs-atomic guard applies), coalesced
+  over 50 ms, one in flight, latest snapshot wins; `flushAllDurableFactsSync()` runs on the desktop's
+  second `before-quit` pass, `hookServer.stop()` flushes the ledger, and the Server Edition's
+  canvas-control `stop()` disposes its three files (queue, reports, holds). A **crash** inside the
+  50 ms window loses that window. **A sync flush is never overwritten by an older async write**
+  (review of #1054, reproduced: `save([1])`, `flush()`, `save([2])`, `flushSync()` left `[1]` on
+  disk): `flushSync` bumps a generation, and the async path checks it and renames in ONE synchronous
+  step, dropping its temp when stale.
+- **Every owner budgets its bytes under the 16 MB load limit**, because a file past it is set aside
+  WHOLE (reproduced in review: 80 queued 250K-char bodies wrote 20 MB and 0 of 80 came back). The
+  queue writes full entries up to 8 MB of JSON and the rest REDUCED (no body, short fields only —
+  `bodyOmitted`, which restore turns into an expiry the sender hears about); the ledger writes
+  replies up to 8 MB and the rest as UNKNOWN rows (still refused, never re-run).
+- **Only the instance that owns the hook endpoint owns the facts.** The ledger is loaded by
+  `hookServer.start()`, which fails for a second instance; the queue, reports and holds follow the
+  same rule (`standDown()` when `startForApp()` returned a warning — desktop `main/index.ts`, Server
+  Edition `ownsDurableState`), so a second instance on the same userData neither expires messages
+  the live one holds nor overwrites its files.
+- **The desktop queue restore waits for the workspace INDEX** (`restoreDeliveryQueue(…, {ready:
+  workspaceStore.load({sideline:false})})`): an entry that lapsed during the downtime is expired
+  there, and its sender leg resolves the sender's project and board log through the index, which
+  nothing else has loaded at that point of boot (review of #1054: the expiry otherwise reached only
+  the in-memory trace ring). The Server Edition already awaited the load before canvas control.
 - **Measured** (this Linux dev host, the ledger at its 4096-row cap with realistic open replies):
   377 bytes a row, a 1.5 MB file, 11.5 ms per full write, 16.6 ms to load at boot; a 20-row ledger
   writes in 0.41 ms. The queue is bounded far lower (16 per target), the reports at 1000.
@@ -7529,8 +7548,10 @@ What a restart MEANS, per fact — decided beside each fact, stated in its heade
   refused, never re-run, and nothing can settle it any more because its late answer died with the
   old process; a reply over 64 KB is written as UNKNOWN rather than dropped (a missing row would let
   the retry run).
-- **Known limit:** two instances sharing one userData (a dev sandbox) are last-writer-wins on these
-  files, and both would expire the same lapsed messages at boot. Nothing locks them.
+- **Delivery is at most once across a crash:** a flush writes the entry OFF disk before its
+  attempt (claim before effect), so a crash mid-delivery loses that one message rather than typing
+  it twice after the next boot. Lapsed entries at restore are never inserted into the live lists
+  (so no flush can deliver one while the expiries are reported) and take no capacity slot.
 
 ## The test suite never touches a live tmux server
 

@@ -144,4 +144,31 @@ describe('DurableFactFile', () => {
     await a.flush()
     expect(h.make().load().map((r) => r.n)).toEqual([3, 4, 5])
   })
+
+  it('a synchronous flush is never overwritten by an OLDER async write still in flight (review repro)', async () => {
+    const h = harness()
+    const a = h.make()
+    a.save([{ id: 'old', n: 1 }])
+    const inFlight = a.flush() // async write of [old] started, not yet renamed
+    a.save([{ id: 'new', n: 2 }])
+    a.flushSync() // quit: [new] lands synchronously
+    await inFlight
+    expect(h.make().load()).toEqual([{ id: 'new', n: 2 }])
+    // No temp litter left by the dropped rename.
+    expect(fs.readdirSync(path.dirname(h.file)).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('a stood-down file neither reads nor writes (a second instance that does not own the fact)', async () => {
+    const h = harness()
+    const owner = h.make()
+    owner.save([{ id: 'owner', n: 1 }])
+    await owner.flush()
+    const second = h.make()
+    second.standDown()
+    expect(second.load()).toEqual([])
+    second.save([{ id: 'intruder', n: 2 }])
+    second.flushSync()
+    await second.flush()
+    expect(h.make().load()).toEqual([{ id: 'owner', n: 1 }])
+  })
 })

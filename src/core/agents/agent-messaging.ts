@@ -408,9 +408,19 @@ export function createDeliveryQueue(
  */
 export async function restoreDeliveryQueue(
   queue: DeliveryQueue,
-  file: Pick<DurableFactFile<PersistedQueueEntry>, 'load'>
+  file: Pick<DurableFactFile<PersistedQueueEntry>, 'load'>,
+  opts: {
+    /**
+     * Resolves once the stores an expiry's sender leg reads are loaded — on the desktop the
+     * workspace INDEX (`projects()` and the board-log routes resolve nothing before it, so an entry
+     * expired at restore would reach only the in-memory trace ring and its sender would never hear).
+     * A rejection is waited out, not propagated: the restore still runs.
+     */
+    ready?: Promise<unknown>
+  } = {}
 ): Promise<void> {
   try {
+    if (opts.ready) await opts.ready.catch(() => undefined)
     await queue.restore(file.load())
   } catch (e) {
     console.warn(`[agent-messaging] could not restore the delivery queue (${String(e)})`)

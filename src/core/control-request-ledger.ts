@@ -331,6 +331,10 @@ export interface PersistedLedgerRow {
  *  few hundred bytes; the bound only keeps a pathological `result` out of the file. */
 export const CONTROL_REQUEST_REPLY_MAX_BYTES = 64 * 1024
 
+/** JSON bytes of replies one ledger file carries; the rows past it are written UNKNOWN. Rows
+ *  themselves are ~300 bytes, so 4096 of them fit beside it under DURABLE_STATE_MAX_BYTES. */
+export const CONTROL_REQUEST_REPLIES_BUDGET = 8 * 1024 * 1024
+
 const FINGERPRINT_RE = /^[0-9a-f]{64}$/
 
 /** Re-check one row read from disk (hand-editable input). `null` drops it. */
@@ -469,6 +473,10 @@ export class ControlRequestLedger {
    */
   exportRows(): PersistedLedgerRow[] {
     const out: PersistedLedgerRow[] = []
+    // Budgeted, oldest claim first: 4096 rows of 64 KB replies would pass the file limit and the
+    // whole file would be set aside at load. Past the budget a settled row is written UNKNOWN (no
+    // reply) — still refused, never re-run.
+    let used = 0
     for (const row of this.rows.values()) {
       const rec: PersistedLedgerRow = {
         caller: row.caller,
@@ -480,8 +488,11 @@ export class ControlRequestLedger {
       }
       if (row.state === 'settled' && row.reply) {
         const reply = sanitizeReply(row.reply)
-        if (reply) rec.reply = reply
-        else rec.state = 'unknown'
+        const size = reply ? JSON.stringify(reply).length : 0
+        if (reply && used + size <= CONTROL_REQUEST_REPLIES_BUDGET) {
+          rec.reply = reply
+          used += size
+        } else rec.state = 'unknown'
       }
       out.push(rec)
     }

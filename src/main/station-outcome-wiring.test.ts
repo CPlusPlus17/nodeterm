@@ -55,22 +55,32 @@ describe('desktop main', () => {
   })
 
   it('persists the store and the delivery queue, and loads them after the status mirror (durable state)', () => {
-    expect(main).toMatch(/durable: new DurableFactFile\(OUTCOME_FACT/)
+    expect(main).toMatch(/const stationOutcomesFile = new DurableFactFile\(OUTCOME_FACT/)
+    expect(main).toContain("durable: stationOutcomesFile")
     expect(main).toMatch(/createDeliveryQueue\(messagingDeps, \{ durable: deliveryQueueFile \}\)/)
     const mirror = main.indexOf('initAgentStatusMirror()\n')
     const load = main.indexOf('stationOutcomes.loadFromDisk()')
     const holds = main.indexOf('stationHandovers.loadFromDisk()')
-    const queue = main.indexOf('restoreDeliveryQueue(messagingDeps.queue, deliveryQueueFile)')
+    const queue = main.indexOf('restoreDeliveryQueue(messagingDeps.queue, deliveryQueueFile, {')
     expect(mirror).toBeGreaterThan(-1)
     expect(load).toBeGreaterThan(mirror)
     expect(holds).toBeGreaterThan(load)
     expect(queue).toBeGreaterThan(holds)
-    expect(main).toMatch(/new DurableFactFile\(HANDOVER_FACT/)
+    expect(main).toMatch(/const stationHandoversFile = new DurableFactFile\(HANDOVER_FACT/)
     // A station's new session withdraws its report BEFORE the renderer hears the event.
     const withdraw = main.indexOf('stationOutcomes.onAgentEvent(enriched)')
     expect(withdraw).toBeGreaterThan(-1)
     expect(withdraw).toBeLessThan(main.indexOf('sendToMain(IPC.agentStatus, enriched)'))
     expect(main).toContain('flushAllDurableFactsSync()')
+    // The restore waits for the workspace index, or a restore-time expiry reaches no sender.
+    expect(main.slice(queue, queue + 200)).toContain('ready: workspaceStore.load({ sideline: false })')
+    // A second instance that lost the hook endpoint stands every durable file down.
+    const gate = main.indexOf('const hookStartupWarning = await hookServer.startForApp()')
+    expect(gate).toBeGreaterThan(-1)
+    expect(gate).toBeLessThan(load)
+    expect(main.slice(gate, gate + 900)).toMatch(
+      /if \(hookStartupWarning\) \{\s*for \(const f of \[deliveryQueueFile, stationOutcomesFile, stationHandoversFile\]\) f\.standDown\(\)/
+    )
   })
 })
 
@@ -110,6 +120,8 @@ describe('Server Edition', () => {
     expect(serverControl).toContain('queueFile.dispose()')
     expect(serverControl).toContain('outcomesFile.dispose()')
     expect(serverControl).toContain('handoversFile.dispose()')
+    expect(serverControl).toContain('if (deps.ownsDurableState === false) queueFile.standDown()')
+    expect(serverIndex).toContain('ownsDurableState: hookStartupWarning === null')
     expect(serverControl.indexOf('stationHandovers.loadFromDisk()')).toBeLessThan(
       serverControl.indexOf('await restoreDeliveryQueue(queue, queueFile)')
     )
