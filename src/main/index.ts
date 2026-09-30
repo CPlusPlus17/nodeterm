@@ -181,6 +181,7 @@ import {
   flush as flushAgentStatusMirror,
   recordAgentEvent,
   recordQuestionResult,
+  recordTurnInterrupt,
   ignoreQuestionHook,
   ackDone,
   recordRawToolEvent,
@@ -2476,6 +2477,19 @@ app.whenReady().then(async () => {
     const ev = recordQuestionResult(nodeId, sessionId, toolUseId)
     if (ev) sendToMain(IPC.agentStatus, ev)
   }
+  /**
+   * The transcript recorded an interrupt marker (Esc / Ctrl+C). Claude sends no hook for an
+   * interrupted turn, so without this the node stayed RUNNING until the stale sweep. The mirror
+   * acts only when the marker names the node's CURRENT turn (`recordTurnInterrupt`), so a marker
+   * read back from history changes nothing. Same handler in src/server/agent-status.ts.
+   */
+  const onTurnInterrupted = (sessionId: string, turnId: string): void => {
+    let nodeId: string | undefined
+    for (const [nid, sid] of nodeContextSession) if (sid === sessionId) nodeId = nid
+    if (!nodeId) return
+    const ev = recordTurnInterrupt(nodeId, sessionId, turnId)
+    if (ev) sendToMain(IPC.agentStatus, ev)
+  }
   const onTaskNotification = (sessionId: string, n: TaskNotification): void => {
     let nodeId: string | undefined
     for (const [nid, sid] of nodeContextSession) if (sid === sessionId) nodeId = nid
@@ -2515,7 +2529,7 @@ app.whenReady().then(async () => {
       }
     }
   }
-  const contextTail = createContextTail(pushContextUpdate, { onTaskNotification, onToolResult })
+  const contextTail = createContextTail(pushContextUpdate, { onTaskNotification, onToolResult, onTurnInterrupted })
   // ONE TAIL PER AGENT, each with its own parser — not one tail switching on an agent id, which
   // would mean changing `ContextTail.track(sessionId, path)` and the four call sites that depend on
   // it. The poller (offset reads, torn-line carry, change-gated push) is written once in
@@ -2546,7 +2560,7 @@ app.whenReady().then(async () => {
   const remoteFile = new RemoteFile((args) =>
     sshProjectManager ? sshProjectManager.sshRun(args) : Promise.resolve({ code: 1, stdout: '' })
   )
-  const remoteContextTail = createRemoteContextTail(win, remoteFile, { onTaskNotification, onToolResult })
+  const remoteContextTail = createRemoteContextTail(win, remoteFile, { onTaskNotification, onToolResult, onTurnInterrupted })
   const remoteCodexContextTail = createRemoteContextTail((usage) => {
     const scoped = remoteCodexContext.publish(usage)
     if (scoped) pushContextUpdate(scoped)

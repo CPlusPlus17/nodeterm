@@ -12,6 +12,7 @@ import {
   parseLatestUsage,
   parseTaskNotifications,
   parseToolResultIds,
+  parseTurnInterrupts,
   type ContextTailOptions
 } from '../core/context-tail'
 import { splitCompleteLines } from '../core/subagent-tail'
@@ -125,6 +126,8 @@ export function createRemoteContextTail(
     if (opts?.onTaskNotification) {
       for (const n of parseTaskNotifications(eventLines)) opts.onTaskNotification(sessionId, n)
     }
+    if (opts?.onTurnInterrupted)
+      for (const id of parseTurnInterrupts(eventLines)) opts.onTurnInterrupted(sessionId, id)
   }
 
   const push = (sessionId: string, t: Tracked): void => {

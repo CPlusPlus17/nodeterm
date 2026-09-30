@@ -170,6 +170,16 @@ export interface MirrorEntry {
    */
   sessionStarted?: { sessionId: string; agentId: NormalizedAgentEvent['agentId']; at: number }
   /**
+   * Claude only: the CLI's id (`prompt_id`) for the turn this node is in, from the
+   * `UserPromptSubmit` that opened it (`NormalizedAgentEvent.turnId`). What lets a transcript
+   * interrupt marker end exactly THIS turn (`recordTurnInterrupt`) — no hook fires for an
+   * Esc/Ctrl+C, so the marker is the only signal, and one read back from history names an older
+   * turn and must change nothing. Runtime-only (not in `buildFile`'s allowlist): after a restart
+   * no marker can match, which degrades to the stale sweep, never to a false end. Cleared by a
+   * session boundary.
+   */
+  turnId?: string
+  /**
    * The entry's state EXPIRED (no state commit for EXPIRE_MS) and was stripped: this is an
    * IDENTITY-ONLY entry kept so external readers can still find the node's session (see
    * IDENTITY_EXPIRE_MS). It carries no `state` and no evidence about one; agent messaging reads it
@@ -606,6 +616,9 @@ function reduceEffectiveEntry(
   // event without the label is a codex/gemini event or a payload with no transcript_path, neither
   // of which is evidence that this node stopped being on the account it was last seen on.
   if (ev.account) next.account = ev.account
+  // The live turn's id rides the event that opens it; nothing else touches it until the next turn
+  // or a session boundary (below). See `recordTurnInterrupt`.
+  if (ev.kind === 'state' && ev.turnId) next.turnId = ev.turnId
 
   if (ev.kind === 'state' && ev.state) {
     // An `idle` done (Claude went quiet at its prompt) is a RESCUE, not a turn end: it may only
@@ -659,6 +672,7 @@ function reduceEffectiveEntry(
     // and is what makes a refusal retryable.
     commitState(undefined, false)
     next.awaitingInput = undefined
+    delete next.turnId
     // The boundary proves nothing about a state (and leaves `verifiedAt` alone), but a VERIFIED
     // start arms the idle rescue above.
     if (ev.sessionPhase === 'start' && ev.verified === true && ev.sessionId) {
@@ -2164,6 +2178,35 @@ export function recordQuestionResult(
   if (!ask || ask.sessionId !== sessionId || ask.toolUseId !== toolUseId) return
   return recordAgentEvent({ nodeId, agentId: 'claude', sessionId, kind: 'state',
     state: 'working', answeredQuestionId: toolUseId })
+}
+
+/**
+ * A Claude transcript recorded an interrupt marker (`parseTurnInterrupts`) for turn `turnId`.
+ *
+ * Claude Code sends NO hook when the user interrupts a turn — Esc while it streams, runs a tool or
+ * shows a permission dialog, or Ctrl+C once (measured on 2.1.285,
+ * `shared/agents/__fixtures__/claude/interrupt-capture.json`) — and its `idle_prompt` notification,
+ * which the `idle` rescue listens for, fires after a normal turn but not after an interrupted one.
+ * Without this the node sat on RUNNING (or NEEDS YOU, for a dismissed dialog) until the 20-minute
+ * stale sweep: `--after` dependents waited, Eco never saw it idle, the phone showed it working.
+ *
+ * It ends the turn only when the marker names the turn the node is in NOW (same session, same
+ * `turnId`, state still working/blocked/waiting). That exact match is the whole safety story: a
+ * marker the tail reads back from history, one from a turn that already ended, one from another
+ * session, or one arriving after a restart (turnId is runtime-only) changes nothing.
+ *
+ * The event is an ordinary interrupted `done` — the shape a `Stop` with `is_interrupt` already
+ * produced — so every consumer handles it with the rules it already has (no completion alert,
+ * the question/approval resets). It carries no `verified`: a transcript read is not a hook POST.
+ */
+export function recordTurnInterrupt(
+  nodeId: string, sessionId: string, turnId: string
+): NormalizedAgentEvent | undefined {
+  const e = state.get(nodeId)
+  if (!e || e.sessionId !== sessionId || !e.turnId || e.turnId !== turnId) return
+  if (e.state !== 'working' && e.state !== 'blocked' && e.state !== 'waiting') return
+  return recordAgentEvent({ nodeId, agentId: e.agentId ?? 'claude', sessionId, kind: 'state',
+    state: 'done', interrupted: true })
 }
 
 /** A node's current main state, or undefined when unknown. Read-only peek for the shells. */

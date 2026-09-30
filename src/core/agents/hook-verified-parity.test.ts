@@ -217,6 +217,25 @@ describe('both shells register a 4-arg raw listener', () => {
     }
   })
 
+  // Same rule, Claude's interrupt marker: no hook fires for an Esc/Ctrl+C, so the transcript marker is
+  // the only end signal. A shell whose claude tail is not handed `onTurnInterrupted` (or whose handler
+  // does not go through the mirror's `recordTurnInterrupt`) leaves that shell's nodes on RUNNING
+  // after every interrupt, and nothing else would notice.
+  it('both shells end an interrupted Claude turn from the transcript marker, through the mirror', () => {
+    for (const rel of ['src/main/index.ts', 'src/server/agent-status.ts']) {
+      const src = code(rel)
+      expect(src, `${rel}: the claude context tail is not given onTurnInterrupted`).toMatch(
+        /createContextTail\(pushContextUpdate, \{ onTaskNotification, onToolResult, onTurnInterrupted \}\)/
+      )
+      expect(src, `${rel}: the handler bypasses the mirror`).toMatch(
+        /const ev = recordTurnInterrupt\(nodeId, sessionId, turnId\)/
+      )
+    }
+    expect(code('src/main/index.ts'), 'the desktop remote (SSH) tail is not given onTurnInterrupted').toMatch(
+      /createRemoteContextTail\(win, remoteFile, \{ onTaskNotification, onToolResult, onTurnInterrupted \}\)/
+    )
+  })
+
   it('both raw listeners carry the codex subagent branch (trackFile + agent_id gate)', () => {
     for (const rel of ['src/main/index.ts', 'src/server/agent-status.ts']) {
       const src = code(rel)

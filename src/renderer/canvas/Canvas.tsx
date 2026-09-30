@@ -14984,7 +14984,8 @@ export function Canvas() {
               e.pendingId,
               e.verified,
               e.errored,
-              e.held
+              e.held,
+              e.interrupted
             )
           // Claude's Stop names the BACKGROUND tasks still running (async subagents, nested ones,
           // background shells). A background subagent that ends its turn while its own work runs

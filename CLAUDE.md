@@ -2375,6 +2375,60 @@ else, and its context links must keep classifying across restarts).
   Resume it offers still replays that dead id — but cold restore no longer creates the state: it
   probes `transcript:exists` first and launches bare on a positive `absent`, saying so on the node
   (see **Cold restore** above). Re-measured on the same host 2026-09-09: **20** of 108.
+- **An interrupted Claude turn (Esc / Ctrl+C) fires NO hook — the transcript marker ends it**
+  (`core/claude-turn-interrupt.test.ts`, fixture `shared/agents/__fixtures__/claude/interrupt-capture.json`).
+  MEASURED on Claude Code **2.1.285**, interactive TUI in a private tmux server, capture hooks via
+  `--settings`, every `NODETERM_*` unset: Esc while it streams, Esc during a foreground tool call,
+  Esc on a permission dialog, and Ctrl+C once mid-stream each fire **nothing** — no `Stop`, no
+  `StopFailure`, no `PostToolUse(Failure)`, and **no `idle_prompt` either**: that notification came
+  60 s after a NORMAL `Stop` but not in 75 s / 80 s after an interrupt, so the `idle` rescue in
+  `normalizeClaude` does not cover this case. Before this a node sat on RUNNING (or NEEDS YOU, for a
+  dismissed permission dialog) until the 20-min stale sweep: `--after` dependents waited, Eco never
+  saw it idle, the notch and the phone showed it working. What the interrupt DOES leave is a USER
+  record, content `[{type:'text', text:'[Request interrupted by user]'}]` (`… for tool use]` when a
+  tool call or its dialog was cancelled), whose **`promptId` equals the turn's `UserPromptSubmit`
+  `prompt_id`** in every capture. Wiring, and the rules it rests on:
+  - `normalizeClaude` puts `prompt_id` on the `UserPromptSubmit` event as **`turnId`**; the mirror
+    keeps it (`MirrorEntry.turnId`, runtime-only, dropped at a session boundary).
+  - The claude context tails (local, and the desktop's SSH one) scan COMPLETE lines with
+    `parseTurnInterrupts` — a CLOSED set of the two texts, array content with exactly that one text
+    part, non-sidechain (a typed prompt is a plain string, so typing the words matches nothing) —
+    and call `onTurnInterrupted(sessionId, turnId)`.
+  - **Both shells** hand that to `recordTurnInterrupt` (pinned in `hook-verified-parity.test.ts`),
+    which ends the turn ONLY when the marker names the node's CURRENT turn (same session, same
+    `turnId`, state working/blocked/waiting). That exact match is the whole safety story: a marker
+    the local tail reads back from history on its first read, one from a finished turn or another
+    session, one after a restart (no `turnId` then) changes nothing. The event is an ordinary
+    `done` + `interrupted` (what a `Stop` with `is_interrupt` already produced), UNverified (a
+    transcript read is not a hook POST), so no completion alert and the question/approval resets
+    apply unchanged.
+  - **`--after` does NOT release on an interrupted turn** (decision, 2026-09-30): the person
+    stopped it, usually to redirect it, and the dependent would start on unfinished work — #521's
+    reasoning for an errored turn. It is its OWN annotation, `agentStatus.lastTurnInterrupted`
+    (transient; set by an interrupted `done`, cleared by a new turn or a `done` that is not
+    interrupted), read only by `depSatisfied`, the QUEUED tooltip (`interruptedDeps`) and `list`
+    (`LAST TURN INTERRUPTED`; an error outranks it). It is deliberately NOT `lastTurnError`: the
+    TURN FAILED chip, the station-failure notice, team progress and issue runs do not treat an
+    interrupt as a failure. ▶ / `run` still start the dependent. The renderer's older keystroke
+    guess (`inferInterruptAfterSettle`, 1.5 s after a lone Esc/Ctrl-C typed into THAT terminal)
+    now records an interrupted `done` too, so a guess cannot release dependents before the marker
+    lands; it stays because it is the only signal for the next case.
+  - **Residual, measured:** Esc or Ctrl+C BEFORE the first token rewinds the prompt into the input
+    box and writes NO marker (the transcript ends at the prompt record). Only the renderer guess
+    (keystroke in that canvas terminal) sees it; the mirror — notch, phone, Eco's mirror reads, the
+    Server Edition's headless `--after` — keeps `working` until the next hook or the stale sweep.
+  - **Esc "during a subagent":** on 2.1.285 the Agent tool launched ASYNC even when asked for a
+    foreground run, so the parent turn had already ended (`Stop`) — Esc at the prompt then fires
+    nothing and does NOT stop the child, whose `SubagentStop` and `<task-notification>` arrive as
+    usual. Nothing to fix there; a truly synchronous child being interrupted was not reproducible.
+  - Server Edition: same core path (its tail + handler); its own headless `--after` still ignores
+    both #521 and this annotation (pre-existing gap). Mobile: gets the `done` through the mirror.
+  - **Device checklist:** (a) macOS desktop: Esc mid-stream / mid-tool / on a dialog → RUNNING
+    clears within ~1 s, no chime, an armed `--after` dependent stays QUEUED with the interrupted
+    tooltip; (b) SSH node: the same over the remote tail; (c) Server Edition browser tab; (d) a
+    Claude older than 2.1.285 — whether the marker text and `promptId` match there is unmeasured
+    (a mismatch degrades to the old behaviour, never to a false end); (e) the phone's Live
+    Activity ends on the interrupt.
 - **Hook server (loopback HTTP)** — `src/core/agents/hook-server.ts` is a main-process
   loopback HTTP server (per-session bearer token, fail-open) that the installed hook scripts
   POST to; it replaced the old `fs.watch` signal-log mechanism. `buildPtyEnv` injects the

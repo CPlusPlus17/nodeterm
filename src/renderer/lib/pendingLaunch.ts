@@ -26,7 +26,7 @@ export interface ArmedNode {
 /** The subset of the agentStatus store this module reads. */
 export type StatusById = Record<
   string,
-  { state?: AgentState; lastTurnError?: { at: number } } | undefined
+  { state?: AgentState; lastTurnError?: { at: number }; lastTurnInterrupted?: { at: number } } | undefined
 >
 
 export interface LaunchToFire {
@@ -211,12 +211,16 @@ export function controlLaunchState(
  * run-now escape, so the human — or the orchestrator, after a retry — is never stuck.
  *
  * The refusal ends by itself: `lastTurnError` is cleared by the upstream's next genuine new turn,
- * so a station that is nudged and answers successfully satisfies its dependents on that turn.
+ * so a station that is nudged and answers successfully satisfies its dependents on that turn. *
+ * A dep whose last turn the user INTERRUPTED (Esc / Ctrl+C — `lastTurnInterrupted`) is refused
+ * for the same reason: an interrupted station is idle too, and its turn did not produce what the
+ * dependent was waiting for. Claude sends no hook for an interrupt; the `done` comes from the
+ * transcript marker (`recordTurnInterrupt`). Same escape (▶), same self-healing (next turn).
  */
 function depSatisfied(depId: string, status: StatusById, live: ReadonlySet<string>): boolean {
   if (!live.has(depId)) return true
   const st = status[depId]
-  return st?.state === 'done' && !st.lastTurnError
+  return st?.state === 'done' && !st.lastTurnError && !st.lastTurnInterrupted
 }
 
 /** Of the deps this node is still waiting on, which are held because they ERRORED rather than
@@ -228,6 +232,23 @@ export function erroredDeps(
 ): string[] {
   return (node.data.pendingLaunch?.after ?? []).filter(
     (d) => live.has(d) && status[d]?.state === 'done' && !!status[d]?.lastTurnError
+  )
+}
+
+/** Of the deps this node is still waiting on, which are held because the user INTERRUPTED their
+ *  last turn? Named by the QUEUED tooltip, like `erroredDeps`. An errored dep is left to
+ *  `erroredDeps` — that is the stronger fact, and one reason is enough. */
+export function interruptedDeps(
+  node: ArmedNode,
+  status: StatusById,
+  live: ReadonlySet<string>
+): string[] {
+  return (node.data.pendingLaunch?.after ?? []).filter(
+    (d) =>
+      live.has(d) &&
+      status[d]?.state === 'done' &&
+      !status[d]?.lastTurnError &&
+      !!status[d]?.lastTurnInterrupted
   )
 }
 
@@ -367,7 +388,9 @@ export function launchTooltip(
   pr?: { expired: boolean; summary: string; deadline: string },
   /** The node's `--after-success` wait: where it stands (`successWaitStatus`), the unmet stations
    *  (`successWaitSummary`), and its deadline as the caller formats it. */
-  success?: { status: 'met' | 'waiting' | 'blocked' | 'expired'; summary: string; deadline: string }
+  success?: { status: 'met' | 'waiting' | 'blocked' | 'expired'; summary: string; deadline: string },
+  /** The deps held because the user interrupted their last turn (`interruptedDeps`). */
+  interruptedOn?: string
 ): string {
   if (delivery?.kind === 'starting') return 'Starting in the background — an agent asked for this session to run now.'
   const runs = `Runs:\n${command}`
@@ -394,6 +417,13 @@ export function launchTooltip(
       `${erroredOn} ended its last turn on an error, so this is held rather than started on ` +
       'what it did not produce.\n' +
       `Retry or nudge it — a successful turn releases this — or press ▶ to run it now.\n${runs}`
+    )
+  // Same shape: an interrupted upstream is idle, and nothing will release this on its own.
+  if (interruptedOn)
+    return (
+      `${interruptedOn} was interrupted before its turn finished, so this is held rather than ` +
+      'started on unfinished work.\n' +
+      `Give it its next prompt — a turn that finishes releases this — or press ▶ to run it now.\n${runs}`
     )
   // A wait that passed its deadline will not end on its own either — the one other case where
   // "waiting for" would be a promise nobody keeps.

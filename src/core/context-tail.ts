@@ -133,6 +133,57 @@ export function parseToolResultIds(text: string | string[]): string[] {
   return ids
 }
 
+/**
+ * The two texts Claude Code writes as a USER record when the user interrupts a turn (Esc, or
+ * Ctrl+C once). A CLOSED set: measured on 2.1.285 (`shared/agents/__fixtures__/claude/
+ * interrupt-capture.json`) — `[Request interrupted by user]` after streamed text,
+ * `… for tool use]` when a tool call or its permission dialog was cancelled. Any other wording is
+ * ignored, so a future CLI that words it differently degrades to what happened before this
+ * existed (the node waits for its next hook, or the stale sweep), never to a guess.
+ */
+export const CLAUDE_INTERRUPT_MARKERS: ReadonlySet<string> = new Set([
+  '[Request interrupted by user]',
+  '[Request interrupted by user for tool use]'
+])
+
+const PROMPT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
+
+/**
+ * Turn ids (`promptId`) of the interrupt markers in these transcript lines, in file order. Pure.
+ *
+ * No hook fires when the user interrupts a Claude turn (Esc during streaming, a tool call or a
+ * permission dialog; Ctrl+C once) — measured on 2.1.285 — and the CLI's `idle_prompt`
+ * notification does not follow an interrupted turn either. This marker is the one trace the
+ * interrupt leaves. The id is only a CANDIDATE: the status mirror acts on it only when it names
+ * the turn the node is in right now (`recordTurnInterrupt`), which is what makes a marker read
+ * back from history on the tail's first read harmless.
+ *
+ * Only a main-thread user record whose content is an ARRAY holding exactly one text part with a
+ * marker text counts. A prompt the user typed is stored as a plain string, so typing the marker's
+ * words cannot produce one.
+ */
+export function parseTurnInterrupts(text: string | string[]): string[] {
+  const out: string[] = []
+  for (const line of toLines(text)) {
+    // Cheap pre-filter before the parse — this runs over every transcript chunk.
+    if (!line.includes('Request interrupted by user')) continue
+    let o: { type?: unknown; isSidechain?: unknown; promptId?: unknown; message?: { content?: unknown } }
+    try {
+      o = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (o?.type !== 'user' || o.isSidechain === true) continue
+    if (typeof o.promptId !== 'string' || !PROMPT_ID_RE.test(o.promptId)) continue
+    const content = o.message?.content
+    if (!Array.isArray(content) || content.length !== 1) continue
+    const part = content[0] as { type?: unknown; text?: unknown } | null
+    if (part?.type !== 'text' || typeof part.text !== 'string' || !CLAUDE_INTERRUPT_MARKERS.has(part.text)) continue
+    out.push(o.promptId)
+  }
+  return out
+}
+
 /** Legacy presence scanner; answer consumers must use parseToolResultIds. */
 export function hasToolResult(text: string | string[]): boolean {
   for (const line of toLines(text)) {
@@ -157,6 +208,9 @@ export interface ContextTailOptions {
   onTaskNotification?: (sessionId: string, n: TaskNotification) => void
   /** Fired when a tracked session's transcript records a tool RESULT — see `parseToolResultIds`. */
   onToolResult?: (sessionId: string, toolUseId: string) => void
+  /** Fired when a tracked session's transcript records a turn INTERRUPT marker, with that turn's id
+   *  — see `parseTurnInterrupts`. Claude only; the consumer decides whether it is the live turn. */
+  onTurnInterrupted?: (sessionId: string, turnId: string) => void
   /**
    * How to read the used/window numbers out of this agent's transcript. Defaults to claude's
    * `parseLatestUsage`. gemini and codex pass their own (`core/gemini-session.ts`
@@ -312,6 +366,8 @@ export function createContextTail(
           }
           if (opts?.onToolResult)
             for (const id of parseToolResultIds(completeLines)) opts.onToolResult(sessionId, id)
+          if (opts?.onTurnInterrupted)
+            for (const id of parseTurnInterrupts(completeLines)) opts.onTurnInterrupted(sessionId, id)
         }
       }
 

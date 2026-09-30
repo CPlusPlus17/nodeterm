@@ -12,7 +12,7 @@ import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { hookServer } from '../core/agents/hook-server'
 import { recordAgentEvent, recordRawToolEvent, recordContextUsage,
-  recordQuestionResult, ignoreQuestionHook
+  recordQuestionResult, recordTurnInterrupt, ignoreQuestionHook
 } from '../core/agent-status-mirror'
 import { createSubagentTail, type SubagentTail } from '../core/subagent-tail'
 import { ClaudeSubagentLifecycle } from '../core/claude-subagent-lifecycle'
@@ -125,6 +125,16 @@ export function wireAgentStatus(
     if (ev) platform.broadcast(IPC.agentStatus, ev)
   }
 
+  /** See the identical handler in src/main/index.ts: an interrupt marker in the transcript ends the
+   *  node's CURRENT turn (Claude sends no hook for an Esc/Ctrl+C), else the node stayed RUNNING. */
+  const onTurnInterrupted = (sessionId: string, turnId: string): void => {
+    let nodeId: string | undefined
+    for (const [nid, sid] of nodeContextSession) if (sid === sessionId) nodeId = nid
+    if (!nodeId) return
+    const ev = recordTurnInterrupt(nodeId, sessionId, turnId)
+    if (ev) platform.broadcast(IPC.agentStatus, ev)
+  }
+
   // Every context tail pushes through here, so an agent's meter reaches the browser and the phone's
   // context ring identically whichever CLI produced the numbers.
   const pushContextUpdate = (payload: unknown): void => {
@@ -140,7 +150,7 @@ export function wireAgentStatus(
     }
   }
   const contextTail =
-    opts.contextTail ?? createContextTail(pushContextUpdate, { onTaskNotification, onToolResult })
+    opts.contextTail ?? createContextTail(pushContextUpdate, { onTaskNotification, onToolResult, onTurnInterrupted })
   // ONE TAIL PER AGENT, each with its own parser — not one tail switching on an agent id, which
   // would mean changing `ContextTail.track(sessionId, path)` and the four call sites that depend on
   // it. The poller (offset reads, torn-line carry, change-gated push) is written once in

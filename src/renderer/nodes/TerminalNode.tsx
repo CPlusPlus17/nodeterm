@@ -234,7 +234,7 @@ import { useCodexIdentity, codexSharedIdentity, codexFallbackText } from '../sta
 import { codexApprovalCaps } from '../state/codexCli'
 import { useAgentStatus, agentStatusForApi, inferInterruptAfterSettle } from '../state/agentStatus'
 import { useLaunchDelivery } from '../state/launchDelivery'
-import { erroredDeps, launchTooltip } from '../lib/pendingLaunch'
+import { erroredDeps, interruptedDeps, launchTooltip } from '../lib/pendingLaunch'
 import { useSuccessWait } from '../lib/useSuccessWait'
 import { StationFailedChip } from '../components/StationFailedChip'
 import { prHoldExpired, prHoldSummary } from '../lib/prWait'
@@ -2097,6 +2097,13 @@ export function TerminalNode({
     const live = new Set(after.filter((d) => !!getNode(d)))
     return erroredDeps({ id, data: { pendingLaunch } }, s.byId, live).join(',')
   })
+  // Same selector shape for deps held because the user interrupted their last turn (Esc/Ctrl+C).
+  const interruptedDepIds = useAgentStatus((s) => {
+    const after = pendingLaunch?.after ?? []
+    if (!after.length) return ''
+    const live = new Set(after.filter((d) => !!getNode(d)))
+    return interruptedDeps({ id, data: { pendingLaunch } }, s.byId, live).join(',')
+  })
   // `--after-pr`: what the pull requests this node waits on look like, from the same status the
   // launch loop judges (the canvas's watch keeps it coming). Selected only for a node that has a
   // PR wait, so no other node re-renders on a GitHub update.
@@ -2124,6 +2131,12 @@ export function TerminalNode({
   const successBlocked = successTooltip?.status === 'blocked'
   const pendingErroredOn = erroredDepIds
     ? erroredDepIds
+        .split(',')
+        .map((depId) => ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId)
+        .join(', ')
+    : ''
+  const pendingInterruptedOn = interruptedDepIds
+    ? interruptedDepIds
         .split(',')
         .map((depId) => ((getNode(depId) as CanvasNode | undefined)?.data.title as string) || depId)
         .join(', ')
@@ -6009,7 +6022,7 @@ export function TerminalNode({
                 ? ' term-node__status--queued-warn'
                 : ''
             }`}
-            title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip, successTooltip)}
+            title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip, successTooltip, pendingInterruptedOn)}
           >
             <span className="term-node__status-dot" />
             {startingNow
