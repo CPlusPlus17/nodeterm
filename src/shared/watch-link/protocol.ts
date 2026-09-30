@@ -39,6 +39,11 @@ export interface WatchKeyframe {
   /** tmux paints its client on the alternate screen; the viewer must switch to it BEFORE painting,
    *  or every tmux redraw scrolls into the viewer's history (CLAUDE.md, co-attach seeding). */
   altScreen: boolean
+  /** The host's cursor when the screen was captured, 0-based (tmux `cursor_x` / `cursor_y`). tmux's
+   *  following stream moves the cursor RELATIVE to where it believes the tty cursor is, and a capture
+   *  trims trailing blanks, so without this every keyframe offsets what is typed next. Absent when
+   *  the host could not read it; the viewer then leaves the cursor where the screen text ends. */
+  cursor?: { x: number; y: number }
 }
 export interface WatchChatMessage {
   id: string
