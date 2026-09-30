@@ -1,3 +1,4 @@
+import { elementOnScreen } from '../terminal/on-screen'
 import { useContextEnsure } from '../terminal/useContextEnsure'
 import { canPlainApprove, sendHeaderAnswer } from '../lib/approveGate'
 import { FIND_DECORATIONS } from '../lib/palette'
@@ -3496,6 +3497,9 @@ export function TerminalNode({
           // on a genuine fresh spawn, so a second project opening another's live node id cannot
           // claim it. Machine-local id, never the git-shared project.json id.
           ownerProjectId: sshProjectId ?? useProjects.getState().activeProjectId,
+          // Only orders the remote spawn queue: on-screen terminals attach before offscreen ones
+          // on a project switch (terminal/on-screen.ts, core/remote-ssh/pty-spawn-gate.ts).
+          onScreen: elementOnScreen(container),
           agentId: data.agentId,
           agentModel: data.agentModel,
           // "Restart on subscription": ride the spawn's env-strip path. Cleared below once the

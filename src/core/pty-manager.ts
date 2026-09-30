@@ -987,6 +987,9 @@ export class PtyManager {
    * exactly as it did before it existed.
    */
   private readProjectSpawnOverrides: ProjectSpawnOverridesReader | null = null
+  /** In-flight project-settings reads, per project, joined by concurrent spawns. See
+   *  `projectSpawnOverrides`. Entries are removed when the read settles — this is not a cache. */
+  private overridesInFlight = new Map<string, Promise<ProjectSpawnOverrides | null>>()
   /** "Which SSH host owns this node?", from the persisted index — see `setRemoteNodeOwner`. */
   private remoteNodeOwner: RemoteNodeOwnerResolver | null = null
   /** ONE shared snapshot interval for all persisted sessions — a per-session interval spawned
@@ -1629,10 +1632,29 @@ export class PtyManager {
   ): Promise<ProjectSpawnOverrides | null> {
     const read = this.readProjectSpawnOverrides
     if (!read || !options.ownerProjectId) return null
+    const projectId = options.ownerProjectId
+    // COALESCE concurrent reads for one project. A project switch mounts every node in one tick,
+    // and for an SSH project each read is an ssh round trip for the host's settings.json, paced by
+    // the per-master child gate — MEASURED (41-terminal SSH project): those reads spread the
+    // terminals' arrival at the spawn gate over ~1.3 s, in node order, so the on-screen ones came
+    // last. Joining an IN-FLIGHT read only (nothing is cached past its settle) keeps every
+    // freshness property the per-spawn read had: a create that starts after it settles reads anew.
+    let shared = this.overridesInFlight.get(projectId)
+    if (!shared) {
+      const p = Promise.resolve()
+        .then(() => read(projectId))
+        .finally(() => {
+          if (this.overridesInFlight.get(projectId) === p) this.overridesInFlight.delete(projectId)
+        })
+      this.overridesInFlight.set(projectId, p)
+      shared = p
+    }
+    // Each spawn gets its own copy: the answer is shared, the object must not be.
+    const mine = shared.then((o) => (o ? { ...o, ...(o.env ? { env: { ...o.env } } : {}) } : o))
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([
-        read(options.ownerProjectId),
+        mine,
         new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), PROJECT_OVERRIDES_TIMEOUT_MS)
           // Never hold the process open for a settings read nobody is waiting on any more.
@@ -2431,7 +2453,9 @@ export class PtyManager {
     // trip. Local spawns are not gated: there is no connection to overrun.
     const spawnSlot =
       options.sshRemote && options.persistKey
-        ? await remotePtySpawnGate.acquire(options.sshRemote.controlPath)
+        ? await remotePtySpawnGate.acquire(options.sshRemote.controlPath, {
+            background: options.onScreen === false
+          })
         : null
     let sessionId: string
     try {

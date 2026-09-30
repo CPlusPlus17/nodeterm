@@ -132,6 +132,14 @@ export interface PtyCreateOptions {
    */
   ownerProjectId?: string
   /**
+   * Whether the node was on screen when the renderer asked for this session. Used ONLY to order
+   * the per-ControlMaster remote spawn queue (`remote-ssh/pty-spawn-gate.ts`): a project switch
+   * mounts every node in one tick, and without it the terminals the user is looking at queued
+   * behind the ones they are not. `false` = queue behind on-screen spawns; absent (older clients,
+   * relay, headless) = on-screen, i.e. the previous plain FIFO.
+   */
+  onScreen?: boolean
+  /**
    * Which agent runs in this session (claude/codex/gemini/custom). Drives the hook env
    * injected at spawn. Defaults to 'claude' for backward compat; the renderer passes a
    * real value in a later phase.
