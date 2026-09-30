@@ -552,7 +552,15 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
     const s = createHostedScheduler(
       {
         mint: () =>
-          mintHostToken({ apiBase: deps.apiBase, deviceId: deps.deviceId, hostPublicKeyB64: addr.hostPublicKeyB64, fetch: deps.fetch, now: wallNow }),
+          mintHostToken({
+            apiBase: deps.apiBase,
+            deviceId: deps.deviceId,
+            hostPublicKeyB64: addr.hostPublicKeyB64,
+            // Proves this process holds the host key (relay-pop.ts); the key never leaves it.
+            hostSecretKey: hostKeys.secretKey,
+            fetch: deps.fetch,
+            now: wallNow
+          }),
         open: (token, ev) => openListener(hostKeys, token, ev),
         setTimeout: (fn, ms) => setT(fn, ms),
         clearTimeout: (h) => clearT(h)

@@ -675,7 +675,13 @@ function hostedWorld() {
   const svc = createHostedService({
     dataDir: dir, apiBase: 'https://api', relayUrl: 'ws://127.0.0.1/r', deviceId: 'host-dev', hostLabel: 'box',
     attach, projectsOfNode: () => ['P'], nodeOfSession: () => undefined, projectCwd: () => '/srv/app',
-    fetch: (async () => new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 })) as typeof fetch,
+    // Routed by URL: the hosted mint asks for a key-proof challenge first (relay-pop.ts). A 404 is a
+    // pre-proof backend, so the legacy mint follows; answering it with a token body would read as a
+    // malformed challenge and no listener would ever open.
+    fetch: (async (u: string | URL | Request) =>
+      String(u).endsWith('/v1/relay/challenge')
+        ? new Response('{}', { status: 404 })
+        : new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 })) as typeof fetch,
     transport: () => { const { hostT, peerT } = transportPair(); peersT.push(peerT); return hostT }
   })
   live.push({ svc, dir })

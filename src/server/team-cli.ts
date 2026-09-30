@@ -17,6 +17,7 @@ import {
   type AdminRotateResult,
   type AdminStatusResult
 } from '../core/relay/team-admin'
+import { POP_REFUSED_MESSAGE } from '../core/relay/relay-pop'
 
 // One rule for what never reaches the admin's terminal: the same characters a label may not
 // contain (C0/C1 controls, DEL, and the text-direction controls). Server-supplied strings can carry
@@ -222,6 +223,14 @@ export function describeStatus(result: AdminStatusResult): string[] {
           ? OFF_TEXT[reason]
           : 'hosting is not running.'
     lines.push(`Hosting: OFF — ${text}`)
+  } else if (sched.state === 'backend-refused' && lastError === POP_REFUSED_MESSAGE) {
+    // The advice is a sentence of its own, and it is how hosting comes back: `team rotate-key`
+    // restarts it in place, so "until the service restarts" would be wrong here.
+    lines.push(
+      'Hosting: STOPPED — the nodeterm API refused to issue relay tokens.',
+      `  ${POP_REFUSED_MESSAGE}`,
+      '  Hosting stays off until nodeterm is updated or the key is rotated.'
+    )
   } else if (sched.state === 'backend-refused') {
     lines.push(
       `Hosting: STOPPED — the nodeterm API refused to issue relay tokens${lastError ? ` (${lastError})` : ''}. ` +

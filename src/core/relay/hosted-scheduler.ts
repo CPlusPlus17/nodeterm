@@ -12,11 +12,20 @@
 //  - at most MINT_BUDGET_PER_HOUR successful mints in any rolling hour, whatever asks for them. The
 //    backend's free limit is 240/h, the 15 s backoff ceiling alone reaches exactly 240/h, and a peer
 //    joining and leaving every 10 s asks for 360/h — so no per-path rule can hold the line on its own;
-//  - a 429 waits at least 60 s (longer if Retry-After says so); a 402/403 stops minting;
+//  - a 429 waits at least 60 s (longer if Retry-After says so); a 402/403 stops minting (a refused
+//    key proof names itself in `lastError`; a 403 host-token.ts judges transient arrives as
+//    `network` and backs off);
+//  - a key-proof refusal stops minting only on the SECOND in a row: a POP_SECRET rotation, or a
+//    secret mismatch between backend instances, inside ONE challenge→mint pair refuses an honest
+//    host once. The first is backed off like a transient 403 (the retry fetches a fresh challenge);
+//    only a successful mint or start() resets the count — a transient failure in between does not,
+//    or a backend refusing every proof behind a flaky challenge would retry forever. Both refusals
+//    are logged with their kind (warn, then error), so an operator can tell the two apart;
 //  - while a backoff timer is armed it owns the next mint: nothing else may mint early.
 // Everything the injected deps can throw is caught: a scheduler that swallowed an exception would sit
 // in 'running' with no listener and no timer, i.e. hosting silently dead until a restart.
 import type { MintResult } from './host-token'
+import { POP_REFUSED_MESSAGE, type PopRefusal } from './relay-pop'
 export type { MintResult } from './host-token'
 
 const REFRESH_LEAD_MS = 30_000
@@ -76,6 +85,8 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
   let opening = false
   let attempt = 0
   let retry: unknown = null
+  /** Key-proof refusals since the last successful mint or start(); the second in a row is terminal. */
+  let popRefusals = 0
   const mints: number[] = []
   const live = new Set<Entry>()
 
@@ -137,11 +148,11 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
     e.refresh = deps.setTimeout(() => {
       e.refresh = null
       // A bridged listener has no refresh (its timer is cleared on bridging); this is only defence.
-      // It is never cut for a refresh — whether the relay ends a bridged socket at its token's
-      // lifetime is UNVERIFIED (the broker's source checks a token only when a socket joins; the
-      // device checklist in docs/hosted-team-relay.md settles it), and if it does, onClose takes it
-      // from there — and it is never re-armed: a bridged refresh would prove nothing (see the header), so a timer
-      // for it would be a timer per session that does nothing, forever for one whose close is lost.
+      // It is never cut for a refresh: nodeterm-server's relay broker never expires or evicts a
+      // bridged socket (it closes only an UNBRIDGED listener, at its token's exp + 30 s), and if one
+      // closes anyway, onClose takes it from there. It is never re-armed either: a bridged refresh
+      // would prove nothing (see the header), so a timer for it would be a timer per session that
+      // does nothing, forever for one whose close is lost.
       if (state !== 'running' || !live.has(e) || e.bridged) return
       // This IDLE listener held its registration for a whole token lifetime: new registrations work.
       proven()
@@ -173,17 +184,36 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
     try {
       let r: MintResult
       let threw: string | null = null
+      /** Set when this mint is the FIRST key-proof refusal in a row, which is retried, not terminal. */
+      let refusedOnce: PopRefusal | null = null
       try {
         r = await deps.mint()
       } catch (err) {
         r = { ok: false, kind: 'network' }
         threw = `mint failed: ${errorText(err)}`
       }
-      if (r.ok) mints.push(now()) // counted even if we were stopped meanwhile: the backend counted it
+      if (r.ok) {
+        mints.push(now()) // counted even if we were stopped meanwhile: the backend counted it
+        popRefusals = 0
+      } else if (r.kind === 'refused' && r.reason && ++popRefusals < 2) {
+        // The first key-proof refusal in a row is transient (see the header): back off, re-challenge.
+        refusedOnce = r.reason
+        r = { ok: false, kind: 'network', status: 403 }
+      }
       if (state !== 'running') return
       if (!r.ok) {
-        lastError = threw ?? (r.kind + (r.status ? ` (${r.status})` : ''))
+        // A key-proof refusal says what to do about it (update, or `team rotate-key`); `refused (403)` would not.
+        lastError =
+          threw ??
+          (refusedOnce
+            ? `key proof refused once (${refusedOnce}) — retrying with a fresh challenge`
+            : r.reason
+              ? POP_REFUSED_MESSAGE
+              : r.kind + (r.status ? ` (${r.status})` : ''))
+        // Only the refusal KIND is logged: nothing here holds key material, and nothing may.
+        if (refusedOnce) console.warn(`[hosted-team] the relay refused this host's key proof once (${refusedOnce}); retrying with a fresh challenge`)
         if (r.kind === 'refused') {
+          if (r.reason) console.error(`[hosted-team] the relay refused this host's key proof twice in a row (${r.reason}); hosting stopped`)
           state = 'backend-refused'
           emit()
           return
@@ -254,6 +284,7 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
       if (state === 'running') return
       state = 'running'
       attempt = 0
+      popRefusals = 0
       emit()
       void top()
     },
