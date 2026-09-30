@@ -7406,7 +7406,8 @@ The invariants, each with its reason:
 `context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still
 pauses the shared pty through Stage 2 backpressure; the canvas authority's own limits (a project's
 non-content fields stay last writer wins between tabs, the share-time window, oversized nodes, board
-edits to another core, the card modal's comments on a relay tab) are under "Known limits" in the doc.
+edits to another core, load-time repairs that are never cast, the card modal's comments on a relay
+tab) are under "Known limits" in the doc.
 
 **Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab).
 Server Edition is the host (the `team` CLI; its browser clients cannot approve and are not hosted
