@@ -315,9 +315,11 @@ unapproved after 2.5 s, the tab says "Waiting for an owner of X to approve this 
 
 On the server that owns the team, the **canvas authority** (`src/core/canvas-authority.ts`) is the
 one writer of every shared project's canvas **content**: its nodes, bridges, ropes and board items
-(columns, cards, card metadata, labels, saved views). Clients send edits, never content. Every edit
-travels as a `canvas:mut` op, which the core's reflector places in one total order (`seq`); the
-authority hears each op right after that stamp, judges it with the same ordering rules every client
+(columns, cards, card metadata, labels, saved views). A client's edits reach it as `canvas:mut`
+ops; a Server Edition tab still sends whole-workspace saves too, but the content in them is
+overlaid with the authority's (input 2), and only a node too large to travel as an op is taken from
+them. The core's reflector places every op in one total order (`seq`); the authority hears each op
+right after that stamp, judges it with the same ordering rules every client
 uses (`src/shared/canvas-order.ts`: the highest `seq` wins per item, and a causal delete, see
 `docs/team-presence.md`), and applies it through the same reducer (`applyCanvasOp`,
 `src/shared/canvas-content.ts`).
@@ -347,8 +349,9 @@ whole-workspace saves still write them.
    client gets the Reload / Keep mine bar (`src/server/workspace-external-watch.ts`).
 
 **Writing.** A governed project is written 1 s after its last op, and at most 5 s after the first op
-not yet written, through the store's atomic content write (`WorkspaceStore.writeProjectContent`: the
-same file a save writes, apart from `rev` and `savedAt`). A failed write keeps every op and retries
+not yet written, through the store's atomic content write (`WorkspaceStore.writeProjectContent`: it
+bumps `rev` like a save, and the file is byte-identical to a save's apart from `rev` and `savedAt`).
+A failed write keeps every op and retries
 after 1 s, 2 s, 4 s and so on, capped at 30 s. Both server shutdown paths write what is pending
 before they exit, so a crash loses only what was not written yet: normally at most the last 5 s.
 Viewers can watch a terminal an Editor opened once its node is written, because node membership is
@@ -376,9 +379,10 @@ workspace over the relay; edits travel as canvas operations". A whole-workspace 
 stale copy of every canvas it holds. No desktop flow sends one: the desktop's canvas saves go to its
 own local core.
 
-**The oversized-node exception.** A node too large to travel as an op (over `MUTATION_MAX_BYTES`,
-256,000 bytes; in practice a sticky note with a pasted document in it) can only reach the core inside
-a save, so a save may contribute that node. It sits outside the total order; its limits are listed
+**The oversized-node exception.** A node too large to travel as an op (its upsert op, serialized, is
+longer than `MUTATION_MAX_BYTES`: `JSON.stringify(op).length` over 256,000, about 250 KB; in
+practice a sticky note with a pasted document in it) can only reach the core inside a save, so a
+save may contribute that node. It sits outside the total order; its limits are listed
 below.
 
 **Bridges grant reads.** On the Server Edition, which agent sessions may read each other's context
@@ -407,9 +411,9 @@ it is a new way to use it.
   is on. An edit on the Omni board to a lane of a project on another core (a hosted lane while a
   local tab is active, or the reverse) is not cast, so on a hosted core it is not written either.
 - **The Omni board and a brand-new node.** While the Omni board is open, removing the card of a node
-  created moments ago is not cast (teammates keep the card). For the project on screen, only nodes
-  that are both on the canvas and in the stored copy count as live then, which can only ever cast
-  fewer removals.
+  created moments ago in the project on screen is not cast (teammates keep the card). For that
+  project only, the nodes that are both on the canvas and in the stored copy count as live then,
+  which can only ever cast fewer removals.
 - **The card modal's comments on a relay tab** (`BoardLogPanel`) still read and write the local core's
   board log, not the host's, because the modal renders outside the tab's session. This predates the
   authority; it is a follow-up.

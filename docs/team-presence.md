@@ -347,9 +347,11 @@ publishes a mutation (position-only, throttled to 20 Hz, while dragging; a full 
 settle; an upsert on add / remove / color / title / collapse), and the server reflects it to
 every client except the sender.
 
-Convergence makes persistence safe for free: because all clients converge on the same node set,
-whichever client calls `workspace.save` writes the same bytes, which defuses today's
-last-writer-wins save. The existing rev-based conflict bar (`workspace-watcher`) stays as the
+Convergence makes persistence safe for free: because all clients that saw the whole exchange
+converge on the same node set, whichever of them calls `workspace.save` writes the same canvas,
+which defuses today's last-writer-wins save. The exceptions (a client that loaded after a delete,
+board bytes in two cases) are in the
+[does-not-converge list](#concurrent-edit-resolution-what-converges-and-what-does-not). The existing rev-based conflict bar (`workspace-watcher`) stays as the
 backstop. On a Server Edition hosting a team, a shared project's content does not come from these
 saves at all: the canvas authority overlays each one with the content it applied from ops
 (`docs/hosted-team-relay.md`).
@@ -952,7 +954,7 @@ read-only guests, per-user settings.
   client whose **inbox is stalled past the TTL** (a backed-up socket) is repaired by its own late ack
   instead of being left on the losing value; and an **oversized** node the reflector would refuse
   neither deafens that node to a peer's concurrent delete nor is silently lost (it is retried, and
-  syncs once trimmed). → `src/core/canvas-sync.convergence.test.ts` (18 tests)
+  syncs once trimmed). → `src/core/canvas-sync.convergence.test.ts`
 - **Applying a peer's mutation** (delivered): patches the live React Flow array — keeps your
   selection, keeps relay-remote nodes, keeps local-only node data, keeps every untouched node's
   object identity, drops the stale `measured` size so a peer's resize is not fought back, and keeps

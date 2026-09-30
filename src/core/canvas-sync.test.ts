@@ -124,7 +124,9 @@ describe('stampMutation', () => {
     expect(stampMutation({ op: 'upsert', node: node('n1'), seen: 9 }, 9).seen).toBe(8)
   })
 
-  it('drops a non-integer / negative `seen` — degrading to unstamped, never to outranking a delete', () => {
+  // Unstamped is judged exactly as before rule 4: never stale, so an unstamped upsert ordered after a
+  // remove IS applied over it (canvas-order `supersededByRemove`). Hygiene, like the clamp above.
+  it('drops a non-integer / negative `seen`, degrading to unstamped (judged as before rule 4)', () => {
     for (const bad of [-1, 1.5, NaN, Infinity, '5', null]) {
       expect(
         stampMutation({ op: 'upsert', node: node('n1'), seen: bad as unknown as number }, 4).seen
@@ -134,10 +136,11 @@ describe('stampMutation', () => {
   })
 
   // canvas-order's reset() keeps a client's causal position (a same-core reconnect needs it). If the
-  // core REALLY restarted, that kept value is above every `seq` the new core hands out, and this
-  // clamp is what makes it harmless: the cast can only read as "never stale" on a peer — the
-  // pre-rule-4 verdict. A degrade, never a split.
-  it('a causal position kept across a real core restart is clamped into a verdict that applies', () => {
+  // core REALLY restarted, that kept value is above every `seq` the new core hands out, so the cast
+  // reads as "never stale" on a peer (the pre-rule-4 verdict: a degrade, never a split) WITH OR
+  // WITHOUT the clamp: unclamped, 40 is also ≥ the tombstone's 3 (canvas-order `supersededByRemove`).
+  // The clamp to `seq - 1` asserted below is hygiene; it changes no verdict.
+  it('a causal position kept across a real core restart reads as never stale (the clamp is hygiene)', () => {
     const me = createCanvasOrder('me')
     me.accept({ op: 'upsert', node: node('n2'), src: 'x', seq: 40 }) // the old core had reached 40
     me.reset() // …and restarted at 0

@@ -287,7 +287,9 @@ Persistence has two layers:
   one-time renderer note). Outside edits (git pull/sync) are detected by
   `core/workspace-watcher.ts` → silent reload, or a Reload/Keep-mine conflict bar when dirty; they
   ride `workspace:external-change`, and so do the phone's `appendRemoteNode` and the SSH
-  reconcile, which really are "another device".
+  reconcile, which really are "another device". The exception is a project a hosted Server Edition
+  shares with its team: the canvas authority adopts that outside edit and publishes it as
+  `canvas:mut` ops, with no `workspace:external-change` (see **Hosted team relay**).
   **A write this core made ITSELF rides `workspace:server-change` instead** — today that is Server
   Edition headless canvas control (`server/canvas-control.ts`) — and the renderer three-way merges
   it against the store baseline (`renderer/lib/serverChange.ts`: incoming nodes adopted silently,
@@ -6736,8 +6738,9 @@ The invariants, each with its reason:
 - **Prune removals are never cast** (`diffKanbanOps`' `liveNodeIds`). Every board commit prunes the
   cards of nodes that are not live locally, and a client whose node op has not arrived yet would
   otherwise cast the removal of a fresh card for everyone. `liveNodeIds` is one project's nodes
-  (React Flow ∩ store while the Omni board is open). Card and meta removals are last-writer-wins
-  VALUES; only node, edge, column, label and view removals are rule-4 deletions.
+  (for the rendered project, React Flow ∩ store while the Omni board is open). Card and meta
+  removals are last-writer-wins VALUES; only node, edge, column, label and view removals are rule-4
+  deletions.
 
 **Known limitations** (full list in the doc): non-editors still receive cross-project presence and
 `context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still

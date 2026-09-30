@@ -419,9 +419,10 @@ export function createCanvasOrder(
       // clientId, `seq` carrying on), and zeroing it stamped our first cast after it `seen: 0` — a
       // ⌘Z of a node deleted before the drop was then a stale frame to every peer holding the
       // tombstone, and our own echo of it is no repair: a persistent split. If the core REALLY
-      // restarted, the kept value is above every `seq` it hands out and the reflector clamps it to
-      // `seq - 1` (canvas-sync `stampMutation`), so our casts read as "never stale" there — the
-      // pre-rule-4 verdict. A degrade, never a split.
+      // restarted, the kept value is above every `seq` it hands out, so our casts read as "never
+      // stale" there (`supersededByRemove`: it is ≥ every new tombstone) — the pre-rule-4 verdict. A
+      // degrade, never a split. The reflector's clamp to `seq - 1` (canvas-sync `stampMutation`)
+      // changes no verdict here; it is hygiene.
     }
   }
 }
