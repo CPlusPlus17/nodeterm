@@ -13,7 +13,10 @@
 //    backend's free limit is 240/h, the 15 s backoff ceiling alone reaches exactly 240/h, and a peer
 //    joining and leaving every 10 s asks for 360/h — so no per-path rule can hold the line on its own;
 //  - a 429 waits at least 60 s (longer if Retry-After says so); a 402/403 stops minting;
-//  - while a backoff timer is armed it owns the next mint: nothing else may mint early.
+//  - while a backoff timer is armed it owns the next mint: nothing else may mint early;
+//  - a live link caps its bridged sessions (`maxBridged`): while full, no idle listener is kept (the
+//    broker turns further clients away), nothing is minted and no timer is armed; a session ending
+//    reopens ONE through the usual top().
 // Everything the injected deps can throw is caught: a scheduler that swallowed an exception would sit
 // in 'running' with no listener and no timer, i.e. hosting silently dead until a restart.
 import type { MintResult } from './host-token'
@@ -58,6 +61,9 @@ export interface SchedulerDeps {
   setTimeout(fn: () => void, ms: number): unknown
   clearTimeout(h: unknown): void
   onStatus?(s: SchedulerStatus): void
+  /** Open no idle listener while this many sessions are bridged (a live link's viewer cap). The
+   *  broker closes a client that finds no idle host listener, so the cap needs no other code. */
+  maxBridged?: number
 }
 
 interface Entry {
@@ -157,10 +163,18 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
     for (const e of live) if (!e.bridged) n++
     return n
   }
+  const bridgedCount = (): number => {
+    let n = 0
+    for (const e of live) if (e.bridged) n++
+    return n
+  }
 
   // Keep one idle listener registered. Never two mints at once, and never ahead of an armed backoff.
   async function top(): Promise<void> {
     if (state !== 'running' || opening || retry !== null || idleCount() >= 1) return
+    // Full: mint nothing, arm nothing, leave the backoff and lastError as they are. Being full is
+    // neither proof nor failure of the relay leg, and a bridged session's onClose calls top() again.
+    if (deps.maxBridged !== undefined && bridgedCount() >= deps.maxBridged) return
     if (status().mintsLastHour >= MINT_BUDGET_PER_HOUR) {
       // Out of budget: wait until the oldest mint in the window ages out (+1 ms, because the window
       // keeps a mint exactly an hour old). The retry slot makes every other path defer to this.
