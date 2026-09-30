@@ -1,6 +1,8 @@
 import type { TextDeliveryResult } from './text-delivery'
+import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from './push-webhook'
 import type { IdentitySeedEntry } from './agent-identity-seed'
 import type { PrWaitHold } from './pr-wait'
+import type { SessionBackend } from './session-backend'
 // Types shared across the main, preload, and renderer processes.
 
 import { TABBAR_HEIGHT_PX } from './window-chrome-metrics'
@@ -1172,7 +1174,14 @@ export interface TmuxStatus {
   /** tmux discovery only; retained for older callers and install polling. */
   available: boolean
   /** Absent on older peers; null when discovery could not be read. */
-  persistence?: { enabled: boolean; backend: 'tmux' | 'session-host' | null } | null
+  persistence?: { enabled: boolean; backend: 'tmux' | 'zellij' | 'session-host' | null } | null
+  /**
+   * The optional Zellij backend (@shared/session-backend): whether a `zellij` binary was found and
+   * whether this machine's setting selects it for NEW local terminals. Absent on older peers and on
+   * Windows (no Zellij backend there). `selected && !available` means new terminals fall back to
+   * tmux — the Settings row says so rather than letting the choice look applied.
+   */
+  zellij?: { available: boolean; selected: boolean; socketTooLong?: boolean }
   /** One-shot install command for a terminal node; null = no known installer (text-only banner). */
   installCommand: string | null
   /** Button caption for installCommand (e.g. "Install Homebrew + tmux" when brew must come first). */
@@ -1240,8 +1249,10 @@ export interface PtyApi {
    *  worktree"). Same tmux kill as `destroy`, opposite intent: the node stays on the canvas, so
    *  co-viewers get `onRecycled` (restart + re-attach), never the permanent closed state. */
   recycle(persistKey: string): void
-  /** Suggest a terminal title from its recent output via the configured AI agent. */
-  generateName(persistKey: string, cwd: string): Promise<GitResult>
+  /** Suggest a terminal title from its recent output via the configured AI agent. `accountId` is
+   *  the node's managed Claude account (trailing + optional: absent = system `~/.claude`), so the
+   *  naming request runs under the same login the node itself does. */
+  generateName(persistKey: string, cwd: string, accountId?: string): Promise<GitResult>
   /** Suggest a group title from its member terminals' recent output via the configured AI agent. */
   generateGroupName(memberKeys: string[], cwd: string): Promise<GitResult>
   /** Capture a terminal session's output as text. `full` grabs the entire scrollback. */
@@ -1872,6 +1883,13 @@ export interface Settings {
   accent: string
   tmuxEnabled: boolean
   /**
+   * Which multiplexer creates a NEW local terminal's persistent session on POSIX: `tmux` (default)
+   * or `zellij`. Hand-editable, so every reader goes through `normalizeSessionBackend`
+   * (@shared/session-backend) — anything unknown reads as tmux. A node whose session already
+   * lives in one backend keeps reattaching there; Windows and SSH projects ignore it.
+   */
+  sessionBackend: SessionBackend
+  /**
    * Reach a released tmux session with a control-mode (`tmux -C`) client instead of respawning its
    * terminal — the shadow clients in pty-manager.ts (`shadowAttach`) and the shared background-write
    * client behind `backgroundWrite`. A control client holds ZERO pty devices, which is the whole
@@ -2210,6 +2228,7 @@ export const DEFAULT_SETTINGS: Settings = {
   browserMemorySaver: true,
   accent: '#0a84ff',
   tmuxEnabled: true,
+  sessionBackend: 'tmux',
   ptyShadowClients: true,
   terminalGpuRendering: 'auto',
   tmuxScrollback: 50000,
@@ -2381,6 +2400,17 @@ export interface SshProjectStatusEvent {
    *  `claudeAutoPermissionMode`. `null` = the probe ran but found no claude (distinguishable from
    *  "old CLI" in the tab-menu hint); absent = nothing new. */
   remoteClaudeVersion?: string | null
+  /** Does THIS HOST's `codex` accept `--no-daemon` (probed after connect, `codex --help` through
+   *  the login shell)? Keyed by `sshHostKey` because it is a fact about the host's binary, not the
+   *  project. Only `supported: true` puts the flag on a remote Codex launch — see
+   *  shared/agents/codex-daemon.ts. Absent = nothing new. */
+  remoteCodexNoDaemon?: RemoteCodexNoDaemon
+}
+
+/** A host's answer to "does its `codex` accept `--no-daemon`?" — see `SshProjectStatusEvent`. */
+export interface RemoteCodexNoDaemon {
+  hostKey: string
+  supported: boolean
 }
 
 /** main → renderer: this SSH identity file needs its passphrase (the ssh-agent doesn't hold the
@@ -2411,6 +2441,8 @@ export interface SshProjectApi {
     claudeAutoPermissionMode?: boolean
     /** The probed remote `claude --version` output (`null` = probe failed; only on reused conns). */
     remoteClaudeVersion?: string | null
+    /** The host's `--no-daemon` answer, when a probe already ran on this connection (reused conns). */
+    remoteCodexNoDaemon?: RemoteCodexNoDaemon
   }>
   /** Tear down the master (remote tmux is unaffected). */
   disconnect(projectId: string): Promise<void>
@@ -2861,6 +2893,12 @@ export interface SessionMemoryReport {
   ok: boolean
   rows: SessionMemoryRow[]
   mem: MemInfo | null
+  /**
+   * Live nodeterm sessions on this machine that the sweep could NOT measure — today, Zellij-backed
+   * ones (the sweep reads tmux). Absent/0 = none. `null` = could not tell. Local scope only. The
+   * panel must never say "no sessions are running" while this is non-zero or unknown.
+   */
+  unmeasured?: number | null
 }
 
 /**
@@ -3380,6 +3418,8 @@ export interface TranscriptHit {
   cwd: string
   projectLabel: string
   mtime: number
+  /** The managed/linked Claude account whose root holds this transcript; absent = system. */
+  accountId?: string
 }
 
 export interface TranscriptsApi {
@@ -3474,11 +3514,17 @@ export interface CodexCliCaps {
    *  "this CLI accepts nothing". Measured: 0.146.0–0.148.0 list `untrusted, on-request, never`;
    *  0.149.0+ list `on-request, never`. */
   approvalValues: string[] | null
+  /** Does this `codex` accept `--no-daemon`? `null` = unknown (not probed, no codex). Every
+   *  nodeterm-launched plain Codex TUI carries the flag when this is `true`: from 0.157.0 a plain
+   *  TUI otherwise runs inside ONE shared background app-server per CODEX_HOME that keeps the FIRST
+   *  pane's `NODETERM_*` environment, attributing every later node's hooks and tool shells to that
+   *  first node (see `codexNoDaemonFrom`). Optional so an older core's answer still type-checks. */
+  noDaemon?: boolean | null
 }
 
 /** The answer before the probe has run, and for any surface that cannot speak for the CLI that will
  *  actually run the session (a relay tab, an SSH host). */
-export const UNKNOWN_CODEX_CLI_CAPS: CodexCliCaps = { approvalValues: null }
+export const UNKNOWN_CODEX_CLI_CAPS: CodexCliCaps = { approvalValues: null, noDaemon: null }
 
 /** Whether a Codex node launched on this machine right now would get a managed shared identity.
  *  Fed by core/codex-identity-caps.ts; the unknown answer is `false`, i.e. plain `codex`. */
@@ -3938,6 +3984,14 @@ export interface PairingApi {
    * entitlement back on the relay backend. Never rejects for a leg that failed — read the result.
    */
   revokeDevice(id: string): Promise<DeviceRevokeResult>
+  /** Push webhook (shared/push-webhook.ts): what token is live for this machine — never its value. */
+  webhookStatus(): Promise<PushWebhookResult<PushWebhookTokenInfo | null>>
+  /** Mint (or rotate) the token. The value in the result is the only copy that will ever exist
+   *  outside the user's own storage: the backend keeps only its hash, and this app keeps nothing. */
+  webhookMint(): Promise<PushWebhookResult<PushWebhookMinted>>
+  webhookRevoke(): Promise<PushWebhookResult<true>>
+  /** The API base the examples should name (NODETERM_API_BASE or production). */
+  webhookEndpoint(): Promise<string>
 }
 
 /** Team presence (docs/team-presence.md). All of it is transient — nothing here is persisted. */
@@ -4035,6 +4089,8 @@ export interface NodeTerminalApi {
   githubControl: import('./github-issues').GitHubControlApi
   usage: UsageApi
   sessionMemory: SessionMemoryApi
+  /** "Open recent" — the newest agent conversations in this machine's CLI histories. */
+  recentConversations: import('./recent-conversations').RecentConversationsApi
   wallpaper: import('./wallpaper').WallpaperApi
   triggers: TriggersApi
   context: ContextApi

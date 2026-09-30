@@ -3258,3 +3258,57 @@ describe('SshProjectManager — atomic remote import (Task 6.2, Property 2 + 11)
     expect(seen.some((c) => /rm -f '[^']*rollout-x\.jsonl'/.test(c))).toBe(true)
   })
 })
+
+// From codex-cli 0.157.0 a plain Codex TUI joins ONE auto-started app-server per CODEX_HOME that
+// keeps the first pane's NODETERM_* env; on an SSH host that means every later remote Codex node
+// runs as the first one. The fix is `--no-daemon`, which may ride a REMOTE line only when that
+// host's own `codex --help` advertised it — the laptop's probe says nothing about the host.
+describe('SshProjectManager — remote codex --no-daemon probe', () => {
+  function mgrWithCodexHelp(answer: string) {
+    const events: { status: string; remoteCodexNoDaemon?: unknown }[] = []
+    const run = vi.fn(async (args: string[]) => {
+      const cmd = args.join(' ')
+      if (cmd.includes('__NT_CODEX_ND__')) return { code: 0, stdout: `Welcome yes\n${answer}` }
+      if (cmd.includes('printf %s')) return { code: 0, stdout: '/home/u' }
+      return { code: 0, stdout: '' }
+    })
+    const mgr = new SshProjectManager({
+      userDataDir: '/ud',
+      spawnMaster: vi.fn(() => ({ kill: vi.fn(), on: vi.fn() })),
+      run,
+      runScp: vi.fn(async () => ({ code: 0 })),
+      getHook: () => ({ port: 1, token: 't', version: '1' }),
+      onStatus: (e) => events.push({ status: e.status, remoteCodexNoDaemon: e.remoteCodexNoDaemon })
+    })
+    return { mgr, events }
+  }
+  const answered = (events: { remoteCodexNoDaemon?: unknown }[]) =>
+    events.find((e) => e.remoteCodexNoDaemon !== undefined)
+
+  it('publishes the HOST\'s answer, keyed by user@host:port, on a connected event', async () => {
+    const { mgr, events } = mgrWithCodexHelp('__NT_CODEX_ND__yes__NT_CODEX_ND_END__')
+    await mgr.connect('p1', conn)
+    await vi.waitFor(() => expect(answered(events)).toBeDefined())
+    expect(answered(events)).toEqual({
+      status: 'connected',
+      remoteCodexNoDaemon: { hostKey: 'u@h:22', supported: true }
+    })
+    // A reused connection hands the same answer back with the connect result.
+    const again = await mgr.connect('p1', conn)
+    expect(again.remoteCodexNoDaemon).toEqual({ hostKey: 'u@h:22', supported: true })
+  })
+
+  it('an older host codex answers false', async () => {
+    const { mgr, events } = mgrWithCodexHelp('__NT_CODEX_ND__no__NT_CODEX_ND_END__')
+    await mgr.connect('p1', conn)
+    await vi.waitFor(() => expect(answered(events)).toBeDefined())
+    expect(answered(events)?.remoteCodexNoDaemon).toEqual({ hostKey: 'u@h:22', supported: false })
+  })
+
+  it('no markers (no codex on the host, a failed probe) publishes nothing — the line stays as it was', async () => {
+    const { mgr, events } = mgrWithCodexHelp('')
+    await mgr.connect('p1', conn)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(answered(events)).toBeUndefined()
+  })
+})

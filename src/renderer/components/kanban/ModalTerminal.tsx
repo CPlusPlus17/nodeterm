@@ -38,6 +38,9 @@ import { parseOsc52 } from '../../terminal/osc52'
 import { createOsc52Notice, dispatchOsc52Toast, handleOsc52Write } from '../../terminal/osc52-policy'
 import { activateUnicode11 } from '../../terminal/unicode-width'
 import { useCopyFeedback } from '../../terminal/useCopyFeedback'
+import { pasteWithImageReceipt } from '../../terminal/image-paste-confirm'
+import { usePasteReceipt } from '../../terminal/usePasteReceipt'
+import { agentProcessInPane } from '../../terminal/live-work'
 import {
   attachReplay,
   cursorPlacementSeq,
@@ -151,6 +154,7 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
   glassRef.current = glass
   const [dropping, setDropping] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const pasteReceipt = usePasteReceipt()
   // Same copy feedback as the canvas node — a copy here is the same act as a copy there, including
   // the agent gate: a claude card stays silent because claude prints its own copy line.
   const copy = useCopyFeedback({
@@ -524,7 +528,17 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
     // A paste came from this window, which already has focus.
     if (opts.raiseWindow) window.nodeTerminal.focusWindow()
     term.focus()
-    term.paste(paths.join(' ') + ' ')
+    // Same receipt as the canvas node (TerminalNode.insertFiles): attached only once the pane
+    // shows it.
+    const st = useAgentStatus.getState().byId[nodeId]
+    const paneAgent = spawn.agentId ?? st?.agentId
+    pasteWithImageReceipt(
+      term,
+      paths.join(' ') + ' ',
+      paths,
+      agentProcessInPane(paneAgent, st) ? paneAgent : undefined,
+      pasteReceipt.report
+    )
   }
 
   const onDrop = async (e: React.DragEvent) => {
@@ -570,6 +584,11 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
       {copy.feedback && (
         <div className={`term-copy-pill term-copy-pill--${copy.feedback.kind}`}>
           {copy.feedback.label}
+        </div>
+      )}
+      {pasteReceipt.receipt && (
+        <div className={`term-paste-pill${pasteReceipt.receipt.ok ? '' : ' term-paste-pill--warn'}`}>
+          {pasteReceipt.receipt.text}
         </div>
       )}
       {searchOpen && (

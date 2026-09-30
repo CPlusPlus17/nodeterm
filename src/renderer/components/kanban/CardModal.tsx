@@ -243,7 +243,7 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
 
   const nameWithAi = async () => {
     setNaming(true)
-    const r = await api.pty.generateName(session.id, session.spawn.cwd ?? '')
+    const r = await api.pty.generateName(session.id, session.spawn.cwd ?? '', session.spawn.accountId)
     setNaming(false)
     if (r.ok) onRename(r.message)
   }

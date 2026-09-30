@@ -82,6 +82,10 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.stationOutcomeList,
   // Same class: which of the host's stations (any project) have work handed to them.
   IPC.stationHandoverList,
+  // "Open recent": the host's conversation history — titles are prompts the host's user typed, in
+  // every project. A relay tab lists its OWN machine's history (relay-api keeps it `...local`), so
+  // no legitimate peer asks the host for this.
+  IPC.recentConversationsList,
   // The host's settings. `settings:save` is the dangerous half: `modelGateway.baseUrl` is the TRUST
   // ANCHOR `agent:discover-models` uses to decide whether it may resolve the stored
   // `${secret:model-gateway-api-key}` (core/agent-env-ipc.ts), so a peer that could save settings

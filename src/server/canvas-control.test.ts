@@ -179,6 +179,9 @@ describe('initServerCanvasControl', () => {
         sessionIdFlag: false
       }),
       codexSharedIdentity: async () => true,
+      // Pinned, never this machine's codex: the line depends on what the CLI advertises. `true`
+      // also proves the Server Edition's opens carry `--no-daemon` (shared/agents/codex-daemon.ts).
+      codexCaps: async () => ({ approvalValues: null, noDaemon: true }),
       installAgentIntegrations: false
     })
 
@@ -204,7 +207,7 @@ describe('initServerCanvasControl', () => {
     const openedId = (opened.result as { id: string }).id
     // The launch is typed into the shell and submitted, never pasted blind (#925).
     expect(shell.submitted).toEqual([
-      "nodeterm-codex 'identity proof' --ask-for-approval on-request"
+      "nodeterm-codex 'identity proof' --ask-for-approval on-request --no-daemon"
     ])
     expect(sendText).not.toHaveBeenCalled()
 

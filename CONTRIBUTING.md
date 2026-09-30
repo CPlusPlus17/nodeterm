@@ -149,7 +149,9 @@ chain appears, or if anything but `dispatchOnUserMove` creates a queued entry.
 
 A card chip that reads agent state subscribes to a **primitive signature** of the nodes it shows
 (`teamProgressSig`, `issueRunChipSig`), never to the whole `agentStatus.byId` map — that map changes
-on every hook event of every node. Before a card shows a fact, check that its place on the board
+on every hook event of every node. A field of `agentStatus` that is persisted across a restart is restored
+as a record of the past, never as live state: `lastSeen` orders and ages sidebar rows but never
+becomes `state` or Eco's idle clock (`lastEventAt`). Before a card shows a fact, check that its place on the board
 does not already say it (`lib/cardRedundancy.ts`); the card modal keeps every fact the card drops.
 `project.ropes` / `bridges` are hostile input like the board: they are admitted through
 `sanitizeLinks` on every load and save seam, and a reader still tolerates anything. A wait rope
@@ -677,11 +679,26 @@ loop an unrelated client error, and never replay the original prompt after recon
 responsive daemon before invoking lifecycle repair; stale PID bookkeeping is not permission to kill
 working sessions. See `docs/shared-codex-node-identity.md`.
 
+**A plain Codex TUI must not join Codex's own auto-started daemon.** From codex-cli 0.157.0 a
+plain `codex` starts (or joins) ONE background app-server per `CODEX_HOME` that keeps the
+environment of the pane that STARTED it, so every later node's hooks and tool shells run with the
+first node's `NODETERM_NODE_ID` (measured on 0.159.2). Every nodeterm codex line therefore ends in
+`--no-daemon` when the CLI that will run it advertised the flag — added in the two assemblers
+(`shared/agents/launch.ts` via `withCodexNoDaemon`), fed by `ApprovalCaps.codexNoDaemon`. A new
+codex launch site goes through those assemblers and threads the caps; never type a bare `codex` line
+yourself, and AWAIT `ensureCodexLaunchCaps` (bounded) where the site is async — a synchronous
+read loses the race when every node cold-restores after a reboot. A relay tab or SSH node must be
+passed as remote: the guest's or laptop's answer never applies to another machine's codex. The
+flag must never meet `--remote` (codex refuses the pair), which is why the managed launcher strips
+it. See CLAUDE.md "Codex's auto-started shared daemon".
+
 **Credentials never ride argv — local or SSH.** Not a tmux `-e` pair, not `curl -H`, not a remote
 command string. `/proc/<pid>/cmdline` is mode 444 on a stock Linux, and a remote command line is argv
 on the host too: we shipped the hook bearer that way and any other account on the machine could read
 it and open a terminal running an arbitrary command. Pass secrets by 0600 file or by **stdin**
-(`curl --config -`), and never add an argv fallback. See `docs/node-identity.md`.
+(`curl --config -`), and never add an argv fallback. See `docs/node-identity.md`. That includes the
+examples we SHOW users to copy (the push webhook's curl pipes its header on stdin, and a test runs
+it under `/bin/sh` to prove it): a user pastes what we print into a CI job on a shared runner.
 
 **A hook socket path is not ownership proof.** Never unlink a live listener to bind a hook
 socket, or overwrite an advertisement whose socket/TCP listener still answers. Local stale cleanup requires `ECONNREFUSED` and an unchanged socket inode; regular files,
@@ -1114,6 +1131,16 @@ name at once. Write real-tmux suites the normal way — pick your own socket nam
 tmux without carrying `TMUX_TMPDIR` into it, which is the one way left to escape the sandbox.
 `src/core/tmux-socket-isolation.guard.test.ts` holds the short allowlist of suites that name a
 production socket on purpose; adding a third is a review conversation, not a checkbox.
+
+**Session code has two local backends on POSIX: tmux and Zellij.** `settings.sessionBackend` picks
+where a NEW local terminal's session is created (default tmux); an existing session is always
+reattached in the backend that holds it. If you add a `PtyManager` method that talks to tmux about a
+node, ask `isZellij(persistKey, live)` first and either implement the Zellij leg in
+`src/core/zellij-backend.ts` or answer the explicit "unknown/refused" value and add the gap to
+`ZELLIJ_BACKEND_GAPS` (the Settings row prints that list; `docs/session-backends.md` must state it).
+Asking the tmux socket about a Zellij node is a guess, and `has-session` exit 1 there reads as
+"cold". The `*.realzellij.test.ts` suites need a binary: set `NODETERM_TEST_ZELLIJ=/abs/path/zellij`
+or put `zellij` on PATH; they sandbox HOME, XDG and `ZELLIJ_SOCKET_DIR`, and skip otherwise.
 
 **A test's temp directory must go away when the run does.** `fakePlatform()`'s `userDataDir` is made
 on first read under one per-run root (`test/setup/fake-platform-root.ts`), and that root is removed
