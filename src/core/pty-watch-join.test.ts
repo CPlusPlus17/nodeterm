@@ -122,17 +122,27 @@ function hasSession(live: string[], args: readonly string[]): boolean {
 /** Every `tmux -V` the manager asked (the watcher client's version probe). */
 const versionAsks: string[] = []
 
+/** A `tmux -V` that could not run at all (spawn error, timeout) — not an answer. */
+const PROBE_FAILS = 'PROBE_FAILS'
+
 /** A tmux-backed manager whose probes answer from `live` without touching a tmux socket. `version`
- *  is what `tmux -V` answers; `window` what the window-size read answers. */
+ *  is what `tmux -V` answers (a list is consumed in order, the last answer repeating); `window` what
+ *  the window-size read answers, `null` = unreadable. */
 async function tmuxManager(
   live: string[],
-  { version = 'tmux 3.4\n', window }: { version?: string; window?: { cols: number; rows: number } } = {}
+  {
+    version = 'tmux 3.4\n',
+    window = { cols: 120, rows: 39 }
+  }: { version?: string | string[]; window?: { cols: number; rows: number } | null } = {}
 ) {
   versionAsks.length = 0
+  const answers = Array.isArray(version) ? [...version] : [version]
   const confirmedProcessRun: ConfirmedProcessRun = async (_file, args) => {
     if (args[0] === '-V') {
-      versionAsks.push(version)
-      return { stdout: version, stderr: '' }
+      const answer = answers.length > 1 ? answers.shift()! : answers[0]
+      versionAsks.push(answer)
+      if (answer === PROBE_FAILS) throw Object.assign(new Error('spawn tmux ETIMEDOUT'), { code: 'ETIMEDOUT' })
+      return { stdout: answer, stderr: '' }
     }
     if (hasSession(live, args)) return { stdout: '', stderr: '' }
     throw Object.assign(new Error("can't find session"), { code: 1 })
@@ -141,7 +151,7 @@ async function tmuxManager(
   vi.spyOn(
     m as unknown as { readWindowSize: (k: string) => Promise<unknown> },
     'readWindowSize'
-  ).mockResolvedValue(window)
+  ).mockResolvedValue(window ?? undefined)
   ;(m as unknown as { tmuxPath: string }).tmuxPath = '/usr/bin/tmux'
   vi.spyOn(
     m as unknown as { tmuxSessionExists: (k: string) => Promise<boolean> },
@@ -227,19 +237,31 @@ describe('joinAsWatcher', () => {
     expect([spawned[0].cols, spawned[0].rows]).toEqual([132, 43])
   })
 
-  it('an unreadable window size falls back to the caller size, then to the last known size', async () => {
-    const m = await tmuxManager(['nt-n1', 'nt-n2', 'nt-n3'])
-    await m.joinAsWatcher(WATCHER, WATCH)
-    expect([spawned[0].cols, spawned[0].rows]).toEqual([40, 10])
-    // No caller size, no read, and a watcher's own client is not a size source → the default.
-    await m.joinAsWatcher(WATCHER + 1, { persistKey: 'n2', viewerId: 'watch-s2' })
-    expect([spawned[1].cols, spawned[1].rows]).toEqual([80, 24])
-    // With an owner's released size on record, that is the fallback.
-    const { sessionId } = await create(OWNER, { cols: 132, rows: 43, persistKey: 'n3' })
-    kill(OWNER, sessionId) // the last subscriber out releases it: no Session is held for n3 now
-    await m.joinAsWatcher(WATCHER + 2, { persistKey: 'n3', viewerId: 'watch-s3' })
-    expect(spawned.at(-1)!.args).toContain('attach-session')
-    expect([spawned.at(-1)!.cols, spawned.at(-1)!.rows]).toEqual([132, 43])
+  it('an unreadable window size REFUSES the spawn — never a guessed size (caller, remembered, default)', async () => {
+    const m = await tmuxManager(['nt-n1'], { window: null })
+    // The caller's size is not used...
+    expect(await m.joinAsWatcher(WATCHER, WATCH)).toEqual(REFUSED)
+    // ...nor the default...
+    expect(await m.joinAsWatcher(WATCHER, { persistKey: 'n1', viewerId: 'watch-s1' })).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+    // ...nor a remembered (released) size.
+    const own = await create(OWNER, { cols: 132, rows: 43 })
+    kill(OWNER, own.sessionId)
+    expect(m.watchSizeFor('n1')).toEqual({ cols: 132, rows: 43 })
+    expect(await m.joinAsWatcher(WATCHER, WATCH)).toEqual(REFUSED)
+    expect(spawned).toHaveLength(1) // the owner's own client, nothing for the watcher
+  })
+
+  it('the refusal is "not now": once the window can be read, the next join spawns', async () => {
+    const m = await tmuxManager(['nt-n1'], { window: null })
+    expect(await m.joinAsWatcher(WATCHER, WATCH)).toEqual(REFUSED)
+    ;(m as unknown as { readWindowSize: ReturnType<typeof vi.fn> }).readWindowSize.mockResolvedValue({
+      cols: 150,
+      rows: 45
+    })
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    expect(w.unavailable).toBeUndefined()
+    expect([spawned[0].cols, spawned[0].rows]).toEqual([150, 45])
   })
 
   it('reads the window size only when it has to', async () => {
@@ -273,6 +295,28 @@ describe('joinAsWatcher', () => {
     warn.mockRestore()
   })
 
+  it('a FAILED version probe is not an answer: not memoized, the next join asks again', async () => {
+    const m = await tmuxManager(['nt-n1'], { version: [PROBE_FAILS, 'tmux 3.4\n'] })
+    expect(await m.joinAsWatcher(WATCHER, WATCH)).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    expect(w.unavailable).toBeUndefined()
+    expect(spawned).toHaveLength(1)
+    expect(versionAsks).toEqual([PROBE_FAILS, 'tmux 3.4\n'])
+    // A definite answer IS kept.
+    await m.joinAsWatcher(WATCHER + 1, { ...WATCH, persistKey: 'n1', viewerId: 'watch-s2' })
+    expect(versionAsks).toHaveLength(2)
+  })
+
+  it('a definite OLD answer is kept (no re-probe per viewer)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const m = await tmuxManager(['nt-n1'], { version: ['tmux 3.1c\n', 'tmux 3.4\n'] })
+    expect(await m.joinAsWatcher(WATCHER, WATCH)).toEqual(REFUSED)
+    expect(await m.joinAsWatcher(WATCHER, WATCH)).toEqual(REFUSED)
+    expect(versionAsks).toEqual(['tmux 3.1c\n'])
+    warn.mockRestore()
+  })
+
   it('the version is probed once, however many watchers spawn', async () => {
     const m = await tmuxManager(['nt-n1', 'nt-n2'])
     await m.joinAsWatcher(WATCHER, WATCH)
@@ -294,8 +338,8 @@ describe('joinAsWatcher', () => {
     const own = await create(OWNER, { cols: 132, rows: 43 })
     kill(OWNER, own.sessionId)
     expect(m.watchSizeFor('n1')).toEqual({ cols: 132, rows: 43 })
-    const w = await m.joinAsWatcher(WATCHER, WATCH) // no Session held → its own client, at 40x10
-    expect([spawned.at(-1)!.cols, spawned.at(-1)!.rows]).toEqual([40, 10])
+    const w = await m.joinAsWatcher(WATCHER, WATCH) // no Session held → its own client, at the window (120x39)
+    expect([spawned.at(-1)!.cols, spawned.at(-1)!.rows]).toEqual([120, 39])
     m.kill(WATCHER, w.sessionId, 'watch-s1') // the watcher's own view: its client is released
     expect(spawned.at(-1)!.killed).toBe(true)
     expect(m.watchSizeFor('n1')).toEqual({ cols: 132, rows: 43 })
@@ -366,6 +410,13 @@ describe('joinAsWatcher over SSH', () => {
     expect(versionAsks).toEqual([])
   })
 
+  it('a remote window size that cannot be read: refused, nothing spawned', async () => {
+    const m = await sshManager('present')
+    ;(m as unknown as { readWindowSize: ReturnType<typeof vi.fn> }).readWindowSize.mockResolvedValue(undefined)
+    expect(await m.joinAsWatcher(WATCHER, { ...WATCH, sshRemote: SSH_REMOTE })).toEqual(REFUSED)
+    expect(spawned).toHaveLength(0)
+  })
+
   it('a remote session the host says is gone: refused, nothing spawned', async () => {
     const m = await sshManager('absent')
     expect(await m.joinAsWatcher(WATCHER, { ...WATCH, sshRemote: SSH_REMOTE })).toEqual(REFUSED)
@@ -392,6 +443,89 @@ describe('joinAsWatcher (continued)', () => {
     await create(OWNER, { cols: 120, rows: 40 })
     await m.joinAsWatcher(WATCHER, smuggled)
     expect(spawned[0].resizes).toEqual([])
+  })
+})
+
+describe('syncWatcherClientSize', () => {
+  type Read = ReturnType<typeof vi.fn>
+  const readOf = (m: object): Read => (m as unknown as { readWindowSize: Read }).readWindowSize
+  const sessionOf = (m: object, id: string) =>
+    (m as unknown as { sessions: Map<string, { sizes: Map<unknown, unknown>; appliedSize?: unknown }> }).sessions.get(id)!
+
+  it("resizes the watcher's OWN client to exactly the window size read now, and tells its viewers", async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const w = await m.joinAsWatcher(WATCHER, WATCH) // spawned at the window, 120x39
+    readOf(m).mockResolvedValue({ cols: 200, rows: 50 }) // the owner (elsewhere) resized the window
+    fake.sent.length = 0
+    expect(await m.syncWatcherClientSize(w.sessionId)).toBe(true)
+    expect(spawned[0].resizes).toEqual([{ cols: 200, rows: 50 }])
+    const sizes = fake.sent.filter((x) => x.channel === IPC.ptySize(w.sessionId))
+    expect(sizes.map((x) => x.to)).toEqual([WATCHER])
+    expect(sizes[0].args[0]).toEqual({ cols: 200, rows: 50 })
+  })
+
+  it('is never a size vote, and never a viewer-supplied size', async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    await m.joinAsWatcher(WATCHER + 1, { persistKey: 'n1', viewerId: 'watch-s2', cols: 33, rows: 7 })
+    readOf(m).mockResolvedValue({ cols: 200, rows: 50 })
+    await m.syncWatcherClientSize(w.sessionId)
+    expect(spawned[0].resizes).toEqual([{ cols: 200, rows: 50 }])
+    expect(sessionOf(m, w.sessionId).sizes.size).toBe(0)
+  })
+
+  it('an unchanged window resizes nothing (a full redraw is not free)', async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    expect(await m.syncWatcherClientSize(w.sessionId)).toBe(true)
+    expect(spawned[0].resizes).toEqual([])
+  })
+
+  it('an unreadable size changes nothing', async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    readOf(m).mockResolvedValue(undefined)
+    expect(await m.syncWatcherClientSize(w.sessionId)).toBe(false)
+    expect(spawned[0].resizes).toEqual([])
+  })
+
+  it("never touches a session that is not a watcher's own client (the owner's pty is never resized)", async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const own = await create(OWNER, { cols: 120, rows: 40 })
+    await m.joinAsWatcher(WATCHER, WATCH) // co-attaches to the owner's Session
+    readOf(m).mockClear()
+    readOf(m).mockResolvedValue({ cols: 200, rows: 50 })
+    expect(await m.syncWatcherClientSize(own.sessionId)).toBe(false)
+    expect(readOf(m)).not.toHaveBeenCalled()
+    expect(spawned[0].resizes).toEqual([])
+    expect(await m.syncWatcherClientSize('no-such-session')).toBe(false)
+  })
+
+  it('a client that went away during the read is left alone', async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    let answer: (v: unknown) => void = () => {}
+    readOf(m).mockImplementation(() => new Promise((r) => (answer = r)))
+    const pending = m.syncWatcherClientSize(w.sessionId)
+    m.kill(WATCHER, w.sessionId, 'watch-s1')
+    answer({ cols: 200, rows: 50 })
+    expect(await pending).toBe(false)
+    expect(spawned[0].resizes).toEqual([])
+  })
+
+  it('an SSH watcher client is synced from the HOST read', async () => {
+    const m = await tmuxManager([])
+    vi.spyOn(
+      m as unknown as { remoteSessionVerdict: () => Promise<string> },
+      'remoteSessionVerdict'
+    ).mockResolvedValue('present')
+    const SSH_REMOTE = { controlPath: '/tmp/nt-test-cm', conn: { host: 'h', user: 'u' }, remoteCwd: '/srv/app' }
+    const w = await m.joinAsWatcher(WATCHER, { ...WATCH, sshRemote: SSH_REMOTE })
+    readOf(m).mockClear()
+    readOf(m).mockResolvedValue({ cols: 210, rows: 55 })
+    expect(await m.syncWatcherClientSize(w.sessionId)).toBe(true)
+    expect(readOf(m)).toHaveBeenCalledWith('n1', expect.objectContaining({ controlPath: '/tmp/nt-test-cm' }))
+    expect(spawned[0].resizes).toEqual([{ cols: 210, rows: 55 }])
   })
 })
 

@@ -5,7 +5,15 @@
 // tmux 3.4 (watcher-client.realtty.test.ts):
 //  - SIZE. Under tmux's default `window-size latest` the newest client sets the window size: a watcher
 //    at 40x10 shrank the owner's 120x39 window to 40x9 — a SIGWINCH to the agent running there, because
-//    somebody opened a link. `-f ignore-size` leaves the window at 120x39 and the owner's client as it was.
+//    somebody opened a link. With `-f ignore-size` the window stayed at 120x39 and the owner's client as
+//    it was — BUT only because the owner was attached: tmux 3.4 honours `ignore-size` only while at least
+//    one client WITHOUT the flag is attached to some session on the same server. A watcher that is the
+//    only client sizes the window like any other (measured: spawned at 40x10 alone → window 40x10; spawned
+//    at 120x40, an owner joins at 200x50 and leaves → the window snaps back to 120x40). So the client is
+//    spawned at the window's CURRENT size, read just before the spawn, and refused when that read fails
+//    (`PtyManager.spawnNew`); `PtyManager.syncWatcherClientSize` keeps it at the window's size while the
+//    link has viewers. Residual: drift for up to one sync interval, and a read racing an owner's resize
+//    or departure (the window then keeps the size read a moment before).
 //  - ENVIRONMENT. Attaching runs `update-environment`, which copies every listed name from the attaching
 //    client's env into the session and STRIPS the ones that client lacks — the account scope
 //    (CLAUDE_CONFIG_DIR, …, CLAUDE.md #419) included. `-E` skips it; the session env is untouched.
@@ -30,21 +38,29 @@ export function localWatcherAttachArgs(socket: string, sessionName: string): str
   return ['-L', socket, 'attach-session', '-E', '-f', WATCHER_CLIENT_FLAGS, '-t', exactPaneTarget(sessionName)]
 }
 
-/** The window's size, so a watcher's client is spawned at what the owner sees. */
-export const WINDOW_SIZE_FORMAT = '#{window_width} #{window_height}'
+/**
+ * What a watcher's client must be sized to so it leaves the window exactly where it is: the window's
+ * width and height, plus the status lines tmux draws under it on that session (`#{status}`: `off`,
+ * `on` = 1, or `2`–`5`). With the production conf (`set -g status off`) that is the window size itself;
+ * a host whose server runs tmux's defaults (status on — a remote conf that was never sourced) would
+ * otherwise lose one row to the status line every time the watcher, as the only client, set the size.
+ */
+export const WINDOW_SIZE_FORMAT = '#{window_width} #{window_height} #{status}'
 
 export function localWindowSizeArgs(socket: string, sessionName: string): string[] {
   return ['-L', socket, 'display-message', '-p', '-t', exactPaneTarget(sessionName), WINDOW_SIZE_FORMAT]
 }
 
-/** `"<cols> <rows>"`, both positive. An exact-target miss answers exit 0 with every format EMPTY, so
- *  anything else is no size — never 0x0. */
+/** `"<width> <height> <status>"` → the client size for that window (see `WINDOW_SIZE_FORMAT`), both
+ *  positive. An exact-target miss answers exit 0 with every format EMPTY, so anything else is no size,
+ *  never 0x0; an unknown status value is no size too. */
 export function parseWindowSize(stdout: string): { cols: number; rows: number } | undefined {
-  const m = /^(\d+) (\d+)$/.exec(stdout.replace(/\r?\n$/, ''))
+  const m = /^(\d+) (\d+) (off|on|[0-5])$/.exec(stdout.replace(/\r?\n$/, ''))
   if (!m) return undefined
   const cols = Number(m[1])
-  const rows = Number(m[2])
-  return cols > 0 && rows > 0 ? { cols, rows } : undefined
+  const height = Number(m[2])
+  const statusLines = m[3] === 'off' ? 0 : m[3] === 'on' ? 1 : Number(m[3])
+  return cols > 0 && height > 0 ? { cols, rows: height + statusLines } : undefined
 }
 
 export interface TmuxVersion {

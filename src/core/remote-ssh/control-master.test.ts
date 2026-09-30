@@ -282,7 +282,7 @@ describe('remoteCaptureVisibleArgs', () => {
 })
 
 describe('remoteTmuxWatcherArgs', () => {
-  it('a tty-allocating child that ATTACHES read-only and size-neutral, never creates', () => {
+  it('a tty-allocating child that ATTACHES read-only and ignore-size, never creates', () => {
     const args = remoteTmuxWatcherArgs(conn, '/s.sock', 'nt-x')
     expect(args[0]).toBe('-t')
     expect(args.slice(1, 1 + childPrefix.length)).toEqual(childPrefix)
@@ -304,7 +304,7 @@ describe('remoteWindowSizeArgs', () => {
     const args = remoteWindowSizeArgs(conn, '/s.sock', 'nt-x')
     expect(args.slice(0, childPrefix.length)).toEqual(childPrefix)
     expect(args[args.length - 1]).toBe(
-      `${TP}tmux -L ${RMT_TMUX_SOCKET} display-message -p -t '=nt-x:' '#{window_width} #{window_height}'`
+      `${TP}tmux -L ${RMT_TMUX_SOCKET} display-message -p -t '=nt-x:' '#{window_width} #{window_height} #{status}'`
     )
   })
 })

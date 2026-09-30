@@ -542,8 +542,9 @@ export function remoteCaptureVisibleArgs(conn: SshConnection, controlPath: strin
 /**
  * A live link watcher's OWN client on the host, for a node no Session is held for: a tty-allocating
  * ssh child (`-t`, like `remoteTmuxPtyArgs`) running `attach-session -E -f ignore-size,read-only` on
- * the exact target — never creating, never resizing the owner's window, never touching the session
- * env (why each flag: `watch-link/watcher-client.ts`). Deliberately NOT wrapped like the owner's
+ * the exact target — never creating, never touching the session env, and out of the window's sizing
+ * while an unflagged client is attached anywhere on the server (tmux honours `ignore-size` only then;
+ * the caller spawns it at the window's current size and keeps it synced — `watch-link/watcher-client.ts`). Deliberately NOT wrapped like the owner's
  * interactive command: a host without tmux gets a failed command, never a plain login shell — a
  * watcher must not get a shell. An old remote tmux (< 3.2) rejects `-f` with a usage error: the
  * command fails and nothing attaches. Proven under a real /bin/sh in watcher-attach.realsh.test.ts

@@ -1,4 +1,4 @@
-// A LIVE LINK WATCHER'S OWN TMUX CLIENT, ON A REAL TTY (controller ruling R19).
+// A LIVE LINK WATCHER'S OWN TMUX CLIENT, ON A REAL TTY (controller rulings R19, R20).
 //
 // When no Session is held for a node (an app restart, a closed project, a released node), a watcher
 // joins by spawning its OWN tmux client. Measured on tmux 3.4, the owner's `new-session -A` spelling
@@ -6,7 +6,10 @@
 // makes the newest client the size) — SIGWINCH to a running agent, because somebody opened a link.
 // The watcher's client is therefore `attach-session -E -f ignore-size,read-only -t =nt-<id>:`, and
 // each word is load-bearing; this file measures each one on a real pty:
-//  - ignore-size: the owner's window and the owner's own client keep their size;
+//  - ignore-size: while the owner is attached, the owner's window and its own client keep their size.
+//                 NOT unconditional: tmux 3.4 honours it only while an unflagged client is attached
+//                 somewhere on the server; alone, the watcher sizes the window like any client — the
+//                 last describe measures that rule and the sync that keeps the window where it was;
 //  - read-only:   bytes typed into the watcher's client never reach the pane;
 //  - -E:          attaching does not run `update-environment`, which would STRIP every listed name the
 //                 watcher's own env lacks (the account scope, CLAUDE_CONFIG_DIR — CLAUDE.md #419);
@@ -148,7 +151,7 @@ afterAll(() => {
 })
 
 describe("a watcher's own tmux client (local)", () => {
-  itReal('never resizes the owner: the window stays 120x39 and the owner keeps its view', async () => {
+  itReal('with the owner attached, the watcher does not resize the window: 120x39, owner view unchanged', async () => {
     newSession('nt-own', 'sleep 120')
     await ownerOf('nt-own')
     const before = clientsOf('nt-own')
@@ -209,13 +212,14 @@ describe("a watcher's own tmux client (local)", () => {
   itReal('the window-size read answers the live window, and nothing for a miss', async () => {
     newSession('nt-sz', 'sleep 120')
     await ownerOf('nt-sz')
-    expect(parseWindowSize(tmux(localWindowSizeArgs(SOCKET, 'nt-sz').slice(2)))).toEqual({ cols: 120, rows: 39 })
+    // The owner's 120x40 client with tmux's default status line: window 120x39, client size 120x40.
+    expect(parseWindowSize(tmux(localWindowSizeArgs(SOCKET, 'nt-sz').slice(2)))).toEqual({ cols: 120, rows: 40 })
     expect(parseWindowSize(tmux(localWindowSizeArgs(SOCKET, 'nt-s').slice(2)))).toBeUndefined()
   })
 })
 
 describe("a watcher's own tmux client (SSH arm, the generated remote line under a real /bin/sh)", () => {
-  itReal('attaches read-only and size-neutral: the owner window stays 120x39, env intact', async () => {
+  itReal('attaches read-only and ignore-size: with the owner attached the window stays 120x39, env intact', async () => {
     newSession('nt-rw', 'sleep 120')
     await ownerOf('nt-rw')
     const line = remoteTmuxWatcherArgs({ host: 'h', user: 'u' }, '/cm/p1', 'nt-rw').at(-1)!
@@ -235,5 +239,72 @@ describe("a watcher's own tmux client (SSH arm, the generated remote line under 
     await until(() => watcher.exit !== null)
     expect(watcher.exit?.exitCode).not.toBe(0)
     expect(tryTmux(['has-session', '-t', '=nt-rgone']).ok).toBe(false)
+  })
+})
+
+// R20 — `ignore-size` is honoured only while an UNFLAGGED client is attached somewhere on the server.
+// Its own private server (not SOCKET above, where the owner clients of the tests before stay attached
+// until afterAll and would keep `ignore-size` honoured). Sessions carry the production conf's
+// `status off`, so the window IS the client size.
+describe("keeping a watcher's own client at the window size (sync)", () => {
+  const SYNC_SOCKET = `nt-wlsy-${process.pid}`
+  const syncSessions: string[] = []
+  const tx = (args: string[]): string =>
+    execFileSync(REAL_TMUX!, ['-L', SYNC_SOCKET, ...args], {
+      env: baseEnv(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+  const win = (name: string): string =>
+    tx(['display-message', '-p', '-t', `=${name}:`, '#{window_width}x#{window_height}']).trim()
+  /** Exactly what `readWindowSize` + the spawn/sync do: the production argv, parsed. */
+  const readSize = (name: string): { cols: number; rows: number } =>
+    parseWindowSize(tx(localWindowSizeArgs(SYNC_SOCKET, name).slice(2)))!
+
+  afterAll(() => {
+    if (!REAL_TMUX || !pty) return
+    for (const name of syncSessions) {
+      try {
+        tx(['kill-session', '-t', `=${name}`])
+      } catch {
+        /* gone */
+      }
+    }
+  })
+
+  async function scenario(name: string, sync: boolean): Promise<string[]> {
+    const seen: string[] = []
+    // `-f /dev/null` on the first call boots this private server with tmux defaults.
+    tx(['-f', '/dev/null', 'new-session', '-d', '-s', name, '-x', '120', '-y', '40', 'sleep 120', ';', 'set-option', 'status', 'off'])
+    syncSessions.push(name)
+    // The watcher's own client, spawned at the window size read just before (spawnNew).
+    const size = readSize(name)
+    seen.push(`${size.cols}x${size.rows}`)
+    const watcher = spawnClient(REAL_TMUX!, localWatcherAttachArgs(SYNC_SOCKET, name), size.cols, size.rows, baseEnv())
+    await until(() => tx(['list-clients', '-t', `=${name}`]).trim().split('\n').filter(Boolean).length === 1)
+    // An owner-style (unflagged) client joins and sizes the window to 200x50.
+    const owner = spawnClient(REAL_TMUX!, ['-L', SYNC_SOCKET, 'attach-session', '-t', `=${name}`], 200, 50, baseEnv())
+    await until(() => win(name) === '200x50')
+    seen.push(win(name))
+    if (sync) {
+      // syncWatcherClientSize: read the window, resize the watcher's OWN pty to exactly that.
+      const now = readSize(name)
+      watcher.proc.resize(now.cols, now.rows)
+      await sleep(200)
+    }
+    owner.proc.kill()
+    await until(() => tx(['list-clients', '-t', `=${name}`]).trim().split('\n').filter(Boolean).length === 1)
+    await sleep(300)
+    seen.push(win(name))
+    watcher.proc.kill()
+    return seen
+  }
+
+  itReal('control, WITHOUT sync: once the unflagged client leaves, the window snaps to the watcher (120x40)', async () => {
+    expect(await scenario('nt-nosync', false)).toEqual(['120x40', '200x50', '120x40'])
+  })
+
+  itReal('WITH sync: the window keeps its latest size (200x50) after the unflagged client leaves', async () => {
+    expect(await scenario('nt-sync', true)).toEqual(['120x40', '200x50', '200x50'])
   })
 })

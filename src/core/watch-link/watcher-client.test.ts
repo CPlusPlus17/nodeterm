@@ -12,7 +12,7 @@ import {
 describe('localWatcherAttachArgs', () => {
   const args = localWatcherAttachArgs('sock', 'nt-abc')
 
-  it('attaches (never creates), skips update-environment, and never sizes or types into the window', () => {
+  it('attaches (never creates), skips update-environment, ignore-size and read-only', () => {
     expect(args).toEqual(['-L', 'sock', 'attach-session', '-E', '-f', 'ignore-size,read-only', '-t', '=nt-abc:'])
     expect(WATCHER_CLIENT_FLAGS).toBe('ignore-size,read-only')
   })
@@ -30,8 +30,8 @@ describe('localWatcherAttachArgs', () => {
 })
 
 describe('localWindowSizeArgs / parseWindowSize', () => {
-  it('reads the window size of exactly this session', () => {
-    expect(WINDOW_SIZE_FORMAT).toBe('#{window_width} #{window_height}')
+  it('reads the window size of exactly this session, with its status lines', () => {
+    expect(WINDOW_SIZE_FORMAT).toBe('#{window_width} #{window_height} #{status}')
     expect(localWindowSizeArgs('sock', 'nt-abc')).toEqual([
       '-L',
       'sock',
@@ -39,18 +39,21 @@ describe('localWindowSizeArgs / parseWindowSize', () => {
       '-p',
       '-t',
       '=nt-abc:',
-      '#{window_width} #{window_height}'
+      '#{window_width} #{window_height} #{status}'
     ])
   })
 
-  it('parses a real reply, CRLF included', () => {
-    expect(parseWindowSize('120 39\n')).toEqual({ cols: 120, rows: 39 })
-    expect(parseWindowSize('80 24')).toEqual({ cols: 80, rows: 24 })
-    expect(parseWindowSize('80 24\r\n')).toEqual({ cols: 80, rows: 24 })
+  it('answers the CLIENT size that leaves the window where it is: window + status lines', () => {
+    // The production conf has `status off`: the client size IS the window size.
+    expect(parseWindowSize('120 40 off\n')).toEqual({ cols: 120, rows: 40 })
+    // tmux defaults (`status on`): a client one row taller than the window, or the window loses a row.
+    expect(parseWindowSize('120 39 on\n')).toEqual({ cols: 120, rows: 40 })
+    expect(parseWindowSize('120 37 3\n')).toEqual({ cols: 120, rows: 40 })
+    expect(parseWindowSize('80 24 off\r\n')).toEqual({ cols: 80, rows: 24 })
   })
 
   it('an exact-target miss (exit 0, every format empty) is no size, never 0x0', () => {
-    for (const out of ['', ' \n', '\n', '0 24\n', '80 0\n', 'a b\n', '80\n', '80 24 1\n', ' 80 24\n']) {
+    for (const out of ['', '  \n', '\n', '0 24 off\n', '80 0 off\n', 'a b off\n', '80 24\n', '80 24 7\n', '80 24 yes\n', ' 80 24 off\n']) {
       expect(parseWindowSize(out)).toBeUndefined()
     }
   })

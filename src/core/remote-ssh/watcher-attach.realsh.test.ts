@@ -146,7 +146,8 @@ describe('remoteWindowSizeArgs (real /bin/sh)', () => {
     // Skipped without a tmux binary: the proof is tmux's own reply.
     const hit = runUnder(delegateDir, sizeLine('nt-w-12'))
     expect(hit.status).toBe(0)
-    expect(parseWindowSize(hit.stdout)).toEqual({ cols: 100, rows: 30 })
+    // `-f /dev/null` = tmux defaults, status on: the client size for a 100x30 window is 100x31.
+    expect(parseWindowSize(hit.stdout)).toEqual({ cols: 100, rows: 31 })
     // A prefix of a live session's name: exit 0 with every format empty — no size, never 12's.
     const miss = runUnder(delegateDir, sizeLine('nt-w-1'))
     expect(parseWindowSize(miss.stdout)).toBeUndefined()

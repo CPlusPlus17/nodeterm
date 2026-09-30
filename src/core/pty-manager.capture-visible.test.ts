@@ -203,25 +203,25 @@ describe('readWindowSize — the size a watcher client is spawned at', () => {
   }
 
   it('asks the local tmux for exactly this session and parses the reply', async () => {
-    script.answer = () => ({ stdout: '120 39\n' })
+    script.answer = () => ({ stdout: '120 39 off\n' })
     const m = await bare()
     expect(await m.readWindowSize(NODE)).toEqual({ cols: 120, rows: 39 })
     expect(calls).toEqual([
       {
         file: '/usr/bin/tmux',
-        args: ['-L', TMUX_SOCKET, 'display-message', '-p', '-t', TARGET, '#{window_width} #{window_height}']
+        args: ['-L', TMUX_SOCKET, 'display-message', '-p', '-t', TARGET, '#{window_width} #{window_height} #{status}']
       }
     ])
   })
 
   it('asks the REMOTE tmux over the ControlMaster for an SSH node', async () => {
-    script.answer = () => ({ stdout: '100 30\n' })
+    script.answer = () => ({ stdout: '100 30 off\n' })
     const m = await bare(null)
     expect(await m.readWindowSize(NODE, SSH_REMOTE)).toEqual({ cols: 100, rows: 30 })
     expect(calls).toHaveLength(1)
     expect(calls[0].file).toBe('/usr/bin/ssh')
     expect(calls[0].args.at(-1)).toContain(
-      `tmux -L ${RMT_TMUX_SOCKET} display-message -p -t '${TARGET}' '#{window_width} #{window_height}'`
+      `tmux -L ${RMT_TMUX_SOCKET} display-message -p -t '${TARGET}' '#{window_width} #{window_height} #{status}'`
     )
   })
 
