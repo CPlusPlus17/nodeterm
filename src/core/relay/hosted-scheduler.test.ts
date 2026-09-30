@@ -1,5 +1,5 @@
 // src/core/relay/hosted-scheduler.test.ts
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import nacl from 'tweetnacl'
 import { createHostedScheduler, type MintResult, type SchedulerStatus } from './hosted-scheduler'
 import { mintHostToken } from './host-token'
@@ -421,8 +421,12 @@ describe('hosted scheduler', () => {
     async (reason) => {
       const h = harness([popRefused(reason), popRefused(reason)])
       h.s.start(); await flush()
-      // The first is transient (a POP_SECRET rotation mid challenge→mint looks exactly like this).
-      expect(h.s.status()).toMatchObject({ state: 'running', lastError: 'network (403)' })
+      // The first is transient (a POP_SECRET rotation mid challenge→mint looks exactly like this),
+      // and says so: an operator reading `team status` must not see a bare `network (403)`.
+      expect(h.s.status()).toMatchObject({
+        state: 'running',
+        lastError: `key proof refused once (${reason}) — retrying with a fresh challenge`
+      })
       expect(h.timers).toHaveLength(1) // the backoff owns the next mint (a fresh challenge)
       await h.advance(1000)
       expect(h.mintCalls()).toBe(2)
@@ -430,6 +434,60 @@ describe('hosted scheduler', () => {
       expect(h.timers).toHaveLength(0)
     }
   )
+
+  it.each<[string, MintResult]>([
+    ['a 503', { ok: false, kind: 'network', status: 503 }],
+    ['a 429', { ok: false, kind: 'rate-limited', status: 429 }],
+    ['a bad response', { ok: false, kind: 'bad-response' }]
+  ])('a transient failure between two refusals does not reset the count: refusal, %s, refusal stops', async (_label, transient) => {
+    // Only a successful mint (or start()) proves the key is accepted. Resetting on a transient
+    // failure would let a backend that refuses every proof, behind a flaky challenge, loop forever.
+    const h = harness([popRefused(), transient, popRefused()])
+    h.s.start(); await flush()
+    expect(h.s.status().state).toBe('running')
+    await h.advance(1000) // the backoff → the transient failure
+    expect(h.mintCalls()).toBe(2)
+    expect(h.s.status().state).toBe('running')
+    await h.advance(60_000) // the next backoff step (or the 429's 60 s floor) → refused again
+    expect(h.mintCalls()).toBe(3)
+    expect(h.s.status()).toMatchObject({ state: 'backend-refused', lastError: POP_REFUSED_MESSAGE })
+    expect(h.timers).toHaveLength(0)
+  })
+
+  it('each key-proof refusal is logged with its kind: warn on the first, error on the terminal one', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const h = harness([popRefused('pop_required'), popRefused('pop_invalid')])
+      h.s.start(); await flush()
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0][0])).toContain('pop_required')
+      expect(error).not.toHaveBeenCalled()
+      await h.advance(1000)
+      expect(h.s.status().state).toBe('backend-refused')
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(error).toHaveBeenCalledTimes(1)
+      expect(String(error.mock.calls[0][0])).toContain('pop_invalid')
+    } finally {
+      warn.mockRestore()
+      error.mockRestore()
+    }
+  })
+
+  it('a refusal that is not a key proof (402) logs nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const h = harness([{ ok: false, kind: 'refused', status: 402 }])
+      h.s.start(); await flush()
+      expect(h.s.status()).toMatchObject({ state: 'backend-refused', lastError: 'refused (402)' })
+      expect(warn).not.toHaveBeenCalled()
+      expect(error).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+      error.mockRestore()
+    }
+  })
 
   it('one PoP refusal then a successful mint: hosting keeps running', async () => {
     const h = harness([popRefused(), ok()])

@@ -110,7 +110,8 @@ async function mintHostToken(
   const hostPublicKeyB64 = publicKeyToB64(keys.publicKey)
   // Read ONCE: the proof's subject must be the exact id the body sends. On a first launch
   // getDeviceId() mints a uuid and writes it asynchronously, so a second call before that write
-  // lands mints another one, and the backend would refuse the pair as pop_invalid (terminal).
+  // lands mints another one, and the backend would refuse the pair as pop_invalid (a key-proof
+  // refusal, which stops phone access when it repeats).
   const deviceId = entitlement ? null : getDeviceId()
   const base = entitlement ? { entitlement, hostPublicKeyB64 } : { deviceId, hostPublicKeyB64 }
   const ctrl = new AbortController()
@@ -151,7 +152,7 @@ async function mintHostToken(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       // popChallenge and popProof travel together or not at all: the backend treats a half-present
-      // proof as invalid, and invalid is terminal.
+      // proof as pop_invalid, which would repeat on every retry and so stop phone access.
       body: JSON.stringify({ ...base, ...(proof ?? {}) }),
       signal: ctrl.signal
     })
@@ -214,7 +215,7 @@ function reportPopRefused(kind: PopRefusal): void {
   try {
     dialog.showErrorBox(
       'Remote access stopped',
-      `${POP_REFUSED_MESSAGE_DESKTOP}\n\nPhone access is off until then. Turn it back on in Settings → Phone.`
+      `${POP_REFUSED_MESSAGE_DESKTOP}\n\nPhone access is off. Turn it back on in Settings → Phone after updating.`
     )
   } catch {
     // No dialog available (headless / very early boot): the console line is the fallback.

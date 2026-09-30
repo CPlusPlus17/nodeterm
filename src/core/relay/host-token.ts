@@ -28,7 +28,8 @@ export type MintResult =
       kind: 'network' | 'rate-limited' | 'refused' | 'bad-response'
       retryAfterMs?: number
       status?: number
-      /** Set only on a terminal key-proof refusal (a `refused` 403). */
+      /** Set only on a key-proof refusal (a `refused` 403). The caller counts them: the second in a
+       *  row is terminal (see hosted-scheduler.ts). */
       reason?: PopRefusal
     }
 

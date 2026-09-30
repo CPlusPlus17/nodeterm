@@ -18,12 +18,14 @@
 //  - a key-proof refusal stops minting only on the SECOND in a row: a POP_SECRET rotation, or a
 //    secret mismatch between backend instances, inside ONE challenge→mint pair refuses an honest
 //    host once. The first is backed off like a transient 403 (the retry fetches a fresh challenge);
-//    a successful mint or start() resets the count;
+//    only a successful mint or start() resets the count — a transient failure in between does not,
+//    or a backend refusing every proof behind a flaky challenge would retry forever. Both refusals
+//    are logged with their kind (warn, then error), so an operator can tell the two apart;
 //  - while a backoff timer is armed it owns the next mint: nothing else may mint early.
 // Everything the injected deps can throw is caught: a scheduler that swallowed an exception would sit
 // in 'running' with no listener and no timer, i.e. hosting silently dead until a restart.
 import type { MintResult } from './host-token'
-import { POP_REFUSED_MESSAGE } from './relay-pop'
+import { POP_REFUSED_MESSAGE, type PopRefusal } from './relay-pop'
 export type { MintResult } from './host-token'
 
 const REFRESH_LEAD_MS = 30_000
@@ -182,6 +184,8 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
     try {
       let r: MintResult
       let threw: string | null = null
+      /** Set when this mint is the FIRST key-proof refusal in a row, which is retried, not terminal. */
+      let refusedOnce: PopRefusal | null = null
       try {
         r = await deps.mint()
       } catch (err) {
@@ -193,13 +197,23 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
         popRefusals = 0
       } else if (r.kind === 'refused' && r.reason && ++popRefusals < 2) {
         // The first key-proof refusal in a row is transient (see the header): back off, re-challenge.
+        refusedOnce = r.reason
         r = { ok: false, kind: 'network', status: 403 }
       }
       if (state !== 'running') return
       if (!r.ok) {
         // A key-proof refusal says what to do about it (update, or `team rotate-key`); `refused (403)` would not.
-        lastError = threw ?? (r.reason ? POP_REFUSED_MESSAGE : r.kind + (r.status ? ` (${r.status})` : ''))
+        lastError =
+          threw ??
+          (refusedOnce
+            ? `key proof refused once (${refusedOnce}) — retrying with a fresh challenge`
+            : r.reason
+              ? POP_REFUSED_MESSAGE
+              : r.kind + (r.status ? ` (${r.status})` : ''))
+        // Only the refusal KIND is logged: nothing here holds key material, and nothing may.
+        if (refusedOnce) console.warn(`[hosted-team] the relay refused this host's key proof once (${refusedOnce}); retrying with a fresh challenge`)
         if (r.kind === 'refused') {
+          if (r.reason) console.error(`[hosted-team] the relay refused this host's key proof twice in a row (${r.reason}); hosting stopped`)
           state = 'backend-refused'
           emit()
           return

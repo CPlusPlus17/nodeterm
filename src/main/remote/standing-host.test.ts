@@ -707,6 +707,9 @@ describe('standing host: host key proof-of-possession on the host-token mint', (
       expect(sessions).toHaveLength(0)
       expect(errorBoxes).toHaveLength(1)
       expect(errorBoxes[0].body).toContain(POP_REFUSED_MESSAGE_DESKTOP)
+      // The follow-up line has its own antecedent now that the message ends with "contact support".
+      expect(errorBoxes[0].body).toContain('Phone access is off. Turn it back on in Settings → Phone after updating.')
+      expect(errorBoxes[0].body).not.toContain('until then')
       // `team rotate-key` exists only in the Server Edition: the desktop must not advise it.
       expect(errorBoxes[0].body).not.toContain('rotate-key')
       // Terminal: no reconnect timer is left armed.
@@ -775,6 +778,43 @@ describe('standing host: host key proof-of-possession on the host-token mint', (
     expect(errorBoxes).toHaveLength(0) // the first refusal of THIS run
     host.stop()
   })
+
+  it.each<[string, 'challenge' | 'host-token', Route]>([
+    ['the challenge answering 503', 'challenge', () => res(503)],
+    ['a challenge network error', 'challenge', () => Promise.reject(new TypeError('fetch failed'))],
+    ['the mint answering 503', 'host-token', () => res(503)]
+  ])(
+    'a transient failure between two refusals does not reset the count: refusal, %s, refusal stops',
+    async (_label, where, transient) => {
+      // Only a successful mint (or start()) proves the key is accepted. Resetting on a transient
+      // failure would let a backend that refuses every proof, behind a flaky challenge, loop forever.
+      vi.useFakeTimers()
+      const pop = createTestPopServer()
+      let challenges = 0
+      let mints = 0
+      routeFetch({
+        challenge: (init) =>
+          where === 'challenge' && ++challenges === 2 ? transient(init) : challengeFrom(pop)(init),
+        hostToken: (init) =>
+          where === 'host-token' && ++mints === 2 ? transient(init) : res(403, { error: 'pop_invalid' })
+      })
+      const host = makeHost()
+      host.setEnabled(true)
+      for (let i = 0; i < 5; i++) await settle()
+      expect(errorBoxes).toHaveLength(0) // refusal 1: transient
+      await vi.advanceTimersByTimeAsync(1000) // the backoff → the transient failure
+      expect(challengeCalls()).toHaveLength(2)
+      expect(errorBoxes).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(2000) // the next backoff step → refusal 2, the second in a row
+      expect(challengeCalls()).toHaveLength(3)
+      expect(errorBoxes).toHaveLength(1)
+      expect(errorBoxes[0].body).toContain(POP_REFUSED_MESSAGE_DESKTOP)
+      await vi.advanceTimersByTimeAsync(60_000) // stopped: nothing re-mints, no second dialog
+      expect(challengeCalls()).toHaveLength(3)
+      expect(errorBoxes).toHaveLength(1)
+      host.stop()
+    }
+  )
 
   it('turning access off while a mint is in flight: a refusal that lands afterwards raises nothing', async () => {
     vi.useFakeTimers()
