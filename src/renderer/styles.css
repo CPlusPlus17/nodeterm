@@ -11090,6 +11090,23 @@ button.pull-checks__name {
   font-size: 13px;
   line-height: 1.6;
 }
+/* Board dispatch's line on an issue card (queued / starting / not dispatched). Static text: the
+   run itself shows as a run chip once it exists. */
+.dispatch-chip {
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.dispatch-chip--starting {
+  color: var(--text);
+}
+.dispatch-chip--refused {
+  color: var(--warn);
+}
+.dispatch-chip__reason {
+  color: var(--muted);
+}
 /* GitHub issue ↔ agent session binding. The issue card lists every session started on it as a
    live chip (state from the agent-status store — static, no animation: a card can carry several,
    and the RUNNING pulse already lives on the session's own card). */
@@ -11252,6 +11269,11 @@ button.pull-checks__name {
 }
 .team-progress__dot--queued {
   background: var(--state-queued);
+  border-color: transparent;
+}
+/* Interrupted by the user: idle, not finished — `--after` holds its dependents on it. */
+.team-progress__dot--interrupted {
+  background: var(--state-warning);
   border-color: transparent;
 }
 /* The session name in the card modal header: sized to its text, not a flex-filling detail line. */

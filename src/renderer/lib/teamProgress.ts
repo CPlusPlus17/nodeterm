@@ -58,6 +58,7 @@ export type StationKind =
   | 'working'
   | 'needs'
   | 'errored'
+  | 'interrupted'
   | 'dropped'
   | 'queued'
   | 'unknown'
@@ -167,7 +168,7 @@ export function stationsByOpener(
 }
 
 type StatusLike = Pick<AgentNodeStatus, 'state'> &
-  Partial<Pick<AgentNodeStatus, 'dropped' | 'paused' | 'hibernated' | 'lastTurnError' | 'agentId' | 'sessionEnded'>>
+  Partial<Pick<AgentNodeStatus, 'dropped' | 'paused' | 'hibernated' | 'lastTurnError' | 'lastTurnInterrupted' | 'agentId' | 'sessionEnded'>>
 
 function reports(agentId: string | undefined): boolean {
   if (!agentId) return false
@@ -191,7 +192,9 @@ export function stationKind(station: TeamStation, status: StatusLike | undefined
   if (state === 'waiting' || state === 'blocked') return 'needs'
   if (state === 'working') return 'working'
   if (station.queued) return 'queued'
-  if (state === 'done') return status?.lastTurnError ? 'errored' : 'done'
+  // An interrupted last turn is not "done" either: `--after` holds its dependents on it
+  // (`lastTurnInterrupted`), and a ring saying "finished" beside a held dependent would disagree.
+  if (state === 'done') return status?.lastTurnError ? 'errored' : status?.lastTurnInterrupted ? 'interrupted' : 'done'
   if (status?.paused || status?.hibernated) return 'paused'
   if (status?.sessionEnded) return 'ended'
   return reports(station.agentId ?? status?.agentId) ? 'unknown' : 'untracked'
@@ -204,6 +207,7 @@ const CHAR: Record<StationKind, string> = {
   working: 'w',
   needs: 'n',
   errored: 'e',
+  interrupted: 'i',
   dropped: 'x',
   queued: 'q',
   unknown: '?',
@@ -261,6 +265,7 @@ export const STATION_LABEL: Record<StationKind, string> = {
   working: 'working',
   needs: 'needs you',
   errored: 'last turn failed',
+  interrupted: 'interrupted',
   dropped: 'dropped',
   queued: 'queued',
   unknown: 'unknown',
@@ -269,7 +274,7 @@ export const STATION_LABEL: Record<StationKind, string> = {
 
 /** Order of the breakdown in the tooltip and the list header — attention first. */
 const BREAKDOWN: readonly StationKind[] = [
-  'dropped', 'errored', 'needs', 'working', 'queued', 'unknown', 'done', 'paused', 'ended', 'untracked'
+  'dropped', 'errored', 'needs', 'interrupted', 'working', 'queued', 'unknown', 'done', 'paused', 'ended', 'untracked'
 ]
 
 /** "2 of 5 done — 1 working, 1 needs you, 1 unknown" (+ the untracked count, outside M). */

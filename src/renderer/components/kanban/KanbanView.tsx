@@ -159,6 +159,12 @@ export interface KanbanViewProps {
    * shows one.
    */
   teams?: ReadonlyMap<string, readonly TeamStation[]>
+  /**
+   * A GitHub issue card this PERSON moved (drag, the card's Move control, the summary modal), with
+   * GitHub's answer. Board dispatch's one trigger (lib/boardDispatch): nothing a refresh or a pull
+   * delivers ever reaches it. Optional: a board with no canvas behind it dispatches nothing.
+   */
+  onIssueMoved?: (projectId: string, issue: GitHubIssueCardView, toColumnId: string | null, status: string) => void
 }
 
 type Drag =
@@ -229,7 +235,7 @@ function useCanvasCovered(): void {
 export const KanbanView = memo(function KanbanView({
   board, sessions, onChange, onOpenNode, onCreateNode, onRenameNode, onEditSticky, onDeleteNode,
   onModalNodeChange, onBrowserNav, onSetIcon, accountMenuItems, onAutoMoveFromPulls, issueAgentMenu,
-  issueWorktreeMenu, teams
+  issueWorktreeMenu, teams, onIssueMoved
 }: KanbanViewProps) {
   useCanvasCovered()
   const { api } = useSession()
@@ -307,6 +313,19 @@ export const KanbanView = memo(function KanbanView({
   }, [pullBoard])
   const connectGitHub = useGitHubIssues((state) => state.connect)
   const moveGitHubState = useGitHubIssues((state) => state.move)
+  // Every person-initiated GitHub move goes through here, so the dispatch hook sees each one with
+  // GitHub's answer — the issue as GitHub now reports it when the move landed (a reopen into the
+  // dispatch column is open afterwards, whatever the card said before).
+  const moveIssueByUser = useCallback(
+    async (issue: GitHubIssueCardView, columnId: string | null, closeReason?: GitHubCloseReason) => {
+      const result = await moveGitHubState(
+        api.githubIssues, projectId, issue.number, columnId, issue.updatedAt, closeReason
+      )
+      const after = 'issue' in result && result.issue ? { ...issue, ...result.issue } : issue
+      onIssueMoved?.(projectId, after, columnId, result.status)
+    },
+    [api.githubIssues, moveGitHubState, onIssueMoved, projectId]
+  )
   const loadMoreGitHub = useGitHubIssues((state) => state.loadMore)
   // Drop ids no longer in the palette so a deleted label can't keep the board filtered to nothing.
   const paletteLabels = useMemo(() => boardLabels(board), [board])
@@ -563,9 +582,9 @@ export const KanbanView = memo(function KanbanView({
         setPendingGitHubMove({ issue, columnId, confirmation, closeReason: confirmation.defaultCloseReason })
         return
       }
-      void moveGitHubState(api.githubIssues, projectId, issue.number, columnId, issue.updatedAt)
+      void moveIssueByUser(issue, columnId)
     },
-    [api.githubIssues, board.github?.completionColumnId, githubReadOnly, moveGitHubState, projectId]
+    [board.github?.completionColumnId, githubReadOnly, moveIssueByUser]
   )
 
   // columnId null = the virtual Ungrouped column.
@@ -1332,9 +1351,7 @@ export const KanbanView = memo(function KanbanView({
           onConfirm={() => {
             const { issue, columnId, closeReason } = pendingGitHubMove
             setPendingGitHubMove(null)
-            void moveGitHubState(
-              api.githubIssues, projectId, issue.number, columnId, issue.updatedAt, closeReason
-            )
+            void moveIssueByUser(issue, columnId, closeReason)
           }}
         />
       )}

@@ -2375,6 +2375,81 @@ else, and its context links must keep classifying across restarts).
   Resume it offers still replays that dead id — but cold restore no longer creates the state: it
   probes `transcript:exists` first and launches bare on a positive `absent`, saying so on the node
   (see **Cold restore** above). Re-measured on the same host 2026-09-09: **20** of 108.
+- **An interrupted Claude turn (Esc / Ctrl+C) fires NO hook — the transcript marker ends it**
+  (`core/claude-turn-interrupt.test.ts`, fixture `shared/agents/__fixtures__/claude/interrupt-capture.json`).
+  MEASURED on Claude Code **2.1.285**, interactive TUI in a private tmux server, capture hooks via
+  `--settings`, every `NODETERM_*` unset: Esc while it streams, Esc during a foreground tool call,
+  Esc on a permission dialog, and Ctrl+C once mid-stream each fire **nothing** — no `Stop`, no
+  `StopFailure`, no `PostToolUse(Failure)`, and **no `idle_prompt` either**: that notification came
+  60 s after a NORMAL `Stop` but not in 75 s / 80 s after an interrupt, so the `idle` rescue in
+  `normalizeClaude` does not cover this case. Before this a node sat on RUNNING (or NEEDS YOU, for a
+  dismissed permission dialog) until the 20-min stale sweep: `--after` dependents waited, Eco never
+  saw it idle, the notch and the phone showed it working. What the interrupt DOES leave is a USER
+  record, content `[{type:'text', text:'[Request interrupted by user]'}]` (`… for tool use]` when a
+  tool call or its dialog was cancelled), whose **`promptId` equals the turn's `UserPromptSubmit`
+  `prompt_id`** in every capture. Wiring, and the rules it rests on:
+  - `normalizeClaude` puts `prompt_id` on the `UserPromptSubmit` event as **`turnId`**; the mirror
+    keeps it (`MirrorEntry.turnId`, runtime-only, dropped at a session boundary).
+  - The claude context tails (local, and the desktop's SSH one) scan COMPLETE lines with ONE
+    stateful scanner per tracked transcript (`createTurnInterruptScanner`): a CLOSED set of the two
+    texts, array content with exactly that one text part, non-sidechain (a typed prompt is a plain
+    string, so typing the words matches nothing) — **and a marker counts for turn P only if P's
+    OPENING prompt record was read BEFORE it** (bounded set of seen prompt ids, 256). The id alone
+    is NOT enough, and this is not theoretical: in real transcripts on the dev host (2.1.209–2.1.283)
+    34 of 114 accepted-shape markers carried the promptId of the prompt written AFTER them — "queue a
+    message while Claude works, then Esc": the CLI tags the marker with the QUEUED prompt's id and
+    writes that prompt ~36 ms later, and its `UserPromptSubmit` has already made it the node's
+    current turn, so an id-only match ended the NEW live turn (fixture
+    `__fixtures__/claude/interrupt-queued.json`). Measured on this host after the fix: all 26
+    queued-shape markers rejected, no real interrupt lost. The one interrupt this drops is the one
+    it cannot place; the interrupted turn really ended and the node is already in the next one. The
+    remote tail's historical first read records prompts but never reports.
+  - **Both shells** check the marker with `turnInterruptEvent` (a mirror PEEK) and push the result
+    through their ONE hook-event path — desktop `emitAgentStatus` (mirror, broadcast, Notch HUD,
+    agent messaging, station notices), Server Edition `emit` (mirror, broadcast, `opts.onEvent`:
+    its delivery queue and `--after` scheduler). Pinned in `hook-verified-parity.test.ts`. It ends
+    the turn ONLY when the marker names the node's CURRENT turn (same session, same `turnId`, state
+    working/blocked/waiting): a marker read back from history, one from a finished turn or another
+    session, one after a restart (no `turnId` then) changes nothing. A prompt event whose
+    `prompt_id` is missing or not a plain token carries `turnId: ''`, which makes the mirror FORGET
+    the previous id. The event is an ordinary `done` + `interrupted` (what a `Stop` with
+    `is_interrupt` already produced), UNverified (a transcript read is not a hook POST), so no
+    completion alert and the question/approval resets apply unchanged.
+  - **`--after` does NOT release on an interrupted turn** (decision, 2026-09-30): the person
+    stopped it, usually to redirect it, and the dependent would start on unfinished work — #521's
+    reasoning for an errored turn. It is its OWN annotation, `agentStatus.lastTurnInterrupted`
+    (transient; set by an interrupted `done`, cleared by a new turn or a `done` that is not
+    interrupted), read by `depSatisfied`, the QUEUED tooltip (`interruptedDeps`), `list`
+    (`LAST TURN INTERRUPTED`; an error outranks it), the canvas's `armedDepSig` (a verdict can clear
+    under a steady `done` — a guessed interrupt then the real Stop — and the launch effect must
+    re-run) and team progress (its own `interrupted` kind, NOT counted as done, so the ring never
+    says "finished" beside a held dependent). It is deliberately NOT `lastTurnError`: the TURN
+    FAILED chip, the station-failure notice and issue runs do not treat an interrupt as a failure.
+    **The `idle_prompt` rescue does NOT set it** (`recordsTurnInterrupt`): it is flagged
+    `interrupted` only to stay silent, and since `idle_prompt` follows a NORMAL Stop, a rescue means
+    a lost Stop POST on a turn that finished — its dependents release as before. ▶ / `run` still
+    start the dependent. The renderer's older keystroke
+    guess (`inferInterruptAfterSettle`, 1.5 s after a lone Esc/Ctrl-C typed into THAT terminal)
+    now records an interrupted `done` too, so a guess cannot release dependents before the marker
+    lands; it stays because it is the only signal for the next case.
+  - **Residual, measured:** Esc or Ctrl+C BEFORE the first token rewinds the prompt into the input
+    box and writes NO marker (the transcript ends at the prompt record). Only the renderer guess
+    (keystroke in that canvas terminal) sees it; the mirror — notch, phone, Eco's mirror reads, the
+    Server Edition's headless `--after` — keeps `working` until the next hook or the stale sweep.
+  - **Esc "during a subagent":** on 2.1.285 the Agent tool launched ASYNC even when asked for a
+    foreground run, so the parent turn had already ended (`Stop`) — Esc at the prompt then fires
+    nothing and does NOT stop the child, whose `SubagentStop` and `<task-notification>` arrive as
+    usual. Nothing to fix there; a truly synchronous child being interrupted was not reproducible.
+  - Server Edition: same core path (its tail + handler); its own headless `--after` still ignores
+    both #521 and this annotation (pre-existing gap). Mobile: gets the `done` through the mirror.
+  - **Device checklist:** (a) macOS desktop: Esc mid-stream / mid-tool / on a dialog → RUNNING
+    clears within ~1 s, no chime, an armed `--after` dependent stays QUEUED with the interrupted
+    tooltip; (b) SSH node: the same over the remote tail; (c) Server Edition browser tab; (d) a
+    Claude older than 2.1.285 — whether the marker text and `promptId` match there is unmeasured
+    (a changed text or a missing `promptId` matches nothing and degrades to the old behaviour); (e)
+    queue a message while a turn runs, then Esc: the node must STAY working on the queued prompt;
+    (f) the phone's Live
+    Activity ends on the interrupt.
 - **Hook server (loopback HTTP)** — `src/core/agents/hook-server.ts` is a main-process
   loopback HTTP server (per-session bearer token, fail-open) that the installed hook scripts
   POST to; it replaced the old `fs.watch` signal-log mechanism. `buildPtyEnv` injects the
@@ -6386,6 +6461,91 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   already has one — see the Worktrees bullet ("A worktree per GitHub issue"). Surfaces: Desktop + Server Edition (renderer + core); Omni board shows no
   issue lanes; **Mobile does not render the binding** — `issueRef` reaches the phone inside the
   project file, and nodeterm-ios ignores the unknown field (follow-up there).
+  **Board dispatch — a card THIS person moves into the dispatch column starts its own run**
+  (2026-09-30; `@shared/board-dispatch` consent, `renderer/lib/boardDispatch.ts` decisions,
+  `state/boardDispatch.ts` queue, wired in Canvas `dispatchOnUserMove` / `drainDispatchQueue`). The
+  run is exactly "Start with agent" — `issueRef` binding, the reference-only `issueLaunchPrompt`,
+  `fileIssueSession` (card filed + `run-started`) — only nobody clicked it. The hard question is WHO
+  may trigger a run on this machine, and the answer shapes everything else:
+  - **The trigger is the person's own move in this app**, never a fact that arrives from outside.
+    `decideDispatch` answers `ignore` for every origin but `'user-move'`, and the only caller that
+    says `'user-move'` is the board's move-result path (`KanbanView.moveIssueByUser` →
+    `onIssueMoved`, reached only from `requestGitHubMove` and the close/reopen confirm). A label
+    set on GitHub (by anyone — on a public repository, ANYONE) reaches this app only as a refreshed
+    page, and a board change arriving by `git pull` only as a new project file; neither has a path
+    in. A move GitHub did not CONFIRM (`stale`, `failed`, `read-only`, …) is not a dispatch.
+    `lib/board-dispatch.guard.test.ts` pins the WHOLE chain: `decideDispatch`'s one caller,
+    `onIssueMoved`'s one firing site, `dispatchStart`'s two callers (after `decideDispatch` in
+    `dispatchOnUserMove`, after `recheckQueued` in the drain), and that a `'queued'` entry — which
+    the drain starts without asking `decideDispatch` again — is created only in `dispatchOnUserMove`.
+  - **Why not a label with an actor allowlist** (the other design considered): it works from a
+    phone, but it needs one issue-events read per candidate issue (budget), compares an actor
+    against a credential that can change under it, and today the poll runs only while a board is
+    subscribed — a network-derived fact standing in for consent, and no run at all when nobody has
+    the board open. That is the follow-up, not v1.
+  - **Consent is machine-local** (`settings.boardDispatch`, the `kanbanPullAutoMove` / trigger arm
+    store tier), never `.nodeterm/project.json`: a switch in the project file would let a pull
+    request make every clone start agents. Per project: the column, the agent, an optional account
+    (absent = the project default through the same funnel as "New <agent>"), a cap (1–8, **default
+    1**: dispatched runs are told to implement the fix in the project's own working tree, so two at
+    once are two agents editing one checkout), and a **binding**.
+  - **The consent binds what the column MEANS, not just its id** (`dispatchBinding`: repository +
+    column title + its GitHub label). Titles and labels live in the git-shared project file, and
+    titles are deliberately outside `githubMappingDigest` — so without it a pulled commit swapping
+    the titles of "Agent" and "In Progress" would turn the person's routine drag into "In Progress"
+    into a dispatch, and re-pointing the board at another repository (which needs only a mapping
+    re-approval) would carry the dispatch switch along. Any difference refuses (`consent-stale`, on
+    the card and in Settings) until the person presses "Re-confirm this column". Choosing a column
+    binds; changing the agent or the cap does not re-bind. An entry without a binding is OFF.
+  - Read through `sanitizeBoardDispatch`: an unreadable entry is OFF, an unreadable cap is 1, the
+    kill switch (`paused`) is on only for a literal `true`. `boardDispatch` is in
+    `SETTINGS_VERB_FORBIDDEN` — an agent that could switch the dispatcher on would grant itself more
+    agents, and the name pattern does not catch the key, so the set is its only fence. Model: the
+    same gateway default `addAgentNode` applies; there is no per-project model.
+  - **Only agents that report their state through hooks** (`dispatchableAgent` →
+    `hasHooks(capabilityAgentId(…))`, the `--after` rule) are offered or accepted. The cap counts
+    sessions by hook state; a hookless custom agent never reports, so after the startup grace its
+    slot would free and the cap would admit one more run every two minutes.
+  - **Bounds.** One run per issue: a bound session that still exists in ANY project, or a dispatch
+    already queued/starting, refuses the next with a reason on the card. The cap counts this
+    project's bound sessions that are `working`/`waiting`/`blocked`, hold a launch that will start
+    BY ITSELF (a `manualOnly` one waiting for Run now does not), or were started by dispatch within
+    `DISPATCH_STARTUP_GRACE_MS` (no hook yet) — `done` frees the slot (the cap limits concurrent
+    WORK), and an unknown state from before a restart does not hold one, or the cap would stay
+    pinned. Over the cap the dispatch QUEUES; the drain runs on a 5 s timer only while something is
+    queued. **Every queued entry is re-asked before it starts** (`recheckQueued`): kill switch,
+    still switched on, project still open/local/not closed, binding unchanged, agent still
+    dispatchable, and the issue still OPEN and still in the dispatch column (read from the host's
+    issue cache with `githubIssues.query` — no GitHub request; an unreadable answer waits, it is
+    never evidence). A teammate closing or moving the issue while it waited drops it with its
+    reason. Moving a queued card out of the column withdraws it. The kill switch refuses new
+    dispatches and drops the queue; running sessions are not touched.
+  - **No dispatched node is ever left armed to start on its own.** The off-screen path writes the
+    node ALREADY CLAIMED (`claimForHeadless`: `manualOnly`, in the same tick as the node — no window
+    in which opening the project would auto-start it beside the headless start), then runs the #925
+    headless start. Whatever it answers, a node that did not start waits for Run now; a Pause or a
+    restart can therefore never be outrun by a held launch that fires on view. The failure notice
+    says exactly that (Run now, or close the node to dispatch the issue again — it keeps the issue's
+    one run until then).
+  - **The queue is in memory, on purpose**: a queue that survived a restart would start agents at
+    boot with nobody there. A restart drops it silently, and the drag (or Start with agent) can be
+    repeated. Each renderer keeps its own queue, so **two Server Edition tabs on one project can
+    each run up to the cap** (known; one tab per project is the supported use).
+  - **The card says what happened** (`DispatchChip`): "Queued for an agent (#2)", "Dispatching an
+    agent…", or "Not dispatched: <reason>" (`DISPATCH_REFUSAL_TEXT`). A started run shows as the
+    ordinary run chip.
+  - **Where it runs: the renderer**, because the trigger is a UI gesture core never sees. On screen
+    it is `addAgentNode`. Off screen — a queued run whose slot freed later, or a project switch
+    during the move's GitHub round trip — it is a cold open into the stored project (the control
+    verbs' path) plus the headless start, which raises its "Go there" notice. A CLOSED project's
+    queued run is dropped, not started (the headless start would unhide its tab). **Server
+    Edition**: the browser renderer's `pty.launchHeadless` is unsupported (the server's own
+    headless launcher serves canvas control, not a browser tab), so a dispatch there starts only
+    for the project ON SCREEN; an off-screen one stays queued (still subject to Pause) until that
+    project is shown. **SSH projects: refused by name** (the headless launcher is local-only).
+    **Relay tabs: refused** (the board is the host's). **Mobile: N/A** (the phone board carries no
+    issue cards). Never auto-posts to GitHub, never closes an issue, never moves a card on a turn
+    `done` — the existing rules; the dispatch column may not be the completion column.
   **Where a card comes from is a registry, not a branch per call site** (`renderer/lib/kanbanSources.ts`,
   2026-08-30 — the same membership-plus-one-leaf discipline `AGENT_CONFIG` uses): each entry declares
   its filter `label`, its `placement` (`assignment` = the board's own persisted assignments,
