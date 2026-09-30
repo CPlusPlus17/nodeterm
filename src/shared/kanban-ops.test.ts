@@ -156,6 +156,20 @@ describe('applyKanbanOp', () => {
     const b = applyKanbanOp(base(), { op: 'kb-column-order', ids: [ids[2], 'ghost', ids[0]] }, P)
     expect(b.columns.map((c) => c.id)).toEqual([ids[2], ids[0], ids[1]])
   })
+  // D5: the unlisted ids are ones teammates added concurrently, in each replica's own arrival order;
+  // sorted, every replica applying the same op to the same set lands on the same list.
+  it('order ops put the unlisted ids after the listed ones SORTED BY ID, whatever order they arrived in', () => {
+    const col = (id: string) => ({ id, title: id, color: '#123456' })
+    const listed = ['kcol-a']
+    const one = { columns: [col('kcol-a'), col('kcol-z'), col('kcol-m')], assignments: [] }
+    const two = { columns: [col('kcol-m'), col('kcol-a'), col('kcol-z')], assignments: [] }
+    const order = { op: 'kb-column-order', ids: listed } as const
+    expect(applyKanbanOp(one, order, P).columns.map((c) => c.id)).toEqual(['kcol-a', 'kcol-m', 'kcol-z'])
+    expect(applyKanbanOp(two, order, P).columns.map((c) => c.id)).toEqual(['kcol-a', 'kcol-m', 'kcol-z'])
+    const lab = (id: string) => ({ id, name: id, color: 'red' as const })
+    const labels = { columns: [], assignments: [], labels: [lab('l-b'), lab('l-z'), lab('l-a')] }
+    expect(applyKanbanOp(labels, { op: 'kb-label-order', ids: ['l-z'] }, P).labels?.map((l) => l.id)).toEqual(['l-z', 'l-a', 'l-b'])
+  })
 })
 
 describe('diffKanbanOps', () => {

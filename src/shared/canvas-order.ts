@@ -20,7 +20,8 @@
 //
 //   1. OUR OWN ECHO IS AN ACK, NOT AN EDIT. We already applied it optimistically; re-applying it
 //      would rubber-band a node we are still dragging (the echo carries the position from ~50 ms
-//      ago). So we consume it for its `seq` and drop it.
+//      ago). So we consume it for its `seq` and drop it. (One exception, a board's ORDER op once it
+//      is our last in flight for that list: see `accept`.)
 //   2. WHILE ONE OF OUR OWN MUTATIONS FOR A NODE IS UNACKED, WE IGNORE PEERS' MUTATIONS FOR THAT
 //      NODE. Not a heuristic — a consequence of FIFO delivery, which IPC and WebSocket both
 //      guarantee: if the reflector had ordered our mutation BEFORE the peer's, our ack would
@@ -172,6 +173,12 @@ function isUpsert(m: CanvasMutation): boolean {
 function isRemove(m: CanvasMutation): boolean {
   if (isKanbanOp(m)) return isKanbanDeletion(m as KanbanOp)
   return m.op === 'remove' || m.op === 'edge-remove'
+}
+
+/** A board's two ORDER ops: whole-list values (`kb-column-order`, `kb-label-order`) whose listed ids
+ *  are only what their sender knew — see the own-echo exception in `accept`. */
+function isBoardOrderOp(m: CanvasMutation): boolean {
+  return m.op === 'kb-column-order' || m.op === 'kb-label-order'
 }
 
 /** The order's own "drops its subject" predicate, for a caller that has to ask the same question —
@@ -413,10 +420,12 @@ export function createCanvasOrder(
         // Rule 4 forecloses that: a value the delete superseded lost on every OTHER client, so
         // replaying it here would resurrect — on this canvas alone — a node nobody else has.
         const repair = superseded.has(id) && current && !stale
+        let settled = false
         // Rule 1: otherwise our own echo is just an ack — consume it, apply nothing.
         if (p && --p.count <= 0) {
           pending.delete(id)
           superseded.delete(id) // every cast of ours is accounted for; the node is settled
+          settled = true
         }
         // The re-creation gate: this remove is now in our `seen` (above), so a re-creation of the
         // key stamped from here on carries it. Matched against our casts in the order we made them:
@@ -428,7 +437,14 @@ export function createCanvasOrder(
         if (at !== -1) {
           for (const c of casts.splice(0, at + 1)) if (c.remove) releaseRemove(c.key)
         }
-        return repair
+        // …with one exception: the echo of our LAST order op for a board list (every cast of ours
+        // for that list now acked) is APPLIED. An order op lists only the ids its sender knew, so
+        // items teammates added concurrently sit unlisted, in each replica's arrival order, until the
+        // winning order op sorts them (kanban-ops `reorder`). Every other replica applies that op;
+        // its sender, dropping its own echo, was the one that kept its arrival order and diverged
+        // (D5). It lists what this board already shows, so it moves nothing else. Not while a later
+        // cast of ours is in flight: that one wins, and applying this one first would flicker.
+        return repair || (settled && current && isBoardOrderOp(m))
       }
       // A straggler: a mutation the total order has already superseded on this client (applied, or
       // deliberately dropped). Applying it would move the node BACKWARDS out of the total order.

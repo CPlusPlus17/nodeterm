@@ -117,6 +117,26 @@ describe('kanban ops in the order', () => {
     expect(mutationNodeId({ op: 'kb-meta', meta: { nodeId: 'n1' } })).toBeNull()
   })
 
+  // D5: an order op lists only the ids its sender knew, so its sender — the one replica that dropped
+  // it as an ack — kept its concurrent adds in arrival order while everyone else sorted them.
+  it('the echo of our LAST order op for a board list is applied; any other echo of ours is an ack', () => {
+    const o = createCanvasOrder('me')
+    const order = (ids: string[]): CanvasMutation => ({ op: 'kb-column-order', ids, src: 'me' })
+    o.onLocal(order(['a']), P)
+    o.onLocal(order(['a', 'b']), P)
+    // A later order op of ours is still in flight: this one loses anyway, and applying it would flicker.
+    expect(o.accept({ ...order(['a']), seq: 3 }, P)).toBe(false)
+    // Our last one: applied, so its unlisted ids are sorted here exactly as on every other replica.
+    expect(o.accept({ ...order(['a', 'b']), seq: 4 }, P)).toBe(true)
+    // The label list takes the same rule; an item op of ours stays a plain ack.
+    const labels: CanvasMutation = { op: 'kb-label-order', ids: ['l1'], src: 'me' }
+    o.onLocal(labels, P)
+    expect(o.accept({ ...labels, seq: 5 }, P)).toBe(true)
+    const colOp: CanvasMutation = { op: 'kb-column', column: { id: 'c1', title: 'T', color: '#fff' }, src: 'me' }
+    o.onLocal(colOp, P)
+    expect(o.accept({ ...colOp, seq: 6 }, P)).toBe(false)
+  })
+
   it('two kb-card ops for the same card: the higher seq wins, the straggler is dropped', () => {
     const o = createCanvasOrder('me')
     expect(o.accept(card('n1', 'doing', 'a', 5), P)).toBe(true)

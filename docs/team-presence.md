@@ -551,9 +551,12 @@ wrote your board over theirs. Board items are in the vocabulary now, one op per 
 - **Order ops are cast on additions too.** An item op only says the item exists, and a peer that
   applies it alone appends it. So the publisher also casts the list's order op whenever the list
   gained an id or the relative order of the ids both sides share changed (`orderChanged`), and every
-  replica lands on the later order op's list. Residual: an order op lists only the ids its sender
-  knew, so two ids added in the same window by two different clients can sit in different relative
-  orders until the next order op.
+  replica lands on the later order op's list. An order op lists only the ids its sender knew, so
+  ids other clients added in the same window are not in it: `reorder` puts those after the listed
+  ones SORTED BY ID, and the op's own sender applies the echo of its last order op for that list
+  instead of dropping it as an ack (`CanvasOrder.accept`). Without both, three concurrent adds
+  converged in only 30 of the 90 reflector interleavings; with them, all do
+  (`kanban-ops.convergence.test.ts` enumerates every interleaving for three clients).
 - **Names are repaired, not refused.** A column title, label name or assignee name is trimmed,
   stripped of control and bidi-override characters and cut to its bound (`displayText`); only an
   empty result is refused. The UI puts no length cap on them, so a refusal would be a rename that

@@ -182,11 +182,20 @@ const viewsOf = (b: ProjectKanban): KanbanSavedView[] =>
 const cardLabelIds = (x: KanbanCardMeta): string[] =>
   Array.isArray(x.labels) ? x.labels.filter((l): l is string => typeof l === 'string') : []
 
+/**
+ * Order `list` by an order op's `ids`: the listed items first, in that order, then every item the op
+ * does not list, SORTED BY ID. An order op names only the ids its sender knew, so an item a teammate
+ * added concurrently is unlisted, and appending the unlisted ones in each replica's own (arrival)
+ * order left three concurrent adds in different orders on different boards (D5). Sorted, every
+ * replica that applies the winning op to the same set of items lands on the same list; the sender
+ * applies its own winning op too (canvas-order `accept`). Compared by code unit, never by locale.
+ */
 function reorder<T extends { id: string }>(list: T[], ids: string[]): T[] {
   const byId = new Map(list.map((x) => [x.id, x]))
   const head = ids.map((id) => byId.get(id)).filter((x): x is T => !!x)
   const listed = new Set(head.map((x) => x.id))
-  return [...head, ...list.filter((x) => !listed.has(x.id))]
+  const rest = list.filter((x) => !listed.has(x.id)).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  return [...head, ...rest]
 }
 
 function upsertById<T extends { id: string }>(list: T[] | undefined, item: T): T[] {
@@ -270,10 +279,10 @@ const same = (a: unknown, b: unknown): boolean => stable(a) === stable(b)
  * UI's add-then-move, a git pull) landed last everywhere else, and two people adding a column at
  * once ended A at …,X,Y and B at …,Y,X. With the order op every replica lands on the LATER order
  * op's list. A pure removal needs none: dropping an id never reorders the rest.
- * Residual, stated: an order op lists the ids its sender knew. An id added concurrently by ANOTHER
- * client that the op does not list keeps its place after the listed ones in each replica's local
- * order — one such id converges (it is last everywhere), two from two different clients in the same
- * window can still sit in different relative orders until the next order op.
+ * An order op lists only the ids its sender knew, so ids added concurrently by OTHER clients are not
+ * in it. They follow the listed ones sorted by id (`reorder`), and the op's own sender re-applies it
+ * on its echo (canvas-order `accept`), so three or more concurrent adds converge on every replica
+ * in every interleaving (kanban-ops.convergence.test.ts enumerates them).
  */
 function orderChanged(prevIds: string[], nextIds: string[]): boolean {
   const had = new Set(prevIds)
