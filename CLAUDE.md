@@ -7270,8 +7270,9 @@ does not survive a real canvas. `canvas/camera-moving.test.ts` pins the absence.
   **removed**. The toggle (`settings.phoneAccessEnabled`, Settings → Phone + quick-pair popover)
   shows for everyone; the standing host reconciles on `enabled && relayAllowed()` alone, with no
   quota metering at `onPeerReady`. **Entitlement passthrough remains**: a stored Pro entitlement is
-  sent on mints, else the `{deviceId,…}` body (host-token `{deviceId, hostPublicKeyB64}`, device
-  mint `{deviceId, hostDeviceId, hostPublicKeyB64, label}`). **The backend is the real gate now**:
+  sent on mints, else the `{deviceId,…}` body (host-token `{deviceId, hostPublicKeyB64}`, plus
+  `popChallenge`/`popProof` when the backend supports it; device mint `{deviceId, hostDeviceId,
+  hostPublicKeyB64, label}`). **The backend is the real gate now**:
   `POST /v1/relay/host-token` / `/v1/relay/device` must admit deviceId (no-entitlement) mints, and
   the relay server may rate-limit free hosts independently — a client-side gate must NOT be
   reintroduced to work around a backend refusal (fix the backend policy instead).
@@ -7410,13 +7411,39 @@ The invariants, each with its reason:
   the API up and the relay down every mint succeeds and every socket dies, and a reset-on-mint
   re-minted at round-trip speed (relay log, 2026-09-27). Successful mints are also capped at 200
   per rolling hour, whatever asks for them (the backend's free limit is 240).
-- **A join code is enough to take hosting offline (R44), and only the backend can close that.**
-  `POST /v1/relay/host-token` takes the code's `hostDeviceId` + `hostPublicKeyB64` with no proof of
-  the host's secret key, and the backend damps host tokens and device mints per that device id. So a
-  code holder, a removed teammate included, can spend the host's hourly mints, the team's daily
-  device mints and the 16 pending slots. `team rotate-key` alone does not help (it keeps the device
-  id); recovery is a fresh `<dataDir>/device-id` + `team rotate-key` + fresh codes (the doc's
-  troubleshooting list). Proof-of-possession on that endpoint is a `nodeterm-server` follow-up.
+- **Every request that trusts a relay host key proves the caller holds its secret half (R44).** A
+  join code carries the host's device id and public key, which used to be all a host-token mint
+  asked for, so a code holder could spend the host's hourly mints. Now the host-token mint (desktop
+  phone relay and Server Edition hosted mint) and the desktop's host-mode push first take a
+  challenge from `/v1/relay/challenge` and send a proof. Rules a refactor must not undo:
+  - **`src/core/relay/relay-pop.ts` is the ONLY proof computation**, and it refuses an all-zero
+    shared secret (a low-order server key gives every caller the same secret). Its bytes are pinned
+    by `relay-pop-vector.json`, mirrored byte for byte in nodeterm-server: a protocol change changes
+    both.
+  - **A request goes out unproven ONLY when the challenge answered 404/405** (a backend that
+    predates the proof). Never after a transient failure (5xx, 429, network, an unusable challenge):
+    the backend LATCHES a host at its first valid proof and refuses an unproven request from it
+    (`403 pop_required`; every host after `POP_REQUIRED_AFTER`, default 2027-01-01), so an
+    unproven mint there would stop hosting. Conversely, a `pop_required` answer to a mint sent
+    unproven after a 404/405 is TRANSIENT: a reverse proxy answers 404 while the backend redeploys.
+  - **A key-proof refusal stops hosting only on the SECOND in a row**, with a fresh challenge in
+    between, on both editions: a `POP_SECRET` rotation or an instance mismatch inside one
+    challenge-then-mint pair refuses an honest host once. A transient failure between the two does
+    not reset the count; only a successful mint or a restart does. The Server Edition says
+    `POP_REFUSED_MESSAGE` (it names `team rotate-key`); the desktop shows ONE dialog with
+    `POP_REFUSED_MESSAGE_DESKTOP`, which must never name `team rotate-key` (Server Edition only).
+  - **Push uses a 15-minute `hostAuth` session from `/v1/push/host-auth`**, re-proven after 10
+    minutes on the client's clock, one per stream (`core/push-notify.ts` `createHostAuthCache`). An
+    old-backend verdict is cached 10 minutes; failed proofs back off 0/5/15/60 s (a hold further out
+    than 60 s is a backward clock step and is ignored); overlapping flushes share one proof; a proof
+    that throws is a failure, never a rejection. A batch that cannot be proven is DROPPED, never sent
+    unproven. An unproven post refused 403 under a verdict cached from an EARLIER batch means the
+    host latched elsewhere: that batch re-proves and re-posts once.
+  - **Still open**: the team's 10 daily device mints and the 16 pending join slots (those routes
+    take no proof), and, before a host's first proof, a code holder's legacy listeners evicting its
+    idle one through the relay's 8-per-host cap. Recovery is a fresh `<dataDir>/device-id` +
+    `team rotate-key` + fresh codes. Full write-up and the rollout (backend first; `POP_SECRET` set,
+    boot log without `DISABLED`): `docs/hosted-team-relay.md` § Host key proof of possession.
 - **The joiner never mints a device token it cannot keep.** Device mints are damped per HOST device
   id, so one team shares 10 a day. It probes the bookmarks file before minting and sends a PER-TEAM
   device id (`<machine id>:<hostId>`), because the backend will not re-register one id for a second

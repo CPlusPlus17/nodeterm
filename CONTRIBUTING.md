@@ -501,6 +501,11 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   write is cast (`canvas/stored-publish.ts`); a new store writer of that kind must use `ownWrite`
   too. Deep version: CLAUDE.md § Hosted team relay.
 
+- **A request that trusts a relay host key (host-token mint, host-mode push) proves possession
+  through `src/core/relay/relay-pop.ts`, and falls back to an unproven request ONLY on a 404/405
+  challenge.** Change the protocol and `relay-pop-vector.json` must change in both repos. Deep
+  version: CLAUDE.md § Hosted team relay.
+
 - **Normalize BOTH sides of a path comparison, through one function.** A marker normalized where
   it is built and matched raw where it is used is a no-op on the machine you wrote it on and a
   silent defect on Windows. That is issue #558: the managed-hook marker was folded to `/` while
