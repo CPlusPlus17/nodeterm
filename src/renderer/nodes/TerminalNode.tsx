@@ -5655,7 +5655,11 @@ export function TerminalNode({
   // return the same name back, and clicking "Name with AI" repeatedly must not spam /rename.
   const nameWithAi = async () => {
     setNaming(true)
-    const r = await api.pty.generateName(id, (data.cwd as string) ?? '')
+    const r = await api.pty.generateName(
+      id,
+      (data.cwd as string) ?? '',
+      data.accountId as string | undefined
+    )
     setNaming(false)
     if (r.ok) {
       const current = titleRef.current ?? (data.title as string) ?? ''

@@ -15427,7 +15427,15 @@ export function Canvas() {
       // unmounting mid-request; this Canvas-level call completes and applies the name anyway.
       useSessionNaming.getState().set(id, true)
       try {
-        const r = await api.pty.generateName(id, cwd ?? '')
+        // The node's managed Claude account, so the naming request runs under the same login the
+        // node does (live node first, then the serialized one for a non-active project).
+        const accountId =
+          (nodesRef.current.find((n) => n.id === id)?.data.accountId as string | undefined) ??
+          useProjects
+            .getState()
+            .projects.find((p) => p.id === projectId)
+            ?.nodes.find((n) => n.id === id)?.accountId
+        const r = await api.pty.generateName(id, cwd ?? '', accountId)
         if (r.ok) renameSession(projectId, id, r.message)
       } finally {
         useSessionNaming.getState().set(id, false)
