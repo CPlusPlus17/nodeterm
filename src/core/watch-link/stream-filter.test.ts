@@ -1,0 +1,224 @@
+import { describe, it, expect } from 'vitest'
+import { createStreamFilter } from './stream-filter'
+
+const ESC = '\x1b'
+const BEL = '\x07'
+const run = (chunks: string[], max?: number): string => {
+  const f = createStreamFilter(max)
+  return chunks.map((c) => f.push(c)).join('')
+}
+
+// The filter's rules, one UTF-16 unit at a time and without a fast path: the oracle the fuzz test
+// holds the production parser to.
+function oneCharAtATime(input: string, max: number): string {
+  let mode: 'text' | 'esc' | 'string' | 'stringEsc' = 'text'
+  let osc = false
+  let len = 0
+  let out = ''
+  const start = (ch: string): 'string' => {
+    osc = ch === ']' || ch === '\x9d'
+    len = 0
+    return 'string'
+  }
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    const n = ch.charCodeAt(0)
+    const intro8 = '\x90\x98\x9d\x9e\x9f'.includes(ch)
+    if (mode === 'text') {
+      if (ch === ESC) mode = 'esc'
+      else if (intro8) mode = start(ch)
+      else out += ch
+    } else if (mode === 'string') {
+      if (ch === '\x9c' || (ch === BEL && osc)) mode = 'text'
+      else if (ch === ESC) mode = 'stringEsc'
+      else if (intro8) mode = start(ch)
+      else if (++len > max) {
+        mode = 'text'
+        len = 0
+      }
+    } else if (']PX^_'.includes(ch) || intro8) mode = start(ch)
+    else if (ch === ESC) mode = 'esc'
+    else if (n <= 0x17 || n === 0x19 || (n >= 0x1c && n <= 0x1f)) out += ch
+    else if (n === 0x7f) continue
+    else if (ch === '\\' && mode === 'stringEsc') mode = 'text'
+    else {
+      out += ESC + ch
+      mode = 'text'
+    }
+  }
+  return out
+}
+
+describe('createStreamFilter', () => {
+  it('passes text, CSI and SGR untouched', () => {
+    const s = `plain ${ESC}[31mred${ESC}[0m ${ESC}[2J${ESC}[H\r\n${ESC}7${ESC}8 é🙂`
+    expect(run([s])).toBe(s)
+  })
+
+  it('removes OSC 52 terminated by BEL and by ST, and every string-type sequence', () => {
+    expect(run([`a${ESC}]52;c;c2VjcmV0\x07b`])).toBe('ab')
+    expect(run([`a${ESC}]0;title${ESC}\\b`])).toBe('ab')
+    expect(run([`a${ESC}Pq#0;2;0;0;0${ESC}\\b`])).toBe('ab')
+    expect(run([`a${ESC}_Gf=100;AAAA${ESC}\\b`])).toBe('ab')
+    expect(run([`a${ESC}^pm${ESC}\\b${ESC}Xsos${ESC}\\c`])).toBe('abc')
+    expect(run([`a\x9d52;c;x\x9cb\x90dcs\x9cc`])).toBe('abc')
+  })
+
+  it('handles a split at every position of an OSC 52', () => {
+    const s = `before${ESC}]52;c;c2VjcmV0${ESC}\\after${ESC}[1m!`
+    for (let i = 0; i <= s.length; i++) {
+      expect(run([s.slice(0, i), s.slice(i)])).toBe(`beforeafter${ESC}[1m!`)
+    }
+  })
+
+  it('an ESC inside a string aborts it and starts a new sequence', () => {
+    expect(run([`a${ESC}]52;c;xx${ESC}[31mred`])).toBe(`a${ESC}[31mred`)
+  })
+
+  it('keeps swallowing an unterminated string until the cap, then resumes text', () => {
+    const f = createStreamFilter(10)
+    expect(f.push(`a${ESC}]52;c;`)).toBe('a')
+    expect(f.push('12345')).toBe('')
+    // The 11th swallowed char ('6') trips the cap and is dropped with the rest; text resumes after it.
+    expect(f.push('67890XYZ')).toBe('7890XYZ')
+  })
+
+  it('reset forgets a half-read sequence', () => {
+    const f = createStreamFilter()
+    expect(f.push(`a${ESC}]52;c;`)).toBe('a')
+    f.reset()
+    expect(f.push('visible')).toBe('visible')
+  })
+
+  it('gives up only past 1 MiB by default: a string of exactly 1 MiB is still swallowed whole', () => {
+    const cap = 1_048_576
+    // `52;c;` counts too: the string's payload starts right after the introducer.
+    const payload = '52;c;' + 'A'.repeat(cap - 5)
+    expect(run([`x${ESC}]${payload}${BEL}y`])).toBe('xy')
+    // One more char trips the cap; it is dropped and text resumes after it.
+    expect(run([`x${ESC}]${payload}Ztail`])).toBe('xtail')
+  })
+
+  it('a keyframe screen (capture-pane -e) loses its OSC 8 links and keeps the link text', () => {
+    // tmux 3.4 `capture-pane -p -e` emits hyperlinks verbatim (measured), ST-terminated; programs
+    // may end them with BEL instead. A keyframe is one push of a whole screen through a FRESH filter.
+    const screen = [
+      `${ESC}[1m$ ${ESC}[0mls -l`,
+      `see ${ESC}]8;id=1;https://example.com/a${ESC}\\the docs${ESC}]8;;${ESC}\\ for more`,
+      `${ESC}]8;;file:///etc/passwd${ESC}\\passwd${ESC}]8;;${ESC}\\ and ${ESC}[4m${ESC}]8;;https://x.test/${BEL}x${ESC}]8;;${BEL}${ESC}[24m`,
+      ''
+    ].join('\n')
+    const out = createStreamFilter().push(screen)
+    expect(out).toBe(
+      [`${ESC}[1m$ ${ESC}[0mls -l`, 'see the docs for more', `passwd and ${ESC}[4mx${ESC}[24m`, ''].join('\n')
+    )
+    expect(out).not.toContain(']8;')
+  })
+
+  // Each case below is a way the viewer could otherwise RECEIVE bytes the owner's terminal treats as
+  // string payload. The reference is xterm.js 5.5's VT500 transition table
+  // (node_modules/@xterm/xterm/src/common/parser/EscapeSequenceParser.ts): it renders the owner's
+  // node, the session host's emulator and the viewer page alike.
+
+  it('BEL ends only an OSC: a DCS, SOS, PM or APC keeps swallowing until ST', () => {
+    // xterm.js treats BEL inside DCS as data and inside SOS/PM/APC as ignored, so the owner never
+    // sees what follows it; ending the string there would show the viewer hidden bytes.
+    expect(run([`a${ESC}Ptmux;x${BEL}hidden${ESC}\\b`])).toBe('ab')
+    expect(run([`a${ESC}_Gq${BEL}hidden${ESC}\\b`])).toBe('ab')
+    expect(run([`a${ESC}^pm${BEL}hidden${ESC}\\b${ESC}Xsos${BEL}hidden\x9cc`])).toBe('abc')
+    expect(run([`a\x90dcs${BEL}hidden\x9cb`])).toBe('ab')
+    expect(run([`a\x9eq${BEL}hidden\x9cb\x98s${BEL}h\x9cc\x9fa${BEL}h\x9cd`])).toBe('abcd')
+  })
+
+  it('an 8-bit introducer after ESC starts a string, as it does in xterm.js', () => {
+    expect(run([`a${ESC}\x9d52;c;c2VjcmV0\x9cb`])).toBe('ab')
+    expect(run([`a${ESC}]0;t${ESC}\x9d52;c;c2VjcmV0\x9cb`])).toBe('ab')
+    expect(run([`a${ESC}`, `\x90q#0\x9cb`])).toBe('ab')
+  })
+
+  it('a C0 control or DEL between ESC and the introducer does not end the escape', () => {
+    // xterm.js executes C0 and ignores DEL while in ESCAPE, so `ESC \n ]52;…` is still an OSC 52.
+    expect(run([`a${ESC}\n]52;c;c2VjcmV0${BEL}b`])).toBe('a\nb')
+    expect(run([`a${ESC}\x7f]52;c;c2VjcmV0${BEL}b`])).toBe('ab')
+    expect(run([`a${ESC}]0;t${ESC}\r\x7f]52;c;c2VjcmV0${BEL}b`])).toBe('a\rb')
+    // The C0 is still executed, and the ESC still applies to what follows it.
+    expect(run([`a${ESC}\r[1mB`])).toBe(`a\r${ESC}[1mB`)
+  })
+
+  it('never emits a lone ESC that the text after a removed string would complete', () => {
+    // `ESC ESC ]…` is ONE OSC in xterm.js (the second ESC restarts the escape); emitting the first
+    // ESC would glue it to the text after the removed string, here into an OSC 0 of its own.
+    expect(run([`${ESC}${ESC}]52;c;c2VjcmV0${BEL}]0;x${BEL}`])).toBe(`]0;x${BEL}`)
+    expect(run([`a${ESC}`, `${ESC}`, `]52;c;x${BEL}]b`])).toBe('a]b')
+    expect(run([`a${ESC}${ESC}[1mb`])).toBe(`a${ESC}[1mb`)
+  })
+
+  it('an 8-bit introducer inside a string starts a new string of its own kind', () => {
+    // OSC → DCS: the BEL is now DCS data, not a terminator.
+    expect(run([`a${ESC}]0;t\x90q${BEL}hidden\x9cb`])).toBe('ab')
+    // ...and it starts a fresh count toward the cap.
+    const f = createStreamFilter(10)
+    expect(f.push(`a${ESC}]` + '12345678')).toBe('a')
+    expect(f.push('\x9d' + '12345678')).toBe('')
+    expect(f.push(`${BEL}b`)).toBe('b')
+  })
+
+  it('reset also forgets a pending ESC', () => {
+    const f = createStreamFilter()
+    expect(f.push(`a${ESC}`)).toBe('a')
+    f.reset()
+    expect(f.push(']visible')).toBe(']visible')
+  })
+
+  it('output never carries a string introducer, whatever the input and however it is chunked', () => {
+    // Why this is enough: in xterm.js a string state (OSC/DCS/SOS/PM/APC) is entered only from
+    // ESCAPE on ] P X ^ _, or anywhere on an 8-bit introducer; ESCAPE is entered only by ESC and is
+    // left by any char except C0 executables, DEL and ESC. So if no push emits an 8-bit introducer
+    // or ends on ESC, and every ESC it emits is followed by a char that leaves ESCAPE without
+    // entering a string, the viewer's parser can never enter one — even when the caller drops some
+    // pushes (drop-and-redraw) or starts on a keyframe.
+    const ALPHABET = [
+      'a', 'b', ' ', '\n', '\r', '\t', '\x00', ESC, ']', 'P', 'X', '^', '_', '[', '\\', 'm', '8', ';',
+      BEL, '\x18', '\x1a', '\x7f', '\x9c', '\x9d', '\x90', '\x98', '\x9e', '\x9f', '\x9b', '\x85', 'é', '🙂'
+    ]
+    const INTRO_8 = /[\x90\x98\x9d\x9e\x9f]/
+    const staysOrStringAfterEsc = (c: string): boolean => {
+      const n = c.charCodeAt(0)
+      const c0Executable = n <= 0x17 || n === 0x19 || (n >= 0x1c && n <= 0x1f)
+      return c0Executable || n === 0x7f || c === ESC || ']PX^_'.includes(c) || INTRO_8.test(c)
+    }
+    // mulberry32, seeded: reproducible, and without an LCG's short low-bit cycles.
+    let seed = 0x5eed
+    const rand = (n: number): number => {
+      seed = (seed + 0x6d2b79f5) >>> 0
+      let z = seed
+      z = Math.imul(z ^ (z >>> 15), z | 1)
+      z ^= z + Math.imul(z ^ (z >>> 7), z | 61)
+      return ((z ^ (z >>> 14)) >>> 0) % n
+    }
+    for (let iter = 0; iter < 4000; iter++) {
+      let input = ''
+      for (let i = rand(60); i > 0; i--) input += ALPHABET[rand(ALPHABET.length)]
+      const cap = [2, 5, 1_048_576][rand(3)]
+      // Cut anywhere, a surrogate pair included: the cap counts UTF-16 units, so nothing depends on it.
+      const cuts = [0, input.length]
+      for (let k = rand(5); k > 0; k--) cuts.push(rand(input.length + 1))
+      cuts.sort((x, y) => x - y)
+      const chunks = cuts.slice(1).map((end, i) => input.slice(cuts[i], end))
+
+      const f = createStreamFilter(cap)
+      const outs = chunks.map((c) => f.push(c))
+      for (const out of outs) {
+        const ctx = JSON.stringify({ input, chunks, cap, out })
+        expect(INTRO_8.test(out), ctx).toBe(false)
+        expect(out.endsWith(ESC), ctx).toBe(false)
+        for (let i = out.indexOf(ESC); i !== -1; i = out.indexOf(ESC, i + 1)) {
+          expect(staysOrStringAfterEsc(out[i + 1]), ctx).toBe(false)
+        }
+      }
+      // However it is chunked, the result is the char-by-char statement of the same rules: the
+      // parser's slicing and fast path neither drop, reorder nor add a char.
+      expect(outs.join(''), JSON.stringify({ chunks, cap })).toBe(oneCharAtATime(input, cap))
+    }
+  })
+})
