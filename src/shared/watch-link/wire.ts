@@ -1,8 +1,12 @@
 // The relay's wire rules, restated without Node so the browser can speak them. The SOURCE of truth
-// is src/core/relay/relay-socket.ts + e2ee.ts + src/shared/rpc.ts; src/core/watch-link/wire.test.ts
-// pins this copy to them byte for byte, so a change there fails there before it can strand the
-// viewer page. (The test lives in core because it imports e2ee.ts, which the web tsconfig project
-// cannot see.)
+// is src/core/relay/relay-socket.ts + e2ee.ts + src/shared/rpc.ts, and two tests pin this copy to it:
+// - src/core/watch-link/wire.test.ts compares against the originals directly: the seq header, the
+//   sealed box (both directions), the pty frame, the tunnel JSON, and the HKDF info string + salt
+//   order (against e2ee's deriveSessionKey). An edit to any of those in the originals fails it.
+// - TAG_*, ROLE_* and NONCE_BYTES are module-private in relay-socket.ts, so nothing compares them
+//   directly; src/core/watch-link/client.test.ts pins them END TO END, by running the client that
+//   uses them against the real host-role relay socket.
+// Both tests live in core because they import core modules the web tsconfig project cannot see.
 //
 // Sealed box: nonce(24) ‖ nacl.box.after(plain). Plain: [role:1][seqHi u32 LE][seqLo u32 LE][tag:1][body].
 import nacl from 'tweetnacl'

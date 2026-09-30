@@ -2,17 +2,23 @@ import { describe, it, expect } from 'vitest'
 import { hkdfSync } from 'node:crypto'
 import nacl from 'tweetnacl'
 import { encodePtyData, encodeArgs, parseRpcMessage } from '../../shared/rpc'
-import { decrypt, encrypt } from '../relay/e2ee'
+import { decrypt, deriveSessionKey, encrypt, randomSessionNonce } from '../relay/e2ee'
 import { hkdfSha256 } from '../../shared/watch-link/hkdf'
 import { sealBox, openBox, withHeader, readHeader, encodePtyFrame, decodePtyFrame, parseTunnelJson, RELAY_SESSION_INFO } from '../../shared/watch-link/wire'
 import { sanitizeChatText, sanitizeChatName, isWatchEndReason, WATCH_CHAT_CAST, WATCH_EVENT_PREFIX } from '../../shared/watch-link/protocol'
-import { utf8 } from '../../shared/watch-link/bytes'
+import { concatBytes, utf8 } from '../../shared/watch-link/bytes'
 
 describe('the wire rules match the relay they were copied from', () => {
   it('HKDF equals node:crypto', async () => {
     const ikm = nacl.randomBytes(32), salt = nacl.randomBytes(32)
     const ours = await hkdfSha256(ikm, salt, utf8(RELAY_SESSION_INFO), 32)
     expect(ours).toEqual(new Uint8Array(hkdfSync('sha256', ikm, salt, utf8(RELAY_SESSION_INFO), 32)))
+  })
+  it("HKDF info and salt order equal the relay's deriveSessionKey", async () => {
+    // The test above feeds OUR info string to both sides, so it cannot see the relay's change.
+    // This one derives the relay's session key from its own code: salt = hostNonce ‖ clientNonce.
+    const base = nacl.randomBytes(32), hn = randomSessionNonce(), cn = randomSessionNonce()
+    expect(await hkdfSha256(base, concatBytes(hn, cn), utf8(RELAY_SESSION_INFO), 32)).toEqual(deriveSessionKey(base, hn, cn))
   })
   it('a box sealed here opens with e2ee.decrypt and vice versa', () => {
     const key = nacl.randomBytes(32), plain = utf8('hello')
