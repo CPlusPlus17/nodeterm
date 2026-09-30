@@ -231,12 +231,20 @@ const HOST_AUTH_REPROVE_MS = 10 * 60_000
 // the live-update stream flushes up to once a second, and every attempt spends the per-IP
 // /v1/relay/challenge budget the relay host-token mint needs too.
 const HOST_AUTH_RETRY_MS = [0, 5_000, 15_000, 60_000]
+// The hold is an absolute WALL-clock time, on purpose: the 10-minute session age above must keep
+// advancing across a sleep, which a monotonic clock does not. So a hold farther out than the longest
+// step can only be a clock that stepped BACK after it was set, and it is ignored — honouring it would
+// hold host-mode push for the whole step (a day, for a day's step).
+const HOST_AUTH_RETRY_MAX_MS = Math.max(...HOST_AUTH_RETRY_MS)
 
 export interface HostAuthCache {
   /** The session token to attach, undefined for legacy (no prover, or an old backend), or 'drop'
    *  when a failure means this batch must not go out unproven. Never '' — the backend reads an
-   *  empty `hostAuth` as present-but-invalid. */
+   *  empty `hostAuth` as present-but-invalid. Never rejects: a proof that throws is a failure like
+   *  any other ('drop', and the backoff). */
   get(identity: PushHostIdentity): Promise<string | undefined | 'drop'>
+  /** Whether `get` would answer from the cache right now, without asking the backend. */
+  onFile(identity: PushHostIdentity): boolean
   /** Forget the session (or the old-backend verdict): the next batch proves again. */
   invalidate(): void
 }
@@ -305,17 +313,27 @@ export function createHostAuthCache(d: { apiBase: string; fetchImpl: typeof fetc
     }
   }
 
+  const keyOf = (id: PushHostIdentity): string => `${id.hostPublicKeyB64}\n${id.hostDeviceId}`
+  const onFile = (key: string): boolean => !!cached && cached.key === key && d.now() - cached.at < HOST_AUTH_REPROVE_MS
+
   return {
     invalidate() {
       cached = null
     },
+    onFile(id) {
+      return !!id.prove && onFile(keyOf(id))
+    },
     async get(id) {
       if (!id.prove) return undefined
-      const key = `${id.hostPublicKeyB64}\n${id.hostDeviceId}`
-      if (cached && cached.key === key && d.now() - cached.at < HOST_AUTH_REPROVE_MS) return cached.token
+      const key = keyOf(id)
+      if (cached && onFile(key)) return cached.token
       if (inflight && inflight.key === key) return inflight.result
-      if (d.now() < retryAt) return 'drop'
-      const result = establish(id, id.prove)
+      const now = d.now()
+      if (now < retryAt && retryAt - now <= HOST_AUTH_RETRY_MAX_MS) return 'drop'
+      // A proof that throws is a failure like any other: 'drop', through the backoff below. The
+      // catch is on the SHARED promise, so a caller joining the proof in flight never sees a
+      // rejection either (the timer-driven flush has nowhere to send one).
+      const result = establish(id, id.prove).catch((): 'drop' => 'drop')
       inflight = { key, result }
       try {
         const r = await result
@@ -355,8 +373,16 @@ async function jsonWithin(res: Response, ms: number): Promise<unknown> {
  * The host-mode post, shared by notify and live-update: attach the session when there is one (the
  * field only when it is a non-empty string), and forget it when the backend refuses it. The refusal
  * is read ONLY from a 403 to a post that carried a session: an unproven post's body is never
- * read — a 403 there (a latched host behind an old-backend verdict, or no live pairing) just
- * forgets the verdict, so the next batch asks for a challenge again.
+ * read — a 403 there (a latched host behind an old-backend verdict, or no live pairing) is judged by
+ * its status alone, and forgets the verdict.
+ *
+ * An unproven post refused under a verdict that was already ON FILE (asked for in an earlier batch)
+ * is the host having latched since, through another path: the standing host's proven mint, or the
+ * other push stream. That batch proves at once and is re-posted ONCE, carrying the session, if the
+ * proof comes back with one; otherwise it is dropped, as before. A verdict asked for in THIS batch is
+ * not re-asked: the challenge answered moments ago, so asking again would add a request to every
+ * batch of an old backend that refuses this host (403 forbidden, no live pairing) and change nothing.
+ * The re-post is never re-posted.
  */
 async function postHostMode(
   fetchImpl: typeof fetch,
@@ -365,17 +391,27 @@ async function postHostMode(
   host: PushHostIdentity,
   payload: Record<string, unknown>
 ): Promise<void> {
+  const onFile = cache.onFile(host)
   const hostAuth = await cache.get(host)
   if (hostAuth === 'drop') return
-  const res = await postJson(fetchImpl, url, {
+  const body = {
     hostDeviceId: host.hostDeviceId,
     hostPublicKeyB64: host.hostPublicKeyB64,
     hostLabel: host.hostLabel,
-    ...payload,
-    ...(hostAuth ? { hostAuth } : {})
-  })
+    ...payload
+  }
+  const res = await postJson(fetchImpl, url, hostAuth ? { ...body, hostAuth } : body)
   if (!res || res.status !== 403 || !host.prove) return
-  if (!hostAuth || popRefusalOf(403, await jsonWithin(res, FETCH_TIMEOUT_MS))) cache.invalidate()
+  if (hostAuth) {
+    if (popRefusalOf(403, await jsonWithin(res, FETCH_TIMEOUT_MS))) cache.invalidate()
+    return
+  }
+  cache.invalidate()
+  if (!onFile) return
+  const proven = await cache.get(host)
+  if (!proven || proven === 'drop') return
+  const again = await postJson(fetchImpl, url, { ...body, hostAuth: proven })
+  if (again?.status === 403 && popRefusalOf(403, await jsonWithin(again, FETCH_TIMEOUT_MS))) cache.invalidate()
 }
 
 export interface PushNotifyDeps {
@@ -463,7 +499,7 @@ export function createPushNotify(deps: PushNotifyDeps): PushNotifyHandle {
   const throttleMs = deps.throttleMs ?? DEFAULT_THROTTLE_MS
 
   // This sender's own hostAuth session (the host-mode proof of possession, above).
-  const hostAuth = createHostAuthCache({ apiBase, fetchImpl, now })
+  const hostAuthCache = createHostAuthCache({ apiBase, fetchImpl, now })
 
   const buffer: PushNotifyEvent[] = []
   // Presence-aware hold queue: while the user is present, accepted alerts wait here (with the mirror
@@ -580,7 +616,7 @@ export function createPushNotify(deps: PushNotifyDeps): PushNotifyHandle {
     if (target.host) {
       // Relay-identity body — byte-identical to the pre-grants shape when no prover is set, and
       // carrying `hostAuth` once the host has proven possession of its key.
-      await postHostMode(fetchImpl, hostAuth, url, target.host, { events })
+      await postHostMode(fetchImpl, hostAuthCache, url, target.host, { events })
     }
     // …and the grants, in the SAME flush (see resolveSendTarget: a paired phone must not silence
     // the SSH-only ones). PER HOST: each event goes only under the grants swept from the host its
@@ -743,7 +779,7 @@ export function createLiveUpdatePush(deps: LiveUpdateDeps): LiveUpdateHandle {
   const coalesceMs = deps.coalesceMs ?? DEFAULT_LIVE_COALESCE_MS
 
   // Its own hostAuth session, independent of notify's (each re-proves at most every 10 minutes).
-  const hostAuth = createHostAuthCache({ apiBase, fetchImpl, now })
+  const hostAuthCache = createHostAuthCache({ apiBase, fetchImpl, now })
 
   const buffer: LiveUpdateItem[] = []
   // Per-node coalescing of activity/context ticks.
@@ -925,7 +961,7 @@ export function createLiveUpdatePush(deps: LiveUpdateDeps): LiveUpdateHandle {
     if (target.host) {
       // Relay-identity body — byte-identical to the pre-grants shape when no prover is set, and
       // carrying `hostAuth` once the host has proven possession of its key.
-      await postHostMode(fetchImpl, hostAuth, url, target.host, { updates })
+      await postHostMode(fetchImpl, hostAuthCache, url, target.host, { updates })
     }
     // …and the grants, in the SAME flush (see resolveSendTarget), PER HOST exactly like notify:
     // an update goes only under the grants swept from its node's host. One POST per live grant,
