@@ -85,7 +85,7 @@ the production paging, not a second implementation of it.
 | `local-commands` | Slash-command records (see **Local commands** below). An `isMeta` caveat is skipped; `/model` plus its ANSI-coloured `<local-command-stdout>` become ONE assistant tool part `{name:"/model", arg:"", result}`; `/effort` with padded args (trimmed) answered on `<local-command-stderr>`; `/compact` with an arg longer than the 200-unit cap; `/exit` with an empty stdout (no `result`); a skill invocation (`<command-message>` before `<command-name>`) whose `isMeta` array body is skipped; a stdout with no command right before it (its own `command output` tool, capped to three lines); and a user message that only mentions `<command-name>` in prose (stays a user message). |
 | `bash-mode` | `!` bash-mode records: `<bash-input>` becomes a tool part named `!` with the command as `arg`; the ONE following record carrying `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>` sets its `result` (non-empty parts joined by `\n`, then the `summarizeResult` cap), including an empty stdout with a stderr. |
 | `meta-turns` | `isMeta` rule 1: a peer hand-back (`promptSource` + `origin.kind:"peer"` + `turnOrigin`), a scheduled wakeup (`turnOrigin:"scheduled"` + `scheduledTaskId`), an auto-continuation (`origin.kind:"auto-continuation"`), a `promptSource`-only, an `origin`-only and a `turnOrigin`-only record (the last two with no `promptSource`, so each field is pinned on its own) are all KEPT; the caveat and a skill body (none of the three fields) are skipped. Three of the kept records then render as system chips (see **System-injected records**): BOTH `origin.kind:"peer"` records — the hand-back and the `origin`-only one — as `Agent message`, and the auto-continuation as `System`; the others stay user messages. |
-| `system-records` | Every rule of **System-injected records**: a full agent completion (nested `<usage>`, a result over three lines), a status + summary completion, a monitor `<event>`, a summary alone (no `result` key), a repeated `<task-id>` with a summary over the 200-unit cap, a whole element with no `origin`, the same whole element sent by a human (`origin.kind:"human"`, and `promptSource:"typed"` with no `origin`; both stay user messages), two malformed notifications (unknown tags only; plain prose), a message that only MENTIONS the element (stays a user message), a subagent `<agent-message>` hand-back with its frame lines, a `<cross-session-message>` (its `from-name` is the arg), a report over the 16384-unit cap, a peer record with no element, an auto-continuation and a multi-line coordinator prompt. |
+| `system-records` | Every rule of **System-injected records**: a full agent completion (nested `<usage>`, a result over three lines), a status + summary completion, a monitor `<event>`, a summary alone (the `notified` result), a repeated `<task-id>` with a summary over the 200-unit cap, a whole element with no `origin`, the same whole element sent by a human (`origin.kind:"human"`, and `promptSource:"typed"` with no `origin`; both stay user messages), two malformed notifications (unknown tags only; plain prose), a message that only MENTIONS the element (stays a user message), a subagent `<agent-message>` hand-back with its frame lines, a `<cross-session-message>` (its `from-name` is the arg), a report over the 16384-unit cap, a peer record with no element, an auto-continuation and a multi-line coordinator prompt. |
 | `pasted-content` | **Pasted content**: a span between typed lines, backtick runs inside (a five-backtick fence) and the same id twice, an array text part beside an image, a pasted `<task-notification>` (stays the user's paste), a close tag with a different id inside a span (content), an empty paste, a same-id open nested inside a span (the span ends at the FIRST close), text that is not the CLI's grammar (no id, an upper-case or three- or five-digit id, a missing newline after the open or before the close: all left as typed) and an unclosed span (left as typed). |
 
 Decision cases: plan `restore` / `acceptEdits` / `manual` / `revise` (the revise text is trimmed),
@@ -189,16 +189,22 @@ units, `String.prototype.slice(0, n)`, and may split a surrogate pair exactly as
 - The **fallback** for name N is `{name: N, arg: firstLine(content), result: full(content)}`.
 
 1. **Background task** (`name:"Background task"`) when the kind is `task-notification`, OR when there
-   is NO kind, `promptSource` is not one of the human sources `"typed"`, `"queued"`,
-   `"suggestion_accepted"`, and the whole string is exactly ONE element: it matches
-   `^\s*<task-notification>([\s\S]*)</task-notification>\s*$` AND the captured inner text contains
-   neither `<task-notification>` nor `</task-notification>`. (A human who types or pastes one element
-   is recorded exactly like that, with `origin.kind:"human"` / `promptSource:"typed"`, measured on
-   CLI 2.1.285; any other kind, `human` included, is never matched by content.) Then, over the whole string: `summary = tag("summary")`,
+   is NO kind, `promptSource` is UNSET or `"system"`, and the whole string is exactly ONE element: it
+   matches `^\s*<task-notification>([\s\S]*)</task-notification>\s*$` AND the captured inner text
+   contains neither `<task-notification>` nor `</task-notification>`. The `promptSource` test is an
+   ALLOWLIST, not a list of human sources: `"typed"`, `"queued"`, `"suggestion_accepted"`, `"sdk"` and
+   any value added later never match. UNSET means the key is absent (TS `=== undefined`); a present
+   `null` is NOT unset and never matches either — the TS code is the reference here. (A human who
+   types or pastes one element is recorded exactly like that, with `origin.kind:"human"` /
+   `promptSource:"typed"`, measured on CLI 2.1.285; any other kind, `human` included, is never matched
+   by content.) Then, over the whole string: `summary = tag("summary")`,
    `status = tag("status")`, `body = tag("result")`, or `tag("event")` when that is `""`. When all
    three are `""` → the fallback. Otherwise `arg` = the first 200 units of `summary`, and `result` =
    `summarize(text)` where `text` = `status + ": " + body` when both are non-empty, else whichever is
-   non-empty, else `""`. Other child tags (`task-id`, `tool-use-id`, `output-file`, `note`, `usage`,
+   non-empty, else the neutral marker `"notified"` (`TASK_NOTIFIED_RESULT`: a summary with neither a
+   status nor a body still reads as finished, not as a tool that is running; neutral rather than
+   "done", because such a notification is often a start). So a Background task part always has a
+   `result`. Other child tags (`task-id`, `tool-use-id`, `output-file`, `note`, `usage`,
    `task-type`, `worktree`, …) are never read, and no XML entity is decoded.
 2. **Agent message** (`name:"Agent message"`) when the kind is `peer`. Find the first (leftmost) match
    of `<(agent-message|cross-session-message)(\s[^>]*)?>([\s\S]*)</\1>` (greedy: up to the LAST close
@@ -255,8 +261,13 @@ starts with a paste still starts with `<` (and is skipped as a title), and no ti
   delivered as a bracketed paste may be recorded as ONE `<pasted_content>` span, which the reader
   renders fenced. A trailing optimistic send whose trimmed text `S` has no exact match is therefore
   also confirmed by a user message whose trimmed text equals `fencePasted(S).trim()`
-  (one-for-one, same freshness rule as the exact match). iOS `ChatPaging.swift` owes the same second
+  (one-for-one, same freshness rule as the exact match). iOS `ChatPaging.swift` makes the same second
   comparison.
+- **Reply detection** (iOS only; the desktop has no counterpart): the phone's post-send checks
+  (`ChatPaging.replyArrived`, `ChatScreen.replyFacts`) look for an assistant message after the sent
+  prompt. A system-record chip (the `isSystemRecordMessage` shape above) is assistant-role only
+  because the wire has no other role for it; it is not the agent's reply, so it is never counted as
+  one.
 
 ## Sizes
 

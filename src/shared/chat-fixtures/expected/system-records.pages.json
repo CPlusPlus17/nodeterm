@@ -73,7 +73,8 @@
             {
               "kind": "tool",
               "name": "Background task",
-              "arg": "Background agent \"demo\" started"
+              "arg": "Background agent \"demo\" started",
+              "result": "notified"
             }
           ],
           "at": 1790362805000,
