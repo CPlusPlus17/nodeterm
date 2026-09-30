@@ -123,6 +123,8 @@ export type GrokPermissionVerdict =
   | {
       phase: 'resolved'
       decision: GrokPermissionDecision
+      /** When grok recorded the answer. */
+      resolvedTs: number
       /** Present once the turn has ended after the resolution. */
       turnEnded?: 'cancelled' | 'other'
     }
@@ -157,6 +159,7 @@ export function permissionVerdict(
   let seen = 0
   let resolvedAt = -1
   let decision: string | undefined
+  let resolvedTs = 0
   for (let i = start; i < records.length; i++) {
     const r = records[i]
     if (i > at && r.type === 'turn_started') return { phase: 'superseded' }
@@ -166,6 +169,7 @@ export function permissionVerdict(
       if (i < at || r.toolName !== toolName) return { phase: 'unknown' }
       resolvedAt = i
       decision = r.decision
+      resolvedTs = r.ts
       break
     }
   }
@@ -178,11 +182,12 @@ export function permissionVerdict(
       return {
         phase: 'resolved',
         decision: decision as GrokPermissionDecision,
+        resolvedTs,
         turnEnded: r.outcome === 'cancelled' ? 'cancelled' : 'other'
       }
     }
   }
-  return { phase: 'resolved', decision: decision as GrokPermissionDecision }
+  return { phase: 'resolved', decision: decision as GrokPermissionDecision, resolvedTs }
 }
 
 /** True for the normalized event a grok `permission_prompt` notification produces. */
@@ -295,6 +300,20 @@ export function createGrokPermissionGate(
   const nodes = new Map<string, NodeState>()
   let disposed = false
 
+  // The listener fans out to several subsystems; one throw must cost that ONE event (as it did
+  // inside the hook server's try/catch before this gate existed), never the node's delivery chain.
+  let warned = false
+  const safeDeliver = (e: NormalizedAgentEvent): void => {
+    try {
+      deliver(e)
+    } catch (err) {
+      if (!warned) {
+        warned = true
+        console.warn('[grok-permission-gate] listener threw; event dropped', err)
+      }
+    }
+  }
+
   const stateOf = (nodeId: string): NodeState => {
     let s = nodes.get(nodeId)
     if (!s) {
@@ -317,7 +336,7 @@ export function createGrokPermissionGate(
   }
 
   const synthetic = (nodeId: string, ep: Episode, patch: Partial<NormalizedAgentEvent>): void => {
-    deliver({
+    safeDeliver({
       nodeId,
       agentId: 'grok',
       kind: 'state',
@@ -400,7 +419,9 @@ export function createGrokPermissionGate(
     const notifiedAt = typeof raw.timestamp === 'string' ? Date.parse(raw.timestamp) : NaN
     if (!Number.isFinite(notifiedAt)) return out(e)
     const matches: { file: string; records: GrokEventRecord[]; index: number }[] = []
-    for (const [sessionId, cwd] of s.sessions) {
+    // A SNAPSHOT: a hook arriving while a read is awaited re-inserts its session into the live Map,
+    // and iterating that Map would read the same file twice and count two matches.
+    for (const [sessionId, cwd] of [...s.sessions]) {
       const dir = grokSessionDir({ sessionsDir: deps.sessionsDir(), cwd, sessionId })
       if (!dir) continue
       const file = path.join(dir, GROK_EVENTS_FILE)
@@ -417,6 +438,12 @@ export function createGrokPermissionGate(
     const req = m.records[m.index] as Extract<GrokEventRecord, { type: 'permission_requested' }>
     const verdict = permissionVerdict(m.records, req.ts, req.toolName)
     if (verdict.phase !== 'pending' && verdict.phase !== 'resolved') return out(e)
+    // A notification cannot be about a request that was answered BEFORE it fired. When the matched
+    // request's answer predates the notification, the real request is one we did not find (a
+    // child whose own hooks have not reached us yet, or a second request whose line is not on disk
+    // yet) — so the hook is published unchanged and nothing is watched. Every legitimate case in
+    // the captures resolves after its notification (the fastest, 216 ms after).
+    if (verdict.phase === 'resolved' && verdict.resolvedTs < notifiedAt) return out(e)
     const ep: Episode = {
       file: m.file,
       reqTs: req.ts,
@@ -432,13 +459,14 @@ export function createGrokPermissionGate(
     if (verdict.phase === 'pending') {
       out(e)
     } else {
-      // Already answered by the time the hook arrived: publish what the file says instead of a
-      // dialog that is no longer on screen. The hook's own identity label is kept — it is the same
-      // POST, reclassified — while everything the watch derives later is unverified.
+      // Answered between the notification and our read: publish what the file says instead of a
+      // dialog that is no longer on screen. The STATE now comes from a file read, so it is
+      // unverified like everything the watch derives.
       ep.resolved = true
       ep.resolvedAt = deps.now()
-      if (verdict.turnEnded === 'cancelled') return out({ ...e, state: 'done', interrupted: true, lastMessage: undefined })
-      out({ ...e, state: 'working', lastMessage: undefined })
+      if (verdict.turnEnded === 'cancelled')
+        return out({ ...e, state: 'done', interrupted: true, lastMessage: undefined, verified: false })
+      out({ ...e, state: 'working', lastMessage: undefined, verified: false })
       if (verdict.decision === 'allow' || verdict.turnEnded === 'other') return
     }
     s.episode = ep
@@ -474,7 +502,7 @@ export function createGrokPermissionGate(
   return {
     handle(nodeId, payload, e) {
       if (disposed) {
-        if (e) deliver(e)
+        if (e) safeDeliver(e)
         return
       }
       const s = stateOf(nodeId)
@@ -488,22 +516,22 @@ export function createGrokPermissionGate(
             if (published) return
             published = true
             s.gen++
-            deliver(ev)
+            safeDeliver(ev)
           }
           const guarded = confirm(nodeId, s, payload, e, once).catch(() => once(e))
           return withTimeout(guarded, () => once(e))
-        })
+        }).catch(() => {})
         return
       }
       s.chain = s.chain.then(() => {
         s.gen++
-        if (e) deliver(e)
+        if (e) safeDeliver(e)
         const ep = s.episode
         if (!ep || !e) return
         // A new turn or a session boundary on the episode's session ends the watch: the dialog it
         // was about belongs to a turn that is over.
         if ((e.newTurn || e.kind === 'session') && e.sessionId === ep.hookSessionId) endEpisode(s)
-      })
+      }).catch(() => {})
     },
     dispose() {
       disposed = true

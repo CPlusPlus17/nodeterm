@@ -1364,7 +1364,9 @@ session.
   png/jpg/jpeg/gif/webp (any case) becomes `[Image #N]` in the composer within ~60 ms; bmp, svg,
   heic, tiff and a missing file stay text; `N` keeps counting for the session and does NOT reset
   when the composer is cleared. So the receipt reads OUR xterm buffer (the emulator, not tmux) for
-  placeholder numbers that were NOT on screen before the paste, up to 3 s: "Image attached", else
+  placeholder numbers ABOVE the highest one on screen before the paste (the counter only rises,
+  so an older placeholder scrolling into view cannot confirm it; with none on screen, two pastes
+  inside ~60 ms can still confirm each other), up to 3 s: "Image attached", else
   "Pasted the path — not confirmed as an image" (`.term-paste-pill`, top-right so it never covers
   the copy pill or the agent's bottom-left input line). Only when a claude CLI is in the pane
   (`agentProcessInPane`); every other agent was not measured and gets the paste with no receipt
@@ -1961,17 +1963,25 @@ else, and its context links must keep classifying across restarts).
   `permission_resolved {decision: allow|deny|cancelled}` and `turn_ended {outcome: cancelled}`. The
   gate ties each notification to ONE `permission_requested` written within 5 s before it and
   publishes what the file says: still pending ⇒ `blocked` + a bounded 1 s watch (a `stat` per tick
-  while nothing changes); answered ⇒ `working` (unverified — a file read is not a hook POST); a
+  while nothing changes); answered ⇒ `working` (unverified — a file read is not a hook POST — including when the
+  answer is already on disk as the hook is read); a
   cancelled turn ⇒ `done` + `interrupted`. **The trap it is shaped around**: a SUBAGENT's prompt
   fires with the PARENT's `sessionId` while its request is in the CHILD's `events.jsonl` — reading
   the parent's file alone would find the parent's older, already-approved request and publish
-  "answered" over an open child dialog. So candidates are the sessions this node's hooks named
+  "answered" over an open child dialog. Candidates are the sessions this node's hooks named
   (children post their own ids), zero or several matches publish the hook unchanged, and every new
   prompt ends the previous watch (the replay found that exact race: the parent's spawn approval
-  landed 90 ms before the child's prompt). Closed sets throughout; an unknown decision, unreadable
+  landed 90 ms before the child's prompt). The candidate set CAN miss the real request — a child's
+  prompt may reach us before any of the child's own hooks, or a second request's line may not be
+  on disk yet — and the older request found instead is then already answered. **The load-bearing
+  rule is therefore: a request answered BEFORE the notification fired is never taken as its
+  answer** (`resolvedTs < notifiedAt` ⇒ the hook is published unchanged, nothing watched): a
+  notification cannot be about a dialog that closed before it. Every capture resolves after its
+  notification (fastest 216 ms). Review of #1065 found that hole; tests A/B pin it. Closed sets throughout; an unknown decision, unreadable
   file or unparsable timestamp is today's behaviour, never a guess. Per-node ordering is kept (a
   confirm read holds that node's later hooks, ≤ 500 ms; polls run off that chain and discard a read
-  that straddled a newer hook). A remote (SSH) grok node's file is on its host, so it reads "cannot
+  that straddled a newer hook). A listener that throws costs that ONE event (as it did inside the
+  hook server's try/catch before), never the node's delivery chain. A remote (SSH) grok node's file is on its host, so it reads "cannot
   tell" and behaves exactly as before — a remote leg is a follow-up. Unmeasured: `events.jsonl`'s
   shape on other grok versions (a changed shape degrades to today's behaviour).
 - **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads

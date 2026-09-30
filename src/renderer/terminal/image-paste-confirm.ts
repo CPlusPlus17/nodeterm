@@ -68,7 +68,7 @@ export const IMAGE_PASTE_CONFIRM_MS = 3000
 export const IMAGE_PASTE_POLL_MS = 50
 
 /**
- * Wait until the screen shows `expected` placeholder numbers that were not on it before the paste.
+ * Wait until the screen shows `expected` placeholder numbers above every one on it before the paste.
  * `before` must be read BEFORE the paste is sent.
  */
 export async function confirmImagePaste(opts: {
@@ -83,9 +83,16 @@ export async function confirmImagePaste(opts: {
   const now = opts.now ?? (() => Date.now())
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const deadline = now() + (opts.timeoutMs ?? IMAGE_PASTE_CONFIRM_MS)
+  // Claude's counter only goes up, so this paste's placeholders are numbered ABOVE every one
+  // already on screen. Counting "any number not seen before" would let an older placeholder that
+  // scrolls into view confirm this paste. Residual: with nothing on screen before the paste, the
+  // floor is 0, and two pastes within the ~60 ms claude takes to answer can still confirm each
+  // other — a receipt is per paste, not per image.
+  let floor = 0
+  for (const n of opts.before) floor = Math.max(floor, n)
   for (;;) {
     let fresh = 0
-    for (const n of imagePlaceholderNumbers(opts.read())) if (!opts.before.has(n)) fresh++
+    for (const n of imagePlaceholderNumbers(opts.read())) if (n > floor) fresh++
     if (fresh >= opts.expected) return 'confirmed'
     if (now() >= deadline) return 'unconfirmed'
     await sleep(opts.pollMs ?? IMAGE_PASTE_POLL_MS)

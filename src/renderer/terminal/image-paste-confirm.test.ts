@@ -119,3 +119,19 @@ describe('both terminal surfaces paste files through the receipt', () => {
     }
   })
 })
+
+describe('review: only numbers ABOVE the highest one on screen confirm', () => {
+  it('an older placeholder scrolling into view does not confirm this paste', async () => {
+    let t = 0
+    const out = await confirmImagePaste({
+      before: new Set([12]),
+      expected: 1,
+      read: () => '❯ [Image #3] [Image #12]', // #3 was scrolled off before the paste
+      now: () => t++,
+      sleep: async () => {},
+      timeoutMs: 50,
+      pollMs: 1
+    })
+    expect(out).toBe('unconfirmed')
+  })
+})

@@ -199,3 +199,125 @@ describe('the gate, replaying each captured scenario', () => {
     expect(h.states().at(-1)).toBe('blocked')
   })
 })
+
+// Review round (PR #1065): synthetic timelines in the captured record shapes, for orderings the
+// captures did not happen to contain.
+const T = Date.parse('2026-09-30T12:00:00.000Z')
+const iso = (ms: number): string => new Date(ms).toISOString()
+const rec = (ms: number, type: string, extra: Record<string, unknown> = {}): string =>
+  JSON.stringify({ ts: iso(ms), type, ...extra })
+const hook = (ms: number, sessionId: string, hookEventName: string, extra: Record<string, unknown> = {}): Hook => ({
+  hookEventName,
+  sessionId,
+  cwd: '/work/project',
+  timestamp: iso(ms),
+  ...extra
+})
+const prompt = (ms: number, sid: string): Hook =>
+  hook(ms, sid, 'notification', { notificationType: 'permission_prompt', message: 'Tool permission requested', level: 'info' })
+const P = '01a0f232-0000-7000-8000-00000000000a'
+const C = '01a0f232-0000-7000-8000-00000000000b'
+
+describe('review: a notification is never answered by a request resolved BEFORE it fired', () => {
+  it("A: the child's prompt arrives before the child's own hooks — the parent's earlier approval must not hide it", async () => {
+    const sc: Scenario = {
+      hooks: [
+        hook(T, P, 'session_start'),
+        hook(T + 10, P, 'user_prompt_submit'),
+        prompt(T + 105, P), // the spawn dialog
+        prompt(T + 2095, P) // the CHILD's dialog, carrying the parent's id
+      ],
+      sessions: {
+        [P]: [
+          rec(T + 5, 'turn_started'),
+          rec(T + 100, 'permission_requested', { tool_name: 'spawn_subagent' }),
+          rec(T + 2000, 'permission_resolved', { tool_name: 'spawn_subagent', decision: 'allow', wait_ms: 1900 })
+        ],
+        [C]: [rec(T + 2050, 'turn_started'), rec(T + 2090, 'permission_requested', { tool_name: 'run_terminal_command' })]
+      }
+    }
+    const h = harness(sc)
+    for (const x of sc.hooks) await h.post(x)
+    await h.advanceTo(T + 20_000)
+    expect(h.states().at(-1)).toBe('blocked')
+    // After the child's prompt, nothing claimed the node was working again.
+    const iBlocked = h.out.map((e) => e.state).lastIndexOf('blocked')
+    expect(h.out.slice(iBlocked + 1)).toEqual([])
+  })
+
+  it("B: a second request whose line is not on disk yet is not answered by the first one's approval", async () => {
+    const S1 = '01a0f232-0000-7000-8000-00000000000c'
+    const sc: Scenario = {
+      hooks: [hook(T, S1, 'session_start'), prompt(T + 105, S1), prompt(T + 2990, S1)],
+      sessions: {
+        [S1]: [
+          rec(T + 5, 'turn_started'),
+          rec(T + 100, 'permission_requested', { tool_name: 'run_terminal_command' }),
+          rec(T + 1000, 'permission_resolved', { tool_name: 'run_terminal_command', decision: 'allow', wait_ms: 900 })
+          // request 2's line has not reached the disk
+        ]
+      }
+    }
+    const h = harness(sc)
+    for (const x of sc.hooks) await h.post(x)
+    await h.advanceTo(T + 20_000)
+    expect(h.states().at(-1)).toBe('blocked')
+  })
+
+  it('two candidate requests inside the window: the hook is published unchanged and NOTHING is watched', async () => {
+    const sc: Scenario = {
+      hooks: [
+        hook(T, P, 'session_start'),
+        hook(T + 50, C, 'user_prompt_submit'), // the child is known
+        prompt(T + 1000, P)
+      ],
+      sessions: {
+        [P]: [
+          rec(T + 5, 'turn_started'),
+          rec(T + 990, 'permission_requested', { tool_name: 'spawn_subagent' }),
+          rec(T + 4000, 'permission_resolved', { tool_name: 'spawn_subagent', decision: 'allow', wait_ms: 3010 })
+        ],
+        [C]: [
+          rec(T + 60, 'turn_started'),
+          rec(T + 995, 'permission_requested', { tool_name: 'run_terminal_command' }),
+          rec(T + 5000, 'permission_resolved', { tool_name: 'run_terminal_command', decision: 'allow', wait_ms: 4005 })
+        ]
+      }
+    }
+    const h = harness(sc)
+    for (const x of sc.hooks) await h.post(x)
+    await h.advanceTo(T + 20_000)
+    // Ambiguous: we cannot say which dialog the prompt was, so we never publish either answer.
+    expect(h.states().at(-1)).toBe('blocked')
+    expect(h.out.filter((e) => e.verified === false)).toEqual([])
+  })
+})
+
+describe('review: a throwing listener costs one event, not the node', () => {
+  it('later events for the same node are still delivered', async () => {
+    const got: NormalizedAgentEvent[] = []
+    let first = true
+    const gate = createGrokPermissionGate((e) => {
+      if (first) {
+        first = false
+        throw new Error('listener boom')
+      }
+      got.push(e)
+    })
+    const warn = console.warn
+    console.warn = () => {}
+    try {
+      const x = hook(T, P, 'user_prompt_submit')
+      gate.handle('n9', x, normalizeGrok({ nodeId: 'n9', agentId: 'grok', payload: x }))
+      const y = hook(T + 10, P, 'pre_tool_use')
+      gate.handle('n9', y, normalizeGrok({ nodeId: 'n9', agentId: 'grok', payload: y }))
+      const z = prompt(T + 20, P) // no file anywhere → published unchanged
+      gate.handle('n9', z, normalizeGrok({ nodeId: 'n9', agentId: 'grok', payload: z }))
+      for (let i = 0; i < 50 && got.length < 2; i++) await new Promise((r) => setTimeout(r, 10))
+    } finally {
+      console.warn = warn
+      gate.dispose()
+    }
+    expect(got.map((e) => e.state)).toEqual(['working', 'blocked'])
+  })
+})
