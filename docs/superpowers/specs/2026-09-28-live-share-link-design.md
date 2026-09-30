@@ -441,7 +441,7 @@ removed from the address bar (the link must stay copyable).
 
 ### Entry points
 
-All go through `requireProOr('Sharing a live link is a Pro feature', …)`, after the availability
+All go through `requireProOr('Sharing a live link', …)` (the UpgradeDialog appends "is a Pro feature"), after the availability
 check below (a Server Edition tab or a relay tab never sees an Upgrade dialog). That is the UX; the
 server is the gate.
 
