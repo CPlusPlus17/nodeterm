@@ -148,11 +148,11 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
     e.refresh = deps.setTimeout(() => {
       e.refresh = null
       // A bridged listener has no refresh (its timer is cleared on bridging); this is only defence.
-      // It is never cut for a refresh — whether the relay ends a bridged socket at its token's
-      // lifetime is UNVERIFIED (the broker's source checks a token only when a socket joins; the
-      // device checklist in docs/hosted-team-relay.md settles it), and if it does, onClose takes it
-      // from there — and it is never re-armed: a bridged refresh would prove nothing (see the header), so a timer
-      // for it would be a timer per session that does nothing, forever for one whose close is lost.
+      // It is never cut for a refresh: nodeterm-server's relay broker never expires or evicts a
+      // bridged socket (it closes only an UNBRIDGED listener, at its token's exp + 30 s), and if one
+      // closes anyway, onClose takes it from there. It is never re-armed either: a bridged refresh
+      // would prove nothing (see the header), so a timer for it would be a timer per session that
+      // does nothing, forever for one whose close is lost.
       if (state !== 'running' || !live.has(e) || e.bridged) return
       // This IDLE listener held its registration for a whole token lifetime: new registrations work.
       proven()
