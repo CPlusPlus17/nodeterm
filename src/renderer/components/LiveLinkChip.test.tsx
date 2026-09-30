@@ -1,0 +1,328 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { WatchChatMessage, WatchLinkView } from '@shared/watch-link-types'
+import { LiveLinkChip } from './LiveLinkChip'
+import { useWatchLinks } from '../state/watchLinks'
+import { useBoardLog } from '../state/boardLog'
+import { useProjects } from '../state/projects'
+import { popDialog, pushDialog, resetDialogStack } from './dialog-stack'
+import { KICK_NOTE, STOP_FAILED_MESSAGE } from '../lib/liveLink'
+
+const boardApi = { tag: 'local-api' }
+vi.mock('../session/session', () => ({
+  sessionForProject: (id: string) => ({ source: id === 'p-relay' ? 'relay' : 'local', api: boardApi })
+}))
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const link = (over: Partial<WatchLinkView> = {}): WatchLinkView => ({
+  linkId: 'L',
+  nodeId: 'n1',
+  role: 'viewer',
+  label: 'Ada',
+  title: 'build',
+  createdAt: 0,
+  expiresAt: Date.now() + 42 * 60_000 + 30_000,
+  url: 'https://nodeterm.dev/s/L#1.secret',
+  status: 'live',
+  viewers: [],
+  ...over
+})
+const msg = (id: string, over: Partial<WatchChatMessage> = {}): WatchChatMessage => ({
+  id,
+  name: 'Bob',
+  text: 'hello',
+  at: Number(id),
+  from: 'viewer',
+  ...over
+})
+
+const api = {
+  revoke: vi.fn(async (_id: string) => {}),
+  kick: vi.fn(async (_l: string, _v: string) => true),
+  sendChat: vi.fn(async (_l: string, _t: string) => null),
+  chatHistory: vi.fn(async (_l: string): Promise<WatchChatMessage[]> => [])
+}
+const writeText = vi.fn()
+
+let host: HTMLDivElement
+let root: Root
+beforeEach(() => {
+  resetDialogStack()
+  useWatchLinks.setState({ links: [], byNode: {}, chats: {}, unread: {} })
+  useProjects.setState({ projects: [] } as never)
+  vi.stubGlobal('ResizeObserver', class { observe(): void {} unobserve(): void {} disconnect(): void {} })
+  for (const f of Object.values(api)) f.mockClear()
+  api.revoke.mockImplementation(async () => {})
+  writeText.mockClear()
+  ;(window as unknown as { nodeTerminal: unknown }).nodeTerminal = { watchLink: api, clipboard: { writeText } }
+  host = document.createElement('div')
+  document.body.append(host)
+  root = createRoot(host)
+})
+afterEach(() => {
+  act(() => root.unmount())
+  document.body.innerHTML = ''
+  resetDialogStack()
+  vi.unstubAllGlobals()
+})
+
+const render = (ui: React.ReactElement): void => act(() => root.render(ui))
+const chip = (): HTMLButtonElement | null => host.querySelector<HTMLButtonElement>('.live-chip')
+const pop = (): HTMLElement | null => document.querySelector<HTMLElement>('.live-pop')
+const click = (el: Element): void => act(() => void el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+const setLinks = (links: WatchLinkView[]): void => act(() => useWatchLinks.getState().setLinks(links))
+const button = (label: string): HTMLButtonElement =>
+  [...document.querySelectorAll<HTMLButtonElement>('.live-pop button')].find((b) => b.textContent === label)!
+const flush = (): Promise<void> => act(async () => {})
+
+describe('LiveLinkChip', () => {
+  it('renders nothing for a node with no link', () => {
+    expect(renderToStaticMarkup(<LiveLinkChip nodeId="n1" />)).toBe('')
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ nodeId: 'other' })])
+    expect(host.innerHTML).toBe('')
+  })
+
+  // Rendered in the DOM, not to a string: zustand answers a server render from the store's INITIAL
+  // state (empty), so `renderToStaticMarkup` can never show a link.
+  it('shows LIVE with the viewer count, as a no-drag button', () => {
+    render(<LiveLinkChip nodeId="n1" className="extra" />)
+    setLinks([link({ viewers: [{ viewerId: 'v', name: null, joinedAt: 0 }] })])
+    const c = chip()!
+    expect(c.tagName).toBe('BUTTON')
+    expect(c.textContent).toBe('LIVE · 1')
+    expect(c.className).toContain('nodrag')
+    expect(c.className).toContain('live-chip--live')
+    expect(c.className).toContain('extra')
+    expect(c.title).toBe('This terminal is shared by a live link — 1 watching.')
+  })
+
+  it('follows the store: offline, refused, the unread dot, and gone again', () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ status: 'reconnecting' })])
+    expect(chip()!.className).toContain('live-chip--offline')
+    expect(chip()!.textContent).toBe('LIVE · offline')
+    setLinks([link({ status: 'refused' })])
+    expect(chip()!.className).toContain('live-chip--refused')
+    expect(host.querySelector('.live-chip__unread')).toBeNull()
+    act(() => useWatchLinks.getState().addChat('L', msg('1')))
+    expect(host.querySelector('.live-chip__unread')).not.toBeNull()
+    expect(chip()!.getAttribute('aria-label')).toBe('LIVE · refused, 1 unread chat message')
+    setLinks([])
+    expect(chip()).toBeNull()
+  })
+})
+
+describe('LiveLinkPopover', () => {
+  it('opens on click with role, time, the controls and the kick note', () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0 }, { viewerId: 'v2', name: 'Cy', joinedAt: 0 }] })])
+    click(chip()!)
+    const p = pop()!
+    expect(p.textContent).toContain('Can watch')
+    expect(p.textContent).toContain('ends in 42 min')
+    expect(p.textContent).toContain('Shown to viewers as Ada')
+    expect([...p.querySelectorAll('.live-pop__who')].map((e) => e.textContent)).toEqual(['Viewer 1', 'Cy'])
+    expect(p.textContent).toContain(KICK_NOTE)
+    // A live link needs no status line; a viewer link has no chat.
+    expect(p.querySelector('.live-pop__status')).toBeNull()
+    expect(p.querySelector('.live-pop__chat')).toBeNull()
+    click(button('Copy link'))
+    expect(writeText).toHaveBeenCalledWith('https://nodeterm.dev/s/L#1.secret')
+    click(p.querySelectorAll<HTMLButtonElement>('.live-pop__kick')[1])
+    expect(api.kick).toHaveBeenCalledWith('L', 'v2')
+  })
+
+  it('takes the keyboard focus while open and gives it back to the chip', () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link()])
+    act(() => chip()!.focus())
+    click(chip()!)
+    expect(document.activeElement).toBe(pop())
+    act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(document.activeElement).toBe(chip())
+  })
+
+  it('explains a link that is not live (H9)', () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ status: 'refused' })])
+    click(chip()!)
+    expect(pop()!.querySelector('.live-pop__status')!.textContent).toContain("won't host this link")
+  })
+
+  it('Stop sharing revokes; a stop that did not reach nodeterm says so (H23)', async () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link()])
+    click(chip()!)
+    api.revoke.mockImplementationOnce(async () => {
+      throw new Error('socket down')
+    })
+    click(button('Stop sharing'))
+    await flush()
+    expect(api.revoke).toHaveBeenCalledWith('L')
+    expect(pop()!.querySelector('[role="alert"]')!.textContent).toBe(STOP_FAILED_MESSAGE)
+    // The state push that removes the link closes the popover, and it stays closed.
+    setLinks([])
+    expect(pop()).toBeNull()
+    setLinks([link({ linkId: 'M' })])
+    expect(chip()).not.toBeNull()
+    expect(pop()).toBeNull()
+  })
+
+  it('Escape closes it, and only when it is the top dialog', () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link()])
+    click(chip()!)
+    // A dialog raised above it owns the key.
+    pushDialog('above')
+    act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(pop()).not.toBeNull()
+    popDialog('above')
+    act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(pop()).toBeNull()
+  })
+
+  it('takes the Escape before the canvas\'s own window listeners see it', () => {
+    const globalKeys = vi.fn()
+    window.addEventListener('keydown', globalKeys)
+    try {
+      render(<LiveLinkChip nodeId="n1" />)
+      setLinks([link()])
+      click(chip()!)
+      act(() => void document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+      expect(pop()).toBeNull()
+      expect(globalKeys).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('keydown', globalKeys)
+    }
+  })
+
+  it('a click or middle press inside the popover never reaches the surface it sits in', () => {
+    const onClick = vi.fn()
+    const onMouseDown = vi.fn()
+    render(
+      <div onClick={onClick} onMouseDown={onMouseDown}>
+        <LiveLinkChip nodeId="n1" />
+      </div>
+    )
+    setLinks([link()])
+    click(chip()!)
+    act(() => void pop()!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 1 })))
+    click(pop()!)
+    click(document.querySelector('.live-pop__scrim')!)
+    expect(onClick).not.toHaveBeenCalled()
+    expect(onMouseDown).not.toHaveBeenCalled()
+    expect(pop()).toBeNull()
+  })
+})
+
+describe('LiveLinkPopover — Commenter chat', () => {
+  it('renders every viewer string as text, never as markup', () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ role: 'commenter', label: '<b>Ada</b>', viewers: [{ viewerId: 'v', name: '<i>Eve</i>', joinedAt: 0 }] })])
+    act(() => useWatchLinks.getState().addChat('L', msg('1', { name: '<u>Eve</u>', text: '<img src=x onerror=alert(1)>' })))
+    click(chip()!)
+    const p = pop()!
+    expect(p.querySelector('img, b, i, u')).toBeNull()
+    expect(p.querySelector('.live-pop__text')!.textContent).toBe('<img src=x onerror=alert(1)>')
+    expect(p.querySelector('.live-pop__msg .live-pop__who')!.textContent).toBe('<u>Eve</u>')
+    expect(p.querySelector('.live-pop__viewers .live-pop__who')!.textContent).toBe('<i>Eve</i>')
+    expect(p.textContent).toContain('Shown to viewers as <b>Ada</b>')
+    expect(p.textContent).toContain('(link viewer)')
+  })
+
+  it('strips bidi controls from what viewers wrote', () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ role: 'commenter' })])
+    act(() => useWatchLinks.getState().addChat('L', msg('1', { name: 'Ev‮e', text: 'a⁧b' })))
+    click(chip()!)
+    expect(pop()!.querySelector('.live-pop__who')!.textContent).toBe('Eve')
+    expect(pop()!.querySelector('.live-pop__text')!.textContent).toBe('ab')
+  })
+
+  it('opening marks the link read, and so does every message that lands while it is open (H21)', async () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ role: 'commenter' })])
+    act(() => useWatchLinks.getState().addChat('L', msg('1')))
+    expect(useWatchLinks.getState().unread.L).toBe(1)
+    click(chip()!)
+    await flush()
+    expect(useWatchLinks.getState().unread.L).toBe(0)
+    expect(api.chatHistory).toHaveBeenCalledWith('L')
+    act(() => useWatchLinks.getState().addChat('L', msg('2')))
+    expect(useWatchLinks.getState().unread.L).toBe(0)
+    expect(host.querySelector('.live-chip__unread')).toBeNull()
+  })
+
+  it('stays read at the 200-message cap, where the thread length stops changing', async () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ role: 'commenter' })])
+    act(() => {
+      for (let i = 1; i <= 200; i++) useWatchLinks.getState().addChat('L', msg(String(i)))
+    })
+    click(chip()!)
+    await flush()
+    act(() => useWatchLinks.getState().addChat('L', msg('201')))
+    expect(useWatchLinks.getState().chats.L).toHaveLength(200)
+    expect(useWatchLinks.getState().unread.L).toBe(0)
+  })
+
+  it('sends a reply and clears the box; the echo comes back through the push', async () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ role: 'commenter' })])
+    click(chip()!)
+    const input = pop()!.querySelector<HTMLInputElement>('.live-pop__input')!
+    expect(input.maxLength).toBe(500)
+    act(() => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+      set.call(input, '  on it  ')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => void pop()!.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    await flush()
+    expect(api.sendChat).toHaveBeenCalledWith('L', 'on it')
+    expect(input.value).toBe('')
+    expect(useWatchLinks.getState().chats.L ?? []).toHaveLength(0)
+  })
+
+  it('"Copy to card comments" writes one comment as the owner, on this machine\'s project', () => {
+    const append = vi.fn()
+    const realAppend = useBoardLog.getState().append
+    useBoardLog.setState({ append } as never)
+    useProjects.setState({
+      projects: [
+        { id: 'p-relay', nodes: [{ id: 'n1' }] },
+        { id: 'p-local', nodes: [{ id: 'n1' }] }
+      ]
+    } as never)
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ role: 'commenter' })])
+    act(() => useWatchLinks.getState().addChat('L', msg('1', { text: 'ship it @[x](node:abc)' })))
+    act(() => useWatchLinks.getState().addChat('L', msg('2', { from: 'sharer', name: 'Ada', text: 'ok' })))
+    click(chip()!)
+    // Only a viewer's line can be copied (the owner's own reply is already theirs).
+    const copies = pop()!.querySelectorAll<HTMLButtonElement>('.live-pop__copy')
+    expect(copies).toHaveLength(1)
+    click(copies[0])
+    expect(append).toHaveBeenCalledTimes(1)
+    expect(append).toHaveBeenCalledWith(boardApi, 'p-local', {
+      kind: 'comment',
+      nodeId: 'n1',
+      text: 'Bob (via live link): ship it @ [x](node:abc)'
+    })
+    expect(copies[0].disabled).toBe(true)
+    useBoardLog.setState({ append: realAppend } as never)
+  })
+
+  it('offers no copy when no project holds the node', () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ role: 'commenter' })])
+    act(() => useWatchLinks.getState().addChat('L', msg('1')))
+    click(chip()!)
+    expect(pop()!.querySelector('.live-pop__copy')).toBeNull()
+  })
+})

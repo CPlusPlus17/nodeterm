@@ -11293,6 +11293,214 @@ button.pull-checks__name {
   background: var(--state-warning);
   border-color: transparent;
 }
+/* Live link chip — "this terminal is being broadcast" (components/LiveLinkChip.tsx), one component on
+   the node header, the kanban card, the card modal and the sessions sidebar row. The dot reads the
+   ERROR role on purpose (task-14-17 H28): the spec asks for a red broadcast dot, and a role of its own
+   would have to pass styles.palette.test's one-colour-per-meaning pins. The label stays ink (muted
+   when refused, as the spec asks). Never animated: a chip that pulsed for as long as a link lives
+   would hold the compositor's frame loop open (CLAUDE.md, Idle energy). */
+.live-chip-wrap {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.live-chip {
+  --live-tone: var(--state-error);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--live-tone) 45%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--live-tone) 12%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.live-chip:hover {
+  background: color-mix(in srgb, var(--live-tone) 20%, transparent);
+}
+.live-chip__dot,
+.live-chip__unread {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--live-tone);
+}
+/* Reconnecting: the relay leg is down; it comes back on its own. */
+.live-chip--offline {
+  --live-tone: var(--state-warning);
+}
+/* Refused: nodeterm's service will not host the link — muted, the owner opens it to see why. */
+.live-chip--refused {
+  --live-tone: var(--muted);
+  color: var(--muted);
+}
+.live-chip__unread {
+  background: var(--state-unread);
+}
+.kanban-card__live,
+.kanban-modal__live {
+  margin-left: 0;
+}
+.ss-live {
+  flex: 0 0 auto;
+  height: 16px;
+  margin-left: 0;
+  padding: 0 5px;
+  font-size: 10px;
+}
+/* Its popover: a body portal above the card modal's scrim (55) and the dictation overlay (60). A
+   solid --panel: under Liquid Glass it is not in either glass list, so it stays opaque. */
+.live-pop__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 61;
+}
+.live-pop {
+  position: fixed;
+  z-index: 62;
+  box-sizing: border-box;
+  width: 340px;
+  max-width: calc(100vw - 12px);
+  max-height: 70vh;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: default;
+}
+.live-pop:focus {
+  outline: none;
+}
+.live-pop p {
+  margin: 0;
+}
+.live-pop__link + .live-pop__link {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.live-pop__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.live-pop__role,
+.live-pop__who {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.live-pop__time,
+.live-pop__muted {
+  color: var(--muted);
+}
+.live-pop p.live-pop__label {
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.live-pop p.live-pop__status {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--state-warning) 12%, transparent);
+}
+.live-pop p.live-pop__status--refused {
+  background: rgba(var(--tint-rgb), 0.06);
+}
+.live-pop__actions {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+}
+.live-pop .confirm__btn.live-pop__btn {
+  padding: 3px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.live-pop p.live-pop__error {
+  margin: 4px 0;
+  color: var(--danger);
+}
+.live-pop__viewers ul,
+.live-pop__thread {
+  margin: 4px 0;
+  padding: 0;
+  list-style: none;
+}
+.live-pop__viewers li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.live-pop .live-pop__kick {
+  margin-left: auto;
+}
+.live-pop p.live-pop__note {
+  margin-top: 4px;
+  font-size: 11px;
+}
+.live-pop__chat {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.live-pop__thread {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.live-pop__msg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+  margin: 4px 0;
+}
+.live-pop__text {
+  flex-basis: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.live-pop__copy {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.live-pop__copy:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.live-pop__reply {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.live-pop .confirm__input.live-pop__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
 /* The session name in the card modal header: sized to its text, not a flex-filling detail line. */
 .kanban-modal__session {
   flex: 0 1 auto;

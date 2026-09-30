@@ -2,6 +2,8 @@ import { memo, useState } from 'react'
 import type { KanbanCardMeta, KanbanColumnCategory, KanbanLabel, KanbanPriority } from '@shared/types'
 import { useAgentStatus } from '../../state/agentStatus'
 import { AccountChip, useAccountChip } from '../AccountChip'
+import { LiveLinkChip } from '../LiveLinkChip'
+import { useWatchLinks } from '../../state/watchLinks'
 import { ContextMeter } from '../ContextMeter'
 import { isRemoteSessionNode } from '@shared/worktree'
 import { NodeIconView } from '../NodeIcon'
@@ -87,10 +89,13 @@ export const SessionCard = memo(function SessionCard({
     ? status.session
     : undefined
   const priority = meta?.priority
+  // A live link counts as detail: "this terminal is being broadcast" must show on the card whatever
+  // else it has to say (a primitive selector — see LiveLinkChip).
+  const hasLiveLink = useWatchLinks((s) => session.kind === 'terminal' && (s.byNode[session.id]?.length ?? 0) > 0)
   // The account chip counts as detail in its own right: a card whose only thing to say is "this
   // one is on the other Claude login" is exactly the card that must say it.
   const hasDetail =
-    !!status?.sessionId || !!sessionName || !!accountChip || stickyPreview.includes('\n')
+    !!status?.sessionId || !!sessionName || !!accountChip || hasLiveLink || stickyPreview.includes('\n')
   return (
     <div
       className={`kanban-card kanban-card--session${dragging ? ' kanban-card--dragging' : ''}${
@@ -219,6 +224,7 @@ export const SessionCard = memo(function SessionCard({
             <>
               <ContextMeter sessionId={status?.sessionId ?? null} nodeId={session.id} remote={isRemoteSessionNode(session.spawn)} agentId={session.agentId ?? session.spawn.agentId ?? status?.agentId} />
               <AccountChip chip={accountChip} />
+              <LiveLinkChip nodeId={session.id} className="kanban-card__live" />
               {sessionName && (
                 <span className="kanban-card__session" title={sessionName}>
                   {sessionName}

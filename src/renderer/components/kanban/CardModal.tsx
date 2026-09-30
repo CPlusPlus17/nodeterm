@@ -19,6 +19,7 @@ import type { NodeIcon } from '@shared/node-icon'
 import { ContextMeter } from '../ContextMeter'
 import { isRemoteSessionNode } from '@shared/worktree'
 import { AccountChip, useAccountChip } from '../AccountChip'
+import { LiveLinkChip } from '../LiveLinkChip'
 import { IssueRefChip } from '../IssueRefChip'
 import { TeamProgressChip } from '../TeamProgressChip'
 import type { TeamStation } from '../../lib/teamProgress'
@@ -379,6 +380,7 @@ export function CardModal({ session, columnTitle, board, onChangeBoard, onClose,
             </span>
           )}
           {isTerminal && <AccountChip chip={accountChip} />}
+          {isTerminal && <LiveLinkChip nodeId={session.id} className="kanban-modal__live" />}
           {/* The driving chip, so a user watching a browser card THROUGH the modal is not
               driving-blind. The lease is keyed by node id (not by webview object), so this shows
               when the node is being driven even though the drive lands on the CANVAS webview, not

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AccountChip, useAccountChip } from './AccountChip'
+import { LiveLinkChip } from './LiveLinkChip'
 import { IconBellFilled, IconCircleCheck, IconClose } from './icons'
 import { NodeIconView } from './NodeIcon'
 import { ProjectGlyph } from './ProjectGlyph'
@@ -156,6 +157,7 @@ export function SessionRow({
             </span>
           )}
           <AccountChip chip={accountChip} className="ss-account" />
+          <LiveLinkChip nodeId={row.id} className="ss-live" />
           {row.loop && (
             <span className="ss-loop">
               {row.loop.kind} · {row.loop.count}
