@@ -75,6 +75,14 @@ export interface StreamFilterOptions {
    * string may be a DCS or APC, where BEL is data). Like every string, it has no length limit.
    */
   midStream?: boolean
+  /**
+   * With `midStream`: called ONCE, when that unknown start state is first left (the first ESC, ST or
+   * 8-bit introducer), after the chunk that left it has been parsed. From then on text flows again, so
+   * the link host takes one more keyframe to repaint the text it swallowed before (controller ruling
+   * R23). Ignored without `midStream`; replaced or dropped by every `reset`. A throw is logged, never
+   * propagated: the parse it follows is complete, and the chunk's output must not be lost with it.
+   */
+  onSettled?: () => void
 }
 
 export interface StreamFilter {
@@ -93,15 +101,28 @@ export function createStreamFilter(opts?: StreamFilterOptions): StreamFilter {
   // where `ESC \` is that string's ST and is dropped with it.
   let mode: 'text' | 'esc' | 'string' | 'stringEsc' = 'text'
   let osc = false
+  // Armed while a midStream start has not been left: the start state is the only string state it is
+  // set in, so the first stop char read while it is set is the one that leaves that state.
+  let settle: (() => void) | null = null
   const enterString = (introducer: number): void => {
     mode = 'string'
     osc = introducer === 0x5d || introducer === 0x9d
   }
   const start = (o: StreamFilterOptions | undefined): void => {
-    if (o?.midStream) enterString(0x90)
-    else {
+    settle = null
+    if (o?.midStream) {
+      enterString(0x90)
+      settle = o.onSettled ?? null
+    } else {
       mode = 'text'
       osc = false
+    }
+  }
+  const fire = (cb: () => void): void => {
+    try {
+      cb()
+    } catch (err) {
+      console.warn(`[watch-link] onSettled threw: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
   start(opts)
@@ -117,6 +138,7 @@ export function createStreamFilter(opts?: StreamFilterOptions): StreamFilter {
       const n = chunk.length
       let out = ''
       let i = 0
+      let settled: (() => void) | null = null
       while (i < n) {
         if (mode === 'text') {
           let j = chunk.indexOf(ESC, i)
@@ -143,6 +165,10 @@ export function createStreamFilter(opts?: StreamFilterOptions): StreamFilter {
           if (m === null) break
           const c = chunk.charCodeAt(m.index)
           i = m.index + 1
+          if (settle) {
+            settled = settle
+            settle = null
+          }
           if (c === 0x1b) mode = 'stringEsc'
           else if (c === 0x9c || c === 0x07) mode = 'text'
           else enterString(c)
@@ -162,6 +188,7 @@ export function createStreamFilter(opts?: StreamFilterOptions): StreamFilter {
           i++
         }
       }
+      if (settled) fire(settled)
       return out
     }
   }

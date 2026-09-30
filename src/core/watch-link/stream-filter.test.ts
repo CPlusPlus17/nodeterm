@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createStreamFilter } from './stream-filter'
@@ -313,6 +313,86 @@ describe('createStreamFilter, joined mid-stream', () => {
     expect(g.push(`a${ESC}]0;t`)).toBe('a')
     g.reset({ midStream: true })
     expect(g.push(`x${BEL}y${ESC}[mz`)).toBe(`${ESC}[mz`)
+  })
+
+  // Controller ruling R23: the link host takes a follow-up keyframe once a joined filter has left its
+  // unknown start state (the text it swallowed until then is on the owner's screen, not the viewer's).
+  describe('onSettled', () => {
+    const settledBy = (input: string): number => {
+      let n = 0
+      createStreamFilter({ midStream: true, onSettled: () => n++ }).push(input)
+      return n
+    }
+
+    it('fires once, when the unknown start state is first left: ESC, ST or an 8-bit introducer', () => {
+      expect(settledBy(`x${ESC}[mtext`)).toBe(1)
+      expect(settledBy(`x${ESC}\\text`)).toBe(1)
+      expect(settledBy('x\x9ctext')).toBe(1)
+      expect(settledBy(`x\x9d52;c;x${BEL}text`)).toBe(1)
+      // BEL does not end the unknown string (it may be a DCS or APC), so it settles nothing.
+      expect(settledBy(`x${BEL}more`)).toBe(0)
+      expect(settledBy('plain text, no escape')).toBe(0)
+    })
+
+    it('fires once only, however many escapes follow, across pushes', () => {
+      let n = 0
+      const f = createStreamFilter({ midStream: true, onSettled: () => n++ })
+      expect(f.push('swallowed ')).toBe('')
+      expect(n).toBe(0)
+      expect(f.push(`${ESC}[1mA${ESC}[m ${ESC}]0;t${BEL}B`)).toBe(`${ESC}[1mA${ESC}[m B`)
+      expect(n).toBe(1)
+      // Later strings end at later stop chars; none of them is the start state any more.
+      expect(f.push(`${ESC}[2J${ESC}]0;x${BEL}${ESC}P1$r${ESC}\\${ESC}[H`)).toBe(`${ESC}[2J${ESC}[H`)
+      expect(n).toBe(1)
+    })
+
+    it('fires after the chunk is parsed: the push still returns everything after the escape', () => {
+      const seen: string[] = []
+      const f = createStreamFilter({ midStream: true, onSettled: () => seen.push('settled') })
+      expect(f.push(`lost${ESC}[Hkept`)).toBe(`${ESC}[Hkept`)
+      expect(seen).toEqual(['settled'])
+    })
+
+    it('never fires for a filter that starts in text', () => {
+      let n = 0
+      const f = createStreamFilter({ onSettled: () => n++ })
+      f.push(`a${ESC}]52;c;x${BEL}b${ESC}[m`)
+      expect(n).toBe(0)
+    })
+
+    it('reset({ midStream, onSettled }) re-arms it; reset() and a midStream reset without it disarm it', () => {
+      let a = 0
+      let b = 0
+      const f = createStreamFilter({ midStream: true, onSettled: () => a++ })
+      f.push(`${ESC}[m`)
+      f.reset({ midStream: true, onSettled: () => b++ })
+      f.push(`${ESC}[m`)
+      expect([a, b]).toEqual([1, 1])
+      // Each disarmed filter then reads a whole OSC, whose BEL is a stop char a stale callback would fire on.
+      f.reset({ midStream: true, onSettled: () => b++ })
+      f.reset({ midStream: true })
+      f.push(`${ESC}[m${ESC}]0;t${BEL}${ESC}[m`)
+      f.reset({ midStream: true, onSettled: () => b++ })
+      f.reset()
+      f.push(`${ESC}]0;t${BEL}${ESC}[m`)
+      expect([a, b]).toEqual([1, 1])
+    })
+
+    it('a throwing callback costs nothing: the chunk is returned whole and the state is right', () => {
+      const f = createStreamFilter({
+        midStream: true,
+        onSettled: () => {
+          throw new Error('boom')
+        }
+      })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        expect(f.push(`lost${ESC}[Hkept`)).toBe(`${ESC}[Hkept`)
+        expect(f.push(`${ESC}]52;c;c2VjcmV0${BEL}after`)).toBe('after')
+      } finally {
+        warn.mockRestore()
+      }
+    })
   })
 
   it('reset({ midStream }) drops what was being read and starts as a join', () => {
