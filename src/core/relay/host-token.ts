@@ -7,14 +7,16 @@
 // longer mint this host's tokens. Only a challenge answered 404/405 means "this backend predates the
 // proof" and gets the legacy two-field mint; any other challenge failure is transient.
 //
-// Unlike the desktop copy, which collapses every failure to `null`, this one says WHICH failure it
-// was, because the scheduler reacts differently to each: a 429 waits at least a minute, a 402/403
-// stops minting, anything else backs off and retries. One 403 is deliberately NOT terminal: a
-// `pop_required` answer to a mint sent WITHOUT a proof because the challenge said 404/405. A reverse
-// proxy answers 404 while the backend redeploys, and the unproven mint that follows can land on the
-// fresh backend, which requires a proof from a host it has seen prove before. Stopping there would
-// stop hosting for good over a redeploy, so it backs off and the next attempt asks for a challenge
-// again.
+// The desktop copy distinguishes only two outcomes: a terminal key-proof refusal (`{ refused }` —
+// `pop_invalid`, or `pop_required` on a proven mint), which stops phone access and tells the human
+// once, and `null` for every other failure, which backs off and retries. This one says WHICH failure
+// it was, because the scheduler reacts differently to each: a 429 waits at least a minute, a 402/403
+// stops minting, anything else backs off and retries. Both copies share one rule: a 403 is
+// deliberately NOT terminal when it is a `pop_required` answer to a mint sent WITHOUT a proof because
+// the challenge said 404/405. A reverse proxy answers 404 while the backend redeploys, and the
+// unproven mint that follows can land on the fresh backend, which requires a proof from a host it
+// has seen prove before. Stopping there would stop hosting for good over a redeploy, so it backs off
+// and the next attempt asks for a challenge again.
 import { computePopProof, fetchPopChallenge, popRefusalOf, type PopRefusal } from './relay-pop'
 
 export type MintResult =
