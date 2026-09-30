@@ -9,10 +9,11 @@
 // desktop. It is read at call time, never cached, so a test can flip it.
 
 import { EventEmitter } from 'events'
+import { PassThrough } from 'stream'
 import fs from 'fs'
 import path from 'path'
 import type { SFTPWrapper } from 'ssh2'
-import { NativeMux, noMasterMessage, type ExecResult } from './native-mux'
+import { NativeMux, channelExit, noMasterMessage, type ExecResult } from './native-mux'
 import { parseScpArgv, parseSshArgv, type ParsedSsh } from './ssh-argv'
 
 export function useNativeSsh(
@@ -66,7 +67,7 @@ export async function runSshArgv(
 /** What SshProjectManager watches for a spawned master process (Runners.spawnMaster). */
 export interface NativeMasterHandle {
   kill(): void
-  on(event: 'exit', cb: (code: number | null) => void): void
+  on(event: string, cb: (...a: unknown[]) => void): void
   stderr(): string
   exited(): boolean
   pid(): number | undefined
@@ -104,7 +105,9 @@ export function startNativeMaster(mux: NativeMux, argv: string[]): NativeMasterH
     kill: () => {
       if (controlPath) void mux.exit(controlPath)
     },
-    on: (_ev, cb) => void events.on('exit', cb),
+    on: (ev, cb) => {
+      if (ev === 'exit') events.on('exit', cb)
+    },
     stderr: () => stderr,
     exited: () => exited,
     // No OS process. The manager only uses the pid to correlate askpass prompts, which the native
@@ -172,4 +175,69 @@ function promisify<T>(fn: (cb: (err: Error | null | undefined, v: T) => void) =>
 
 function result(code: number, stdout: string, stderr: string): ExecResult {
   return { code, signal: null, stdout: Buffer.from(stdout), stderr: Buffer.from(stderr), timedOut: false }
+}
+
+/** What a streaming caller uses of a ChildProcess (the setup runner): pipes, `close`, `error`, kill. */
+export interface NativeStreamChild extends EventEmitter {
+  stdout: PassThrough
+  stderr: PassThrough
+  kill(signal?: string): boolean
+}
+
+/**
+ * `spawn(ssh, argv, {stdio: ['ignore','pipe','pipe']})` over the native transport. Emits `close`
+ * with the remote exit status (255 when the channel is cut off or cannot be opened, ssh's code);
+ * `kill` closes the channel — the same thing killing the local mux client did.
+ */
+export function spawnSshArgvStream(mux: NativeMux, argv: string[]): NativeStreamChild {
+  const child = new EventEmitter() as NativeStreamChild
+  child.stdout = new PassThrough()
+  child.stderr = new PassThrough()
+  let closeChannel: (() => void) | null = null
+  let killed = false
+  let done = false
+  const finish = (code: number): void => {
+    if (done) return
+    done = true
+    child.stdout.end()
+    child.stderr.end()
+    child.emit('close', code)
+  }
+  child.kill = () => {
+    killed = true
+    // Asynchronously, as a real child reports its exit: a caller may attach 'close' after kill().
+    if (closeChannel) closeChannel()
+    else queueMicrotask(() => finish(255))
+    return true
+  }
+  let p: ParsedSsh
+  try {
+    p = parseSshArgv(argv)
+    if (p.kind !== 'exec') throw new Error('native ssh transport: not a command argv')
+  } catch (e) {
+    queueMicrotask(() => {
+      child.stderr.write(`${(e as Error).message}\n`)
+      finish(255)
+    })
+    return child
+  }
+  mux.channel(p).then(
+    (ch) => {
+      if (killed) {
+        ch.close()
+        return
+      }
+      closeChannel = () => ch.close()
+      ch.pipe(child.stdout, { end: false })
+      ch.stderr.pipe(child.stderr, { end: false })
+      ch.on('close', () => finish(channelExit(ch).code ?? 255))
+      ch.on('error', () => {})
+      ch.end()
+    },
+    (e: Error) => {
+      child.stderr.write(`${e.message}\n`)
+      finish(255)
+    }
+  )
+  return child
 }

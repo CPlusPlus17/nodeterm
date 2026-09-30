@@ -44,8 +44,9 @@ export interface ExecResult {
 export interface NativeMuxDeps {
   /** Effective config for a destination (`ssh -G`; see ssh-config.ts). */
   resolveHost(target: SshTarget): Promise<ResolvedHost>
-  /** Ask the user for a key's passphrase; null = cancelled. Absent = never prompt. */
-  askPassphrase?(identityFile: string): Promise<string | null>
+  /** Ask the user for a key's passphrase; null = cancelled (or nobody answered). Absent = never
+   *  prompt. `retry`: the previous answer was wrong. `target`: `user@host`, for the dialog. */
+  askPassphrase?(identityFile: string, req: { retry: boolean; target: string }): Promise<string | null>
   /** Default agent when the config names none (`SSH_AUTH_SOCK` / Windows' openssh-ssh-agent pipe). */
   defaultAgent?(): string | undefined
   readFile?(p: string): Buffer | null
@@ -182,6 +183,17 @@ export class NativeMux {
     p: Extract<ParsedSsh, { kind: 'exec' }>,
     pty: { cols: number; rows: number; term?: string }
   ): Promise<ClientChannel> {
+    return this.channel(p, pty)
+  }
+
+  /**
+   * A channel for `p`'s command, with a pty or without — the streaming form of `exec` for a caller
+   * that reads output as it arrives (the setup runner). Same master rules as `exec`.
+   */
+  async channel(
+    p: Extract<ParsedSsh, { kind: 'exec' }>,
+    pty?: { cols: number; rows: number; term?: string }
+  ): Promise<ClientChannel> {
     const cp = p.options.controlPath
     if (!cp) throw new Error('ssh: a pty needs a ControlPath')
     if (!this.conns.get(cp)?.alive) {
@@ -190,9 +202,17 @@ export class NativeMux {
     }
     const conn = this.conns.get(cp)!
     await conn.ready
-    const ptyOpts = { cols: pty.cols, rows: pty.rows, term: pty.term ?? 'xterm-256color' }
     return new Promise((resolve, reject) => {
-      const cb = (err: Error | undefined, ch: ClientChannel): void => (err ? reject(err) : resolve(ch))
+      const cb = (err: Error | undefined, ch: ClientChannel): void => {
+        if (err) return reject(err)
+        recordExit(ch)
+        resolve(ch)
+      }
+      if (!pty) {
+        conn.client.exec(p.command ?? '', cb)
+        return
+      }
+      const ptyOpts = { cols: pty.cols, rows: pty.rows, term: pty.term ?? 'xterm-256color' }
       if (p.command) conn.client.exec(p.command, { pty: ptyOpts }, cb)
       else conn.client.shell(ptyOpts, cb)
     })
@@ -336,7 +356,8 @@ export class NativeMux {
     const sock = await (this.deps.connectSocket ?? defaultConnectSocket)(host.hostname, host.port, timeoutMs)
     const knownAs = host.hostKeyAlias ?? target.host
     let hostKeyRefusal = ''
-    const auth = this.authPlan(target, host, options, mode)
+    const cancelled = { value: false }
+    const auth = this.authPlan(target, host, options, mode, cancelled)
     const cfg: ConnectConfig = {
       sock,
       username: host.user,
@@ -373,6 +394,9 @@ export class NativeMux {
         client.removeListener('ready', onReady)
         if (hostKeyRefusal) return reject(new Error(hostKeyRefusal))
         if (e.level === 'client-authentication') {
+          // A passphrase the user declined is the reason, not a denial by the server; say so the
+          // way the POSIX path does (SshProjectManager's cancelled message).
+          if (cancelled.value) return reject(new Error('SSH connection cancelled: this key needs its passphrase.'))
           return reject(new Error(`${target.user}@${target.host}: Permission denied (publickey).`))
         }
         reject(new Error(`ssh: ${e.message}`))
@@ -392,7 +416,8 @@ export class NativeMux {
     target: SshTarget,
     host: ResolvedHost,
     options: SshOptions,
-    mode: { interactive: boolean }
+    mode: { interactive: boolean },
+    cancelled: { value: boolean }
   ): { next(): Promise<unknown> } {
     const username = host.user
     const identitiesOnly = options.identitiesOnly ?? host.identitiesOnly
@@ -423,8 +448,11 @@ export class NativeMux {
           if (!mode.interactive || options.batchMode || !this.deps.askPassphrase) return null
           // Up to three tries, like ssh's NumberOfPasswordPrompts default.
           for (let i = 0; i < 3 && key instanceof Error; i++) {
-            const pass = await this.deps.askPassphrase(file)
-            if (pass === null) return null
+            const pass = await this.deps.askPassphrase(file, { retry: i > 0, target: `${target.user}@${target.host}` })
+            if (pass === null) {
+              cancelled.value = true
+              return null
+            }
             key = utils.parseKey(data, pass)
           }
         }
@@ -489,6 +517,29 @@ function filteredAgent(agentPath: string, pubFiles: Buffer[]): ReturnType<typeof
       )
     })
   return base
+}
+
+const exits = new WeakMap<ClientChannel, { code: number | null; signal: string | null }>()
+
+/**
+ * Record a channel's exit status the moment it is opened, synchronously. The open confirmation and
+ * the exit-status can arrive in ONE TCP read (a fast command, a pty whose remote side exits at
+ * once); ssh2 parses both in the same tick, so a listener attached after `await`ing the channel
+ * misses `exit`, and a clean remote exit would read as 255 — "the transport dropped", which sends
+ * the reconnector after a terminal that simply ended.
+ */
+function recordExit(ch: ClientChannel): void {
+  const rec = { code: null as number | null, signal: null as string | null }
+  exits.set(ch, rec)
+  ch.on('exit', (code: number | null, signal?: string) => {
+    rec.code = code
+    rec.signal = signal ?? null
+  })
+}
+
+/** The exit status recorded for a channel from `channel()` / `shell()` (null until it arrives). */
+export function channelExit(ch: ClientChannel): { code: number | null; signal: string | null } {
+  return exits.get(ch) ?? { code: null, signal: null }
 }
 
 function fail(e: unknown): ExecResult {

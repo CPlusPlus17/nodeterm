@@ -48,6 +48,8 @@ import {
   type RemoteNodeOwnerResolver
 } from './remote-end'
 import { RemoteSessionIndex, type SessionVerdict } from './remote-ssh/remote-session-index'
+import { isSshProgram, nativeExecFileAsync, nativeMux, useNativeSsh } from './remote-ssh/native/native-runtime'
+import { NativeSshPty } from './remote-ssh/native/native-pty'
 import { remotePtySpawnGate, type SpawnSlot } from './remote-ssh/pty-spawn-gate'
 import type { SshConnection } from '../shared/ssh'
 import { recordPendingRemoteKill, type PendingRemoteKill } from './pending-remote-kills'
@@ -213,10 +215,17 @@ const PROBE_TIMEOUT_MS = 6_000
  * just as invisible. Callers may still pass their own `timeout` for the rare op that needs longer.
  */
 const runAsync = ((file: string, args: readonly string[], opts?: object) =>
-  execFileAsync(file, args as string[], {
-    timeout: PROC_TIMEOUT_MS,
-    ...(opts ?? {})
-  } as never)) as unknown as typeof execFileAsync
+  // An ssh side-call on the native transport (Windows; see remote-ssh/native/native-mux.ts) runs
+  // over the project's one connection instead of spawning an ssh that cannot multiplex there.
+  // Same result and error shape as execFile, so no caller below changes.
+  isSshProgram(file) && useNativeSsh()
+    ? nativeExecFileAsync(args, {
+        timeout: ((opts as { timeout?: number } | undefined)?.timeout ?? PROC_TIMEOUT_MS)
+      })
+    : execFileAsync(file, args as string[], {
+        timeout: PROC_TIMEOUT_MS,
+        ...(opts ?? {})
+      } as never)) as unknown as typeof execFileAsync
 
 /** Narrow child-process seam for strict tmux probes/confirmed teardown. Production delegates to
  * the same bounded runner above; focused tests inject a stateful fake so hidden dual-backend
@@ -241,6 +250,9 @@ type ConfirmedProcessRun = (
  * would take the main process down instead of failing this one call.
  */
 function runWithStdin(file: string, args: readonly string[], input: string): Promise<unknown> {
+  if (isSshProgram(file) && useNativeSsh()) {
+    return nativeExecFileAsync(args, { timeout: PROC_TIMEOUT_MS, input })
+  }
   const p = execFileAsync(file, args as string[], { timeout: PROC_TIMEOUT_MS } as never)
   const child = (p as unknown as { child: import('child_process').ChildProcess }).child
   const stdin = child.stdin
@@ -3582,13 +3594,22 @@ export class PtyManager {
           )) as unknown as pty.IPty
     } else {
       try {
-        proc = pty.spawn(file, args, {
-          name: 'xterm-256color',
-          cols: options.cols,
-          rows: options.rows,
-          cwd,
-          env
-        })
+        proc =
+          !!(options.sshRemote && options.persistKey && remoteSsh) && useNativeSsh()
+            ? // The remote terminal as a pty CHANNEL on the project's one native connection: no ssh
+              // process (it could not multiplex on Windows). See remote-ssh/native/native-pty.ts.
+              (new NativeSshPty(nativeMux(), args, {
+                cols: options.cols,
+                rows: options.rows,
+                name: 'xterm-256color'
+              }) as unknown as pty.IPty)
+            : pty.spawn(file, args, {
+                name: 'xterm-256color',
+                cols: options.cols,
+                rows: options.rows,
+                cwd,
+                env
+              })
       } catch (err) {
         // node-pty surfaces the underlying failure as a bare "posix_spawnp failed." with no errno.
         // Two different field causes wear that same message, so BOTH are measured before anything is
