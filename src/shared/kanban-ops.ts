@@ -9,16 +9,21 @@ import { defaultKanbanFor } from './kanban-default-board'
 import { boardLabels, KANBAN_LABEL_COLORS, metaList } from './kanban-labels'
 import { isValidRank } from './kanban-rank'
 import { sanitizeViews } from './kanban-views'
-import { capCodePoints } from './presence'
+import { SYSTEM_NODE_COLORS } from './node-colors'
+import { capCodePoints, UNSAFE_DISPLAY_CHARS } from './presence'
 import type {
   KanbanAssignment, KanbanCardMeta, KanbanColumn, KanbanColumnCategory, KanbanLabel,
   KanbanLabelColor, KanbanOp, KanbanPriority, KanbanSavedView, ProjectKanban
 } from './types'
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/
-/** What a display name must never carry: C0/C1 controls (they break a name out of its one-line chip)
- *  and the bidi overrides / isolates (they make a name DISPLAY as something it is not). */
-const UNSAFE_DISPLAY = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g
+/** What a display name must never carry: C0/C1 controls (they break a name out of its one-line chip),
+ *  the bidi overrides / isolates and the zero-width marks and BOM (they make a name DISPLAY as
+ *  something it is not). ONE set, shared with presence names (@shared/presence). */
+const UNSAFE_DISPLAY = UNSAFE_DISPLAY_CHARS
+/** A column whose colour is missing or unusable keeps its place in this colour (the default board's
+ *  first column), exactly as a label with a colour off its palette becomes `default`. */
+const DEFAULT_COLUMN_COLOR = SYSTEM_NODE_COLORS[0]
 const TITLE_MAX = 200
 const COLOR_MAX = 64
 const NAME_MAX = 100
@@ -39,6 +44,9 @@ const text = (x: unknown, max: number): string | null =>
  * characters are removed, the rest trimmed, then cut to `max` CODE POINTS (never splitting an astral
  * character in half) and trimmed again. Only what is empty once repaired is refused (`null`). Ids
  * are never passed through here — an id is an address, and a repaired one addresses the wrong thing.
+ * Nor are they refused for their characters: ids are never displayed, and refusing one would stop
+ * that item, and every order op listing it, ever syncing. Only a malformed id (`isRefId`: not a
+ * string, empty, or past the ref bound) is refused.
  */
 function displayText(x: unknown, max: number): string | null {
   if (typeof x !== 'string') return null
@@ -53,9 +61,8 @@ const idList = (x: unknown): string[] | null => {
 function column(x: unknown): KanbanColumn | null {
   if (!isObj(x) || !isRefId(x.id)) return null
   const title = displayText(x.title, TITLE_MAX)
-  const color = text(x.color, COLOR_MAX)
-  if (title === null || color === null) return null
-  const out: KanbanColumn = { id: x.id, title, color }
+  if (title === null) return null
+  const out: KanbanColumn = { id: x.id, title, color: text(x.color, COLOR_MAX) ?? DEFAULT_COLUMN_COLOR }
   if (CATEGORIES.includes(x.category as KanbanColumnCategory)) out.category = x.category as KanbanColumnCategory
   return out
 }
@@ -106,9 +113,10 @@ export function isKanbanOp(m: { op?: unknown }): boolean {
   return typeof m.op === 'string' && m.op.startsWith('kb-')
 }
 
-/** The sanitized op, or null to REFUSE it. Refusals are whole-op (a bad id addresses the wrong
- *  thing); repairable fields are repaired or dropped — colour, rank, priority, dueAt, category, and
- *  the display text (label name, column title, assignee name: see `displayText`). */
+/** The sanitized op, or null to REFUSE it. Refusals are whole-op (a malformed id addresses the wrong
+ *  thing); repairable fields are repaired or dropped — colour (a column's to the default colour, a
+ *  label's to `default`), rank, priority, dueAt, category, and the display text (label name, column
+ *  title, assignee name: see `displayText`). */
 export function sanitizeKanbanOp(m: unknown): KanbanOp | null {
   if (!isObj(m)) return null
   switch (m.op) {
@@ -178,6 +186,12 @@ const metaOf = (b: ProjectKanban): KanbanCardMeta[] => metaList(b).filter(isEntr
 const labelsOf = (b: ProjectKanban): KanbanLabel[] => boardLabels(b)
 const viewsOf = (b: ProjectKanban): KanbanSavedView[] =>
   Array.isArray(b.views) ? b.views.filter(isEntry('id')) as KanbanSavedView[] : []
+/** Every node id a board's cards and card metadata name, read tolerantly. */
+export function boardNodeIds(b: ProjectKanban | undefined): string[] {
+  if (!b) return []
+  return [...assignmentsOf(b).map((a) => a.nodeId), ...metaOf(b).map((x) => x.nodeId)]
+}
+
 /** A card's label ids, whatever a malformed file put there. */
 const cardLabelIds = (x: KanbanCardMeta): string[] =>
   Array.isArray(x.labels) ? x.labels.filter((l): l is string => typeof l === 'string') : []

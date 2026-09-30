@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { applyKanbanOp, diffKanbanOps, sanitizeKanbanOp, kanbanOpKey, isKanbanDeletion } from './kanban-ops'
-import { defaultKanbanFor } from './kanban-default-board'
+import { DEFAULT_BOARD_COLUMNS, defaultKanbanFor } from './kanban-default-board'
+import { UNSAFE_DISPLAY_CHARS } from './presence'
 import { columnOrder } from './kanban-order'
 import { isValidRank, rankBetween } from './kanban-rank'
 import type { KanbanOp, ProjectKanban } from './types'
@@ -52,9 +53,27 @@ describe('sanitizeKanbanOp', () => {
     expect(sanitizeKanbanOp({ op: 'kb-meta', meta: { nodeId: 'n1', assignees: [{ name: 'Ada\u202egnihsihp', color: '#f00' }, { name: '\u0007', color: '#0f0' }] } }))
       .toEqual({ op: 'kb-meta', meta: { nodeId: 'n1', assignees: [{ name: 'Adagnihsihp', color: '#f00' }] } })
   })
-  it('ids stay refuse-only: a control character in an id is not repaired', () => {
+  // An id is an ADDRESS, never displayed: a malformed one (not a string, empty, past the ref bound) is
+  // refused whole, and any other string is carried byte for byte. Stripping a character would address
+  // a different item; refusing it would stop that item (and any order op listing it) ever syncing.
+  it('ids are never repaired: a malformed id is refused, any other string is carried as is', () => {
     expect(sanitizeKanbanOp({ op: 'kb-column-remove', id: 'x'.repeat(129) })).toBeNull()
     expect(sanitizeKanbanOp({ op: 'kb-card', assignment: { nodeId: '', columnId: 'c1' } })).toBeNull()
+    expect(sanitizeKanbanOp({ op: 'kb-column-remove', id: 'a\u0007\u202eb' })).toEqual({ op: 'kb-column-remove', id: 'a\u0007\u202eb' })
+  })
+  // D7: ONE unsafe-display set, shared with presence names: the zero-width marks and the BOM too.
+  it('strips zero-width marks and the BOM from a display name, like a presence name', () => {
+    expect(sanitizeKanbanOp({ op: 'kb-label', label: { id: 'l1', name: '\ufeffB\u200bu\u200fg', color: 'red' } }))
+      .toEqual({ op: 'kb-label', label: { id: 'l1', name: 'Bug', color: 'red' } })
+    expect(UNSAFE_DISPLAY_CHARS.source).toContain('\\u200b-\\u200f')
+  })
+  // D7: a column's colour is repaired, not a reason to refuse the column (like a label's).
+  it('a column with a missing or invalid colour keeps its place with the default colour', () => {
+    const expected = { op: 'kb-column', column: { id: 'c1', title: 'T', color: DEFAULT_BOARD_COLUMNS[0].color } }
+    expect(sanitizeKanbanOp({ op: 'kb-column', column: { id: 'c1', title: 'T' } })).toEqual(expected)
+    expect(sanitizeKanbanOp({ op: 'kb-column', column: { id: 'c1', title: 'T', color: 7 } })).toEqual(expected)
+    expect(sanitizeKanbanOp({ op: 'kb-column', column: { id: 'c1', title: 'T', color: '#f\u0000' } })).toEqual(expected)
+    expect(sanitizeKanbanOp({ op: 'kb-column', column: { id: 'c1', title: 'T', color: 'x'.repeat(65) } })).toEqual(expected)
   })
   it('drops an invalid rank rather than the whole op', () => {
     expect(sanitizeKanbanOp({ op: 'kb-card', assignment: { nodeId: 'n1', columnId: 'c1', rank: '!!' } }))

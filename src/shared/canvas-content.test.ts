@@ -238,18 +238,44 @@ describe('diffContent', () => {
   // outside edit that REMOVED the block (a checkout from before the board was first edited) turns
   // every replica's board back into that default, instead of casting nothing and leaving each
   // client's old board in place over a file that no longer has one.
-  it('a removed board diffs to the lazy default', () => {
+  it('a removed board diffs to the lazy default: every item list, not only columns and cards', () => {
     const prev: CanvasContent = {
       nodes: [node('a')],
       bridges: [],
       ropes: [],
-      kanban: { columns: [{ id: 'k1', title: 'T', color: '#000' }], assignments: [{ nodeId: 'a', columnId: 'k1' }] }
+      kanban: {
+        columns: [{ id: 'k1', title: 'T', color: '#000' }],
+        assignments: [{ nodeId: 'a', columnId: 'k1' }],
+        meta: [{ nodeId: 'a', priority: 'high', labels: ['l1'] }],
+        labels: [{ id: 'l1', name: 'Bug', color: 'red' }],
+        views: [{ id: 'v1', name: 'Mine', query: {} } as never]
+      }
     }
     const next: CanvasContent = { nodes: [node('a')], bridges: [], ropes: [] }
     const replayed = diffContent(prev, next, 'p').reduce((c, m) => applyCanvasOp(c, m, 'p'), prev)
-    expect(replayed.kanban?.columns).toEqual(defaultKanbanFor('p').columns)
+    const fresh = defaultKanbanFor('p')
+    expect(replayed.kanban?.columns).toEqual(fresh.columns)
     expect(replayed.kanban?.assignments).toEqual([])
+    expect(replayed.kanban?.meta ?? []).toEqual([])
+    expect(replayed.kanban?.labels ?? []).toEqual([])
+    expect(replayed.kanban?.views ?? []).toEqual([])
     // …and a project that never had a board still casts nothing for it.
     expect(diffContent(next, { ...next }, 'p')).toEqual([])
+  })
+
+  // D12: the placement of a card whose node is gone on BOTH sides (a dead card the file still
+  // carried) is removed when the outside edit drops it; before, `prev ∪ next` node ids were the only
+  // live set, so every replica kept it.
+  it('drops a dead card placement and its meta when the edit drops them', () => {
+    const board = (withCard: boolean): ProjectKanban => ({
+      ...defaultKanbanFor('p'),
+      assignments: withCard ? [{ nodeId: 'gone', columnId: defaultKanbanFor('p').columns[0].id }] : [],
+      ...(withCard ? { meta: [{ nodeId: 'gone', priority: 'low' as const }] } : {})
+    })
+    const prev: CanvasContent = { nodes: [node('a')], bridges: [], ropes: [], kanban: board(true) }
+    const next: CanvasContent = { nodes: [node('a')], bridges: [], ropes: [], kanban: board(false) }
+    const ops = diffContent(prev, next, 'p')
+    expect(ops).toContainEqual({ op: 'kb-card-remove', nodeId: 'gone' })
+    expect(ops).toContainEqual({ op: 'kb-meta-remove', nodeId: 'gone' })
   })
 })

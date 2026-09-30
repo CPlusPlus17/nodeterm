@@ -10,7 +10,7 @@ import {
   isWellFormedMutation
 } from './canvas-mutations'
 import { defaultKanbanFor } from './kanban-default-board'
-import { applyKanbanOp, diffKanbanOps, isKanbanOp, sanitizeKanbanOp } from './kanban-ops'
+import { applyKanbanOp, boardNodeIds, diffKanbanOps, isKanbanOp, sanitizeKanbanOp } from './kanban-ops'
 import type { BridgeLink, CanvasMutation, CanvasNodeState, Project, ProjectKanban } from './types'
 
 /**
@@ -57,7 +57,9 @@ export function contentOf(p: Pick<Project, 'nodes' | 'bridges' | 'ropes' | 'kanb
  * header for why a reducer must not re-apply a transport limit). A malformed op is a no-op.
  */
 export function applyCanvasOp(c: CanvasContent, m: CanvasMutation, projectId: string): CanvasContent {
-  if (!isWellFormedMutation(m)) return c
+  if (!m || typeof m !== 'object') return c
+  // A board op is sanitized ONCE: `sanitizeKanbanOp` is its whole shape verdict (what
+  // `isWellFormedMutation` would have asked for it), and its result is the op applied.
   if (isKanbanOp(m)) {
     const op = sanitizeKanbanOp(m)
     if (!op) return c
@@ -65,6 +67,7 @@ export function applyCanvasOp(c: CanvasContent, m: CanvasMutation, projectId: st
     const after = applyKanbanOp(c.kanban, op, projectId)
     return sameBoard(before, after) ? c : { ...c, kanban: after }
   }
+  if (!isWellFormedMutation(m)) return c
   if (isEdgeMutation(m)) {
     const s = applyEdgeMutationToScene({ bridges: c.bridges, ropes: c.ropes }, m)
     return s.bridges === c.bridges && s.ropes === c.ropes ? c : { ...c, bridges: s.bridges, ropes: s.ropes }
@@ -76,9 +79,10 @@ export function applyCanvasOp(c: CanvasContent, m: CanvasMutation, projectId: st
 /**
  * The ops that turn `prev` into `next`, for an OUTSIDE edit (a git pull, a hand edit) that the
  * authority must publish to every client as if someone had cast it. Every removal in it is real:
- * the board part is diffed with EVERY node id of both sides as live, so a card whose node is gone
- * from the new file has its removal cast — unlike a client's publisher, which must not cast the
- * lazy prune of a card whose node op may simply not have arrived yet.
+ * the board part is diffed with EVERY node id of both sides as live — the nodes, and every node a
+ * card of the old board names — so a card whose node is gone from the new file has its removal cast,
+ * a dead card the file carried included, unlike a client's publisher, which must not cast the lazy
+ * prune of a card whose node op may simply not have arrived yet.
  *
  * A `next` with no board while `prev` had one diffs to the LAZY DEFAULT, not to nothing: a file with
  * no `kanban` block renders as the default board on every client, so an outside edit that removed
@@ -95,7 +99,7 @@ export function diffContent(prev: CanvasContent, next: CanvasContent, projectId:
     { nodes: prev.nodes, bridges: prev.bridges, ropes: prev.ropes },
     { nodes: next.nodes, bridges: next.bridges, ropes: next.ropes }
   )
-  const all = new Set([...prev.nodes, ...next.nodes].map((n) => n.id))
+  const all = new Set([...[...prev.nodes, ...next.nodes].map((n) => n.id), ...boardNodeIds(prev.kanban)])
   const nextBoard = next.kanban ?? (prev.kanban ? defaultKanbanFor(projectId) : undefined)
   const board = diffKanbanOps(prev.kanban, nextBoard, projectId, all)
   const nodeAdds = scene.filter((m) => m.op === 'upsert')

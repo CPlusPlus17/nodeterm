@@ -260,6 +260,15 @@ describe('board labels', () => {
     expect(boardLabels(k)[1]).toMatchObject({ id: idB, name: 'B', color: 'green' })
   })
 
+  // D7: a hand-edited file can carry a non-list `labels`; the toggle reads it as none instead of
+  // throwing (`.includes` of a string or an object) out of a click handler.
+  it('toggleCardLabel treats a non-list labels field as no labels', () => {
+    const k = { columns: [], assignments: [], meta: [{ nodeId: 'n1', labels: 'bug' as never, priority: 'high' as const }] }
+    expect(toggleCardLabel(k, 'n1', 'l1').meta).toEqual([{ nodeId: 'n1', priority: 'high', labels: ['l1'] }])
+    const obj = { columns: [], assignments: [], meta: [{ nodeId: 'n1', labels: { 0: 'x' } as never }] }
+    expect(toggleCardLabel(obj, 'n1', 'l1').meta).toEqual([{ nodeId: 'n1', labels: ['l1'] }])
+  })
+
   it('toggleCardLabel adds then removes; labelsForCard resolves in palette order and drops dangling', () => {
     let k = createLabel(board(), 'A', 'blue').k
     const a = boardLabels(k)[0].id
