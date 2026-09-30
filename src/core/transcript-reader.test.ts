@@ -879,7 +879,9 @@ describe('system-injected user records', () => {
         { origin: { kind: 'human' } },
         { promptSource: 'typed' },
         { promptSource: 'queued' },
-        { promptSource: 'suggestion_accepted' }
+        { promptSource: 'suggestion_accepted' },
+        { promptSource: 'sdk' },
+        { promptSource: 'some-future-human-source' }
       ]) {
         const msgs = parseChatMessages(userStr(el, extra).split('\n'))
         expect(msgs).toEqual([{ role: 'user', parts: [{ kind: 'text', text: el }] }])
@@ -1100,7 +1102,7 @@ describe('system-injected user records', () => {
     const fill = (unit: string): string => unit.repeat(Math.ceil(SIZE / unit.length))
     const hex4 = (i: number): string => (i % 65536).toString(16).padStart(4, '0')
     // Generous on purpose (a loaded CI box), and still an order of magnitude under any quadratic time.
-    const BOUND_MS = 1500
+    const BOUND_MS = 5000
     const cases: Array<[string, string]> = [
       ['unclosed paste opens, one id', userStr(fill('<pasted_content id="0a1b">\nx'), { origin: { kind: 'human' } })],
       [

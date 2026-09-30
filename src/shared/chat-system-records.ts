@@ -56,7 +56,7 @@ export function fencePasted(body: string): string {
 
 /**
  * Every paste span in typed text → `fencePasted(body)`, left to right. A span's body ends at the
- * FIRST close marker with the same id at or after the body's start (the CLI's own `indexOf`). Text
+ * FIRST close marker with the same id at or after the body's start (close to, but deliberately not exactly, the CLI's `o_t`: an empty body and an unclosed open stay as typed here — the CLI's writer never emits either, so ports must NOT "correct" toward the CLI). Text
  * outside the spans is kept as typed; an open with no matching close is left alone.
  */
 export function expandPastedContent(text: string): string {

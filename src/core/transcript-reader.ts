@@ -190,8 +190,11 @@ const originKind = (origin: unknown): string | undefined => {
   return typeof k === 'string' ? k : undefined
 }
 
-/** `promptSource` values that mean a human sent the record (measured on CLI 2.1.285). */
-const HUMAN_PROMPT_SOURCES: ReadonlySet<string> = new Set(['typed', 'queued', 'suggestion_accepted'])
+/** The only `promptSource` values a content-only (origin-less) task-notification may carry: none, or
+ *  `system`. An ALLOWLIST, not a list of human sources — a human source added later (`sdk` already
+ *  exists, 132 records measured) must never turn a human's pasted element into a chip. Every real
+ *  notification measured (1,693, CLI 2.1.209–2.1.286) carries `origin.kind` AND `promptSource:"system"`. */
+const systemOrUnsetSource = (source: unknown): boolean => source === undefined || source === 'system'
 
 /** The first line of the trimmed text, trimmed, capped like a tool arg. */
 const firstLine = (text: string): string => capArg(text.trim().split('\n')[0])
@@ -296,8 +299,10 @@ export function classifySystemRecord(
   content: string
 ): SystemRecord | null {
   const kind = originKind(rec.origin)
-  const human = typeof rec.promptSource === 'string' && HUMAN_PROMPT_SOURCES.has(rec.promptSource)
-  if (kind === 'task-notification' || (kind === undefined && !human && isWholeTaskNotification(content))) {
+  if (
+    kind === 'task-notification' ||
+    (kind === undefined && systemOrUnsetSource(rec.promptSource) && isWholeTaskNotification(content))
+  ) {
     return taskNotification(content)
   }
   if (kind === 'peer') return peerMessage(content)
