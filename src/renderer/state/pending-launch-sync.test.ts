@@ -1,15 +1,16 @@
 // `pendingLaunch` across the live canvas (applyMutationToFlow), the background-project store
-// (applyNodeMutation / applyOwnNodeMutation), and two Server Edition tabs sharing one core.
+// (applyNodeMutation / applyOwnNodeMutation), and a relay tab's receive path. The two-owner-tabs
+// half (through the real core reflector) is cross-layer and lives in
+// test/acceptance/pending-launch-reflector.test.ts.
 //
 // The launch is machine-local (@shared/node-exec): a peer or relay guest may never set, replace or
 // clear it. Two OWNER tabs, though, must still agree on who claimed a launch, or both would type it
 // — so the core forwards an owner's copy to the other owners with `origin: 'core'`, and that copy
-// is authoritative. These tests pin both halves, including exactly-once.
+// is authoritative. The peer/relay half is pinned here.
 import { describe, it, expect, beforeEach } from 'vitest'
-import { applyMutationToFlow, nodeStatesToFlow, flowToNodeStates, type CanvasNode } from './workspace'
+import { applyMutationToFlow, nodeStatesToFlow, type CanvasNode } from './workspace'
 import { useProjects } from './projects'
-import { sanitizeInboundMutation, stripCastNodeExec } from '@shared/node-exec'
-import { launchesToFire } from '../lib/pendingLaunch'
+import { receivedCanvasMutation } from '../session/relay-ssh'
 import type { CanvasMutation, CanvasNodeState, PendingLaunch } from '@shared/types'
 
 const armed: PendingLaunch = { after: [], command: 'claude "brief"', attempted: false }
@@ -45,6 +46,12 @@ describe('applyMutationToFlow (live canvas)', () => {
     const cleared = applyMutationToFlow(mine, { op: 'upsert', node: state(), origin: 'core' })
     expect(cleared[0].data.pendingLaunch).toBeUndefined()
   })
+  it('a core-vouched copy of a node we do NOT have yet is appended WITH its launch', () => {
+    // The append branch: the Server Edition's headless factory publishes a brand-new held node.
+    const other = flow(state({ id: 'n0' }))
+    const out = applyMutationToFlow(other, { op: 'upsert', node: state({ pendingLaunch: armed }), origin: 'core' })
+    expect(out.find((n) => n.id === 'n1')?.data.pendingLaunch).toEqual(armed)
+  })
 })
 
 describe('projects store (a project not on screen)', () => {
@@ -71,26 +78,35 @@ describe('projects store (a project not on screen)', () => {
   })
 })
 
-describe('two owner tabs on one Server Edition core: a launch is typed exactly once', () => {
-  /** Tab A claims the launch (the write-ahead `attempted:true, manualOnly:true`) and casts it; the
-   *  core fans it out; tab B applies what it received. Returns B's canvas afterwards. */
-  function claimReachesB(bIsOwner: boolean): CanvasNode[] {
-    const tabB = flow(state({ pendingLaunch: armed }))
-    const claimed = stripCastNodeExec(flowToNodeStates(flow(state({ pendingLaunch: { ...armed, attempted: true, manualOnly: true } }))))[0]
-    // What the core's reflector sends tab B (pinned in core/canvas-sync.pending-launch.test.ts):
-    // an owner recipient gets the owner's copy vouched with origin 'core'; anyone else gets it
-    // stripped of the launch.
-    const cast: CanvasMutation = { op: 'upsert', node: claimed, src: 'cv-a', seq: 1 }
-    const delivered: CanvasMutation[] = [bIsOwner ? { ...cast, origin: 'core' } : sanitizeInboundMutation(cast)]
-    return applyMutationToFlow(tabB, delivered[0])
-  }
-  it('an owner tab B sees A\'s claim and does not fire', () => {
-    const b = claimReachesB(true)
-    expect(b[0].data.pendingLaunch?.manualOnly).toBe(true)
-    expect(launchesToFire(b as never, {}, new Set(['n1']))).toEqual([])
+/**
+ * A relay TAB on this machine shows another machine's project; its mutations come from that
+ * machine's core, which can put `origin: 'core'` on anything. Canvas.tsx passes every received
+ * mutation through `receivedCanvasMutation(received, relay)` before applying it (live canvas, or
+ * the store for a background project) — so a remote vouch can neither plant nor clear a launch here.
+ */
+describe('a relay tab: a remote core\'s origin:\'core\' vouches for nothing', () => {
+  const vouchedClear: CanvasMutation = { op: 'upsert', node: state(), origin: 'core', seq: 1 }
+  const vouchedPlant: CanvasMutation = { op: 'upsert', node: state({ id: 'x', pendingLaunch: { after: [], command: 'evil' } }), origin: 'core', seq: 2 }
+  it('live canvas: cannot clear our launch, cannot plant one', () => {
+    const mine = flow(state({ pendingLaunch: armed }))
+    expect(applyMutationToFlow(mine, receivedCanvasMutation(vouchedClear, true))[0].data.pendingLaunch).toEqual(armed)
+    const planted = applyMutationToFlow(mine, receivedCanvasMutation(vouchedPlant, true))
+    expect(planted.find((n) => n.id === 'x')?.data.pendingLaunch).toBeUndefined()
   })
-  it('control: a tab that did NOT receive the claim would fire it a second time', () => {
-    const b = claimReachesB(false)
-    expect(launchesToFire(b as never, {}, new Set(['n1'])).map((l) => l.id)).toEqual(['n1'])
+  it('background project (the store): cannot clear our launch, cannot plant one', () => {
+    useProjects.getState().hydrate({ version: 2, activeProjectId: '', projects: [] })
+    const p = useProjects.getState().addProject('p', '/tmp/p')
+    useProjects.getState().applyOwnNodeMutation(p.id, { op: 'upsert', node: state({ pendingLaunch: armed }) })
+    useProjects.getState().applyNodeMutation(p.id, receivedCanvasMutation(vouchedClear, true))
+    useProjects.getState().applyNodeMutation(p.id, receivedCanvasMutation(vouchedPlant, true))
+    const nodes = useProjects.getState().getProject(p.id)!.nodes
+    expect(nodes.find((n) => n.id === 'n1')?.pendingLaunch).toEqual(armed)
+    expect(nodes.find((n) => n.id === 'x')?.pendingLaunch).toBeUndefined()
+  })
+  it('control: the same vouched copy on a LOCAL session is authoritative (sets and clears)', () => {
+    const mine = flow(state({ pendingLaunch: armed }))
+    expect(applyMutationToFlow(mine, receivedCanvasMutation(vouchedClear, false))[0].data.pendingLaunch).toBeUndefined()
+    const planted = applyMutationToFlow(mine, receivedCanvasMutation(vouchedPlant, false))
+    expect(planted.find((n) => n.id === 'x')?.data.pendingLaunch).toEqual({ after: [], command: 'evil' })
   })
 })

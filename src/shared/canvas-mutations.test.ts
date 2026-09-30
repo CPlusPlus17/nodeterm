@@ -38,6 +38,22 @@ describe('applyCanvasMutation', () => {
       applyCanvasMutation([n('1'), n('2')], { op: 'remove', id: '1' }).map((x) => x.id)
     ).toEqual(['2'])
   })
+
+  // A held launch (`pendingLaunch`) is machine-local (@shared/node-exec). The APPEND branch is the
+  // one the Server Edition's headless factory depends on: it publishes a brand-new held node, and
+  // an owner tab must receive it WITH its launch, or that tab's next save drops the launch.
+  describe('pendingLaunch on an APPENDED node', () => {
+    const held = { after: [], command: 'claude "brief"', attempted: true, manualOnly: true }
+    it('a core-vouched upsert of a node we do not have keeps its launch', () => {
+      const out = applyCanvasMutation([n('1')], { op: 'upsert', node: { ...n('2'), pendingLaunch: held }, origin: 'core' })
+      expect(out.find((x) => x.id === '2')?.pendingLaunch).toEqual(held)
+    })
+    it('an unvouched (peer) upsert of a node we do not have drops it', () => {
+      const out = applyCanvasMutation([n('1')], { op: 'upsert', node: { ...n('2'), pendingLaunch: held } })
+      expect(out.find((x) => x.id === '2')).toBeDefined()
+      expect(out.find((x) => x.id === '2')?.pendingLaunch).toBeUndefined()
+    })
+  })
 })
 
 describe('diffToMutations', () => {

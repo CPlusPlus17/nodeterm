@@ -76,7 +76,7 @@ import {
   useSharedGlyphActive
 } from './SharedGlyphLayer'
 import { SshReconnector } from '../lib/sshReconnect'
-import { projectMayDialSsh, sanitizeRelayMutation } from '../session/relay-ssh'
+import { projectMayDialSsh, receivedCanvasMutation } from '../session/relay-ssh'
 import {
   hostAttachmentsFor,
   planActiveProjectDials,
@@ -689,7 +689,6 @@ import {
   type CanvasScene
 } from '@shared/canvas-mutations'
 import { isKanbanOp } from '@shared/kanban-ops'
-import { withoutCoreOrigin } from '@shared/node-exec'
 import { chordHeld, isHoldChord, isModifierEventKey, matchesShortcut } from '@shared/shortcut'
 
 // The dispatch below is the CONSUMER of the confirm-gated set. Before this import the set named
@@ -4064,7 +4063,7 @@ export function Canvas() {
     // dial-capable SSH connection onto this machine (session/relay-ssh.ts).
     const relay = activeSession.source === 'relay'
     return activeSession.api.canvas.onMutation((projectId, received) => {
-      const mutation = relay ? sanitizeRelayMutation(withoutCoreOrigin(received)) : received
+      const mutation = receivedCanvasMutation(received, relay)
       // Proof of a peer, whatever the presence table says — but only a cast from ANOTHER client
       // (`provesPeer`): our own echo is our ack, and a lone client that casts on a governed project
       // must not start publishing every project on this core.

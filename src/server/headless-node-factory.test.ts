@@ -254,8 +254,10 @@ describe('HeadlessNodeFactory', () => {
       launchTiming: { quietMs: 0, capMs: 0 },
       // Every content op the factory casts; `published` / `removed` keep the node halves these
       // tests assert on (edges and board ops are cast too — see the cast-before-save suite).
+      // `published` holds a SNAPSHOT, as the real publisher takes one at call time: the factory
+      // goes on to update the same node object in place after it publishes.
       publishMutation: (_projectId, m) => {
-        if (m.op === 'upsert') published.push(m.node)
+        if (m.op === 'upsert') published.push(structuredClone(m.node))
         else if (m.op === 'remove') removed.push(m.id)
       },
       publishProject: (project) => publishedProjects.push(structuredClone(project))
@@ -289,6 +291,11 @@ describe('HeadlessNodeFactory', () => {
     expect(pty.sends).toEqual([{ nodeId: id, text: 'printf hello' }])
     // The persisted hold is published first, then its acknowledged delivery.
     expect(published.map((node) => node.id)).toEqual([id, id])
+    // …and the first publish CARRIES the claimed hold: an owner tab appends this brand-new node
+    // with its launch (test/acceptance/pending-launch-reflector.test.ts), so its next save
+    // cannot drop what this core persisted. The second is the delivery, which clears it.
+    expect(published[0].pendingLaunch).toMatchObject({ command: 'printf hello', attempted: true, manualOnly: true })
+    expect(published[1].pendingLaunch).toBeUndefined()
 
     expect(fs.existsSync(path.join(dataDir, 'workspace.json'))).toBe(true)
     const projectFile = path.join(projectDir, '.nodeterm', 'project.json')

@@ -1,4 +1,5 @@
 import type { CanvasMutation, CanvasNodeState, Project } from '@shared/types'
+import { withoutCoreOrigin } from '@shared/node-exec'
 
 /**
  * A relay tab must never make THIS machine dial SSH.
@@ -70,6 +71,16 @@ export function sanitizeRelayMutation(mutation: CanvasMutation): CanvasMutation 
   if (mutation.op !== 'upsert') return mutation
   const node = sanitizeRelayNode(mutation.node)
   return node === mutation.node ? mutation : { ...mutation, node }
+}
+
+/**
+ * What a canvas-sync mutation received on a session may do here. A relay tab's mutations come from
+ * ANOTHER machine's core, which can put anything on the wire, so its `origin: 'core'` vouches for
+ * nothing: it is dropped (the node's held launch stays ours — @shared/node-exec) and the
+ * dial-capable SSH connection is stripped. A local session's mutation is returned as received.
+ */
+export function receivedCanvasMutation(received: CanvasMutation, relay: boolean): CanvasMutation {
+  return relay ? sanitizeRelayMutation(withoutCoreOrigin(received)) : received
 }
 
 /**
