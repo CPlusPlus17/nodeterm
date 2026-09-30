@@ -4417,11 +4417,12 @@ export class PtyManager {
   }
 
   /**
-   * A live link's keyframe: the VISIBLE screen of a session, with the cursor and the alternate-screen
-   * flag read in the same tmux invocation — never history. Which backends get one, the exact target
-   * and the parse are `watch-link/capture-route.ts`. The session host (scrollback only), a direct
-   * Windows pane and a plain shell get `unavailableCapture()`, as does any failure — a dead
-   * ControlMaster, tmux's own "can't find session" for an exact-target miss.
+   * A live link's keyframe: the VISIBLE screen of a session, with the cursor read in the same tmux
+   * invocation — never history. The keyframe's `altScreen` is the caller's, from the join (a
+   * tmux-backed client paints on the alternate screen; see `VisibleCapture`). Which backends get
+   * one, the exact target and the parse are `watch-link/capture-route.ts`. The session host
+   * (scrollback only), a direct Windows pane and a plain shell get `unavailableCapture()`, as does
+   * any failure — a dead ControlMaster, tmux's own "can't find session" for an exact-target miss.
    */
   async captureVisible(sessionId: string): Promise<VisibleCapture> {
     const session = this.sessions.get(sessionId)

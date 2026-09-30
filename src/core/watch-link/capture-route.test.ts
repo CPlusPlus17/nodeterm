@@ -64,76 +64,66 @@ describe('localCaptureVisibleArgs', () => {
     expect(args.filter((a) => a.includes('nt-abc'))).toEqual(['=nt-abc:', '=nt-abc:'])
   })
 
-  it('asks for the cursor and the alternate-screen flag', () => {
-    expect(VISIBLE_CAPTURE_FORMAT).toBe('#{cursor_x} #{cursor_y} #{alternate_on}')
+  it('asks for the cursor and nothing else — no alternate-screen flag (R18)', () => {
+    // A keyframe's altScreen comes from the JOIN (tmux-backed client => true), never the capture:
+    // the pane's `#{alternate_on}` describes a different screen than the tmux client's stream.
+    expect(VISIBLE_CAPTURE_FORMAT).toBe('#{cursor_x} #{cursor_y}')
+    expect(args.join(' ')).not.toContain('alternate_on')
   })
 })
 
 describe('parseVisibleCapture', () => {
   it('splits the trailing cursor line off a real tmux 3.4 reply', () => {
     // Measured: a 20x4 pane after 10 lines of output — only the visible rows, then the cursor line.
-    expect(parseVisibleCapture('L8\nL9\nL10\n\n0 3 0\n')).toEqual({
+    expect(parseVisibleCapture('L8\nL9\nL10\n\n0 3\n')).toEqual({
       screen: 'L8\nL9\nL10\n\n',
-      cursor: { x: 0, y: 3 },
-      altScreen: false
+      cursor: { x: 0, y: 3 }
     })
   })
 
-  it('reads the alternate-screen flag', () => {
-    expect(parseVisibleCapture('\n  ALT\n\n\n5 1 1\n')).toEqual({
-      screen: '\n  ALT\n\n\n',
-      cursor: { x: 5, y: 1 },
-      altScreen: true
-    })
+  it('carries no alternate-screen field at all', () => {
+    expect(Object.keys(parseVisibleCapture('\n  ALT\n\n\n5 1\n')).sort()).toEqual(['cursor', 'screen'])
+    expect(Object.keys(parseVisibleCapture('no cursor line\n')).sort()).toEqual(['cursor', 'screen'])
   })
 
   it('keeps the screen byte-identical to what capture-pane printed on its own', () => {
     const screen = '\u001b[1mbold\u001b[0m\nplain\n'
-    expect(parseVisibleCapture(`${screen}12 1 0\n`).screen).toBe(screen)
+    expect(parseVisibleCapture(`${screen}12 1\n`).screen).toBe(screen)
   })
 
   it('an empty screen is an empty string, not the cursor line', () => {
-    expect(parseVisibleCapture('0 0 0\n')).toEqual({
-      screen: '',
-      cursor: { x: 0, y: 0 },
-      altScreen: false
-    })
+    expect(parseVisibleCapture('0 0\n')).toEqual({ screen: '', cursor: { x: 0, y: 0 } })
   })
 
   it('a screen whose own last line looks like a cursor line keeps that line', () => {
     // Only the LAST line is the cursor; a numeric-ish row above it is screen text.
-    expect(parseVisibleCapture('10 20 1\n3 4 0\n')).toEqual({
-      screen: '10 20 1\n',
-      cursor: { x: 3, y: 4 },
-      altScreen: false
-    })
+    expect(parseVisibleCapture('10 20\n3 4\n')).toEqual({ screen: '10 20\n', cursor: { x: 3, y: 4 } })
   })
 
   it('reads CRLF line endings', () => {
-    expect(parseVisibleCapture('a\r\nb\r\n7 1 1\r\n')).toEqual({
+    expect(parseVisibleCapture('a\r\nb\r\n7 1\r\n')).toEqual({
       screen: 'a\r\nb\r\n',
-      cursor: { x: 7, y: 1 },
-      altScreen: true
+      cursor: { x: 7, y: 1 }
     })
   })
 
   it('without a cursor line the whole output is the screen and the cursor is unknown', () => {
-    for (const out of ['a\nb\n', 'a\nb', 'a\n3 4 5\n', 'a\n3 4\n', 'a\nx 1 0\n', 'a\n  \n', '']) {
-      expect(parseVisibleCapture(out)).toEqual({ screen: out, cursor: null, altScreen: null })
+    for (const out of ['a\nb\n', 'a\nb', 'a\n3 4 5\n', 'a\n3 4 0\n', 'a\n3\n', 'a\nx 1\n', 'a\n  \n', '']) {
+      expect(parseVisibleCapture(out)).toEqual({ screen: out, cursor: null })
     }
   })
 
   it('does not accept a padded or signed cursor line', () => {
-    for (const line of [' 1 2 0', '1 2 0 ', '-1 2 0', '1  2 0', '1\t2\t0']) {
+    for (const line of [' 1 2', '1 2 ', '-1 2', '1  2', '1\t2']) {
       const out = `s\n${line}\n`
-      expect(parseVisibleCapture(out)).toEqual({ screen: out, cursor: null, altScreen: null })
+      expect(parseVisibleCapture(out)).toEqual({ screen: out, cursor: null })
     }
   })
 })
 
 describe('unavailableCapture', () => {
   it('is an empty screen with nothing known', () => {
-    expect(unavailableCapture()).toEqual({ screen: '', cursor: null, altScreen: null })
+    expect(unavailableCapture()).toEqual({ screen: '', cursor: null })
   })
 
   it('is a fresh object each time (a caller may mutate what it was handed)', () => {

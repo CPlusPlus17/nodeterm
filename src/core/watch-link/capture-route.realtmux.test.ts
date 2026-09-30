@@ -1,4 +1,4 @@
-// A LIVE LINK'S KEYFRAME, CAPTURED FROM A REAL TMUX (R10 + R17).
+// A LIVE LINK'S KEYFRAME, CAPTURED FROM A REAL TMUX (R10 + R17, amended by R18: no alt-screen flag).
 //
 // What is measured here is a property of tmux, not of our code, so it cannot be unit-tested:
 //  - the one invocation `capture-pane … ; display-message …` really does print the visible screen
@@ -111,9 +111,8 @@ describe('visible capture against a real tmux', () => {
     const got = captureVisible('nt-x-12')
     expect(got.screen).toContain('SCREEN-OF-12')
     expect(got.cursor).toEqual({ x: 0, y: 1 })
-    expect(got.altScreen).toBe(false)
     // The cursor line is not left in the screen.
-    expect(got.screen).not.toMatch(/\d+ \d+ [01]\n?$/)
+    expect(got.screen).not.toMatch(/(^|\n)\d+ \d+\n?$/)
   })
 
   itTmux('only the visible rows — the history above them is never in the keyframe', () => {
@@ -124,11 +123,12 @@ describe('visible capture against a real tmux', () => {
     expect(got.screen.split('\n').filter(Boolean)).toEqual(['L8', 'L9', 'L10'])
   })
 
-  itTmux('reads the alternate screen and its flag', () => {
+  itTmux('a pane on the alternate screen: the grid on screen, with its cursor — and no flag (R18)', () => {
     const got = captureVisible('nt-alt')
     expect(got.screen).toContain('ALT')
     expect(got.screen).not.toContain('MAIN')
-    expect(got.altScreen).toBe(true)
     expect(got.cursor).toEqual({ x: 5, y: 1 })
+    // The keyframe's altScreen is the caller's, from the join — the capture reports none.
+    expect(Object.keys(got).sort()).toEqual(['cursor', 'screen'])
   })
 })

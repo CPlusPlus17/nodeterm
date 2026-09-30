@@ -7,9 +7,9 @@
 // scrollback and a direct Windows pane has no visible-only read, so both get NO keyframe (the viewer
 // starts from the live stream) rather than history. A plain shell has no tmux to ask.
 //
-// The screen, the cursor and the alternate-screen flag are read in ONE tmux invocation
-// (`capture-pane … ; display-message …`), so all three describe the same instant: a cursor read in a
-// second round trip could describe a screen that has since scrolled.
+// The screen and the cursor are read in ONE tmux invocation (`capture-pane … ; display-message …`), so
+// both describe the same instant: a cursor read in a second round trip could describe a screen that has
+// since scrolled.
 //
 // The target is EXACT (`exactPaneTarget`). Node ids end in a counter, so `nt-x-1` is a prefix of
 // `nt-x-12`, and tmux resolves a bare target by fnmatch then PREFIX on a miss: a bare target would
@@ -24,19 +24,28 @@
 // and the combined `capture-pane -t =nt-x-1: ; display-message …` stops at the failed capture: exit 1,
 // nothing on stdout. So an exact miss is a failed command, which the caller reads as unavailable.
 
+/**
+ * What a visible-only capture returns: the screen and the cursor, read at one instant.
+ *
+ * Deliberately NO alternate-screen flag (controller ruling R18). A keyframe's `altScreen` is decided
+ * by the CALLER from the join (a tmux-backed client ⇒ `true`), not from the capture: a watcher
+ * co-attaches to the tmux CLIENT's output, and tmux paints its client on the alternate screen
+ * whatever the pane's application does, so every `tmux`/`ssh`-route join means `altScreen: true`.
+ * The pane's own `#{alternate_on}` (vim, a TUI) describes a different screen — a shell pane reads 0
+ * while the stream is on the alternate screen — and mapping it into the keyframe would scroll every
+ * tmux redraw into the viewer's history.
+ */
 export interface VisibleCapture {
   /** The visible screen with SGR, byte-identical to what `capture-pane -p -e` prints on its own
    *  (one `\n`-terminated line per row); '' when there is none. Never history. */
   screen: string
   /** The pane's cursor at capture time, 0-based (`#{cursor_x}`, `#{cursor_y}`); null when unread. */
   cursor: { x: number; y: number } | null
-  /** Whether the pane's application is on the alternate screen (`#{alternate_on}`); null when unread. */
-  altScreen: boolean | null
 }
 
 /** A session with no visible-only capture, or one that failed: an empty screen, nothing known. */
 export function unavailableCapture(): VisibleCapture {
-  return { screen: '', cursor: null, altScreen: null }
+  return { screen: '', cursor: null }
 }
 
 export function visibleCaptureRoute(
@@ -48,8 +57,8 @@ export function visibleCaptureRoute(
   return tmuxAvailable && s.tmuxBacked ? 'tmux' : 'none'
 }
 
-/** The tmux format read beside the screen: cursor column, cursor row, alternate screen (0/1). */
-export const VISIBLE_CAPTURE_FORMAT = '#{cursor_x} #{cursor_y} #{alternate_on}'
+/** The tmux format read beside the screen: cursor column and cursor row, 0-based. */
+export const VISIBLE_CAPTURE_FORMAT = '#{cursor_x} #{cursor_y}'
 
 /** "Exactly this session, its active pane" — the only spelling that is exact AND resolves for a
  *  target-pane command (see the measurement at the top of this file). */
@@ -81,7 +90,7 @@ export function localCaptureVisibleArgs(socket: string, sessionName: string): st
   ]
 }
 
-const CURSOR_LINE = /^(\d+) (\d+) ([01])$/
+const CURSOR_LINE = /^(\d+) (\d+)$/
 
 /**
  * Split the combined reply: the LAST line is the cursor line when it has exactly the format's shape,
@@ -93,10 +102,9 @@ export function parseVisibleCapture(stdout: string): VisibleCapture {
   const cut = body.lastIndexOf('\n')
   const last = cut === -1 ? body : body.slice(cut + 1)
   const m = CURSOR_LINE.exec(last)
-  if (!m) return { screen: stdout, cursor: null, altScreen: null }
+  if (!m) return { screen: stdout, cursor: null }
   return {
     screen: cut === -1 ? '' : body.slice(0, cut + 1),
-    cursor: { x: Number(m[1]), y: Number(m[2]) },
-    altScreen: m[3] === '1'
+    cursor: { x: Number(m[1]), y: Number(m[2]) }
   }
 }

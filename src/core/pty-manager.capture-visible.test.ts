@@ -79,7 +79,7 @@ beforeEach(() => {
   calls.length = 0
   ssh.path = '/usr/bin/ssh'
   hostCapture.mockClear()
-  script.answer = () => ({ stdout: 'hello\n\n2 0 0\n' })
+  script.answer = () => ({ stdout: 'hello\n\n2 0\n' })
   // `findSsh` memoizes per module; a fresh module per test lets one test say "no ssh here".
   vi.resetModules()
   initPlatform(fakePlatform())
@@ -91,8 +91,7 @@ describe('captureVisible — local tmux', () => {
     const m = await manager({})
     expect(await m.captureVisible('sess-1')).toEqual({
       screen: 'hello\n\n',
-      cursor: { x: 2, y: 0 },
-      altScreen: false
+      cursor: { x: 2, y: 0 }
     })
     expect(calls).toEqual([
       {
@@ -166,8 +165,7 @@ describe('captureVisible — SSH project', () => {
     const m = await manager({ sshRemote: SSH_REMOTE })
     expect(await m.captureVisible('sess-1')).toEqual({
       screen: 'hello\n\n',
-      cursor: { x: 2, y: 0 },
-      altScreen: false
+      cursor: { x: 2, y: 0 }
     })
     expect(calls).toHaveLength(1)
     expect(calls[0].file).toBe('/usr/bin/ssh')

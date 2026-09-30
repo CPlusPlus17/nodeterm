@@ -124,7 +124,7 @@ describe('remoteCaptureVisibleArgs (real /bin/sh)', () => {
     const got = parseVisibleCapture(stdout)
     expect(got.screen).toContain('REMOTE-12')
     expect(got.cursor).toEqual({ x: 0, y: 1 })
-    expect(got.altScreen).toBe(false)
+    expect(got.screen).not.toMatch(/(^|\n)\d+ \d+\n?$/)
   })
 
   it.skipIf(!REAL_TMUX)('an exact-target miss prints nothing and fails — never the longer-named session', () => {
