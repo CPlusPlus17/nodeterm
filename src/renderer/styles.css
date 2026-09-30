@@ -11311,6 +11311,31 @@ button.pull-checks__name {
   color: var(--text);
   background: rgba(var(--tint-rgb), 0.08);
 }
+/* Dev-server ports a node's session listens on (components/PortsChip) — canvas node header and
+   the card modal header alike. Same quiet outline as `#N`; the port is monospace so `:5173` reads
+   as an address, not a count. */
+.ports-chip-wrap {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.ports-chip {
+  margin-left: 6px;
+  padding: 0 6px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(var(--tint-rgb), 0.16);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.ports-chip:hover {
+  color: var(--text);
+  background: rgba(var(--tint-rgb), 0.08);
+}
 /* Team progress — "N of M done" over the stations a session opened (lib/teamProgress). One
    component on the board card, the card modal header and the canvas node header. The arc is the
    done fraction; the dot says the strongest thing a station is asking for. */

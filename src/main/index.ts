@@ -236,6 +236,7 @@ import { createSessionReaper } from '../core/session-budget'
 import { initKeepAwake } from './keep-awake'
 import type { KeepAwakeTracker } from '../core/keep-awake'
 import { startSessionMemoryService, sshScopePredicate } from '../core/session-memory-service'
+import { startDevPortsService } from '../core/dev-ports-service'
 import { createMemoryPressureMonitor } from '../core/memory-pressure'
 import { createPtyPressureMonitor } from '../core/pty-pressure'
 import { registerPtmxLimitHandler } from './ptmx-limit'
@@ -377,7 +378,7 @@ import { isJoinCode } from '../core/relay/join-code'
 import { connectHostedTeam, removeHostedBookmark } from './remote/hosted-join'
 import { BookmarkStore, publicBookmark } from './remote/relay-bookmarks'
 import { loadOrCreatePeerKeyPair } from './remote/peer-identity'
-import { initSshProject } from './remote-ssh/ssh-project'
+import { initSshProject, onSshProjectStatus } from './remote-ssh/ssh-project'
 import { resyncProjectAgents, RESYNC_TRANSCRIPT_TAIL_BYTES } from './remote-ssh/agent-resync'
 import { setGitRemoteResolver, type GitRemoteRef } from '../core/remote-ssh/remote-git'
 import { SshFs, sshAppendArgs, sshTailArgs, sshSizeArgs, sshWriteArgs } from './ssh-fs'
@@ -3213,6 +3214,41 @@ app.whenReady().then(async () => {
         }
       }
     }
+  })
+  // Dev-server ports (CLAUDE.md → Dev-server ports). Same identity predicate and the same
+  // exit-code-gated runner shape as session memory above; forwarding rides the project's master.
+  const devPorts = startDevPortsService({
+    tmuxBin: () => ptyManager.getTmuxBin(),
+    remote: {
+      isRemoteProject: sshScopePredicate({
+        sshProjectIds: () => workspaceStore.sshProjectIds(),
+        connectedProjectIds: () =>
+          (sshProjectManager?.connectedHosts() ?? []).map((h) => h.projectId)
+      }),
+      run: async (projectId, command) => {
+        const mgr = sshProjectManager
+        const ref = mgr?.refForProject(projectId)
+        if (!mgr || !ref) return null
+        try {
+          // The script always ends with an unconditional echo: a non-zero code is ssh itself failing.
+          const { code, stdout } = await mgr.sshRun(childArgs(ref.conn, ref.controlPath, command))
+          return code === 0 ? stdout : null
+        } catch {
+          return null
+        }
+      },
+      forward: {
+        refForProject: (projectId) => sshProjectManager?.refForProject(projectId),
+        run: (args) =>
+          sshProjectManager ? sshProjectManager.sshRun(args) : Promise.resolve({ code: -1, stdout: '' })
+      }
+    }
+  })
+  // A node's session ending (delete, recycle) takes its dev server with it — cancel its forwards.
+  ptyManager.onSessionEnded((nodeId) => void devPorts.registry?.nodeEnded(nodeId))
+  // A master that went away took its listeners with it; forget them so the menu offers again.
+  onSshProjectStatus((e) => {
+    if (e.status !== 'connected' && e.status !== 'connecting') devPorts.registry?.projectDisconnected(e.projectId)
   })
   const ackSweeper = createAckSweeper({
     handlers: { ackDone, onUnreadClear: (id) => sendToMain(IPC.agentUnreadClear, id) }

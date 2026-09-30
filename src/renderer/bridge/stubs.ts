@@ -276,6 +276,17 @@ export function buildStubApi(): Omit<
       cookieProviders: () => Promise.resolve({}),
       onUpdate: noopUnsub
     },
+    devPorts: {
+      // Deliberately NOT superseded by a WS namespace: the Server Edition does not serve dev ports
+      // (its browser tab has no <webview> browser node, and a page the viewer opened would load on
+      // the viewer's machine, where the server's port is not). A relay tab shares this surface for
+      // the other reason — its sessions live on the host. `unsupported` is the honest answer on
+      // both, and the chip is not drawn.
+      scan: () => Promise.resolve({ ok: false, reason: 'unsupported', nodes: {} }),
+      forward: () =>
+        Promise.resolve({ ok: false, reason: 'unsupported', message: 'Port forwarding is not available here.' }),
+      unforward: () => Promise.resolve(false)
+    },
     // Real in the browser (ws-bridge `buildRecentConversationsApi`). Where this stub stays in force
     // — nowhere today — `unsupported` is the honest answer: "could not look", never "no history".
     recentConversations: {

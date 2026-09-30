@@ -202,6 +202,16 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   from a background header: only the active SSH project is git-routable. SSH headers observe
   Source refreshes instead.
 
+- **A port is a node's only if its listener is in that node's process tree.** Dev-server
+  discovery (`core/dev-ports.ts`) attributes ports by socket ownership and never connects to
+  anything. A new consumer reads the scan, it does not add a probe. A forward
+  (`core/remote-ssh/port-forward.ts`) binds `127.0.0.1` only, keeps the same port number or
+  refuses with the reason — a different local port is only ever the person's explicit choice — and
+  never forwards a port below 1024 unasked. The renderer passes a node and a port, never an address:
+  core re-scans and decides the host-side target. Treat `ss`/`lsof`/`ls` output as attacker-
+  influenced text: a process name is chosen by the process, so parse each owner group on its own and
+  never let a name reach a pid (see CLAUDE.md → Dev-server ports).
+
 - **A GitHub issue reaches a pane only as a validated reference.** Issue titles and bodies are
   written by strangers on public repositories, and a launch line is typed into a shell. Anything
   that starts or instructs an agent about an issue goes through `@shared/github-issue-ref`:
