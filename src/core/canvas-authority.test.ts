@@ -177,7 +177,7 @@ describe('canvas authority — governing', () => {
     expect(byId(h.writes[1].content.nodes, 'a')?.position.x).toBe(7000)
   })
 
-  it('5. applies ops in the total order, including rule 4 (a stale frame cannot resurrect a delete)', async () => {
+  it('5. applies ops in the total order, including the order\'s causal delete (a stale frame cannot resurrect a delete)', async () => {
     const h = harness({ disk: { P: content([at('a', 1), at('b', 1)]) } })
     h.authority.onReflected('P', { op: 'remove', id: 'a', seq: 5 })
     h.authority.onReflected('P', { op: 'upsert', node: at('a', 42), seq: 6, seen: 3 })
@@ -190,7 +190,7 @@ describe('canvas authority — governing', () => {
     expect(byId(h.writes[0].content.nodes, 'b')?.position.x).toBe(10)
   })
 
-  it('5c. rule 4 holds for an edge: a stale re-upsert cannot bring back a removed link', async () => {
+  it('5c. the causal delete holds for an edge: a stale re-upsert cannot bring back a removed link', async () => {
     const e1 = { id: 'e1', source: 'a', target: 'b' }
     const h = harness({ disk: { P: content([node('a'), node('b')], { bridges: [e1] }) } })
     h.authority.onReflected('P', { op: 'edge-remove', kind: 'bridge', id: 'e1', seq: 5 })
@@ -201,7 +201,7 @@ describe('canvas authority — governing', () => {
     expect(h.writes[0].content.ropes).toEqual([])
   })
 
-  it('5d. rule 4 holds for a board column: a stale re-upsert cannot bring back a removed column', async () => {
+  it('5d. the causal delete holds for a board column: a stale re-upsert cannot bring back a removed column', async () => {
     const c1 = { id: 'c1', title: 'One', color: '#fff' }
     const c2 = { id: 'c2', title: 'Two', color: '#fff' }
     const h = harness({ disk: { P: content([node('a')], { kanban: { columns: [c1, c2], assignments: [] } }) } })
@@ -412,14 +412,15 @@ describe('canvas authority — outside edits', () => {
     await h.authority.overlayLoad(ws(project({ nodes: [node('a'), node('b')] })))
     h.cast({ op: 'upsert', node: node('c') })
     await settle()
-    const persisted = await h.authority.adoptOutsideEdit(
+    const adopted = await h.authority.adoptOutsideEdit(
       project({
         name: 'Renamed',
         defaultPermissionMode: 'manual',
         nodes: [node('a', { shell: '/bin/zsh' }), node('d')]
       })
     )
-    expect(persisted).not.toBeNull()
+    expect(adopted?.asOps).toBe(true)
+    const persisted = adopted?.project
     // The non-content fields come from the edit: they are what a stale tab would otherwise revert.
     expect(persisted?.name).toBe('Renamed')
     expect(persisted?.defaultPermissionMode).toBe('manual')
@@ -452,6 +453,35 @@ describe('canvas authority — outside edits', () => {
     h.disk.set('P', content([node('a')]))
     await h.authority.adoptOutsideEdit(project({ nodes: [node('a')] }))
     expect(h.published.map((p) => p.m)).toEqual([{ op: 'remove', id: 'b' }])
+  })
+})
+
+describe('canvas authority — an outside edit with no baseline to diff (N5)', () => {
+  // A shared project whose file could not be read holds no state, so an edit that makes it readable
+  // (a pull resolving conflict markers) adopts the edited file AS its baseline and has no difference
+  // to publish. No op can carry it to a client, so it is answered as a WHOLE project to send.
+  it('adopts it, publishes no op, and answers it as a whole project to send', async () => {
+    const h = harness({ disk: {} })
+    h.authority.sharedChanged()
+    await settle()
+    expect(h.logs).toHaveLength(1) // unreadable: said once
+    h.disk.set('P', content([node('a'), node('b')]))
+    const adopted = await h.authority.adoptOutsideEdit(project({ name: 'Fixed', nodes: [node('a'), node('b')] }))
+    expect(h.published).toEqual([])
+    expect(adopted?.asOps).toBe(false)
+    expect(adopted?.project.name).toBe('Fixed')
+    expect(ids(adopted?.project.nodes ?? [])).toEqual(['a', 'b'])
+    expect(h.authority.adoptedIds()).toEqual(['P'])
+    // From here on it is an ordinary governed project: the next edit is diffed.
+    h.disk.set('P', content([node('a')]))
+    const next = await h.authority.adoptOutsideEdit(project({ nodes: [node('a')] }))
+    expect(next?.asOps).toBe(true)
+    expect(h.published.map((x) => x.m)).toEqual([{ op: 'remove', id: 'b' }])
+  })
+
+  it('answers null when nothing adopted it (still unreadable), so the edit is sent as for an ungoverned project', async () => {
+    const h = harness({ disk: {} })
+    expect(await h.authority.adoptOutsideEdit(project({ nodes: [node('a')] }))).toBeNull()
   })
 })
 
@@ -504,6 +534,22 @@ describe('canvas authority — flushing and lifecycle', () => {
     expect(h.writes.map((w) => w.at)).toEqual([1000, 2000, 4000])
     expect(ids(h.writes[2].content.nodes)).toEqual(['a', 'x', 'b', 'c'])
     expect(h.logs).toHaveLength(2) // one per failed write
+  })
+
+  // N7: a write that fails for good (the file is gone or unreadable) retried every 30 s and logged
+  // every time, forever. One line when a failure streak starts, one when it ends.
+  it('12b. logs a failing write once per failure streak, and once on recovery', async () => {
+    const h = harness({ disk: { P: content([node('a')]) }, writeResults: [false, false, false, false, true, false, true] })
+    h.cast({ op: 'upsert', node: node('b') })
+    await h.clock.advanceTo(20_000) // fails at 1 s, 2 s, 4 s, 8 s; lands at 16 s
+    expect(h.writes).toHaveLength(5)
+    expect(h.logs.filter((l) => l.includes('failed'))).toHaveLength(1)
+    expect(h.logs.filter((l) => l.includes('succeeded'))).toHaveLength(1)
+    // A new streak says so again.
+    h.cast({ op: 'upsert', node: node('c') })
+    await h.clock.advance(10_000)
+    expect(h.logs.filter((l) => l.includes('failed'))).toHaveLength(2)
+    expect(h.logs.filter((l) => l.includes('succeeded'))).toHaveLength(2)
   })
 
   it('13. unsharing flushes the pending state once, then releases the project', async () => {

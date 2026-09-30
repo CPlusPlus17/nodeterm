@@ -367,8 +367,10 @@ whole-workspace saves still write them.
 not yet written, through the store's atomic content write (`WorkspaceStore.writeProjectContent`: it
 bumps `rev` like a save, and the file is byte-identical to a save's apart from `rev` and `savedAt`).
 A failed write keeps every op and retries
-after 1 s, 2 s, 4 s and so on, capped at 30 s. Both server shutdown paths write what is pending
-before they exit, so a crash loses only what was not written yet: normally at most the last 5 s.
+after 1 s, 2 s, 4 s and so on, capped at 30 s. The journal says so once when a failure streak
+begins and once when a write lands again, not on every retry. Both server shutdown paths write what
+is pending before they exit, so a crash loses only what was not written yet: normally at most the
+last 5 s.
 Before the authority stops, the shutdown ends the browser connections and waits for the saves
 already queued (`WorkspaceStore.idle`): a save that ran after the authority was detached would be
 written un-overlaid, over its final write.
@@ -382,7 +384,10 @@ browser tabs are told the new governed set (`canvas:authority-changed`). A share
 cannot be read stays governed, so its clients keep publishing, but the authority writes nothing for
 it and saves of it pass through unchanged until it can be read. The journal says so once:
 "[canvas-authority] project <id> is shared, but its content could not be read …". `team share` does
-not check the id, so a shared id that is not a project on this core logs the same line.
+not check the id, so a shared id that is not a project on this core logs the same line. When an
+outside edit makes the file readable again (a pull that resolves conflict markers), the authority
+adopts the edited file as its first baseline, so it has no difference to publish as ops: the project
+is sent whole on `workspace:external-change` instead, as for an ungoverned project.
 
 **Publishing when alone.** A client normally casts nothing while no teammate is attached. On a
 governed project that would lose every edit, so a client publishes whenever the project is governed:
@@ -429,6 +434,11 @@ it is a new way to use it.
 - **Board edits reach only the active tab's core.** A client casts only to the core its active tab
   is on. An edit on the Omni board to a lane of a project on another core (a hosted lane while a
   local tab is active, or the reverse) is not cast, so on a hosted core it is not written either.
+- **Load-time repairs are not cast.** What a client derives while it loads a project (a missing
+  `--after` dependency rope it heals, a legacy node migrated to its current shape) becomes that
+  client's baseline and is never cast, so on a governed project it never reaches disk: every load
+  derives it again. The repairs are deterministic, so this costs nothing visible, but a repair that
+  must persist on a shared project has to be cast.
 - **The card modal's comments on a relay tab** (`BoardLogPanel`) still read and write the local core's
   board log, not the host's, because the modal renders outside the tab's session. This predates the
   authority; it is a follow-up.

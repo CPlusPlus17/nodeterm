@@ -63,6 +63,15 @@ export function createServerWorkspaceWatcher(
  * those fields are security-relevant (a pull that drops a `bypassPermissions` default or turns a
  * capability off must not be undone by the next autosave). The ops go out first, so a client
  * merging the project already holds its content.
+ *
+ * An edit the authority could not turn into ops is NOT swallowed (N5). With no baseline held before
+ * it (the file was unreadable until this edit, say a pull that resolved conflict markers) the
+ * adoption reads the edited file itself and finds no difference, so the project goes out WHOLE on
+ * `workspace:external-change`, as for an ungoverned project: the clients hold content the authority
+ * never saw, so only the whole project can bring them up to date, and that channel reloads a clean
+ * canvas. Its conflict bar is safe here: the project is adopted now, so a "Keep mine" save is
+ * overlaid and cannot write stale content back. When nothing adopted it at all (still unreadable, or
+ * no longer governed), the raw project goes out exactly as for an ungoverned one.
  */
 export function outsideEditPublisher(
   authority: () => Pick<CanvasAuthority, 'governs' | 'adoptOutsideEdit'> | null,
@@ -74,8 +83,10 @@ export function outsideEditPublisher(
     if (a?.governs(project.id)) {
       void a
         .adoptOutsideEdit(project)
-        .then((persisted) => {
-          if (persisted) serverChange(persisted)
+        .then((adopted) => {
+          if (!adopted) broadcast(project)
+          else if (adopted.asOps) serverChange(adopted.project)
+          else broadcast(adopted.project)
         })
         .catch((error: unknown) => {
           console.warn('[nodeterm-server] the canvas authority could not adopt an outside edit', error)

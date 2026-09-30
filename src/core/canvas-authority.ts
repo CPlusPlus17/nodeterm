@@ -32,7 +32,8 @@
 //     edit, because disk has the edit and not them.
 //
 //  4. A FAILED READ GOVERNS NOTHING. A shared project whose content cannot be read keeps `governs`
-//     true (the clients must keep publishing), drops its ops, and says so once.
+//     true (the clients must keep publishing), drops its ops, and says so once. (Not to be confused
+//     with canvas-order's rule 4, the causal delete, which this module applies through its order.)
 //
 // One accepted exception to "content comes only from ops": a node too large to travel as an op
 // (over the byte cap every cast is held to) can only ever arrive in a save, so a save may contribute
@@ -67,6 +68,18 @@ export interface CanvasAuthorityDeps {
   log?: (msg: string) => void
 }
 
+/** What `adoptOutsideEdit` did with an edit it adopted. */
+export interface AdoptedOutsideEdit {
+  /** The project exactly as a load now returns it: the edit's own non-content fields, overlaid with
+   *  the authority's content. */
+  project: Project
+  /** true = the difference went out as ops, so what is left to send is the project's other fields
+   *  (`workspace:server-change`). false = there was no baseline to diff against (the file could not
+   *  be read before this edit), so no op carried it and the project must be sent whole
+   *  (`workspace:external-change`). */
+  asOps: boolean
+}
+
 export interface CanvasAuthority {
   /** Is this project's content written by the authority? Shared and not stopped; true before the
    *  project is first adopted, and true even when its content cannot be read. */
@@ -83,10 +96,10 @@ export interface CanvasAuthority {
   /** Governed projects' content fields replaced by the authority's (the store's load hook). */
   overlayLoad(ws: Workspace): Promise<Workspace>
   /** A project re-read after an outside edit (a git pull, a hand edit): its content is adopted and
-   *  the difference published as ops. Answers the project exactly as a load now returns it (the
-   *  edit's own non-content fields, overlaid with the authority's content), for the shell to send to
-   *  every client on `workspace:server-change`; null = nothing was adopted. */
-  adoptOutsideEdit(project: Project): Promise<Project | null>
+   *  the difference published as ops. Answers what is left for the shell to send (see
+   *  `AdoptedOutsideEdit`); null = nothing adopted it (not governed, or still unreadable), and it is
+   *  sent as for an ungoverned project. */
+  adoptOutsideEdit(project: Project): Promise<AdoptedOutsideEdit | null>
   /** The shared set changed: flush and release what left it, adopt what joined it. */
   sharedChanged(): void
   /** Write every dirty project now. */
@@ -112,8 +125,8 @@ interface Governed {
  * The order's own tag. EMPTY on purpose: the reflector strips every `src` that is not a ref id
  * (`stampMutation`), and `accept` compares with `m.src && m.src === src`, so no reflected op,
  * honest or forged, is ever taken for this authority's own echo (rule 2 in the header). It never
- * calls `onLocal`, so for it the order is exactly "highest seq wins per key" plus rule 4's causal
- * delete, the same verdicts every client reaches.
+ * calls `onLocal`, so for it the order is exactly "highest seq wins per key" plus canvas-order's
+ * causal delete (that module's rule 4), the same verdicts every client reaches.
  */
 const AUTHORITY_ORDER_TAG = ''
 
@@ -190,7 +203,8 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
   const isShared = (id: string): boolean => deps.sharedProjectIds().has(id)
   // `governs` asks only "shared, and not stopped", on purpose: a shared project whose content cannot
   // be read must still read as governed, so its clients keep publishing ops (rule 4). That includes a
-  // shared SSH project, which the authority never overlays (`overlayable`) and cannot read (the
+  // shared SSH project: `governedIds()` lists it (every shared id, adopted or not), so its clients
+  // publish for it, yet the authority never overlays it (`overlayable`) and cannot read it (the
   // store refuses SSH content), so its eager adoption logs once that its content could not be read.
   // Harmless: the Server Edition has no SSH-project manager, so it never opens an SSH project, and
   // such an entry can only come from a hand-copied index. Its saves pass through un-overlaid, which
@@ -314,17 +328,24 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
       g.flushing = null
       if (ok) {
         g.unflushed.splice(0, written)
+        // A failure streak said so once when it began (below); its end is said once too.
+        if (g.attempt > 0) log(`writing project ${id} succeeded again, after ${g.attempt} attempt(s)`)
         g.attempt = 0
         // Anything applied while the write was in flight is still owed.
         if (g.dirty) schedule(id, g)
         else release(id, g)
         return
       }
-      // Rule 3: keep the content and every unflushed op, and try again later.
+      // Rule 3: keep the content and every unflushed op, and try again later. Said ONCE per failure
+      // streak: a file that is gone for good fails every retry, and a line every 30 s forever buries
+      // the journal (the recovery is said once too, above).
       g.dirty = true
       clearTimers(g)
-      const wait = retryMs(g.attempt++)
-      log(`writing project ${id} failed; its content is kept and the write is retried in ${wait} ms`)
+      const wait = retryMs(g.attempt)
+      if (g.attempt === 0) {
+        log(`writing project ${id} failed; its content is kept and the write is retried (first in ${wait} ms, backing off to 30 s); nothing more is said until a write lands`)
+      }
+      g.attempt++
       if (!stopped) {
         g.retryTimer = setTimer(() => {
           g.retryTimer = null
@@ -354,7 +375,9 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
       // Its limits, which follow from it having no place in the total order:
       //  (a) A STALE SAVE REVIVES A REMOVED BIG NODE. A client's save issued before that client
       //      applied a `remove` of the node still carries it, and the save is not ordered against
-      //      the remove, so the node is adopted back and written. The window is one save debounce.
+      //      the remove, so the node is adopted back and written, and it stays on disk until someone
+      //      removes it again (the window in which such a save can be issued is one save debounce;
+      //      the revival itself does not expire).
       //  (b) AN OUTSIDE EDIT OF A BIG NODE REACHES NO CLIENT, AND THE NEXT SAVE UNDOES IT. The
       //      published upsert is refused by the reflector (too large), so every client keeps its old
       //      copy, and the next save from any of them re-adopts that copy: a git-pulled change to a
@@ -423,8 +446,13 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
       return { ...ws, projects }
     },
 
-    async adoptOutsideEdit(project: Project): Promise<Project | null> {
+    async adoptOutsideEdit(project: Project): Promise<AdoptedOutsideEdit | null> {
       if (!overlayable(project) || !governs(project.id)) return null
+      // The diff below is against a baseline HELD before this edit. Without one (the file could not
+      // be read until now, or its first read is still in flight) the adoption reads the edited file
+      // itself, so it finds no difference: no op can carry the edit, and it is answered for sending
+      // whole (N5), rather than swallowed.
+      const hadBaseline = governed.has(project.id)
       const g = await adopt(project.id)
       if (!g || !governs(project.id) || governed.get(project.id) !== g) return null
       const before = g.content
@@ -439,8 +467,8 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
       if (g.unflushed.length) markDirty(project.id, g)
       // The ops carry the content; the edit's OTHER fields (name, colour, icon, layouts, the
       // permission default, the capability flags, the board's github mapping) reach no client
-      // through them. Answered as a load would answer it, so the shell can send it whole.
-      return overlayProject(project, g, 'load')
+      // through them. Answered as a load would answer it, so the shell can send it.
+      return { project: overlayProject(project, g, 'load'), asOps: hadBaseline }
     },
 
     sharedChanged(): void {

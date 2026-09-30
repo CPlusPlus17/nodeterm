@@ -287,6 +287,26 @@ describe('Server Edition external workspace watcher', () => {
     }
   })
 
+  // N5: an edit the authority could not turn into ops is still delivered — whole, on the channel the
+  // ungoverned path uses — instead of being swallowed.
+  it('routes by what the authority did: ops → server change; no baseline → whole project; nothing → as ungoverned', async () => {
+    const external: Project[] = []
+    const server: Project[] = []
+    const p = { id: 'g', name: 'g', color: '#000', viewport: { x: 0, y: 0, zoom: 1 }, nodes: [] } as Project
+    const persisted = { ...p, name: 'persisted' }
+    for (const answer of [{ project: persisted, asOps: true }, { project: persisted, asOps: false }, null]) {
+      const route = outsideEditPublisher(
+        () => ({ governs: () => true, adoptOutsideEdit: async () => answer }),
+        (x) => external.push(x),
+        (x) => server.push(x)
+      )
+      route(p)
+      await new Promise((r) => setImmediate(r))
+    }
+    expect(server).toEqual([persisted])
+    expect(external).toEqual([persisted, p])
+  })
+
   it('with no authority (another server owns this data dir), every outside edit is broadcast', () => {
     const sent: Project[] = []
     const route = outsideEditPublisher(() => null, (p) => sent.push(p), () => {
