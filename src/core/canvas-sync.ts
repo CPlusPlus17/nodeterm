@@ -182,17 +182,28 @@ function tellListener(projectId: string, stamped: CanvasMutation): void {
  * control request). It takes the same validation, execution-field sanitization and total-order
  * stamp as a browser cast, then fans out to every connected canvas. Disk persistence remains the
  * caller's responsibility; this function is only the live convergence leg.
+ *
+ * `trusted` (default true) = the op speaks for the held launch (`pendingLaunch`): owner clients get
+ * it vouched (`origin: 'core'`), so its launch, or its ABSENCE, is authoritative there. Server canvas
+ * control needs exactly that (a headless delivery CLEARS the launch on every owner tab). The canvas
+ * authority passes `false`: its state holds no launch at all (core/canvas-authority.ts rule 1), so a
+ * vouched copy of its outside-edit diff would clear every armed node it touched on every owner tab.
+ * Untrusted, it carries no launch to anybody and each owner keeps its own, exactly as for a peer's
+ * cast.
  */
-export function publishCanvasMutation(projectId: string, mutation: CanvasMutation): boolean {
+export function publishCanvasMutation(
+  projectId: string,
+  mutation: CanvasMutation,
+  opts: { trusted?: boolean } = {}
+): boolean {
   if (!isRefId(projectId) || !isCanvasMutation(mutation)) return false
-  const clean = sanitizeCanvasMutation(mutation, true)
+  const trusted = opts.trusted !== false
+  const clean = sanitizeCanvasMutation(mutation, trusted)
   if (!clean) return false
   const p = platform()
-  // The core's own write: its held launch is authoritative for owner clients (a headless delivery
-  // CLEARS it there — without that a browser would keep and re-save the stale launch).
   const stamped = stampMutation(clean, ++seq)
   tellListener(projectId, stamped)
-  fanOutMutation(p, projectId, stamped, true)
+  fanOutMutation(p, projectId, stamped, trusted)
   return true
 }
 

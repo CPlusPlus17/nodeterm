@@ -353,7 +353,9 @@ whole-workspace saves still write them.
    authority applied, written to disk or not.
 4. **Outside edits.** A `git pull` or hand edit of a governed `.nodeterm/project.json`, seen by the
    server's file watcher, is adopted: the authority re-applies the ops it has not written yet on top,
-   publishes the difference as `canvas:mut` ops, and broadcasts no `workspace:external-change`, so no
+   publishes the difference as `canvas:mut` ops (untrusted: its state holds no launch, so the ops
+   speak for none and every owner tab keeps an armed node's `pendingLaunch`; vouched, a pull that only
+   moved an `--after` node would cancel its launch), and broadcasts no `workspace:external-change`, so no
    client gets the Reload / Keep mine bar (`src/server/workspace-external-watch.ts`). The edit's other
    fields (name, colour, icon, layouts, the permission default, the capability flags, the board's
    `github` and `pullLinks`) follow right after the ops, as the persisted project on

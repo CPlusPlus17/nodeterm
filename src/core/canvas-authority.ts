@@ -20,8 +20,9 @@
 //     `--after` node's launch, and a delivery's clear of it, reach the index's `localExec`.
 //
 //  2. ITS OWN PUBLISHED OPS ARE ORDINARY OPS. The diff an outside edit publishes goes out bare (no
-//     `src`, no `seen`), is stamped by the reflector and comes back through `onReflected` like any
-//     client's cast. It is applied, and it changes nothing, because the content is already there.
+//     `src`, no `seen`) and UNTRUSTED (the shell publishes it with `{ trusted: false }`: rule 1 means
+//     it holds no launch, so it must not speak for one on an owner tab), is stamped by the reflector
+//     and comes back through `onReflected` like any client's cast. It is applied, and it changes nothing, because the content is already there.
 //     Treating it as "our own echo" instead would diverge from the clients the moment an older op
 //     landed between the publish and the echo: the clients end on the published value (it has the
 //     higher seq), and an authority that dropped its echo would keep the older one.

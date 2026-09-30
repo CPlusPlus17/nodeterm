@@ -960,8 +960,11 @@ export async function startServer(
       sharedProjectIds: () => hosted.sharedProjectIds(),
       readContent: (id) => workspaceStore.readProjectContent(id),
       writeContent: (id, content) => workspaceStore.writeProjectContent(id, content),
+      // UNTRUSTED: the authority's state holds no launch, so its outside-edit diff must not speak
+      // for one. Vouched, an owner tab would read each upsert's missing `pendingLaunch` as "the core
+      // cleared it" and a git pull would cancel every queued `--after` it touched.
       publish: (id, m) => {
-        publishCanvasMutation(id, m)
+        publishCanvasMutation(id, m, { trusted: false })
       },
       log: (message) => console.warn(`[canvas-authority] ${message}`)
     })

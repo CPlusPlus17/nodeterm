@@ -7369,7 +7369,10 @@ The invariants, each with its reason:
   authority even on an owner's op: a save carries this machine's own values onto the overlaid nodes
   (`carryLocalNodeExec`), and that carry is how an armed `--after` node — and server canvas
   control's claim/clear of its launch (`savePatches` → `castAndSave`) — reaches the index's
-  `localExec` on a governed project. **Server canvas control delivers only what landed**: `open` and
+  `localExec` on a governed project. For the same reason the authority's outside-edit diff is
+  published UNTRUSTED (`publishCanvasMutation(id, m, { trusted: false })`): vouched as a core write,
+  its launch-less upserts read as "cleared" on every owner tab, and a git pull cancelled queued
+  `--after` launches. **Server canvas control delivers only what landed**: `open` and
   `run` launch nothing when their write-ahead `castAndSave` was refused (canvas control stopping),
   and `refreshArmed` types a held command only when `savePatches` says both that the save landed and
   that its claim applied to the fresh read (a teammate may have deleted, re-armed or claimed the node

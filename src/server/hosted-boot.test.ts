@@ -90,6 +90,10 @@ describe('hosted team boot wiring (source)', () => {
     expect(block).toContain('sharedProjectIds: () => hosted.sharedProjectIds()')
     expect(block).toContain('workspaceStore.setContentAuthority(')
     expect(block).toContain('setReflectedListener(')
+    // Its outside-edit diff is published UNTRUSTED (N1): vouched as a core write, an owner tab would
+    // read each upsert's missing launch as "cleared" and cancel every queued `--after` it touched.
+    expect(block).toMatch(/publish: \(id, m\) => \{\s*publishCanvasMutation\(id, m, \{ trusted: false \}\)/)
+    expect(src.match(/trusted: false/g)?.length).toBe(1)
     // Every shared project is adopted ONCE at boot, after the index load and after hosting started
     // (start() loads the team file), before any outside edit could be adopted lazily: a lazy adoption
     // after a git pull reads the pulled file as its baseline and publishes no diff at all.

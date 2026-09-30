@@ -3,6 +3,8 @@ import { testTmpDir } from './test-tmp'
 import { initPlatform, resetPlatformForTests, type CorePlatform } from './platform'
 import { initCanvasSync, publishCanvasMutation, setReflectedListener, stampMutation } from './canvas-sync'
 import { IPC } from '../shared/ipc'
+import { createCanvasAuthority } from './canvas-authority'
+import { applyCanvasMutation } from '../shared/canvas-mutations'
 import type { CanvasMutation, CanvasNodeState, PendingLaunch } from '../shared/types'
 
 /**
@@ -145,5 +147,54 @@ describe('the reflected-op listener (the Server Edition canvas authority)', () =
     }
     expect(t.sent.filter((x) => x.to === 2).map((x) => (x.m as Extract<CanvasMutation, { op: 'upsert' }>).node.pendingLaunch))
       .toEqual([launch, launch])
+  })
+})
+
+describe('the canvas authority\'s outside-edit diff (N1)', () => {
+  // The authority's state carries no launch (rule 1), so every upsert of its diff lacks one. Vouched
+  // as the core's own write, an owner tab reads that absence as "the core cleared it" — on its live
+  // canvas AND in its stored copy — and its next save writes the loss into `localExec`: a git pull
+  // that merely moved an `--after` node cancelled its queued launch. So the authority's publish is
+  // UNTRUSTED (server/index.ts passes `{ trusted: false }`, pinned in hosted-boot.test.ts), and
+  // every owner carries its own launch across.
+  it('an outside edit that moves an armed node reaches owners unvouched, so each keeps its launch', async () => {
+    const authority = createCanvasAuthority({
+      sharedProjectIds: () => new Set(['p1']),
+      readContent: async () => ({ nodes: [node('n1')], bridges: [], ropes: [] }),
+      writeContent: async () => true,
+      publish: (id, m) => {
+        publishCanvasMutation(id, m, { trusted: false })
+      },
+      setTimer: () => null,
+      clearTimer: () => {},
+      log: () => {}
+    })
+    setReflectedListener((id, m) => authority.onReflected(id, m))
+    authority.sharedChanged()
+    await authority.flushAll()
+    await authority.adoptOutsideEdit({
+      id: 'p1',
+      name: 'p',
+      color: '#fff',
+      viewport: { x: 0, y: 0, zoom: 1 },
+      nodes: [node('n1', { position: { x: 500, y: 0 } })]
+    })
+    const up = to(1)
+    expect(up.op).toBe('upsert')
+    expect(up.origin).toBeUndefined()
+    // An owner's stored copy of the armed node (the live canvas's `applyMutationToFlow` reads the
+    // same `origin`): the move lands, the launch stays.
+    const [kept] = applyCanvasMutation([node('n1', { pendingLaunch: launch })], up)
+    expect(kept.position.x).toBe(500)
+    expect(kept.pendingLaunch).toEqual(launch)
+    await authority.stop()
+  })
+
+  it('an untrusted core write strips a launch for everybody, and never vouches', () => {
+    publishCanvasMutation('p1', { op: 'upsert', node: node('n1', { pendingLaunch: launch }) }, { trusted: false })
+    for (const id of [1, 2, 9]) {
+      expect(to(id).origin).toBeUndefined()
+      expect(to(id).node.pendingLaunch).toBeUndefined()
+    }
   })
 })
