@@ -5117,6 +5117,28 @@ detaching + an always-true pressure signal is why the symptom read as "my sessio
 disappearing" rather than as an occasional cull. The `vm_stat` reader is what makes the pool safe
 again; the grace window was never the thing that was wrong.
 
+## Live links (Pro, read-only browser link to one terminal)
+
+A live link shows ONE node, read-only, in a plain browser until it expires (≤ 24 h) or is stopped;
+creating one is Pro and the backend is the gate. Reference: **`docs/live-links.md`**. Invariants:
+- `watchLink:*` (owner IPC) is host-only: no relay peer, hosted editors included, may create, list (a
+  view carries the secret URL), stop, kick or chat. The viewer protocol is `watch:*` and must never
+  start with `watchLink:` — relay-host refuses host-only channels before any policy, so it could never
+  arrive (`src/shared/host-control.test.ts`, `src/core/relay/scoped-guest-policy.test.ts`).
+- A watcher never goes through `decideAccess` (it would get the VIEW table): `watcher-policy.ts` refuses
+  all but a Commenter's `watch:chat` cast, passes out only `watch:*`, its own pty frames and `pty:size`,
+  and takes no `interceptReq` (`watcher-policy.test.ts`, `chat-cast.guard.test.ts`).
+- Watchers are QUIET (no broadcast, not in `clientIds()`) and SELF-PACED (never paused, dropped or
+  resynced by the registry); the reaper reads `quietClientIds()` too, or it releases a session only a
+  viewer holds (`ui-sink-registry.watcher.test.ts`, `pty-reap.test.ts`).
+- The stream filter sees every byte, has NO length cap (a cap leaked a measured clipboard), and every
+  join resets it `midStream`, never to text mode and never on a keyframe. `captureVisible` never returns
+  history (exact `=nt-<id>:`, no `-S`; session host and plain shell get no keyframe). A viewer sizes
+  nothing: `joinOnly` + `sizeVote: false`; its own tmux client is `-E -f ignore-size,read-only`.
+- Node gone is tri-state (only ABSENT ends a link; a lost or corrupt index is never a complete read).
+  Link state is never canvas content, no canvas-control verb touches links, the chip is not hideable
+  (`src/renderer/lib/live-link.guard.test.ts`); both shells wire one core service, the Server Edition as
+  `unsupported` until it has a license layer (`src/main/watch-link-wiring.test.ts`).
 
 ## Node colors (one palette, two sections)
 
@@ -7340,11 +7362,13 @@ The invariants, each with its reason:
   `init`/`status`/`info`. The `relay:hosted:*` verbs are intercepted inside the relay session and
   never registered on the platform, so a Server Edition browser client cannot call them. An
   interceptor bypasses `access` and every jail, so each one judges the CALLER's own session key.
-- **LOCAL confirms have exactly three call sites on the host side:** the Team Access dialog
-  (`relay:host:confirm`), `autoApprove` for a key `team.json` pins, and an owner's
-  `relay:hosted:approve`. The joiner side has two: the human's `relay:client:confirm`, and the
+- **LOCAL confirms have exactly four call sites on the host side:** the Team Access dialog
+  (`relay:host:confirm`), `autoApprove` for a key `team.json` pins, an owner's
+  `relay:hosted:approve`, and a live link's `autoApprove` for the ONE viewer key derived from that
+  link's own secret, read from the host's own link record (any other key is denied at once, never
+  asked — `docs/live-links.md`). The joiner side has two: the human's `relay:client:confirm`, and the
   bookmark auto-confirm. The one remote confirm still arrives only on the encrypted tunnel. A new
-  local confirm is a design change; the comment in `relay-trust.ts` lists all five.
+  local confirm is a design change; the comment in `relay-trust.ts` lists all six.
 - **Nothing is served before mutual approval.** Frames that arrive between approval and open (while
   the pin is being written) are HELD, at most `HELD_FRAMES_MAX` (256), then served through the same
   checks. Refusing them would fail a new teammate's first `workspace:load`, which routinely lands
