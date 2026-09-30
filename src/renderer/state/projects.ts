@@ -493,7 +493,8 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   openFolderProject(folder) {
-    const existing = get().projects.find((p) => p.cwd === folder)
+    // Never a relay tab: it carries the HOST's cwd, and the same path can exist on both machines.
+    const existing = get().projects.find((p) => p.cwd === folder && !p.remote)
     if (existing) {
       // reopenProject also clears `closed` — an "Open folder" on a previously closed
       // project must bring its tab back, not activate an invisible project.

@@ -276,6 +276,11 @@ export function buildStubApi(): Omit<
       cookieProviders: () => Promise.resolve({}),
       onUpdate: noopUnsub
     },
+    // Real in the browser (ws-bridge `buildRecentConversationsApi`). Where this stub stays in force
+    // — nowhere today — `unsupported` is the honest answer: "could not look", never "no history".
+    recentConversations: {
+      list: () => Promise.resolve({ ok: false as const, reason: 'unsupported' as const })
+    },
     sessionMemory: {
       // Superseded by the real WS-backed namespace in ws-bridge (the core session-memory service
       // runs in the server shell too), so nothing reaches these in a live browser session. Kept
