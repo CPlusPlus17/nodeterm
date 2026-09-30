@@ -1088,6 +1088,23 @@ the primary fence. As a belt
 behind it, an SSH-project node's request carries `requireRemote`, which `desktopHeadlessRequest`
 keeps, so core's `spawnNew` refuses rather than spawning it locally. Keep both fences.
 
+## Performance
+
+Measure before you optimize, and put the before/after in the commit. The CLAUDE.md section
+**Performance: measure it, then fix what the measurement names** has the method (CDP against
+`npx electron-vite dev --remoteDebuggingPort 9333`) and the rules it produced. The ones that
+bite most often:
+- An infinite CSS animation keeps the whole window repainting at display rate. Bound it.
+- Never put `will-change` on the React Flow viewport.
+- `handleNodesChange` must not call `onNodesChange` with an empty batch (it re-renders the canvas
+  every frame through React Flow's ResizeObserver).
+- Work done per terminal on a project switch must be coalesced and on-screen-first.
+
+**SSH projects on Windows** run over an in-process transport (`src/core/remote-ssh/native/`),
+not the ssh binary. If you add an ssh call site, route it through `useNativeSsh()` like the
+others, and if you add an ssh option to `control-master.ts`, teach `ssh-argv.ts` about it (the
+parser refuses unknown options on purpose). Test from macOS/Linux with `NODETERM_NATIVE_SSH=1`.
+
 ## Testing
 
 **Screenshot paste has one route per gesture.** On macOS, Cmd+V saves/uploads a file and
