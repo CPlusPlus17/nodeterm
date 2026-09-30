@@ -18,7 +18,7 @@
 //  - THE SAME GATE AND THE SAME CAST as every other family (`shouldPublishFor`, `castFor`): the same
 //    core, a role that may publish, the order's pending entry and the size guard. A held launch rides
 //    the owner leg as usual.
-import type { StoredCanvasPublishHook } from '../state/projects'
+import { useProjects, type StoredCanvasPublishHook } from '../state/projects'
 import type { CanvasMutation } from '@shared/types'
 
 export interface StoredCanvasPublisherDeps {
@@ -39,4 +39,22 @@ export function createStoredCanvasPublisher(deps: StoredCanvasPublisherDeps): St
     // Only now is the write diffed: a project that casts nothing never pays for it.
     for (const m of ops()) deps.send(projectId, m)
   }
+}
+
+/**
+ * The RECEIVE side's write into a project's stored copy — Canvas's `applyToStored`, which calls this
+ * with its `markDirty`. Applies ONE op through the store reducer (`applyCanvasOp`), which calls
+ * neither publish hook (this module's, nor the board's `setProjectKanban` funnel), so an op that came
+ * from someone else is never cast again as ours. It is the path for EVERY peer board op (the board
+ * reads the store, not React Flow), for a peer's node or edge op on a project React Flow does not
+ * hold, for the kanban publisher's local repair (ruling R2), and for the echo of our own last order
+ * op (D5). `onChanged` runs only when the stored copy actually changed: the store writes nothing for
+ * an op that changes nothing (a duplicate cast — every Server Edition tab re-casts what it receives —
+ * or a remove of something already gone), so the project object's identity is the answer, and a
+ * no-op schedules no save.
+ */
+export function applyToStoredCopy(projectId: string, mutation: CanvasMutation, onChanged: () => void): void {
+  const store = useProjects.getState()
+  const before = store.getProject(projectId)
+  if (store.applyCanvasOp(projectId, mutation) && useProjects.getState().getProject(projectId) !== before) onChanged()
 }

@@ -652,7 +652,7 @@ import { snapResizeChanges } from '../lib/resizeSnap'
 import { canClearDirty, canCommitCanvas, canCreateOnCanvas, liveCanvasHolds } from '../state/persistGuards'
 import { mirrorLatest, rebaseOnLatest, useNodesEpoch } from './nodesEpoch'
 import { boardLiveNodeIds, createKanbanPublisher } from './kanban-sync'
-import { createStoredCanvasPublisher } from './stored-publish'
+import { applyToStoredCopy, createStoredCanvasPublisher } from './stored-publish'
 import { isHidden } from '../lib/ui-visibility'
 import { boardLogEvents } from '../lib/boardLogDiff'
 import { useBoardLog } from '../state/boardLog'
@@ -3783,20 +3783,13 @@ export function Canvas() {
 
   /**
    * Apply ONE op to a project's STORED copy, through the store reducer (`applyCanvasOp`) — never
-   * through `setProjectKanban`, whose publish hook would cast it again. The path for a peer's op on
-   * a project React Flow does not hold, for EVERY peer board op (the board reads the store, not
-   * React Flow), and for the kanban publisher's local repair (ruling R2). Save only when that copy
-   * actually changed: the store writes nothing for an op that changes nothing (a duplicate cast —
-   * every Server Edition tab re-casts what it receives — or a remove of something already gone), so
-   * the project object's identity is the answer, and a no-op schedules no save.
+   * through `setProjectKanban`, whose publish hook would cast it again — and save only when that copy
+   * actually changed. The path for a peer's op on a project React Flow does not hold, for EVERY peer
+   * board op, and for the kanban publisher's local repair (ruling R2). The body is
+   * `applyToStoredCopy` (./stored-publish), behaviour-tested in kanban-sync.test.ts.
    */
   const applyToStored = useCallback(
-    (projectId: string, mutation: CanvasMutation): void => {
-      const store = useProjects.getState()
-      const before = store.getProject(projectId)
-      if (store.applyCanvasOp(projectId, mutation) && useProjects.getState().getProject(projectId) !== before)
-        markDirty()
-    },
+    (projectId: string, mutation: CanvasMutation): void => applyToStoredCopy(projectId, mutation, markDirty),
     [markDirty]
   )
 

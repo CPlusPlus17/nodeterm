@@ -3,7 +3,8 @@ import { boardLiveNodeIds, createKanbanPublisher, type KanbanPublisherDeps } fro
 import { applyKanbanOp } from '@shared/kanban-ops'
 import { defaultKanbanFor } from '@shared/kanban-default-board'
 import type { CanvasMutation, KanbanOp, ProjectKanban } from '@shared/types'
-import { setKanbanPublishHook, useProjects } from '../state/projects'
+import { setKanbanPublishHook, setStoredCanvasPublishHook, useProjects } from '../state/projects'
+import { applyToStoredCopy, createStoredCanvasPublisher } from './stored-publish'
 import { nodeStatesToFlow } from '../state/workspace'
 import { pruneAssignments } from '../lib/kanban'
 import { kanbanSessionsFrom } from './toKanbanSession'
@@ -240,6 +241,92 @@ describe('the store funnel publishes, and only the funnel', () => {
     expect(useProjects.getState().applyCanvasOp(pid, op)).toBe(true)
     expect(useProjects.getState().getProject(pid)?.kanban?.assignments).toEqual([op.assignment])
     expect(calls).toEqual([])
+    expect(sent).toEqual([])
+  })
+})
+
+// D12: Canvas's `applyToStored` — the receive handler's write for EVERY peer board op, and for a
+// peer's node or edge op on a project React Flow does not hold. It is also where D5's sender-side
+// convergence lands (our own last order op's echo is applied, not dropped). Canvas delegates to
+// `applyToStoredCopy` with its `markDirty`; this drives that with both publish hooks registered the
+// way Canvas registers them, and a background project.
+describe('applyToStored: a peer op lands in the stored copy and is never published again (D12)', () => {
+  const nodeState = (id: string) =>
+    ({ id, kind: 'terminal', title: id, color: '#fff', group: '', position: { x: 0, y: 0 }, size: { width: 10, height: 10 } }) as never
+  let sent: Array<[string, CanvasMutation]>
+  let dirty: number
+  const apply = (id: string, m: CanvasMutation): void => applyToStoredCopy(id, m, () => { dirty++ })
+
+  beforeEach(() => {
+    useProjects.getState().hydrate({ version: 2, activeProjectId: '', projects: [] })
+    const active = useProjects.getState().addProject('active').id
+    const bg = useProjects.getState().addProject('bg').id
+    useProjects.getState().commitCanvas(bg, [nodeState('n1'), nodeState('n2')], { x: 0, y: 0, zoom: 1 })
+    useProjects.getState().setActive(active)
+    sent = []
+    dirty = 0
+    const send = (id: string, m: CanvasMutation): boolean => { sent.push([id, m]); return true }
+    const kanban = createKanbanPublisher({
+      send,
+      liveNodeIds: (id) => new Set((useProjects.getState().getProject(id)?.nodes ?? []).map((n) => n.id)),
+      shouldPublish: () => true,
+      applyLocal: (id, m) => applyToStoredCopy(id, m, () => { dirty++ })
+    })
+    setKanbanPublishHook((id, prev, next) => kanban.publish(id, prev, next))
+    // Every gate open, the background project governed: if the write reached a publish hook, it casts.
+    setStoredCanvasPublishHook(
+      createStoredCanvasPublisher({ renderedProjectId: () => active, isGoverned: () => true, shouldPublish: () => true, send })
+    )
+  })
+  afterEach(() => {
+    setKanbanPublishHook(null)
+    setStoredCanvasPublishHook(null)
+  })
+
+  const bgId = (): string => useProjects.getState().projects.find((p) => p.name === 'bg')!.id
+
+  it('a peer board op for a background project is stored and saved once; a duplicate is neither', () => {
+    const id = bgId()
+    const column = defaultKanbanFor(id).columns[1].id
+    const op: KanbanOp = { op: 'kb-card', assignment: { nodeId: 'n1', columnId: column } }
+    apply(id, op)
+    expect(useProjects.getState().getProject(id)?.kanban?.assignments).toEqual([op.assignment])
+    expect(dirty).toBe(1)
+    expect(sent).toEqual([])
+    // Every Server Edition tab re-casts what it receives: the same op again changes nothing.
+    const before = useProjects.getState().getProject(id)
+    apply(id, op)
+    expect(useProjects.getState().getProject(id)).toBe(before)
+    expect(dirty).toBe(1)
+    expect(sent).toEqual([])
+  })
+
+  it('a peer node or edge op for a background project is stored, not re-cast by the stored hook', () => {
+    const id = bgId()
+    apply(id, { op: 'upsert', node: nodeState('n3') })
+    apply(id, { op: 'edge-upsert', kind: 'bridge', edge: { id: 'b1', source: 'n1', target: 'n3' } })
+    expect(useProjects.getState().getProject(id)?.nodes.map((n) => n.id)).toEqual(['n1', 'n2', 'n3'])
+    expect(useProjects.getState().getProject(id)?.bridges).toEqual([{ id: 'b1', source: 'n1', target: 'n3' }])
+    expect(dirty).toBe(2)
+    expect(sent).toEqual([])
+  })
+
+  it('D5: our own last order op’s echo sorts a teammate’s concurrent column in, and publishes nothing', () => {
+    const id = bgId()
+    const [a, b, c] = defaultKanbanFor(id).columns.map((col) => col.id)
+    // A teammate's new column arrived while our reorder was in flight: it sits unlisted, at the end.
+    apply(id, { op: 'kb-column', column: { id: 'late', title: 'Late', color: '#fff' } as never })
+    expect(useProjects.getState().getProject(id)?.kanban?.columns.map((col) => col.id)).toEqual([a, b, c, 'late'])
+    dirty = 0
+    // The echo of OUR order op, which every other replica applied (it lists what we knew).
+    apply(id, { op: 'kb-column-order', ids: [c, a, b] })
+    const order = useProjects.getState().getProject(id)?.kanban?.columns.map((col) => col.id)
+    expect(order?.slice(0, 3)).toEqual([c, a, b])
+    expect(dirty).toBe(1)
+    expect(sent).toEqual([])
+    // With nothing concurrent the echo is a fixed point: no store write, no save.
+    apply(id, { op: 'kb-column-order', ids: [c, a, b] })
+    expect(dirty).toBe(1)
     expect(sent).toEqual([])
   })
 })

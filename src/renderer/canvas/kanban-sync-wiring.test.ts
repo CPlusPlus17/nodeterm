@@ -102,8 +102,10 @@ describe('kanban sync wiring', () => {
     // Before the edge and node branches: a board op never touches React Flow, active project or not.
     expect(recv.indexOf('isKanbanOp(mutation)')).toBeLessThan(recv.indexOf('isEdgeMutation(mutation)'))
     expect(recv).not.toMatch(/setProjectKanban\(/)
+    // The body is `applyToStoredCopy` (behaviour-tested in kanban-sync.test.ts, D12); Canvas only
+    // hands it the save trigger.
     const apply = between(canvas, 'const applyToStored = useCallback(', '[markDirty]')
-    expect(apply).toContain('store.applyCanvasOp(projectId, mutation)')
+    expect(apply).toContain('applyToStoredCopy(projectId, mutation, markDirty)')
   })
 
   // Spec §5: only the originating client records a board-log entry — a client applying a peer's op
