@@ -20,7 +20,7 @@
 //
 // Core publishes the WHOLE list after every change (never a delta), like station outcomes; the
 // renderer mirrors it (`state/stationHandovers.ts`) and the Server Edition's headless factory asks
-// the tracker directly. TRANSIENT: after a restart no work has been handed over in this run.
+// the tracker directly. DURABLE across a restart: core stores the holding stations (HANDOVER_FACT).
 
 import { isSafeNodeId } from './safe-id'
 
