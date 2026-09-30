@@ -22,7 +22,14 @@ import {
 import { E_UNSUPPORTED } from '@shared/rpc'
 import { GROK_AMBIGUOUS_SESSION_MESSAGE, isGrokAmbiguousSessionError } from '@shared/chat-page'
 import { Spinner } from '../components/Spinner'
-import { CHAT_LIVE_RELOAD_MIN_MS, CHAT_OPTIMISTIC_WORKING_MS, chatActivity, planLiveReload } from '../lib/chatLive'
+import {
+  CHAT_LIVE_RELOAD_MIN_MS,
+  CHAT_OPTIMISTIC_WORKING_MS,
+  TURN_END_RELOAD_DELAYS_MS,
+  chatActivity,
+  planLiveReload,
+  turnEndReloadCarries
+} from '../lib/chatLive'
 import { sentCommand } from '@shared/chat-command'
 import { isInteractiveBuiltin } from '@shared/chat-catalog'
 import { capabilityAgentId, chatReadsLocalOnly } from '@shared/agents/config'
@@ -307,7 +314,9 @@ export function ChatPanel({
   // The ONE tail read a sent local command schedules (see `send`): `/model` or `!ls` fires no hook,
   // so neither a state change nor a live read would ever confirm it.
   const commandReadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const loadRef = useRef<(live?: boolean, rebind?: boolean) => void>(() => {})
+  const loadRef = useRef<(live?: boolean, rebind?: boolean, carry?: boolean) => void>(() => {})
+  // The turn-end settle reloads (TURN_END_RELOAD_DELAYS_MS) still to fire; cleared on unmount.
+  const settleTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
   const requestHeldReloadRef = useRef<() => void>(() => {})
 
   // `live` = a read driven by a hook event while the agent works (see `attemptLive`), as opposed to
@@ -319,7 +328,10 @@ export function ChatPanel({
   // `rebind` = the held-request reload (see `requestHeldReload`): QUIET like a live read (no
   // "Loading…", the older-page row left alone, unconfirmed sends kept), and it never cancels an
   // older-page fetch — it is only ever started with none in flight.
-  const load = useCallback((live = false, rebind = false) => {
+  //
+  // `carry` = keep unconfirmed sends (`carryUnconfirmed`). Every live and rebind read does; so do the
+  // turn-end settle reloads but the last (`turnEndReloadCarries`).
+  const load = useCallback((live = false, rebind = false, carry = live || rebind) => {
     const token = ++reqRef.current
     if (!rebind) olderReqRef.current++
     // The held request this read starts under: once it is applied, the thread is known to show the
@@ -393,7 +405,7 @@ export function ChatPanel({
         // command it is the ONLY signal (no hook fires). A command that starts a real turn is
         // still covered — its `working` state keeps the row (and the send refusal) on its own.
         if (tailConfirmsSends(threadRef.current, identity, res)) setOptimistic(false)
-        setThread((t) => applyTail(t, identity, res, { carryUnconfirmed: live || rebind }))
+        setThread((t) => applyTail(t, identity, res, { carryUnconfirmed: carry }))
         setLoadState('ok')
         setHeldRead({ identity, pendingId: heldAtStart })
         settleHeldReload(heldAtStart)
@@ -516,6 +528,8 @@ export function ChatPanel({
       attemptLiveRef.current = () => {}
       if (liveTimerRef.current !== null) clearTimeout(liveTimerRef.current)
       liveTimerRef.current = null
+      for (const t of settleTimersRef.current) clearTimeout(t)
+      settleTimersRef.current = []
     },
     []
   )
@@ -580,12 +594,26 @@ export function ChatPanel({
     return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [])
 
-  // Reload when a turn completes (working -> not working). Sessions whose hooks never report
-  // `working` never take this path — the bar's ↻ is their reload.
+  // Reload when a turn completes (working -> not working), then again on the settle schedule
+  // (TURN_END_RELOAD_DELAYS_MS): the Stop hook lands before the final reply is written, so the read
+  // at the edge usually misses it. A new turn does NOT cancel the schedule: a prompt sent the moment
+  // the turn ended starts one at once, and cancelling there would hide the finished turn's reply
+  // until the next one ended. Sessions whose hooks never report `working` never take this path —
+  // the bar's ↻ is their reload.
   useEffect(() => {
-    if (prevState.current === 'working' && state !== 'working') load()
+    if (prevState.current === 'working' && state !== 'working') {
+      load(false, false, true)
+      for (const t of settleTimersRef.current) clearTimeout(t)
+      const last = TURN_END_RELOAD_DELAYS_MS.length - 1
+      settleTimersRef.current = TURN_END_RELOAD_DELAYS_MS.map((ms, i) =>
+        setTimeout(() => {
+          const working = useAgentStatus.getState().byId[nodeId]?.state === 'working'
+          loadRef.current(false, false, turnEndReloadCarries({ final: i === last, working }))
+        }, ms)
+      )
+    }
     prevState.current = state
-  }, [state, load])
+  }, [state, load, nodeId])
 
   // Any state change retires the optimistic working row: from here the real state speaks.
   useEffect(() => {
