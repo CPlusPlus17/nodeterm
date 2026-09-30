@@ -334,7 +334,11 @@ whole-workspace saves still write them.
 
 1. **Ops**: from Editors' hosted tabs, from the server's own browser tabs, and from server canvas
    control, which diffs everything a verb changed and casts each op before it saves (`castAndSave`,
-   `src/server/headless-node-factory.ts`).
+   `src/server/headless-node-factory.ts`). A tab also casts what it writes into a governed project
+   it is not showing (a ⌘⇧T or "Recently closed" reopen, a cold open, an off-canvas node or link):
+   those writes go to its projects store, not its canvas, so the store hands each one to the publish
+   hook (`src/renderer/canvas/stored-publish.ts`). Without the cast the next overlaid save would
+   drop them.
 2. **Saves.** Before a whole-workspace save is written, a governed project's content is replaced by
    the authority's (`overlaySave`). The board is overlaid field by field: its items (columns, cards,
    metadata, labels, views) come from the authority, `github` and `pullLinks` from the save. This

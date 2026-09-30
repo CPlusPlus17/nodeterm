@@ -7377,7 +7377,12 @@ The invariants, each with its reason:
   (`applyMutationToFlow`), because a trip through the serializers would wipe the selection; live
   edge ops go through the reducer's own edge applier, `applyEdgeMutationToScene`. THIS renderer's
   own node writes into a background project are not received ops and take `applyOwnNodeMutation`
-  (unstripped: the held launch is ours to set or clear — see the `pendingLaunch` paragraph).
+  (unstripped: the held launch is ours to set or clear — see the `pendingLaunch` paragraph). **The
+  node publisher never casts them** (it diffs React Flow, and a load is ADOPTED as its baseline), so
+  that store path and `appendCanvasLinks` hand every write to `setStoredCanvasPublishHook`, which
+  Canvas casts only for a GOVERNED project that is not the one React Flow holds
+  (`canvas/stored-publish.ts`): without it a ⌘⇧T reopen or a cold open into an off-screen shared
+  project was dropped from disk by the next overlaid save. An ungoverned project casts nothing new.
 - **The solo-gate trap.** The publisher casts nothing while no teammate is attached, and on a governed
   project that loses every edit. The gate is `shouldPublishFor` = `(hasPeers || governed) && sameCore
   && !readOnly`: a Server Edition tab publishes every project until its first `canvas:authority`

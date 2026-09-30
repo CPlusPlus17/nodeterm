@@ -422,6 +422,24 @@ export function setKanbanPublishHook(hook: KanbanPublishHook | null): void {
   kanbanPublishHook = hook
 }
 
+/**
+ * Publishes a node or edge write THIS renderer made into a project's STORED copy
+ * (`applyOwnNodeMutation`, `appendCanvasLinks`): a ⌘⇧T / "Recently closed" reopen into a project that
+ * is not on screen, a cold open, an off-canvas display node, a headless start's launch patch. The node
+ * publisher never sees these writes: it diffs React Flow, and a stored project's nodes enter React
+ * Flow only through a load, which it ADOPTS as its baseline rather than casting. On a project a
+ * Server Edition canvas authority governs that was data loss, because the save overlay replaces the
+ * stored content with what the authority heard as ops (docs/hosted-team-relay.md). Called AFTER the
+ * store write, once per op actually written. Same one-owner rule as the board hook: a peer's op is
+ * applied with `applyCanvasOp`, which never calls it, so nothing received is published again.
+ */
+export type StoredCanvasPublishHook = (projectId: string, m: CanvasMutation) => void
+let storedCanvasPublishHook: StoredCanvasPublishHook | null = null
+/** Canvas registers this once per core binding and clears it (`null`) on teardown. */
+export function setStoredCanvasPublishHook(hook: StoredCanvasPublishHook | null): void {
+  storedCanvasPublishHook = hook
+}
+
 export const useProjects = create<ProjectsState>((set, get) => ({
   projects: [],
   activeProjectId: '',
@@ -630,7 +648,13 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   appendCanvasLinks(projectId, links) {
-    const add = (existing: BridgeLink[] | undefined, incoming: BridgeLink[] | undefined) => {
+    // The edges actually appended, per kind: what the publish hook casts (a re-link casts nothing).
+    const added: { bridge: BridgeLink[]; rope: BridgeLink[] } = { bridge: [], rope: [] }
+    const add = (
+      kind: 'bridge' | 'rope',
+      existing: BridgeLink[] | undefined,
+      incoming: BridgeLink[] | undefined
+    ) => {
       if (!incoming?.length) return existing
       const kept = existing ?? []
       const seenId = new Set(kept.map((e) => e.id))
@@ -642,15 +666,21 @@ export const useProjects = create<ProjectsState>((set, get) => ({
         seenPair.add(pair)
         return true
       })
+      added[kind] = fresh
       return fresh.length ? [...kept, ...fresh] : existing
     }
+    const p = get().projects.find((x) => x.id === projectId)
+    if (!p) return
+    const next = {
+      ...p,
+      bridges: add('bridge', p.bridges, links.bridges),
+      ropes: add('rope', p.ropes, links.ropes)
+    }
     set((s) => ({
-      projects: s.projects.map((p) =>
-        p.id === projectId
-          ? { ...p, bridges: add(p.bridges, links.bridges), ropes: add(p.ropes, links.ropes) }
-          : p
-      )
+      projects: s.projects.map((x) => (x.id === projectId ? next : x))
     }))
+    for (const kind of ['bridge', 'rope'] as const)
+      for (const edge of added[kind]) storedCanvasPublishHook?.(projectId, { op: 'edge-upsert', kind, edge })
   },
 
   applyCanvasOp(projectId, mutation) {
@@ -688,6 +718,8 @@ export const useProjects = create<ProjectsState>((set, get) => ({
         applyOwnCanvasMutation(nodes, mutation)
       )
     }))
+    // A node op only: `applyOwnCanvasMutation` writes nothing for any other family.
+    if (mutation.op === 'upsert' || mutation.op === 'remove') storedCanvasPublishHook?.(projectId, mutation)
     return true
   },
 

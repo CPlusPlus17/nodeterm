@@ -405,7 +405,7 @@ import {
   shouldShowExplorerPinHint,
   writeSeenExplorerPinHint
 } from '../lib/explorerPinHint'
-import { setKanbanPublishHook, useProjects } from '../state/projects'
+import { setKanbanPublishHook, setStoredCanvasPublishHook, useProjects } from '../state/projects'
 import { useAgentStatus, recordsTurnInterrupt } from '../state/agentStatus'
 import { hostChatSend, hostChatSession, hostChatStatus } from '../lib/hostChatQuery'
 import { chatPaneRefusal } from '../lib/chatPaneGate'
@@ -652,6 +652,7 @@ import { snapResizeChanges } from '../lib/resizeSnap'
 import { canClearDirty, canCommitCanvas, canCreateOnCanvas, liveCanvasHolds } from '../state/persistGuards'
 import { rebaseOnLatest, useNodesEpoch } from './nodesEpoch'
 import { boardLiveNodeIds, createKanbanPublisher } from './kanban-sync'
+import { createStoredCanvasPublisher } from './stored-publish'
 import { isHidden } from '../lib/ui-visibility'
 import { boardLogEvents } from '../lib/boardLogDiff'
 import { useBoardLog } from '../state/boardLog'
@@ -3973,8 +3974,21 @@ export function Canvas() {
       applyLocal: (projectId, m) => applyToStored(projectId, m)
     })
     setKanbanPublishHook((id, prev, next) => kanbanPublisher.publish(id, prev, next))
+    // Own node/edge writes into a project that is NOT on screen (a ⌘⇧T reopen, a cold open, an
+    // off-canvas display node, a headless launch patch) reach the store only, never React Flow, so
+    // the node publisher above never casts them — and a governed project's save overlay would drop
+    // them from disk (canvas/stored-publish.ts). Same cast, same gate.
+    setStoredCanvasPublishHook(
+      createStoredCanvasPublisher({
+        renderedProjectId: () => nodesProjectIdRef.current,
+        isGoverned: (projectId) => governedRef.current.has(projectId),
+        shouldPublish: (projectId) => shouldPublishFor(projectId),
+        send: (projectId, m) => castFor(projectId, m)
+      })
+    )
     return () => {
       setKanbanPublishHook(null)
+      setStoredCanvasPublishHook(null)
       unsub()
       governed.release()
       pub.dispose()
