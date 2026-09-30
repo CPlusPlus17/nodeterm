@@ -398,8 +398,11 @@ removed from the address bar (the link must stay copyable).
 
 - `disableStdin: true`; `onData` is not wired to anything.
 - No web-links addon; OSC 8 never arrives (host filter). **No clickable links.**
-- A CSI handler swallows mouse-tracking DECSET/DECRST (1000/1002/1003/1006), so a viewer can always
-  select text.
+- A CSI handler swallows a DECSET that only enables mouse tracking (9/1000/1002/1003, plus the
+  1005/1006/1015 encodings), so a viewer can always select text. A DECSET that MIXES a mouse mode with
+  another (`?1049;1000h`) is applied as written and tracking is switched straight back off
+  (`?1000l` queued): swallowing it whole lost the alternate screen (measured against xterm 5.5). A
+  DECRST is never swallowed: it can only turn tracking off.
 - Fixed `cols`/`rows` from `meta`, no FitAddon; font size computed to fit the width, floor 7 px,
   horizontal scroll below that; pinch zoom allowed on mobile.
 - Scrollback 1000 lines: what this viewer itself watched on a plain shell, never host history.
