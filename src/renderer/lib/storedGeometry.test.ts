@@ -31,7 +31,7 @@ const apply = (nodes: CanvasNodeState[], ms: ReturnType<typeof geometryMutations
 
 describe('geometryMutations — a structural verb run off screen', () => {
   it('groups from persisted sizes: a new frame, children re-parented, nothing else rewritten', () => {
-    const next = groupSelectedNodes(nodeStatesToFlow(stored), ['a', 'b'], 0, false)
+    const next = groupSelectedNodes(nodeStatesToFlow(stored), ['a', 'b'], 0, 0)
     const ms = geometryMutations(stored, next)
     const after = apply(stored, ms)
     const frame = after.find((n) => n.kind === 'group')!
@@ -47,7 +47,7 @@ describe('geometryMutations — a structural verb run off screen', () => {
   })
 
   it('ungroup removes only the frame and frees its children', () => {
-    const grouped = apply(stored, geometryMutations(stored, groupSelectedNodes(nodeStatesToFlow(stored), ['a', 'b'], 0, false)))
+    const grouped = apply(stored, geometryMutations(stored, groupSelectedNodes(nodeStatesToFlow(stored), ['a', 'b'], 0, 0)))
     const frameId = grouped.find((n) => n.kind === 'group')!.id
     const ms = geometryMutations(grouped, ungroupNodes(nodeStatesToFlow(grouped), frameId))
     const after = apply(grouped, ms)
