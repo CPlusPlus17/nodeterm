@@ -451,4 +451,22 @@ describe('hosted scheduler', () => {
       '/v1/relay/challenge', '/v1/relay/host-token', '/v1/relay/challenge', '/v1/relay/host-token'
     ])
   })
+
+  it('a rate-limited challenge (429, shared per-IP limit) waits the 60 s floor before the next mint', async () => {
+    const keys = nacl.box.keyPair()
+    const pub = Buffer.from(keys.publicKey).toString('base64')
+    let challenges = 0
+    const f = (async (u: string) => {
+      if (u.endsWith('/v1/relay/challenge')) { challenges++; return new Response('{}', { status: 429 }) }
+      throw new Error('no mint may follow a refused challenge')
+    }) as typeof fetch
+    const mint = () => mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: pub, hostSecretKey: keys.secretKey, fetch: f })
+    const h = harness([mint, mint])
+    h.s.start(); await flush()
+    expect(h.s.status()).toMatchObject({ state: 'running', lastError: 'rate-limited (429)' })
+    await h.advance(59_999)
+    expect(challenges).toBe(1)
+    await h.advance(1)
+    expect(challenges).toBe(2)
+  })
 })

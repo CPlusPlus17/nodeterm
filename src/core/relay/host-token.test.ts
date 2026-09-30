@@ -159,17 +159,59 @@ describe('host token proof of possession', () => {
     expect(await mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: PUB, hostSecretKey: keys.secretKey, fetch: unproven.f }))
       .toEqual({ ok: false, kind: 'refused', status: 403, reason: 'pop_invalid' })
   })
+  it('a pop_required answer to an UNPROVEN mint after a 405 challenge is transient too', async () => {
+    const { f, calls } = api(undefined, { challenge: () => res(405, {}), mint: () => res(403, { error: 'pop_required' }) })
+    const r = await mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: PUB, hostSecretKey: keys.secretKey, fetch: f })
+    expect(r).toEqual({ ok: false, kind: 'network', status: 403 })
+    expect(calls[1].body).toEqual({ deviceId: 'd', hostPublicKeyB64: PUB })
+  })
   it('a 405 challenge is an old backend too; any other challenge failure is transient and sends nothing', async () => {
     const old = api(undefined, { challenge: () => res(405, {}) })
     await mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: PUB, hostSecretKey: keys.secretKey, fetch: old.f })
     expect(old.calls.map((c) => c.url)).toEqual(['https://api/v1/relay/challenge', 'https://api/v1/relay/host-token'])
     expect(old.calls[1].body).toEqual({ deviceId: 'd', hostPublicKeyB64: PUB })
-    for (const challenge of [() => res(403, { error: 'pop_invalid' }), () => res(200, { challenge: 1 }), () => { throw new Error('ECONNRESET') }]) {
+    for (const challenge of [() => res(403, { error: 'pop_invalid' }), () => res(502, {}), () => { throw new Error('ECONNRESET') }]) {
       const t = api(undefined, { challenge })
       const r = await mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: PUB, hostSecretKey: keys.secretKey, fetch: t.f })
       expect(r).toMatchObject({ ok: false, kind: 'network' })
       expect(t.calls).toHaveLength(1)
     }
+  })
+  it('a rate-limited challenge (429) is rate-limited, so the scheduler waits its 60 s floor, and sends nothing', async () => {
+    // Several hosts behind one NAT share /challenge's per-IP limit.
+    const { f, calls } = api(undefined, { challenge: () => res(429, {}) })
+    const r = await mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: PUB, hostSecretKey: keys.secretKey, fetch: f })
+    expect(r).toEqual({ ok: false, kind: 'rate-limited', status: 429 })
+    expect(calls).toHaveLength(1)
+  })
+  it('a 2xx challenge the host cannot use is bad-response, not network, and sends nothing', async () => {
+    for (const body of [{ challenge: 1, serverPublicKeyB64: 'x' }, { pairingToken: 'T' }, null]) {
+      const { f, calls } = api(undefined, { challenge: () => res(200, body) })
+      const r = await mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: PUB, hostSecretKey: keys.secretKey, fetch: f })
+      expect(r).toEqual({ ok: false, kind: 'bad-response' })
+      expect(calls).toHaveLength(1)
+    }
+    const broken = { ...res(200, null), json: async () => { throw new SyntaxError('Unexpected token <') } } as Response
+    const t = api(undefined, { challenge: () => broken })
+    expect(await mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: PUB, hostSecretKey: keys.secretKey, fetch: t.f }))
+      .toEqual({ ok: false, kind: 'bad-response' })
+  })
+  it('a challenge body that stalls until the 8 s timeout is network (a timeout), not bad-response', async () => {
+    vi.useFakeTimers()
+    const f = (async (u: string, init: RequestInit) => {
+      if (!u.endsWith('/v1/relay/challenge')) throw new Error('no mint may follow')
+      return {
+        ...res(200, null),
+        json: () => new Promise((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        })
+      } as Response
+    }) as unknown as typeof fetch
+    const p = mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: PUB, hostSecretKey: keys.secretKey, fetch: f })
+    let settled: unknown = 'pending'
+    void p.then((r) => { settled = r })
+    await vi.advanceTimersByTimeAsync(8_000)
+    expect(settled).toEqual({ ok: false, kind: 'network' })
   })
   it('a proof that cannot be computed (a low-order server key) is bad-response and sends no mint', async () => {
     const { f, calls } = api(undefined, { challenge: () => res(200, { challenge: 'c.s', serverPublicKeyB64: Buffer.alloc(32).toString('base64') }) })

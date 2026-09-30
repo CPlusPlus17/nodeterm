@@ -10,7 +10,7 @@
 // Unlike the desktop copy, which collapses every failure to `null`, this one says WHICH failure it
 // was, because the scheduler reacts differently to each: a 429 waits at least a minute, a 402/403
 // stops minting, anything else backs off and retries. One 403 is deliberately NOT terminal: a
-// `pop_required` answer to a mint sent WITHOUT a proof because the challenge said 404. A reverse
+// `pop_required` answer to a mint sent WITHOUT a proof because the challenge said 404/405. A reverse
 // proxy answers 404 while the backend redeploys, and the unproven mint that follows can land on the
 // fresh backend, which requires a proof from a host it has seen prove before. Stopping there would
 // stop hosting for good over a redeploy, so it backs off and the next attempt asks for a challenge
@@ -66,6 +66,9 @@ export async function mintHostToken(deps: {
   const timer = setTimeout(() => ctrl.abort(), MINT_TIMEOUT_MS)
   try {
     let proof: { popChallenge: string; popProof: string } | null = null
+    // True only when a challenge was asked for and answered 404/405: the one case this mint goes out
+    // unproven although we hold the key (see the header on what a 403 then means).
+    let sentUnproven = false
     if (deps.hostSecretKey) {
       const ch = await fetchPopChallenge({
         apiBase: deps.apiBase,
@@ -76,7 +79,18 @@ export async function mintHostToken(deps: {
       })
       // Never an unproven mint after a transient failure: to a host the backend has seen prove
       // before, that mint is a 403 which would stop hosting. Back off and ask again.
-      if (!ch.ok && !ch.unsupported) return { ok: false, kind: 'network', ...(ch.status ? { status: ch.status } : {}) }
+      if (!ch.ok && !ch.unsupported) {
+        // /challenge has its own per-IP limit, which several hosts behind one NAT share: take the
+        // scheduler's 60 s floor rather than the short network backoff.
+        if (ch.status === 429) return { ok: false, kind: 'rate-limited', status: 429 }
+        // A 2xx that is not a usable challenge is the server's fault, unless the body read was cut
+        // short by our own timeout.
+        if (ch.status !== undefined && ch.status >= 200 && ch.status < 300) {
+          return ctrl.signal.aborted ? { ok: false, kind: 'network' } : { ok: false, kind: 'bad-response' }
+        }
+        return { ok: false, kind: 'network', ...(ch.status ? { status: ch.status } : {}) }
+      }
+      if (!ch.ok && ch.unsupported) sentUnproven = true
       if (ch.ok) {
         try {
           proof = {
@@ -118,7 +132,7 @@ export async function mintHostToken(deps: {
       const reason = res.status === 403 ? popRefusalOf(403, await res.json().catch(() => null)) : null
       // The challenge said 404/405 and this mint went out unproven: a pop_required here is a backend
       // that came back mid-redeploy (see the header), so it is transient, not a refusal.
-      if (reason === 'pop_required' && deps.hostSecretKey && !proof) return { ok: false, kind: 'network', status: 403 }
+      if (reason === 'pop_required' && sentUnproven) return { ok: false, kind: 'network', status: 403 }
       return { ok: false, kind: 'refused', status: res.status, ...(reason ? { reason } : {}) }
     }
     if (!res.ok) return { ok: false, kind: 'network', status: res.status }
