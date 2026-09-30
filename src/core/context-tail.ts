@@ -148,40 +148,105 @@ export const CLAUDE_INTERRUPT_MARKERS: ReadonlySet<string> = new Set([
 
 const PROMPT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
 
+/** How many opening-prompt ids a per-session scanner remembers (oldest dropped first). */
+export const TURN_PROMPTS_SEEN_MAX = 256
+
+type TranscriptRecord = {
+  type?: unknown
+  isSidechain?: unknown
+  isMeta?: unknown
+  promptId?: unknown
+  message?: { content?: unknown }
+}
+
+const isMarkerRecord = (o: TranscriptRecord): boolean => {
+  const content = o.message?.content
+  if (!Array.isArray(content) || content.length !== 1) return false
+  const part = content[0] as { type?: unknown; text?: unknown } | null
+  return part?.type === 'text' && typeof part.text === 'string' && CLAUDE_INTERRUPT_MARKERS.has(part.text)
+}
+
+/** A main-thread user record that OPENS a turn: the typed (or dequeued) prompt itself — not a tool
+ *  result, not a meta record, not the interrupt marker. */
+const isOpeningPrompt = (o: TranscriptRecord): boolean => {
+  if (o.isMeta === true) return false
+  const content = o.message?.content
+  if (typeof content === 'string') return true
+  if (!Array.isArray(content) || content.length === 0) return false
+  if (content.some((c) => (c as { type?: unknown } | null)?.type === 'tool_result')) return false
+  return !isMarkerRecord(o)
+}
+
 /**
- * Turn ids (`promptId`) of the interrupt markers in these transcript lines, in file order. Pure.
+ * The interrupt markers of ONE transcript, read chunk by chunk. Stateful: it remembers the turn ids
+ * whose OPENING prompt record it has already read (bounded, `TURN_PROMPTS_SEEN_MAX`), because a
+ * marker only counts for a turn whose prompt came BEFORE it in the file.
+ *
+ * That order is not a detail. On "queue a message while Claude works, then press Esc" the CLI
+ * writes the marker tagged with the QUEUED prompt's id and the queued prompt record ~36 ms AFTER
+ * it (measured in real transcripts, 2.1.209–2.1.283: 34 of 114 accepted-shape markers carried the
+ * NEXT prompt's id, 31 of them behind a `queue-operation`; redacted in
+ * `shared/agents/__fixtures__/claude/interrupt-queued.json`). That queued prompt's
+ * UserPromptSubmit makes it the node's current turn, so an id match alone ended the NEW live turn.
+ * A marker whose turn was not opened earlier in what this scanner has read is dropped — the
+ * interrupted turn really did end, but the node is already in the next one.
+ *
+ * `record` lines are read for prompts only and never report (the remote tail's historical read).
+ */
+export interface TurnInterruptScanner {
+  scan(text: string | string[], opts?: { record?: boolean }): string[]
+}
+
+export function createTurnInterruptScanner(max = TURN_PROMPTS_SEEN_MAX): TurnInterruptScanner {
+  const seen = new Set<string>()
+  const remember = (id: string): void => {
+    seen.delete(id)
+    seen.add(id)
+    if (seen.size > max) seen.delete(seen.values().next().value as string)
+  }
+  return {
+    scan(text, opts) {
+      const out: string[] = []
+      for (const line of toLines(text)) {
+        // Cheap pre-filter before the parse — this runs over every transcript chunk. Every record
+        // this scanner cares about is a user record carrying a promptId.
+        if (!line.includes('"promptId"') || !line.includes('"user"')) continue
+        let o: TranscriptRecord
+        try {
+          o = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (o?.type !== 'user' || o.isSidechain === true) continue
+        if (typeof o.promptId !== 'string' || !PROMPT_ID_RE.test(o.promptId)) continue
+        if (isMarkerRecord(o)) {
+          if (!opts?.record && seen.has(o.promptId)) out.push(o.promptId)
+        } else if (isOpeningPrompt(o)) {
+          remember(o.promptId)
+        }
+      }
+      return out
+    }
+  }
+}
+
+/**
+ * Turn ids (`promptId`) of the interrupt markers in these transcript lines, in file order, counting
+ * a marker only when its turn's opening prompt precedes it IN THESE LINES (see
+ * `createTurnInterruptScanner`, which the tails use to carry that across reads). Pure.
  *
  * No hook fires when the user interrupts a Claude turn (Esc during streaming, a tool call or a
  * permission dialog; Ctrl+C once) — measured on 2.1.285 — and the CLI's `idle_prompt`
  * notification does not follow an interrupted turn either. This marker is the one trace the
  * interrupt leaves. The id is only a CANDIDATE: the status mirror acts on it only when it names
- * the turn the node is in right now (`recordTurnInterrupt`), which is what makes a marker read
- * back from history on the tail's first read harmless.
+ * the turn the node is in right now (`recordTurnInterrupt`).
  *
  * Only a main-thread user record whose content is an ARRAY holding exactly one text part with a
  * marker text counts. A prompt the user typed is stored as a plain string, so typing the marker's
  * words cannot produce one.
  */
 export function parseTurnInterrupts(text: string | string[]): string[] {
-  const out: string[] = []
-  for (const line of toLines(text)) {
-    // Cheap pre-filter before the parse — this runs over every transcript chunk.
-    if (!line.includes('Request interrupted by user')) continue
-    let o: { type?: unknown; isSidechain?: unknown; promptId?: unknown; message?: { content?: unknown } }
-    try {
-      o = JSON.parse(line)
-    } catch {
-      continue
-    }
-    if (o?.type !== 'user' || o.isSidechain === true) continue
-    if (typeof o.promptId !== 'string' || !PROMPT_ID_RE.test(o.promptId)) continue
-    const content = o.message?.content
-    if (!Array.isArray(content) || content.length !== 1) continue
-    const part = content[0] as { type?: unknown; text?: unknown } | null
-    if (part?.type !== 'text' || typeof part.text !== 'string' || !CLAUDE_INTERRUPT_MARKERS.has(part.text)) continue
-    out.push(o.promptId)
-  }
-  return out
+  return createTurnInterruptScanner().scan(text)
 }
 
 /** Legacy presence scanner; answer consumers must use parseToolResultIds. */
@@ -238,6 +303,8 @@ export interface ContextTailOptions {
 }
 
 interface Tracked {
+  /** Claude interrupt markers, with the opening prompts already read (see the scanner). */
+  interrupts: TurnInterruptScanner
   path: string
   offset: number
   used: number
@@ -367,7 +434,7 @@ export function createContextTail(
           if (opts?.onToolResult)
             for (const id of parseToolResultIds(completeLines)) opts.onToolResult(sessionId, id)
           if (opts?.onTurnInterrupted)
-            for (const id of parseTurnInterrupts(completeLines)) opts.onTurnInterrupted(sessionId, id)
+            for (const id of t.interrupts.scan(completeLines)) opts.onTurnInterrupted(sessionId, id)
         }
       }
 
@@ -415,6 +482,7 @@ export function createContextTail(
         return
       }
       const t: Tracked = {
+        interrupts: createTurnInterruptScanner(),
         path: transcriptPath,
         offset: 0,
         used: 0,

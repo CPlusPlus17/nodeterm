@@ -12,7 +12,8 @@ import {
   parseLatestUsage,
   parseTaskNotifications,
   parseToolResultIds,
-  parseTurnInterrupts,
+  createTurnInterruptScanner,
+  type TurnInterruptScanner,
   type ContextTailOptions
 } from '../core/context-tail'
 import { splitCompleteLines } from '../core/subagent-tail'
@@ -48,6 +49,8 @@ export function logsFailure(failures: number): boolean {
 }
 
 interface Tracked {
+  /** Claude interrupt markers, with the opening prompts already read (see the scanner). */
+  interrupts: TurnInterruptScanner
   ref: RemoteFileRef
   offset: number | null
   failures: number
@@ -126,8 +129,11 @@ export function createRemoteContextTail(
     if (opts?.onTaskNotification) {
       for (const n of parseTaskNotifications(eventLines)) opts.onTaskNotification(sessionId, n)
     }
-    if (opts?.onTurnInterrupted)
-      for (const id of parseTurnInterrupts(eventLines)) opts.onTurnInterrupted(sessionId, id)
+    // A historical read still RECORDS the opening prompts it passes (a marker only counts for a turn
+    // whose prompt came before it — see createTurnInterruptScanner); it never reports one.
+    if (historical) t.interrupts.scan(completeLines, { record: true })
+    else if (opts?.onTurnInterrupted)
+      for (const id of t.interrupts.scan(eventLines)) opts.onTurnInterrupted(sessionId, id)
   }
 
   const push = (sessionId: string, t: Tracked): void => {
@@ -257,6 +263,7 @@ export function createRemoteContextTail(
         return
       }
       const t: Tracked = {
+        interrupts: createTurnInterruptScanner(),
         ref,
         offset: null,
         failures: 0,

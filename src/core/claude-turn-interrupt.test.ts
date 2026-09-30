@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
 import path from 'path'
 import { normalizeClaude, type NormalizedAgentEvent } from '@shared/agents/normalize'
-import { parseTurnInterrupts, CLAUDE_INTERRUPT_MARKERS, createContextTail } from './context-tail'
+import { parseTurnInterrupts, CLAUDE_INTERRUPT_MARKERS, createContextTail, createTurnInterruptScanner } from './context-tail'
 import {
   recordAgentEvent,
   recordTurnInterrupt,
@@ -24,6 +24,15 @@ const fixture = JSON.parse(
     .readFileSync(path.join(__dirname, '../shared/agents/__fixtures__/claude/interrupt-capture.json'), 'utf8')
     .replace(/\r\n/g, '\n')
 ) as { claudeVersion: string; scenarios: Record<string, Scenario>; idlePrompt: { fired: Payload[] } }
+
+// A REAL "queue a message, then Esc" transcript excerpt (redacted): the marker carries the QUEUED
+// prompt's id and the queued prompt record comes right AFTER it.
+const queued = JSON.parse(
+  fs
+    .readFileSync(path.join(__dirname, '../shared/agents/__fixtures__/claude/interrupt-queued.json'), 'utf8')
+    .replace(/\r\n/g, '\n')
+) as { interruptedTurn: string; queuedTurn: string; records: Payload[] }
+const queuedLines = queued.records.map((r) => JSON.stringify(r))
 
 const MARKED = ['esc_streaming', 'esc_tool_call', 'esc_permission_prompt', 'ctrl_c_streaming', 'esc_tool_call_then_80s_idle']
 const REWOUND = ['ctrl_c_before_first_token', 'esc_before_first_token']
@@ -77,6 +86,40 @@ describe('parseTurnInterrupts', () => {
     expect(parseTurnInterrupts(lines(sc('esc_after_background_subagent')))).toEqual([])
   })
 
+  it('the queued-prompt case: the marker names the NEXT prompt, whose record comes after it — dropped', () => {
+    const marker = queued.records.find(
+      (r) => Array.isArray((r.message as { content?: unknown })?.content) &&
+        CLAUDE_INTERRUPT_MARKERS.has(String(((r.message as { content: { text?: string }[] }).content[0])?.text))
+    )!
+    // The fact the rule rests on: the id is the queued prompt's, not the interrupted turn's.
+    expect(marker.promptId).toBe(queued.queuedTurn)
+    expect(marker.promptId).not.toBe(queued.interruptedTurn)
+    expect(queued.records.some((r) => r.type === 'queue-operation')).toBe(true)
+    expect(parseTurnInterrupts(queuedLines)).toEqual([])
+    // Also when the tail read the interrupted turn's prompt in an EARLIER chunk.
+    const scanner = createTurnInterruptScanner()
+    expect(scanner.scan(queuedLines.slice(0, 3))).toEqual([])
+    expect(scanner.scan(queuedLines.slice(3))).toEqual([])
+  })
+
+  it('a turn opened in an earlier chunk still counts (the scanner carries what it has read)', () => {
+    const l = lines(sc('esc_streaming'))
+    const scanner = createTurnInterruptScanner()
+    expect(scanner.scan(l.slice(0, 1))).toEqual([])
+    expect(scanner.scan(l.slice(1))).toEqual([promptIdOf(sc('esc_streaming'))])
+    // record-only reads (the remote tail's history) remember prompts but never report.
+    const r = createTurnInterruptScanner()
+    expect(r.scan(l, { record: true })).toEqual([])
+  })
+
+  it('remembers a bounded number of turns, oldest dropped first', () => {
+    const scanner = createTurnInterruptScanner(2)
+    const prompt = (id: string) => JSON.stringify({ type: 'user', promptId: id, message: { content: 'hi' } })
+    const mark = (id: string) => JSON.stringify({ type: 'user', promptId: id, message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } })
+    scanner.scan([prompt('a'), prompt('b'), prompt('c')])
+    expect(scanner.scan([mark('a'), mark('b'), mark('c')])).toEqual(['b', 'c'])
+  })
+
   const rec = (over: Payload): string =>
     JSON.stringify({
       type: 'user',
@@ -86,18 +129,21 @@ describe('parseTurnInterrupts', () => {
     })
 
   it('refuses shapes that are not the CLI’s marker', () => {
-    expect(parseTurnInterrupts([rec({})])).toEqual(['p-1'])
+    const opened = JSON.stringify({ type: 'user', promptId: 'p-1', message: { content: 'typed prompt' } })
+    // No opening prompt before it: not this turn's marker.
+    expect(parseTurnInterrupts([rec({})])).toEqual([])
+    expect(parseTurnInterrupts([opened, rec({})])).toEqual(['p-1'])
     // A prompt the user typed is a plain string, even when it says the same words.
-    expect(parseTurnInterrupts([rec({ message: { role: 'user', content: '[Request interrupted by user]' } })])).toEqual([])
+    expect(parseTurnInterrupts([opened, rec({ message: { role: 'user', content: '[Request interrupted by user]' } })])).toEqual([])
     // Other wording: closed set, a future spelling degrades to nothing.
-    expect(parseTurnInterrupts([rec({ message: { content: [{ type: 'text', text: '[Request interrupted by user!]' }] } })])).toEqual([])
+    expect(parseTurnInterrupts([opened, rec({ message: { content: [{ type: 'text', text: '[Request interrupted by user!]' }] } })])).toEqual([])
     // Extra parts, a sidechain, an assistant record, a hostile id, no id, a torn line.
-    expect(parseTurnInterrupts([rec({ message: { content: [{ type: 'text', text: '[Request interrupted by user]' }, { type: 'text', text: 'x' }] } })])).toEqual([])
-    expect(parseTurnInterrupts([rec({ isSidechain: true })])).toEqual([])
-    expect(parseTurnInterrupts([rec({ type: 'assistant' })])).toEqual([])
+    expect(parseTurnInterrupts([opened, rec({ message: { content: [{ type: 'text', text: '[Request interrupted by user]' }, { type: 'text', text: 'x' }] } })])).toEqual([])
+    expect(parseTurnInterrupts([opened, rec({ isSidechain: true })])).toEqual([])
+    expect(parseTurnInterrupts([opened, rec({ type: 'assistant' })])).toEqual([])
     expect(parseTurnInterrupts([rec({ promptId: 'a b;rm' })])).toEqual([])
     expect(parseTurnInterrupts([rec({ promptId: undefined })])).toEqual([])
-    expect(parseTurnInterrupts([rec({}).slice(0, 60)])).toEqual([])
+    expect(parseTurnInterrupts([opened, rec({}).slice(0, 60)])).toEqual([])
   })
 })
 
@@ -107,8 +153,11 @@ describe('normalizeClaude carries the turn id', () => {
     const evs = s.hooks.map((payload) => normalizeClaude({ nodeId: 'n', agentId: 'claude', payload }))
     expect(evs[0]).toMatchObject({ state: 'working', newTurn: true, turnId: promptIdOf(s) })
     expect(evs[1]?.turnId).toBeUndefined()
+    // A prompt with no usable id says so with '' — which makes the mirror FORGET the old turn id.
     const hostile = normalizeClaude({ nodeId: 'n', agentId: 'claude', payload: { ...s.hooks[0], prompt_id: 'x y' } })
-    expect(hostile?.turnId).toBeUndefined()
+    expect(hostile?.turnId).toBe('')
+    const { prompt_id: _drop, ...noId } = s.hooks[0]
+    expect(normalizeClaude({ nodeId: 'n', agentId: 'claude', payload: noId })?.turnId).toBe('')
   })
 })
 
@@ -157,6 +206,26 @@ describe('recordTurnInterrupt (the status mirror decides)', () => {
     recordAgentEvent({ nodeId: NODE, agentId: 'claude', sessionId: sessionOf(a), kind: 'state', state: 'working', newTurn: true, turnId: 'next-turn' })
     expect(recordTurnInterrupt(NODE, sessionOf(a), oldTurn)).toBeUndefined()
     expect(_snapshot()[NODE]?.state).toBe('working')
+  })
+
+  it('queue a message, then Esc: the NEW live turn is NOT ended (the review’s blocker)', () => {
+    const SID = 'sess-q'
+    recordAgentEvent({ nodeId: NODE, agentId: 'claude', sessionId: SID, kind: 'state', state: 'working', newTurn: true, turnId: queued.interruptedTurn })
+    // The queued prompt's UserPromptSubmit: it is the node's current turn now.
+    recordAgentEvent({ nodeId: NODE, agentId: 'claude', sessionId: SID, kind: 'state', state: 'working', newTurn: true, turnId: queued.queuedTurn })
+    // The tail's 1 Hz read lands after that hook and sees marker + queued prompt together — also
+    // on a first read that starts at the queued prompt.
+    for (const id of createTurnInterruptScanner().scan(queuedLines)) recordTurnInterrupt(NODE, SID, id)
+    for (const id of createTurnInterruptScanner().scan(queuedLines.slice(-2))) recordTurnInterrupt(NODE, SID, id)
+    expect(_snapshot()[NODE]?.state).toBe('working')
+  })
+
+  it('a prompt with no usable id forgets the previous turn id', () => {
+    const s = sc('esc_tool_call')
+    replayHooks(s)
+    recordAgentEvent(normalizeClaude({ nodeId: NODE, agentId: 'claude', payload: { ...s.hooks[0], prompt_id: undefined } })!)
+    expect(_snapshot()[NODE]?.turnId).toBeUndefined()
+    expect(recordTurnInterrupt(NODE, sessionOf(s), promptIdOf(s))).toBeUndefined()
   })
 
   it('refuses another session, a finished turn, and an entry with no turn id (after a restart)', () => {

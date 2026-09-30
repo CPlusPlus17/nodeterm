@@ -11254,6 +11254,11 @@ button.pull-checks__name {
   background: var(--state-queued);
   border-color: transparent;
 }
+/* Interrupted by the user: idle, not finished — `--after` holds its dependents on it. */
+.team-progress__dot--interrupted {
+  background: var(--state-warning);
+  border-color: transparent;
+}
 /* The session name in the card modal header: sized to its text, not a flex-filling detail line. */
 .kanban-modal__session {
   flex: 0 1 auto;

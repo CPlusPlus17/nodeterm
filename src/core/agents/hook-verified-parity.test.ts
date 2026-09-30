@@ -227,8 +227,13 @@ describe('both shells register a 4-arg raw listener', () => {
       expect(src, `${rel}: the claude context tail is not given onTurnInterrupted`).toMatch(
         /createContextTail\(pushContextUpdate, \{ onTaskNotification, onToolResult, onTurnInterrupted \}\)/
       )
-      expect(src, `${rel}: the handler bypasses the mirror`).toMatch(
-        /const ev = recordTurnInterrupt\(nodeId, sessionId, turnId\)/
+      // The event must go through the shell's ONE hook-event path (mirror + every tap), not be
+      // broadcast on the side.
+      expect(src, `${rel}: the handler does not ask the mirror`).toMatch(
+        /const ev = turnInterruptEvent\(nodeId, sessionId, turnId\)/
+      )
+      expect(src, `${rel}: the interrupt bypasses the shell's hook-event path`).toMatch(
+        rel.includes('main') ? /if \(ev\) emitAgentStatus\(ev\)/ : /if \(ev\) emit\(ev\)/
       )
     }
     expect(code('src/main/index.ts'), 'the desktop remote (SSH) tail is not given onTurnInterrupted').toMatch(

@@ -115,3 +115,31 @@ describe('--after holds on an interrupted upstream', () => {
     expect(text).not.toMatch(/e \[terminal\].*INTERRUPTED/)
   })
 })
+
+describe('review follow-ups', () => {
+  it('the idle rescue does NOT record an interrupt (it means a lost Stop on a normal turn)', async () => {
+    const { recordsTurnInterrupt } = await import('../state/agentStatus')
+    expect(recordsTurnInterrupt({ interrupted: true })).toBe(true)
+    expect(recordsTurnInterrupt({ interrupted: true, idle: true })).toBe(false)
+    expect(recordsTurnInterrupt({})).toBe(false)
+  })
+
+  it('Canvas: the launch effect re-runs when a last-turn verdict clears under a steady `done`', async () => {
+    const { readFileSync } = await import('fs')
+    const { resolve } = await import('path')
+    const src = readFileSync(resolve(__dirname, '../canvas/Canvas.tsx'), 'utf8')
+    const sig = src.slice(src.indexOf('const armedDepSig = useAgentStatus'), src.indexOf('// ---- the setup gate'))
+    expect(sig).toContain('lastTurnInterrupted')
+    expect(sig).toContain('lastTurnError')
+  })
+
+  it('team progress does not count an interrupted station as done', async () => {
+    const { stationKind, summarizeTeam } = await import('./teamProgress')
+    const k = stationKind({ id: 's', title: 's', agentId: 'claude', queued: false } as never, {
+      state: 'done',
+      lastTurnInterrupted: { at: 1 }
+    })
+    expect(k).toBe('interrupted')
+    expect(summarizeTeam([k]).done).toBe(0)
+  })
+})

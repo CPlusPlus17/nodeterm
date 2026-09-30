@@ -12,7 +12,7 @@ import { join, resolve } from 'path'
 import { homedir } from 'os'
 import { hookServer } from '../core/agents/hook-server'
 import { recordAgentEvent, recordRawToolEvent, recordContextUsage,
-  recordQuestionResult, recordTurnInterrupt, ignoreQuestionHook
+  recordQuestionResult, turnInterruptEvent, ignoreQuestionHook
 } from '../core/agent-status-mirror'
 import { createSubagentTail, type SubagentTail } from '../core/subagent-tail'
 import { ClaudeSubagentLifecycle } from '../core/claude-subagent-lifecycle'
@@ -131,8 +131,10 @@ export function wireAgentStatus(
     let nodeId: string | undefined
     for (const [nid, sid] of nodeContextSession) if (sid === sessionId) nodeId = nid
     if (!nodeId) return
-    const ev = recordTurnInterrupt(nodeId, sessionId, turnId)
-    if (ev) platform.broadcast(IPC.agentStatus, ev)
+    // Through the SAME path as a hook event (`emit`, below), so the mirror records it and the
+    // delivery queue / `--after` scheduler tap (`opts.onEvent`) sees it.
+    const ev = turnInterruptEvent(nodeId, sessionId, turnId)
+    if (ev) emit(ev)
   }
 
   // Every context tail pushes through here, so an agent's meter reaches the browser and the phone's
@@ -169,7 +171,7 @@ export function wireAgentStatus(
     wholeFile: true
   })
 
-  hooks.setListener((e) => {
+  const emit = (e: NormalizedAgentEvent): void => {
     // Claude subagent events first become one card per child (claudeSubagents above); every other
     // event comes back as itself. Then, per event: record FIRST — recordAgentEvent computes the
     // stash-priority classification and returns the event ENRICHED for a needs-you edge (a question
@@ -180,7 +182,8 @@ export function wireAgentStatus(
       platform.broadcast(IPC.agentStatus, enriched)
       opts.onEvent?.(enriched)
     }
-  })
+  }
+  hooks.setListener(emit)
 
   // Security: hook POSTs can be forged, so a forged POST could set transcript_path to an
   // arbitrary local path (e.g. ~/.ssh/id_rsa) and have the app read it. The tails read the

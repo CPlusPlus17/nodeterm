@@ -289,6 +289,17 @@ export function interruptVerdict(
   return prev
 }
 
+/**
+ * Does this event record `lastTurnInterrupted`? An interrupted `done` does — EXCEPT the `idle`
+ * rescue (Claude's `idle_prompt`), which is flagged interrupted only so it raises no completion
+ * alert. Measured on 2.1.285, `idle_prompt` follows a NORMAL Stop and not an interrupted turn, so a
+ * rescue that moves a working node means the Stop POST was lost (a flapping SSH tunnel) on a turn
+ * that finished normally — holding its `--after` dependents would be wrong.
+ */
+export function recordsTurnInterrupt(e: { interrupted?: boolean; idle?: boolean }): boolean {
+  return e.interrupted === true && e.idle !== true
+}
+
 export interface AgentStatusStore {
   byId: Record<string, AgentNodeStatus>
   /** The terminal node the user is currently focused in (for unread decisions). */

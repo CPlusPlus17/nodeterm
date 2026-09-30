@@ -181,7 +181,7 @@ import {
   flush as flushAgentStatusMirror,
   recordAgentEvent,
   recordQuestionResult,
-  recordTurnInterrupt,
+  turnInterruptEvent,
   ignoreQuestionHook,
   ackDone,
   recordRawToolEvent,
@@ -2487,8 +2487,10 @@ app.whenReady().then(async () => {
     let nodeId: string | undefined
     for (const [nid, sid] of nodeContextSession) if (sid === sessionId) nodeId = nid
     if (!nodeId) return
-    const ev = recordTurnInterrupt(nodeId, sessionId, turnId)
-    if (ev) sendToMain(IPC.agentStatus, ev)
+    // Through the SAME fan-out as a hook event (declared further down, called only once hooks
+    // flow): the mirror records it, and the Notch HUD, agent messaging and station notices see it.
+    const ev = turnInterruptEvent(nodeId, sessionId, turnId)
+    if (ev) emitAgentStatus(ev)
   }
   const onTaskNotification = (sessionId: string, n: TaskNotification): void => {
     let nodeId: string | undefined

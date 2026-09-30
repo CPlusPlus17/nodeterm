@@ -175,7 +175,7 @@ export interface MirrorEntry {
    * interrupt marker end exactly THIS turn (`recordTurnInterrupt`) — no hook fires for an
    * Esc/Ctrl+C, so the marker is the only signal, and one read back from history names an older
    * turn and must change nothing. Runtime-only (not in `buildFile`'s allowlist): after a restart
-   * no marker can match, which degrades to the stale sweep, never to a false end. Cleared by a
+   * no marker can match, which degrades to the stale sweep. Cleared by a
    * session boundary.
    */
   turnId?: string
@@ -618,7 +618,11 @@ function reduceEffectiveEntry(
   if (ev.account) next.account = ev.account
   // The live turn's id rides the event that opens it; nothing else touches it until the next turn
   // or a session boundary (below). See `recordTurnInterrupt`.
-  if (ev.kind === 'state' && ev.turnId) next.turnId = ev.turnId
+  // A prompt with no usable id (`''`) forgets the old one rather than keeping it.
+  if (ev.kind === 'state' && ev.turnId !== undefined) {
+    if (ev.turnId) next.turnId = ev.turnId
+    else delete next.turnId
+  }
 
   if (ev.kind === 'state' && ev.state) {
     // An `idle` done (Claude went quiet at its prompt) is a RESCUE, not a turn end: it may only
@@ -2181,7 +2185,8 @@ export function recordQuestionResult(
 }
 
 /**
- * A Claude transcript recorded an interrupt marker (`parseTurnInterrupts`) for turn `turnId`.
+ * A Claude transcript recorded an interrupt marker (`parseTurnInterrupts`) for turn `turnId`: the
+ * event that ends the node's turn, or undefined when the marker is not about the CURRENT turn.
  *
  * Claude Code sends NO hook when the user interrupts a turn — Esc while it streams, runs a tool or
  * shows a permission dialog, or Ctrl+C once (measured on 2.1.285,
@@ -2191,22 +2196,35 @@ export function recordQuestionResult(
  * stale sweep: `--after` dependents waited, Eco never saw it idle, the phone showed it working.
  *
  * It ends the turn only when the marker names the turn the node is in NOW (same session, same
- * `turnId`, state still working/blocked/waiting). That exact match is the whole safety story: a
- * marker the tail reads back from history, one from a turn that already ended, one from another
- * session, or one arriving after a restart (turnId is runtime-only) changes nothing.
+ * `turnId`, state still working/blocked/waiting): a marker the tail reads back from history, one
+ * from a turn that already ended, one from another session, or one arriving after a restart
+ * (turnId is runtime-only) changes nothing. The id match is only HALF the safety story: on "queue a
+ * message, then Esc" the CLI tags the marker with the QUEUED prompt's id, which is the current turn
+ * by then — the tail's scanner therefore drops a marker whose turn it has not seen OPENED before it
+ * (`createTurnInterruptScanner`, context-tail.ts).
  *
  * The event is an ordinary interrupted `done` — the shape a `Stop` with `is_interrupt` already
  * produced — so every consumer handles it with the rules it already has (no completion alert,
  * the question/approval resets). It carries no `verified`: a transcript read is not a hook POST.
  */
-export function recordTurnInterrupt(
+export function turnInterruptEvent(
   nodeId: string, sessionId: string, turnId: string
 ): NormalizedAgentEvent | undefined {
   const e = state.get(nodeId)
   if (!e || e.sessionId !== sessionId || !e.turnId || e.turnId !== turnId) return
   if (e.state !== 'working' && e.state !== 'blocked' && e.state !== 'waiting') return
-  return recordAgentEvent({ nodeId, agentId: e.agentId ?? 'claude', sessionId, kind: 'state',
-    state: 'done', interrupted: true })
+  return { nodeId, agentId: e.agentId ?? 'claude', sessionId, kind: 'state', state: 'done', interrupted: true }
+}
+
+/** `turnInterruptEvent`, recorded. The shells do NOT call this: they push `turnInterruptEvent`'s
+ *  event through their normal hook-event path, so every consumer of that stream (the Notch HUD,
+ *  agent messaging's receipt watch, station notices, the Server Edition's delivery queue and
+ *  `--after` scheduler) sees the interrupt exactly as it sees a hook. */
+export function recordTurnInterrupt(
+  nodeId: string, sessionId: string, turnId: string
+): NormalizedAgentEvent | undefined {
+  const ev = turnInterruptEvent(nodeId, sessionId, turnId)
+  return ev ? recordAgentEvent(ev) : undefined
 }
 
 /** A node's current main state, or undefined when unknown. Read-only peek for the shells. */

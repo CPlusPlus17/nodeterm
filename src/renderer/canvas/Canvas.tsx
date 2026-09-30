@@ -406,7 +406,7 @@ import {
   writeSeenExplorerPinHint
 } from '../lib/explorerPinHint'
 import { useProjects } from '../state/projects'
-import { useAgentStatus } from '../state/agentStatus'
+import { useAgentStatus, recordsTurnInterrupt } from '../state/agentStatus'
 import { hostChatSend, hostChatSession, hostChatStatus } from '../lib/hostChatQuery'
 import { chatPaneRefusal } from '../lib/chatPaneGate'
 import { useLaunchDelivery } from '../state/launchDelivery'
@@ -2035,7 +2035,13 @@ export function Canvas() {
       const p = n.data.pendingLaunch
       if (!p) continue
       sig += `${n.id}:`
-      for (const d of p.after) sig += `${d}=${s.byId[d]?.state ?? ''},`
+      // The last-turn verdicts ride the signature too: a verdict can clear while the state stays
+      // `done` (a keystroke-guessed interrupt, then the turn's real Stop), and the launch effect
+      // must re-run to release the dependent then.
+      for (const d of p.after) {
+        const st = s.byId[d]
+        sig += `${d}=${st?.state ?? ''}${st?.lastTurnError ? 'e' : ''}${st?.lastTurnInterrupted ? 'i' : ''},`
+      }
       sig += '|'
     }
     return sig
@@ -14985,7 +14991,7 @@ export function Canvas() {
               e.verified,
               e.errored,
               e.held,
-              e.interrupted
+              recordsTurnInterrupt(e)
             )
           // Claude's Stop names the BACKGROUND tasks still running (async subagents, nested ones,
           // background shells). A background subagent that ends its turn while its own work runs

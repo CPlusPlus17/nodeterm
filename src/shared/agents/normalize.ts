@@ -63,8 +63,8 @@ export interface NormalizedAgentEvent {
    * Esc / Ctrl+C — the one trace an interrupted turn leaves, because no hook fires for it
    * (measured on 2.1.285, `__fixtures__/claude/interrupt-capture.json`). The status mirror keeps
    * this id so a marker can be matched to exactly the turn it ends (`recordTurnInterrupt`), never
-   * to an older one read back from the transcript. Absent when the payload has none or it is not
-   * a plain token.
+   * to an older one read back from the transcript. `''` when the prompt event has no usable id (none,
+   * or not a plain token) — which CLEARS the mirror's id; absent on every other event.
    */
   turnId?: string
   sessionId?: string
@@ -193,8 +193,10 @@ const RECURRING_TOOLS = new Set(['Skill', 'CronCreate', 'ScheduleWakeup'])
 
 /** A Claude turn id (`prompt_id`, a uuid today) as a plain bounded token, else nothing. */
 const TURN_ID_RE = /^[A-Za-z0-9_-]{1,128}$/
-function turnIdOf(v: unknown): { turnId?: string } {
-  return typeof v === 'string' && TURN_ID_RE.test(v) ? { turnId: v } : {}
+function turnIdOf(v: unknown): { turnId: string } {
+  // '' = "a prompt opened a turn, but with no usable id": the mirror then FORGETS the previous
+  // turn's id instead of keeping it, so no marker can be matched to a turn that has ended.
+  return { turnId: typeof v === 'string' && TURN_ID_RE.test(v) ? v : '' }
 }
 
 interface ClaudePayload {
