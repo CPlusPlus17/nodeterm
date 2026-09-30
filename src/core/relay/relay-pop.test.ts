@@ -17,6 +17,15 @@ describe('relay-pop: the shared vector (byte contract with nodeterm-server)', ()
     const s = createTestPopServer(vector.popSecret, { now: () => (vector.cases[0].exp - 60) * 1000, nonce: Buffer.from(vector.nonce, 'base64url') })
     expect(s.issue(vector.hostPublicKeyB64, 'host-token')).toEqual({ challenge: vector.cases[0].challenge, serverPublicKeyB64: vector.cases[0].serverPublicKeyB64, exp: vector.cases[0].exp })
   })
+  // The vector pins the mirror's issue() and the client's proof; this pins the mirror's verify() to
+  // the same bytes directly, instead of only through random keys. One server per case: the cases
+  // share one nonce, and verify() consumes it.
+  for (const c of vector.cases) {
+    it(`the test server verifies the vector proof (${c.purpose}, "${c.subject}")`, () => {
+      const s = createTestPopServer(vector.popSecret, { now: () => (c.exp - 60) * 1000, nonce: Buffer.from(vector.nonce, 'base64url') })
+      expect(s.verify({ hostPublicKeyB64: vector.hostPublicKeyB64, purpose: c.purpose as PopPurpose, subject: c.subject, popChallenge: c.challenge, popProof: c.proof })).toBe(true)
+    })
+  }
 })
 
 describe('computePopProof', () => {
@@ -33,6 +42,21 @@ describe('computePopProof', () => {
     const ch = s.issue(pub, 'host-token')
     const proof = popProverFor(k)({ challenge: ch.challenge, serverPublicKeyB64: ch.serverPublicKeyB64, purpose: 'host-token', subject: 'd' })
     expect(s.verify({ hostPublicKeyB64: pub, purpose: 'host-token', subject: 'd', popChallenge: ch.challenge, popProof: proof })).toBe(true)
+  })
+  it.each<[string, (k: nacl.BoxKeyPair, other: nacl.BoxKeyPair) => void]>([
+    ['has its bytes overwritten in place', (k, other) => k.secretKey.set(other.secretKey)],
+    ['is replaced by another array', (k, other) => { k.secretKey = other.secretKey }]
+  ])('popProverFor captures the secret at creation: a key pair whose secret %s still proves for the public key it was made with', (_label, mutate) => {
+    // The public key is captured eagerly; a secret read at call time could pair a NEW secret with the
+    // OLD public key, which proves nothing the backend accepts.
+    const k = nacl.box.keyPair()
+    const pub = Buffer.from(k.publicKey).toString('base64')
+    const prove = popProverFor(k)
+    mutate(k, nacl.box.keyPair())
+    const s = createTestPopServer()
+    const ch = s.issue(pub, 'push')
+    const proof = prove({ challenge: ch.challenge, serverPublicKeyB64: ch.serverPublicKeyB64, purpose: 'push', subject: 'x' })
+    expect(s.verify({ hostPublicKeyB64: pub, purpose: 'push', subject: 'x', popChallenge: ch.challenge, popProof: proof })).toBe(true)
   })
 })
 

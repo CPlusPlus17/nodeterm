@@ -4,6 +4,11 @@
 // backend does (docs/hosted-team-relay.md), so a client that proves something the backend would
 // refuse goes red here instead of in production. The hostId hash is computed inline rather than via
 // ./relay-id: a mirror of the BACKEND must not silently follow a drift in the client's own derivation.
+//
+// Deliberately NOT mirrored: the backend's cap on its used-nonce set (50 000 entries; when full it
+// sweeps the expired nonces, then evicts the oldest). `used` below is an unbounded Set. A test issues
+// a handful of challenges, nowhere near the cap, and what a client test needs from the mirror is the
+// replay refusal itself; the cap only decides which very old nonce becomes replayable under load.
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import nacl from 'tweetnacl'
 import type { PopPurpose } from './relay-pop'
@@ -70,7 +75,11 @@ export function createTestPopServer(
   return {
     issue(hostPublicKeyB64, purpose) {
       const hostPub = decodeHostKey(hostPublicKeyB64)
-      // The backend answers null (→ 400) here; a test that sends a bad key should fail loudly.
+      // The backend answers null (→ 400) here; this throws instead. Called inside a fetch fake (where
+      // every client test calls it), the throw becomes a rejected fetch, which the client reads as a
+      // transient network failure (`network` on the Server Edition mint, `null` on the desktop mint,
+      // 'drop' on push), NOT a loud error: a test that expects success still fails, but on its own
+      // assertion, not here.
       if (!hostPub || !PURPOSES.includes(purpose)) throw new Error('relay-pop test server: bad host key or purpose')
       const nonce = b64u(opts.nonce ?? randomBytes(16))
       const exp = nowS() + CHALLENGE_TTL_S

@@ -43,10 +43,13 @@ export function computePopProof(i: {
 
 export type PopProver = (i: { challenge: string; serverPublicKeyB64: string; purpose: PopPurpose; subject: string }) => string
 
-/** A prover closed over a key pair, so callers that only need to PROVE never hold the secret. */
+/** A prover closed over a key pair, so callers that only need to PROVE never hold the secret. Both
+ *  halves are captured at creation (the secret as a COPY), so a later mutation of the key pair object
+ *  — its secret's bytes or the property itself — can never pair a new secret with the old public key. */
 export function popProverFor(keys: { publicKey: Uint8Array; secretKey: Uint8Array }): PopProver {
   const hostPublicKeyB64 = Buffer.from(keys.publicKey).toString('base64')
-  return (i) => computePopProof({ ...i, hostSecretKey: keys.secretKey, hostPublicKeyB64 })
+  const hostSecretKey = Uint8Array.from(keys.secretKey)
+  return (i) => computePopProof({ ...i, hostSecretKey, hostPublicKeyB64 })
 }
 
 export type ChallengeResult =
