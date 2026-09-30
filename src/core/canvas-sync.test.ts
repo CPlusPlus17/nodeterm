@@ -110,9 +110,10 @@ describe('stampMutation', () => {
     ).toBeUndefined()
   })
 
-  // `seen` (canvas-order rule 4) is the one client-supplied field that DECIDES something: an upsert
-  // claiming to have seen a node's delete is applied over it. A forged one resurrects a node a
-  // teammate deleted — on every canvas. It can never legitimately reach the order it is being given.
+  // `seen` (canvas-order rule 4): an upsert claiming to have seen a node's delete is applied over it.
+  // It can never legitimately reach the order it is being given, so it is clamped below it. The
+  // clamp is hygiene, not protection: it changes no verdict (every earlier remove is at most
+  // `seq - 1`), so a forged `seen` still resurrects a deleted node, clamp or no clamp.
   it('passes an honest `seen` through untouched', () => {
     expect(stampMutation({ op: 'upsert', node: node('n1'), seen: 6 }, 9).seen).toBe(6)
     expect(stampMutation({ op: 'upsert', node: node('n1'), seen: 0 }, 1).seen).toBe(0)

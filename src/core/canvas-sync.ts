@@ -75,13 +75,15 @@ export function reflectTargets(all: ClientId[], _sender: ClientId): ClientId[] {
  * another client's tag, which would only ever make that client ignore an edit meant for it, but is
  * still not something to reflect unchecked.
  *
- * `seen` is the sender's causal position (canvas-order rule 4), and it is the one client-supplied
- * value that DECIDES something: an upsert claiming to have seen a node's delete is applied over it.
- * A forged one is therefore a way to resurrect a node a teammate deleted. It cannot legitimately
- * reach the order this mutation is being GIVEN (the sender can only have seen `seq`s already
- * assigned), so clamp it there — an honest client is never touched, and a liar buys itself nothing
- * beyond the moment it actually cast. A non-integer / negative value is dropped, which degrades to
- * "unstamped" (judged exactly as before rule 4 existed), never to a value that outranks a delete.
+ * `seen` is the sender's causal position (canvas-order rule 4): an upsert claiming to have seen a
+ * node's delete is applied over it. It cannot legitimately reach the order this mutation is being
+ * GIVEN (the sender can only have seen `seq`s already assigned), so it is clamped to `seq - 1`, and
+ * a non-integer / negative value is dropped ("unstamped": judged exactly as before rule 4 existed).
+ * That is HYGIENE, NOT PROTECTION: the clamp changes no verdict. Every remove ordered before this
+ * mutation has a `seq` at most `seq - 1`, so a clamped forgery still counts as having seen it, and a
+ * remove ordered after it supersedes it by `seq` alone. A forged `seen` resurrects a node a teammate
+ * deleted either way; what bounds that is who may cast at all (`canvas:mut` is Editor-only on a
+ * hosted team, src/core/relay/access-policy.ts).
  */
 export function stampMutation<M extends CanvasMutation>(m: M, seq: number): M & MutationStamp {
   const stamped: M & MutationStamp = { ...m, seq }

@@ -654,10 +654,13 @@ export interface CanvasState {
  *  - `seen` is the sender's CAUSAL stamp: the highest `seq` it had applied at the moment it cast.
  *    It answers the one question `seq` alone cannot — "did this client already know about the
  *    delete?" — which is what lets a delete beat a concurrent drag frame instead of being
- *    resurrected by it (canvas-order's rule 4). Client-supplied, so the reflector BOUNDS it
- *    (it can never legitimately reach the order it is being given); a mutation without it is
- *    judged exactly as before, so an unstamped peer degrades rather than breaks.
- * The relay's host↔client mirror (src/main/remote) uses the same vocabulary and simply omits them.
+ *    resurrected by it (canvas-order's rule 4). Client-supplied; the reflector clamps it below the
+ *    order it is being given, which is hygiene and changes no verdict (see `stampMutation`). A
+ *    mutation without it is judged exactly as before, so an unstamped peer degrades rather than
+ *    breaks.
+ * The legacy relay host's canvas mirror (`canvas:state` / `canvas:mutate`: src/main/remote/
+ * host-service.ts and canvas-sync.ts, which stayed there when the relay transport moved to
+ * src/core/relay) uses the same vocabulary and simply omits them.
  */
 export type CanvasMutation =
   | { op: 'upsert'; node: CanvasNodeState; src?: string; seq?: number; seen?: number }
