@@ -88,8 +88,11 @@ export type WatchLinkNotice =
   | { kind: 'joined'; linkId: string; nodeId: string; title: string; viewers: number }
   /** A link ended on its own: `revoked` here is a SERVER-side revoke (an owner's own Stop raises none). */
   | { kind: 'ended'; linkId: string; nodeId: string; title: string; reason: 'expired' | 'revoked' | 'node-gone' }
-  /** Links are not written to disk this run (the keychain refused to seal, or the links file could
-   *  not be read): they work, and end at quit. Sent at boot and after every create while it holds. */
+  /** A link is not written to disk this run. Two causes: the links file could not be read (then NO
+   *  link is saved this run; they work and end at quit — sent at boot and after every create), or the
+   *  keychain refused to seal (then only the link just created is not saved; links read at boot or
+   *  sealed earlier stay saved — sent after that create). Copy: "only the link just created is not
+   *  saved" unless the renderer knows it is the first cause. */
   | { kind: 'not-persistent' }
 
 /** `window.nodeTerminal.watchLink`. Desktop: real (preload). Server Edition: real bridge, and create

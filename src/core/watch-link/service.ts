@@ -23,7 +23,9 @@
 // written must not exist: the server row is revoked), but no longer than PERSIST_TIMEOUT_MS.
 // A links file that could not be read (WatchLinkStoreUnreadable) turns this run MEMORY-ONLY: the
 // store is latched and never written, links still work and end at quit, and the owner is told on
-// every create (R22, R42c) — as when the keychain refuses to seal (the store answers memory-only).
+// every create (R22, R42c). A keychain that refuses to SEAL is narrower (R45): the store still writes
+// every link it holds a sealed form of — read at boot or sealed earlier this run — so only a link that
+// was never sealed (the one just created) is not saved; it answers memory-only, and the owner is told.
 // `init()` writes only when it actually pruned something (R42a), so a boot never rewrites the file.
 //
 // ENTITLEMENT. A host never mints with an empty entitlement (the API would answer 400, which stops

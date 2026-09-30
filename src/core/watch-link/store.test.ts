@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { promises as fsp, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { testTmpDir } from '../test-tmp'
 import { renameAtomic, writeFileAtomic } from '../fs-atomic'
 import { WatchLinkStore, WatchLinkStoreUnreadable, type WatchLinkRecord } from './store'
@@ -478,6 +479,31 @@ describe('a keychain that stops sealing mid-run (R45)', () => {
     k.state.refuse = true
     expect(await s.save([{ ...a, secret: new Uint8Array(32).fill(9) }])).toBe('memory-only')
     expect(ids(f)).toEqual([])
+  })
+
+  it('keeps a sealed form only for the links in the last saved list (a stopped link\'s form is dropped)', async () => {
+    const f = file()
+    const k = switchable()
+    const s = new WatchLinkStore({ file: f, seal: k.flaky, unseal })
+    expect(await s.save([a, b])).toBe('saved')
+    expect(await s.save([a])).toBe('saved') // b stopped
+    k.state.refuse = true
+    // b again (same id, same secret): its form was dropped with it, so it needs sealing — refused.
+    expect(await s.save([a, b])).toBe('memory-only')
+    expect(ids(f)).toEqual([a.linkId])
+  })
+
+  it('holds a DIGEST of each secret, never its text or bytes', async () => {
+    const f = file()
+    const s = new WatchLinkStore({ file: f, seal, unseal })
+    await s.save([a, c])
+    await s.load()
+    const held = JSON.stringify([...(s as unknown as { sealedForms: Map<string, unknown> }).sealedForms])
+    for (const r of [a, c]) {
+      expect(held).not.toContain(Buffer.from(r.secret).toString('base64'))
+      expect(held).not.toContain(Buffer.from(r.secret).toString('hex'))
+    }
+    expect(held).toContain(createHash('sha256').update(a.secret).digest('hex'))
   })
 
   it('never re-seals a secret it already holds sealed (the file does not churn on every write)', async () => {

@@ -38,6 +38,7 @@
 // `seal` starts throwing only a link it NEVER sealed is left out (reported 'memory-only'); links read
 // at boot and links sealed earlier stay on disk, and a link no longer in the list is still dropped.
 import { promises as fs } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { renameAtomic, writeFileAtomic } from '../fs-atomic'
 import { LINK_ID_RE } from '../../shared/watch-link/link'
 import type { WatchLinkRole } from '../../shared/watch-link/protocol'
@@ -69,11 +70,13 @@ export class WatchLinkStoreUnreadable extends Error {
   }
 }
 
-/** A secret's base64 text and the sealed text the file holds for it. */
+/** A DIGEST of a secret (never its text or bytes: the cache must not be a second plaintext copy)
+ *  and the sealed text the file holds for it. */
 interface SealedForm {
-  secret: string
+  digest: string
   sealed: string
 }
+const digestOf = (secret: Uint8Array): string => createHash('sha256').update(secret).digest('hex')
 
 interface FileEntry {
   linkId: string
@@ -116,8 +119,9 @@ export class WatchLinkStore {
   /** Valid entries whose sealed secret this run could not unseal (R42), carried back on every write
    *  until their own `expiresAt`. Set by each `load()`. */
   private opaque: FileEntry[] = []
-  /** The sealed form of every secret this run read or sealed, by link id (R45): reused on every
-   *  write, so a keychain that starts refusing mid-run costs only a link it never sealed. */
+  /** The sealed form of every secret this run read or sealed, by link id, with a digest of the secret
+   *  it seals (R45): reused on every write, so a keychain that starts refusing mid-run costs only a
+   *  link it never sealed. Replaced by each save's list, so a stopped link's form goes with it. */
   private sealedForms = new Map<string, SealedForm>()
 
   constructor(
@@ -201,7 +205,7 @@ export class WatchLinkStore {
         continue
       }
       if (!secret) continue
-      if (sealed) sealedForms.set(e.linkId, { secret: Buffer.from(secret).toString('base64'), sealed: e.secret })
+      if (sealed) sealedForms.set(e.linkId, { digest: digestOf(secret), sealed: e.secret })
       out.push({ linkId: e.linkId, nodeId: e.nodeId, role: e.role, label: e.label, title: e.title, createdAt: e.createdAt, expiresAt: e.expiresAt, secret })
     }
     this.opaque = opaque
@@ -260,7 +264,8 @@ export class WatchLinkStore {
         let secret = text
         if (this.o.seal) {
           const known = this.sealedForms.get(r.linkId)
-          if (known && known.secret === text) {
+          const digest = digestOf(r.secret)
+          if (known && known.digest === digest) {
             // Never re-sealed: the form read at boot or sealed earlier this run is still valid, and a
             // keychain that has started refusing must not cost a link it already holds sealed (R45).
             secret = known.sealed
@@ -274,7 +279,7 @@ export class WatchLinkStore {
               continue
             }
           }
-          sealedNext.set(r.linkId, { secret: text, sealed: secret })
+          sealedNext.set(r.linkId, { digest, sealed: secret })
         }
         links.push({
           linkId: r.linkId, nodeId: r.nodeId, role: r.role, label: r.label, title: r.title,
