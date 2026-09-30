@@ -513,6 +513,57 @@ describe('syncWatcherClientSize', () => {
     expect(spawned[0].resizes).toEqual([])
   })
 
+  // Controller ruling R24: the link host syncs on every keyframe AND on a 10 s timer, and two links can
+  // watch one node, so calls overlap. Two reads racing each other could land out of order and leave the
+  // client at the OLDER size. So one read is in flight per session, and callers that arrive meanwhile
+  // share ONE queued rerun, which reads after it (the latest read is applied last).
+  it('serializes per session: one read in flight, callers meanwhile share ONE rerun, the later read applied last', async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const w = await m.joinAsWatcher(WATCHER, WATCH) // spawned at the window, 120x39
+    const answers: Array<(v: unknown) => void> = []
+    readOf(m).mockClear()
+    readOf(m).mockImplementation(() => new Promise((r) => answers.push(r)))
+    const first = m.syncWatcherClientSize(w.sessionId)
+    const second = m.syncWatcherClientSize(w.sessionId)
+    const third = m.syncWatcherClientSize(w.sessionId)
+    expect(second).toBe(third) // one queued rerun, shared
+    await vi.advanceTimersByTimeAsync(0)
+    expect(readOf(m)).toHaveBeenCalledTimes(1) // nothing reads beside the one in flight
+    answers[0]({ cols: 100, rows: 30 })
+    expect(await first).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(readOf(m)).toHaveBeenCalledTimes(2) // the rerun reads only once the first settled
+    answers[1]({ cols: 200, rows: 50 })
+    expect(await second).toBe(true)
+    expect(spawned[0].resizes).toEqual([{ cols: 100, rows: 30 }, { cols: 200, rows: 50 }])
+    // Settled: the next call starts a fresh read at once.
+    readOf(m).mockResolvedValue({ cols: 200, rows: 50 })
+    expect(await m.syncWatcherClientSize(w.sessionId)).toBe(true)
+    expect(readOf(m)).toHaveBeenCalledTimes(3)
+  })
+
+  it('serialization is per session: another session reads at the same time', async () => {
+    const m = await tmuxManager(['nt-n1', 'nt-n2'])
+    const a = await m.joinAsWatcher(WATCHER, WATCH)
+    const b = await m.joinAsWatcher(WATCHER, { persistKey: 'n2', viewerId: 'watch-s2' })
+    readOf(m).mockClear()
+    readOf(m).mockImplementation(() => new Promise(() => {}))
+    void m.syncWatcherClientSize(a.sessionId)
+    void m.syncWatcherClientSize(b.sessionId)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(readOf(m).mock.calls.map((c) => c[0])).toEqual(['n1', 'n2'])
+  })
+
+  it('a read that throws settles the slot: the next call reads again', async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    readOf(m).mockRejectedValueOnce(new Error('boom'))
+    expect(await m.syncWatcherClientSize(w.sessionId)).toBe(false)
+    readOf(m).mockResolvedValue({ cols: 130, rows: 40 })
+    expect(await m.syncWatcherClientSize(w.sessionId)).toBe(true)
+    expect(spawned[0].resizes).toEqual([{ cols: 130, rows: 40 }])
+  })
+
   it('an SSH watcher client is synced from the HOST read', async () => {
     const m = await tmuxManager([])
     vi.spyOn(
@@ -526,6 +577,45 @@ describe('syncWatcherClientSize', () => {
     expect(await m.syncWatcherClientSize(w.sessionId)).toBe(true)
     expect(readOf(m)).toHaveBeenCalledWith('n1', expect.objectContaining({ controlPath: '/tmp/nt-test-cm' }))
     expect(spawned[0].resizes).toEqual([{ cols: 210, rows: 55 }])
+  })
+})
+
+// Controller ruling R25: the size a live link's `watch:meta` reports is the JOINED session's current
+// size. For a watcher's own client that is the size it runs at (the window's, read at spawn and kept by
+// the sync) — `watchSizeFor` cannot see that client (it is invisible to every persistKey lookup) and
+// would answer a stale released size or nothing.
+describe('sessionSize', () => {
+  it("is the owner's pty size for a co-attached watcher, and follows the owner's resize", async () => {
+    const m = await manager()
+    const own = await create(OWNER, { cols: 120, rows: 40 })
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    expect(w.sessionId).toBe(own.sessionId)
+    expect(m.sessionSize(w.sessionId)).toEqual({ cols: 120, rows: 40 })
+    fake.senderListeners[IPC.ptyResize](OWNER, own.sessionId, 100, 30)
+    expect(m.sessionSize(w.sessionId)).toEqual({ cols: 100, rows: 30 })
+  })
+
+  it("is a watcher's OWN client's size — the window's, read at spawn and kept by the sync", async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const w = await m.joinAsWatcher(WATCHER, WATCH) // caller said 40x10; spawned at the window, 120x39
+    expect(m.sessionSize(w.sessionId)).toEqual({ cols: 120, rows: 39 })
+    expect(m.watchSizeFor('n1')).toBeUndefined() // what the old wiring would have reported: nothing
+    ;(m as unknown as { readWindowSize: ReturnType<typeof vi.fn> }).readWindowSize.mockResolvedValue({ cols: 200, rows: 50 })
+    await m.syncWatcherClientSize(w.sessionId)
+    expect(m.sessionSize(w.sessionId)).toEqual({ cols: 200, rows: 50 })
+  })
+
+  it('is null for a session this manager does not know', async () => {
+    const m = await manager()
+    expect(m.sessionSize('no-such-session')).toBeNull()
+  })
+
+  it('hands back a copy, not the live size record', async () => {
+    const m = await manager()
+    const own = await create(OWNER, { cols: 120, rows: 40 })
+    const size = m.sessionSize(own.sessionId)!
+    size.cols = 1
+    expect(m.sessionSize(own.sessionId)).toEqual({ cols: 120, rows: 40 })
   })
 })
 

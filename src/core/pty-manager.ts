@@ -4607,28 +4607,76 @@ export class PtyManager {
    * for anything that is not a watcher's own client, an unreadable size, or a session that went away
    * during the read. With the production conf (`status off`) the window IS the client size, so a
    * client of the window's size leaves the window where it is.
+   *
+   * SERIALIZED per session (controller ruling R24): the link host calls it before every keyframe and
+   * on a timer, and two links can watch one node, so calls overlap — and two reads racing each other
+   * could be applied out of order, leaving the client at the OLDER size. So one read is in flight per
+   * session, and every caller that arrives meanwhile shares ONE queued rerun that reads after it: the
+   * latest read is the one applied last. Never rejects.
    */
-  async syncWatcherClientSize(sessionId: string): Promise<boolean> {
-    const session = this.sessions.get(sessionId)
-    if (!session?.watcherClient || !session.persistKey) return false
-    const size = await this.readWindowSize(session.persistKey, session.sshRemote)
-    if (!size || this.sessions.get(sessionId) !== session) return false
-    if (session.appliedSize?.cols !== size.cols || session.appliedSize?.rows !== size.rows) {
-      try {
-        session.proc.resize(size.cols, size.rows)
-      } catch {
-        return false // the client already exited
+  syncWatcherClientSize(sessionId: string): Promise<boolean> {
+    const slot = this.watcherSizeSyncs.get(sessionId)
+    if (!slot) return this.startWatcherSizeSync(sessionId)
+    // Starts only once the read in flight settled, so its answer can never land after this one.
+    slot.rerun ??= slot.current.then(() => this.startWatcherSizeSync(sessionId))
+    return slot.rerun
+  }
+
+  /** One `syncWatcherClientSize` read per session at a time; `rerun` is the one queued behind it. */
+  private readonly watcherSizeSyncs = new Map<string, { current: Promise<boolean>; rerun: Promise<boolean> | null }>()
+
+  private startWatcherSizeSync(sessionId: string): Promise<boolean> {
+    const current = this.syncWatcherClientSizeOnce(sessionId)
+    const slot = { current, rerun: null as Promise<boolean> | null }
+    this.watcherSizeSyncs.set(sessionId, slot)
+    // Registered BEFORE any rerun's `.then`, so it runs first: with a rerun queued the slot stays until
+    // the rerun replaces it; with none, the session has no sync in flight any more.
+    void current.finally(() => {
+      if (this.watcherSizeSyncs.get(sessionId) === slot && !slot.rerun) this.watcherSizeSyncs.delete(sessionId)
+    })
+    return current
+  }
+
+  private async syncWatcherClientSizeOnce(sessionId: string): Promise<boolean> {
+    try {
+      const session = this.sessions.get(sessionId)
+      if (!session?.watcherClient || !session.persistKey) return false
+      const size = await this.readWindowSize(session.persistKey, session.sshRemote)
+      if (!size || this.sessions.get(sessionId) !== session) return false
+      if (session.appliedSize?.cols !== size.cols || session.appliedSize?.rows !== size.rows) {
+        try {
+          session.proc.resize(size.cols, size.rows)
+        } catch {
+          return false // the client already exited
+        }
+        session.appliedSize = size
       }
-      session.appliedSize = size
+      // The same per-subscriber `pty:size` applySize sends (a live link's viewer renders exactly this).
+      const channel = IPC.ptySize(sessionId)
+      for (const sub of session.subscribers) {
+        const shown = session.shown.get(sub)
+        if (shown && shown.cols === size.cols && shown.rows === size.rows) continue
+        session.shown.set(sub, size)
+        this.send(subClient(sub), channel, size)
+      }
+      return true
+    } catch {
+      return false
     }
-    const channel = IPC.ptySize(sessionId)
-    for (const sub of session.subscribers) {
-      const shown = session.shown.get(sub)
-      if (shown && shown.cols === size.cols && shown.rows === size.rows) continue
-      session.shown.set(sub, size)
-      this.send(subClient(sub), channel, size)
-    }
-    return true
+  }
+
+  /**
+   * The size a session runs at NOW: the backend's authoritative size (the session host's answer),
+   * else the size pushed into its pty. What a live link's `watch:meta` reports for the session a viewer
+   * just joined (controller ruling R25): for a co-attached watcher that is the owner's pty size; for a
+   * watcher's OWN client it is the window size the client was spawned at and `syncWatcherClientSize`
+   * keeps it at — a client `watchSizeFor` cannot see (it is hidden from every persistKey lookup). A
+   * copy; null for a session this manager does not know, or one that has no size yet.
+   */
+  sessionSize(sessionId: string): { cols: number; rows: number } | null {
+    const session = this.sessions.get(sessionId)
+    const size = session?.backendSize ?? session?.appliedSize
+    return size ? { cols: size.cols, rows: size.rows } : null
   }
 
   /**
