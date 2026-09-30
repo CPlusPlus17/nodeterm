@@ -1,8 +1,8 @@
 // Custom sounds for the agent alerts (issue #289). The built-in chimes are synthesized in
 // `renderer/lib/sfx.ts`; a user may replace either one with their own audio file.
 //
-// The FILE lives in the data dir of the machine that owns the core (`<userData>/sounds/<kind>.<ext>`
-// — see core/alert-sounds.ts), never at the user's original path: in the Server Edition that path
+// The FILE lives in the data dir of the machine that owns the core (`<userData>/sounds/<kind>.sound`,
+// one format-independent name — see core/alert-sounds.ts), never at the user's original path: in the Server Edition that path
 // names a disk on another machine. What rides in settings is only the display name and a stamp,
 // so every window/client can tell a new pick from the one it already decoded.
 

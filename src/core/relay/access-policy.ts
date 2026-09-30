@@ -328,6 +328,10 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.filesDownloadTicket,
   IPC.filesSaveUpload,
   IPC.filesSaveCanvasImage,
+  // Custom alert sounds live in the HOST's data dir and replace the host user's own chime.
+  IPC.filesSaveAlertSound,
+  IPC.filesReadAlertSound,
+  IPC.filesClearAlertSound,
   // Git: every mutation, plus network, worktree and commit-message (runs an agent CLI) operations.
   IPC.gitInit,
   IPC.gitClone,

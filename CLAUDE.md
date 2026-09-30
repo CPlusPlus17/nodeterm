@@ -3121,7 +3121,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `customAlertSounds[kind] = {name, stamp}`. Playback decodes the bytes with `decodeAudioData` — no
   `<audio>`, so CSP `media-src` is untouched on both surfaces — and **any failure (missing file,
   refused read, decode/playback error) falls back to the chime without throwing** (`lib/customSfx.ts`,
-  failures not cached). Every `playSfx` caller must pass `customAlertSounds` (source-pinned in
+  read failures and a missing/closed audio context are retried on the next alert; a DECODE failure
+  is cached for that `stamp`, so a new pick is tried afresh). Every `playSfx` caller must pass `customAlertSounds` (source-pinned in
   `customSfx.wiring.test.ts`). Server Edition: full — the browser's `<input type=file>` bytes are
   stored in the SERVER's data dir. Mobile: N/A (own notification sounds).
 - **Status-grouped sessions** — three always-visible sections: **Waiting for your response** maps
