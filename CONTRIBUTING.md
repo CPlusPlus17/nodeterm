@@ -149,7 +149,9 @@ chain appears, or if anything but `dispatchOnUserMove` creates a queued entry.
 
 A card chip that reads agent state subscribes to a **primitive signature** of the nodes it shows
 (`teamProgressSig`, `issueRunChipSig`), never to the whole `agentStatus.byId` map — that map changes
-on every hook event of every node. Before a card shows a fact, check that its place on the board
+on every hook event of every node. A field of `agentStatus` that is persisted across a restart is restored
+as a record of the past, never as live state: `lastSeen` orders and ages sidebar rows but never
+becomes `state` or Eco's idle clock (`lastEventAt`). Before a card shows a fact, check that its place on the board
 does not already say it (`lib/cardRedundancy.ts`); the card modal keeps every fact the card drops.
 `project.ropes` / `bridges` are hostile input like the board: they are admitted through
 `sanitizeLinks` on every load and save seam, and a reader still tolerates anything. A wait rope

@@ -852,7 +852,10 @@ Lifecycle, by intent:
   Eco defers the Phase-2 viewer release until the node hibernates (hard cap idle+offscreen), but
   ONLY when the idle clock is known (`idleKnown` — `lastEventAt` is transient, so after an app
   restart nothing can hibernate and deferring would make Eco a memory regression). Eco is
-  structurally inert for sessions with no turn in the current app run — documented follow-up.
+  structurally inert for sessions with no turn in the current app run, and that is now a DECISION,
+  not a follow-up: the persisted `agentStatus.lastSeen` clock (see **Status-grouped sessions**) is
+  deliberately never an idle proof — see "A restored clock is not an idle proof" in
+  `terminal/hibernation-policy.ts`.
   The deferral is also unaware of `paused`: a deep-paused node's freshly recycled shell keeps its
   xterm alive until the hard cap, waiting for a hibernation that (being already exited, or having
   no CLI to exit) can never come — a second documented follow-up.
@@ -2901,6 +2904,49 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   another user prompt. Within each section rows sort newest-first by `lastEventAt`, the transition
   clock (same-state hook freshness is `stateAt`), and show its short relative age. Missing clocks
   stay last with no made-up timestamp. A click may clear the glow but cannot move the row.
+  **The clock survives an app restart as "last seen", never as a state** (`agentStatus.lastSeen`,
+  `{at, state}`). `lastEventAt`/`stateAt`/`state` are transient, so before this every row after a
+  restart sorted as "no clock" and lost its age. `lastSeen` is the time of the LAST hook event (a
+  same-state one included) and the state it asserted, persisted beside the agentStatus record under
+  its OWN small key (`nodeterm.agentStatus.lastSeen`) — chosen over the core mirror because the
+  sidebar already reads this store,
+  the mirror expires state after 6 h and identity later, and reading it would need a new IPC leg for
+  a display fact. Rules a refactor must not undo:
+  - **Restored as a clock only.** Load fills `lastSeen` and nothing else: `state` stays unknown (the
+    hook server was down with the app, so a turn may have started or ended in between), and
+    `lastEventAt` stays unset. Load marks the clock `restored` (transient, never written); the row
+    reads `lastEventAt ?? lastSeen.at` and its `statusClock` is `transition` / `seen` (a hook event
+    this run but no transition yet) / `restored`. Only `restored` says "before nodeterm restarted"
+    (`seen 3h ago`, tooltip naming the state it was last seen in). **The first event after a restart
+    is usually a SAME-state one** (a cold-restore `--resume` fires SessionStart = `state: undefined`
+    on an entry whose state is already unknown), so the store's in-place fast path must not take it:
+    it replaces the entry (the row loses `restored` and re-sorts at once) without stamping
+    `lastEventAt` (an unknown state is not an idle clock).
+  - **Eco never reads it** (so `idleKnown` and `planHibernation` are unchanged). Even a proven-idle
+    prompt after boot would not be enough: the background-task stamp and the subagent cards Eco
+    also needs are transient and cannot be rebuilt after a restart, and `/exit` kills both
+    silently. A session becomes a candidate again from its next live `done`.
+  - **Its own key, so the main table's write cadence is unchanged.** State events still write
+    nothing to `nodeterm.agentStatus`. That matters twice: the main table carries `loop.items` (up to
+    100 × 4000 chars per loop node — 428 KB and ~2.1 ms per stringify with one full loop, measured in
+    review), and on the Server Edition every tab rewrites its whole in-memory table, so a periodic
+    rewrite would let tab B undo tab A's `clearUnread`/`hibernated` within seconds. A first version
+    stored the clock inside that table on a 2 s THROTTLE and rewrote it every 2 s while any agent
+    worked. The clock key is saved on a real TRAILING debounce (5 s quiet, `LAST_SEEN_SAVE_MAX_WAIT_MS`
+    30 s at most while never quiet) plus `pagehide`: 2 Hz hook events for 10 s = ONE write. Measured:
+    ~59 bytes per clock, 1000 clocks = 59 KB and 0.7 ms per `JSON.stringify` on this dev host. Two
+    Server Edition tabs still race on the CLOCK key (last writer wins), which costs only display.
+  - **Bounded.** At most `LAST_SEEN_MAX` (1000) newest clocks are written; a clock older than 90 days
+    or more than 5 min in the future is refused on load (hand-editable input — a future stamp would
+    pin a row to the top); an unknown `state` keeps the time and drops the state; an unreadable clock
+    key costs the clocks, never the table.
+  - **It cannot create a row**: rows come from canvas nodes, never from the status table.
+    `remove(id)` writes the clock key at once, a pending debounced save included; a deletion path
+    that bypasses `remove` (e.g. `reloadActiveProject` dropping nodes) leaves a clock that simply
+    ages out. Tests: `state/agentStatus.lastSeen.test.ts`.
+  - Surfaces: Desktop full; Server Edition per browser profile (localStorage, like `unread`); relay
+    tabs keep a keyless store and persist nothing; kanban has no clock-ordered view, so nothing to
+    wire there; Mobile N/A (its own state).
 - **Session name ⇄ node title** — **two lists, because the two directions are separate facts**:
   `TITLE_READ_CAPABLE` (`canReadTitle` — claude, **codex**, grok, **gemini**) is the READ leg,
   `RENAME_CAPABLE` (`canRename` — claude, grok) the WRITE leg, and **read ⊇ write** is an invariant
