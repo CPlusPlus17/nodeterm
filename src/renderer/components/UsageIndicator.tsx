@@ -119,36 +119,66 @@ export interface MoveTarget {
   label: string
 }
 
+/** A bulk move in flight (Canvas `moveAccountSessions`): which account it empties, on which machine
+ *  (`usageScopeKey`), and how many sessions it started. */
+export interface AccountMoveProgress {
+  from: string | undefined
+  count: number
+  scopeKey: string
+}
+
 /**
  * "⇄ Move N sessions" on an account row — the bulk version of a node's "Switch Claude account":
  * every Claude session on this canvas running on this account is quit, its conversation copied to
  * the picked account, and resumed there (Canvas `moveAccountSessions`). It sits where the limit is
  * read, because that is where the user learns an account is spent. Absent when there is nothing to
  * move or nowhere to move it.
+ *
+ * While a move runs (`moving`), the sessions it is moving still carry their OLD account until each
+ * one lands, so the live count would offer them again — and a second bulk move is refused while one
+ * runs. So the source row says "Moving N sessions…", and every other row's control is disabled.
  */
 function MoveSessionsControl({
   count,
   targets,
+  moving,
   onMove
 }: {
   count: number
   targets: readonly MoveTarget[]
+  /** null = no move running; 'this' = this row's account is being moved; 'other' = some other. */
+  moving: null | { row: 'this' | 'other'; count: number }
   onMove: (to: MoveTarget) => void
 }) {
   const [picking, setPicking] = useState(false)
+  const plural = (n: number): string => `${n} ${n === 1 ? 'session' : 'sessions'}`
+  if (moving?.row === 'this') {
+    return (
+      <span className="usage-account__move">
+        <button type="button" className="usage-account__use" disabled>
+          ⇄ Moving {plural(moving.count)}…
+        </button>
+      </span>
+    )
+  }
   if (count === 0 || targets.length === 0) return null
   return (
     <span className="usage-account__move">
       <button
         type="button"
         className="usage-account__use"
-        aria-expanded={picking}
-        title="Quit these sessions, move their conversations to another account and resume them there — no login needed. Busy sessions are skipped."
+        aria-expanded={!moving && picking}
+        disabled={!!moving}
+        title={
+          moving
+            ? 'Another move is still running — wait for it to finish.'
+            : 'Quit these sessions, move their conversations to another account and resume them there — no login needed. Busy sessions are skipped.'
+        }
         onClick={() => setPicking((v) => !v)}
       >
-        ⇄ Move {count} {count === 1 ? 'session' : 'sessions'}
+        ⇄ Move {plural(count)}
       </button>
-      {picking ? (
+      {!moving && picking ? (
         <span className="usage-account__move-targets" role="group" aria-label="Move sessions to">
           {targets.map((t) => (
             <button
@@ -309,7 +339,8 @@ export function UsageIndicator({
   overBoard = false,
   onSetDefaultAccount,
   countAccountSessions,
-  onMoveSessions
+  onMoveSessions,
+  accountMove = null
 }: {
   overBoard?: boolean
   /** Writes `project.defaultAccountId` + persists (Canvas's own TabBar handler). When absent the
@@ -320,6 +351,8 @@ export function UsageIndicator({
   countAccountSessions?: (accountId: string | undefined) => number
   /** Move every such session from one account to another (Canvas `moveAccountSessions`). */
   onMoveSessions?: (from: string | undefined, to: string | undefined, toLabel: string) => void
+  /** The bulk move in flight, if any (Canvas owns it; see `MoveSessionsControl`). */
+  accountMove?: AccountMoveProgress | null
 }): JSX.Element | null {
   const [usage, setUsage] = useState<ClaudeUsage | null>(null)
   const [open, setOpen] = useState(false)
@@ -400,6 +433,18 @@ export function UsageIndicator({
       <MoveSessionsControl
         count={countAccountSessions(from)}
         targets={targets}
+        moving={
+          accountMove
+            ? {
+                row:
+                  accountMove.scopeKey === scopeHostKey &&
+                  (accountMove.from || undefined) === (from || undefined)
+                    ? 'this'
+                    : 'other',
+                count: accountMove.count
+              }
+            : null
+        }
         onMove={(to) => {
           setOpen(false)
           onMoveSessions(from, to.id, to.label)

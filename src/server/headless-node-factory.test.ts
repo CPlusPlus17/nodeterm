@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { StationHandoverTracker } from '../core/station-handover'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -13,6 +14,7 @@ import { initCanvasSync, publishCanvasMutation, setReflectedListener } from '../
 import type { AgentState } from '../shared/agents/normalize'
 import { MAX_LAUNCH_LINE_BYTES } from '../shared/canonical-line'
 import { RUN_NOW_AFTER_REFUSAL } from '../shared/control-verbs'
+import { RUN_NOW_AFTER_SUCCESS_REFUSAL, type StationOutcomeRecord } from '../shared/station-outcome'
 import {
   DEFAULT_SETTINGS,
   type CanvasMutation,
@@ -170,6 +172,9 @@ describe('HeadlessNodeFactory', () => {
   let ownership: HeadlessNodeOwnership
   let codexSharedIdentity: boolean
   let codexApprovalValues: { approvalValues: string[] | null }
+  let outcomes: Record<string, StationOutcomeRecord>
+  /** Stations with unfinished handed-over work (core/station-handover.ts), as the tracker answers. */
+  let handedOver: Set<string>
 
   const settings = (): Settings => ({
     ...DEFAULT_SETTINGS,
@@ -186,6 +191,8 @@ describe('HeadlessNodeFactory', () => {
     store = new WorkspaceStore()
     pty = new FakePty()
     states = {}
+    outcomes = {}
+    handedOver = new Set()
     published = []
     removed = []
     publishedProjects = []
@@ -242,6 +249,8 @@ describe('HeadlessNodeFactory', () => {
       codexSharedIdentity: async () => codexSharedIdentity,
       ownership,
       stateOf: (id) => states[id],
+      outcomeOf: (id) => outcomes[id],
+      handedOver: (id) => handedOver.has(id),
       launchTiming: { quietMs: 0, capMs: 0 },
       // Every content op the factory casts; `published` / `removed` keep the node halves these
       // tests assert on (edges and board ops are cast too — see the cast-before-save suite).
@@ -1221,6 +1230,222 @@ describe('HeadlessNodeFactory', () => {
     expect(workspace.projects[0].nodes.find((node) => node.id === id)?.pendingLaunch).toBeUndefined()
   })
 
+  describe('plain --after on a station handed new work (core/station-handover.ts)', () => {
+    it('does NOT take the creation shortcut on a done from before the hand-over', async () => {
+      // The station reads `done` — from its PREVIOUS task — and was just handed the next one.
+      states['term-upstream'] = 'done'
+      handedOver.add('term-upstream')
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'consume result', after: 'term-upstream' },
+        true
+      )
+      expect(reply.ok).toBe(true)
+      const id = (reply.result as { id: string }).id
+      expect(pty.sends).toEqual([])
+      expect(reply.result).toMatchObject({ queued: true, queuedIds: [id] })
+      // refreshArmed on the same old `done` still holds.
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      // The new work's turn ends: the tracker drops the station, and the next done releases D once.
+      handedOver.delete('term-upstream')
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'done' })
+      await factory.refreshArmed()
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'consume result'" }])
+    })
+
+    it('an already-armed dependent is held by a hand-over that arrives before the station idles', async () => {
+      states['term-upstream'] = 'working'
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'consume result', after: 'term-upstream' },
+        true
+      )
+      const id = (reply.result as { id: string }).id
+      handedOver.add('term-upstream')
+      states['term-upstream'] = 'done'
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'done' })
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      handedOver.delete('term-upstream')
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'consume result'" }])
+    })
+
+    it('with a REAL tracker, a done still listing a background subagent holds; none left releases', async () => {
+      // Wired as canvas-control.ts wires it: the tracker is fed every event BEFORE the factory.
+      const tracker = new StationHandoverTracker()
+      handedOver = { has: (id: string) => tracker.isHandedOver(id) } as unknown as Set<string>
+      const feed = (ev: { nodeId: string; state: 'working' | 'done'; backgroundSubagentIds?: string[] }) => {
+        states[ev.nodeId] = ev.state
+        tracker.onAgentEvent(ev)
+        factory.onAgentEvent(ev)
+      }
+      feed({ nodeId: 'term-upstream', state: 'working' })
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'consume result', after: 'term-upstream' },
+        true
+      )
+      const id = (reply.result as { id: string }).id
+      feed({ nodeId: 'term-upstream', state: 'done', backgroundSubagentIds: ['a1b2c3'] })
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      feed({ nodeId: 'term-upstream', state: 'working' })
+      feed({ nodeId: 'term-upstream', state: 'done', backgroundSubagentIds: [] })
+      await factory.refreshArmed()
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'consume result'" }])
+    })
+
+    it('a success wait holds too: its turn is not over while handed-over work is unfinished', async () => {
+      states['term-upstream'] = 'done'
+      outcomes['term-upstream'] = { nodeId: 'term-upstream', outcome: 'succeeded', at: Date.now() }
+      handedOver.add('term-upstream')
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'ship it', 'after-success': 'term-upstream' },
+        true
+      )
+      expect(reply.ok).toBe(true)
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+    })
+  })
+
+  describe('--after-success: the dependent waits for a REPORTED success, not a turn ending', () => {
+    const report = (nodeId: string, outcome: 'succeeded' | 'failed', note?: string) => {
+      outcomes[nodeId] = { nodeId, outcome, at: Date.now(), ...(note ? { note } : {}) }
+    }
+    const openWaiting = async () => {
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'ship it', 'after-success': 'term-upstream' },
+        true
+      )
+      expect(reply.ok).toBe(true)
+      return (reply.result as { id: string }).id
+    }
+
+    it('holds on an idle station with no report, and releases once it reports success', async () => {
+      states['term-upstream'] = 'done'
+      const id = await openWaiting()
+      expect(pty.sends).toEqual([])
+      const held = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
+      expect(held?.pendingLaunch).toMatchObject({
+        after: ['term-upstream'],
+        afterSuccess: { deps: ['term-upstream'], deadlineAt: expect.any(Number) },
+        executor: 'server'
+      })
+      // The turn is over and nothing was reported: `--after` alone would fire here.
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      report('term-upstream', 'succeeded')
+      await factory.refreshArmed()
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'ship it'" }])
+    })
+
+    it('a reported failure blocks it for good', async () => {
+      states['term-upstream'] = 'done'
+      const id = await openWaiting()
+      report('term-upstream', 'failed', 'tests red')
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      const still = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)
+      expect(still?.pendingLaunch?.afterSuccess).toBeDefined()
+    })
+
+    it('holds when the station\'s last turn ERRORED after it reported success (#521, like the desktop)', async () => {
+      states['term-upstream'] = 'done'
+      const id = await openWaiting()
+      report('term-upstream', 'succeeded')
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'done', errored: true })
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      // The next genuine new turn clears the verdict; a clean end of it releases.
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'working', newTurn: true })
+      states['term-upstream'] = 'done'
+      factory.onAgentEvent({ nodeId: 'term-upstream', state: 'done' })
+      await vi.waitFor(() => expect(pty.sends).toEqual([{ nodeId: id, text: "claude 'ship it'" }]))
+    })
+
+    it('a reported success mid-turn waits for the turn to end', async () => {
+      states['term-upstream'] = 'working'
+      await openWaiting()
+      report('term-upstream', 'succeeded')
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+      states['term-upstream'] = 'done'
+      await factory.refreshArmed()
+      expect(pty.sends).toHaveLength(1)
+    })
+
+    it('a station already reported successful and idle releases the open at once', async () => {
+      states['term-upstream'] = 'done'
+      report('term-upstream', 'succeeded')
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'go', 'after-success': 'term-upstream' },
+        true
+      )
+      expect(reply.result).toMatchObject({ deliveredIds: [expect.any(String)], afterSuccess: ['term-upstream'] })
+      expect(pty.sends).toHaveLength(1)
+    })
+
+    it('never fires past its deadline', async () => {
+      states['term-upstream'] = 'done'
+      const reply = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'x', 'after-success': 'term-upstream', 'success-deadline': '1m' },
+        true
+      )
+      expect(reply.ok).toBe(true)
+      const ws = await store.load({ sideline: false })
+      const node = ws.projects[0].nodes.find((n) => n.id === (reply.result as { id: string }).id)
+      node!.pendingLaunch!.afterSuccess!.deadlineAt = 1
+      await store.save(ws)
+      report('term-upstream', 'succeeded')
+      await factory.refreshArmed()
+      expect(pty.sends).toEqual([])
+    })
+
+    it('a hostile persisted hold never fires and never throws', async () => {
+      states['term-upstream'] = 'done'
+      const id = await openWaiting()
+      const ws = await store.load({ sideline: false })
+      const node = ws.projects[0].nodes.find((n) => n.id === id)
+      ;(node!.pendingLaunch as unknown as { afterSuccess: unknown }).afterSuccess = { deps: 'term-upstream' }
+      await store.save(ws)
+      report('term-upstream', 'succeeded')
+      await expect(factory.refreshArmed()).resolves.toBeUndefined()
+      expect(pty.sends).toEqual([])
+    })
+
+    it('refuses a station that could never report, and --run-now, before creating anything', async () => {
+      const ws = await store.load({ sideline: false })
+      ws.projects[0].nodes.push({ ...terminal('term-agy', 'Agy'), agentId: 'antigravity' })
+      await store.save(ws)
+      ownership.record('term-agy', { sourceNodeId: 'term-source', projectId: 'project-1' })
+      const before = (await store.load({ sideline: false })).projects[0].nodes.length
+      const r = await factory.openAgent(
+        'term-source',
+        { agent: 'claude', prompt: 'x', 'after-success': 'term-agy' },
+        true
+      )
+      expect(r).toMatchObject({ ok: false, error: expect.stringContaining('cannot report an outcome') })
+      await expect(
+        factory.openAgent(
+          'term-source',
+          { agent: 'claude', prompt: 'x', 'after-success': 'term-upstream', 'run-now': '1' },
+          true
+        )
+      ).resolves.toEqual({ ok: false, error: RUN_NOW_AFTER_SUCCESS_REFUSAL })
+      expect((await store.load({ sideline: false })).projects[0].nodes.length).toBe(before)
+    })
+  })
+
   it('holds a fresh dependency through its boot done blip, then releases after working -> done', async () => {
     const upstreamReply = await factory.openAgent(
       'term-source',
@@ -1949,6 +2174,13 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
       .nodes.find((n) => n.id === id)
   const upsertsOf = (ms: CanvasMutation[], id: string): CanvasNodeState[] =>
     ms.flatMap((m) => (m.op === 'upsert' && m.node.id === id ? [m.node] : []))
+  /**
+   * A node's held launch as a RESTART would find it: a fresh store reading workspace.json and
+   * project.json. `pendingLaunch` is machine-local (@shared/node-exec), so `onDisk` (project.json)
+   * never has one whatever happened; the index's `localExec` is where a claim or a clear lands.
+   */
+  const indexed = async (id: string): Promise<CanvasNodeState['pendingLaunch']> =>
+    (await new WorkspaceStore().load({ sideline: false })).projects[0].nodes.find((n) => n.id === id)?.pendingLaunch
 
   it('open: a move made while the launch runs survives on disk, in the cast and in the broadcast', async () => {
     const factory = new HeadlessNodeFactory(deps())
@@ -1967,6 +2199,7 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
     // The verb's own patch (the launch was delivered) landed; the teammate's move was kept.
     expect(onDisk(id)?.position).toEqual({ x: 999, y: 7 })
     expect(onDisk(id)?.pendingLaunch).toBeUndefined()
+    expect(await indexed(id)).toBeUndefined()
     const later = upsertsOf(cast.slice(castAtMove), id)
     expect(later.length).toBeGreaterThan(0)
     for (const n of later) expect(n.position).toEqual({ x: 999, y: 7 })
@@ -2008,6 +2241,7 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
     factory.stop()
     expect(onDisk('term-held')?.position).toEqual({ x: 999, y: 7 })
     expect(onDisk('term-held')?.pendingLaunch).toBeUndefined()
+    expect(await indexed('term-held')).toBeUndefined()
     for (const n of upsertsOf(cast.slice(castAtMove), 'term-held')) expect(n.position).toEqual({ x: 999, y: 7 })
     expect(broadcast.at(-1)?.nodes.find((n) => n.id === 'term-held')?.position).toEqual({ x: 999, y: 7 })
   })
@@ -2027,6 +2261,7 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
     expect(pty.sends).toEqual([{ nodeId: 'term-armed', text: 'printf armed' }])
     expect(onDisk('term-armed')?.position).toEqual({ x: 999, y: 7 })
     expect(onDisk('term-armed')?.pendingLaunch).toBeUndefined()
+    expect(await indexed('term-armed')).toBeUndefined()
     for (const n of upsertsOf(cast.slice(castAtMove), 'term-armed')) expect(n.position).toEqual({ x: 999, y: 7 })
     expect(broadcast.at(-1)?.nodes.find((n) => n.id === 'term-armed')?.position).toEqual({ x: 999, y: 7 })
   })
@@ -2104,6 +2339,99 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
     expect(broadcast).toEqual([])
     expect(warn.mock.calls.some((c) => String(c[0]).includes('canvas control stopped'))).toBe(true)
     warn.mockRestore()
+  })
+
+  // `pendingLaunch` is a machine-local exec field (@shared/node-exec): never in project.json, never in
+  // the authority's state (the reflector hands the authority every op without it, even an owner's).
+  // On a governed project a launch therefore reaches disk ONLY through a save's exec carry
+  // (`carryLocalNodeExec` in the authority's save overlay) into workspace.json's `localExec` — and
+  // that is also the only way the factory's second-phase patches (claim, clear, awaitWorking) land.
+  describe('a held launch on a GOVERNED project (machine-local)', () => {
+    it('an armed node a browser tab adds keeps its launch across an authority flush and a reload', async () => {
+      const heard: CanvasMutation[] = []
+      setReflectedListener((id, m) => {
+        heard.push(m)
+        authority.onReflected(id, m)
+      })
+      // An OWNER tab (a cookie-authenticated Server Edition browser): the reflector keeps its launch
+      // for the other owner tabs, and still hands the authority the op without one.
+      fake.isOwnerClient = (id) => id === 42
+      fake.clients.push(42)
+      const launch = { after: ['term-dep'], command: 'printf new' }
+      clientCast({ op: 'upsert', node: { ...terminal('term-new', 'New', 'claude', 2800), pendingLaunch: launch } })
+      expect(upsertsOf(heard, 'term-new')).toHaveLength(1)
+      expect(upsertsOf(heard, 'term-new')[0].pendingLaunch).toBeUndefined()
+      expect(fake.sent.some((s) => s.to === 42 && (s.args[1] as CanvasMutation & { origin?: string }).origin === 'core')).toBe(true)
+      // The tab's own whole-workspace save: its live node carries the launch, the overlay carries it
+      // onto the authority's node, and the split keeps it in the index.
+      const ws = await store.load({ sideline: false })
+      ws.projects[0].nodes.find((n) => n.id === 'term-new')!.pendingLaunch = structuredClone(launch)
+      await store.save(ws)
+      // The authority's own write (project.json only) leaves the index alone.
+      await authority.flushAll()
+      expect(onDisk('term-new')).toBeDefined()
+      expect(onDisk('term-new')?.pendingLaunch).toBeUndefined()
+      expect(await indexed('term-new')).toEqual(launch)
+      // A server restart: a fresh store under a fresh authority still hands the launch back.
+      const store2 = new WorkspaceStore()
+      const authority2 = createCanvasAuthority({
+        sharedProjectIds: () => shared,
+        readContent: (id) => store2.readProjectContent(id),
+        writeContent: (id, c) => store2.writeProjectContent(id, c),
+        publish: () => {},
+        setTimer: () => null,
+        clearTimer: () => {},
+        log: () => {}
+      })
+      store2.setContentAuthority(authority2)
+      const reloaded = (await store2.load({ sideline: false })).projects[0].nodes.find((n) => n.id === 'term-new')
+      expect(reloaded?.pendingLaunch).toEqual(launch)
+      await authority2.stop()
+    })
+
+    it('refreshArmed: the claim of a launch whose send fails reaches the index, never the authority, and survives a flush', async () => {
+      const heard: CanvasMutation[] = []
+      setReflectedListener((id, m) => {
+        heard.push(m)
+        authority.onReflected(id, m)
+      })
+      const factory = new HeadlessNodeFactory(deps())
+      pty.live.add('term-armed')
+      vi.spyOn(pty, 'sendText').mockResolvedValue(false)
+      await factory.refreshArmed({ nodeId: 'term-dep', state: 'done' })
+      factory.stop()
+      const claimed = { after: ['term-dep'], command: 'printf armed', executor: 'server', attempted: true, manualOnly: true }
+      // Cast (the core's own write: owner tabs get the claim), but heard by the authority without it.
+      expect(upsertsOf(cast, 'term-armed').some((n) => n.pendingLaunch?.attempted === true)).toBe(true)
+      expect(upsertsOf(heard, 'term-armed').length).toBeGreaterThan(0)
+      for (const n of upsertsOf(heard, 'term-armed')) expect(n.pendingLaunch).toBeUndefined()
+      expect(await indexed('term-armed')).toEqual(claimed)
+      // A teammate's move, then the authority's flush: project.json moves, the claim stays put.
+      clientCast({ op: 'upsert', node: { ...(await liveNode('term-armed')), position: { x: 5, y: 5 } } })
+      await authority.flushAll()
+      expect(onDisk('term-armed')?.position).toEqual({ x: 5, y: 5 })
+      expect(onDisk('term-armed')?.pendingLaunch).toBeUndefined()
+      expect(await indexed('term-armed')).toEqual(claimed)
+    })
+
+    it('refreshArmed: a first working turn drops awaitWorking from the index, keeping the arm', async () => {
+      const ws = await store.load({ sideline: false })
+      ws.projects[0].nodes.find((n) => n.id === 'term-armed')!.pendingLaunch = {
+        ...held('printf armed', ['term-dep']),
+        awaitWorking: ['term-dep']
+      }
+      await store.save(ws)
+      expect((await indexed('term-armed'))?.awaitWorking).toEqual(['term-dep'])
+      const factory = new HeadlessNodeFactory(deps())
+      await factory.refreshArmed({ nodeId: 'term-dep', state: 'working' })
+      factory.stop()
+      const after = await indexed('term-armed')
+      expect(after).toMatchObject({ after: ['term-dep'], command: 'printf armed', executor: 'server' })
+      expect(after?.awaitWorking).toBeUndefined()
+      await authority.flushAll()
+      expect((await indexed('term-armed'))?.awaitWorking).toBeUndefined()
+      expect((await indexed('term-armed'))?.command).toBe('printf armed')
+    })
   })
 
   it('refreshArmed with nothing ready deep-copies nothing and saves nothing', async () => {

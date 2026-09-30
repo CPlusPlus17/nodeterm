@@ -243,6 +243,17 @@ export const IPC = {
   stationNoticeDropped: 'station-notice:dropped',
   /** core → every renderer: the FULL current notice list on each change, never a delta. */
   stationNoticeChanged: 'station-notice:changed',
+  /** Station task outcomes (`report-outcome`, src/core/station-outcome-store.ts). invoke: every
+   *  record this process holds (StationOutcomeRecord[]), for a renderer that booted after a push. */
+  stationOutcomeList: 'station-outcome:list',
+  /** core → every renderer: the FULL current record list on each change, never a delta. */
+  stationOutcomeChanged: 'station-outcome:changed',
+  /** Stations with unfinished HANDED-OVER work (src/core/station-handover.ts): what plain `--after`
+   *  reads so a `done` from before new work arrived does not release a dependent. invoke: the
+   *  current list (StationHandoverRecord[]), for a renderer that booted after a push. */
+  stationHandoverList: 'station-handover:list',
+  /** core → every renderer: the FULL current list on each change, never a delta. */
+  stationHandoverChanged: 'station-handover:changed',
   /** Canvas sync: a client casts its local node mutations here; the core reflector
    *  (src/core/canvas-sync.ts) stamps each with the total order (`seq`) and sends it back out on the
    *  SAME channel to EVERY attached client — the sender included, whose copy is its ack (see

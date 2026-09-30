@@ -21,7 +21,7 @@
 //
 // Pure + DOM-free (vitest runs in the node environment): only setTimeout, no React, no window.
 
-import { stripSharedNodeExec } from './node-exec'
+import { stripCastNodeExec } from './node-exec'
 import { asScene, diffToMutations, type CanvasScene } from './canvas-mutations'
 import { mutationKey, mutationNodeId } from './canvas-order'
 import type { BridgeLink, CanvasMutation, CanvasNodeState } from './types'
@@ -414,5 +414,8 @@ export function publishableStates(
   // programs and hosts on OUR box), and sending them would both leak our local setup and put a
   // value of foreign provenance into their live nodes. The publisher's baseline is built from this
   // same function, so nothing re-publishes in a loop.
-  return stripSharedNodeExec(states.filter((n) => !isEphemeralNodeId(n.id, ephemeralIds)))
+  // A held launch (`pendingLaunch`) is the one exec field that DOES ride the cast: it goes to this
+  // machine's own core, whose reflector forwards it only between owner clients (two Server Edition
+  // tabs must agree on who claimed a launch) and strips it for every relay/peer recipient.
+  return stripCastNodeExec(states.filter((n) => !isEphemeralNodeId(n.id, ephemeralIds)))
 }

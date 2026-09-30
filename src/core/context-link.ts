@@ -340,6 +340,10 @@ export function initContextLink(
 ): void {
   pty = ptyManager
   deps = platformDeps
+  // Re-derive from the platform this init runs under: a process that boots a second core (the
+  // server e2e suites start several, each on its own dataDir) must not keep writing into the
+  // FIRST one's directory — which is how a test's removed dataDir came back, `context.sh` and all.
+  dir = ''
   linkRevision++
   linkDocs.clear()
   verifiedPaths.clear()

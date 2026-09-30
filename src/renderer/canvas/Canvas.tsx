@@ -63,6 +63,7 @@ import {
 } from './canvas-image-import'
 import {
   SharedGlyphLayer,
+  createPixelRatioWatcher,
   flushOpaqueNodeIds,
   gestureTerminalIds,
   hasActiveGesture,
@@ -75,8 +76,10 @@ import {
   useSharedGlyphActive
 } from './SharedGlyphLayer'
 import { SshReconnector } from '../lib/sshReconnect'
+import { projectMayDialSsh, sanitizeRelayMutation } from '../session/relay-ssh'
 import {
   hostAttachmentsFor,
+  planActiveProjectDials,
   connectHostAttachment,
   type SshConnectFn
 } from '../lib/sshAttachments'
@@ -84,6 +87,7 @@ import { terminalKey } from '../terminal/terminal-config'
 import {
   setWebglGesture,
   setWebglZoom,
+  setWebglDevicePixelRatio,
   releaseAllHiddenGrants,
   WEBGL_GESTURE_SETTLE_MS
 } from '../terminal/webgl-budget'
@@ -272,7 +276,7 @@ import {
   terminalShortcutPolicy
 } from '../lib/keybindingOverrides'
 import { CanvasPills } from '../components/CanvasPills'
-import { UsageIndicator } from '../components/UsageIndicator'
+import { UsageIndicator, type AccountMoveProgress } from '../components/UsageIndicator'
 import { SystemResourcePill } from '../components/SystemResourcePill'
 import { PresenceLayer } from '../components/PresenceLayer'
 import { Facepile } from '../components/Facepile'
@@ -402,7 +406,7 @@ import {
   writeSeenExplorerPinHint
 } from '../lib/explorerPinHint'
 import { setKanbanPublishHook, useProjects } from '../state/projects'
-import { useAgentStatus } from '../state/agentStatus'
+import { useAgentStatus, recordsTurnInterrupt } from '../state/agentStatus'
 import { hostChatSend, hostChatSession, hostChatStatus } from '../lib/hostChatQuery'
 import { chatPaneRefusal } from '../lib/chatPaneGate'
 import { useLaunchDelivery } from '../state/launchDelivery'
@@ -482,6 +486,21 @@ import {
   normalizeIssueRef,
   type IssueRef
 } from '@shared/github-issue-ref'
+import { dispatchBinding, sanitizeBoardDispatch, type BoardDispatchProject } from '@shared/board-dispatch'
+import {
+  DISPATCH_DRAIN_MS,
+  DISPATCH_REFUSAL_TEXT,
+  decideDispatch,
+  dispatchableAgent,
+  moveWithdrawsDispatch,
+  occupiesSlot,
+  queueToDrop,
+  queueToStart,
+  recheckQueued,
+  type QueuedCardFact
+} from '../lib/boardDispatch'
+import { dispatchEntry, useBoardDispatch, type DispatchCardEntry } from '../state/boardDispatch'
+import type { GitHubIssueCardView as DispatchIssueCard } from '@shared/github-issues'
 import { planIssueWorktree } from '@shared/issue-worktree'
 import { sharedBasePathOf, sharedWorktreeLocationRefusal } from '@shared/worktree-location'
 import {
@@ -528,6 +547,7 @@ import {
   launchesToFire,
   queueControlLaunch,
   withPrHold,
+  withSuccessHold,
   withLaunchBrief,
   launchBriefPresent,
   LAUNCH_STALL_MS,
@@ -535,6 +555,19 @@ import {
 } from '../lib/pendingLaunch'
 import { prHoldReports, prWaitReplyLine, resolvePrWaitFor, startFreshReadAsks, type PrWaitArmResult } from '../lib/prWait'
 import { RUN_NOW_AFTER_PR_REFUSAL } from '@shared/pr-wait'
+import {
+  afterSuccessFlagRefusal,
+  normalizeSuccessWaitHold,
+  parseAfterSuccessArg,
+  parseSuccessDeadlineArg,
+  outcomeOf,
+  successDepRefusal,
+  type SuccessWaitHold
+} from '@shared/station-outcome'
+import { useStationOutcomes } from '../state/stationOutcomes'
+import { installStationOutcomeWiring } from '../lib/stationOutcomeWiring'
+import { useStationHandovers } from '../state/stationHandovers'
+import { installStationHandoverWiring } from '../lib/stationHandoverWiring'
 import { lookupPullRequests, pullBoardFor, useGitHubIssues } from '../state/githubIssues'
 import { usePullChase } from '../components/kanban/usePullAutoMove'
 import {
@@ -622,7 +655,16 @@ import { boardLiveNodeIds, createKanbanPublisher } from './kanban-sync'
 import { isHidden } from '../lib/ui-visibility'
 import { boardLogEvents } from '../lib/boardLogDiff'
 import { useBoardLog } from '../state/boardLog'
-import { isGlobalKanbanOpen, isKanbanOpen, isOmniKanbanEnabled, useViewMode, viewFor } from '../state/viewMode'
+import {
+  isGlobalKanbanOpen,
+  isKanbanOpen,
+  isOmniKanbanEnabled,
+  showCanvas,
+  toggleAllProjectsBoard,
+  toggleBoardView,
+  useViewMode,
+  viewFor
+} from '../state/viewMode'
 import { GlobalKanbanView } from '../components/kanban/GlobalKanbanView'
 import { useFocusNode, FOCUS_SURFACE_ID } from '../state/focusNode'
 import { focusTargetId } from '../lib/focusTarget'
@@ -646,6 +688,7 @@ import {
   type CanvasScene
 } from '@shared/canvas-mutations'
 import { isKanbanOp } from '@shared/kanban-ops'
+import { withoutCoreOrigin } from '@shared/node-exec'
 import { chordHeld, isHoldChord, isModifierEventKey, matchesShortcut } from '@shared/shortcut'
 
 // The dispatch below is the CONSUMER of the confirm-gated set. Before this import the set named
@@ -658,6 +701,7 @@ import {
   RUN_NOW_AFTER_REFUSAL
 } from '@shared/control-verbs'
 import {
+  claimForHeadless,
   headlessStartNoticeText,
   mergeRunNow,
   planRunVerb,
@@ -754,6 +798,7 @@ import {
   claudeSwitchHostKey,
   claudeSwitchTargets,
   planClaudeAccountSwitch,
+  startBulkSwitch,
   summarizeBulkSwitch,
   switchOutcomeNotice,
   type ClaudeSwitchOutcome
@@ -1707,9 +1752,6 @@ export function Canvas() {
   const onCanvasMoveStart = useCallback(() => {
     if (movingClearRef.current) clearTimeout(movingClearRef.current)
     movingClearRef.current = null
-    // Every appearance: freeze the viewport's raster scale for the duration of the move (see the
-    // `.canvas-camera-moving` rule). Before the glass early-return — this is not a glass feature.
-    flowWrapRef.current?.classList.add('canvas-camera-moving')
     if (keepBlurWhileMovingRef.current) return
     flowWrapRef.current?.classList.add('canvas-moving')
   }, [])
@@ -1718,7 +1760,6 @@ export function Canvas() {
     movingClearRef.current = setTimeout(() => {
       movingClearRef.current = null
       flowWrapRef.current?.classList.remove('canvas-moving')
-      flowWrapRef.current?.classList.remove('canvas-camera-moving')
     }, 150)
   }, [])
   useEffect(
@@ -2067,7 +2108,28 @@ export function Canvas() {
       const p = n.data.pendingLaunch
       if (!p) continue
       sig += `${n.id}:`
-      for (const d of p.after) sig += `${d}=${s.byId[d]?.state ?? ''},`
+      // The last-turn verdicts ride the signature too: a verdict can clear while the state stays
+      // `done` (a keystroke-guessed interrupt, then the turn's real Stop), and the launch effect
+      // must re-run to release the dependent then.
+      for (const d of p.after) {
+        const st = s.byId[d]
+        sig += `${d}=${st?.state ?? ''}${st?.lastTurnError ? 'e' : ''}${st?.lastTurnInterrupted ? 'i' : ''},`
+      }
+      sig += '|'
+    }
+    return sig
+  })
+  // ---- work handed to the stations an armed node waits on (plain `--after`) ----
+  // A station handed new work it has not finished (core/station-handover.ts) is never a satisfied
+  // dep, whatever its state reads. A PRIMITIVE signature over the armed nodes' deps only — the
+  // `armedDepSig` discipline — so the launch effect re-runs when one of THOSE stations finishes its
+  // new work, and nothing re-renders on another station's hand-over.
+  const armedHandoverSig = useStationHandovers((s) => {
+    let sig = ''
+    for (const n of nodesRef.current) {
+      const p = n.data.pendingLaunch
+      if (!p) continue
+      for (const d of p.after) if (s.byId[d]) sig += `${d},`
       sig += '|'
     }
     return sig
@@ -2140,6 +2202,25 @@ export function Canvas() {
         read = true
       }
       sig += `${n.id}:${prHoldReports(hold, board).map((r) => r.state).join(',')}|`
+    }
+    return sig
+  })
+  // ---- the success reports an armed node waits on (`--after-success`) ----
+  // A PRIMITIVE signature of each waited-on station's latest report, the same discipline as
+  // `armedDepSig`: the launch effect re-runs when one of THOSE stations reports, and nothing
+  // re-renders on another station's report. Their turn state is already in `armedDepSig` — every
+  // success station is in `after` too.
+  const armedSuccessSig = useStationOutcomes((s) => {
+    let sig = ''
+    for (const n of nodesRef.current) {
+      // Through the shape rule: a selector must never throw on a malformed hold.
+      const hold = normalizeSuccessWaitHold((n.data.pendingLaunch as PendingLaunch | undefined)?.afterSuccess)
+      if (!hold || hold.invalid) continue
+      for (const d of hold.deps) {
+        const r = outcomeOf(s.byId, d)
+        sig += `${d}:${r ? `${r.outcome}@${r.at}${r.workPending ? 'p' : ''}` : '-'},`
+      }
+      sig += '|'
     }
     return sig
   })
@@ -2266,7 +2347,11 @@ export function Canvas() {
       setupDoneForGroup,
       useLaunchDelivery.getState().byId,
       // The `--after-pr` gate: this canvas's pull request status and the clock its deadlines are on.
-      { board: pullBoardFor(useGitHubIssues.getState(), renderedProjectId ?? ''), now: Date.now() }
+      { board: pullBoardFor(useGitHubIssues.getState(), renderedProjectId ?? ''), now: Date.now() },
+      // The `--after-success` gate: every station's latest task report (core's store, mirrored).
+      { outcomes: useStationOutcomes.getState().byId, now: Date.now() },
+      // Stations handed new work they have not finished: their `done` is the previous task's.
+      useStationHandovers.getState().byId
     ).filter((f) => !launchInFlight.current.has(f.id))
     // Anything we were reporting on that is no longer an armed node — delivered, run by hand with
     // ▶, or deleted — stops being reported. Timers go with it: a stall warning for a node that has
@@ -2357,8 +2442,8 @@ export function Canvas() {
         return deliverHeld()
       })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- armedDepSig/armedSetupSig/armedPrSig/launchNudge are the triggers
-  }, [nodes, armedDepSig, armedSetupSig, armedPrSig, launchNudge])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- armedDepSig/armedHandoverSig/armedSetupSig/armedPrSig/armedSuccessSig/launchNudge are the triggers
+  }, [nodes, armedDepSig, armedHandoverSig, armedSetupSig, armedPrSig, armedSuccessSig, launchNudge])
 
   // Selection state for ephemeral nodes (they live outside React Flow's managed nodes), owned by
   // the agent-nodes store so the cards themselves can set it — see `selectable: false` below.
@@ -2888,8 +2973,11 @@ export function Canvas() {
     // SSH project: (re)open its ControlMaster and record the controlPath so this project's
     // terminal nodes can run over it. Idempotent in main (a live master is reused), so a tab
     // switch back to a connected project is a no-op. Remote tmux is unaffected by the master.
-    if (project.ssh) {
-      const ssh = project.ssh
+    // A RELAY tab dials nothing (`planActiveProjectDials`): its project and nodes are another
+    // machine's, and connecting them would log THIS machine into a server the host named.
+    const dials = planActiveProjectDials(project)
+    if (dials.own) {
+      const ssh = dials.own
       // SSH remote projects are free (Core). Only phone/relay remote access is Pro-gated.
       window.nodeTerminal.sshProject
         .connect(project.id, ssh.server, ssh.remoteCwd)
@@ -2916,7 +3004,7 @@ export function Canvas() {
     // locally.
     // NOTE: git routing is deliberately NOT armed for an attachment. The project's own cwd is what
     // the Source Control panel is about, and an attached node must not repoint it at another host.
-    for (const attachment of hostAttachmentsFor(project.id, project.nodes, project.ssh?.server)) {
+    for (const attachment of dials.attachments) {
       void connectHostAttachment(
         attachment.scopeId,
         {
@@ -3327,29 +3415,18 @@ export function Canvas() {
   // place: the IPC path bypasses the registry, so duplicating the omni/asDefault choice
   // caused Cmd+Shift+B on desktop to ignore omniKanbanAsDefault and to toggle the per-project
   // board underneath the global overlay.
-  const performKanbanToggle = useCallback(() => {
-    if (isGlobalKanbanOpen()) {
-      useViewMode.getState().toggleGlobalKanban()
-      return true
-    }
-    const settings = useSettings.getState().settings
-    if (isOmniKanbanEnabled(settings) && settings.omniKanbanAsDefault === true) {
-      commitActiveToStore()
-      useViewMode.getState().toggleGlobalKanban()
-      return true
-    }
-    const id = useProjects.getState().activeProjectId
-    if (!id) return false
-    useViewMode.getState().toggle(id)
-    return true
-  }, [commitActiveToStore])
+  // The decision itself is `toggleBoardView` / `toggleAllProjectsBoard` (state/viewMode.ts), which
+  // TabBar's board icon calls too. No commit is needed before Omni opens: its active lane reads
+  // the live canvas (GlobalKanbanLive), and the effect above commits for the other readers.
+  const performKanbanToggle = useCallback(
+    () => toggleBoardView(useProjects.getState().activeProjectId),
+    []
+  )
 
-  const performGlobalKanbanToggle = useCallback(() => {
-    if (!isOmniKanbanEnabled(useSettings.getState().settings)) return false
-    if (!isGlobalKanbanOpen()) commitActiveToStore()
-    useViewMode.getState().toggleGlobalKanban()
-    return true
-  }, [commitActiveToStore])
+  const performGlobalKanbanToggle = useCallback(
+    () => toggleAllProjectsBoard(useProjects.getState().activeProjectId),
+    []
+  )
 
   // Mirror `dirty` into a ref so the external-change listener (mounted once) reads the
   // live value without re-subscribing on every edit.
@@ -3971,7 +4048,13 @@ export function Canvas() {
       if (!pub || !pub.hasOwed() || loadingRef.current) return
       pub.publish(publishableLater(nodesRef.current))
     }
-    return activeSession.api.canvas.onMutation((projectId, mutation) => {
+    // A relay tab's mutations come from ANOTHER machine's core, which can put anything on the wire,
+    // so its `origin: 'core'` vouches for nothing here: drop it, and the node's held launch stays
+    // ours (strip theirs, carry our own — @shared/node-exec). Nor may a relay peer's node bring a
+    // dial-capable SSH connection onto this machine (session/relay-ssh.ts).
+    const relay = activeSession.source === 'relay'
+    return activeSession.api.canvas.onMutation((projectId, received) => {
+      const mutation = relay ? sanitizeRelayMutation(withoutCoreOrigin(received)) : received
       // Proof of a peer, whatever the presence table says — but only a cast from ANOTHER client
       // (`provesPeer`): our own echo is our ack, and a lone client that casts on a governed project
       // must not start publishing every project on this core.
@@ -4094,7 +4177,7 @@ export function Canvas() {
       setNodes(rebaseOnLatest(base, flow, (ns) => applyMutationToFlow(ns as CanvasNode[], mutation)))
       markDirty()
     })
-  }, [activeSession.api, setNodes, setLinkEdges, setControlEdges, markDirty, publishableLater, applyToStored])
+  }, [activeSession.api, setNodes, setLinkEdges, setControlEdges, markDirty, publishableLater, applyToStored, activeSession.source])
 
   // Record an undo snapshot when the canvas settles (debounced; skips drag frames/loads).
   useEffect(() => {
@@ -4216,6 +4299,15 @@ export function Canvas() {
         }
         return true
       })
+      // Nothing left for the managed state: return WITHOUT calling onNodesChange. Its
+      // applyNodeChanges returns a NEW array even for an empty change list, and a new `nodes`
+      // rebuilds every ephemeral card (useMemo keyed on `nodes`) as a fresh object without
+      // `measured` — so React Flow resets its handleBounds, re-observes it, and its ResizeObserver
+      // (force: true) emits another `dimensions` change for that card, filtered out right here.
+      // MEASURED with one subagent card on a 46-node canvas: that loop re-rendered the whole
+      // Canvas every frame (60 unobserve/observe per second, ~35% of the renderer's main thread,
+      // ~110% renderer+GPU CPU with nothing happening). canvas-empty-changes.test.ts pins it.
+      if (managed.length === 0) return
       // Re-snap what the resizer proposes before it is applied, so a resize tracks the grid
       // during the drag instead of correcting itself on release (see lib/resizeSnap.ts).
       const snapSettings = useSettings.getState().settings
@@ -5612,8 +5704,7 @@ export function Canvas() {
       // so the user actually sees the login node they must interact with. Same rationale as the
       // Settings-overlay close in the add-account listeners above.
       if (pid) {
-        if (isGlobalKanbanOpen()) useViewMode.getState().toggleGlobalKanban()
-        else if (isKanbanOpen(pid)) useViewMode.getState().toggle(pid)
+        if (isGlobalKanbanOpen() || isKanbanOpen(pid)) showCanvas(pid)
       }
     }
     window.addEventListener('nodeterm:switch-system-account', onSwitchSystemAccount)
@@ -7765,20 +7856,24 @@ export function Canvas() {
 
   /**
    * The usage popover's bulk move: every Claude session on this canvas that runs on `from` (and on
-   * the popover's machine) is moved to `to`, ONE AT A TIME — each is the same quit → copy → recycle
-   * as the single switch, and running them in parallel would put N transcript copies and N pane
-   * recycles on one host at once. Busy sessions are skipped, never interrupted. One summary line.
+   * the popover's machine) is moved to `to`, ALL AT ONCE — each is the same quit → copy → recycle
+   * as the single switch (`startBulkSwitch` says why they are not serialized, and where an SSH
+   * host's load is paced instead). Busy sessions are skipped, never interrupted. One summary line.
    */
   const bulkSwitchRunning = useRef(false)
+  // The same move, as the popover sees it: its sessions keep their OLD account until each lands, so
+  // without this the source row re-offers them mid-move (see `MoveSessionsControl`).
+  const [accountMove, setAccountMove] = useState<AccountMoveProgress | null>(null)
   const moveAccountSessions = useCallback(
     async (from: string | undefined, to: string | undefined, toLabel: string) => {
       if (bulkSwitchRunning.current) return
       bulkSwitchRunning.current = true
       try {
         const byId = useAgentStatus.getState().byId
-        const scope = scopeFromKey(
-          usageScopeKey(useProjects.getState().getProject(useProjects.getState().activeProjectId))
+        const scopeKey = usageScopeKey(
+          useProjects.getState().getProject(useProjects.getState().activeProjectId)
         )
+        const scope = scopeFromKey(scopeKey)
         const { ready, busy } = bulkSwitchCandidates(
           nodesRef.current
             .filter((n) => n.type === 'terminal')
@@ -7793,15 +7888,22 @@ export function Canvas() {
           scope.kind === 'ssh' ? scope.hostKey : undefined
         )
         if (ready.length + busy.length === 0) return
+        setAccountMove({ from, count: ready.length, scopeKey })
         setNotice({
           kind: 'info',
           text: `Moving ${ready.length} ${ready.length === 1 ? 'session' : 'sessions'} to ${toLabel}…`
         })
-        const outcomes: ClaudeSwitchOutcome[] = []
-        for (const n of ready) outcomes.push(await runClaudeAccountSwitch(n.id, to))
+        // All at once, not one after another — see `startBulkSwitch`.
+        const outcomes = (
+          await startBulkSwitch(
+            ready.map((n) => n.id),
+            (id) => runClaudeAccountSwitch(id, to)
+          )
+        ).map((o): ClaudeSwitchOutcome => o ?? { kind: 'not-restarted', outcome: 'exit-timeout' })
         setNotice(summarizeBulkSwitch(outcomes, busy.length, toLabel))
       } finally {
         bulkSwitchRunning.current = false
+        setAccountMove(null)
       }
     },
     [runClaudeAccountSwitch]
@@ -8757,7 +8859,7 @@ export function Canvas() {
           for (const node of plan.nodes) {
             useProjects
               .getState()
-              .applyNodeMutation(plan.projectId, {
+              .applyOwnNodeMutation(plan.projectId, {
                 op: 'upsert',
                 node: flowToNodeStates([armForColdOpen(node)])[0]
               })
@@ -10471,9 +10573,10 @@ export function Canvas() {
           zoomRafRef.current = null
           setZoomPct(Math.round(viewportRef.current.zoom * 100))
           setGroupLabelBoost(viewportRef.current.zoom)
-          // Feed the crisp gate (GPU text is a magnified bitmap past ~175%; the DOM renderer
-          // re-rasters and stays sharp). Idempotent + hysteresis inside, and the swaps it queues
-          // only run once the gesture settles — per-frame cost here is a float compare.
+          // Feed the crisp gate (GPU text is a magnified bitmap past ~175%, or past 100% on a
+          // low-DPI display; the DOM renderer re-rasters and stays sharp). Idempotent + hysteresis
+          // inside, and the swaps it queues only run once the gesture settles — per-frame cost
+          // here is a float compare.
           setWebglZoom(viewportRef.current.zoom)
         })
       }
@@ -10540,6 +10643,9 @@ export function Canvas() {
   // never a session's: the default agent-status store and the stations core reports on are both
   // this machine's (lib/stationNoticeWiring).
   useEffect(() => installStationNoticeWiring(window.nodeTerminal), [])
+  // Station task outcomes (`report-outcome`): core's store mirrored for the `--after-success` gate.
+  useEffect(() => installStationOutcomeWiring(window.nodeTerminal), [])
+  useEffect(() => installStationHandoverWiring(window.nodeTerminal), [])
 
   // Session board cards are derived LIVE from the canvas nodes; the board stores only assignments.
   // Only while the board is OPEN: `nodes` gets a fresh identity on every drag frame, so a closed
@@ -10551,9 +10657,11 @@ export function Canvas() {
   // request's head branch is matched against (lib/pullLinks.ts) — except on an SSH project, where
   // branch links are not supported and no card carries one (kanbanSessionsFrom).
   const activeProjectSsh = useProjects((s) => !!s.projects.find((p) => p.id === s.activeProjectId)?.ssh)
+  // Derived while EITHER board is up: the Omni overview feeds the active project's lane from these
+  // live cards too (GlobalKanbanLive), never from the store copy that lags the canvas.
   const kanbanSessions = useMemo(
-    () => perProjectKanbanOpen ? kanbanSessionsFrom(nodes, { ssh: activeProjectSsh }) : NO_KANBAN_SESSIONS,
-    [nodes, perProjectKanbanOpen, activeProjectSsh]
+    () => kanbanOpen ? kanbanSessionsFrom(nodes, { ssh: activeProjectSsh }) : NO_KANBAN_SESSIONS,
+    [nodes, kanbanOpen, activeProjectSsh]
   )
 
   // Team progress (lib/teamProgress): the stations each session opened, read off the live control
@@ -10571,6 +10679,10 @@ export function Canvas() {
   useEffect(() => {
     useTeamStations.getState().set(teamStations)
   }, [teamStations])
+  const globalKanbanLive = useMemo(
+    () => activeProjectId ? { projectId: activeProjectId, sessions: kanbanSessions, teams: teamStations } : null,
+    [activeProjectId, kanbanSessions, teamStations]
+  )
 
   // Create a node from the board's per-column "+ New" menu: it lands on the canvas (view
   // center) and, for a real column, is assigned there. The assignment is written directly —
@@ -10663,7 +10775,7 @@ export function Canvas() {
    */
   const fileIssueSession = useCallback(
     (
-      issue: GitHubIssueCardView,
+      columnId: string | null,
       ref: IssueRef,
       created: { node: CanvasNode; placed: CanvasNode; projectId: string },
       agentId: AgentId
@@ -10672,7 +10784,7 @@ export function Canvas() {
       const nodeId = node.id
       // The project addAgentNode charged the node to (its guarded, live read) — not a second read.
       const board = useProjects.getState().getProject(targetProjectId)?.kanban ?? defaultKanban(targetProjectId)
-      const column = issue.columnId ? board.columns.find((c) => c.id === issue.columnId) : undefined
+      const column = columnId ? board.columns.find((c) => c.id === columnId) : undefined
       if (column) {
         // The node goes on the wire BEFORE the card that names it (spec §2 batch order).
         castNewNodeNow(targetProjectId, created.placed)
@@ -10737,7 +10849,7 @@ export function Canvas() {
         issueRef: start.ref
       })
       if (!created) return // addAgentNode already said why
-      fileIssueSession(issue, start.ref, created, agentId)
+      fileIssueSession(issue.columnId, start.ref, created, agentId)
     },
     [addAgentNode, issueStartPrompt, fileIssueSession]
   )
@@ -10752,6 +10864,364 @@ export function Canvas() {
       }).map((entry) => entry.item),
     [agentCreationEntries, startIssueAgent]
   )
+
+  // ---- Board dispatch: a card THIS person moves into the dispatch column starts its own run ----
+  // Decisions are lib/boardDispatch (pure, tested); consent is machine-local settings
+  // (@shared/board-dispatch); the queue is transient (state/boardDispatch). The run itself is
+  // exactly "Start with agent": `issueRef` binding, the reference-only launch prompt,
+  // `fileIssueSession` (card filed + `run-started`). On screen it goes through `addAgentNode`; for a
+  // project that is not on screen (a queued run whose slot freed later, or a project switch during
+  // the move's round trip) it is a cold open, already CLAIMED, plus the #925 headless start — so no
+  // dispatched node is ever left armed to start on its own later (the kill switch could not reach it).
+
+  /** Every node of a project as the dispatcher needs it: the live canvas for the active project,
+   *  the stored copy for any other. `pending` = a launch that will start BY ITSELF. */
+  const dispatchNodesOf = useCallback(
+    (projectId: string): Array<{ id: string; issueRef?: unknown; pending: boolean }> => {
+      const st = useProjects.getState()
+      const selfStarting = (p: unknown): boolean =>
+        !!p && typeof p === 'object' && !(p as PendingLaunch).manualOnly
+      if (st.activeProjectId === projectId && nodesProjectIdRef.current === projectId) {
+        return nodesRef.current.map((n) => ({
+          id: n.id,
+          issueRef: n.data.issueRef,
+          pending: selfStarting(n.data.pendingLaunch)
+        }))
+      }
+      return (st.getProject(projectId)?.nodes ?? []).map((n) => ({
+        id: n.id,
+        issueRef: n.issueRef,
+        pending: selfStarting(n.pendingLaunch)
+      }))
+    },
+    []
+  )
+
+  /** Sessions bound to this issue that still exist, in ANY project: one run per issue. */
+  const dispatchBoundRuns = useCallback(
+    (key: string): number => {
+      let count = 0
+      for (const p of useProjects.getState().projects) {
+        for (const n of dispatchNodesOf(p.id)) if (issueKey(n.issueRef) === key) count++
+      }
+      return count
+    },
+    [dispatchNodesOf]
+  )
+
+  /** Runs of this project holding a concurrency slot now, plus dispatches still starting. */
+  const dispatchOccupying = useCallback(
+    (projectId: string): number => {
+      const byId = useAgentStatus.getState().byId
+      const { startedAt, byKey } = useBoardDispatch.getState()
+      const now = Date.now()
+      let count = 0
+      for (const n of dispatchNodesOf(projectId)) {
+        if (!normalizeIssueRef(n.issueRef)) continue
+        if (occupiesSlot({ state: byId[n.id]?.state, pending: n.pending, startedAt: startedAt[n.id] }, now)) count++
+      }
+      for (const e of Object.values(byKey)) if (e.projectId === projectId && e.status === 'starting') count++
+      return count
+    },
+    [dispatchNodesOf]
+  )
+
+  const dispatchAgentOk = (agentId: string): boolean =>
+    dispatchableAgent(
+      agentId,
+      !!agentConfig(agentId) || useSettings.getState().settings.customAgents.some((c) => c.id === agentId)
+    )
+
+  /** The consent binding of a project's dispatch column as it is NOW (repository from the issue's
+   *  own reference — the board's repository). */
+  const dispatchBindingNow = (project: Project | undefined, columnId: string, ref: IssueRef | undefined) =>
+    dispatchBinding(
+      ref ? `${ref.owner}/${ref.repo}` : undefined,
+      project?.kanban?.columns.find((c) => c.id === columnId)?.title,
+      project?.kanban?.github?.columnMappings.find((m) => m.columnId === columnId)?.label
+    )
+
+  /** The project's run may start from here now: always on screen; off screen only where a headless
+   *  launcher exists (the desktop — the browser's renderer has none). */
+  const dispatchStartableNow = (projectId: string): boolean =>
+    !isBrowserRuntime() || useProjects.getState().activeProjectId === projectId
+
+  /** Start one dispatched run. Called ONLY by dispatchOnUserMove and drainDispatchQueue (pinned by
+   *  board-dispatch.guard.test). Never throws; every failure lands on the card. */
+  const dispatchStart = useCallback(
+    async (entry: DispatchCardEntry, config: BoardDispatchProject): Promise<void> => {
+      useBoardDispatch.getState().put({ ...entry, status: 'starting' })
+      const fail = (reason: string): void =>
+        useBoardDispatch.getState().put({ ...entry, status: 'refused', reason })
+      try {
+        const prompt = issueLaunchPrompt(entry.ref)
+        if (!prompt) return fail(DISPATCH_REFUSAL_TEXT['no-reference'])
+        const agentId = config.agentId as AgentId
+        const st = useProjects.getState()
+        const project = st.getProject(entry.projectId)
+        if (!project) return fail(DISPATCH_REFUSAL_TEXT['project-gone'])
+        if (project.ssh) return fail(DISPATCH_REFUSAL_TEXT['remote-project'])
+        if (project.closed) return fail(DISPATCH_REFUSAL_TEXT['project-closed'])
+        let nodeId: string
+        if (st.activeProjectId === project.id && canCreateOnCanvas(nodesProjectIdRef.current, project.id)) {
+          const created = addAgentNode(agentId, undefined, undefined, config.accountId, prompt, {
+            issueRef: entry.ref
+          })
+          if (!created) return fail('The agent could not be opened; the notice says why.')
+          fileIssueSession(entry.columnId, entry.ref, created, agentId)
+          nodeId = created.node.id
+        } else {
+          // Callers never send an off-screen start to a runtime without a headless launcher; this
+          // is the belt, so nothing is ever left armed there.
+          if (!dispatchStartableNow(project.id)) return fail('Open the project to dispatch this issue.')
+          // Not on screen: a cold open into the stored project (the control verbs' path), then the
+          // headless start. Defaults come from THAT project, never the one on screen.
+          const settings = useSettings.getState().settings
+          let account: string | undefined
+          if (agentId === 'codex') {
+            const decision = resolveNewCodexNodeAccount(
+              config.accountId,
+              settings.codexAccounts,
+              connectedProjectIdForHost
+            )
+            if (!decision.create) return fail('The dispatch Codex account is not usable.')
+            account = decision.accountId
+          } else {
+            account = resolveNewNodeAccount(config.accountId, project, settings.claudeAccounts)
+          }
+          const model =
+            settings.agentLaunchMode === 'gateway-model' &&
+            settings.modelGatewayDefaultModel &&
+            canSwitchModel(agentId)
+              ? settings.modelGatewayDefaultModel
+              : undefined
+          const stored = project.nodes
+          const built = createAgentNode(
+            agentId,
+            stored.length,
+            project.cwd,
+            { x: 0, y: 0 },
+            prompt,
+            undefined,
+            account,
+            projectPermissionMode(project, agentId),
+            project.id,
+            model
+          )
+          const node: CanvasNode = { ...built, data: { ...built.data, issueRef: entry.ref } }
+          const w = (node.width as number) ?? 640
+          const h = (node.height as number) ?? 440
+          const at = nextFreePosition(stored, { width: w, height: h })
+          node.position = { x: at.x - w / 2, y: at.y - h / 2 }
+          // Written ALREADY CLAIMED (the #925 write-ahead claim, manualOnly): in the same tick as the
+          // node, so there is no window in which opening the project could auto-start it beside the
+          // headless start, and whatever the headless start answers, the node never becomes armed
+          // to start by itself later — past a Pause, past a restart.
+          const [armed] = flowToNodeStates([armForColdOpen(node)])
+          st.applyOwnNodeMutation(project.id, {
+            op: 'upsert',
+            node: armed.pendingLaunch ? { ...armed, pendingLaunch: claimForHeadless(armed.pendingLaunch) } : armed
+          })
+          // `placed` is the stored node itself: the project is not the canvas React Flow holds, so
+          // `castNewNodeNow` casts nothing for it (a stored project's node is not the node publisher's).
+          fileIssueSession(entry.columnId, entry.ref, { node, placed: node, projectId: project.id }, agentId)
+          nodeId = node.id
+          const held = useProjects.getState().getProject(project.id)?.nodes.find((n) => n.id === nodeId)
+          if (held?.pendingLaunch) {
+            const fresh = useProjects.getState().getProject(project.id) ?? project
+            const batch = await startNodesHeadlessRef.current(fresh, [held])
+            const outcome = batch.outcomes[0]
+            if (outcome && !outcome.started) {
+              // Every failure leaves the pre-claimed launch waiting for Run now (never armed): the
+              // node keeps the issue's one run until it is run or closed.
+              setNotice({
+                kind: 'error',
+                sticky: true,
+                text: `Dispatched #${entry.number} in "${project.name}", but it could not start (${outcome.reason}). Use Run now on its node, or close the node to dispatch the issue again.`,
+                action: { label: 'Go there', run: () => travelToNodeRef.current(nodeId) }
+              })
+            }
+          } else {
+            void writeDisk()
+          }
+        }
+        const done = useBoardDispatch.getState()
+        done.markStarted(nodeId, Date.now())
+        done.remove(entry.key)
+      } catch (error) {
+        console.warn('[nodeterm] board dispatch failed', error)
+        fail('Starting the agent failed.')
+      }
+    },
+    [addAgentNode, fileIssueSession, connectedProjectIdForHost, writeDisk]
+  )
+
+  /** Board dispatch's ONE trigger: a GitHub card this person moved, with GitHub's answer
+   *  (KanbanView `onIssueMoved`). Pinned as the only caller by board-dispatch.guard.test. */
+  const dispatchOnUserMove = useCallback(
+    (projectId: string, issue: DispatchIssueCard, toColumnId: string | null, status: string) => {
+      const dispatch = sanitizeBoardDispatch(useSettings.getState().settings.boardDispatch)
+      const config = dispatch.projects[projectId]
+      if (!config) return
+      const project = useProjects.getState().getProject(projectId)
+      const ref = issueRefFromHtmlUrl(issue.htmlUrl, issue.number)
+      const key = issueKey(ref)
+      const current = key ? useBoardDispatch.getState().byKey[key] : undefined
+      const trigger = {
+        origin: 'user-move' as const,
+        projectId,
+        toColumnId,
+        moveStatus: status,
+        issue: { number: issue.number, htmlUrl: issue.htmlUrl, state: issue.state }
+      }
+      if (key && current && current.status !== 'starting' && moveWithdrawsDispatch(trigger, dispatch)) {
+        useBoardDispatch.getState().remove(key)
+        return
+      }
+      const decision = decideDispatch(
+        trigger,
+        {
+          dispatch,
+          project: project ? { remote: !!project.ssh, relay: !!project.remote } : undefined,
+          completionColumnId: project?.kanban?.github?.completionColumnId,
+          bindingNow: dispatchBindingNow(project, config.columnId, ref),
+          agentDispatchable: dispatchAgentOk(config.agentId),
+          boundRuns: key ? dispatchBoundRuns(key) : 0,
+          queuedOrStarting: current?.status === 'queued' || current?.status === 'starting',
+          occupying: dispatchOccupying(projectId)
+        }
+      )
+      if (decision.kind === 'ignore') return
+      const now = Date.now()
+      if (decision.kind === 'refuse') {
+        if (!key || !ref) {
+          setNotice({ kind: 'error', text: `#${issue.number} was not dispatched: ${DISPATCH_REFUSAL_TEXT[decision.reason]}` })
+          return
+        }
+        // A second drag of a card already on its way keeps its entry; everything else says why.
+        if (decision.reason === 'already-queued') return
+        useBoardDispatch.getState().put(
+          dispatchEntry({ key, projectId, ref, number: issue.number, columnId: config.columnId }, 'refused', now,
+            DISPATCH_REFUSAL_TEXT[decision.reason])
+        )
+        return
+      }
+      const entry = dispatchEntry(
+        { key: decision.key, projectId, ref: decision.ref, number: issue.number, columnId: config.columnId },
+        'queued',
+        now
+      )
+      // Over the cap — or a project that left the screen during the move's round trip in a runtime
+      // that cannot start it off screen (the drain starts it when it is shown again).
+      if (decision.kind === 'queue' || !dispatchStartableNow(projectId)) {
+        useBoardDispatch.getState().put(entry)
+        return
+      }
+      void dispatchStart(entry, config)
+    },
+    [dispatchBoundRuns, dispatchOccupying, dispatchStart]
+  )
+
+  /** The card as the host's issue list for the dispatch column holds it now (a local read of the
+   *  host's cache — no GitHub request). A failed read is `unreadable`, never absence. */
+  const dispatchReadCard = useCallback(
+    async (projectId: string, columnId: string, number: number): Promise<QueuedCardFact> => {
+      try {
+        let cursor: string | undefined
+        for (let page = 0; page < 10; page++) {
+          const res = await api.githubIssues.query({
+            projectId,
+            columnId,
+            pageSize: 50,
+            search: String(number),
+            ...(cursor ? { cursor } : {})
+          })
+          const hit = res.items.find((i) => i.number === number)
+          if (hit) return { kind: 'found', state: hit.state, columnId: hit.columnId }
+          if (!res.nextCursor) return { kind: 'absent' }
+          cursor = res.nextCursor
+        }
+        return { kind: 'unreadable' }
+      } catch {
+        return { kind: 'unreadable' }
+      }
+    },
+    [api]
+  )
+
+  /** Start what the queue's free slots allow, re-checking each issue first; drop entries whose
+   *  project stopped dispatching. Called ONLY by the drain timer below. */
+  const dispatchRechecking = useRef(new Set<string>())
+  const drainDispatchQueue = useCallback(() => {
+    const dispatch = sanitizeBoardDispatch(useSettings.getState().settings.boardDispatch)
+    const queue = useBoardDispatch.getState().queue()
+    for (const e of queueToDrop(queue, dispatch)) {
+      const entry = useBoardDispatch.getState().byKey[e.key]
+      if (!entry) continue
+      useBoardDispatch.getState().put({
+        ...entry,
+        status: 'refused',
+        reason: DISPATCH_REFUSAL_TEXT[dispatch.paused ? 'paused' : 'switched-off']
+      })
+    }
+    const candidates = queueToStart(
+      useBoardDispatch.getState().queue().filter((e) => !dispatchRechecking.current.has(e.key)),
+      dispatch,
+      dispatchOccupying,
+      (e) => dispatchStartableNow(e.projectId)
+    )
+    for (const e of candidates) {
+      dispatchRechecking.current.add(e.key)
+      void (async () => {
+        try {
+          const project = useProjects.getState().getProject(e.projectId)
+          const config = dispatch.projects[e.projectId]
+          const card = config ? await dispatchReadCard(e.projectId, config.columnId, e.number) : ({ kind: 'unreadable' } as const)
+          // Everything re-read AFTER the await: settings, the project and the queue entry itself.
+          const now = sanitizeBoardDispatch(useSettings.getState().settings.boardDispatch)
+          const cfg = now.projects[e.projectId]
+          const entry = useBoardDispatch.getState().byKey[e.key]
+          if (!entry || entry.status !== 'queued') return
+          const verdict = recheckQueued({
+            config: cfg,
+            paused: now.paused,
+            project: project ? { remote: !!project.ssh, relay: !!project.remote, closed: !!project.closed } : undefined,
+            bindingNow: cfg ? dispatchBindingNow(useProjects.getState().getProject(e.projectId), cfg.columnId, e.ref) : undefined,
+            agentDispatchable: cfg ? dispatchAgentOk(cfg.agentId) : false,
+            card
+          })
+          if (verdict.kind === 'wait') return
+          if (verdict.kind === 'drop') {
+            useBoardDispatch.getState().put({ ...entry, status: 'refused', reason: DISPATCH_REFUSAL_TEXT[verdict.reason] })
+            return
+          }
+          // The issue may have gained a run by hand while it waited.
+          if (dispatchBoundRuns(e.key) > 0) {
+            useBoardDispatch.getState().remove(e.key)
+            return
+          }
+          if (cfg) await dispatchStart(entry, cfg)
+        } finally {
+          dispatchRechecking.current.delete(e.key)
+        }
+      })()
+    }
+  }, [dispatchOccupying, dispatchBoundRuns, dispatchStart, dispatchReadCard])
+  const drainDispatchQueueRef = useRef(drainDispatchQueue)
+  useEffect(() => {
+    drainDispatchQueueRef.current = drainDispatchQueue
+  })
+  // Re-checked on a short timer ONLY while something is queued (a slot frees when a run's turn
+  // ends, which no single store change says cheaply), on every settings change (pause, off), and
+  // on a project switch (the browser starts only the project on screen).
+  const dispatchQueued = useBoardDispatch((s) => Object.values(s.byKey).some((e) => e.status === 'queued'))
+  const boardDispatchSettings = useSettings((s) => s.settings.boardDispatch)
+  useEffect(() => {
+    if (!dispatchQueued) return
+    drainDispatchQueueRef.current()
+    const timer = setInterval(() => drainDispatchQueueRef.current(), DISPATCH_DRAIN_MS)
+    return () => clearInterval(timer)
+  }, [dispatchQueued, boardDispatchSettings, activeProjectId])
 
   // ---- GitHub issue → agent session in its OWN worktree ("Start with agent in a new worktree ▸") ----
   /** The reuse-or-new question, when the issue already has a worktree (or its branch exists). */
@@ -10827,7 +11297,7 @@ export function Canvas() {
         nodesRef.current = grow(nodesRef.current)
         setNodes((ns) => grow(ns as CanvasNode[]))
       }
-      fileIssueSession(issue, start.ref, created, agentId)
+      fileIssueSession(issue.columnId, start.ref, created, agentId)
       return true
     },
     [setNodes, addAgentNode, setupHoldGroup, fileIssueSession]
@@ -11556,6 +12026,45 @@ export function Canvas() {
             }
           }
         : {}
+      // `--after-success` (@shared/station-outcome): stations the new node(s) also need a REPORTED
+      // SUCCESS from. Main already ran the shape gate (and refused the `--after <id>:ok` form); this
+      // is the renderer's belt, never the only gate. The ids are then FOLDED INTO `after` — a success
+      // wait is `--after` plus the station's report — so every existing `--after` rule applies to
+      // them unchanged on every open path: the station must exist and report status, the dependency
+      // rope is drawn and its delete is the escape, `--run-now` / `--project` refuse. The one thing
+      // added is checked where `--after` is checked: the station must be able to REPORT.
+      const successGatePre = openVerb ? afterSuccessFlagRefusal(verb, args) : null
+      if (successGatePre) {
+        reply({ ok: false, error: successGatePre })
+        return
+      }
+      const successParsedPre =
+        openVerb && args['after-success'] !== undefined ? parseAfterSuccessArg(args['after-success']) : undefined
+      const successIdsPre = successParsedPre?.ok ? successParsedPre.ids : []
+      const successDeadlinePre = parseSuccessDeadlineArg(args['success-deadline'])
+      const successHoldPre: SuccessWaitHold | undefined =
+        successIdsPre.length && successDeadlinePre.ok
+          ? { deps: successIdsPre, deadlineAt: Date.now() + successDeadlinePre.ms }
+          : undefined
+      if (successIdsPre.length) {
+        const plainAfter = (args.after ?? '').split(',').map((d) => d.trim()).filter(Boolean)
+        args = { ...args, after: [...new Set([...plainAfter, ...successIdsPre])].join(',') }
+      }
+      const successReplyLines = successHoldPre
+        ? [
+            `waits for a reported success from: ${successHoldPre.deps.join(', ')} ` +
+              `(until ${new Date(successHoldPre.deadlineAt).toISOString()})`
+          ]
+        : []
+      const successReplyText = successReplyLines.map((l) => `\n${l}`).join('')
+      const successResult = successHoldPre
+        ? {
+            afterSuccess: {
+              deps: successHoldPre.deps,
+              deadline: new Date(successHoldPre.deadlineAt).toISOString()
+            }
+          }
+        : {}
 
       // ── Agent messaging (`send`/`reply`) — handled BEFORE the source-routing machinery ──────
       // These are STORE_ANSWERED_VERBS (lib/controlRouting): routing by source must never travel
@@ -12008,7 +12517,7 @@ export function Canvas() {
           // starts when that project's canvas is next shown (mount spawns the PTY, the
           // armed-launch effect delivers with its retry loop — Task 2.0's measured round-trip).
           for (const node of tgMade) {
-            tgStore.applyNodeMutation(target.id, {
+            tgStore.applyOwnNodeMutation(target.id, {
               op: 'upsert',
               node: flowToNodeStates([withPrHold(withLaunchBrief(armForColdOpen(node), openPrompt.promptFile), prHoldPre)])[0]
             })
@@ -12135,7 +12644,7 @@ export function Canvas() {
               }
               useProjects
                 .getState()
-                .applyNodeMutation(route.projectId, {
+                .applyOwnNodeMutation(route.projectId, {
                   op: 'upsert',
                   node: { ...target, text: next.text, ...stamp }
                 })
@@ -12176,13 +12685,13 @@ export function Canvas() {
             node.data.textUpdatedBy = stamp.textUpdatedBy
             useProjects
               .getState()
-              .applyNodeMutation(route.projectId, { op: 'upsert', node: flowToNodeStates([node])[0] })
+              .applyOwnNodeMutation(route.projectId, { op: 'upsert', node: flowToNodeStates([node])[0] })
             void writeDisk()
             reply({ ok: true, message: `created note "${node.data.title}" (${node.id})` })
             return
           }
           if (!needsLiveCanvas(verb)) {
-            const rows = storedNodeListing(projects.find((p) => p.id === route.projectId)?.nodes ?? [], useAgentStatus.getState().byId, useLaunchDelivery.getState().byId)
+            const rows = storedNodeListing(projects.find((p) => p.id === route.projectId)?.nodes ?? [], useAgentStatus.getState().byId, useLaunchDelivery.getState().byId, Date.now(), useStationOutcomes.getState().byId, useStationHandovers.getState().byId)
             reply({
               ok: true,
               result: rows,
@@ -12251,6 +12760,14 @@ export function Canvas() {
               return
             }
             const coldAfterIds = coldAfter.after ?? []
+            // `--after-success` stations (folded into `after`) must also be able to REPORT.
+            const coldCannotReport = successIdsPre.find(
+              (d) => !sourceIsControlCapable(storedAgentIdOf(coldNodes.find((n) => n.id === d), coldStatusAgent))
+            )
+            if (coldCannotReport) {
+              reply({ ok: false, error: successDepRefusal(verb, coldCannotReport) })
+              return
+            }
             const coldCwd =
               args.cwd || coldGroupCwd(coldNodes, coldGroup.groupId, !!owner.ssh) || coldSrc.cwd
             // Same SSH rule as the live path: a node an agent opens has to run on the same host the
@@ -12303,6 +12820,7 @@ export function Canvas() {
                   ...(coldIssueRef ? [`bound to GitHub issue ${formatIssueRef(coldIssueRef)}`] : []),
                   ...(coldAfterIds.length ? [`armed to wait for: ${coldAfterIds.join(', ')}`] : []),
                   ...prReplyLines,
+                  ...successReplyLines,
                   // #925: `--run-now` starts it headless instead — except on an SSH project, whose
                   // nodes a headless start refuses (they start on view, over SSH).
                   runNowRequested(args) && !owner.ssh
@@ -12317,7 +12835,8 @@ export function Canvas() {
                   after: coldAfterIds,
                   projectId: owner.id,
                   ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {}),
-                  ...prResult
+                  ...prResult,
+                  ...successResult
                 }
               })
               return
@@ -12367,14 +12886,17 @@ export function Canvas() {
               // opener's name goes on the node now (lib/stationOpener). `--after-pr` rides the same
               // held launch (withPrHold — the one attach every path uses).
               const node = withOpenedBy(
-                withPrHold(
-                  held && coldAfterIds.length
-                    ? {
-                        ...armed,
-                        data: { ...armed.data, pendingLaunch: { ...held, after: coldAfterIds } }
-                      }
-                    : armed,
-                  prHoldPre
+                withSuccessHold(
+                  withPrHold(
+                    held && coldAfterIds.length
+                      ? {
+                          ...armed,
+                          data: { ...armed.data, pendingLaunch: { ...held, after: coldAfterIds } }
+                        }
+                      : armed,
+                    prHoldPre
+                  ),
+                  successHoldPre
                 ),
                 sourceNodeId
               )
@@ -12399,7 +12921,7 @@ export function Canvas() {
                 const w = (coldMade[0]?.width as number) ?? 600
                 const h = (coldMade[0]?.height as number) ?? 400
                 const need = groupSizeFor(coldExistingInGroup + coldCount, w, h)
-                coldStore.applyNodeMutation(owner.id, {
+                coldStore.applyOwnNodeMutation(owner.id, {
                   op: 'upsert',
                   node: {
                     ...frame,
@@ -12412,7 +12934,7 @@ export function Canvas() {
               }
             }
             for (const node of coldMade) {
-              coldStore.applyNodeMutation(owner.id, {
+              coldStore.applyOwnNodeMutation(owner.id, {
                 op: 'upsert',
                 node: flowToNodeStates([node])[0]
               })
@@ -12473,7 +12995,8 @@ export function Canvas() {
                     (coldDepLinked.length ? ' (and linked to read them)' : '')
                   : '') +
                 (coldIssueRef ? `\nbound to GitHub issue ${formatIssueRef(coldIssueRef)}` : '') +
-                prReplyText,
+                prReplyText +
+                successReplyText,
               // Every node on this branch has no process behind it until that project is viewed,
               // whether or not it holds a command — the same rule the `--project` branch states.
               result: {
@@ -12484,6 +13007,7 @@ export function Canvas() {
                 after: coldAfterIds,
                 ...(coldIssueRef ? { issue: formatIssueRef(coldIssueRef) } : {}),
                 ...prResult,
+                ...successResult,
                 queued: true,
                 queuedIds: coldIds
               } as Record<string, unknown>
@@ -12728,7 +13252,7 @@ export function Canvas() {
           // `applyNodeMutation` + `appendCanvasLinks` are the store paths a peer mutation and the
           // cold open already take, and `writeDisk` is what persists them.
           const ocStore = useProjects.getState()
-          ocStore.applyNodeMutation(offCanvas.project.id, {
+          ocStore.applyOwnNodeMutation(offCanvas.project.id, {
             op: 'upsert',
             node: flowToNodeStates([withOpenedBy(placed, sourceNodeId)])[0]
           })
@@ -12799,6 +13323,12 @@ export function Canvas() {
             })
             return null
           }
+          // `--after-success` (folded into `after` above): the station must also be able to
+          // REPORT, or the wait could only ever end at its deadline.
+          if (successIdsPre.includes(depId) && !sourceIsControlCapable(depAgent)) {
+            reply({ ok: false, error: successDepRefusal(verb, depId) })
+            return null
+          }
         }
         return ids
       }
@@ -12820,7 +13350,10 @@ export function Canvas() {
         const awaitSetupGroup = setupHoldGroup(intoGroup)
         // Always retain the command until the PTY-ready delivery loop acknowledges it.
         // Node creation (even on screen) is not command delivery.
-        return withPrHold(withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile), prHoldPre)
+        return withSuccessHold(
+          withPrHold(withLaunchBrief(queueControlLaunch(node, after, awaitSetupGroup), promptFile), prHoldPre),
+          successHoldPre
+        )
       }
       // Open `count` nodes INTO a group frame: grow the frame FIRST (extent:'parent' would
       // clamp children landing outside it), then drop each node into the next grid slot
@@ -12871,7 +13404,7 @@ export function Canvas() {
               id: n.id, kind: n.type, title: n.data.title as string,
               pendingLaunch: n.data.pendingLaunch, agentId: n.data.agentId as string | undefined,
               issueRef: n.data.issueRef
-            })), st, useLaunchDelivery.getState().byId)
+            })), st, useLaunchDelivery.getState().byId, Date.now(), useStationOutcomes.getState().byId, useStationHandovers.getState().byId)
             reply({ ok: true, result: list, message: controlListingText(list) })
             return
           }
@@ -12895,7 +13428,8 @@ export function Canvas() {
                     (termCwd ? `, cwd ${termCwd}` : '') +
                     (args.cmd ? `, running: ${args.cmd}` : ''),
                   ...(after?.length ? [`armed to wait for: ${after.join(', ')}`] : []),
-                  ...prReplyLines
+                  ...prReplyLines,
+                  ...successReplyLines
                 ].join('\n'),
                 result: {
                   dryRun: true,
@@ -12903,7 +13437,8 @@ export function Canvas() {
                   group: intoGroupId ?? null,
                   cwd: termCwd ?? null,
                   after: after ?? [],
-                  ...prResult
+                  ...prResult,
+                  ...successResult
                 }
               })
               return
@@ -12936,8 +13471,9 @@ export function Canvas() {
                 `opened ${count} terminal(s): ${ids.join(', ')}` +
                 (queuedIds.length ? '\nqueued; awaiting launch delivery' : '') +
                 (after?.length ? `\nwaiting for ${after.join(', ')} before running` : '') +
-                prReplyText,
-              result: { ...openResult, ...prResult }
+                prReplyText +
+                successReplyText,
+              result: { ...openResult, ...prResult, ...successResult }
             })
             return
           }
@@ -13024,6 +13560,7 @@ export function Canvas() {
                   ...(issueRef ? [`bound to GitHub issue ${formatIssueRef(issueRef)}`] : []),
                   ...(after?.length ? [`armed to wait for: ${after.join(', ')}`] : []),
                   ...prReplyLines,
+                  ...successReplyLines,
                   'Each session would be connected + context-linked to you.'
                 ].join('\n'),
                 result: {
@@ -13034,7 +13571,8 @@ export function Canvas() {
                   cwd: agentCwd ?? null,
                   after: after ?? [],
                   ...(issueRef ? { issue: formatIssueRef(issueRef) } : {}),
-                  ...prResult
+                  ...prResult,
+                  ...successResult
                 }
               })
               return
@@ -13111,12 +13649,14 @@ export function Canvas() {
                   ? `\nwaiting for ${after.join(', ')} before running` +
                     (depLinked.length ? ` (and linked to read them)` : '')
                   : '') +
-                prReplyText,
+                prReplyText +
+                successReplyText,
               result: {
                 ...openResult,
                 linked: bridged,
                 ...(issueRef ? { issue: formatIssueRef(issueRef) } : {}),
-                ...prResult
+                ...prResult,
+                ...successResult
               }
             })
             return
@@ -14105,8 +14645,13 @@ export function Canvas() {
               // still waiting on its verification (command-delivery.ts). The dialog makes that
               // rare, not impossible — the human confirms on their own clock, not the pane's.
               let thrown: string | null = null
+              // When the text STARTED going into the pane — after the human's confirm. Core's
+              // hand-over tracker stamps the new work with it (core/station-handover.ts): a turn
+              // that began while the dialog was open is not an answer to this text.
+              let typedAt: number | undefined
               const outcome = await guardConcurrentRestart(args.node, async () => {
                 try {
+                  typedAt = Date.now()
                   const ok = await api.pty.sendText(args.node, args.text ?? '')
                   if (ok === 'pasted-not-submitted') thrown = TEXT_NOT_SUBMITTED
                   return ok === true ? ('sent' as const) : ('failed' as const)
@@ -14125,7 +14670,8 @@ export function Canvas() {
               reply({
                 ok: outcome === 'sent',
                 message: outcome === 'sent' ? 'sent' : 'failed',
-                error: outcome === 'sent' ? undefined : (thrown ?? 'sendText failed')
+                error: outcome === 'sent' ? undefined : (thrown ?? 'sendText failed'),
+                ...(typedAt !== undefined ? { result: { typedAt } } : {})
               })
             }
             // Has the user waived this verb's dialog (this app run / permanently / while their own
@@ -14722,8 +15268,8 @@ export function Canvas() {
   // Global Kanban delegates active-project mutations to the live canvas (React Flow is
   // source of truth — direct store writes for the active project would be clobbered by the
   // next commitActiveToStore). Non-active projects write to the store and then to disk.
-  // Delete uses ConfirmDialog and SSH-aware teardown (local transport.destroy vs remote
-  // sshProject.killSessions with everySocket), not native confirm.
+  // Delete uses ConfirmDialog (not native confirm); an off-canvas delete tears down through
+  // `closeStoredNodes`, the one cross-project teardown funnel.
   useEffect(() => {
     const onGlobalRename = (e: CustomEvent<{ projectId: string; nodeId: string; title: string }>) => {
       renameSession(e.detail.projectId, e.detail.nodeId, e.detail.title)
@@ -14770,34 +15316,17 @@ export function Canvas() {
         deleteNodeFromKanban(nodeId)
         return
       }
+      // Off-canvas teardown: the SAME funnel the sessions sidebar and canvas control's off-canvas
+      // `close` use (parked-xterm dispose, remote-aware destroy, issue run-ended, agent/fan-out/
+      // attach-consent/webview cleanup, frame children freed). A hand-rolled copy here drifted —
+      // it skipped the parked dispose and swallowed a failed SSH kill.
       const proj = useProjects.getState().getProject(projectId)
       const label = proj?.nodes.find((n) => n.id === nodeId)?.title || 'this session'
       setConfirm({
         message: `Delete ${label}? Its terminal session will end.`,
-        onConfirm: async () => {
-          const doomed = proj?.nodes.find((n) => n.id === nodeId)
-          if (doomed?.issueRef) logIssueRunEnded(projectId, doomed)
-          useProjects.setState((s) => ({
-            projects: s.projects.map((p) =>
-              p.id === projectId ? { ...p, nodes: p.nodes.filter((n) => n.id !== nodeId) } : p
-            )
-          }))
-          const owner = useProjects.getState().projects.find((p) => p.id === projectId)
-          const isSsh = !!owner?.ssh
-          try {
-            if (isSsh) {
-              await (window as unknown as { nodeTerminal: { sshProject: { killSessions: (a: string, b: string[], c: unknown) => Promise<void> } } }).nodeTerminal.sshProject.killSessions(projectId, [nodeId], { everySocket: true } as never)
-            } else {
-              transport.destroy(nodeId)
-            }
-          } catch {}
-          useAgentStatus.getState().remove(nodeId)
-          useAgentNodes.getState().clearForParent(nodeId)
-          useAgentNodes.getState().clearLoop(nodeId)
-          useWebviewKeepAlive.getState().drop(nodeId)
-          clearAttachConsent(nodeId)
+        onConfirm: () => {
+          closeStoredNodes(projectId, [nodeId])
           setConfirm(null)
-          void writeDisk()
         }
       })
     }
@@ -14827,7 +15356,7 @@ export function Canvas() {
       window.removeEventListener('nodeterm:global-delete' as never, onGlobalDelete as never)
       window.removeEventListener('nodeterm:global-set-icon' as never, onGlobalSetIcon as never)
     }
-  }, [renameSession, setNodes, markDirty, writeDisk, deleteNodeFromKanban, logIssueRunEnded])
+  }, [renameSession, setNodes, markDirty, writeDisk, deleteNodeFromKanban, closeStoredNodes])
 
   // Sidebar "Name with AI": generate a title from the session's captured terminal output
   // (same BYO-agent path as the terminal node's ✦), then apply it via renameSession.
@@ -15190,8 +15719,15 @@ export function Canvas() {
               e.pendingId,
               e.verified,
               e.errored,
-              e.held
+              e.held,
+              recordsTurnInterrupt(e)
             )
+          // Claude's Stop names the BACKGROUND tasks still running (async subagents, nested ones,
+          // background shells). A background subagent that ends its turn while its own work runs
+          // fires SubagentStop — its card goes done — and is resumed later, so the card alone would
+          // let Eco or the bulk restart type /exit over live work. The existing background-task
+          // stamp is the guard both already read; a turn start clears it, the next Stop re-decides.
+          if (e.state === 'done' && !stuckRescueSkip && e.backgroundTaskIds?.length) cs.markBackgroundTask(e.nodeId)
           // A genuine new turn drops the previous fan-out — but only the cards that FINISHED
           // (issue #547). Claude launches subagents async, so "waiting for N background agents to
           // finish" is exactly the state in which the next prompt gets typed, and clearing a
@@ -15233,12 +15769,17 @@ export function Canvas() {
         }
         case 'subagent-start':
           if (e.toolUseId) {
-            an.start(e.toolUseId, {
-              parentNodeId: e.nodeId,
-              type: e.subagentType,
-              label: e.taskLabel,
-              startedAt: e.subagentStartedAt
-            })
+            an.start(
+              e.toolUseId,
+              {
+                parentNodeId: e.nodeId,
+                type: e.subagentType,
+                label: e.taskLabel,
+                startedAt: e.subagentStartedAt
+              },
+              // A Claude native card replacing the card its tool call drew (claude-subagent-lifecycle).
+              e.supersedes
+            )
           }
           break
         case 'subagent-end':
@@ -15305,6 +15846,27 @@ export function Canvas() {
           break
       }
     })
+  }, [])
+
+  // The crisp gate's zoom threshold depends on the display (issue #986): report the device-pixel
+  // ratio now and whenever it changes. Same two triggers as the shared glyph layer: the re-arming
+  // media-query watcher, plus `resize` for ratios an exact `dppx` query can miss (fractional
+  // browser-zoom steps in the Server Edition).
+  useEffect(() => {
+    const report = (): void => setWebglDevicePixelRatio(window.devicePixelRatio)
+    report()
+    const watch = createPixelRatioWatcher(
+      {
+        dpr: () => window.devicePixelRatio || 1,
+        match: (query) => (typeof window.matchMedia === 'function' ? window.matchMedia(query) : null)
+      },
+      report
+    )
+    window.addEventListener('resize', report)
+    return () => {
+      watch.stop()
+      window.removeEventListener('resize', report)
+    }
   }, [])
 
   // Safety net for a lost Stop POST / crashed CLI: decay working entries that saw no hook
@@ -15513,7 +16075,8 @@ export function Canvas() {
         if (attached) return connectHostAttachment(scopeId, attached, sshConnect, sshDisconnect)
         const projectId = scopeId
         const project = useProjects.getState().getProject(projectId)
-        if (!project?.ssh) return false
+        // Never a relay tab's endpoint — see session/relay-ssh.ts.
+        if (!project?.ssh || !projectMayDialSsh(project)) return false
         const ssh = project.ssh
         // Same post-connect sequence as the active-project effect: arm remote git routing first
         // (only if this project is still the active tab), then record the connection info.
@@ -16000,7 +16563,7 @@ export function Canvas() {
           const st = useProjects.getState()
           const stored = st.getProject(projectId)?.nodes.find((n) => n.id === nodeId)
           if (!stored) return false
-          return st.applyNodeMutation(projectId, { op: 'upsert', node: { ...stored, pendingLaunch: pending } })
+          return st.applyOwnNodeMutation(projectId, { op: 'upsert', node: { ...stored, pendingLaunch: pending } })
         },
         writeDisk,
         markDirty
@@ -16841,7 +17404,7 @@ export function Canvas() {
           })()}
       </div>
       {globalKanbanOpen ? (
-        <GlobalKanbanView />
+        <GlobalKanbanView live={globalKanbanLive} onModalNodeChange={setKanbanModalNode} />
       ) : perProjectKanbanOpen && (
         <KanbanView
           board={projectKanban ?? seedBoard}
@@ -16860,6 +17423,7 @@ export function Canvas() {
           issueAgentMenu={issueAgentMenu}
           issueWorktreeMenu={issueWorktreeMenu}
           teams={teamStations}
+          onIssueMoved={dispatchOnUserMove}
         />
       )}
       <UpdateCard />
@@ -17138,6 +17702,7 @@ export function Canvas() {
             onSetDefaultAccount={setProjectDefaultAccount}
             countAccountSessions={countAccountSessions}
             onMoveSessions={(from, to, label) => void moveAccountSessions(from, to, label)}
+            accountMove={accountMove}
           />
         </CanvasPills>
 

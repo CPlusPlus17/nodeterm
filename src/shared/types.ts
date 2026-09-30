@@ -22,6 +22,7 @@ import type { ClientId, DinoSnapshot, PeerDiff, PeerIdentity, PeerState } from '
 import type { WhisperModelInfo } from './speech'
 import type { ProjectKanbanGitHub } from './github-issues'
 import type { KanbanPullAutoMove, KanbanPullLinks } from './kanban-pull-links'
+import type { BoardDispatch } from './board-dispatch'
 import type { CodexAccount } from './codex-account'
 import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
@@ -441,6 +442,14 @@ export interface PendingLaunch {
    */
   afterPr?: PrWaitHold
   /**
+   * Also wait for these stations to REPORT SUCCESS (`--after-success`, see @shared/station-outcome):
+   * each id is in `after` too, so this adds "and it said it succeeded" to "its turn is over". ANDed
+   * with every other gate. Validated at both serializer seams (`normalizePendingLaunch`): a malformed
+   * value becomes a hold that never fires on its own. A build older than this one does not know the
+   * field and releases the node on the turn ending alone.
+   */
+  afterSuccess?: import('./station-outcome').SuccessWaitHold
+  /**
    * The file `command` reads its prompt from (`"$(cat '<path>')"`): a `--prompt-file`, or a long
    * `--prompt` spilled to a file (#706). A held launch may be delivered weeks after it was armed, so
    * the delivery loop checks this file still exists before it types the command, and holds the node
@@ -658,13 +667,19 @@ export interface CanvasState {
  *    order it is being given, which is hygiene and changes no verdict (see `stampMutation`). A
  *    mutation without it is judged exactly as before, so an unstamped peer degrades rather than
  *    breaks.
+ *  - `origin: 'core'` is ALSO reflector-authoritative: a client-supplied one is deleted at ingest.
+ *    The core adds it only on a copy that came from an OWNER client (or the core itself) and goes to
+ *    an owner client, and it is the ONE thing that lets a receiver take the node's machine-local
+ *    `pendingLaunch` as sent (@shared/node-exec `mutationTrustsLaunch`). It means something only on
+ *    a node `upsert`; every other op may carry it (the reflector vouches per recipient, not per op)
+ *    and ignores it.
  * The legacy relay host's canvas mirror (`canvas:state` / `canvas:mutate`: src/main/remote/
  * host-service.ts and canvas-sync.ts, which stayed there when the relay transport moved to
- * src/core/relay) uses the same vocabulary and simply omits them.
+ * src/core/relay) uses the same vocabulary and simply omits these stamps.
  */
 export type CanvasMutation =
-  | { op: 'upsert'; node: CanvasNodeState; src?: string; seq?: number; seen?: number }
-  | { op: 'remove'; id: string; src?: string; seq?: number; seen?: number }
+  | { op: 'upsert'; node: CanvasNodeState; src?: string; seq?: number; seen?: number; origin?: 'core' }
+  | { op: 'remove'; id: string; src?: string; seq?: number; seen?: number; origin?: 'core' }
   | {
       op: 'edge-upsert'
       kind: CanvasEdgeKind
@@ -672,8 +687,17 @@ export type CanvasMutation =
       src?: string
       seq?: number
       seen?: number
+      origin?: 'core'
     }
-  | { op: 'edge-remove'; kind: CanvasEdgeKind; id: string; src?: string; seq?: number; seen?: number }
+  | {
+      op: 'edge-remove'
+      kind: CanvasEdgeKind
+      id: string
+      src?: string
+      seq?: number
+      seen?: number
+      origin?: 'core'
+    }
   | (KanbanOp & MutationStamp)
 
 /** The node and edge half of `CanvasMutation` — all a canvas SCENE diff (`diffToMutations`) ever
@@ -683,11 +707,13 @@ export type CanvasMutation =
 export type SceneMutation = Exclude<CanvasMutation, { op: `kb-${string}` }>
 
 /** Stamp fields every canvas mutation may carry (see canvas-order): the sender tag, the reflector's
- *  total order, and the sender's causal position. Documented on `CanvasMutation` above. */
+ *  total order, the sender's causal position, and the core's per-recipient vouching (`origin`).
+ *  Documented on `CanvasMutation` above. */
 export interface MutationStamp {
   src?: string
   seq?: number
   seen?: number
+  origin?: 'core'
 }
 
 /**
@@ -890,6 +916,11 @@ export interface BoardLogEvent {
      *  `StationFailureReason`, @shared/station-notice), `title` = the station's title as the notice
      *  carried it (one line, capped). Never any station output. */
     | 'station-failed'
+    /** A station reported its TASK outcome (`report-outcome`, @shared/station-outcome). Filed under
+     *  the STATION's own card. `from` = the station's node id, `to` = the outcome (`succeeded` /
+     *  `failed`), `title` = its note (one line, capped). Written by the app, never a gate: the
+     *  outcome a `--after-success` wait reads lives in core's transient store, not in this file. */
+    | 'station-reported'
   from?: string
   to?: string
   /** Column title for column-added/deleted; card title for card-created; outcome for agent-message;
@@ -1095,6 +1126,12 @@ export interface Project {
    * peer's disk, so it must never land in this client's workspace.json.
    */
   remote?: boolean
+  /**
+   * Relay tabs only: the host's SSH endpoint as DISPLAY strings (the tab's `SSH user@host` chip).
+   * A relay tab never carries `ssh` — it would make this machine dial the host's server with this
+   * machine's credentials (see renderer/session/relay-ssh.ts). Runtime-only like `remote`.
+   */
+  relaySsh?: { user: string; host: string; remoteCwd: string }
 }
 
 /** The full workspace written to / read from disk. */
@@ -2104,6 +2141,12 @@ export interface Settings {
    *  and absent from DEFAULT_SETTINGS — means off everywhere. Read through
    *  `sanitizeKanbanPullAutoMove`: settings.json is hand-editable. */
   kanbanPullAutoMove?: KanbanPullAutoMove
+  /** Machine-local board dispatch: which projects start an agent run when this person moves a
+   *  GitHub issue card into a chosen column, with which agent and how many at once, plus the kill
+   *  switch (@shared/board-dispatch — why this is here and never in the project file). Absent —
+   *  and absent from DEFAULT_SETTINGS — means off everywhere. Read through
+   *  `sanitizeBoardDispatch`: settings.json is hand-editable. */
+  boardDispatch?: BoardDispatch
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -3840,7 +3883,8 @@ export type DeviceRevokeServerOutcome = 'ok' | 'failed' | 'skipped'
  * as a clean one (the same discipline as remote/revocation.ts's persisted/killed).
  */
 export interface DeviceRevokeResult {
-  /** The agent.json entry + authorized_keys line were removed from this machine. */
+  /** The phone's relay trust (every phone relay pin + live relay session), its authorized_keys line
+   *  and its agent.json entry were all removed from this machine. */
   local: boolean
   /** Whether the phone's Pro entitlement was taken back on the relay backend. */
   server: DeviceRevokeServerOutcome
@@ -4196,5 +4240,21 @@ export interface NodeTerminalApi {
     list(): Promise<import('./station-notice').StationNoticeView[]>
     onChanged(cb: (views: import('./station-notice').StationNoticeView[]) => void): () => void
     reportDropped(nodeId: string, dropped: boolean): void
+  }
+  /** Station task outcomes (`report-outcome`, src/core/station-outcome-store.ts): what each station
+   *  reported about its own task in this app run — what a `--after-success` wait reads. Desktop and
+   *  Server Edition are real; a relay tab's stations belong to the host's core, so there it is inert
+   *  (and its launch delivery is refused anyway). */
+  stationOutcome: {
+    list(): Promise<import('./station-outcome').StationOutcomeRecord[]>
+    onChanged(cb: (records: import('./station-outcome').StationOutcomeRecord[]) => void): () => void
+  }
+  /** Stations with unfinished HANDED-OVER work (src/core/station-handover.ts) — what plain
+   *  `--after` reads so it never releases on a `done` from before that work arrived. Desktop and
+   *  Server Edition are real; a relay tab's stations belong to the host's core, so there it is
+   *  inert (and its launch delivery is refused anyway). */
+  stationHandover: {
+    list(): Promise<import('./station-handover').StationHandoverRecord[]>
+    onChanged(cb: (records: import('./station-handover').StationHandoverRecord[]) => void): () => void
   }
 }

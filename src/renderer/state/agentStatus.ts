@@ -69,6 +69,11 @@ export interface AgentNodeStatus {
    * hibernation and the bulk in-place restart both type it — kills it silently, with no output and
    * no error. The stamp is what those two exclude on.
    *
+   * Second writer: a Claude `Stop` whose `background_tasks` inventory still lists running work
+   * (async subagents, background shells — `NormalizedAgentEvent.backgroundTaskIds`). A background
+   * subagent that ends its turn while its own work runs fires SubagentStop, so its card reads done
+   * while it is only paused; the inventory is what still says the CLI holds live work.
+   *
    * TRANSIENT — never persisted, same rationale as `lastEventAt`: after a relaunch Eco is inert
    * until a turn happens anyway, and any turn's `working` would have cleared this. A stale stamp
    * restored from disk would exempt the node from Eco for good.
@@ -224,6 +229,23 @@ export interface AgentNodeStatus {
    * `NormalizedAgentEvent.errored`. Reading the error itself is still owed.
    */
   lastTurnError?: { at: number }
+  /**
+   * The station's LAST turn was interrupted by the user (Esc / Ctrl+C) instead of finishing — from
+   * an interrupted `done` (`NormalizedAgentEvent.interrupted`: the transcript marker Claude writes,
+   * a `Stop` with `is_interrupt`, or the `idle_prompt` rescue).
+   *
+   * Read by exactly one rule: `--after` does not release a dependent on it (`depSatisfied`). The
+   * turn the dependent was waiting for did not produce its result — the person stopped it,
+   * usually to redirect it — so starting the next station on it is the same mistake #521 closed
+   * for an errored turn. It is deliberately NOT `lastTurnError`: an interrupt is not a failure, so
+   * the TURN FAILED chip, the station-failure notice, team progress and issue runs stay as they
+   * were. ▶ still runs the dependent by hand.
+   *
+   * Cleared by the next genuine new turn, and by any `done` that is not interrupted (a turn that
+   * then ends normally — an injected `<task-notification>` turn has no newTurn — is the last turn
+   * now). TRANSIENT, like `lastTurnError`.
+   */
+  lastTurnInterrupted?: { at: number }
   /** Set when running /loop, /schedule or /cron (heuristic); shown as a connected node. */
   loop?: {
     count: number
@@ -251,6 +273,33 @@ export interface AgentNodeStatus {
   }
 }
 
+/**
+ * The next `lastTurnInterrupted` for one `setState` edge: `'set'` to stamp it now, the previous value
+ * to keep it, `undefined` to clear it. Pure. A new turn clears; an interrupted `done` sets; any
+ * other `done` clears (that turn ended normally); every other edge keeps.
+ */
+export function interruptVerdict(
+  prev: { at: number } | undefined,
+  state: AgentState | undefined,
+  newTurn?: boolean,
+  interrupted?: boolean
+): { at: number } | 'set' | undefined {
+  if (newTurn) return undefined
+  if (state === 'done') return interrupted === true ? 'set' : undefined
+  return prev
+}
+
+/**
+ * Does this event record `lastTurnInterrupted`? An interrupted `done` does — EXCEPT the `idle`
+ * rescue (Claude's `idle_prompt`), which is flagged interrupted only so it raises no completion
+ * alert. Measured on 2.1.285, `idle_prompt` follows a NORMAL Stop and not an interrupted turn, so a
+ * rescue that moves a working node means the Stop POST was lost (a flapping SSH tunnel) on a turn
+ * that finished normally — holding its `--after` dependents would be wrong.
+ */
+export function recordsTurnInterrupt(e: { interrupted?: boolean; idle?: boolean }): boolean {
+  return e.interrupted === true && e.idle !== true
+}
+
 export interface AgentStatusStore {
   byId: Record<string, AgentNodeStatus>
   /** The terminal node the user is currently focused in (for unread decisions). */
@@ -271,7 +320,8 @@ export interface AgentStatusStore {
     pendingId?: string,
     verified?: boolean,
     errored?: boolean,
-    held?: HeldPermission
+    held?: HeldPermission,
+    interrupted?: boolean
   ): void
   /**
    * Subscribe to EVERY hook event `setState` records for node `id` — same-state ones included, and
@@ -378,7 +428,11 @@ export interface AgentStatusSession {
   store: UseBoundStore<StoreApi<AgentStatusStore>>
   /**
    * Esc/Ctrl-C interrupt inference: Claude Code fires NO hook when the user
-   * cancels a turn, so a node interrupted mid-work would sit on "working" forever. Called
+   * cancels a turn (measured on 2.1.285), so a node interrupted mid-work would sit on "working"
+   * forever. The core now ends such a turn from the transcript's interrupt marker
+   * (`recordTurnInterrupt`), for every surface; this renderer-only GUESS stays because it is the
+   * one thing that covers a cancel BEFORE the first token, which the CLI rewinds without writing
+   * a marker at all — and it covers only keystrokes typed into THIS terminal. Called
    * from the terminal's input path on a lone Esc / Ctrl-C: wait one settle window; if the
    * node is still `working` and NOT ONE hook event arrived since the keystroke (stateAt
    * unchanged), conclude the turn was cancelled and flip it to done. A wrong guess
@@ -551,7 +605,7 @@ export function createAgentStatusSession(
         return s.activeId === id ? { activeId: null } : s
       }),
 
-    setState: (id, state, agentId, newTurn, pendingId, verified, errored, held) => {
+    setState: (id, state, agentId, newTurn, pendingId, verified, errored, held, interrupted) => {
       set((s) => {
         const prev = s.byId[id] ?? EMPTY
         const now = Date.now()
@@ -560,6 +614,9 @@ export function createAgentStatusSession(
         // a badge appearing or disappearing needs, so an event that moves this must not take it.
         const turnErrorMoves =
           errored === true || (newTurn === true && prev.lastTurnError !== undefined)
+        // The interrupt verdict moves on the same kinds of edge (see `lastTurnInterrupted`).
+        const interruptNext = interruptVerdict(prev.lastTurnInterrupted, state, newTurn, interrupted)
+        const turnInterruptMoves = (interruptNext === undefined) !== (prev.lastTurnInterrupted === undefined)
         // Done-holdoff: a late working event (parallel hook curls arrive out of order, or a
         // tool POST that was in flight when the user interrupted) must not resurrect a turn
         // that just finished. Only a genuine new turn (UserPromptSubmit) may.
@@ -584,7 +641,8 @@ export function createAgentStatusSession(
           (agentId === undefined || prev.agentId === agentId) &&
           samePendingWhileBlocked &&
           sameHeld &&
-          !turnErrorMoves
+          !turnErrorMoves &&
+          !turnInterruptMoves
         ) {
           // Same-state event: refresh freshness in place — stateAt is never rendered, and a
           // new object here would re-render every node header on each tool event.
@@ -615,6 +673,7 @@ export function createAgentStatusSession(
         // error and the next prompt say nothing about whether that turn produced anything.
         if (newTurn) next.lastTurnError = undefined
         else if (errored) next.lastTurnError = { at: now }
+        next.lastTurnInterrupted = interruptNext === 'set' ? { at: now } : interruptNext
         // A LIVE state is proof the CLI is running, so the hibernated flag is simply wrong and is
         // dropped here — the one self-heal this flag has. It is set by a controller that watched
         // the CLI let go of the pane, but the world moves on without us: the user relaunches the
@@ -973,7 +1032,11 @@ export function createAgentStatusSession(
       const cur = store.getState()
       const now = cur.byId[id]
       if (now?.state === 'working' && now.stateAt === baseline) {
-        cur.setState(id, 'done', now.agentId)
+        // Recorded as an INTERRUPTED done, like the transcript marker the core reads a moment
+        // later (`recordTurnInterrupt`): a guess that released `--after` dependents would race
+        // the authoritative signal and could start them on unfinished work. A wrong guess heals —
+        // the turn's next hook puts it back to working and its normal `done` clears the verdict.
+        cur.setState(id, 'done', now.agentId, undefined, undefined, undefined, undefined, undefined, true)
       }
     }, settleMs)
   }

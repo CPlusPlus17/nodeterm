@@ -3,9 +3,8 @@
 // function: mint discipline, the joiner-side pin, auto-confirm, and the denial reason. The first
 // block drives a fake connect so every option handed to the relay client is observable; the second
 // runs the real core client against the real hosted service over an in-process transport.
-import { describe, it, expect, vi, afterAll, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { joinHostedTeam, connectHostedTeam, removeHostedBookmark, createHostedJoinState, HostedJoinError, type HostedJoinDeps, type HostedJoinEvents, type HostedConnectOptions, type HostedJoinFailure } from './hosted-join'
 import { joinErrorCode, joinRetryAfterMs } from '../../shared/relay-join-errors'
@@ -19,19 +18,10 @@ import { transportPair } from '../../core/relay/transport-pair'
 import type { PeerAttach } from '../../core/relay/relay-host'
 import type { RelayTransport } from '../../core/relay/relay-socket'
 import { IPC } from '../../shared/ipc'
+import { relayPtyDataKey } from '../../shared/relay-pty-channel'
+import { testTmpDir } from '../../core/test-tmp'
 
-// Every directory this file makes is removed when it finishes: `setup()` never removed its own, and
-// one leaked per test on every run of the suite (see src/core/platform-fake-dirs.ts for what that
-// did to a shared host's /tmp). `hostedWorld()` still removes its own early, in `afterEach`.
-const madeDirs: string[] = []
-const tmpDir = () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosted-join-'))
-  madeDirs.push(dir)
-  return dir
-}
-afterAll(() => {
-  for (const dir of madeDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true })
-})
+const tmpDir = () => testTmpDir('hosted-join-')
 const pub = (k: KeyPair) => publicKeyToB64(k.publicKey)
 
 function codeFor(hostKeys: KeyPair, over: Partial<JoinCode> = {}): JoinCode {
@@ -396,8 +386,10 @@ describe('connectHostedTeam (the relay:client:connect leg for a join code)', () 
       [IPC.relayClientSas('c1'), '123 456'],
       [IPC.relayClientApproved('c1')],
       [IPC.relayClientFrame('c1'), '{"t":"res"}'],
-      [IPC.ptyData('p1'), 'out']
+      // NAMESPACED: the host's `p1` must never land on a local pty's `pty:data:p1` channel.
+      [IPC.ptyData(relayPtyDataKey('c1', 'p1')), 'out']
     ])
+    expect(x.sent.some(([ch]) => ch === IPC.ptyData('p1'))).toBe(false)
   })
 
   it('a close carries the host\'s refusal reason and unregisters the session', async () => {

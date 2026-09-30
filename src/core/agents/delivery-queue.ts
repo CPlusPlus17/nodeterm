@@ -106,6 +106,10 @@ export interface DeliveryQueueDeps {
   /** Tell the sender how a flush ended (delivered, or refused because the world changed under it).
    *  Same optionality reasoning as `onExpired`. */
   onFlushed?(req: QueuedDeliveryRequest, outcome: AgentMessageOutcome): void
+  /** An entry was accepted into a target's queue — called synchronously, right as it is added, so a
+   *  listener learns of it before any flush or expiry of that entry can run. Every entry that fires
+   *  this later ends in exactly one `onFlushed` or `onExpired`. */
+  onQueued?(req: QueuedDeliveryRequest): void
   /** Arm a one-shot timer, returning its cancel. Injected so tests drive TTL expiry deterministically
    *  instead of waiting real milliseconds; defaults to `setTimeout`/`clearTimeout`. */
   schedule?(ms: number, fn: () => void): CancelTimer
@@ -195,6 +199,7 @@ export class DeliveryQueue {
     }
     list.push(entry)
     this.queues.set(req.targetNodeId, list)
+    this.deps.onQueued?.(req)
     // Kick the wake for a hibernated target so it starts its resume; the flush waits on the idle
     // event, not on the wake. A busy (non-hibernated) target needs nothing — it will go idle on its
     // own turn end.

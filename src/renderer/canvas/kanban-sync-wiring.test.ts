@@ -20,7 +20,7 @@ function between(src: string, start: string, end: string): string {
 const publisherEffect = (): string => between(canvas, 'const order = createCanvasOrder(src)', 'orderRef.current = null')
 /** The peer-mutation receive handler. */
 const receiveHandler = (): string =>
-  between(canvas, 'return activeSession.api.canvas.onMutation((projectId, mutation) => {', '}, [activeSession.api, setNodes')
+  between(canvas, 'return activeSession.api.canvas.onMutation((projectId, received) => {', '}, [activeSession.api, setNodes')
 
 describe('kanban sync wiring', () => {
   it('Canvas registers the kanban publish hook and clears it', () => {
@@ -118,7 +118,10 @@ describe('kanban sync wiring', () => {
     const cb = canvas.slice(canvas.indexOf('boardLogEvents('), canvas.indexOf('boardLogEvents(') + 800)
     expect(cb).toMatch(/sessionForProject\(/)
     expect(canvas).not.toMatch(/useBoardLog\.getState\(\)\.append\(api,/)
-    expect(omni).toMatch(/useBoardLog\.getState\(\)\.append\(sessionForProject\(projectId\)\.api, projectId,/)
+    // The Omni board resolves the lane's session once (main's #1041 also needs it for the hosted
+    // read-only refusal) and appends through it.
+    expect(omni).toMatch(/const session = sessionForProject\(projectId\)/)
+    expect(omni).toMatch(/useBoardLog\.getState\(\)\.append\(session\.api, projectId,/)
     expect(omni).not.toMatch(/useBoardLog\.getState\(\)\.append\(api,/)
   })
 

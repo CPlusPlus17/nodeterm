@@ -20,11 +20,15 @@
 // fight its own optimistic state, and the publisher's `adopt` guard still means nothing is
 // re-published: no loop.
 //
-// Beyond `seq` it is a pipe, not a store: it holds NO canvas state, applies no policy, and persists
-// nothing. The canvas itself stays where it has always been — React Flow in each renderer — and the
-// disk write stays with WorkspaceStore. On a Server Edition hosting a team, the canvas authority
-// hears every stamped op through `setReflectedListener` and writes shared projects' content from
-// them (docs/hosted-team-relay.md); that is the authority's state, never this module's.
+// Beyond `seq` it is a pipe, not a store: it holds NO canvas state and persists nothing. The one
+// policy it applies is sanitizing what it reflects (`sanitizeCanvasMutation`): a board op is
+// repaired, and the exec boundary holds (@shared/node-exec) — `shell`/`ssh.extraArgs` never pass,
+// and a held launch (`pendingLaunch`) passes only from an OWNER client to owner clients, stamped
+// `origin: 'core'` (fanOutMutation). The canvas itself stays where it has always been — React Flow
+// in each renderer — and the disk write stays with WorkspaceStore. On a Server Edition hosting a
+// team, the canvas authority hears every stamped op through `setReflectedListener` — with the held
+// launch stripped, whoever sent it — and writes shared projects' content from them
+// (docs/hosted-team-relay.md); that is the authority's state, never this module's.
 //
 // NOT RATE-LIMITED, deliberately — unlike presence (see PRESENCE_RATE_BUDGETS). A presence cast is
 // a SAMPLED signal whose loss is self-correcting: the next cursor frame carries the current
@@ -47,6 +51,7 @@ import {
   MUTATION_MAX_BYTES,
   sanitizeCanvasMutation
 } from '../shared/canvas-mutations'
+import { sanitizeInboundMutation } from '../shared/node-exec'
 import { type ClientId } from '../shared/presence'
 import type { CanvasMutation, MutationStamp } from '../shared/types'
 
@@ -68,8 +73,9 @@ export function reflectTargets(all: ClientId[], _sender: ClientId): ClientId[] {
 }
 
 /**
- * Stamp a client's mutation with its place in the total order, and BOUND the two client-supplied
- * fields it carries. Pure — exported for the test.
+ * Stamp a client's mutation with its place in the total order, and BOUND the client-supplied stamp
+ * fields it carries (`src`, `seen`; a client-supplied `origin` is dropped outright, below). Pure —
+ * exported for the test.
  *
  * `src` is echoed to every peer, and a client could otherwise plant a megabyte there — or forge
  * another client's tag, which would only ever make that client ignore an edit meant for it, but is
@@ -91,7 +97,35 @@ export function stampMutation<M extends CanvasMutation>(m: M, seq: number): M & 
   const seen = stamped.seen
   if (typeof seen !== 'number' || !Number.isInteger(seen) || seen < 0) delete stamped.seen
   else if (seen >= seq) stamped.seen = seq - 1
+  // `origin: 'core'` is the core's own vouching (it lets a receiver take a held launch as sent), so a
+  // client may never supply it. It is re-added below, per recipient, and only where it is true.
+  delete (stamped as { origin?: unknown }).origin
   return stamped
+}
+
+/**
+ * Deliver one stamped mutation to every client, deciding PER RECIPIENT whether the node's held launch
+ * (`pendingLaunch`, machine-local — @shared/node-exec) goes with it. Pure over the platform —
+ * exported for the test.
+ *
+ * `trusted` = the mutation came from an OWNER client or from the core itself. An owner recipient
+ * then gets it with the launch and `origin: 'core'` (so two Server Edition tabs agree on who claimed
+ * a launch — the exactly-once half); every other recipient (a relay peer, a hosted-team guest) gets
+ * it WITHOUT the launch. An untrusted mutation carries no launch to anybody: a peer cannot arm,
+ * re-arm or clear a launch on this machine.
+ */
+export function fanOutMutation(
+  p: Pick<CorePlatform, 'clientIds' | 'sendTo' | 'isOwnerClient'>,
+  projectId: string,
+  stamped: CanvasMutation,
+  trusted: boolean
+): void {
+  const vouched: CanvasMutation | null = trusted ? { ...stamped, origin: 'core' } : null
+  const stripped = sanitizeInboundMutation(stamped)
+  for (const id of p.clientIds()) {
+    const owner = p.isOwnerClient?.(id) === true
+    p.sendTo(id, IPC.canvasMut, projectId, vouched && owner ? vouched : stripped)
+  }
 }
 
 /** The platform this reflector is already installed on. `on`/`onWithSender` COMPOSE on the same
@@ -128,11 +162,16 @@ export function setReflectedListener(fn: ((projectId: string, m: CanvasMutation)
 }
 
 /** Hand one stamped op to the listener. A throw is logged, never let into the fan-out: every client
- *  must still get the op, whatever the authority made of it. */
+ *  must still get the op, whatever the authority made of it.
+ *
+ *  The listener gets the op WITHOUT its held launch (`pendingLaunch`), even when an owner sent it:
+ *  the authority's state carries no exec field (core/canvas-authority.ts rule 1), and a launch
+ *  reaches disk only through a save's own exec carry, into the machine-local index. Its reducer
+ *  would drop an unvouched launch anyway; stripping it here keeps it out of the op log too. */
 function tellListener(projectId: string, stamped: CanvasMutation): void {
   if (!reflectedListener) return
   try {
-    reflectedListener(projectId, stamped)
+    reflectedListener(projectId, sanitizeInboundMutation(stamped))
   } catch (err) {
     console.warn('[canvas-sync] the reflected-op listener threw', err)
   }
@@ -146,12 +185,14 @@ function tellListener(projectId: string, stamped: CanvasMutation): void {
  */
 export function publishCanvasMutation(projectId: string, mutation: CanvasMutation): boolean {
   if (!isRefId(projectId) || !isCanvasMutation(mutation)) return false
-  const clean = sanitizeCanvasMutation(mutation)
+  const clean = sanitizeCanvasMutation(mutation, true)
   if (!clean) return false
   const p = platform()
+  // The core's own write: its held launch is authoritative for owner clients (a headless delivery
+  // CLEARS it there — without that a browser would keep and re-save the stale launch).
   const stamped = stampMutation(clean, ++seq)
   tellListener(projectId, stamped)
-  for (const id of p.clientIds()) p.sendTo(id, IPC.canvasMut, projectId, stamped)
+  fanOutMutation(p, projectId, stamped, true)
   return true
 }
 
@@ -173,16 +214,22 @@ export function initCanvasSync(): void {
     //    not even reflected to the other clients: a peer must not be able to put a program name or
     //    an `-o ProxyCommand=…` into anybody's canvas (@shared/node-exec). Every receiver strips
     //    them again on apply — this is the cheap upstream half;
+    //  - a held launch (`pendingLaunch`) is kept only when the SENDER is an owner client, and then
+    //    forwarded only to owner clients (fanOutMutation);
     //  - a kanban op is rebuilt by `sanitizeKanbanOp` (unknown fields dropped, a label colour off the
     //    palette → `default`, an invalid rank / priority / dueAt / category dropped), keeping its
     //    `src` / `seen` so the order can still judge it. Kanban fields land in a git-shared
     //    project.json, and the authority sanitizes again before it writes (the two-seam rule).
-    const clean = sanitizeCanvasMutation(mutation)
+    const fromOwner = p.isOwnerClient?.(senderId) === true
+    const clean = sanitizeCanvasMutation(mutation, fromOwner)
     if (!clean) return
     const stamped = stampMutation(clean, ++seq)
     tellListener(projectId, stamped)
-    for (const id of reflectTargets(p.clientIds(), senderId)) {
-      p.sendTo(id, IPC.canvasMut, projectId, stamped)
-    }
+    fanOutMutation(
+      { clientIds: () => reflectTargets(p.clientIds(), senderId), sendTo: p.sendTo.bind(p), isOwnerClient: p.isOwnerClient?.bind(p) },
+      projectId,
+      stamped,
+      fromOwner
+    )
   })
 }

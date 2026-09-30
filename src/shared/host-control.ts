@@ -40,7 +40,26 @@ import { IPC } from './ipc'
  * This lives in `shared/` because it is a policy question, not a shell mechanism: two shells each
  * carrying their own `startsWith` is exactly how one of them ends up a release behind the other.
  */
-export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = ['githubControl:']
+export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = [
+  'githubControl:',
+  // The host's credential and identity planes. None of these crosses the relay for a legitimate
+  // tab (relay-api.ts keeps license/accounts/usage LOCAL), and each is something the invite never
+  // granted: the license key and its seats, the managed Claude/Codex logins (a login node writes
+  // credentials into the account dir, removal deletes one), and account usage read with the
+  // host's stored tokens.
+  'license:',
+  'claude-accounts:',
+  'codex-accounts:',
+  'usage:',
+  // The trust plane itself: who is paired, who may connect, and the invites that mint seats. A
+  // peer that could reach these could pin its own key or revoke the host's other devices. Note the
+  // trailing colons: `relay:host:` does not match the hosted-team verbs (`relay:hosted:*`), which
+  // the Server Edition's hosted service intercepts and judges itself.
+  'pairing:',
+  'remote:',
+  'relay:host:',
+  'relay:client:'
+]
 
 export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.projectSetupRun,
@@ -54,13 +73,34 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   // cannot quietly open it.
   IPC.agentBoardCommentDeliver,
   IPC.stationNoticeDropped,
-  IPC.stationNoticeList
+  IPC.stationNoticeList,
+  // Unscoped: every project's station outcomes and their notes. A relay guest bound to one project
+  // must not read another's, and a relay tab's launch loop is refused anyway (its stub is inert).
+  IPC.stationOutcomeList,
+  // Same class: which of the host's stations (any project) have work handed to them.
+  IPC.stationHandoverList,
+  // The host's settings. `settings:save` is the dangerous half: `modelGateway.baseUrl` is the TRUST
+  // ANCHOR `agent:discover-models` uses to decide whether it may resolve the stored
+  // `${secret:model-gateway-api-key}` (core/agent-env-ipc.ts), so a peer that could save settings
+  // and then ask for discovery would have the keychain-held key sent to a URL of its choosing.
+  // `settings:load` goes too: settings.json carries custom agents' launch env (API keys), and a
+  // relay tab keeps its settings LOCAL (relay-api.ts), so no legitimate peer reads the host's.
+  IPC.settingsLoad,
+  IPC.settingsSave,
+  // Model-gateway discovery and the write-only gateway credential. Discovery resolves host-side
+  // secrets against the saved gateway; the credential verbs write/clear the keychain-held key.
+  IPC.agentDiscoverModels,
+  IPC.agentGatewayCredentialStatus,
+  IPC.agentGatewayCredentialSave,
+  IPC.agentGatewayCredentialClear
 ])
 
 /** What a refused peer is told. One wording, so the two shells answer identically. */
 export const HOST_ONLY_REFUSAL = 'host-control method is not available to relay peers'
 
 export function isHostOnlyChannel(channel: string): boolean {
+  // The method name arrives off the wire; a non-string is never a channel (and must not throw).
+  if (typeof channel !== 'string') return false
   if (HOST_ONLY_CHANNELS.has(channel)) return true
   return HOST_ONLY_CHANNEL_PREFIXES.some((prefix) => channel.startsWith(prefix))
 }

@@ -31,7 +31,24 @@ import {
 } from '../shared/station-notice'
 import { STATION_NOTICE_FROM } from '../shared/agents/agent-messaging'
 import { PR_DEADLINE_DEFAULT_MS, PR_DEADLINE_MAX_MS, PR_WAIT_MAX, afterPrFlagRefusal } from '../shared/pr-wait'
+import {
+  OUTCOME_NOTE_MAX,
+  REPORT_OUTCOME_VERB,
+  SUCCESS_WAIT_MAX,
+  afterSuccessFlagRefusal
+} from '../shared/station-outcome'
 import { ISSUE_BRANCH_SLUG_MAX, issueWorktreeBranch } from '../shared/issue-worktree'
+import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
+import {
+  REQUEST_ID_HINT_LEAD,
+  REQUEST_ID_MAX_LENGTH,
+  REQUEST_ID_OUTCOME_GLOSS,
+  REQUEST_ID_REPLAYED_LEAD,
+  REQUEST_ID_RETRYABLE,
+  REQUEST_ID_VERBS,
+  REQUEST_LEDGER_TTL_MS,
+  requestIdAnnounceLine
+} from './control-request-ledger'
 
 /**
  * The messaging verbs' retry guidance, RENDERED from `RETRYABLE` — the table is the source, and
@@ -190,6 +207,96 @@ function afterPrDocLines(): string[] {
     '  sync (about a minute while the app runs), finished checks are re-read on a backoff while the window',
     '  is visible, and a node in a project that is not on screen starts once that project is next viewed.',
     '  The Server Edition refuses `--after-pr`.'
+  ]
+}
+
+/**
+ * `--after-success` and the verb that feeds it, `report-outcome` — both agent-facing bodies share
+ * these lines. Every limit is RENDERED from the module that enforces it (@shared/station-outcome,
+ * and the one deadline grammar in @shared/pr-wait), so the text cannot promise a bound the gate
+ * refuses. The "when a report ends" rule is the one core/station-outcome-store.ts implements;
+ * `canvas-control-core.test.ts` pins its clauses against both bodies.
+ */
+function afterSuccessDocLines(): string[] {
+  const hours = PR_DEADLINE_DEFAULT_MS / 3_600_000
+  const days = PR_DEADLINE_MAX_MS / 86_400_000
+  return [
+    'Success waits (`--after-success`, on `open-terminal --cmd` / `open-claude` / `open-agent`):',
+    '- `--after-success <id,id>` holds the launch until every listed station has REPORTED SUCCESS with',
+    `  \`${REPORT_OUTCOME_VERB}\` and its turn is over. It is \`--after\` plus the report: a station whose turn merely`,
+    '  ENDED — it gave up, answered its own question, produced something broken — does not release it.',
+    '  Use it when the next station must only start on a GOOD result; use plain `--after` when it should look',
+    '  at whatever the upstream produced. Both can be on one open, with different stations. `list` marks',
+    '  such a node WAITING FOR SUCCESS (naming who it still needs), and every station\'s own row says',
+    '  REPORTED SUCCESS or REPORTED FAILURE with its note — read that instead of asking the stations.',
+    '- A station that reports `failed` BLOCKS the dependent: it never starts on that (`list` marks it BLOCKED BY',
+    '  FAILURE and names the station and its note). Retry or re-brief the station — it reports again — or start',
+    '  the dependent yourself with `run`. No report yet means waiting: "no news" is never a success.',
+    '- Only an agent session with canvas control can report, so only such a node may be named; a plain',
+    '  terminal is refused (wait on it with `--after`). A station that is CLOSED counts only if it reported',
+    '  success before it was closed; closed without one, it blocks.',
+    '- A report stands until that station reports again, or until new work YOU hand it through canvas',
+    '  control reaches its session: a `send`, `reply`, `write` or `run` aimed at it withdraws the reports it',
+    '  made before that work arrived. A `send` / `reply` QUEUED for a busy station stops its report',
+    '  counting the moment it is queued — so the report it makes for the task it is still on releases',
+    '  nothing — and a queued message that expires unread withdraws the report too. So to reuse a',
+    '  station, hand it the next task FIRST, then open the dependent — opened first, the dependent would',
+    '  start at once on the earlier success. A new turn does not withdraw a report, and neither does the',
+    "  user typing in the station's pane.",
+    `- \`--success-deadline <90m|12h|3d>\` bounds the wait (default ${hours}h, at most ${days}d). Past it the node`,
+    '  never starts on its own: `list` marks it EXPIRED, and you start it with `run` (the user can press ▶).',
+    `- Name each station once, at most ${SUCCESS_WAIT_MAX}: an id in both \`--after\` and \`--after-success\` is refused, and so is`,
+    '  a suffix on `--after` (`--after a1:ok`) — write `--after-success a1`. `--run-now` and `--project` cannot',
+    '  be combined with it. Reports live in the running app: after an app restart no station has reported',
+    '  yet, so a dependent still waiting then needs its stations to report again (or `run`) — and one whose',
+    '  station reported success and was then CLOSED reads BLOCKED ("closed without reporting success in',
+    '  this app run"): nothing can report for it any more, so only `run` (or ▶) starts it. The Server',
+    '  Edition accepts both the flag and the verb.'
+  ]
+}
+
+/**
+ * The plain `--after` "new work" rule — core/station-handover.ts. Both agent-facing bodies share
+ * these lines; `canvas-control-core.test.ts` pins them against both.
+ */
+function afterHandoverDocLines(): string[] {
+  return [
+    'Reusing a station with `--after` (new work resets the wait):',
+    '- A station handed new work through canvas control — a `send` / `reply` aimed at it (queued or',
+    '  delivered), a `write` into it, or a `run` starting its held launch — does not count as finished',
+    '  for `--after` until a turn that STARTED after that work arrived has ended. Its earlier `done` (the',
+    '  previous task) releases nothing, and while a `send` / `reply` is still QUEUED for it nothing',
+    '  releases at all. A `write` that only answers the station\'s open prompt (a permission or a',
+    '  question) is not new work. A queued message that EXPIRES unread still holds, and the turn the',
+    '  station was on when it expired does not end that: only a turn started AFTER the expiry does, and',
+    '  nothing starts one unless the station is given work again — send the task again, or start the',
+    '  dependent yourself with `run`.',
+    '- So to reuse a station, hand it the next task FIRST, then open the dependent `--after` it — opened',
+    '  first, the dependent would start at once on the previous task\'s output. `list` marks such a',
+    '  dependent "waiting for <station> to finish the work handed to it". A person typing in the',
+    "  station's pane is not a hand-over. `run` (or the user's ▶) always starts a held node anyway.",
+    '- A turn that ENDS with a background SUBAGENT still running (Claude reports them when its turn',
+    '  ends) has not finished either: `--after` on that station waits for a later turn end that reports',
+    '  none left — the subagent\'s result wakes the station for that turn (`list`: "waiting for',
+    '  <station> to finish the tasks still running in its background"). A background SHELL (a dev',
+    '  server, a watcher, a long test run) does NOT hold: it may never end. So if YOU are the station and',
+    '  a dependent needs a background shell\'s result, wait for it before you end your turn. Agents that',
+    '  do not report background tasks release on their turn end as before.'
+  ]
+}
+
+function reportOutcomeDocLines(): string[] {
+  return [
+    `- \`${REPORT_OUTCOME_VERB} --outcome succeeded|failed [--note "<one line>"]\` — say how YOUR task went.`,
+    '  REPORT WHEN EVERY TASK YOU ARE GIVEN ENDS, including one handed to you later in a message: nodes',
+    '  opened with `--after-success` on you start only on `succeeded`, and `failed` holds them. Be honest:',
+    '  `succeeded` means the task is done and checked the way your brief asked (tests pass, the file',
+    '  exists, the PR is open) — not merely that you stopped. You gave up, hit a blocker, need a human, or',
+    '  are unsure: that is `failed`, with the reason in `--note`. Report last, when nothing is left to do.',
+    '  You report only about yourself — `--node` naming another node is refused — and a later report',
+    `  replaces the earlier one. The note (one line, at most ${OUTCOME_NOTE_MAX} characters) is shown in \`list\`, on your`,
+    "  card and on the waiting node; it is never typed into anyone's session. Reporting does not end your",
+    '  session or your turn, and it moves no kanban card.'
   ]
 }
 
@@ -354,6 +461,7 @@ export type ControlVerb =
   | 'open-project'
   | 'settings'
   | 'report-issue'
+  | 'report-outcome'
 
 export interface ControlCommand {
   verb: ControlVerb
@@ -407,7 +515,11 @@ const VERBS: ControlVerb[] = [
   // something (@core/github/report-issue-service). Off by default per project; there is no
   // `--project` flag on purpose — reporting into somebody else's repository is not a capability
   // an agent should be able to reach by naming an id.
-  'report-issue'
+  'report-issue',
+  // A station reports its OWN task outcome (@shared/station-outcome); a dependent opened with
+  // `--after-success` waits for a reported success. Answered by the shell's control handler, never
+  // forwarded to a canvas. Verified-only (requiresVerified).
+  'report-outcome'
 ]
 
 /**
@@ -456,6 +568,58 @@ function dryRunDocLines(): string[] {
 }
 
 /**
+ * The `--request-id` paragraph both agent-facing bodies share, RENDERED from the ledger's tables
+ * (`control-request-ledger.ts`) — the verb set, the retry split, the glosses, the replay lead and
+ * the retention — the same derive-don't-retype rule as `messagingGuidanceLines`, so an outcome or a
+ * verb added there lands in the text an agent reads the day it is added.
+ */
+// The opens that can take longer than the app's own wait: git work, a whole team, a review panel.
+const SLOW_OPEN_VERBS = ['open-worktree', 'spawn-team', 'verify'] as const
+
+function requestIdDocLines(): string[] {
+  const yes: string[] = []
+  const no: string[] = []
+  for (const [kind, retryable] of Object.entries(REQUEST_ID_RETRYABLE)) {
+    const line = `\`${kind}\` (${REQUEST_ID_OUTCOME_GLOSS[kind as keyof typeof REQUEST_ID_OUTCOME_GLOSS]})`
+    ;(retryable ? yes : no).push(line)
+  }
+  const hours = Math.round(REQUEST_LEDGER_TTL_MS / 3_600_000)
+  return [
+    'Retrying safely (`--request-id`):',
+    `- The verbs that create something (${[...REQUEST_ID_VERBS].join(', ')}) take`,
+    `  \`--request-id <id>\`: 1-${REQUEST_ID_MAX_LENGTH} letters, digits, \`.\`, \`_\`, \`:\` or \`-\`, starting with`,
+    '  a letter or digit. Make each id UNIQUE: a uuid',
+    '  (`$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)`: slim Linux images lack',
+    '  `uuidgen`, macOS lacks `/proc`), or a readable name with a random',
+    '  part (`wave2-reviewer-1-7f3a9c`). A bare readable name can come back: ids are remembered per',
+    `  node for ${Math.round(REQUEST_LEDGER_TTL_MS / 3_600_000)} hours, so a later conversation in the same node that reuses one for the same`,
+    '  call is answered with the earlier reply — an open that never happened this time.',
+    '- When a call\'s reply never reached you — your tool call timed out, the connection dropped, the',
+    '  output was cut off — run the SAME command with the SAME id. nodeterm recognises it and, instead',
+    '  of opening a second node, returns the first call\'s reply, whose first line starts',
+    `  \`${REQUEST_ID_REPLAYED_LEAD}\`. Without an id, repeating an open whose reply you lost can open it twice.`,
+    '- A reply you DID see is the answer for that id, a refusal included: to try again after a',
+    '  refusal, or to open another node on purpose, use a NEW id. The same id with different flags is',
+    '  refused, and opens nothing.',
+    `- Retry with the SAME id after a short wait: ${yes.join('; ')}.`,
+    `- A same-id retry never clears these — fix the call: ${no.join('; ')}.`,
+    `- For an open that can be slow — ${SLOW_OPEN_VERBS.join(', ')}, or any open while the app may be busy —`,
+    '  pass your OWN unique `--request-id` up front, and give the tool call a timeout longer than',
+    `  the app's own ${CONTROL_REQUEST_TIMEOUT_MS / 1000}s wait (180s is safe). At a ${CONTROL_REQUEST_TIMEOUT_MS / 1000}s tool default the tool is killed at the`,
+    '  same moment the app gives up, and the reply that would have named the id is lost with it.',
+    `- When you pass none, the CLI picks an id per run and prints it to stderr BEFORE it sends the`,
+    `  open (\`${requestIdAnnounceLine('<id>')}\`); a reply that says the call may still`,
+    `  complete names it again on a \`${REQUEST_ID_HINT_LEAD}\` line. To retry, pass exactly that id with`,
+    '  `--request-id`. Never re-run the bare command: it gets a fresh id and can open a second one.',
+    '- Without `--request-id` the CLI still tags each RUN with its own id, so its own automatic',
+    '  re-send to another endpoint never opens twice — but a second run is a second call. An id is',
+    `  matched only for a session whose node identity is verified (the reply says so otherwise), for ${hours} hours,`,
+    '  and not across an app restart. An SSH host keeps the CLI it got at its last connect: until that',
+    '  project reconnects, `--request-id` works there but runs carry no automatic id.'
+  ]
+}
+
+/**
  * The `--issue` SHAPE gate, shared by both shells: the Server Edition runs it inside
  * `parseControlRequest`, and desktop main runs it in its control handler before forwarding (desktop
  * main does not run `parseControlRequest` at all). A plain terminal cannot read an issue and no other
@@ -497,6 +661,13 @@ export function parseControlRequest(
   // refuses the well-formed flag as unsupported (its open allowlist), since it keeps no PR watch.
   const afterPrRefusal = afterPrFlagRefusal(v, args)
   if (afterPrRefusal) return { error: afterPrRefusal }
+  // `--after-success`: the same shape gate desktop main runs before forwarding, including the one
+  // refusal of the ambiguous `--after <id>:ok` form (@shared/station-outcome).
+  const afterSuccessRefusal = afterSuccessFlagRefusal(v, args)
+  if (afterSuccessRefusal) return { error: afterSuccessRefusal }
+  if (v === 'report-outcome' && !args.outcome) {
+    return { error: 'report-outcome requires --outcome succeeded|failed' }
+  }
   if ((v === 'group' || v === 'arrange') && !args.nodes) return { error: `${v} requires --nodes <id,id>` }
   if (v === 'ungroup' && !args.group) return { error: 'ungroup requires --group <id>' }
   if (v === 'move' && !args.nodes) return { error: 'move requires --nodes <id,id>' }
@@ -558,12 +729,27 @@ export function parseControlRequest(
 const CC_START = '<!-- nodeterm:manage-canvas:start -->'
 const CC_END = '<!-- nodeterm:manage-canvas:end -->'
 
+/** The two markers, for the SSH freshness probe, which must find the block exactly where the
+ *  merge below would. */
+export const CANVAS_CONTROL_MARKERS = { start: CC_START, end: CC_END } as const
+
+/** The exact bytes the merge below writes from the start marker through the end marker. ONE
+ *  definition: the SSH freshness probe compares a host's copy against this, so a second spelling
+ *  would make every host look stale (or, worse, current). */
+export function frameCanvasControlBlock(block: string): string {
+  return `${CC_START}\n${block.trim()}\n${CC_END}`
+}
+
 /** Idempotently merge the canvas-control block into a global instructions file.
- *  Everything outside the markers is preserved; an existing block is replaced. */
+ *  Everything outside the markers is preserved; an existing block is replaced.
+ *
+ *  The end marker is searched AFTER the start marker. Taking the first one anywhere read a stray
+ *  end line (a block the user deleted by hand, end line kept) as "no block", so every merge
+ *  appended another copy — on the desktop at every launch, and on an SSH host at every check. */
 export function mergeCanvasControlBlock(existing: string, block: string): string {
-  const full = `${CC_START}\n${block.trim()}\n${CC_END}`
+  const full = frameCanvasControlBlock(block)
   const start = existing.indexOf(CC_START)
-  const end = existing.indexOf(CC_END)
+  const end = existing.indexOf(CC_END, start)
   if (start >= 0 && end > start) {
     return existing.slice(0, start) + full + existing.slice(end + CC_END.length)
   }
@@ -597,6 +783,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '',
     ...dryRunDocLines(),
     '',
+    ...requestIdDocLines(),
+    '',
     'Server Edition ownership is fail-closed: every request requires verified node identity, and',
     'a caller may mutate or message only nodes it opened during the current server run.',
     'Restarting the server clears that creator proof; persisted nodes and queued launches are never',
@@ -607,9 +795,9 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     'Verbs:',
     '- `list` — current nodes (id, kind, title). Start here when you need a node id.',
     '- `help` — print the verb list. Answered by the shim itself, so it works even if the app is down.',
-    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]` — open N plain terminals. `--cmd` requires verified node identity.',
-    '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]` — open N Claude sessions.',
-    `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open`,
+    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]` — open N plain terminals. `--cmd` requires verified node identity.',
+    '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]` — open N Claude sessions.',
+    `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open`,
     '  any agent CLI. `--group` parents the node(s) into a group frame; a worktree-bound group also',
     '  hands its worktree path down as the cwd. `--after <id,id>` opens the node ARMED: it does not',
     '  start until every listed station has finished a turn SUCCESSFULLY. It is',
@@ -617,7 +805,9 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  their work with get-linked-context when it wakes — nothing to `link`. Use it for "B needs what',
     '  A produced" instead of polling. A station whose turn ended on an API error does NOT release its',
     '  dependents even though it is idle (`list` marks it LAST TURN ERRORED); nudge or retry it, or',
-    '  run the armed node yourself. Only',
+    '  run the armed node yourself. The same holds for a Claude station whose last turn the user',
+    '  interrupted (Esc / Ctrl+C; `list` marks it LAST TURN INTERRUPTED): a finished next turn releases',
+    '  it. Only',
     `  status-reporting agent nodes (${statusAgents}, or custom agents based on them) may be waited on; a plain terminal never`,
     '  reports finishing, so waiting on one is refused.',
     '  AN OPEN NEVER SWITCHES THE USER\'S VIEW. If your own project is not the one on screen, the',
@@ -675,6 +865,9 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  agent does not recognise fails inside the session, not at open time — name a model you know.',
     ...issueBindingDocLines(),
     ...afterPrDocLines(),
+    ...afterHandoverDocLines(),
+    ...afterSuccessDocLines(),
+    ...reportOutcomeDocLines(),
     '- `open-project --cwd </abs/path> [--name N] [--color C]` — register (or find) the project for a',
     '  local directory; the reply carries `{ projectId, name, cwd, created }`. Idempotent: the same',
     '  cwd always returns the same project, never a duplicate. Creating/adding asks the user to',
@@ -800,7 +993,9 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     'independent — for every "and then", ask whether the next step READS the previous step\'s',
     'output. If not, they are separate stations, open them all at once; if it does, open the',
     'downstream one with `--after <upstream-id>` and it starts itself when the upstream goes',
-    'idle (do not poll for that yourself). Then break the task into 2-5 workstreams;',
+    'idle (do not poll for that yourself) — or with `--after-success <upstream-id>` when it must',
+    'start only on a SUCCESSFUL upstream, and tell every station you open to finish with',
+    '`report-outcome`. Then break the task into 2-5 workstreams;',
     'per stream `open-worktree --branch <slug>` then `open-agent --agent claude --group <groupId>',
     '--prompt "<concrete task>"` (each stream on its own branch, no tree conflicts). Members land',
     'in grid slots inside the frame automatically; align the frames themselves with',
@@ -833,10 +1028,10 @@ export function buildCanvasControlInstructions(shimPath: string): string {
 // could not be made safe.
 //
 // INSTALL LIFECYCLE, and why a verb must not depend on this parser's fixes: the shim is rewritten
-// locally at every app boot, but onto an SSH host ONLY inside RemoteHooks.setup(), i.e. on connect.
-// An already-connected SSH project keeps the shim it was handed. So a parsing improvement reaches
-// remote agent nodes only after a reconnect, with no signal on the wire — the same shape as the
-// managed hook script's stale window. Verbs are therefore designed to parse identically under both
+// locally at every app boot, and an SSH host's copy is checked on every connect and brought to this
+// build's bytes (RemoteHooks.refreshAgentTools). A host can still run an older loop for a while —
+// its tunnel is down, the file is unreadable, or a second desktop on an older build shares the host
+// account — with no signal on the wire. Verbs are therefore designed to parse identically under both
 // the old and the new loop: give every flag a value, and the two loops agree.
 /** The shim's generic transport-failure sentence — exported so the agent-facing docs can quote it
  *  verbatim and the parity test holds the two ends together (issue #367). */
@@ -904,6 +1099,17 @@ fi
 # write/close/rename/color/branch/send/reply/sticky/run forms accept — into curl --data-urlencode arguments. The positional
 # list doubles as the accumulator: originals are consumed from the front, translated pairs
 # appended at the back, so "$@" holds exactly the curl args once the loop drains.
+# Two flags the shim itself acts on (before posting, below): a caller that named its own
+# --request-id already knows it, and a --dry-run claims nothing.
+nt_own_request_id=""
+nt_dry_run=""
+nt_note_flag() {
+  case "$1" in
+    request-id) nt_own_request_id=1 ;;
+    dry-run) nt_dry_run=1 ;;
+  esac
+}
+
 nt_seen_pos=0
 nt_count=$#
 nt_i=0
@@ -916,6 +1122,7 @@ while [ "$nt_i" -lt "$nt_count" ]; do
       nt_k=\${nt_a#--}
       nt_v=\${nt_k#*=}
       nt_k=\${nt_k%%=*}
+      nt_note_flag "$nt_k"
       set -- "$@" --data-urlencode "arg.$nt_k=$nt_v"
       ;;
     --*)
@@ -931,6 +1138,7 @@ while [ "$nt_i" -lt "$nt_count" ]; do
       # \`--text=--oops\`, which the branch above exists for and which was previously unexpressible
       # in either direction.
       nt_k=\${nt_a#--}
+      nt_note_flag "$nt_k"
       nt_v=""
       if [ "$nt_i" -lt "$nt_count" ]; then
         case "$1" in
@@ -957,6 +1165,17 @@ ${OWNED_ENDPOINT_FALLBACK_SH}
 
 nt_out=$(mktemp 2>/dev/null || echo "/tmp/nodeterm-control.$$")
 
+# ONE id for this RUN, sent on every POST of it (see control-request-ledger.ts). The endpoint walk
+# below re-posts the same call when the first transport failed with no answer — but a request can
+# be read and executed and only the REPLY lost, and a second POST was then a second open. With the
+# id, the server recognises its own re-post and replays the first reply instead. A second RUN gets a
+# new id: repeating a command on purpose is a new call (an agent retrying after a lost reply passes
+# --request-id to say otherwise). Random bytes when the system has them, else pid + time — the
+# server ignores a malformed one rather than refusing the call.
+nt_request_id=$(od -An -N12 -tx1 /dev/urandom 2>/dev/null | tr -d ' \\n')
+[ -n "$nt_request_id" ] || nt_request_id="$$-$(date +%s 2>/dev/null)"
+nt_request_id="cli-$nt_request_id"
+
 # One POST against the CURRENT endpoint vars — call as \`nt_control_post "$@"\` so the translated
 # curl args reach it. Sets nt_code: '' when there is no transport to try at all, curl's
 # %{http_code} otherwise ('000' = the transport failed before any HTTP answer). nt_had_transport
@@ -970,18 +1189,29 @@ nt_control_post() {
       curl -sS -o "$nt_out" -w '%{http_code}' -X POST --config - \\
       --unix-socket "$NODETERM_HOOK_SOCK" "http://localhost/control/$nt_verb" \\
       -H "Accept: text/plain" \\
-      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" "$@" 2>/dev/null)
+      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" \\
+      --data-urlencode "requestId=$nt_request_id" "$@" 2>/dev/null)
   elif [ -n "$NODETERM_HOOK_PORT" ]; then
     nt_had_transport=1
     nt_code=$(nt_hook_headers |
       curl -sS -o "$nt_out" -w '%{http_code}' -X POST --config - \\
       "http://127.0.0.1:\${NODETERM_HOOK_PORT}/control/$nt_verb" \\
       -H "Accept: text/plain" \\
-      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" "$@" 2>/dev/null)
+      --data-urlencode "nodeId=\${NODETERM_NODE_ID}" \\
+      --data-urlencode "requestId=$nt_request_id" "$@" 2>/dev/null)
   fi
 }
 # Only a dead transport or an explicit wrong-owner (421) answer permits failover; 403 stays final.
 nt_reached() { [ -n "$nt_code" ] && [ "$nt_code" != "000" ] && [ "$nt_code" != "421" ]; }
+
+# Say the per-run id BEFORE posting an open (see requestIdAnnounceLine): an agent's own tool call is
+# usually killed at 120 s, the same instant the app gives up waiting, and with it the reply that
+# would have named the id. On stderr, so stdout stays the reply alone.
+if [ -z "$nt_own_request_id" ] && [ -z "$nt_dry_run" ]; then
+  case "$nt_verb" in
+    ${[...REQUEST_ID_VERBS].join('|')}) echo "${requestIdAnnounceLine('$nt_request_id')}" >&2 ;;
+  esac
+fi
 
 nt_had_transport=""
 nt_control_post "$@"
@@ -1098,6 +1328,8 @@ value is allowed anywhere on the line, not only at the end.
 
 ${dryRunDocLines().join('\n')}
 
+${requestIdDocLines().join('\n')}
+
 Server Edition ownership is fail-closed: every request requires verified node identity, and a
 caller may mutate or message only nodes it opened during the current server run. Restarting
 the server clears that creator proof; persisted nodes and queued launches are never auto-adopted,
@@ -1111,11 +1343,14 @@ Verbs:
   it is idle, but it produced nothing, so do not read its output or build on it. The marker
   is on the row on purpose — a fan-out of seven stations should cost one call to learn this,
   not seven. It clears itself the moment that station completes another turn.
+  A row ending **LAST TURN INTERRUPTED** is a Claude station whose last turn the user stopped
+  (Esc / Ctrl+C) before it finished: idle, but its work is unfinished. It clears itself when
+  that station finishes another turn.
 - \`help\` — print the verb list. The shim answers this itself, without reaching the app, so it
   is also what to run when you are unsure whether the control endpoint is alive.
-- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
-- \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N Claude sessions (default 1).
-- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N sessions of any agent CLI.
+- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
+- \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N Claude sessions (default 1).
+- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N sessions of any agent CLI.
   \`--group\` parents the node(s) into an existing group frame; a worktree-bound group also
   hands its worktree path down as the cwd.
   \`--after <id,id>\` opens the node **armed**: it does NOT start yet, and launches itself once
@@ -1131,6 +1366,9 @@ Verbs:
   though it is idle: it reached idle immediately and produced nothing, so firing would start
   the chain on bad ground. \`list\` marks it LAST TURN ERRORED. Nudge or retry that station —
   one successful turn releases everything armed behind it — or run the armed node yourself.
+  The same holds for a Claude station whose last turn the user INTERRUPTED (Esc / Ctrl+C):
+  it is idle but did not finish, so its dependents stay held (\`list\` marks it LAST TURN
+  INTERRUPTED) until it finishes a turn, or until you run the armed node yourself.
   \`--project <id>\` opens the node(s) in another project instead of yours. It accepts exactly
   two things — any other id is refused: your OWN project id, which behaves exactly as if the flag
   were omitted; or an id \`open-project\` returned to YOU
@@ -1200,6 +1438,10 @@ Verbs:
   open time, so name a model you know that CLI accepts rather than guessing.
 ${issueBindingDocLines().join('\n')}
 ${afterPrDocLines().join('\n')}
+${afterHandoverDocLines().join('\n')}
+
+${afterSuccessDocLines().join('\n')}
+${reportOutcomeDocLines().join('\n')}
 - \`open-project --cwd </abs/path> [--name N] [--color C]\` — register (or find) the project for a
   local directory; the reply carries \`{ projectId, name, cwd, created }\`. Idempotent: the same
   cwd always returns the same project, never a duplicate — and \`--name\`/\`--color\` apply only
@@ -1408,7 +1650,10 @@ across Nodeterm sessions), be the orchestration chef — plan the kitchen, then 
    the wait is wasted — those steps are separate stations, open them all at once. If it does,
    the dependency is real: open the downstream station with \`--after <upstream-id>\` and it
    will start itself when the upstream goes idle. Do not fake this by polling in your own
-   session; that is what \`--after\` exists to replace.
+   session; that is what \`--after\` exists to replace. When the downstream must only start on
+   a SUCCESSFUL upstream — its turn ending is not enough — use \`--after-success <upstream-id>\`,
+   and end every station's brief with "when you are done, run \`report-outcome --outcome
+   succeeded\` or \`--outcome failed --note <why>\`".
 1. Split the task into the independent workstreams step 0 identified.
 2. Per workstream, give it its own branch + kitchen station:
    \`open-worktree --branch <slug>\` → note the returned \`groupId\`, then

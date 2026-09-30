@@ -15,7 +15,8 @@
 //
 // The heavy lifting (relay wiring, RPC/frame handlers, fs jail, canvas mirror, approval gate) is
 // shared with the interactive host via `connectHostSession`. Pin/lookup logic is the pure,
-// unit-tested `approved-devices-core`.
+// unit-tested `approved-devices-core`; the pins live in the PHONE store (`phonePins`) and nowhere
+// else — the desktop relay roles have their own stores, which this module never reads.
 
 import { dialog, ipcMain, type BrowserWindow } from 'electron'
 import { IPC } from '../../shared/ipc'
@@ -38,7 +39,8 @@ import { currentCanvas, initHostCanvasHub, subscribeCanvas } from './host-canvas
 import { hostIdFromPublicKeyB64 } from './relay-id'
 import { removeRelayAdvertisement, writeRelayAdvertisement } from './relay-advertise'
 import { isPinned, pinDevice } from './approved-devices-core'
-import { loadApprovedDevices, updateApprovedDevices } from './approved-devices'
+import { phonePins } from './approved-devices'
+import { registerPeerSessionKiller } from './peer-revoke'
 import { createPhoneApprovals } from '../../core/phone-approval'
 
 // Re-mint the token this long before its expiry (TTL is ~120s). Floored so a bogus/short exp can't
@@ -202,7 +204,7 @@ export function initStandingHost(
   // is exactly-once, so a peer never leaves twice (its color is never freed for someone else).
 
   const approvals = createPhoneApprovals({
-    persist: (pub) => updateApprovedDevices((store) => pinDevice(store, pub)),
+    persist: (pub) => phonePins.update((store) => pinDevice(store, pub)),
     cleared: (id) => send(IPC.remoteHostPeerPendingCleared, { id })
   })
 
@@ -273,7 +275,7 @@ export function initStandingHost(
     const pub = s.peerPublicKeyB64()
     let store
     try {
-      store = await loadApprovedDevices()
+      store = await phonePins.load()
     } catch {
       store = { pubkeys: [] as string[] }
     }
@@ -396,6 +398,23 @@ export function initStandingHost(
       if (opened && running && pendingCount() < TARGET_PENDING) queueMicrotask(() => void connectOne())
     }
   }
+
+  // Revocation (peer-revoke.ts): cut every pooled session held by a matching key — bridged or still
+  // awaiting SAS — and drop any pending consent for it, including one whose socket already closed
+  // (#819 keeps those alive for the SAS deadline). Otherwise a phone "Remove" would leave the removed
+  // phone in its shell until the socket dropped, or let an open dialog re-pin it afterwards.
+  registerPeerSessionKiller('phone', (match) => {
+    approvals.clearWhere(match)
+    let cut = false
+    for (const p of [...pool]) {
+      const key = p.session.peerPublicKeyB64()
+      if (key && match(key)) {
+        removeFromPool(p)
+        cut = true
+      }
+    }
+    if (cut) ensurePool()
+  })
 
   function start(): void {
     if (running) return

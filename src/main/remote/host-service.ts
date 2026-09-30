@@ -52,6 +52,7 @@ import { sanitizeClientMutation } from './canvas-sync'
 import { connectRelay, type RelaySocket, type RpcRequest } from './relay-socket'
 import { initHostCanvasHub, currentCanvas, subscribeCanvas } from './host-canvas-hub'
 import { createPhonePresence, type PhonePresence } from './phone-presence'
+import { registerPeerSessionKiller } from './peer-revoke'
 
 // Default relay endpoint; `NODETERM_RELAY_URL` overrides it (mirrors license.ts's API_BASE /
 // CHECKOUT_URL env-override pattern — used both as the dev gate and for local testing).
@@ -1405,6 +1406,13 @@ export function initRemoteHost(
     session = null
     pendingApprovalId = null
   }
+
+  // Revocation (peer-revoke.ts): this session is never pinned, so an unpin alone would never reach
+  // it — a revoke must be able to cut it by the key it authenticated (or is awaiting SAS for).
+  registerPeerSessionKiller('phone', (match) => {
+    const key = session?.peerPublicKeyB64()
+    if (key && match(key)) endSession()
+  })
 
   ipcMain.handle(IPC.remoteHostStart, async (): Promise<{ offer: string }> => {
     if (!isPremium()) {

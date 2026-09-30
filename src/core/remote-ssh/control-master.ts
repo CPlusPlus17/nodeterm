@@ -50,8 +50,25 @@ export function controlPathFor(projectId: string): string {
   return path.join(os.homedir(), '.nodeterm', 'ssh-cm', `${id}.sock`)
 }
 
-function target(conn: SshConnection): string {
+/**
+ * One `user@host` destination argv element, refused when it could be anything else. A leading `-`
+ * makes ssh parse the whole element as an OPTION (`-oProxyCommand=…@host` runs a local command), and
+ * whitespace or a control character is never part of a real user or host name. Every argv this module
+ * builds passes through here, so no caller — a hand-edited project file, a relay peer, a future
+ * dialog — can turn an endpoint into ssh options.
+ */
+export function sshDestination(conn: Pick<SshConnection, 'user' | 'host'>): string {
+  for (const [field, v] of [['user', conn.user], ['host', conn.host]] as const) {
+    // eslint-disable-next-line no-control-regex
+    if (typeof v !== 'string' || (field === 'host' && v === '') || v.startsWith('-') || /[\s\u0000-\u001f\u007f]/.test(v)) {
+      throw new Error(`refusing ssh ${field} ${JSON.stringify(String(v)).slice(0, 80)}: not a valid ${field}`)
+    }
+  }
   return `${conn.user}@${conn.host}`
+}
+
+function target(conn: SshConnection): string {
+  return sshDestination(conn)
 }
 
 function portArgs(conn: SshConnection): string[] {

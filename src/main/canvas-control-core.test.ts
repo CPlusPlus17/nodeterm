@@ -14,6 +14,14 @@ import {
   CODEX_SANDBOX_RETRY_LINE
 } from '../core/agents/hook-sandbox-hint-sh'
 import { RETRYABLE } from '../core/agents/agent-message-decide'
+import {
+  REQUEST_ID_HINT_LEAD,
+  REQUEST_ID_MAX_LENGTH,
+  REQUEST_ID_OUTCOME_GLOSS,
+  REQUEST_ID_REPLAYED_LEAD,
+  REQUEST_ID_RETRYABLE,
+  REQUEST_ID_VERBS
+} from '../core/control-request-ledger'
 import { BOARD_COMMENT_FROM_PREFIX, BOARD_COMMENT_REPLY_TO } from '../shared/board-comment'
 import {
   STATION_NOTICE_COMMON_OPTIONS,
@@ -30,7 +38,7 @@ import {
   SETTINGS_VERB_KEY_LIST,
   readSettingsValue
 } from '../shared/settings-verb'
-import { decideControlConfirm, isWaivableVerb } from '../shared/control-confirm'
+import { CONTROL_REQUEST_TIMEOUT_MS, decideControlConfirm, isWaivableVerb } from '../shared/control-confirm'
 import { DEFAULT_SETTINGS } from '../shared/types'
 import { serverSettingsControl } from '../server/settings-control'
 import {
@@ -46,6 +54,7 @@ import {
   offScreenDisposition,
   controlVerbSetsForTests
 } from '../shared/control-off-screen'
+import { OUTCOME_NOTE_MAX, REPORT_OUTCOME_VERB, SUCCESS_WAIT_MAX } from '../shared/station-outcome'
 
 describe('parseControlRequest', () => {
   it('accepts known verbs', () => {
@@ -347,6 +356,16 @@ describe('parseControlRequest', () => {
     expect(second).toContain('/new/nodeterm.sh')
     expect(second).not.toContain('/tmp/nodeterm.sh')
     expect(second).toContain('# My own notes')
+  })
+
+  it('a stray end marker BEFORE the block does not make every merge append another copy', () => {
+    // The end marker is searched AFTER the start marker; taking the first one anywhere read a
+    // hand-deleted block's leftover end line as "no block" and appended on every connect.
+    const block = buildCanvasControlInstructions('/tmp/nodeterm.sh')
+    const stray = '# mine\n<!-- nodeterm:manage-canvas:end -->\n'
+    const once = mergeCanvasControlBlock(stray, block)
+    expect(mergeCanvasControlBlock(once, block)).toBe(once)
+    expect(once.match(/manage-canvas:start/g)).toHaveLength(1)
   })
 
   it('instructions cover the verb set and the confirm caveat', () => {
@@ -687,6 +706,58 @@ describe('parseControlRequest', () => {
       const word = new RegExp(`\\b${kind}\\b`)
       expect(word.test(retryable ? yesSection : noSection), `${kind} in its group`).toBe(true)
       expect(word.test(retryable ? noSection : yesSection), `${kind} not in the other`).toBe(false)
+    }
+  })
+
+  // --- retried calls (src/core/control-request-ledger.ts) ----------------------------------------
+  // The request-id contract an agent reads must be the TABLES': which verbs take an id, which
+  // outcomes a same-id retry can change, what a replay looks like. Rendered, never re-typed, so a
+  // verb or an outcome added to the ledger lands in both bodies the day it is added.
+  it('both bodies document --request-id, rendered from the ledger tables', () => {
+    for (const [name, body] of [
+      ['skill', buildCanvasSkillBody('/x/shim.sh')],
+      ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+    ] as const) {
+      const at = body.indexOf('Retrying safely')
+      expect(at, `${name}: the section exists`).toBeGreaterThan(-1)
+      const section = body.slice(at, body.indexOf('\n\n', at))
+      for (const verb of REQUEST_ID_VERBS) expect(section, `${name}: ${verb}`).toContain(verb)
+      expect(section).toContain(`1-${REQUEST_ID_MAX_LENGTH}`)
+      expect(section).toContain(`\`${REQUEST_ID_REPLAYED_LEAD}\``)
+      expect(section).toMatch(/SAME command with the SAME id/)
+      expect(section).toMatch(/refusal included/)
+      expect(section).toMatch(/NEW id/)
+      expect(section).toMatch(/verified/)
+      expect(section).toMatch(/24 hours/)
+      // Review follow-up to #1027: the ids suggested must be UNIQUE (a readable name alone comes back
+      // in a later conversation of the same node and replays the old reply), and a reply that may
+      // still complete names its id — the CLI's own included — to be passed back with the flag.
+      expect(section).toMatch(/UNIQUE/)
+      // A portable uuid: `uuidgen` is missing on slim Debian/Ubuntu (uuid-runtime), macOS has no /proc.
+      expect(section).toContain('`$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid)`')
+      expect(section).toMatch(/random\s+part/)
+      // Review follow-up to #1033: an agent's tool call is typically killed at the same 120 s the app
+      // waits, so the advice for a slow open is to name the id up front and give the tool more time;
+      // and the CLI's own id is on stderr before the POST, whatever becomes of the reply.
+      expect(section).toMatch(/OWN\s+unique\s+`--request-id`\s+up\s+front/)
+      for (const verb of ['open-worktree', 'spawn-team', 'verify']) expect(section).toContain(verb)
+      expect(section).toContain(`${CONTROL_REQUEST_TIMEOUT_MS / 1000}s`)
+      expect(section).toMatch(/timeout\s+longer\s+than/)
+      expect(section).toMatch(/to\s+stderr\s+BEFORE\s+it\s+sends/)
+      expect(section).not.toMatch(/a name like `wave2-reviewer-1`\)/)
+      expect(section).toContain(`\`${REQUEST_ID_HINT_LEAD}\``)
+      expect(section).toMatch(/Never re-run the bare command/)
+      const yesAt = section.indexOf('Retry with the SAME id after a short wait')
+      const noAt = section.indexOf('A same-id retry never clears these')
+      expect(yesAt, name).toBeGreaterThan(-1)
+      expect(noAt, name).toBeGreaterThan(yesAt)
+      const yes = section.slice(yesAt, noAt)
+      const no = section.slice(noAt)
+      for (const [kind, retryable] of Object.entries(REQUEST_ID_RETRYABLE)) {
+        expect(retryable ? yes : no, `${name}: ${kind} in its group`).toContain(`\`${kind}\``)
+        expect(retryable ? no : yes, `${name}: ${kind} not in the other`).not.toContain(`\`${kind}\``)
+        expect(section).toContain(REQUEST_ID_OUTCOME_GLOSS[kind as keyof typeof REQUEST_ID_OUTCOME_GLOSS])
+      }
     }
   })
 
@@ -1364,5 +1435,125 @@ describe('--after-pr: open a node that waits on a pull request', () => {
     expect(flat).toContain('The Server Edition refuses `--after-pr`')
     // Quoting: an unquoted leading # starts a shell comment.
     expect(flat).toContain('Write the number bare (`1008:merged`)')
+  })
+})
+
+describe('--after-success + report-outcome: a dependent that waits for a reported SUCCESS', () => {
+  it('passes a well-formed wait through the shape gate on the open verbs', () => {
+    expect(parseControlRequest('open-claude', { 'after-success': 'a1,a2', 'success-deadline': '6h' })).toMatchObject({
+      verb: 'open-claude'
+    })
+    expect(parseControlRequest('open-terminal', { 'after-success': 'a1', cmd: 'make' })).toMatchObject({
+      verb: 'open-terminal'
+    })
+    expect(parseControlRequest('open-agent', { agent: 'codex', after: 'b1', 'after-success': 'a1' })).toMatchObject({
+      verb: 'open-agent'
+    })
+  })
+
+  it.each([
+    [{ after: 'a1:ok' }, /--after takes plain node ids/],
+    [{ after: 'a1', 'after-success': 'a1' }, /name each station once/],
+    [{ 'after-success': 'a1:ok' }, /--after-success takes plain node ids/],
+    [{ 'after-success': 'a1', 'run-now': '1' }, /--run-now cannot be combined with --after-success/],
+    [{ 'success-deadline': '2h' }, /only with --after-success/],
+    [{ 'after-success': 'a1', 'success-deadline': '30d' }, /--success-deadline must be/]
+  ])('refuses %j before the renderer sees it', (args, error) => {
+    const r = parseControlRequest('open-agent', { agent: 'claude', ...args })
+    expect((r as { error?: string }).error).toMatch(error)
+  })
+
+  it('refuses the flag on a verb that opens nothing, and on a terminal with nothing to run', () => {
+    expect((parseControlRequest('spawn-team', { team: '[]', 'after-success': 'a1' }) as { error: string }).error).toMatch(
+      /applies only to open-terminal/
+    )
+    expect((parseControlRequest('open-terminal', { 'after-success': 'a1' }) as { error: string }).error).toMatch(
+      /needs --cmd/
+    )
+  })
+
+  it('report-outcome is a registered verb that needs --outcome', () => {
+    expect(parseControlRequest('report-outcome', { outcome: 'succeeded' })).toEqual({
+      verb: 'report-outcome',
+      args: { outcome: 'succeeded' }
+    })
+    expect(parseControlRequest('report-outcome', {})).toEqual({
+      error: 'report-outcome requires --outcome succeeded|failed'
+    })
+  })
+
+  const bodies: Array<[string, string]> = [
+    ['skill body', buildCanvasSkillBody('/x/nodeterm.sh')],
+    ['instructions block', buildCanvasControlInstructions('/x/nodeterm.sh')]
+  ]
+
+  it.each(bodies)('%s lists the flag on all three open verbs', (_name, body) => {
+    const synopsis = /\[--after-success <id,id>\] \[--success-deadline <90m\|12h\|3d>\]/
+    for (const verb of ['open-terminal ', 'open-claude ', 'open-agent --agent ']) {
+      const line = body.split('\n').find((l) => l.includes(`\`${verb}`)) ?? ''
+      expect(line, verb).toMatch(synopsis)
+    }
+  })
+
+  it.each(bodies)('%s states what a success wait needs, what blocks it, and when a report ends', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('`--after-success <id,id>` holds the launch until every listed station has REPORTED SUCCESS')
+    expect(flat).toContain('It is `--after` plus the report')
+    expect(flat).toContain('A station that reports `failed` BLOCKS the dependent')
+    expect(flat).toContain('BLOCKED BY FAILURE')
+    expect(flat).toContain('WAITING FOR SUCCESS')
+    expect(flat).toContain('No report yet means waiting')
+    expect(flat).toContain('A station that is CLOSED counts only if it reported success before it was closed')
+    // The "new task" rule, as core implements it (OUTCOME_CLEARING_VERBS).
+    expect(flat).toContain('a `send`, `reply`, `write` or `run` aimed at it withdraws the reports it made before that work arrived')
+    expect(flat).toContain('A `send` / `reply` QUEUED for a busy station stops its report counting the moment it is queued')
+    expect(flat).toContain('a queued message that expires unread withdraws the report too')
+    expect(flat).toContain('hand it the next task FIRST, then open the dependent')
+    expect(flat).toContain('only `run` (or ▶) starts it')
+    expect(flat).toContain('A new turn does not withdraw a report')
+    // Limits rendered from the modules that enforce them.
+    expect(flat).toContain('`--success-deadline <90m|12h|3d>` bounds the wait (default 24h, at most 14d)')
+    expect(flat).toContain(`at most ${SUCCESS_WAIT_MAX}`)
+    expect(flat).toContain('a suffix on `--after` (`--after a1:ok`)')
+    expect(flat).toContain('The Server Edition accepts both the flag and the verb')
+  })
+
+  // Plain `--after` and new work (core/station-handover.ts): the rule an orchestrator reusing a
+  // station must know, in both bodies, in the words core implements.
+  it.each(bodies)('%s states that new work resets a plain --after wait, and how to reuse a station', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('Reusing a station with `--after` (new work resets the wait)')
+    expect(flat).toContain(
+      'a `send` / `reply` aimed at it (queued or delivered), a `write` into it, or a `run` starting its held launch — does not count as finished for `--after` until a turn that STARTED after that work arrived has ended'
+    )
+    expect(flat).toContain("Its earlier `done` (the previous task) releases nothing")
+    expect(flat).toContain('while a `send` / `reply` is still QUEUED for it nothing releases at all')
+    expect(flat).toContain('A queued message that EXPIRES unread still holds')
+    expect(flat).toContain('only a turn started AFTER the expiry does')
+    expect(flat).toContain("A `write` that only answers the station's open prompt")
+    expect(flat).toContain('hand it the next task FIRST, then open the dependent `--after` it')
+    expect(flat).toContain('"waiting for <station> to finish the work handed to it"')
+    expect(flat).toContain("A person typing in the station's pane is not a hand-over")
+    expect(flat).toContain('A turn that ENDS with a background SUBAGENT still running')
+    expect(flat).toContain('waits for a later turn end that reports none left')
+    expect(flat).toContain('A background SHELL (a dev server, a watcher, a long test run) does NOT hold')
+    expect(flat).toContain('"waiting for <station> to finish the tasks still running in its background"')
+  })
+
+  it.each(bodies)('%s teaches stations to report, honestly, about themselves only', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain(`\`${REPORT_OUTCOME_VERB} --outcome succeeded|failed [--note "<one line>"]\``)
+    expect(flat).toContain('REPORT WHEN EVERY TASK YOU ARE GIVEN ENDS')
+    expect(flat).toContain('not merely that you stopped')
+    expect(flat).toContain('`--node` naming another node is refused')
+    expect(flat).toContain(`at most ${OUTCOME_NOTE_MAX} characters`)
+    expect(flat).toContain('never typed into anyone\'s session')
+    // And orchestrators are told to ask for it.
+    expect(flat).toMatch(/--after-success <upstream-id>/)
+    expect(flat).toMatch(/report-outcome/)
+  })
+
+  it('the verb is in the shim\'s derived verb list and reached only through the verified gate', () => {
+    expect(CONTROL_SHIM_SCRIPT).toContain('report-outcome')
   })
 })

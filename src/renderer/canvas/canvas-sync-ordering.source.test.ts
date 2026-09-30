@@ -17,7 +17,7 @@ function sendCallback(): string {
 
 /** The peer-mutation receive handler. */
 function receiveHandler(): string {
-  const start = src.indexOf('return activeSession.api.canvas.onMutation((projectId, mutation) => {')
+  const start = src.indexOf('return activeSession.api.canvas.onMutation((projectId, received) => {')
   return src.slice(start, src.indexOf('}, [activeSession.api, setNodes, setLinkEdges', start))
 }
 

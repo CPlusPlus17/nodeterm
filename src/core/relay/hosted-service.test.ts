@@ -74,6 +74,7 @@ function world(opts: WorldOpts = {}) {
     detach: (id) => { sinks.delete(id) },
     dispatch: async (_id, req) => {
       dispatched.push(req.method)
+      if (req.method === IPC.ptyCreate) return { t: 'res', id: req.id, ok: true, result: { sessionId: 'sess-shared', fresh: false } }
       if (req.method === IPC.agentSubagentSnapshot) {
         return { t: 'res', id: req.id, ok: true, result: [{ nodeId: 'n-shared', task: 'shared task' }, { nodeId: 'n-other', task: 'SECRET other task' }] }
       }
@@ -676,6 +677,12 @@ describe('hosted service — unshare stops a terminal a viewer is already watchi
     const eSink = [...w.sinks.values()].at(-1)!
     const size = (n: number) => JSON.stringify({ t: 'ev', channel: IPC.ptySize('sess-shared'), args: [{ cols: n, rows: n }] })
     const exit = JSON.stringify({ t: 'ev', channel: IPC.ptyExit('sess-shared'), args: [0] })
+    // Both opened the shared terminal: the relay client delivers output only for a session its own
+    // `pty:create` answer named (shared/relay-pty-channel.ts).
+    for (const [g, id] of [[viewer, 50], [editor, 60]] as const) {
+      g.req(id, IPC.ptyCreate, [{ persistKey: 'n-shared', cols: 80, rows: 24 }])
+      await vi.waitFor(() => expect(g.res(id)?.result?.sessionId).toBe('sess-shared'))
+    }
     // Both are watching the shared terminal (the PtyManager sends to its subscribers' sinks).
     for (const s of [vSink, eSink]) {
       s.sendBinary(encodePtyData('sess-shared', 'before'))

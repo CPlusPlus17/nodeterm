@@ -16,6 +16,12 @@ export interface RemoteAtomicWrite {
  */
 export const REMOTE_WRITE_SHORT_BODY = 65
 
+/**
+ * Exit status of a write refused because its `requireDir` did not exist when the write ran.
+ * sysexits' EX_NOINPUT; nothing else in these commands exits with it.
+ */
+export const REMOTE_WRITE_NO_DIR = 66
+
 export type RemoteFileMode = '600' | '644' | '700' | '755'
 
 export interface RemoteAtomicWriteOptions {
@@ -29,6 +35,10 @@ export interface RemoteAtomicWriteOptions {
   /** An editor may legitimately save an empty file. Nothing this app GENERATES is ever empty, so
    *  an empty body is refused unless the caller says otherwise. */
   allowEmpty?: boolean
+  /** Write only if this directory ALREADY exists on the host — checked in the same command as the
+   *  write, so a directory removed after the caller looked is not recreated by the parent
+   *  `mkdir -p`. Refused with `REMOTE_WRITE_NO_DIR`, the body drained so ssh sees no broken pipe. */
+  requireDir?: string
 }
 
 function remoteDirname(path: string): string {
@@ -87,7 +97,10 @@ export function remoteAtomicWrite(
         : `${parentPath}/${temporaryLeaf}`
   const target = quoteRemotePath(path)
   const temporary = quoteRemotePath(temporaryPath)
-  const prefix = options.restrictPermissions ? 'umask 077; ' : ''
+  const gate = options.requireDir
+    ? `[ -d ${quoteRemotePath(options.requireDir)} ] || { cat > /dev/null; exit ${REMOTE_WRITE_NO_DIR}; }; `
+    : ''
+  const prefix = `${gate}${options.restrictPermissions ? 'umask 077; ' : ''}`
   const parent = options.makeParent === false
     ? ''
     : `mkdir -p -- ${quoteRemotePath(parentPath)} && `
@@ -117,6 +130,7 @@ export class RemoteWriteError extends Error {
     super(
       `remote write of ${path} did not land (exit ${code}` +
         (code === REMOTE_WRITE_SHORT_BODY ? ': the body did not arrive in full' : '') +
+        (code === REMOTE_WRITE_NO_DIR ? ': its directory no longer exists' : '') +
         '); the previous file is unchanged'
     )
     this.name = 'RemoteWriteError'

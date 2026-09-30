@@ -338,9 +338,13 @@ whole-workspace saves still write them.
 2. **Saves.** Before a whole-workspace save is written, a governed project's content is replaced by
    the authority's (`overlaySave`). The board is overlaid field by field: its items (columns, cards,
    metadata, labels, views) come from the authority, `github` and `pullLinks` from the save. This
-   machine's exec fields (`shell`, `ssh.extraArgs`) are carried over from the save's copy of each
-   node, since the authority's own state holds none. A stale copy cannot write content back, with
-   one exception, the oversized node below.
+   machine's exec fields (`shell`, `ssh.extraArgs`, and a held launch, `pendingLaunch`) are carried
+   over from the save's copy of each node, since the authority's own state holds none. That carry
+   is the ONLY way a launch reaches disk on a governed project: the reflector hands the authority
+   every op without its launch, so an armed `--after` node, and server canvas control's
+   claim/clear of its launch (`savePatches`), land in the index's machine-local `localExec`
+   through the save that follows the cast. A stale copy cannot write content back, with one
+   exception, the oversized node below.
 3. **Loads**, overlaid the same way (`overlayLoad`), so a client that loads sees every op the
    authority applied, written to disk or not.
 4. **Outside edits.** A `git pull` or hand edit of a governed `.nodeterm/project.json`, seen by the

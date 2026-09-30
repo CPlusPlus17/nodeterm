@@ -136,10 +136,15 @@ export function parseAfterPrArg(
 const DURATION = /^([1-9][0-9]{0,4})([mhd])$/
 const UNIT_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000 }
 
-/** `--pr-deadline <duration>` (`90m`, `12h`, `3d`), 1 minute to 14 days; absent = 24 h. Refused, not
- *  clamped: a caller who asked for a month would otherwise be told nothing about getting two weeks. */
-export function parsePrDeadlineArg(
-  raw: string | undefined
+/**
+ * A wait's deadline flag (`90m`, `12h`, `3d`), 1 minute to 14 days; absent = 24 h. Refused, not
+ * clamped: a caller who asked for a month would otherwise be told nothing about getting two weeks.
+ * ONE grammar for every held-launch deadline (`--pr-deadline`, `--success-deadline`), so the two
+ * flags cannot come to accept different spellings or bounds.
+ */
+export function parseWaitDeadlineArg(
+  raw: string | undefined,
+  flag: string
 ): { ok: true; ms: number } | { ok: false; error: string } {
   if (raw === undefined) return { ok: true, ms: PR_DEADLINE_DEFAULT_MS }
   const m = DURATION.exec(raw)
@@ -147,10 +152,17 @@ export function parsePrDeadlineArg(
   if (!m || ms < PR_DEADLINE_MIN_MS || ms > PR_DEADLINE_MAX_MS) {
     return {
       ok: false,
-      error: `--pr-deadline must be a duration like 90m, 12h or 3d, between 1m and 14d (got ${JSON.stringify(raw).slice(0, 40)})`
+      error: `${flag} must be a duration like 90m, 12h or 3d, between 1m and 14d (got ${JSON.stringify(raw).slice(0, 40)})`
     }
   }
   return { ok: true, ms }
+}
+
+/** `--pr-deadline <duration>`: see `parseWaitDeadlineArg`. */
+export function parsePrDeadlineArg(
+  raw: string | undefined
+): { ok: true; ms: number } | { ok: false; error: string } {
+  return parseWaitDeadlineArg(raw, '--pr-deadline')
 }
 
 const OPEN_VERBS: ReadonlySet<string> = new Set(['open-terminal', 'open-claude', 'open-agent'])

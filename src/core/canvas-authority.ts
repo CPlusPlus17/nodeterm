@@ -10,12 +10,14 @@
 // two non-op inputs it accepts (an outside edit, and a node too large to ever travel as an op).
 // Four rules keep that honest:
 //
-//  1. ITS STATE CARRIES NO EXEC FIELDS. `shell` and `ssh.extraArgs` are machine-local
-//     (@shared/node-exec): every op is sanitized before it is reflected, but a store read re-applies
-//     this machine's values, so content entering from anywhere but an op is stripped on the way in
-//     (`governedContent`). Unstripped state would differ from every sanitized echo and publish
-//     spurious diffs. Exec reaches a save or a load only through `carryLocalNodeExec`, from the
-//     copy the save or load itself carried.
+//  1. ITS STATE CARRIES NO EXEC FIELDS. `shell`, `ssh.extraArgs` and a held launch
+//     (`pendingLaunch`) are machine-local (@shared/node-exec): every op reaches this module
+//     sanitized (the reflector hands its listener the op without a launch, even an owner's), but a
+//     store read re-applies this machine's values, so content entering from anywhere but an op is
+//     stripped on the way in (`governedContent`). Unstripped state would differ from every
+//     sanitized echo and publish spurious diffs. Exec reaches a save or a load only through
+//     `carryLocalNodeExec`, from the copy the save or load itself carried — which is how an armed
+//     `--after` node's launch, and a delivery's clear of it, reach the index's `localExec`.
 //
 //  2. ITS OWN PUBLISHED OPS ARE ORDINARY OPS. The diff an outside edit publishes goes out bare (no
 //     `src`, no `seen`), is stamped by the reflector and comes back through `onReflected` like any

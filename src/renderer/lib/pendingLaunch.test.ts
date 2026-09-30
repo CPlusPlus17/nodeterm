@@ -9,8 +9,11 @@ import {
   unmetDeps,
   LAUNCH_STALL_MS,
   withPrHold,
+  withSuccessHold,
+  successDepFacts,
   withLaunchBrief,
   launchBriefPresent,
+  handedOverDeps,
   type ArmedNode,
   type StatusById
 } from './pendingLaunch'
@@ -429,6 +432,183 @@ describe('--after-pr: a PR wait is a third gate, ANDed with the deps and the set
 
   it('without a PR wait the existing sentences are byte-identical', () => {
     expect(launchTooltip(undefined, 'Builder', 'claude')).toBe('Waiting for Builder to finish, then runs:\nclaude')
+  })
+})
+
+describe('--after-success: a success wait is a fourth gate — the turn ending is not enough', () => {
+  const NOW = 5_000_000
+  // As every open path builds it: the station is in `after` too (a success wait is `--after` plus
+  // the report).
+  const successNode = (deps: string[], deadlineAt = NOW + 60_000, after = deps): ArmedNode => ({
+    id: 'c',
+    data: { pendingLaunch: { after, command: 'echo c', afterSuccess: { deps, deadlineAt } } }
+  })
+  const live = new Set(['a', 'b', 'c'])
+  const done: StatusById = { a: { state: 'done' }, b: { state: 'done' } }
+  const rec = (nodeId: string, outcome: 'succeeded' | 'failed') => ({ nodeId, outcome, at: 1 })
+  const ctx = (...records: ReturnType<typeof rec>[]) => ({
+    outcomes: Object.fromEntries(records.map((r) => [r.nodeId, r])),
+    now: NOW
+  })
+  const fire = (node: ArmedNode, status: StatusById, c?: ReturnType<typeof ctx>, l = live) =>
+    launchesToFire([node], status, l, undefined, undefined, undefined, c)
+
+  it('a reported success, turn over: fires', () => {
+    expect(fire(successNode(['a']), done, ctx(rec('a', 'succeeded')))).toEqual([{ id: 'c', command: 'echo c' }])
+  })
+
+  it('a reported FAILURE blocks — the dependent never starts on it', () => {
+    expect(fire(successNode(['a']), done, ctx(rec('a', 'failed')))).toEqual([])
+  })
+
+  it('no report yet holds, even though the turn is over (the whole point: done is not success)', () => {
+    expect(fire(successNode(['a']), done, ctx())).toEqual([])
+  })
+
+  it('a reported success mid-turn waits for the turn to end', () => {
+    expect(fire(successNode(['a']), { a: { state: 'working' } }, ctx(rec('a', 'succeeded')))).toEqual([])
+  })
+
+  it('an errored last turn holds even after a success report (#521 stands)', () => {
+    expect(
+      fire(successNode(['a']), { a: { state: 'done', lastTurnError: { at: 1 } } }, ctx(rec('a', 'succeeded')))
+    ).toEqual([])
+  })
+
+  it('needs every station: one success is not enough', () => {
+    expect(fire(successNode(['a', 'b']), done, ctx(rec('a', 'succeeded')))).toEqual([])
+    expect(fire(successNode(['a', 'b']), done, ctx(rec('a', 'succeeded'), rec('b', 'succeeded')))).toEqual([
+      { id: 'c', command: 'echo c' }
+    ])
+  })
+
+  it('is ANDed with a plain --after on another station', () => {
+    const node = successNode(['a'], NOW + 60_000, ['a', 'b'])
+    expect(fire(node, { a: { state: 'done' }, b: { state: 'working' } }, ctx(rec('a', 'succeeded')))).toEqual([])
+    expect(fire(node, done, ctx(rec('a', 'succeeded')))).toEqual([{ id: 'c', command: 'echo c' }])
+  })
+
+  it('never fires past the deadline, whatever was reported', () => {
+    expect(fire(successNode(['a'], NOW), done, ctx(rec('a', 'succeeded')))).toEqual([])
+  })
+
+  it('a caller that passes no success context never releases a success hold', () => {
+    expect(fire(successNode(['a']), done, undefined)).toEqual([])
+  })
+
+  it('a CLOSED station releases only if it reported success before it went', () => {
+    const gone = new Set(['c'])
+    expect(fire(successNode(['a']), {}, ctx(rec('a', 'succeeded')), gone)).toEqual([{ id: 'c', command: 'echo c' }])
+    // For plain `--after` a deleted station is satisfied; for a success wait it is not — closing a
+    // station is exactly how an orchestrator abandons a failed attempt.
+    expect(fire(successNode(['a']), {}, ctx(), gone)).toEqual([])
+    expect(fire(successNode(['a']), {}, ctx(rec('a', 'failed')), gone)).toEqual([])
+  })
+
+  it('a hostile persisted hold never throws and never fires', () => {
+    for (const bad of ['a', ['a'], { deps: 'a', deadlineAt: NOW + 1 }, { deps: [42], deadlineAt: NOW + 1 }, 7]) {
+      const node = {
+        id: 'c',
+        data: { pendingLaunch: { after: ['a'], command: 'echo c', afterSuccess: bad } }
+      } as unknown as ArmedNode
+      expect(() => fire(node, done, ctx(rec('a', 'succeeded')))).not.toThrow()
+      expect(fire(node, done, ctx(rec('a', 'succeeded')))).toEqual([])
+    }
+  })
+
+  it('successDepFacts reads the --after rule for the turn and an OWN record only', () => {
+    expect(successDepFacts('a', done, live, {})).toEqual({ exists: true, turnDone: true })
+    expect(successDepFacts('constructor', {}, new Set(), {})).toEqual({ exists: false, turnDone: false })
+  })
+
+  it('the list row names the wait: waiting, blocked, expired — a delivery record still wins', () => {
+    expect(controlLaunchState(true, undefined, undefined, false, 'waiting')).toBe('waiting-success')
+    expect(controlLaunchState(true, undefined, undefined, false, 'blocked')).toBe('blocked-failure')
+    expect(controlLaunchState(true, undefined, undefined, false, 'expired')).toBe('success-expired')
+    expect(controlLaunchState(true, undefined, undefined, false, 'met')).toBe('queued')
+    expect(controlLaunchState(true, { kind: 'failed', attempts: 1, at: 0 }, undefined, false, 'blocked')).toBe('failed')
+  })
+
+  it('the tooltip says why it waits, why it is blocked, and that an expired wait needs ▶', () => {
+    const waiting = launchTooltip(undefined, 'Linter', 'claude', undefined, false, undefined, {
+      status: 'waiting',
+      summary: 'Builder (no outcome reported yet)',
+      deadline: '18:00'
+    })
+    expect(waiting).toBe(
+      'Waiting for Linter to finish and for a reported success from Builder (no outcome reported yet), until 18:00, then runs:\nclaude'
+    )
+    const blocked = launchTooltip(undefined, '', 'claude', undefined, false, undefined, {
+      status: 'blocked',
+      summary: 'Builder (reported failure: "red")',
+      deadline: '18:00'
+    })
+    expect(blocked).toContain('Held on Builder (reported failure: "red")')
+    expect(blocked).toContain('▶')
+    const expired = launchTooltip(undefined, '', 'claude', undefined, false, undefined, {
+      status: 'expired',
+      summary: '',
+      deadline: '18:00'
+    })
+    expect(expired).toMatch(/passed its deadline \(18:00\)/)
+    expect(expired).toMatch(/will not start on its own/)
+  })
+})
+
+describe('plain --after on a station handed new work (core/station-handover.ts)', () => {
+  const live = new Set(['a', 'b', 'c'])
+  const status: StatusById = { a: { state: 'done' }, b: { state: 'done' } }
+  const handovers = { a: { nodeId: 'a', since: 10 } }
+
+  it('a handed-over station is never a satisfied dep, whatever its state reads', () => {
+    expect(launchesToFire([armed('c', ['a', 'b'])], status, live, undefined, undefined, undefined, undefined, handovers)).toEqual([])
+    expect(unmetDeps(armed('c', ['a', 'b']), status, live, handovers)).toEqual(['a'])
+    expect(handedOverDeps(armed('c', ['a', 'b']), live, handovers)).toEqual(['a'])
+  })
+
+  it('without a hand-over the same state fires as before', () => {
+    expect(launchesToFire([armed('c', ['a', 'b'])], status, live, undefined, undefined, undefined, undefined, {})).toEqual([
+      { id: 'c', command: 'echo c' }
+    ])
+  })
+
+  it('a deleted station still counts as satisfied, hand-over or not', () => {
+    expect(launchesToFire([armed('c', ['a'])], {}, new Set(['c']), undefined, undefined, undefined, undefined, handovers)).toEqual([
+      { id: 'c', command: 'echo c' }
+    ])
+    expect(handedOverDeps(armed('c', ['a']), new Set(['c']), handovers)).toEqual([])
+  })
+
+  it('a success wait on a handed-over station holds: its turn is not over', () => {
+    expect(successDepFacts('a', status, live, {}, handovers).turnDone).toBe(false)
+    expect(successDepFacts('a', status, live, {}).turnDone).toBe(true)
+  })
+
+  it('a prototype key is not a hand-over', () => {
+    const bare = Object.create(null) as Record<string, undefined>
+    expect(handedOverDeps(armed('c', ['constructor', '__proto__']), new Set(['constructor', '__proto__']), bare)).toEqual([])
+    expect(handedOverDeps(armed('c', ['constructor']), new Set(['constructor']), {})).toEqual([])
+  })
+
+  it('the tooltip says what the wait is for, not "waiting for X to finish" about an idle X', () => {
+    const text = launchTooltip(undefined, 'Builder, Tester', 'claude go', undefined, false, undefined, undefined, undefined, 'Builder')
+    expect(text).toBe(
+      'Waiting for Builder to finish — a turn that ended before that work was done does not count ' +
+        '(all waits: Builder, Tester), then runs:\nclaude go'
+    )
+    // An errored upstream is still named first: it will not end on its own.
+    expect(launchTooltip(undefined, 'Builder', 'claude go', 'Tester', false, undefined, undefined, 'Builder')).toMatch(/^Tester ended/)
+  })
+})
+
+describe('withSuccessHold — the sibling of withPrHold', () => {
+  const hold = { deps: ['a'], deadlineAt: 9 }
+  it('adds the hold to a node that already holds its launch, and only then', () => {
+    const node = { id: 'n', data: { pendingLaunch: { after: ['a'], command: 'c' } } }
+    expect(withSuccessHold(node, hold).data.pendingLaunch).toEqual({ after: ['a'], command: 'c', afterSuccess: hold })
+    expect(withSuccessHold(node, undefined)).toBe(node)
+    const bare = { id: 'n', data: {} as { pendingLaunch?: PendingLaunch } }
+    expect(withSuccessHold(bare, hold)).toBe(bare)
   })
 })
 

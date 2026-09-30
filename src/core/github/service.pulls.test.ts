@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { GitHubIssueCache } from './cache'
+import { testTmpDir } from '../test-tmp'
 import { GitHubIssueService, type GitHubIssueServiceContext, type GitHubIssuesClientLike } from './service'
 import { GitHubRequestCoordinator } from './request-coordinator'
 import type { PullStatusRead } from './graphql-pulls'
@@ -10,9 +10,15 @@ import type { GitHubIssue, IssueHeartbeatResult, NormalisedProjectKanbanGitHub }
 import type { GitHubPullChecksResult, PullStatusFacts } from '../../shared/github-pull-status'
 
 let userDataDir: string
-beforeEach(async () => { userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nt-github-pulls-')) })
-// A claim persists the pull memory asynchronously, so a save can still be landing as a test ends.
-afterEach(async () => { await fs.rm(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }) })
+beforeEach(() => { userDataDir = testTmpDir('nt-github-pulls-') })
+// A claim persists the pull memory asynchronously, so a save can still be landing as a test ends —
+// and one that lands AFTER the rm recreates the directory (`writePrivate` mkdirs), which is how this
+// file stranded a `nt-github-pulls-*` dir per run. Settle first, then remove; `testTmpDir` removes it
+// again when the file ends, for a save slower than the settle.
+afterEach(async () => {
+  await flush()
+  await fs.rm(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
+})
 
 const HEAD = 'a'.repeat(40)
 const config: NormalisedProjectKanbanGitHub = {

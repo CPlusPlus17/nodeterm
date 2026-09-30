@@ -1,93 +1,106 @@
-// fakePlatform()'s temp directories must not outlive the test file that made them.
-//
-// They used to: every call mkdtemp'd a `nodeterm-fake-*` directory and nothing removed it, until a
-// shared host's /tmp hit 100% inode use (~395,000 of them). The mechanism is platform-fake-dirs.ts
-// (the registry + sweep) and test/setup/fake-platform-cleanup.ts (the per-file `afterAll`).
-import { execFile } from 'child_process'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { describe, expect, it, vi } from 'vitest'
-import { fakePlatform } from './platform-fake'
-import { fakePlatformDirs, removeFakePlatformDirs } from './platform-fake-dirs'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  FAKE_PLATFORM_ROOT_ENV,
+  enterFakePlatformRoot,
+  fakePlatform,
+  leaveFakePlatformRoot,
+  makeFakeUserDataDir
+} from './platform-fake'
 
-const repoRoot = path.resolve(__dirname, '../..')
+// Read before any test below re-points it: what the vitest run itself set up.
+const runRootAtLoad = process.env[FAKE_PLATFORM_ROOT_ENV]
 
-describe('fakePlatform temp directories', () => {
-  it('records every directory it creates', () => {
-    const a = fakePlatform()
-    const b = fakePlatform()
-    expect(a.userDataDir).not.toBe(b.userDataDir)
-    for (const dir of [a.userDataDir, b.userDataDir]) {
-      expect(fs.statSync(dir).isDirectory()).toBe(true)
-      expect(fakePlatformDirs().has(dir)).toBe(true)
-    }
+// fakePlatform() used to mkdtemp a directory in the system temp dir on EVERY call and never remove
+// it — ~395,000 of them filled a development server's /tmp inodes. These pin the three halves of the
+// fix: made only when read, made under the run's root, and the root removed at the end of the run.
+describe('fakePlatform userDataDir', () => {
+  let saved: string | undefined
+  let root: string
+
+  beforeEach(() => {
+    saved = process.env[FAKE_PLATFORM_ROOT_ENV]
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'nt-fake-root-test-'))
+    process.env[FAKE_PLATFORM_ROOT_ENV] = root
+  })
+  afterEach(() => {
+    if (saved === undefined) delete process.env[FAKE_PLATFORM_ROOT_ENV]
+    else process.env[FAKE_PLATFORM_ROOT_ENV] = saved
+    fs.rmSync(root, { recursive: true, force: true })
   })
 
-  it('makes and records nothing when the caller brings its own userDataDir', () => {
-    const before = [...fakePlatformDirs()]
-    const p = fakePlatform({ userDataDir: '/fixture-data' })
-    expect(p.userDataDir).toBe('/fixture-data')
-    expect([...fakePlatformDirs()]).toEqual(before)
+  it('makes no directory until userDataDir is read', () => {
+    fakePlatform()
+    fakePlatform()
+    expect(fs.readdirSync(root)).toEqual([])
   })
 
-  it('records into the same registry after vi.resetModules (it lives on globalThis)', async () => {
-    vi.resetModules()
-    const fresh = await import('./platform-fake')
-    const dir = fresh.fakePlatform().userDataDir
-    expect(fakePlatformDirs().has(dir)).toBe(true)
+  it('makes one fresh directory under the run root on first read, and keeps it', () => {
+    const p = fakePlatform()
+    const dir = p.userDataDir
+    expect(path.dirname(dir)).toBe(root)
+    expect(path.basename(dir)).toMatch(/^u-/)
+    expect(fs.statSync(dir).isDirectory()).toBe(true)
+    expect(p.userDataDir).toBe(dir)
+    expect(fakePlatform().userDataDir).not.toBe(dir)
+    expect(fs.readdirSync(root)).toHaveLength(2)
   })
 
-  it('the sweep removes every recorded directory, contents included, and empties the registry', () => {
-    const used = fakePlatform().userDataDir
-    const alreadyGone = fakePlatform().userDataDir
-    fs.mkdirSync(path.join(used, 'nested'))
-    fs.writeFileSync(path.join(used, 'nested', 'state.json'), '{}')
-    fs.rmSync(alreadyGone, { recursive: true }) // a test that cleaned up after itself
-    const { removed, failed } = removeFakePlatformDirs()
-    expect(failed).toEqual([])
-    expect(removed).toEqual(expect.arrayContaining([used, alreadyGone]))
-    expect(fs.existsSync(used)).toBe(false)
-    expect(fakePlatformDirs().size).toBe(0)
+  it('makes nothing when the test passes its own userDataDir', () => {
+    const p = fakePlatform({ userDataDir: '/nonexistent/own-dir' })
+    expect(p.userDataDir).toBe('/nonexistent/own-dir')
+    expect(fs.readdirSync(root)).toEqual([])
   })
 
-  // The end-to-end check: a real child vitest, on the repo's real config (only `include` swapped),
-  // runs a file that makes directories through fakePlatform(). They must exist throughout that file
-  // (the fixture asserts it, in a later test and in its own afterAll) and be gone once it has ended.
-  // This is what fails if the setup file is dropped from vitest.config.ts, if it stops registering
-  // the sweep, or if fakePlatform() stops recording what it makes.
-  it('removes them once the test file that made them has finished (real vitest run)', async () => {
-    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'nt-fake-cleanup-'))
+  it('carries the directory through a spread copy', () => {
+    const p = { ...fakePlatform() }
+    expect(path.dirname(p.userDataDir)).toBe(root)
+    expect(fs.readdirSync(root)).toHaveLength(1)
+  })
+
+  it('makeFakeUserDataDir: a fresh directory under the run root each call (own CorePlatforms)', () => {
+    const a = makeFakeUserDataDir()
+    const b = makeFakeUserDataDir()
+    expect(a).not.toBe(b)
+    expect(path.dirname(a)).toBe(root)
+    expect(path.dirname(b)).toBe(root)
+    expect(fs.statSync(a).isDirectory()).toBe(true)
+  })
+
+  it('falls back to the system temp dir when the run root is gone', () => {
+    fs.rmSync(root, { recursive: true, force: true })
+    const dir = fakePlatform().userDataDir
     try {
-      const out = path.join(scratch, 'dirs.json')
-      // Strip the parent run's worker identity so the child is a vitest run of its own.
-      const env: NodeJS.ProcessEnv = { NT_FAKE_DIRS_OUT: out }
-      for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('VITEST')) env[k] ??= v
-      const result = await new Promise<{ code: number; output: string }>((resolve) => {
-        execFile(
-          process.execPath,
-          [
-            path.join(repoRoot, 'node_modules', 'vitest', 'vitest.mjs'),
-            'run',
-            '--config',
-            'test/fixtures/fake-platform-cleanup/vitest.config.ts'
-          ],
-          { cwd: repoRoot, env, timeout: 90_000 },
-          (err, stdout, stderr) => {
-            const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0
-            resolve({ code, output: `${stdout}\n${stderr}` })
-          }
-        )
-      })
-      expect(result.code, result.output).toBe(0)
-      const dirs = JSON.parse(fs.readFileSync(out, 'utf8')) as string[]
-      expect(dirs).toHaveLength(3)
-      for (const dir of dirs) {
-        expect(path.basename(dir)).toMatch(/^nodeterm-fake-/)
-        expect(fs.existsSync(dir), `${dir} outlived its test file`).toBe(false)
-      }
+      expect(path.dirname(dir)).toBe(os.tmpdir())
     } finally {
-      fs.rmSync(scratch, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true })
     }
-  }, 100_000)
+  })
+})
+
+describe('the run root (test/setup/fake-platform-root.ts)', () => {
+  it('is in effect for this run — vitest.config.ts keeps it in globalSetup', () => {
+    // Without it every fakePlatform() directory lands in the system temp dir and is never removed.
+    expect(runRootAtLoad, 'fake-platform root not set — see test/setup/fake-platform-root.ts').toBeTruthy()
+    expect(fs.statSync(runRootAtLoad!).isDirectory()).toBe(true)
+  })
+
+  it('removes every directory the run made, and the variable with it', () => {
+    const saved = process.env[FAKE_PLATFORM_ROOT_ENV]
+    try {
+      const runRoot = enterFakePlatformRoot()
+      expect(process.env[FAKE_PLATFORM_ROOT_ENV]).toBe(runRoot)
+      const dir = fakePlatform().userDataDir
+      fs.writeFileSync(path.join(dir, 'state.json'), '{}')
+      expect(dir.startsWith(runRoot + path.sep)).toBe(true)
+      leaveFakePlatformRoot(runRoot)
+      expect(fs.existsSync(runRoot)).toBe(false)
+      expect(process.env[FAKE_PLATFORM_ROOT_ENV]).toBeUndefined()
+    } finally {
+      if (saved === undefined) delete process.env[FAKE_PLATFORM_ROOT_ENV]
+      else process.env[FAKE_PLATFORM_ROOT_ENV] = saved
+    }
+  })
 })

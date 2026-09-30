@@ -40,6 +40,7 @@ import type { BookmarkStore, RelayBookmark } from './relay-bookmarks'
 import { IPC } from '../../shared/ipc'
 import type { RelayClosedReason } from '../../shared/types'
 import { retryAfterTag, type JoinErrorCode } from '../../shared/relay-join-errors'
+import { relayPtyDataKey } from '../../shared/relay-pty-channel'
 
 /** What a hosted join hands the relay client: never a pin store. */
 export type HostedConnectOptions = Omit<ConnectRelayClientOptions, 'pins' | 'transport'>
@@ -347,8 +348,9 @@ export async function connectHostedTeam(codeText: string, deps: HostedJoinDeps, 
       onSas: (sas) => io.send(IPC.relayClientSas(connectionId), sas),
       onApproved: () => io.send(IPC.relayClientApproved(connectionId)),
       onFrame: (json) => io.send(IPC.relayClientFrame(connectionId), json),
-      // pty output arrives on the SAME per-session channel a local pty uses.
-      onPtyData: (sessionId, data) => io.send(IPC.ptyData(sessionId), data),
+      // pty output rides a NAMESPACED channel, never the bare host id (shared/relay-pty-channel.ts):
+      // the host's `pty-3` is not this machine's `pty-3`.
+      onPtyData: (sessionId, data) => io.send(IPC.ptyData(relayPtyDataKey(connectionId, sessionId)), data),
       onClosed: (reason) => {
         ended = true
         io.sessions.delete(connectionId)

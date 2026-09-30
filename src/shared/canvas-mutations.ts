@@ -3,7 +3,7 @@
 // (src/core). Pure: no electron, no sockets, no disk.
 
 import { isKanbanOp, sanitizeKanbanOp } from './kanban-ops'
-import { carryLocalNodeExec, sanitizeInboundMutation, sanitizeInboundNode } from './node-exec'
+import { carryLocalNodeExec, mutationTrustsLaunch, sanitizeInboundMutation, sanitizeInboundNode } from './node-exec'
 import { REF_MAX_LEN } from './presence'
 import type { BridgeLink, CanvasEdgeKind, CanvasMutation, CanvasNodeState, SceneMutation } from './types'
 
@@ -123,7 +123,10 @@ function checkMutation(value: unknown, sized: boolean): value is CanvasMutation 
 /**
  * The CLEAN form of an accepted mutation — what a reflector reflects and an authority applies, so
  * every peer receives the repaired op rather than each repairing the raw one on its own:
- *  - a node `upsert` loses the exec-enabling fields (`sanitizeInboundMutation`, @shared/node-exec);
+ *  - a node `upsert` loses the exec-enabling fields (`sanitizeInboundMutation`, @shared/node-exec).
+ *    `keepLaunch` keeps its held launch (`pendingLaunch`), and is for the reflector alone, for an
+ *    OWNER sender: it then forwards that launch to owner clients only (core/canvas-sync.ts
+ *    `fanOutMutation`);
  *  - a kanban op is rebuilt by `sanitizeKanbanOp` (unknown fields dropped, colour / rank / priority /
  *    dueAt / category repaired or dropped), KEEPING the stamp fields `src` / `seq` / `seen` — the
  *    order still has to judge it;
@@ -131,7 +134,7 @@ function checkMutation(value: unknown, sized: boolean): value is CanvasMutation 
  * `null` = refused (a kanban op `sanitizeKanbanOp` refuses). The caller still runs
  * `isCanvasMutation` first for the size cap; this adds no size check of its own.
  */
-export function sanitizeCanvasMutation(m: CanvasMutation): CanvasMutation | null {
+export function sanitizeCanvasMutation(m: CanvasMutation, keepLaunch = false): CanvasMutation | null {
   if (isKanbanOp(m)) {
     const clean = sanitizeKanbanOp(m)
     if (!clean) return null
@@ -141,7 +144,7 @@ export function sanitizeCanvasMutation(m: CanvasMutation): CanvasMutation | null
     if (m.seen !== undefined) out.seen = m.seen
     return out
   }
-  return sanitizeInboundMutation(m)
+  return sanitizeInboundMutation(m, keepLaunch)
 }
 
 function withinSizeLimit(m: unknown): boolean {
@@ -255,13 +258,37 @@ export function applyCanvasMutation(
   if (m.op === 'remove') return states.filter((n) => n.id !== m.id)
   // A kanban op addresses the board, not the node list (its `nodeId` names a CARD) — same no-op.
   if (m.op !== 'upsert') return states
-  const node = sanitizeInboundNode(m.node)
+  // A held launch (`pendingLaunch`) is machine-local too; only a core-vouched owner copy
+  // (`origin: 'core'`) may set or clear it (@shared/node-exec).
+  const trust = mutationTrustsLaunch(m)
+  const node = sanitizeInboundNode(m.node, trust)
   const idx = states.findIndex((n) => n.id === node.id)
   if (idx === -1) return [...states, node]
   const next = states.slice()
   // …and OUR exec fields stay on the node the upsert replaces: they are per-machine, so a peer
   // dragging our ssh terminal must not hand it back stripped of the jump host we configured.
-  next[idx] = carryLocalNodeExec(states[idx], node)
+  next[idx] = carryLocalNodeExec(states[idx], node, trust)
+  return next
+}
+
+/**
+ * Apply a mutation THIS renderer authored itself (a cold open into a background project, the
+ * headless start's outcome patch, an off-canvas display node). Nothing is stripped or carried: the
+ * write is ours, so its `pendingLaunch` is the one to keep — and an upsert without one CLEARS it,
+ * which the inbound path above can never do (it carries the old one across). Never call this with a
+ * mutation that arrived from anywhere else; that is what `applyCanvasMutation` is for.
+ */
+export function applyOwnCanvasMutation(
+  states: CanvasNodeState[],
+  m: CanvasMutation
+): CanvasNodeState[] {
+  if (m.op === 'remove') return states.filter((n) => n.id !== m.id)
+  // An edge or board op addresses no node in this list: the same no-op as `applyCanvasMutation`.
+  if (m.op !== 'upsert') return states
+  const idx = states.findIndex((n) => n.id === m.node.id)
+  if (idx === -1) return [...states, m.node]
+  const next = states.slice()
+  next[idx] = m.node
   return next
 }
 

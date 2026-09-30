@@ -39,7 +39,7 @@ describe('the publish gate hears the canvas authority', () => {
   })
 
   it('only ANOTHER client\'s mutation proves a peer (never our own echo)', () => {
-    const handler = between(canvas, 'return activeSession.api.canvas.onMutation((projectId, mutation) => {', 'const order = orderRef.current')
+    const handler = between(canvas, 'return activeSession.api.canvas.onMutation((projectId, received) => {', 'const order = orderRef.current')
     expect(handler).toContain('if (provesPeer(mutation, canvasSrcRef.current)) hasPeersRef.current = true')
     expect(handler).not.toMatch(/^\s*hasPeersRef\.current = true/m)
     const tag = between(canvas, 'const src = `cv-${Math.random().toString(36).slice(2, 10)}`', 'const order = createCanvasOrder(src)')

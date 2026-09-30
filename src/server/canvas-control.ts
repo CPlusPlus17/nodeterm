@@ -12,6 +12,12 @@ import {
 } from '../core/agents/agent-messaging'
 import { paneOwnerProject } from '../core/agents/pane-ownership'
 import { StationNoticeMonitor } from '../core/agents/station-notice'
+import {
+  StationOutcomeStore,
+  clearOutcomesAfterControl,
+  handleReportOutcome
+} from '../core/station-outcome-store'
+import { StationHandoverTracker } from '../core/station-handover'
 import { stationRecipientFromOwner } from '../shared/station-notice'
 import {
   mirrorEntry,
@@ -88,6 +94,10 @@ export interface ServerCanvasControl {
   onAgentEvent(event: NormalizedAgentEvent): void
   /** Station-failure notices for the stations agents opened during THIS server run. */
   stationNotices: StationNoticeMonitor
+  /** What each station reported about its own task in THIS server run (`report-outcome`). */
+  stationOutcomes: StationOutcomeStore
+  /** Stations with unfinished handed-over work in THIS server run (plain `--after` holds on them). */
+  stationHandovers: StationHandoverTracker
   installSkillInto(configDir: string): void
   stop(): void
 }
@@ -176,6 +186,20 @@ export async function initServerCanvasControl(
     installHooksIntoLocalAccounts(deps.settings().claudeAccounts ?? [], installSkillInto)
   }
 
+  // Station task outcomes: built before the factory, which reads them for `--after-success`.
+  const stationOutcomes = new StationOutcomeStore((records) =>
+    platform().broadcast(IPC.stationOutcomeChanged, records)
+  )
+  // Stations with unfinished handed-over work (core/station-handover.ts): built before the factory,
+  // whose plain `--after` holds on them — the same tracker, fed the same events, as the desktop.
+  // Every change re-evaluates the factory's arms: a hold can end on an event `refreshArmed` is not
+  // otherwise run for (a SessionEnd clearing a background-subagent hold). `factory` is assigned
+  // below, before any event can reach the tracker.
+  let factoryRef: HeadlessNodeFactory | undefined
+  const stationHandovers = new StationHandoverTracker((records) => {
+    platform().broadcast(IPC.stationHandoverChanged, records)
+    void factoryRef?.refreshArmed()
+  })
   const factory = new HeadlessNodeFactory({
     workspaceStore: deps.workspaceStore,
     ptyManager: deps.ptyManager,
@@ -191,6 +215,8 @@ export async function initServerCanvasControl(
       deps.codexSharedIdentity ?? (() => codexIdentityCaps().then((caps) => caps.shared)),
     stateOf: nodeState,
     agentIdOf: (nodeId) => mirrorEntry(nodeId)?.agentId,
+    outcomeOf: (nodeId) => stationOutcomes.get(nodeId),
+    handedOver: (nodeId) => stationHandovers.isHandedOver(nodeId),
     // NOT `workspaceExternalChange`. That channel means "somebody else wrote this file" and the
     // renderer answers it with `decideExternalChange`, which compares the whole project shell —
     // and `ropes` is part of it, so every headless spawn (one appended `ctrl-…` rope) read as a
@@ -206,6 +232,8 @@ export async function initServerCanvasControl(
     // An issue card's run history lives in the same board log the messaging trace writes to.
     appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry)
   })
+
+  factoryRef = factory
 
   const messaging: AgentMessagingDeps = {
     paneOwner: (nodeId) => deps.ptyManager.paneOwner(nodeId),
@@ -227,7 +255,13 @@ export async function initServerCanvasControl(
     callerOwnsTarget: (sourceNodeId, targetNodeId) =>
       factory.ownsSpawn(sourceNodeId, targetNodeId),
     customAgents: () => deps.settings().customAgents,
-    appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry)
+    appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry),
+    // A `send` / `reply` hands a station new work when it REACHES the pane (queued ⇒ "work pending"
+    // until it lands) — the same rule, and the same store method, as the desktop.
+    onHandover: (ev) => {
+      stationOutcomes.onHandover(ev)
+      stationHandovers.onHandover(ev)
+    }
   }
   const queue = createDeliveryQueue(messaging)
   messaging.queue = queue
@@ -269,6 +303,22 @@ export async function initServerCanvasControl(
     color: (sourceNodeId, args) => factory.color(sourceNodeId, args),
     sticky: (sourceNodeId, args) => factory.sticky(sourceNodeId, args),
     run: (sourceNodeId, args, verified) => factory.run(sourceNodeId, args, verified),
+    // A station's report about ITSELF (core/station-outcome-store.ts, the same handler the desktop
+    // runs). A report can release an armed dependent, so the factory re-evaluates its arms.
+    reportOutcome: (sourceNodeId, args, verified) =>
+      handleReportOutcome(
+        { nodeId: sourceNodeId, args, verified },
+        {
+          store: stationOutcomes,
+          now: () => Date.now(),
+          projectIdOfNode: (id) => {
+            const ids = deps.workspaceStore.projectIdsForNode(id)
+            return ids.length === 1 ? ids[0] : undefined
+          },
+          appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry),
+          onRecorded: () => void factory.refreshArmed()
+        }
+      ),
     settings: async (sourceNodeId, args) =>
       serverSettingsControl(
         {
@@ -289,14 +339,30 @@ export async function initServerCanvasControl(
   // restart clears it, so an owner request or browser view is the only cold-spawn authority.
   await factory.start()
 
+  const baseHandler = createServerEditionControlHandler(actions)
   return {
-    handler: createServerEditionControlHandler(actions),
+    // New work typed into a station by `run` withdraws its older outcome report — the "new task"
+    // rule in core/station-outcome-store.ts, applied on the answer. (`send` / `reply` go through
+    // `messaging.onHandover` above, which knows when a queued message actually lands.)
+    handler: async (req) => {
+      // When the request arrived — before `run` typed anything (see core/station-handover.ts).
+      const requestAt = Date.now()
+      const reply = await baseHandler(req)
+      clearOutcomesAfterControl(stationOutcomes, req.verb, req.args, reply, req.nodeId)
+      stationHandovers.noteControlAnswer(req.verb, req.args, reply, req.nodeId, requestAt)
+      return reply
+    },
     onAgentEvent: (event) => {
+      // The hand-over tracker FIRST: it stamps turn starts and ends, and both the queue flush and
+      // the factory's `refreshArmed` below act on this very event.
+      stationHandovers.onAgentEvent(event)
       onMessagingAgentEvent(event, queue)
       factory.onAgentEvent(event)
       stationNotices.onAgentEvent(event)
     },
     stationNotices,
+    stationOutcomes,
+    stationHandovers,
     installSkillInto,
     stop: () => {
       factory.stop()

@@ -1,6 +1,4 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
-import os from 'os'
 import path from 'path'
 import {
   registerPeerSink,
@@ -13,6 +11,7 @@ import { presenceHub, allocateRelayClientId } from '../core/presence/hub'
 import { initPlatform, resetPlatformForTests, type CorePlatform } from '../core/platform'
 import { IPC } from '../shared/ipc'
 import { decodePtyData } from '../shared/rpc'
+import { testTmpDir } from '../core/test-tmp'
 
 /** A fake peer sink that records everything the core pushed at it. */
 function fakeSink(buffered = () => 0) {
@@ -37,7 +36,7 @@ function fakePlatformWithPeers(wc: { sent: Array<{ id: number; channel: string; 
   const p: CorePlatform = {
     // mkdtemp, not a '/tmp/ud' literal: registered via initPlatform below, so a fixed temp path
     // taints every platform().userDataDir write as js/insecure-temporary-file (see platform-fake.ts).
-    userDataDir: madeDir(mkdtempSync(path.join(os.tmpdir(), 'nodeterm-peer-registry-'))),
+    userDataDir: testTmpDir('nodeterm-peer-registry-'),
     appVersion: '0.0.0',
     isPackaged: false,
     handle: () => {},
@@ -65,14 +64,6 @@ function fakePlatformWithPeers(wc: { sent: Array<{ id: number; channel: string; 
 let gone: number[]
 let flow: Array<[number, string, boolean, string]>
 
-// Every platform above mints a fresh mkdtemp dir, removed after each test (they used to leak one per
-// test on every run — see src/core/platform-fake-dirs.ts for what that did to a shared /tmp).
-const madeDirs: string[] = []
-function madeDir(dir: string): string {
-  madeDirs.push(dir)
-  return dir
-}
-
 beforeEach(() => {
   gone = []
   flow = []
@@ -88,7 +79,6 @@ afterEach(() => {
   for (const id of peerRegistry().ids()) unregisterPeerSink(id)
   resetPlatformForTests()
   vi.useRealTimers()
-  for (const dir of madeDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
 describe('peer sink registry', () => {
