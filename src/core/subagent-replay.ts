@@ -19,8 +19,17 @@ export class SubagentReplay {
       const key = this.key(event)
       // A native card REPLACING the card its tool call drew (core/claude-subagent-lifecycle.ts):
       // the replayed card keeps the original start time under the new key.
-      const replaced = event.supersedes ? this.starts.get(this.key({ ...event, toolUseId: event.supersedes })) : undefined
-      if (event.supersedes) this.starts.delete(this.key({ ...event, toolUseId: event.supersedes }))
+      // Its last sign of life moves with it (a time cannot double the way streamed text would), and
+      // `forget` drops the old key's activity entry too — a bare `starts.delete` orphaned it.
+      const oldKey = event.supersedes && event.supersedes !== event.toolUseId
+        ? this.key({ ...event, toolUseId: event.supersedes })
+        : undefined
+      const replaced = oldKey ? this.starts.get(oldKey) : undefined
+      const replacedLast = oldKey ? this.lastActivity.get(oldKey) : undefined
+      if (oldKey) this.forget(oldKey)
+      if (replaced && replacedLast !== undefined) {
+        this.lastActivity.set(key, Math.max(replacedLast, this.lastActivity.get(key) ?? 0))
+      }
       const running = this.starts.get(key)
       if (running) {
         // A repeated start of a running card corrects what it shows, never when it started.

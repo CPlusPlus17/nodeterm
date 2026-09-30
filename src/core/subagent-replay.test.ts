@@ -80,6 +80,17 @@ describe('Claude native subagents (core/claude-subagent-lifecycle.ts)', () => {
     replay.record({ ...start, toolUseId: 'a1', supersedes: 'toolu_1' }, 150)
     expect(replay.snapshot(200).map((e) => [e.toolUseId, e.subagentStartedAt])).toEqual([['a1', 100]])
   })
+  it('a supersede moves the replaced card\'s last activity to the new key and drops the old entry', () => {
+    const replay = new SubagentReplay()
+    replay.record({ ...start, toolUseId: 'toolu_1' }, 100)
+    replay.touch('toolu_1', 140)
+    replay.record({ ...start, toolUseId: 'a1', supersedes: 'toolu_1' }, 150)
+    expect(replay.snapshot(200)).toEqual([expect.objectContaining({ toolUseId: 'a1', subagentLastActivityAt: 140 })])
+    // A later start that reuses the old key must not inherit the orphaned activity time.
+    replay.record({ ...start, toolUseId: 'toolu_1' }, 300)
+    const reused = replay.snapshot(300).find((e) => e.toolUseId === 'toolu_1')
+    expect(reused?.subagentLastActivityAt).toBeUndefined()
+  })
   it('a repeated start of a running card corrects its label and keeps its start time', () => {
     const replay = new SubagentReplay()
     replay.record({ ...start, toolUseId: 'a1', taskLabel: 'guess' }, 100)
