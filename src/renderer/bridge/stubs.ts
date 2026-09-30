@@ -585,6 +585,9 @@ export function buildStubApi(): Omit<
     },
     // Inert by default: the Server Edition overrides it with the real bridge
     // (`buildStationNoticeApi`), and a relay tab keeps this — its stations belong to the host's core.
+    // Inert by default: the Server Edition overrides it (`buildStationNoticeApi` carries it too), and
+    // a relay tab keeps this — its board belongs to the host, whose dispatch it cannot see.
+    boardDispatch: { report: noop },
     stationNotice: {
       list: async () => [],
       onChanged: noopUnsub,

@@ -867,6 +867,11 @@ const api: NodeTerminalApi = {
     deliver: (req) => ipcRenderer.invoke(IPC.agentMessageDeliver, req),
     deliverBoardComment: (req) => ipcRenderer.invoke(IPC.agentBoardCommentDeliver, req)
   },
+  boardDispatch: {
+    report: (entries) => {
+      void ipcRenderer.invoke(IPC.boardDispatchReport, entries).catch(() => undefined)
+    }
+  },
   stationNotice: {
     list: () => ipcRenderer.invoke(IPC.stationNoticeList),
     onChanged: (cb) => {

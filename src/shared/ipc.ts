@@ -241,6 +241,9 @@ export const IPC = {
   /** renderer → core: the renderer's DROPPED verdict for one node (`nodeId, dropped`) — the one
    *  trigger fact core cannot measure itself (it needs the renderer's hibernated/paused flags). */
   stationNoticeDropped: 'station-notice:dropped',
+  /** renderer → core: the renderer's board-dispatch map (@shared/board-dispatch-report), replaced
+   *  whole on each change — what the `issues` control verb shows beside an issue. Display only. */
+  boardDispatchReport: 'board-dispatch:report',
   /** core → every renderer: the FULL current notice list on each change, never a delta. */
   stationNoticeChanged: 'station-notice:changed',
   /** Station task outcomes (`report-outcome`, src/core/station-outcome-store.ts). invoke: every

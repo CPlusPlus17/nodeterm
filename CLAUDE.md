@@ -3761,6 +3761,49 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   nodeterm has no automatic post-to-issue path and must not grow one. `list` marks a bound row
   `issue owner/repo#N`. Server Edition: `open-agent --issue` works under its verified-only,
   creator-owned rules and writes the run history; `assign` is unsupported there (the skill says so).
+  **The board's GitHub lane for agents (`issues`, `prs`, 2026-09-30, read-only).** An orchestrator could
+  start work on an issue (`--issue`) and wait on a PR (`--after-pr`) but not SEE the lane: `board` lists
+  session cards only (measured: 21 session cards, zero issue/PR cards), so agents fell back to
+  `gh issue list` / `gh pr checks`, which spend the account's budget outside the coordinator and cannot
+  say which column an issue sits in, which session is bound to it, whether dispatch queued it, or what CI
+  snapshot the board already holds. `issues [--state open|closed|all] [--label L] [--column <id|title|
+  ungrouped>] [--limit N]` and `prs [--state open|merged|closed|all] [--limit N]` (default open, 30 rows,
+  max 100, newest-updated first; both take `--project`) answer that. ONE module, `core/github/control-
+  read.ts`, called by desktop main (after the `--project` grant gate, before any forward) and by the
+  Server Edition's control handler (own project only — it keeps no grant ledger). Rules a refactor must
+  not undo:
+  - **Zero GitHub requests.** The read is `GitHubIssueService.controlSnapshot`: the issue cache plus the
+    pull tracker's memory, through `projectContextForCache` — no credential resolve, no heartbeat, no
+    poll (`service.pulls.test.ts` counts the client's calls and the credential chain, before and after a
+    fetch). No snapshot yet, an unapproved repository and a board with no GitHub connection are each a
+    NAMED refusal (`issues-no-snapshot`, `-not-approved`, `-no-github-board`), never "0 issues". An
+    agent's read deliberately does NOT start a fetch: a repository's first fetch is a full paged harvest,
+    and spending that is the person's call (opening the board), not a background agent's.
+  - **The board's semantics, imported.** CI is `GitHubPullStatus.ci` (`pullStatusFrom`: a null rollup
+    is "no checks", never passed; only the CURRENT head counts), merge `ready` only from CLEAN, a failed
+    status read says STALE (`pullStatusFreshness`), merged/closed PRs carry no CI. PR ↔ session card is
+    `pullsForCard` — MOVED to `@shared/pull-card-links` (the renderer's `lib/pullLinks.ts` re-exports it)
+    with the nearest-bound-branch walk (`nearestBoundBranch`, which `worktreeBranchOf` now calls), so
+    the card and the verb cannot link differently: worktree branch (never a fork, never on an SSH
+    project) or the issue the session was started on, tombstones honoured. Bound sessions are terminal
+    nodes whose `issueRef` names this repository, with the mirror's live state (`queued` for a held
+    launch, `unknown` otherwise).
+  - **Untrusted text.** Titles, labels, logins and branch names pass `untrustedLine` (one line, `\p{Cf}`
+    bidi/zero-width stripped, capped); the reply's first line is `UNTRUSTED_TEXT_NOTE`; issue bodies and
+    comments are never included (the agent reads them with `gh`, as the `--issue` prompt says).
+  - **Dispatch state is the renderer's**, so the renderer REPORTS it: `boardDispatch.report` (display
+    only, replaced whole on change, `@shared/board-dispatch-report`) into `core/board-dispatch-report.ts`,
+    kept per sender and read only for senders still in `clientIds()` (a closed tab leaves no stale
+    "queued"), owner clients only, the channel host-only (a relay tab's stub is inert). Desktop and
+    Server Edition both register it.
+  - Verified-only (`requiresVerified`, refusal `GitHub lane read refused.`) — the project is resolved
+    from the caller's node, so a forgeable caller could read any project's lane; `STORE_ANSWERED_VERBS`
+    (a read needs no canvas, and polling `prs` must never travel the user's view); not a request-id
+    verb. Both agent bodies render `githubReadDocLines` from the module's constants, including the loop
+    (`issues` → `open-agent --issue #N` → `prs` / `--after-pr`) and "GitHub writes stay with the person".
+    Relay tabs: no lane (their control belongs to the host). **Mobile: N/A** — the phone issues no
+    control verbs.
+
   **Dependency edges (`--after`, 2026-07):** `open-terminal`/`open-claude`/`open-agent` accept
   `--after <id,id>`, which opens the node **armed** — `data.pendingLaunch` ({after, command},
   `PendingLaunch` in shared/types) holds the launch the factory built, and Canvas fires it once

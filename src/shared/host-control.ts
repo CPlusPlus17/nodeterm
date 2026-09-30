@@ -73,6 +73,9 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   // cannot quietly open it.
   IPC.agentBoardCommentDeliver,
   IPC.stationNoticeDropped,
+  // The host's own dispatcher state; a relay tab's board belongs to the host and its dispatch is
+  // refused, so a peer has nothing true to report.
+  IPC.boardDispatchReport,
   IPC.stationNoticeList,
   // Unscoped: every project's station outcomes and their notes. A relay guest bound to one project
   // must not read another's, and a relay tab's launch loop is refused anyway (its stub is inert).

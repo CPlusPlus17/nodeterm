@@ -91,6 +91,25 @@ export interface GitHubIssueProjectContext {
   mappingApproved: boolean
 }
 
+/** What `controlSnapshot` answers: the cached board state of one project, no request made. */
+export interface GitHubControlSnapshot {
+  repository: string
+  completionColumnId?: string
+  mappingApproved: boolean
+  /** Issues AND pull requests of the harvest, each with the column its labels map it to. */
+  items: GitHubIssueCardView[]
+  /** A complete harvest exists (from this run or the on-disk cache). */
+  hasSnapshot: boolean
+  /** Only a partial harvest exists (the repository is over the issue/byte bounds). */
+  partial: boolean
+  incomplete: boolean
+  pullsTruncated: boolean
+  /** Epoch ms of the last complete refresh — how old the list is. */
+  lastSuccessfulRefreshAt?: number
+  pullBoard: GitHubPullBoard
+  throttle?: GitHubThrottle
+}
+
 export interface GitHubIssueServiceContext extends GitHubIssueProjectContext {
   credentialGeneration: number
   userId: string
@@ -713,6 +732,34 @@ export class GitHubIssueService {
     const context = await this.cacheContext(request.projectId)
     const { key } = await this.cachedState(context)
     return this.pulls.board(key)
+  }
+
+  /**
+   * Everything the read-only control verbs (`issues` / `prs`, core/github/control-read.ts) show, from
+   * what this process ALREADY holds: the issue cache and the pull tracker's memory. It sends no
+   * request, resolves no credential and starts no poll — an agent's read must never spend the
+   * account's GitHub budget or wake a repository nobody has subscribed to. Throws the host's coded
+   * errors (`not-approved`, `invalid-configuration`, …) exactly like `query`, so a caller can say
+   * WHY there is nothing to show rather than "0 issues".
+   */
+  async controlSnapshot(projectId: string): Promise<GitHubControlSnapshot> {
+    const context = await this.cacheContext(projectId)
+    const { key, state, userId } = await this.cachedState(context)
+    const source = state.snapshot?.issues ?? state.partialIssues ?? []
+    const throttle = userId ? this.options.coordinator.throttle(userId) : undefined
+    return {
+      repository: context.repository,
+      completionColumnId: context.config.completionColumnId,
+      mappingApproved: context.mappingApproved,
+      items: source.map((issue): GitHubIssueCardView => ({ ...issue, ...mapping(issue, context.config) })),
+      hasSnapshot: !!state.snapshot,
+      partial: !state.snapshot && !!state.partialIssues,
+      incomplete: state.incomplete,
+      pullsTruncated: !!state.snapshot?.pullsTruncated,
+      ...(state.snapshot ? { lastSuccessfulRefreshAt: state.snapshot.lastSuccessfulRefreshAt } : {}),
+      pullBoard: this.pulls.board(key),
+      ...(throttle ? { throttle } : {})
+    }
   }
 
   /**

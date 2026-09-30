@@ -269,7 +269,12 @@ export const requiresVerified: ReadonlySet<string> = new Set([
   // A station's own task outcome (@shared/station-outcome): a reported success RELEASES every
   // dependent armed with `--after-success`, so the claim must come from the node it is about — and
   // only a verified caller is provably that node.
-  'report-outcome'
+  'report-outcome',
+  // The board's GitHub lane (core/github/control-read.ts). The project read is resolved from the
+  // CALLER's node, so a caller nobody can verify could name any node and read another project's
+  // lane — bound sessions and dispatch state included. NEW verbs: fail-closed strands nobody.
+  'issues',
+  'prs'
 ])
 
 /**
@@ -298,6 +303,9 @@ export const RUN_CONTROL_REFUSAL = 'Run refused.'
 /** Same posture for `report-outcome` (defined beside its grammar, @shared/station-outcome). */
 export { REPORT_OUTCOME_CONTROL_REFUSAL }
 
+/** The flat refusal for an unverified `issues` / `prs` read (core/github/control-read.ts). */
+export const GITHUB_READ_CONTROL_REFUSAL = 'GitHub lane read refused.'
+
 /** The verified-only refusal, worded for the verb that was refused. */
 export function verifiedRefusalFor(verb: string): string {
   if (verb === 'open-terminal') return 'Terminal command refused.'
@@ -307,6 +315,7 @@ export function verifiedRefusalFor(verb: string): string {
   if (verb === 'open-project') return OPEN_PROJECT_CONTROL_REFUSAL
   if (verb === 'run') return RUN_CONTROL_REFUSAL
   if (verb === 'report-outcome') return REPORT_OUTCOME_CONTROL_REFUSAL
+  if (verb === 'issues' || verb === 'prs') return GITHUB_READ_CONTROL_REFUSAL
   return MESSAGING_CONTROL_REFUSAL
 }
 
