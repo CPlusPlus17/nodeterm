@@ -4134,7 +4134,7 @@ export interface NodeTerminalApi {
     reportDropped(nodeId: string, dropped: boolean): void
   }
   /** Station task outcomes (`report-outcome`, src/core/station-outcome-store.ts): what each station
-   *  reported about its own task in this app run — what a `--after-success` wait reads. Desktop and
+   *  reported about its own task (durable across a restart) — what a `--after-success` wait reads. Desktop and
    *  Server Edition are real; a relay tab's stations belong to the host's core, so there it is inert
    *  (and its launch delivery is refused anyway). */
   stationOutcome: {

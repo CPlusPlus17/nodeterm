@@ -48,8 +48,24 @@
  * NOT a hand-over: a board comment (a person steering), a station notice (the app telling an
  * orchestrator something), a person typing in the pane. Deliberately the same set #1042 counts.
  *
- * TRANSIENT, bounded (the oldest station with nothing handed over is evicted first): after a
- * restart nothing has been handed over in this run.
+ * Bounded (the oldest station with nothing handed over is evicted first) and DURABLE ACROSS A
+ * RESTART (`HANDOVER_FACT`, `<userData>/orchestration-state/station-handovers.json`, through
+ * core/durable-state.ts). Without it an app restart forgot every hold, and a dependent armed on a
+ * station that had just been handed its next task fired on the first `done` after the restart —
+ * the previous task's, or a turn in flight before the work landed. What a restart means here:
+ *   - the HOLDING stations are stored — `handedAt`, the current turn's start and state, the
+ *     background flag — so a hold ends after the restart exactly as it would have without one: on
+ *     a `done` for a turn that started at or after the hand-over (wall-clock times, so a turn that
+ *     began before the restart still counts if it began after the hand-over);
+ *   - `queued` is NOT stored: it is rebuilt from the durable delivery queue, whose restore replays
+ *     a `queued` hand-over per waiting message (and a `settled` one, never landed, for each message
+ *     that lapsed while the app was down — which is still a hand-over, see above);
+ *   - hook events are lost while the app is down (the hook POSTs have nowhere to go), so a turn
+ *     that ENDED during the downtime is not seen: the hold lasts until the station's next turn end.
+ *     The holding direction, with ▶ / `run` as the way out, like every other uncertainty here;
+ *   - a hold is not bound to a session: a station respawned into a new session still owes the work
+ *     it was handed, and its next completed turn ends the hold as usual.
+ * Loaded by each shell after the station reports and before the delivery queue.
  */
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { IPC } from '../shared/ipc'
@@ -57,6 +73,7 @@ import { isSafeNodeId } from '../shared/safe-id'
 import type { StationHandoverRecord } from '../shared/station-handover'
 import type { MessageHandover } from './agents/agent-messaging'
 import type { CorePlatform } from './platform'
+import type { DurableFactFile, DurableFactSpec } from './durable-state'
 
 /** How many stations' activity one process tracks. Far past any canvas; evicts the oldest first. */
 export const STATION_HANDOVER_MAX_TRACKED = 2000
@@ -82,6 +99,39 @@ interface StationTrack {
   background?: boolean
 }
 
+/** One holding station as it is written to disk (`queued` is rebuilt, never stored). */
+export interface PersistedHandover {
+  nodeId: string
+  handedAt?: number
+  turnStartedAt?: number
+  state?: AgentState
+  background?: true
+}
+
+const STATES: ReadonlySet<string> = new Set(['working', 'waiting', 'blocked', 'done'])
+
+/** Re-check one entry read from disk (hand-editable input). `null` drops it. */
+export function sanitizePersistedHandover(raw: unknown): PersistedHandover | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.nodeId !== 'string' || !isSafeNodeId(r.nodeId)) return null
+  const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+  const out: PersistedHandover = { nodeId: r.nodeId }
+  for (const k of ['handedAt', 'turnStartedAt'] as const) {
+    if (r[k] === undefined) continue
+    if (!fin(r[k])) return null
+    out[k] = r[k] as number
+  }
+  if (r.state !== undefined) {
+    if (typeof r.state !== 'string' || !STATES.has(r.state)) return null
+    out.state = r.state as AgentState
+  }
+  if (r.background === true) out.background = true
+  // An entry that holds nothing is not a hand-over (and would only take a slot).
+  if (out.handedAt === undefined && !out.background) return null
+  return out
+}
+
 function holds(t: StationTrack): boolean {
   return t.queued > 0 || t.handedAt !== undefined || t.background === true
 }
@@ -93,8 +143,44 @@ export class StationHandoverTracker {
 
   constructor(
     private readonly publish: (records: StationHandoverRecord[]) => void = () => {},
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    /** Mirror the holding stations to disk; `loadFromDisk` reads them back at boot. */
+    private readonly durable?: Pick<DurableFactFile<PersistedHandover>, 'load' | 'save'>
   ) {}
+
+  /**
+   * Bring back the holds an earlier process saved (see the header). Called once per shell at boot,
+   * BEFORE the delivery queue is restored (its replay adds `queued` on top). Stations this run has
+   * already seen win. Never throws: the file layer turns a bad file into an empty list.
+   */
+  loadFromDisk(): void {
+    if (!this.durable) return
+    for (const p of this.durable.load()) {
+      if (this.byId.has(p.nodeId)) continue
+      const t = this.touch(p.nodeId)
+      if (p.handedAt !== undefined) t.handedAt = p.handedAt
+      if (p.turnStartedAt !== undefined) t.turnStartedAt = p.turnStartedAt
+      if (p.state !== undefined) t.state = p.state
+      if (p.background) t.background = true
+    }
+    this.changed()
+  }
+
+  private persist(): void {
+    if (!this.durable) return
+    const out: PersistedHandover[] = []
+    for (const [nodeId, t] of this.byId) {
+      if (t.handedAt === undefined && !t.background) continue
+      out.push({
+        nodeId,
+        ...(t.handedAt !== undefined ? { handedAt: t.handedAt } : {}),
+        ...(t.turnStartedAt !== undefined ? { turnStartedAt: t.turnStartedAt } : {}),
+        ...(t.state !== undefined ? { state: t.state } : {}),
+        ...(t.background ? { background: true as const } : {})
+      })
+    }
+    this.durable.save(out)
+  }
 
   private touch(nodeId: string): StationTrack {
     const cur = this.byId.get(nodeId) ?? { queued: 0 }
@@ -129,6 +215,7 @@ export class StationHandoverTracker {
   }
 
   private changed(): void {
+    this.persist()
     const list = this.list()
     const sig = list
       .map((r) => `${r.nodeId}:${r.since ?? ''}:${r.queued ? 1 : 0}:${r.background ? 1 : 0}`)
@@ -158,8 +245,11 @@ export class StationHandoverTracker {
     if (typeof state !== 'string') return
     const t = this.touch(event.nodeId)
     if (ACTIVE.has(state)) {
-      if (!t.state || !ACTIVE.has(t.state)) t.turnStartedAt = this.now()
+      const started = !t.state || !ACTIVE.has(t.state)
+      if (started) t.turnStartedAt = this.now()
       t.state = state
+      // A held station's turn start is what ends its hold: it must survive a restart too.
+      if (started && holds(t)) this.persist()
       return
     }
     t.state = state
@@ -249,4 +339,12 @@ export function registerStationHandoverIpc(
   tracker: () => StationHandoverTracker | null
 ): void {
   platform.handle(IPC.stationHandoverList, () => tracker()?.list() ?? [])
+}
+
+/** The tracker's durable file (core/durable-state.ts). */
+export const HANDOVER_FACT: DurableFactSpec<PersistedHandover> = {
+  kind: 'station-handovers',
+  version: 1,
+  maxRecords: STATION_HANDOVER_MAX_TRACKED,
+  sanitize: sanitizePersistedHandover
 }

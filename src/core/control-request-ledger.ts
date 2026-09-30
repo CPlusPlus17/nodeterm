@@ -26,16 +26,27 @@
 //   - Retention is bounded: 24 h, and a cap per caller and in total. An in-flight row is never
 //     evicted by a cap (evicting it would let its own retry run a second time).
 //
-// PROCESS MEMORY, deliberately. The ledger lives in the one process that executes the call (the
-// hook server's `/control/` route, which BOTH shells pass through). An app restart between the
-// effect and the retry empties it, and that retry runs again. That is the case that matters least:
-// a restart inside the seconds-to-minutes between a lost reply and its retry is rare, and it also
-// rotates the endpoint the shim posts to, so the shim's own re-post never reaches the new process
-// with the old id anyway. Persisting it would mean a store, a schema and atomic writes on every
-// control call for that corner.
+// DURABLE ACROSS A RESTART (it used to be process memory, which let a retry after an app restart
+// re-run an open that had already happened). The ledger still lives in the one process that
+// executes the call (the hook server's `/control/` route, which BOTH shells pass through), and the
+// route mirrors every change to `<userData>/orchestration-state/control-requests.json`
+// (`CONTROL_REQUEST_FACT`, through core/durable-state.ts). What a restart means for a row:
+//   - settled rows come back and REPLAY, exactly as before the restart, until their 24 h are up;
+//   - a row that was IN FLIGHT when the process ended comes back UNKNOWN: its handler was cut off
+//     mid-call, so it may have taken effect. Refused, never re-run — the same answer an unknown row
+//     always gave. Nothing can settle it any more (the late answer died with the old process), so it
+//     stays unknown until retention drops it;
+//   - an unknown row stays unknown;
+//   - a reply too large to store (`CONTROL_REQUEST_REPLY_MAX_BYTES`) is written as UNKNOWN rather
+//     than dropped: a missing row would let the retry run, and "refused" is the safe direction.
+// A crash inside the save window (`DURABLE_STATE_DEBOUNCE_MS`) loses the rows claimed in it; a clean
+// quit flushes synchronously. The file is hand-editable, so every row is re-checked on read
+// (`sanitizeLedgerRow`).
 //
 // Pure: no clock, no I/O, no network. The route wires it (src/core/agents/hook-server.ts).
 import { createHash } from 'node:crypto'
+import { isSafeNodeId } from '../shared/safe-id'
+import type { DurableFactSpec } from './durable-state'
 
 /**
  * The verbs that CREATE something — a node, a team, a worktree, a frame. The ones this module
@@ -280,6 +291,7 @@ export type LedgerDecision =
 
 interface Row {
   caller: string
+  requestId: string
   fingerprint: string
   claimedAt: number
   touchedAt: number
@@ -299,6 +311,74 @@ export interface ControlRequestLedgerOptions {
   /** An in-flight row older than this answers as unknown (still refused). The route passes the
    *  socket ceiling, past which the caller's own request has already been cut off. */
   inFlightStaleMs?: number
+  /** Called after every change a restart must see (a claim, a settlement, a prune). The route
+   *  mirrors `exportRows()` to disk from here. */
+  onChange?: () => void
+}
+
+/** One ledger row as it is written to disk. `requestId` is the caller's id; the key is rebuilt. */
+export interface PersistedLedgerRow {
+  caller: string
+  requestId: string
+  fingerprint: string
+  claimedAt: number
+  touchedAt: number
+  state: 'in-flight' | 'settled' | 'unknown'
+  reply?: ControlReply
+}
+
+/** A stored reply larger than this (JSON) is written as an UNKNOWN row instead. Open replies are a
+ *  few hundred bytes; the bound only keeps a pathological `result` out of the file. */
+export const CONTROL_REQUEST_REPLY_MAX_BYTES = 64 * 1024
+
+const FINGERPRINT_RE = /^[0-9a-f]{64}$/
+
+/** Re-check one row read from disk (hand-editable input). `null` drops it. */
+export function sanitizeLedgerRow(raw: unknown): PersistedLedgerRow | null {
+  if (!raw || typeof raw !== 'object') return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.caller !== 'string' || !isSafeNodeId(r.caller)) return null
+  if (typeof r.requestId !== 'string' || !isValidRequestId(r.requestId)) return null
+  if (typeof r.fingerprint !== 'string' || !FINGERPRINT_RE.test(r.fingerprint)) return null
+  if (typeof r.claimedAt !== 'number' || !Number.isFinite(r.claimedAt)) return null
+  if (typeof r.touchedAt !== 'number' || !Number.isFinite(r.touchedAt)) return null
+  if (r.state !== 'in-flight' && r.state !== 'settled' && r.state !== 'unknown') return null
+  const row: PersistedLedgerRow = {
+    caller: r.caller,
+    requestId: r.requestId,
+    fingerprint: r.fingerprint,
+    claimedAt: r.claimedAt,
+    touchedAt: r.touchedAt,
+    state: r.state
+  }
+  if (r.state === 'settled') {
+    const reply = sanitizeReply(r.reply)
+    // A settled row without a usable reply cannot replay; it must still refuse, so it is unknown.
+    if (reply) row.reply = reply
+    else row.state = 'unknown'
+  }
+  return row
+}
+
+function sanitizeReply(raw: unknown): ControlReply | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.ok !== 'boolean') return null
+  if (r.message !== undefined && typeof r.message !== 'string') return null
+  if (r.error !== undefined && typeof r.error !== 'string') return null
+  let size = 0
+  try {
+    size = JSON.stringify(r).length
+  } catch {
+    return null
+  }
+  if (size > CONTROL_REQUEST_REPLY_MAX_BYTES) return null
+  return {
+    ok: r.ok,
+    ...(typeof r.message === 'string' ? { message: r.message } : {}),
+    ...(typeof r.error === 'string' ? { error: r.error } : {}),
+    ...(r.result !== undefined ? { result: r.result } : {})
+  }
 }
 
 export class ControlRequestLedger {
@@ -310,8 +390,10 @@ export class ControlRequestLedger {
   private readonly perCallerMax: number
   private readonly globalMax: number
   private readonly inFlightStaleMs: number
+  private readonly onChange: () => void
 
   constructor(opts: ControlRequestLedgerOptions = {}) {
+    this.onChange = opts.onChange ?? ((): void => {})
     this.now = opts.now ?? Date.now
     this.ttlMs = opts.ttlMs ?? REQUEST_LEDGER_TTL_MS
     this.perCallerMax = opts.perCallerMax ?? REQUEST_LEDGER_PER_CALLER_MAX
@@ -338,10 +420,11 @@ export class ControlRequestLedger {
       }
       return { kind: 'refuse', outcome: 'request-outcome-unknown', firstRunAt }
     }
-    const row: Row = { caller, fingerprint, claimedAt: now, touchedAt: now, state: 'in-flight' }
+    const row: Row = { caller, requestId, fingerprint, claimedAt: now, touchedAt: now, state: 'in-flight' }
     this.rows.set(key, row)
     this.perCaller.set(caller, (this.perCaller.get(caller) ?? 0) + 1)
     this.enforceCaps(caller)
+    this.onChange()
     // The claim closes over THIS row object, never the key: a row forgotten by retention or a cap
     // and then re-claimed under the same key is a different object, so a late answer from the
     // forgotten call can only ever write to the detached row nobody reads.
@@ -350,6 +433,7 @@ export class ControlRequestLedger {
       row.reply = kept
       row.state = 'settled'
       row.touchedAt = this.now()
+      this.onChange()
     }
     return {
       kind: 'run',
@@ -359,6 +443,7 @@ export class ControlRequestLedger {
           if (reply.indeterminate) {
             row.state = 'unknown'
             row.touchedAt = this.now()
+            this.onChange()
             return
           }
           store(reply)
@@ -367,6 +452,7 @@ export class ControlRequestLedger {
           if (row.state !== 'in-flight') return
           row.state = 'unknown'
           row.touchedAt = this.now()
+          this.onChange()
         },
         settleLate: (reply) => {
           if (row.state !== 'unknown' || reply.indeterminate) return
@@ -376,15 +462,72 @@ export class ControlRequestLedger {
     }
   }
 
+  /**
+   * Every row, oldest claim first, as it is written to disk. A row still in flight is written as
+   * it is and read back as UNKNOWN (`restore`): if the process ends before it settles, its handler
+   * was cut off and the effect may have happened.
+   */
+  exportRows(): PersistedLedgerRow[] {
+    const out: PersistedLedgerRow[] = []
+    for (const row of this.rows.values()) {
+      const rec: PersistedLedgerRow = {
+        caller: row.caller,
+        requestId: row.requestId,
+        fingerprint: row.fingerprint,
+        claimedAt: row.claimedAt,
+        touchedAt: row.touchedAt,
+        state: row.state
+      }
+      if (row.state === 'settled' && row.reply) {
+        const reply = sanitizeReply(row.reply)
+        if (reply) rec.reply = reply
+        else rec.state = 'unknown'
+      }
+      out.push(rec)
+    }
+    return out
+  }
+
+  /**
+   * Load rows written by an earlier process (boot, before any call). In-flight rows become UNKNOWN
+   * (refused, never re-run); rows past retention are skipped; the caps apply as on a claim. Rows
+   * already held (none, at boot) win over restored ones.
+   */
+  restore(rows: readonly PersistedLedgerRow[]): void {
+    const now = this.now()
+    for (const r of rows) {
+      if (now - r.touchedAt > this.ttlMs) continue
+      const key = `${r.caller}\u0000${r.requestId}`
+      if (this.rows.has(key)) continue
+      const row: Row = {
+        caller: r.caller,
+        requestId: r.requestId,
+        fingerprint: r.fingerprint,
+        claimedAt: r.claimedAt,
+        touchedAt: r.touchedAt,
+        state: r.state === 'settled' && r.reply ? 'settled' : 'unknown',
+        ...(r.state === 'settled' && r.reply ? { reply: r.reply } : {})
+      }
+      this.rows.set(key, row)
+      this.perCaller.set(r.caller, (this.perCaller.get(r.caller) ?? 0) + 1)
+      this.enforceCaps(r.caller)
+    }
+  }
+
   /** Test seam: how many rows are held. */
   sizeForTests(): number {
     return this.rows.size
   }
 
   private prune(now: number): void {
+    let dropped = false
     for (const [key, row] of this.rows) {
-      if (now - row.touchedAt > this.ttlMs) this.drop(key, row)
+      if (now - row.touchedAt > this.ttlMs) {
+        this.drop(key, row)
+        dropped = true
+      }
     }
+    if (dropped) this.onChange()
   }
 
   private enforceCaps(caller: string): void {
@@ -407,4 +550,12 @@ export class ControlRequestLedger {
     if (n > 0) this.perCaller.set(row.caller, n)
     else this.perCaller.delete(row.caller)
   }
+}
+
+/** The ledger's durable file (core/durable-state.ts). Wired by the hook server's route. */
+export const CONTROL_REQUEST_FACT: DurableFactSpec<PersistedLedgerRow> = {
+  kind: 'control-requests',
+  version: 1,
+  maxRecords: REQUEST_LEDGER_GLOBAL_MAX,
+  sanitize: sanitizeLedgerRow
 }

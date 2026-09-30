@@ -43,8 +43,11 @@ import {
   requestIdOutcomeMessage,
   requestIdReplayLine,
   requestIdRetryHint,
-  type LedgerClaim
+  type LedgerClaim,
+  CONTROL_REQUEST_FACT,
+  type PersistedLedgerRow
 } from '../control-request-ledger'
+import { DurableFactFile } from '../durable-state'
 
 // v2 advertises NODETERM_NODE_TOKEN_DIR so clients read their per-node capability from a file
 // rather than receiving it in argv. Nothing consumes the posted version server-side, so the bump
@@ -372,11 +375,13 @@ export class HookServer {
       }>)
     | null = null
   /**
-   * Retried control calls (`--request-id`, or the shim's per-run id). In memory, like
-   * `provenNodes`: it records what happened on THIS process's socket, and a restart forgets it —
-   * see the header of control-request-ledger.ts for why that is the right trade.
+   * Retried control calls (`--request-id`, or the shim's per-run id). Durable: `start()` loads it
+   * from `<userData>/orchestration-state/control-requests.json` and every change is mirrored there,
+   * so a retry after an app restart is answered from the row instead of opening a second node (the
+   * header of control-request-ledger.ts states what a restart does to each row). `stop()` flushes.
    */
-  private requestLedger = new ControlRequestLedger({ inFlightStaleMs: CONTROL_CEILING_MS })
+  private requestLedger = this.newRequestLedger()
+  private requestLedgerFile: DurableFactFile<PersistedLedgerRow> | null = null
   // Context-link reads. Same shape as the control handler, but it answers with TEXT (a rendered
   // transcript / summary / terminal capture) rather than acting on the canvas.
   private contextLinkHandler:
@@ -635,8 +640,26 @@ export class HookServer {
     }
   }
 
+  private newRequestLedger(): ControlRequestLedger {
+    return new ControlRequestLedger({
+      inFlightStaleMs: CONTROL_CEILING_MS,
+      onChange: () => this.requestLedgerFile?.save(this.requestLedger.exportRows())
+    })
+  }
+
+  /** Load the durable request ledger for this data dir (start), replacing the in-memory one. */
+  private attachRequestLedgerFile(userDataDir: string): void {
+    this.requestLedgerFile?.dispose()
+    const file = new DurableFactFile(CONTROL_REQUEST_FACT, { userDataDir })
+    const ledger = this.newRequestLedger()
+    ledger.restore(file.load())
+    this.requestLedger = ledger
+    this.requestLedgerFile = file
+  }
+
   private async startOwnedEndpoint(): Promise<void> {
     await assertHookEndpointAvailable(this.endpointFilePath())
+    this.attachRequestLedgerFile(platform().userDataDir)
     this.previousEndpointToken = ''
     try {
       const previous = parseEndpointEnv(readFileSync(this.endpointFilePath(), 'utf8'))
@@ -1433,6 +1456,9 @@ export class HookServer {
   }
 
   stop(): void {
+    // Write what the ledger learned before the process can go: an awaited write races exit.
+    this.requestLedgerFile?.dispose()
+    this.requestLedgerFile = null
     this.server?.close()
     this.server = null
     // The file must not advertise a listener that no longer exists (issue #445): a stopped server

@@ -59,8 +59,10 @@ import {
 import {
   DeliveryQueue,
   type DeliveryQueueDeps,
+  type PersistedQueueEntry,
   type QueuedDeliveryRequest
 } from './delivery-queue'
+import type { DurableFactFile } from '../durable-state'
 import { randomUUID } from 'crypto'
 import { nodeTokenFilePresent } from './node-token-files'
 import { mirrorEntry as coreMirrorEntry, type MirrorEntry } from '../agent-status-mirror'
@@ -285,7 +287,14 @@ const QUEUE_TRACE_AUTHOR = { name: 'nodeterm', color: '#8b8b8b' } as const
  */
 export function createDeliveryQueue(
   deps: AgentMessagingDeps,
-  opts: { capacity?: number; ttlMs?: number; schedule?: DeliveryQueueDeps['schedule'] } = {}
+  opts: {
+    capacity?: number
+    ttlMs?: number
+    schedule?: DeliveryQueueDeps['schedule']
+    /** Mirror the queue to disk (`QUEUE_FACT`). The shell calls `restoreDeliveryQueue` at boot,
+     *  once every listener (`onHandover`, `onQueuedResult`) is wired. */
+    durable?: Pick<DurableFactFile<PersistedQueueEntry>, 'save'>
+  } = {}
 ): DeliveryQueue {
   const now = deps.now ?? ((): number => Date.now())
   /** The project that lists a node id, for a board-log write. A trace is not an authorization, so
@@ -376,11 +385,36 @@ export function createDeliveryQueue(
         deps.onQueuedResult?.(req, outcome)
       },
       // Injected so a test pins TTL expiry deterministically; production uses the default setTimeout.
-      ...(opts.schedule ? { schedule: opts.schedule } : {})
+      ...(opts.schedule ? { schedule: opts.schedule } : {}),
+      ...(opts.durable ? { persist: (entries: PersistedQueueEntry[]) => opts.durable?.save(entries) } : {}),
+      // Which conversation a message was queued for — compared when a RESTORED entry flushes.
+      bindingOf: (id) => {
+        const m = (deps.mirrorEntry ?? coreMirrorEntry)(id)
+        return m && (m.sessionId || m.agentId)
+          ? { ...(m.sessionId ? { sessionId: m.sessionId } : {}), ...(m.agentId ? { agentId: m.agentId } : {}) }
+          : undefined
+      }
     },
     { capacity: opts.capacity, ttlMs: opts.ttlMs }
   )
   return queue
+}
+
+/**
+ * Restore the queue an earlier process left on disk (`QUEUE_FACT`). Called by each shell at boot,
+ * AFTER `onHandover` / `onQueuedResult` are wired, so the restored entries rebuild the station
+ * outcome store's "work pending" count and an entry that lapsed while the app was down is reported
+ * to its sender. Never throws: the file layer already turns a bad file into an empty list.
+ */
+export async function restoreDeliveryQueue(
+  queue: DeliveryQueue,
+  file: Pick<DurableFactFile<PersistedQueueEntry>, 'load'>
+): Promise<void> {
+  try {
+    await queue.restore(file.load())
+  } catch (e) {
+    console.warn(`[agent-messaging] could not restore the delivery queue (${String(e)})`)
+  }
 }
 
 /**

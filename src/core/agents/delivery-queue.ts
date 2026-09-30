@@ -1,6 +1,8 @@
 import type { AgentMessageOutcome } from './agent-message-decide'
 import { RETRYABLE } from './agent-message-decide'
 import type { DeliveryTraceInput } from './agent-message-trace'
+import type { DurableFactSpec } from '../durable-state'
+import { isSafeNodeId } from '../../shared/safe-id'
 
 /**
  * DELIVER-ON-IDLE — a bounded, per-target queue with a TTL, and never a silent drop.
@@ -43,6 +45,43 @@ import type { DeliveryTraceInput } from './agent-message-trace'
  * therefore comes back `notPermitted` at flush and the message is DROPPED, never delivered — pinned
  * by `delivery-queue.test.ts`, which flips the injected `deliver` from `targetBusy` to
  * `notPermitted` between enqueue and flush and asserts nothing reached the pane.
+ *
+ * ── DURABLE ACROSS A RESTART (`snapshot` / `restore`, `QUEUE_FACT`) ─────────────────────────────
+ *
+ * The queue used to be process memory, so a `send` answered `queued` vanished on an app restart
+ * while its sender believed it would be delivered. Every change is now mirrored (the `persist` dep)
+ * to `<userData>/orchestration-state/delivery-queue.json`, and a shell restores it at boot, AFTER
+ * wiring every listener (`onQueued` is replayed for each restored entry, so the station-outcome
+ * store's "work pending" count is rebuilt from the queue rather than persisted twice). What a
+ * restart means for an entry, decided here:
+ *
+ *  - **Its TTL keeps running while the app is down.** The deadline is wall-clock (`enqueuedAt` +
+ *    `ttlMs`), not "5 minutes of uptime". An entry whose deadline passed while the app was down is
+ *    EXPIRED at restore — traced `expired` and the sender told through `onExpired`, exactly like an
+ *    expiry in-run — never delivered late and never dropped in silence.
+ *  - **It is typed only into the SAME session it was queued for.** At enqueue the target's agent
+ *    and session id are recorded (`bindingOf`, the status mirror). A RESTORED entry flushes only if
+ *    the target's current session and agent are the recorded ones; a different session (the pane
+ *    was respawned, `/clear`, another agent now runs there) ends it as `targetGone` — the session it
+ *    was addressed to is gone — and the sender is told. An entry with no recorded session is refused
+ *    the same way (nothing proves it is the same conversation); a target whose session is not known
+ *    YET waits (the flush trigger is a hook event, which names it). In-run entries are unchanged.
+ *  - **The whole gate chain still runs at flush**, as it always did (scope, pane ownership, grant,
+ *    flow). Note what that means after a restart where tmux survived: pane ownership is recorded
+ *    only on a fresh spawn (pane-ownership.ts), so the surviving pane is UNPROVEN and the flush is
+ *    refused `notPermitted` — the sender is told, which is still strictly better than the silent
+ *    loss it replaces. After a machine reboot the cold-restored pane IS a fresh spawn, so a message
+ *    for a session that resumed under its old id is delivered.
+ *  - **Two kinds never flush after a restart**: a board comment (only the local user, typing in THIS
+ *    app, may trigger one — a message read back off disk must not be able to speak as a person) and
+ *    an app-composed station notice (its monitor's state did not survive). Both, and an entry whose
+ *    body was too large to store (`QUEUE_PERSIST_BODY_MAX`), are expired at restore so their row /
+ *    sender still hears the end.
+ *  - Not flushed at boot: the first flush waits for the target's next `done`, like any entry. A
+ *    target that stays idle through the rest of the TTL expires it (sender told).
+ *  - A crash inside the save window loses that window; a clean quit flushes synchronously. The file
+ *    is hand-editable, so every entry is re-checked on read (`sanitizePersistedQueueEntry`). It holds
+ *    message bodies, so it is written 0600 under userData and never leaves the machine.
  *
  * ── SHIPS ON BOTH SHELLS, USED ON ONE ──────────────────────────────────────────────────────────
  *
@@ -113,6 +152,17 @@ export interface DeliveryQueueDeps {
   /** Arm a one-shot timer, returning its cancel. Injected so tests drive TTL expiry deterministically
    *  instead of waiting real milliseconds; defaults to `setTimeout`/`clearTimeout`. */
   schedule?(ms: number, fn: () => void): CancelTimer
+  /** The whole queue changed: mirror `snapshot()` to disk. Absent ⇒ process memory only. */
+  persist?(entries: PersistedQueueEntry[]): void
+  /** The target's current agent and session (the status mirror), recorded at enqueue and compared
+   *  when a RESTORED entry flushes. Absent ⇒ nothing is recorded, and a restored entry is refused. */
+  bindingOf?(nodeId: string): QueueBinding | undefined
+}
+
+/** Which conversation a queued message was addressed to. */
+export interface QueueBinding {
+  sessionId?: string
+  agentId?: string
 }
 
 interface QueueEntry {
@@ -122,6 +172,113 @@ interface QueueEntry {
   cancelTimer: CancelTimer
   /** The traceId minted when this was queued, reused on its expiry so the two entries correlate. */
   queuedTraceId: string
+  binding?: QueueBinding
+  /** Came back from disk after a restart: flushes only into the session it was queued for. */
+  restored?: true
+}
+
+/** One queued message as written to disk. */
+export interface PersistedQueueEntry {
+  req: QueuedDeliveryRequest
+  enqueuedAt: number
+  ttlMs: number
+  queuedTraceId: string
+  binding?: QueueBinding
+  /** The body was too large to store; the entry is written only so its end can be told. */
+  bodyOmitted?: true
+}
+
+/** A body larger than this is not written; its entry is expired at restore (sender told). */
+export const QUEUE_PERSIST_BODY_MAX = 256 * 1024
+/** At most this many entries on disk. `DELIVERY_QUEUE_CAPACITY` per target bounds it in practice. */
+export const QUEUE_PERSIST_MAX = 1024
+/** The longest TTL a restored entry may claim — a hand-edited `ttlMs` must not keep one forever. */
+const QUEUE_PERSIST_TTL_MAX = 24 * 60 * 60 * 1000
+
+/** The verbs a restored entry may still deliver. See the header: a board comment and a station
+ *  notice are expired at restore instead. */
+const RESTORABLE_VERBS: ReadonlySet<string> = new Set(['send', 'reply', 'notify'])
+
+const EXTRA_KEY_RE = /^[A-Za-z][A-Za-z0-9]{0,40}$/
+
+/** Re-check one entry read from disk (hand-editable input). `null` drops it. */
+export function sanitizePersistedQueueEntry(raw: unknown): PersistedQueueEntry | null {
+  if (!raw || typeof raw !== 'object') return null
+  const e = raw as Record<string, unknown>
+  const r = e.req as Record<string, unknown> | null
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return null
+  if (typeof r.targetNodeId !== 'string' || !isSafeNodeId(r.targetNodeId)) return null
+  // A board comment's source is `board-comment:<id>`, never a node id; everything else is a node.
+  if (typeof r.sourceNodeId !== 'string' || r.sourceNodeId.length === 0 || r.sourceNodeId.length > 200)
+    return null
+  if (typeof r.verb !== 'string' || r.verb.length > 40) return null
+  if (RESTORABLE_VERBS.has(r.verb) && !isSafeNodeId(r.sourceNodeId)) return null
+  if (typeof r.sourceTitle !== 'string' || r.sourceTitle.length > 1000) return null
+  if (typeof r.body !== 'string' || r.body.length > QUEUE_PERSIST_BODY_MAX) return null
+  const req: QueuedDeliveryRequest = {
+    sourceNodeId: r.sourceNodeId,
+    targetNodeId: r.targetNodeId,
+    sourceTitle: r.sourceTitle,
+    body: r.body,
+    verb: r.verb
+  }
+  let extras = 0
+  for (const [k, v] of Object.entries(r)) {
+    if (k in req) continue
+    if (!EXTRA_KEY_RE.test(k) || ++extras > 16) return null
+    if (typeof v === 'string' ? v.length > 64 * 1024 : typeof v !== 'number' && typeof v !== 'boolean')
+      return null
+    req[k] = v
+  }
+  const fin = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+  if (!fin(e.enqueuedAt) || !fin(e.ttlMs) || e.ttlMs <= 0 || e.ttlMs > QUEUE_PERSIST_TTL_MAX) return null
+  if (typeof e.queuedTraceId !== 'string' || e.queuedTraceId.length > 200) return null
+  const out: PersistedQueueEntry = {
+    req,
+    enqueuedAt: e.enqueuedAt,
+    ttlMs: e.ttlMs,
+    queuedTraceId: e.queuedTraceId
+  }
+  if (e.binding !== undefined) {
+    const b = e.binding as Record<string, unknown> | null
+    if (!b || typeof b !== 'object') return null
+    const binding: QueueBinding = {}
+    if (b.sessionId !== undefined) {
+      if (typeof b.sessionId !== 'string' || b.sessionId.length > 200) return null
+      binding.sessionId = b.sessionId
+    }
+    if (b.agentId !== undefined) {
+      if (typeof b.agentId !== 'string' || b.agentId.length > 200) return null
+      binding.agentId = b.agentId
+    }
+    out.binding = binding
+  }
+  if (e.bodyOmitted === true) out.bodyOmitted = true
+  return out
+}
+
+/** The queue's durable file (core/durable-state.ts). */
+export const QUEUE_FACT: DurableFactSpec<PersistedQueueEntry> = {
+  kind: 'delivery-queue',
+  version: 1,
+  maxRecords: QUEUE_PERSIST_MAX,
+  sanitize: sanitizePersistedQueueEntry
+}
+
+/**
+ * May a RESTORED entry go into the target now? `deliver` = run the gate chain; `wait` = the
+ * target's session is not known yet (re-queue, TTL still running); `gone` = it is a different
+ * conversation, or nothing recorded which one it was.
+ */
+export function restoredBindingVerdict(
+  recorded: QueueBinding | undefined,
+  current: QueueBinding | undefined
+): 'deliver' | 'wait' | 'gone' {
+  if (!recorded?.sessionId) return 'gone'
+  if (!current?.sessionId) return 'wait'
+  if (current.sessionId !== recorded.sessionId) return 'gone'
+  if (recorded.agentId && current.agentId && current.agentId !== recorded.agentId) return 'gone'
+  return 'deliver'
 }
 
 /** Outcomes that mean "the target still is not ready, come back" — a flush that gets one of these
@@ -190,15 +347,18 @@ export class DeliveryQueue {
       outcome: 'queued',
       bodyChars: req.body.length
     }, req)
+    const binding = this.deps.bindingOf?.(req.targetNodeId)
     const entry: QueueEntry = {
       req,
       enqueuedAt: now,
       ttlMs: this.ttlMs,
       queuedTraceId: t.traceId,
-      cancelTimer: this.schedule(this.ttlMs, () => void this.expire(req.targetNodeId, entry))
+      cancelTimer: this.schedule(this.ttlMs, () => void this.expire(req.targetNodeId, entry)),
+      ...(binding ? { binding: { ...binding } } : {})
     }
     list.push(entry)
     this.queues.set(req.targetNodeId, list)
+    this.persist()
     this.deps.onQueued?.(req)
     // Kick the wake for a hibernated target so it starts its resume; the flush waits on the idle
     // event, not on the wake. A busy (non-hibernated) target needs nothing — it will go idle on its
@@ -223,7 +383,16 @@ export class DeliveryQueue {
       // must not flush the same entry twice. It goes back on failure, at the FRONT, preserving order.
       list.shift()
       entry.cancelTimer()
-      const outcome = await this.deps.deliver(entry.req)
+      // A restored entry goes only into the session it was queued for (see the header).
+      const verdict = entry.restored
+        ? restoredBindingVerdict(entry.binding, this.deps.bindingOf?.(nodeId))
+        : 'deliver'
+      if (verdict === 'wait') {
+        this.requeueFront(nodeId, entry)
+        return
+      }
+      const outcome: AgentMessageOutcome =
+        verdict === 'gone' ? { kind: 'targetGone' } : await this.deps.deliver(entry.req)
       if (REQUEUE_ON.has(outcome.kind)) {
         // Not ready yet (busy again, still unverified, or rate-limited): keep it, TTL counting from
         // its ORIGINAL enqueue, and stop draining — the target is evidently not idle after all.
@@ -233,6 +402,7 @@ export class DeliveryQueue {
       // Terminal: delivered, or a refusal waiting will not fix (notPermitted from a revoked grant,
       // targetGone, targetNotAgentPane…). The entry is done; tell the sender and move to the next.
       if (this.queues.get(nodeId)?.length === 0) this.queues.delete(nodeId)
+      this.persist()
       this.deps.onFlushed?.(entry.req, outcome)
     }
   }
@@ -265,6 +435,7 @@ export class DeliveryQueue {
     const list = this.queues.get(nodeId) ?? []
     list.unshift(entry)
     this.queues.set(nodeId, list)
+    this.persist()
   }
 
   /**
@@ -281,6 +452,7 @@ export class DeliveryQueue {
     list.splice(i, 1)
     if (list.length === 0) this.queues.delete(nodeId)
     entry.cancelTimer()
+    this.persist()
     const queuedForMs = this.deps.now() - entry.enqueuedAt
     const t = await this.deps.trace({
       sourceNodeId: entry.req.sourceNodeId,
@@ -290,6 +462,69 @@ export class DeliveryQueue {
       bodyChars: entry.req.body.length
     }, entry.req)
     this.deps.onExpired?.(entry.req, { traceId: t.traceId, queuedForMs })
+  }
+
+  /** Every queued entry as it is written to disk, oldest first per target. */
+  snapshot(): PersistedQueueEntry[] {
+    const out: PersistedQueueEntry[] = []
+    for (const list of this.queues.values()) {
+      for (const e of list) {
+        const omit = e.req.body.length > QUEUE_PERSIST_BODY_MAX
+        out.push({
+          req: omit ? { ...e.req, body: '' } : e.req,
+          enqueuedAt: e.enqueuedAt,
+          ttlMs: e.ttlMs,
+          queuedTraceId: e.queuedTraceId,
+          ...(e.binding ? { binding: e.binding } : {}),
+          ...(omit ? { bodyOmitted: true as const } : {})
+        })
+      }
+    }
+    return out
+  }
+
+  /**
+   * Bring back entries an earlier process queued (boot, after every listener is wired). Each one is
+   * announced through `onQueued` like a fresh enqueue; one whose wall-clock TTL lapsed while the app
+   * was down — or that may not flush after a restart at all — is then EXPIRED at once (traced, and
+   * the sender told). The rest wait for their target's next `done` with the TTL they have LEFT.
+   * Capacity still applies per target; an entry past it is expired rather than dropped.
+   */
+  async restore(entries: readonly PersistedQueueEntry[]): Promise<void> {
+    const now = this.deps.now()
+    const lapsed: QueueEntry[] = []
+    for (const p of entries) {
+      const list = this.queues.get(p.req.targetNodeId) ?? []
+      // A clock that went backwards must not stretch the wait past one full TTL.
+      const age = Math.max(0, now - p.enqueuedAt)
+      const remaining = Math.min(p.ttlMs, p.ttlMs - age)
+      const entry: QueueEntry = {
+        req: p.req,
+        enqueuedAt: Math.min(p.enqueuedAt, now),
+        ttlMs: p.ttlMs,
+        queuedTraceId: p.queuedTraceId,
+        cancelTimer: () => {},
+        restored: true,
+        ...(p.binding ? { binding: p.binding } : {})
+      }
+      list.push(entry)
+      this.queues.set(p.req.targetNodeId, list)
+      this.deps.onQueued?.(entry.req)
+      const deliverable =
+        remaining > 0 &&
+        !p.bodyOmitted &&
+        RESTORABLE_VERBS.has(String(p.req.verb)) &&
+        list.length <= this.capacity
+      if (deliverable) {
+        entry.cancelTimer = this.schedule(remaining, () => void this.expire(p.req.targetNodeId, entry))
+      } else lapsed.push(entry)
+    }
+    this.persist()
+    for (const entry of lapsed) await this.expire(entry.req.targetNodeId, entry)
+  }
+
+  private persist(): void {
+    this.deps.persist?.(this.snapshot())
   }
 
   /** Test seam / shutdown: cancel every timer and drop every queue WITHOUT tracing (a teardown is
