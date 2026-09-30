@@ -102,8 +102,13 @@ export const REMOVED_MAX = 512
 /**
  * How many of our own casts the FIFO record behind the re-creation gate's release keeps (see
  * `hasPendingRemove`). A cast leaves it the moment its echo, or a later one, comes back, so it only
- * grows while the core answers nothing at all — and then the oldest entry is simply forgotten (the
- * behaviour before the release existed: that remove's gate waits for its own echo or a reset).
+ * grows while the core answers nothing at all — and then the oldest entry is forgotten. A forgotten
+ * REMOVE is released as it is forgotten: nothing can match it any more, so kept it would hold its
+ * key's gate until a reset. That opens the gate before the echo, which is the degrade the gate
+ * exists to prevent (a re-creation cast now can be a stale frame to a peer) — bounded to a client
+ * that already has 4096 casts unanswered. A forgotten cast's own echo, when it does come back,
+ * releases nothing: matched to a LATER cast of the same key, it would release every remove cast
+ * between the two while their echoes are still in flight.
  */
 export const LOCAL_CASTS_MAX = 4096
 
@@ -227,7 +232,8 @@ export interface CanvasOrder {
    * LOST ack does not come with a reconnect: one `canvas:mut` can be dropped on its way back while
    * the connection stays up (the ui sink's per-message failure limit). So a remove is also released
    * when the echo of a LATER cast of ours arrives: echoes come back in the order we cast them (FIFO),
-   * so that echo proves the earlier one is not coming. A reset still clears everything.
+   * so that echo proves the earlier one is not coming. A reset still clears everything. (The record
+   * of our casts is capped — LOCAL_CASTS_MAX says what happens to a remove it forgets.)
    *
    * The PROJECT rides in the key: callers build it with `mutationKey(m, projectId)` — the same
    * function `onLocal` keys with — so the gate is project-scoped wherever a key is. (Only a
@@ -297,6 +303,14 @@ export function createCanvasOrder(
   /** Our own casts in the order we made them, `{ key, remove }` — what an echo is matched against
    *  (FIFO) to prove an earlier echo was lost. Capped at LOCAL_CASTS_MAX. */
   const casts: Array<{ key: string; remove: boolean }> = []
+  /**
+   * Per key, how many of our casts were shifted out of `casts` (the cap) with their echo still to
+   * come. A key's forgotten casts are OLDER than any it still has recorded, and echoes return in cast
+   * order, so the next echoes of that key are theirs: each is consumed here and matches nothing.
+   * Cleared whenever an echo matches a RECORDED cast — every forgotten cast is older than that one,
+   * so (FIFO) no echo of theirs can still arrive — and by `reset`.
+   */
+  const forgotten = new Map<string, number>()
   /** Set by `reset`: the next stamped `seq` says whether the core restarted (see `accept`). */
   let rebase = false
   /**
@@ -377,7 +391,13 @@ export function createCanvasOrder(
         pendingRemoveTotal++
       }
       casts.push({ key: id, remove })
-      if (casts.length > LOCAL_CASTS_MAX) casts.shift()
+      if (casts.length > LOCAL_CASTS_MAX) {
+        // Forget the oldest (see LOCAL_CASTS_MAX): a remove is released now, since nothing can match
+        // it later, and its echo is marked as one that must match nothing.
+        const old = casts.shift() as { key: string; remove: boolean }
+        if (old.remove) releaseRemove(old.key)
+        forgotten.set(old.key, (forgotten.get(old.key) ?? 0) + 1)
+      }
       // A fresh local edit IS an optimistic value on our canvas again, so rule 1 is sound for this
       // node once more and an older echo of ours must not be replayed over it. (This one's own echo
       // will be dropped as the ack it is; it carries what we already show.)
@@ -432,10 +452,18 @@ export function createCanvasOrder(
         // this echo is the one for the FIRST cast of this key still recorded, and every cast recorded
         // before it has had its echo lost (FIFO) — a remove among them will never be acked, so its
         // gate is released too. An echo we have no record of (straggling in after a reset) releases
-        // nothing, so it cannot push a later remove's count below one.
-        const at = casts.findIndex((c) => c.key === id)
-        if (at !== -1) {
-          for (const c of casts.splice(0, at + 1)) if (c.remove) releaseRemove(c.key)
+        // nothing, so it cannot push a later remove's count below one; nor does the echo of a cast
+        // the capped record forgot (`forgotten`), which would otherwise match a LATER cast of its key.
+        const lost = forgotten.get(id)
+        if (lost) {
+          if (lost <= 1) forgotten.delete(id)
+          else forgotten.set(id, lost - 1)
+        } else {
+          const at = casts.findIndex((c) => c.key === id)
+          if (at !== -1) {
+            for (const c of casts.splice(0, at + 1)) if (c.remove) releaseRemove(c.key)
+            forgotten.clear()
+          }
         }
         // …with one exception: the echo of our LAST order op for a board list (every cast of ours
         // for that list now acked) is APPLIED. An order op lists only the ids its sender knew, so
@@ -481,6 +509,7 @@ export function createCanvasOrder(
       pendingRemoves.clear()
       pendingRemoveTotal = 0
       casts.length = 0
+      forgotten.clear()
       // The core may have restarted at seq 0 — a `removed` entry stamped with the OLD counter would
       // then outrank every new mutation and blackhole that node.
       removed.clear()

@@ -890,7 +890,11 @@ remove of ours in flight (counted per key, not TTL-bound — a late ack is exact
 LOST ack does not come with a reconnect: the ui sink drops a single message and keeps the connection
 (`SINK_FAILURE_LIMIT`). Our echoes come back in the order we cast (FIFO), so the echo of a LATER cast
 of ours proves an earlier one was lost, and releases that remove's gate too; Canvas compares the total
-count of pending removes across each `accept` to see it. A reset still clears everything. The
+count of pending removes across each `accept` to see it. A reset still clears everything. The record
+of our casts that FIFO match reads is capped (`LOCAL_CASTS_MAX`, 4096), which only matters while the
+core answers nothing at all: a remove the cap forgets is released as it goes (the pre-gate degrade,
+not a gate stuck until a reset), and a forgotten cast's own late echo releases nothing (matched to a
+later cast of its key, it would release removes whose echoes are still in flight). The
 refusal keeps the op owed in the
 publisher, and an adopt in that window keeps an owed EDGE owed as well as an owed node (a teammate's
 op is usually what arrives during that round trip). Nothing else would ever cast it — our echo is an

@@ -7,6 +7,7 @@ import {
   createCanvasOrder,
   createReconnectWatch,
   isRemoveOp,
+  LOCAL_CASTS_MAX,
   mutationKey,
   mutationNodeId,
   PENDING_TTL_MS,
@@ -608,6 +609,48 @@ describe('createCanvasOrder', () => {
       expect(o.hasPendingRemove('n:n1')).toBe(true)
       o.accept(up('n9', 1, 'me', 6)) // …and this one proves the second n1 echo lost
       expect(o.hasPendingRemove('n:n1')).toBe(false)
+    })
+
+    // The FIFO record is capped (LOCAL_CASTS_MAX), and it only fills while the core answers nothing
+    // at all — a long drag against a dead connection that never resets. Two things must hold when
+    // it overflows: a remove shifted out is released THEN (it can never be matched again, so kept it
+    // would stick until a reset), and an echo whose own record is gone matches nothing (matched to a
+    // LATER cast of the same key, it released every remove cast in between, echoes still in flight).
+    it('a remove shifted out of the record is released then, and its late echo is not a later remove’s', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(rm('n1', 'me', 0)) // its echo is on its way…
+      for (let i = 0; i < LOCAL_CASTS_MAX; i++) o.onLocal(up('d', i, 'me', 0)) // …behind a long, unanswered drag
+      expect(o.hasPendingRemove('n:n1')).toBe(false) // the pre-gate degrade, not a gate stuck for the session
+      expect(o.pendingRemoveCount()).toBe(0)
+      o.onLocal(rm('n1', 'me', 0)) // deleted again
+      o.accept(rm('n1', 'me', 5)) // the FIRST remove's echo, at last
+      expect(o.hasPendingRemove('n:n1')).toBe(true) // …is not the second one's ack
+      o.accept(rm('n1', 'me', 6)) // the second one's own echo
+      expect(o.hasPendingRemove('n:n1')).toBe(false)
+    })
+
+    it('an echo whose record was shifted out releases nothing — not a later remove still in flight', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(up('d', 0, 'me', 0)) // the oldest cast: its record is about to be forgotten
+      for (let i = 1; i < LOCAL_CASTS_MAX; i++) o.onLocal(up('f', i, 'me', 0))
+      o.onLocal(rm('n1', 'me', 0)) // the record is full: `d`'s entry is shifted out
+      o.onLocal(up('d', 1, 'me', 0)) // a LATER cast of the same key
+      o.accept(up('d', 0, 'me', 7)) // the echo of the forgotten one
+      expect(o.hasPendingRemove('n:n1')).toBe(true) // n1's echo has not come back
+      expect(o.pendingRemoveCount()).toBe(1)
+      o.accept(rm('n1', 'me', 8)) // its own echo (the ones before it proven lost, FIFO)
+      expect(o.hasPendingRemove('n:n1')).toBe(false)
+    })
+
+    it('an echo matched to a recorded cast proves every forgotten echo lost, so none is waited for', () => {
+      const o = createCanvasOrder('me')
+      o.onLocal(up('d', 0, 'me', 0)) // the oldest cast — and its echo is lost
+      for (let i = 1; i < LOCAL_CASTS_MAX; i++) o.onLocal(up('f', i, 'me', 0))
+      o.onLocal(up('x', 0, 'me', 0)) // `d`'s record is shifted out
+      o.onLocal(rm('d', 'me', 0))
+      o.accept(up('x', 0, 'me', 9)) // a recorded cast's echo: everything older is proven lost (FIFO)
+      o.accept(rm('d', 'me', 10)) // so this is the remove's own echo, not the forgotten frame's
+      expect(o.hasPendingRemove('n:d')).toBe(false)
     })
 
     it('isRemoveOp is the order’s own remove predicate, nodes and edges alike', () => {
