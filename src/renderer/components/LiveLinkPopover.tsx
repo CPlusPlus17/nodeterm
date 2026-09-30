@@ -7,9 +7,12 @@ import { CHAT_TEXT_MAX, type WatchChatMessage } from '@shared/watch-link/protoco
 import { useDialogStack } from './dialog-stack'
 import { useMenuFlip } from '../ui/useMenuFlip'
 import {
+  CHAT_NOT_SENT_MESSAGE,
   commentFromChat,
   formatClock,
   formatRemaining,
+  KICK_FAILED_MESSAGE,
+  KICK_NOT_DONE_MESSAGE,
   KICK_NOTE,
   ROLE_LABEL,
   statusLine,
@@ -17,7 +20,7 @@ import {
   viewerName
 } from '../lib/liveLink'
 import { thisMachine } from '../lib/machineName'
-import { EMPTY_LINKS, useWatchLinks } from '../state/watchLinks'
+import { EMPTY_LINKS, useWatchLinks, viewLinkThread } from '../state/watchLinks'
 import { useBoardLog } from '../state/boardLog'
 import { useProjects } from '../state/projects'
 import { sessionForProject } from '../session/session'
@@ -30,6 +33,35 @@ export interface PopoverAnchor {
 }
 
 const EMPTY_CHAT: WatchChatMessage[] = []
+
+const stop = (e: React.SyntheticEvent): void => e.stopPropagation()
+/**
+ * The popover is a body portal, but its React events still bubble through the REACT tree — into the
+ * chip's surface: a card that opens on click and drags, a node header, a sessions row that ends the
+ * session on a middle click, the canvas's own window listeners (React stops a synthetic event at the
+ * portal's container, before the window). So every event is stopped at the portal's two roots, the
+ * scrim and the panel — and only there: the chip itself lets keys and drags through (LiveLinkChip).
+ */
+const ISOLATE = {
+  onClick: stop,
+  onDoubleClick: stop,
+  onMouseDown: stop,
+  onMouseUp: stop,
+  onPointerDown: stop,
+  onPointerUp: stop,
+  onContextMenu: stop,
+  onKeyDown: stop,
+  onKeyUp: stop,
+  onDragStart: stop,
+  onDragOver: stop,
+  onDrop: stop,
+  onWheel: stop,
+  onFocus: stop,
+  onBlur: stop,
+  onChange: stop,
+  onInput: stop,
+  onSubmit: stop
+} as const
 
 function useNow(ms: number): number {
   const [now, setNow] = useState(() => Date.now())
@@ -105,14 +137,20 @@ export function LiveLinkPopover({
   return createPortal(
     <>
       <div
+        {...ISOLATE}
         className="live-pop__scrim"
-        onClick={onClose}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClose()
+        }}
         onContextMenu={(e) => {
           e.preventDefault()
+          e.stopPropagation()
           onClose()
         }}
       />
       <div
+        {...ISOLATE}
         ref={flip.ref}
         className="live-pop nodrag nowheel"
         style={{ top: flip.top, left: flip.left }}
@@ -204,7 +242,15 @@ const LinkBlock = memo(function LinkBlock({
                     type="button"
                     className="confirm__btn live-pop__btn live-pop__kick"
                     title={KICK_NOTE}
-                    onClick={() => void api.kick(link.linkId, v.viewerId).catch(() => {})}
+                    onClick={() => {
+                      setError(null)
+                      api.kick(link.linkId, v.viewerId).then(
+                        (ok) => {
+                          if (!ok) setError(KICK_NOT_DONE_MESSAGE)
+                        },
+                        () => setError(KICK_FAILED_MESSAGE)
+                      )
+                    }}
                   >
                     Kick
                   </button>
@@ -227,7 +273,10 @@ function ChatThread({ linkId, nodeId }: { linkId: string; nodeId: string }): Rea
   const [draft, setDraft] = useState('')
   const [copiedIds, setCopiedIds] = useState<ReadonlySet<string>>(() => new Set())
   const [copyError, setCopyError] = useState(false)
+  const [sendError, setSendError] = useState(false)
   const threadRef = useRef<HTMLOListElement>(null)
+  // While this thread is on screen, what lands in it is read as it arrives (N2).
+  useEffect(() => viewLinkThread(linkId), [linkId])
   // Core keeps the thread in memory; ask for it once when the thread opens (a reload, or messages
   // that arrived before this renderer subscribed). The store merges it with what was pushed.
   useEffect(() => {
@@ -236,14 +285,18 @@ function ChatThread({ linkId, nodeId }: { linkId: string; nodeId: string }): Rea
       () => {}
     )
   }, [api, linkId])
-  // Open = read: on open, and again for every message that lands while it is open (H21). Keyed on
-  // the LAST message's id, not the length — at the 200-message cap the length stops changing.
-  const lastId = chat.length > 0 ? chat[chat.length - 1].id : ''
+  // Open = read (H21): what arrived before the thread opened is read on open; what lands while it
+  // is open never counts (`viewLinkThread` above).
   useEffect(() => {
     useWatchLinks.getState().markRead(linkId)
+  }, [linkId])
+  // Follow the newest message. Keyed on the LAST message's id, not the length — at the 200-message
+  // cap the length stops changing.
+  const lastId = chat.length > 0 ? chat[chat.length - 1].id : ''
+  useEffect(() => {
     const el = threadRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [linkId, lastId])
+  }, [lastId])
   return (
     <div className="live-pop__chat">
       {chat.length === 0 ? (
@@ -287,15 +340,29 @@ function ChatThread({ linkId, nodeId }: { linkId: string; nodeId: string }): Rea
           No project on {thisMachine()} holds this terminal, so there is no card to comment on.
         </p>
       )}
+      {sendError && (
+        <p className="live-pop__error" role="alert">
+          {CHAT_NOT_SENT_MESSAGE}
+        </p>
+      )}
       <form
         className="live-pop__reply"
         onSubmit={(e) => {
           e.preventDefault()
           const text = draft.trim()
           if (!text) return
-          setDraft('')
-          // The reply comes back through the chat push (core echoes the owner's own message).
-          api.sendChat(linkId, text).catch(() => setDraft((d) => d || text))
+          setSendError(false)
+          // The reply comes back through the chat push (core echoes the owner's own message), so
+          // nothing is added here. The box is cleared only once core took it (unless the owner has
+          // typed on since); a null answer (no host for the link, or nothing left after cleaning) or
+          // a rejection keeps the draft and says so.
+          api.sendChat(linkId, text).then(
+            (sent) => {
+              if (sent) setDraft((d) => (d.trim() === text ? '' : d))
+              else setSendError(true)
+            },
+            () => setSendError(true)
+          )
         }}
       >
         <input

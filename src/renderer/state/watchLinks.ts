@@ -22,31 +22,51 @@ interface WatchLinksState {
   chats: Record<string, WatchChatMessage[]>
   /** Viewer messages the owner has not seen in that link's popover yet. */
   unread: Record<string, number>
+  /** A list has landed (a `list()` answer or a state push). Until then a chat for an unknown link
+   *  is kept — it can only be for a link the list has not told us about yet. */
+  hydrated: boolean
   setLinks(links: WatchLinkView[]): void
   addChat(linkId: string, msg: WatchChatMessage): void
   setChat(linkId: string, msgs: WatchChatMessage[]): void
   markRead(linkId: string): void
 }
 
-function sameLink(a: WatchLinkView, b: WatchLinkView): boolean {
-  if (
-    a.linkId !== b.linkId ||
-    a.nodeId !== b.nodeId ||
-    a.role !== b.role ||
-    a.label !== b.label ||
-    a.title !== b.title ||
-    a.createdAt !== b.createdAt ||
-    a.expiresAt !== b.expiresAt ||
-    a.url !== b.url ||
-    a.status !== b.status ||
-    a.viewers.length !== b.viewers.length
-  ) {
-    return false
+/**
+ * Structural equality for the JSON core pushes (primitives, arrays, plain objects). Structural on
+ * purpose: a hand-written field list silently keeps a stale object when `WatchLinkView` gains a field
+ * nobody added to it — the `setCo` trap CLAUDE.md records for the cold-resume banner.
+ */
+function sameJson(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((x, i) => sameJson(x, b[i]))
   }
-  return a.viewers.every((v, i) => {
-    const w = b.viewers[i]
-    return v.viewerId === w.viewerId && v.name === w.name && v.joinedAt === w.joinedAt
-  })
+  const ra = a as Record<string, unknown>
+  const rb = b as Record<string, unknown>
+  const keys = Object.keys(ra)
+  if (keys.length !== Object.keys(rb).length) return false
+  return keys.every((k) => Object.prototype.hasOwnProperty.call(rb, k) && sameJson(ra[k], rb[k]))
+}
+
+/** Links whose thread is on screen right now (a popover's chat is mounted), counted per mount. A
+ *  message that lands while its thread is shown is read the moment it arrives: it never counts as
+ *  unread, so the chip's dot does not flash for one render (N2). Not store state: nothing renders
+ *  from it. */
+const viewing = new Map<string, number>()
+
+/** Mark a link's thread as on screen; the returned function takes the mark back. */
+export function viewLinkThread(linkId: string): () => void {
+  viewing.set(linkId, (viewing.get(linkId) ?? 0) + 1)
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    const n = (viewing.get(linkId) ?? 1) - 1
+    if (n > 0) viewing.set(linkId, n)
+    else viewing.delete(linkId)
+  }
 }
 
 function sameItems<T>(a: readonly T[] | undefined, b: readonly T[]): boolean {
@@ -59,11 +79,18 @@ function pruned<V>(rec: Record<string, V>, keep: (id: string) => boolean): Recor
   return Object.fromEntries(Object.entries(rec).filter(([id]) => keep(id)))
 }
 
+/** A chat for a link the (hydrated) list no longer holds is dropped (N1): a history answer or a
+ *  push that lands after the link ended would otherwise bring its thread back until the next push. */
+function unknownLink(s: WatchLinksState, linkId: string): boolean {
+  return s.hydrated && !s.links.some((l) => l.linkId === linkId)
+}
+
 export const useWatchLinks = create<WatchLinksState>((set) => ({
   links: [],
   byNode: {},
   chats: {},
   unread: {},
+  hydrated: false,
 
   // Every push is the FULL list, freshly deserialized. Objects whose content did not change keep
   // their identity (and so does each node's array), so a push about one link re-renders only the
@@ -73,7 +100,7 @@ export const useWatchLinks = create<WatchLinksState>((set) => ({
       const prev = new Map(s.links.map((l) => [l.linkId, l]))
       const next = incoming.map((l) => {
         const p = prev.get(l.linkId)
-        return p && sameLink(p, l) ? p : l
+        return p && sameJson(p, l) ? p : l
       })
       const links = sameItems(s.links, next) ? s.links : next
       let byNode = s.byNode
@@ -89,18 +116,20 @@ export const useWatchLinks = create<WatchLinksState>((set) => ({
       const live = new Set(links.map((l) => l.linkId))
       const chats = pruned(s.chats, (id) => live.has(id))
       const unread = pruned(s.unread, (id) => live.has(id))
-      if (links === s.links && chats === s.chats && unread === s.unread) return s
-      return { links, byNode, chats, unread }
+      if (links === s.links && chats === s.chats && unread === s.unread && s.hydrated) return s
+      return { links, byNode, chats, unread, hydrated: true }
     }),
 
   addChat: (linkId, msg) =>
     set((s) => {
+      if (unknownLink(s, linkId)) return s
       const chat = s.chats[linkId] ?? []
       // The same message can reach us twice: pushed, and inside a history answer that raced it.
       if (chat.some((m) => m.id === msg.id)) return s
+      const unseen = msg.from === 'viewer' && !viewing.has(linkId)
       return {
         chats: { ...s.chats, [linkId]: [...chat, msg].slice(-CHAT_KEEP) },
-        unread: msg.from === 'viewer' ? { ...s.unread, [linkId]: (s.unread[linkId] ?? 0) + 1 } : s.unread
+        unread: unseen ? { ...s.unread, [linkId]: (s.unread[linkId] ?? 0) + 1 } : s.unread
       }
     }),
 
@@ -109,6 +138,7 @@ export const useWatchLinks = create<WatchLinksState>((set) => ({
   // would drop it. Ordered by core's timestamp; the sort is stable, so equal times keep their order.
   setChat: (linkId, msgs) =>
     set((s) => {
+      if (unknownLink(s, linkId)) return s
       const ids = new Set(msgs.map((m) => m.id))
       const extra = (s.chats[linkId] ?? []).filter((m) => !ids.has(m.id))
       const merged = [...msgs, ...extra].sort((a, b) => a.at - b.at).slice(-CHAT_KEEP)

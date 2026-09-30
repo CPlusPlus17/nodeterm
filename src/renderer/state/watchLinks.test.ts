@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { EMPTY_LINKS, liveChipSig, startWatchLinkSync, useWatchLinks } from './watchLinks'
+import { EMPTY_LINKS, liveChipSig, startWatchLinkSync, useWatchLinks, viewLinkThread } from './watchLinks'
 import type { WatchChatMessage, WatchLinkNotice, WatchLinkView } from '@shared/watch-link-types'
 
 const link = (id: string, nodeId: string, over: Partial<WatchLinkView> = {}): WatchLinkView => ({
@@ -23,7 +23,7 @@ const msg = (id: string, from: 'viewer' | 'sharer' = 'viewer', at = 0): WatchCha
   from
 })
 
-beforeEach(() => useWatchLinks.setState({ links: [], byNode: {}, chats: {}, unread: {} }))
+beforeEach(() => useWatchLinks.setState({ links: [], byNode: {}, chats: {}, unread: {}, hydrated: false }))
 
 describe('watchLinks store', () => {
   it('indexes by node, in list order', () => {
@@ -47,6 +47,41 @@ describe('watchLinks store', () => {
     // A push identical in content changes nothing at all.
     s.setLinks([link('a', 'n1'), link('c', 'n2', { viewers: [{ viewerId: 'v', name: null, joinedAt: 1 }] })])
     expect(useWatchLinks.getState()).toBe(after)
+  })
+
+  it('compares EVERY field: a change to any one of them is a new object (M2)', () => {
+    // A fixture with every field of the type, iterated by key: a field added to WatchLinkView (and
+    // to this fixture, which the type forces) is covered without editing the comparison.
+    const base: WatchLinkView = link('a', 'n1', {
+      viewers: [{ viewerId: 'v', name: 'Eve', joinedAt: 5 }]
+    })
+    const bump = (v: unknown): unknown =>
+      typeof v === 'number' ? v + 1 : typeof v === 'string' ? `${v}x` : Array.isArray(v) ? [] : v
+    for (const key of Object.keys(base) as (keyof WatchLinkView)[]) {
+      useWatchLinks.setState({ links: [], byNode: {}, chats: {}, unread: {}, hydrated: false })
+      useWatchLinks.getState().setLinks([base])
+      const before = useWatchLinks.getState().links[0]
+      const changed = { ...base, [key]: bump(base[key]) } as WatchLinkView
+      expect(changed[key], key).not.toEqual(base[key])
+      useWatchLinks.getState().setLinks([changed])
+      expect(useWatchLinks.getState().links[0], key).not.toBe(before)
+    }
+    // Every field of a viewer, the name included (a viewer who starts chatting gains a name).
+    const viewer = base.viewers[0]
+    for (const key of Object.keys(viewer) as (keyof typeof viewer)[]) {
+      useWatchLinks.getState().setLinks([base])
+      const before = useWatchLinks.getState().links[0]
+      useWatchLinks.getState().setLinks([{ ...base, viewers: [{ ...viewer, [key]: bump(viewer[key]) }] }])
+      expect(useWatchLinks.getState().links[0], `viewer.${key}`).not.toBe(before)
+    }
+    useWatchLinks.getState().setLinks([{ ...base, viewers: [{ ...viewer, name: null }] }])
+    const unnamed = useWatchLinks.getState().links[0]
+    useWatchLinks.getState().setLinks([base])
+    expect(useWatchLinks.getState().links[0]).not.toBe(unnamed)
+    // A field this build has never heard of is compared too.
+    const known = useWatchLinks.getState().links[0]
+    useWatchLinks.getState().setLinks([{ ...base, fromANewerCore: 1 } as WatchLinkView])
+    expect(useWatchLinks.getState().links[0]).not.toBe(known)
   })
 
   it('counts unread viewer messages, not the sharer\'s own', () => {
@@ -73,6 +108,39 @@ describe('watchLinks store', () => {
     expect(st.unread.a).toBeUndefined()
     expect(st.chats.b).toHaveLength(1)
     expect(st.unread.b).toBe(1)
+  })
+
+  it('a chat for a link the list no longer holds is dropped once a list has landed (N1)', () => {
+    const s = useWatchLinks.getState()
+    // Before any list: kept — it can only be for a link not listed yet.
+    s.addChat('early', msg('0'))
+    expect(useWatchLinks.getState().chats.early).toHaveLength(1)
+    s.setLinks([link('a', 'n1')])
+    expect(useWatchLinks.getState().chats.early).toBeUndefined()
+    s.addChat('gone', msg('1'))
+    s.setChat('gone', [msg('2')])
+    expect(useWatchLinks.getState().chats.gone).toBeUndefined()
+    expect(useWatchLinks.getState().unread.gone).toBeUndefined()
+    s.addChat('a', msg('3'))
+    expect(useWatchLinks.getState().chats.a).toHaveLength(1)
+  })
+
+  it('a message that lands while its thread is on screen never counts as unread (N2)', () => {
+    const s = useWatchLinks.getState()
+    s.setLinks([link('a', 'n1')])
+    const seen: number[] = []
+    const off = useWatchLinks.subscribe((st) => seen.push(st.unread.a ?? 0))
+    const release = viewLinkThread('a')
+    const release2 = viewLinkThread('a')
+    s.addChat('a', msg('1'))
+    release()
+    s.addChat('a', msg('2')) // still on screen in the other mount
+    expect(seen.every((n) => n === 0)).toBe(true)
+    release2()
+    release2() // idempotent
+    s.addChat('a', msg('3'))
+    expect(useWatchLinks.getState().unread.a).toBe(1)
+    off()
   })
 
   it('a history answer never drops a message that arrived while it was in flight', () => {
@@ -153,10 +221,11 @@ describe('startWatchLinkSync', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(useWatchLinks.getState().links).toHaveLength(1)
-    h.state!([])
-    expect(useWatchLinks.getState().links).toHaveLength(0)
     h.chat!('a', msg('1'))
     expect(useWatchLinks.getState().chats.a).toHaveLength(1)
+    h.state!([])
+    expect(useWatchLinks.getState().links).toHaveLength(0)
+    expect(useWatchLinks.getState().chats.a).toBeUndefined()
     h.notice!({ kind: 'not-persistent' })
     expect(notices).toEqual([{ kind: 'not-persistent' }])
     stop()

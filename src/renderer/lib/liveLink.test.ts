@@ -3,12 +3,15 @@
 // through lib/machineName, and a literal "this computer" must not depend on the OS running the suite.
 import { describe, it, expect } from 'vitest'
 import {
+  CHAT_NOT_SENT_MESSAGE,
   chipView,
   commentFromChat,
   createErrorMessage,
   DEFAULT_TTL,
   formatClock,
   formatRemaining,
+  KICK_FAILED_MESSAGE,
+  KICK_NOT_DONE_MESSAGE,
   noticeText,
   NOT_IN_OPEN_PROJECT,
   PRO_GATE_FEATURE,
@@ -102,11 +105,22 @@ describe('statusLine (H9)', () => {
 })
 
 describe('time', () => {
-  it('remaining time', () => {
-    expect(formatRemaining(60 * 60_000 + 1, 0)).toBe('ends in 1 h')
-    expect(formatRemaining(42 * 60_000, 0)).toBe('ends in 42 min')
-    expect(formatRemaining(30_000, 0)).toBe('ends in under a minute')
+  it('remaining time, hours AND minutes past the hour (M4)', () => {
+    const MIN = 60_000
     expect(formatRemaining(0, 5)).toBe('ended')
+    expect(formatRemaining(5, 5)).toBe('ended')
+    expect(formatRemaining(30_000, 0)).toBe('ends in under a minute')
+    expect(formatRemaining(MIN - 1, 0)).toBe('ends in under a minute')
+    expect(formatRemaining(MIN, 0)).toBe('ends in 1 min')
+    expect(formatRemaining(42 * MIN, 0)).toBe('ends in 42 min')
+    expect(formatRemaining(60 * MIN - 1, 0)).toBe('ends in 59 min')
+    expect(formatRemaining(60 * MIN, 0)).toBe('ends in 1 h')
+    expect(formatRemaining(60 * MIN + 1, 0)).toBe('ends in 1 h')
+    expect(formatRemaining(61 * MIN, 0)).toBe('ends in 1 h 1 min')
+    expect(formatRemaining(120 * MIN - 1, 0)).toBe('ends in 1 h 59 min')
+    expect(formatRemaining(120 * MIN, 0)).toBe('ends in 2 h')
+    expect(formatRemaining(24 * 60 * MIN - 1, 0)).toBe('ends in 23 h 59 min')
+    expect(formatRemaining(24 * 60 * MIN, 0)).toBe('ends in 24 h')
   })
   it('a clock time is hours and minutes, never seconds (H25)', () => {
     const at = new Date(2026, 9, 1, 15, 42, 37).getTime()
@@ -184,9 +198,9 @@ describe('noticeText', () => {
     )
   })
 
-  it('not-persistent names no cause it did not measure (H7, H26)', () => {
+  it('not-persistent says only the new link is unsaved, and names no cause (H7, H26, R55)', () => {
     expect(noticeText({ kind: 'not-persistent' })).toBe(
-      "Live links aren't being saved on this computer right now. They keep working until you quit."
+      "The live link you just created isn't saved on this computer: it works until you quit. Links created before it are still saved."
     )
   })
 
@@ -219,6 +233,9 @@ describe('copy Task 17 reads (R47, R48, R52, H11, H23, H26)', () => {
       'Stop every live link on your license? This also ends links shared from other computers. Viewers are disconnected at once.'
     )
     expect(STOP_FAILED_MESSAGE).toBe("The stop didn't reach nodeterm — try again.")
+    expect(KICK_FAILED_MESSAGE).toBe("The kick didn't reach nodeterm — try again.")
+    expect(KICK_NOT_DONE_MESSAGE).toBe('That viewer was not disconnected — they may already have left.')
+    expect(CHAT_NOT_SENT_MESSAGE).toBe("Your reply wasn't sent — viewers didn't see it.")
     expect(NOT_IN_OPEN_PROJECT).toBe('not in an open project')
     // UpgradeDialog appends " is a Pro feature" (R52).
     expect(`${PRO_GATE_FEATURE} is a Pro feature`).toBe('Sharing a live link is a Pro feature')

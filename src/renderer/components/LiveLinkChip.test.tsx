@@ -9,7 +9,13 @@ import { useWatchLinks } from '../state/watchLinks'
 import { useBoardLog } from '../state/boardLog'
 import { useProjects } from '../state/projects'
 import { popDialog, pushDialog, resetDialogStack } from './dialog-stack'
-import { KICK_NOTE, STOP_FAILED_MESSAGE } from '../lib/liveLink'
+import {
+  CHAT_NOT_SENT_MESSAGE,
+  KICK_FAILED_MESSAGE,
+  KICK_NOT_DONE_MESSAGE,
+  KICK_NOTE,
+  STOP_FAILED_MESSAGE
+} from '../lib/liveLink'
 
 const boardApi = { tag: 'local-api' }
 vi.mock('../session/session', () => ({
@@ -43,7 +49,13 @@ const msg = (id: string, over: Partial<WatchChatMessage> = {}): WatchChatMessage
 const api = {
   revoke: vi.fn(async (_id: string) => {}),
   kick: vi.fn(async (_l: string, _v: string) => true),
-  sendChat: vi.fn(async (_l: string, _t: string) => null),
+  sendChat: vi.fn(async (_l: string, t: string): Promise<WatchChatMessage | null> => ({
+    id: 's',
+    name: 'Ada',
+    text: t,
+    at: 0,
+    from: 'sharer'
+  })),
   chatHistory: vi.fn(async (_l: string): Promise<WatchChatMessage[]> => [])
 }
 const writeText = vi.fn()
@@ -52,7 +64,7 @@ let host: HTMLDivElement
 let root: Root
 beforeEach(() => {
   resetDialogStack()
-  useWatchLinks.setState({ links: [], byNode: {}, chats: {}, unread: {} })
+  useWatchLinks.setState({ links: [], byNode: {}, chats: {}, unread: {}, hydrated: false })
   useProjects.setState({ projects: [] } as never)
   vi.stubGlobal('ResizeObserver', class { observe(): void {} unobserve(): void {} disconnect(): void {} })
   for (const f of Object.values(api)) f.mockClear()
@@ -103,11 +115,16 @@ describe('LiveLinkChip', () => {
 
   it('follows the store: offline, refused, the unread dot, and gone again', () => {
     render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link()])
+    expect(host.querySelector('.live-chip__dot')).not.toBeNull()
     setLinks([link({ status: 'reconnecting' })])
     expect(chip()!.className).toContain('live-chip--offline')
     expect(chip()!.textContent).toBe('LIVE · offline')
+    // The broadcast dot is LIVE's alone (N6).
+    expect(host.querySelector('.live-chip__dot')).toBeNull()
     setLinks([link({ status: 'refused' })])
     expect(chip()!.className).toContain('live-chip--refused')
+    expect(host.querySelector('.live-chip__dot')).toBeNull()
     expect(host.querySelector('.live-chip__unread')).toBeNull()
     act(() => useWatchLinks.getState().addChat('L', msg('1')))
     expect(host.querySelector('.live-chip__unread')).not.toBeNull()
@@ -201,7 +218,83 @@ describe('LiveLinkPopover', () => {
     }
   })
 
-  it('a click or middle press inside the popover never reaches the surface it sits in', () => {
+  it('keys pressed on the chip reach the window — also after the popover hands focus back (I1)', () => {
+    const globalKeys = vi.fn()
+    window.addEventListener('keydown', globalKeys)
+    try {
+      render(<LiveLinkChip nodeId="n1" />)
+      setLinks([link()])
+      act(() => chip()!.focus())
+      click(chip()!)
+      act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+      expect(pop()).toBeNull()
+      expect(document.activeElement).toBe(chip())
+      globalKeys.mockClear()
+      act(() => void chip()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true })))
+      expect(globalKeys).toHaveBeenCalledTimes(1)
+    } finally {
+      window.removeEventListener('keydown', globalKeys)
+    }
+  })
+
+  it('a drag over the chip reaches the surface under it (I1)', () => {
+    const onDragOver = vi.fn()
+    const onDrop = vi.fn()
+    render(
+      <div onDragOver={onDragOver} onDrop={onDrop}>
+        <LiveLinkChip nodeId="n1" />
+      </div>
+    )
+    setLinks([link()])
+    act(() => void chip()!.dispatchEvent(new Event('dragover', { bubbles: true, cancelable: true })))
+    act(() => void chip()!.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true })))
+    expect(onDragOver).toHaveBeenCalledTimes(1)
+    expect(onDrop).toHaveBeenCalledTimes(1)
+  })
+
+  it('keys typed inside the popover reach neither the surface nor the window', () => {
+    const globalKeys = vi.fn()
+    const onKeyDown = vi.fn()
+    window.addEventListener('keydown', globalKeys)
+    try {
+      render(
+        <div onKeyDown={onKeyDown}>
+          <LiveLinkChip nodeId="n1" />
+        </div>
+      )
+      setLinks([link({ role: 'commenter' })])
+      click(chip()!)
+      const input = pop()!.querySelector<HTMLInputElement>('.live-pop__input')!
+      act(() => void input.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', bubbles: true })))
+      act(() => void input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true })))
+      expect(onKeyDown).not.toHaveBeenCalled()
+      expect(globalKeys).not.toHaveBeenCalled()
+      expect(pop()).not.toBeNull()
+    } finally {
+      window.removeEventListener('keydown', globalKeys)
+    }
+  })
+
+  it('a failed Kick says so: not reached, or nobody to kick (M3)', async () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0 }] })])
+    click(chip()!)
+    api.kick.mockImplementationOnce(async () => {
+      throw new Error('socket down')
+    })
+    click(pop()!.querySelector('.live-pop__kick')!)
+    await flush()
+    expect(pop()!.querySelector('[role="alert"]')!.textContent).toBe(KICK_FAILED_MESSAGE)
+    api.kick.mockImplementationOnce(async () => false)
+    click(pop()!.querySelector('.live-pop__kick')!)
+    await flush()
+    expect(pop()!.querySelector('[role="alert"]')!.textContent).toBe(KICK_NOT_DONE_MESSAGE)
+    click(pop()!.querySelector('.live-pop__kick')!)
+    await flush()
+    expect(pop()!.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('a click or middle press on the chip or inside the popover never reaches the surface it sits in', () => {
     const onClick = vi.fn()
     const onMouseDown = vi.fn()
     render(
@@ -210,6 +303,8 @@ describe('LiveLinkPopover', () => {
       </div>
     )
     setLinks([link()])
+    // The chip's own press and click stop too (a sessions row ends the session on a middle press).
+    act(() => void chip()!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 1 })))
     click(chip()!)
     act(() => void pop()!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 1 })))
     click(pop()!)
@@ -287,6 +382,56 @@ describe('LiveLinkPopover — Commenter chat', () => {
     expect(api.sendChat).toHaveBeenCalledWith('L', 'on it')
     expect(input.value).toBe('')
     expect(useWatchLinks.getState().chats.L ?? []).toHaveLength(0)
+    expect(pop()!.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('a reply core did not take keeps the draft and says so (M3)', async () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ role: 'commenter' })])
+    click(chip()!)
+    const input = pop()!.querySelector<HTMLInputElement>('.live-pop__input')!
+    const type = (v: string): void =>
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, v)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    const submit = (): void =>
+      act(() => void pop()!.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    type('hello')
+    api.sendChat.mockImplementationOnce(async () => null)
+    submit()
+    await flush()
+    expect(input.value).toBe('hello')
+    expect(pop()!.querySelector('[role="alert"]')!.textContent).toBe(CHAT_NOT_SENT_MESSAGE)
+    api.sendChat.mockImplementationOnce(async () => {
+      throw new Error('socket down')
+    })
+    submit()
+    await flush()
+    expect(input.value).toBe('hello')
+    expect(pop()!.querySelector('[role="alert"]')!.textContent).toBe(CHAT_NOT_SENT_MESSAGE)
+    submit()
+    await flush()
+    expect(input.value).toBe('')
+    expect(pop()!.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('while the thread is open a new message never shows as unread, not even for one render (N2)', async () => {
+    render(<LiveLinkChip nodeId="n1" />)
+    setLinks([link({ role: 'commenter' })])
+    click(chip()!)
+    await flush()
+    const counts: number[] = []
+    const off = useWatchLinks.subscribe((st) => counts.push(st.unread.L ?? 0))
+    act(() => useWatchLinks.getState().addChat('L', msg('1')))
+    act(() => useWatchLinks.getState().addChat('L', msg('2')))
+    off()
+    expect(counts.every((n) => n === 0)).toBe(true)
+    expect(host.querySelector('.live-chip__unread')).toBeNull()
+    // Closed: the next one counts again.
+    act(() => void window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    act(() => useWatchLinks.getState().addChat('L', msg('3')))
+    expect(useWatchLinks.getState().unread.L).toBe(1)
   })
 
   it('"Copy to card comments" writes one comment as the owner, on this machine\'s project', () => {

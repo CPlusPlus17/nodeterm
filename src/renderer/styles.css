@@ -11299,13 +11299,10 @@ button.pull-checks__name {
    would have to pass styles.palette.test's one-colour-per-meaning pins. The label stays ink (muted
    when refused, as the spec asks). Never animated: a chip that pulsed for as long as a link lives
    would hold the compositor's frame loop open (CLAUDE.md, Idle energy). */
-.live-chip-wrap {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
 .live-chip {
   --live-tone: var(--state-error);
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 5px;
   height: 18px;
@@ -15515,8 +15512,10 @@ body.focus-mode .dock:hover {
    (#323232 with no shadow, #242424, #1e1e1e, #1a1a1a, a near-black 0.98 slab) beside the glass
    menus. Under glass each is the menu surface's own colour made solid (`--panel`, the colour the
    glass fill is `--panel` at an alpha of), with the glass hairline and one shadow. Every modal
-   dialog is glass (the text list above); these four are the only opaque floating surfaces. */
-:root[data-nt-glass='on'] :is(.ctx-popover, .color-popover, .label-picker, .kanban-meta__picker) {
+   dialog is glass (the text list above); these five are the only opaque floating surfaces — the
+   fifth, the live-link popover (LiveLinkPopover), opens over the card modal as well as a glass node
+   header, and stays solid for the same reason. */
+:root[data-nt-glass='on'] :is(.ctx-popover, .color-popover, .label-picker, .kanban-meta__picker, .live-pop) {
   background: var(--panel);
   border: 1px solid var(--glass-edge);
   box-shadow: 0 12px 36px rgba(0, 0, 0, calc(0.45 * var(--shadow-k)));
@@ -15812,7 +15811,7 @@ body.focus-mode .dock:hover {
    floating surfaces (the popovers inside glass nodes, below): the glass placeholder is sized for the
    translucent fill, and on a solid popover it read brighter than the popover's own body text, as if
    the field were already filled (visual QA round 4, N4-M2). */
-:root[data-nt-glass='on'] :not(.sticky-node__body, :is(.ctx-popover, .color-popover, .label-picker, .kanban-meta__picker) *)::placeholder {
+:root[data-nt-glass='on'] :not(.sticky-node__body, :is(.ctx-popover, .color-popover, .label-picker, .kanban-meta__picker, .live-pop) *)::placeholder {
   color: var(--glass-placeholder);
 }
 /* An empty field must look empty (visual QA round 3, NM1): the placeholder's 4.5:1 floor sits at

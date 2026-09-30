@@ -56,6 +56,12 @@ export const PRO_GATE_FEATURE = 'Sharing a live link'
 export const SAVE_FIRST_MESSAGE = "Save the canvas first — this terminal isn't saved yet. Nothing was shared."
 /** H23: `revoke`/`revokeAll` rejected (the Server Edition's socket was down). */
 export const STOP_FAILED_MESSAGE = "The stop didn't reach nodeterm — try again."
+/** Kick rejected (the same dropped socket). */
+export const KICK_FAILED_MESSAGE = "The kick didn't reach nodeterm — try again."
+/** Kick answered false: core found no connected viewer by that id (or its host could not end it). */
+export const KICK_NOT_DONE_MESSAGE = 'That viewer was not disconnected — they may already have left.'
+/** `sendChat` answered null or rejected: nothing reached the viewers; the draft is kept. */
+export const CHAT_NOT_SENT_MESSAGE = "Your reply wasn't sent — viewers didn't see it."
 /** R48: Stop all revokes every link of the LICENSE, other machines included — both entry points confirm. */
 export const STOP_ALL_PALETTE_LABEL = 'Stop all live links (every machine on this license)'
 export const STOP_ALL_BUTTON = 'Stop all'
@@ -105,12 +111,17 @@ export function statusLine(status: WatchLinkView['status']): string | null {
   return null
 }
 
+/** How long a link still runs. Hours AND minutes past the hour: a floored "1 h" for 1 h 59 min
+ *  understated by up to an hour the one figure that says how long a broadcast goes on. */
 export function formatRemaining(expiresAt: number, now: number): string {
   const ms = expiresAt - now
   if (ms <= 0) return 'ended'
   if (ms < 60_000) return 'ends in under a minute'
   const min = Math.floor(ms / 60_000)
-  return min >= 60 ? `ends in ${Math.floor(min / 60)} h` : `ends in ${min} min`
+  if (min < 60) return `ends in ${min} min`
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  return m === 0 ? `ends in ${h} h` : `ends in ${h} h ${m} min`
 }
 
 /** A wall-clock time for "until 15:42" / "since 14:05" — hours and minutes, in the user's locale (H25). */
@@ -175,10 +186,12 @@ export function noticeText(n: WatchLinkNotice): string | null {
   switch (n.kind) {
     case 'joined':
       return `Someone started watching ${stripBidiControls(n.title)} (${n.viewers} watching).`
-    // It covers "the keychain refused to seal" AND "the links file could not be read", and carries
-    // no reason — so it names neither (H7).
+    // Two causes, no reason carried (H7, R55): the keychain refused to seal — only the link just
+    // created is lost at a restart, links read at boot or sealed earlier stay saved — or the links
+    // file could not be read. The renderer cannot tell them apart, so it says what the shared type
+    // documents as the default: only the new link.
     case 'not-persistent':
-      return `Live links aren't being saved on ${thisMachine()} right now. They keep working until you quit.`
+      return `The live link you just created isn't saved on ${thisMachine()}: it works until you quit. Links created before it are still saved.`
     case 'ended': {
       const title = stripBidiControls(n.title)
       if (n.reason === 'expired') return `The live link to ${title} expired.`

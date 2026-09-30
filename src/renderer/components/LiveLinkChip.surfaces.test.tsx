@@ -61,7 +61,7 @@ let host: HTMLDivElement
 let root: Root
 beforeEach(() => {
   resetDialogStack()
-  useWatchLinks.setState({ links: [], byNode: {}, chats: {}, unread: {} })
+  useWatchLinks.setState({ links: [], byNode: {}, chats: {}, unread: {}, hydrated: false })
   useAgentStatus.setState({ byId: {} } as never)
   useProjects.setState({ activeProjectId: 'p1', projects: [] } as never)
   vi.stubGlobal('ResizeObserver', class { observe(): void {} unobserve(): void {} disconnect(): void {} })
@@ -87,14 +87,14 @@ const setLinks = (links: WatchLinkView[]): void => act(() => useWatchLinks.getSt
 const click = (el: Element): void => act(() => void el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 const pop = (): HTMLElement | null => document.querySelector<HTMLElement>('.live-pop')
 
-function card(onOpen = vi.fn()) {
+function card(onOpen = vi.fn(), onDropAt = vi.fn()) {
   return (
     <SessionCard
       session={session}
       onOpen={onOpen}
       onDragStart={vi.fn()}
       onDragEnd={vi.fn()}
-      onDropAt={vi.fn()}
+      onDropAt={onDropAt}
       onContext={vi.fn()}
     />
   )
@@ -121,6 +121,20 @@ describe('LIVE chip — kanban card', () => {
     click(pop()!)
     click(document.querySelector('.live-pop__scrim')!)
     expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('another card dragged over this card\'s chip can still be dropped on the card (I1)', () => {
+    const onDropAt = vi.fn()
+    render(card(vi.fn(), onDropAt))
+    setLinks([link()])
+    const chip = host.querySelector('.live-chip')!
+    const over = new Event('dragover', { bubbles: true, cancelable: true })
+    act(() => void chip.dispatchEvent(over))
+    // The card's handler ran: it accepted the drop and drew its drop line.
+    expect(over.defaultPrevented).toBe(true)
+    expect(host.querySelector('.kanban-card')!.className).toMatch(/kanban-card--drop-(before|after)/)
+    act(() => void chip.dispatchEvent(new Event('drop', { bubbles: true, cancelable: true })))
+    expect(onDropAt).toHaveBeenCalledWith('n1', expect.stringMatching(/before|after/))
   })
 })
 
