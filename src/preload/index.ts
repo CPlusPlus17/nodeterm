@@ -2,6 +2,7 @@ import { subscribeAgentReplay } from '../shared/agent-replay-subscription'
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import { IPC } from '../shared/ipc'
 import { resolveUiScale } from '../shared/ui-scale'
+import type { RecentConversationsRequest } from '../shared/recent-conversations'
 import type {
   CanvasMutation,
   CanvasState,
@@ -24,6 +25,7 @@ import type {
 import type { ClientId, PeerDiff, PeerIdentity, PeerState } from '../shared/presence'
 import type { ProjectConsentRequest, ProjectSetupEvent } from '../shared/project-settings'
 import type { WatchChatMessage, WatchLinkNotice, WatchLinkView } from '../shared/watch-link-types'
+import type { DevPortForwardRequest, DevPortsQuery } from '../shared/dev-ports'
 
 // Fan a single ipcRenderer listener per channel out to many renderer subscribers. Without
 // this, every node that subscribes (e.g. Cmd+M markdown toggle on each terminal/editor) adds
@@ -94,7 +96,8 @@ const api: NodeTerminalApi = {
     destroy: (persistKey, opts) =>
       ipcRenderer.send(IPC.ptyDestroy, persistKey, opts?.everySocket === true),
     recycle: (persistKey) => ipcRenderer.send(IPC.ptyRecycle, persistKey),
-    generateName: (persistKey, cwd) => ipcRenderer.invoke(IPC.ptyGenerateName, persistKey, cwd),
+    generateName: (persistKey, cwd, accountId) =>
+      ipcRenderer.invoke(IPC.ptyGenerateName, persistKey, cwd, accountId),
     generateGroupName: (memberKeys, cwd) =>
       ipcRenderer.invoke(IPC.ptyGenerateGroupName, memberKeys, cwd),
     capture: (persistKey, full) => ipcRenderer.invoke(IPC.ptyCapture, persistKey, full),
@@ -380,6 +383,8 @@ const api: NodeTerminalApi = {
   },
   clipboard: {
     // Route to the MAIN process: renderer-side `clipboard` access is deprecated in Electron.
+    // Fire-and-forget with no failure surface, so `ClipboardWriteOptions.quiet` has nothing to
+    // silence here and is ignored.
     writeText: (text: string) => ipcRenderer.send(IPC.clipboardWrite, text),
     writeFiles: (paths: string[]) => ipcRenderer.invoke(IPC.clipboardWriteFiles, paths)
   },
@@ -506,6 +511,17 @@ const api: NodeTerminalApi = {
     read: (q?: SessionMemoryQuery) => ipcRenderer.invoke(IPC.sessionMemory, q),
     host: (q?: SessionMemoryQuery) => ipcRenderer.invoke(IPC.sessionMemoryHost, q)
   },
+  // Forwarded verbatim for the same reason as sessionMemory: `remote` is OR-ed with the core's own
+  // claim, and a forward request carries only node + port — the host-side address is decided in core.
+  devPorts: {
+    scan: (q?: DevPortsQuery) => ipcRenderer.invoke(IPC.devPortsScan, q),
+    forward: (req: DevPortForwardRequest) => ipcRenderer.invoke(IPC.devPortsForward, req),
+    unforward: (req: { projectId: string; localPort: number }) => ipcRenderer.invoke(IPC.devPortsUnforward, req)
+  },
+  recentConversations: {
+    list: (req?: RecentConversationsRequest) =>
+      ipcRenderer.invoke(IPC.recentConversationsList, req)
+  },
   wallpaper: {
     listStills: () => ipcRenderer.invoke(IPC.wallpaperListStills),
     load: (w) => ipcRenderer.invoke(IPC.wallpaperLoad, w),
@@ -580,7 +596,8 @@ const api: NodeTerminalApi = {
     readTranscript: (sessionId, cwd, accountId, nodeId, agentId, page) =>
       ipcRenderer.invoke(IPC.chatReadTranscript, sessionId, cwd, accountId, nodeId, agentId, page),
     transcriptExists: (sessionId, accountId, nodeId) =>
-      ipcRenderer.invoke(IPC.transcriptExists, sessionId, accountId, nodeId)
+      ipcRenderer.invoke(IPC.transcriptExists, sessionId, accountId, nodeId),
+    catalog: (nodeId, agentId, accountId, cwd) => ipcRenderer.invoke(IPC.chatCatalog, nodeId, agentId, accountId, cwd)
   },
   claudeAccounts: {
     add: (ctx) => ipcRenderer.invoke(IPC.claudeAccountsAdd, ctx),
@@ -699,7 +716,11 @@ const api: NodeTerminalApi = {
     probeSsh: () => ipcRenderer.invoke(IPC.pairingProbeSsh),
     openRemoteLoginSettings: () => ipcRenderer.invoke(IPC.pairingOpenRemoteLoginSettings),
     listDevices: () => ipcRenderer.invoke(IPC.pairingListDevices),
-    revokeDevice: (id) => ipcRenderer.invoke(IPC.pairingRevokeDevice, id)
+    revokeDevice: (id) => ipcRenderer.invoke(IPC.pairingRevokeDevice, id),
+    webhookStatus: () => ipcRenderer.invoke(IPC.pairingWebhookStatus),
+    webhookMint: () => ipcRenderer.invoke(IPC.pairingWebhookMint),
+    webhookRevoke: () => ipcRenderer.invoke(IPC.pairingWebhookRevoke),
+    webhookEndpoint: () => ipcRenderer.invoke(IPC.pairingWebhookEndpoint)
   },
   // Team presence. `hello` is the only request (its response is how this client learns its OWN
   // ClientId, without which it would draw its own cursor as a peer's); the publishers are
@@ -871,6 +892,11 @@ const api: NodeTerminalApi = {
   agentMessage: {
     deliver: (req) => ipcRenderer.invoke(IPC.agentMessageDeliver, req),
     deliverBoardComment: (req) => ipcRenderer.invoke(IPC.agentBoardCommentDeliver, req)
+  },
+  boardDispatch: {
+    report: (entries) => {
+      void ipcRenderer.invoke(IPC.boardDispatchReport, entries).catch(() => undefined)
+    }
   },
   stationNotice: {
     list: () => ipcRenderer.invoke(IPC.stationNoticeList),

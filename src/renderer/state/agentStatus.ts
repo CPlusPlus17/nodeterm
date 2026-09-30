@@ -8,9 +8,12 @@ import type { WakeContext } from '../terminal/wake-identity'
 
 /**
  * Transient per-node status for agent (e.g. Claude Code) sessions, driven by the agent's hooks.
- * `unread`, `session`, `sessionId`, `agentId`, `account`, `loop` and `hibernated` are persisted to
- * localStorage so they survive a reload/restart; the live `state` (working/waiting/…) is not
- * (it'd be stale on relaunch), and neither are its two clocks (`stateAt`, `lastEventAt`).
+ * `unread`, `session`, `sessionId`, `agentId`, `account`, `loop`, `hibernated` and `lastSeen` are
+ * persisted to localStorage so they survive a reload/restart; the live `state` (working/waiting/…)
+ * is not (it'd be stale on relaunch), and neither are its two clocks (`stateAt`, `lastEventAt`).
+ * `lastSeen` is a THIRD clock that exists only to be persisted: when the last hook event landed and
+ * which state it asserted, restored as a "last seen" label and a sort key — never as a state, and
+ * never as an idle clock (see its field comment).
  * `agentId` is durable because a PLAIN terminal's agent identity exists nowhere else: an
  * explicit agent node re-derives it from `data.agentId`, but a hand-launched `claude` in a
  * plain terminal is only known here, and its context links must keep classifying across
@@ -63,6 +66,33 @@ export interface AgentNodeStatus {
    * session the moment the app came back. Absent ⇒ unknown idle ⇒ never a hibernation candidate.
    */
   lastEventAt?: number
+  /**
+   * When the LAST hook event for this node landed, and the state it asserted — the one status clock
+   * that survives an app restart. PERSISTED under its OWN small key (`<persistKey>.lastSeen`, see
+   * `saveClocks`) — never inside the main table, whose write cadence stays exactly what it was.
+   * Bounded: `LAST_SEEN_MAX` newest, `LAST_SEEN_MAX_AGE_MS` old at most, dropped with the node by
+   * `remove` (a deletion path that bypasses `remove` leaves a clock that ages out; it can never make
+   * a row, since rows come from canvas nodes).
+   *
+   * It is a record of the PAST, restored as nothing else:
+   *  - NOT as `state`: after a relaunch nothing has reported, a turn may have started or ended while
+   *    the app was down (the hook server was down with it), so the state stays unknown until the
+   *    next hook event. `lastSeen.state` is shown as "what it was last seen doing", never acted on.
+   *  - NOT as `lastEventAt`: that field is the Eco idle clock AND the `idleKnown` signal for the
+   *    offscreen release deferral, and a restored stamp read as "idle since before the restart"
+   *    would make a session with an unknown state look hours idle. Eco stays inert for a session
+   *    with no hook event in this run, deliberately — see `hibernation-policy.ts` ("A restored clock
+   *    is not an idle proof").
+   * Its readers are the sessions sidebar's order and age label (`sessionList.ts`), which use it only
+   * while `lastEventAt` is unset. `lastSeen.restored` (set on load, never written) is what says the
+   * clock is from BEFORE the restart; any hook event in this run replaces the object without it.
+   *
+   * Written on EVERY hook event, same-state ones included (in place, no re-render — the fast path's
+   * rule — except the first event after a restart, which re-renders so the row re-sorts and loses
+   * its "restored" label), and saved on a trailing debounce (`LAST_SEEN_SAVE_DEBOUNCE_MS`, capped by
+   * `LAST_SEEN_SAVE_MAX_WAIT_MS`) plus `pagehide`, so a busy turn costs no write per tool event.
+   */
+  lastSeen?: LastSeen
   /**
    * When this node last launched a BACKGROUND shell task (Claude's `Bash` with
    * `run_in_background: true`). Such a task lives inside the CLI process, so `/exit` — Eco
@@ -389,6 +419,63 @@ export interface AgentStatusStore {
   remove(id: string): void
 }
 
+/** The persisted "last seen" clock (see `AgentNodeStatus.lastSeen`). */
+export interface LastSeen {
+  /** Epoch ms of the last hook event this machine received for the node. */
+  at: number
+  /** The state that event asserted; undefined = the event left the state unknown (a SessionStart
+   *  or SessionEnd). */
+  state?: AgentState
+  /** TRANSIENT, set on load only: this clock came off disk, from before the app restarted. Never
+   *  written back — every hook event in this run builds a fresh object without it. */
+  restored?: true
+}
+
+/** At most this many persisted clocks (newest kept): a canvas that has churned through thousands of
+ *  nodes must not grow the clock key forever. */
+export const LAST_SEEN_MAX = 1000
+/** A clock older than this is dropped on load: "last seen 4 months ago" orders nothing useful, and
+ *  an entry that old most likely belongs to a node deleted by a path that never reached `remove`. */
+export const LAST_SEEN_MAX_AGE_MS = 90 * 24 * 60 * 60_000
+/** A persisted clock more than this far in the FUTURE is refused, not clamped: localStorage is
+ *  hand-editable, and a future stamp would pin a row to the top of its section for good. The slack
+ *  covers an ordinary clock correction between two runs. */
+export const LAST_SEEN_FUTURE_SLACK_MS = 5 * 60_000
+/** Trailing debounce for the clock key: written once the hook events have been quiet this long… */
+export const LAST_SEEN_SAVE_DEBOUNCE_MS = 5000
+/** …or at the latest this long after the first unsaved event, so a canvas that is never quiet still
+ *  persists its clocks (a crash then loses at most this window). The key is ~47 bytes per clock. */
+export const LAST_SEEN_SAVE_MAX_WAIT_MS = 30_000
+/** The clocks' own localStorage key, beside (never inside) the main table. */
+export const lastSeenKey = (persistKey: string): string => `${persistKey}.lastSeen`
+
+const AGENT_STATES: ReadonlySet<string> = new Set<AgentState>(['working', 'waiting', 'blocked', 'done'])
+
+/**
+ * Read a persisted `lastSeen` back — or nothing. Pure and exported for the corrupt-input tests. The
+ * value is hand-editable input: a non-object, a non-finite / non-positive / too-old / future `at`
+ * yields no clock at all; an unknown `state` keeps the clock and drops the state (the time is still
+ * a fact about the node, the label just cannot name what it was doing).
+ */
+export function readLastSeen(v: unknown, nowMs: number): LastSeen | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const { at, state } = v as { at?: unknown; state?: unknown }
+  if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) return undefined
+  if (at > nowMs + LAST_SEEN_FUTURE_SLACK_MS) return undefined
+  if (nowMs - at > LAST_SEEN_MAX_AGE_MS) return undefined
+  return typeof state === 'string' && AGENT_STATES.has(state)
+    ? { at, state: state as AgentState }
+    : { at }
+}
+
+/** The ids whose `lastSeen` may be written: the `LAST_SEEN_MAX` newest. Pure, for the bound test. */
+export function lastSeenKeep(byId: Record<string, { lastSeen?: LastSeen }>): Set<string> {
+  const withClock = Object.entries(byId).filter(([, v]) => v.lastSeen)
+  if (withClock.length <= LAST_SEEN_MAX) return new Set(withClock.map(([id]) => id))
+  withClock.sort((a, b) => b[1].lastSeen!.at - a[1].lastSeen!.at)
+  return new Set(withClock.slice(0, LAST_SEEN_MAX).map(([id]) => id))
+}
+
 const EMPTY: AgentNodeStatus = { unread: false }
 /** The DEFAULT (local-core) persistence key. Only the default instance uses it. */
 const KEY = 'nodeterm.agentStatus'
@@ -454,13 +541,37 @@ export function createAgentStatusSession(
   if (persistKey === KEY) migrateLegacyKey()
 
   function load(): Record<string, AgentNodeStatus> {
+    const out = loadMain()
+    if (!persistKey) return out
+    // The clocks ride their own key (see `lastSeen`). Restored as a CLOCK marked `restored`, never
+    // as `state` or `lastEventAt`.
+    try {
+      const raw = localStorage.getItem(lastSeenKey(persistKey))
+      const data: unknown = raw ? JSON.parse(raw) : undefined
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        const nowMs = Date.now()
+        for (const [id, v] of Object.entries(data as Record<string, unknown>)) {
+          const seen = readLastSeen(v, nowMs)
+          if (!seen) continue
+          out[id] = { ...(out[id] ?? EMPTY), lastSeen: { ...seen, restored: true } }
+        }
+      }
+    } catch {
+      /* an unreadable clock key costs the clocks, never the table */
+    }
+    return out
+  }
+
+  function loadMain(): Record<string, AgentNodeStatus> {
     if (!persistKey) return {}
     try {
       const raw = localStorage.getItem(persistKey)
       if (!raw) return {}
       const data = JSON.parse(raw) as Record<string, Partial<AgentNodeStatus>>
       const out: Record<string, AgentNodeStatus> = {}
+      if (!data || typeof data !== 'object') return {}
       for (const [id, v] of Object.entries(data)) {
+        if (!v || typeof v !== 'object') continue
         out[id] = { unread: !!v.unread, session: v.session, sessionId: v.sessionId, agentId: v.agentId }
         // Minimal shape check, like `loop` below: this file is on disk and hand-editable, and a
         // half-written entry must not put a chip on a node claiming an identity it never had.
@@ -569,6 +680,50 @@ export function createAgentStatusSession(
     }
   }
 
+  // The clock key (see `lastSeen`): its own small record, so a hook event never rewrites the main
+  // table (which carries loop items and is shared, per key, by every Server Edition tab).
+  function saveClocks(byId: Record<string, AgentNodeStatus>): void {
+    cancelClockSave()
+    if (!persistKey) return
+    try {
+      const out: Record<string, { at: number; state?: AgentState }> = {}
+      // A fresh object of exactly the two fields: `restored` and anything else never ride out.
+      for (const id of lastSeenKeep(byId)) {
+        const c = byId[id].lastSeen!
+        out[id] = c.state ? { at: c.at, state: c.state } : { at: c.at }
+      }
+      localStorage.setItem(lastSeenKey(persistKey), JSON.stringify(out))
+    } catch {
+      // ignore quota / serialization errors
+    }
+  }
+  // A TRAILING debounce with a max wait: each event pushes the write back by the debounce window,
+  // but never past `LAST_SEEN_SAVE_MAX_WAIT_MS` after the first unsaved event.
+  let clockSaveTimer: ReturnType<typeof setTimeout> | undefined
+  let clockDirtySince: number | undefined
+  function cancelClockSave(): void {
+    if (clockSaveTimer !== undefined) clearTimeout(clockSaveTimer)
+    clockSaveTimer = undefined
+    clockDirtySince = undefined
+  }
+  function scheduleClockSave(): void {
+    if (!persistKey) return
+    const now = Date.now()
+    if (clockDirtySince === undefined) clockDirtySince = now
+    if (clockSaveTimer !== undefined) clearTimeout(clockSaveTimer)
+    const wait = Math.max(
+      0,
+      Math.min(LAST_SEEN_SAVE_DEBOUNCE_MS, clockDirtySince + LAST_SEEN_SAVE_MAX_WAIT_MS - now)
+    )
+    clockSaveTimer = setTimeout(() => saveClocks(store.getState().byId), wait)
+  }
+  // A quit/reload inside the debounce window must not lose the newest clock.
+  if (persistKey && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('pagehide', () => {
+      if (clockSaveTimer !== undefined) saveClocks(store.getState().byId)
+    })
+  }
+
   // `onHookEvent` listeners, per node id. Outside zustand on purpose (see the interface).
   const hookEventSubs = new Map<string, Set<() => void>>()
   const pulse = (id: string): void => {
@@ -646,8 +801,26 @@ export function createAgentStatusSession(
         ) {
           // Same-state event: refresh freshness in place — stateAt is never rendered, and a
           // new object here would re-render every node header on each tool event.
+          if (s.byId[id]?.lastSeen?.restored) {
+            // The FIRST event after a restart for a node whose state is still unknown (a
+            // SessionStart from a cold-restore resume, say) is same-state by construction. Not in
+            // place: the row must lose its "restored" label and re-sort NOW, not whenever another
+            // node's event happens to replace `byId`. The idle clock is deliberately left unset —
+            // an unknown state is not an idle one.
+            scheduleClockSave()
+            return {
+              byId: {
+                ...s.byId,
+                [id]: { ...s.byId[id], stateAt: now, stateVerified: verified === true, lastSeen: { at: now, state } }
+              }
+            }
+          }
           if (s.byId[id]) {
             s.byId[id].stateAt = now
+            // "Last seen" is the last hook EVENT, so a same-state one moves it too — in place, like
+            // `stateAt`, and saved on the trailing debounce rather than once per tool event.
+            s.byId[id].lastSeen = { at: now, state }
+            scheduleClockSave()
             // The evidence rides along, in place and for the same reason: a re-assert of the SAME
             // state by a legacy POST must not leave an earlier `true` standing, or this copy would
             // disagree with the mirror the gate actually reads.
@@ -658,7 +831,7 @@ export function createAgentStatusSession(
         // The ONE place a state transition is recorded, so it is also the one place the idle
         // clock is stamped (the same-state fast path above deliberately does not touch it —
         // see `lastEventAt`).
-        const next = { ...prev, state, stateAt: now, lastEventAt: now }
+        const next = { ...prev, state, stateAt: now, lastEventAt: now, lastSeen: { at: now, state } }
         // Written on the same edge the state is — the evidence describes THIS transition, and an
         // absent argument is not evidence.
         next.stateVerified = verified === true
@@ -748,6 +921,7 @@ export function createAgentStatusSession(
         // PERSISTED flag has to reach disk, or a relaunch would restore a hibernated/paused node
         // that has been demonstrably running since.
         if (alive && (prev.hibernated || prev.paused)) save(byId)
+        scheduleClockSave()
         return { byId }
       })
       // After the set: a listener reads the store and must see this event applied.
@@ -1020,6 +1194,8 @@ export function createAgentStatusSession(
         const byId = { ...s.byId }
         delete byId[id]
         save(byId)
+        // Now, not on the debounce: the deleted node's clock must not outlive it on disk.
+        if (s.byId[id].lastSeen) saveClocks(byId)
         return { byId }
       })
   }))

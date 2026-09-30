@@ -149,7 +149,9 @@ chain appears, or if anything but `dispatchOnUserMove` creates a queued entry.
 
 A card chip that reads agent state subscribes to a **primitive signature** of the nodes it shows
 (`teamProgressSig`, `issueRunChipSig`), never to the whole `agentStatus.byId` map — that map changes
-on every hook event of every node. Before a card shows a fact, check that its place on the board
+on every hook event of every node. A field of `agentStatus` that is persisted across a restart is restored
+as a record of the past, never as live state: `lastSeen` orders and ages sidebar rows but never
+becomes `state` or Eco's idle clock (`lastEventAt`). Before a card shows a fact, check that its place on the board
 does not already say it (`lib/cardRedundancy.ts`); the card modal keeps every fact the card drops.
 `project.ropes` / `bridges` are hostile input like the board: they are admitted through
 `sanitizeLinks` on every load and save seam, and a reader still tolerates anything. A wait rope
@@ -199,6 +201,16 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   keyed by API identity, exact cwd and (for SSH) project identity. Never probe an SSH cwd locally
   from a background header: only the active SSH project is git-routable. SSH headers observe
   Source refreshes instead.
+
+- **A port is a node's only if its listener is in that node's process tree.** Dev-server
+  discovery (`core/dev-ports.ts`) attributes ports by socket ownership and never connects to
+  anything. A new consumer reads the scan, it does not add a probe. A forward
+  (`core/remote-ssh/port-forward.ts`) binds `127.0.0.1` only, keeps the same port number or
+  refuses with the reason — a different local port is only ever the person's explicit choice — and
+  never forwards a port below 1024 unasked. The renderer passes a node and a port, never an address:
+  core re-scans and decides the host-side target. Treat `ss`/`lsof`/`ls` output as attacker-
+  influenced text: a process name is chosen by the process, so parse each owner group on its own and
+  never let a name reach a pid (see CLAUDE.md → Dev-server ports).
 
 - **A GitHub issue reaches a pane only as a validated reference.** Issue titles and bodies are
   written by strangers on public repositories, and a launch line is typed into a shell. Anything
@@ -508,6 +520,15 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   write is cast (`canvas/stored-publish.ts`); a new store writer of that kind must use `ownWrite`
   too. Deep version: CLAUDE.md § Hosted team relay.
 
+- **A request that trusts a relay host key (host-token mint, host-mode push) proves possession
+  through `src/core/relay/relay-pop.ts`, and falls back to an unproven request ONLY on a 404/405
+  challenge.** One exception, push only: a 200 challenge followed by a 404 from `/v1/push/host-auth`
+  (possible only in a backend redeploy window) also posts unproven, and caches that verdict for 10
+  minutes; push stops nothing, and the backend gates the post regardless. The push webhook's
+  management calls prove the same key through their own protocol (`src/core/push-webhook.ts`) — do
+  not fold one into the other. Change the relay protocol and `relay-pop-vector.json` must change in
+  both repos. Deep version: CLAUDE.md § Hosted team relay.
+
 - **Normalize BOTH sides of a path comparison, through one function.** A marker normalized where
   it is built and matched raw where it is used is a no-op on the machine you wrote it on and a
   silent defect on Windows. That is issue #558: the managed-hook marker was folded to `/` while
@@ -679,11 +700,26 @@ loop an unrelated client error, and never replay the original prompt after recon
 responsive daemon before invoking lifecycle repair; stale PID bookkeeping is not permission to kill
 working sessions. See `docs/shared-codex-node-identity.md`.
 
+**A plain Codex TUI must not join Codex's own auto-started daemon.** From codex-cli 0.157.0 a
+plain `codex` starts (or joins) ONE background app-server per `CODEX_HOME` that keeps the
+environment of the pane that STARTED it, so every later node's hooks and tool shells run with the
+first node's `NODETERM_NODE_ID` (measured on 0.159.2). Every nodeterm codex line therefore ends in
+`--no-daemon` when the CLI that will run it advertised the flag — added in the two assemblers
+(`shared/agents/launch.ts` via `withCodexNoDaemon`), fed by `ApprovalCaps.codexNoDaemon`. A new
+codex launch site goes through those assemblers and threads the caps; never type a bare `codex` line
+yourself, and AWAIT `ensureCodexLaunchCaps` (bounded) where the site is async — a synchronous
+read loses the race when every node cold-restores after a reboot. A relay tab or SSH node must be
+passed as remote: the guest's or laptop's answer never applies to another machine's codex. The
+flag must never meet `--remote` (codex refuses the pair), which is why the managed launcher strips
+it. See CLAUDE.md "Codex's auto-started shared daemon".
+
 **Credentials never ride argv — local or SSH.** Not a tmux `-e` pair, not `curl -H`, not a remote
 command string. `/proc/<pid>/cmdline` is mode 444 on a stock Linux, and a remote command line is argv
 on the host too: we shipped the hook bearer that way and any other account on the machine could read
 it and open a terminal running an arbitrary command. Pass secrets by 0600 file or by **stdin**
-(`curl --config -`), and never add an argv fallback. See `docs/node-identity.md`.
+(`curl --config -`), and never add an argv fallback. See `docs/node-identity.md`. That includes the
+examples we SHOW users to copy (the push webhook's curl pipes its header on stdin, and a test runs
+it under `/bin/sh` to prove it): a user pastes what we print into a CI job on a shared runner.
 
 **A hook socket path is not ownership proof.** Never unlink a live listener to bind a hook
 socket, or overwrite an advertisement whose socket/TCP listener still answers. Local stale cleanup requires `ECONNREFUSED` and an unchanged socket inode; regular files,
@@ -1059,6 +1095,23 @@ the primary fence. As a belt
 behind it, an SSH-project node's request carries `requireRemote`, which `desktopHeadlessRequest`
 keeps, so core's `spawnNew` refuses rather than spawning it locally. Keep both fences.
 
+## Performance
+
+Measure before you optimize, and put the before/after in the commit. The CLAUDE.md section
+**Performance: measure it, then fix what the measurement names** has the method (CDP against
+`npx electron-vite dev --remoteDebuggingPort 9333`) and the rules it produced. The ones that
+bite most often:
+- An infinite CSS animation keeps the whole window repainting at display rate. Bound it.
+- Never put `will-change` on the React Flow viewport.
+- `handleNodesChange` must not call `onNodesChange` with an empty batch (it re-renders the canvas
+  every frame through React Flow's ResizeObserver).
+- Work done per terminal on a project switch must be coalesced and on-screen-first.
+
+**SSH projects on Windows** run over an in-process transport (`src/core/remote-ssh/native/`),
+not the ssh binary. If you add an ssh call site, route it through `useNativeSsh()` like the
+others, and if you add an ssh option to `control-master.ts`, teach `ssh-argv.ts` about it (the
+parser refuses unknown options on purpose). Test from macOS/Linux with `NODETERM_NATIVE_SSH=1`.
+
 ## Testing
 
 **Screenshot paste has one route per gesture.** On macOS, Cmd+V saves/uploads a file and
@@ -1116,6 +1169,16 @@ name at once. Write real-tmux suites the normal way — pick your own socket nam
 tmux without carrying `TMUX_TMPDIR` into it, which is the one way left to escape the sandbox.
 `src/core/tmux-socket-isolation.guard.test.ts` holds the short allowlist of suites that name a
 production socket on purpose; adding a third is a review conversation, not a checkbox.
+
+**Session code has two local backends on POSIX: tmux and Zellij.** `settings.sessionBackend` picks
+where a NEW local terminal's session is created (default tmux); an existing session is always
+reattached in the backend that holds it. If you add a `PtyManager` method that talks to tmux about a
+node, ask `isZellij(persistKey, live)` first and either implement the Zellij leg in
+`src/core/zellij-backend.ts` or answer the explicit "unknown/refused" value and add the gap to
+`ZELLIJ_BACKEND_GAPS` (the Settings row prints that list; `docs/session-backends.md` must state it).
+Asking the tmux socket about a Zellij node is a guess, and `has-session` exit 1 there reads as
+"cold". The `*.realzellij.test.ts` suites need a binary: set `NODETERM_TEST_ZELLIJ=/abs/path/zellij`
+or put `zellij` on PATH; they sandbox HOME, XDG and `ZELLIJ_SOCKET_DIR`, and skip otherwise.
 
 **A test's temp directory must go away when the run does.** `fakePlatform()`'s `userDataDir` is made
 on first read under one per-run root (`test/setup/fake-platform-root.ts`), and that root is removed

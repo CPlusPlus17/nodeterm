@@ -1,6 +1,8 @@
 import type { TextDeliveryResult } from './text-delivery'
+import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from './push-webhook'
 import type { IdentitySeedEntry } from './agent-identity-seed'
 import type { PrWaitHold } from './pr-wait'
+import type { SessionBackend } from './session-backend'
 // Types shared across the main, preload, and renderer processes.
 
 import { TABBAR_HEIGHT_PX } from './window-chrome-metrics'
@@ -1172,7 +1174,14 @@ export interface TmuxStatus {
   /** tmux discovery only; retained for older callers and install polling. */
   available: boolean
   /** Absent on older peers; null when discovery could not be read. */
-  persistence?: { enabled: boolean; backend: 'tmux' | 'session-host' | null } | null
+  persistence?: { enabled: boolean; backend: 'tmux' | 'zellij' | 'session-host' | null } | null
+  /**
+   * The optional Zellij backend (@shared/session-backend): whether a `zellij` binary was found and
+   * whether this machine's setting selects it for NEW local terminals. Absent on older peers and on
+   * Windows (no Zellij backend there). `selected && !available` means new terminals fall back to
+   * tmux — the Settings row says so rather than letting the choice look applied.
+   */
+  zellij?: { available: boolean; selected: boolean; socketTooLong?: boolean }
   /** One-shot install command for a terminal node; null = no known installer (text-only banner). */
   installCommand: string | null
   /** Button caption for installCommand (e.g. "Install Homebrew + tmux" when brew must come first). */
@@ -1240,8 +1249,10 @@ export interface PtyApi {
    *  worktree"). Same tmux kill as `destroy`, opposite intent: the node stays on the canvas, so
    *  co-viewers get `onRecycled` (restart + re-attach), never the permanent closed state. */
   recycle(persistKey: string): void
-  /** Suggest a terminal title from its recent output via the configured AI agent. */
-  generateName(persistKey: string, cwd: string): Promise<GitResult>
+  /** Suggest a terminal title from its recent output via the configured AI agent. `accountId` is
+   *  the node's managed Claude account (trailing + optional: absent = system `~/.claude`), so the
+   *  naming request runs under the same login the node itself does. */
+  generateName(persistKey: string, cwd: string, accountId?: string): Promise<GitResult>
   /** Suggest a group title from its member terminals' recent output via the configured AI agent. */
   generateGroupName(memberKeys: string[], cwd: string): Promise<GitResult>
   /** Capture a terminal session's output as text. `full` grabs the entire scrollback. */
@@ -1456,8 +1467,18 @@ export interface DialogApi {
   selectFile(): Promise<string | null>
 }
 
+export interface ClipboardWriteOptions {
+  /**
+   * Never raise a failure toast. For writes the user did not explicitly ask for as a copy — today
+   * only copy-on-select (issue #759), which writes on every completed drag, where a toast per drag
+   * would be unusable. The write still tries every route; only the banner is withheld. The desktop
+   * preload's write is fire-and-forget IPC with no failure surface at all, so it ignores this.
+   */
+  quiet?: boolean
+}
+
 export interface ClipboardApi {
-  writeText(text: string): void
+  writeText(text: string, opts?: ClipboardWriteOptions): void
   /** Copy local files so Finder and other file-aware macOS apps can paste them. */
   writeFiles(paths: string[]): Promise<boolean>
 }
@@ -1794,6 +1815,13 @@ export interface Settings {
   worktreePathTemplate: string
   /** ms to dwell over a terminal before it takes pointer focus (pan-across guard). */
   panHoverDelay: number
+  /** Issue #757. Whether a terminal node's keyboard focus follows the POINTER (the long-standing
+   *  behaviour and the default): a `panHoverDelay` dwell takes it and leaving the node gives it
+   *  back. Off = click to focus (the Mac model): the pointer decides nothing, a click or a "go to
+   *  node" takes the keyboard, and the terminal keeps it until focus really moves elsewhere
+   *  (another node, the empty canvas, a field). Machine-local, Settings → Behavior. Decisions live
+   *  in `renderer/lib/terminalFocusMode.ts`. */
+  terminalFocusFollowsPointer: boolean
   doubleClickFocus: boolean
   /** "Go to node" (sessions sidebar, notification click, ⌘K jump, breadcrumb steps, presence
    *  travel) fits the node in view. Off: the camera keeps the CURRENT zoom and only pans, which is
@@ -1840,6 +1868,30 @@ export interface Settings {
    * click drops whatever was last selected anywhere on the machine into a live agent prompt.
    */
   terminalMiddleClickPaste: boolean
+  /**
+   * Copy a completed MOUSE selection that the terminal emulator (xterm) owns to the system
+   * clipboard (issue #759). OFF by default: it preserves the explicit-copy behaviour, and silently
+   * changing what is on the clipboard is a surprise worth opting into.
+   *
+   * Scope, stated honestly: it covers only selections xterm makes itself — a drag, double/triple
+   * click, or a FORCED selection (Option-drag on macOS, Shift-drag elsewhere) inside an app that
+   * tracks the mouse. It cannot copy a selection an app draws itself, and OSC 52 copies (tmux
+   * copy-mode, vim `"+y`) reach the clipboard whether this is on or off. Programmatic selections
+   * (find-bar hits) never copy. Read live, so a toggle applies to the next drag on every open
+   * terminal. Logic: `renderer/terminal/copy-on-select.ts`.
+   */
+  copyOnSelect: boolean
+  /**
+   * Windows SSH projects: after a key is unlocked with its passphrase, also load it into the
+   * Windows OpenSSH agent service, so later connections (and the user's own `ssh`) do not prompt
+   * again. OFF by default because that agent STORES the key — DPAPI-encrypted in
+   * `HKCU\Software\OpenSSH\Agent\Keys`, surviving service restarts — until it is removed
+   * (`ssh-add -d` / `-D`), and it refuses a lifetime constraint (measured on windows-latest,
+   * OpenSSH_for_Windows_9.5p2), so there is no "for this session only". A host whose own
+   * `~/.ssh/config` says `AddKeysToAgent yes` gets the add without this switch: that user already
+   * asked OpenSSH for exactly this. Logic: `core/remote-ssh/native/agent-add.ts`.
+   */
+  windowsSshAgentAddKeys: boolean
   /** Plain mouse wheel zooms the canvas (no Cmd/Ctrl needed). On macOS a two-finger trackpad
    *  scroll keeps panning independently (see canvas/wheel-gesture.ts), so mouse and trackpad
    *  coexist; elsewhere this still trades away scroll-to-pan, so it stays opt-in. */
@@ -1871,6 +1923,13 @@ export interface Settings {
   browserMemorySaver: boolean
   accent: string
   tmuxEnabled: boolean
+  /**
+   * Which multiplexer creates a NEW local terminal's persistent session on POSIX: `tmux` (default)
+   * or `zellij`. Hand-editable, so every reader goes through `normalizeSessionBackend`
+   * (@shared/session-backend) — anything unknown reads as tmux. A node whose session already
+   * lives in one backend keeps reattaching there; Windows and SSH projects ignore it.
+   */
+  sessionBackend: SessionBackend
   /**
    * Reach a released tmux session with a control-mode (`tmux -C`) client instead of respawning its
    * terminal — the shadow clients in pty-manager.ts (`shadowAttach`) and the shared background-write
@@ -2197,12 +2256,15 @@ export const DEFAULT_SETTINGS: Settings = {
   omniKanbanAsDefault: false,
   worktreePathTemplate: DEFAULT_WORKTREE_PATH_TEMPLATE,
   panHoverDelay: 600,
+  terminalFocusFollowsPointer: true,
   doubleClickFocus: true,
   focusZoomToNode: true,
   rememberCanvasLock: false,
   openMarkdownPreview: true,
   openMarkdownPreviewMigrated: true,
   terminalMiddleClickPaste: false,
+  copyOnSelect: false,
+  windowsSshAgentAddKeys: false,
   wheelZoom: false,
   wheelZoomSpeed: 1,
   trackpadPan: true,
@@ -2210,6 +2272,7 @@ export const DEFAULT_SETTINGS: Settings = {
   browserMemorySaver: true,
   accent: '#0a84ff',
   tmuxEnabled: true,
+  sessionBackend: 'tmux',
   ptyShadowClients: true,
   terminalGpuRendering: 'auto',
   tmuxScrollback: 50000,
@@ -2381,6 +2444,17 @@ export interface SshProjectStatusEvent {
    *  `claudeAutoPermissionMode`. `null` = the probe ran but found no claude (distinguishable from
    *  "old CLI" in the tab-menu hint); absent = nothing new. */
   remoteClaudeVersion?: string | null
+  /** Does THIS HOST's `codex` accept `--no-daemon` (probed after connect, `codex --help` through
+   *  the login shell)? Keyed by `sshHostKey` because it is a fact about the host's binary, not the
+   *  project. Only `supported: true` puts the flag on a remote Codex launch — see
+   *  shared/agents/codex-daemon.ts. Absent = nothing new. */
+  remoteCodexNoDaemon?: RemoteCodexNoDaemon
+}
+
+/** A host's answer to "does its `codex` accept `--no-daemon`?" — see `SshProjectStatusEvent`. */
+export interface RemoteCodexNoDaemon {
+  hostKey: string
+  supported: boolean
 }
 
 /** main → renderer: this SSH identity file needs its passphrase (the ssh-agent doesn't hold the
@@ -2411,6 +2485,8 @@ export interface SshProjectApi {
     claudeAutoPermissionMode?: boolean
     /** The probed remote `claude --version` output (`null` = probe failed; only on reused conns). */
     remoteClaudeVersion?: string | null
+    /** The host's `--no-daemon` answer, when a probe already ran on this connection (reused conns). */
+    remoteCodexNoDaemon?: RemoteCodexNoDaemon
   }>
   /** Tear down the master (remote tmux is unaffected). */
   disconnect(projectId: string): Promise<void>
@@ -2861,6 +2937,12 @@ export interface SessionMemoryReport {
   ok: boolean
   rows: SessionMemoryRow[]
   mem: MemInfo | null
+  /**
+   * Live nodeterm sessions on this machine that the sweep could NOT measure — today, Zellij-backed
+   * ones (the sweep reads tmux). Absent/0 = none. `null` = could not tell. Local scope only. The
+   * panel must never say "no sessions are running" while this is non-zero or unknown.
+   */
+  unmeasured?: number | null
 }
 
 /**
@@ -3232,6 +3314,16 @@ export interface ChatApi {
     accountId?: string,
     nodeId?: string
   ): Promise<TranscriptPresence>
+
+  /**
+   * The ⌘M composer's `/` catalog for a node: its agent's measured built-in slash commands, custom
+   * command files and skills (core/chat-catalog.ts). An SSH-project node's files are read on its
+   * HOST (`nodeId` — remoteness is the shell's own record, never this call's). A relay tab REJECTS
+   * (E_UNSUPPORTED — the peer's files are not this machine's to read, and the relay does not carry
+   * the channel); the composer then offers the shared built-in table alone, and every caller must
+   * treat any rejection the same way.
+   */
+  catalog(nodeId: string, agentId: string, accountId?: string, cwd?: string): Promise<import('./chat-catalog').ChatCatalog>
 }
 
 /** Optional SSH context for account ops. When `projectId` names a connected SSH project, the
@@ -3380,6 +3472,8 @@ export interface TranscriptHit {
   cwd: string
   projectLabel: string
   mtime: number
+  /** The managed/linked Claude account whose root holds this transcript; absent = system. */
+  accountId?: string
 }
 
 export interface TranscriptsApi {
@@ -3474,11 +3568,17 @@ export interface CodexCliCaps {
    *  "this CLI accepts nothing". Measured: 0.146.0–0.148.0 list `untrusted, on-request, never`;
    *  0.149.0+ list `on-request, never`. */
   approvalValues: string[] | null
+  /** Does this `codex` accept `--no-daemon`? `null` = unknown (not probed, no codex). Every
+   *  nodeterm-launched plain Codex TUI carries the flag when this is `true`: from 0.157.0 a plain
+   *  TUI otherwise runs inside ONE shared background app-server per CODEX_HOME that keeps the FIRST
+   *  pane's `NODETERM_*` environment, attributing every later node's hooks and tool shells to that
+   *  first node (see `codexNoDaemonFrom`). Optional so an older core's answer still type-checks. */
+  noDaemon?: boolean | null
 }
 
 /** The answer before the probe has run, and for any surface that cannot speak for the CLI that will
  *  actually run the session (a relay tab, an SSH host). */
-export const UNKNOWN_CODEX_CLI_CAPS: CodexCliCaps = { approvalValues: null }
+export const UNKNOWN_CODEX_CLI_CAPS: CodexCliCaps = { approvalValues: null, noDaemon: null }
 
 /** Whether a Codex node launched on this machine right now would get a managed shared identity.
  *  Fed by core/codex-identity-caps.ts; the unknown answer is `false`, i.e. plain `codex`. */
@@ -3938,6 +4038,14 @@ export interface PairingApi {
    * entitlement back on the relay backend. Never rejects for a leg that failed — read the result.
    */
   revokeDevice(id: string): Promise<DeviceRevokeResult>
+  /** Push webhook (shared/push-webhook.ts): what token is live for this machine — never its value. */
+  webhookStatus(): Promise<PushWebhookResult<PushWebhookTokenInfo | null>>
+  /** Mint (or rotate) the token. The value in the result is the only copy that will ever exist
+   *  outside the user's own storage: the backend keeps only its hash, and this app keeps nothing. */
+  webhookMint(): Promise<PushWebhookResult<PushWebhookMinted>>
+  webhookRevoke(): Promise<PushWebhookResult<true>>
+  /** The API base the examples should name (NODETERM_API_BASE or production). */
+  webhookEndpoint(): Promise<string>
 }
 
 /** Team presence (docs/team-presence.md). All of it is transient — nothing here is persisted. */
@@ -4035,6 +4143,9 @@ export interface NodeTerminalApi {
   githubControl: import('./github-issues').GitHubControlApi
   usage: UsageApi
   sessionMemory: SessionMemoryApi
+  devPorts: import('./dev-ports').DevPortsApi
+  /** "Open recent" — the newest agent conversations in this machine's CLI histories. */
+  recentConversations: import('./recent-conversations').RecentConversationsApi
   wallpaper: import('./wallpaper').WallpaperApi
   triggers: TriggersApi
   context: ContextApi
@@ -4239,6 +4350,13 @@ export interface NodeTerminalApi {
      *  the same gates. `result` carries the typed outcome the comment row renders. Desktop only: the
      *  browser and relay bridges answer `notPermitted: unsupported-edition`. */
     deliverBoardComment(req: BoardCommentDeliverRequest): Promise<AgentMessageReply>
+  }
+  /** Board dispatch (#1051): the renderer REPORTS its in-memory dispatch map to core, replaced
+   *  whole on each change, so the read-only `issues` control verb can show it beside an issue
+   *  (@shared/board-dispatch-report). Display only. Desktop and Server Edition are real; a relay
+   *  tab's board is the host's, so there it is inert. */
+  boardDispatch: {
+    report(entries: import('./board-dispatch-report').BoardDispatchReportEntry[]): void
   }
   /** Station-failure notices (@shared/station-notice, src/core/agents/station-notice.ts): the
    *  chips on an orchestrator whose stations stopped, and the renderer's DROPPED verdicts, which

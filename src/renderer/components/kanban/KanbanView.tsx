@@ -1259,6 +1259,7 @@ export const KanbanView = memo(function KanbanView({
           board={board}
           onChangeBoard={commit}
           onClose={() => setModalNodeId(null)}
+          portsProjectId={projectId}
           onOpenCanvas={() => {
             setModalNodeId(null)
             onOpenNode(modalNodeId)

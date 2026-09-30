@@ -169,7 +169,9 @@ export function buildRelayApi(
 
     // ── Deferred over the relay in v1 — documented degrades (a clean refusal, not a wrong-machine
     //    silent no-op): ──
-    // `chat` is now just readTranscript + transcriptExists (the SDK chat node was removed). It has
+    // `chat` is readTranscript + transcriptExists + catalog (the SDK chat node was removed). `catalog`
+    // rejects like `readTranscript` (the stub's E_UNSUPPORTED): the composer then offers the shared
+    // built-in table alone, never this machine's command folders under the peer's node. It has
     // no relay builder: reading a transcript over the relay would read THIS machine's transcript,
     // not the host's, so `readTranscript` refuses with E_UNSUPPORTED instead. `transcriptExists`
     // takes the stub's `'unknown'` for the same reason and the opposite shape — its consumer acts
@@ -178,6 +180,9 @@ export function buildRelayApi(
     // `...local` (a v1 degrade: they read/write on this machine, not the host). boardLog is now
     // bridged to the host (see above) — it no longer rides `...local`.
     chat: stub.chat,
+    // `recentConversations` stays on `...local` ON PURPOSE: "Open recent" lists THIS machine's agent
+    // histories and resumes them into this machine's local projects only. The host's list is
+    // host-only (`HOST_ONLY_CHANNELS`) — a peer never reads the host's conversation titles.
     // Agent canvas-control (`agent:control`) is not wired over the relay (matches the Server
     // Edition); inert no-ops rather than a local subscription that never carries the host's events.
     onAgentControl: stub.onAgentControl,
@@ -194,6 +199,7 @@ export function buildRelayApi(
     // Station-failure notices are about THIS machine's stations and its own orchestrators; a relay
     // tab's nodes live in the host's core, whose notices are the host's renderer's to draw.
     stationNotice: stub.stationNotice,
+    boardDispatch: stub.boardDispatch,
     stationOutcome: stub.stationOutcome,
     stationHandover: stub.stationHandover,
     // Live links publish THIS machine's terminals; a relay tab shows another machine's, so it takes

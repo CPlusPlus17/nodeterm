@@ -100,6 +100,9 @@ export interface ServerEditionControlActions {
   /** `report-outcome` (@shared/station-outcome): a station's report about ITSELF — no creator check,
    *  because it touches no other node. */
   reportOutcome(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  /** `issues` / `prs` (core/github/control-read.ts): the board's GitHub lane, read-only, from the
+   *  GitHub service's cache. The caller's own project only (this edition keeps no grant ledger). */
+  githubRead(verb: 'issues' | 'prs', sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   deliver(input: {
     verb: 'send' | 'reply' | 'notify'
     sourceNodeId: string
@@ -123,7 +126,9 @@ const SERVER_V1_VERBS: ReadonlySet<string> = new Set([
   'sticky',
   'settings',
   'run',
-  'report-outcome'
+  'report-outcome',
+  'issues',
+  'prs'
 ])
 
 /** A permanent, verb-specific refusal used only while canvas control itself is enabled. */
@@ -192,6 +197,9 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
         return actions.run(nodeId, command.args, verified)
       case 'report-outcome':
         return actions.reportOutcome(nodeId, command.args, verified)
+      case 'issues':
+      case 'prs':
+        return actions.githubRead(command.verb, nodeId, command.args)
       case 'send':
       case 'reply':
       case 'notify':

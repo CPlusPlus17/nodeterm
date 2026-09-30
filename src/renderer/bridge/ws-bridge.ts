@@ -1,6 +1,8 @@
+import type { ChatCatalog } from '@shared/chat-catalog'
 import type { NormalizedAgentEvent } from '../../shared/agents/normalize'
 import { subscribeAgentReplay } from '../../shared/agent-replay-subscription'
 import type { DesktopWallpaper, WallpaperStill } from '../../shared/wallpaper'
+import type { RecentConversationsRequest, RecentConversationsResult } from '../../shared/recent-conversations'
 // WebSocket bridge that reconstructs `window.nodeTerminal` in the browser (Server Edition).
 //
 // Under Electron the preload already defines `window.nodeTerminal`; this module only runs when
@@ -686,8 +688,17 @@ export function buildFilesApi(
  * station-notice.ts). Kept OUT of `buildAgentApi` on purpose: that builder is spread into relay
  * tabs too, and a relay tab's stations are the host's to report, never this browser's.
  */
-export function buildStationNoticeApi(client: RpcClient): Pick<NodeTerminalApi, 'stationNotice'> {
+export function buildStationNoticeApi(
+  client: RpcClient
+): Pick<NodeTerminalApi, 'stationNotice' | 'boardDispatch'> {
   return {
+    // Same host-only class as the DROPPED report beside it: this tab's own dispatcher state, read by
+    // the server's `issues` control verb (core/board-dispatch-report.ts). Never spread into a relay tab.
+    boardDispatch: {
+      report: (entries) => {
+        void client.request(IPC.boardDispatchReport, entries).catch(() => undefined)
+      }
+    },
     stationNotice: {
       list: () =>
         (client.request(IPC.stationNoticeList) as Promise<unknown>).then(sanitizeStationNotices, () => []),
@@ -1026,6 +1037,19 @@ export function buildSessionMemoryApi(client: RpcClient): Pick<NodeTerminalApi, 
   }
 }
 
+/** The server lists ITS OWN host's history — the machine the browser's sessions run on. A failed
+ *  request is `{ok:false}`, never an empty list. */
+export function buildRecentConversationsApi(client: RpcClient): Pick<NodeTerminalApi, 'recentConversations'> {
+  return {
+    recentConversations: {
+      list: (req?: RecentConversationsRequest) =>
+        (client.request(IPC.recentConversationsList, req) as Promise<RecentConversationsResult>).catch(
+          () => ({ ok: false as const, reason: 'failed' as const })
+        )
+    }
+  }
+}
+
 export function buildWallpaperApi(client: RpcClient): Pick<NodeTerminalApi, 'wallpaper'> {
   return {
     wallpaper: {
@@ -1133,7 +1157,11 @@ export function buildTranscriptApi(
             accountId,
             nodeId
           ) as Promise<TranscriptPresence>
-        ).catch(() => 'unknown' as const)
+        ).catch(() => 'unknown' as const),
+      // REAL: the server registers `registerChatCatalogIpc` and runs on the machine whose command
+      // and skill folders these are. The reply is re-checked in the composer (sanitizeChatCatalog).
+      catalog: (nodeId, agentId, accountId, cwd) =>
+        client.request(IPC.chatCatalog, nodeId, agentId, accountId, cwd) as Promise<ChatCatalog>
     },
     claudeReadTranscript: (sessionId, cwd, accountId, nodeId) =>
       client.request(
@@ -1325,6 +1353,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildUsageApi(client),
     ...buildSessionMemoryApi(client),
     ...buildWatchLinkApi(client),
+    ...buildRecentConversationsApi(client),
     ...buildWallpaperApi(client),
     ...buildTriggersApi(client),
     ...buildGitHubApi(client),

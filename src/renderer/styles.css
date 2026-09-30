@@ -2664,6 +2664,30 @@ body,
   animation: nt-copy-pill-in 120ms ease-out;
 }
 
+/* Image-paste receipt (terminal/image-paste-confirm.ts): "Image attached" once the agent's pane
+   shows the image, or a warning that only the path went in. Same chrome as the copy receipt, in the
+   TOP-right corner so the two can never cover each other or the agent's bottom-left input line. */
+.term-paste-pill {
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  z-index: 5;
+  pointer-events: none;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: 7px;
+  color: var(--success);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+  animation: nt-copy-pill-in 120ms ease-out;
+}
+.term-paste-pill--warn {
+  color: var(--caution);
+  border-color: color-mix(in srgb, var(--caution) 35%, transparent);
+}
+
 /* The hint is instruction, not status: quieter border, neutral text. */
 .term-copy-pill--hint {
   color: var(--text);
@@ -3611,9 +3635,62 @@ body,
   gap: 6px;
 }
 .term-chat__compose {
+  position: relative;
   flex: 0 0 auto;
   padding: 8px;
   border-top: 1px solid rgba(var(--tint-rgb), 0.08);
+}
+/* The composer's `/` and `@` completion menu (ChatComposer), floating ABOVE the composer box. A solid
+   token, not a glass fill: it sits inside a glass node, which is a backdrop root (Liquid Glass). */
+.term-chat__complete {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% - 4px);
+  z-index: 8;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid rgba(var(--tint-rgb), 0.14);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.term-chat__complete-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.term-chat__complete-item.is-active {
+  background: rgba(var(--tint-rgb), 0.1);
+  color: var(--text-strong);
+}
+.term-chat__complete-name {
+  flex: 0 0 auto;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+  color: var(--text-strong);
+}
+.term-chat__complete-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.term-chat__complete-tag {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--muted);
 }
 /* The claude.ai-style composer (ChatPanel): ONE rounded box holding the textarea on top and a
    compact toolbar under it — "+" attach on the left; model label, muted effort label and the mic
@@ -4146,7 +4223,11 @@ body,
 
 .welcome__recent-name {
   font-size: 13px;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .welcome__recent-path {
@@ -4197,6 +4278,81 @@ body,
 .welcome__recent-del:hover {
   background: color-mix(in srgb, var(--state-error) 15%, transparent);
   color: var(--danger);
+}
+
+/* ---- "Recent conversations" on the start screen (core/recent-conversations.ts) ---- */
+.welcome__convs-list {
+  max-height: 300px;
+  gap: 2px;
+}
+
+.welcome__convs-group + .welcome__convs-group {
+  margin-top: 6px;
+}
+
+.welcome__convs-folder {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.welcome__convs-folder .welcome__recent-path {
+  font-weight: 400;
+}
+
+.welcome__conv-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.welcome__conv-age {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.welcome__conv-action {
+  flex: none;
+  font-size: 11px;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.welcome__conv:hover .welcome__conv-action,
+.welcome__conv:focus-visible .welcome__conv-action {
+  opacity: 1;
+}
+
+.welcome__conv--disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.welcome__conv--disabled .welcome__conv-action {
+  color: var(--muted);
+}
+
+.welcome__convs-more {
+  margin-top: 4px;
+  padding: 2px 10px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.welcome__convs-more:hover {
+  color: var(--text);
 }
 
 /* ---- Right-click context menu ---- */
@@ -7987,6 +8143,15 @@ button.group-node__setup:disabled {
 /* Non-Claude provider segments read one step quieter than the Claude numbers, so a long pill
    still scans as "Claude first, others after" without needing separate icons per provider. */
 .usage-pill__provider .usage-pill__num { color: rgba(var(--tint-rgb), 0.75); font-size: 11px; }
+/* The managed account the pill describes (the project's "Use for new sessions" default). */
+.usage-pill__account {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: rgba(var(--tint-rgb), 0.6);
+}
 .usage-pill__dim,
 .sysres-pill__dim { color: rgba(var(--tint-rgb), 0.5); }
 .usage-pill__pulse,
@@ -8205,14 +8370,13 @@ button.group-node__setup:disabled {
   margin-left: 0;
 }
 
-/* Popover-footer action (issue #420): opens the system-scoped `claude /login` terminal. A quiet
-   full-width row, styled with the same tint/accent tokens as `.usage-account__use` so it reads
-   in both themes. */
+/* "Switch Claude account…" (issue #420): opens the system-scoped `claude /login` terminal. A
+   quiet full-width row, styled with the same tint/accent tokens as `.usage-account__use` so it
+   reads in both themes. It sits INSIDE the Claude / System block it acts on (issue #912) — as a
+   popover footer it read as the action of whichever provider happened to be listed last. */
 .usage-popover__switch {
   display: block;
   width: 100%;
-  /* Stays put below the scrolling account list (issue #503). */
-  flex: none;
   margin-top: 10px;
   padding: 5px 8px;
   border: none;
@@ -8509,6 +8673,9 @@ button.group-node__setup:disabled {
   color: rgba(var(--tint-rgb), 0.65);
   overflow-wrap: anywhere;
 }
+/* A personal organization's name is derived from the email printed right above it
+   ("<email>'s Organization"): kept (it is the real name), but quieter, since it repeats (#912). */
+.usage-account__organization--derived { color: rgba(var(--tint-rgb), 0.45); }
 
 .seg-pill {
   display: inline-flex;
@@ -8837,6 +9004,8 @@ button.group-node__setup:disabled {
 .ss-meta__cwd { font-family: monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ss-meta__ssh { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; }
 .ss-meta__state-age { margin-left: auto; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+/* A clock restored from before the restart: a record of the past, drawn quieter than a live age. */
+.ss-meta__state-age--restored { font-style: italic; }
 .ss-ctx { font-size: 9.5px; padding: 0 5px; border-radius: 4px; color: #000; font-weight: 600; flex: 0 0 auto; }
 /* Out of FLOW, not merely invisible. Both buttons already appeared only on hover, yet they held
    46px of a 253px line — measured — away from the name at every other moment. Floated over the
@@ -9126,7 +9295,7 @@ button.group-node__setup:disabled {
 }
 .ss-group__chev:hover { background: rgba(var(--tint-rgb), 0.12); color: var(--text); }
 .ss-group__dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
-.ss-group__name { font-size: 12px; font-weight: 600; color: var(--text); }
+.ss-group__name { flex: 0 1 auto; min-width: 0; font-size: 12px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ss-group.is-active .ss-group__name { color: var(--accent); }
 .ss-group__branch { font-size: 10px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ss-group__count { font-size: 10px; color: var(--muted); }
@@ -11198,6 +11367,31 @@ button.pull-checks__name {
   cursor: pointer;
 }
 .issue-ref-chip:hover {
+  color: var(--text);
+  background: rgba(var(--tint-rgb), 0.08);
+}
+/* Dev-server ports a node's session listens on (components/PortsChip) — canvas node header and
+   the card modal header alike. Same quiet outline as `#N`; the port is monospace so `:5173` reads
+   as an address, not a count. */
+.ports-chip-wrap {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+.ports-chip {
+  margin-left: 6px;
+  padding: 0 6px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(var(--tint-rgb), 0.16);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.ports-chip:hover {
   color: var(--text);
   background: rgba(var(--tint-rgb), 0.08);
 }
@@ -14924,6 +15118,10 @@ body.focus-mode .dock:hover {
   text-align: center;
 }
 
+.node-icon svg {
+  display: block;
+}
+
 .node-icon img {
   width: 100%;
   height: 100%;
@@ -15006,6 +15204,16 @@ body.focus-mode .dock:hover {
 }
 .node-icon-dialog__swatch.is-current {
   background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* A glyph swatch (issue #291) draws an svg in `currentColor`, so it needs the text color a
+   button does not inherit, and centering the emoji swatches get from their line box. */
+.node-icon-dialog__swatch--glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  padding: 5px 0;
 }
 
 .node-icon-dialog__row {

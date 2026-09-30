@@ -54,6 +54,11 @@ import {
 import { HeadlessNodeFactory } from './headless-node-factory'
 import { sendSettledEnvelope } from './settled-envelope'
 import { serverSettingsControl } from './settings-control'
+import {
+  answerGitHubRead,
+  resolveGitHubReadProject,
+  type GitHubReadDeps
+} from '../core/github/control-read'
 
 export interface ServerCanvasControlDeps {
   workspaceStore: WorkspaceStore
@@ -70,6 +75,9 @@ export interface ServerCanvasControlDeps {
    *  what `open-agent --issue #N` resolves against. Absent = only an explicitly configured
    *  repository counts. See HeadlessNodeFactoryDeps.issueRepository. */
   issueRepository?: (projectId: string) => Promise<string | null>
+  /** The GitHub service's cache reads behind `issues` / `prs` (core/github/control-read.ts).
+   *  Absent = those verbs answer that the GitHub lane is unavailable here. */
+  githubRead?: Pick<GitHubReadDeps, 'snapshot' | 'dispatch'>
   /**
    * Whether to write this server's discovery surface into the machine's REAL agent configuration
    * directories: `~/.claude/skills/manage-nodeterm-canvas/SKILL.md`, the marker block in
@@ -360,6 +368,28 @@ export async function initServerCanvasControl(
           onRecorded: () => void factory.refreshArmed()
         }
       ),
+    // The board's GitHub lane, read-only, from the GitHub service's cache — the same core module the
+    // desktop answers with. Own project only: this edition keeps no `open-project` grant ledger.
+    githubRead: async (verb, sourceNodeId, args) => {
+      const read = deps.githubRead
+      if (!read) {
+        const msg = `${verb}-unavailable: the GitHub lane is not available on this server. Do not retry.`
+        return { ok: false, error: msg, message: msg }
+      }
+      const ids = deps.workspaceStore.projectIdsForNode(sourceNodeId)
+      const resolved = resolveGitHubReadProject({
+        verb,
+        callerProjectId: ids.length === 1 ? ids[0] : undefined,
+        targetProjectId: args.project,
+        grantsOtherProjects: false
+      })
+      if ('refuse' in resolved) return { ok: false, error: resolved.refuse, message: resolved.refuse }
+      return answerGitHubRead(verb, resolved.projectId, args, {
+        ...read,
+        agentState: (id) => nodeState(id),
+        now: () => Date.now()
+      })
+    },
     settings: async (sourceNodeId, args) =>
       serverSettingsControl(
         {

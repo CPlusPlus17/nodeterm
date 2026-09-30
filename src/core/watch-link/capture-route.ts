@@ -5,7 +5,8 @@
 //
 // Which backend gets one (`visibleCaptureRoute`): the session host's capture is ~200 lines of
 // scrollback and a direct Windows pane has no visible-only read, so both get NO keyframe (the viewer
-// starts from the live stream) rather than history. A plain shell has no tmux to ask.
+// starts from the live stream) rather than history. A plain shell has no tmux to ask, and neither has
+// a Zellij session (the optional local backend, zellij-backend.ts).
 //
 // The screen and the cursor are read in ONE tmux invocation (`capture-pane … ; display-message …`), so
 // both describe the same instant: a cursor read in a second round trip could describe a screen that has
@@ -56,10 +57,13 @@ export function unavailableCapture(): VisibleCapture {
 }
 
 export function visibleCaptureRoute(
-  s: { sessionHost?: unknown; nativeWindowsPane?: unknown; sshRemote?: unknown; tmuxBacked?: boolean },
+  s: { sessionHost?: unknown; nativeWindowsPane?: unknown; sshRemote?: unknown; tmuxBacked?: boolean; zellij?: boolean },
   tmuxAvailable: boolean
 ): 'none' | 'ssh' | 'tmux' {
-  if (s.sessionHost || s.nativeWindowsPane) return 'none'
+  // A Zellij session is `tmuxBacked` too (that field means "releasing a client destroys nothing"),
+  // but there is no tmux session to capture: never aim the tmux socket at it (pty-manager's rule
+  // for every path that would talk to tmux). No keyframe — the viewer starts from the live stream.
+  if (s.sessionHost || s.nativeWindowsPane || s.zellij) return 'none'
   if (s.sshRemote) return 'ssh'
   return tmuxAvailable && s.tmuxBacked ? 'tmux' : 'none'
 }

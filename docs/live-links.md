@@ -212,6 +212,12 @@ A keyframe is `PtyManager.captureVisible(sessionId)`: **the visible screen, neve
 - **Windows session host and the direct Windows pty: none.** `sessionHostCapture` returns ~200 lines of
   scrollback, not the visible screen; a visible-only read needs an additive, negotiated session-host
   command (a follow-up). Never history instead. **A plain shell with no tmux: none.**
+- **A Zellij node (the optional local backend, `settings.sessionBackend`): none.** Its Session is marked
+  `tmuxBacked` like a tmux one, but there is no tmux session to capture, so `visibleCaptureRoute` routes
+  it to none rather than aiming the tmux socket at it. A viewer still co-attaches to a Zellij painter
+  this process holds; with none held it is refused (`join-only`) — a watcher's own client is a
+  read-only TMUX client, and a Zellij attach would be a full, typing one. A visible-only Zellij capture
+  (`zellijCapture … viewport`) exists but has no cursor read; wiring it is a follow-up.
 
 **The target is exact, `=nt-<id>:`.** Node ids end in a counter, so `nt-x-1` is a prefix of `nt-x-12`,
 and tmux resolves a bare target by fnmatch then PREFIX on a miss. Measured on tmux 3.4 with only
@@ -452,8 +458,9 @@ Found while building it:
   per viewer at a 2.7 MB/s flood (measured), ≤ 10 viewers per link.
 - **Text typed with no escape after a co-attach join lags** until the next escape or the 2 s keyframe
   (R23): the mid-stream filter swallows it by design.
-- **On a backend with no visible capture** (Windows session host, direct Windows pty, plain shell) a
-  throttled viewer shows gaps until the app repaints (R36).
+- **On a backend with no visible capture** (Windows session host, direct Windows pty, plain shell,
+  Zellij) a throttled viewer shows gaps until the app repaints (R36). A Zellij node with no painter held
+  in this process (a closed project, after a restart) cannot be watched at all until one is.
 - **A single capture failure on a tmux/SSH backend is treated as "no capture"**: no repaint until the
   next keyframe or the app's redraw. Retrying there would stall the stream for good on the backends that
   genuinely have no capture, and the flag cannot tell the two apart.

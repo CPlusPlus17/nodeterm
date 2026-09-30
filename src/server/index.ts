@@ -20,6 +20,7 @@ import { registerAgentEnvIpc } from '../core/agent-env-ipc'
 import { PtyManager } from '../core/pty-manager'
 import { registerCoreHandlers } from './handlers'
 import { registerGitHubIntegration } from '../core/github/integration'
+import { registerBoardDispatchReportIpc } from '../core/board-dispatch-report'
 import { runGitHubCliCommand } from '../core/github/credentials'
 import {
   registerServerGitHubControl,
@@ -105,6 +106,8 @@ import { wireAgentStatus } from './agent-status'
 import { initServerContextLink } from './context-link'
 import { createServerWorkspaceWatcher, outsideEditPublisher } from './workspace-external-watch'
 import { registerTranscriptIpc } from '../core/transcript-ipc'
+import { registerChatCatalogIpc } from '../core/chat-catalog'
+import { registerRecentConversationsIpc } from '../core/recent-conversations'
 import { registerContextEnsureIpc } from '../core/context-ensure'
 import { IPC } from '@shared/ipc'
 import { WhisperModelStore } from '../core/speech/whisper-models'
@@ -402,6 +405,8 @@ export async function startServer(
     run: runGitHubCliCommand
   })
   registerServerGitHubControl(platform, github.controller)
+  // A browser tab's board dispatch reports its queue here, for the `issues` control verb (display only).
+  const boardDispatchReports = registerBoardDispatchReportIpc(platform)
 
   // Board-log: same CorePlatform registrar as desktop, but the Server Edition has no SSH projects
   // (terminals are local), so the router only ever resolves a local folder cwd or unsupported —
@@ -495,6 +500,9 @@ export async function startServer(
       ...(localCodexCaps?.approvalValues
         ? { codexApprovalValues: localCodexCaps.approvalValues }
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
+      // Only a SEEN `true`: a phone-launched plain Codex TUI must carry `--no-daemon` too, or it
+      // joins the auto-started shared app-server and runs as another node (shared/agents/codex-daemon).
+      ...(localCodexCaps?.noDaemon === true ? { codexNoDaemon: true } : {}),
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
         .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) })),
@@ -532,6 +540,13 @@ export async function startServer(
     // Codex's ⌘M reader takes ITS tail's hook path (claude's `pathFor` must never answer a codex id).
     codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId)
   })
+  // The ⌘M composer's `/` catalog. No remote leg, for the reason above: this process runs on the
+  // host whose command and skill folders a node's agent reads. An SSH-project node in this store is
+  // still someone ELSE's machine: named remote here, it answers built-ins + `partial`, never this
+  // server's own ~/.claude.
+  registerChatCatalogIpc({ isRemoteNode: (nodeId) => !!workspaceStore.sshProjectIdForNode(nodeId) })
+  // "Open recent": the SERVER host's agent histories — the machine the browser's sessions run on.
+  registerRecentConversationsIpc()
   // The context meter's mount-time rehydration, registered beside the read channels and for the
   // same reason: the tails it feeds are the ones created just above. Until this landed the Server
   // Edition had NO handler for `context:ensure` at all — the browser cast it and nothing received
@@ -765,6 +780,11 @@ export async function startServer(
         // answer the issue lane gets from the GitHub host controller.
         issueRepository: (projectId) =>
           github.controller.status(projectId).then((view) => view.project?.repository ?? null),
+        // `issues` / `prs`: the board's GitHub lane from the service's cache (no GitHub request).
+        githubRead: {
+          snapshot: (projectId) => github.service.controlSnapshot(projectId),
+          dispatch: (projectId) => boardDispatchReports.forProject(projectId)
+        },
         installAgentIntegrations: config.installHooks !== false,
         // The durable orchestration facts follow hook-endpoint ownership, like the request ledger.
         ownsDurableState: hookStartupWarning === null
@@ -874,6 +894,8 @@ export async function startServer(
   // complete before the server serves — not that it precedes this line.
   startSessionMemoryService({
     tmuxBin: () => ptyManager.getTmuxBin(),
+    // Zellij-backed sessions are not in the tmux sweep; the panel says how many it did not measure.
+    unmeasuredSessions: () => ptyManager.zellijSessionCount(),
     remote: {
       isRemoteProject: sshScopePredicate({ sshProjectIds: () => workspaceStore.sshProjectIds() })
     }

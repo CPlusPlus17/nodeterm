@@ -13,6 +13,12 @@ import { parseEndpointEnv } from './hook-endpoint-parse'
 import { hookSockPath } from './hook-sock-path'
 import { canControlCanvas, type AgentId } from '../../shared/agents/config'
 import { normalizeFor, type NormalizedAgentEvent } from '../../shared/agents/normalize'
+import {
+  createGrokPermissionGate,
+  defaultGrokPermissionGateDeps,
+  type GrokPermissionGate,
+  type GrokPermissionGateDeps
+} from './grok-permission-gate'
 import { classifyClaudeConfigDir, configDirFromTranscriptPath } from '../claude-accounts-core'
 import { claudeAccountsSnapshot } from '../claude-config-dir'
 import type { CodexIdentityEvent, ObservedClaudeAccount } from '../../shared/types'
@@ -269,7 +275,12 @@ export const requiresVerified: ReadonlySet<string> = new Set([
   // A station's own task outcome (@shared/station-outcome): a reported success RELEASES every
   // dependent armed with `--after-success`, so the claim must come from the node it is about — and
   // only a verified caller is provably that node.
-  'report-outcome'
+  'report-outcome',
+  // The board's GitHub lane (core/github/control-read.ts). The project read is resolved from the
+  // CALLER's node, so a caller nobody can verify could name any node and read another project's
+  // lane — bound sessions and dispatch state included. NEW verbs: fail-closed strands nobody.
+  'issues',
+  'prs'
 ])
 
 /**
@@ -298,6 +309,9 @@ export const RUN_CONTROL_REFUSAL = 'Run refused.'
 /** Same posture for `report-outcome` (defined beside its grammar, @shared/station-outcome). */
 export { REPORT_OUTCOME_CONTROL_REFUSAL }
 
+/** The flat refusal for an unverified `issues` / `prs` read (core/github/control-read.ts). */
+export const GITHUB_READ_CONTROL_REFUSAL = 'GitHub lane read refused.'
+
 /** The verified-only refusal, worded for the verb that was refused. */
 export function verifiedRefusalFor(verb: string): string {
   if (verb === 'open-terminal') return 'Terminal command refused.'
@@ -307,6 +321,7 @@ export function verifiedRefusalFor(verb: string): string {
   if (verb === 'open-project') return OPEN_PROJECT_CONTROL_REFUSAL
   if (verb === 'run') return RUN_CONTROL_REFUSAL
   if (verb === 'report-outcome') return REPORT_OUTCOME_CONTROL_REFUSAL
+  if (verb === 'issues' || verb === 'prs') return GITHUB_READ_CONTROL_REFUSAL
   return MESSAGING_CONTROL_REFUSAL
 }
 
@@ -449,6 +464,24 @@ export class HookServer {
 
   setListener(cb: (e: NormalizedAgentEvent) => void): void {
     this.listener = cb
+  }
+
+  private grokPermissionGate: GrokPermissionGate | null = null
+  private grokGateDeps: GrokPermissionGateDeps | undefined
+  /** Test seam: the grok permission gate's file/timer deps. */
+  setGrokPermissionGateDeps(deps: GrokPermissionGateDeps): void {
+    this.grokPermissionGate?.dispose()
+    this.grokPermissionGate = null
+    this.grokGateDeps = deps
+  }
+  private grokGate(): GrokPermissionGate {
+    if (!this.grokPermissionGate) {
+      this.grokPermissionGate = createGrokPermissionGate(
+        (e) => this.listener?.(e),
+        this.grokGateDeps ?? defaultGrokPermissionGateDeps()
+      )
+    }
+    return this.grokPermissionGate
   }
 
   // Raw payload listener: receives the parsed (un-normalized) hook JSON. Drives the
@@ -1020,8 +1053,14 @@ export class HookServer {
           // structured answer (core/agents/permission-decision.ts, MIN_STRUCTURED_ANSWER_REVISION).
           const raw = normalizeFor(agentId, { nodeId, agentId, payload })
           const normalized = raw ? labelHeldForRevision(raw, clientRevision) : raw
-          if (normalized && this.listener)
-            this.listener({ ...normalized, verified, clientRevision, ...(account ? { account } : {}) })
+          const labelled = normalized
+            ? { ...normalized, verified, clientRevision, ...(account ? { account } : {}) }
+            : null
+          // Grok's permission prompt is confirmed against grok's own event log before it is
+          // published, and cleared from it once answered (core/agents/grok-permission-gate.ts).
+          // Every grok event goes through the gate so their order is kept per node.
+          if (agentId === 'grok') this.grokGate().handle(nodeId, payload, labelled)
+          else if (labelled && this.listener) this.listener(labelled)
         }
         res.writeHead(204)
         res.end()
@@ -1459,6 +1498,8 @@ export class HookServer {
     // Write what the ledger learned before the process can go: an awaited write races exit.
     this.requestLedgerFile?.dispose()
     this.requestLedgerFile = null
+    this.grokPermissionGate?.dispose()
+    this.grokPermissionGate = null
     this.server?.close()
     this.server = null
     // The file must not advertise a listener that no longer exists (issue #445): a stopped server

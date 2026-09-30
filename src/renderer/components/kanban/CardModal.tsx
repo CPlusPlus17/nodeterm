@@ -16,7 +16,7 @@ import {
 import { NodeIconView } from '../NodeIcon'
 import { nodeIconDialog } from '../NodeIconPicker'
 import { applyIconChoice } from '../../lib/nodeIconChoice'
-import type { NodeIcon } from '@shared/node-icon'
+import { normalizeNodeIcon, type NodeIcon } from '@shared/node-icon'
 import { ContextMeter } from '../ContextMeter'
 import { isRemoteSessionNode } from '@shared/worktree'
 import { AccountChip, useAccountChip } from '../AccountChip'
@@ -26,6 +26,8 @@ import { liveLinkUnavailable } from '../../lib/liveLinkEntry'
 import { isBrowserRuntime } from '@renderer/bridge/runtime'
 import { IssueRefChip } from '../IssueRefChip'
 import { TeamProgressChip } from '../TeamProgressChip'
+import { PortsChip } from '../PortsChip'
+import { useProjects } from '../../state/projects'
 import type { TeamStation } from '../../lib/teamProgress'
 import { sessionNameRepeatsTitle } from '../../lib/cardRedundancy'
 import type { IssueRef } from '@shared/github-issue-ref'
@@ -83,6 +85,9 @@ interface CardModalProps {
   board: ProjectKanban
   onChangeBoard: (next: ProjectKanban) => void
   onClose: () => void
+  /** The card's project, when its node is on the LIVE canvas (the active project): the Ports chip
+   *  is drawn only then, because "Open in browser node" places the page beside the node there. */
+  portsProjectId?: string
   /** Secondary action: close the modal, switch to canvas, focus the node. */
   onOpenCanvas: () => void
   /** Rename funnel (same as the sidebar's). */
@@ -110,8 +115,11 @@ interface CardModalProps {
  *  canvas under it) stay mounted. Terminal cards carry the node header's actions too:
  *  search / dictate / AI-name / the ⌘M view — ChatPanel or the output markdown, the same face the
  *  canvas node shows (the node itself is hidden under the board). */
-export function CardModal({ session, projectId, columnTitle, board, onChangeBoard, onClose, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel }: CardModalProps) {
+export function CardModal({ session, projectId, columnTitle, board, onChangeBoard, onClose, portsProjectId, onOpenCanvas, onRename, onEditSticky, onBrowserNav, onSetIcon, onOpenIssue, mentionables, team, onTravel }: CardModalProps) {
   const { api } = useSession()
+  // The header slot decides "icon or smiley" on the NORMALIZED value, the answer NodeIconView
+  // itself gives — on the raw one, an invalid stored icon drew an empty, un-muted slot.
+  const sessionIcon = normalizeNodeIcon(session.icon)
   // Which machine this node runs on, for the live-link chip and action (R57, H4).
   const liveLinkSource = projectSessionSource(projectId)
   const activeLiveLinks = useWatchLinks((s) => s.links.length)
@@ -145,6 +153,7 @@ export function CardModal({ session, projectId, columnTitle, board, onChangeBoar
   // and the canvas node header use). The card carries it on its detail line; the modal, which
   // hides the node, carries it here so the session's name is never two views away.
   const sessionName = useAgentStatus((st) => st.byId[session.id]?.session)
+  const portsRemote = useProjects((s) => !!(portsProjectId && s.getProject(portsProjectId)?.ssh))
   const accountChip = useAccountChip(session.spawn.accountId, observedAccount)
   const [naming, setNaming] = useState(false)
   // Comments & activity panel: OPEN by default in the modal; the header 💬 collapses it. The
@@ -264,7 +273,7 @@ export function CardModal({ session, projectId, columnTitle, board, onChangeBoar
 
   const nameWithAi = async () => {
     setNaming(true)
-    const r = await api.pty.generateName(session.id, session.spawn.cwd ?? '')
+    const r = await api.pty.generateName(session.id, session.spawn.cwd ?? '', session.spawn.accountId)
     setNaming(false)
     if (r.ok) onRename(r.message)
   }
@@ -355,17 +364,17 @@ export function CardModal({ session, projectId, columnTitle, board, onChangeBoar
         >
           <span className="kanban-card__nodedot" style={{ background: session.color }} />
           <button
-            className={`kanban-modal__icon${session.icon ? '' : ' kanban-modal__icon--empty'}`}
-            title={session.icon ? 'Change icon' : 'Set icon'}
+            className={`kanban-modal__icon${sessionIcon ? '' : ' kanban-modal__icon--empty'}`}
+            title={sessionIcon ? 'Change icon' : 'Set icon'}
             onClick={() =>
               void nodeIconDialog({
                 nodeId: session.id,
                 title: session.title,
-                icon: session.icon
+                icon: sessionIcon
               }).then((choice) => applyIconChoice(choice, onSetIcon))
             }
           >
-            {session.icon ? <NodeIconView icon={session.icon} size={16} /> : <IconSmiley />}
+            {sessionIcon ? <NodeIconView icon={sessionIcon} size={16} /> : <IconSmiley />}
           </button>
           {editingTitle ? (
             <input
@@ -394,6 +403,19 @@ export function CardModal({ session, projectId, columnTitle, board, onChangeBoar
           <span className="kanban-modal__column">{columnTitle ?? 'Ungrouped'}</span>
           {isTerminal && onOpenIssue && <IssueRefChip issueRef={session.issueRef} onOpen={onOpenIssue} />}
           {isTerminal && team && team.length > 0 && onTravel && <TeamProgressChip stations={team} onTravel={onTravel} />}
+          {/* The same Ports chip as the canvas node header. Opening a port places the browser node
+              beside this node ON THE CANVAS, so the modal hands over to the canvas to show it. */}
+          {isTerminal && portsProjectId && (
+            <PortsChip
+              nodeId={session.id}
+              projectId={portsProjectId}
+              remote={portsRemote}
+              onOpenUrl={(url) => {
+                window.dispatchEvent(new CustomEvent('nodeterm:open-url-node', { detail: { url, sourceNodeId: session.id } }))
+                onOpenCanvas()
+              }}
+            />
+          )}
           {isTerminal && sessionName && !sessionNameRepeatsTitle(sessionName, session.title) && (
             <span className="kanban-card__session kanban-modal__session" title={sessionName}>
               {sessionName}
@@ -638,6 +660,7 @@ export function CardModal({ session, projectId, columnTitle, board, onChangeBoar
                                 projectId: session.spawn.sshRemoteTmux ? nodeUploadScope(session.spawn.ssh) : ''
                               })
                             }
+                            sshProjectId={session.spawn.sshRemoteTmux ? nodeUploadScope(session.spawn.ssh) : undefined}
                             onShowTerminal={() => {
                               // The picker just opened in the live viewer needs the keyboard.
                               requestTerminalFocusOnExit(session.id)

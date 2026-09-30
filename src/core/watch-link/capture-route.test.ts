@@ -24,6 +24,10 @@ describe('visibleCaptureRoute', () => {
     expect(visibleCaptureRoute({ sessionHost: true, sshRemote: {} }, true)).toBe('none')
     expect(visibleCaptureRoute({ nativeWindowsPane: {}, tmuxBacked: true }, true)).toBe('none')
   })
+
+  it('a Zellij session is none although it is marked tmux-backed: there is no tmux session to capture', () => {
+    expect(visibleCaptureRoute({ zellij: true, tmuxBacked: true }, true)).toBe('none')
+  })
 })
 
 describe('exactPaneTarget', () => {

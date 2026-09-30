@@ -92,6 +92,7 @@ const Swimlane = memo(function Swimlane({
   const [cardMenu, setCardMenu] = useState<{ x: number; y: number; nodeId: string } | null>(null)
   const [labelFilter, setLabelFilter] = useState<string[]>([])
   const [collapsed, setCollapsed] = useState(false)
+  const activePortsProjectId = useProjects((s) => s.activeProjectId)
   const customAgents = useSettings((s) => s.settings.customAgents)
   const disabledAgents = useSettings((s) => s.settings.disabledAgents)
 
@@ -313,6 +314,7 @@ const Swimlane = memo(function Swimlane({
           board={board}
           onChangeBoard={commit}
           onClose={() => setModalNodeId(null)}
+          portsProjectId={projectId === activePortsProjectId ? projectId : undefined}
           onOpenCanvas={() => { setModalNodeId(null); onOpenNode(modalNodeId, projectId) }}
           onRename={(t) => onRenameNode(modalNodeId, t)}
           onEditSticky={(t) => onEditSticky(projectId, modalNodeId, t)}
