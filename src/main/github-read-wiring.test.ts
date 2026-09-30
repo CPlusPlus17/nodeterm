@@ -19,7 +19,7 @@ const canvas = read('../renderer/canvas/Canvas.tsx')
 describe('desktop main', () => {
   const handler = main.slice(main.indexOf('hookServer.setControlHandler('))
   const at = handler.indexOf('if (GITHUB_READ_VERBS.has(verb)) {')
-  const block = handler.slice(at, at + 1200)
+  const block = handler.slice(at, at + 1600)
 
   it('answers issues / prs in MAIN, after the --project grant gate and before any forward', () => {
     expect(at).toBeGreaterThan(-1)
@@ -32,7 +32,10 @@ describe('desktop main', () => {
     expect(block).toContain('grantsOtherProjects: true')
     expect(block).toContain('callerProjectId: projectIdOfNode(nodeId)')
     expect(block).toContain('github.service.controlSnapshot(id)')
-    expect(block).toContain('workspaceStore.githubProject(id)')
+    // One workspace load per call: the project rides the snapshot.
+    expect(block).not.toContain('githubProject(')
+    // Main's own verified guard, behind the route's requiresVerified.
+    expect(block).toContain('if (!verified) return { ok: false, error: GITHUB_READ_CONTROL_REFUSAL')
     expect(block).toContain('agentState: (id) => nodeState(id)')
     expect(block).toContain('boardDispatchReports.forProject(id)')
   })
@@ -59,7 +62,7 @@ describe('Server Edition', () => {
     expect(at).toBeGreaterThan(-1)
     const block = serverIndex.slice(at, at + 500)
     expect(block).toContain('github.service.controlSnapshot(projectId)')
-    expect(block).toContain('workspaceStore.githubProject(projectId)')
+    expect(block).not.toContain('githubProject(')
     expect(block).toContain('boardDispatchReports.forProject(projectId)')
   })
 })

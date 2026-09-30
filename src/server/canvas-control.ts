@@ -77,7 +77,7 @@ export interface ServerCanvasControlDeps {
   issueRepository?: (projectId: string) => Promise<string | null>
   /** The GitHub service's cache reads behind `issues` / `prs` (core/github/control-read.ts).
    *  Absent = those verbs answer that the GitHub lane is unavailable here. */
-  githubRead?: Pick<GitHubReadDeps, 'snapshot' | 'project' | 'dispatch'>
+  githubRead?: Pick<GitHubReadDeps, 'snapshot' | 'dispatch'>
   /**
    * Whether to write this server's discovery surface into the machine's REAL agent configuration
    * directories: `~/.claude/skills/manage-nodeterm-canvas/SKILL.md`, the marker block in

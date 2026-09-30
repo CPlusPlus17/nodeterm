@@ -147,7 +147,8 @@ import { fetchCheck } from '../core/check'
 import {
   hookServer,
   OPEN_PROJECT_CONTROL_REFUSAL,
-  REPORT_ISSUE_CONTROL_REFUSAL
+  REPORT_ISSUE_CONTROL_REFUSAL,
+  GITHUB_READ_CONTROL_REFUSAL
 } from '../core/agents/hook-server'
 import { reportIssue } from '../core/github/report-issue-service'
 import { ReportLedgerStore } from '../core/github/report-ledger'
@@ -4020,6 +4021,9 @@ app.whenReady().then(async () => {
     // GitHub service's cache (core/github/control-read.ts) — no GitHub request, no canvas, never
     // forwarded. After the `--project` gate above, so a targeted read is own-or-granted.
     if (GITHUB_READ_VERBS.has(verb)) {
+      // A second guard behind the route's `requiresVerified`, like open-project's: the project read
+      // is resolved from the caller's node, so an unverified caller must never reach it.
+      if (!verified) return { ok: false, error: GITHUB_READ_CONTROL_REFUSAL, message: GITHUB_READ_CONTROL_REFUSAL }
       const resolved = resolveGitHubReadProject({
         verb,
         callerProjectId: projectIdOfNode(nodeId),
@@ -4029,7 +4033,6 @@ app.whenReady().then(async () => {
       if ('refuse' in resolved) return { ok: false, error: resolved.refuse, message: resolved.refuse }
       return answerGitHubRead(verb, resolved.projectId, args, {
         snapshot: (id) => github.service.controlSnapshot(id),
-        project: async (id) => (await workspaceStore.githubProject(id))?.project ?? null,
         agentState: (id) => nodeState(id),
         dispatch: (id) => boardDispatchReports.forProject(id),
         now: () => Date.now()

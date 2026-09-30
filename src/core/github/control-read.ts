@@ -142,8 +142,6 @@ export function githubReadArgsRefusal(verb: string, args: Record<string, string 
 export interface GitHubReadDeps {
   /** `GitHubIssueService.controlSnapshot` — the cache, no request. Throws the host's coded errors. */
   snapshot(projectId: string): Promise<GitHubControlSnapshot>
-  /** The project as the GitHub integration reads it (nodes, board columns, pull-link tombstones). */
-  project(projectId: string): Promise<Project | null>
   /** The node's live agent state (the status mirror), or undefined when unknown. */
   agentState(nodeId: string): string | undefined
   /** What the board's dispatcher holds for this project (display only). Absent = not visible. */
@@ -218,7 +216,8 @@ function sessionCards(project: Project): CanvasNodeState[] {
 
 function sessionRef(node: CanvasNodeState, deps: GitHubReadDeps): SessionRef {
   const state = deps.agentState(node.id) ?? (node.pendingLaunch ? 'queued' : 'unknown')
-  return { id: node.id, title: untrustedLine(node.title, NAME_MAX), state }
+  // The node id comes from the git-shared project file too, and nothing checks its shape on load.
+  return { id: untrustedLine(node.id, NAME_MAX) || '(unnamed node)', title: untrustedLine(node.title, NAME_MAX), state }
 }
 
 function sessionText(s: SessionRef): string {
@@ -261,11 +260,33 @@ export async function answerIssues(
     return refuse(snapshotRefusal(ISSUES_VERB, error))
   }
   if (!snapshot.hasSnapshot && !snapshot.partial) return refuse(noSnapshotRefusal(ISSUES_VERB, snapshot.repository))
-  const project = await deps.project(projectId)
+  // Resolved once, by the snapshot itself: a second workspace load per call would fire its persist
+  // hooks again for an agent that polls.
+  const project = snapshot.project ?? null
   const now = deps.now()
-  const columns = (project?.kanban?.columns ?? []).map((c) => ({ id: c.id, title: untrustedLine(c.title, NAME_MAX) }))
-  const columnTitle = (id: string | null): string =>
-    id === null ? 'Ungrouped' : columns.find((c) => c.id === id)?.title || id
+  // Column ids AND titles come from the git-shared project file, which checks only that they are
+  // strings — both are untrusted display text here.
+  const columns = (project?.kanban?.columns ?? []).map((c) => ({
+    id: c.id,
+    idText: untrustedLine(c.id, NAME_MAX),
+    title: untrustedLine(c.title, NAME_MAX)
+  }))
+  const columnTitle = (id: string | null): string => {
+    if (id === null) return 'Ungrouped'
+    const column = columns.find((c) => c.id === id)
+    return column?.title || column?.idText || untrustedLine(id, NAME_MAX) || '(unnamed column)'
+  }
+
+  // The label → column mapping came through the git-shared project file; until this machine approves
+  // it, placements under it are not facts — the board shows it read-only with "approve the column
+  // labels", and so does this: no `column:` on a row, and `--column` is refused.
+  if (!snapshot.mappingApproved && filter.column !== undefined) {
+    return refuse(
+      'issues-mapping-not-approved: this board\'s column labels changed and are not approved on this ' +
+        'machine, so issue placements are not shown and --column cannot filter. The user approves them ' +
+        'in the board\'s GitHub settings. Run `issues` without --column to list the issues.'
+    )
+  }
 
   let columnFilter: string | null | undefined
   if (filter.column !== undefined) {
@@ -276,7 +297,7 @@ export async function answerIssues(
       if (!match) {
         return refuse(
           `issues: no column "${untrustedLine(filter.column, NAME_MAX)}" on this board. Columns: ` +
-            `${['ungrouped', ...columns.map((c) => `${c.id} "${c.title}"`)].join(', ')}`
+            `${['ungrouped', ...columns.map((c) => `${c.idText} "${c.title}"`)].join(', ')}`
         )
       }
       columnFilter = match.id
@@ -303,13 +324,19 @@ export async function answerIssues(
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.number - a.number)
   const shown = matching.slice(0, filter.limit)
 
-  const rows = shown.map((item) => issueRow(item, columnTitle, bound.get(item.number) ?? [], dispatch.get(item.number)))
+  const rows = shown.map((item) => issueRow(
+    item, snapshot.mappingApproved ? columnTitle : null, bound.get(item.number) ?? [], dispatch.get(item.number)
+  ))
   const filters = [`state ${filter.state}`,
     ...(filter.label !== undefined ? [`label "${untrustedLine(filter.label, LABEL_MAX)}"`] : []),
     ...(filter.column !== undefined ? [`column "${untrustedLine(filter.column, NAME_MAX)}"`] : [])]
   const lines = [
     UNTRUSTED_TEXT_NOTE,
     `GitHub issues of ${untrustedLine(snapshot.repository, 200)} — ${freshnessHeader(snapshot, now)}.`,
+    ...(snapshot.mappingApproved ? [] : [
+      'Column placements are NOT shown: this board\'s column labels changed and are not approved on this ' +
+        'machine (the user approves them in the board\'s GitHub settings).'
+    ]),
     `${shown.length} of ${matching.length} shown (${filters.join(', ')}; newest-updated first).`,
     ...(shown.length ? rows.map((r) => r.text) : ['(no issues match)']),
     'Read one: `gh issue view N --repo ' + untrustedLine(snapshot.repository, 200) + ' --comments`. ' +
@@ -322,6 +349,7 @@ export async function answerIssues(
       repository: snapshot.repository,
       ...(snapshot.lastSuccessfulRefreshAt !== undefined ? { fetchedAt: snapshot.lastSuccessfulRefreshAt } : {}),
       partial: snapshot.partial || snapshot.incomplete,
+      mappingApproved: snapshot.mappingApproved,
       total: matching.length,
       items: rows.map((r) => r.json)
     }
@@ -330,7 +358,7 @@ export async function answerIssues(
 
 function issueRow(
   item: GitHubIssueCardView,
-  columnTitle: (id: string | null) => string,
+  columnTitle: ((id: string | null) => string) | null,
   sessions: SessionRef[],
   dispatch: BoardDispatchReportEntry | undefined
 ): { text: string; json: Record<string, unknown> } {
@@ -338,11 +366,14 @@ function issueRow(
   const state = item.state === 'closed' && item.stateReason ? `closed: ${item.stateReason}` : item.state
   const labels = item.labels.map((l) => untrustedLine(l.name, LABEL_MAX)).filter(Boolean)
   const assignees = item.assignees.map((u) => untrustedLine(u.login, NAME_MAX)).filter(Boolean)
-  const column = item.conflict === 'multiple-mapped-labels'
-    ? 'unplaced (several column labels)'
-    : item.conflict === 'open-with-completion-label'
-      ? 'unplaced (open with the completion label)'
-      : columnTitle(item.columnId)
+  // `null` = the mapping is not approved on this machine: no placement is claimed.
+  const column = columnTitle === null
+    ? undefined
+    : item.conflict === 'multiple-mapped-labels'
+      ? 'unplaced (several column labels)'
+      : item.conflict === 'open-with-completion-label'
+        ? 'unplaced (open with the completion label)'
+        : columnTitle(item.columnId)
   const dispatchText = dispatch
     ? dispatch.status === 'queued'
       ? `queued for an agent${dispatch.position ? ` (#${dispatch.position})` : ''}`
@@ -351,7 +382,7 @@ function issueRow(
         : `not dispatched: ${dispatch.reason ?? 'refused'}`
     : undefined
   const parts = [
-    `column: ${column}`,
+    ...(column !== undefined ? [`column: ${column}`] : []),
     ...(labels.length ? [`labels: ${listLine(labels)}`] : []),
     ...(assignees.length ? [`assignees: ${listLine(assignees)}`] : []),
     ...(sessions.length ? [`sessions: ${listLine(sessions.map(sessionText))}`] : []),
@@ -364,8 +395,7 @@ function issueRow(
       title,
       state: item.state,
       ...(item.stateReason ? { stateReason: item.stateReason } : {}),
-      columnId: item.columnId,
-      column,
+      ...(column !== undefined ? { columnId: item.columnId === null ? null : untrustedLine(item.columnId, NAME_MAX), column } : {}),
       labels,
       assignees,
       updatedAt: item.updatedAt,
@@ -430,7 +460,7 @@ export async function answerPrs(
     return refuse(snapshotRefusal(PRS_VERB, error))
   }
   if (!snapshot.hasSnapshot && !snapshot.partial) return refuse(noSnapshotRefusal(PRS_VERB, snapshot.repository))
-  const project = await deps.project(projectId)
+  const project = snapshot.project ?? null
   const now = deps.now()
   const board = snapshot.pullBoard
   const byNumber = new Map(board.pulls.map((p) => [p.number, p]))
@@ -466,7 +496,12 @@ export async function answerPrs(
   const all = [...numbers].map((number) => {
     const item = harvest.get(number)
     const status = byNumber.get(number)
-    const lifecycle: Lifecycle = status?.lifecycle ?? (item ? harvestLifecycle(item) : 'open')
+    // A merge or close the harvest has seen is final, and wins over an open/draft status read that
+    // may be stale (its last refresh failed). Otherwise the status read is fresher about drafts.
+    const harvested = item ? harvestLifecycle(item) : undefined
+    const lifecycle: Lifecycle = harvested === 'merged' || harvested === 'closed'
+      ? harvested
+      : status?.lifecycle ?? harvested ?? 'open'
     return { number, item, status, lifecycle }
   })
   const matching = all

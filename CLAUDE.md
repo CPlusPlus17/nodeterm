@@ -3779,6 +3779,15 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     NAMED refusal (`issues-no-snapshot`, `-not-approved`, `-no-github-board`), never "0 issues". An
     agent's read deliberately does NOT start a fetch: a repository's first fetch is a full paged harvest,
     and spending that is the person's call (opening the board), not a background agent's.
+  - **An unapproved column mapping is not a fact.** The label → column mapping arrives through the
+    git-shared project file; while this machine has not approved its digest (`mappingApproved` false)
+    the board is read-only with "approve the column labels", and `issues` likewise shows NO `column:`,
+    says so in its header, and refuses `--column` (`issues-mapping-not-approved`).
+  - **One workspace load per call.** The host's cache context carries the `Project` it resolved
+    (`GitHubIssueProjectContext.project`, in-process only) and `controlSnapshot` returns it; a second
+    `githubProject` load per call re-fired the store's persist hooks for an agent polling `prs`.
+  - **A harvested merge/close wins over an open status read**, which may be stale; the status read
+    stays authoritative about draft vs open.
   - **The board's semantics, imported.** CI is `GitHubPullStatus.ci` (`pullStatusFrom`: a null rollup
     is "no checks", never passed; only the CURRENT head counts), merge `ready` only from CLEAN, a failed
     status read says STALE (`pullStatusFreshness`), merged/closed PRs carry no CI. PR ↔ session card is
@@ -3788,7 +3797,8 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     project) or the issue the session was started on, tombstones honoured. Bound sessions are terminal
     nodes whose `issueRef` names this repository, with the mirror's live state (`queued` for a held
     launch, `unknown` otherwise).
-  - **Untrusted text.** Titles, labels, logins and branch names pass `untrustedLine` (one line, `\p{Cf}`
+  - **Untrusted text.** Titles, labels, logins, branch names — and node ids and column ids, which come from
+    the git-shared project file whose load checks only that they are strings — pass `untrustedLine` (one line, `\p{Cf}`
     bidi/zero-width stripped, capped); the reply's first line is `UNTRUSTED_TEXT_NOTE`; issue bodies and
     comments are never included (the agent reads them with `gh`, as the `--issue` prompt says).
   - **Dispatch state is the renderer's**, so the renderer REPORTS it: `boardDispatch.report` (display
@@ -3796,12 +3806,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     kept per sender and read only for senders still in `clientIds()` (a closed tab leaves no stale
     "queued"), owner clients only, the channel host-only (a relay tab's stub is inert). Desktop and
     Server Edition both register it.
-  - Verified-only (`requiresVerified`, refusal `GitHub lane read refused.`) — the project is resolved
+  - Verified-only (`requiresVerified`, refusal `GitHub lane read refused.`, and desktop main checks
+    `verified` again as a second guard, like open-project) — the project is resolved
     from the caller's node, so a forgeable caller could read any project's lane; `STORE_ANSWERED_VERBS`
     (a read needs no canvas, and polling `prs` must never travel the user's view); not a request-id
     verb. Both agent bodies render `githubReadDocLines` from the module's constants, including the loop
     (`issues` → `open-agent --issue #N` → `prs` / `--after-pr`) and "GitHub writes stay with the person".
-    Relay tabs: no lane (their control belongs to the host). **Mobile: N/A** — the phone issues no
+    Relay peers cannot call these (their control belongs to the host). **Mobile: N/A** — the phone issues no
     control verbs.
 
   **Dependency edges (`--after`, 2026-07):** `open-terminal`/`open-claude`/`open-agent` accept

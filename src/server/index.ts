@@ -753,7 +753,6 @@ export async function startServer(
         // `issues` / `prs`: the board's GitHub lane from the service's cache (no GitHub request).
         githubRead: {
           snapshot: (projectId) => github.service.controlSnapshot(projectId),
-          project: async (projectId) => (await workspaceStore.githubProject(projectId))?.project ?? null,
           dispatch: (projectId) => boardDispatchReports.forProject(projectId)
         },
         installAgentIntegrations: config.installHooks !== false,

@@ -21,8 +21,9 @@ export function createBoardDispatchReports(
   const bySender = new Map<number, BoardDispatchReportEntry[]>()
   return {
     receive(senderId, raw) {
-      // Only an owner client's dispatcher is this machine's (a Server Edition tab signed in to it,
-      // the desktop window). `isOwnerClient` is absent on the desktop platform: its one window is.
+      // Only an owner client's dispatcher is this machine's: a Server Edition tab signed in to it, or
+      // the desktop's main window (both platforms implement `isOwnerClient`; a relay peer is not one).
+      // A platform without it (a test double) accepts every sender.
       if (platform.isOwnerClient && !platform.isOwnerClient(senderId)) return
       const entries = sanitizeDispatchReport(raw)
       if (entries.length) bySender.set(senderId, entries)

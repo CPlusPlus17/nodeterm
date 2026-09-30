@@ -1,3 +1,4 @@
+import type { Project } from '../../shared/types'
 import type {
   CreateIssueInput,
   CreateMappedLabelsResult,
@@ -89,11 +90,16 @@ export interface GitHubIssueProjectContext {
    *  the board reads but never writes: the mapping decides what a write DOES, and it arrives
    *  through the git-shared project file. */
   mappingApproved: boolean
+  /** The project this context was resolved from (in-process only). The read-only control verbs use
+   *  it so a call loads the workspace once, not a second time for the nodes and board. */
+  project?: Project
 }
 
 /** What `controlSnapshot` answers: the cached board state of one project, no request made. */
 export interface GitHubControlSnapshot {
   repository: string
+  /** The project the snapshot was resolved for (nodes, board columns, pull-link tombstones). */
+  project?: Project
   completionColumnId?: string
   mappingApproved: boolean
   /** Issues AND pull requests of the harvest, each with the column its labels map it to. */
@@ -749,6 +755,7 @@ export class GitHubIssueService {
     const throttle = userId ? this.options.coordinator.throttle(userId) : undefined
     return {
       repository: context.repository,
+      ...(context.project ? { project: context.project } : {}),
       completionColumnId: context.config.completionColumnId,
       mappingApproved: context.mappingApproved,
       items: source.map((issue): GitHubIssueCardView => ({ ...issue, ...mapping(issue, context.config) })),
