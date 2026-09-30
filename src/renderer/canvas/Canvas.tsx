@@ -1,4 +1,6 @@
 import { reportTextDelivery } from '../lib/textDelivery'
+import { withCodexNoDaemon } from '@shared/agents/codex-daemon'
+import { codexApprovalCaps } from '../state/codexCli'
 import { TEXT_NOT_SUBMITTED } from '@shared/text-delivery'
 import { VisibleMiniMap } from './VisibleMiniMap'
 import { MinimapDock } from './MinimapDock'
@@ -7480,7 +7482,18 @@ export function Canvas() {
         useAgentStatus.getState().byId[id]?.sessionId,
         node?.data.agentSessionId
       )
-      return agentId && sid ? resumeCommand(agentId, sid) : null
+      const line = agentId && sid ? resumeCommand(agentId, sid) : null
+      // A hand-typed resume must not start or join Codex's shared daemon either (codex-daemon.ts).
+      return line && agentId
+        ? withCodexNoDaemon(
+            line,
+            capabilityAgentId(agentId),
+            codexApprovalCaps(
+              node?.data.ssh || node?.data.sshRemoteTmux,
+              useProjects.getState().activeProjectId ?? undefined
+            )
+          )
+        : line
     }
     const targetLabel =
       targetAgentId == null

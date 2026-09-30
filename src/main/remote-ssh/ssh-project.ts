@@ -55,6 +55,7 @@ import {
 import { SshChildGate } from '../../core/remote-ssh/ssh-child-gate'
 import { claudeVersionProbeCommand, parseClaudeVersionProbe } from '../../core/remote-ssh/claude-version-probe'
 import { codexNoDaemonProbeCommand, parseCodexNoDaemonProbe } from '../../core/remote-ssh/codex-no-daemon-probe'
+import { codexProbeHostKey } from '../../shared/agents/codex-daemon'
 import { RemoteHooks } from './remote-hooks'
 import type { AgentToolsTrigger } from './agent-tools-freshness'
 import {
@@ -1810,6 +1811,11 @@ export class SshProjectManager {
 
   /** The connection's cached remote `--permission-mode auto` capability (undefined = not
    *  probed / not connected). Feeds the agent-status settings block the phone reads. */
+  /** This connection's host codex takes `--no-daemon` — `true` only when its own probe said so. */
+  remoteCodexNoDaemonFor(projectId: string): boolean {
+    return this.conns.get(projectId)?.remoteCodexNoDaemon?.supported === true
+  }
+
   remoteAutoPermFor(projectId: string): boolean | undefined {
     return this.conns.get(projectId)?.claudeAutoPermissionMode
   }
@@ -2516,7 +2522,9 @@ export class SshProjectManager {
       supported = null
     }
     if (supported === null || this.conns.get(projectId) !== entry) return
-    const answer: RemoteCodexNoDaemon = { hostKey: sshHostKey(entry.conn), supported }
+    const hostKey = codexProbeHostKey(entry.conn)
+    if (!hostKey) return
+    const answer: RemoteCodexNoDaemon = { hostKey, supported }
     entry.remoteCodexNoDaemon = answer
     this.emitStatus({ projectId, status: 'connected', remoteCodexNoDaemon: answer })
   }

@@ -24,6 +24,27 @@ import type { AgentId } from './config'
 
 export const CODEX_NO_DAEMON_FLAG = '--no-daemon'
 
+/**
+ * The ONE detection rule, spelled for both readers: an option HEADER line (indent <= 6, which is
+ * where clap puts options; descriptions sit at 10), and the flag followed by whitespace or the end
+ * of the line — so a future `--no-daemon-x` option is not read as this one. The TS reader
+ * (`codexNoDaemonFrom`) and every generated shell reader (`grep -E`, the managed launcher and the
+ * remote probe) use these two strings; a test pins that they agree on the same inputs.
+ */
+export const CODEX_NO_DAEMON_HELP_RE = /^ {0,6}--no-daemon(\s|$)/
+export const CODEX_NO_DAEMON_HELP_ERE = '^ {0,6}--no-daemon([[:space:]]|$)'
+
+/**
+ * Which host a remote `--no-daemon` answer belongs to: `user@host:port`. The PORT is part of it on
+ * purpose — two containers on one machine (`root@localhost:2222`, `:2223`) are two binaries, and a
+ * key without the port let the last probe answer for both (a 0.148 container handed the flag dies).
+ */
+export function codexProbeHostKey(conn: { user?: unknown; host?: unknown; port?: unknown }): string | null {
+  if (typeof conn.host !== 'string' || typeof conn.user !== 'string') return null
+  const port = typeof conn.port === 'number' && Number.isFinite(conn.port) ? conn.port : 22
+  return `${conn.user}@${conn.host}:${port}`
+}
+
 /** Append `--no-daemon` to a codex launch/resume line. `agentId` is the CAPABILITY id (a custom
  *  agent whose `baseAgent` is codex passes `codex`, exactly as `withPermissionMode` is called). */
 export function withCodexNoDaemon(cmd: string, agentId: AgentId, caps: ApprovalCaps = {}): string {

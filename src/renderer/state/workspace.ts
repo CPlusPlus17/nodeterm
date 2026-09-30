@@ -722,7 +722,7 @@ export function createAgentNode(
       // Which `--ask-for-approval` values this node's codex actually has. Same `ssh` truthiness as
       // the line above, and for a related reason: a remote session runs the HOST's codex, so the
       // local probe must not speak for it (it falls back to the baseline vocabulary instead).
-      approvalCaps: codexApprovalCaps(ssh),
+      approvalCaps: codexApprovalCaps(ssh, projectId),
       // A model picked at creation (e.g. Transfer-to-agent-with-model). `withAgentModel` appends
       // `--model <value>` for a switch-capable agent and no-ops otherwise, so the line stays
       // byte-identical when no model is chosen.

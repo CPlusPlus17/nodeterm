@@ -679,8 +679,11 @@ first node's `NODETERM_NODE_ID` (measured on 0.159.2). Every nodeterm codex line
 `--no-daemon` when the CLI that will run it advertised the flag — added in the two assemblers
 (`shared/agents/launch.ts` via `withCodexNoDaemon`), fed by `ApprovalCaps.codexNoDaemon`. A new
 codex launch site goes through those assemblers and threads the caps; never type a bare `codex` line
-yourself. The flag must never meet `--remote` (codex refuses the pair), which is why the managed
-launcher strips it. See CLAUDE.md "Codex's auto-started shared daemon".
+yourself, and AWAIT `ensureCodexLaunchCaps` (bounded) where the site is async — a synchronous
+read loses the race when every node cold-restores after a reboot. A relay tab or SSH node must be
+passed as remote: the guest's or laptop's answer never applies to another machine's codex. The
+flag must never meet `--remote` (codex refuses the pair), which is why the managed launcher strips
+it. See CLAUDE.md "Codex's auto-started shared daemon".
 
 **Credentials never ride argv — local or SSH.** Not a tmux `-e` pair, not `curl -H`, not a remote
 command string. `/proc/<pid>/cmdline` is mode 444 on a stock Linux, and a remote command line is argv

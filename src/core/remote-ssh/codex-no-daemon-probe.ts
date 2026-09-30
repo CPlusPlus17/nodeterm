@@ -11,20 +11,21 @@
 // usually never sees an nvm/npm-global PATH), with the answer DELIMITED so a profile banner can
 // never be read as one. No marker ⇒ unknown ⇒ no flag.
 import { posixQuote } from '../../shared/ssh'
+import { CODEX_NO_DAEMON_HELP_ERE } from '../../shared/agents/codex-daemon'
 
 export const CODEX_NO_DAEMON_START = '__NT_CODEX_ND__'
 export const CODEX_NO_DAEMON_END = '__NT_CODEX_ND_END__'
 
 /**
- * Prints `yes` / `no` between the markers when a `codex` resolves, nothing otherwise. Anchored on
- * an option HEADER line (`codexNoDaemonFrom`'s rule), never on prose. A `codex --help` that fails
+ * Prints `yes` / `no` between the markers when a `codex` resolves, nothing otherwise. The match is
+ * `CODEX_NO_DAEMON_HELP_ERE`, the shell spelling of `codexNoDaemonFrom`'s own rule. A `codex --help` that fails
  * answers `no` — the conservative reading (no flag), and the one a CLI that cannot print its own
  * help page deserves.
  */
 export function codexNoDaemonProbeCommand(): string {
   const emit =
     `command -v codex >/dev/null 2>&1 && { ` +
-    `if codex --help 2>/dev/null | grep -q -e '^[[:space:]]*--no-daemon'; ` +
+    `if codex --help 2>/dev/null | grep -q -E '${CODEX_NO_DAEMON_HELP_ERE}'; ` +
     `then a=yes; else a=no; fi; ` +
     `printf '${CODEX_NO_DAEMON_START}%s${CODEX_NO_DAEMON_END}' "$a"; }`
   const q = posixQuote(emit)

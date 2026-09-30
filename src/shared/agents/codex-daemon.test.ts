@@ -93,3 +93,36 @@ describe('every codex launch and resume line carries it (the two assemblers)', (
     expect(assembleLaunchCommand({ agentId: 'claude', approvalCaps: ON }, {}).command).toBe('claude')
   })
 })
+
+describe('one detection rule, two spellings', () => {
+  it('the TS regex and the shell ERE agree, and neither reads a future --no-daemon-x', async () => {
+    const { CODEX_NO_DAEMON_HELP_RE, CODEX_NO_DAEMON_HELP_ERE } = await import('./codex-daemon')
+    const { execFileSync } = await import('node:child_process')
+    const cases: Array<[string, boolean]> = [
+      ['      --no-daemon', true],
+      ['      --no-daemon   Run without the shared background server', true],
+      ['  --no-daemon', true],
+      ['      --no-daemon-x', false],
+      ['      --no-daemons', false],
+      ['          Unlike --no-daemon this needs an address', false],
+      ['--remote --no-daemon', false]
+    ]
+    for (const [line, want] of cases) {
+      expect(CODEX_NO_DAEMON_HELP_RE.test(line), line).toBe(want)
+      let sh = true
+      try {
+        execFileSync('grep', ['-q', '-E', CODEX_NO_DAEMON_HELP_ERE], { input: `${line}\n` })
+      } catch {
+        sh = false
+      }
+      expect(sh, `grep -E: ${line}`).toBe(want)
+    }
+  })
+
+  it('the probe host key carries the port', async () => {
+    const { codexProbeHostKey } = await import('./codex-daemon')
+    expect(codexProbeHostKey({ user: 'root', host: 'localhost', port: 2222 })).toBe('root@localhost:2222')
+    expect(codexProbeHostKey({ user: 'root', host: 'localhost' })).toBe('root@localhost:22')
+    expect(codexProbeHostKey({ host: 'localhost' })).toBeNull()
+  })
+})

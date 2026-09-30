@@ -3285,24 +3285,24 @@ describe('SshProjectManager — remote codex --no-daemon probe', () => {
   const answered = (events: { remoteCodexNoDaemon?: unknown }[]) =>
     events.find((e) => e.remoteCodexNoDaemon !== undefined)
 
-  it('publishes the HOST\'s answer, keyed by user@host, on a connected event', async () => {
+  it('publishes the HOST\'s answer, keyed by user@host:port, on a connected event', async () => {
     const { mgr, events } = mgrWithCodexHelp('__NT_CODEX_ND__yes__NT_CODEX_ND_END__')
     await mgr.connect('p1', conn)
     await vi.waitFor(() => expect(answered(events)).toBeDefined())
     expect(answered(events)).toEqual({
       status: 'connected',
-      remoteCodexNoDaemon: { hostKey: 'u@h', supported: true }
+      remoteCodexNoDaemon: { hostKey: 'u@h:22', supported: true }
     })
     // A reused connection hands the same answer back with the connect result.
     const again = await mgr.connect('p1', conn)
-    expect(again.remoteCodexNoDaemon).toEqual({ hostKey: 'u@h', supported: true })
+    expect(again.remoteCodexNoDaemon).toEqual({ hostKey: 'u@h:22', supported: true })
   })
 
   it('an older host codex answers false', async () => {
     const { mgr, events } = mgrWithCodexHelp('__NT_CODEX_ND__no__NT_CODEX_ND_END__')
     await mgr.connect('p1', conn)
     await vi.waitFor(() => expect(answered(events)).toBeDefined())
-    expect(answered(events)?.remoteCodexNoDaemon).toEqual({ hostKey: 'u@h', supported: false })
+    expect(answered(events)?.remoteCodexNoDaemon).toEqual({ hostKey: 'u@h:22', supported: false })
   })
 
   it('no markers (no codex on the host, a failed probe) publishes nothing — the line stays as it was', async () => {

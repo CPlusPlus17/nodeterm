@@ -26,6 +26,7 @@ import {
 import { applyCanvasOp as applyCanvasOpTo, contentOf } from '@shared/canvas-content'
 import { diffToMutations, type CanvasScene } from '@shared/canvas-mutations'
 import { applyOwnCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
+import { registerCodexRelayProjectCheck } from './codexCli'
 import { markWorkspaceDirty } from './workspaceDirty'
 import { folderName } from '../lib/projectOpen'
 // One order-independent key for an edge's endpoints — the SAME rule `hiddenLinkIds` uses, so a
@@ -1091,3 +1092,8 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     return { version: 2, activeProjectId, projects: projects.filter((p) => !p.remote) }
   }
 }))
+
+// Codex launch caps must know a relay tab when they see one: its sessions run on ANOTHER machine's
+// codex, which this machine's probe never saw (see `codexApprovalCaps`). Registered here rather
+// than imported there, because this store imports workspace.ts, which imports codexCli.ts.
+registerCodexRelayProjectCheck((id) => useProjects.getState().getProject(id)?.remote === true)

@@ -785,6 +785,26 @@ Lifecycle, by intent:
     switch, transfer, headless Server opens, custom agents whose `baseAgent` is codex, a launch-
     command override). Only a literal `true` emits it: clap exits on an unknown option, so an
     unprobed, remote-unknown or older CLI gets the line it always got.
+  - **Await the answer before building a line — the race is the bug.** After a reboot every Codex
+    node cold-restores in the same tick; a node that builds its line before the probe lands launches
+    flagless, starts the shared daemon with ITS env, and every other node joins it. On a
+    shared-identity machine `codex app-server daemon version` reports such a daemon `running`
+    (verified in review), so the managed launcher adopts it too. So TerminalNode's four codex sites
+    (cold restore, its fresh fallback, restart, wake) `await ensureCodexLaunchCaps(...)`
+    (`renderer/state/codexCli.ts`, 3 s bound, fail open to the old line): local waits for the local
+    probe, SSH waits for that host's answer to arrive in `useSshConn`, non-codex agents and relay
+    tabs never wait. Pinned at source level by `nodes/codex-launch-caps-wiring.test.ts`.
+    `createAgentNode` (a NEW node) is synchronous and still reads the landed answer — a node created
+    inside the first ~second after boot can miss it; stated, not fixed.
+  - **A relay tab never gets this machine's answer.** Its pane runs the HOST's codex; the guest's
+    `true` typed into a host older than 0.156 dies on the unknown option. `codexApprovalCaps(remote,
+    projectId)` treats a relay-bound project (checked through `registerCodexRelayProjectCheck`,
+    registered by the projects store to avoid an import cycle) or a node's
+    `session.source === 'relay'` as remote-with-no-probe: no flag, baseline vocabulary.
+  - **One detection rule, two spellings.** `CODEX_NO_DAEMON_HELP_RE` / `_ERE`
+    (`shared/agents/codex-daemon.ts`): an option header at indent <= 6 followed by whitespace or end
+    of line, so a future `--no-daemon-x` is not this flag. TS reader, launcher and remote probe all
+    use it; a test runs the ERE through real `grep -E` beside the regex.
   - **Never beside `--remote`** — measured: `ERROR: --no-daemon cannot be used with --remote.` The
     managed launcher (`buildCodexLauncherScript`) therefore STRIPS it before its own
     `codex --remote unix:// resume` and routes every plain-codex fallback through `nt_exec_plain`,
@@ -795,24 +815,43 @@ Lifecycle, by intent:
     thread of that account too. Our own start stays the scrubbed `nt_start_app_server` (#350).
   - **SSH: the HOST's binary is asked.** `core/remote-ssh/codex-no-daemon-probe.ts` runs one
     marker-delimited `codex --help` through the login shell after connect (off the connect path, like
-    the claude probe) and publishes `{hostKey: user@host, supported}` on a `connected` event and on a
-    reused connect's result; the renderer keeps it per host (`useSshConn.codexNoDaemonByHost`) and
-    `codexApprovalCaps(remote)` reads it. Before it lands a remote line carries nothing.
+    the claude probe) and publishes `{hostKey, supported}` on a `connected` event and on a reused
+    connect's result; the renderer keeps it per host (`useSshConn.codexNoDaemonByHost`). **The key
+    is `user@host:port`** (`codexProbeHostKey`), NOT `sshHostKey`: two containers behind one machine
+    (`root@localhost:2222` on 0.159, `:2223` on 0.148) are two binaries, and a portless key let the
+    last probe answer for both. The SSH mirror slice carries the host's `true` to the phone.
   - `codex exec` (commit messages), `login`, `mcp` and `app-server` take no such flag and are not
-    TUI clients of the daemon. The phone gets `MirrorSettings.codexNoDaemon` (iOS reader: follow-up,
-    @eneskirca). opencode was checked the same way: no published release has `serve --service`
+    TUI clients of the daemon. The phone gets `MirrorSettings.codexNoDaemon`, local and per SSH slice (iOS
+    reader: follow-up, @eneskirca). opencode was checked the same way: no published release has `serve --service`
     (latest 1.18.33 and the `dev` channel), and a plain TUI leaves no process behind.
-  - **Residual, stated:** a `codex` the user TYPES by hand in a nodeterm plain terminal carries that
-    node's `NODETERM_NODE_ID` and, on 0.157+, can still start the account's daemon with it — until
-    that daemon restarts, managed threads' tool shells then keep the leaked id (the prelude skips a
-    set one). Changing the prelude to prefer the thread record over a set id was rejected: a
-    bind-refused fallback pane legitimately runs a thread another node's record names.
+  - **Residuals, stated:** (1) a `codex` TYPED into a pane rather than launched by us — by hand in a
+    plain terminal, or by an agent through `open-terminal --cmd codex` / `write` — carries that
+    node's `NODETERM_NODE_ID` and, on 0.157+, can still start the account's daemon with it; managed
+    threads' tool shells then keep the leaked id (the prelude skips a set one). Changing the prelude
+    to prefer the thread record over a set id was rejected: a bind-refused fallback pane legitimately
+    runs a thread another node's record names. (2) A launch-command override or custom `launchCmd`
+    that runs a DIFFERENT codex than PATH's (`npx @openai/codex@0.148.0`) is given the flag from
+    PATH's probe and dies on it; the fix there is the user's (drop the pin or add the flag to their
+    own command) — we cannot probe an arbitrary command line. (3) The Windows argv planner
+    (`core/agent-launch.ts`) carries the flag but has no production caller today; Windows native
+    Codex is unmeasured.
+  - **Machines that ran a pre-fix build keep the mis-attribution until they recycle.** Panes already
+    joined to the daemon stay joined across a warm reattach (the TUI process is still the old one); a
+    daemon started before the fix keeps its first pane's env, and so does its `pid-update-loop`
+    process (verified in review), so managed threads keep using it. We deliberately do NOT kill it:
+    every unsupervised plain client attached to it would die with it. Recovery, in order: restart
+    each Codex node (node menu → Restart, or close and reopen), then from a shell WITHOUT any
+    `NODETERM_*` variables run `codex app-server daemon restart` (one per account: set that
+    account's `CODEX_HOME`).
   - **Device checklist:** (a) macOS desktop, npm codex ≥ 0.157: two Codex nodes, each RUNNING badge
     and `nodeterm list` line on its own node; (b) standalone codex with shared identity: a node
     whose launcher fell back still reports as itself; (c) SSH project on a host with codex ≥ 0.157:
     the second remote Codex node's badge is its own after the probe landed (and flagless before);
     (d) Windows native codex: whether the daemon exists there at all is unmeasured — the flag rides
-    only if its `--help` lists it.
+    only if its `--help` lists it; (e) reboot a Mac with 5+ Codex nodes: after cold restore each
+    badge is its own (the bounded wait); (f) an upgraded machine: after the recovery steps above,
+    `ps eww` on the daemon shows no `NODETERM_NODE_ID`; (g) two SSH projects on one host at
+    different ports with different codex versions: only the newer one's lines carry the flag.
 - **A shared Codex daemon restart is NOT a terminal-session restart.** tmux survives, and the Codex
   rollout/thread survives, but every `codex --remote unix://` TUI attached to that account's one
   app-server socket exits together. `buildCodexLauncherScript` therefore stays in the pane as a

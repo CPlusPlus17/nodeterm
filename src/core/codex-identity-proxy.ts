@@ -48,6 +48,7 @@ import {
   writeFileSync
 } from 'fs'
 import path from 'path'
+import { CODEX_NO_DAEMON_HELP_ERE } from '../shared/agents/codex-daemon'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { renameAtomicSync } from './fs-atomic'
 import { platform } from './platform'
@@ -786,6 +787,9 @@ nt_run_shared() {
   # spell the flag itself (\`withPermissionMode\` then suppresses ours and lets theirs through).
   # Rebuilt by rotating the positional list, which is the only way sh can edit "$@" without an array.
   nt_drop_next=0
+  # The manual-resume hints below name the flag when the launch line carried it: a human resuming
+  # by hand after the shared daemon failed must not start or join ANOTHER one with this pane's env.
+  nt_hint_nd=''
   nt_left=$#
   while [ "$nt_left" -gt 0 ]; do
     nt_arg=$1
@@ -801,7 +805,7 @@ nt_run_shared() {
       # Measured on 0.159.2: "ERROR: --no-daemon cannot be used with --remote." The launch line
       # carries it for the plain-codex exits below (nt_exec_plain); the managed thread IS a remote
       # client of the scrubbed shared daemon, so it must not.
-      --no-daemon) continue ;;
+      --no-daemon) nt_hint_nd=' --no-daemon'; continue ;;
     esac
     set -- "$@" "$nt_arg"
   done
@@ -845,8 +849,8 @@ nt_run_shared() {
     fi
     nt_rapid_resets=$((nt_rapid_resets + 1))
     if [ "$nt_rapid_resets" -gt 3 ]; then
-      printf '\\nNodeTerm: Codex daemon kept resetting; automatic resume stopped. Run: codex resume %s\\n' \
-        "$nt_shared_thread" >&2
+      printf '\\nNodeTerm: Codex daemon kept resetting; automatic resume stopped. Run: codex%s resume %s\\n' \
+        "$nt_hint_nd" "$nt_shared_thread" >&2
       return "$nt_status"
     fi
 
@@ -857,8 +861,8 @@ nt_run_shared() {
       nt_app_server_ready && break
       nt_start_try=$((nt_start_try + 1))
       if [ "$nt_start_try" -ge 3 ]; then
-        printf 'NodeTerm: shared Codex daemon did not recover. Run: codex resume %s\\n' \
-          "$nt_shared_thread" >&2
+        printf 'NodeTerm: shared Codex daemon did not recover. Run: codex%s resume %s\\n' \
+          "$nt_hint_nd" "$nt_shared_thread" >&2
         return "$nt_status"
       fi
       sleep "$nt_start_try"
@@ -879,7 +883,7 @@ nt_exec_plain() {
   for nt_plain_arg in "$@"; do
     case "$nt_plain_arg" in --no-daemon|--remote|--remote=*) exec codex "$@" ;; esac
   done
-  if codex --help 2>/dev/null | grep -q -e '^[[:space:]]*--no-daemon'; then
+  if codex --help 2>/dev/null | grep -q -E '${CODEX_NO_DAEMON_HELP_ERE}'; then
     exec codex --no-daemon "$@"
   fi
   exec codex "$@"

@@ -2487,11 +2487,15 @@ app.whenReady().then(async () => {
         claudePermissionMode: s.claudePermissionMode,
         // The phone launches claude on the REMOTE host — its CLI is the gate, never the local one.
         autoSupported: sshProjectManager?.remoteAutoPermFor(projectId) === true,
-        // `codexApprovalValues` is deliberately ABSENT from an SSH slice. Same rule one agent over:
-        // the session runs the HOST's codex, there is no remote codex probe yet (claude has one, at
-        // connect), and publishing this machine's vocabulary for another machine's binary is the
-        // cross-host guess the whole gate exists to prevent. Absent ⇒ the baseline vocabulary ⇒
-        // Manual degrades honestly instead of a value the host may have removed.
+        // `codexApprovalValues` is deliberately ABSENT from an SSH slice: the session runs the HOST's
+        // codex, the only remote codex probe asks about `--no-daemon` (not the approval vocabulary),
+        // and publishing this machine's vocabulary for another machine's binary is the cross-host
+        // guess the whole gate exists to prevent. Absent ⇒ the baseline vocabulary ⇒ Manual
+        // degrades honestly instead of a value the host may have removed.
+        //
+        // `codexNoDaemon` IS the host's own answer (core/remote-ssh/codex-no-daemon-probe.ts), so it
+        // may ride — only as a seen `true`.
+        ...(sshProjectManager?.remoteCodexNoDaemonFor(projectId) ? { codexNoDaemon: true as const } : {}),
         ...(home && hostKey
           ? {
               claudeAccounts: (s.claudeAccounts ?? [])

@@ -30,6 +30,7 @@ import { UNKNOWN_CODEX_CLI_CAPS, type CodexCliCaps } from '../shared/types'
 import { findInLoginPath } from './pty-manager'
 import { directExecutableInvocation } from './exec-path'
 import { platform } from './platform'
+import { CODEX_NO_DAEMON_HELP_RE } from '../shared/agents/codex-daemon'
 
 const execFileP = promisify(execFile)
 const PROBE_TIMEOUT_MS = 5000
@@ -129,7 +130,7 @@ export function codexApprovalValuesFrom(helpOutput: string | null | undefined): 
  */
 export function codexNoDaemonFrom(helpOutput: string | null | undefined): boolean | null {
   if (!helpOutput) return null
-  return helpOutput.split(/\r?\n/).some((l) => /^ {0,6}--no-daemon\b/.test(l))
+  return helpOutput.split(/\r?\n/).some((l) => CODEX_NO_DAEMON_HELP_RE.test(l))
 }
 
 let helpCached: Promise<string | null> | null = null
