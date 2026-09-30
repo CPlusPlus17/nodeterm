@@ -15,6 +15,10 @@
 //  - a 429 waits at least 60 s (longer if Retry-After says so); a 402/403 stops minting (a refused
 //    key proof names itself in `lastError`; a 403 host-token.ts judges transient arrives as
 //    `network` and backs off);
+//  - a key-proof refusal stops minting only on the SECOND in a row: a POP_SECRET rotation, or a
+//    secret mismatch between backend instances, inside ONE challenge→mint pair refuses an honest
+//    host once. The first is backed off like a transient 403 (the retry fetches a fresh challenge);
+//    a successful mint or start() resets the count;
 //  - while a backoff timer is armed it owns the next mint: nothing else may mint early.
 // Everything the injected deps can throw is caught: a scheduler that swallowed an exception would sit
 // in 'running' with no listener and no timer, i.e. hosting silently dead until a restart.
@@ -79,6 +83,8 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
   let opening = false
   let attempt = 0
   let retry: unknown = null
+  /** Key-proof refusals since the last successful mint or start(); the second in a row is terminal. */
+  let popRefusals = 0
   const mints: number[] = []
   const live = new Set<Entry>()
 
@@ -182,7 +188,13 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
         r = { ok: false, kind: 'network' }
         threw = `mint failed: ${errorText(err)}`
       }
-      if (r.ok) mints.push(now()) // counted even if we were stopped meanwhile: the backend counted it
+      if (r.ok) {
+        mints.push(now()) // counted even if we were stopped meanwhile: the backend counted it
+        popRefusals = 0
+      } else if (r.kind === 'refused' && r.reason && ++popRefusals < 2) {
+        // The first key-proof refusal in a row is transient (see the header): back off, re-challenge.
+        r = { ok: false, kind: 'network', status: 403 }
+      }
       if (state !== 'running') return
       if (!r.ok) {
         // A key-proof refusal says what to do about it (update, or `team rotate-key`); `refused (403)` would not.
@@ -258,6 +270,7 @@ export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
       if (state === 'running') return
       state = 'running'
       attempt = 0
+      popRefusals = 0
       emit()
       void top()
     },

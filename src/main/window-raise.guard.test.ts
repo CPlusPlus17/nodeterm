@@ -94,9 +94,10 @@ const ALLOWED = new Map<string, { calls: number; why: string }>([
         'not a silent raise); the honest fix routes it to a non-modal in-app surface and needs a ' +
         'macOS check that a sheet on a background window does not activate. The SECOND call is ' +
         'the same class: an app-modal showErrorBox (reportPopRefused) when the relay refuses this ' +
-        "host's key proof (pop_invalid, or pop_required on a proven mint), raised from a re-mint " +
-        'on the refresh/reconnect timer. It is terminal and rare (a downgrade after the host ' +
-        'latched, or a replaced key), and phone access silently stopping would be worse. Both ' +
+        "host's key proof on two consecutive mints, each on a fresh challenge (pop_invalid, or " +
+        'pop_required on a proven mint), raised from a re-mint on the refresh/reconnect timer. ' +
+        'This build always proves when the backend asks, so it means a backend fault or a client ' +
+        'bug: terminal and rare, and phone access silently stopping would be worse. Both ' +
         "belong to one fix: route standing-host's dialogs to a non-modal in-app surface. The two " +
         'call sites stay separate on purpose (one shared helper would hide a raise from this ' +
         'count). Listed so they cannot be forgotten, and so the count still fails if a THIRD ' +

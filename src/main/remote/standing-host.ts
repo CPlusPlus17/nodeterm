@@ -43,7 +43,7 @@ import { phonePins } from './approved-devices'
 import { registerPeerSessionKiller } from './peer-revoke'
 import { createPhoneApprovals } from '../../core/phone-approval'
 import {
-  POP_REFUSED_MESSAGE,
+  POP_REFUSED_MESSAGE_DESKTOP,
   computePopProof,
   fetchPopChallenge,
   popRefusalOf,
@@ -95,9 +95,10 @@ export function tokenTtlMs(exp: number, serverDate: string | null, localNowMs: n
  * other challenge failure is transient and mints NOTHING: to a host the backend has seen prove
  * before, an unproven mint is a 403, which would stop hosting over a blip.
  *
- * Returns `{ refused }` for a terminal key-proof refusal (the caller stops hosting and says so) and
- * null for every other failure (the caller backs off and retries). One 403 is deliberately NOT
- * terminal: `pop_required` for a mint sent WITHOUT a proof because the challenge said 404/405. A
+ * Returns `{ refused }` for a key-proof refusal and null for every other failure (the caller backs
+ * off and retries). This function stays stateless: the caller counts refusals and stops hosting
+ * only on the second in a row (see `popRefusals` in initStandingHost). One 403 is not a refusal at
+ * all: `pop_required` for a mint sent WITHOUT a proof because the challenge said 404/405. A
  * reverse proxy answers 404 while the backend redeploys, and the unproven mint that follows can land
  * on the fresh backend; stopping there would end hosting for good over a redeploy, so it backs off
  * and the next attempt asks for a challenge again.
@@ -204,20 +205,21 @@ function reportKeyLocked(err: Error): void {
 }
 
 /**
- * The relay refused this host's key proof (`pop_invalid`, or `pop_required` on a proven mint). It
- * will refuse every retry the same way, so hosting stops and the human is told, once, how to
- * recover — instead of phone access going quietly dead, or a retry loop spending the host's mints.
+ * The relay refused this host's key proof twice in a row, each time on a fresh challenge
+ * (`pop_invalid`, or `pop_required` on a proven mint). It will keep refusing, so hosting stops and
+ * the human is told, once, what to do — instead of phone access going quietly dead, or a retry
+ * loop spending the host's mints. The kind goes to the log only; the dialog text is fixed.
  */
-function reportPopRefused(): void {
+function reportPopRefused(kind: PopRefusal): void {
   try {
     dialog.showErrorBox(
       'Remote access stopped',
-      `${POP_REFUSED_MESSAGE}\n\nPhone access is off until then. Turn it back on in Settings → Phone.`
+      `${POP_REFUSED_MESSAGE_DESKTOP}\n\nPhone access is off until then. Turn it back on in Settings → Phone.`
     )
   } catch {
     // No dialog available (headless / very early boot): the console line is the fallback.
   }
-  console.error('[standing-host] the relay refused this host key proof')
+  console.error(`[standing-host] the relay refused this host key proof twice in a row (${kind})`)
 }
 
 export interface StandingHost {
@@ -266,6 +268,11 @@ export function initStandingHost(
   const pool = new Set<Pooled>()
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectAttempt = 0
+  // Key-proof refusals since the last successful mint or start(). Only the SECOND in a row is
+  // terminal: a POP_SECRET rotation, or a secret mismatch between backend instances, inside one
+  // challenge→mint pair refuses an honest host once, and stopping there would leave every host that
+  // was mid-mint at that moment off until someone turned phone access back on by hand.
+  let popRefusals = 0
 
   function send(channel: string, ...args: unknown[]): void {
     if (!win.isDestroyed()) win.webContents.send(channel, ...args)
@@ -403,15 +410,22 @@ export function initStandingHost(
       const token = await mintHostToken(entitlement, keys)
       if (!running) return
       if (token && 'refused' in token) {
-        // Terminal: every retry would be refused the same way. stop() clears any armed reconnect.
-        stop()
-        reportPopRefused()
+        popRefusals += 1
+        if (popRefusals >= 2) {
+          // Terminal: every retry would be refused the same way. stop() clears any armed reconnect.
+          stop()
+          reportPopRefused(token.refused)
+          return
+        }
+        console.warn(`[standing-host] the relay refused this host key proof (${token.refused}); retrying with a fresh challenge`)
+        scheduleReconnect()
         return
       }
       if (!token) {
         scheduleReconnect()
         return
       }
+      popRefusals = 0 // a successful mint: the key proof is accepted
       // NOT `reconnectAttempt = 0` here. A mint proves only that the API answered — the relay is a
       // different host, and when it is unreachable from this machine (relay log, 2026-09-27: a host
       // on the fixed build, API fine, relay WS failing for 2½ minutes) every mint succeeds, every
@@ -506,6 +520,7 @@ export function initStandingHost(
     if (running) return
     running = true
     reconnectAttempt = 0
+    popRefusals = 0
     ensurePool()
   }
 

@@ -7,11 +7,13 @@
 // longer mint this host's tokens. Only a challenge answered 404/405 means "this backend predates the
 // proof" and gets the legacy two-field mint; any other challenge failure is transient.
 //
-// The desktop copy distinguishes only two outcomes: a terminal key-proof refusal (`{ refused }` —
+// The desktop copy distinguishes only two outcomes: a key-proof refusal (`{ refused }` —
 // `pop_invalid`, or `pop_required` on a proven mint), which stops phone access and tells the human
-// once, and `null` for every other failure, which backs off and retries. This one says WHICH failure
-// it was, because the scheduler reacts differently to each: a 429 waits at least a minute, a 402/403
-// stops minting, anything else backs off and retries. Both copies share one rule: a 403 is
+// once when it is the second in a row, and `null` for every other failure, which backs off and
+// retries. This one says WHICH failure it was, because the scheduler reacts differently to each: a
+// 429 waits at least a minute, a 402/403 stops minting (a key-proof refusal only on the second in a
+// row — hosted-scheduler.ts counts), anything else backs off and retries. Both copies stay stateless
+// and count their refusals in the caller. Both share one more rule: a 403 is
 // deliberately NOT terminal when it is a `pop_required` answer to a mint sent WITHOUT a proof because
 // the challenge said 404/405. A reverse proxy answers 404 while the backend redeploys, and the
 // unproven mint that follows can land on the fresh backend, which requires a proof from a host it

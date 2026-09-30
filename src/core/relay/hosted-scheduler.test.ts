@@ -413,11 +413,81 @@ describe('hosted scheduler', () => {
 
   // --- relay proof of possession (relay-pop.ts) ---
 
-  it('a PoP refusal stops with backend-refused and the proof message', async () => {
-    const h = harness([{ ok: false, kind: 'refused', status: 403, reason: 'pop_required' }])
+  const popRefused = (reason: 'pop_required' | 'pop_invalid' = 'pop_invalid'): MintResult =>
+    ({ ok: false, kind: 'refused', status: 403, reason })
+
+  it.each(['pop_required', 'pop_invalid'] as const)(
+    'two %s refusals in a row stop with backend-refused and the proof message; the first backs off',
+    async (reason) => {
+      const h = harness([popRefused(reason), popRefused(reason)])
+      h.s.start(); await flush()
+      // The first is transient (a POP_SECRET rotation mid challenge→mint looks exactly like this).
+      expect(h.s.status()).toMatchObject({ state: 'running', lastError: 'network (403)' })
+      expect(h.timers).toHaveLength(1) // the backoff owns the next mint (a fresh challenge)
+      await h.advance(1000)
+      expect(h.mintCalls()).toBe(2)
+      expect(h.s.status()).toMatchObject({ state: 'backend-refused', lastError: POP_REFUSED_MESSAGE })
+      expect(h.timers).toHaveLength(0)
+    }
+  )
+
+  it('one PoP refusal then a successful mint: hosting keeps running', async () => {
+    const h = harness([popRefused(), ok()])
     h.s.start(); await flush()
-    expect(h.s.status()).toMatchObject({ state: 'backend-refused', lastError: POP_REFUSED_MESSAGE })
-    expect(h.timers).toHaveLength(0)
+    await h.advance(1000)
+    expect(h.s.status()).toMatchObject({ state: 'running', idle: 1 })
+    expect(h.opened).toHaveLength(1)
+  })
+
+  it('a successful mint resets the count: refusal, success, refusal is still transient', async () => {
+    const h = harness([popRefused(), ok(), popRefused(), popRefused()])
+    h.s.start(); await flush()
+    await h.advance(1000) // retry → success
+    expect(h.opened).toHaveLength(1)
+    h.opened[0].ev.onBridged(); await flush() // bridged → a replacement is minted, and refused
+    expect(h.mintCalls()).toBe(3)
+    expect(h.s.status().state).toBe('running') // the first refusal since the success
+    await h.advance(1000)
+    expect(h.mintCalls()).toBe(4)
+    expect(h.s.status().state).toBe('backend-refused') // the second in a row
+  })
+
+  it('start() resets the count: a refusal before a stop does not make the next one terminal', async () => {
+    const h = harness([popRefused(), popRefused()])
+    h.s.start(); await flush()
+    expect(h.s.status().state).toBe('running')
+    h.s.stop()
+    h.s.start(); await flush()
+    expect(h.mintCalls()).toBe(2)
+    expect(h.s.status().state).toBe('running') // the first refusal of THIS run
+  })
+
+  it('a POP_SECRET rotated between the challenge and the mint: the real mint backs off, re-challenges and proves', async () => {
+    // Backend A issues the challenge, backend B (the new secret) verifies the mint: an honest host
+    // earns pop_invalid once. Stopping there would stop every host mid-mint at the rotation.
+    const keys = nacl.box.keyPair()
+    const pub = Buffer.from(keys.publicKey).toString('base64')
+    const oldSecret = createTestPopServer('old-secret-'.padEnd(40, 'o'))
+    const newSecret = createTestPopServer('new-secret-'.padEnd(40, 'n'))
+    let issuer = oldSecret
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+    const f = (async (u: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      if (u.endsWith('/v1/relay/challenge')) {
+        const c = issuer.issue(pub, 'host-token')
+        issuer = newSecret // the rotation lands right after the first challenge
+        return json(200, c)
+      }
+      const proven = newSecret.verify({ hostPublicKeyB64: pub, purpose: 'host-token', subject: String(body.deviceId ?? ''), popChallenge: body.popChallenge, popProof: body.popProof })
+      return proven ? json(200, { pairingToken: 'T', hostId: 'H', exp: 0 }) : json(403, { error: 'pop_invalid' })
+    }) as typeof fetch
+    const mint = () => mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: pub, hostSecretKey: keys.secretKey, fetch: f })
+    const h = harness([mint, mint])
+    h.s.start(); await flush()
+    expect(h.s.status().state).toBe('running')
+    await h.advance(1000); await flush()
+    expect(h.opened).toHaveLength(1)
+    expect(h.s.status().state).toBe('running')
   })
 
   it('a pop_required answer to an unproven mint (challenge 404 mid-redeploy) backs off and proves on the retry', async () => {
