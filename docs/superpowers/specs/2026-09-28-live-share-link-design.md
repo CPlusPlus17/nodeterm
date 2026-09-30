@@ -288,9 +288,13 @@ The watcher's pty stream passes a per-session, stateful parser that **removes ev
 sequence**: OSC, DCS, APC, PM and SOS. They carry clipboard contents (OSC 52 from tmux
 `set-clipboard on`), titles, hyperlink targets, file transfers and palette changes, none of which is
 text on the screen. CSI, other ESC sequences and text pass unchanged. Sequences split across chunks
-are handled. An unterminated string sequence is swallowed until its terminator; only past **1 MiB**
-does the parser give up and return to text (a lower cap would print the tail of a large OSC 52
-payload, i.e. the clipboard, as text). The parser is reset only when the viewer moves to a new pty
+are handled. A string sequence is swallowed until its terminator, **however long**: xterm itself
+has no length limit (it stays in the string until ESC, ST, BEL for OSC, CAN or SUB), so a cap could
+only ever show a viewer bytes the owner's screen does not show. An earlier draft resumed text
+past 1 MiB; measured on tmux 3.4 with the app's clipboard settings, a 900 KB copy became a 1.2 MB
+OSC 52 and 151,428 characters of the clipboard's base64 reached the viewer. The filter keeps no
+buffer, so there is nothing for a cap to bound. A viewer that joins a running session starts its
+filter inside an unknown string (`midStream`), so a join in the middle of an OSC 52 leaks nothing. The parser is reset only when the viewer moves to a new pty
 session, never on a keyframe.
 
 **Keyframes are filtered too.** `capture-pane -e` emits OSC 8 hyperlinks verbatim (measured, tmux 3.4),
@@ -540,7 +544,7 @@ only calls `requireProOr`, which today has zero callers.)
 ## Testing
 
 - **Pure units:** key derivation against vectors; link encode/parse; the stream filter (chunk
-  boundaries, the 1 MiB cap, CSI untouched); the token bucket; the chat sanitizer; registry lifecycle
+  boundaries, no length cap (a 2 MiB OSC 52 swallowed whole), a mid-stream join, CSI untouched); the token bucket; the chat sanitizer; registry lifecycle
   on a fake clock; scheduler `maxBridged`.
 - **Core integration** (in-process transport, the real `relay-host`, the real watcher policy, and the
   **browser client itself** from `src/shared/watch-link/`):
