@@ -7837,7 +7837,8 @@ The invariants, each with its reason:
   the API up and the relay down every mint succeeds and every socket dies, and a reset-on-mint
   re-minted at round-trip speed (relay log, 2026-09-27). Successful mints are also capped at 200
   per rolling hour, whatever asks for them (the backend's free limit is 240).
-- **Every request that trusts a relay host key proves the caller holds its secret half (R44).** A
+- **A host-token mint and host-mode push prove the caller holds the relay host key's secret half
+  (R44)** — device mints and join slots still take no proof (see "Still open" below). A
   join code carries the host's device id and public key, which used to be all a host-token mint
   asked for, so a code holder could spend the host's hourly mints. Now the host-token mint (desktop
   phone relay and Server Edition hosted mint) and the desktop's host-mode push first take a

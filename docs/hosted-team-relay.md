@@ -754,8 +754,8 @@ proves again.
     A post it refuses with a 403 forgets the verdict (see below), and an old backend refuses every
     post from a host with no live pairing (`403 forbidden`). While it does, **every batch** costs
     the challenge plus the post: one request more per batch than before the proof existed, and
-    live-update can flush once a second. That case ends once the backend with the proof is
-    deployed: its host-auth refuses such a host `forbidden` instead, which is backed off like any
+    live-update can flush once a second. That case ends once the backend runs with the proof on
+    (`POP_SECRET` set): its host-auth refuses such a host `forbidden` instead, which is backed off like any
     other failed proof, and no post goes out.
   - Failed proofs back off 0, 5, 15, then 60 s between attempts, since every attempt spends the
     per-IP challenge budget the mint needs too. A hold further out than 60 s can only be a clock

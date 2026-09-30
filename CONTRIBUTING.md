@@ -507,8 +507,10 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   through `src/core/relay/relay-pop.ts`, and falls back to an unproven request ONLY on a 404/405
   challenge.** One exception, push only: a 200 challenge followed by a 404 from `/v1/push/host-auth`
   (possible only in a backend redeploy window) also posts unproven, and caches that verdict for 10
-  minutes; push stops nothing, and the backend gates the post regardless. Change the protocol and
-  `relay-pop-vector.json` must change in both repos. Deep version: CLAUDE.md § Hosted team relay.
+  minutes; push stops nothing, and the backend gates the post regardless. The push webhook's
+  management calls prove the same key through their own protocol (`src/core/push-webhook.ts`) — do
+  not fold one into the other. Change the relay protocol and `relay-pop-vector.json` must change in
+  both repos. Deep version: CLAUDE.md § Hosted team relay.
 
 - **Normalize BOTH sides of a path comparison, through one function.** A marker normalized where
   it is built and matched raw where it is used is a no-op on the machine you wrote it on and a
