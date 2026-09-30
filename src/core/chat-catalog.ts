@@ -223,12 +223,14 @@ async function listLocalDir(dir: string): Promise<{ name: string; dir: boolean }
 
 async function readLocalHead(file: string): Promise<string | null> {
   try {
-    const st = await fsp.stat(file)
-    if (!st.isFile()) return null
-    const hit = headCache.get(file)
-    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.text
+    // Open FIRST and stat the handle: the (mtime, size) the cache is keyed on then describes the very
+    // bytes read, never a file swapped in between a path stat and the open.
     const fh = await fsp.open(file, 'r')
     try {
+      const st = await fh.stat()
+      if (!st.isFile()) return null
+      const hit = headCache.get(file)
+      if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.text
       const buf = Buffer.alloc(Math.min(CATALOG_HEAD_BYTES, st.size))
       const { bytesRead } = await fh.read(buf, 0, buf.length, 0)
       const text = buf.subarray(0, bytesRead).toString('utf8')

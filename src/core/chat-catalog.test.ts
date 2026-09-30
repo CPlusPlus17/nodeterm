@@ -195,7 +195,7 @@ describe('remote (one ssh round trip)', () => {
     write(path.join(cwd, '.claude/commands/a/b.md'), 'nested')
     write(path.join(cwd, '.claude/commands/it\'s.md'), 'quote')
     const roots = catalogRoots({ agentId: 'claude', accountId: undefined, cwd }, { remote: true })
-    const out = execFileSync('/bin/sh', ['-c', remoteCatalogCommand(roots)], { env: { PATH: process.env.PATH, HOME: host }, encoding: 'utf8' })
+    const out = execFileSync('/bin/sh', ['-c', remoteCatalogCommand(roots)], { env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: host }, encoding: 'utf8' })
     const { perRoot, partial } = parseRemoteCatalog(out, roots)
     const all = perRoot.flat()
     const n = all.map((e) => e.name)
