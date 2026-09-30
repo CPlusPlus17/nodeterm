@@ -22,6 +22,7 @@ import type { ClientId, DinoSnapshot, PeerDiff, PeerIdentity, PeerState } from '
 import type { WhisperModelInfo } from './speech'
 import type { ProjectKanbanGitHub } from './github-issues'
 import type { KanbanPullAutoMove, KanbanPullLinks } from './kanban-pull-links'
+import type { BoardDispatch } from './board-dispatch'
 import type { CodexAccount } from './codex-account'
 import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
@@ -2059,6 +2060,12 @@ export interface Settings {
    *  and absent from DEFAULT_SETTINGS — means off everywhere. Read through
    *  `sanitizeKanbanPullAutoMove`: settings.json is hand-editable. */
   kanbanPullAutoMove?: KanbanPullAutoMove
+  /** Machine-local board dispatch: which projects start an agent run when this person moves a
+   *  GitHub issue card into a chosen column, with which agent and how many at once, plus the kill
+   *  switch (@shared/board-dispatch — why this is here and never in the project file). Absent —
+   *  and absent from DEFAULT_SETTINGS — means off everywhere. Read through
+   *  `sanitizeBoardDispatch`: settings.json is hand-editable. */
+  boardDispatch?: BoardDispatch
 }
 
 export const DEFAULT_SETTINGS: Settings = {
