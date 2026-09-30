@@ -118,8 +118,9 @@ const SECRET = 'term-e2e-secret' // in a project that is not shared
 
 const pub = (k: KeyPair): string => publicKeyToB64(k.publicKey)
 
-/** Fail with the step's NAME if its event never comes. A bound on a hang, never a success condition
- *  (except where a caller passes a tighter `ms` because the bound IS the claim, e.g. a flush). */
+/** Fail with the step's NAME if its event never comes. A bound on a hang, never a success condition:
+ *  a timing claim (the authority's 1 s / 5 s flush) is pinned by its unit tests on a manual clock,
+ *  never by a wall-clock bound on a loaded CI machine (ruling R14). */
 function step<T>(name: string, p: Promise<T>, ms: number = STEP_MS): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<never>((_, reject) => {
@@ -582,13 +583,17 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       const ack = mutOf(await step(`the owner’s ${m.op} is reflected`, owner.mut(m.op, mutationKey(m, SHARED))))
       expect(ack, m.op).toMatchObject({ ...m, seq: expect.any(Number) })
     }
-    // The flush lands within its bound (1 s after the last op, 5 s at most) with nobody saving: read
-    // the file until it holds the bridge.
+    // The authority writes it with nobody saving (its 1 s / 5 s bounds are pinned on a manual clock
+    // in canvas-authority.test.ts): read the file until it holds ALL THREE ops, parsed — a raw
+    // substring would also match a half-applied write.
     const flushed = await projectFileWhen(
       'the authority writes the shared project',
       sharedCwd,
-      (raw) => raw.includes('bridge-e2e'),
-      6_000
+      (_raw, file) =>
+        !!file.bridges?.some((b) => b.id === 'bridge-e2e') &&
+        positionOf(file.nodes, LIVE)?.x === 321 &&
+        !!file.kanban?.assignments.some((a) => a.nodeId === LIVE && a.columnId === column2),
+      STEP_MS
     )
     expect(positionOf(flushed.nodes, LIVE)).toEqual({ x: 321, y: 0 })
     expect(flushed.bridges).toContainEqual({ id: 'bridge-e2e', source: LIVE, target: IDLE })
@@ -630,7 +635,7 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       'the marker reaches the project file',
       sharedCwd,
       (_raw, file) => positionOf(file.nodes, IDLE)?.x === 777,
-      6_000
+      STEP_MS
     )
     expect(afterMarker.kanban?.assignments.map((a) => a.nodeId)).not.toContain(IDLE)
     expect(afterMarker.kanban?.assignments).toContainEqual(expect.objectContaining({ nodeId: LIVE, columnId: column2 }))
@@ -698,7 +703,10 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       owner.mut('upsert', mutationKey(owed, SHARED), (m) => m.op === 'upsert' && m.node.position.x === 654)
     )
     await step('server close', closeFirstServer())
-    // Written by the time close() resolves: a close that did not wait for the flush fails here.
+    // On disk once close() resolves. Timing-dependent in the GREEN direction only: the authority's
+    // own 1 s flush may already have written the op before close() began, so a pass does not prove
+    // that close() waited for the flush; a failure does prove the op was lost. That close() awaits
+    // the authority's stop (which writes what is owed) is pinned in hosted-boot.test.ts.
     expect(positionOf(readProjectFile(sharedCwd).file.nodes, IDLE)).toEqual({ x: 654, y: 0 })
 
     listeners = fifo<RelayTransport>()
