@@ -49,6 +49,7 @@ import {
 import { buildStubApi } from './stubs'
 import { relayPtyDataKey } from '../../shared/relay-pty-channel'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
+import { projectIdsBoundToApi } from '../session/session'
 
 /** What Task 6 consumes: the bridged api for `createSession`, an approval gate to await, and a
  *  teardown hook to run on disconnect/revoke. */
@@ -194,11 +195,28 @@ export function buildRelayApi(
     // tab's nodes live in the host's core, whose notices are the host's renderer's to draw.
     stationNotice: stub.stationNotice,
     stationOutcome: stub.stationOutcome,
+    stationHandover: stub.stationHandover,
     // The mirror identity seed is a deliberate no-op here: a relay tab's nodes belong to the HOST's
     // core, whose mirror is seeded by the host's own renderer from its own localStorage. This
     // machine's localStorage holds no identity for them, and `...local` would plant this machine's
     // ids into this machine's mirror under the peer's node ids.
     seedAgentIdentity: () => undefined,
+
+    // Which of this tab's projects publish their canvas ops even when nobody else is attached. A
+    // HOSTED tab's host runs the canvas authority (docs/hosted-team-relay.md), which governs every
+    // project it shares, and a hosted tab holds shared projects only: so every project bound to THIS
+    // connection is governed. Answered here, from the session registry, never over the wire (a
+    // viewer could not ask anyway, and the host's answer names the host's projects, which is what the
+    // binding already holds). A Team Access tab's host is a desktop, which governs nothing: `local`.
+    canvasAuthority: hosted
+      ? {
+          // Answered at once from the bindings, so nothing needs to be assumed before it.
+          assumeAllUntilAnswered: false,
+          governed: async () => projectIdsBoundToApi(api),
+          // The set changes only when a tab binds or unbinds, and Canvas re-reads it on every bind.
+          onChanged: () => () => {}
+        }
+      : local.canvasAuthority,
 
     // The hosted team verbs — ONLY on a tab joined by a hosted team's code. A Team Access relay
     // tab's host answers none of them, so there the key is absent altogether (never `undefined`),

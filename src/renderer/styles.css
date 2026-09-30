@@ -1595,14 +1595,14 @@ body,
 .term-node--glass .term-node__body {
   background: transparent;
 }
-/* Camera move (pan / zoom), every appearance: promote the viewport so the compositor scales the
-   already-rastered layer instead of re-rasterising every node's DOM at each intermediate zoom.
-   MEASURED (12 WebGL terminals, 60 Hz wheel zoom, M2): 41–48% → 30–36% total CPU, GPU process
-   22% → 15%. Only WHILE moving: the class is removed 150 ms after the move settles so text
-   re-rasters sharp at the final scale — a permanent will-change would leave it blurry. */
-.canvas-camera-moving .react-flow__viewport {
-  will-change: transform;
-}
+/* NO `will-change: transform` on `.react-flow__viewport`, not even while the camera moves. It was
+   tried (00c9c5fc) to let the compositor scale an already-rastered layer through a pan/zoom, and
+   on a real canvas it does the opposite of saving work: the viewport layer spans the WHOLE canvas,
+   and Chromium rasters it at a scale it ratchets up during a zoom and never lowers. MEASURED on a
+   46-node SSH canvas (41 terminals, 1470x923 @2x, CDP-driven wheel zoom 0.8 <-> 0.12 and pans):
+   with it, 41-252 "tile memory limits exceeded, some content may not draw" warnings per gesture
+   round (blank tiles = the canvas flickering) and no CPU gain (~170% during the gesture either
+   way, the scripted gesture 36 s vs 28 s); without it, 0. camera-moving.test.ts pins its absence. */
 /* The blur is re-rasterised for every glass node on every frame of a pan/zoom (their backdrop
    moves under them). With Keep blur while moving OFF (settings.glassBlurWhileMoving), Canvas marks
    the flow wrapper while the camera moves; the tint stays, and the tint alone is what keeps text at
@@ -1641,17 +1641,27 @@ body,
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--state-unread) 80%, transparent),
     0 0 26px 4px color-mix(in srgb, var(--state-unread) 60%, transparent);
-  opacity: 0;
-  animation: nt-unread-glow 2s ease-in-out infinite;
+  opacity: 0.85;
+  animation: nt-unread-glow 2s ease-in-out 4;
   will-change: opacity;
 }
 
+/* Bounded like the working glow (4 cycles, ~8 s) and resting LIT at 0.85, the value the idle gate
+   and Reduce Motion already hold it at, so the glow still says "finished while you were away" after
+   the pulse ends. It used to run forever: an unread node stays unread until someone looks at it,
+   which on a busy canvas is many nodes for hours, and one running animation keeps the compositor at
+   display rate for the whole window. MEASURED (46-node SSH canvas, 14 unread nodes, focused window,
+   dev build): pausing every status animation took idle renderer+GPU CPU from ~120% to ~26%, and no
+   single family alone got there — see styles.animation-gate.test.ts. */
 @keyframes nt-unread-glow {
   0%,
   100% {
-    opacity: 0;
+    opacity: 0.85;
   }
-  50% {
+  40% {
+    opacity: 0.1;
+  }
+  75% {
     opacity: 1;
   }
 }
@@ -7681,7 +7691,7 @@ button.group-node__setup:disabled {
 }
 .minimap .mm-working {
   filter: drop-shadow(0 0 3px color-mix(in srgb, var(--mm-working) 80%, transparent));
-  animation: mm-pulse-soft 2.6s ease-in-out infinite;
+  animation: mm-pulse-soft 2.6s ease-in-out 4;
   animation-play-state: var(--nt-anim-state);
 }
 .minimap .mm-attention {
@@ -7694,16 +7704,23 @@ button.group-node__setup:disabled {
    stroke THICKENS on the beat as well, which is what makes it findable on a busy map. */
 .minimap .mm-unread {
   filter: drop-shadow(0 0 4px color-mix(in srgb, var(--mm-unread) 95%, transparent));
-  animation: mm-pulse-unread 1.6s ease-in-out infinite;
+  animation: mm-pulse-unread 1.6s ease-in-out 4;
   animation-play-state: var(--nt-anim-state);
 }
+/* Working and unread beat 4 times and then REST at full stroke (the drop-shadow halo is static),
+   mirroring their bounded canvas glows: an infinite beat repainted the minimap's filtered SVG every
+   frame for as long as a node stayed unread. Needs-you keeps beating, like its canvas glow. */
 @keyframes mm-pulse-unread {
   0%,
   100% {
+    stroke-opacity: 1;
+    stroke-width: 4px;
+  }
+  40% {
     stroke-opacity: 0.3;
     stroke-width: 3px;
   }
-  50% {
+  75% {
     stroke-opacity: 1;
     stroke-width: 6px;
   }
@@ -7721,10 +7738,10 @@ button.group-node__setup:disabled {
 @keyframes mm-pulse-soft {
   0%,
   100% {
-    stroke-opacity: 0.45;
+    stroke-opacity: 1;
   }
   50% {
-    stroke-opacity: 1;
+    stroke-opacity: 0.45;
   }
 }
 
@@ -11090,6 +11107,23 @@ button.pull-checks__name {
   font-size: 13px;
   line-height: 1.6;
 }
+/* Board dispatch's line on an issue card (queued / starting / not dispatched). Static text: the
+   run itself shows as a run chip once it exists. */
+.dispatch-chip {
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.dispatch-chip--starting {
+  color: var(--text);
+}
+.dispatch-chip--refused {
+  color: var(--warn);
+}
+.dispatch-chip__reason {
+  color: var(--muted);
+}
 /* GitHub issue ↔ agent session binding. The issue card lists every session started on it as a
    live chip (state from the agent-status store — static, no animation: a card can carry several,
    and the RUNNING pulse already lives on the session's own card). */
@@ -11252,6 +11286,11 @@ button.pull-checks__name {
 }
 .team-progress__dot--queued {
   background: var(--state-queued);
+  border-color: transparent;
+}
+/* Interrupted by the user: idle, not finished — `--after` holds its dependents on it. */
+.team-progress__dot--interrupted {
+  background: var(--state-warning);
   border-color: transparent;
 }
 /* The session name in the card modal header: sized to its text, not a flex-filling detail line. */

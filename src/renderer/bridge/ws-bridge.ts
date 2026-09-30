@@ -72,6 +72,7 @@ import type { PaneOwner } from '../../shared/agents/pane-owner-predicate'
 import { buildStubApi, unsupported } from './stubs'
 import { sanitizeStationNotices } from '@shared/station-notice'
 import { sanitizeOutcomeRecords } from '@shared/station-outcome'
+import { sanitizeHandoverRecords } from '@shared/station-handover'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 import { encodePcmForWire } from './speech-encode'
 import { type FrameTransport, WebSocketFrameTransport } from './frame-transport'
@@ -698,7 +699,24 @@ export function buildStationNoticeApi(client: RpcClient): Pick<NodeTerminalApi, 
  * The Server Edition's station task outcomes — REAL, for the same reason as station notices: the
  * server's canvas-control runtime records `report-outcome` and honours `--after-success` headlessly,
  * and a browser tab's QUEUED badge and `list` must say what the server knows. Kept out of
- * `buildAgentApi`, which relay tabs share.
+ * `buildAgentApi`, which relay tabs share. The hand-over list (src/core/station-handover.ts) is real
+ * for the same reason: the server's headless factory honours plain `--after` with it, and `list`
+ * names it.
+ */
+export function buildStationHandoverApi(client: RpcClient): Pick<NodeTerminalApi, 'stationHandover'> {
+  return {
+    stationHandover: {
+      list: () =>
+        (client.request(IPC.stationHandoverList) as Promise<unknown>).then(sanitizeHandoverRecords, () => []),
+      onChanged: (cb) =>
+        client.subscribe(IPC.stationHandoverChanged, ((records: unknown) =>
+          cb(sanitizeHandoverRecords(records))) as Listener)
+    }
+  }
+}
+
+/**
+ * The Server Edition's station task outcomes — the real bridge, see `buildStationHandoverApi`'s note.
  */
 export function buildStationOutcomeApi(client: RpcClient): Pick<NodeTerminalApi, 'stationOutcome'> {
   return {
@@ -786,6 +804,27 @@ export function buildCanvasApi(client: RpcClient): Pick<NodeTerminalApi, 'canvas
     canvas: {
       mutate: (projectId, mutation) => client.cast(IPC.canvasMut, projectId, mutation),
       onMutation: (listener) => client.subscribe(IPC.canvasMut, listener as Listener)
+    }
+  }
+}
+
+/**
+ * Build the `canvasAuthority` namespace over an RpcClient: a REAL implementation for the Server
+ * Edition browser, whose core may run the canvas authority (docs/hosted-team-relay.md). A server
+ * that does not answer (an older one, a failure) governs nothing, so the tab keeps the solo gate
+ * rather than rejecting. Deliberately NOT part of `buildCanvasApi`, which the relay tab shares: a
+ * relay tab answers from its own connection (relay-api.ts) and never asks the host over the wire.
+ */
+export function buildCanvasAuthorityApi(client: RpcClient): Pick<NodeTerminalApi, 'canvasAuthority'> {
+  const ids = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  return {
+    canvasAuthority: {
+      // A Server Edition core governs the projects its hosted team shares, and says which only when
+      // asked: until it answers, a client publishes for every project (collab-sync `followGoverned`).
+      assumeAllUntilAnswered: true,
+      governed: () => client.request(IPC.canvasAuthority).then(ids, () => []),
+      onChanged: (listener) => client.subscribe(IPC.canvasAuthorityChanged, ((v: unknown) => listener(ids(v))) as Listener)
     }
   }
 }
@@ -1234,7 +1273,9 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildAgentApi(client),
     ...buildStationNoticeApi(client),
     ...buildStationOutcomeApi(client),
+    ...buildStationHandoverApi(client),
     ...buildCanvasApi(client),
+    ...buildCanvasAuthorityApi(client),
     ...buildPresenceApi(client),
     ...buildSpeechApi(client),
     ...buildUsageApi(client),

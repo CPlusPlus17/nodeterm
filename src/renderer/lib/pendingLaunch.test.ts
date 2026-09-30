@@ -13,6 +13,7 @@ import {
   successDepFacts,
   withLaunchBrief,
   launchBriefPresent,
+  handedOverDeps,
   type ArmedNode,
   type StatusById
 } from './pendingLaunch'
@@ -551,6 +552,52 @@ describe('--after-success: a success wait is a fourth gate — the turn ending i
     })
     expect(expired).toMatch(/passed its deadline \(18:00\)/)
     expect(expired).toMatch(/will not start on its own/)
+  })
+})
+
+describe('plain --after on a station handed new work (core/station-handover.ts)', () => {
+  const live = new Set(['a', 'b', 'c'])
+  const status: StatusById = { a: { state: 'done' }, b: { state: 'done' } }
+  const handovers = { a: { nodeId: 'a', since: 10 } }
+
+  it('a handed-over station is never a satisfied dep, whatever its state reads', () => {
+    expect(launchesToFire([armed('c', ['a', 'b'])], status, live, undefined, undefined, undefined, undefined, handovers)).toEqual([])
+    expect(unmetDeps(armed('c', ['a', 'b']), status, live, handovers)).toEqual(['a'])
+    expect(handedOverDeps(armed('c', ['a', 'b']), live, handovers)).toEqual(['a'])
+  })
+
+  it('without a hand-over the same state fires as before', () => {
+    expect(launchesToFire([armed('c', ['a', 'b'])], status, live, undefined, undefined, undefined, undefined, {})).toEqual([
+      { id: 'c', command: 'echo c' }
+    ])
+  })
+
+  it('a deleted station still counts as satisfied, hand-over or not', () => {
+    expect(launchesToFire([armed('c', ['a'])], {}, new Set(['c']), undefined, undefined, undefined, undefined, handovers)).toEqual([
+      { id: 'c', command: 'echo c' }
+    ])
+    expect(handedOverDeps(armed('c', ['a']), new Set(['c']), handovers)).toEqual([])
+  })
+
+  it('a success wait on a handed-over station holds: its turn is not over', () => {
+    expect(successDepFacts('a', status, live, {}, handovers).turnDone).toBe(false)
+    expect(successDepFacts('a', status, live, {}).turnDone).toBe(true)
+  })
+
+  it('a prototype key is not a hand-over', () => {
+    const bare = Object.create(null) as Record<string, undefined>
+    expect(handedOverDeps(armed('c', ['constructor', '__proto__']), new Set(['constructor', '__proto__']), bare)).toEqual([])
+    expect(handedOverDeps(armed('c', ['constructor']), new Set(['constructor']), {})).toEqual([])
+  })
+
+  it('the tooltip says what the wait is for, not "waiting for X to finish" about an idle X', () => {
+    const text = launchTooltip(undefined, 'Builder, Tester', 'claude go', undefined, false, undefined, undefined, undefined, 'Builder')
+    expect(text).toBe(
+      'Waiting for Builder to finish — a turn that ended before that work was done does not count ' +
+        '(all waits: Builder, Tester), then runs:\nclaude go'
+    )
+    // An errored upstream is still named first: it will not end on its own.
+    expect(launchTooltip(undefined, 'Builder', 'claude go', 'Tester', false, undefined, undefined, 'Builder')).toMatch(/^Tester ended/)
   })
 })
 

@@ -4,11 +4,28 @@
  * Edition both answer the verb here and both register the read channel — so the two cannot come to
  * accept different reports or keep them differently.
  *
- * TRANSIENT, like the agent state it sits beside and for the same reason `lastTurnError` is: after
- * a restart no station has spoken in this run, and a success restored from disk would describe a
- * task from another app run. Held in MAIN rather than the renderer so a renderer reload (⌘R, a
- * Server Edition browser tab closing) does not lose it — the station-notice monitor learned that
- * lesson with its DROPPED verdict.
+ * DURABLE ACROSS A RESTART (it used to be transient, so after an app restart every
+ * `--after-success` dependent read BLOCKED and needed ▶ / `run`). Held in MAIN rather than the
+ * renderer so a renderer reload (⌘R, a Server Edition browser tab closing) does not lose it — the
+ * station-notice monitor learned that lesson with its DROPPED verdict — and mirrored to
+ * `<userData>/orchestration-state/station-outcomes.json` (`OUTCOME_FACT`) so an app restart does not
+ * either. What a restart means for a report:
+ *   - it comes back as it was, BOUND to the session that made it: `record` stores the station's
+ *     agent and session id (`sessionOf`, the status mirror). At load, a report whose recorded
+ *     session or agent differs from what the (restored) mirror now says for that node is dropped —
+ *     the node id now belongs to another conversation, and its word is not this one's;
+ *   - and afterwards: a `SessionStart` from the node naming a DIFFERENT session or agent than the
+ *     one a report is bound to withdraws it (`onAgentEvent`). That also holds in-run — a report is
+ *     about a task in one conversation, and `/clear`, a respawn or another agent in the pane is a
+ *     different one. It errs toward holding, like every rule here. A report with no recorded
+ *     session (its station never named one) is kept: there is nothing to compare;
+ *   - "work pending" is NOT stored: it is rebuilt from the durable delivery queue, whose restore
+ *     replays a `queued` hand-over for every message still waiting (delivery-queue.ts). A message
+ *     that lapsed while the app was down is then settled without landing, which withdraws the report
+ *     exactly as an in-run expiry does;
+ *   - a report whose station was CLOSED keeps counting for the dependents it already had (the
+ *     deleted-station rule, `evaluateSuccessDep`) — across a restart now too.
+ * A crash inside the save window loses that window; a clean quit flushes synchronously.
  *
  * WHEN A REPORT ENDS (the "new task" rule):
  *   - the station reports again — the later report supersedes;
@@ -43,11 +60,67 @@ import { isSafeNodeId } from '../shared/safe-id'
 import {
   REPORT_OUTCOME_CONTROL_REFUSAL,
   parseReportOutcome,
+  sanitizeOutcomeRecords,
   type StationOutcome,
   type StationOutcomeRecord
 } from '../shared/station-outcome'
 import type { CorePlatform } from './platform'
 import type { MessageHandover } from './agents/agent-messaging'
+import type { DurableFactFile, DurableFactSpec } from './durable-state'
+
+/** Which conversation a report was made in. */
+export interface OutcomeBinding {
+  sessionId?: string
+  agentId?: string
+}
+
+/** One report as it is written to disk: the published record plus its binding. */
+export interface PersistedOutcome {
+  nodeId: string
+  outcome: StationOutcome
+  note?: string
+  at: number
+  sessionId?: string
+  agentId?: string
+}
+
+/** Re-check one report read from disk (hand-editable input). `null` drops it. The note is re-run
+ *  through the SAME sanitizer a live report takes (`sanitizeOutcomeRecords`). */
+export function sanitizePersistedOutcome(raw: unknown): PersistedOutcome | null {
+  const [rec] = sanitizeOutcomeRecords([raw])
+  if (!rec) return null
+  const r = raw as Record<string, unknown>
+  const out: PersistedOutcome = {
+    nodeId: rec.nodeId,
+    outcome: rec.outcome,
+    at: rec.at,
+    ...(rec.note ? { note: rec.note } : {})
+  }
+  for (const k of ['sessionId', 'agentId'] as const) {
+    const v = r[k]
+    if (v === undefined) continue
+    if (typeof v !== 'string' || v.length === 0 || v.length > 200) return null
+    out[k] = v
+  }
+  return out
+}
+
+/** Would a report bound to `recorded` still speak for a node now in `current`? Unknown on either
+ *  side keeps it — only a VISIBLE difference drops it. */
+export function sameConversation(recorded: OutcomeBinding, current: OutcomeBinding | undefined): boolean {
+  if (!current) return true
+  if (recorded.sessionId && current.sessionId && recorded.sessionId !== current.sessionId) return false
+  if (recorded.agentId && current.agentId && recorded.agentId !== current.agentId) return false
+  return true
+}
+
+export interface StationOutcomeStoreOptions {
+  /** Mirror every change to disk and load from it at construction. */
+  durable?: Pick<DurableFactFile<PersistedOutcome>, 'load' | 'save'>
+  /** The node's current agent and session (the status mirror). Recorded with a report and compared
+   *  at load. Absent ⇒ reports carry no binding. */
+  sessionOf?(nodeId: string): OutcomeBinding | undefined
+}
 
 /** How many stations' reports one process keeps. Far past any canvas; evicts the oldest first. */
 export const STATION_OUTCOME_MAX_RECORDS = 1000
@@ -63,26 +136,125 @@ export class StationOutcomeStore {
    *  report does not count (`workPending` on the published record). Every entry is removed by the
    *  queue's own `settled` event — the queue guarantees one per `queued`. */
   private readonly pending = new Map<string, number>()
+  /** Which conversation each report was made in (persisted beside it, never published). */
+  private readonly bindings = new Map<string, OutcomeBinding>()
+  private readonly durable: StationOutcomeStoreOptions['durable']
+  private readonly sessionOf: StationOutcomeStoreOptions['sessionOf']
 
   /** `publish` gets the FULL list after every change (never a delta), like station notices. */
-  constructor(private readonly publish: (records: StationOutcomeRecord[]) => void = () => {}) {}
+  constructor(
+    private readonly publish: (records: StationOutcomeRecord[]) => void = () => {},
+    opts: StationOutcomeStoreOptions = {}
+  ) {
+    this.durable = opts.durable
+    this.sessionOf = opts.sessionOf
+  }
+
+  /**
+   * Load what an earlier process saved (see the header). A shell calls it ONCE at boot, AFTER the
+   * status mirror is restored (the binding check reads it) and BEFORE the delivery queue is
+   * restored (whose replayed hand-overs act on these reports). Reports already recorded in this
+   * run win. Never throws: the file layer turns a bad file into an empty list.
+   */
+  loadFromDisk(): void {
+    if (!this.durable) return
+    let dropped = false
+    for (const p of this.durable.load()) {
+      const binding: OutcomeBinding = {
+        ...(p.sessionId ? { sessionId: p.sessionId } : {}),
+        ...(p.agentId ? { agentId: p.agentId } : {})
+      }
+      if (!sameConversation(binding, this.sessionOf?.(p.nodeId))) {
+        dropped = true
+        continue
+      }
+      if (this.byId.has(p.nodeId)) continue
+      this.byId.set(p.nodeId, {
+        nodeId: p.nodeId,
+        outcome: p.outcome,
+        at: p.at,
+        ...(p.note ? { note: p.note } : {})
+      })
+      this.bindings.set(p.nodeId, binding)
+    }
+    this.evict()
+    if (dropped) this.persist()
+    this.publish(this.list())
+  }
 
   record(rec: StationOutcomeRecord): void {
     this.byId.delete(rec.nodeId)
     this.byId.set(rec.nodeId, rec)
-    while (this.byId.size > STATION_OUTCOME_MAX_RECORDS) {
-      const oldest = this.byId.keys().next().value
-      if (oldest === undefined) break
-      this.byId.delete(oldest)
-    }
-    this.publish(this.list())
+    const b = this.sessionOf?.(rec.nodeId)
+    this.bindings.set(rec.nodeId, {
+      ...(b?.sessionId ? { sessionId: b.sessionId } : {}),
+      ...(b?.agentId ? { agentId: b.agentId } : {})
+    })
+    this.evict()
+    this.changed()
   }
 
   /** Withdraw a station's report. `true` when there was one. */
   clear(nodeId: string): boolean {
     if (!this.byId.delete(nodeId)) return false
-    this.publish(this.list())
+    this.bindings.delete(nodeId)
+    this.changed()
     return true
+  }
+
+  /**
+   * One normalized agent event. Only a session START matters: a node that begins a DIFFERENT
+   * session (or now runs a different agent) than the one its report was made in no longer speaks
+   * with that report's voice — withdraw it. Any other event, and a start naming no session, changes
+   * nothing (a subagent's stop can name the child's session; only a start is the node's own).
+   */
+  onAgentEvent(e: {
+    nodeId?: string
+    sessionPhase?: string
+    sessionId?: string
+    agentId?: string
+    subagentType?: string
+  }): void {
+    // A child's own session events (grok) name the CHILD's session, never the node's.
+    if (!e?.nodeId || e.sessionPhase !== 'start' || e.subagentType) return
+    const binding = this.bindings.get(e.nodeId)
+    if (!binding || !this.byId.has(e.nodeId)) return
+    const current: OutcomeBinding = {
+      ...(e.sessionId ? { sessionId: e.sessionId } : {}),
+      ...(e.agentId ? { agentId: e.agentId } : {})
+    }
+    if (!sameConversation(binding, current)) this.clear(e.nodeId)
+  }
+
+  private evict(): void {
+    while (this.byId.size > STATION_OUTCOME_MAX_RECORDS) {
+      const oldest = this.byId.keys().next().value
+      if (oldest === undefined) break
+      this.byId.delete(oldest)
+      this.bindings.delete(oldest)
+    }
+  }
+
+  private changed(): void {
+    this.persist()
+    this.publish(this.list())
+  }
+
+  private persist(): void {
+    if (!this.durable) return
+    const out: PersistedOutcome[] = []
+    for (const rec of this.byId.values()) {
+      const b = this.bindings.get(rec.nodeId)
+      out.push({
+        nodeId: rec.nodeId,
+        outcome: rec.outcome,
+        at: rec.at,
+        ...(rec.note ? { note: rec.note } : {}),
+        ...(b?.sessionId ? { sessionId: b.sessionId } : {}),
+        ...(b?.agentId ? { agentId: b.agentId } : {})
+      })
+    }
+    this.durable.save(out)
   }
 
   /** Withdraw a station's report if it was made BEFORE `at` — new work landed at `at`, so only a
@@ -115,7 +287,10 @@ export class StationOutcomeStore {
     const left = (this.pending.get(id) ?? 1) - 1
     if (left > 0) this.pending.set(id, left)
     else this.pending.delete(id)
-    if (!ev.landed) this.byId.delete(id)
+    if (!ev.landed && this.byId.delete(id)) {
+      this.bindings.delete(id)
+      this.persist()
+    }
     this.publish(this.list())
   }
 
@@ -254,4 +429,12 @@ export function registerStationOutcomeIpc(
   store: () => StationOutcomeStore | null
 ): void {
   platform.handle(IPC.stationOutcomeList, () => store()?.list() ?? [])
+}
+
+/** The store's durable file (core/durable-state.ts). */
+export const OUTCOME_FACT: DurableFactSpec<PersistedOutcome> = {
+  kind: 'station-outcomes',
+  version: 1,
+  maxRecords: STATION_OUTCOME_MAX_RECORDS,
+  sanitize: sanitizePersistedOutcome
 }

@@ -594,6 +594,18 @@ export function buildStubApi(): Omit<
     stationOutcome: {
       list: async () => [],
       onChanged: noopUnsub
+    },
+    // Same split again: the Server Edition overrides it (`buildStationHandoverApi`).
+    stationHandover: {
+      list: async () => [],
+      onChanged: noopUnsub
+    },
+    // Governs nothing by default. The Server Edition overrides it with the real bridge
+    // (`buildCanvasAuthorityApi`); a relay tab answers from its own connection (relay-api.ts).
+    canvasAuthority: {
+      assumeAllUntilAnswered: false,
+      governed: async () => [],
+      onChanged: noopUnsub
     }
   } satisfies Omit<
     NodeTerminalApi,

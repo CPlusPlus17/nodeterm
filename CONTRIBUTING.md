@@ -138,6 +138,15 @@ so the live-state chips can never be saved into one. Board keys are
 registry commands in the `board` scope — the only scope allowed a bare letter, because it never
 fires while typing or in a terminal.
 
+Anything that **starts an agent by itself** (board dispatch is the first) takes its consent from
+machine-local settings and its trigger from a gesture the person made in this app — never from a
+label, a column or a file that can arrive from GitHub or a `git pull` — and its consent binds what
+it consented to (board dispatch binds repository + column title + label, not a bare column id).
+Board dispatch's one trigger is `KanbanView.moveIssueByUser` → `onIssueMoved` → `decideDispatch`,
+and a run starts only through `dispatchStart`, from that decision or from the queue drain after
+`recheckQueued`; `lib/board-dispatch.guard.test.ts` fails if a new caller of any link in that
+chain appears, or if anything but `dispatchOnUserMove` creates a queued entry.
+
 A card chip that reads agent state subscribes to a **primitive signature** of the nodes it shows
 (`teamProgressSig`, `issueRunChipSig`), never to the whole `agentStatus.byId` map — that map changes
 on every hook event of every node. Before a card shows a fact, check that its place on the board
@@ -349,6 +358,13 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   runs only on time. Do not move the ledger into one shell's handler: the other shell silently loses
   it.
 
+- **A new way to hand a station work must feed `src/core/station-handover.ts`.** Plain `--after`
+  would otherwise release a dependent on the station's `done` from its PREVIOUS task. Today the
+  hand-overs are `send` / `reply` (through the messaging layer's `onHandover`) and `write` / `run`
+  (`noteControlAnswer` in each shell's control handler — desktop main's `finishAnswer` and the
+  Server Edition wrapper). A new verb that types a task into another node's pane joins that set in
+  the same PR, on BOTH shells; `src/main/station-handover-wiring.test.ts` pins the sites that exist.
+
 - **A new canvas-control open path must record who opened the node.** When a station stops, the
   agent that opened it is told (`src/core/agents/station-notice.ts`) — and a rope alone cannot say
   who that is, because an `--after` node is roped to the stations it waited on too, with the same id
@@ -476,6 +492,15 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   credentials, license or pairing belongs in `src/shared/host-control.ts` instead — refused to every
   relay peer.
 
+- **A change to canvas content that does not travel as a `canvas:mut` op is lost on a hosted core —
+  route new content edits through the op vocabulary (`src/shared/canvas-content.ts`).** On a Server
+  Edition hosting a team, the canvas authority writes a shared project's nodes, edges and board
+  from the ops it hears, and overlays every save with that content, so a content change that reaches
+  the core only inside a save is dropped from disk. A renderer write into a project that is NOT on
+  screen goes through the projects store, whose node and edge writers run inside `ownWrite` so the
+  write is cast (`canvas/stored-publish.ts`); a new store writer of that kind must use `ownWrite`
+  too. Deep version: CLAUDE.md § Hosted team relay.
+
 - **Normalize BOTH sides of a path comparison, through one function.** A marker normalized where
   it is built and matched raw where it is used is a no-op on the machine you wrote it on and a
   silent defect on Windows. That is issue #558: the managed-hook marker was folded to `/` while
@@ -484,6 +509,14 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   concurrent 45 s permission waits racing one prompt. Write the normalizer once, use it on both
   sides, and pin it with a `C:\`-shaped test.
 
+- **Orchestration state that must survive a restart goes through `src/core/durable-state.ts`.** The
+  delivery queue, station reports and the `--request-id` ledger are mirrored to
+  `<userData>/orchestration-state/` by one module: add a `DurableFactSpec` (kind, version, a
+  sanitizer that DROPS what it cannot trust, a cap) rather than writing another store. Decide — and
+  write in the fact's header — what a restart MEANS for it (a TTL that kept running, a session that
+  may have changed), load it at boot in BOTH shells after anything it reads (the status mirror), and
+  test it by writing through one instance and reading through a new one. Never put it in
+  `.nodeterm/project.json`: it is one machine's run state. CLAUDE.md § Durable orchestration state.
 - **Never publish a file with a bare `fs.rename`.** Use `renameAtomic` or `writeFileAtomic` from
   `src/core/fs-atomic.ts`. On Windows a rename fails with `EPERM` whenever anything has the
   destination open — Defender scanning the file you just wrote, the search indexer, OneDrive — so
@@ -922,6 +955,16 @@ on `hydrated` (the first-launch consent dialog and `settings.rememberCanvasLock`
 examples). If the same effect also WRITES, latch its first run: otherwise switching the setting on
 mid-session applies stored state to whatever the user is doing right then, which is a different
 feature from the one they asked for.
+
+**Canvas's `nodesRef` / `nodesProjectIdRef` are the LATEST pair, not the rendered one.** During a
+project switch a zustand write re-renders Canvas at SyncLane before the load's DefaultLane
+`setNodes` lands, so for a moment the ref names the incoming project while the render's `nodes`
+are still the outgoing one's (`canvas/nodesEpoch.ts`). Event-time code (commits, the `canvas:mut`
+receive path, creates) reads the refs; code that pairs the tag with the RENDERED `nodes` (a
+render-time publish, an effect keyed on `nodes`) reads `renderedProjectId`. A peer op goes live
+only when `liveCanvasHolds` says React Flow has that project, and its `setNodes` is functional
+(`rebaseOnLatest`). `nodesEpoch.test.tsx` reproduces the window with real React; never wrap it in
+`act`, which flushes both lanes together and hides it.
 
 Maximize placement and refocusing must use the same measured usable rectangle
 (`measureMaximizeInsets`): pinned side panels plus persistent top controls and bottom dock.

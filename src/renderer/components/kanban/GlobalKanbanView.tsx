@@ -379,7 +379,7 @@ export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, on
     // host's to change, and a move here would only diverge.
     const session = sessionForProject(projectId)
     if (isHostedReadOnly(session.id)) return
-    const prev = useProjects.getState().getProject(projectId)?.kanban ?? defaultKanban()
+    const prev = useProjects.getState().getProject(projectId)?.kanban ?? defaultKanban(projectId)
     useProjects.getState().setProjectKanban(projectId, next)
     markWorkspaceDirty()
     const lv = liveRef.current
@@ -460,7 +460,7 @@ export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, on
       </div>
       <div className="global-kanban__scroll">
         {projects.map((p, idx) => {
-          const board = p.kanban ?? defaultKanban()
+          const board = p.kanban ?? defaultKanban(p.id)
           const isLive = live !== null && live.projectId === p.id
           const sessions = isLive
             ? live.sessions

@@ -98,6 +98,10 @@ export const FOREIGN_TMP_ENTRIES: ReadonlyArray<{ pattern: RegExp; why: string }
   {
     pattern: /^\.?com\.google\.Chrome\./,
     why: "Chrome's own scratch files (`com.google.Chrome.*`, hidden `.com.google.Chrome.*`), left by the headless browser `scripts/terminal-fit-layout.test.ts` drives"
+  },
+  {
+    pattern: /^scoped_dir/,
+    why: "Chromium's `base::ScopedTempDir` (`scoped_dir<random>`), created by the real Electron that `scripts/tabbar-drag.test.ts` launches; whether it is gone by teardown depends on how fast that process exits (seen on PR #1052's CI)"
   }
 ]
 

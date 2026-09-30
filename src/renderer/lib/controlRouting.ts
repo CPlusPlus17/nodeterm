@@ -24,7 +24,15 @@ import {
   type StationOutcomeRecord
 } from '@shared/station-outcome'
 import { prHoldExpired } from './prWait'
-import { controlLaunchState, successDepFacts, type LaunchDelivery, type StatusById } from './pendingLaunch'
+import {
+  controlLaunchState,
+  handedOverDeps,
+  holdReason,
+  successDepFacts,
+  type HandoverById,
+  type LaunchDelivery,
+  type StatusById
+} from './pendingLaunch'
 import { projectTravel } from './presenceTravel'
 import {
   projectCapabilityGrantedFor,
@@ -187,7 +195,9 @@ export function storedNodeListing(
   deliveries: Record<string, LaunchDelivery | undefined> = {},
   now: number = Date.now(),
   /** Every station's latest task report (`report-outcome`, core's store mirrored). */
-  outcomes: Readonly<Record<string, StationOutcomeRecord>> = {}
+  outcomes: Readonly<Record<string, StationOutcomeRecord>> = {},
+  /** Stations with unfinished handed-over work (core/station-handover.ts, mirrored). */
+  handovers: HandoverById = {}
 ) {
   const live = new Set(nodes.map((n) => n.id))
   const titleOf = (id: string): string => {
@@ -207,7 +217,7 @@ export function storedNodeListing(
       (n.pendingLaunch as { afterSuccess?: unknown } | undefined)?.afterSuccess
     )
     const successFacts = (d: string) =>
-      successDepFacts(d, statuses, live, outcomes)
+      successDepFacts(d, statuses, live, outcomes, handovers)
     const successState = successHold ? successWaitStatus(successHold, successFacts, now) : undefined
     const launchState = controlLaunchState(!!n.pendingLaunch, deliveries[n.id] ?? ((n.pendingLaunch as { manualOnly?: boolean } | undefined)?.manualOnly ? { kind: 'failed', attempts: 1, at: 0 } : undefined), status, prExpired, successState) ??
       (n.agentId && !status?.state ? 'unconfirmed' as const : undefined)
@@ -221,13 +231,39 @@ export function storedNodeListing(
       successHold && !successHold.invalid && successState !== 'met'
         ? successWaitSummary(successHold, successFacts, titleOf)
         : undefined
+    // Plain `--after` deps whose `done` is from BEFORE the work just handed to them: named, so an
+    // orchestrator reading QUEUED next to a station that reads idle knows what it is waiting for.
+    // (`pendingLaunch` is unvalidated here: only a list of strings is read.)
+    const rawAfter = (n.pendingLaunch as { after?: unknown } | undefined)?.after
+    const handedOver = Array.isArray(rawAfter)
+      ? handedOverDeps(
+          {
+            id: n.id,
+            data: {
+              pendingLaunch: {
+                after: rawAfter.filter((d): d is string => typeof d === 'string'),
+                command: ''
+              }
+            }
+          },
+          live,
+          handovers
+        )
+      : []
     return {
       id: n.id, kind: n.kind ?? 'terminal', title: n.title ?? '',
       ...(issue ? { issue } : {}),
       ...(status?.lastTurnError ? { lastTurnErrored: true } : {}),
+      ...(status?.lastTurnInterrupted && !status.lastTurnError ? { lastTurnInterrupted: true } : {}),
       ...(launchState ? { launchState } : {}),
       ...(launchState === 'queued' && prHold && !prHold.invalid ? { prWait: formatPrWaits(prHold) } : {}),
       ...(successWait ? { successWait } : {}),
+      ...(handedOver.some((d) => holdReason(handovers[d]) === 'work')
+        ? { handoverWait: handedOver.filter((d) => holdReason(handovers[d]) === 'work').map(titleOf).join(', ') }
+        : {}),
+      ...(handedOver.some((d) => holdReason(handovers[d]) === 'background')
+        ? { backgroundWait: handedOver.filter((d) => holdReason(handovers[d]) === 'background').map(titleOf).join(', ') }
+        : {}),
       ...(reported
         ? {
             outcome: reported.outcome,
@@ -260,8 +296,11 @@ export function controlListingText(rows: ReturnType<typeof storedNodeListing>): 
     (n.launchState ? ` — ${launchLabels[n.launchState]}` : '') +
     (n.prWait ? ` — waits on ${n.prWait}` : '') +
     (n.successWait ? ` — needs success from: ${n.successWait}` : '') +
+    (n.handoverWait ? ` — waiting for ${n.handoverWait} to finish the work handed to it` : '') +
+    (n.backgroundWait ? ` — waiting for ${n.backgroundWait} to finish the tasks still running in its background` : '') +
     (n.outcome ? ` — REPORTED ${n.outcome === 'succeeded' ? 'SUCCESS' : 'FAILURE'}${n.outcomeNote ? ` ("${n.outcomeNote}")` : ''}` : '') +
     (n.outcomeSuperseded ? ' (before new work queued for it; not counted until it reports again)' : '') +
-    (n.lastTurnErrored ? ' — LAST TURN ERRORED' : '')
+    (n.lastTurnErrored ? ' — LAST TURN ERRORED' : '') +
+    (n.lastTurnInterrupted ? ' — LAST TURN INTERRUPTED' : '')
   ).join('\n')
 }

@@ -58,7 +58,7 @@ afterEach(() => {
   }
 })
 
-type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectsOfNode' | 'nodeOfSession' | 'killPeer'>> & {
+type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectsOfNode' | 'nodeOfSession' | 'killPeer' | 'onSharedChange'>> & {
   recordTimers?: boolean
   dataDir?: string
 }
@@ -106,6 +106,7 @@ function world(opts: WorldOpts = {}) {
     ...(opts.now ? { now: opts.now } : {}),
     ...(opts.monotonicNow ? { monotonicNow: opts.monotonicNow } : {}),
     ...(opts.killPeer ? { killPeer: opts.killPeer } : {}),
+    ...(opts.onSharedChange ? { onSharedChange: opts.onSharedChange } : {}),
     ...timerDeps
   })
   live.push({ svc, dataDir })
@@ -969,5 +970,65 @@ describe('hosted service — lifecycle', () => {
     expect(hosted).toHaveLength(9)
     expect(hosted).toEqual(expect.arrayContaining([IPC.relayHostedBookmarks, IPC.relayHostedBookmarkRemove]))
     for (const ch of hosted) expect(ch).toMatch(/^relay:hosted:/)
+  })
+})
+
+describe('hosted service — the canvas authority seam (docs/hosted-team-relay.md)', () => {
+  it('sharedProjectIds() follows share/unshare, and onSharedChange fires after each write', async () => {
+    const seen: string[][] = []
+    // The callback reads the accessor: it must already answer with the NEW set when it is told.
+    let svc: HostedService | null = null
+    const w = world({ onSharedChange: () => seen.push([...svc!.sharedProjectIds()].sort()) })
+    svc = w.svc
+    await w.svc.init()
+    expect([...w.svc.sharedProjectIds()]).toEqual([])
+    await w.svc.share('P', true)
+    expect([...w.svc.sharedProjectIds()]).toEqual(['P'])
+    await w.svc.share('Q', true)
+    await w.svc.share('P', false)
+    expect([...w.svc.sharedProjectIds()]).toEqual(['Q'])
+    expect(seen).toEqual([['P'], ['P', 'Q'], ['Q']])
+  })
+
+  it('a share whose write failed tells nobody', async () => {
+    let told = 0
+    const w = world({ onSharedChange: () => told++ })
+    await w.svc.init()
+    disk.failTeamWrite = true
+    await expect(w.svc.share('P', true)).rejects.toThrow('disk full')
+    expect(told).toBe(0)
+    expect([...w.svc.sharedProjectIds()]).toEqual([])
+  })
+
+  it('a relay workspace:save is refused for every role, with E_ROLE and the reason, and never reaches the store', async () => {
+    const w = world()
+    const owner = await ownerOnline(w)
+    const editor = await approvedGuest(w, owner, 'editor', 5)
+    const viewer = await approvedGuest(w, owner, 'viewer', 6)
+    const ws = { version: 2, activeProjectId: 'P', projects: [{ id: 'P', nodes: [] }] }
+    owner.req(21, IPC.workspaceSave, [ws])
+    editor.req(22, IPC.workspaceSave, [ws])
+    viewer.req(23, IPC.workspaceSave, [ws])
+    owner.req(24, IPC.workspaceLoad) // positive control: the owner's other requests still dispatch
+    await vi.waitFor(() => expect(owner.res(24)).toBeDefined())
+    await vi.waitFor(() => expect(editor.res(22)).toBeDefined())
+    await vi.waitFor(() => expect(viewer.res(23)).toBeDefined())
+    const refusal = {
+      ok: false,
+      error: {
+        code: 'E_ROLE',
+        message: "A hosted team cannot save the host's workspace over the relay; edits travel as canvas operations"
+      }
+    }
+    expect(owner.res(21)).toMatchObject(refusal)
+    expect(editor.res(22)).toMatchObject(refusal)
+    expect(viewer.res(23)).toMatchObject(refusal)
+    expect(w.dispatched).not.toContain(IPC.workspaceSave)
+    expect(w.dispatched).toContain(IPC.workspaceLoad)
+    // A cast of it is dropped too.
+    owner.cast(IPC.workspaceSave, [ws])
+    owner.req(25, IPC.relayHostedSelf)
+    await vi.waitFor(() => expect(owner.res(25)).toBeDefined())
+    expect(w.casts).not.toContain(IPC.workspaceSave)
   })
 })

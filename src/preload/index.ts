@@ -537,6 +537,14 @@ const api: NodeTerminalApi = {
       return () => ipcRenderer.removeListener(IPC.canvasMut, handler)
     }
   },
+  // The desktop never governs: a canvas authority runs only in a Server Edition hosting a team
+  // (docs/hosted-team-relay.md), and main registers no `canvas:authority` handler. A relay tab onto
+  // such a host answers for itself (renderer/bridge/relay-api.ts).
+  canvasAuthority: {
+    assumeAllUntilAnswered: false,
+    governed: async () => [],
+    onChanged: () => () => {}
+  },
   codex: {
     identityCaps: () => ipcRenderer.invoke(IPC.codexIdentityCaps),
     cliCaps: () => ipcRenderer.invoke(IPC.codexCliCaps),
@@ -876,6 +884,14 @@ const api: NodeTerminalApi = {
       const handler = (_e: unknown, records: Parameters<typeof cb>[0]) => cb(records)
       ipcRenderer.on(IPC.stationOutcomeChanged, handler)
       return () => ipcRenderer.removeListener(IPC.stationOutcomeChanged, handler)
+    }
+  },
+  stationHandover: {
+    list: () => ipcRenderer.invoke(IPC.stationHandoverList),
+    onChanged: (cb) => {
+      const handler = (_e: unknown, records: Parameters<typeof cb>[0]) => cb(records)
+      ipcRenderer.on(IPC.stationHandoverChanged, handler)
+      return () => ipcRenderer.removeListener(IPC.stationHandoverChanged, handler)
     }
   }
 }

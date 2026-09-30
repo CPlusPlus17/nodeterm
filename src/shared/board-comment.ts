@@ -37,8 +37,9 @@ export const BOARD_COMMENT_BODY_MAX = 16_384
 
 /** How long after a `queued` outcome a comment row stops presenting it as live: the core's
  *  deliver-on-idle TTL (`DELIVERY_QUEUE_TTL_MS`, 5 min — pinned by a core test) plus a minute. The
- *  queue is process memory; an app that quit while a comment waited never writes its end, and a
- *  row reading "queued" forever would be a silent lie. */
+ *  queue is durable and a clean restart expires a waiting comment at boot (writing its end), but a
+ *  crash inside the queue's save window, or a second instance that does not own the queue, still
+ *  never writes one — and a row reading "queued" forever would be a silent lie. */
 export const BOARD_COMMENT_QUEUE_STALE_MS = 6 * 60_000
 
 /** The trace/queue identity of a delivery started by a board comment: `board-comment:<commentId>`.

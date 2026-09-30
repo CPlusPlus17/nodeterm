@@ -140,7 +140,7 @@ describe('Start with agent (issue card)', () => {
     const body = code(between('const startIssueAgent = useCallback(', 'const issueAgentMenu = useCallback('))
     expect(body).toContain('issueStartPrompt(issue)')
     expect(body).toContain('start.prompt, {\n        issueRef: start.ref\n      }')
-    expect(body).toContain('fileIssueSession(issue, start.ref, created, agentId)')
+    expect(body).toContain('fileIssueSession(issue.columnId, start.ref, created, agentId)')
     // The attacker-writable fields of the issue never reach this function's launch.
     expect(body).not.toMatch(/issue\.title|issue\.body/)
   })

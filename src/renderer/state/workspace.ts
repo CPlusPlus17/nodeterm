@@ -44,6 +44,7 @@ export { applyCanvasMutation, applyOwnCanvasMutation } from '@shared/canvas-muta
 export { accountNodeColor, agentAccountColor } from '@shared/agents/account-color'
 import { mutationTrustsLaunch, sanitizeInboundNode } from '@shared/node-exec'
 import { SYSTEM_NODE_COLORS } from '@shared/node-colors'
+import { groupsFirstBy } from '@shared/node-order'
 
 // Preserve the renderer's long-standing import surface; validation and the palette now live in
 // shared so Server Edition and canvas-control accept exactly what these pickers display.
@@ -1355,34 +1356,12 @@ export function alignNodes(nodes: CanvasNode[], ids: string[], edge: AlignEdge):
 }
 
 /**
- * Group (parent) nodes must precede their descendants in the array (React Flow requirement).
- * With nesting the old "all groups, then everything else" split is not enough — a child frame
- * could still be emitted before its parent — so groups are emitted depth-first from the root.
- *
- * This order is also the DOWNGRADE contract: `flowToNodeStates` preserves array order, and an
- * older build's flat `kind === 'group'` sort returns 0 for two groups, which a stable sort
- * (ES2019+) leaves alone. So a nested tree written by this build still hydrates parent-first,
- * and therefore still RENDERS, on a build that predates nesting.
+ * Parent-first order for the live React Flow array — the ONE definition is `groupsFirstBy`
+ * (@shared/node-order), which also documents the downgrade contract this order keeps. Only the
+ * group test differs here: a React Flow node says `type`, a persisted state says `kind`.
  */
 function groupsFirst(nodes: CanvasNode[]): CanvasNode[] {
-  const byId = new Map(nodes.map((node) => [node.id, node]))
-  const emitted = new Set<string>()
-  const visiting = new Set<string>()
-  const groups: CanvasNode[] = []
-  const emitGroup = (node: CanvasNode): void => {
-    if (emitted.has(node.id) || node.type !== 'group') return
-    if (visiting.has(node.id)) return // cyclic parentId: emit once, don't recurse forever
-    visiting.add(node.id)
-    const parent = node.parentId ? byId.get(node.parentId) : undefined
-    if (parent?.type === 'group') emitGroup(parent)
-    visiting.delete(node.id)
-    if (!emitted.has(node.id)) {
-      emitted.add(node.id)
-      groups.push(node)
-    }
-  }
-  nodes.forEach(emitGroup)
-  return [...groups, ...nodes.filter((node) => node.type !== 'group')]
+  return groupsFirstBy(nodes, (node) => node.type === 'group')
 }
 
 /** A node's position in ROOT space: its own position plus every ancestor frame's origin. */
@@ -2109,10 +2088,16 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
  * Flow re-measure from the incoming `style`, which is what the peer sent.
  */
 export function applyMutationToFlow(nodes: CanvasNode[], m: CanvasMutation): CanvasNode[] {
+  // An edge mutation addresses neither of these nodes — Canvas routes those to the edge state.
+  // Returned by REFERENCE so the caller's `next === prev` short-circuit still fires (same contract
+  // as `applyCanvasMutation`), rather than trusting every call site to have pre-filtered.
+  if (m.op === 'edge-upsert' || m.op === 'edge-remove') return nodes
   if (m.op === 'remove') {
     if (!nodes.some((n) => n.id === m.id)) return nodes // already gone — keep identity, skip render
     return nodes.filter((n) => n.id !== m.id)
   }
+  // A kanban op addresses the project's board, not the node list — same no-op, same reference.
+  if (m.op !== 'upsert') return nodes
   // A peer's node never brings the exec-enabling fields with it (@shared/node-exec): they are
   // per-machine settings, and letting one into the live array is exactly how it ends up harvested
   // into this machine's "trusted" workspace.json on the next save.

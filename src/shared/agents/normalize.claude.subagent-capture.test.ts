@@ -202,6 +202,30 @@ describe('normalizeClaude over the captured native subagent hooks', () => {
     expect(e?.backgroundTaskIds).toEqual(['odd1', 'run1'])
   })
 
+  it('backgroundSubagentIds is the SUBAGENT subset — the only background work plain --after holds on', () => {
+    // The measured fixture: every running entry is an async child (`type: 'subagent'`).
+    const [first, last] = named('print_async', 'Stop')
+    const e1 = normalizeClaude(env(first))
+    expect(e1?.backgroundSubagentIds).toEqual(e1?.backgroundTaskIds)
+    expect(normalizeClaude(env(last))?.backgroundSubagentIds).toEqual([])
+    // A background shell, an unknown type and a finished child do not count; no inventory = absent.
+    const mixed = normalizeClaude(
+      env({
+        ...first,
+        background_tasks: [
+          { id: 'bash_devserver', type: 'local_bash', status: 'running' },
+          { id: 'odd', type: 'something-new', status: 'running' },
+          { id: 'done1', type: 'subagent', status: 'completed' },
+          { id: 'run1', type: 'subagent', status: 'running' }
+        ]
+      })
+    )
+    expect(mixed?.backgroundTaskIds).toEqual(['bash_devserver', 'odd', 'run1'])
+    expect(mixed?.backgroundSubagentIds).toEqual(['run1'])
+    const { background_tasks: _drop, ...older } = first
+    expect(normalizeClaude(env(older))?.backgroundSubagentIds).toBeUndefined()
+  })
+
   it('the subagent hand-back prompt is not a genuine user turn (same rule as <task-notification>)', () => {
     const handback = events('interactive_background_then_esc').find(
       (e) => e.hook_event_name === 'UserPromptSubmit' && String(e.prompt).startsWith('<agent-message')
