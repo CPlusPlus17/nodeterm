@@ -1127,6 +1127,16 @@ tmux without carrying `TMUX_TMPDIR` into it, which is the one way left to escape
 `src/core/tmux-socket-isolation.guard.test.ts` holds the short allowlist of suites that name a
 production socket on purpose; adding a third is a review conversation, not a checkbox.
 
+**Session code has two local backends on POSIX: tmux and Zellij.** `settings.sessionBackend` picks
+where a NEW local terminal's session is created (default tmux); an existing session is always
+reattached in the backend that holds it. If you add a `PtyManager` method that talks to tmux about a
+node, ask `isZellij(persistKey, live)` first and either implement the Zellij leg in
+`src/core/zellij-backend.ts` or answer the explicit "unknown/refused" value and add the gap to
+`ZELLIJ_BACKEND_GAPS` (the Settings row prints that list; `docs/session-backends.md` must state it).
+Asking the tmux socket about a Zellij node is a guess, and `has-session` exit 1 there reads as
+"cold". The `*.realzellij.test.ts` suites need a binary: set `NODETERM_TEST_ZELLIJ=/abs/path/zellij`
+or put `zellij` on PATH; they sandbox HOME, XDG and `ZELLIJ_SOCKET_DIR`, and skip otherwise.
+
 **A test's temp directory must go away when the run does.** `fakePlatform()`'s `userDataDir` is made
 on first read under one per-run root (`test/setup/fake-platform-root.ts`), and that root is removed
 after the last test file finishes. It used to be one `mkdtemp` in the system temp dir per call, never

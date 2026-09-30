@@ -2,6 +2,7 @@ import type { TextDeliveryResult } from './text-delivery'
 import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from './push-webhook'
 import type { IdentitySeedEntry } from './agent-identity-seed'
 import type { PrWaitHold } from './pr-wait'
+import type { SessionBackend } from './session-backend'
 // Types shared across the main, preload, and renderer processes.
 
 import { TABBAR_HEIGHT_PX } from './window-chrome-metrics'
@@ -1173,7 +1174,14 @@ export interface TmuxStatus {
   /** tmux discovery only; retained for older callers and install polling. */
   available: boolean
   /** Absent on older peers; null when discovery could not be read. */
-  persistence?: { enabled: boolean; backend: 'tmux' | 'session-host' | null } | null
+  persistence?: { enabled: boolean; backend: 'tmux' | 'zellij' | 'session-host' | null } | null
+  /**
+   * The optional Zellij backend (@shared/session-backend): whether a `zellij` binary was found and
+   * whether this machine's setting selects it for NEW local terminals. Absent on older peers and on
+   * Windows (no Zellij backend there). `selected && !available` means new terminals fall back to
+   * tmux — the Settings row says so rather than letting the choice look applied.
+   */
+  zellij?: { available: boolean; selected: boolean; socketTooLong?: boolean }
   /** One-shot install command for a terminal node; null = no known installer (text-only banner). */
   installCommand: string | null
   /** Button caption for installCommand (e.g. "Install Homebrew + tmux" when brew must come first). */
@@ -1873,6 +1881,13 @@ export interface Settings {
   accent: string
   tmuxEnabled: boolean
   /**
+   * Which multiplexer creates a NEW local terminal's persistent session on POSIX: `tmux` (default)
+   * or `zellij`. Hand-editable, so every reader goes through `normalizeSessionBackend`
+   * (@shared/session-backend) — anything unknown reads as tmux. A node whose session already
+   * lives in one backend keeps reattaching there; Windows and SSH projects ignore it.
+   */
+  sessionBackend: SessionBackend
+  /**
    * Reach a released tmux session with a control-mode (`tmux -C`) client instead of respawning its
    * terminal — the shadow clients in pty-manager.ts (`shadowAttach`) and the shared background-write
    * client behind `backgroundWrite`. A control client holds ZERO pty devices, which is the whole
@@ -2211,6 +2226,7 @@ export const DEFAULT_SETTINGS: Settings = {
   browserMemorySaver: true,
   accent: '#0a84ff',
   tmuxEnabled: true,
+  sessionBackend: 'tmux',
   ptyShadowClients: true,
   terminalGpuRendering: 'auto',
   tmuxScrollback: 50000,
@@ -2875,6 +2891,12 @@ export interface SessionMemoryReport {
   ok: boolean
   rows: SessionMemoryRow[]
   mem: MemInfo | null
+  /**
+   * Live nodeterm sessions on this machine that the sweep could NOT measure — today, Zellij-backed
+   * ones (the sweep reads tmux). Absent/0 = none. `null` = could not tell. Local scope only. The
+   * panel must never say "no sessions are running" while this is non-zero or unknown.
+   */
+  unmeasured?: number | null
 }
 
 /**
