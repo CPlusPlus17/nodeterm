@@ -312,3 +312,97 @@ describe('WatchLinkStore', () => {
     expect(await s.load()).toEqual([rec({ label: 'Bob' })])
   })
 })
+
+// Ruling R42(b): an entry whose SEALED secret cannot be unsealed this run (the keychain is locked at
+// login, or was reset) is not evidence that the link is gone. The store keeps it verbatim — never
+// returned by load(), never erased by a save — until its own expiresAt passes. Only then is it dropped.
+describe('opaque entries (a sealed secret this run cannot unseal)', () => {
+  const locked = () => {
+    throw new Error('keychain locked')
+  }
+  const other = rec({ linkId: 'OtherLinkIjKlMnOpQrStU', label: 'Bob' })
+
+  it('survives a save verbatim and comes back once the keychain answers again', async () => {
+    const f = file()
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).save([rec()])).toBe('saved')
+    const sealedEntry = JSON.parse(readFileSync(f, 'utf8')).links[0]
+
+    // This run: the keychain refuses. The link is not returned (it cannot be hosted without its secret).
+    const s = new WatchLinkStore({ file: f, seal, unseal: locked })
+    expect(await s.load()).toEqual([])
+    // A save of this run's own links (a new one) must not erase it.
+    expect(await s.save([other])).toBe('saved')
+    const onDisk = JSON.parse(readFileSync(f, 'utf8')).links as Record<string, unknown>[]
+    expect(onDisk).toHaveLength(2)
+    expect(onDisk.find((e) => e.linkId === rec().linkId)).toEqual(sealedEntry)
+    // An empty save (every live link revoked) keeps it too.
+    expect(await s.save([])).toBe('saved')
+    expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([sealedEntry])
+
+    // Next run the keychain answers: the link is back, secret intact.
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).load()).toEqual([rec()])
+  })
+
+  it('is dropped by the first save after its own expiresAt', async () => {
+    const f = file()
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).save([rec()])).toBe('saved')
+    let t = EXPIRES_AT - 1
+    const s = new WatchLinkStore({ file: f, seal, unseal: locked, now: () => t })
+    expect(await s.load()).toEqual([])
+    expect(await s.save([])).toBe('saved')
+    expect(JSON.parse(readFileSync(f, 'utf8')).links).toHaveLength(1)
+    t = EXPIRES_AT
+    expect(await s.save([])).toBe('saved')
+    expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([])
+    // Gone for good: time going back does not bring it back.
+    t = EXPIRES_AT - 1
+    expect(await s.save([])).toBe('saved')
+    expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([])
+  })
+
+  it('a live record with the same id wins over the opaque copy (never two entries for one link)', async () => {
+    const f = file()
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).save([rec()])).toBe('saved')
+    const s = new WatchLinkStore({ file: f, seal, unseal: locked })
+    expect(await s.load()).toEqual([])
+    expect(await s.save([rec({ label: 'Live' })])).toBe('saved')
+    const links = JSON.parse(readFileSync(f, 'utf8')).links as Record<string, unknown>[]
+    expect(links).toHaveLength(1)
+    expect(links[0].label).toBe('Live')
+  })
+
+  it('is kept when sealing fails too (memory-only writes no live link, but never erases one it could not read)', async () => {
+    const f = file()
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).save([rec()])).toBe('saved')
+    const sealedEntry = JSON.parse(readFileSync(f, 'utf8')).links[0]
+    const s = new WatchLinkStore({ file: f, seal: locked, unseal: locked })
+    expect(await s.load()).toEqual([])
+    expect(await s.save([other])).toBe('memory-only')
+    expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([sealedEntry])
+  })
+
+  it('discardOpaque() drops them from the next save ("Stop all": the server revoked them)', async () => {
+    const f = file()
+    expect(await new WatchLinkStore({ file: f, seal, unseal }).save([rec()])).toBe('saved')
+    const s = new WatchLinkStore({ file: f, seal, unseal: locked })
+    expect(await s.load()).toEqual([])
+    s.discardOpaque()
+    expect(await s.save([])).toBe('saved')
+    expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([])
+  })
+
+  it('only a sealed entry the keychain REFUSED is opaque: a malformed or raw-on-desktop one is still dropped', async () => {
+    const f = file()
+    const sealB64 = (bytes: Uint8Array) => seal(Buffer.from(b64(bytes), 'utf8')).toString('base64')
+    writeLinks(f, [
+      // Unsealed fine, but the wrong length: malformed, not a keychain problem.
+      rawEntry({ linkId: 'ShortSealIjKlMnOpQrStU', secret: sealB64(new Uint8Array(31).fill(7)), sealed: true }),
+      // A raw secret on a desktop is never adopted.
+      rawEntry({ linkId: 'RawOnDesktopKlMnOpQrSt' })
+    ])
+    const s = new WatchLinkStore({ file: f, seal, unseal })
+    expect(await s.load()).toEqual([])
+    expect(await s.save([])).toBe('saved')
+    expect(JSON.parse(readFileSync(f, 'utf8')).links).toEqual([])
+  })
+})

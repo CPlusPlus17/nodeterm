@@ -619,6 +619,27 @@ describe('sessionSize', () => {
   })
 })
 
+// Controller ruling R38: a live link asks "is the session I joined still there?" after the join and
+// after every capture (an exit can race either — R30). An explicit accessor, not `nodeOfSession(sid)
+// !== undefined`, which would lean on every watched session having been created with a persistKey.
+describe('hasSession', () => {
+  it('is true for a live session, owner or watcher, and false once it ended', async () => {
+    const m = await manager()
+    const own = await create(OWNER, { cols: 120, rows: 40 })
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    expect(m.hasSession(own.sessionId)).toBe(true)
+    expect(m.hasSession(w.sessionId)).toBe(true)
+    spawned[spawned.length - 1].onExitCb!({ exitCode: 0 })
+    expect(m.hasSession(own.sessionId)).toBe(false)
+  })
+
+  it('is false for a session this manager never created', async () => {
+    const m = await manager()
+    expect(m.hasSession('no-such-session')).toBe(false)
+    expect(m.hasSession('')).toBe(false)
+  })
+})
+
 describe('watchSizeFor', () => {
   it('is the size the live pty runs at, whatever the watcher reported', async () => {
     const m = await manager()

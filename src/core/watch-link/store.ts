@@ -1,8 +1,9 @@
 // Active live links survive an app restart (spec D8). The secret is sealed through the platform's
 // secret seam: Electron safeStorage on the desktop, and ABSENT on the Server Edition by design
 // (headless, no keychain: raw bytes in a 0600 file, the same rule as its node secrets). On the
-// desktop there is no plaintext fallback: if sealing throws, the file is written EMPTY and links
-// live in memory for this run; a raw secret found on a desktop is refused, never adopted.
+// desktop there is no plaintext fallback: if sealing throws, no live link is written (the file keeps
+// only the opaque entries below) and links live in memory for this run; a raw secret found on a
+// desktop is refused, never adopted.
 //
 // What is sealed is the BASE64 TEXT of the secret, never its bytes. The desktop seam is a string
 // seam (`safeStorage.encryptString(b.toString('utf8'))` / `Buffer.from(decryptString(b), 'utf8')`),
@@ -23,6 +24,14 @@
 // is about to refuse (a slow EACCES/EIO, a newer build's version), or land between reading a corrupt
 // file and setting it aside. The snapshot is taken (and sealed) when `save` is CALLED, so disk order
 // is call order; a failed load or write never breaks the chain for what follows.
+//
+// OPAQUE ENTRIES (controller ruling R42). A sealed secret the keychain REFUSES to unseal this run
+// (locked at login, or reset) says nothing about whether the link is gone: the next run may unseal it.
+// So such an entry is kept exactly as it was read — never returned by `load()` (nothing can host a
+// link without its secret), never erased by a `save()` — and carried back verbatim on every write
+// until its own `expiresAt` passes; the first write after that drops it. A sealed secret that unseals
+// but is malformed, and a raw secret found on a desktop, are not opaque: they are dropped as before.
+// `discardOpaque()` is for "Stop all", whose server revoke has ended every link of the license.
 import { promises as fs } from 'node:fs'
 import { renameAtomic, writeFileAtomic } from '../fs-atomic'
 import { LINK_ID_RE } from '../../shared/watch-link/link'
@@ -93,8 +102,24 @@ export class WatchLinkStore {
   private writing: Promise<void> = Promise.resolve()
   /** False once `load()` found a file it could not read: never write over it this run. */
   private writable = true
+  /** Valid entries whose sealed secret this run could not unseal (R42), carried back on every write
+   *  until their own `expiresAt`. Set by each `load()`. */
+  private opaque: FileEntry[] = []
 
-  constructor(private readonly o: { file: string; seal?: (b: Buffer) => Buffer; unseal?: (b: Buffer) => Buffer }) {}
+  constructor(
+    private readonly o: {
+      file: string
+      seal?: (b: Buffer) => Buffer
+      unseal?: (b: Buffer) => Buffer
+      /** Clock for dropping an opaque entry past its `expiresAt` (tests). */
+      now?: () => number
+    }
+  ) {}
+
+  /** Forget every opaque entry: the next write leaves them out ("Stop all" revoked them server-side). */
+  discardOpaque(): void {
+    this.opaque = []
+  }
 
   load(): Promise<WatchLinkRecord[]> {
     const loading = this.writing.then(() => this.read())
@@ -136,16 +161,26 @@ export class WatchLinkStore {
     if (v !== 1) throw this.latch('unknown-version', `${this.o.file} has version ${JSON.stringify(v)}, expected 1`)
 
     const out: WatchLinkRecord[] = []
+    const opaque: FileEntry[] = []
     for (const e of Array.isArray(links) ? (links.slice(0, MAX_ENTRIES) as Partial<FileEntry>[]) : []) {
       if (!e || !str(e.linkId, 22) || !LINK_ID_RE.test(e.linkId)) continue
       // `isSafeNodeId` does not check the type: `12` and `["n1"]` pass its regex by coercion.
       if (typeof e.nodeId !== 'string' || !isSafeNodeId(e.nodeId)) continue
       if (e.role !== 'viewer' && e.role !== 'commenter') continue
       if (!str(e.label, 40) || !str(e.title, 80) || !num(e.createdAt) || !num(e.expiresAt) || typeof e.secret !== 'string') continue
-      const secret = this.readSecret(e.secret, e.sealed === true)
+      const sealed = e.sealed === true
+      const secret = this.readSecret(e.secret, sealed)
+      if (secret === 'refused') {
+        opaque.push({
+          linkId: e.linkId, nodeId: e.nodeId, role: e.role, label: e.label, title: e.title,
+          createdAt: e.createdAt, expiresAt: e.expiresAt, secret: e.secret, sealed: true
+        })
+        continue
+      }
       if (!secret) continue
       out.push({ linkId: e.linkId, nodeId: e.nodeId, role: e.role, label: e.label, title: e.title, createdAt: e.createdAt, expiresAt: e.expiresAt, secret })
     }
+    this.opaque = opaque
     return out
   }
 
@@ -163,17 +198,30 @@ export class WatchLinkStore {
     }
   }
 
-  private readSecret(stored: string, sealed: boolean): Uint8Array | null {
-    try {
-      if (sealed) {
-        if (!this.o.unseal) return null
-        return decodeSecret(this.o.unseal(Buffer.from(stored, 'base64')).toString('utf8'))
+  /** The secret; null for a malformed one (dropped); 'refused' for a sealed one this run cannot
+   *  unseal — no keychain here, or it refused (kept as an opaque entry, R42). */
+  private readSecret(stored: string, sealed: boolean): Uint8Array | null | 'refused' {
+    if (sealed) {
+      if (!this.o.unseal) return 'refused'
+      let text: string
+      try {
+        text = this.o.unseal(Buffer.from(stored, 'base64')).toString('utf8')
+      } catch {
+        return 'refused'
       }
-      // A desktop (it can seal) never adopts a raw secret it finds on disk.
-      return this.o.seal ? null : decodeSecret(stored)
-    } catch {
-      return null
+      return decodeSecret(text)
     }
+    // A desktop (it can seal) never adopts a raw secret it finds on disk.
+    return this.o.seal ? null : decodeSecret(stored)
+  }
+
+  /** The opaque entries this write carries: none past its own expiry (dropped for good), none a live
+   *  record replaces. */
+  private carriedOpaque(live: readonly FileEntry[]): FileEntry[] {
+    const t = (this.o.now ?? Date.now)()
+    this.opaque = this.opaque.filter((e) => e.expiresAt > t)
+    const ids = new Set(live.map((e) => e.linkId))
+    return this.opaque.filter((e) => !ids.has(e.linkId))
   }
 
   async save(records: readonly WatchLinkRecord[]): Promise<SaveOutcome> {
@@ -187,7 +235,7 @@ export class WatchLinkStore {
           try {
             secret = this.o.seal(Buffer.from(text, 'utf8')).toString('base64')
           } catch {
-            // The keychain refused: no plaintext fallback. Write nothing, keep links in memory.
+            // The keychain refused: no plaintext fallback. Write no live link, keep them in memory.
             outcome = 'memory-only'
             break
           }
@@ -202,10 +250,12 @@ export class WatchLinkStore {
       return 'failed'
     }
     if (outcome === 'memory-only') links = []
-    const data = JSON.stringify({ v: 1, links })
-    // Everything above ran synchronously at call time, so the chain is extended in call order.
+    // Everything above ran synchronously at call time, so the chain is extended in call order. The
+    // opaque entries are joined at WRITE time: a save issued while a load was still reading carries
+    // what that load found.
     const write = this.writing.then(() => {
       if (!this.writable) throw new Error('watch-link store is latched: it could not read its file')
+      const data = JSON.stringify({ v: 1, links: [...links, ...this.carriedOpaque(links)] })
       return writeFileAtomic(this.o.file, data, { mode: 0o600 })
     })
     this.writing = write.catch(() => {})

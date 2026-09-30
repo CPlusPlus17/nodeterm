@@ -4476,6 +4476,15 @@ export class PtyManager {
   }
 
   /**
+   * Is this session known to the manager — created and not yet ended? Read-only. A live link's host
+   * asks it after a join and after every keyframe capture (controller rulings R30/R38): the session's
+   * exit can race either, and its `pty:exit` was delivered before the viewer knew the session id.
+   */
+  hasSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId)
+  }
+
+  /**
    * The CURRENT screen of a live session, by sessionId — the redraw sent to a client that fell so
    * far behind that its socket backlog was discarded (see ServerPlatform's WS_DROP_WATER). Reuses
    * the existing `tmux capture-pane -e` paths (`captureSnapshot`, which the relay host already
