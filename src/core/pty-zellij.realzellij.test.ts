@@ -120,11 +120,21 @@ describe.skipIf(!TEST_ZELLIJ)('PtyManager on the Zellij backend (real binary)', 
 
   it('after a restart the node reattaches its Zellij session warm — even with the setting back on tmux', async () => {
     settings = { ...settings, sessionBackend: 'tmux' }
+    // The review repro: a personal session whose name has a SPACE used to make every listing
+    // unparseable → "unknown" → with tmux selected, fresh:true and a tmux spawn — the agent resumed
+    // a second time beside the live Zellij one.
+    execFileSync(TEST_ZELLIJ as string, ['attach', '--create-background', 'my work'], {
+      env: sb.env,
+      timeout: 10_000,
+      stdio: 'ignore'
+    })
     const m = await manager() // a fresh manager = a fresh app run: no memory of the node
     expect(await m.sessionExists(node)).toBe(true)
     const r = await m.createHeadless({ cols: 100, rows: 30, persistKey: node, cwd: sb.root })
     expect(r.fresh).toBe(false)
     expect(h.spawns.at(-1)!.file).toBe(TEST_ZELLIJ)
+    // …and a node that never existed is not claimed to exist.
+    expect(await m.sessionExists('never-existed')).toBe(false)
   }, 30_000)
 
   it('with tmux selected and no Zellij session, the default path is untouched', async () => {

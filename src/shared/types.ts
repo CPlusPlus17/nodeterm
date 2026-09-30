@@ -1180,7 +1180,7 @@ export interface TmuxStatus {
    * Windows (no Zellij backend there). `selected && !available` means new terminals fall back to
    * tmux — the Settings row says so rather than letting the choice look applied.
    */
-  zellij?: { available: boolean; selected: boolean }
+  zellij?: { available: boolean; selected: boolean; socketTooLong?: boolean }
   /** One-shot install command for a terminal node; null = no known installer (text-only banner). */
   installCommand: string | null
   /** Button caption for installCommand (e.g. "Install Homebrew + tmux" when brew must come first). */
@@ -2877,6 +2877,12 @@ export interface SessionMemoryReport {
   ok: boolean
   rows: SessionMemoryRow[]
   mem: MemInfo | null
+  /**
+   * Live nodeterm sessions on this machine that the sweep could NOT measure — today, Zellij-backed
+   * ones (the sweep reads tmux). Absent/0 = none. `null` = could not tell. Local scope only. The
+   * panel must never say "no sessions are running" while this is non-zero or unknown.
+   */
+  unmeasured?: number | null
 }
 
 /**

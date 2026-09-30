@@ -6,6 +6,8 @@ import { useSettings } from '../state/settings'
 /** Always the local core (the server in a browser), never the selected relay host. */
 export function usePersistenceStatus(): TmuxStatus | null | undefined {
   const enabled = useSettings((s) => s.settings.tmuxEnabled)
+  // The backend choice changes what the core reports; re-read at once rather than in up to 15 s.
+  const backend = useSettings((s) => s.settings.sessionBackend)
   const [status, setStatus] = useState<TmuxStatus | null>()
   useEffect(() => {
     let cancelled = false
@@ -26,7 +28,7 @@ export function usePersistenceStatus(): TmuxStatus | null | undefined {
       clearInterval(timer)
       clearTimeout(settled)
     }
-  }, [enabled])
+  }, [enabled, backend])
   return status
 }
 
@@ -45,7 +47,13 @@ export function persistenceDescription(status: TmuxStatus | null | undefined): s
  * created, so each branch says what actually happens next — including the fallback when Zellij is
  * selected but no binary was found, which must not read as applied.
  */
-export function sessionBackendNote(z: { available: boolean; selected: boolean }): string {
+export function sessionBackendNote(z: {
+  available: boolean
+  selected: boolean
+  socketTooLong?: boolean
+}): string {
+  if (z.selected && z.available && z.socketTooLong)
+    return 'Zellij is selected, but its socket path on this machine is longer than the system allows (Zellij refuses to start there) — new local terminals use tmux. Setting a short XDG_RUNTIME_DIR or ZELLIJ_SOCKET_DIR for the app fixes it.'
   if (z.selected && !z.available)
     return 'Zellij is selected but was not found on this machine — new local terminals use tmux until it is installed.'
   if (z.selected)

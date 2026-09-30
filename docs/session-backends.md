@@ -68,17 +68,40 @@ foreground-process question and would be the model for that leg.
   bash/zsh/fish, as tmux runs its default shell as a login shell.
 - **Zombies:** a session listed with no terminal pane is only believed after five pane-less reads
   300 ms apart (a just-created session looks the same for a moment); a confirmed zombie is killed
-  before the node is created again. Zellij that cannot be asked folds to "exists", the same
-  fail-safe direction as tmux.
-- **Delete** kills `nt-<id>` in Zellij (exact name) whenever a Zellij binary exists, so a node
-  deleted after a restart, never mounted since, does not leave its session running.
+  before the node is created again.
+- **Unknown is warm, whatever the setting.** When Zellij cannot be asked about a node, the create
+  is never cold — even with tmux selected — because a node that may still run in Zellij must not
+  get its snapshot replayed and its agent `--resume`d a second time in a new tmux shell (found in
+  review: a first version folded to warm only when Zellij was selected). `sessionExists`, by
+  contrast, claims a Zellij session only from a listing that parsed and shows it live.
+- **Session names may contain spaces** (measured: `my work [Created 0s ago]`); the listing parser
+  takes everything before the last ` [Created `. The first version rejected such a line, and one
+  personal session made every probe `unknown`.
+- **`--` before every positional text** (`paste`, `write-chars`): measured, `- item one` was
+  refused as an unknown argument and `-h` printed help with exit 0 while delivering nothing.
+- **Only when Zellij is in play.** Probes of nodes we know nothing about (the per-create
+  `list-sessions`, the per-delete `kill-session`, the relay listing) run only when Zellij is
+  selected or has been used on this machine (our `zellij.kdl` exists; it is written only when a
+  Zellij terminal is created). A tmux user who merely has Zellij installed runs exactly the old
+  path.
+- **Socket path length.** Zellij refuses a socket path over the platform limit ("IPC socket path is
+  too long (108 bytes, max 107)", measured in review on Linux; macOS allows 103). With the setting on and a
+  path that would not fit, new terminals fall back to tmux and the Settings row says why. A stock
+  Mac (no `XDG_RUNTIME_DIR`, 49-character `$TMPDIR`) with a real node id computes to ~104 bytes —
+  over the limit — so on such a Mac the row is expected to say so until `XDG_RUNTIME_DIR` or
+  `ZELLIJ_SOCKET_DIR` is set short. Calculated, not run.
+- **Delete** kills `nt-<id>` in Zellij (exact name) whenever Zellij is in play, so a node deleted
+  after a restart, never mounted since, does not leave its session running.
 - **Paste:** refused (not split) above 120,000 UTF-8 bytes.
+- **Session memory:** the sweep reads tmux; the panel reports how many Zellij sessions it did not
+  measure instead of "No sessions are running here.".
 
 ### Not available with Zellij (named in the Settings row)
 
 - Agent-to-agent messaging and triggers into Zellij sessions are refused (no pane-owner or paste-mode probe).
 - Model switch refuses: it cannot stop the foreground process of a Zellij pane.
-- The session-memory panel and the idle-session reaper do not see Zellij sessions.
+- The session-memory panel counts Zellij sessions but does not measure them; the idle-session reaper does not see them.
+- Pasted text reaches Zellij as a command-line argument (readable by other local users while the call runs); pastes over 120 KB are refused.
 - The stale-folder banner and the live pane folder for file links are unavailable.
 - SSH projects and Windows keep tmux / the session host.
 - nodeterm mobile’s direct SSH attach only finds tmux sessions.
@@ -89,7 +112,8 @@ is SSH-only anyway; `paneCursor` is unknown, so a resync paint leaves the cursor
 
 ## Surfaces
 
-- **Desktop:** full, macOS and Linux.
+- **Desktop:** measured and tested on Linux only. macOS is untested: see the checklist, whose
+  first item decides whether Zellij can be used there at all without a short socket dir.
 - **Server Edition:** the same core. The Settings row appears whenever the server host reports
   Zellij discovery; sessions are created on the server host.
 - **Mobile:** over the relay, the phone's `pty.attach` goes through the same core and joins the
@@ -99,14 +123,18 @@ is SSH-only anyway; `paneCursor` is unknown, so a resync paint leaves the cursor
 
 ## Device checklist (not run here)
 
-1. macOS: `ps -A -o pid=,ppid=,tpgid=,comm=,args=` shape and `tpgid` for the pane shell
+1. **macOS socket path**: on a stock Mac, does the Settings row report the socket path as too long
+   (expected, see above), and with `ZELLIJ_SOCKET_DIR` set short, do Zellij nodes open? Also run
+   the `*.realzellij.test.ts` suites on a Mac (their sandbox falls back to a short `/tmp` socket
+   dir when the sandbox path would not fit).
+2. macOS: `ps -A -o pid=,ppid=,tpgid=,comm=,args=` shape and `tpgid` for the pane shell
    (Restart agent / Eco read the pane command from it).
-2. macOS: Zellij from Homebrew is found from a Finder-launched app (`/opt/homebrew/bin`).
-3. A canvas node in Zellij: typing, resize, wheel scroll, drag-copy (OSC 52 pill), Shift+Enter in
+3. macOS: Zellij from Homebrew is found from a Finder-launched app (`/opt/homebrew/bin`).
+4. A canvas node in Zellij: typing, resize, wheel scroll, drag-copy (OSC 52 pill), Shift+Enter in
    an agent CLI, Ctrl-g reaching Claude Code.
-4. Attach from an outside terminal with `zellij attach nt-<id>`; both clients see the same pane;
+5. Attach from an outside terminal with `zellij attach nt-<id>`; both clients see the same pane;
    the smaller one sizes it.
-5. App restart with a Zellij node: warm reattach, no cold restore, agent still running.
-6. Machine reboot: cold restore replays the scrollback snapshot and resumes the agent in a new
+6. App restart with a Zellij node: warm reattach, no cold restore, agent still running.
+7. Machine reboot: cold restore replays the scrollback snapshot and resumes the agent in a new
    Zellij session.
-7. Server Edition on a Linux host with Zellij installed: create, reattach from a second tab.
+8. Server Edition on a Linux host with Zellij installed: create, reattach from a second tab.

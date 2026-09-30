@@ -1133,9 +1133,26 @@ Rules a refactor must not undo:
   that created it, so the painter's `env` (hook env, account scope, gateway/project/custom-agent
   values, all merged in `spawnSession`) IS the session env — measured. There is no `-e` list to
   maintain and nothing to leak; do not add one.
-- **Only an answer is absence.** `list-sessions -n` exits 1 both for "No active zellij sessions
-  found" (absence) and for real failures; only the sentence counts, everything else is `unknown`,
-  folded to "exists" like tmux's `probeSaysAbsent`.
+- **Only an answer is absence, and `unknown` is WARM whatever the setting.** `list-sessions -n`
+  exits 1 both for "No active zellij sessions found" (absence) and for real failures; only the
+  sentence counts. When Zellij cannot be asked, the create is never cold — even with tmux selected
+  — or a node still live in Zellij gets its snapshot replayed and its agent resumed a SECOND time
+  in a new tmux shell (the review blocker on #1067: the first version folded to warm only when
+  Zellij was selected). `sessionExists` is the opposite fold: it claims a Zellij session only from
+  a listing that PARSED and shows it live, or every node on the machine "exists" (the phone's End
+  session always said "still running"). Session names may contain SPACES (`my work [Created …]`),
+  and a space-intolerant parser turned ONE personal session into `unknown` for every probe.
+- **`--` before every positional text** (`paste`, `write-chars`): otherwise clap reads a leading
+  `-` as a flag — measured in review, a markdown bullet list was refused and `-h` printed help with
+  exit 0, delivering nothing while the caller then pressed Enter.
+- **Zellij is probed only when it is in play** (`zellijProbeRun`: selected, or `zellij.kdl`
+  exists — written only when a Zellij painter is created), so a tmux user with Zellij merely
+  installed runs exactly the old path: no `list-sessions` per cold create, no `kill-session` per
+  delete.
+- **Socket path length**: Zellij refuses a socket path over `sun_path` (107 bytes on Linux, 103 on
+  macOS). `zellijSocketPath` mirrors its dir rule; a create that would not fit falls back to tmux
+  and Settings says why. A stock Mac with no `XDG_RUNTIME_DIR` computes to ~104 bytes for a real
+  node id — calculated, not run; it is the first device-checklist item.
 - **A zombie needs confirming before it is killed.** A shell that exits with no client attached
   leaves the session listed with only the hidden plugin pane, and `attach --create` to it exits at
   once, so `decideZellij` kills it first. But a session a moment old ALSO has no terminal pane yet
@@ -1151,14 +1168,16 @@ Rules a refactor must not undo:
   session is not resurrected by the next `attach --create`.
 - **`tmuxBacked` is also true for a Zellij session** (it means "releasing the client destroys
   nothing"); every path that would talk to the tmux socket asks `isZellij` first. A delete kills
-  `nt-<id>` in Zellij whenever a binary exists (exact-name match, a no-op for a tmux node), because a
-  node deleted after a restart has no live session and no record.
+  `nt-<id>` in Zellij whenever Zellij is in play (exact-name match, a no-op for a tmux node), because a
+  node deleted after a restart has no live session and no record (only when Zellij is in play).
 - **Explicit degrades, named in Settings** (`ZELLIJ_BACKEND_GAPS`, pinned to the doc by
   `zellij-backend.test.ts`): messaging/triggers refused (`paneOwner` null), model switch refused
-  (`terminateForeground` false), no session-memory panel / reaper, no pane cwd / stale-cwd banner,
-  mobile direct-SSH sees only tmux. The pane foreground command IS provided, from one `ps` read
+  (`terminateForeground` false), the session-memory panel COUNTS Zellij sessions it did not measure
+  (`SessionMemoryReport.unmeasured` — never "No sessions are running here." over live ones) and the
+  reaper ignores them, pasted text rides argv (readable while the call runs), no pane cwd /
+  stale-cwd banner, mobile direct-SSH sees only tmux. The pane foreground command IS provided, from one `ps` read
   (server → shell → the shell's `tpgid`); ambiguous (two pane shells) answers null.
-Surfaces: Desktop full; Server Edition the same core (row shown when its host reports Zellij);
+Surfaces: Desktop measured and tested on Linux only (macOS unverified — socket path first); Server Edition the same core (row shown when its host reports Zellij);
 Mobile via relay joins the Zellij session (`listNodetermSessions` includes and remembers them),
 the phone's direct SSH path does not — iOS follow-up. Real-binary suites: `*.realzellij.test.ts`
 (`NODETERM_TEST_ZELLIJ` or `zellij` on PATH; skipped in CI, which has none).

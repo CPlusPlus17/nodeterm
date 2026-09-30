@@ -16,7 +16,7 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { findInPathString } from './exec-path'
 import { testTmpDir } from './test-tmp'
-import type { ZellijRun } from './zellij-backend'
+import { zellijSocketFits, zellijSocketPath, type ZellijRun } from './zellij-backend'
 
 const run = promisify(execFile)
 
@@ -29,6 +29,8 @@ export interface ZellijSandbox {
   root: string
   env: Record<string, string>
   run: ZellijRun
+  /** A short socket dir outside the sandbox (only when the sandbox path was too long). */
+  shortSock?: string
 }
 
 export function makeZellijSandbox(): ZellijSandbox {
@@ -41,6 +43,13 @@ export function makeZellijSandbox(): ZellijSandbox {
     XDG_RUNTIME_DIR: path.join(root, 'r'),
     ZELLIJ_SOCKET_DIR: path.join(root, 's')
   }
+  // Zellij refuses a socket path over the platform limit (103 bytes on macOS); a Mac's sandboxed
+  // temp dir can be long enough to hit it. Then use a short dir under /tmp, removed at dispose.
+  let shortSock: string | undefined
+  if (!zellijSocketFits(zellijSocketPath(dirs, os.tmpdir(), 0, 'nt-zw-xxxxxxxx-t'), process.platform)) {
+    shortSock = fs.mkdtempSync('/tmp/zj-')
+    dirs.ZELLIJ_SOCKET_DIR = shortSock
+  }
   for (const d of Object.values(dirs)) fs.mkdirSync(d, { recursive: true })
   const env: Record<string, string> = { ...(process.env as Record<string, string>), ...dirs, SHELL: '/bin/sh' }
   for (const k of ['ZELLIJ', 'ZELLIJ_SESSION_NAME', 'ZELLIJ_PANE_ID', 'TMUX', 'TMUX_PANE']) delete env[k]
@@ -52,7 +61,7 @@ export function makeZellijSandbox(): ZellijSandbox {
     })
     return { stdout, stderr }
   }
-  return { root, env, run: bound }
+  return { root, env, run: bound, shortSock }
 }
 
 /** Kill every session in the sandbox and remove Zellij's temp-dir log. Never throws. */
@@ -62,6 +71,7 @@ export async function disposeZellijSandbox(sb: ZellijSandbox): Promise<void> {
   } catch {
     // none left — the normal case
   }
+  if (sb.shortSock) fs.rmSync(sb.shortSock, { recursive: true, force: true })
   const uid = process.getuid?.() ?? 0
   try {
     fs.rmSync(path.join(os.tmpdir(), `zellij-${uid}`), { recursive: true, force: true })

@@ -27,3 +27,18 @@ describe('Session backend row — the sentence says what a NEW terminal gets', (
     expect(persistenceDescription(status)).toMatch(/^Zellij is available/)
   })
 })
+
+import { unmeasuredNote } from '../lib/sessionMemoryNote'
+
+describe('review of #1067 — sentences that must not over-claim', () => {
+  it('a socket path Zellij would refuse says new terminals use tmux, and why', () => {
+    expect(sessionBackendNote({ selected: true, available: true, socketTooLong: true })).toMatch(
+      /socket path.*longer than the system allows.*use tmux/
+    )
+  })
+  it('the memory panel names Zellij sessions it did not measure instead of "no sessions"', () => {
+    expect(unmeasuredNote(1)).toBe('1 Zellij session is running here and is not measured (the sweep reads tmux).')
+    expect(unmeasuredNote(3)).toMatch(/^3 Zellij sessions are running here/)
+    expect(unmeasuredNote(null)).toMatch(/could not be counted/)
+  })
+})

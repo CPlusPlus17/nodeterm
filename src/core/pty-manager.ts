@@ -89,6 +89,9 @@ import {
   zellijSendText,
   zellijSessionState,
   zellijWriteChars,
+  zellijSocketFits,
+  zellijSocketPath,
+  TYPICAL_SESSION_NAME,
   loginShellArgs,
   parseZellijSessionList,
   type ZellijRun,
@@ -1939,7 +1942,7 @@ export class PtyManager {
         enabled: this.getSettings().tmuxEnabled,
         backend:
           // Zellij when it is selected AND found: that is where a new local terminal goes.
-          this.zellijSelected() && this.zellijBin()
+          this.zellijSelected() && this.zellijBin() && this.zellijSocketFitsFor(TYPICAL_SESSION_NAME)
             ? 'zellij'
             : this.runtimePlatform !== 'win32' && available
               ? 'tmux'
@@ -1949,7 +1952,8 @@ export class PtyManager {
         ? {
             zellij: {
               available: !!this.zellijBin(),
-              selected: normalizeSessionBackend(this.getSettings().sessionBackend) === 'zellij'
+              selected: normalizeSessionBackend(this.getSettings().sessionBackend) === 'zellij',
+              ...(this.zellijSocketFitsFor(TYPICAL_SESSION_NAME) ? {} : { socketTooLong: true })
             }
           }
         : {})
@@ -2093,7 +2097,8 @@ export class PtyManager {
   persistentSpawnAvailable(): boolean {
     if (this.tmuxPath && this.getSettings().tmuxEnabled) return true
     // A machine with no tmux whose setting picks Zellij still creates a persistent session.
-    if (this.zellijSelected() && this.zellijBin()) return true
+    if (this.zellijSelected() && this.zellijBin() && this.zellijSocketFitsFor(TYPICAL_SESSION_NAME))
+      return true
     return this.hostBackendEligible()
   }
 
@@ -2470,10 +2475,15 @@ export class PtyManager {
         ? await this.decideZellij(options.persistKey)
         : undefined
     if (zellijChoice?.use) fresh = zellijChoice.fresh
+    // Zellij could not be asked about this node: it may be live there, so never COLD in tmux.
+    else if (zellijChoice?.state === 'unknown') fresh = false
     // A join-only create on Zellij needs a session we SAW live; anything else could create one.
     const joinRefused = zellijChoice?.use
       ? zellijChoice.state !== 'live'
-      : fresh || freshUnverified || joinOnlyLocalVerdict === 'unknown'
+      : fresh ||
+        freshUnverified ||
+        joinOnlyLocalVerdict === 'unknown' ||
+        zellijChoice?.state === 'unknown'
     if (options.joinOnly && joinRefused)
       return { sessionId: '', fresh: false, unavailable: 'join-only' }
     // Ensure the login-shell PATH is resolved (prewarmed in init(); usually already settled)
@@ -2944,7 +2954,7 @@ export class PtyManager {
   private async decideZellij(
     persistKey: string
   ): Promise<{ use: boolean; fresh: boolean; state: ZellijSessionState }> {
-    const run = this.zellijRun()
+    const run = this.zellijProbeRun()
     if (!run) {
       this.zellijKeys.delete(persistKey)
       return { use: false, fresh: true, state: 'absent' }
@@ -2955,11 +2965,58 @@ export class PtyManager {
       await zellijKillSession(run, name)
       state = 'absent'
     }
-    const selected = this.zellijSelected()
+    // Creating needs a socket path Zellij will accept; over the limit it refuses with exit 1 and
+    // the node would open as an exited terminal. Fall back to tmux instead (Settings says so).
+    const canCreate = this.zellijSocketFitsFor(name)
+    const selected = this.zellijSelected() && canCreate
     const use = state === 'live' || (selected && (state === 'absent' || state === 'unknown'))
     if (use) this.zellijKeys.add(persistKey)
     else this.zellijKeys.delete(persistKey)
+    // `unknown` is WARM whatever the setting says: a node that may be live in Zellij must never be
+    // cold-started — snapshot replayed, agent `--resume`d a second time — in a new tmux shell.
     return { use, fresh: state === 'absent', state }
+  }
+
+  /** The Zellij runner for PROBES of nodes we know nothing about. Only when Zellij is in play on this
+   *  machine — selected now, or used before (our `zellij.kdl` exists: it is written only when a
+   *  Zellij painter is created) — so a tmux user who merely has Zellij installed pays nothing: no
+   *  `list-sessions` per cold create, no `kill-session` per delete. */
+  private zellijProbeRun(): ZellijRun | null {
+    if (!this.getSettings().tmuxEnabled) return null
+    if (!this.zellijSelected()) {
+      try {
+        if (!fs.existsSync(path.join(platform().userDataDir, 'zellij.kdl'))) return null
+      } catch {
+        return null
+      }
+    }
+    return this.zellijRun()
+  }
+
+  /** Would Zellij accept the IPC socket for `name` in this environment (zellijSocketPath)? */
+  private zellijSocketFitsFor(name: string): boolean {
+    const env = process.env as Record<string, string | undefined>
+    return zellijSocketFits(
+      zellijSocketPath(env, os.tmpdir(), process.getuid?.() ?? 0, name),
+      this.runtimePlatform
+    )
+  }
+
+  /**
+   * Live `nt-*` Zellij sessions on this machine (null = could not tell / Zellij not in play). The
+   * session-memory panel measures tmux only, so it says how many it could NOT measure rather than
+   * "no sessions are running" over a machine full of Zellij ones.
+   */
+  async zellijSessionCount(): Promise<number | null> {
+    const run = this.zellijProbeRun()
+    if (!run) return 0
+    try {
+      const listing = parseZellijSessionList((await run(['list-sessions', '-n'])).stdout)
+      return listing.ok ? [...listing.live].filter((n) => isSessionName(n)).length : null
+    } catch (error) {
+      const text = error && typeof error === 'object' ? String((error as { stdout?: unknown }).stdout ?? '') : ''
+      return text.includes('No active zellij sessions found') ? 0 : null
+    }
   }
 
   async sessionExists(persistKey: string): Promise<boolean> {
@@ -2967,13 +3024,16 @@ export class PtyManager {
     const probes: Promise<boolean>[] = []
     // A Zellij session is a session: the relay host asks this before attaching a phone to a node,
     // and a "no" there would CREATE a tmux session beside the running Zellij one. `unknown` folds
-    // to "exists" like tmux's probe; a live answer records the id so the attach routes to Zellij.
-    const zellij = this.getSettings().tmuxEnabled ? this.zellijRun() : null
+    // Only a PARSED listing that shows the session live answers "yes": an `unknown` here would say
+    // every node on the machine exists (the phone's End session then always reports "still
+    // running", and a relay attach never cold-restores). A live answer records the id so the
+    // attach routes to Zellij.
+    const zellij = this.zellijProbeRun()
     if (zellij) {
       probes.push(
         zellijSessionState(zellij, sessionName(persistKey)).then((state) => {
           if (state === 'live') this.zellijKeys.add(persistKey)
-          return state === 'live' || state === 'unknown'
+          return state === 'live'
         })
       )
     }
@@ -5294,7 +5354,7 @@ export class PtyManager {
     const hostSessions = this.hostBackendEligible()
       ? sessionHostListSessions().catch(() => [] as string[])
       : Promise.resolve([] as string[])
-    const zellijRun = this.getSettings().tmuxEnabled ? this.zellijRun() : null
+    const zellijRun = this.zellijProbeRun()
     const zellijSessions = zellijRun
       ? zellijRun(['list-sessions', '-n'])
           .then(({ stdout }) => {
@@ -5975,13 +6035,13 @@ export class PtyManager {
           }
         }
       }
-      // Zellij too, by exact name, whenever a binary exists — not only for a node this process
+      // Zellij too, by exact name, whenever Zellij is in play here — not only for a node this process
       // knows to be Zellij-backed: a delete after an app restart, for a node never mounted since,
       // holds no live session and no record, and skipping it would leave the session running with
       // nothing on screen. `kill-session` matches exactly and answers "no such session" for a tmux
       // node, so the extra call ends nothing it should not. Remote nodes never have one.
-      if (remoteEnd.kind === 'none' && this.getSettings().tmuxEnabled) {
-        const run = this.zellijRun()
+      if (remoteEnd.kind === 'none') {
+        const run = this.isZellij(persistKey, dying) ? this.zellijRun() : this.zellijProbeRun()
         if (run) await zellijKillSession(run, sessionName(persistKey))
       }
     }

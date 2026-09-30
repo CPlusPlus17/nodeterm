@@ -14,6 +14,10 @@ import {
   zellijForegroundCommand,
   zellijSendText,
   zellijSessionState,
+  zellijSocketFits,
+  zellijSocketPath,
+  zellijWriteChars,
+  TYPICAL_SESSION_NAME,
   type ZellijRun
 } from './zellij-backend'
 import fs from 'fs'
@@ -62,6 +66,15 @@ describe('parseZellijSessionList', () => {
     if (!l.ok) return
     expect([...l.live]).toEqual(['nt-a3'])
     expect([...l.exited]).toEqual(['nt-b1'])
+  })
+  it('a session name with SPACES parses (measured) — one personal "my work" must not blind every probe', () => {
+    const l = parseZellijSessionList(
+      'my work [Created 1s ago] \nold stuff [Created 3d ago] (EXITED - attach to resurrect)\nnt-x [Created 2s ago]\n'
+    )
+    expect(l.ok).toBe(true)
+    if (!l.ok) return
+    expect([...l.live].sort()).toEqual(['my work', 'nt-x'])
+    expect([...l.exited]).toEqual(['old stuff'])
   })
   it('an unparseable line makes the whole listing unknown — never a silent drop', () => {
     expect(parseZellijSessionList('nt-a3 [Created 1s ago]\n\u001b[32;1mnt-b\u001b[m [Created').ok).toBe(false)
@@ -140,9 +153,17 @@ describe('zellijSendText — one paste, then Enter, never a split', () => {
     const run = live()
     expect(await zellijSendText(run, 'nt-x', 'a\nb', true)).toBe(true)
     expect(run.calls.slice(1)).toEqual([
-      ['--session', 'nt-x', 'action', 'paste', '--pane-id', 'terminal_0', 'a\nb'],
+      ['--session', 'nt-x', 'action', 'paste', '--pane-id', 'terminal_0', '--', 'a\nb'],
       ['--session', 'nt-x', 'action', 'write', '--pane-id', 'terminal_0', '13']
     ])
+  })
+  it('text starting with "-" is a positional, never a flag (`--` before it)', async () => {
+    const run = live()
+    expect(await zellijSendText(run, 'nt-x', '- item one\n- item two', false)).toBe(true)
+    expect(run.calls.at(-1)?.slice(-2)).toEqual(['--', '- item one\n- item two'])
+    const w = fakeRun([{ when: isPanes, stdout: LIVE_PANES }, { when: (a) => a.includes('write-chars') }])
+    expect(await zellijWriteChars(w, 'nt-x', '-h')).toBe(true)
+    expect(w.calls.at(-1)?.slice(-2)).toEqual(['--', '-h'])
   })
   it('refuses a paste over the argv ceiling instead of splitting it', async () => {
     const run = live()
@@ -232,5 +253,25 @@ describe('the gap list the Settings row prints is the list the docs state', () =
       .readFileSync(path.join(__dirname, '../../docs/session-backends.md'), 'utf8')
       .replace(/\r\n/g, '\n')
     for (const gap of ZELLIJ_BACKEND_GAPS) expect(doc).toContain(`- ${gap}`)
+  })
+})
+
+describe('zellijSocketPath — Zellij refuses a socket path over the platform limit', () => {
+  it('follows Zellij: ZELLIJ_SOCKET_DIR, else XDG_RUNTIME_DIR/zellij, else <tmp>/zellij-<uid>', () => {
+    expect(zellijSocketPath({ ZELLIJ_SOCKET_DIR: '/s/' }, '/t', 5, 'nt-a')).toBe('/s/contract_version_1/nt-a')
+    expect(zellijSocketPath({ XDG_RUNTIME_DIR: '/run/user/5' }, '/t', 5, 'nt-a')).toBe(
+      '/run/user/5/zellij/contract_version_1/nt-a'
+    )
+    expect(zellijSocketPath({}, '/t/', 5, 'nt-a')).toBe('/t/zellij-5/contract_version_1/nt-a')
+  })
+  it('a stock Mac temp dir plus a real node id does not fit macOS; Linux has 4 more bytes', () => {
+    const macTmp = '/var/folders/zz/zyxvpxvq6csfxvn_n0000000000000/T/' // 49 chars, the stock shape
+    const mac = zellijSocketPath({}, macTmp, 501, TYPICAL_SESSION_NAME)
+    expect(zellijSocketFits(mac, 'darwin')).toBe(false)
+    expect(zellijSocketFits(zellijSocketPath({ XDG_RUNTIME_DIR: '/run/user/1000' }, '/tmp', 1000, TYPICAL_SESSION_NAME), 'linux')).toBe(true)
+    expect(zellijSocketFits('x'.repeat(107), 'linux')).toBe(true)
+    expect(zellijSocketFits('x'.repeat(108), 'linux')).toBe(false)
+    expect(zellijSocketFits('x'.repeat(103), 'darwin')).toBe(true)
+    expect(zellijSocketFits('x'.repeat(104), 'darwin')).toBe(false)
   })
 })

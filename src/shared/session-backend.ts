@@ -30,7 +30,8 @@ export function normalizeSessionBackend(value: unknown): SessionBackend {
 export const ZELLIJ_BACKEND_GAPS: readonly string[] = [
   'Agent-to-agent messaging and triggers into Zellij sessions are refused (no pane-owner or paste-mode probe).',
   'Model switch refuses: it cannot stop the foreground process of a Zellij pane.',
-  'The session-memory panel and the idle-session reaper do not see Zellij sessions.',
+  'The session-memory panel counts Zellij sessions but does not measure them; the idle-session reaper does not see them.',
+  'Pasted text reaches Zellij as a command-line argument (readable by other local users while the call runs); pastes over 120 KB are refused.',
   'The stale-folder banner and the live pane folder for file links are unavailable.',
   'SSH projects and Windows keep tmux / the session host.',
   'nodeterm mobile’s direct SSH attach only finds tmux sessions.'

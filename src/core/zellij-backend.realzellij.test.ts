@@ -78,6 +78,19 @@ describe.skipIf(!TEST_ZELLIJ)('Zellij backend against the real binary', () => {
     expect(await eventually(async () => (await screen('nt-paste1')).includes('^[[200~F1'))).toBe(true)
   })
 
+  it('text that starts with "-" is delivered, not read as a flag', async () => {
+    await create('nt-dash1')
+    await zellijWriteChars(sb.run, 'nt-dash1', 'stty -echo; cat -v\r')
+    expect(await zellijSendText(sb.run, 'nt-dash1', '- item one\n- item two', true)).toBe(true)
+    expect(await zellijWriteChars(sb.run, 'nt-dash1', '-h\r')).toBe(true)
+    expect(
+      await eventually(async () => {
+        const text = await screen('nt-dash1')
+        return text.includes('- item two') && /^-h$/m.test(text)
+      })
+    ).toBe(true)
+  })
+
   it('the foreground command is read off the process table', async () => {
     await create('nt-fg1')
     await zellijWriteChars(sb.run, 'nt-fg1', 'sleep 30\r')

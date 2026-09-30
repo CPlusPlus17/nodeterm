@@ -120,8 +120,12 @@ export type ZellijListing = { ok: true; live: Set<string>; exited: Set<string> }
 /**
  * Parse `zellij list-sessions -n`. A line is `<name> [Created <age> ago]`, plus
  * ` (EXITED - attach to resurrect)` for a serialized dead session (possible for a session a USER
- * created under our name with their own config — ours never serialize). An unparseable line makes
- * the whole listing unknown rather than silently dropping a session we might be asked about.
+ * created under our name with their own config — ours never serialize). Session names may contain
+ * SPACES (measured: `zellij attach -b 'my work'` lists as `my work [Created 0s ago]`), so the name
+ * is everything before the LAST ` [Created `. A line that still does not parse makes the whole
+ * listing unknown rather than silently dropping a session we might be asked about — which is why a
+ * space-intolerant pattern was a blocker: ONE personal session named "my work" turned every answer
+ * into `unknown`, forever.
  */
 export function parseZellijSessionList(stdout: string): ZellijListing {
   const live = new Set<string>()
@@ -130,7 +134,7 @@ export function parseZellijSessionList(stdout: string): ZellijListing {
     const line = raw.trimEnd()
     if (!line) continue
     if (line.startsWith(NO_SESSIONS)) continue
-    const m = /^(\S+) \[Created [^\]]*\]( \(EXITED\b.*\))?$/.exec(line)
+    const m = /^(.+) \[Created [^\]]*\]( \(EXITED\b.*\))?$/.exec(line)
     if (!m) return { ok: false }
     ;(m[2] ? exited : live).add(m[1])
   }
@@ -301,7 +305,9 @@ export async function zellijSendText(
   if (!pane) return false
   if (text) {
     try {
-      await run(['--session', name, 'action', 'paste', '--pane-id', pane, text])
+      // `--` before the text: without it clap reads a leading `-` as a flag — measured, a markdown
+      // bullet list was refused and `-h` printed help with exit 0, delivering NOTHING.
+      await run(['--session', name, 'action', 'paste', '--pane-id', pane, '--', text])
     } catch {
       return false
     }
@@ -322,7 +328,7 @@ export async function zellijWriteChars(run: ZellijRun, name: string, data: strin
   const pane = await paneOf(run, name)
   if (!pane) return false
   try {
-    await run(['--session', name, 'action', 'write-chars', '--pane-id', pane, data])
+    await run(['--session', name, 'action', 'write-chars', '--pane-id', pane, '--', data])
     return true
   } catch {
     return false
@@ -395,4 +401,40 @@ function errorText(error: unknown): string {
   if (!error || typeof error !== 'object') return String(error ?? '')
   const e = error as { stdout?: unknown; stderr?: unknown; message?: unknown }
   return [e.stdout, e.stderr, e.message].filter((v) => typeof v === 'string').join('\n')
+}
+
+/**
+ * Where Zellij will put a session's IPC socket, mirroring its own rule: `$ZELLIJ_SOCKET_DIR`, else
+ * `$XDG_RUNTIME_DIR/zellij`, else `<temp dir>/zellij-<uid>`; then `contract_version_1/<name>`.
+ * Zellij REFUSES a path over the platform's `sun_path` limit ("IPC socket path is too long (108
+ * bytes, max 107)", exit 1) — and on a stock Mac (no XDG_RUNTIME_DIR, a 49-character
+ * `/var/folders/…/T/`) a real node id lands at ~104 bytes against macOS's 103. Calculated, not run
+ * on a Mac: see the device checklist in docs/session-backends.md.
+ */
+export function zellijSocketPath(
+  env: Record<string, string | undefined>,
+  tmpDir: string,
+  uid: number,
+  name: string
+): string {
+  const trim = (d: string): string => d.replace(/\/+$/, '')
+  const dir = env.ZELLIJ_SOCKET_DIR
+    ? trim(env.ZELLIJ_SOCKET_DIR)
+    : env.XDG_RUNTIME_DIR
+      ? `${trim(env.XDG_RUNTIME_DIR)}/zellij`
+      : `${trim(tmpDir)}/zellij-${uid}`
+  return `${dir}/contract_version_1/${name}`
+}
+
+/** Largest usable unix-socket path in bytes: `sun_path` is 104 bytes on macOS/BSD, 108 on Linux,
+ *  one of which is the terminating NUL. */
+export function socketPathMax(platform: NodeJS.Platform): number {
+  return platform === 'linux' ? 107 : 103
+}
+
+/** A node id as the app mints them (`term-<base36 ms>-<8 hex>`), for "would a typical node fit". */
+export const TYPICAL_SESSION_NAME = 'nt-term-mucjey8s-ca76ca3d'
+
+export function zellijSocketFits(path: string, platform: NodeJS.Platform): boolean {
+  return Buffer.byteLength(path, 'utf8') <= socketPathMax(platform)
 }
