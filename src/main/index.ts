@@ -1960,6 +1960,8 @@ app.whenReady().then(async () => {
     // (core/agents/pane-ownership.ts). The gate trusts this over the attacker-writable store to
     // decide whose grant applies; unproven ⇒ refused (PR #237 fix round 2).
     paneOwnerProject: (id) => paneOwnerProject(id),
+    // A node opened off screen without `--run-now` has no pane yet: queued, not refused.
+    heldLaunch: (projectId, id) => workspaceStore.heldLaunch(projectId, id),
     customAgents: () => settingsStore.get().customAgents,
     appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry)
   }

@@ -154,6 +154,16 @@ export interface AgentMessagingDeps {
    */
   paneOwnerProject(nodeId: string): string | undefined
   /**
+   * Does THIS machine hold an undelivered launch for `nodeId` in `projectId` (`pendingLaunch`, the
+   * machine-local exec overlay — never the git-shared file)? A node opened into a project that is
+   * not on screen without `--run-now` is written with its launch held until that project is shown,
+   * so for a while it has no pane at all. Paired with `hasLiveSession` = false, that is a target
+   * that has not STARTED yet, which the queue waits out (`targetNotStarted`) instead of refusing
+   * it as unproven: an ownership proof is only ever recorded by the spawn that has not happened.
+   * Optional; absent ⇒ such a target is refused `unproven-target-owner` as before.
+   */
+  heldLaunch?(projectId: string, nodeId: string): boolean
+  /**
    * Optional shell-specific creator gate. Server Edition supplies its process-local caller→target
    * proof so message delivery cannot type into a session the caller did not spawn. Desktop omits
    * this because its control path remains user-confirmed. Checked on every queued flush too.
@@ -636,6 +646,15 @@ export function renderMessageOutcome(o: AgentMessageOutcome): AgentMessageReply 
         error: `targetGone: no live session exists for the target node. ${advice}`,
         result: o
       }
+    case 'targetNotStarted':
+      return {
+        ok: false,
+        error:
+          'targetNotStarted: the target was opened with its launch held (its project is not on ' +
+          'screen) and has not started yet, so there is no session to deliver into. Start it with ' +
+          `\`run --node <id>\` (or open it with --run-now next time), then send again. ${advice}`,
+        result: o
+      }
     case 'notPermitted':
       return {
         ok: false,
@@ -709,8 +728,23 @@ export async function runDelivery(
     // store's `projectId` is only a cross-check. Unprovable — no ledger entry (restart / never
     // spawned here), or the ledger owner disagrees with the sole store claimant — fails closed.
     const owner = projectId ? deps.paneOwnerProject(req.targetNodeId) : undefined
-    if (!projectId || !owner || owner !== projectId) notPermitted = 'unproven-target-owner'
-    else if (!deps.messagingEnabled(owner)) notPermitted = 'switch-off'
+    if (!projectId || !owner || owner !== projectId) {
+      // A target that has not been SPAWNED yet (its launch is held until its project is shown, or
+      // until `--run-now` / `run` starts it) has no ownership proof because the only thing that can
+      // record one is the spawn it is waiting for. That is a wait, not a refusal: answered
+      // `targetNotStarted`, which the queue holds, and the flush re-runs this whole chain against
+      // the pane the spawn will have proven. Only for NO owner and NO session — a live pane whose
+      // owner is unproven or disputed stays refused, which is the security property this gate is.
+      if (
+        projectId &&
+        !owner &&
+        deps.heldLaunch?.(projectId, req.targetNodeId) &&
+        !(await deps.hasLiveSession(req.targetNodeId))
+      ) {
+        if (!deps.messagingEnabled(projectId)) notPermitted = 'switch-off'
+        else return { kind: 'targetNotStarted' }
+      } else notPermitted = 'unproven-target-owner'
+    } else if (!deps.messagingEnabled(owner)) notPermitted = 'switch-off'
   }
 
   // Flow control (PR #208), taken as a RESERVATION rather than a pure read: `checkFlowLimits`
@@ -835,7 +869,10 @@ const BOARD_RETRY_SLACK_MS = 500
  *  scope/ownership/grant, and its non-readiness is a turn it happens to be in, not a boundary. */
 const QUEUE_ON_BUSY: ReadonlySet<AgentMessageOutcome['kind']> = new Set([
   'targetBusy',
-  'targetNotIdleUnknown'
+  'targetNotIdleUnknown',
+  // Opened with its launch held (not on screen, no `--run-now`): flushed on its first idle after
+  // the launch lands. Its TTL runs as for any queued message, so a project nobody opens expires it.
+  'targetNotStarted'
 ])
 
 /**
