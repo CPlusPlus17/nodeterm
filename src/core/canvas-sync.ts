@@ -230,7 +230,9 @@ export function initCanvasSync(): void {
     //  - a kanban op is rebuilt by `sanitizeKanbanOp` (unknown fields dropped, a label colour off the
     //    palette → `default`, an invalid rank / priority / dueAt / category dropped), keeping its
     //    `src` / `seen` so the order can still judge it. Kanban fields land in a git-shared
-    //    project.json, and the authority sanitizes again before it writes (the two-seam rule).
+    //    project.json, and the authority sanitizes again before it writes (the two-seam rule);
+    //  - a remove or an edge op is rebuilt from the fields its op defines (and its stamp), so no extra
+    //    field a client attached is forwarded to every peer.
     const fromOwner = p.isOwnerClient?.(senderId) === true
     const clean = sanitizeCanvasMutation(mutation, fromOwner)
     if (!clean) return

@@ -228,6 +228,19 @@ describe('initCanvasSync (reflector)', () => {
     ])
   })
 
+  it('forwards only the fields a remove or an edge op defines, and refuses an oversized remove (D1)', () => {
+    t.setClients([1, 2])
+    const pad = 'x'.repeat(100_000)
+    t.cast(1, 'p1', { op: 'remove', id: 'a', pad, src: 'cv-a' })
+    t.cast(1, 'p1', { op: 'edge-upsert', kind: 'rope', edge: { id: 'e', source: 'a', target: 'b', pad }, pad })
+    t.cast(1, 'p1', { op: 'remove', id: 'b', pad: 'x'.repeat(MUTATION_MAX_BYTES) })
+    const to2 = t.sent.filter((x) => x.to === 2).map((x) => x.args[1])
+    expect(to2).toEqual([
+      { op: 'remove', id: 'a', src: 'cv-a', seq: 1 },
+      { op: 'edge-upsert', kind: 'rope', edge: { id: 'e', source: 'a', target: 'b' }, seq: 2 }
+    ])
+  })
+
   it('is NOT rate-limited: a bulk delete of many nodes reflects every one', () => {
     t.setClients([1, 2])
     for (let i = 0; i < 200; i++) t.cast(1, 'p1', { op: 'remove', id: `n${i}` })

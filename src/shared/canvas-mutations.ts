@@ -99,8 +99,11 @@ function checkMutation(value: unknown, sized: boolean): value is CanvasMutation 
   const fits = (x: unknown): boolean => !sized || withinSizeLimit(x)
   const m = value as { op?: unknown; id?: unknown; node?: unknown; kind?: unknown; edge?: unknown }
   if (isKanbanOp(m)) return sanitizeKanbanOp(value) !== null && fits(value)
-  if (m.op === 'remove') return isRefId(m.id)
-  if (m.op === 'edge-remove') return isEdgeKind(m.kind) && isRefId(m.id)
+  // Removes are held to the byte cap too: the reflector rebuilds them from their known fields
+  // (`sanitizeCanvasMutation`), but an 8 MiB frame must not reach even that far, nor the authority's
+  // op log.
+  if (m.op === 'remove') return isRefId(m.id) && fits(value)
+  if (m.op === 'edge-remove') return isEdgeKind(m.kind) && isRefId(m.id) && fits(value)
   if (m.op === 'edge-upsert') {
     if (!isEdgeKind(m.kind)) return false
     const edge = m.edge as { id?: unknown; source?: unknown; target?: unknown } | undefined
@@ -130,21 +133,34 @@ function checkMutation(value: unknown, sized: boolean): value is CanvasMutation 
  *  - a kanban op is rebuilt by `sanitizeKanbanOp` (unknown fields dropped, colour / rank / priority /
  *    dueAt / category repaired or dropped), KEEPING the stamp fields `src` / `seq` / `seen` — the
  *    order still has to judge it;
- *  - everything else passes through unchanged.
+ *  - a `remove`, `edge-remove` or `edge-upsert` is rebuilt from the fields its op defines (an edge is
+ *    its three ids), with the same stamp fields: whatever else a cast carries would otherwise be
+ *    forwarded to every client and kept in the authority's op log (D1).
  * `null` = refused (a kanban op `sanitizeKanbanOp` refuses). The caller still runs
- * `isCanvasMutation` first for the size cap; this adds no size check of its own.
+ * `isCanvasMutation` first for the shape and the size cap; this adds no check of its own.
  */
 export function sanitizeCanvasMutation(m: CanvasMutation, keepLaunch = false): CanvasMutation | null {
   if (isKanbanOp(m)) {
     const clean = sanitizeKanbanOp(m)
     if (!clean) return null
-    const out: CanvasMutation = { ...clean }
-    if (m.src !== undefined) out.src = m.src
-    if (m.seq !== undefined) out.seq = m.seq
-    if (m.seen !== undefined) out.seen = m.seen
-    return out
+    return withStamp({ ...clean }, m)
+  }
+  if (m.op === 'remove') return withStamp({ op: 'remove', id: m.id }, m)
+  if (m.op === 'edge-remove') return withStamp({ op: 'edge-remove', kind: m.kind, id: m.id }, m)
+  if (m.op === 'edge-upsert') {
+    const { id, source, target } = m.edge
+    return withStamp({ op: 'edge-upsert', kind: m.kind, edge: { id, source, target } }, m)
   }
   return sanitizeInboundMutation(m, keepLaunch)
+}
+
+/** Copy the order's stamp fields (`src`, `seq`, `seen`) from `from` onto a rebuilt op; an absent one
+ *  stays absent. `origin` is deliberately not among them: only the core adds it, per recipient. */
+function withStamp(out: CanvasMutation, from: CanvasMutation): CanvasMutation {
+  if (from.src !== undefined) out.src = from.src
+  if (from.seq !== undefined) out.seq = from.seq
+  if (from.seen !== undefined) out.seen = from.seen
+  return out
 }
 
 function withinSizeLimit(m: unknown): boolean {

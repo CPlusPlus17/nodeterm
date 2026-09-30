@@ -451,12 +451,46 @@ describe('sanitizeCanvasMutation', () => {
     expect(sanitizeCanvasMutation({ op: 'kb-card-remove', nodeId: '' })).toBeNull()
   })
 
-  it('strips the exec-enabling fields off a node upsert, and passes other ops through', () => {
+  it('strips the exec-enabling fields off a node upsert', () => {
     const withShell = { op: 'upsert', node: { ...n('1'), shell: '/bin/evil' } } as CanvasMutation
     const out = sanitizeCanvasMutation(withShell) as Extract<CanvasMutation, { op: 'upsert' }>
     expect(out.node.shell).toBeUndefined()
-    const rm: CanvasMutation = { op: 'remove', id: '1', src: 'a' }
-    expect(sanitizeCanvasMutation(rm)).toBe(rm)
+  })
+
+  // D1: every field of a cast is forwarded to every client, so a remove or an edge op is rebuilt
+  // from the fields its op defines — plus the stamp fields the order judges — and nothing else.
+  it('rebuilds remove / edge-remove / edge-upsert from their known fields, keeping src / seq / seen', () => {
+    const pad = 'x'.repeat(10_000)
+    const stamp = { src: 'cv-a', seq: 7, seen: 6 }
+    const rm = { op: 'remove', id: '1', pad, ...stamp } as unknown as CanvasMutation
+    expect(sanitizeCanvasMutation(rm)).toEqual({ op: 'remove', id: '1', ...stamp })
+    const er = { op: 'edge-remove', kind: 'rope', id: 'e1', pad, ...stamp } as unknown as CanvasMutation
+    expect(sanitizeCanvasMutation(er)).toEqual({ op: 'edge-remove', kind: 'rope', id: 'e1', ...stamp })
+    const eu = {
+      op: 'edge-upsert',
+      kind: 'bridge',
+      edge: { id: 'e1', source: 'a', target: 'b', pad },
+      pad,
+      ...stamp
+    } as unknown as CanvasMutation
+    expect(sanitizeCanvasMutation(eu)).toEqual({
+      op: 'edge-upsert',
+      kind: 'bridge',
+      edge: { id: 'e1', source: 'a', target: 'b' },
+      ...stamp
+    })
+    // An absent stamp stays absent (no `src: undefined` key goes on the wire).
+    expect(Object.keys(sanitizeCanvasMutation({ op: 'remove', id: '1' })!)).toEqual(['op', 'id'])
+  })
+})
+
+describe('isCanvasMutation — the byte cap covers removes too (D1)', () => {
+  it('refuses an oversized remove and edge-remove, like every other op', () => {
+    const pad = 'x'.repeat(MUTATION_MAX_BYTES)
+    expect(isCanvasMutation({ op: 'remove', id: '1', pad })).toBe(false)
+    expect(isCanvasMutation({ op: 'edge-remove', kind: 'rope', id: 'e1', pad })).toBe(false)
+    // The shape verdict alone (the reducer's guard) still accepts them.
+    expect(isWellFormedMutation({ op: 'remove', id: '1', pad })).toBe(true)
   })
 })
 
