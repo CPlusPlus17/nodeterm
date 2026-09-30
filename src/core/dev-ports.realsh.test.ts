@@ -87,6 +87,41 @@ EOF`,
     expect(r).toEqual({ ok: true, nodes: { web: [{ port: 8080, addresses: ['127.0.0.1'], command: 'node', ephemeral: false }] } })
   })
 
+  it('ss branch: a process NAMED like a group cannot claim a node\'s pid', async () => {
+    // 100 is the web pane's shell; 700 is a stranger's server that renamed itself.
+    const bin = fakeHost({
+      tmux: TMUX,
+      ps: `printf '  1 0 init\\n  100 1 zsh\\n  700 1 %s\\n' 'x",pid=100'`,
+      ss: `printf '%s\\n' 'LISTEN 0 5 0.0.0.0:8000 0.0.0.0:* users:(("x",pid=100",pid=700,fd=3))'`
+    })
+    expect(parseDevPortsProbe(await probe(bin), SOCKS)).toEqual({ ok: true, nodes: {} })
+  })
+
+  it.skipIf(realSsOnAppendedPath || realLsofOnAppendedPath)(
+    '/proc branch: a newline in an fd target cannot forge a pid header',
+    async () => {
+      const proc = testTmpDir('devports-procq-')
+      fs.mkdirSync(path.join(proc, 'net'))
+      fs.writeFileSync(
+        path.join(proc, 'net/tcp'),
+        '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n' +
+          '   0: 00000000:1F40 00000000:0000 0A 00000000:00000000 00:00000000 00000000  65534        0 999 1\n'
+      )
+      // 700 is a stranger (not under any pane); its fd target smuggles a header naming pid 100,
+      // the web pane's shell, followed by a line claiming socket 999.
+      fs.mkdirSync(path.join(proc, '700', 'fd'), { recursive: true })
+      fs.symlinkSync(`a\n${proc}/100/fd:\nl -> socket:[999]`, path.join(proc, '700/fd/4'))
+      fs.symlinkSync('socket:[999]', path.join(proc, '700/fd/3'))
+      const bin = fakeHost({
+        tmux: TMUX,
+        ps: `printf '  1 0 init\\n  100 1 zsh\\n  700 1 evil\\n'`,
+        cat: 'exec /bin/cat "$@"',
+        ls: 'exec /bin/ls "$@"'
+      })
+      expect(parseDevPortsProbe(await probe(bin, proc), SOCKS)).toEqual({ ok: true, nodes: {} })
+    }
+  )
+
   it.skipIf(realSsOnAppendedPath || realLsofOnAppendedPath)('no tool at all says so — never "no ports"', async () => {
     const bin = fakeHost({ tmux: TMUX, ps: PS })
     expect(parseDevPortsProbe(await probe(bin), SOCKS)).toEqual({ ok: false, reason: 'no-listener-tool', nodes: {} })
@@ -146,4 +181,43 @@ describe.skipIf(!canRunReal)('dev-ports probe end to end (real tmux, real listen
     expect(r.nodes.realnode?.map((p) => p.port)).toEqual([Number(port)])
     expect(r.nodes.realnode?.[0].addresses).toEqual(['127.0.0.1'])
   }, 20_000)
+
+  it.skipIf(!hasTool('ss') || !hasTool('python3'))(
+    'a REAL process outside the tree, renamed to name the pane\'s pid, is not attributed (real ss)',
+    async () => {
+      const dir = testTmpDir('devports-forge-')
+      const portFile = path.join(dir, 'port')
+      execFileSync('tmux', ['-L', SOCKET, '-f', '/dev/null', 'new-session', '-d', '-s', 'nt-victim', 'sleep 60'])
+      const panePid = execFileSync('tmux', ['-L', SOCKET, 'list-panes', '-t', '=nt-victim', '-F', '#{pane_pid}'], {
+        encoding: 'utf8'
+      }).trim()
+      const name = `x",pid=${panePid}`.slice(0, 15)
+      // A child of the TEST RUNNER — never under the pane — that renames itself and listens.
+      const py = [
+        'import ctypes,socket,sys,time',
+        `ctypes.CDLL(None).prctl(15, ctypes.c_char_p(${JSON.stringify(name)}.encode()), 0, 0, 0)`,
+        "s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen()",
+        `open(${JSON.stringify(portFile)},'w').write(str(s.getsockname()[1]))`,
+        'time.sleep(30)'
+      ].join('\n')
+      const child = execFile('python3', ['-c', py])
+      try {
+        let port = ''
+        for (let i = 0; i < 100 && !port; i++) {
+          await new Promise((r) => setTimeout(r, 50))
+          port = fs.existsSync(portFile) ? fs.readFileSync(portFile, 'utf8') : ''
+        }
+        expect(port).not.toBe('')
+        const { stdout } = await run('/bin/sh', ['-c', devPortsProbeCommand({ sockets: [SOCKET] })])
+        // Only meaningful if ss really printed the forged name — assert the precondition.
+        expect(stdout).toContain(`"${name}"`)
+        const r = parseDevPortsProbe(stdout, [SOCKET])
+        expect(r.ok).toBe(true)
+        expect(r.nodes.victim).toBeUndefined()
+      } finally {
+        child.kill()
+      }
+    },
+    20_000
+  )
 })

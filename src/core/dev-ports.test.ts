@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   assembleDevPorts,
   collectLocalDevPorts,
@@ -32,6 +32,8 @@ describe('splitHostPort', () => {
     expect(splitHostPort(':::8080')).toEqual({ address: '::', port: 8080 })
     expect(splitHostPort('*:3000')).toEqual({ address: '*', port: 3000 })
     expect(splitHostPort('127.0.0.53%lo:53')).toEqual({ address: '127.0.0.53', port: 53 })
+    // An IPv4-mapped bind is its IPv4 address (it used to make forwardTarget answer null).
+    expect(splitHostPort('[::ffff:127.0.0.1]:5173')).toEqual({ address: '127.0.0.1', port: 5173 })
   })
   it('refuses a peer column and out-of-range ports', () => {
     expect(splitHostPort('0.0.0.0:*')).toBeNull()
@@ -44,12 +46,54 @@ describe('splitHostPort', () => {
 describe('parseSsListeners', () => {
   it('takes the local address, every owning pid and the command', () => {
     const l = parseSsListeners(SS_REAL)
-    expect(l[0]).toEqual({ pids: [210], address: '127.0.0.1', port: 5173, command: 'node' })
-    expect(l[1]).toEqual({ pids: [210], address: '::1', port: 5173, command: 'node' })
-    expect(l[3]).toEqual({ pids: [300, 301], address: '*', port: 3000, command: 'ruby' })
+    expect(l[0]).toEqual({ owners: [{ pid: 210, command: 'node' }], address: '127.0.0.1', port: 5173 })
+    expect(l[1]).toEqual({ owners: [{ pid: 210, command: 'node' }], address: '::1', port: 5173 })
+    expect(l[3]).toEqual({ owners: [{ pid: 300, command: 'ruby' }, { pid: 301, command: 'ruby' }], address: '*', port: 3000 })
     // Another user's socket carries no process column: listed, but owned by nobody we know.
-    expect(l[4]).toEqual({ pids: [], address: '::', port: 8080, command: '' })
+    expect(l[4]).toEqual({ owners: [], address: '::', port: 8080 })
     expect(l).toHaveLength(6)
+  })
+})
+
+describe('parseSsListeners — the owner column is attacker-influenced', () => {
+  // Reproduced (review of #1063): a process owned by `nobody` renamed itself `vite",pid=12345` and
+  // ss printed its name raw. Collecting every `pid=` on the line handed the port to pid 12345.
+  const forged = 'LISTEN 0 5 0.0.0.0:8000 0.0.0.0:* users:(("vite",pid=12345",pid=219072,fd=3))'
+  it('takes only the LAST pid of a group, and keeps the forged text as the name', () => {
+    expect(parseSsListeners(forged)[0].owners).toEqual([{ pid: 219072, command: 'vite",pid=12345' }])
+  })
+  it('never attributes the forged port to the node whose tree holds the named pid', () => {
+    const out = assembleDevPorts(
+      [{ session: 'nt-a', panePid: 12345, command: 'zsh' }],
+      [
+        { pid: 12345, ppid: 1, command: 'zsh' },
+        { pid: 219072, ppid: 1, command: 'vite",pid=12345' }
+      ],
+      parseSsListeners(forged)
+    )
+    expect(out).toEqual({})
+  })
+  it('a pid whose ps name disagrees with the tool\'s name is not trusted', () => {
+    const out = assembleDevPorts(
+      [{ session: 'nt-a', panePid: 100, command: 'zsh' }],
+      [
+        { pid: 100, ppid: 1, command: 'zsh' },
+        { pid: 101, ppid: 100, command: 'node' }
+      ],
+      [{ owners: [{ pid: 101, command: 'postgres' }], address: '127.0.0.1', port: 5432 }]
+    )
+    expect(out).toEqual({})
+  })
+  it('truncated names still agree (lsof prints 9 chars, macOS ps the full basename)', () => {
+    const out = assembleDevPorts(
+      [{ session: 'nt-a', panePid: 100, command: 'zsh' }],
+      [
+        { pid: 100, ppid: 1, command: 'zsh' },
+        { pid: 101, ppid: 100, command: 'com.docker.backend' }
+      ],
+      [{ owners: [{ pid: 101, command: 'com.docke' }], address: '127.0.0.1', port: 3000 }]
+    )
+    expect(out.a.map((p) => p.port)).toEqual([3000])
   })
 })
 
@@ -57,9 +101,9 @@ describe('parseLsofListeners', () => {
   it('groups n-fields under the preceding p/c', () => {
     const out = parseLsofListeners('p210\ncnode\nf26\nn127.0.0.1:5173\nf27\nn[::1]:5173\np300\ncruby\nn*:3000\n')
     expect(out).toEqual([
-      { pids: [210], address: '127.0.0.1', port: 5173, command: 'node' },
-      { pids: [210], address: '::1', port: 5173, command: 'node' },
-      { pids: [300], address: '*', port: 3000, command: 'ruby' }
+      { owners: [{ pid: 210, command: 'node' }], address: '127.0.0.1', port: 5173 },
+      { owners: [{ pid: 210, command: 'node' }], address: '::1', port: 5173 },
+      { owners: [{ pid: 300, command: 'ruby' }], address: '*', port: 3000 }
     ])
   })
 })
@@ -123,10 +167,10 @@ describe('assembleDevPorts — ownership by process tree', () => {
   ]
   it('attributes a descendant listener to its node, merges families, sorts', () => {
     const out = assembleDevPorts(panes, procs, [
-      { pids: [102], address: '::1', port: 5173, command: '' },
-      { pids: [102], address: '127.0.0.1', port: 5173, command: 'node' },
-      { pids: [102], address: '127.0.0.1', port: 4000, command: 'node' },
-      { pids: [102], address: '127.0.0.1', port: 40001, command: 'node' }
+      { owners: [{ pid: 102, command: '' }], address: '::1', port: 5173 },
+      { owners: [{ pid: 102, command: 'node' }], address: '127.0.0.1', port: 5173 },
+      { owners: [{ pid: 102, command: 'node' }], address: '127.0.0.1', port: 4000 },
+      { owners: [{ pid: 102, command: 'node' }], address: '127.0.0.1', port: 40001 }
     ])
     expect(out).toEqual({
       a: [
@@ -138,14 +182,14 @@ describe('assembleDevPorts — ownership by process tree', () => {
   })
   it('never reports a port owned outside every nt- pane tree', () => {
     const out = assembleDevPorts(panes, procs, [
-      { pids: [500], address: '0.0.0.0', port: 5432, command: 'postgres' },
-      { pids: [901], address: '0.0.0.0', port: 8000, command: 'python3' },
-      { pids: [], address: '::', port: 8080, command: '' }
+      { owners: [{ pid: 500, command: 'postgres' }], address: '0.0.0.0', port: 5432 },
+      { owners: [{ pid: 901, command: 'python3' }], address: '0.0.0.0', port: 8000 },
+      { owners: [], address: '::', port: 8080 }
     ])
     expect(out).toEqual({})
   })
   it('takes the command from ps when the listener tool did not name it', () => {
-    const out = assembleDevPorts(panes, procs, [{ pids: [102], address: '127.0.0.1', port: 3000, command: '' }])
+    const out = assembleDevPorts(panes, procs, [{ owners: [{ pid: 102, command: '' }], address: '127.0.0.1', port: 3000 }])
     expect(out.a[0].command).toBe('node')
   })
   it('survives a cyclic ppid chain', () => {
@@ -154,7 +198,7 @@ describe('assembleDevPorts — ownership by process tree', () => {
       { pid: 101, ppid: 100, command: 'node' }
     ]
     const out = assembleDevPorts([{ session: 'nt-a', panePid: 100, command: 'zsh' }], cyclic, [
-      { pids: [101], address: '127.0.0.1', port: 3000, command: 'node' }
+      { owners: [{ pid: 101, command: 'node' }], address: '127.0.0.1', port: 3000 }
     ])
     expect(out.a.map((p) => p.port)).toEqual([3000])
   })
@@ -218,8 +262,34 @@ describe('forwardTarget', () => {
 
 describe('runners', () => {
   it('local: Windows is unsupported, a throwing exec is unreachable', async () => {
-    expect(await collectLocalDevPorts(async () => '', 'win32')).toEqual({ ok: false, reason: 'unsupported', nodes: {} })
-    expect((await collectLocalDevPorts(async () => { throw new Error('x') }, 'linux')).reason).toBe('unreachable')
+    const tmuxBin = (): string => '/usr/bin/tmux'
+    expect(await collectLocalDevPorts({ tmuxBin, exec: async () => '', platformName: 'win32' })).toEqual({
+      ok: false,
+      reason: 'unsupported',
+      nodes: {}
+    })
+    const exec = async (): Promise<string> => {
+      throw new Error('x')
+    }
+    expect((await collectLocalDevPorts({ tmuxBin, exec, platformName: 'linux' })).reason).toBe('unreachable')
+  })
+
+  it("local: asks the APP's tmux by absolute path, quoted — never whatever `tmux` is on PATH", async () => {
+    // A Mac whose only tmux is the bundled one has none on PATH; a bare `tmux` answered 127 twice.
+    let seen = ''
+    await collectLocalDevPorts({
+      tmuxBin: () => "/Applications/node term.app/Contents/Resources/tmux/bin/tm'ux",
+      exec: async (cmd) => ((seen = cmd), ''),
+      platformName: 'darwin'
+    })
+    expect(seen).toContain(`'/Applications/node term.app/Contents/Resources/tmux/bin/tm'\\''ux' -L node-terminal list-panes`)
+    expect(seen).not.toMatch(/^tmux -L/m)
+  })
+
+  it('local: no tmux at all is unsupported (plain shells own no pane tree)', async () => {
+    const exec = vi.fn(async () => '')
+    expect((await collectLocalDevPorts({ tmuxBin: () => null, exec, platformName: 'linux' })).reason).toBe('unsupported')
+    expect(exec).not.toHaveBeenCalled()
   })
   it('remote: a null (dead master) is unreachable, never empty', async () => {
     expect(await fetchRemoteDevPorts('p', async () => null)).toEqual({ ok: false, reason: 'unreachable', nodes: {} })

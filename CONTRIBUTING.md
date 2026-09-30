@@ -206,7 +206,9 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   (`core/remote-ssh/port-forward.ts`) binds `127.0.0.1` only, keeps the same port number or
   refuses with the reason — a different local port is only ever the person's explicit choice — and
   never forwards a port below 1024 unasked. The renderer passes a node and a port, never an address:
-  core re-scans and decides the host-side target. See CLAUDE.md → Dev-server ports.
+  core re-scans and decides the host-side target. Treat `ss`/`lsof`/`ls` output as attacker-
+  influenced text: a process name is chosen by the process, so parse each owner group on its own and
+  never let a name reach a pid (see CLAUDE.md → Dev-server ports).
 
 - **A GitHub issue reaches a pane only as a validated reference.** Issue titles and bodies are
   written by strangers on public repositories, and a launch line is typed into a shell. Anything

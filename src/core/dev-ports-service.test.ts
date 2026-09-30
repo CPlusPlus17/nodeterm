@@ -41,7 +41,7 @@ describe('startDevPortsService', () => {
   it('a local project is scanned on this machine', async () => {
     const local = vi.fn(async (): Promise<DevPortsReport> => ({ ok: true, nodes: {} }))
     const run = vi.fn()
-    startDevPortsService({ local, remote: { isRemoteProject: () => false, run } })
+    startDevPortsService({ tmuxBin: () => null, local, remote: { isRemoteProject: () => false, run } })
     await scan({ projectId: 'p' })
     expect(local).toHaveBeenCalledTimes(1)
     expect(run).not.toHaveBeenCalled()
@@ -50,7 +50,7 @@ describe('startDevPortsService', () => {
   it('an SSH project is scanned on its host — by identity OR by the renderer\'s claim — never locally', async () => {
     const local = vi.fn(async (): Promise<DevPortsReport> => ({ ok: true, nodes: { x: [] } }))
     const run = vi.fn(async () => REPLY)
-    startDevPortsService({ local, remote: { isRemoteProject: (id) => id === 'ssh', run } })
+    startDevPortsService({ tmuxBin: () => null, local, remote: { isRemoteProject: (id) => id === 'ssh', run } })
     expect((await scan({ projectId: 'ssh' })).nodes.web[0].port).toBe(5173)
     expect((await scan({ projectId: 'other', remote: true })).ok).toBe(true)
     expect(local).not.toHaveBeenCalled()
@@ -58,12 +58,12 @@ describe('startDevPortsService', () => {
 
   it('a dead master is unreachable, and with no runner a remote scope is refused, never local', async () => {
     const local = vi.fn(async (): Promise<DevPortsReport> => ({ ok: true, nodes: {} }))
-    startDevPortsService({ local, remote: { isRemoteProject: () => true, run: async () => null } })
+    startDevPortsService({ tmuxBin: () => null, local, remote: { isRemoteProject: () => true, run: async () => null } })
     expect((await scan({ projectId: 'ssh' })).reason).toBe('unreachable')
     resetPlatformForTests()
     platform = fakePlatform()
     initPlatform(platform)
-    startDevPortsService({ local, remote: { isRemoteProject: () => true } })
+    startDevPortsService({ tmuxBin: () => null, local, remote: { isRemoteProject: () => true } })
     expect((await scan({ projectId: 'ssh' })).reason).toBe('unsupported')
     expect(local).not.toHaveBeenCalled()
   })
@@ -75,13 +75,13 @@ describe('startDevPortsService', () => {
       await new Promise((r) => setTimeout(r, 5))
       return REPLY
     })
-    startDevPortsService({ remote: { isRemoteProject: () => true, run } })
+    startDevPortsService({ tmuxBin: () => null, remote: { isRemoteProject: () => true, run } })
     await Promise.all([scan({ projectId: 'ssh' }), scan({ projectId: 'ssh' })])
     expect(calls).toBe(1)
   })
 
   it('forwarding is refused for a local project, and when no registry is wired', async () => {
-    startDevPortsService({
+    startDevPortsService({ tmuxBin: () => null,
       remote: {
         isRemoteProject: (id) => id === 'ssh',
         run: async () => REPLY,
@@ -92,14 +92,14 @@ describe('startDevPortsService', () => {
     resetPlatformForTests()
     platform = fakePlatform()
     initPlatform(platform)
-    startDevPortsService({ remote: { isRemoteProject: () => true, run: async () => REPLY } })
+    startDevPortsService({ tmuxBin: () => null, remote: { isRemoteProject: () => true, run: async () => REPLY } })
     expect(await fwd({ projectId: 'ssh', nodeId: 'web', port: 5173 })).toMatchObject({ ok: false, reason: 'unsupported' })
   })
 
   it('an SSH scan reports the forwards the registry holds, and reconciles them', async () => {
     const sshRun = vi.fn(async (_args: string[]) => ({ code: 0, stdout: "" }))
     const held = new Set<number>()
-    startDevPortsService({
+    startDevPortsService({ tmuxBin: () => null,
       remote: {
         isRemoteProject: () => true,
         run: async () => REPLY,
@@ -109,7 +109,7 @@ describe('startDevPortsService', () => {
             held.add(5173)
             return sshRun(args)
           },
-          localPortBusy: async () => false,
+          localPortState: async () => ({ v4Answers: false, v6Answers: false, bind: 'ok' as const }),
           localPortHeld: async (p) => held.has(p)
         }
       }

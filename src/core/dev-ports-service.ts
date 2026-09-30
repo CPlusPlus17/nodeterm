@@ -17,13 +17,15 @@ import type {
 } from '../shared/dev-ports'
 import { collectLocalDevPorts, fetchRemoteDevPorts, type RemoteDevPortsRunner } from './dev-ports'
 import {
-  defaultLocalPortBusy,
+  defaultLocalPortState,
   defaultLocalPortHeld,
   PortForwardRegistry,
   type PortForwardDeps
 } from './remote-ssh/port-forward'
 
 export interface DevPortsServiceOptions {
+  /** The app's tmux binary for the LOCAL scan — the same resolver session memory is given. */
+  tmuxBin: () => string | null
   /** This machine's scan. Injectable for tests. */
   local?: () => Promise<DevPortsReport>
   remote?: {
@@ -32,13 +34,13 @@ export interface DevPortsServiceOptions {
     run?: RemoteDevPortsRunner
     /** Present ⇒ same-port forwarding is offered for SSH projects. */
     forward?: Pick<PortForwardDeps, 'refForProject' | 'run'> &
-      Partial<Pick<PortForwardDeps, 'localPortBusy' | 'localPortHeld'>>
+      Partial<Pick<PortForwardDeps, 'localPortState' | 'localPortHeld'>>
   }
 }
 
 const unsupported = (): DevPortsReport => ({ ok: false, reason: 'unsupported', nodes: {} })
 
-export function startDevPortsService(opts: DevPortsServiceOptions = {}): {
+export function startDevPortsService(opts: DevPortsServiceOptions): {
   registry: PortForwardRegistry | null
   dispose(): void
 } {
@@ -64,7 +66,7 @@ export function startDevPortsService(opts: DevPortsServiceOptions = {}): {
         refForProject: fwd.refForProject,
         run: fwd.run,
         scan: scanRemote,
-        localPortBusy: fwd.localPortBusy ?? defaultLocalPortBusy,
+        localPortState: fwd.localPortState ?? defaultLocalPortState,
         localPortHeld: fwd.localPortHeld ?? defaultLocalPortHeld
       })
     : null
@@ -79,7 +81,7 @@ export function startDevPortsService(opts: DevPortsServiceOptions = {}): {
       await registry.reconcile(query.projectId, report)
       return { ...report, forwards: registry.list(query.projectId) }
     }
-    return (opts.local ?? (() => collectLocalDevPorts()))()
+    return (opts.local ?? (() => collectLocalDevPorts({ tmuxBin: opts.tmuxBin })))()
   })
 
   platform().handle(
@@ -111,5 +113,5 @@ export function startDevPortsService(opts: DevPortsServiceOptions = {}): {
     }
   )
 
-  return { registry, dispose: (): void => {} }
+  return { registry, dispose: (): void => registry?.dispose() }
 }

@@ -22,6 +22,7 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { DEV_PORT_EPHEMERAL_MIN, type DevPort, type DevPortsReport } from '../shared/dev-ports'
 import { REMOTE_TMUX_PATH_DIRS } from '../shared/ssh'
+import { shellSingleQuote } from '../shared/shell-quote'
 import { indexProcesses, type PaneRef } from './session-memory'
 import { fencedListPanesCommand, parseFencedPanes } from './session-memory-remote'
 import { TMUX_SOCKET } from './tmux-naming'
@@ -45,6 +46,15 @@ export interface DevPortsProbeOptions {
   sockets?: readonly string[]
   /** Root of the proc filesystem for the last-resort branch. Tests point it at a fake tree. */
   procRoot?: string
+  /**
+   * An absolute tmux binary to ask. The LOCAL leg passes the app's own (`PtyManager.getTmuxBin()`,
+   * the same one session memory is given): a Mac whose only tmux is the bundled one, or a Linux
+   * box whose tmux is only on the login-shell PATH (nix, linuxbrew), has NO `tmux` on this
+   * process's PATH, so a bare `tmux` answered 127 on both sockets and the chip never appeared —
+   * and a different tmux CLIENT against the app's server can hit a protocol mismatch. Omitted on
+   * an SSH host, where the host's own tmux is found through the PATH append.
+   */
+  tmuxBin?: string
 }
 
 /**
@@ -60,10 +70,11 @@ export interface DevPortsProbeOptions {
 export function devPortsProbeCommand(opts: DevPortsProbeOptions = {}): string {
   const sockets = opts.sockets ?? DEV_PORT_SOCKETS
   const proc = opts.procRoot ?? '/proc'
+  const tmux = opts.tmuxBin ? shellSingleQuote(opts.tmuxBin) : 'tmux'
   return [
     `PATH="$PATH:${REMOTE_TMUX_PATH_DIRS}:/usr/sbin:/sbin"`,
     `echo '${PANES}'`,
-    ...sockets.map(fencedListPanesCommand),
+    ...sockets.map((s) => fencedListPanesCommand(s, tmux)),
     `echo '${PROCS}'`,
     `ps -eo pid=,ppid=,comm= 2>/dev/null`,
     `echo '${LISTEN}'`,
@@ -79,7 +90,10 @@ export function devPortsProbeCommand(opts: DevPortsProbeOptions = {}): string {
     `  echo '##VIA proc'`,
     `  cat '${proc}/net/tcp' '${proc}/net/tcp6' 2>/dev/null`,
     `  echo '${FD}'`,
-    `  ls -l '${proc}'/[0-9]*/fd 2>/dev/null`,
+    // `-q`: a non-printable in a link target prints as `?`. Without it GNU ls prints a NEWLINE in
+    // an fd's target raw, and a file named `a\n/proc/100/fd:\nl -> socket:[999]` forges a pid
+    // header and hands socket 999 to pid 100 (reproduced).
+    `  ls -lq '${proc}'/[0-9]*/fd 2>/dev/null`,
     `  echo '##LISTENRC 0'`,
     `else`,
     `  echo '##VIA none'`,
@@ -88,12 +102,18 @@ export function devPortsProbeCommand(opts: DevPortsProbeOptions = {}): string {
   ].join('\n')
 }
 
-/** One listening socket and the pid(s) that hold it. */
+/** A process holding a listening socket, with the name the listener tool printed for it ('' when
+ *  the tool names none — the /proc branch). */
+export interface SocketOwner {
+  pid: number
+  command: string
+}
+
+/** One listening socket and the process(es) that hold it. */
 export interface Listener {
-  pids: number[]
+  owners: SocketOwner[]
   address: string
   port: number
-  command: string
 }
 
 export interface ProcRow {
@@ -131,12 +151,29 @@ export function splitHostPort(token: string): { address: string; port: number } 
   const pct = address.indexOf('%')
   if (pct >= 0) address = address.slice(0, pct)
   if (address === '::' || address === '') address = '::'
+  // An IPv4-mapped bind (`::ffff:127.0.0.1`) IS its IPv4 address — the /proc decoder already says
+  // so, and leaving it mapped made `forwardTarget` answer null for an ordinary loopback server.
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address)
+  if (mapped) address = mapped[1]
   return { address, port }
 }
 
-/** `ss -ltnp`. The local address is the first `addr:port` token with a numeric port — the peer
- *  column (`0.0.0.0:*`) never has one, which also makes this indifferent to whether the installed
- *  ss prints a State column. */
+/**
+ * `ss -ltnp`. The local address is the first `addr:port` token with a numeric port — the peer
+ * column (`0.0.0.0:*`) never has one, which also makes this indifferent to whether the installed
+ * ss prints a State column.
+ *
+ * **The owner column is attacker-influenced text.** ss prints each holder as
+ * `("<name>",pid=N,fd=M)` with the process NAME raw — any process can rename itself (15 bytes of
+ * comm), and a name of `vite",pid=12345` printed `users:(("vite",pid=12345",pid=219072,fd=3))`
+ * (reproduced as root against a listener owned by `nobody`). Collecting every `pid=N` on the line
+ * handed that stranger's port to whichever node's tree holds 12345 — pane pids are visible to every
+ * user through `ps` — and the forward then served the attacker's page on `localhost`, where it
+ * reads the cookies of every other localhost dev app. So each group is parsed on its own and only
+ * the LAST `,pid=N,fd=M` before its closing `)` is the pid: ss cannot print `)` inside a name
+ * (it would end the group), so a greedy `[^)]*` cannot be steered past it. `assembleDevPorts`
+ * then cross-checks that name against `ps` for that pid.
+ */
 export function parseSsListeners(text: string): Listener[] {
   const out: Listener[] = []
   for (const line of text.split('\n')) {
@@ -146,9 +183,11 @@ export function parseSsListeners(text: string): Listener[] {
       if (hp) break
     }
     if (!hp) continue
-    const pids = [...line.matchAll(/pid=(\d+)/g)].map((m) => Number(m[1]))
-    const command = /\(\("([^"]*)",pid=/.exec(line)?.[1] ?? ''
-    out.push({ pids, ...hp, command })
+    const owners: SocketOwner[] = []
+    for (const group of line.matchAll(/\("([^)]*)",pid=(\d+),fd=\d+\)/g)) {
+      owners.push({ pid: Number(group[2]), command: group[1] })
+    }
+    out.push({ owners, ...hp })
   }
   return out
 }
@@ -170,7 +209,7 @@ export function parseLsofListeners(text: string): Listener[] {
       // An established connection prints `a->b`; LISTEN never does, but be explicit.
       if (val.includes('->')) continue
       const hp = splitHostPort(val)
-      if (hp) out.push({ pids: [pid], ...hp, command })
+      if (hp) out.push({ owners: [{ pid, command }], ...hp })
     }
   }
   return out
@@ -249,6 +288,19 @@ export function parseProcFdSockets(text: string): Map<string, number[]> {
   return out
 }
 
+/**
+ * Does the name a listener tool printed for a pid agree with `ps`'s name for it? Defence in depth
+ * behind the per-group ss parse: a pid the tool attributes must be a process `ps` knows by that
+ * name. Prefix-tolerant, because the tools truncate differently (Linux comm is 15 bytes, lsof's
+ * default `c` field 9, macOS ps prints the full basename). A tool that names nothing ('' — the
+ * /proc branch, where the pid comes from the kernel's fd table) is not checked.
+ */
+function namesAgree(toolName: string, psName: string | undefined): boolean {
+  if (!toolName) return true
+  if (psName === undefined || psName === '') return false
+  return psName.startsWith(toolName) || toolName.startsWith(psName)
+}
+
 /** `node id → ports`, from the three facts. Pure. */
 export function assembleDevPorts(
   panes: readonly PaneRef[],
@@ -274,8 +326,9 @@ export function assembleDevPorts(
   }
   const byNode = new Map<string, Map<number, DevPort>>()
   for (const l of listeners) {
-    const pid = l.pids.find((p) => owner.has(p))
-    if (pid === undefined) continue
+    const holder = l.owners.find((o) => owner.has(o.pid) && namesAgree(o.command, commandOf.get(o.pid)))
+    if (holder === undefined) continue
+    const pid = holder.pid
     const nodeId = owner.get(pid) as string
     let ports = byNode.get(nodeId)
     if (!ports) byNode.set(nodeId, (ports = new Map()))
@@ -287,7 +340,7 @@ export function assembleDevPorts(
     ports.set(l.port, {
       port: l.port,
       addresses: [l.address],
-      command: l.command || commandOf.get(pid) || '',
+      command: holder.command || commandOf.get(pid) || '',
       ephemeral: l.port >= DEV_PORT_EPHEMERAL_MIN
     })
   }
@@ -342,7 +395,9 @@ export function parseDevPortsProbe(stdout: string, sockets: readonly string[] = 
     const sockets4 = parseProcNetTcp(bodyLines.slice(0, fdAt).join('\n'))
     const owners = parseProcFdSockets(bodyLines.slice(fdAt + 1).join('\n'))
     listeners = []
-    for (const [inode, hp] of sockets4) listeners.push({ pids: owners.get(inode) ?? [], ...hp, command: '' })
+    for (const [inode, hp] of sockets4) {
+      listeners.push({ owners: (owners.get(inode) ?? []).map((pid) => ({ pid, command: '' })), ...hp })
+    }
   } else {
     return fail('unreachable')
   }
@@ -370,17 +425,29 @@ export function forwardTarget(addresses: readonly string[]): string | null {
   return specific ?? null
 }
 
+export interface LocalDevPortsOptions {
+  /** The app's tmux (`PtyManager.getTmuxBin()`); null = no tmux, so there is no pane tree at all. */
+  tmuxBin: () => string | null
+  exec?: (command: string) => Promise<string>
+  platformName?: NodeJS.Platform
+}
+
 /** Runs the probe on this machine. Windows has no `/bin/sh` and no tmux: honestly unsupported. */
-export async function collectLocalDevPorts(
-  exec: (command: string) => Promise<string> = async (command) => {
-    const { stdout } = await runAsync('/bin/sh', ['-c', command], { timeout: 15_000, maxBuffer: 16 * 1024 * 1024 })
-    return stdout
-  },
-  platformName: NodeJS.Platform = process.platform
-): Promise<DevPortsReport> {
+export async function collectLocalDevPorts(opts: LocalDevPortsOptions): Promise<DevPortsReport> {
+  const platformName = opts.platformName ?? process.platform
   if (platformName === 'win32') return fail('unsupported')
+  // No tmux means every terminal is a plain shell (PtyManager's fallback): no nt- pane tree exists
+  // to own a port. Unsupported for this run rather than a "could not look" asked every 30 s.
+  const tmuxBin = opts.tmuxBin()
+  if (!tmuxBin) return fail('unsupported')
+  const exec =
+    opts.exec ??
+    (async (command: string): Promise<string> => {
+      const { stdout } = await runAsync('/bin/sh', ['-c', command], { timeout: 15_000, maxBuffer: 16 * 1024 * 1024 })
+      return stdout
+    })
   try {
-    return parseDevPortsProbe(await exec(devPortsProbeCommand()))
+    return parseDevPortsProbe(await exec(devPortsProbeCommand({ tmuxBin })))
   } catch {
     return fail('unreachable')
   }

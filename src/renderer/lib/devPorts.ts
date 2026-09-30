@@ -18,6 +18,11 @@ export const DEV_PORTS_HOOK_DEBOUNCE_MS = 4_000
 /** No automatic scan closer than this to the previous one; an explicit refresh ignores it. */
 export const DEV_PORTS_MIN_GAP_MS = 10_000
 
+/** The automatic triggers (hook lull, poll) run only while the window is visible AND focused. */
+export function scanWhileWatching(visible: boolean, focused: boolean): boolean {
+  return visible && focused
+}
+
 export type ScanReason = 'mount' | 'focus' | 'hook' | 'poll' | 'user'
 
 export function shouldScan(reason: ScanReason, now: number, lastStartedAt: number | undefined): boolean {

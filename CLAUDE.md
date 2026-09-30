@@ -5192,6 +5192,28 @@ project's existing ControlMaster, so the URL the tool itself printed just works 
   exit 1 with no output is an ANSWER, "nothing listening"), else `/proc/net/tcp{,6}` joined to
   `ls -l /proc/*/fd` by socket inode (one `ls`, never a `readlink` per descriptor). No tool at all is
   its own failure (`no-listener-tool`), never "no ports".
+- **The listener tools' output is attacker-influenced text — parse it as such** (review of #1063,
+  reproduced on the dev host). ss prints a holder as `("<name>",pid=N,fd=M)` with the process NAME
+  raw, and any process can rename itself: as root, a listener owned by `nobody` named
+  `vite",pid=12345` printed `users:(("vite",pid=12345",pid=219072,fd=3))`. Collecting every `pid=`
+  on the line handed that stranger's port to whichever node's tree holds 12345 (pane pids are
+  visible to every user via `ps`), and the forward then served the attacker's page on
+  `localhost:P` — where it receives the cookies of every OTHER localhost dev app (cookies are not
+  port-scoped). Two defences: each `(…)` group is parsed on its own and only its LAST
+  `,pid=N,fd=M` counts (ss cannot print `)` inside a name, so a greedy `[^)]*` cannot be steered
+  past it), and `assembleDevPorts` requires the tool's name for that pid to agree with `ps`'s
+  (prefix-tolerant: Linux comm is 15 bytes, lsof's `c` 9, macOS ps prints the full basename). The
+  `/proc` branch had the same class: GNU `ls -l` prints a NEWLINE in an fd's link target raw, so a
+  target `a\n/proc/100/fd:\nl -> socket:[999]` forged a pid header; it is `ls -lq` now. Both
+  are tested under a real `/bin/sh`, and the ss one also END TO END: a real process outside the
+  pane tree renames itself (`prctl(PR_SET_NAME)`) to name the pane's pid, real `ss` prints the
+  forged group, and the port is not attributed.
+- **The LOCAL scan asks the app's own tmux** (`tmuxBin: ptyManager.getTmuxBin()`, the resolver
+  session memory is given, quoted into the script). A bare `tmux` answered 127 on both sockets for
+  a Mac whose only tmux is the bundled one and for a Linux tmux reachable only on the login-shell
+  PATH (nix, linuxbrew) — `unreachable`, no chip ever — and a different tmux client against the
+  app's server can hit a protocol mismatch. No tmux at all is `unsupported` (plain shells own no
+  pane tree). An SSH host keeps `tmux` via the PATH append.
 - **One generated script, run on BOTH machines.** `devPortsProbeCommand` is POSIX sh; a local project
   runs it through `/bin/sh -c`, an SSH project over the master — one round trip carrying the panes of
   both nodeterm sockets (fenced per socket with the SAME `fencedListPanesCommand`/`parseFencedPanes`
@@ -5212,7 +5234,9 @@ project's existing ControlMaster, so the URL the tool itself printed just works 
   debounced trailing scan 4 s after the project's agents report activity (`onHookEvent` — a dev
   server is usually an agent's tool call); a slow poll (30 s local, 60 s SSH) ONLY while the window is
   focused and visible — a server started by hand in a plain terminal fires no hook; and on demand when
-  the chip's menu opens. Automatic scans keep a 10 s gap; concurrent ones coalesce in core. An SSH
+  the chip's menu opens. **Both automatic triggers — the hook lull AND the poll — check "someone is
+  watching" at fire time**; the hook one did not at first, so every agent turn in a backgrounded
+  window cost an exec on the host (`ps` + `ss -p` across every process's fds as root). Automatic scans keep a 10 s gap; concurrent ones coalesce in core. An SSH
   project is scanned only while connected. One scan costs one `ps` plus one `ss` (a few lines) — an
   exec over the master on a host, never a login.
 - **Forwarding rules — each a refusal, never a guess** (`PortForwardRegistry`):
@@ -5222,17 +5246,34 @@ project's existing ControlMaster, so the URL the tool itself printed just works 
     address), because a server bound only to `::1` refuses `127.0.0.1`. The target is re-validated as
     an IP literal — it came off another machine's command output and lands in an ssh argument.
   - The local side binds `127.0.0.1` ONLY (`localForwardArgs`), never `*`: an unfinished app must not
-    be published to the network the laptop is on.
+    be published to the network the laptop is on. `localFwdSpec` re-validates both ports and the
+    target at the argv site (rule 13) and throws, which the registry reports as a failed forward.
+    An IPv4-mapped bind (`::ffff:127.0.0.1`) is normalized to its IPv4 address first — it used to
+    make `forwardTarget` answer null, reported as a misleading SSH refusal (now its own
+    `unreachable-address`).
   - **A taken local port is refused with the reason, never silently moved.** "Taken" means anything
     answers on `127.0.0.1:P` OR `[::1]:P`, or 127.0.0.1 cannot be bound: a local app bound only to
     `::1` leaves 127.0.0.1 free, the forward would succeed, and the browser's `localhost` (IPv6 first)
     would show the LOCAL app under the host's name. A different local port is only ever the person's
     explicit choice (a confirm naming a suggested free port, and saying the tool's printed links will
-    not reach it).
+    not reach it). The facts are two connects and one bind, ordered by the pure `localPortVerdict`:
+    an answer on `::1` is busy; a bind refused with EACCES/EPERM is `local-port-denied` (a confirmed
+    privileged port on Linux as non-root — "already in use" was a lie), with a free unprivileged port
+    offered; a bind refused as IN USE may be OUR OWN master's listener — after an app crash the
+    adopted ControlPersist orphan keeps its forwards while the registry starts empty — so the
+    identical forward is re-issued: the holding master acknowledges it with 0 (measured) and it is
+    re-adopted, anything else answers 255 and it stays busy; a v4 answer we could still bind beside
+    (BSD wildcard + SO_REUSEADDR) is busy, never shadowed.
   - A privileged port (< 1024, either side) is never forwarded until the person confirms it.
   - Lifecycle: cancelled (`-O cancel` with the exact spec) when the node's session ends
     (`PtyManager.onSessionEnded` — delete and recycle) or when a SUCCESSFUL scan no longer lists the
-    host port; dropped without ssh when the project leaves `connected` (the master takes its
+    host port UNDER THE NODE THAT OWNS THE FORWARD (the same number under another node is not the
+    server the person opened). The renderer scans only the project on screen, so core re-checks on
+    its own: a sweep (`FORWARD_SWEEP_MS`, 60 s) armed ONLY while a forward is held re-scans each
+    forwarding project, skipping one reconciled within the interval — without it, a project switched
+    away from or closed (neither disconnects) kept its forwards bound after the dev server died, the
+    local port stayed taken (a local dev server silently moved to P+1), and whatever later bound the
+    host's P got the traffic; dropped without ssh when the project leaves `connected` (the master takes its
     listeners with it). A failed scan cancels nothing — a failed read is never evidence. A master
     rebuilt behind our back by `ControlMaster=auto` (issue #735's mechanism) carries no `-L`, so every
     successful scan re-checks that the local listener is still held and forgets one that is not — the
@@ -5259,7 +5300,8 @@ project's existing ControlMaster, so the URL the tool itself printed just works 
   beside the node. **Mobile: follow-up** — the phone would need the port list over the relay and a
   forward of its own (it has no local browser node); noted for nodeterm-ios. All three channels are
   in `HOST_ONLY_CHANNELS` (a forward binds a port on the host machine's loopback).
-- **Known limits, stated:** a server that DAEMONIZES (double-fork, reparented to init) leaves the
+- **Known limits, stated:** a re-adopted orphan forward (above) is only re-claimed when the person
+  opens that port again; until then the chip does not show it as forwarded. A server that DAEMONIZES (double-fork, reparented to init) leaves the
   pane tree and is not found; `ss` without `-p` information for our own processes (hidepid, a
   container) finds listeners but no owner, so nothing is attributed; the Mac leg (lsof, the local
   bind/connect probes under BSD socket rules) has not been run on a Mac — device checklist in the PR.

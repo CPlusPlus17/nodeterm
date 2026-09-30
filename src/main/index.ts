@@ -3155,6 +3155,7 @@ app.whenReady().then(async () => {
   // Dev-server ports (CLAUDE.md → Dev-server ports). Same identity predicate and the same
   // exit-code-gated runner shape as session memory above; forwarding rides the project's master.
   const devPorts = startDevPortsService({
+    tmuxBin: () => ptyManager.getTmuxBin(),
     remote: {
       isRemoteProject: sshScopePredicate({
         sshProjectIds: () => workspaceStore.sshProjectIds(),

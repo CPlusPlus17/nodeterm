@@ -70,7 +70,11 @@ export type DevPortForwardRefusal =
   | 'not-listening'
   | 'privileged'
   | 'local-port-busy'
+  /** This computer refuses to let the app listen on the port (below 1024 without admin rights). */
+  | 'local-port-denied'
   | 'forward-failed'
+  /** The server is bound to something that is not a plain IP literal — nothing to aim at. */
+  | 'unreachable-address'
 
 export type DevPortForwardResult =
   | { ok: true; localPort: number; url: string; reused: boolean }
@@ -116,7 +120,11 @@ export function forwardRefusalText(
       return `Port ${port} is a privileged port (below 1024).`
     case 'local-port-busy':
       return `Port ${localPort} is already in use on this computer, so it cannot be forwarded to the same number.`
+    case 'local-port-denied':
+      return `This computer does not let the app listen on port ${localPort} (ports below 1024 need administrator rights here).`
     case 'forward-failed':
       return `The SSH connection refused to forward port ${port}.`
+    case 'unreachable-address':
+      return `Port ${port} is bound to an address this app cannot forward to.`
   }
 }

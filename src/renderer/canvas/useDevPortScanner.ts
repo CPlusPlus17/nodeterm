@@ -2,11 +2,16 @@
 // rules live in lib/devPorts.ts; this is only the wiring: mount, window focus, a debounced trailing
 // scan after the project's agents report activity, and a slow poll while the window is focused.
 import { useEffect } from 'react'
-import { DEV_PORTS_HOOK_DEBOUNCE_MS, pollIntervalMs } from '../lib/devPorts'
+import { DEV_PORTS_HOOK_DEBOUNCE_MS, pollIntervalMs, scanWhileWatching } from '../lib/devPorts'
 import { devPortsAvailable, scanDevPorts } from '../state/devPorts'
 import { useAgentStatus } from '../state/agentStatus'
 import { useProjects } from '../state/projects'
 import { useSshConn } from '../state/sshConn'
+
+/** Is someone looking? Read at FIRE time: a hook lull while the window is in the background must
+ *  not become an exec on the host (the focus event re-scans when the person comes back). */
+const watching = (): boolean =>
+  scanWhileWatching(document.visibilityState === 'visible', document.hasFocus())
 
 /**
  * @param terminalIdsSig the project's terminal node ids joined with `,` — a primitive, so a canvas
@@ -19,7 +24,6 @@ export function useDevPortScanner(projectId: string, terminalIdsSig: string): vo
 
   useEffect(() => {
     if (!eligible) return
-    const watching = (): boolean => document.visibilityState === 'visible' && document.hasFocus()
     void scanDevPorts(projectId, remote, 'mount')
     const timer = setInterval(() => {
       if (watching()) void scanDevPorts(projectId, remote, 'poll')
@@ -39,7 +43,7 @@ export function useDevPortScanner(projectId: string, terminalIdsSig: string): vo
       if (debounce) clearTimeout(debounce)
       debounce = setTimeout(() => {
         debounce = null
-        void scanDevPorts(projectId, remote, 'hook')
+        if (watching()) void scanDevPorts(projectId, remote, 'hook')
       }, DEV_PORTS_HOOK_DEBOUNCE_MS)
     }
     const subscribe = useAgentStatus.getState().onHookEvent

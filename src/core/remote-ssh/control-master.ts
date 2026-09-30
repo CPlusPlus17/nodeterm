@@ -778,6 +778,12 @@ export function hookForwardCancelArgs(conn: SshConnection, controlPath: string, 
  * `toAddr` must already be a validated IP literal (core/dev-ports.ts `forwardTarget`).
  */
 function localFwdSpec(localPort: number, toAddr: string, remotePort: number): string {
+  // Re-validated HERE, at the argv site (CLAUDE.md rule 13), not only by the caller: the address
+  // came off another machine's command output. A throw is caught by the registry as a failed
+  // forward, never an ssh argument.
+  const okPort = (n: number): boolean => Number.isInteger(n) && n >= 1 && n <= 65535
+  const okAddr = /^\d{1,3}(\.\d{1,3}){3}$/.test(toAddr) || (/^[0-9A-Fa-f:]+$/.test(toAddr) && toAddr.includes(':'))
+  if (!okPort(localPort) || !okPort(remotePort) || !okAddr) throw new Error('invalid forward spec')
   const host = toAddr.includes(':') ? `[${toAddr}]` : toAddr
   return `127.0.0.1:${localPort}:${host}:${remotePort}`
 }

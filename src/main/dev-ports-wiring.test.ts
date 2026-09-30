@@ -12,6 +12,9 @@ describe('dev-ports wiring', () => {
   it('the desktop registers the service with a forward leg over the project master', () => {
     expect(main).toMatch(/startDevPortsService\(\{[\s\S]{0,1500}forward: \{[\s\S]{0,300}refForProject/)
   })
+  it("the local scan asks the app's own tmux, like session memory (a bundled-only tmux is not on PATH)", () => {
+    expect(main).toMatch(/startDevPortsService\(\{\s*tmuxBin: \(\) => ptyManager\.getTmuxBin\(\)/)
+  })
   it('a node\'s session ending cancels its forwards; a disconnect forgets the project\'s', () => {
     expect(main).toMatch(/ptyManager\.onSessionEnded\(\(nodeId\) => void devPorts\.registry\?\.nodeEnded\(nodeId\)\)/)
     expect(main).toMatch(/onSshProjectStatus\([\s\S]{0,200}projectDisconnected\(e\.projectId\)/)

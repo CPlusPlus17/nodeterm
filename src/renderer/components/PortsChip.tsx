@@ -75,7 +75,7 @@ export const PortsChip = memo(function PortsChip({
         })
         return
       }
-      if (result.reason === 'local-port-busy' && result.suggestedLocalPort !== undefined) {
+      if ((result.reason === 'local-port-busy' || result.reason === 'local-port-denied') && result.suggestedLocalPort !== undefined) {
         const alt = result.suggestedLocalPort
         setPending({
           port: req.port,

@@ -1,9 +1,15 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import net from 'net'
 import type { DevPortsReport } from '../../shared/dev-ports'
 import type { SshConnection } from '../../shared/ssh'
 import { localForwardArgs, localForwardCancelArgs } from './control-master'
-import { canBind, canConnect, defaultLocalPortBusy, PortForwardRegistry, type PortForwardDeps } from './port-forward'
+import { canBind, canConnect, defaultLocalPortBusy, localPortVerdict, PortForwardRegistry, type PortForwardDeps } from './port-forward'
+
+const registries: PortForwardRegistry[] = []
+afterEach(() => {
+  for (const r of registries.splice(0)) r.dispose()
+  vi.useRealTimers()
+})
 
 const conn: SshConnection = { host: 'box', user: 'me', port: 2222 }
 const CP = '/tmp/cp.sock'
@@ -17,29 +23,49 @@ const vite = (addresses = ['127.0.0.1']): DevPortsReport['nodes'] => ({
 
 function harness(over: Partial<PortForwardDeps> & { scanResult?: DevPortsReport } = {}) {
   const calls: string[][] = []
+  /** Held by some OTHER local process on 127.0.0.1. */
   const busy = new Set<number>()
+  /** Something listens on [::1] only. */
+  const v6 = new Set<number>()
+  /** Binding needs rights we do not have. */
+  const denied = new Set<number>()
+  /** Held by the project's master (ours, or an adopted orphan's). */
   const held = new Set<number>()
   let connected = true
   let scanResult = over.scanResult ?? report(vite())
+  const scans: string[] = []
   const deps: PortForwardDeps = {
     refForProject: (id) => (connected && id === 'p' ? { conn, controlPath: CP } : undefined),
     run: async (args) => {
       calls.push(args)
       const i = args.indexOf('-L')
       const local = Number(args[i + 1].split(':')[1])
-      if (args[1] === 'forward') held.add(local)
-      else held.delete(local)
+      if (args[1] === 'forward') {
+        // Measured: the holding master acknowledges an identical forward with 0; a port another
+        // process holds fails the bind with 255.
+        if (busy.has(local) || denied.has(local)) return { code: 255, stdout: '' }
+        held.add(local)
+      } else held.delete(local)
       return { code: 0, stdout: '' }
     },
-    scan: async () => scanResult,
-    localPortBusy: async (p) => busy.has(p) || held.has(p),
+    scan: async (id) => (scans.push(id), scanResult),
+    localPortState: async (p) => ({
+      v4Answers: busy.has(p) || held.has(p),
+      v6Answers: v6.has(p),
+      bind: denied.has(p) ? 'denied' : busy.has(p) || held.has(p) ? 'in-use' : 'ok'
+    }),
     localPortHeld: async (p) => held.has(p),
     ...over
   }
+  const reg = new PortForwardRegistry(deps)
+  registries.push(reg)
   return {
-    reg: new PortForwardRegistry(deps),
+    reg,
+    scans,
     calls,
     busy,
+    v6,
+    denied,
     held,
     setScan: (r: DevPortsReport) => (scanResult = r),
     disconnect: () => (connected = false)
@@ -104,7 +130,10 @@ describe('PortForwardRegistry.forward', () => {
     h.busy.add(5174)
     const r = await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173 })
     expect(r).toMatchObject({ ok: false, reason: 'local-port-busy', suggestedLocalPort: 5175 })
-    expect(h.calls).toHaveLength(0)
+    // The only ssh call is the identical re-claim, which the master refused (someone else holds it).
+    expect(h.calls).toHaveLength(1)
+    expect(h.reg.list('p')).toEqual([])
+    h.calls.length = 0
     // The explicit choice is honoured.
     const chosen = await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173, localPort: 5175 })
     expect(chosen).toMatchObject({ ok: true, localPort: 5175, url: 'http://localhost:5175' })
@@ -133,6 +162,56 @@ describe('PortForwardRegistry.forward', () => {
     expect(await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173.5 })).toMatchObject({ reason: 'invalid-port' })
     h.disconnect()
     expect(await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173 })).toMatchObject({ reason: 'not-connected' })
+  })
+})
+
+describe('PortForwardRegistry — local port facts (review nits)', () => {
+  it('re-claims a forward an adopted orphan master still holds, instead of "port in use"', async () => {
+    const h = harness()
+    h.held.add(5173) // the master kept it across an app restart; the registry is empty
+    expect(await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173 })).toMatchObject({
+      ok: true,
+      localPort: 5173,
+      reused: true
+    })
+    expect(h.reg.list('p')).toEqual([{ nodeId: 'web', remotePort: 5173, localPort: 5173 }])
+  })
+
+  it('a port another process holds stays busy even after the re-claim attempt', async () => {
+    const h = harness()
+    h.busy.add(5173)
+    expect(await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173 })).toMatchObject({
+      ok: false,
+      reason: 'local-port-busy',
+      suggestedLocalPort: 5174
+    })
+    expect(h.reg.list('p')).toEqual([])
+  })
+
+  it('a listener on ::1 only is busy — never re-claimed, never forwarded over', async () => {
+    const h = harness()
+    h.v6.add(5173)
+    expect(await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173 })).toMatchObject({ reason: 'local-port-busy' })
+    expect(h.calls).toHaveLength(0)
+  })
+
+  it('a privileged local bind this user may not make says so, with an alternative', async () => {
+    const h = harness({ scanResult: report({ web: [{ port: 80, addresses: ['0.0.0.0'], command: 'nginx', ephemeral: false }] }) })
+    h.denied.add(80)
+    const r = await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 80, allowPrivileged: true })
+    expect(r).toMatchObject({ ok: false, reason: 'local-port-denied', suggestedLocalPort: 1024 })
+    expect(h.calls).toHaveLength(0)
+  })
+
+  it('an address that is no IP literal is named as such, not as an SSH refusal', async () => {
+    const h = harness({ scanResult: report({ web: [{ port: 5173, addresses: ['localhost'], command: 'node', ephemeral: false }] }) })
+    expect(await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173 })).toMatchObject({ reason: 'unreachable-address' })
+  })
+
+  it('the argv builder itself refuses a bad spec (validated at the interpolation site)', () => {
+    expect(() => localForwardArgs(conn, CP, 5173, '-oProxyCommand=x', 5173)).toThrow()
+    expect(() => localForwardArgs(conn, CP, 0, '127.0.0.1', 5173)).toThrow()
+    expect(() => localForwardCancelArgs(conn, CP, 5173, '127.0.0.1', 70000)).toThrow()
   })
 })
 
@@ -185,6 +264,48 @@ describe('PortForwardRegistry lifecycle', () => {
   })
 })
 
+describe('PortForwardRegistry sweep — forwards of projects NOT on screen', () => {
+  it('cancels a forward on its own once the owning node stops listening, even if nothing scans it', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173 })
+    h.setScan(report({}))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.reg.list('p')).toEqual([])
+    expect(h.calls.at(-1)?.[1]).toBe('cancel')
+  })
+
+  it('is disarmed while nothing is held — no scan runs on a timer then', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    await vi.advanceTimersByTimeAsync(180_000)
+    expect(h.scans).toEqual([])
+    await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173 })
+    await h.reg.unforward('p', 5173)
+    const before = h.scans.length
+    await vi.advanceTimersByTimeAsync(180_000)
+    expect(h.scans.length).toBe(before)
+  })
+
+  it('skips a project the renderer reconciled within the interval', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173 })
+    await vi.advanceTimersByTimeAsync(59_000)
+    await h.reg.reconcile('p', report(vite()))
+    const before = h.scans.length
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(h.scans.length).toBe(before)
+  })
+
+  it('checks the OWNING node: the same port under another node is not the server that was opened', async () => {
+    const h = harness()
+    await h.reg.forward({ projectId: 'p', nodeId: 'web', port: 5173 })
+    await h.reg.reconcile('p', report({ other: [{ port: 5173, addresses: ['127.0.0.1'], command: 'node', ephemeral: false }] }))
+    expect(h.reg.list('p')).toEqual([])
+  })
+})
+
 describe('local port probes (real sockets)', () => {
   const servers: net.Server[] = []
   afterEach(async () => {
@@ -205,6 +326,14 @@ describe('local port probes (real sockets)', () => {
     expect(await defaultLocalPortBusy(port)).toBe(true)
     await new Promise((r) => servers.pop()!.close(r))
     expect(await defaultLocalPortBusy(port)).toBe(false)
+  })
+
+  it('the pure verdict orders the facts: ::1 first, then rights, then in-use, then a v4 answer', () => {
+    expect(localPortVerdict({ v4Answers: false, v6Answers: true, bind: 'in-use' })).toBe('busy')
+    expect(localPortVerdict({ v4Answers: false, v6Answers: false, bind: 'denied' })).toBe('denied')
+    expect(localPortVerdict({ v4Answers: true, v6Answers: false, bind: 'in-use' })).toBe('maybe-ours')
+    expect(localPortVerdict({ v4Answers: true, v6Answers: false, bind: 'ok' })).toBe('busy')
+    expect(localPortVerdict({ v4Answers: false, v6Answers: false, bind: 'ok' })).toBe('free')
   })
 
   it('a listener on ::1 ONLY still makes the port busy (localhost would reach it first)', async () => {
