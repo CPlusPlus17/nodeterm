@@ -248,7 +248,7 @@ protocol.**
 2. The host makes the pty join itself:
    `ptyManager.create(watcherId, {persistKey: nodeId, joinOnly: true, sizeVote: false,
    cols/rows: the session's last applied size, sshRemote/requireRemote: from the host's own node
-   records, viewerId: 'watch-<sessionId>'})`. **No argument comes from the viewer.** (The hosted
+   records, viewerId: a fresh `v-<8 hex>` per viewer session})`. **No argument comes from the viewer.** (The hosted
    Viewer path strips `sshRemote` because a peer supplied it; here the host builds it.)
 3. A keyframe from **`captureVisible(sessionId)`** (new; never history):
    - local tmux: `capture-pane -p -e` (the `captureSnapshot` path, which has no `-S`);
@@ -316,7 +316,7 @@ handler: xterm's default (`linkHandler: null`) still opens an OSC 8 link after a
 ### Owner state and host-only IPC
 
 - The registry emits `watchLink:state {linkId, nodeId, role, label, expiresAt,
-  status: live | reconnecting | refused, viewers: [{sessionId, name?, joinedAt}]}` to local owner
+  status: live | reconnecting | refused, viewers: [{viewerId, name?, joinedAt}]}` to local owner
   clients only.
 - IPC: `watchLink:create | list | revoke | revoke-all | kick | chat-send | chat-history`, plus the
   `watchLink:state` / `watchLink:chat` events. **`watchLink:` joins `HOST_ONLY_CHANNEL_PREFIXES`**
@@ -552,7 +552,8 @@ only calls `requireProOr`, which today has zero callers.)
 - **Core integration** (in-process transport, the real `relay-host`, the real watcher policy, and the
   **browser client itself** from `src/shared/watch-link/`):
   - handshake; a wrong viewer key is denied;
-  - **one request for every channel in `IPC`**: all refused with `E_ROLE`, except a Commenter's chat;
+  - **one request for every channel in `IPC`**: all refused — `E_FORBIDDEN` for the host-only channels
+    (relay-host refuses those before any policy runs), `E_ROLE` for every other — except a Commenter's chat;
   - **one broadcast on every channel**: zero frames reach the watcher;
   - a watcher with a tiny window does not shrink the pty;
   - a watcher whose socket is stalled does not pause the pty;
