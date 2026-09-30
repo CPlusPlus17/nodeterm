@@ -9,6 +9,9 @@ import type { UiSink } from '../ui-sink-registry'
 
 const channelValues = (): string[] =>
   (Object.values(IPC) as unknown[]).filter((v): v is string => typeof v === 'string')
+/** Every per-id channel factory in IPC (`pty:data:<sid>`, `pty:size:<sid>`, …). */
+const channelFactories = (): Array<(id: string) => string> =>
+  (Object.values(IPC) as unknown[]).filter((v): v is (id: string) => string => typeof v === 'function')
 
 describe('watcherAccess', () => {
   it('refuses every IPC channel as a request and as a cast, for both roles', () => {
@@ -27,15 +30,28 @@ describe('watcherAccess', () => {
 })
 
 describe('watcherEventAllowed', () => {
-  it('passes watch:* and this session\'s pty lifecycle events only', () => {
+  it('passes watch:* and this session\'s pty:size only', () => {
     expect(watcherEventAllowed(WATCH_EVENT.meta, null)).toBe(true)
     expect(watcherEventAllowed(IPC.ptySize('s1'), 's1')).toBe(true)
-    expect(watcherEventAllowed(IPC.ptyResync('s1'), 's1')).toBe(true)
     expect(watcherEventAllowed(IPC.ptySize('s2'), 's1')).toBe(false)
+    expect(watcherEventAllowed(IPC.ptySize('s11'), 's1')).toBe(false)
     expect(watcherEventAllowed(IPC.ptySize('s1'), null)).toBe(false)
+  })
+  it('refuses this session\'s lifecycle and resync events (consumed, or history)', () => {
+    for (const ch of [IPC.ptyExit('s1'), IPC.ptyClosed('s1'), IPC.ptyRecycled('s1'), IPC.ptyResync('s1')]) {
+      expect(watcherEventAllowed(ch, 's1')).toBe(false)
+    }
   })
   it('refuses every broadcast channel in IPC', () => {
     for (const ch of channelValues()) expect(watcherEventAllowed(ch, 's1')).toBe(false)
+  })
+  it('passes exactly one per-session channel in IPC: pty:size of this session', () => {
+    const factories = channelFactories()
+    expect(factories.length).toBeGreaterThan(5)
+    for (const f of factories) {
+      expect(watcherEventAllowed(f('s1'), 's1')).toBe(f === IPC.ptySize)
+      expect(watcherEventAllowed(f('s2'), 's1')).toBe(false)
+    }
   })
 })
 
@@ -64,6 +80,14 @@ function harness(
 const ev = (channel: string, ...args: unknown[]) => JSON.stringify({ t: 'ev', channel, args })
 
 describe('wrapWatcherSink', () => {
+  it('forwards watch:* events and this session\'s pty:size', () => {
+    const h = harness()
+    const meta = ev(WATCH_EVENT.meta, { v: 1 })
+    const size = ev(IPC.ptySize('s1'), 80, 24)
+    h.sink.sendText(meta)
+    h.sink.sendText(size)
+    expect(h.text).toEqual([meta, size])
+  })
   it('drops broadcast events and another session\'s data', () => {
     const h = harness()
     h.sink.sendText(ev('canvas:mut', 'p1', {}))
@@ -79,11 +103,29 @@ describe('wrapWatcherSink', () => {
     h.sink.sendBinary(encodePtyData('s1', 'cmV0\x07visible'))
     expect(h.bin).toEqual(['visible'])
   })
-  it('reports lifecycle events for its session', () => {
+  it('never lets another session\'s bytes move this viewer\'s parser', () => {
+    const h = harness()
+    h.sink.sendBinary(encodePtyData('s2', '\x1b]52;c;'))
+    h.sink.sendBinary(encodePtyData('s1', 'visible'))
+    expect(h.bin).toEqual(['visible'])
+  })
+  it('reports its session\'s lifecycle events and forwards none of them', () => {
     const h = harness()
     h.sink.sendText(ev(IPC.ptyExit('s1'), 0))
+    // `{by}` names another client: never for a viewer's eyes.
+    h.sink.sendText(ev(IPC.ptyClosed('s1'), { by: 3 }))
     h.sink.sendText(ev(IPC.ptyRecycled('s1'), { ready: true }))
-    expect(h.calls.life).toEqual(['exit', 'recycled'])
+    expect(h.calls.life).toEqual(['exit', 'closed', 'recycled'])
+    expect(h.text).toEqual([])
+  })
+  it('ignores another session\'s lifecycle events and refuses a resync', () => {
+    const h = harness()
+    h.sink.sendText(ev(IPC.ptyExit('s2'), 0))
+    h.sink.sendText(ev(IPC.ptyClosed('s2'), { by: 3 }))
+    h.sink.sendText(ev(IPC.ptyRecycled('s2'), { ready: true }))
+    h.sink.sendText(ev(IPC.ptyResync('s1'), 'HISTORY \x1b]8;;https://x\x07link\x1b]8;;\x07'))
+    expect(h.calls.life).toEqual([])
+    expect(h.text).toEqual([])
   })
   it('goes over budget when the socket backs up or the bucket is empty', () => {
     const backed = harness({ buffered: WATCHER_BUFFER_LIMIT + 1 })
