@@ -198,10 +198,14 @@ describe('noticeText', () => {
     )
   })
 
-  it('not-persistent says only the new link is unsaved, and names no cause (H7, H26, R55)', () => {
+  it('not-persistent is neutral: it claims nothing about earlier links and names no cause (H7, H26, R59)', () => {
+    // R59: the renderer cannot tell "the keychain refused to seal" from "the links file was
+    // unreadable at boot", and in the second case earlier links are NOT saved — so the copy says
+    // only what is true in both.
     expect(noticeText({ kind: 'not-persistent' })).toBe(
-      "The live link you just created isn't saved on this computer: it works until you quit. Links created before it are still saved."
+      "This link wasn't saved on this computer — it keeps working until you quit."
     )
+    expect(noticeText({ kind: 'not-persistent' })).not.toMatch(/before it|still saved|keychain|secure storage/i)
   })
 
   it('an unknown kind is no notice', () => {

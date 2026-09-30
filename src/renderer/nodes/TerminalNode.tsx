@@ -5959,8 +5959,9 @@ export function TerminalNode({
         {showUsage && <ContextMeter sessionId={status?.sessionId ?? null} nodeId={id} remote={!!remoteSession} agentId={agentId} />}
         {/* Who else is in this node. Subscribes to presence itself — see PresenceChips. */}
         <PresenceChips nodeId={id} />
-        {/* This terminal is broadcast by a live link — never hideable (live-link.guard.test.ts). */}
-        <LiveLinkChip nodeId={id} />
+        {/* This terminal is broadcast by a live link — never hideable (live-link.guard.test.ts).
+            Only through the LOCAL session: a relay tab's node with the same id is not ours (R57). */}
+        <LiveLinkChip nodeId={id} source={session.source} />
         {status?.state === 'working' && (
           <span className="term-node__status term-node__status--busy" title={`${agentLabel} is working`}>
             <AgentMascot agentId={agentId} />

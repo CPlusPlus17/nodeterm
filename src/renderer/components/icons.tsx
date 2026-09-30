@@ -219,6 +219,16 @@ export const IconEye = () => (
   </svg>
 )
 
+/** "Share live link" — a dot inside two pairs of arcs (the Settings → Live links glyph, at this
+ *  set's 24-unit scale). Deliberately NOT `IconEye`: that already means "Hide cards & connections"
+ *  in the same node header, and one glyph must not mean two things. */
+export const IconBroadcast = () => (
+  <svg {...S}>
+    <circle cx="12" cy="12" r="2.4" />
+    <path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.95 4.95a9.9 9.9 0 0 0 0 14.1M19.05 4.95a9.9 9.9 0 0 1 0 14.1" />
+  </svg>
+)
+
 export const IconEyeOff = () => (
   <svg {...S}>
     <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61A13.53 13.53 0 0 0 1 11s4 7 11 7a9.26 9.26 0 0 0 5.39-1.61M14.12 14.12a3 3 0 1 1-4.24-4.24" />

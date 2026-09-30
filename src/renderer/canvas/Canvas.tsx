@@ -110,6 +110,7 @@ import { CommandPalette, type Command } from '../components/CommandPalette'
 import { Tooltip } from '../components/Tooltip'
 import {
   IconBranch,
+  IconBroadcast,
   IconCanvasView,
   IconClose,
   IconCollapse,
@@ -237,6 +238,21 @@ import { approvePhoneWithFeedback } from '../lib/phone-approval'
 import { peerApprovalView } from '@shared/remote/approval'
 import { promptDialog } from '../components/promptDialog'
 import { UpgradeDialog } from '../components/UpgradeDialog'
+import { LiveLinkDialog } from '../components/LiveLinkDialog'
+import { requireProOr } from '../state/upgradeGate'
+import { startWatchLinkSync, useWatchLinks } from '../state/watchLinks'
+import { noticeText } from '../lib/liveLink'
+import {
+  liveLinkCommands,
+  liveLinkMenuRow,
+  liveLinkNodeFor,
+  liveLinkPrepare,
+  openLiveLink,
+  stopAllConfirm,
+  stopLiveLinks,
+  type LiveLinkAvailabilityFacts,
+  type LiveLinkTarget
+} from '../lib/liveLinkEntry'
 import { RemotePicker } from '../components/RemotePicker'
 import { WorktreeDialog } from '../components/WorktreeDialog'
 import { SpawnTeamDialog } from '../components/SpawnTeamDialog'
@@ -3470,6 +3486,126 @@ export function Canvas() {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs are read at call time
   }, [api, persist])
+
+  // ── Live links (Task 17) ────────────────────────────────────────────────────────────────────
+  // A read-only, expiring browser view of ONE terminal. The store (state/watchLinks) mirrors this
+  // machine's core registry — `window.nodeTerminal`, never a relay session's api: links are made on
+  // the machine that runs the terminal. Started ONCE per Canvas mount; without it the store stays
+  // empty and no LIVE chip ever appears. `not-persistent` stays on screen (it is shown after every
+  // create while links cannot be saved); the rest fade like any info strip.
+  useEffect(
+    () =>
+      startWatchLinkSync(window.nodeTerminal, (n) => {
+        const text = noticeText(n)
+        if (text) setNotice({ kind: 'info', text, sticky: n.kind === 'not-persistent' })
+      }),
+    []
+  )
+  const [liveLinkDialog, setLiveLinkDialog] = useState<LiveLinkTarget | null>(null)
+  const closeLiveLinkDialog = useCallback(() => setLiveLinkDialog(null), [])
+  /** The facts the ONE availability rule reads, for the node's OWN project (H4): a node of a relay
+   *  tab — shown on the Omni board or in the sidebar while a local tab is active — is judged by the
+   *  relay session, not by whichever tab is on screen. Read at call time, never memoized. */
+  const liveLinkFacts = useCallback(
+    (projectId: string): LiveLinkAvailabilityFacts => ({
+      serverEdition: isBrowserRuntime(),
+      source: sessionForProject(projectId).source,
+      activeLinks: useWatchLinks.getState().links.length
+    }),
+    []
+  )
+  /** Every entry point ends here: availability (with its reason in the info strip), THEN the Pro
+   *  gate, then the dialog — see lib/liveLinkEntry `openLiveLink`. */
+  const openLiveLinkFor = useCallback(
+    (target: LiveLinkTarget) =>
+      openLiveLink(
+        {
+          facts: liveLinkFacts,
+          requirePro: requireProOr,
+          show: setLiveLinkDialog,
+          notice: (text) => setNotice({ kind: 'info', text })
+        },
+        target
+      ),
+    [liveLinkFacts]
+  )
+  // The card modal's "Share live link" action (it cannot reach Canvas state). Its detail names the
+  // card's PROJECT, so an Omni-board card of another tab is judged by its own session.
+  useEffect(() => {
+    const on = (e: Event): void => {
+      const d = (e as CustomEvent<{ nodeId?: unknown; title?: unknown; projectId?: unknown }>).detail
+      if (typeof d?.nodeId !== 'string' || typeof d.projectId !== 'string') return
+      const title = typeof d.title === 'string' && d.title.trim() ? d.title : 'Terminal'
+      openLiveLinkFor({ nodeId: d.nodeId, title, projectId: d.projectId })
+    }
+    window.addEventListener('nodeterm:live-link', on)
+    return () => window.removeEventListener('nodeterm:live-link', on)
+  }, [openLiveLinkFor])
+  /**
+   * The "Share live link…" row for one node — ONE builder behind the canvas node menu, the
+   * sessions-sidebar row of ANY project, and both boards' card menus (R49). The active project's
+   * node comes from the live canvas; any other project's from its stored copy: a link does not
+   * need the node on screen (core attaches join-only). Declared before `selectionItems`, which
+   * lists it in its deps (a stale closure otherwise).
+   */
+  const liveLinkMenuItems = useCallback(
+    (nodeId: string, projectId?: string): MenuItem[] => {
+      const store = useProjects.getState()
+      const pid = projectId ?? store.activeProjectId
+      if (!pid) return []
+      return liveLinkMenuRow({
+        node: liveLinkNodeFor({
+          nodeId,
+          projectId: pid,
+          activeProjectId: store.activeProjectId,
+          live: nodesRef.current,
+          stored: store.getProject(pid)?.nodes
+        }),
+        projectId: pid,
+        hidden: useSettings.getState().settings.hiddenNodeMenuItems,
+        facts: liveLinkFacts(pid),
+        icon: <IconBroadcast />,
+        open: openLiveLinkFor
+      })
+    },
+    [liveLinkFacts, openLiveLinkFor]
+  )
+  /**
+   * R47: before core looks the node up, publish pending edits of the canvas on screen — a node
+   * opened seconds ago is not in the saved project yet and would answer `node-missing`. The same
+   * rule a board comment's delivery uses (`syncMessageScope`): never saved over an unresolved
+   * external-edit conflict. A background project's node needs no flush: its stored copy is what was
+   * last written.
+   */
+  const liveLinkPrepareFor = useCallback(
+    (target: LiveLinkTarget) => (): Promise<string | null> =>
+      liveLinkPrepare({
+        needed:
+          target.projectId === useProjects.getState().activeProjectId &&
+          dirtyRef.current &&
+          nodesRef.current.some((n) => n.id === target.nodeId),
+        conflict: !!conflictRef.current,
+        save: persist
+      }),
+    [persist]
+  )
+
+  /** R48: "Stop all" revokes every link of the LICENSE — other machines' included — and cannot be
+   *  undone, so the palette asks first, with the same sentence and danger button as Settings. */
+  const confirmStopAllLiveLinks = useCallback(
+    () =>
+      setConfirm(
+        stopAllConfirm({
+          close: () => setConfirm(null),
+          stop: () =>
+            void stopLiveLinks(
+              () => window.nodeTerminal.watchLink.revokeAll(),
+              (text) => setNotice({ kind: 'error', text })
+            )
+        })
+      ),
+    [setConfirm]
+  )
 
   /** Re-runs the active-project load effect by bumping the store's `reloadNonce`.
    *
@@ -9711,7 +9847,10 @@ export function Canvas() {
                     hint: 'Rebuilds the view and re-attaches to the same session. Nothing running is interrupted.',
                     onClick: () => reloadTerminals(ids)
                   }
-                ])
+                ]),
+            // Share live link… — single terminal only; disabled with its reason where it cannot
+            // work, hideable as `live-link` (the shared builder applies both).
+            ...(ids.length === 1 ? liveLinkMenuItems(ids[0]) : [])
           ] as MenuItem[])
         : []),
       // Conversation actions — Branch, Transfer ▸ (targets, then models), Restart ▸, Pause — sit
@@ -10012,7 +10151,8 @@ export function Canvas() {
     gatewayModels,
     gatewayStatus,
     gatewayError,
-    session.source
+    session.source,
+    liveLinkMenuItems
   ])
 
   /** "New <agent>" creation entries shared by the pane, sidebar and group context menus.
@@ -15551,6 +15691,8 @@ export function Canvas() {
                   void writeDisk()
                 }
               },
+              // Works for any project: a live link needs no node on screen (R49).
+              ...liveLinkMenuItems(id, projectId),
               { type: 'separator' },
               { label: 'End session', icon: <IconTrash />, danger: true, onClick: () => closeSession(projectId, id) }
             ]
@@ -15562,7 +15704,8 @@ export function Canvas() {
       renameSession,
       closeSession,
       writeDisk,
-      selectionItems
+      selectionItems,
+      liveLinkMenuItems
     ]
   )
 
@@ -17061,6 +17204,17 @@ export function Canvas() {
             )
           ]),
       { id: 'save', label: 'Save', icon: <IconSave />, run: () => void persist() },
+      // Live links: Manage (the Settings section), and Stop all — which CONFIRMS (R48).
+      ...liveLinkCommands({
+        activeLinks: useWatchLinks.getState().links.length,
+        icon: <IconBroadcast />,
+        manage: () => {
+          setSettingsSection('live-links')
+          setSettingsNonce((n) => n + 1)
+          setSettingsOpen(true)
+        },
+        confirmStopAll: confirmStopAllLiveLinks
+      }),
       // Hidden when the canvas has no restartable agent node — the row would have nothing to act
       // on. `hint` is searchable, so "new model" / "update" find it too.
       ...(hasRestartableAgents()
@@ -17172,7 +17326,8 @@ export function Canvas() {
     toggleFocusMode,
     hostedBookmarks,
     copyHostedInviteCode,
-    forgetHostedTeam
+    forgetHostedTeam,
+    confirmStopAllLiveLinks
   ])
 
   // Build the palette's command list only when its inputs change — the inline `buildCommands()`
@@ -17413,7 +17568,11 @@ export function Canvas() {
           })()}
       </div>
       {globalKanbanOpen ? (
-        <GlobalKanbanView live={globalKanbanLive} onModalNodeChange={setKanbanModalNode} />
+        <GlobalKanbanView
+          live={globalKanbanLive}
+          onModalNodeChange={setKanbanModalNode}
+          liveLinkMenuItems={liveLinkMenuItems}
+        />
       ) : perProjectKanbanOpen && (
         <KanbanView
           board={projectKanban ?? seedBoard}
@@ -17428,6 +17587,7 @@ export function Canvas() {
           onBrowserNav={browserNavFromKanban}
           onSetIcon={setNodeIcon}
           accountMenuItems={accountSwitchRows}
+          liveLinkMenuItems={liveLinkMenuItems}
           onAutoMoveFromPulls={autoMoveCardFromPulls}
           issueAgentMenu={issueAgentMenu}
           issueWorktreeMenu={issueWorktreeMenu}
@@ -18140,6 +18300,24 @@ export function Canvas() {
       )}
 
       <UpgradeDialog />
+      {liveLinkDialog && (
+        <LiveLinkDialog
+          key={`${liveLinkDialog.projectId}:${liveLinkDialog.nodeId}`}
+          nodeId={liveLinkDialog.nodeId}
+          title={liveLinkDialog.title}
+          surface={
+            isBrowserRuntime()
+              ? 'server'
+              : sessionForProject(liveLinkDialog.projectId).source === 'relay'
+                ? 'relay'
+                : 'desktop'
+          }
+          prepare={liveLinkPrepareFor(liveLinkDialog)}
+          // No license layer in the Server Edition (R43): never an Upgrade button there.
+          onUpgrade={isBrowserRuntime() ? undefined : () => void useEntitlement.getState().upgrade('pro')}
+          onClose={closeLiveLinkDialog}
+        />
+      )}
 
       {remotePicker && (
         <RemotePicker

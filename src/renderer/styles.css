@@ -11498,6 +11498,78 @@ button.pull-checks__name {
   padding: 4px 8px;
   font-size: 12px;
 }
+/* The create dialog (LiveLinkDialog): the `.confirm` shell, a little wider for the URL. */
+.confirm.live-dialog {
+  width: 460px;
+}
+.live-dialog .live-dialog__title {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.live-dialog__group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0 0 10px;
+  padding: 0;
+  border: 0;
+  font-size: 12px;
+}
+.live-dialog__group legend {
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.live-dialog__group label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.live-dialog__label {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.live-dialog__label .confirm__input {
+  margin: 4px 0 10px;
+}
+/* The exposure warning: always visible, never a checkbox. A hue wash with ink text (the status-chip
+   recipe), so it reads the same on the default look and under Liquid Glass. */
+.live-dialog__warning {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--state-warning) 12%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.live-dialog__error {
+  margin: 0 0 10px;
+  color: var(--danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.live-dialog__url {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.live-dialog__url .confirm__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+.live-dialog__note {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
 /* The session name in the card modal header: sized to its text, not a flex-filling detail line. */
 .kanban-modal__session {
   flex: 0 1 auto;

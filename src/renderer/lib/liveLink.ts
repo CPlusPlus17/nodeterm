@@ -186,12 +186,12 @@ export function noticeText(n: WatchLinkNotice): string | null {
   switch (n.kind) {
     case 'joined':
       return `Someone started watching ${stripBidiControls(n.title)} (${n.viewers} watching).`
-    // Two causes, no reason carried (H7, R55): the keychain refused to seal — only the link just
-    // created is lost at a restart, links read at boot or sealed earlier stay saved — or the links
-    // file could not be read. The renderer cannot tell them apart, so it says what the shared type
-    // documents as the default: only the new link.
+    // Two causes, no reason carried (H7, R59): the keychain refused to seal — only the link just
+    // created is lost at a restart — or the links file could not be read at boot, in which case the
+    // earlier links are not being saved either. The renderer cannot tell them apart, so the copy
+    // says only what is true in both: THIS link is not saved, and it works until the app quits.
     case 'not-persistent':
-      return `The live link you just created isn't saved on ${thisMachine()}: it works until you quit. Links created before it are still saved.`
+      return `This link wasn't saved on ${thisMachine()} — it keeps working until you quit.`
     case 'ended': {
       const title = stripBidiControls(n.title)
       if (n.reason === 'expired') return `The live link to ${title} expired.`

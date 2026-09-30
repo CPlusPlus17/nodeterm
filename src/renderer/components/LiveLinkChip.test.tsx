@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WatchChatMessage, WatchLinkView } from '@shared/watch-link-types'
-import { LiveLinkChip } from './LiveLinkChip'
+import { LiveLinkChip, projectSessionSource, showsLiveLinks } from './LiveLinkChip'
 import { useWatchLinks } from '../state/watchLinks'
 import { useBoardLog } from '../state/boardLog'
 import { useProjects } from '../state/projects'
@@ -93,16 +93,41 @@ const flush = (): Promise<void> => act(async () => {})
 
 describe('LiveLinkChip', () => {
   it('renders nothing for a node with no link', () => {
-    expect(renderToStaticMarkup(<LiveLinkChip nodeId="n1" />)).toBe('')
-    render(<LiveLinkChip nodeId="n1" />)
+    expect(renderToStaticMarkup(<LiveLinkChip nodeId="n1" source="local" />)).toBe('')
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ nodeId: 'other' })])
     expect(host.innerHTML).toBe('')
+  })
+
+  // R57: the store lists THIS machine's links by node id. A relay tab shows another machine's
+  // canvas, and a git-shared project opened both locally and over the relay carries the SAME node
+  // ids — so a surface viewed through anything but the local session shows no chip at all.
+  it('shows nothing for a node viewed through a relay (or unresolved) session, even with a link on that id', () => {
+    render(
+      <>
+        <LiveLinkChip nodeId="n1" source="relay" />
+        <LiveLinkChip nodeId="n1" source={null} />
+      </>
+    )
+    setLinks([link()])
+    expect(host.querySelector('.live-chip')).toBeNull()
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    expect(chip()).not.toBeNull()
+  })
+
+  it('the shared rule: only a LOCAL session shows this machine\'s links; a project resolves through its session', () => {
+    expect(showsLiveLinks('local')).toBe(true)
+    expect(showsLiveLinks('relay')).toBe(false)
+    expect(showsLiveLinks('server')).toBe(false)
+    expect(showsLiveLinks(null)).toBe(false)
+    expect(projectSessionSource('p-local')).toBe('local')
+    expect(projectSessionSource('p-relay')).toBe('relay')
   })
 
   // Rendered in the DOM, not to a string: zustand answers a server render from the store's INITIAL
   // state (empty), so `renderToStaticMarkup` can never show a link.
   it('shows LIVE with the viewer count, as a no-drag button', () => {
-    render(<LiveLinkChip nodeId="n1" className="extra" />)
+    render(<LiveLinkChip nodeId="n1" source="local" className="extra" />)
     setLinks([link({ viewers: [{ viewerId: 'v', name: null, joinedAt: 0 }] })])
     const c = chip()!
     expect(c.tagName).toBe('BUTTON')
@@ -114,7 +139,7 @@ describe('LiveLinkChip', () => {
   })
 
   it('follows the store: offline, refused, the unread dot, and gone again', () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link()])
     expect(host.querySelector('.live-chip__dot')).not.toBeNull()
     setLinks([link({ status: 'reconnecting' })])
@@ -136,7 +161,7 @@ describe('LiveLinkChip', () => {
 
 describe('LiveLinkPopover', () => {
   it('opens on click with role, time, the controls and the kick note', () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0 }, { viewerId: 'v2', name: 'Cy', joinedAt: 0 }] })])
     click(chip()!)
     const p = pop()!
@@ -155,7 +180,7 @@ describe('LiveLinkPopover', () => {
   })
 
   it('takes the keyboard focus while open and gives it back to the chip', () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link()])
     act(() => chip()!.focus())
     click(chip()!)
@@ -165,14 +190,14 @@ describe('LiveLinkPopover', () => {
   })
 
   it('explains a link that is not live (H9)', () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ status: 'refused' })])
     click(chip()!)
     expect(pop()!.querySelector('.live-pop__status')!.textContent).toContain("won't host this link")
   })
 
   it('Stop sharing revokes; a stop that did not reach nodeterm says so (H23)', async () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link()])
     click(chip()!)
     api.revoke.mockImplementationOnce(async () => {
@@ -191,7 +216,7 @@ describe('LiveLinkPopover', () => {
   })
 
   it('Escape closes it, and only when it is the top dialog', () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link()])
     click(chip()!)
     // A dialog raised above it owns the key.
@@ -207,7 +232,7 @@ describe('LiveLinkPopover', () => {
     const globalKeys = vi.fn()
     window.addEventListener('keydown', globalKeys)
     try {
-      render(<LiveLinkChip nodeId="n1" />)
+      render(<LiveLinkChip nodeId="n1" source="local" />)
       setLinks([link()])
       click(chip()!)
       act(() => void document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
@@ -222,7 +247,7 @@ describe('LiveLinkPopover', () => {
     const globalKeys = vi.fn()
     window.addEventListener('keydown', globalKeys)
     try {
-      render(<LiveLinkChip nodeId="n1" />)
+      render(<LiveLinkChip nodeId="n1" source="local" />)
       setLinks([link()])
       act(() => chip()!.focus())
       click(chip()!)
@@ -242,7 +267,7 @@ describe('LiveLinkPopover', () => {
     const onDrop = vi.fn()
     render(
       <div onDragOver={onDragOver} onDrop={onDrop}>
-        <LiveLinkChip nodeId="n1" />
+        <LiveLinkChip nodeId="n1" source="local" />
       </div>
     )
     setLinks([link()])
@@ -259,7 +284,7 @@ describe('LiveLinkPopover', () => {
     try {
       render(
         <div onKeyDown={onKeyDown}>
-          <LiveLinkChip nodeId="n1" />
+          <LiveLinkChip nodeId="n1" source="local" />
         </div>
       )
       setLinks([link({ role: 'commenter' })])
@@ -276,7 +301,7 @@ describe('LiveLinkPopover', () => {
   })
 
   it('a failed Kick says so: not reached, or nobody to kick (M3)', async () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0 }] })])
     click(chip()!)
     api.kick.mockImplementationOnce(async () => {
@@ -299,7 +324,7 @@ describe('LiveLinkPopover', () => {
     const onMouseDown = vi.fn()
     render(
       <div onClick={onClick} onMouseDown={onMouseDown}>
-        <LiveLinkChip nodeId="n1" />
+        <LiveLinkChip nodeId="n1" source="local" />
       </div>
     )
     setLinks([link()])
@@ -317,7 +342,7 @@ describe('LiveLinkPopover', () => {
 
 describe('LiveLinkPopover — Commenter chat', () => {
   it('renders every viewer string as text, never as markup', () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ role: 'commenter', label: '<b>Ada</b>', viewers: [{ viewerId: 'v', name: '<i>Eve</i>', joinedAt: 0 }] })])
     act(() => useWatchLinks.getState().addChat('L', msg('1', { name: '<u>Eve</u>', text: '<img src=x onerror=alert(1)>' })))
     click(chip()!)
@@ -331,7 +356,7 @@ describe('LiveLinkPopover — Commenter chat', () => {
   })
 
   it('strips bidi controls from what viewers wrote', () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ role: 'commenter' })])
     act(() => useWatchLinks.getState().addChat('L', msg('1', { name: 'Ev‮e', text: 'a⁧b' })))
     click(chip()!)
@@ -340,7 +365,7 @@ describe('LiveLinkPopover — Commenter chat', () => {
   })
 
   it('opening marks the link read, and so does every message that lands while it is open (H21)', async () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ role: 'commenter' })])
     act(() => useWatchLinks.getState().addChat('L', msg('1')))
     expect(useWatchLinks.getState().unread.L).toBe(1)
@@ -354,7 +379,7 @@ describe('LiveLinkPopover — Commenter chat', () => {
   })
 
   it('stays read at the 200-message cap, where the thread length stops changing', async () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ role: 'commenter' })])
     act(() => {
       for (let i = 1; i <= 200; i++) useWatchLinks.getState().addChat('L', msg(String(i)))
@@ -367,7 +392,7 @@ describe('LiveLinkPopover — Commenter chat', () => {
   })
 
   it('sends a reply and clears the box; the echo comes back through the push', async () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ role: 'commenter' })])
     click(chip()!)
     const input = pop()!.querySelector<HTMLInputElement>('.live-pop__input')!
@@ -386,7 +411,7 @@ describe('LiveLinkPopover — Commenter chat', () => {
   })
 
   it('a reply core did not take keeps the draft and says so (M3)', async () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ role: 'commenter' })])
     click(chip()!)
     const input = pop()!.querySelector<HTMLInputElement>('.live-pop__input')!
@@ -417,7 +442,7 @@ describe('LiveLinkPopover — Commenter chat', () => {
   })
 
   it('while the thread is open a new message never shows as unread, not even for one render (N2)', async () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ role: 'commenter' })])
     click(chip()!)
     await flush()
@@ -444,7 +469,7 @@ describe('LiveLinkPopover — Commenter chat', () => {
         { id: 'p-local', nodes: [{ id: 'n1' }] }
       ]
     } as never)
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ role: 'commenter' })])
     act(() => useWatchLinks.getState().addChat('L', msg('1', { text: 'ship it @[x](node:abc)' })))
     act(() => useWatchLinks.getState().addChat('L', msg('2', { from: 'sharer', name: 'Ada', text: 'ok' })))
@@ -464,7 +489,7 @@ describe('LiveLinkPopover — Commenter chat', () => {
   })
 
   it('offers no copy when no project holds the node', () => {
-    render(<LiveLinkChip nodeId="n1" />)
+    render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ role: 'commenter' })])
     act(() => useWatchLinks.getState().addChat('L', msg('1')))
     click(chip()!)

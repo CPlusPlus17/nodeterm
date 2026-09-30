@@ -53,7 +53,7 @@ describe('live-link guards', () => {
     expect([...HIDEABLE_MENU_ITEMS, ...HIDEABLE_HEADER_BUTTONS].map((r) => r.id).filter((id) => /chip|indicator/i.test(id))).toEqual([])
     for (const f of SURFACES) {
       const src = read(f)
-      expect(src, f).toMatch(/import \{ LiveLinkChip \} from '(\.\.\/|\.\/)(components\/)?LiveLinkChip'/)
+      expect(src, f).toMatch(/import \{ LiveLinkChip(, [\w, ]+)? \} from '(\.\.\/|\.\/)(components\/)?LiveLinkChip'/)
       const lines = src.split('\n')
       const at = lines.findIndex((l) => l.includes('<LiveLinkChip'))
       expect(at, `${f} renders <LiveLinkChip`).toBeGreaterThanOrEqual(0)
@@ -65,6 +65,33 @@ describe('live-link guards', () => {
       expect(lines.slice(Math.max(0, Math.min(from, at - 3)), at + 1).join('\n'), f).not.toMatch(/isHidden|hidden/i)
       // …nor anywhere in the file under an id that names the chip.
       expect(src, f).not.toMatch(/isHidden\(\s*['"][^'"]*(chip|indicator)/i)
+      // R57: every chip says which session it is viewed through (a relay copy of a git-shared node
+      // carries the same id, and must not show this machine's chip). The prop is required, so this
+      // pins that no surface satisfies it with a constant.
+      for (const line of lines.filter((l) => l.includes('<LiveLinkChip'))) {
+        expect(line, f).toMatch(/source=\{/)
+        expect(line, f).not.toMatch(/source=["']local["']|source=\{['"]local['"]\}/)
+      }
+    }
+  })
+
+  it('R57: the surfaces outside a project\'s SessionProvider resolve the session from the project', () => {
+    // The boards and the sessions sidebar are not inside the node's SessionProvider (useSession()
+    // there is the app's local session), so each resolves its project's session and hands it on.
+    const sidebar = read('src/renderer/components/SessionsSidebar.tsx')
+    expect((sidebar.match(/<SessionRow\b/g) ?? []).length).toBeGreaterThan(0)
+    expect((sidebar.match(/liveLinkSource=\{projectSessionSource\(/g) ?? []).length).toBe(
+      (sidebar.match(/<SessionRow\b/g) ?? []).length
+    )
+    for (const f of ['src/renderer/components/kanban/KanbanView.tsx', 'src/renderer/components/kanban/GlobalKanbanView.tsx']) {
+      const src = read(f)
+      expect(src, f).toContain('const liveLinkSource = projectSessionSource(projectId)')
+      const cards = src.split('<SessionCard').slice(1)
+      expect(cards.length, f).toBeGreaterThan(0)
+      for (const c of cards) expect(c.slice(0, c.indexOf('/>')), f).toContain('liveLinkSource={liveLinkSource}')
+      const modals = src.split('<CardModal').slice(1)
+      expect(modals.length, f).toBeGreaterThan(0)
+      for (const m of modals) expect(m.slice(0, m.indexOf('/>')), f).toContain('projectId={projectId}')
     }
   })
 

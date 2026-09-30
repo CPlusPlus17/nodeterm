@@ -87,10 +87,11 @@ const setLinks = (links: WatchLinkView[]): void => act(() => useWatchLinks.getSt
 const click = (el: Element): void => act(() => void el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 const pop = (): HTMLElement | null => document.querySelector<HTMLElement>('.live-pop')
 
-function card(onOpen = vi.fn(), onDropAt = vi.fn()) {
+function card(onOpen = vi.fn(), onDropAt = vi.fn(), liveLinkSource: 'local' | 'relay' = 'local') {
   return (
     <SessionCard
       session={session}
+      liveLinkSource={liveLinkSource}
       onOpen={onOpen}
       onDragStart={vi.fn()}
       onDragEnd={vi.fn()}
@@ -109,6 +110,16 @@ describe('LIVE chip — kanban card', () => {
     const chip = host.querySelector('.kanban-card__detail .live-chip.kanban-card__live')
     expect(chip?.textContent).toBe('LIVE · 1')
     setLinks([])
+    expect(host.querySelector('.kanban-card__detail')).toBeNull()
+  })
+
+  // R57: a relay tab's board shows another machine's nodes, and a git-shared project opened both
+  // locally and over the relay carries the SAME node ids — this machine's link must not light up
+  // (or add a detail row to) the relay copy of the card.
+  it('a card on a relay project shows no chip and no detail row for a colliding node id', () => {
+    render(card(vi.fn(), vi.fn(), 'relay'))
+    setLinks([link()])
+    expect(host.querySelector('.live-chip')).toBeNull()
     expect(host.querySelector('.kanban-card__detail')).toBeNull()
   })
 
@@ -142,7 +153,7 @@ describe('LIVE chip — card modal header', () => {
   it('shows in the header, and Escape closes the popover, not the modal', () => {
     const onClose = vi.fn()
     render(
-      <CardModal
+      <CardModal projectId="p1"
         session={session}
         columnTitle="Doing"
         board={board}
@@ -177,6 +188,7 @@ describe('LIVE chip — sessions sidebar row', () => {
     render(
       <SessionRow
         row={row}
+        liveLinkSource="local"
         onClick={onClick}
         onClose={onClose}
         onRename={vi.fn()}
@@ -195,5 +207,23 @@ describe('LIVE chip — sessions sidebar row', () => {
     click(pop()!)
     expect(onClick).not.toHaveBeenCalled()
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('R57: a row of a relay project shows no chip for a colliding node id', () => {
+    render(
+      <SessionRow
+        row={row}
+        liveLinkSource="relay"
+        onClick={vi.fn()}
+        onClose={vi.fn()}
+        onRename={vi.fn()}
+        onAiName={vi.fn()}
+        onContextMenu={vi.fn()}
+        onDragStart={vi.fn()}
+        onDragEnd={vi.fn()}
+      />
+    )
+    setLinks([link()])
+    expect(host.querySelector('.live-chip')).toBeNull()
   })
 })

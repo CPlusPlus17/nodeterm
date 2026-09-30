@@ -1,7 +1,33 @@
 import { memo, useCallback, useEffect, useState } from 'react'
 import { chipView } from '../lib/liveLink'
+import { sessionForProject, type SessionSource } from '../session/session'
 import { EMPTY_LINKS, liveChipSig, useWatchLinks } from '../state/watchLinks'
 import { LiveLinkPopover, type PopoverAnchor } from './LiveLinkPopover'
+
+/**
+ * R57 — THE rule for whether a surface may show THIS machine's live links for a node. The store is
+ * keyed by node id and lists only links this machine created; a relay tab shows ANOTHER machine's
+ * canvas, and a git-shared project opened both locally and over the relay carries the same node
+ * ids. So only a node viewed through the LOCAL session shows the chip (and counts as "has a live
+ * link" on a kanban card). Unknown (null) shows nothing.
+ */
+export function showsLiveLinks(source: SessionSource | null): boolean {
+  return source === 'local'
+}
+
+/**
+ * The source of the session a project's surfaces are viewed through — for the surfaces that know a
+ * project id but sit outside that project's `SessionProvider` (the boards, the sessions sidebar).
+ * Null when no session resolves (a registry with no session at all, e.g. a unit test), which
+ * `showsLiveLinks` reads as "do not show".
+ */
+export function projectSessionSource(projectId: string): SessionSource | null {
+  try {
+    return sessionForProject(projectId).source
+  } catch {
+    return null
+  }
+}
 
 /**
  * "This terminal is being broadcast." ONE component on the canvas node header, the kanban card, the
@@ -15,12 +41,17 @@ import { LiveLinkPopover, type PopoverAnchor } from './LiveLinkPopover'
  */
 export const LiveLinkChip = memo(function LiveLinkChip({
   nodeId,
+  source,
   className
 }: {
   nodeId: string
+  /** The session this node is viewed through (R57). Required, so no surface can forget it: a
+   *  relay-sourced surface passes 'relay' and the chip stays empty for a colliding node id. */
+  source: SessionSource | null
   className?: string
 }): React.JSX.Element | null {
-  const sig = useWatchLinks((s) => liveChipSig(s, nodeId))
+  const local = showsLiveLinks(source)
+  const sig = useWatchLinks((s) => (local ? liveChipSig(s, nodeId) : ''))
   const [anchor, setAnchor] = useState<PopoverAnchor | null>(null)
   const close = useCallback(() => setAnchor(null), [])
   // The last link went away while the popover was open: forget it was open, or the NEXT link on
