@@ -467,7 +467,13 @@ export function buildStubApi(): Omit<
       probeSsh: U('pairing.probeSsh'),
       openRemoteLoginSettings: U('pairing.openRemoteLoginSettings'),
       listDevices: U('pairing.listDevices'),
-      revokeDevice: U('pairing.revokeDevice')
+      revokeDevice: U('pairing.revokeDevice'),
+      // The Server Edition has no relay host key and no paired-phone registry, so it cannot own a
+      // push webhook (same degrade as push-notify). The Settings row is hidden in the browser.
+      webhookStatus: U('pairing.webhookStatus'),
+      webhookMint: U('pairing.webhookMint'),
+      webhookRevoke: U('pairing.webhookRevoke'),
+      webhookEndpoint: U('pairing.webhookEndpoint')
     },
     shortcuts: {
       // Deliberate no-op (not a gap): the recording bit exists to stand the DESKTOP's

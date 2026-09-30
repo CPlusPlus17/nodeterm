@@ -694,7 +694,11 @@ const api: NodeTerminalApi = {
     probeSsh: () => ipcRenderer.invoke(IPC.pairingProbeSsh),
     openRemoteLoginSettings: () => ipcRenderer.invoke(IPC.pairingOpenRemoteLoginSettings),
     listDevices: () => ipcRenderer.invoke(IPC.pairingListDevices),
-    revokeDevice: (id) => ipcRenderer.invoke(IPC.pairingRevokeDevice, id)
+    revokeDevice: (id) => ipcRenderer.invoke(IPC.pairingRevokeDevice, id),
+    webhookStatus: () => ipcRenderer.invoke(IPC.pairingWebhookStatus),
+    webhookMint: () => ipcRenderer.invoke(IPC.pairingWebhookMint),
+    webhookRevoke: () => ipcRenderer.invoke(IPC.pairingWebhookRevoke),
+    webhookEndpoint: () => ipcRenderer.invoke(IPC.pairingWebhookEndpoint)
   },
   // Team presence. `hello` is the only request (its response is how this client learns its OWN
   // ClientId, without which it would draw its own cursor as a peer's); the publishers are

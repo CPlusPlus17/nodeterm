@@ -678,7 +678,9 @@ working sessions. See `docs/shared-codex-node-identity.md`.
 command string. `/proc/<pid>/cmdline` is mode 444 on a stock Linux, and a remote command line is argv
 on the host too: we shipped the hook bearer that way and any other account on the machine could read
 it and open a terminal running an arbitrary command. Pass secrets by 0600 file or by **stdin**
-(`curl --config -`), and never add an argv fallback. See `docs/node-identity.md`.
+(`curl --config -`), and never add an argv fallback. See `docs/node-identity.md`. That includes the
+examples we SHOW users to copy (the push webhook's curl pipes its header on stdin, and a test runs
+it under `/bin/sh` to prove it): a user pastes what we print into a CI job on a shared runner.
 
 **A hook socket path is not ownership proof.** Never unlink a live listener to bind a hook
 socket, or overwrite an advertisement whose socket/TCP listener still answers. Local stale cleanup requires `ECONNREFUSED` and an unchanged socket inode; regular files,

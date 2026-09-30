@@ -1,4 +1,5 @@
 import type { TextDeliveryResult } from './text-delivery'
+import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from './push-webhook'
 import type { IdentitySeedEntry } from './agent-identity-seed'
 import type { PrWaitHold } from './pr-wait'
 // Types shared across the main, preload, and renderer processes.
@@ -3938,6 +3939,14 @@ export interface PairingApi {
    * entitlement back on the relay backend. Never rejects for a leg that failed — read the result.
    */
   revokeDevice(id: string): Promise<DeviceRevokeResult>
+  /** Push webhook (shared/push-webhook.ts): what token is live for this machine — never its value. */
+  webhookStatus(): Promise<PushWebhookResult<PushWebhookTokenInfo | null>>
+  /** Mint (or rotate) the token. The value in the result is the only copy that will ever exist
+   *  outside the user's own storage: the backend keeps only its hash, and this app keeps nothing. */
+  webhookMint(): Promise<PushWebhookResult<PushWebhookMinted>>
+  webhookRevoke(): Promise<PushWebhookResult<true>>
+  /** The API base the examples should name (NODETERM_API_BASE or production). */
+  webhookEndpoint(): Promise<string>
 }
 
 /** Team presence (docs/team-presence.md). All of it is transient — nothing here is persisted. */
