@@ -24,6 +24,7 @@ import { StationHandoverTracker } from '../../src/core/station-handover'
 import type { AgentState } from '../../src/shared/agents/normalize'
 import type { StationHandoverRecord } from '../../src/shared/station-handover'
 import { launchesToFire, type ArmedNode } from '../../src/renderer/lib/pendingLaunch'
+import { normalizeClaude } from '../../src/shared/agents/normalize'
 
 interface Harness {
   deps: AgentMessagingDeps
@@ -217,24 +218,47 @@ describe('plain --after after a write / run', () => {
   })
 })
 
-describe('plain --after on a station whose turn ended with BACKGROUND tasks still running', () => {
-  // Measured live (2026-09-30): an agent's turn ended while its test suite still ran in a
-  // background shell, and the node armed `--after` it fired before anything had been pushed.
-  const stop = (h: Harness, ids: string[] | undefined) => {
+describe('plain --after on a station whose turn ended with background work still running', () => {
+  // Measured live (2026-09-30): an agent's turn ended while its work went on in the background, and
+  // the node armed `--after` it fired before anything had been pushed. Only background SUBAGENTS
+  // hold: an async child ends and its task-notification wakes the parent into another turn, while a
+  // background SHELL (a dev server, a watcher) may never end — holding on it would hold forever.
+  // Fed through the REAL Claude normalizer, so the `type` split is the one production applies.
+  const stop = (h: Harness, tasks: Array<{ id: string; type: string; status: string }> | undefined) => {
     h.tick(10)
     h.state.st = 'done'
-    h.tracker.onAgentEvent({ nodeId: 'st', state: 'done', ...(ids ? { backgroundTaskIds: ids } : {}) })
+    const ev = normalizeClaude({
+      nodeId: 'st',
+      agentId: 'claude',
+      payload: {
+        hook_event_name: 'Stop',
+        session_id: 's1',
+        ...(tasks ? { background_tasks: tasks } : {})
+      }
+    })!
+    h.tracker.onAgentEvent(ev)
   }
 
-  it('a done listing a running task does not release D; a later done with an empty inventory does', () => {
+  it('an async SUBAGENT still running holds D until a later turn end with none left', () => {
     const h = harness()
     h.event('working')
-    stop(h, ['bash_suite'])
+    stop(h, [{ id: 'a1b2c3', type: 'subagent', status: 'running' }])
     expect(dFires(h)).toBe(false)
-    // The suite finishes and wakes the station (or the next prompt does); that turn's end is empty.
+    // The child's task-notification wakes the station; that turn ends with the child gone.
     h.event('working')
     expect(dFires(h)).toBe(false)
-    stop(h, [])
+    stop(h, [{ id: 'a1b2c3', type: 'subagent', status: 'completed' }])
+    expect(dFires(h)).toBe(true)
+  })
+
+  it('a background SHELL that never ends (a dev server) does NOT hold D — before and after this PR', () => {
+    const h = harness()
+    h.event('working')
+    stop(h, [{ id: 'bash_devserver', type: 'local_bash', status: 'running' }])
+    expect(dFires(h)).toBe(true)
+    // …and it keeps not holding on every later turn that still lists it.
+    h.event('working')
+    stop(h, [{ id: 'bash_devserver', type: 'local_bash', status: 'running' }])
     expect(dFires(h)).toBe(true)
   })
 

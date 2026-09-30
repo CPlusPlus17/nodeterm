@@ -13936,8 +13936,13 @@ export function Canvas() {
               // still waiting on its verification (command-delivery.ts). The dialog makes that
               // rare, not impossible — the human confirms on their own clock, not the pane's.
               let thrown: string | null = null
+              // When the text STARTED going into the pane — after the human's confirm. Core's
+              // hand-over tracker stamps the new work with it (core/station-handover.ts): a turn
+              // that began while the dialog was open is not an answer to this text.
+              let typedAt: number | undefined
               const outcome = await guardConcurrentRestart(args.node, async () => {
                 try {
+                  typedAt = Date.now()
                   const ok = await api.pty.sendText(args.node, args.text ?? '')
                   if (ok === 'pasted-not-submitted') thrown = TEXT_NOT_SUBMITTED
                   return ok === true ? ('sent' as const) : ('failed' as const)
@@ -13956,7 +13961,8 @@ export function Canvas() {
               reply({
                 ok: outcome === 'sent',
                 message: outcome === 'sent' ? 'sent' : 'failed',
-                error: outcome === 'sent' ? undefined : (thrown ?? 'sendText failed')
+                error: outcome === 'sent' ? undefined : (thrown ?? 'sendText failed'),
+                ...(typedAt !== undefined ? { result: { typedAt } } : {})
               })
             }
             // Has the user waived this verb's dialog (this app run / permanently / while their own

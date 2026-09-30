@@ -69,6 +69,29 @@ export function liveBackgroundTaskIds(value: unknown): string[] | undefined {
 }
 
 /**
+ * The subset of `liveBackgroundTaskIds` that are background SUBAGENTS (`type: 'subagent'`, the
+ * value every measured async child carries in the fixtures), or `undefined` with no inventory.
+ *
+ * Why a subset: plain `--after` holds a station whose turn ended with background work still
+ * running (core/station-handover.ts), and only a subagent is safe to hold on. An async subagent
+ * ENDS, and its `<task-notification>` wakes the parent into another turn, so a later `Stop` with
+ * it gone reliably comes. A background SHELL may never end (a dev server, a file watcher,
+ * `tail -f`) and does not reliably wake the station, so holding on one could hold a dependent
+ * forever. Any other or unknown `type` is treated like a shell: not held on.
+ */
+export function liveBackgroundSubagentIds(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const live = new Set(liveBackgroundTaskIds(value))
+  const out: string[] = []
+  for (const t of value) {
+    if (!t || typeof t !== 'object') continue
+    const { id, type } = t as { id?: unknown; type?: unknown }
+    if (type === 'subagent' && typeof id === 'string' && live.has(id) && !out.includes(id)) out.push(id)
+  }
+  return out
+}
+
+/**
  * The prompt Claude injects into the PARENT when a background subagent hands its result back
  * (measured, 2.1.284, via the child's `SubagentHandback` tool): `<agent-message from="<agent id>">
  * [Subagent hand-back] …`. Like `<task-notification>` it is not a genuine user turn. Matched on the

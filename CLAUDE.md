@@ -3827,20 +3827,30 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   - **The fact is core's, per station, fed by the SAME hand-over moments #1042 uses**: the
     messaging layer's `onHandover` (`queued` = held from that instant; `landed` at the time the
     delivery attempt STARTED; a queued entry that `settled` without landing holds too, from the
-    settle — the orchestrator armed D believing the task was handed), and each shell's control
-    answer for `write` / `run` (`noteControlAnswer`, on success only, never the caller naming itself,
-    stamped with the time the REQUEST ARRIVED — before any byte was typed). Board comments, station
-    notices and a person typing are not hand-overs (the #1042 set).
+    settle — the orchestrator armed D believing the task was handed; the turn running at the expiry
+    does not end it, only a turn started after it does, and nothing starts one unless the station is
+    given work again, so ▶ / `run` are the usual way out), and each shell's control answer
+    (`noteControlAnswer`, on success only, never the caller naming itself) for `write` — stamped with
+    the renderer's `typedAt`, when it STARTED TYPING after the human's confirm, never the request
+    time: a turn that began while the dialog was open (a background child's task-notification) must
+    not answer text not yet typed — and for `run` (starts the named node's held launch; no confirm,
+    stamped at request arrival). A `write` into a station that was BLOCKED or WAITING at request time
+    (read from the tracker's short state history) is NOT a hand-over: it answers the prompt and the
+    same turn continues, so no new turn would ever start to end it. Board comments, station notices
+    and a person typing are not hand-overs (the #1042 set).
   - **It ends with a turn that STARTED at or after the newest hand-over and has ENDED, with nothing
     still queued.** The tracker stamps turn starts itself (first working/waiting/blocked after an
-    idle state, on its own clock) for EVERY station, because a delivered prompt can start — and
+    idle state, or any genuine `newTurn` — after an Esc interrupt core may never see the idle the
+    renderer infers — on its own clock) for EVERY station, because a delivered prompt can start — and
     even finish — its turn before the delivery's `landed` event is emitted; a hand-over that finds
     its answering turn already over clears at once. Timestamps never cross a process: the renderer
     only reads a membership list, so the Server Edition browser's clock never enters it. A turn
     already running when the work landed does not end it (the typed text is answered by a LATER
     turn); if a CLI folds typed input into the running turn instead, the hold lasts until its next
-    turn — the holding direction, with ▶ / `run` as the way out. An idle-prompt `done` with no turn
-    in between ends nothing.
+    turn — the holding direction, with ▶ / `run` as the way out. The idle-prompt rescue (`idle: true`)
+    counts only for a station still `working` (the reduceEntry rule): it also fires under an open
+    permission prompt, and taking it as idle there let the approval's `working` stamp a fake turn
+    start inside the same turn (review of #1052, reproduced).
   - **The tracker is fed every agent event BEFORE the messaging queue** (desktop `emitAgentStatus`,
     the Server Edition's `onAgentEvent`): the queue flushes new work on the very `done` the tracker
     must stamp, and the server's `refreshArmed` reads the tracker on that same event. Pinned at
@@ -3852,23 +3862,29 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     `--after` would hold. The Server Edition's factory asks `handedOver` in `refreshArmed` AND in the
     creation shortcut (`mustWait`): "already satisfied at creation" must mean satisfied under this
     rule, or the node is launched immediately by the shortcut.
-  - **Background tasks hold the same way** (same module, same list; `background: true` on the
-    record). MEASURED live 2026-09-30: an agent's turn ended while its full test suite still ran in
-    a background shell, and the node armed `--after` it fired before anything was pushed — the same
-    bug class, from background work instead of a hand-over. Claude's `Stop` carries
-    `background_tasks` (see **Claude's native subagent hooks**, fact 6), normalized to
-    `backgroundTaskIds`. A `done` whose inventory lists a live task holds the station; only a later
-    `done` whose inventory is PRESENT and EMPTY releases it, or `SessionEnd` (the CLI took its tasks
-    with it and will never report them). An ABSENT inventory is unknown and changes NOTHING: a CLI
-    too old to send the field keeps today's behaviour exactly (it never sets the hold — holding on
-    "unknown" would strand every such station forever), and a `done` without one (the idle-prompt
-    rescue, `StopFailure`, other agents) neither sets nor clears it. A turn STARTING does not clear
-    it (the task may outlive that turn). A task that finishes without waking the station for another
-    turn leaves the hold until the station's next turn end — holding, with ▶ / `run` as the way out.
-    The agent bodies tell a station not to end its turn with background work a dependent needs.
-  - **Eviction never drops a held station** (the bound is 2000 tracked stations; the oldest with
-    nothing handed over goes first) — dropping one would release its dependents.
-  - Surfaces: `list` says `waiting for <station> to finish the work handed to it`; the QUEUED tooltip
+  - **Background SUBAGENTS hold the same way; background SHELLS do not** (same module, same list;
+    `background: true` on the record). MEASURED live 2026-09-30: an agent's turn ended while its
+    work went on in the background, and the node armed `--after` it fired before anything was
+    pushed. Claude's `Stop` carries `background_tasks` (see **Claude's native subagent hooks**, fact
+    6); `liveBackgroundSubagentIds` keeps only `type: 'subagent'` entries
+    (`NormalizedAgentEvent.backgroundSubagentIds`). A `done` listing a live subagent holds the
+    station; only a later `done` whose inventory is PRESENT with no subagent left releases it, or
+    `SessionEnd`. Why only subagents: a child ENDS, and its task-notification wakes the parent into
+    another turn, so that later `Stop` reliably comes; a background shell (a dev server, a watcher,
+    `tail -f`) may never end and does not reliably wake the station — holding on shells held a
+    dependent FOREVER ("S starts the dev server, T `--after` S runs e2e" never fired; review of
+    #1052). Unknown `type`s are treated like shells. An ABSENT inventory is unknown and changes
+    NOTHING (a CLI too old to send it keeps today's behaviour exactly; the idle rescue and
+    `StopFailure` carry none). The agent bodies tell a station to wait for a background shell's
+    result itself before ending its turn when a dependent needs it.
+  - **Eviction prefers stations with nothing held** (the bound is 2000 tracked stations; the oldest
+    with nothing held goes first) — dropping a held one would release its dependents. Only when
+    every tracked station holds is the oldest held one dropped.
+  - **The Server Edition re-runs `refreshArmed` on every tracker change**, not only on
+    working/done events: a hold can end on an event the factory is not otherwise run for (a
+    `SessionEnd` clearing a subagent hold).
+  - Surfaces: `list` says `waiting for <station> to finish the work handed to it` (or `…the tasks
+    still running in its background`); the QUEUED tooltip
     names it; both agent bodies render `afterHandoverDocLines` ("hand it the next task FIRST, then
     open the dependent"). TRANSIENT: after a restart nothing has been handed over in this run.
     Relay tabs take the inert stub; the list channel is HOST_ONLY

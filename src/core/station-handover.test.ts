@@ -136,17 +136,17 @@ describe('StationHandoverTracker — when a station counts as finished for plain
     expect(h.t.list().map((r) => r.nodeId)).toEqual(['st'])
   })
 
-  describe('background tasks left running at a turn end (Claude `Stop.background_tasks`)', () => {
-    const stop = (t: StationHandoverTracker, ids?: string[]) =>
-      t.onAgentEvent({ nodeId: 'st', state: 'done', ...(ids ? { backgroundTaskIds: ids } : {}) })
+  describe('background SUBAGENTS left running at a turn end (Claude `Stop.background_tasks`)', () => {
+    const stop = (t: StationHandoverTracker, subagents?: string[]) =>
+      t.onAgentEvent({ nodeId: 'st', state: 'done', ...(subagents ? { backgroundSubagentIds: subagents } : {}) })
 
-    it('a done that still lists a running task holds; a later done with an EMPTY inventory releases', () => {
+    it('a done that still lists a running subagent holds; a later done with none releases', () => {
       const h = tracker()
       h.ev('working', 100)
-      stop(h.t, ['bash_1'])
+      stop(h.t, ['agent_1'])
       expect(h.t.isHandedOver('st')).toBe(true)
       expect(h.t.list()).toEqual([{ nodeId: 'st', background: true }])
-      // A turn starting does not end it: the task may outlive that turn.
+      // The child's task-notification wakes the parent: a turn starting does not end the hold.
       h.ev('working', 200)
       expect(h.t.isHandedOver('st')).toBe(true)
       stop(h.t, [])
@@ -159,14 +159,14 @@ describe('StationHandoverTracker — when a station counts as finished for plain
       stop(h.t) // a CLI too old to send the field: today's behaviour
       expect(h.t.isHandedOver('st')).toBe(false)
       stop(h.t, ['agent_1'])
-      h.ev('done', 300) // the idle-prompt rescue / StopFailure carry no inventory
+      h.t.onAgentEvent({ nodeId: 'st', state: 'done', errored: true } as never) // StopFailure: no inventory
       expect(h.t.isHandedOver('st')).toBe(true)
     })
 
-    it('SessionEnd ends it: the CLI took its tasks with it and will never report them', () => {
+    it('SessionEnd ends it: the CLI took its subagents with it and will never report them', () => {
       const h = tracker()
       h.ev('working', 100)
-      stop(h.t, ['bash_1'])
+      stop(h.t, ['agent_1'])
       h.t.onAgentEvent({ nodeId: 'st', state: undefined, sessionPhase: 'end' })
       expect(h.t.isHandedOver('st')).toBe(false)
     })
@@ -174,14 +174,102 @@ describe('StationHandoverTracker — when a station counts as finished for plain
     it('background work and a hand-over hold independently', () => {
       const h = tracker()
       h.ev('working', 100)
-      stop(h.t, ['bash_1'])
-      h.t.noteControlAnswer('write', { node: 'st' }, { ok: true }, 'orch', h.at(150))
+      stop(h.t, ['agent_1'])
+      h.t.noteControlAnswer('write', { node: 'st' }, { ok: true, result: { typedAt: 150 } }, 'orch', 140)
+      h.at(155)
       h.ev('working', 160)
-      stop(h.t, ['bash_1']) // the new work's turn ended, the background task still runs
+      stop(h.t, ['agent_1']) // the new work's turn ended, the subagent still runs
       expect(h.t.list()).toEqual([{ nodeId: 'st', background: true }])
       h.ev('working', 200)
       stop(h.t, [])
       expect(h.t.isHandedOver('st')).toBe(false)
+    })
+  })
+
+  describe('review of #1052: prompts, interrupts, the idle rescue and the confirm dialog', () => {
+    it('a write that ANSWERS a blocked / waiting station is not a hand-over (the same turn continues)', () => {
+      for (const prompt of ['blocked', 'waiting'] as const) {
+        const h = tracker()
+        h.ev('working', 100)
+        h.ev(prompt, 110)
+        h.at(130)
+        h.t.noteControlAnswer('write', { node: 'st', text: 'y' }, { ok: true, result: { typedAt: 125 } }, 'orch', 120)
+        expect(h.t.isHandedOver('st')).toBe(false)
+      }
+    })
+
+    it('the state at REQUEST time decides, not at the answer (the prompt was answered by then)', () => {
+      const h = tracker()
+      h.ev('working', 100)
+      h.ev('blocked', 110)
+      // The confirm dialog is open; meanwhile the user answers the prompt in the pane themselves.
+      h.ev('working', 200)
+      h.at(300)
+      h.t.noteControlAnswer('write', { node: 'st' }, { ok: true, result: { typedAt: 290 } }, 'orch', 150)
+      expect(h.t.isHandedOver('st')).toBe(false)
+    })
+
+    it('a genuine new turn (newTurn) starts one even when core never saw the previous idle (Esc)', () => {
+      const h = tracker()
+      h.ev('working', 100) // interrupted with Esc: no Stop, core still reads `working`
+      h.t.noteControlAnswer('write', { node: 'st' }, { ok: true, result: { typedAt: 150 } }, 'orch', 150)
+      h.at(160)
+      h.t.onAgentEvent({ nodeId: 'st', state: 'working', newTurn: true })
+      h.ev('done', 200)
+      expect(h.t.isHandedOver('st')).toBe(false)
+    })
+
+    it('the idle-prompt rescue counts only for a WORKING station — never under a prompt', () => {
+      // The reviewer's ordering: a write lands mid-turn A → A asks permission → idle-prompt fires
+      // under the prompt → the approval → A's Stop. Task B never started, so D must still wait.
+      const h = tracker()
+      h.ev('working', 100)
+      h.t.noteControlAnswer('write', { node: 'st' }, { ok: true, result: { typedAt: 150 } }, 'orch', 150)
+      h.at(160)
+      h.ev('blocked', 170)
+      h.at(180)
+      h.t.onAgentEvent({ nodeId: 'st', state: 'done', idle: true, interrupted: true } as never)
+      h.ev('working', 190) // the approval
+      h.ev('done', 200) // A's Stop
+      expect(h.t.isHandedOver('st')).toBe(true)
+      h.ev('working', 210)
+      h.ev('done', 300)
+      expect(h.t.isHandedOver('st')).toBe(false)
+    })
+
+    it('the idle-prompt rescue still ends a WORKING station\'s turn (the Esc-during-a-tool case)', () => {
+      const h = tracker()
+      h.ev('done', 50)
+      h.t.noteControlAnswer('write', { node: 'st' }, { ok: true, result: { typedAt: 90 } }, 'orch', 90)
+      h.ev('working', 100)
+      h.at(150)
+      h.t.onAgentEvent({ nodeId: 'st', state: 'done', idle: true, interrupted: true } as never)
+      expect(h.t.isHandedOver('st')).toBe(false)
+    })
+
+    it('a turn that started while the confirm dialog was open does not answer the write', () => {
+      const h = tracker()
+      h.ev('done', 50)
+      // Request at 100; the dialog is open; a task-notification turn runs 120–180.
+      h.ev('working', 120)
+      h.ev('done', 180)
+      h.at(200)
+      // Confirmed and typed at 195; the answer arrives at 200.
+      h.t.noteControlAnswer('write', { node: 'st' }, { ok: true, result: { typedAt: 195 } }, 'orch', 100)
+      expect(h.t.isHandedOver('st')).toBe(true)
+      h.ev('working', 210)
+      h.ev('done', 300)
+      expect(h.t.isHandedOver('st')).toBe(false)
+    })
+
+    it('a write whose typedAt is missing or implausible is stamped at the answer (holding)', () => {
+      const h = tracker()
+      h.ev('done', 50)
+      h.ev('working', 120)
+      h.ev('done', 180)
+      h.at(200)
+      h.t.noteControlAnswer('write', { node: 'st' }, { ok: true, result: { typedAt: 10 } }, 'orch', 100)
+      expect(h.t.list()).toEqual([{ nodeId: 'st', since: 200 }])
     })
   })
 
