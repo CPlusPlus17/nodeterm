@@ -5025,17 +5025,24 @@ plan: the pure `renderer/lib/recentConversations.ts`; execution: Canvas `resumeR
   a group that does not re-encode to its own name (grok's slug+hash form for a long cwd) keeps a
   null cwd rather than a guessed one. copilot's `session.start` names `context.cwd`, and its
   `sessionId` must equal the directory it sits in.
-- **Bounded**: per root only the newest `PER_ROOT` (25) files by mtime are OPENED (the rest cost a
-  stat; codex walks its dated tree newest-first and stats at most 100), each open is a 512 KB head
-  plus, for a claude/gemini title, a 128 KB tail, and the parse is cached by (path, size, mtime).
-  Measured on the dev host (313 claude transcripts, 62 codex rollouts): 227 ms cold, 20 ms cached,
-  46 rows. Read on demand only — once per start-screen appearance and per palette open, never a timer.
+- **Bounded**: per root only the newest `PER_ROOT` (25) files by mtime are OPENED; every other
+  file costs a stat, and stats run in parallel capped at `STAT_CONCURRENCY` (32) — the first version
+  awaited them one by one, which review measured at 2.8–4.0 s warm for 10,000 transcripts on every
+  ⌘K. Codex walks its dated tree newest-first and stats at most 100. Each open is a 512 KB head plus,
+  for a claude/gemini title, a 128 KB tail; the parse is cached by (path, size, mtime), and the whole
+  answer is REUSED for `RESULT_REUSE_MS` (10 s, keyed by the exact roots + limit, concurrent callers
+  share one read). Measured (fixture trees, this host): 300 files 45 ms cold / 17 ms warm, 3,000 →
+  209 / 356 ms, 10,000 → 630 / 617 ms; the real dev-host history (313 claude transcripts, 62 codex
+  rollouts) 227 ms cold, 20 ms cached, 46 rows. Read on demand only — once per start-screen
+  appearance and per palette open, never a timer. (`core/transcript-index.ts` was not reused: it is
+  claude-only and carries no account per entry.)
 - **Title = display text, never a command.** The agent's own session name where it has one (claude
   `custom-title`/`ai-title` via `pickSessionName`, gemini `update_topic` via `pickGeminiTitle`, grok
   `summary.json`), else the first thing the user typed (the agent's own chat parser; a `<…>` harness
   wrapper is not a prompt). Every title goes through `untrustedLine` (no control, bidi or zero-width
-  characters, one line, capped at 120). A transcript is `lstat`ed and must be a regular file — a
-  symlink planted in a history dir is never read. Only the SESSION ID reaches a pane, re-validated
+  characters, one line, capped at 120). Every file the reader opens is `lstat`ed first and must be a
+  regular file — transcripts, gemini's `.project_root` and grok's `summary.json` alike — so a symlink
+  planted in a history dir is never followed. Only the SESSION ID reaches a pane, re-validated
   three times: `SAFE_SESSION_ID` at read, `canResumeWith` in the plan, and `createAgentNode`, which
   THROWS on an id the resume grammar refuses rather than silently starting a fresh conversation.
 - **The resume funnel is the factory's own**: `createAgentNode`'s trailing `resumeSessionId` builds
@@ -5043,17 +5050,38 @@ plan: the pure `renderer/lib/recentConversations.ts`; execution: Canvas `resumeR
   custom args, codex's launcher, `withPermissionMode` and the gateway model all apply — mints no id,
   and persists the RESUMED id as `agentSessionId`. The ⌘K transcript-search hit now uses the same
   path; before, it replaced the command by hand and kept a freshly minted id the node never ran, so
-  its cold restore after a reboot resumed nothing.
+  its cold restore after a reboot resumed nothing — and it passed no account, so a hit from a
+  managed/linked root resumed under the system login. `TranscriptHit.accountId` (from the index root
+  that holds the file) now travels with it, refused if that account is gone or not local.
 - **The account is the one that holds the history**, never the project default: a conversation in a
   managed account's config dir resumed under the system login answers "No conversation found".
   `boundAccountId` still decides binding; the plan REFUSES when that account is gone, pending or
-  host-pinned (`RESUME_REFUSALS.accountGone`).
-- **Where it resumes** (`planResume`): a node already holding the session (its live hook id, else
-  its persisted `agentSessionId`, live canvas first, then every stored project) is FOCUSED — two CLIs
-  on one transcript interleave it. Else a LOCAL folder project whose cwd equals the conversation's
-  (active first, then open, then closed → reopened). **Never an SSH project or a relay tab**: this
-  is this machine's history, and those cwds are on another machine. No project → "Open folder &
-  resume" through `openOrAdoptFolder` (the same probe/adopt rules as "Open folder…"). A resume into
+  host-pinned (`RESUME_REFUSALS.accountGone`). A codex rollout HARDLINKED into a second home by
+  "Switch Codex account" is one inode seen twice with the same mtime: `mergeRecent` credits the tie
+  to the MANAGED account's copy. That is usually the account it was switched TO; a switch back to
+  the system login is credited wrongly, which costs nothing — both homes hold the same file, so the
+  resume finds it under either.
+- **Where it resumes** (`planResume`):
+  - A node already holding the session is FOCUSED — two CLIs on one transcript interleave it. A node
+    holds exactly ONE session: its live hook id, ELSE its persisted `agentSessionId` — never both.
+    `agentSessionId` is the launch-minted id and nothing rewrites it from hooks, so after `/clear`
+    (live B) the node no longer holds A, and A must stay resumable (`closedHistory` uses the same
+    `live || persisted`).
+  - A folder that no longer exists (`cwdState: 'absent'`, a definite ENOENT/ENOTDIR from core — a
+    failed stat is `unknown` and proceeds) is REFUSED: opening it would RECREATE it (the store
+    mkdirs `<cwd>/.nodeterm`), and a removed worktree is the common case; a later
+    `git worktree add` at that path would then fail.
+  - Else the MOST SPECIFIC local owner of the folder: a worktree-bound group frame whose
+    `worktree.path` is the folder or an ancestor (the node opens inside that frame), or the local
+    project whose cwd is the folder or an ANCESTOR — segment-wise (`containsDir`), longest wins,
+    then active > open > closed (reopened). A conversation in `/repo/packages/app` resumes in the
+    `/repo` project; it does not mint a second project with a `project.json` inside the repository.
+    The node's cwd is always the conversation's own folder (the CLI keys the transcript by it).
+  - **Never an SSH project or a relay tab**: this is this machine's history, and those cwds are on
+    another machine. `openFolderProject`/`openOrAdoptFolder` now skip relay tabs too — a relay tab
+    carries the HOST's cwd, and the same path on two machines used to switch to it and do nothing.
+  - No owner → "Open folder & resume" through `openOrAdoptFolder` (the same probe/adopt rules as
+    "Open folder…"); the ⌘K row says "Open folder & resume: …", never a bare "Resume". A resume into
   another project lands via `pendingResumeRef`, consumed by the project-load effect beside
   `pendingFocusRef`, and RE-PLANS at creation (a node may have taken the session meanwhile).
   Refused rows stay on the start screen, disabled with the reason; the palette omits them (no

@@ -155,6 +155,32 @@ async function statCandidate(file: string): Promise<Candidate | null> {
   }
 }
 
+/** Stats run in parallel, but never more than this many at once: a history of 10,000 transcripts
+ *  (measured in review: 1.6 s cold / 2.8–4.0 s warm, awaited one by one) must not open 10,000
+ *  handles at the same instant either. */
+export const STAT_CONCURRENCY = 32
+
+export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
+}
+
+async function isRegularFile(file: string): Promise<boolean> {
+  try {
+    return (await fs.promises.lstat(file)).isFile()
+  } catch {
+    return false
+  }
+}
+
 function newest(cands: Array<Candidate | null>, n = PER_ROOT): Candidate[] {
   return cands
     .filter((c): c is Candidate => !!c && c.size > 0)
@@ -293,7 +319,9 @@ async function parseGemini(c: Candidate, cwd: string | null): Promise<Parsed> {
 async function parseGrok(c: Candidate, sessionId: string, cwd: string | null): Promise<Parsed> {
   const lines = await headLines(c)
   const prompt = firstPrompt(chatMessagesFromGrok(lines.join('\n')))
-  const meta = await readGrokSessionMeta(path.dirname(c.file))
+  const dir = path.dirname(c.file)
+  // summary.json is opened by the shared reader, which follows links — lstat it here first.
+  const meta = (await isRegularFile(path.join(dir, 'summary.json'))) ? await readGrokSessionMeta(dir) : null
   const t = titled(meta?.title, prompt)
   if (t.titleSource === 'none') return null
   return { agentId: 'grok', sessionId, cwd, ...t }
@@ -338,11 +366,13 @@ function row(parsed: Parsed, c: Candidate, accountId?: string): Row | null {
 // ── per-agent enumeration ─────────────────────────────────────────────────────────────────────
 
 async function claudeRows(root: string, accountId?: string): Promise<Row[]> {
-  const cands: Array<Candidate | null> = []
-  for (const proj of await listDirs(root)) {
-    const dir = path.join(root, proj)
-    for (const f of await listFiles(dir, '.jsonl')) cands.push(await statCandidate(path.join(dir, f)))
-  }
+  const files: string[] = []
+  const projects = await listDirs(root)
+  const lists = await mapLimit(projects, STAT_CONCURRENCY, (proj) => listFiles(path.join(root, proj), '.jsonl'))
+  projects.forEach((proj, i) => {
+    for (const f of lists[i]) files.push(path.join(root, proj, f))
+  })
+  const cands = await mapLimit(files, STAT_CONCURRENCY, statCandidate)
   const out: Row[] = []
   for (const c of newest(cands)) {
     const r = row(await cached(c, () => parseClaude(c)), c, accountId)
@@ -370,7 +400,7 @@ async function codexRows(home: string, accountId?: string): Promise<Row[]> {
     }
   }
   const out: Row[] = []
-  for (const c of newest(await Promise.all(files.map(statCandidate)))) {
+  for (const c of newest(await mapLimit(files, STAT_CONCURRENCY, statCandidate))) {
     const r = row(await cached(c, () => parseCodex(c)), c, accountId)
     if (r) out.push(r)
   }
@@ -384,14 +414,17 @@ async function geminiRows(tmp: string): Promise<Row[]> {
     // MEASURED (gemini-cli, 2026-09): each project dir holds `.project_root`, the absolute cwd.
     let cwd: string | null = null
     try {
-      cwd = safeCwd((await readRange(path.join(projDir, '.project_root'), 0, 4096)).trim())
+      const rootFile = path.join(projDir, '.project_root')
+      // lstat first: a symlink planted here must not make us read whatever it points at.
+      if (await isRegularFile(rootFile)) cwd = safeCwd((await readRange(rootFile, 0, 4096)).trim())
     } catch {
       /* an older layout (hash-named dir) has none — the row keeps a null cwd */
     }
     const chats = path.join(projDir, 'chats')
-    for (const f of await listFiles(chats, '.jsonl')) {
-      cands.push({ c: await statCandidate(path.join(chats, f)), cwd })
-    }
+    const stats = await mapLimit(await listFiles(chats, '.jsonl'), STAT_CONCURRENCY, (f) =>
+      statCandidate(path.join(chats, f))
+    )
+    for (const c of stats) cands.push({ c, cwd })
   }
   const byFile = new Map(cands.filter((x) => x.c).map((x) => [x.c!.file, x.cwd]))
   const out: Row[] = []
@@ -414,10 +447,11 @@ async function grokRows(sessions: string): Promise<Row[]> {
     } catch {
       /* not an encoded path */
     }
-    for (const id of await listDirs(path.join(sessions, group))) {
-      if (!isSafeGrokSessionId(id) || !validId(id)) continue
-      cands.push({ c: await statCandidate(path.join(sessions, group, id, GROK_CHAT_HISTORY_FILE)), id, cwd })
-    }
+    const ids = (await listDirs(path.join(sessions, group))).filter((id) => isSafeGrokSessionId(id) && validId(id))
+    const stats = await mapLimit(ids, STAT_CONCURRENCY, (id) =>
+      statCandidate(path.join(sessions, group, id, GROK_CHAT_HISTORY_FILE))
+    )
+    ids.forEach((id, i) => cands.push({ c: stats[i], id, cwd }))
   }
   const meta = new Map(cands.filter((x) => x.c).map((x) => [x.c!.file, x]))
   const out: Row[] = []
@@ -430,11 +464,8 @@ async function grokRows(sessions: string): Promise<Row[]> {
 }
 
 async function copilotRows(root: string): Promise<Row[]> {
-  const cands: Array<Candidate | null> = []
-  for (const id of await listDirs(root)) {
-    if (!validId(id)) continue
-    cands.push(await statCandidate(path.join(root, id, COPILOT_EVENTS_FILE)))
-  }
+  const ids = (await listDirs(root)).filter(validId)
+  const cands = await mapLimit(ids, STAT_CONCURRENCY, (id) => statCandidate(path.join(root, id, COPILOT_EVENTS_FILE)))
   const out: Row[] = []
   for (const c of newest(cands)) {
     const id = path.basename(path.dirname(c.file))
@@ -444,14 +475,23 @@ async function copilotRows(root: string): Promise<Row[]> {
   return out
 }
 
-/** Newest first; the same (agent, session) seen twice (a root listed twice, a hardlinked rollout
- *  in two codex homes) keeps its NEWEST sighting. */
+/** Newest first; the same (agent, session) seen twice keeps its NEWEST sighting. A tie — a codex
+ *  rollout HARDLINKED into a second home by "Switch Codex account" is one inode, so both sightings
+ *  carry the same mtime — goes to the MANAGED account's copy: that is the account the conversation
+ *  was usually switched to. A switch BACK to the system login is credited wrongly, at no cost: both
+ *  homes hold the same file, so the resume finds it under either login. */
 export function mergeRecent(rows: Row[], limit: number): Row[] {
   const best = new Map<string, Row>()
   for (const r of rows) {
     const key = `${r.agentId}\0${r.sessionId}`
     const prev = best.get(key)
-    if (!prev || r.lastActiveAt > prev.lastActiveAt) best.set(key, r)
+    if (
+      !prev ||
+      r.lastActiveAt > prev.lastActiveAt ||
+      (r.lastActiveAt === prev.lastActiveAt && !!r.accountId && !prev.accountId)
+    ) {
+      best.set(key, r)
+    }
   }
   return [...best.values()].sort((a, b) => b.lastActiveAt - a.lastActiveAt).slice(0, limit)
 }
@@ -475,7 +515,53 @@ export async function listRecentConversations(
   ]
   const settled = await Promise.allSettled(jobs)
   const rows = settled.flatMap((s) => (s.status === 'fulfilled' ? s.value : []))
-  return mergeRecent(rows, clampLimit(limit))
+  const merged = mergeRecent(rows, clampLimit(limit))
+  // Does each folder still exist? A removed worktree is the common case, and "Open folder & resume"
+  // would otherwise RECREATE it (the store mkdirs `<cwd>/.nodeterm`). One stat per distinct cwd.
+  const cwds = [...new Set(merged.map((r) => r.cwd).filter((c): c is string => !!c))]
+  const states = new Map(
+    (await mapLimit(cwds, STAT_CONCURRENCY, async (c) => [c, await dirState(c)] as const)).map(([c, st]) => [c, st])
+  )
+  return merged.map((r) => (r.cwd ? { ...r, cwdState: states.get(r.cwd) ?? 'unknown' } : r))
+}
+
+/** `absent` only on a definite ENOENT/ENOTDIR (or a path that is not a directory) — any other error
+ *  is `unknown`: a failed stat is never evidence of absence. */
+export async function dirState(dir: string): Promise<'present' | 'absent' | 'unknown'> {
+  try {
+    return (await fs.promises.stat(dir)).isDirectory() ? 'present' : 'absent'
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'absent' : 'unknown'
+  }
+}
+
+/** How long one answer is reused. Opening ⌘K twice in a row must not re-stat the whole history;
+ *  a conversation that ended a few seconds ago appearing a few seconds late costs nothing. */
+export const RESULT_REUSE_MS = 10_000
+let reuse: { key: string; at: number; items: Promise<RecentConversation[]> } | null = null
+
+export function resetRecentConversationsReuseForTests(): void {
+  reuse = null
+}
+
+/** `listRecentConversations` with a short reuse window, keyed by the exact roots + limit (so an
+ *  account added in Settings is looked at on the next open, not after the window). A concurrent
+ *  second call shares the first's in-flight read. */
+export function listRecentConversationsReused(
+  roots: RecentRoots,
+  limit: number,
+  now: number = Date.now()
+): Promise<RecentConversation[]> {
+  const key = JSON.stringify([roots, limit])
+  if (reuse && reuse.key === key && now - reuse.at < RESULT_REUSE_MS) return reuse.items
+  const items = listRecentConversations(roots, limit)
+  reuse = { key, at: now, items }
+  // A failed read is not reused.
+  items.catch(() => {
+    if (reuse?.items === items) reuse = null
+  })
+  return items
 }
 
 /** Sanitize a request that arrived over IPC / the WS bridge. */
@@ -492,7 +578,7 @@ export function registerRecentConversationsIpc(): void {
   platform().handle(IPC.recentConversationsList, async (raw: unknown): Promise<RecentConversationsResult> => {
     try {
       const req = normalizeRecentRequest(raw)
-      return { ok: true, items: await listRecentConversations(defaultRecentRoots(req), req.limit) }
+      return { ok: true, items: await listRecentConversationsReused(defaultRecentRoots(req), clampLimit(req.limit)) }
     } catch {
       return { ok: false, reason: 'failed' }
     }

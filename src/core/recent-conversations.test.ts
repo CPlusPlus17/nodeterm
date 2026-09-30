@@ -8,8 +8,13 @@ import {
   clampLimit,
   defaultRecentRoots,
   firstPrompt,
+  dirState,
   listRecentConversations,
+  listRecentConversationsReused,
+  mapLimit,
   mergeRecent,
+  resetRecentConversationsReuseForTests,
+  RESULT_REUSE_MS,
   normalizeRecentRequest,
   PER_ROOT,
   resetRecentConversationsCacheForTests,
@@ -65,6 +70,7 @@ let roots: RecentRoots
 
 beforeEach(() => {
   resetRecentConversationsCacheForTests()
+  resetRecentConversationsReuseForTests()
   home = testTmpDir('nt-recent-')
   roots = {
     claude: [{ root: path.join(home, '.claude', 'projects') }],
@@ -249,6 +255,69 @@ describe('bounds and caching', () => {
     expect(clampLimit('5')).toBe(RECENT_CONVERSATIONS_MAX)
     expect(normalizeRecentRequest(null)).toEqual({})
     expect(normalizeRecentRequest({ codexAccountIds: ['a', 7, 'b'], limit: 3 })).toEqual({ codexAccountIds: ['a', 'b'], limit: 3 })
+  })
+})
+
+describe('review #1062 fixes', () => {
+  it('says whether each folder still exists — absent only on a definite ENOENT', async () => {
+    const live = testTmpDir('nt-live-')
+    write(path.join(roots.claude[0].root, '-a', `${CLAUDE_ID}.jsonl`), claudeTranscript({ cwd: live }))
+    const gone = 'aaaaaaaa-3b7d-4e61-9a24-7c1d8e0f4b32'
+    write(path.join(roots.claude[0].root, '-b', `${gone}.jsonl`), claudeTranscript({ id: gone, cwd: path.join(home, 'removed-worktree') }))
+    const items = await listRecentConversations(roots)
+    expect(items.find((i) => i.sessionId === CLAUDE_ID)?.cwdState).toBe('present')
+    expect(items.find((i) => i.sessionId === gone)?.cwdState).toBe('absent')
+    const file = write(path.join(home, 'f'), 'x')
+    expect(await dirState(file)).toBe('absent')
+    expect(await dirState(path.join(file, 'below'))).toBe('absent')
+  })
+
+  it('a hardlinked codex rollout (same inode, same mtime) is credited to the managed account', () => {
+    const r = (accountId?: string): RecentConversation => ({
+      agentId: 'codex', sessionId: CODEX_ID, cwd: '/x', lastActiveAt: 5, title: 't', titleSource: 'prompt',
+      ...(accountId ? { accountId } : {})
+    })
+    expect(mergeRecent([r(), r('cw')], 10)[0].accountId).toBe('cw')
+    expect(mergeRecent([r('cw'), r()], 10)[0].accountId).toBe('cw')
+  })
+
+  it('reuses one answer inside the window, and re-reads after it (or for other roots)', async () => {
+    const f = write(path.join(roots.claude[0].root, '-a', `${CLAUDE_ID}.jsonl`), claudeTranscript({ title: 'One' }), 1_000)
+    const first = await listRecentConversationsReused(roots, 60, 0)
+    fs.writeFileSync(f, claudeTranscript({ title: 'Two!' }))
+    expect(await listRecentConversationsReused(roots, 60, RESULT_REUSE_MS - 1)).toBe(first)
+    expect((await listRecentConversationsReused(roots, 60, RESULT_REUSE_MS + 1))[0].title).toBe('Two!')
+    const other = { ...roots, copilot: [] }
+    expect(await listRecentConversationsReused(other, 60, RESULT_REUSE_MS + 2)).not.toBe(first)
+  })
+
+  it('mapLimit keeps order and never runs more than the limit at once', async () => {
+    let live = 0
+    let peak = 0
+    const out = await mapLimit([1, 2, 3, 4, 5, 6, 7], 3, async (n) => {
+      live++
+      peak = Math.max(peak, live)
+      await new Promise((r) => setTimeout(r, 1))
+      live--
+      return n * 2
+    })
+    expect(out).toEqual([2, 4, 6, 8, 10, 12, 14])
+    expect(peak).toBe(3)
+  })
+
+  it('never follows a symlinked gemini .project_root or grok summary.json', async () => {
+    const secret = write(path.join(home, 'secret.txt'), '/etc/secret-dir')
+    const gdir = path.join(roots.geminiTmp!, 'p')
+    fs.mkdirSync(gdir, { recursive: true })
+    fs.symlinkSync(secret, path.join(gdir, '.project_root'))
+    write(path.join(gdir, 'chats', 's.jsonl'), jl({ sessionId: GEMINI_ID, kind: 'main' }, { id: '1', type: 'user', content: [{ text: 'hello' }] }))
+    const grokDir = path.join(roots.grokSessions!, encodeURIComponent('/srv/grok'), GROK_ID)
+    write(path.join(grokDir, 'chat_history.jsonl'), jl({ type: 'user', content: [{ type: 'text', text: 'typed' }] }))
+    const leak = write(path.join(home, 'leak.json'), JSON.stringify({ generated_title: 'LEAKED' }))
+    fs.symlinkSync(leak, path.join(grokDir, 'summary.json'))
+    const items = await listRecentConversations(roots)
+    expect(items.find((i) => i.agentId === 'gemini')?.cwd).toBeNull()
+    expect(items.find((i) => i.agentId === 'grok')).toMatchObject({ title: 'typed', titleSource: 'prompt' })
   })
 })
 

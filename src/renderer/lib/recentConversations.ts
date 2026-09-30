@@ -19,13 +19,17 @@ import type { RecentConversation } from '@shared/recent-conversations'
 
 export type ResumePlan =
   | { kind: 'focus'; nodeId: string; projectId: string }
-  | { kind: 'resume'; projectId: string; reopen: boolean }
+  /** `groupId`: a worktree-bound group frame whose worktree holds the conversation's folder — the
+   *  node opens inside it, so it is where the user's branch work already is. */
+  | { kind: 'resume'; projectId: string; reopen: boolean; groupId?: string }
   | { kind: 'open-folder'; folder: string }
   | { kind: 'refuse'; reason: string }
 
 export const RESUME_REFUSALS = {
   unsafeId: 'This conversation’s id cannot be put on a command line safely.',
   noCwd: 'The history does not say which folder this conversation ran in.',
+  folderGone:
+    'The folder this conversation ran in no longer exists (a removed worktree?). Opening it would recreate an empty folder.',
   accountGone: 'The account this conversation belongs to is no longer set up on this machine.'
 } as const
 
@@ -33,14 +37,26 @@ export const RESUME_REFUSALS = {
 export interface HeldSession {
   nodeId: string
   projectId: string
-  /** The live hook-fed id (wins), and the persisted `agentSessionId`. */
-  sessionIds: Array<string | undefined>
+  /** The ONE session this node holds: the live hook-fed id, else the persisted `agentSessionId`.
+   *  Never both — `agentSessionId` is the id minted at launch and nothing rewrites it from hooks,
+   *  so after a `/clear` (live id B) the node no longer holds A, and A must stay resumable. Same
+   *  rule as `closedHistory` (`live || persisted`). */
+  sessionId: string | undefined
+}
+
+/** A worktree-bound group frame on a canvas: its project, its id and its worktree folder. */
+export interface WorktreeGroupRef {
+  projectId: string
+  groupId: string
+  path: string
 }
 
 export interface ResumeContext {
   projects: readonly Pick<Project, 'id' | 'cwd' | 'ssh' | 'closed' | 'unavailable' | 'remote'>[]
   activeProjectId: string
   held: readonly HeldSession[]
+  /** Worktree-bound groups (live canvas + stored projects), for a conversation that ran in one. */
+  worktreeGroups?: readonly WorktreeGroupRef[]
   claudeAccounts: readonly Pick<ClaudeAccount, 'id' | 'host' | 'pending'>[]
   codexAccounts: readonly Pick<CodexAccount, 'id' | 'host' | 'pending'>[]
 }
@@ -59,7 +75,7 @@ export function heldSessions(
     out.push({
       nodeId: n.id,
       projectId: activeProjectId,
-      sessionIds: [liveSessionId(n.id), str(n.data?.agentSessionId)]
+      sessionId: liveSessionId(n.id) || str(n.data?.agentSessionId)
     })
   }
   for (const p of projects) {
@@ -68,15 +84,40 @@ export function heldSessions(
       out.push({
         nodeId: n.id,
         projectId: p.id,
-        sessionIds: [liveSessionId(n.id), str((n as { agentSessionId?: unknown }).agentSessionId)]
+        sessionId: liveSessionId(n.id) || str((n as { agentSessionId?: unknown }).agentSessionId)
       })
     }
   }
   return out
 }
 
+/** Every worktree-bound group, live canvas first (the store lags it by an autosave). */
+export function worktreeGroups(
+  projects: readonly Pick<Project, 'id' | 'nodes'>[],
+  activeProjectId: string,
+  liveNodes: ReadonlyArray<{ id: string; type?: string; data?: { worktree?: unknown } }>
+): WorktreeGroupRef[] {
+  const out: WorktreeGroupRef[] = []
+  const pathOf = (w: unknown): string | undefined =>
+    w && typeof w === 'object' && typeof (w as { path?: unknown }).path === 'string'
+      ? (w as { path: string }).path
+      : undefined
+  for (const n of liveNodes) {
+    const p = n.type === 'group' ? pathOf(n.data?.worktree) : undefined
+    if (p) out.push({ projectId: activeProjectId, groupId: n.id, path: p })
+  }
+  for (const pr of projects) {
+    if (pr.id === activeProjectId && liveNodes.length) continue
+    for (const n of pr.nodes ?? []) {
+      const p = n.kind === 'group' ? pathOf((n as { worktree?: unknown }).worktree) : undefined
+      if (p) out.push({ projectId: pr.id, groupId: n.id, path: p })
+    }
+  }
+  return out
+}
+
 export function findHolder(conv: RecentConversation, held: readonly HeldSession[]): HeldSession | undefined {
-  return held.find((h) => h.sessionIds.some((id) => id === conv.sessionId))
+  return held.find((h) => h.sessionId === conv.sessionId)
 }
 
 function accountUsable(conv: RecentConversation, ctx: ResumeContext): boolean {
@@ -91,11 +132,17 @@ function accountUsable(conv: RecentConversation, ctx: ResumeContext): boolean {
   return false
 }
 
-/** Normalize a folder for comparison: trailing separators do not make a different directory. */
-function sameDir(a: string | undefined, b: string): boolean {
-  if (!a) return false
-  const trim = (s: string): string => (s.length > 1 ? s.replace(/[/\\]+$/, '') : s)
-  return trim(a) === trim(b)
+const trimSep = (s: string): string => (s.length > 1 ? s.replace(/[/\\]+$/, '') : s)
+
+/** Length of `dir` when it is `target` or an ANCESTOR of it (segment-wise: `/repo` holds
+ *  `/repo/packages/app`, never `/repository`), else -1. Longer = more specific. */
+export function containsDir(dir: string | undefined, target: string): number {
+  if (!dir) return -1
+  const d = trimSep(dir)
+  const t = trimSep(target)
+  if (t === d) return d.length
+  const prefixes = /[/\\]$/.test(d) ? [d] : [d + '/', d + '\\']
+  return prefixes.some((p) => t.startsWith(p)) ? d.length : -1
 }
 
 export function planResume(conv: RecentConversation, ctx: ResumeContext): ResumePlan {
@@ -105,13 +152,46 @@ export function planResume(conv: RecentConversation, ctx: ResumeContext): Resume
   if (!canResumeWith(conv.agentId, conv.sessionId)) return { kind: 'refuse', reason: RESUME_REFUSALS.unsafeId }
   if (!accountUsable(conv, ctx)) return { kind: 'refuse', reason: RESUME_REFUSALS.accountGone }
   if (!conv.cwd) return { kind: 'refuse', reason: RESUME_REFUSALS.noCwd }
-  const local = ctx.projects.filter(
-    (p) => !p.ssh && !p.remote && !p.unavailable && sameDir(p.cwd, conv.cwd!)
-  )
-  const pick =
-    local.find((p) => p.id === ctx.activeProjectId) ?? local.find((p) => !p.closed) ?? local[0]
-  if (pick) return { kind: 'resume', projectId: pick.id, reopen: !!pick.closed }
-  return { kind: 'open-folder', folder: conv.cwd }
+  // Only a DEFINITE absence refuses; `unknown` (a stat that failed otherwise) proceeds.
+  if (conv.cwdState === 'absent') return { kind: 'refuse', reason: RESUME_REFUSALS.folderGone }
+  const cwd = conv.cwd
+  // The most specific owner of the folder wins: a worktree-bound group, or the local project whose
+  // folder is the conversation's or an ANCESTOR of it (a subfolder like `/repo/packages/app`
+  // resumes in the `/repo` project, it does not mint a second project inside the repository).
+  const local = ctx.projects.filter((p) => !p.ssh && !p.remote && !p.unavailable)
+  const localIds = new Set(local.map((p) => p.id))
+  const rank = (p: (typeof local)[number]): number =>
+    p.id === ctx.activeProjectId ? 0 : p.closed ? 2 : 1
+  let best: { depth: number; projectId: string; groupId?: string; rank: number } | null = null
+  const consider = (depth: number, projectId: string, groupId?: string): void => {
+    if (depth < 0) return
+    const p = local.find((x) => x.id === projectId)!
+    const r = rank(p)
+    // Deeper wins; at equal depth a group beats its project, then active > open > closed.
+    if (
+      !best ||
+      depth > best.depth ||
+      (depth === best.depth && !!groupId && !best.groupId) ||
+      (depth === best.depth && !!groupId === !!best.groupId && r < best.rank)
+    ) {
+      best = { depth, projectId, groupId, rank: r }
+    }
+  }
+  for (const p of local) consider(containsDir(p.cwd, cwd), p.id)
+  for (const g of ctx.worktreeGroups ?? []) {
+    if (localIds.has(g.projectId)) consider(containsDir(g.path, cwd), g.projectId, g.groupId)
+  }
+  const pick = best as { depth: number; projectId: string; groupId?: string; rank: number } | null
+  if (pick) {
+    const project = local.find((p) => p.id === pick.projectId)!
+    return {
+      kind: 'resume',
+      projectId: pick.projectId,
+      reopen: !!project.closed,
+      ...(pick.groupId ? { groupId: pick.groupId } : {})
+    }
+  }
+  return { kind: 'open-folder', folder: cwd }
 }
 
 /** The action a row offers, in words. */

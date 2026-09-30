@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
+  containsDir,
   groupRecentByFolder,
+  worktreeGroups,
   heldSessions,
   localCodexAccountIds,
   planResume,
@@ -35,14 +37,14 @@ describe('planResume', () => {
       conv(),
       ctx({
         projects: [{ id: 'p1', cwd: '/srv/demo' }] as never,
-        held: [{ nodeId: 'n7', projectId: 'p2', sessionIds: [undefined, SID] }]
+        held: [{ nodeId: 'n7', projectId: 'p2', sessionId: SID }]
       })
     )
     expect(plan).toEqual({ kind: 'focus', nodeId: 'n7', projectId: 'p2' })
   })
 
   it('the live hook id counts as holding too', () => {
-    const plan = planResume(conv(), ctx({ held: [{ nodeId: 'n1', projectId: 'p', sessionIds: [SID, 'minted'] }] }))
+    const plan = planResume(conv(), ctx({ held: [{ nodeId: 'n1', projectId: 'p', sessionId: SID }] }))
     expect(plan.kind).toBe('focus')
   })
 
@@ -103,6 +105,67 @@ describe('planResume', () => {
   })
 })
 
+describe('planResume — folder ownership (review #1062)', () => {
+  it('refuses a folder that no longer exists — never recreates it', () => {
+    expect(planResume(conv({ cwdState: 'absent' }), ctx())).toEqual({ kind: 'refuse', reason: RESUME_REFUSALS.folderGone })
+    // Even when a project owns an ancestor: the CLI keys the conversation by its folder.
+    expect(planResume(conv({ cwdState: 'absent' }), ctx({ projects: [{ id: 'p', cwd: '/srv' }] as never })).kind).toBe('refuse')
+  })
+
+  it('an unknown folder state is not absence', () => {
+    expect(planResume(conv({ cwdState: 'unknown' }), ctx()).kind).toBe('open-folder')
+  })
+
+  it('a conversation in a subfolder resumes in the ancestor project (the longest prefix wins)', () => {
+    const projects = [
+      { id: 'root', cwd: '/srv' },
+      { id: 'repo', cwd: '/srv/demo' },
+      { id: 'lookalike', cwd: '/srv/dem' }
+    ] as never
+    expect(planResume(conv({ cwd: '/srv/demo/packages/app' }), ctx({ projects }))).toEqual({
+      kind: 'resume',
+      projectId: 'repo',
+      reopen: false
+    })
+    expect(planResume(conv({ cwd: '/srv/demolition' }), ctx({ projects }))).toMatchObject({ projectId: 'root' })
+  })
+
+  it('a conversation in a bound worktree resumes inside that worktree’s group', () => {
+    const projects = [{ id: 'repo', cwd: '/srv/demo' }] as never
+    const groups = [{ projectId: 'repo', groupId: 'g1', path: '/srv/demo.worktrees/fix-x' }]
+    expect(
+      planResume(conv({ cwd: '/srv/demo.worktrees/fix-x' }), ctx({ projects, worktreeGroups: groups }))
+    ).toEqual({ kind: 'resume', projectId: 'repo', reopen: false, groupId: 'g1' })
+  })
+
+  it('a worktree group in a relay tab or SSH project is not a local owner', () => {
+    const projects = [{ id: 'relay', cwd: '/elsewhere', remote: true }] as never
+    const groups = [{ projectId: 'relay', groupId: 'g1', path: '/srv/demo' }]
+    expect(planResume(conv(), ctx({ projects, worktreeGroups: groups })).kind).toBe('open-folder')
+  })
+
+  it('containsDir is segment-wise and tolerates trailing separators', () => {
+    expect(containsDir('/srv/demo/', '/srv/demo')).toBe('/srv/demo'.length)
+    expect(containsDir('/srv/demo', '/srv/demo/a')).toBe('/srv/demo'.length)
+    expect(containsDir('/srv/demo', '/srv/demolition')).toBe(-1)
+    expect(containsDir('C:\\work', 'C:\\work\\app')).toBe('C:\\work'.length)
+    expect(containsDir('/', '/srv')).toBe(1)
+    expect(containsDir(undefined, '/srv')).toBe(-1)
+  })
+
+  it('collects worktree groups from the live canvas and the stored projects', () => {
+    const projects = [
+      { id: 'a', nodes: [{ id: 'old', kind: 'group', worktree: { path: '/stale' } }] },
+      { id: 'b', nodes: [{ id: 'g2', kind: 'group', worktree: { path: '/wt/b' } }, { id: 't', kind: 'terminal' }] }
+    ] as never
+    const live = [{ id: 'g1', type: 'group', data: { worktree: { path: '/wt/a' } } }, { id: 'x', type: 'terminal', data: {} }]
+    expect(worktreeGroups(projects, 'a', live)).toEqual([
+      { projectId: 'a', groupId: 'g1', path: '/wt/a' },
+      { projectId: 'b', groupId: 'g2', path: '/wt/b' }
+    ])
+  })
+})
+
 describe('heldSessions', () => {
   it('reads the live canvas for the active project and the store for the rest', () => {
     const projects = [
@@ -111,9 +174,17 @@ describe('heldSessions', () => {
     ] as never
     const held = heldSessions(projects, 'a', [{ id: 'n1', data: { agentSessionId: 'x1' } }], (id) => (id === 'n2' ? 'live2' : undefined))
     expect(held).toEqual([
-      { nodeId: 'n1', projectId: 'a', sessionIds: [undefined, 'x1'] },
-      { nodeId: 'n2', projectId: 'b', sessionIds: ['live2', 'x2'] }
+      { nodeId: 'n1', projectId: 'a', sessionId: 'x1' },
+      { nodeId: 'n2', projectId: 'b', sessionId: 'live2' }
     ])
+  })
+
+  it('a node that moved to a new session (/clear) no longer holds its launch-minted one', () => {
+    // Minted A at launch, live id now B: A must be resumable from the list, B must focus the node.
+    const held = heldSessions([], 'p', [{ id: 'n1', data: { agentSessionId: 'A' } }], () => 'B')
+    const planA = planResume(conv({ sessionId: 'A' }), ctx({ held }))
+    expect(planA.kind).toBe('open-folder')
+    expect(planResume(conv({ sessionId: 'B' }), ctx({ held }))).toMatchObject({ kind: 'focus', nodeId: 'n1' })
   })
 })
 

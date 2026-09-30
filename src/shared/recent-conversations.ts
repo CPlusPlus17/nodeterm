@@ -51,6 +51,10 @@ export interface RecentConversation {
   /** The managed or linked account whose config dir holds this history; absent = the system
    *  account. A resume MUST run under this account or the CLI will not find the conversation. */
   accountId?: string
+  /** Does `cwd` still exist as a directory on this machine? Only a definite ENOENT/ENOTDIR is
+   *  `absent` — a stat that failed otherwise is `unknown`, never evidence of absence. Absent when
+   *  `cwd` is null or the reader did not look. */
+  cwdState?: 'present' | 'absent' | 'unknown'
 }
 
 export interface RecentConversationsRequest {

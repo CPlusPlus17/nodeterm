@@ -481,6 +481,7 @@ import type { RecentConversation } from '@shared/recent-conversations'
 import {
   heldSessions,
   localCodexAccountIds,
+  worktreeGroups,
   planResume,
   folderLabel,
   recentTitle,
@@ -11666,6 +11667,16 @@ export function Canvas() {
       // resume line goes through that project's launch command, like every other launch it owns.
       const activeId = useProjects.getState().activeProjectId
       if (!canResumeWith('claude', hit.sessionId)) return
+      const hitAccount = hit.accountId
+      if (
+        hitAccount &&
+        !(useSettings.getState().settings.claudeAccounts ?? []).some(
+          (a) => a.id === hitAccount && !a.host && !a.pending
+        )
+      ) {
+        setNotice({ kind: 'error', text: RESUME_REFUSALS.accountGone })
+        return
+      }
       // The factory's resume path: the same assembler cold restore uses (launch override, permission
       // flag), and the node persists THIS id — not a freshly minted one it never ran — so a later
       // cold restore resumes the same conversation.
@@ -11676,7 +11687,9 @@ export function Canvas() {
         viewCenter(),
         undefined,
         undefined,
-        undefined,
+        // The account whose root holds this transcript — the system login would not find it. A
+        // hit naming an account that has since been removed or is not local is refused.
+        hitAccount,
         activePermissionMode('claude'),
         activeId,
         undefined,
@@ -16258,7 +16271,9 @@ export function Canvas() {
     async (folder: string): Promise<void> => {
       commitActiveToStore()
       // A folder maps to one project: reuse the already-registered one first…
-      const existing = useProjects.getState().projects.find((p) => p.cwd === folder)
+      // A relay tab carries the HOST's cwd: the same path on two machines must not route a local
+      // folder to another machine's tab (openFolderProject applies the same rule).
+      const existing = useProjects.getState().projects.find((p) => p.cwd === folder && !p.remote)
       if (existing) {
         useProjects.getState().openFolderProject(folder)
         // An `unavailable` placeholder never recovers on its own: a save emits a header-only ref
@@ -16603,6 +16618,7 @@ export function Canvas() {
       projects,
       activeProjectId: active,
       held: heldSessions(projects, active, live as never, (id) => byId[id]?.sessionId),
+      worktreeGroups: worktreeGroups(projects, active, live as never),
       claudeAccounts: settings.claudeAccounts ?? [],
       codexAccounts: settings.codexAccounts ?? []
     }
@@ -16652,12 +16668,17 @@ export function Canvas() {
       }
       if (conv.titleSource === 'name' && conv.title) node.data = { ...node.data, title: conv.title }
       node.selected = true
-      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), node])
+      // Inside the worktree-bound frame that owns the folder, when there is one (its branch's work).
+      const placed =
+        plan.groupId && nodesRef.current.some((n) => n.id === plan.groupId)
+          ? parentInto(node, plan.groupId)
+          : node
+      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), placed])
       markDirty()
-      goToNode(node)
+      goToNode(placed)
       setWelcomeOpen(false)
     },
-    [resumeContext, travelToNode, emptyNodePos, setNodes, markDirty, goToNode]
+    [resumeContext, travelToNode, emptyNodePos, parentInto, setNodes, markDirty, goToNode]
   )
   useEffect(() => {
     resumeCreateRef.current = createRecentResumeNode
@@ -16695,13 +16716,20 @@ export function Canvas() {
           else switchProject(plan.projectId)
           return
         case 'open-folder':
-          void openOrAdoptFolder(plan.folder).then(() => {
-            setWelcomeOpen(false)
-            const landed = useProjects
-              .getState()
-              .projects.find((p) => !p.ssh && !p.remote && p.cwd === plan.folder)
-            if (landed) resumeWhenLanded(landed.id, conv)
-          })
+          void openOrAdoptFolder(plan.folder)
+            .then(() => {
+              setWelcomeOpen(false)
+              const landed = useProjects
+                .getState()
+                .projects.find((p) => !p.ssh && !p.remote && p.cwd === plan.folder)
+              if (landed) resumeWhenLanded(landed.id, conv)
+            })
+            .catch((err: unknown) =>
+              setNotice({
+                kind: 'error',
+                text: `Could not open ${plan.folder}: ${stripIpcPrefix(err instanceof Error ? err.message : String(err))}`
+              })
+            )
           return
       }
     },
@@ -17362,7 +17390,8 @@ export function Canvas() {
       if (action.disabled) return []
       return [{
         id: `recent:${conv.agentId}:${conv.sessionId}`,
-        label: `${action.label === 'Go to node' ? 'Go to' : 'Resume'}: ${recentTitle(conv)}`,
+        // The row says what it will DO — "Open folder & resume" opens a new project first.
+        label: `${action.label}: ${recentTitle(conv)}`,
         hint: [folderLabel(conv.cwd), relativeTime(conv.lastActiveAt, at)].join(' · '),
         section: 'Recent conversations',
         icon: <AgentIcon agentId={conv.agentId} />,

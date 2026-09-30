@@ -6,6 +6,14 @@ beforeEach(() => {
 })
 
 describe('openFolderProject', () => {
+  it('never routes a local folder to a relay tab carrying the same path (another machine)', () => {
+    const relay = useProjects.getState().addProject('host', '/Users/me/dev/my-app')
+    useProjects.setState((st) => ({ projects: st.projects.map((q) => (q.id === relay.id ? { ...q, remote: true } : q)) }))
+    const p = useProjects.getState().openFolderProject('/Users/me/dev/my-app')
+    expect(p.id).not.toBe(relay.id)
+    expect(p.remote).toBeFalsy()
+  })
+
   it('creates a new project named after the folder and activates it', () => {
     const p = useProjects.getState().openFolderProject('/Users/me/dev/my-app')
     expect(p.name).toBe('my-app')

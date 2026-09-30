@@ -3380,6 +3380,8 @@ export interface TranscriptHit {
   cwd: string
   projectLabel: string
   mtime: number
+  /** The managed/linked Claude account whose root holds this transcript; absent = system. */
+  accountId?: string
 }
 
 export interface TranscriptsApi {
