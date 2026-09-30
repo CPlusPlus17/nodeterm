@@ -1112,6 +1112,57 @@ conversation, the other two stop the burst that strands it:
   Wall time is the price and it is the right trade: ungated, five to eleven panes never painted at
   all inside a 20 s budget — the same shape `remote-session-index.ts` reports for its own burst.
 
+### Zellij as an optional local backend (`settings.sessionBackend`)
+
+Local POSIX terminals can live in **Zellij** instead of tmux (`src/core/zellij-backend.ts`; the
+measurement table, the herdr comparison and the device checklist are in
+**`docs/session-backends.md`** — Zellij 0.45.1 and herdr 0.9.3 release binaries, Linux, sandboxed
+HOME/XDG/socket dir). Default stays tmux; `normalizeSessionBackend` reads anything unknown as tmux;
+SSH projects keep the remote tmux and Windows keeps the session host. herdr was measured and not
+implemented: its unit is a server of workspaces, a plain pane cannot be attached on its own
+(`agent attach` refuses a non-agent pane), per-pane env is argv, and `pane send-text` ignores the
+app's paste mode (measured: unframed after `?2004h`).
+
+Rules a refactor must not undo:
+- **The backend follows the session that exists** (`decideZellij`). A warm tmux session wins and
+  never reaches the Zellij probe; a LIVE Zellij session is reattached in Zellij whatever the setting
+  now says; only a node with no session anywhere is created in the selected backend. Otherwise
+  flipping the setting cold-restores (`--resume`) an agent into the other multiplexer while the
+  original keeps running in the first.
+- **Env rides the client, never argv.** Each Zellij session is its own server forked by the client
+  that created it, so the painter's `env` (hook env, account scope, gateway/project/custom-agent
+  values, all merged in `spawnSession`) IS the session env — measured. There is no `-e` list to
+  maintain and nothing to leak; do not add one.
+- **Only an answer is absence.** `list-sessions -n` exits 1 both for "No active zellij sessions
+  found" (absence) and for real failures; only the sentence counts, everything else is `unknown`,
+  folded to "exists" like tmux's `probeSaysAbsent`.
+- **A zombie needs confirming before it is killed.** A shell that exits with no client attached
+  leaves the session listed with only the hidden plugin pane, and `attach --create` to it exits at
+  once, so `decideZellij` kills it first. But a session a moment old ALSO has no terminal pane yet
+  (measured, and it made the first version of this code kill its own fresh sessions): five pane-less
+  reads 300 ms apart, and one pane at any read is `live`.
+- **Every action names a pane** (`pickZellijPane`): without `--pane-id` an action silently did
+  nothing headless. `action paste` is the `paste-buffer -p` contract (framed only when the app asked
+  — measured both ways); Enter is a second `write 13`; a paste over 120,000 bytes is refused, never
+  split (one argv element; 140,000 failed with exit 126).
+- **Keybindings are session-wide**, so our `zellij.kdl` decides what everyone attached to a canvas
+  session can press: locked mode (Ctrl-g/p/t/o reach the app — Claude Code uses Ctrl-g), unlock on
+  Ctrl-Alt-g so an outside client can still detach, `session_serialization false` so a killed
+  session is not resurrected by the next `attach --create`.
+- **`tmuxBacked` is also true for a Zellij session** (it means "releasing the client destroys
+  nothing"); every path that would talk to the tmux socket asks `isZellij` first. A delete kills
+  `nt-<id>` in Zellij whenever a binary exists (exact-name match, a no-op for a tmux node), because a
+  node deleted after a restart has no live session and no record.
+- **Explicit degrades, named in Settings** (`ZELLIJ_BACKEND_GAPS`, pinned to the doc by
+  `zellij-backend.test.ts`): messaging/triggers refused (`paneOwner` null), model switch refused
+  (`terminateForeground` false), no session-memory panel / reaper, no pane cwd / stale-cwd banner,
+  mobile direct-SSH sees only tmux. The pane foreground command IS provided, from one `ps` read
+  (server → shell → the shell's `tpgid`); ambiguous (two pane shells) answers null.
+Surfaces: Desktop full; Server Edition the same core (row shown when its host reports Zellij);
+Mobile via relay joins the Zellij session (`listNodetermSessions` includes and remembers them),
+the phone's direct SSH path does not — iOS follow-up. Real-binary suites: `*.realzellij.test.ts`
+(`NODETERM_TEST_ZELLIJ` or `zellij` on PATH; skipped in CI, which has none).
+
 ### We have our own VT emulator — check it before asking tmux
 
 xterm.js is not just a renderer. It parses the pane's output stream, so it **tracks DECSET modes

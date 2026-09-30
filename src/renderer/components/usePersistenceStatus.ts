@@ -36,5 +36,21 @@ export function persistenceDescription(status: TmuxStatus | null | undefined): s
   if (!p) return 'Session protection could not be checked. Continuity is not confirmed.'
   if (!p.enabled) return 'Session protection is off for new local terminals. They will not survive an app or server restart.'
   if (!p.backend) return 'No session protection backend was found. New local terminals will not survive an app or server restart.'
-  return `${p.backend === 'tmux' ? 'tmux' : 'Session host'} is available for new local terminals. Existing plain-shell terminals are not upgraded; runtime startup can still fail.`
+  const name = p.backend === 'tmux' ? 'tmux' : p.backend === 'zellij' ? 'Zellij' : 'Session host'
+  return `${name} is available for new local terminals. Existing plain-shell terminals are not upgraded; runtime startup can still fail.`
+}
+
+/**
+ * The Session backend row's sentence. The setting only decides where a NEW local terminal is
+ * created, so each branch says what actually happens next — including the fallback when Zellij is
+ * selected but no binary was found, which must not read as applied.
+ */
+export function sessionBackendNote(z: { available: boolean; selected: boolean }): string {
+  if (z.selected && !z.available)
+    return 'Zellij is selected but was not found on this machine — new local terminals use tmux until it is installed.'
+  if (z.selected)
+    return 'New local terminals open in a Zellij session (attach from any terminal with `zellij attach nt-<node id>`). Terminals already running keep their current backend.'
+  return z.available
+    ? 'New local terminals open in tmux. Zellij is also available here. Terminals already running keep their current backend.'
+    : 'New local terminals open in tmux. Install Zellij to choose it instead.'
 }
