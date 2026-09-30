@@ -34,7 +34,8 @@ means — and what you may assume when writing a feature — is three tiers, not
   no tmux (Windows), a standalone session-host process — the mechanism differs, the guarantee does
   not.
 - **POSIX-bound edges degrade explicitly, never silently.** Some subsystems are structurally tied
-  to POSIX (SSH ControlMaster, the unix-socket askpass transport, some tmux-only paths). On a
+  to POSIX (SSH ControlMaster, the unix-socket askpass transport, some tmux-only paths — SSH
+  projects on Windows use the in-process transport instead, see **SSH projects on Windows**). On a
   platform where they cannot work they must either use a platform-appropriate mechanism or be
   clearly gated off — a feature that throws `EACCES`/`EPERM` on Windows because nobody checked is a
   bug, not an accepted limitation.
@@ -7830,6 +7831,96 @@ terminals, 1470×923 @2x, CDP-driven wheel zoom 0.8 ↔ 0.12 and pans, dev build
 which users saw as the canvas flickering on zoom — and no CPU gain (~170% total during the gesture
 either way; the scripted gesture itself ran 36 s vs 28 s); without it, 0. The small-canvas gain
 does not survive a real canvas. `canvas/camera-moving.test.ts` pins the absence.
+
+## Performance: measure it, then fix what the measurement names
+
+Performance work in this app has been wrong by intuition more often than right, so the rule is
+the one every bullet below learned the hard way: **measure on the real thing, find the mechanism,
+fix that, measure again — and write the before/after in the commit.** Say which build the
+numbers come from (a dev build's React is several times slower than production; a percentage
+from one is a direction, not a prediction).
+
+**How to measure (works on the dev app, no code changes):** start it with
+`npx electron-vite dev --remoteDebuggingPort 9333` and drive it over CDP from a small Node
+script (`fetch('http://localhost:9333/json')`, then a WebSocket to the page):
+- `Runtime.evaluate` for DOM facts; a module's live instance is reached with
+  `import(<its URL from performance.getEntriesByType('resource')>)` — importing the bare path
+  after an HMR update gives a SECOND copy of the module and silently measures nothing;
+- `Profiler.start/stop` for where main-thread time goes (group samples by the outermost APP
+  frame, not by self time — self time drowns in React internals);
+- `document.getAnimations()` for what is keeping the compositor busy;
+- patch `ResizeObserver.prototype.observe` / `setTimeout` for a few seconds to count who calls
+  them; `Input.dispatchMouseEvent` (`mouseWheel`, `modifiers: 2`) for zoom/pan gestures;
+- process CPU from `ps -o time` deltas of the renderer + GPU processes (not `%cpu`, which is a
+  lifetime average); tile/raster trouble shows as `tile memory limits exceeded` in the dev log;
+- for SSH: the host's `journalctl -u ssh | grep -c 'Accepted publickey'` over the test window is
+  the number that says whether multiplexing held (healthy ≈ 0–1 per connect).
+
+**Rules this produced (each has its measurement in the linked section or commit):**
+- **One running animation keeps the whole window at display rate** — see **Idle energy** above.
+  Status animations are bounded (they settle lit), never infinite, except needs-you. Measured on a
+  46-node canvas: idle renderer+GPU ~120% → ~25% (#1050).
+- **Never promote the React Flow viewport** (`will-change: transform`) — it is a canvas-sized
+  layer; on a real canvas it overran the tile budget (flicker) with no CPU gain (#1047).
+- **An all-filtered node-change batch must not reach `onNodesChange`** (`handleNodesChange` returns
+  early). `applyNodeChanges([])` returns a NEW array; a new `nodes` rebuilds the ephemeral
+  subagent/loop cards without `measured`, React Flow re-observes them and its ResizeObserver
+  (`force: true`) emits another change — the whole Canvas re-rendered every frame while idle with
+  one subagent card on screen (~111% → ~55% idle, #1047; `canvas-empty-changes.test.ts`).
+- **Per-terminal work on a project switch must be coalesced and ordered.** A switch mounts every
+  node in one tick. Join an in-flight read instead of issuing one per node (the SSH project's
+  settings.json read, `overridesInFlight` in pty-manager), and let on-screen nodes go first
+  (`PtyCreateOptions.onScreen` → `pty-spawn-gate.ts`): on a 41-terminal SSH project the visible
+  ones went from painting LAST (1.5–2.1 s) to first (0.55–1.1 s), 0 extra logins (#1057).
+- **A hint must fail toward the old behavior.** `onScreen` absent/unknown = on screen = the old
+  FIFO; a coalesced read is never a cache (a spawn after it settles reads again).
+
+## SSH projects on Windows: the in-process transport
+
+Windows' own OpenSSH cannot multiplex, and that is measured, not assumed (windows-latest,
+`OpenSSH_for_Windows_9.5p2`): `ssh -M` fails with `getsockname failed: Not a socket`, and a child
+carrying `ControlPath` FAILS rather than falling back — so every remote command, terminal and
+tunnel of an SSH project failed on a stock Windows machine. Git for Windows' ssh (10.5p1) starts a
+master but every session over it is reset and falls back to a full login per command. So on
+Windows the app does not run the ssh binary for SSH projects at all: `src/core/remote-ssh/native/`
+holds ONE `ssh2` connection per ControlPath and carries every exec, pty, SFTP session and reverse
+unix-socket forward over it. POSIX keeps OpenSSH untouched.
+
+- **One switch:** `useNativeSsh()` — always on win32; `NODETERM_NATIVE_SSH=1` turns it on anywhere
+  (how it is tested live from macOS against a real host), `=0` forces it off. Decided once per app
+  run for the SshProjectManager runners.
+- **Call sites do not change.** They keep building OpenSSH argv (`control-master.ts`);
+  `ssh-argv.ts` is a STRICT parser that reads it back and refuses (by name) any option it does not
+  know. A builder that grows a flag must teach the parser, or the native path fails loudly —
+  `ssh-argv.test.ts` parses every builder's output.
+- **Seams wired:** SshProjectManager's runners (`initSshProject`), pty-manager's
+  `runAsync`/`runWithStdin` and the remote terminal itself (`NativeSshPty`, a pty channel shaped
+  like `IPty`), remote-git, the setup runner (`spawnSshArgvStream`), the workspace poll's
+  master check. A new ssh call site owes the same routing.
+- **Semantics are OpenSSH's:** ControlMaster auto/no, `-O check|exit|forward|cancel`,
+  `StrictHostKeyChecking=accept-new` over the user's own known_hosts (hashed entries included —
+  that is why HMAC-SHA1 appears; CodeQL's alert on it is dismissed with the reason), publickey
+  only (agent, then key files, passphrase through the existing dialog, never in BatchMode), the
+  user's `~/.ssh/config` via `ssh -G` (never a second parser of it), a dropped connection ends
+  every channel with 255 (what `SshReconnector` reads).
+- **Channels past the server's MaxSessions spill onto more connections** (10 on a stock sshd; a
+  live 89-terminal project left 25 terminals blank before this). A refusal marks that connection
+  full until one of its channels closes; overflow connections are bounded
+  (`MAX_OVERFLOW_CONNECTIONS`) and live and die with the primary. A key unlocked with a passphrase
+  is held in memory while any connection is alive so overflow connections do not prompt again —
+  the Windows tradeoff for having no app-private ssh-agent.
+- **Channel races — keep these, each was a real bug:** open-confirmation, exit-status and close can
+  arrive in ONE read, so the exit status is recorded inside ssh2's callback (`recordExit`) and exec
+  consumers attach there too (`openOn`'s `onOpen`); late consumers check `channelExit(ch).closed`.
+  A killed streaming child must never write to its ended pipes (an uncaught
+  `ERR_STREAM_WRITE_AFTER_END` in main). A stream nobody reads never emits `close` — tests must
+  `resume()` the channels they hold.
+- **Tests run on every OS** against ssh2's own in-process `Server` (loopback, no sshd); the
+  directory is in the `windows-latest` CI job. Live numbers (macOS, `NODETERM_NATIVE_SSH=1`,
+  89-terminal project): 89/89 attached, 0 ssh processes, ~1 login per connect, main CPU 3–5% idle.
+- **Not done yet (phase 3):** adding an unlocked key to the Windows OpenSSH agent service,
+  ProxyJump (refused by name today; ProxyCommand stays refused), sleep/wake verification, a
+  like-for-like timing against OpenSSH on the same project.
 
 ## Remote access (phone relay) — free, not Pro
 
