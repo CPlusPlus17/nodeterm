@@ -674,11 +674,26 @@ loop an unrelated client error, and never replay the original prompt after recon
 responsive daemon before invoking lifecycle repair; stale PID bookkeeping is not permission to kill
 working sessions. See `docs/shared-codex-node-identity.md`.
 
+**A plain Codex TUI must not join Codex's own auto-started daemon.** From codex-cli 0.157.0 a
+plain `codex` starts (or joins) ONE background app-server per `CODEX_HOME` that keeps the
+environment of the pane that STARTED it, so every later node's hooks and tool shells run with the
+first node's `NODETERM_NODE_ID` (measured on 0.159.2). Every nodeterm codex line therefore ends in
+`--no-daemon` when the CLI that will run it advertised the flag — added in the two assemblers
+(`shared/agents/launch.ts` via `withCodexNoDaemon`), fed by `ApprovalCaps.codexNoDaemon`. A new
+codex launch site goes through those assemblers and threads the caps; never type a bare `codex` line
+yourself, and AWAIT `ensureCodexLaunchCaps` (bounded) where the site is async — a synchronous
+read loses the race when every node cold-restores after a reboot. A relay tab or SSH node must be
+passed as remote: the guest's or laptop's answer never applies to another machine's codex. The
+flag must never meet `--remote` (codex refuses the pair), which is why the managed launcher strips
+it. See CLAUDE.md "Codex's auto-started shared daemon".
+
 **Credentials never ride argv — local or SSH.** Not a tmux `-e` pair, not `curl -H`, not a remote
 command string. `/proc/<pid>/cmdline` is mode 444 on a stock Linux, and a remote command line is argv
 on the host too: we shipped the hook bearer that way and any other account on the machine could read
 it and open a terminal running an arbitrary command. Pass secrets by 0600 file or by **stdin**
-(`curl --config -`), and never add an argv fallback. See `docs/node-identity.md`.
+(`curl --config -`), and never add an argv fallback. See `docs/node-identity.md`. That includes the
+examples we SHOW users to copy (the push webhook's curl pipes its header on stdin, and a test runs
+it under `/bin/sh` to prove it): a user pastes what we print into a CI job on a shared runner.
 
 **A hook socket path is not ownership proof.** Never unlink a live listener to bind a hook
 socket, or overwrite an advertisement whose socket/TCP listener still answers. Local stale cleanup requires `ECONNREFUSED` and an unchanged socket inode; regular files,

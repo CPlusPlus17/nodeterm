@@ -235,6 +235,8 @@ import { createMemoryPressureMonitor } from '../core/memory-pressure'
 import { createPtyPressureMonitor } from '../core/pty-pressure'
 import { registerPtmxLimitHandler } from './ptmx-limit'
 import { getDeviceId } from '../core/device-id'
+import { createPushWebhookClient } from '../core/push-webhook'
+import { PUSH_WEBHOOK_DEFAULT_API_BASE } from '../shared/push-webhook'
 import { initRemoteStatusPush } from './remote-ssh/remote-status-push'
 import { initCanvasSync } from '../core/canvas-sync'
 import { retainUntilDismissed } from './notifications'
@@ -264,6 +266,7 @@ import {
   remoteTranscriptRoots
 } from '../core/remote-transcript-locate'
 import { readChatCatalog, registerChatCatalogIpc, type ChatCatalogDeps } from '../core/chat-catalog'
+import { registerRecentConversationsIpc } from '../core/recent-conversations'
 import { readChatTranscript, registerTranscriptIpc, resolveTranscript, type TranscriptIpcDeps } from '../core/transcript-ipc'
 import { createReadRemoteGrokChat } from '../core/remote-grok-chat'
 import { createHostChat, mirrorChatSendRefusal } from './remote/host-chat'
@@ -1753,6 +1756,24 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle(IPC.pairingListDevices, () => pairingService.listDevices())
   ipcMain.handle(IPC.pairingRevokeDevice, (_e, id: string) => pairingService.revokeDevice(id))
+  // Push webhook management. The proof of ownership is made HERE with the relay host secret key,
+  // which never reaches the renderer; the minted token passes through to it exactly once and is
+  // not kept by this process (core/push-webhook.ts).
+  const pushWebhook = createPushWebhookClient({
+    isPackaged: () => app.isPackaged,
+    // The same local check the host-mode push path uses (refreshPushIdentity below): no paired
+    // phone ⇒ the host key is not read (a first read creates it) and the backend is not called.
+    hasPairedPhone: async () =>
+      (await phonePins.load()).pubkeys.length > 0 || (await pairingService.listDevices()).length > 0,
+    loadHost: async () => {
+      const kp = await loadOrCreateKeyPair()
+      return { hostDeviceId: getDeviceId(), publicKey: kp.publicKey, secretKey: kp.secretKey, label: hostname() }
+    }
+  })
+  ipcMain.handle(IPC.pairingWebhookStatus, () => pushWebhook.status())
+  ipcMain.handle(IPC.pairingWebhookMint, () => pushWebhook.mint())
+  ipcMain.handle(IPC.pairingWebhookRevoke, () => pushWebhook.revoke())
+  ipcMain.handle(IPC.pairingWebhookEndpoint, () => process.env.NODETERM_API_BASE || PUSH_WEBHOOK_DEFAULT_API_BASE)
 
   // Revoking a bridged PEER must CUT THE LIVE SESSION, not just unpin it (revocation.ts): unpinning
   // refuses only the NEXT handshake, while the open relay socket keeps full shell access — "the
@@ -2280,6 +2301,9 @@ app.whenReady().then(async () => {
       ...(localCodexCaps?.approvalValues
         ? { codexApprovalValues: localCodexCaps.approvalValues }
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
+      // Only a SEEN `true`: a phone-launched plain Codex TUI must carry `--no-daemon` too, or it
+      // joins the auto-started shared app-server and runs as another node (shared/agents/codex-daemon).
+      ...(localCodexCaps?.noDaemon === true ? { codexNoDaemon: true } : {}),
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
         .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) })),
@@ -2485,11 +2509,15 @@ app.whenReady().then(async () => {
         claudePermissionMode: s.claudePermissionMode,
         // The phone launches claude on the REMOTE host — its CLI is the gate, never the local one.
         autoSupported: sshProjectManager?.remoteAutoPermFor(projectId) === true,
-        // `codexApprovalValues` is deliberately ABSENT from an SSH slice. Same rule one agent over:
-        // the session runs the HOST's codex, there is no remote codex probe yet (claude has one, at
-        // connect), and publishing this machine's vocabulary for another machine's binary is the
-        // cross-host guess the whole gate exists to prevent. Absent ⇒ the baseline vocabulary ⇒
-        // Manual degrades honestly instead of a value the host may have removed.
+        // `codexApprovalValues` is deliberately ABSENT from an SSH slice: the session runs the HOST's
+        // codex, the only remote codex probe asks about `--no-daemon` (not the approval vocabulary),
+        // and publishing this machine's vocabulary for another machine's binary is the cross-host
+        // guess the whole gate exists to prevent. Absent ⇒ the baseline vocabulary ⇒ Manual
+        // degrades honestly instead of a value the host may have removed.
+        //
+        // `codexNoDaemon` IS the host's own answer (core/remote-ssh/codex-no-daemon-probe.ts), so it
+        // may ride — only as a seen `true`.
+        ...(sshProjectManager?.remoteCodexNoDaemonFor(projectId) ? { codexNoDaemon: true as const } : {}),
         ...(home && hostKey
           ? {
               claudeAccounts: (s.claudeAccounts ?? [])
@@ -2904,6 +2932,8 @@ app.whenReady().then(async () => {
     }
   }
   registerChatCatalogIpc(chatCatalogDeps)
+  // "Open recent": this machine's agent histories (both shells register it — core/recent-conversations.ts).
+  registerRecentConversationsIpc()
 
   initTranscriptIndex(() => settingsStore.get().claudeAccounts ?? [])
   corePlatform.handle(IPC.transcriptSearch, (query: string) => searchTranscripts(query))

@@ -2,6 +2,7 @@ import type { ChatCatalog } from '@shared/chat-catalog'
 import type { NormalizedAgentEvent } from '../../shared/agents/normalize'
 import { subscribeAgentReplay } from '../../shared/agent-replay-subscription'
 import type { DesktopWallpaper, WallpaperStill } from '../../shared/wallpaper'
+import type { RecentConversationsRequest, RecentConversationsResult } from '../../shared/recent-conversations'
 // WebSocket bridge that reconstructs `window.nodeTerminal` in the browser (Server Edition).
 //
 // Under Electron the preload already defines `window.nodeTerminal`; this module only runs when
@@ -992,6 +993,19 @@ export function buildSessionMemoryApi(client: RpcClient): Pick<NodeTerminalApi, 
   }
 }
 
+/** The server lists ITS OWN host's history — the machine the browser's sessions run on. A failed
+ *  request is `{ok:false}`, never an empty list. */
+export function buildRecentConversationsApi(client: RpcClient): Pick<NodeTerminalApi, 'recentConversations'> {
+  return {
+    recentConversations: {
+      list: (req?: RecentConversationsRequest) =>
+        (client.request(IPC.recentConversationsList, req) as Promise<RecentConversationsResult>).catch(
+          () => ({ ok: false as const, reason: 'failed' as const })
+        )
+    }
+  }
+}
+
 export function buildWallpaperApi(client: RpcClient): Pick<NodeTerminalApi, 'wallpaper'> {
   return {
     wallpaper: {
@@ -1294,6 +1308,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildSpeechApi(client),
     ...buildUsageApi(client),
     ...buildSessionMemoryApi(client),
+    ...buildRecentConversationsApi(client),
     ...buildWallpaperApi(client),
     ...buildTriggersApi(client),
     ...buildGitHubApi(client),

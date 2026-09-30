@@ -1,4 +1,5 @@
 import type { TextDeliveryResult } from './text-delivery'
+import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from './push-webhook'
 import type { IdentitySeedEntry } from './agent-identity-seed'
 import type { PrWaitHold } from './pr-wait'
 // Types shared across the main, preload, and renderer processes.
@@ -2381,6 +2382,17 @@ export interface SshProjectStatusEvent {
    *  `claudeAutoPermissionMode`. `null` = the probe ran but found no claude (distinguishable from
    *  "old CLI" in the tab-menu hint); absent = nothing new. */
   remoteClaudeVersion?: string | null
+  /** Does THIS HOST's `codex` accept `--no-daemon` (probed after connect, `codex --help` through
+   *  the login shell)? Keyed by `sshHostKey` because it is a fact about the host's binary, not the
+   *  project. Only `supported: true` puts the flag on a remote Codex launch — see
+   *  shared/agents/codex-daemon.ts. Absent = nothing new. */
+  remoteCodexNoDaemon?: RemoteCodexNoDaemon
+}
+
+/** A host's answer to "does its `codex` accept `--no-daemon`?" — see `SshProjectStatusEvent`. */
+export interface RemoteCodexNoDaemon {
+  hostKey: string
+  supported: boolean
 }
 
 /** main → renderer: this SSH identity file needs its passphrase (the ssh-agent doesn't hold the
@@ -2411,6 +2423,8 @@ export interface SshProjectApi {
     claudeAutoPermissionMode?: boolean
     /** The probed remote `claude --version` output (`null` = probe failed; only on reused conns). */
     remoteClaudeVersion?: string | null
+    /** The host's `--no-daemon` answer, when a probe already ran on this connection (reused conns). */
+    remoteCodexNoDaemon?: RemoteCodexNoDaemon
   }>
   /** Tear down the master (remote tmux is unaffected). */
   disconnect(projectId: string): Promise<void>
@@ -3390,6 +3404,8 @@ export interface TranscriptHit {
   cwd: string
   projectLabel: string
   mtime: number
+  /** The managed/linked Claude account whose root holds this transcript; absent = system. */
+  accountId?: string
 }
 
 export interface TranscriptsApi {
@@ -3484,11 +3500,17 @@ export interface CodexCliCaps {
    *  "this CLI accepts nothing". Measured: 0.146.0–0.148.0 list `untrusted, on-request, never`;
    *  0.149.0+ list `on-request, never`. */
   approvalValues: string[] | null
+  /** Does this `codex` accept `--no-daemon`? `null` = unknown (not probed, no codex). Every
+   *  nodeterm-launched plain Codex TUI carries the flag when this is `true`: from 0.157.0 a plain
+   *  TUI otherwise runs inside ONE shared background app-server per CODEX_HOME that keeps the FIRST
+   *  pane's `NODETERM_*` environment, attributing every later node's hooks and tool shells to that
+   *  first node (see `codexNoDaemonFrom`). Optional so an older core's answer still type-checks. */
+  noDaemon?: boolean | null
 }
 
 /** The answer before the probe has run, and for any surface that cannot speak for the CLI that will
  *  actually run the session (a relay tab, an SSH host). */
-export const UNKNOWN_CODEX_CLI_CAPS: CodexCliCaps = { approvalValues: null }
+export const UNKNOWN_CODEX_CLI_CAPS: CodexCliCaps = { approvalValues: null, noDaemon: null }
 
 /** Whether a Codex node launched on this machine right now would get a managed shared identity.
  *  Fed by core/codex-identity-caps.ts; the unknown answer is `false`, i.e. plain `codex`. */
@@ -3948,6 +3970,14 @@ export interface PairingApi {
    * entitlement back on the relay backend. Never rejects for a leg that failed — read the result.
    */
   revokeDevice(id: string): Promise<DeviceRevokeResult>
+  /** Push webhook (shared/push-webhook.ts): what token is live for this machine — never its value. */
+  webhookStatus(): Promise<PushWebhookResult<PushWebhookTokenInfo | null>>
+  /** Mint (or rotate) the token. The value in the result is the only copy that will ever exist
+   *  outside the user's own storage: the backend keeps only its hash, and this app keeps nothing. */
+  webhookMint(): Promise<PushWebhookResult<PushWebhookMinted>>
+  webhookRevoke(): Promise<PushWebhookResult<true>>
+  /** The API base the examples should name (NODETERM_API_BASE or production). */
+  webhookEndpoint(): Promise<string>
 }
 
 /** Team presence (docs/team-presence.md). All of it is transient — nothing here is persisted. */
@@ -4045,6 +4075,8 @@ export interface NodeTerminalApi {
   githubControl: import('./github-issues').GitHubControlApi
   usage: UsageApi
   sessionMemory: SessionMemoryApi
+  /** "Open recent" — the newest agent conversations in this machine's CLI histories. */
+  recentConversations: import('./recent-conversations').RecentConversationsApi
   wallpaper: import('./wallpaper').WallpaperApi
   triggers: TriggersApi
   context: ContextApi

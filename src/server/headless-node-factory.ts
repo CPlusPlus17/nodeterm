@@ -1601,7 +1601,10 @@ export class HeadlessNodeFactory {
               sessionIdFlagSupported,
               launchCmdOverride: settings.agentLaunchCommands?.[agentId as BuiltinAgentId],
               sharedIdentity: codexSharedIdentity,
-              approvalCaps: { codexApprovalValues: codexCaps.approvalValues },
+              approvalCaps: {
+                codexApprovalValues: codexCaps.approvalValues,
+                codexNoDaemon: codexCaps.noDaemon ?? null
+              },
               model: args.model
             },
             this.deps.env ?? process.env

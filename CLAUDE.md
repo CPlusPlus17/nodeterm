@@ -765,6 +765,93 @@ Lifecycle, by intent:
   The refusal is **only** in `spawnNew` — a co-attach JOIN to a live session for that node id is
   still correct. An offline node reports itself to `SshReconnector`, so the canvas heals itself;
   `retryNow` (banner Reconnect / node Reconnect) skips the backoff and clears the refuse window.
+- **Codex's auto-started shared daemon: every nodeterm Codex TUI runs `--no-daemon`** (2026-09-30).
+  From codex-cli **0.157.0** the `daemon_auto_start` feature is `stable, true` (0.156.1:
+  `experimental, false`; 0.148.0: no such feature): a plain `codex` TUI no longer runs in-process
+  but starts, or JOINS, ONE background `app-server` per `CODEX_HOME`, and that daemon keeps the
+  environment of the pane that STARTED it and outlives it. The daemon is what spawns tool shells and
+  hook processes, and nodeterm tells a node apart by environment (`buildPtyEnv`). MEASURED on
+  0.159.2 (private `CODEX_HOME`, private tmux socket, `env -i`): pane A (`NODETERM_NODE_ID=node-A`)
+  started the daemon; in pane B (`node-B`) the tool shell printed `node-A` and every hook process
+  logged `node-A` — pane B's status, canvas-control verbs and context-link reads were pane A's.
+  `--no-daemon` put pane C back on `node-C` in both; `-c features.daemon_auto_start=false` did NOT
+  (it still joins a RUNNING daemon); there is no environment switch. Transcript and the three help
+  pages: `src/core/__fixtures__/codex-daemon/`. Rules a refactor must not undo:
+  - **Feature-detected, fail open.** `core/codex-cli.ts` `codexNoDaemonFrom` reads the flag off the
+    option-header lines of the same memoized `codex --help` the approval vocabulary uses;
+    `CodexCliCaps.noDaemon` rides the existing `ApprovalCaps` bag (`codexNoDaemon`) that every launch
+    site already threads, and `withCodexNoDaemon` (`shared/agents/codex-daemon.ts`) appends it in
+    BOTH assemblers — fresh launch and resume (cold restore, restart, restart-with-model, account
+    switch, transfer, headless Server opens, custom agents whose `baseAgent` is codex, a launch-
+    command override). Only a literal `true` emits it: clap exits on an unknown option, so an
+    unprobed, remote-unknown or older CLI gets the line it always got.
+  - **Await the answer before building a line — the race is the bug.** After a reboot every Codex
+    node cold-restores in the same tick; a node that builds its line before the probe lands launches
+    flagless, starts the shared daemon with ITS env, and every other node joins it. On a
+    shared-identity machine `codex app-server daemon version` reports such a daemon `running`
+    (verified in review), so the managed launcher adopts it too. So TerminalNode's four codex sites
+    (cold restore, its fresh fallback, restart, wake) `await ensureCodexLaunchCaps(...)`
+    (`renderer/state/codexCli.ts`, 3 s bound, fail open to the old line): local waits for the local
+    probe, SSH waits for that host's answer to arrive in `useSshConn`, non-codex agents and relay
+    tabs never wait. Pinned at source level by `nodes/codex-launch-caps-wiring.test.ts`.
+    `createAgentNode` (a NEW node) is synchronous and still reads the landed answer — a node created
+    inside the first ~second after boot can miss it; stated, not fixed.
+  - **A relay tab never gets this machine's answer.** Its pane runs the HOST's codex; the guest's
+    `true` typed into a host older than 0.156 dies on the unknown option. `codexApprovalCaps(remote,
+    projectId)` treats a relay-bound project (checked through `registerCodexRelayProjectCheck`,
+    registered by the projects store to avoid an import cycle) or a node's
+    `session.source === 'relay'` as remote-with-no-probe: no flag, baseline vocabulary.
+  - **One detection rule, two spellings.** `CODEX_NO_DAEMON_HELP_RE` / `_ERE`
+    (`shared/agents/codex-daemon.ts`): an option header at indent <= 6 followed by whitespace or end
+    of line, so a future `--no-daemon-x` is not this flag. TS reader, launcher and remote probe all
+    use it; a test runs the ERE through real `grep -E` beside the regex.
+  - **Never beside `--remote`** — measured: `ERROR: --no-daemon cannot be used with --remote.` The
+    managed launcher (`buildCodexLauncherScript`) therefore STRIPS it before its own
+    `codex --remote unix:// resume` and routes every plain-codex fallback through `nt_exec_plain`,
+    which keeps it, or ADDS it when the codex about to run advertises it (the SSH launcher's host was
+    never probed from here). This matters beyond the fallback node itself: a daemon started by a
+    plain pane carries that pane's `NODETERM_NODE_ID`, and the thread-identity prelude only resolves
+    a tool shell whose `NODETERM_NODE_ID` is EMPTY — so one plain launch used to poison every managed
+    thread of that account too. Our own start stays the scrubbed `nt_start_app_server` (#350).
+  - **SSH: the HOST's binary is asked.** `core/remote-ssh/codex-no-daemon-probe.ts` runs one
+    marker-delimited `codex --help` through the login shell after connect (off the connect path, like
+    the claude probe) and publishes `{hostKey, supported}` on a `connected` event and on a reused
+    connect's result; the renderer keeps it per host (`useSshConn.codexNoDaemonByHost`). **The key
+    is `user@host:port`** (`codexProbeHostKey`), NOT `sshHostKey`: two containers behind one machine
+    (`root@localhost:2222` on 0.159, `:2223` on 0.148) are two binaries, and a portless key let the
+    last probe answer for both. The SSH mirror slice carries the host's `true` to the phone.
+  - `codex exec` (commit messages), `login`, `mcp` and `app-server` take no such flag and are not
+    TUI clients of the daemon. The phone gets `MirrorSettings.codexNoDaemon`, local and per SSH slice (iOS
+    reader: follow-up, @eneskirca). opencode was checked the same way: no published release has `serve --service`
+    (latest 1.18.33 and the `dev` channel), and a plain TUI leaves no process behind.
+  - **Residuals, stated:** (1) a `codex` TYPED into a pane rather than launched by us — by hand in a
+    plain terminal, or by an agent through `open-terminal --cmd codex` / `write` — carries that
+    node's `NODETERM_NODE_ID` and, on 0.157+, can still start the account's daemon with it; managed
+    threads' tool shells then keep the leaked id (the prelude skips a set one). Changing the prelude
+    to prefer the thread record over a set id was rejected: a bind-refused fallback pane legitimately
+    runs a thread another node's record names. (2) A launch-command override or custom `launchCmd`
+    that runs a DIFFERENT codex than PATH's (`npx @openai/codex@0.148.0`) is given the flag from
+    PATH's probe and dies on it; the fix there is the user's (drop the pin or add the flag to their
+    own command) — we cannot probe an arbitrary command line. (3) The Windows argv planner
+    (`core/agent-launch.ts`) carries the flag but has no production caller today; Windows native
+    Codex is unmeasured.
+  - **Machines that ran a pre-fix build keep the mis-attribution until they recycle.** Panes already
+    joined to the daemon stay joined across a warm reattach (the TUI process is still the old one); a
+    daemon started before the fix keeps its first pane's env, and so does its `pid-update-loop`
+    process (verified in review), so managed threads keep using it. We deliberately do NOT kill it:
+    every unsupervised plain client attached to it would die with it. Recovery, in order: restart
+    each Codex node (node menu → Restart, or close and reopen), then from a shell WITHOUT any
+    `NODETERM_*` variables run `codex app-server daemon restart` (one per account: set that
+    account's `CODEX_HOME`).
+  - **Device checklist:** (a) macOS desktop, npm codex ≥ 0.157: two Codex nodes, each RUNNING badge
+    and `nodeterm list` line on its own node; (b) standalone codex with shared identity: a node
+    whose launcher fell back still reports as itself; (c) SSH project on a host with codex ≥ 0.157:
+    the second remote Codex node's badge is its own after the probe landed (and flagless before);
+    (d) Windows native codex: whether the daemon exists there at all is unmeasured — the flag rides
+    only if its `--help` lists it; (e) reboot a Mac with 5+ Codex nodes: after cold restore each
+    badge is its own (the bounded wait); (f) an upgraded machine: after the recovery steps above,
+    `ps eww` on the daemon shows no `NODETERM_NODE_ID`; (g) two SSH projects on one host at
+    different ports with different codex versions: only the newer one's lines carry the flag.
 - **A shared Codex daemon restart is NOT a terminal-session restart.** tmux survives, and the Codex
   rollout/thread survives, but every `codex --remote unix://` TUI attached to that account's one
   app-server socket exits together. `buildCodexLauncherScript` therefore stays in the pane as a
@@ -1361,6 +1448,19 @@ session.
   PTY write has no image receipt. Never synthesize that key or fall back between routes.
   The macOS shortcuts reference explains both keys; its Server Edition copy explicitly
   says Ctrl+V cannot transfer the viewer's clipboard to the host. SSH keeps remote uploads.
+  **The path paste has a receipt for claude, and only for claude** (`terminal/image-paste-confirm.ts`,
+  both surfaces through `pasteWithImageReceipt`). MEASURED on Claude Code 2.1.285 (bracketed paste,
+  captures in `terminal/__fixtures__/claude-image-paste.json`): a path to an existing
+  png/jpg/jpeg/gif/webp (any case) becomes `[Image #N]` in the composer within ~60 ms; bmp, svg,
+  heic, tiff and a missing file stay text; `N` keeps counting for the session and does NOT reset
+  when the composer is cleared. So the receipt reads OUR xterm buffer (the emulator, not tmux) for
+  placeholder numbers ABOVE the highest one on screen before the paste (the counter only rises,
+  so an older placeholder scrolling into view cannot confirm it; with none on screen, two pastes
+  inside ~60 ms can still confirm each other), up to 3 s: "Image attached", else
+  "Pasted the path — not confirmed as an image" (`.term-paste-pill`, top-right so it never covers
+  the copy pill or the agent's bottom-left input line). Only when a claude CLI is in the pane
+  (`agentProcessInPane`); every other agent was not measured and gets the paste with no receipt
+  either way — nothing is claimed on its behalf. A terminal disposed mid-wait reports nothing.
   **Copying now says so**: the OSC 52 handler floats a transient `Copied N lines` pill over the
   terminal's BOTTOM-RIGHT corner (`.term-copy-pill`, the same class on the canvas node and the
   kanban card modal — one session seen twice must not speak in two voices; bottom-right because
@@ -1940,6 +2040,40 @@ else, and its context links must keep classifying across restarts).
   harmful. The `auto` permission-mode **version gate is claude's alone** (it is fed by a `claude
   --version` probe), and grok's mode flag must go **BEFORE** its `--` separator, which is
   end-of-options. Full picture, dialect traps and the device checklist: **`docs/grok-agent.md`**.
+- **Grok NEEDS YOU is confirmed against grok's own event log** (`core/agents/grok-permission-gate.ts`,
+  inside the hook server, so both shells get it from one place). MEASURED on grok 1.0.13
+  (2026-09-30, interactive TUI against a local fake chat_completions model, fixture
+  `shared/agents/__fixtures__/grok/permission-events.json`): the `permission_prompt` notification is
+  genuine (fired 1–20 ms after grok writes `permission_requested` to `<session dir>/events.jsonl`),
+  but grok is silent about the ANSWER — approve fires no hook until the approved tool FINISHES (the
+  capture's 10 s command read NEEDS YOU for 10 s), a dismissed dialog (Ctrl+C) fires none at all
+  (the only later hook is `idle_prompt` 60 s on, which the mirror deliberately never lets clear a
+  `blocked` node — a stuck badge until the next prompt), and a rejection fires `permission_denied`
+  then cancels the turn with no Stop (RUNNING for 60 s). `events.jsonl` records all three:
+  `permission_resolved {decision: allow|deny|cancelled}` and `turn_ended {outcome: cancelled}`. The
+  gate ties each notification to ONE `permission_requested` written within 5 s before it and
+  publishes what the file says: still pending ⇒ `blocked` + a bounded 1 s watch (a `stat` per tick
+  while nothing changes); answered ⇒ `working` (unverified — a file read is not a hook POST — including when the
+  answer is already on disk as the hook is read); a
+  cancelled turn ⇒ `done` + `interrupted`. **The trap it is shaped around**: a SUBAGENT's prompt
+  fires with the PARENT's `sessionId` while its request is in the CHILD's `events.jsonl` — reading
+  the parent's file alone would find the parent's older, already-approved request and publish
+  "answered" over an open child dialog. Candidates are the sessions this node's hooks named
+  (children post their own ids), zero or several matches publish the hook unchanged, and every new
+  prompt ends the previous watch (the replay found that exact race: the parent's spawn approval
+  landed 90 ms before the child's prompt). The candidate set CAN miss the real request — a child's
+  prompt may reach us before any of the child's own hooks, or a second request's line may not be
+  on disk yet — and the older request found instead is then already answered. **The load-bearing
+  rule is therefore: a request answered BEFORE the notification fired is never taken as its
+  answer** (`resolvedTs < notifiedAt` ⇒ the hook is published unchanged, nothing watched): a
+  notification cannot be about a dialog that closed before it. Every capture resolves after its
+  notification (fastest 216 ms). Review of #1065 found that hole; tests A/B pin it. Closed sets throughout; an unknown decision, unreadable
+  file or unparsable timestamp is today's behaviour, never a guess. Per-node ordering is kept (a
+  confirm read holds that node's later hooks, ≤ 500 ms; polls run off that chain and discard a read
+  that straddled a newer hook). A listener that throws costs that ONE event (as it did inside the
+  hook server's try/catch before), never the node's delivery chain. A remote (SSH) grok node's file is on its host, so it reads "cannot
+  tell" and behaves exactly as before — a remote leg is a follow-up. Unmeasured: `events.jsonl`'s
+  shape on other grok versions (a changed shape degrades to today's behaviour).
 - **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads
   `chat_history.jsonl` into claude's `ChatMessage`/`ChatPart` shapes (no new wire field): typed
   prompts, assistant text, tool calls (`arg` = the salient argument — `command`, `target_file`, …, in
@@ -5135,6 +5269,101 @@ principle. Per-agent write-ups: `docs/grok-agent.md`, `docs/gemini-agent.md`.
     group (a typed `/exit` can land in the agent composer as prompt text), recycle the persistent
     session, and let cold restore resume with the new model under the newly injected environment.
 
+## Open recent (resume a past agent conversation from its history)
+
+Past conversations live in each CLI's own history, and nodeterm used to resume only what a node
+remembered. "Open recent" lists them — the start screen's **Recent conversations** (grouped by the
+folder each ran in) and a **Recent conversations** section of ⌘K — and one click resumes one.
+Reader: `core/recent-conversations.ts` (`recent-conversations:list`, registered by BOTH shells);
+plan: the pure `renderer/lib/recentConversations.ts`; execution: Canvas `resumeRecentConversation`.
+
+- **Which agents, and why only those** (`RECENT_CONVERSATION_AGENTS`, `@shared/recent-conversations`):
+  claude (system root + every LOCAL settled managed and linked account — `claudeAccountsSnapshot`),
+  codex (system `CODEX_HOME` + the managed homes whose ids the renderer sends; core re-validates
+  each through `codexHomeForAccount`, which throws outside the id alphabet), gemini, grok, copilot.
+  Each is in `RESUMABLE_AGENTS` AND has a measured on-disk shape. **opencode is out**: its history is
+  a SQLite database we never open, and the only reader is `opencode export` (one spawn, ~1.5 s,
+  ~320 MB per session). **antigravity is out**: its record shapes were never captured. An agent
+  outside the list contributes no rows — nothing guesses at a layout.
+- **Measured shapes the reader depends on** (dev host, 2026-09-30): codex `session_meta` carries
+  `id`, `cwd` and `thread_source` — a spawned child says `"subagent"` with a `source: {subagent:…}`
+  object (4 of 62 rollouts here) and is SKIPPED, a user's own thread says `"user"`; that first line
+  also carries the whole base instructions (tens of KB), which is why the head read is 512 KB.
+  gemini's project dir holds `.project_root` = the absolute cwd, and its header says `kind: "main"`;
+  a session holding only harness `<session_context>` (no prompt, no title) is not a conversation
+  and is skipped (all 3 gemini sessions on this host). grok's session group is the URL-encoded cwd;
+  a group that does not re-encode to its own name (grok's slug+hash form for a long cwd) keeps a
+  null cwd rather than a guessed one. copilot's `session.start` names `context.cwd`, and its
+  `sessionId` must equal the directory it sits in.
+- **Bounded**: per root only the newest `PER_ROOT` (25) files by mtime are OPENED; every other
+  file costs a stat, and stats run in parallel capped at `STAT_CONCURRENCY` (32) — the first version
+  awaited them one by one, which review measured at 2.8–4.0 s warm for 10,000 transcripts on every
+  ⌘K. Codex walks its dated tree newest-first and stats at most 100. Each open is a 512 KB head plus,
+  for a claude/gemini title, a 128 KB tail; the parse is cached by (path, size, mtime), and the whole
+  answer is REUSED for `RESULT_REUSE_MS` (10 s, keyed by the exact roots + limit, concurrent callers
+  share one read). Measured (fixture trees, this host): 300 files 45 ms cold / 17 ms warm, 3,000 →
+  209 / 356 ms, 10,000 → 630 / 617 ms; the real dev-host history (313 claude transcripts, 62 codex
+  rollouts) 227 ms cold, 20 ms cached, 46 rows. Read on demand only — once per start-screen
+  appearance and per palette open, never a timer. (`core/transcript-index.ts` was not reused: it is
+  claude-only and carries no account per entry.)
+- **Title = display text, never a command.** The agent's own session name where it has one (claude
+  `custom-title`/`ai-title` via `pickSessionName`, gemini `update_topic` via `pickGeminiTitle`, grok
+  `summary.json`), else the first thing the user typed (the agent's own chat parser; a `<…>` harness
+  wrapper is not a prompt). Every title goes through `untrustedLine` (no control, bidi or zero-width
+  characters, one line, capped at 120). Every file the reader opens is `lstat`ed first and must be a
+  regular file — transcripts, gemini's `.project_root` and grok's `summary.json` alike — so a symlink
+  planted in a history dir is never followed. Only the SESSION ID reaches a pane, re-validated
+  three times: `SAFE_SESSION_ID` at read, `canResumeWith` in the plan, and `createAgentNode`, which
+  THROWS on an id the resume grammar refuses rather than silently starting a fresh conversation.
+- **The resume funnel is the factory's own**: `createAgentNode`'s trailing `resumeSessionId` builds
+  the line with `assembleResumeCommand` — the assembler cold restore uses, so a launch override,
+  custom args, codex's launcher, `withPermissionMode` and the gateway model all apply — mints no id,
+  and persists the RESUMED id as `agentSessionId`. The ⌘K transcript-search hit now uses the same
+  path; before, it replaced the command by hand and kept a freshly minted id the node never ran, so
+  its cold restore after a reboot resumed nothing — and it passed no account, so a hit from a
+  managed/linked root resumed under the system login. `TranscriptHit.accountId` (from the index root
+  that holds the file) now travels with it, refused if that account is gone or not local.
+- **The account is the one that holds the history**, never the project default: a conversation in a
+  managed account's config dir resumed under the system login answers "No conversation found".
+  `boundAccountId` still decides binding; the plan REFUSES when that account is gone, pending or
+  host-pinned (`RESUME_REFUSALS.accountGone`). A codex rollout HARDLINKED into a second home by
+  "Switch Codex account" is one inode seen twice with the same mtime: `mergeRecent` credits the tie
+  to the MANAGED account's copy. That is usually the account it was switched TO; a switch back to
+  the system login is credited wrongly, which costs nothing — both homes hold the same file, so the
+  resume finds it under either.
+- **Where it resumes** (`planResume`):
+  - A node already holding the session is FOCUSED — two CLIs on one transcript interleave it. A node
+    holds exactly ONE session: its live hook id, ELSE its persisted `agentSessionId` — never both.
+    `agentSessionId` is the launch-minted id and nothing rewrites it from hooks, so after `/clear`
+    (live B) the node no longer holds A, and A must stay resumable (`closedHistory` uses the same
+    `live || persisted`).
+  - A folder that no longer exists (`cwdState: 'absent'`, a definite ENOENT/ENOTDIR from core — a
+    failed stat is `unknown` and proceeds) is REFUSED: opening it would RECREATE it (the store
+    mkdirs `<cwd>/.nodeterm`), and a removed worktree is the common case; a later
+    `git worktree add` at that path would then fail.
+  - Else the MOST SPECIFIC local owner of the folder: a worktree-bound group frame whose
+    `worktree.path` is the folder or an ancestor (the node opens inside that frame), or the local
+    project whose cwd is the folder or an ANCESTOR — segment-wise (`containsDir`), longest wins,
+    then active > open > closed (reopened). A conversation in `/repo/packages/app` resumes in the
+    `/repo` project; it does not mint a second project with a `project.json` inside the repository.
+    The node's cwd is always the conversation's own folder (the CLI keys the transcript by it).
+  - **Never an SSH project or a relay tab**: this is this machine's history, and those cwds are on
+    another machine. `openFolderProject`/`openOrAdoptFolder` now skip relay tabs too — a relay tab
+    carries the HOST's cwd, and the same path on two machines used to switch to it and do nothing.
+  - No owner → "Open folder & resume" through `openOrAdoptFolder` (the same probe/adopt rules as
+    "Open folder…"); the ⌘K row says "Open folder & resume: …", never a bare "Resume". A resume into
+  another project lands via `pendingResumeRef`, consumed by the project-load effect beside
+  `pendingFocusRef`, and RE-PLANS at creation (a node may have taken the session meanwhile).
+  Refused rows stay on the start screen, disabled with the reason; the palette omits them (no
+  disabled state there).
+- **Surfaces.** Desktop: this machine's history. **Server Edition**: its own host's history — the
+  machine the browser's sessions run on (real ws-bridge leg). **SSH projects: local history only in
+  v1** — a remote host's transcripts would need a remote leg over the ControlMaster, and a local
+  conversation is never resumed into an SSH project. **Relay tabs**: the list stays LOCAL (relay-api
+  spreads `...local`), and `recent-conversations:list` is `HOST_ONLY` so a peer can never list the
+  host's history (titles are prompts the host's user typed, in every project). **Mobile**: follow-up
+  in nodeterm-ios — "open recent" on the phone needs this list over the relay dialect.
+
 ## Session memory (the RAM pill + the per-session panel)
 
 A bottom-left **RAM pill** (`components/SystemResourcePill.tsx`) beside the usage pill, and the
@@ -7473,6 +7702,84 @@ does not survive a real canvas. `canvas/camera-moving.test.ts` pins the absence.
   would then refuse every admin key in it). Relay attach on Windows rests on the session host
   being packaged (#575, shipped by #579): without that bundle `pty.attach` spawns a new plain shell
   instead of joining the node's session, while `sessionExists` still answers "warm".
+
+## Push webhook (a script or CI job rings the paired phone)
+
+Settings → Phone → **Push webhook** mints a per-host bearer token; anything that can run `curl`
+then pushes a plain-text notification to the phones relay-paired with this machine
+(`POST https://api.nodeterm.dev/v1/push/webhook`, `{"title","body"}`). Agents already push through
+their hooks; this is for the jobs that have no agent in the loop. The backend half lives in
+nodeterm-server (`src/routes/push-webhook.ts`, `src/lib/host-proof.ts`); the desktop half is
+`core/push-webhook.ts` (client), `shared/push-webhook.ts` (types, copy, the example) and
+`PushWebhookPanel.tsx`. Rules a change must keep:
+
+- **Minting, reading and revoking need the relay host SECRET key, not the public identity.** Every
+  other host-authenticated backend route accepts `(hostDeviceId, hostPublicKeyB64)`, and both are
+  known to every paired phone; for a send that only lets the holder reach phones that already
+  trust the host, but a webhook token is DURABLE — whoever can mint or revoke one can keep a live
+  token or silently cut the owner's CI alerts. So each management call is a challenge: the server
+  answers with an ephemeral X25519 key (derived from its own secret + the challenge, so no state
+  and any instance verifies), and main returns `HMAC-SHA256(X25519(hostSecret, ephemeral),
+  context)` with `context` = domain, challenge, action, host device id. The key never leaves main;
+  a proof for `status` cannot be spent on `revoke`; a challenge lives 5 min and is single-use per
+  process. `webhookProofContext` and the server's `proofContext` are ONE wire contract — change
+  both. `core/push-webhook.test.ts` verifies the desktop's NaCl `scalarMult` proof against Node's
+  own X25519 (the server's primitive), so the two cannot drift silently.
+- **The token is shown ONCE and kept nowhere on this side.** 256 random bits (`ntwh_` + 43
+  base64url), stored server-side only as its SHA-256 (a fast hash is right for a high-entropy
+  token), returned `Cache-Control: no-store`. The panel holds it in component state until "Done";
+  it is never written to settings.json, storage or a log (the panel test asserts local/session
+  storage). There is no "show again" — Rotate mints a new one and revokes the old. One live token
+  per host is enforced by a partial UNIQUE index on the backend (`host_id WHERE revoked_at IS
+  NULL`), not by the mint's transaction: under READ COMMITTED two concurrent first mints each see
+  no live row and both insert.
+- **Viewing the page calls nothing without a paired phone.** The client asks `hasPairedPhone` (the
+  same local check as `pushHasPairedPhone`: a phone pin or a registry device) BEFORE reading the
+  host key or the network: the first read of `remote-host-key.json` CREATES it, and a status call
+  sends the device id + public key to the backend — neither may happen because someone opened
+  Settings → Phone. A failed local check reads as "no phone". And settings search unmounts and
+  remounts every row, so the panel reuses its last status answer for 5 minutes
+  (`STATUS_REUSE_MS`, module state) instead of spending a challenge + status round trip per remount
+  against a per-IP budget that everyone behind one NAT shares.
+- **The example never puts the token on argv.** `pushWebhookCurlExample` (labelled `sh`) reads
+  `$NODETERM_WEBHOOK_TOKEN` and feeds the header to `curl --config -` through `printf` (a shell
+  builtin), the house rule for every credential we generate. Windows has no `sh`, so there is a
+  `PowerShell` twin (`pushWebhookPowerShellExample`): `Invoke-RestMethod` makes the request
+  in-process, so there is no child argv at all (and PowerShell 5.1 mangles JSON quotes passed to
+  `curl.exe`). `shared/push-webhook.test.ts` runs the
+  example under a real `/bin/sh` with a recording curl and asserts the token reached stdin and not
+  argv.
+- **The push is labelled and inert.** Subtitle `Webhook · <hostname>`, its own `thread-id`, the
+  phone's existing no-action category `AGENT_DONE`, and an `nt` block with `kind: 'webhook'` and no
+  `nodeId`, so a tap opens the Inbox and nothing else: no Allow/Deny buttons, no deep link, no URL
+  opened. Title is one line (≤ 120 code points), body ≤ 500; C0/C1 controls, lone surrogates and
+  the bidi/zero-width controls are stripped — NOT all of `\p{Cf}`, which holds ZWJ and the tag
+  characters (👨‍💻, subdivision flags) — and a payload over APNs' 4096 bytes is refused with a 413
+  rather than answered `sent: 0` (lone surrogates JSON-escape to 6 bytes each; measured 4103 bytes
+  before they were stripped).
+- **KNOWN GAP — needs an iOS release (@eneskirca).** The phone shows these pushes without a release
+  (unknown `kind` + no `nodeId` routes to a plain Inbox open), EXCEPT while its Inbox sheet is open:
+  `PushPresentation.shouldSuppressBanner` suppresses every push then (the live feed is assumed to
+  show it), so `willPresent` presents nothing — no banner, no sound, no Notification Center entry —
+  and a webhook message never appears in the Inbox feed. It is lost. The fix is phone-side: do not
+  suppress `nt.kind == "webhook"`.
+- **Budgets:** 10 per minute per token, 60 per hour per HOST (keyed by hostId, so rotating does not
+  reset it), 20 mints per host per day, plus per-IP shields. Fan-out = exactly a host-mode
+  `/v1/push/notify`: this host's live relay pairings with a live APNs registration, minus phones
+  that muted this host.
+- **Relay-paired phones only.** An SSH-granted phone (push grants) has no row the backend can tie to
+  this host, so it does not receive webhook pushes; minting with no live pairing answers
+  `no_paired_phone` and the panel says so. The desktop refuses before calling at all when it knows
+  of no paired phone, so a token left live after every phone is unpaired cannot be revoked from
+  here until a phone is paired again (it sends to nobody meanwhile).
+- **No canvas-control verb.** An agent already has hook-driven pushes, and a verb would need the
+  desktop to hold the token, which it deliberately does not.
+
+Surfaces: Desktop full. **Server Edition: N/A** — it has no relay host key or paired-phone
+registry (same degrade as `push-notify.ts`); the bridge answers `E_UNSUPPORTED` and the row is
+hidden in a browser tab. IPC is under `pairing:` so `HOST_ONLY_CHANNEL_PREFIXES` keeps it off the
+relay. **Mobile:** the Inbox-open gap above needs an iOS release; an iOS follow-up could also give
+`kind: 'webhook'` its own Inbox row and tap target.
 
 ## Hosted team relay (Server Edition as a relay host)
 

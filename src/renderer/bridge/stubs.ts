@@ -276,6 +276,11 @@ export function buildStubApi(): Omit<
       cookieProviders: () => Promise.resolve({}),
       onUpdate: noopUnsub
     },
+    // Real in the browser (ws-bridge `buildRecentConversationsApi`). Where this stub stays in force
+    // — nowhere today — `unsupported` is the honest answer: "could not look", never "no history".
+    recentConversations: {
+      list: () => Promise.resolve({ ok: false as const, reason: 'unsupported' as const })
+    },
     sessionMemory: {
       // Superseded by the real WS-backed namespace in ws-bridge (the core session-memory service
       // runs in the server shell too), so nothing reaches these in a live browser session. Kept
@@ -470,7 +475,13 @@ export function buildStubApi(): Omit<
       probeSsh: U('pairing.probeSsh'),
       openRemoteLoginSettings: U('pairing.openRemoteLoginSettings'),
       listDevices: U('pairing.listDevices'),
-      revokeDevice: U('pairing.revokeDevice')
+      revokeDevice: U('pairing.revokeDevice'),
+      // The Server Edition has no relay host key and no paired-phone registry, so it cannot own a
+      // push webhook (same degrade as push-notify). The Settings row is hidden in the browser.
+      webhookStatus: U('pairing.webhookStatus'),
+      webhookMint: U('pairing.webhookMint'),
+      webhookRevoke: U('pairing.webhookRevoke'),
+      webhookEndpoint: U('pairing.webhookEndpoint')
     },
     shortcuts: {
       // Deliberate no-op (not a gap): the recording bit exists to stand the DESKTOP's

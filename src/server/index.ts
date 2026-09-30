@@ -107,6 +107,7 @@ import { initServerContextLink } from './context-link'
 import { createServerWorkspaceWatcher, outsideEditPublisher } from './workspace-external-watch'
 import { registerTranscriptIpc } from '../core/transcript-ipc'
 import { registerChatCatalogIpc } from '../core/chat-catalog'
+import { registerRecentConversationsIpc } from '../core/recent-conversations'
 import { registerContextEnsureIpc } from '../core/context-ensure'
 import { IPC } from '@shared/ipc'
 import { WhisperModelStore } from '../core/speech/whisper-models'
@@ -486,6 +487,9 @@ export async function startServer(
       ...(localCodexCaps?.approvalValues
         ? { codexApprovalValues: localCodexCaps.approvalValues }
         : {}), // unprobed ⇒ absent ⇒ the reader uses the baseline vocabulary
+      // Only a SEEN `true`: a phone-launched plain Codex TUI must carry `--no-daemon` too, or it
+      // joins the auto-started shared app-server and runs as another node (shared/agents/codex-daemon).
+      ...(localCodexCaps?.noDaemon === true ? { codexNoDaemon: true } : {}),
       claudeAccounts: (s.claudeAccounts ?? [])
         .filter((a) => !a.host && !a.pending)
         .map((a) => ({ id: a.id, dir: claudeConfigDirFor(a.id) })),
@@ -528,6 +532,8 @@ export async function startServer(
   // still someone ELSE's machine: named remote here, it answers built-ins + `partial`, never this
   // server's own ~/.claude.
   registerChatCatalogIpc({ isRemoteNode: (nodeId) => !!workspaceStore.sshProjectIdForNode(nodeId) })
+  // "Open recent": the SERVER host's agent histories — the machine the browser's sessions run on.
+  registerRecentConversationsIpc()
   // The context meter's mount-time rehydration, registered beside the read channels and for the
   // same reason: the tails it feeds are the ones created just above. Until this landed the Server
   // Edition had NO handler for `context:ensure` at all — the browser cast it and nothing received

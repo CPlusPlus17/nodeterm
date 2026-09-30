@@ -969,6 +969,10 @@ export function normalizeGrok(env: RawHookEnvelope): NormalizedAgentEvent | null
     // leaves grok waiting for approval with the node showing nothing, and no later hook is
     // guaranteed to correct it. If a future grok does emit the routine prompt, it must be told apart
     // by something that actually differs — not by a message the real ask also carries.
+    // What this cannot see is the ANSWER: grok fires no hook when the dialog is approved (until the
+    // tool finishes) or dismissed (never). The hook server's grok permission gate
+    // (core/agents/grok-permission-gate.ts) confirms this `blocked` against grok's events.jsonl and
+    // clears it from there — this function stays a pure mapping of the hook.
     if (type === 'permission_prompt') {
       return { ...base, kind: 'state', state: 'blocked', lastMessage }
     }
