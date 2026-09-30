@@ -7958,9 +7958,30 @@ unix-socket forward over it. POSIX keeps OpenSSH untouched.
 - **Tests run on every OS** against ssh2's own in-process `Server` (loopback, no sshd); the
   directory is in the `windows-latest` CI job. Live numbers (macOS, `NODETERM_NATIVE_SSH=1`,
   89-terminal project): 89/89 attached, 0 ssh processes, ~1 login per connect, main CPU 3–5% idle.
-- **Not done yet (phase 3):** adding an unlocked key to the Windows OpenSSH agent service,
-  ProxyJump (refused by name today; ProxyCommand stays refused), sleep/wake verification, a
-  like-for-like timing against OpenSSH on the same project.
+- **ProxyJump** (#1078) follows OpenSSH: each hop is resolved by ITS OWN `ssh -G` and gets its own
+  host-key check and publickey auth; the chain is ssh2 `forwardOut` streams used as the next hop's
+  socket. `ssh -J a,b t` means `ssh -J a -W t b`, so only the FIRST hop's own ProxyJump is followed
+  (recursively); loops and chains deeper than 8 are refused by name. Jump connections belong to
+  the target connection and die with it (a dropped jump → 255 on the target's channels). MaxSessions
+  overflow connections REUSE the primary's chain (one bastion login; direct-tcpip does not count
+  against the bastion's MaxSessions); one-off connections build their own. Known hosts are checked
+  under `HostName` (or `HostKeyAlias`), as OpenSSH does — not under the alias as typed.
+  **ProxyCommand stays refused by name**, on the target and on a hop.
+- **The Windows ssh-agent only on the user's say-so** (#1080). MEASURED on windows-latest
+  (OpenSSH_for_Windows_9.5p2): the agent service REFUSES any lifetime or confirm constraint
+  (`ssh-add -t` / `-c` and our `ADD_ID_CONSTRAINED` alike), and an unconstrained key is stored in
+  `HKCU\Software\OpenSSH\Agent\Keys` (DPAPI) and survives service restarts — "until removed" is
+  the only add Windows offers. So a passphrase-unlocked key is added (`agent-add.ts`, our own
+  agent-protocol writer; ssh2 only lists and signs) ONLY when the host's own config says
+  `AddKeysToAgent yes` (what Windows' ssh.exe would do) or the user turned on Settings → Remote
+  (SSH) → "Keep unlocked keys in the Windows ssh-agent" (`settings.windowsSshAgentAddKeys`, default
+  OFF, copy says Windows keeps it until `ssh-add -d`). A config lifetime is sent as a constraint and
+  Windows' refusal stands: a refused constrained add is NEVER retried unconstrained. Fail-open: an
+  agent error never affects the connection. Reboot persistence is inferred from the registry hive,
+  not measured.
+- **Not done yet:** sleep/wake verification on the native transport, a like-for-like timing against
+  OpenSSH on the same project, and any run on a real Windows desktop (all evidence so far is CI plus
+  the macOS run of the same code path).
 
 ## Remote access (phone relay) — free, not Pro
 
