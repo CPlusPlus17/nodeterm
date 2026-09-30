@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createWatchLinkApi } from './api'
 
 const res = (status: number, body: unknown, headers: Record<string, string> = {}) =>
@@ -23,6 +23,49 @@ function hungFetch() {
       signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
     })) as unknown as typeof fetch
   return { f, signals }
+}
+
+/** A 200 whose body sends part of a chunk and then dies the way undici reports a reset (`terminated`). */
+function resetMidBody() {
+  let pulls = 0
+  const body = new ReadableStream<Uint8Array>({
+    pull(c) {
+      if (pulls++ === 0) c.enqueue(new TextEncoder().encode('{"pairingToken":"P'))
+      else c.error(new TypeError('terminated'))
+    }
+  })
+  return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
+}
+
+/**
+ * Tracks the abort timers `createWatchLinkApi` arms. Only timers armed with `delay` are counted, so a
+ * timer some other layer arms (undici, vitest) cannot make the count lie either way.
+ */
+function trackTimers(delay: number) {
+  const realSet = globalThis.setTimeout
+  const realClear = globalThis.clearTimeout
+  const live = new Set<unknown>()
+  let armed = 0
+  const setSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number, ...args: unknown[]) => {
+    const h = realSet(fn, ms, ...args)
+    if (ms === delay) {
+      armed++
+      live.add(h)
+    }
+    return h
+  }) as unknown as typeof setTimeout)
+  const clearSpy = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((h?: Parameters<typeof clearTimeout>[0]) => {
+    live.delete(h)
+    return realClear(h)
+  }) as typeof clearTimeout)
+  return {
+    live,
+    armed: () => armed,
+    restore: () => {
+      setSpy.mockRestore()
+      clearSpy.mockRestore()
+    }
+  }
 }
 
 describe('createWatchLinkApi', () => {
@@ -176,5 +219,112 @@ describe('createWatchLinkApi', () => {
       `https://api.test/v1/watch-links/${enc}/status`,
       `https://api.test/v1/watch-links/${enc}/revoke`
     ])
+  })
+
+  it('create accepts a 200 only when expiresAt is a finite number above zero', async () => {
+    const bodies = [
+      '{"linkId":"L","expiresAt":0}',
+      '{"linkId":"L","expiresAt":-5}',
+      // NaN cannot cross JSON (it serializes to null); a string and a non-finite number can.
+      '{"linkId":"L","expiresAt":null}',
+      '{"linkId":"L","expiresAt":"1790679600"}',
+      '{"linkId":"L","expiresAt":1e999}',
+      '{"linkId":"L"}'
+    ]
+    for (const text of bodies) {
+      expect(await api(() => new Response(text, { status: 200 })).a.create('e', 'h', 3600)).toEqual({ ok: false, error: 'network' })
+    }
+  })
+
+  it('create falls back to the local clock when the Date header is missing or unparseable', async () => {
+    // Without a server clock to subtract, the instant is taken as-is: expiresAt = the server's
+    // instant in ms (local now + (instant - local now)).
+    const serverExp = Date.parse('Tue, 29 Sep 2026 11:00:00 GMT') / 1000
+    for (const headers of [{}, { date: 'yesterday' }] as Record<string, string>[]) {
+      const r = await api(() => res(200, { linkId: 'L', expiresAt: serverExp }, headers), 5_000).a.create('e', 'h', 3600)
+      expect(r).toEqual({ ok: true, linkId: 'L', expiresAt: serverExp * 1000 })
+    }
+  })
+
+  it('hostToken: our own malformed request (400) is refused, never retried as a network failure', async () => {
+    expect(await api(() => res(400, { error: 'bad_request' })).a.hostToken('L', 'e')).toEqual({ ok: false, kind: 'refused', status: 400 })
+  })
+
+  it('hostToken: a 5xx is a network failure that keeps its status', async () => {
+    for (const status of [500, 502, 503]) {
+      expect(await api(() => res(status, null)).a.hostToken('L', 'e')).toEqual({ ok: false, kind: 'network', status })
+    }
+  })
+
+  it('Retry-After counts only as whole seconds, clamped to an hour', async () => {
+    const after = async (value: string) => api(() => res(429, {}, { 'retry-after': value })).a.hostToken('L', 'e')
+    // Delay-seconds (RFC 9110) only; everything else leaves the wait to the scheduler's own floor.
+    for (const value of ['Wed, 21 Oct 2026 07:28:00 GMT', '1e9', 'Infinity', '0x10', '', '0.5', '-5', '0']) {
+      expect(await after(value)).toEqual({ ok: false, kind: 'rate-limited', status: 429 })
+    }
+    expect(await api(() => res(429, {})).a.hostToken('L', 'e')).toEqual({ ok: false, kind: 'rate-limited', status: 429 })
+    expect(await after('60')).toEqual({ ok: false, kind: 'rate-limited', status: 429, retryAfterMs: 60_000 })
+    expect(await after('3600')).toEqual({ ok: false, kind: 'rate-limited', status: 429, retryAfterMs: 3_600_000 })
+    for (const value of ['3601', '86400', '99999999999999999999']) {
+      expect(await after(value)).toEqual({ ok: false, kind: 'rate-limited', status: 429, retryAfterMs: 3_600_000 })
+    }
+  })
+
+  it('a transport error while the body streams is no answer, never a bad response', async () => {
+    expect(await api(() => resetMidBody()).a.hostToken('L', 'e')).toEqual({ ok: false, kind: 'network' })
+    expect(await api(() => resetMidBody()).a.create('e', 'h', 3600)).toEqual({ ok: false, error: 'network' })
+    expect(await api(() => resetMidBody()).a.status('L', 'e')).toBe('unknown')
+  })
+
+  it('a completed body that does not parse is the server\'s fault', async () => {
+    for (const text of ['{"pairingToken":"P"', '', 'not json']) {
+      expect(await api(() => new Response(text, { status: 200 })).a.hostToken('L', 'e')).toEqual({ ok: false, kind: 'bad-response', status: 200 })
+    }
+  })
+
+  it('every request refuses to follow a redirect', async () => {
+    const inits: RequestInit[] = []
+    const a = createWatchLinkApi({
+      apiBase: 'https://api.test',
+      fetch: (async (_url: string, init: RequestInit) => {
+        inits.push(init)
+        return res(204, null)
+      }) as typeof fetch
+    })
+    await a.create('e', 'h', 3600)
+    await a.hostToken('L', 'e')
+    await a.status('L', 'e')
+    await a.revoke('L', 'e')
+    await a.revokeAll('e')
+    expect(inits.map((i) => i.redirect)).toEqual(['error', 'error', 'error', 'error', 'error'])
+  })
+
+  it('the abort timer is cleared after every outcome', async () => {
+    const T = 4_321
+    const t = trackTimers(T)
+    try {
+      const run = (reply: (init: RequestInit) => Promise<Response>) =>
+        createWatchLinkApi({ apiBase: 'https://api.test', timeoutMs: T, fetch: ((_u: string, init: RequestInit) => reply(init)) as typeof fetch })
+      // success, error status, thrown fetch, and a body that dies mid-stream
+      await run(async () => res(200, { pairingToken: 'P', exp: 1_120 })).hostToken('L', 'e')
+      await run(async () => res(500, null)).hostToken('L', 'e')
+      await run(async () => { throw new Error('offline') }).hostToken('L', 'e')
+      await run(async () => resetMidBody()).hostToken('L', 'e')
+      expect(t.armed()).toBe(4)
+      expect(t.live.size).toBe(0)
+    } finally {
+      t.restore()
+    }
+    // and the timeout itself: the timer that fired is cleared too, and nothing else is left armed
+    const T2 = 17
+    const t2 = trackTimers(T2)
+    try {
+      const { f } = hungFetch()
+      expect(await createWatchLinkApi({ apiBase: 'https://api.test', timeoutMs: T2, fetch: f }).revoke('L', 'e')).toBe(false)
+      expect(t2.armed()).toBe(1)
+      expect(t2.live.size).toBe(0)
+    } finally {
+      t2.restore()
+    }
   })
 })
