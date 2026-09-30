@@ -172,6 +172,28 @@ describe('native-invoke', () => {
     expect(code).toBe(255)
   })
 
+  it('a streaming child killed before its open FAILS never writes to its ended pipes', async () => {
+    // CI caught this as an uncaught ERR_STREAM_WRITE_AFTER_END: kill() closed the child, then the
+    // connection failed and the error path wrote to the ended stderr.
+    const failing = new NativeMux({
+      defaultAgent: () => undefined,
+      resolveHost: () => new Promise((_r, reject) => setTimeout(() => reject(new Error('late failure')), 30))
+    })
+    muxes.push(failing)
+    const uncaught: unknown[] = []
+    const onErr = (e: unknown): void => void uncaught.push(e)
+    process.on('uncaughtException', onErr)
+    try {
+      const child = spawnSshArgvStream(failing, childArgs(conn(), path.join(dir, 'late.sock'), 'x'))
+      child.kill('SIGKILL')
+      expect(await new Promise<number>((r) => child.on('close', r))).toBe(255)
+      await new Promise((r) => setTimeout(r, 80)) // past the late failure
+      expect(uncaught).toEqual([])
+    } finally {
+      process.off('uncaughtException', onErr)
+    }
+  })
+
   it('an argv the parser refuses is a named exit 255, not a guess', async () => {
     const r = await runSshArgv(mux(), ['-L', '1:h:2', 'dev@127.0.0.1'])
     expect(r.code).toBe(255)

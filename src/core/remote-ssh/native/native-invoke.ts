@@ -216,6 +216,7 @@ export function spawnSshArgvStream(mux: NativeMux, argv: string[]): NativeStream
     if (p.kind !== 'exec') throw new Error('native ssh transport: not a command argv')
   } catch (e) {
     queueMicrotask(() => {
+      if (done) return
       child.stderr.write(`${(e as Error).message}\n`)
       finish(255)
     })
@@ -236,6 +237,9 @@ export function spawnSshArgvStream(mux: NativeMux, argv: string[]): NativeStream
       ch.end()
     },
     (e: Error) => {
+      // Killed before the open failed: the child already closed and its pipes are ended. A write
+      // here would throw ERR_STREAM_WRITE_AFTER_END as an uncaught exception in main.
+      if (done) return
       child.stderr.write(`${e.message}\n`)
       finish(255)
     }
