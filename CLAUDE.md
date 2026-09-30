@@ -3249,6 +3249,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   its `contextTail`, the hook-fed path authority). The browser's real reader is
   `buildTranscriptApi` in ws-bridge — deliberately NOT folded into `buildClaudeApi`, which the
   relay shares and must not adopt it.
+  **System-injected user records are not the user's words** — a `<task-notification>`, a peer
+  `<agent-message>`/`<cross-session-message>`, an auto-continuation/coordinator prompt — so
+  `parseChatRecords` (and the find-bar index) renders each as ONE assistant tool part
+  (`classifySystemRecord`: "Background task" / "Agent message" / "System", no wire change; each is
+  a turn boundary in `assistantTurnEnds`) and fences a human paste's `<pasted_content>` span (the
+  CLI's own 4-hex-id grammar only; titles keep the raw text) — all `indexOf` scans, never a
+  backtracking regex (quadratic on unclosed tags); exact rules in `src/shared/chat-fixtures/README.md`.
   **Paged reads (2026-09).** `chat.readTranscript` takes a trailing optional `page`
   (`{before?, maxBytes?}`, `shared/chat-page.ts`). Absent = the legacy 5 MB-tail read, byte for byte
   (result is exactly `{messages, found}`). Present = ONE window of at most `maxBytes` (clamped
