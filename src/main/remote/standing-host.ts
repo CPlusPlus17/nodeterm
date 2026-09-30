@@ -42,6 +42,13 @@ import { isPinned, pinDevice } from './approved-devices-core'
 import { phonePins } from './approved-devices'
 import { registerPeerSessionKiller } from './peer-revoke'
 import { createPhoneApprovals } from '../../core/phone-approval'
+import {
+  POP_REFUSED_MESSAGE,
+  computePopProof,
+  fetchPopChallenge,
+  popRefusalOf,
+  type PopRefusal
+} from '../../core/relay/relay-pop'
 
 // Re-mint the token this long before its expiry (TTL is ~120s). Floored so a bogus/short exp can't
 // spin us.
@@ -80,23 +87,79 @@ export function tokenTtlMs(exp: number, serverDate: string | null, localNowMs: n
  * Mint a standing host token from the API. Pro proves entitlement; the free tier sends
  * its deviceId instead (backend admits it against the server-side free-tier policy —
  * until that ships, the mint fails and free hosting simply stays down, i.e. today's
- * behavior). Returns null on any failure.
+ * behavior).
+ *
+ * When the backend supports it, the mint also carries a proof that this process holds the host's
+ * secret key (relay-pop.ts), so a join code alone can no longer mint this host's tokens. Only a
+ * challenge answered 404/405 means "this backend predates the proof" and gets the legacy mint; any
+ * other challenge failure is transient and mints NOTHING: to a host the backend has seen prove
+ * before, an unproven mint is a 403, which would stop hosting over a blip.
+ *
+ * Returns `{ refused }` for a terminal key-proof refusal (the caller stops hosting and says so) and
+ * null for every other failure (the caller backs off and retries). One 403 is deliberately NOT
+ * terminal: `pop_required` for a mint sent WITHOUT a proof because the challenge said 404/405. A
+ * reverse proxy answers 404 while the backend redeploys, and the unproven mint that follows can land
+ * on the fresh backend; stopping there would end hosting for good over a redeploy, so it backs off
+ * and the next attempt asks for a challenge again.
  */
 async function mintHostToken(
   entitlement: string | null,
-  hostPublicKeyB64: string
-): Promise<HostTokenResponse | null> {
+  keys: KeyPair
+): Promise<HostTokenResponse | { refused: PopRefusal } | null> {
+  const hostPublicKeyB64 = publicKeyToB64(keys.publicKey)
+  // Read ONCE: the proof's subject must be the exact id the body sends. On a first launch
+  // getDeviceId() mints a uuid and writes it asynchronously, so a second call before that write
+  // lands mints another one, and the backend would refuse the pair as pop_invalid (terminal).
+  const deviceId = entitlement ? null : getDeviceId()
+  const base = entitlement ? { entitlement, hostPublicKeyB64 } : { deviceId, hostPublicKeyB64 }
   const ctrl = new AbortController()
+  // One timer for the whole mint: the challenge, the host-token request and its body read.
   const timer = setTimeout(() => ctrl.abort(), 8000)
   try {
+    const ch = await fetchPopChallenge({
+      apiBase: API_BASE,
+      hostPublicKeyB64,
+      purpose: 'host-token',
+      signal: ctrl.signal
+    })
+    if (!ch.ok && !ch.unsupported) return null // transient: back off, never mint unproven
+    // True only when the challenge said 404/405: the one case this mint goes out unproven although
+    // we hold the key (see the header on what a pop_required then means).
+    const sentUnproven = !ch.ok && ch.unsupported
+    let proof: { popChallenge: string; popProof: string } | null = null
+    if (ch.ok) {
+      try {
+        proof = {
+          popChallenge: ch.challenge,
+          popProof: computePopProof({
+            hostSecretKey: keys.secretKey,
+            hostPublicKeyB64,
+            challenge: ch.challenge,
+            serverPublicKeyB64: ch.serverPublicKeyB64,
+            purpose: 'host-token',
+            // The backend proves host-token against `body.deviceId ?? ''`: '' on the Pro path.
+            subject: deviceId ?? ''
+          })
+        }
+      } catch {
+        // A server key the proof cannot use (malformed, or low-order): back off, never mint.
+        return null
+      }
+    }
     const res = await fetch(`${API_BASE}/v1/relay/host-token`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(
-        entitlement ? { entitlement, hostPublicKeyB64 } : { deviceId: getDeviceId(), hostPublicKeyB64 }
-      ),
+      // popChallenge and popProof travel together or not at all: the backend treats a half-present
+      // proof as invalid, and invalid is terminal.
+      body: JSON.stringify({ ...base, ...(proof ?? {}) }),
       signal: ctrl.signal
     })
+    if (res.status === 403) {
+      const refused = popRefusalOf(403, await res.json().catch(() => null))
+      // A backend that came back mid-redeploy (see the header): transient, not a refusal.
+      if (refused === 'pop_required' && sentUnproven) return null
+      if (refused) return { refused }
+    }
     if (!res.ok) return null
     const json = (await res.json().catch(() => ({}))) as Partial<HostTokenResponse>
     if (!json.pairingToken) return null
@@ -138,6 +201,23 @@ function reportKeyLocked(err: Error): void {
     // No dialog available (headless / very early boot): the console line is the fallback.
   }
   console.error('[standing-host] host identity is locked:', err.message)
+}
+
+/**
+ * The relay refused this host's key proof (`pop_invalid`, or `pop_required` on a proven mint). It
+ * will refuse every retry the same way, so hosting stops and the human is told, once, how to
+ * recover — instead of phone access going quietly dead, or a retry loop spending the host's mints.
+ */
+function reportPopRefused(): void {
+  try {
+    dialog.showErrorBox(
+      'Remote access stopped',
+      `${POP_REFUSED_MESSAGE}\n\nPhone access is off until then. Turn it back on in Settings → Phone.`
+    )
+  } catch {
+    // No dialog available (headless / very early boot): the console line is the fallback.
+  }
+  console.error('[standing-host] the relay refused this host key proof')
 }
 
 export interface StandingHost {
@@ -320,8 +400,14 @@ export function initStandingHost(
         scheduleReconnect() // transient disk error: back off and try again
         return
       }
-      const token = await mintHostToken(entitlement, publicKeyToB64(keys.publicKey))
+      const token = await mintHostToken(entitlement, keys)
       if (!running) return
+      if (token && 'refused' in token) {
+        // Terminal: every retry would be refused the same way. stop() clears any armed reconnect.
+        stop()
+        reportPopRefused()
+        return
+      }
       if (!token) {
         scheduleReconnect()
         return
