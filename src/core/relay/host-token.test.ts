@@ -196,9 +196,14 @@ describe('host token proof of possession', () => {
     expect(await mintHostToken({ apiBase: 'https://api', deviceId: 'd', hostPublicKeyB64: PUB, hostSecretKey: keys.secretKey, fetch: t.f }))
       .toEqual({ ok: false, kind: 'bad-response' })
   })
-  it('a challenge body that stalls until the 8 s timeout is network (a timeout), not bad-response', async () => {
+  it('a challenge body that stalls until the 8 s timeout is network (a timeout), not bad-response, and mints nothing', async () => {
     vi.useFakeTimers()
+    // The URL list is the guard: a mint that slipped through would ALSO read as network (this fake
+    // throws on it, and so would a real fetch on the already-aborted signal), so the result alone
+    // cannot tell "no mint" from "a mint that failed".
+    const urls: string[] = []
     const f = (async (u: string, init: RequestInit) => {
+      urls.push(u)
       if (!u.endsWith('/v1/relay/challenge')) throw new Error('no mint may follow')
       return {
         ...res(200, null),
@@ -212,6 +217,7 @@ describe('host token proof of possession', () => {
     void p.then((r) => { settled = r })
     await vi.advanceTimersByTimeAsync(8_000)
     expect(settled).toEqual({ ok: false, kind: 'network' })
+    expect(urls).toEqual(['https://api/v1/relay/challenge'])
   })
   it('a proof that cannot be computed (a low-order server key) is bad-response and sends no mint', async () => {
     const { f, calls } = api(undefined, { challenge: () => res(200, { challenge: 'c.s', serverPublicKeyB64: Buffer.alloc(32).toString('base64') }) })
