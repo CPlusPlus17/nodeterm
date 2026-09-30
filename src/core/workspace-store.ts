@@ -327,7 +327,8 @@ export class WorkspaceStore {
   onPersist?: () => void
   /**
    * Some load in THIS run found no readable workspace.json — missing (deleted, a first run, a crash
-   * between the corrupt-file set-aside and the next write), unreadable, or unparsable — so whatever
+   * between the corrupt-file set-aside and the next write), unreadable, unparsable, or parsable but no
+   * index this build recognises (`{}`, a v3 without entries, a newer build's version) — so whatever
    * index this run holds afterwards may have been rebuilt from NOTHING: the renderer's unconditional
    * boot save writes an EMPTY index over the set-aside file while every project's own
    * `.nodeterm/project.json` still holds its nodes. `knownNodeIds` then answers undefined for the rest
@@ -426,10 +427,23 @@ export class WorkspaceStore {
       }
       return EMPTY_WORKSPACE
     }
-    const anyParsed = parsed as { version?: number }
-    if (anyParsed?.version === 3) return this.loadV3(parsed as WorkspaceIndexV3, sideline)
+    const anyParsed = parsed as { version?: number; entries?: unknown }
+    // Only a v3 index with an entry list of objects is one: `{"version":3}` alone used to reach loadV3
+    // and throw (`index.entries is not iterable`); now it falls through, like any unrecognised shape.
+    if (anyParsed?.version === 3 && Array.isArray(anyParsed.entries) && anyParsed.entries.every(isObjectEntry)) {
+      try {
+        return await this.loadV3(parsed as WorkspaceIndexV3, sideline)
+      } catch (e) {
+        this.indexRebuiltThisRun = true // R44: an index we could not build is not a read of it
+        throw e
+      }
+    }
     // v1/v2: assemble in memory now; the first save() performs the actual migration.
     const legacy = migrateLegacy(parsed)
+    // PARSED, but no index this build recognises (`{}`, `null`, `[]`, a v2 without its projects list,
+    // a v3 without entries, a newer build's version): the run's index is rebuilt from nothing exactly
+    // as for an unparsable file (R44 / re-review NEW-1). A readable EMPTY v2/v3 index is not this.
+    if (legacy === EMPTY_WORKSPACE) this.indexRebuiltThisRun = true
     if (legacy.projects.length) this.pendingV2Backup = raw
     return legacy
   }
@@ -2728,7 +2742,11 @@ function unavailableProject(e: { id: string; name: string; color: string; closed
   }
 }
 
-/** Normalize legacy on-disk shapes (v1 single canvas, v2 projects) into a v2-shaped workspace. */
+const isObjectEntry = (e: unknown): boolean => typeof e === 'object' && e !== null && !Array.isArray(e)
+
+/** Normalize legacy on-disk shapes (v1 single canvas, v2 projects) into a v2-shaped workspace.
+ *  Anything else answers `EMPTY_WORKSPACE` itself (by identity: `loadInner` reads that as "no index
+ *  this build recognises"). */
 function migrateLegacy(parsed: unknown): Workspace {
   const ws = parsed as Partial<Workspace> & Partial<WorkspaceV1>
   if (ws?.version === 2 && Array.isArray(ws.projects)) {

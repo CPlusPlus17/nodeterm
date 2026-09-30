@@ -2368,4 +2368,13 @@ describe('knownNodeIds — every node id in every project, or undefined when it 
       expect([...(next.knownNodeIds() ?? [])]).toEqual(['term-1'])
     }
   })
+  // Re-review NEW-1: an index of the right version that cannot be BUILT (loadV3 throws: a `cwd` that
+  // is not a string) keeps rejecting as before, and marks the run like any other unreadable index.
+  it('a v3 index whose build throws still rejects the load, and marks the run', async () => {
+    await fs.writeFile(path.join(userData, 'workspace.json'), JSON.stringify({ version: 3, entries: [{ id: 'p1', name: 'x', color: '#fff', cwd: 5 }] }))
+    const store = new WorkspaceStore()
+    await expect(store.load()).rejects.toThrow()
+    await store.save(ws([]))
+    expect(store.knownNodeIds()).toBeUndefined()
+  })
 })

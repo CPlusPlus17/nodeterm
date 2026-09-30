@@ -146,4 +146,47 @@ describe('an index rebuilt from nothing is never a complete read (R44)', () => {
     await store.save(ws([]))
     expect(workspaceNodeState(store, 'term-1')).toBe('unknown')
   })
+
+  // NEW-1: a file that PARSES but is no index this build recognises falls through to an empty
+  // workspace just like an unparsable one — and its empty boot save must not read as complete either.
+  for (const [label, body] of [
+    ['{}', '{}'],
+    ['[]', '[]'],
+    ['null', 'null'],
+    ['a v2 without its projects list', '{"version":2}'],
+    ['a v3 without entries', '{"version":3}'],
+    ['a v3 whose entries are not objects', '{"version":3,"entries":[5]}'],
+    ['a newer build\'s index', '{"version":4,"entries":[]}']
+  ] as const) {
+    it(`a PARSABLE but unrecognised index (${label}) is the same: unknown after the empty boot save, and load() answers`, async () => {
+      const m = await machine()
+      await fs.writeFile(m.index, body)
+      const store = new WorkspaceStore()
+      await expect(store.load({ sideline: false })).resolves.toMatchObject({ projects: [] })
+      const links = linksOver(store)
+      await links.s.init()
+      await store.load()
+      await store.save(ws([]))
+      expect(workspaceNodeState(store, 'term-1')).toBe('unknown')
+      await settle()
+      expect(links.calls).toEqual([])
+      expect(links.s.list()).toHaveLength(1)
+    })
+  }
+
+  // …while an index that says, readably, that there is nothing IS a complete read.
+  for (const [label, body] of [
+    ['v3', '{"version":3,"entries":[]}'],
+    ['v2', '{"version":2,"activeProjectId":"","projects":[]}']
+  ] as const) {
+    it(`a genuinely empty ${label} index stays a complete read: the node is absent`, async () => {
+      const m = await machine()
+      await fs.writeFile(m.index, body)
+      const store = new WorkspaceStore()
+      await store.load()
+      await store.save(ws([]))
+      expect(store.knownNodeIds()).toEqual(new Set())
+      expect(workspaceNodeState(store, 'term-1')).toBe('absent')
+    })
+  }
 })
