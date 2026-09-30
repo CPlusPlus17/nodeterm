@@ -116,7 +116,7 @@ Success means:
 | Watcher policy | `src/core/watch-link/watcher-policy.ts` | The `RelayHostHooks` for a viewer session: `access` (refuse everything except a Commenter's chat cast) and `wrapSink` (deliver only this session's pty channels and `watchLink:*` events). |
 | Output filter | `src/core/watch-link/stream-filter.ts` | Stateful per-session parser that removes string-type escape sequences from the watcher's pty stream. |
 | Backend client | `src/core/watch-link/api.ts` | create / host-token / status / revoke / revoke-all calls. |
-| Existing-code changes | `ui-sink-registry.ts`, `pty-manager.ts`, `hosted-scheduler.ts`, `host-control.ts` | Registry client flags `broadcast: false` and `pausesPty: false` (+ a per-client resync provider), `captureVisible(sessionId)`, scheduler `maxBridged`, `watchLink:` host-only prefix. |
+| Existing-code changes | `ui-sink-registry.ts`, both platforms, `pty-manager.ts`, `hosted-scheduler.ts`, `host-control.ts` | Registry client options `quiet` and `selfPaced`, `quietClientIds()` for the reaper, `captureVisible(sessionId)`, scheduler `maxBridged`, `watchLink:` host-only prefix. |
 | Shell wiring | `src/main` and `src/server` | Register the same core service; desktop persists secrets with `safeStorage`, Server Edition with a 0600 file in its data dir. |
 | API | nodeterm-server | `watch_links` table and six routes. |
 | Viewer page | nodeterm-web | `/s/[id]` route and the vendored client. |
@@ -178,7 +178,7 @@ Host → viewer:
 
 - `ev watchLink:meta {v: 1, role, label, title, expiresAt, cols, rows}`
 - pty output as binary `encodePtyData` frames; `ev pty:size:<sid>`
-- keyframe: visible screen + cursor + alt-screen flag, in the `pty:resync` shape
+- `ev watch:keyframe {sessionId, screen, altScreen}` — the visible screen and whether tmux paints on the alternate screen
 - `ev watchLink:chat {id, name, text, at, from: 'viewer' | 'sharer'}`
 - `ev watchLink:end {reason}`, `reason ∈ revoked | expired | node-gone | session-ended |
   host-stopping | kicked`
@@ -195,11 +195,12 @@ protocol.**
 - At most **5** active links per machine. A record is
   `{linkId, nodeId, role, label, createdAt, expiresAt, secret}`.
 - **Persistence:** `<userData>/watch-links.json` through `writeFileAtomic`.
-  - Desktop: `secret` is `safeStorage`-encrypted. With no `safeStorage`, links are **not persisted**
+  - Through the platform's existing secret seam, `CorePlatform.sealSecret` / `unsealSecret`.
+  - Desktop: the seam is Electron `safeStorage`. If sealing throws, links are **not persisted**
     (they work, and end at quit), and the user is told once. There is no plaintext fallback on the
     desktop.
-  - Server Edition: a 0600 file in its data dir, the same rule as the hosted team's host key
-    (headless Linux has no keyring).
+  - Server Edition: the seam is absent by design (headless, no keychain), so the secret is stored
+    raw in a 0600 file in its data dir, the same rule as its node secrets and hosted host key.
   - At launch, expired records are pruned and each remaining link's listeners reopen.
 - **Clock:** the expiry timer is derived from the server's `expiresAt` and the response's `Date`
   header (`tokenTtlMs`'s rule), never from the local clock alone.
@@ -231,19 +232,28 @@ protocol.**
 ### Attaching a viewer session
 
 1. `PeerAttach.attach(sink)` registers the watcher client **without joining presence** (no cursor or
-   facepile on the owner's canvas), with registry flags `broadcast: false` (absent from `ids()` and
-   `clientIds()`; reachable only by `sendTo`) and `pausesPty: false`.
+   facepile on the owner's canvas) as a **quiet**, **self-paced** client (see Backpressure). Quiet means: absent
+   from `broadcast()` and from `clientIds()` (so the canvas-sync fan-out and any future `clientIds()`
+   consumer skip it by default), reachable only by `sendTo`. The pty reaper is the one consumer that
+   must still count it as live — it decides "is anyone watching this session?" from `clientIds()`,
+   and a session only a watcher holds would otherwise be released after 10 minutes with no event —
+   so it reads a separate `quietClientIds()` as well.
 2. The host makes the pty join itself:
    `ptyManager.create(watcherId, {persistKey: nodeId, joinOnly: true, sizeVote: false,
    cols/rows: the session's last applied size, sshRemote/requireRemote: from the host's own node
    records, viewerId: 'watch-<sessionId>'})`. **No argument comes from the viewer.** (The hosted
    Viewer path strips `sshRemote` because a peer supplied it; here the host builds it.)
 3. A keyframe from **`captureVisible(sessionId)`** (new; never history):
-   - local tmux and session-host: the `captureSnapshot` path (`capture-pane -p -e`,
-     `sessionHostCapture(name, false)`);
-   - SSH: `capture-pane -p -e` over the ControlMaster, **without** `-S`;
-   - a plain shell with no tmux: no capture exists. The viewer starts from the live stream, and the
-     page says so.
+   - local tmux: `capture-pane -p -e` (the `captureSnapshot` path, which has no `-S`);
+   - SSH: `capture-pane -p -e` over the ControlMaster, **without** `-S` (the existing remote builder
+     always adds `-S -200`);
+   - **session host (Windows) and the direct Windows pty: none in v1.** `sessionHostCapture(name,
+     false)` returns the recent ~200 lines, not the visible screen, and a visible-only capture needs
+     an additive, negotiated session-host command (a follow-up). Never history instead;
+   - a plain shell with no tmux: none.
+
+   With no keyframe the viewer starts from the live stream and the page says "Waiting for the
+   terminal to redraw…" until output arrives.
 4. `watchLink:meta`, then the live stream.
 
 If the join answers `unavailable: 'join-only'`, or the session later sends `pty:exit` /
@@ -252,12 +262,18 @@ node appears.
 
 ### Backpressure — a viewer never slows the owner
 
-- `pausesPty: false` skips `sendTo`'s 1 MB pause block entirely for a watcher client, closing for
-  links the residual `docs/hosted-team-relay.md` documents for hosted Viewers.
-- Drop-and-redraw at **512 KB** buffered for a watcher, with resync through **`captureVisible`** (the
-  default resync provider returns history for session-host and SSH; watchers must never get it).
+- A watcher is registered **self-paced**: the registry never takes a pause ticket for it (closing, for
+  links, the residual `docs/hosted-team-relay.md` documents for hosted Viewers) and never drops or
+  resyncs its output. The watcher's own sink does both, because only it can keep the stream filter
+  (below) in step with the pty: a frame the registry dropped would never reach the parser, and a
+  string sequence cut in half would leak its tail as text.
+- Drop-and-redraw at **512 KB** buffered, decided by the watcher sink, with the redraw sent as a
+  `watch:keyframe` from **`captureVisible`** once the socket drains below 256 KB (the registry's
+  default resync provider returns history on the session-host and SSH paths; a watcher never uses it).
 - A per-viewer token bucket (**256 KB/s sustained, 1 MB burst**). Past it the stream stops and at most
   one keyframe per second is sent. This bounds relay traffic during a flood (`yes`, a verbose build).
+- Every pty byte passes the stream filter even while nothing is forwarded, so the parser's position
+  is always the pty's.
 
 ### Output filter
 
@@ -265,7 +281,10 @@ The watcher's pty stream passes a per-session, stateful parser that **removes ev
 sequence**: OSC, DCS, APC, PM and SOS. They carry clipboard contents (OSC 52 from tmux
 `set-clipboard on`), titles, hyperlink targets, file transfers and palette changes, none of which is
 text on the screen. CSI, other ESC sequences and text pass unchanged. Sequences split across chunks
-are handled; an unterminated string sequence past **64 KB** is dropped and the parser resets.
+are handled. An unterminated string sequence is swallowed until its terminator; only past **1 MiB**
+does the parser give up and return to text (a lower cap would print the tail of a large OSC 52
+payload, i.e. the clipboard, as text). The parser is reset only when the viewer moves to a new pty
+session, never on a keyframe.
 
 ### Commenter chat
 
@@ -493,7 +512,7 @@ only calls `requireProOr`, which today has zero callers.)
 - **Read-only:** there is no input channel in the protocol; the watcher policy refuses every request
   (deny-by-default); the pty join is `joinOnly` + `sizeVote: false`; a watcher never takes a pause
   ticket.
-- **Isolation from the canvas:** a watcher receives no broadcast (absent from `ids()`), and its sink
+- **Isolation from the canvas:** a watcher is a quiet client (absent from `broadcast()` and `clientIds()`), and its sink
   filter passes only its session's pty channels and `watchLink:*` events. Canvas ops, presence,
   agent status and context updates cannot reach it by either path.
 - **Residual — no forward secrecy**, as for the relay today: a recorded session plus a later-leaked
@@ -509,7 +528,7 @@ only calls `requireProOr`, which today has zero callers.)
 ## Testing
 
 - **Pure units:** key derivation against vectors; link encode/parse; the stream filter (chunk
-  boundaries, the 64 KB cap, CSI untouched); the token bucket; the chat sanitizer; registry lifecycle
+  boundaries, the 1 MiB cap, CSI untouched); the token bucket; the chat sanitizer; registry lifecycle
   on a fake clock; scheduler `maxBridged`.
 - **Core integration** (in-process transport, the real `relay-host`, the real watcher policy, and the
   **browser client itself** from `src/shared/watch-link/`):
@@ -518,14 +537,15 @@ only calls `requireProOr`, which today has zero callers.)
   - **one broadcast on every channel**: zero frames reach the watcher;
   - a watcher with a tiny window does not shrink the pty;
   - a watcher whose socket is stalled does not pause the pty;
-  - resync returns the visible screen only, on the session-host and SSH paths too;
+  - resync returns the visible screen only on the SSH path, and nothing (never history) on the
+    session-host path;
   - no OSC 52 in the delivered stream;
   - `node-gone` and expiry end sessions.
 - **Guard tests:** `watchLink:*` is host-only and in no role table, refused on both the Team Access
   and the hosted paths; `CanvasNodeState`, `CanvasMutation` and `ProjectKanban` carry no link field;
   `LiveLinkChip` is not in any hideable list; the canvas-control verb table names no link verb.
-- **Mutation checks:** break each load-bearing rule on purpose (host-only prefix, `broadcast: false`,
-  `pausesPty: false`, `captureVisible`, the stream filter, `autoApprove`'s key comparison) and confirm
+- **Mutation checks:** break each load-bearing rule on purpose (host-only prefix, the quiet client option,
+  self-pacing, `captureVisible`, the stream filter, `autoApprove`'s key comparison) and confirm
   a test turns red.
 - **Backend:** every refusal path in the routes table, owner mismatch, TTL clamping, license limits,
   the timing-safe compare, the same 404 for unknown id and wrong key, no 410 leak on a wrong key,
