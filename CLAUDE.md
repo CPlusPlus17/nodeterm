@@ -1443,6 +1443,39 @@ session.
 - The xterm container is `nodrag nowheel`; a transparent **hover-guard** overlay sits on top
   until you dwell `settings.panHoverDelay` (so quick drag = move node, scroll = pan). After
   the dwell the guard is removed and xterm takes input. The header stays draggable.
+- **Click to focus** (`settings.terminalFocusFollowsPointer`, default ON = the dwell above; issue
+  #757, Settings → Behavior). Off, the pointer decides nothing: no dwell, and `mouseleave` no
+  longer blurs, re-arms or releases. A click (`HoverGuard` pointer events → `onGuardClick` → `enterNow`) or a "go to node" takes the
+  keyboard, and the node's active flag, presence focus AND guard then follow DOM focus. ONE hook
+  owns all of it, `nodes/useClickToFocus.ts`, and it binds to the stable `.term-node` ROOT, never
+  the React Flow wrapper: focus mode MOVES that root into the fullscreen surface
+  (`surface.appendChild(root)`), so a listener or containment check captured on the wrapper went
+  deaf there and read every body press as an outside press. The wrapper is re-resolved at event
+  time only to recognise the node's own React Flow chrome (resize handles). Root `focusin`/
+  `focusout` run `focusLossOutcome` (`lib/terminalFocusMode.ts`): focus moving inside the node or
+  the WINDOW blurring (Cmd+Tab) keeps it, a press on the node's own chrome (header drag — React Flow
+  focuses its wrapper, MEASURED in Electron 42) hands it back to the element that lost it (the ⌘M
+  composer) or the xterm (`reclaimTarget`), anything else — another node, a field, the empty canvas
+  (`onPaneClick` blurs the xterm textarea, `shouldReleasePaneFocus`) — releases it and re-arms the
+  guard. One document capture `pointerdown` does the rest: outside the node it releases activity
+  claimed WITHOUT focus (go-to-node under the ⌘M view, Canvas's own `setActive` on a jump — no
+  focusout ever comes, `outsidePressReleases`), and a document capture `focusin` landing outside
+  the node (its own wrapper counts as inside) does the same for KEYBOARD focus moves — ⌘M open,
+  then ⌘K's autofocus — else the stale `activeId` suppresses that node's unread dot; inside the BODY, any deliberate primary press that is not on the guard runs `enterNow`
+  (`bodyPressAcknowledges`) — guard down, xterm focused, ⌘M view open, all the same — so an unread
+  finish is cleared by clicking the terminal, not only by clicking the guard. A focus RESTORE that
+  no press caused (window activation) never acknowledges. The xterm blur that OPENING the ⌘M view
+  causes is `keep`, not a release (`lostIsCoveredXterm`). Focus mode's reparent blurs a focused xterm SYNCHRONOUSLY inside
+  `appendChild` (MEASURED, Electron 42: `relatedTarget` null, root still connected — so an
+  `isConnected` test cannot see it); `nodes/reparentKeepingFocus.ts` brackets the move with a flag the
+  hook honours (`reparenting`) and re-focuses the element that held the keyboard, in BOTH modes —
+  before it, entering/leaving focus mode dropped the keyboard in the default mode too. The guard listens to POINTER events
+  (`nodes/HoverGuard.tsx`): React Flow's d3-drag swallows a left `mousedown`/`mouseup` on a
+  draggable node before React sees them, so the old mouse-event guard never received a left click
+  (#87's click-to-focus only ever worked through the dwell). Only a literal `false` in
+  settings.json selects it (`resolveFocusFollowsPointer`). The ⌘/ shortcuts panel prints "Click" instead of
+  the dwell. Renderer only: Desktop + Server Edition identical; kanban card modal N/A (it has no
+  hover guard); Mobile N/A.
 - **Where the wheel stops being the terminal's is decided by HIT TEST, per packet** — `Canvas.tsx`
   answers `overNativeScrollable` with `target?.closest('.nowheel')`, and React Flow's own
   `panOnScroll` walks the same class (`noWheelClassName`). Two consequences, and issue #767 reported
