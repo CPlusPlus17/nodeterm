@@ -250,7 +250,7 @@ describe('evaluateSuccessDep — the whole matrix', () => {
     expect(at({ exists: false, turnDone: false, outcome: { outcome: 'failed' } })).toBe('blocked')
     // Reports do not survive a restart, and the text says so — only `run` / ▶ move it then.
     expect(evaluateSuccessDep('a1', { exists: false, turnDone: false }).detail).toBe(
-      'closed without reporting success in this app run'
+      'closed without reporting success'
     )
   })
 })

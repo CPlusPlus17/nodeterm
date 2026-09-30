@@ -4,8 +4,8 @@
  * a hand-over is and when it ends; the renderer reads it for the plain `--after` gate
  * (`launchesToFire`), the QUEUED tooltip and `list`.
  *
- * Transient: core re-sends the list on request after a reload, and after an app restart there is
- * nothing to send — no work has been handed over in this run.
+ * Transient HERE: core re-sends the list on request after a reload, and core itself keeps the holds
+ * across an app restart (HANDOVER_FACT) and pushes them when it loads them at boot.
  */
 import { create } from 'zustand'
 import type { StationHandoverRecord } from '@shared/station-handover'

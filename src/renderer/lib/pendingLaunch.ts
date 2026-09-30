@@ -70,7 +70,7 @@ function handedOver(handovers: HandoverById | undefined, depId: string): boolean
 }
 
 /** What `launchesToFire` needs to judge a `--after-success` wait: every station's latest task
- *  report in this app run (core's store, mirrored) and the clock deadlines are on. */
+ *  report (core's durable store, mirrored) and the clock deadlines are on. */
 export interface SuccessGateContext {
   outcomes: Readonly<Record<string, StationOutcomeRecord>>
   now: number

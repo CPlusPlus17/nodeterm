@@ -70,6 +70,7 @@ import {
 import { appendBoardLogVia, registerBoardLogHandlers, type BoardLogRoute } from '../core/board-log-handlers'
 import {
   createDeliveryQueue,
+  restoreDeliveryQueue,
   deliverFromControl,
   deliverBoardCommentFromUi,
   deliverStationNotice,
@@ -84,9 +85,13 @@ import {
   StationOutcomeStore,
   clearOutcomesAfterControl,
   handleReportOutcome,
-  registerStationOutcomeIpc
+  registerStationOutcomeIpc,
+  OUTCOME_FACT
 } from '../core/station-outcome-store'
+import { DurableFactFile, flushAllDurableFactsSync } from '../core/durable-state'
+import { QUEUE_FACT } from '../core/agents/delivery-queue'
 import {
+  HANDOVER_FACT,
   StationHandoverTracker,
   registerStationHandoverIpc
 } from '../core/station-handover'
@@ -1913,7 +1918,11 @@ app.whenReady().then(async () => {
   // RENDERER state (Eco lives in `useAgentStatus`, the wake registry in the renderer's
   // agent-restart) with no main-side signal today: the BUSY-target leg is fully wired here, and the
   // hibernated leg's renderer→main wake is an explicitly-recorded residual (see the PR body).
-  messagingDeps.queue = createDeliveryQueue(messagingDeps)
+  // Durable across an app restart (<userData>/orchestration-state/delivery-queue.json): restored
+  // below, once the status mirror is loaded and every listener is wired — see delivery-queue.ts for
+  // what a restart does to a queued message (TTL keeps running, same session only, sender told).
+  const deliveryQueueFile = new DurableFactFile(QUEUE_FACT, { userDataDir: corePlatform.userDataDir })
+  messagingDeps.queue = createDeliveryQueue(messagingDeps, { durable: deliveryQueueFile })
   setDeliveryQueue(messagingDeps.queue)
   ipcMain.handle(IPC.agentMessageDeliver, async (_e, raw: unknown) => {
     if (!isDeliverRequest(raw))
@@ -1959,8 +1968,18 @@ app.whenReady().then(async () => {
   // Station task outcomes (`report-outcome`, src/core/station-outcome-store.ts): what each station
   // said about its OWN task, read by the renderer's `--after-success` gate. Held here, in main, so a
   // renderer reload does not lose it; pushed whole to the window on every change.
-  const stationOutcomes = new StationOutcomeStore((records) =>
-    sendToMain(IPC.stationOutcomeChanged, records)
+  // Durable across an app restart too (station-outcomes.json), each report bound to the session
+  // that made it; `loadFromDisk()` runs below, after the status mirror it compares against.
+  const stationOutcomesFile = new DurableFactFile(OUTCOME_FACT, { userDataDir: corePlatform.userDataDir })
+  const stationOutcomes = new StationOutcomeStore(
+    (records) => sendToMain(IPC.stationOutcomeChanged, records),
+    {
+      durable: stationOutcomesFile,
+      sessionOf: (id) => {
+        const m = mirrorEntry(id)
+        return m ? { sessionId: m.sessionId, agentId: m.agentId } : undefined
+      }
+    }
   )
   registerStationOutcomeIpc(corePlatform, () => stationOutcomes)
   // A `send` / `reply` hands a station new work — decided by when the message REACHES its pane (a
@@ -1968,9 +1987,13 @@ app.whenReady().then(async () => {
   // comes back. The messaging service reports those moments; the store applies the rule.
   // The same hand-over moments also hold plain `--after` (src/core/station-handover.ts): a station
   // handed new work is not "done" until a turn that started after the hand-over has ended. Pushed
-  // whole to the window, whose launch loop reads it.
-  const stationHandovers = new StationHandoverTracker((records) =>
-    sendToMain(IPC.stationHandoverChanged, records)
+  // whole to the window, whose launch loop reads it. Durable (station-handovers.json), loaded below
+  // between the reports and the queue.
+  const stationHandoversFile = new DurableFactFile(HANDOVER_FACT, { userDataDir: corePlatform.userDataDir })
+  const stationHandovers = new StationHandoverTracker(
+    (records) => sendToMain(IPC.stationHandoverChanged, records),
+    Date.now,
+    stationHandoversFile
   )
   registerStationHandoverIpc(corePlatform, () => stationHandovers)
   messagingDeps.onHandover = (ev) => {
@@ -1996,6 +2019,13 @@ app.whenReady().then(async () => {
   // listeners (setListener/setRawListener/setControlHandler) attach later, which the server
   // tolerates — early hook POSTs are simply dropped, never mis-routed.
   const hookStartupWarning = await hookServer.startForApp()
+  // The durable orchestration facts belong to the instance that owns the hook endpoint, exactly
+  // like the request ledger (which `hookServer.start()` only loads when it wins the endpoint). A
+  // second instance on the same userData that lost it must neither restore them — it would expire,
+  // and tell senders about, messages the owning instance still holds — nor overwrite their files.
+  if (hookStartupWarning) {
+    for (const f of [deliveryQueueFile, stationOutcomesFile, stationHandoversFile]) f.standDown()
+  }
   // ---- Node identity (src/core/agents/node-auth-secret.ts) ------------------------------------
   // One secret does two jobs: it arms the hook server's per-node capability (closing the "shared
   // bearer can name any sibling node" hole) and it signs the codex thread → node records the hook
@@ -2091,6 +2121,20 @@ app.whenReady().then(async () => {
   })
   // Mirror live agent status to <userData>/agent-status.json for the external mobile host agent.
   initAgentStatusMirror()
+  // The orchestration facts an earlier run left on disk, in THIS order: station reports first
+  // (their session check reads the mirror just restored), then the hand-over holds, then the
+  // delivery queue (it replays into both), whose restore
+  // replays a `queued` hand-over per waiting message (rebuilding "work pending") and ends, with the
+  // sender told, every message whose TTL ran out while the app was down.
+  stationOutcomes.loadFromDisk()
+  stationHandovers.loadFromDisk()
+  // The queue waits for the workspace INDEX: an entry that lapsed while the app was down is expired
+  // here, and its sender leg (board-log line in the sender's project) resolves projects through the
+  // index, which nothing else has loaded yet at this point of boot (the renderer's own
+  // `workspace.load` comes later). Read-only load (`sideline: false`), like the relay path's.
+  void restoreDeliveryQueue(messagingDeps.queue, deliveryQueueFile, {
+    ready: workspaceStore.load({ sideline: false })
+  })
 
   /** The one display-title rule for everything the HOST sends out (push alerts, Live Activity
    *  updates, the notch capsule): the live session name unless the node was hand-renamed. */
@@ -2932,6 +2976,9 @@ app.whenReady().then(async () => {
       // The hand-over tracker FIRST: it stamps when a station's turn starts and ends, and the
       // messaging queue below may flush new work into the station on this very `done`.
       stationHandovers.onAgentEvent(enriched)
+      // A station that starts a DIFFERENT session drops the report its old one made — before the
+      // renderer hears the event, so no `--after-success` can fire on it in between.
+      stationOutcomes.onAgentEvent(enriched)
       sendToMain(IPC.agentStatus, enriched)
       // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
       notchHudOnAgentEvent(enriched)
@@ -4764,6 +4811,9 @@ app.on('before-quit', (e) => {
     // that outlive the app. The next launch rewrites both; a crash skips this, which is what the
     // generated clients' endpoint failover exists for.
     hookServer.stop()
+    // The durable orchestration facts (delivery queue, station reports): write whatever the last
+    // debounce window still holds — synchronously, because an awaited write races exit.
+    flushAllDurableFactsSync()
     // A SIGTERM quit (dev runners, `kill`, logout) arrives through Chromium's shutdown
     // detector, and this pass's re-issued app.quit() cannot resume the OS-initiated
     // termination the first pass preventDefault'ed: both passes run, but will-quit never

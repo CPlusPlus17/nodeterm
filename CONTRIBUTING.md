@@ -509,6 +509,14 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   concurrent 45 s permission waits racing one prompt. Write the normalizer once, use it on both
   sides, and pin it with a `C:\`-shaped test.
 
+- **Orchestration state that must survive a restart goes through `src/core/durable-state.ts`.** The
+  delivery queue, station reports and the `--request-id` ledger are mirrored to
+  `<userData>/orchestration-state/` by one module: add a `DurableFactSpec` (kind, version, a
+  sanitizer that DROPS what it cannot trust, a cap) rather than writing another store. Decide — and
+  write in the fact's header — what a restart MEANS for it (a TTL that kept running, a session that
+  may have changed), load it at boot in BOTH shells after anything it reads (the status mirror), and
+  test it by writing through one instance and reading through a new one. Never put it in
+  `.nodeterm/project.json`: it is one machine's run state. CLAUDE.md § Durable orchestration state.
 - **Never publish a file with a bare `fs.rename`.** Use `renameAtomic` or `writeFileAtomic` from
   `src/core/fs-atomic.ts`. On Windows a rename fails with `EPERM` whenever anything has the
   destination open — Defender scanning the file you just wrote, the search indexer, OneDrive — so
