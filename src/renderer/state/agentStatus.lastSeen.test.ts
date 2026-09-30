@@ -5,12 +5,12 @@ import { shouldDeferReleaseForEco } from '../terminal/offscreen-policy'
 import { buildStatusList } from '../lib/sessionList'
 
 // The persisted "last seen" clock (`AgentNodeStatus.lastSeen`): restored across an app restart as a
-// CLOCK that orders and ages sidebar rows — never as a live state, never as Eco's idle clock.
+// CLOCK that orders and ages sidebar rows — never as a live state, never as Eco's idle clock. It
+// lives under its OWN key so a hook event never rewrites the main status table.
 
-function memStorage(seed: Record<string, string> = {}): Storage & { map: Map<string, string> } {
+function memStorage(seed: Record<string, string> = {}): Storage {
   const m = new Map(Object.entries(seed))
   return {
-    map: m,
     getItem: (k: string) => m.get(k) ?? null,
     setItem: (k: string, v: string) => void m.set(k, v),
     removeItem: (k: string) => void m.delete(k),
@@ -19,11 +19,16 @@ function memStorage(seed: Record<string, string> = {}): Storage & { map: Map<str
     get length() {
       return m.size
     }
-  } as Storage & { map: Map<string, string> }
+  } as Storage
 }
 
 const KEY = 'nodeterm.agentStatus'
+const CLOCK_KEY = 'nodeterm.agentStatus.lastSeen'
 const HOUR = 3600_000
+
+function seeded(main: Record<string, unknown>, clocks: Record<string, unknown>): Storage {
+  return memStorage({ [KEY]: JSON.stringify(main), [CLOCK_KEY]: JSON.stringify(clocks) })
+}
 
 beforeEach(() => vi.resetModules())
 afterEach(() => {
@@ -39,57 +44,75 @@ async function boot(storage: Storage): Promise<typeof import('./agentStatus')> {
 }
 
 describe('lastSeen survives a restart as a clock, not a state', () => {
-  it('persist → new store: the clock and its state come back, the live state and idle clock do not', async () => {
+  it('persist → new store: the clock and its state come back marked restored; live state and idle clock do not', async () => {
     vi.useFakeTimers()
     const storage = memStorage()
     const run1 = await boot(storage)
     run1.useAgentStatus.getState().setState('a', 'working', 'claude')
     vi.advanceTimersByTime(1000)
     run1.useAgentStatus.getState().setState('a', 'done', 'claude')
-    // Debounced — flush it.
     vi.advanceTimersByTime(run1.LAST_SEEN_SAVE_DEBOUNCE_MS + 10)
     const doneAt = run1.useAgentStatus.getState().byId['a'].lastEventAt!
+    // Only the two fields go to disk, under the clock key; the main table carries no clock.
+    expect(JSON.parse(storage.getItem(CLOCK_KEY)!)).toEqual({ a: { at: doneAt, state: 'done' } })
+    expect(storage.getItem(KEY)).toBeNull()
 
     const run2 = await boot(storage)
     const st = run2.useAgentStatus.getState().byId['a']
-    expect(st.lastSeen).toEqual({ at: doneAt, state: 'done' })
+    expect(st.lastSeen).toEqual({ at: doneAt, state: 'done', restored: true })
     expect(st.state).toBeUndefined()
     expect(st.lastEventAt).toBeUndefined()
     expect(st.stateAt).toBeUndefined()
   })
 
-  it('a same-state hook event moves the clock and is saved on the debounce, not per event', async () => {
+  it('a long burst of hook events writes the clock key ONCE (trailing debounce) and never the main table', async () => {
     vi.useFakeTimers()
     const storage = memStorage()
     const spy = vi.spyOn(storage, 'setItem')
     const run1 = await boot(storage)
     const s = run1.useAgentStatus.getState()
     s.setState('b', 'working', 'claude')
+    // 2 Hz for 10 s — a busy turn's tool events.
     for (let i = 0; i < 20; i++) {
-      vi.advanceTimersByTime(50)
-      s.setState('b', 'working', 'claude') // same-state freshness (a tool event)
+      vi.advanceTimersByTime(500)
+      s.setState('b', 'working', 'claude')
     }
-    expect(spy).not.toHaveBeenCalled() // no write per tool event
+    expect(spy).not.toHaveBeenCalled()
     vi.advanceTimersByTime(run1.LAST_SEEN_SAVE_DEBOUNCE_MS + 10)
-    expect(spy).toHaveBeenCalledTimes(1)
-    const saved = JSON.parse(storage.getItem(KEY)!)
-    expect(saved.b.lastSeen.at).toBe(run1.useAgentStatus.getState().byId['b'].stateAt)
-    expect(saved.b.lastSeen.at).toBeGreaterThan(run1.useAgentStatus.getState().byId['b'].lastEventAt!)
-    expect(saved.b.state).toBeUndefined()
-    expect(saved.b.lastEventAt).toBeUndefined()
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([CLOCK_KEY])
+    const saved = JSON.parse(storage.getItem(CLOCK_KEY)!)
+    expect(saved.b.at).toBe(run1.useAgentStatus.getState().byId['b'].stateAt)
+    expect(storage.getItem(KEY)).toBeNull() // state events still write nothing to the main table
   })
 
-  it('remove() drops the clock with the node, so a deleted node leaves nothing on disk', async () => {
+  it('a canvas that is never quiet still persists within the max wait', async () => {
+    vi.useFakeTimers()
+    const storage = memStorage()
+    const spy = vi.spyOn(storage, 'setItem')
+    const run1 = await boot(storage)
+    const s = run1.useAgentStatus.getState()
+    s.setState('c', 'working', 'claude')
+    const steps = Math.ceil(run1.LAST_SEEN_SAVE_MAX_WAIT_MS / 1000) + 1
+    for (let i = 0; i < steps; i++) {
+      vi.advanceTimersByTime(1000)
+      s.setState('c', 'working', 'claude')
+    }
+    expect(spy.mock.calls.filter((c) => c[0] === CLOCK_KEY)).toHaveLength(1)
+    expect(spy.mock.calls.some((c) => c[0] === KEY)).toBe(false)
+  })
+
+  it('remove() drops the clock with the node at once, and a pending debounce cannot resurrect it', async () => {
     vi.useFakeTimers()
     const storage = memStorage()
     const run1 = await boot(storage)
     run1.useAgentStatus.getState().setState('c', 'done', 'claude')
     vi.advanceTimersByTime(run1.LAST_SEEN_SAVE_DEBOUNCE_MS + 10)
-    expect(JSON.parse(storage.getItem(KEY)!).c.lastSeen).toBeDefined()
+    expect(JSON.parse(storage.getItem(CLOCK_KEY)!).c).toBeDefined()
+    run1.useAgentStatus.getState().setState('c', 'working', 'claude') // arms a debounce
     run1.useAgentStatus.getState().remove('c')
-    // Even a debounced save that was already pending cannot resurrect it.
-    vi.advanceTimersByTime(run1.LAST_SEEN_SAVE_DEBOUNCE_MS + 10)
-    expect(JSON.parse(storage.getItem(KEY)!).c).toBeUndefined()
+    expect(JSON.parse(storage.getItem(CLOCK_KEY)!).c).toBeUndefined()
+    vi.advanceTimersByTime(run1.LAST_SEEN_SAVE_MAX_WAIT_MS)
+    expect(JSON.parse(storage.getItem(CLOCK_KEY)!).c).toBeUndefined()
     const run2 = await boot(storage)
     expect(run2.useAgentStatus.getState().byId['c']).toBeUndefined()
   })
@@ -104,6 +127,37 @@ describe('lastSeen survives a restart as a clock, not a state', () => {
     for (let i = 0; i < 5; i++) expect(keep.has(`n${i}`)).toBe(false) // oldest dropped
     expect(keep.has(`n${LAST_SEEN_MAX + 4}`)).toBe(true)
     expect(keep.has('none')).toBe(false)
+  })
+})
+
+describe('the first event after a restart (SessionStart of a cold-restore resume)', () => {
+  it('drops the restored mark, re-renders so the row re-sorts, and leaves the idle clock unknown', async () => {
+    const now = Date.now()
+    const storage = seeded(
+      { r: { agentId: 'claude', sessionId: 's' } },
+      { r: { at: now - 5 * HOUR, state: 'done' } }
+    )
+    const { useAgentStatus } = await boot(storage)
+    const before = useAgentStatus.getState().byId
+    // A SessionStart normalizes to `state: undefined` — same-state for a restored entry.
+    useAgentStatus.getState().setState('r', undefined, 'claude')
+    const after = useAgentStatus.getState().byId
+    expect(after).not.toBe(before) // a new table: subscribers (the sidebar) re-sort now
+    expect(after.r.lastSeen?.restored).toBeUndefined()
+    expect(Date.now() - after.r.lastSeen!.at).toBeLessThan(5000)
+    expect(after.r.lastEventAt).toBeUndefined() // an unknown state is not an idle one
+    expect(after.r.sessionId).toBe('s')
+
+    const project = {
+      id: 'p',
+      name: 'P',
+      color: '#fff',
+      nodes: [{ id: 'r', kind: 'terminal' as const, title: 'r', color: '#fff', agentId: 'claude' as const }]
+    }
+    const row = buildStatusList([project], null, 'p', after, '').flatMap((g) => g.rows)[0]
+    expect(row.statusClock).toBe('seen') // NOT "before nodeterm restarted"
+    const { sessionStateAgeTitle } = await import('../lib/sessionList')
+    expect(sessionStateAgeTitle('seen just now', row.statusClock)).not.toMatch(/restarted/)
   })
 })
 
@@ -128,24 +182,26 @@ describe('hostile / corrupt persisted values', () => {
     ]) {
       expect(readLastSeen(bad, now)).toBeUndefined()
     }
-    // Unknown state: keep the time, drop the state. Prototype names are not states.
+    // Unknown state: keep the time, drop the state. Prototype names are not states. A forged
+    // `restored` never comes through (the loader sets it itself).
     expect(readLastSeen({ at: now - HOUR, state: 'constructor' }, now)).toEqual({ at: now - HOUR })
     expect(readLastSeen({ at: now - HOUR, state: 7 }, now)).toEqual({ at: now - HOUR })
-    expect(readLastSeen({ at: now - HOUR, state: 'blocked', extra: 1 }, now)).toEqual({
+    expect(readLastSeen({ at: now - HOUR, state: 'blocked', extra: 1, restored: 'no' }, now)).toEqual({
       at: now - HOUR,
       state: 'blocked'
     })
   })
 
-  it('a corrupt entry never breaks the load of its neighbours, and never becomes a state', async () => {
-    const storage = memStorage({
-      [KEY]: JSON.stringify({
-        good: { unread: true, lastSeen: { at: Date.now() - HOUR, state: 'working' } },
+  it('a corrupt clock never breaks the load of the table or its neighbours, and never becomes a state', async () => {
+    const storage = seeded(
+      { good: { unread: true }, badClock: { sessionId: 's', state: 'working', lastEventAt: 1 } },
+      {
+        good: { at: Date.now() - HOUR, state: 'working' },
         nullEntry: null,
         numEntry: 5,
-        badClock: { sessionId: 's', lastSeen: { at: 'soon', state: 'done' }, state: 'working', lastEventAt: 1 }
-      })
-    })
+        badClock: { at: 'soon', state: 'done' }
+      }
+    )
     const { useAgentStatus } = await boot(storage)
     const byId = useAgentStatus.getState().byId
     expect(byId.good.unread).toBe(true)
@@ -159,7 +215,16 @@ describe('hostile / corrupt persisted values', () => {
     expect(byId.numEntry).toBeUndefined()
   })
 
-  it('a non-object top level loads as empty', async () => {
+  it('an unparseable or non-object clock key costs the clocks only', async () => {
+    for (const raw of ['{not json', '"hello"', '[1,2]', 'null']) {
+      const { useAgentStatus } = await boot(
+        memStorage({ [KEY]: JSON.stringify({ k: { unread: true } }), [CLOCK_KEY]: raw })
+      )
+      expect(useAgentStatus.getState().byId).toEqual({ k: { unread: true } })
+    }
+  })
+
+  it('a non-object main table loads as empty', async () => {
     const { useAgentStatus } = await boot(memStorage({ [KEY]: '"hello"' }))
     expect(useAgentStatus.getState().byId).toEqual({})
   })
@@ -177,12 +242,9 @@ describe('Eco stays inert for a restored clock', () => {
   const cfg = { enabled: true, idleMinutes: 30 }
 
   it('a status restored from disk (lastSeen done, hours old) is never a candidate', async () => {
-    const storage = memStorage({
-      [KEY]: JSON.stringify({
-        e: { agentId: 'claude', sessionId: 'sess', lastSeen: { at: Date.now() - 6 * HOUR, state: 'done' } }
-      })
-    })
-    const { useAgentStatus } = await boot(storage)
+    const { useAgentStatus } = await boot(
+      seeded({ e: { agentId: 'claude', sessionId: 'sess' } }, { e: { at: Date.now() - 6 * HOUR, state: 'done' } })
+    )
     const st = useAgentStatus.getState().byId['e']
     const rows = buildHibernationCandidates({ ...base, statusById: { e: st } })
     expect(rows[0].lastEventAt).toBeUndefined()
@@ -203,27 +265,19 @@ describe('Eco stays inert for a restored clock', () => {
   })
 
   it('pins why neither field may be restored: fed a guessed done + the old clock, the plan WOULD exit it', () => {
-    // Pins WHY the adapter must not read lastSeen: were the restored clock fed in as lastEventAt with a
-    // restored state, the pure plan WOULD pick it. The only thing keeping Eco inert is that neither
-    // field is restored — which the test above pins through the real store.
     const guessed = buildHibernationCandidates({
       ...base,
       statusById: { e: { state: 'done', sessionId: 's', lastEventAt: Date.now() - 6 * HOUR } }
     })
     expect(planHibernation(guessed, Date.now(), cfg)).toEqual(['e'])
-    const restored = buildHibernationCandidates({
-      ...base,
-      statusById: { e: { sessionId: 's' } }
-    })
+    const restored = buildHibernationCandidates({ ...base, statusById: { e: { sessionId: 's' } } })
     expect(planHibernation(restored, Date.now(), cfg)).toEqual([])
   })
 
   it('the first live done after boot starts the idle window from NOW, not from the restored clock', async () => {
-    vi.useFakeTimers()
-    const storage = memStorage({
-      [KEY]: JSON.stringify({ e: { agentId: 'claude', sessionId: 's', lastSeen: { at: Date.now() - 6 * HOUR, state: 'done' } } })
-    })
-    const { useAgentStatus } = await boot(storage)
+    const { useAgentStatus } = await boot(
+      seeded({ e: { agentId: 'claude', sessionId: 's' } }, { e: { at: Date.now() - 6 * HOUR, state: 'done' } })
+    )
     useAgentStatus.getState().setState('e', 'done', 'claude')
     const st = useAgentStatus.getState().byId['e']
     const rows = buildHibernationCandidates({ ...base, statusById: { e: st } })
@@ -235,17 +289,18 @@ describe('Eco stays inert for a restored clock', () => {
 describe('sidebar ordering and age label', () => {
   it('orders rows by the restored clock and labels it as from before the restart', async () => {
     const now = Date.now()
-    const storage = memStorage({
-      [KEY]: JSON.stringify({
-        old: { agentId: 'claude', lastSeen: { at: now - 5 * HOUR, state: 'done' } },
-        recent: { agentId: 'claude', lastSeen: { at: now - 1 * HOUR, state: 'working' } },
-        // A persisted clock for a node that no longer exists on any canvas: it must not make a row.
-        ghost: { agentId: 'claude', lastSeen: { at: now - 60_000, state: 'done' } }
-      })
-    })
-    const { useAgentStatus } = await boot(storage)
+    const { useAgentStatus } = await boot(
+      seeded(
+        { old: { agentId: 'claude' }, recent: { agentId: 'claude' } },
+        {
+          old: { at: now - 5 * HOUR, state: 'done' },
+          recent: { at: now - 1 * HOUR, state: 'working' },
+          // A clock for a node that no longer exists on any canvas: it must not make a row.
+          ghost: { at: now - 60_000, state: 'done' }
+        }
+      )
+    )
     const { sessionStateAgeLabel, sessionStateAgeTitle } = await import('../lib/sessionList')
-    const statusById = useAgentStatus.getState().byId
     const project = {
       id: 'p',
       name: 'P',
@@ -256,23 +311,23 @@ describe('sidebar ordering and age label', () => {
         { id: 'recent', kind: 'terminal' as const, title: 'c-recent', color: '#fff', agentId: 'claude' as const }
       ]
     }
-    const groups = buildStatusList([project], null, 'p', statusById, '')
+    const groups = buildStatusList([project], null, 'p', useAgentStatus.getState().byId, '')
     const unknown = groups.find((g) => g.kind === 'unknown')!
     expect(unknown.rows.map((r) => r.id)).toEqual(['recent', 'old', 'noClock'])
     expect(groups.flatMap((g) => g.rows).some((r) => r.id === 'ghost')).toBe(false)
     const recent = unknown.rows[0]
-    expect(recent.statusClockRestored).toBe(true)
+    expect(recent.statusClock).toBe('restored')
     expect(recent.lastSeenState).toBe('working')
     expect(recent.statusKind).toBe('unknown') // the restored state is display-only
-    const label = sessionStateAgeLabel(recent.statusUpdatedAt, now, recent.statusClockRestored)
+    const label = sessionStateAgeLabel(recent.statusUpdatedAt, now, recent.statusClock)
     expect(label).toBe('seen 1h ago')
-    expect(sessionStateAgeTitle(label!, true, 'working')).toMatch(/before nodeterm restarted/)
-    expect(sessionStateAgeTitle(label!, true, 'working')).toMatch(/Running/)
-    // A live clock wins and is not marked restored.
+    expect(sessionStateAgeTitle(label!, 'restored', 'working')).toMatch(/before nodeterm restarted/)
+    expect(sessionStateAgeTitle(label!, 'restored', 'working')).toMatch(/Running/)
+    // A live transition wins.
     useAgentStatus.getState().setState('old', 'done', 'claude')
     const after = buildStatusList([project], null, 'p', useAgentStatus.getState().byId, '')
     const oldRow = after.flatMap((g) => g.rows).find((r) => r.id === 'old')!
-    expect(oldRow.statusClockRestored).toBeUndefined()
-    expect(sessionStateAgeLabel(oldRow.statusUpdatedAt, Date.now(), oldRow.statusClockRestored)).toBe('just now')
+    expect(oldRow.statusClock).toBe('transition')
+    expect(sessionStateAgeLabel(oldRow.statusUpdatedAt, Date.now(), oldRow.statusClock)).toBe('just now')
   })
 })

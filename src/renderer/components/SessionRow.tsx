@@ -203,8 +203,8 @@ export function SessionRow({
             {row.cwd && <span className="ss-meta__cwd">{dirName(row.cwd)}</span>}
             {stateAgeLabel && (
               <span
-                className={`ss-meta__state-age${row.statusClockRestored ? ' ss-meta__state-age--restored' : ''}`}
-                title={sessionStateAgeTitle(stateAgeLabel, !!row.statusClockRestored, row.lastSeenState)}
+                className={`ss-meta__state-age${row.statusClock === 'restored' ? ' ss-meta__state-age--restored' : ''}`}
+                title={sessionStateAgeTitle(stateAgeLabel, row.statusClock, row.lastSeenState)}
               >
                 {stateAgeLabel}
               </span>

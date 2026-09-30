@@ -442,7 +442,7 @@ export function SessionsSidebar(props: SessionsSidebarProps): JSX.Element | null
         onContextMenu={(e) => props.onRowContextMenu(e, row.projectId!, row.id)}
         onDragStart={() => {}}
         onDragEnd={() => {}}
-        stateAgeLabel={sessionStateAgeLabel(row.statusUpdatedAt, statusNow, row.statusClockRestored)}
+        stateAgeLabel={sessionStateAgeLabel(row.statusUpdatedAt, statusNow, row.statusClock)}
       />
     </div>
   )
