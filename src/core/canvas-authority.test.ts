@@ -626,3 +626,58 @@ describe('canvas authority — flushing and lifecycle', () => {
     expect(h.writes.every((w) => w.at === 0)).toBe(true)
   })
 })
+
+// The downgrade contract (CLAUDE.md, the group-frame bullet): a frame precedes its descendants in
+// the persisted array, so a pre-nesting build's flat, STABLE groups-first sort still hydrates a
+// nested tree parent-first. A governed project's file is written from the authority's array, not
+// from React Flow's, so its reducer has to keep that order itself.
+describe('canvas authority — the written node order is parent-first', () => {
+  const group = (id: string, over: Partial<CanvasNodeState> = {}): CanvasNodeState => node(id, { kind: 'group', ...over })
+  const under = (parentId: string) => ({ parentId })
+  /** Every node's parent (when it has one in the list) appears before it. */
+  const parentFirst = (nodes: CanvasNodeState[]): boolean =>
+    nodes.every((n, i) => !n.parentId || !nodes.some((p) => p.id === n.parentId) || nodes.findIndex((p) => p.id === n.parentId) < i)
+  /** What a build that predates nesting does on load: a flat, stable "groups first" sort. */
+  const preNestingSort = (nodes: CanvasNodeState[]): CanvasNodeState[] =>
+    [...nodes].sort((a, b) => (a.kind === 'group' ? 0 : 1) - (b.kind === 'group' ? 0 : 1))
+
+  it('grouping two nodes (the new frame is an append) writes the frame first', async () => {
+    const h = harness({ disk: { P: content([node('a'), node('b')]) } })
+    // The ops a client's publisher sends for groupSelectedNodes: next-array order, frame first.
+    h.cast({ op: 'upsert', node: group('G') })
+    h.cast({ op: 'upsert', node: node('a', under('G')) })
+    h.cast({ op: 'upsert', node: node('b', under('G')) })
+    await h.clock.advance(1000)
+    expect(h.writes).toHaveLength(1)
+    expect(ids(h.writes[0].content.nodes)).toEqual(['G', 'a', 'b'])
+  })
+
+  it('wrapping a frame into a new outer frame writes outer, inner, then the leaf', async () => {
+    const h = harness({ disk: { P: content([group('I'), node('x', under('I'))]) } })
+    h.cast({ op: 'upsert', node: group('O') })
+    h.cast({ op: 'upsert', node: group('I', under('O')) })
+    await h.clock.advance(1000)
+    const written = h.writes[0].content.nodes
+    expect(ids(written)).toEqual(['O', 'I', 'x'])
+    // …and that is exactly what the downgrade contract needs: the flat sort leaves it parent-first.
+    expect(parentFirst(preNestingSort(written))).toBe(true)
+  })
+
+  it('the same holds when the reparent reaches it before the new frame does', async () => {
+    const h = harness({ disk: { P: content([group('I'), node('x', under('I'))]) } })
+    h.cast({ op: 'upsert', node: group('I', under('O')) })
+    h.cast({ op: 'upsert', node: group('O') })
+    await h.clock.advance(1000)
+    expect(ids(h.writes[0].content.nodes)).toEqual(['O', 'I', 'x'])
+  })
+
+  it('an upsert that neither appends nor reparents keeps the order it found, even a legacy one', async () => {
+    // A file written before this order was enforced: the leaf ahead of its frame.
+    const h = harness({ disk: { P: content([node('a', under('G')), group('G'), node('b')]) } })
+    h.cast({ op: 'upsert', node: at('a', 42, under('G')) })
+    h.cast({ op: 'upsert', node: group('G', { title: 'renamed' }) })
+    await h.clock.advance(1000)
+    expect(ids(h.writes[0].content.nodes)).toEqual(['a', 'G', 'b'])
+    expect(byId(h.writes[0].content.nodes, 'a')?.position.x).toBe(42)
+  })
+})

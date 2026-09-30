@@ -5,6 +5,7 @@ import path from 'node:path'
 
 import { publishCanvasMutation } from '../core/canvas-sync'
 import { contentOf, diffContent, type CanvasContent } from '../shared/canvas-content'
+import { groupsFirst } from '../shared/node-order'
 import { launchHeadless } from '../core/headless-launch'
 import { gateProjectTarget, GRANT_CAP } from '../core/project-grants'
 import {
@@ -468,28 +469,6 @@ function isDescendant(
     current = byId.get(current.parentId)
   }
   return false
-}
-
-/** Persist frames before their descendants, matching React Flow's hydration requirement. */
-function groupsFirst(nodes: CanvasNodeState[]): CanvasNodeState[] {
-  const byId = new Map(nodes.map((node) => [node.id, node]))
-  const emitted = new Set<string>()
-  const visiting = new Set<string>()
-  const groups: CanvasNodeState[] = []
-  const emit = (node: CanvasNodeState): void => {
-    if (emitted.has(node.id) || node.kind !== 'group') return
-    if (visiting.has(node.id)) return
-    visiting.add(node.id)
-    const parent = node.parentId ? byId.get(node.parentId) : undefined
-    if (parent?.kind === 'group') emit(parent)
-    visiting.delete(node.id)
-    if (!emitted.has(node.id)) {
-      emitted.add(node.id)
-      groups.push(node)
-    }
-  }
-  nodes.forEach(emit)
-  return [...groups, ...nodes.filter((node) => node.kind !== 'group')]
 }
 
 /** Re-fit one persisted group around its direct children without moving them in parent space. */

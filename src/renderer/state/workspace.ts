@@ -44,6 +44,7 @@ export { applyCanvasMutation, applyOwnCanvasMutation } from '@shared/canvas-muta
 export { accountNodeColor, agentAccountColor } from '@shared/agents/account-color'
 import { mutationTrustsLaunch, sanitizeInboundNode } from '@shared/node-exec'
 import { SYSTEM_NODE_COLORS } from '@shared/node-colors'
+import { groupsFirstBy } from '@shared/node-order'
 
 // Preserve the renderer's long-standing import surface; validation and the palette now live in
 // shared so Server Edition and canvas-control accept exactly what these pickers display.
@@ -1355,34 +1356,12 @@ export function alignNodes(nodes: CanvasNode[], ids: string[], edge: AlignEdge):
 }
 
 /**
- * Group (parent) nodes must precede their descendants in the array (React Flow requirement).
- * With nesting the old "all groups, then everything else" split is not enough — a child frame
- * could still be emitted before its parent — so groups are emitted depth-first from the root.
- *
- * This order is also the DOWNGRADE contract: `flowToNodeStates` preserves array order, and an
- * older build's flat `kind === 'group'` sort returns 0 for two groups, which a stable sort
- * (ES2019+) leaves alone. So a nested tree written by this build still hydrates parent-first,
- * and therefore still RENDERS, on a build that predates nesting.
+ * Parent-first order for the live React Flow array — the ONE definition is `groupsFirstBy`
+ * (@shared/node-order), which also documents the downgrade contract this order keeps. Only the
+ * group test differs here: a React Flow node says `type`, a persisted state says `kind`.
  */
 function groupsFirst(nodes: CanvasNode[]): CanvasNode[] {
-  const byId = new Map(nodes.map((node) => [node.id, node]))
-  const emitted = new Set<string>()
-  const visiting = new Set<string>()
-  const groups: CanvasNode[] = []
-  const emitGroup = (node: CanvasNode): void => {
-    if (emitted.has(node.id) || node.type !== 'group') return
-    if (visiting.has(node.id)) return // cyclic parentId: emit once, don't recurse forever
-    visiting.add(node.id)
-    const parent = node.parentId ? byId.get(node.parentId) : undefined
-    if (parent?.type === 'group') emitGroup(parent)
-    visiting.delete(node.id)
-    if (!emitted.has(node.id)) {
-      emitted.add(node.id)
-      groups.push(node)
-    }
-  }
-  nodes.forEach(emitGroup)
-  return [...groups, ...nodes.filter((node) => node.type !== 'group')]
+  return groupsFirstBy(nodes, (node) => node.type === 'group')
 }
 
 /** A node's position in ROOT space: its own position plus every ancestor frame's origin. */

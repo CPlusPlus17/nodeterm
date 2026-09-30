@@ -438,6 +438,12 @@ it is a new way to use it.
 - **Node order is not synced.** The sessions sidebar's order is the node list's order, and no op
   carries an order change, so on a governed project a reorder stays on the screen that made it: the
   file keeps the authority's order (the order it read, with nodes it hears about later appended).
+  What IS guaranteed is parent-first: the reducer re-sorts with the shared `groupsFirst`
+  (`src/shared/node-order.ts`) whenever an op appends a node or changes its `parentId`, so every
+  frame the authority writes precedes its descendants, as a normal save's does. That is the
+  downgrade contract (a build that predates nested frames still hydrates the file parent-first). A
+  file that was already out of that order when the authority read it keeps it until one of those
+  ops touches it.
 - **Load-time repairs are not cast.** What a client derives while it loads a project (a missing
   `--after` dependency rope it heals, a legacy node migrated to its current shape) becomes that
   client's baseline and is never cast, so on a governed project it never reaches disk: every load

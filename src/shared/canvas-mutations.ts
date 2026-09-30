@@ -4,6 +4,7 @@
 
 import { isKanbanOp, sanitizeKanbanOp } from './kanban-ops'
 import { carryLocalNodeExec, mutationTrustsLaunch, sanitizeInboundMutation, sanitizeInboundNode } from './node-exec'
+import { groupsFirst } from './node-order'
 import { REF_MAX_LEN } from './presence'
 import type { BridgeLink, CanvasEdgeKind, CanvasMutation, CanvasNodeState, SceneMutation } from './types'
 
@@ -254,7 +255,9 @@ export function createMutationGuard(): (m: CanvasMutation) => boolean {
 /**
  * Apply a single mutation to a node list, returning a NEW array (the input is never mutated).
  * `upsert` replaces the node with the matching id, or appends it if absent; `remove` filters
- * out the node with the given id.
+ * out the node with the given id. An upsert that appends, or that changes the node's `parentId`,
+ * re-sorts the list parent-first (`groupsFirst`, @shared/node-order); any other upsert keeps the
+ * order it found.
  *
  * Every caller of this is applying a mutation that came from SOMEONE ELSE (a canvas-sync peer, a
  * relay client), so the node goes through `sanitizeInboundNode` first: the exec-enabling fields
@@ -279,12 +282,17 @@ export function applyCanvasMutation(
   const trust = mutationTrustsLaunch(m)
   const node = sanitizeInboundNode(m.node, trust)
   const idx = states.findIndex((n) => n.id === node.id)
-  if (idx === -1) return [...states, node]
+  // Append, then re-sort parent-first (@shared/node-order) — exactly where the live React Flow
+  // apply (`applyMutationToFlow`) re-sorts: on an append and on a `parentId` change, and nowhere
+  // else, so an upsert that does neither keeps the order it found. This is the array the Server
+  // Edition canvas authority WRITES for a governed project, so without it grouping would persist
+  // a frame after its children and break the downgrade contract a normal save keeps.
+  if (idx === -1) return groupsFirst([...states, node])
   const next = states.slice()
   // …and OUR exec fields stay on the node the upsert replaces: they are per-machine, so a peer
   // dragging our ssh terminal must not hand it back stripped of the jump host we configured.
   next[idx] = carryLocalNodeExec(states[idx], node, trust)
-  return next
+  return states[idx].parentId === next[idx].parentId ? next : groupsFirst(next)
 }
 
 /**

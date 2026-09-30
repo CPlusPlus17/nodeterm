@@ -1484,7 +1484,11 @@ session.
   a frame among its siblings, carrying its subtree. `nodeStatesToFlow`/`groupsFirst` emit frames
   **depth-first from the root** — a flat "groups first" sort is not enough once two groups compare
   equal — and that persisted order is also the downgrade contract (a pre-nesting build's stable
-  sort leaves it alone, so a nested tree still hydrates parent-first and renders there).
+  sort leaves it alone, so a nested tree still hydrates parent-first and renders there). The order
+  has ONE definition (`groupsFirstBy`, `src/shared/node-order.ts`), and the shared op reducer
+  (`applyCanvasMutation`) re-sorts with it on an append or a `parentId` change — the same two points
+  the live React Flow apply does — because a governed Server Edition project's file is written from
+  the canvas authority's array, not from React Flow's.
   **A frame that gains a child bigger than itself is re-fitted, ancestors included**
   (`fitGroupToChildren` up the chain): a wrapper created at `(minX-28, minY-62)` relative to its
   parent is routinely negative, and `extent:'parent'` would make React Flow clamp it into an

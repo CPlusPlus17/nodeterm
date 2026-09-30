@@ -501,3 +501,33 @@ describe('applyCanvasMutation with a kanban op', () => {
     expect(applyCanvasMutation(a, { op: 'kb-card-remove', nodeId: '1' })).toBe(a)
   })
 })
+
+describe('applyCanvasMutation — parent-first order (the downgrade contract)', () => {
+  const g = (id: string, parentId?: string): CanvasNodeState =>
+    ({ ...n(id), kind: 'group', ...(parentId ? { parentId } : {}) }) as CanvasNodeState
+  const child = (id: string, parentId: string, x = 0): CanvasNodeState => ({ ...n(id, x), parentId })
+  const ids = (nodes: CanvasNodeState[]): string[] => nodes.map((x) => x.id)
+
+  it('re-sorts when an upsert appends a frame', () => {
+    const out = applyCanvasMutation([n('a'), n('b')], { op: 'upsert', node: g('G') })
+    expect(ids(out)).toEqual(['G', 'a', 'b'])
+  })
+
+  it('re-sorts when an upsert changes a node\'s parentId', () => {
+    // O arrived before this re-sort rule existed, after its future child.
+    const out = applyCanvasMutation([g('I'), child('x', 'I'), g('O')], { op: 'upsert', node: g('I', 'O') })
+    expect(ids(out)).toEqual(['O', 'I', 'x'])
+  })
+
+  it('keeps the order, and every untouched entry, when an upsert neither appends nor reparents', () => {
+    const before = [child('a', 'G'), g('G'), n('b')]
+    const out = applyCanvasMutation(before, { op: 'upsert', node: child('a', 'G', 9) })
+    expect(ids(out)).toEqual(['a', 'G', 'b'])
+    expect(out[1]).toBe(before[1])
+    expect(out[2]).toBe(before[2])
+  })
+
+  it('an appended leaf with no frame in the list keeps plain append order', () => {
+    expect(ids(applyCanvasMutation([n('b'), n('a')], { op: 'upsert', node: n('c') }))).toEqual(['b', 'a', 'c'])
+  })
+})
