@@ -178,6 +178,9 @@ export function buildRelayApi(
     // `...local` (a v1 degrade: they read/write on this machine, not the host). boardLog is now
     // bridged to the host (see above) — it no longer rides `...local`.
     chat: stub.chat,
+    // `recentConversations` stays on `...local` ON PURPOSE: "Open recent" lists THIS machine's agent
+    // histories and resumes them into this machine's local projects only. The host's list is
+    // host-only (`HOST_ONLY_CHANNELS`) — a peer never reads the host's conversation titles.
     // Agent canvas-control (`agent:control`) is not wired over the relay (matches the Server
     // Edition); inert no-ops rather than a local subscription that never carries the host's events.
     onAgentControl: stub.onAgentControl,
