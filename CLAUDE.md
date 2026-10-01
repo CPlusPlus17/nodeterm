@@ -2002,6 +2002,22 @@ An unrelated active canvas is not saved for a background message. Server control
 its nodes through the authoritative store; the renderer barrier is a desktop concern. Mobile is
 not an agent-message sender.
 
+**A `send` to a node that has not STARTED yet is queued, not refused** (`targetNotStarted`,
+`agent-messaging.ts`). A node opened into a project that is not on screen without `--run-now`
+exists only as a held launch until the project is viewed, so no spawn has recorded its pane owner.
+When the owner is unproven AND no session exists AND this machine holds a launch for it
+(`WorkspaceStore.heldLaunch`, the machine-local `localExec` overlay), the outcome is
+`targetNotStarted` and the deliver-on-idle queue holds it; the flush re-runs every gate against the
+pane the spawn will have proven. A LIVE pane with no proven owner stays `unproven-target-owner` —
+that refusal is the security property. Such a message waits up to 24 hours
+(`NOT_STARTED_TTL_MS` = `QUEUE_PERSIST_TTL_MAX`): the start waits for a person to open the project,
+and the ordinary 5-minute TTL lost the message in the field (queued 19:12, expired 19:17, project
+opened 19:27). It is not carried across an app restart (no session was recorded to bind it to), and
+a node deleted before it starts keeps it until the TTL. A `targetStatusStale` target — a station
+started a moment ago (`--run-now`, `run`) that has not posted its first hook — is queued too, with the
+ordinary TTL: a retry cannot help before that hook, and its first verified `done` flushes the queue.
+Both shells wire `heldLaunch`.
+
 **A board comment that @mentions a session is a message from a PERSON** (`@shared/board-comment`,
 `deliverBoardCommentFromUi` in `core/agents/agent-messaging.ts`). The comment composer's @ picker
 inserts an id-based token `@[label](node:<id>)` (the id is the authority, the label only a fallback

@@ -2025,6 +2025,22 @@ export class WorkspaceStore {
   }
 
   /**
+   * Does THIS machine hold an undelivered launch (`pendingLaunch`) for `nodeId` in `projectId`?
+   * Read from the entry's machine-local exec overlay (`localExec`, where every ref kind keeps it),
+   * with the entry's own node copy as a fallback. Same id semantics as `persistedCanvases`. Agent
+   * messaging asks it to tell a node that has not STARTED yet from one whose pane is unproven.
+   */
+  heldLaunch(projectId: string, nodeId: string): boolean {
+    for (const e of this.index?.entries ?? []) {
+      if ((e.project ? e.project.id : e.id) !== projectId) continue
+      if (e.localExec?.[nodeId]?.pendingLaunch) return true
+      const nodes = e.project?.nodes ?? e.cache?.nodes ?? []
+      return nodes.some((n) => n.id === nodeId && !!n.pendingLaunch)
+    }
+    return false
+  }
+
+  /**
    * Does this project exist on THIS machine, and is it SSH? The `--project` targeting gate
    * (issue #338, src/core/project-grants.ts) asks the core store — never the request — before
    * any targeted open is forwarded. Same three-entry-kind scan and same id semantics as
