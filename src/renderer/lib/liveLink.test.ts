@@ -241,7 +241,7 @@ describe('noticeText', () => {
   })
 
   it('strips bidi controls from a title before it reaches the strip', () => {
-    const t = noticeText({ kind: 'joined', linkId: 'L', nodeId: 'n', title: 'a‮b', viewers: 1 })
+    const t = noticeText({ kind: 'joined', linkId: 'L', nodeId: 'n', title: 'a\u202eb', viewers: 1 })
     expect(t).toBe('Someone started watching ab (1 watching).')
   })
 })
@@ -278,7 +278,7 @@ describe('viewerName', () => {
   it('a viewer who has not chatted is numbered; a name loses its bidi controls', () => {
     expect(viewerName({ viewerId: 'a', name: null, joinedAt: 0, waiting: false }, 0)).toBe('Viewer 1')
     expect(viewerName({ viewerId: 'a', name: '  ', joinedAt: 0, waiting: false }, 2)).toBe('Viewer 3')
-    expect(viewerName({ viewerId: 'a', name: 'Bob⁦', joinedAt: 0, waiting: false }, 0)).toBe('Bob')
+    expect(viewerName({ viewerId: 'a', name: 'Bob\u2066', joinedAt: 0, waiting: false }, 0)).toBe('Bob')
   })
 })
 

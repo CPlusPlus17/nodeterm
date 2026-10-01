@@ -53,7 +53,7 @@ describe('LiveLinkDialogBody', () => {
 
   it('the header title loses its bidi controls (H26)', () => {
     const html = renderToStaticMarkup(
-      <LiveLinkDialogBody title={'bu‮ild'} state={FORM} onChange={noop} onSubmit={noop} onClose={noop} onStop={noop} />
+      <LiveLinkDialogBody title={'bu\u202eild'} state={FORM} onChange={noop} onSubmit={noop} onClose={noop} onStop={noop} />
     )
     expect(html).toContain('Share a live link to build')
   })

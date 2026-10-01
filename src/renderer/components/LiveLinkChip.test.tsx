@@ -384,7 +384,7 @@ describe('LiveLinkPopover — Commenter chat', () => {
   it('strips bidi controls from what viewers wrote', () => {
     render(<LiveLinkChip nodeId="n1" source="local" />)
     setLinks([link({ role: 'commenter' })])
-    act(() => useWatchLinks.getState().addChat('L', msg('1', { name: 'Ev‮e', text: 'a⁧b' })))
+    act(() => useWatchLinks.getState().addChat('L', msg('1', { name: 'Ev\u202ee', text: 'a\u2067b' })))
     click(chip()!)
     expect(pop()!.querySelector('.live-pop__who')!.textContent).toBe('Eve')
     expect(pop()!.querySelector('.live-pop__text')!.textContent).toBe('ab')
