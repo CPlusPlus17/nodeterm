@@ -6459,6 +6459,32 @@ body,
   background: var(--accent-hover);
 }
 
+.update-prep__title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Prepare-for-update (issue #829): the busy-session list and the stop summary. No fill of its own:
+   it sits inside `.confirm`, which owns the surface in every appearance. */
+.update-prep__list {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.update-prep__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .confirm__msg {
   margin: 0 0 16px;
   /* The scrollable region once the box hits its max-height, so the action buttons

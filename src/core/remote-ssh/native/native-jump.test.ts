@@ -14,10 +14,11 @@ import { parseSshArgv } from './ssh-argv'
 import { childArgs } from '../control-master'
 import { parseProxyJump, sshGArgs, type HostQuery, type ResolvedHost } from './ssh-config'
 import type { SshConnection } from '../../../shared/ssh'
+import { ed25519KeyPair } from './test-keys'
 
-const clientKey = utils.generateKeyPairSync('ed25519') // the target accepts only this
-const jumpKey = utils.generateKeyPairSync('ed25519') // the jumps accept only this
-const strangerKey = utils.generateKeyPairSync('ed25519')
+const clientKey = ed25519KeyPair() // the target accepts only this
+const jumpKey = ed25519KeyPair() // the jumps accept only this
+const strangerKey = ed25519KeyPair()
 
 interface Peer {
   name: string
@@ -39,7 +40,7 @@ function pubMatches(offered: { algo: string; data: Buffer }, pub: string): boole
 }
 
 function startPeer(name: string, acceptKey: string, isJump: boolean): Promise<Peer> {
-  const hostKey = utils.generateKeyPairSync('ed25519')
+  const hostKey = ed25519KeyPair()
   const peer: Peer = { name, server: null as unknown as Server, port: 0, hostKey, logins: 0, live: [], forwards: [], limit: Infinity }
   peer.server = new Server({ hostKeys: [hostKey.private] }, (client) => {
     peer.live.push(client)
@@ -187,7 +188,7 @@ describe('NativeMux over a ProxyJump chain', () => {
   })
 
   it('refuses a CHANGED host key on the jump, before the target is ever reached', async () => {
-    fs.writeFileSync(kh(), `[127.0.0.1]:${jump1.port} ${utils.generateKeyPairSync('ed25519').public}\n`)
+    fs.writeFileSync(kh(), `[127.0.0.1]:${jump1.port} ${ed25519KeyPair().public}\n`)
     const r = await mux().exec(exec('echo hi'))
     expect(r.code).toBe(255)
     expect(r.stderr.toString()).toMatch(/jump host jump1: .*REMOTE HOST IDENTIFICATION HAS CHANGED/)

@@ -9,15 +9,16 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import type { AddressInfo } from 'net'
-import { Server, utils, type Connection } from 'ssh2'
+import { Server, type Connection } from 'ssh2'
 import { NativeMux } from './native-mux'
 import { parseSshArgv } from './ssh-argv'
 import { childArgs, remoteTmuxPtyArgs } from '../control-master'
 import type { SshConnection } from '../../../shared/ssh'
+import { ed25519KeyPair } from './test-keys'
 
 const LIMIT = 3
-const hostKey = utils.generateKeyPairSync('ed25519')
-const clientKey = utils.generateKeyPairSync('ed25519')
+const hostKey = ed25519KeyPair()
+const clientKey = ed25519KeyPair()
 let dir: string
 let server: Server
 let port: number
