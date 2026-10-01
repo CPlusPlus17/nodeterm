@@ -514,6 +514,10 @@ export const IPC = {
   filesSaveUpload: 'files:save-upload',
   /** Write a canvas image into the project's own `.nodeterm/images/` (see core/canvas-images.ts). */
   filesSaveCanvasImage: 'files:save-canvas-image',
+  /** Custom agent-alert sounds (issue #289) — stored under the core's data dir, addressed by kind. */
+  filesSaveAlertSound: 'files:save-alert-sound',
+  filesReadAlertSound: 'files:read-alert-sound',
+  filesClearAlertSound: 'files:clear-alert-sound',
   settingsLoad: 'settings:load',
   settingsSave: 'settings:save',
   sshList: 'ssh:list',

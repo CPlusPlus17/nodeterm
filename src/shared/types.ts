@@ -28,6 +28,7 @@ import type { BoardDispatch } from './board-dispatch'
 import type { CodexAccount } from './codex-account'
 import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
+import type { AlertSoundKind, AlertSoundSaveResult, CustomAlertSounds } from './alert-sound'
 import type { CanvasLayout, LayoutViewports } from './canvas-layout'
 import type {
   ModelDiscoveryResult,
@@ -1543,6 +1544,17 @@ export interface FilesApi {
    * Resolves null when it could not be written; callers drop that file like a failed drop.
    */
   saveCanvasImage(projectId: string, name: string, dataBase64: string): Promise<string | null>
+  /**
+   * Store a custom sound for an agent alert (issue #289). The core validates kind, extension,
+   * size and magic bytes, then writes a FIXED per-kind file under its own data dir — the picked
+   * file's path is never sent, only its bytes and base name. Resolves `{ ok: false, error }` for a
+   * refusal; never rejects on a bad file.
+   */
+  saveAlertSound(kind: AlertSoundKind, name: string, dataBase64: string): Promise<AlertSoundSaveResult>
+  /** The stored custom sound for `kind` as base64, or null when there is none (or it is unreadable). */
+  readAlertSound(kind: AlertSoundKind): Promise<string | null>
+  /** Delete the custom sound for `kind` (Reset to default). */
+  clearAlertSound(kind: AlertSoundKind): Promise<boolean>
 }
 
 export interface MediaApi {
@@ -2009,6 +2021,11 @@ export interface Settings {
   soundEffects: boolean
   /** Sound-effect volume, 0..1. */
   soundVolume: number
+  /** User-picked replacements for the built-in chimes, per alert kind (issue #289). Holds only a
+   *  display name + a stamp — the FILE lives in the core's data dir (`<userData>/sounds/`), never
+   *  at the user's original path. Read through `customAlertSoundFor` (hand-editable JSON); an
+   *  absent/malformed entry, or a file that is gone or will not decode, plays the built-in chime. */
+  customAlertSounds: CustomAlertSounds
   /** User-defined agents (BYO CLI) appended to the Add menus. */
   customAgents: CustomAgent[]
   /** One gateway root + non-secret credential reference used by model-switch-capable harnesses. */
@@ -2300,6 +2317,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notifyConsentAsked: false,
   soundEffects: true,
   soundVolume: 0.5,
+  customAlertSounds: {},
   customAgents: [],
   modelGateway: { baseUrl: '', apiKey: '' },
   // No default gateway model until the user picks one in Settings → Model gateway. Absent ⇒

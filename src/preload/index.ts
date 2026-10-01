@@ -1,6 +1,7 @@
 import { subscribeAgentReplay } from '../shared/agent-replay-subscription'
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import { IPC } from '../shared/ipc'
+import type { AlertSoundKind } from '../shared/alert-sound'
 import { resolveUiScale } from '../shared/ui-scale'
 import type { RecentConversationsRequest } from '../shared/recent-conversations'
 import type {
@@ -435,7 +436,11 @@ const api: NodeTerminalApi = {
     saveUpload: (name: string, dataBase64: string) =>
       ipcRenderer.invoke(IPC.filesSaveUpload, name, dataBase64),
     saveCanvasImage: (projectId: string, name: string, dataBase64: string) =>
-      ipcRenderer.invoke(IPC.filesSaveCanvasImage, projectId, name, dataBase64)
+      ipcRenderer.invoke(IPC.filesSaveCanvasImage, projectId, name, dataBase64),
+    saveAlertSound: (kind: AlertSoundKind, name: string, dataBase64: string) =>
+      ipcRenderer.invoke(IPC.filesSaveAlertSound, kind, name, dataBase64),
+    readAlertSound: (kind: AlertSoundKind) => ipcRenderer.invoke(IPC.filesReadAlertSound, kind),
+    clearAlertSound: (kind: AlertSoundKind) => ipcRenderer.invoke(IPC.filesClearAlertSound, kind)
   },
   updates: {
     onAvailable: (listener) => {
