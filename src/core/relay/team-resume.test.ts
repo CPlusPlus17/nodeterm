@@ -16,11 +16,12 @@ const PROJECT = {
   ]
 } as unknown as Project
 
-function deps(o: { verdict?: Record<string, 'present' | 'absent' | 'unknown'>; launch?: 'delivered' | 'failed' } = {}) {
+function deps(o: { verdict?: Record<string, 'present' | 'absent' | 'unknown'>; launch?: 'delivered' | 'failed'; inFlight?: Set<string> } = {}) {
   const launched: Array<{ nodeId: string; command: string }> = []
   let inFlight = 0
   let peak = 0
   const d: ResumeDeps = {
+    inFlight: o.inFlight ?? new Set<string>(),
     loadProject: async (id) => (id === 'project-1' ? PROJECT : null),
     sessionVerdict: async (nodeId) => o.verdict?.[nodeId] ?? 'absent',
     command: async (entry) => `${entry.agentId} --resume ${entry.sessionId}${entry.permissionMode ? ` <${entry.permissionMode}>` : ''}`,
@@ -80,6 +81,37 @@ describe('runResume', () => {
   it('an unknown project is a coded refusal of the whole request', async () => {
     const { d } = deps()
     await expect(runResume(d, { projectId: 'nope', sessions: [] })).rejects.toMatchObject({ code: 'E_BAD_REQUEST' })
+  })
+  it('two overlapping requests never resume one node twice; the node is free again once its launch settles', async () => {
+    // The CLI's 60 s timeout can end the desktop's call while the server keeps draining it, and the
+    // user runs Share again: both requests would see `absent` and type `--resume` twice.
+    const shared = new Set<string>()
+    const first = deps({ inFlight: shared })
+    let release!: () => void
+    const held = new Promise<void>((r) => (release = r))
+    const realLaunch = first.d.launch
+    first.d.launch = async (...args) => {
+      await held
+      return realLaunch(...args)
+    }
+    const running = runResume(first.d, { projectId: 'project-1', sessions: [E('term-a'), E('term-b', 'codex', 's2')] })
+    await new Promise((r) => setTimeout(r, 0))
+    const second = deps({ inFlight: shared })
+    const overlap = await runResume(second.d, { projectId: 'project-1', sessions: [E('term-a')] })
+    expect(overlap.results).toEqual([{ nodeId: 'term-a', status: 'already-running' }])
+    expect(second.launched).toEqual([])
+    release()
+    expect((await running).results.map((x) => x.status)).toEqual(['resumed', 'resumed'])
+    expect(shared.size).toBe(0)
+    // Released after a FAILED launch too: a later request may try again.
+    const failing = deps({ inFlight: shared })
+    failing.d.launch = async () => {
+      throw new Error('boom')
+    }
+    expect((await runResume(failing.d, { projectId: 'project-1', sessions: [E('term-a')] })).results[0]).toMatchObject({ status: 'refused' })
+    expect(shared.size).toBe(0)
+    const third = deps({ inFlight: shared })
+    expect((await runResume(third.d, { projectId: 'project-1', sessions: [E('term-a')] })).results[0].status).toBe('resumed')
   })
   it(`never runs more than ${RESUME_CONCURRENCY} launches at once, and keeps result order`, async () => {
     const nodes = Array.from({ length: 10 }, (_, i) => node({ id: `t${i}`, agentId: 'claude' }))

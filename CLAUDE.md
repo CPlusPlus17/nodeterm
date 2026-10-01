@@ -8457,7 +8457,10 @@ invariants:
   project (and says so when the undo itself fails); after it, the SSH project is NEVER reopened,
   even when the kill or the join fails, because that would be a second writer. `team resume` re-asks
   with the core's exact `sessionVerdict` (the folded `sessionExists` prefix-matches): present ⇒
-  `already-running`, unknown ⇒ refused, so a re-run never doubles an agent.
+  `already-running`, unknown ⇒ refused, and a node another request in this process is still
+  launching is `already-running` too (`ResumeDeps.inFlight`, ONE set per server process, claimed
+  before the first await): the desktop's call times out at 60 s while the server keeps draining, so
+  a re-run never doubles an agent.
 - **What may be handed over is read twice, and only what the user confirmed may change nothing.**
   Busy is `working`, `blocked` AND `waiting` (a Codex approval prompt and an open AskUserQuestion
   are `waiting`); an agent only the status store knows (launched by hand) counts as busy

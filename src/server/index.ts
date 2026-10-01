@@ -991,6 +991,8 @@ export async function startServer(
   // unix socket, or Windows, disables administration — it must not take the rest of the Server
   // Edition down with it.
   let otherServerHere = false
+  // One set for the whole process: the nodes a `team resume` is launching right now (runResume).
+  const resumesInFlight = new Set<string>()
   const teamAdmin = await startTeamAdmin(config.dataDir, hosted, {
     // `team bootstrap`: adopt the folder into THIS core's workspace (saved before it is shared, so
     // the canvas authority can read it). The server runs as the SSH login user, so its home is the
@@ -1002,6 +1004,7 @@ export async function startServer(
     resume: (req) =>
       runResume(
         {
+          inFlight: resumesInFlight,
           loadProject: async (id) => (await workspaceStore.load({ sideline: false })).projects.find((p) => p.id === id) ?? null,
           sessionVerdict: (nodeId) => ptyManager.sessionVerdict(nodeId),
           command: async (entry, node) => {

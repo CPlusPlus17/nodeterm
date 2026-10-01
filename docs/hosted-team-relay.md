@@ -139,8 +139,10 @@ Every entry is checked again here: the node must be a terminal of that project r
 the agent must be resumable and not run under a managed account, and the session id must pass the
 same rule as every other resume; an unknown permission mode gives the bare command. A node whose
 `nt-<id>` session already exists on this core's socket (`node-terminal`, checked with the exact
-target) is `already-running`, and one whose session this core cannot check is refused rather than
-started, so a re-run never puts a second agent on one conversation. Launches run four at a time, in
+target) is `already-running`, and so is a node another `team resume` on this server is still
+launching (the desktop's call gives up after 60 s while the server keeps going, and the user may
+share again). One whose session this core cannot check is refused rather than started, so a re-run
+never puts a second agent on one conversation. Launches run four at a time, in
 the node's folder and with this core's hook environment, so each agent's status reaches every
 teammate. Share with team calls it only for sessions it has verified gone from the desktop's socket.
 
