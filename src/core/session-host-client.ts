@@ -36,6 +36,10 @@ import {
   type ListSessionsResult
 } from '../session-host/protocol'
 import { resolveSessionHostScript, spawnSessionHost } from './session-host-launcher'
+
+/** How long a host launch waits for the first staging of a new version (copy + hash + smoke run)
+ *  before launching from the installed binary instead. */
+export const STAGED_RUNTIME_WAIT_MS = 45_000
 import { latestClaimSize, type SizeClaim } from './pty-size'
 import { isTerminalReport } from './terminal-reports'
 import type { PreparedAgentLaunch } from './agent-launch'
@@ -271,8 +275,32 @@ export class SessionHostClient {
       resourcesPath?: string | null
       appPath?: string | null
       repoRoot?: string | null
+      /** Stage (or reuse) a host runtime outside the install directory. Absent = legacy launch. */
+      stageRuntime?: (script: string) => Promise<{ exe: string; script: string } | null>
     }
   ) {}
+
+  /** A staged host crashed on start this app run: launch from the installed binary from now on. */
+  private stagedRuntimeDisabled = false
+
+  /** The relocated runtime to launch the host from (Windows; `session-host-runtime.ts`), or null
+   *  for the legacy launch. Bounded: a staging that has not finished in time is not waited for —
+   *  it keeps running and serves the next launch. */
+  private async stagedRuntimeFor(script: string): Promise<{ exe: string; script: string } | null> {
+    const stage = this.deps.stageRuntime
+    if (!stage || this.stagedRuntimeDisabled) return null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        stage(script).catch(() => null),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), STAGED_RUNTIME_WAIT_MS)
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
 
   bundleAvailable(): boolean {
     return (
@@ -418,7 +446,16 @@ export class SessionHostClient {
     // A host that is ALREADY starting needs no second one. Spawning anyway is not harmful (it
     // exits on the exclusive-create lock), but it is a process per create during the window this
     // wait exists for — see `hostIsStarting`.
-    if (!this.hostIsStarting()) spawnSessionHost(script, this.deps.userDataDir)
+    if (!this.hostIsStarting()) {
+      const staged = await this.stagedRuntimeFor(script)
+      // Staging can take seconds on the first launch of a new version; re-ask so a host another
+      // process started meanwhile is not doubled.
+      if (!staged || !this.hostIsStarting()) {
+        spawnSessionHost(script, this.deps.userDataDir, staged, () => {
+          this.stagedRuntimeDisabled = true
+        })
+      }
+    }
     let lastPublicationError: Error | null = null
     const waitStartedAt = Date.now()
     for (let attempt = 0; ; attempt++) {

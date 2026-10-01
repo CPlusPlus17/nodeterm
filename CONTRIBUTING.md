@@ -93,6 +93,17 @@ verify and stop any remaining host. Never recommend **End session** (it deletes 
 resume depends on supported, saved conversation history; it does not preserve running tasks.
 See `docs/windows-session-host.md` for the user-controlled preparation/recovery steps and limits.
 
+Staged host runtime (#829 step 3): a packaged Windows build launches the host from a private
+copy, `%LOCALAPPDATA%\nodeterm\session-host\<version>-<fingerprint>\nodeterm-sessionhost-v2.exe`
+(`src/core/session-host-runtime.ts`), so it maps no installed file and no longer blocks updates.
+Rules: a copy is launched only after it was published by one rename of a hash-verified,
+smoke-tested temp dir (marker written last); the image name must stay unlike `nodeterm.exe` /
+`nodeterm-session-host.exe` (old uninstallers match those by name machine-wide); every staging
+failure falls back to the legacy in-install-dir launch, which the preflight still blocks on; old
+copies are deleted only after a SUCCESSFUL process query shows nothing runs from them and the
+directory can be renamed aside. The host protocol stays additive-only — an older host is kept and
+used, an incompatible one is left running and reported, never killed.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not
