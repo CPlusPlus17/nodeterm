@@ -8,7 +8,7 @@ import { isClosedTeamTab } from './closedHistory'
  *  whichever variant comes back; `'skip'` means the entry was stale (already reopened another
  *  way, its project was permanently deleted, or every node it held recreated to nothing) and the
  *  caller should keep popping. `'refuse'` means the entry's project is a CLOSED team tab
- *  (`isClosedTeamTab`): nothing may be written into it or reopen it, and the caller keeps the entry
+ *  (`isClosedTeamTab`): nothing may be written into it or reopen it, and the caller drops the entry
  *  and says why. */
 export type ReopenPlan =
   | { action: 'reopenProject'; projectId: string }

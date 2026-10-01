@@ -9358,10 +9358,11 @@ export function Canvas() {
             permissionModeFor: (agentId) => projectPermissionMode(project, agentId)
           })
       )
-      // A closed team tab: nothing is written into it or reopened, and the entry goes back on the
-      // stack untouched (its persisted twin too), so it still restores once the tab is back.
+      // A closed team tab: nothing is written into it or reopened, and the entry is dropped. Put
+      // back on top it would answer every later ⇧⌘T with this notice and hide every older entry,
+      // and a closed team tab does not come back through ⇧⌘T anyway. A relay project is never
+      // saved, so it has no persisted twin to discard.
       if (plan.action === 'refuse') {
-        useReopenHistory.getState().push(entry)
         setNotice({ kind: 'info', text: CLOSED_TEAM_TAB_NOTICE })
         return true
       }

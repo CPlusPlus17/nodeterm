@@ -53,11 +53,14 @@ describe('handed-off reopen guard in Canvas', () => {
     const human = between('const reopenProject = useCallback(', CALLBACK_END)
     expect(human).toContain('return Promise.resolve(reopenProjectUnchecked(id))')
     expect(human).toContain('ok && reopenProjectUnchecked(id)')
-    // ⇧⌘T: a refused plan puts the entry back before its persisted twin would be discarded.
+    // ⇧⌘T: a refused plan says why and drops the entry (pushed back on top it would hide every
+    // older entry), before anything is discarded or recreated.
     const last = between('const reopenLastClosedCommand = useCallback(', '}, [executeReopenPlan, writeDisk])')
     const refused = last.indexOf("if (plan.action === 'refuse') {")
     expect(refused).toBeGreaterThan(-1)
-    expect(last.indexOf('useReopenHistory.getState().push(entry)', refused)).toBeGreaterThan(refused)
+    const refuseBody = last.slice(refused, last.indexOf('}', refused))
+    expect(refuseBody).toContain('CLOSED_TEAM_TAB_NOTICE')
+    expect(refuseBody).not.toContain('push(entry)')
     expect(last.indexOf('discardClosedSession(')).toBeGreaterThan(refused)
     // The sidebar's session restore checks before it consumes the entry.
     const session = between('const reopenClosedSessionCommand = useCallback(', CALLBACK_END)

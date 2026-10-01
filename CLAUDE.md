@@ -8515,7 +8515,8 @@ invariants:
   (so does every path through `reopenProject`); "Recently closed" lists neither the tab
   (`isReopenableClosedProject`) nor its closed sessions (`isClosedTeamTab`); `planReopen` answers
   `refuse` for ANY entry into a closed team tab BEFORE recreating a node into it (a `nodes` entry
-  would otherwise be written into it and reopen it), and ⇧⌘T puts the entry back untouched;
+  would otherwise be written into it and reopen it), and ⇧⌘T drops that entry (kept on top it
+  would answer every later ⇧⌘T with the notice and hide every older entry);
   `performCloseProject` does not push a project entry for a relay tab. What brings the tab back is
   joining the team again with none of its tabs open, or an unshare + share (a reconnect keeps it
   dismissed, `lib/hostedTeamTabs.ts`).
