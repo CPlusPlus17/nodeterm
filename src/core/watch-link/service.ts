@@ -130,16 +130,17 @@ export interface WatchLinkService {
 
 /**
  * The node-gone rule over the workspace store, shared by both shells: present when some project
- * holds the node; absent only when the store has a COMPLETE read of every project (`knownNodeIds`)
- * and the node is not in it; unknown otherwise (the index not loaded yet, a project file not read
- * this run, an SSH project with no cache).
+ * holds the node; absent only when the store has a COMPLETE read of every project
+ * (`knownNodeIdsStrict`) and the node is not in it; unknown otherwise (the index not loaded yet, a
+ * project file not read this run, an SSH project with no cache, an index rebuilt from nothing this
+ * run). The STRICT accessor, never the mirror's `knownNodeIds`: absent here revokes a link for good.
  */
 export function workspaceNodeState(
-  store: Pick<WorkspaceStore, 'projectIdsForNode' | 'knownNodeIds'>,
+  store: Pick<WorkspaceStore, 'projectIdsForNode' | 'knownNodeIdsStrict'>,
   nodeId: string
 ): WatchLinkNodeState {
   if (store.projectIdsForNode(nodeId).length > 0) return 'present'
-  const known = store.knownNodeIds()
+  const known = store.knownNodeIdsStrict()
   if (!known) return 'unknown'
   return known.has(nodeId) ? 'present' : 'absent'
 }

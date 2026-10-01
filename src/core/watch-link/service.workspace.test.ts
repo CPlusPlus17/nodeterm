@@ -109,7 +109,7 @@ describe('an index rebuilt from nothing is never a complete read (R44)', () => {
     await store.save(ws([])) // the renderer's unconditional boot save: an EMPTY index
     expect(JSON.parse(await fs.readFile(m.index, 'utf8')).entries).toEqual([])
     expect(workspaceNodeState(store, 'term-1')).toBe('unknown')
-    expect(store.knownNodeIds()).toBeUndefined()
+    expect(store.knownNodeIdsStrict()).toBeUndefined()
     await settle()
     expect(links.calls).toEqual([])
     expect(links.stopped).toEqual([])
@@ -141,7 +141,7 @@ describe('an index rebuilt from nothing is never a complete read (R44)', () => {
     await fs.mkdir(m.index) // readFile answers EISDIR: the store falls back to an empty workspace
     const store = new WorkspaceStore()
     await store.load({ sideline: false })
-    expect(store.knownNodeIds()).toBeUndefined()
+    expect(store.knownNodeIdsStrict()).toBeUndefined()
     await fs.rmdir(m.index)
     await store.save(ws([]))
     expect(workspaceNodeState(store, 'term-1')).toBe('unknown')
@@ -185,7 +185,7 @@ describe('an index rebuilt from nothing is never a complete read (R44)', () => {
       const store = new WorkspaceStore()
       await store.load()
       await store.save(ws([]))
-      expect(store.knownNodeIds()).toEqual(new Set())
+      expect(store.knownNodeIdsStrict()).toEqual(new Set())
       expect(workspaceNodeState(store, 'term-1')).toBe('absent')
     })
   }

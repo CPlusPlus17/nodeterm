@@ -852,7 +852,7 @@ describe('registerWatchLinkIpc / sendToOwners', () => {
 describe('workspaceNodeState', () => {
   const store = (held: Record<string, string[]>, known: Set<string> | undefined) => ({
     projectIdsForNode: (id: string) => held[id] ?? [],
-    knownNodeIds: () => known
+    knownNodeIdsStrict: () => known
   })
   it('present when a project holds it', () => {
     expect(workspaceNodeState(store({ n1: ['p1'] }, undefined), 'n1')).toBe('present')

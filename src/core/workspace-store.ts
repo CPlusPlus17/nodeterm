@@ -331,10 +331,16 @@ export class WorkspaceStore {
    * index this build recognises (`{}`, a v3 without entries, a newer build's version) — so whatever
    * index this run holds afterwards may have been rebuilt from NOTHING: the renderer's unconditional
    * boot save writes an EMPTY index over the set-aside file while every project's own
-   * `.nodeterm/project.json` still holds its nodes. `knownNodeIds` then answers undefined for the rest
-   * of the run (controller ruling R44): a live link would otherwise read every node as gone and be
-   * revoked server-side a second after launch — irreversibly. The cost: node-gone and the mirror's
-   * existence pruning wait for the next launch with a readable index (links still end at their expiry).
+   * `.nodeterm/project.json` still holds its nodes. `knownNodeIdsStrict` then answers undefined for
+   * the rest of the run (controller ruling R44): a live link would otherwise read every node as gone
+   * and be revoked server-side a second after launch — irreversibly. The cost: a live link's node-gone
+   * waits for the next launch with a readable index (links still end at their expiry).
+   *
+   * Live links ONLY (R64/M2): `knownNodeIds`, which the agent-status mirror prunes identities with,
+   * does not read this flag. A mirror entry pruned against an index rebuilt from nothing costs one
+   * hook event to restore; the flag lasts for the whole PROCESS, and a Server Edition started on a
+   * fresh data dir runs for weeks — R54's first version switched the mirror's pruning off for all of
+   * them, so the phone kept listing deleted sessions for up to the 30-day identity TTL.
    */
   private indexRebuiltThisRun = false
   /** The content authority, when this process runs one (Server Edition hosting a team). */
@@ -1918,12 +1924,13 @@ export class WorkspaceStore {
    * the entry by its identity TTL alone. Same three-entry-kind scan as `findNode`.
    * Consequence: ONE permanently unavailable local ref or one never-cached SSH project turns
    * existence pruning off for EVERY project, leaving only the 30-day identity TTL.
-   * Also undefined for the rest of a run whose index was rebuilt from nothing (`indexRebuiltThisRun`,
-   * R44): an empty index written over a lost workspace.json is not a read of the projects it lost.
+   * It does NOT read `indexRebuiltThisRun` (R64/M2): for the mirror an index rebuilt from nothing is
+   * an answer, because a wrongly pruned identity costs one hook event to restore. Live links, whose
+   * "gone" is an irreversible revoke, ask `knownNodeIdsStrict`.
    * Parses through `parsedLastWritten`, so a mirror flush re-parses no unchanged project.json.
    */
   knownNodeIds(): Set<string> | undefined {
-    if (!this.index || this.indexRebuiltThisRun) return undefined
+    if (!this.index) return undefined
     const ids = new Set<string>()
     for (const e of this.index.entries) {
       let nodes: CanvasNodeState[] | undefined
@@ -1940,6 +1947,17 @@ export class WorkspaceStore {
       for (const n of nodes) if (n && typeof n.id === 'string') ids.add(n.id)
     }
     return ids
+  }
+
+  /**
+   * `knownNodeIds`, for a caller whose "not in any project" is IRREVERSIBLE — a live link, which a node
+   * gone ends and revokes server-side (R40). Also undefined for the rest of a run whose index was
+   * rebuilt from nothing (`indexRebuiltThisRun`, R44): an empty index written over a lost
+   * workspace.json is not a read of the projects it lost.
+   */
+  knownNodeIdsStrict(): Set<string> | undefined {
+    if (this.indexRebuiltThisRun) return undefined
+    return this.knownNodeIds()
   }
 
   /**
