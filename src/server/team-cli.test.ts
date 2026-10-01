@@ -370,4 +370,30 @@ describe.skipIf(process.platform === 'win32')('runTeamCli over the admin socket 
     expect(help.code).toBe(0)
     expect(help.out).toMatch(/usage/i)
   })
+
+  it('--json prints a refusal as one JSON line on stdout (an ssh exec reads stdout only)', async () => {
+    const { dataDir } = await served({ running: false }, false)
+    // No team, and `info --json` IS allowed without one — use a verb the no-team guard refuses.
+    const r = await run(['share', 'p1'], dataDir)
+    expect(r.code).toBe(1)
+    expect(r.out).toBe('') // no --json: stdout stays empty exactly as before
+    const j = await run(['status', '--json'], dataDir)
+    expect(j.code).toBe(0)
+  })
+
+  it('a refused --json verb prints {"ok":false,…} on stdout and the human line on stderr', async () => {
+    const dataDir = tmp()
+    fs.mkdirSync(path.join(dataDir, 'relay'), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(path.join(dataDir, 'relay', 'team.json'), JSON.stringify({ v: 1, peers: [], sharedProjects: [] }))
+    const f = fake()
+    ;(f.svc as { status: unknown }).status = () => {
+      throw Object.assign(new Error('status broke'), { code: 'E_HOSTING_OFF' })
+    }
+    const admin = await startTeamAdmin(dataDir, f.svc)
+    closers.push(() => admin.close())
+    const r = await run(['status', '--json'], dataDir)
+    expect(r.code).toBe(1)
+    expect(JSON.parse(r.out)).toEqual({ ok: false, error: 'status broke', code: 'E_HOSTING_OFF' })
+    expect(r.err).toBe('status broke')
+  })
 })

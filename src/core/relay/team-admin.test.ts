@@ -14,6 +14,10 @@ import {
   projectIdProblem,
   parseAdminRequest,
   ADMIN_REQUEST_MAX,
+  adminErrorCode,
+  codedError,
+  ADMIN_ERROR_CODE_RE,
+  CMD_TIMEOUT_MS,
   type AdminReply
 } from './team-admin'
 import { createHostKey } from './host-key'
@@ -453,5 +457,62 @@ describe.skipIf(process.platform === 'win32')('team admin socket (unix socket, P
     await admin.close()
     expect(fs.existsSync(adminSocketPath(dataDir))).toBe(false)
     idle.destroy()
+  })
+})
+
+describe('admin error codes', () => {
+  it('adminErrorCode reads a well-formed E_ code off a thrown error and ignores anything else', () => {
+    expect(adminErrorCode(codedError('E_BAD_CWD', 'nope'))).toBe('E_BAD_CWD')
+    expect(adminErrorCode(Object.assign(new Error('x'), { code: 'ENOENT' }))).toBeUndefined()
+    expect(adminErrorCode(Object.assign(new Error('x'), { code: 'E_lower' }))).toBeUndefined()
+    expect(adminErrorCode('E_BAD_KEY')).toBeUndefined()
+    expect(adminErrorCode(null)).toBeUndefined()
+    expect(ADMIN_ERROR_CODE_RE.test('E_HOSTING_OFF')).toBe(true)
+  })
+  it('bootstrap and resume get longer client timeouts than the 30 s default', () => {
+    expect(CMD_TIMEOUT_MS.bootstrap).toBe(45_000)
+    expect(CMD_TIMEOUT_MS.resume).toBe(60_000)
+    expect(CMD_TIMEOUT_MS.init).toBeUndefined()
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('coded failures over the socket', () => {
+  it('a throw carrying an E_ code reaches the client with its code', async () => {
+    const dataDir = tmp()
+    writeTeam(dataDir)
+    const { svc } = fakeService()
+    ;(svc as { share: HostedService['share'] }).share = async () => {
+      throw codedError('E_ADOPT_FAILED', 'the project file is unreadable')
+    }
+    await boot(dataDir, svc)
+    expect(await callTeamAdmin(dataDir, { cmd: 'share', projectId: 'p1', on: true })).toEqual({
+      ok: false,
+      error: 'the project file is unreadable',
+      code: 'E_ADOPT_FAILED'
+    })
+  })
+  it('a plain throw stays code-less (byte-identical to before)', async () => {
+    const dataDir = tmp()
+    writeTeam(dataDir)
+    const { svc } = fakeService()
+    ;(svc as { share: HostedService['share'] }).share = async () => {
+      throw new Error('disk full')
+    }
+    await boot(dataDir, svc)
+    expect(await callTeamAdmin(dataDir, { cmd: 'share', projectId: 'p1', on: true })).toEqual({ ok: false, error: 'disk full' })
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('client timeout', () => {
+  it('opts.timeoutMs overrides the default wait, and the message names it', async () => {
+    const dataDir = tmp()
+    writeTeam(dataDir)
+    const { svc } = fakeService()
+    ;(svc as { share: HostedService['share'] }).share = () => new Promise<void>(() => {})
+    await boot(dataDir, svc)
+    const started = Date.now()
+    const r = await callTeamAdmin(dataDir, { cmd: 'share', projectId: 'p1', on: true }, { timeoutMs: 100 })
+    expect(r).toEqual({ ok: false, error: expect.stringMatching(/did not answer within 0\.1 s/) })
+    expect(Date.now() - started).toBeLessThan(5_000)
   })
 })

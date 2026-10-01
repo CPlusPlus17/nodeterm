@@ -17,6 +17,7 @@ import { ensurePrivateDir } from './private-dir'
 import { TeamStore, TEAM_LABEL_MAX, TEAM_PROJECT_ID_MAX } from './team-store'
 import { loadHostKey } from './host-key'
 import { publicKeyFromB64, publicKeyToB64 } from './e2ee'
+import { ADMIN_ERROR_CODE_RE, adminErrorCode } from './admin-error'
 import type {
   HostedInfo,
   HostedRotateResult,
@@ -24,6 +25,8 @@ import type {
   HostedStartResult,
   HostedStatus
 } from './hosted-service'
+
+export { codedError, adminErrorCode, ADMIN_ERROR_CODE_RE } from './admin-error'
 
 export type AdminRequest =
   | { cmd: 'init' }
@@ -33,7 +36,7 @@ export type AdminRequest =
   | { cmd: 'status' }
   | { cmd: 'share'; projectId: string; on: boolean }
   | { cmd: 'rotate-key' }
-export type AdminReply = { ok: true; result: unknown } | { ok: false; error: string }
+export type AdminReply = { ok: true; result: unknown } | { ok: false; error: string; code?: string }
 
 /** `init`'s answer. The address and join code are present only when hosting is running. */
 export interface AdminInitResult {
@@ -72,6 +75,9 @@ export const ADMIN_REQUEST_MAX = 64 * 1024
 const REQUEST_IDLE_MS = 10_000
 /** How long the CLI waits for an answer. `init` and `rotate-key` do local file work only. */
 const CALL_TIMEOUT_MS = 30_000
+/** Client timeouts for verbs that do more than local file work: bootstrap may wait up to 15 s for
+ *  the first relay registration, resume settles up to 4 agent launches at a time. */
+export const CMD_TIMEOUT_MS: Readonly<Record<string, number>> = Object.freeze({ bootstrap: 45_000, resume: 60_000 })
 /** How long probing an existing socket may take before it is treated as "cannot tell". */
 const PROBE_TIMEOUT_MS = 2_000
 /** A `remove` key is compared, never decoded: bound it only so a line cannot be all key. */
@@ -230,7 +236,7 @@ async function offReason(relayDir: string): Promise<HostingOff> {
 }
 
 const ok = (result: unknown): AdminReply => ({ ok: true, result })
-const fail = (error: string): AdminReply => ({ ok: false, error })
+const fail = (error: string, code?: string): AdminReply => (code ? { ok: false, error, code } : { ok: false, error })
 
 /** The address teammates need — only while hosting actually runs. */
 const address = (svc: HostedService, running: boolean): { info: HostedInfo | null; joinCode: string | null } =>
@@ -302,7 +308,7 @@ async function answer(relayDir: string, svc: HostedService, line: string, closin
   try {
     return await handle(relayDir, svc, req, closing)
   } catch (err) {
-    return fail(err instanceof Error ? err.message : String(err))
+    return fail(err instanceof Error ? err.message : String(err), adminErrorCode(err))
   }
 }
 
@@ -446,24 +452,29 @@ function parseReply(line: string): AdminReply {
   try {
     const r = JSON.parse(line) as Record<string, unknown> | null
     if (r && r.ok === true && 'result' in r) return { ok: true, result: r.result }
-    if (r && r.ok === false && typeof r.error === 'string') return { ok: false, error: r.error }
+    if (r && r.ok === false && typeof r.error === 'string') {
+      const code = typeof r.code === 'string' && ADMIN_ERROR_CODE_RE.test(r.code) ? r.code : undefined
+      return fail(r.error, code)
+    }
   } catch {
     // fall through
   }
   return fail('The nodeterm server sent a reply this CLI does not understand (is the server a different version?).')
 }
 
-export function callTeamAdmin(dataDir: string, req: AdminRequest): Promise<AdminReply> {
+export function callTeamAdmin(dataDir: string, req: AdminRequest, opts: { timeoutMs?: number } = {}): Promise<AdminReply> {
   const sock = adminSocketPath(dataDir)
   const problem = socketPathProblem(sock)
   if (problem) return Promise.resolve(fail(problem))
+  const perVerb = Object.hasOwn(CMD_TIMEOUT_MS, req.cmd) ? CMD_TIMEOUT_MS[req.cmd] : undefined
+  const timeoutMs = opts.timeoutMs ?? perVerb ?? CALL_TIMEOUT_MS
   return new Promise((resolve) => {
     let done = false
     let buf = ''
     const c = net.connect(sock)
     const timer = setTimeout(
-      () => finish(fail(`The nodeterm server did not answer within ${CALL_TIMEOUT_MS / 1000} s (${sock}).`)),
-      CALL_TIMEOUT_MS
+      () => finish(fail(`The nodeterm server did not answer within ${timeoutMs / 1000} s (${sock}).`)),
+      timeoutMs
     )
     function finish(r: AdminReply): void {
       if (done) return

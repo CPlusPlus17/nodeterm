@@ -363,13 +363,17 @@ export async function runTeamCli(
     return 2
   }
   const r = await callTeamAdmin(dd.dataDir ?? dataDir, req)
+  const json = dd.argv.includes('--json')
   if (!r.ok) {
+    // A remote caller (the desktop, over an ssh exec channel) reads stdout only: under --json the
+    // refusal is also one machine-readable line there. The human line still goes to stderr.
+    if (json) out(JSON.stringify({ ok: false, error: clean(r.error), ...(r.code ? { code: r.code } : {}) }))
     err(clean(r.error))
     return 1
   }
   // The reply is printed to `out` even when the exit code is 1: the command ran, and what it found
   // (hosting did not start, no address yet) is its answer, not a failure to run.
-  const { lines, code } = render(req, r.result, dd.argv.includes('--json'))
+  const { lines, code } = render(req, r.result, json)
   for (const line of lines) out(line)
   return code
 }
