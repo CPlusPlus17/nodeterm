@@ -12,6 +12,11 @@
 //   the owner's canvas ops are written to the shared project's file by this core, the viewer hears
 //   them and cannot cast one, an outside edit of the file reaches the owner as ops → `team unshare`
 //   silences the viewer's terminal → a restart on the same data dir keeps every edit.
+// A second test starts from a server with no team at all and drives `team bootstrap`, the one verb
+// the desktop's "Share with team" calls: it sets up the team, the owner, an adopted folder and its
+// share → the owner joins with no SAS on either side → a re-run changes nothing and keeps the code →
+// a second folder's share reaches the connected owner live (`relay:hosted:shared-changed`) → so does
+// its `team unshare`.
 //
 // What is real and what is not:
 //  - REAL: startServer and every core service it boots, the admin unix socket and its client, the
@@ -31,9 +36,10 @@
 // that polls is the project file (`projectFileWhen`): the authority's flush is a disk write, and no
 // client is sent an event for it. It polls every 100 ms under a step deadline.
 //
-// One data dir per file (see hosted-boot.test.ts: some core paths are memoized per process, so a
-// boot on ANOTHER data dir would write into this one). The restart boots a second server on the
-// SAME data dir, which is exactly where those memoized paths already point.
+// One data dir per test. The per-process memos hosted-boot.test.ts warns about (the context-link
+// dir, the hook endpoint file) are re-derived by every boot (`initContextLink`) and dropped by every
+// close (`hookServer.stop()`), so a later test's boot does not write into an earlier test's removed
+// dir. The first test's restart boots a second server on the SAME data dir.
 import { describe, it, expect, vi, afterEach, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -55,6 +61,7 @@ import type { RelayTransport } from '../core/relay/relay-socket'
 import { IPC } from '../shared/ipc'
 import { mutationKey } from '../shared/canvas-order'
 import { seededColumnId } from '../shared/kanban-default-board'
+import type { BootstrapResult } from '../shared/share-team'
 import type { CanvasMutation, CanvasNodeState, Project, PtyCreateResult, Workspace } from '../shared/types'
 
 // A broken seam must fail HERE, never reach production. index.ts reads NODETERM_RELAY_URL at module
@@ -367,39 +374,42 @@ afterAll(() => {
   else process.env.NODETERM_RELAY_URL = env.prev
 })
 
-// The admin channel is a unix socket, which Windows does not have (team-admin.ts refuses it by
-// name there), so no hosted team can be set up on that platform. Linux and macOS run it.
-describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on a headless server', () => {
-  it('admin setup → owner auto-approved → guest waits → approved as viewer → watches the owner’s terminal, starts none, writes nothing → shared canvas edits persist with no browser attached and survive a restart', async () => {
-    spawned.length = 0
-    const dataDir = fs.mkdtempSync(path.join(SHORT_BASE, 'nthe-'))
-    teardown.push(() => fs.rmSync(dataDir, { recursive: true, force: true }))
-    // Plain-shell terminals (see the header), from the server's own settings file.
-    fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ tmuxEnabled: false }))
+/** A fresh data dir, removed after the test. Its terminals are plain shells, from the server's own
+ *  settings file (see the header). */
+function hostedDataDir(): string {
+  const dataDir = fs.mkdtempSync(path.join(SHORT_BASE, 'nthe-'))
+  teardown.push(() => fs.rmSync(dataDir, { recursive: true, force: true }))
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ tmuxEnabled: false }))
+  return dataDir
+}
 
-    // The relay: each listener the scheduler opens is one in-process transport pair, and its peer end
-    // is handed to whichever teammate connects next — the relay's pairing, minus the network. A fresh
-    // queue per boot (step 9): the listeners a closed server opened are dead ends.
-    let listeners = fifo<RelayTransport>()
-    const relayTestTransport = (): RelayTransport => {
+/** The relay and the host-token API, faked in-process. */
+function fakeRelay() {
+  // The host-token API, proof of possession included: a byte-exact mirror of the backend issues
+  // the challenge and refuses a mint whose proof does not verify, so a host that stopped proving it
+  // holds its key (or proved the wrong thing) never gets a listener. A token good for an hour, so
+  // no listener refresh lands mid-test.
+  const popServer = createTestPopServer()
+  const relay = {
+    /** Each listener the scheduler opens is one in-process transport pair, and its peer end is
+     *  handed to whichever teammate connects next — the relay's pairing, minus the network. Replace
+     *  it for a fresh boot: the listeners a closed server opened are dead ends. */
+    listeners: fifo<RelayTransport>(),
+    /** Every host-token mint the host asked for, in order. */
+    mints: [] as Array<{ url: string; body: Record<string, unknown> }>,
+    relayTestTransport: (): RelayTransport => {
       const { hostT, peerT } = transportPair()
-      listeners.push(peerT)
+      relay.listeners.push(peerT)
       return hostT
-    }
-    // The host-token API, proof of possession included: a byte-exact mirror of the backend issues
-    // the challenge and refuses a mint whose proof does not verify, so a host that stopped proving it
-    // holds its key (or proved the wrong thing) never gets a listener. A token good for an hour, so
-    // no listener refresh lands mid-test.
-    const popServer = createTestPopServer()
-    const mints: Array<{ url: string; body: Record<string, unknown> }> = []
-    const relayTestFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    },
+    relayTestFetch: (async (url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
       const json = (status: number, payload: unknown) =>
         new Response(JSON.stringify(payload), { status, headers: { date: new Date().toUTCString() } })
       if (String(url).endsWith('/v1/relay/challenge')) {
         return json(200, popServer.issue(String(body.hostPublicKeyB64), body.purpose as 'host-token'))
       }
-      mints.push({ url: String(url), body })
+      relay.mints.push({ url: String(url), body })
       const proven = popServer.verify({
         hostPublicKeyB64: String(body.hostPublicKeyB64),
         purpose: 'host-token',
@@ -410,14 +420,46 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
       if (!proven) return json(403, { error: 'pop_invalid' })
       return json(200, { pairingToken: 'relay-token', hostId: 'H', exp: Math.floor(Date.now() / 1000) + 3600 })
     }) as typeof fetch
-    // The mint's production twin of the relay trap above: if `relayTestFetch` stopped being plumbed
-    // through, the mint would fall back to the global fetch — which refuses here instead of minting
-    // a host token against the real API.
-    const globalHostTokenCalls: string[] = []
-    vi.stubGlobal('fetch', (async (url: string | URL | Request) => {
-      if (String(url).includes('/v1/relay/')) globalHostTokenCalls.push(String(url))
-      throw new Error('hosted-e2e: the global fetch is not used in this test')
-    }) as typeof fetch)
+  }
+  return relay
+}
+
+/** The mint's production twin of the relay trap at the top: if `relayTestFetch` stopped being
+ *  plumbed through, the mint would fall back to the global fetch — which refuses here instead of
+ *  minting a host token against the real API. Returns the relay URLs that reached it. */
+function trapGlobalFetch(): string[] {
+  const calls: string[] = []
+  vi.stubGlobal('fetch', (async (url: string | URL | Request) => {
+    if (String(url).includes('/v1/relay/')) calls.push(String(url))
+    throw new Error('hosted-e2e: the global fetch is not used in this test')
+  }) as typeof fetch)
+  return calls
+}
+
+/** A headless boot on `dataDir` that dials the fake relay. */
+function hostedConfig(dataDir: string, relay: ReturnType<typeof fakeRelay>): Parameters<typeof startServer>[0] {
+  return {
+    port: 0,
+    host: '127.0.0.1',
+    dataDir,
+    rendererDir: path.join(dataDir, 'no-renderer'),
+    insecureHttp: false,
+    headless: true,
+    // Never touch the developer's real agent configs (see ServerConfig.installHooks).
+    installHooks: false,
+    relayTestTransport: relay.relayTestTransport,
+    relayTestFetch: relay.relayTestFetch
+  }
+}
+
+// The admin channel is a unix socket, which Windows does not have (team-admin.ts refuses it by
+// name there), so no hosted team can be set up on that platform. Linux and macOS run it.
+describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on a headless server', () => {
+  it('admin setup → owner auto-approved → guest waits → approved as viewer → watches the owner’s terminal, starts none, writes nothing → shared canvas edits persist with no browser attached and survive a restart', async () => {
+    spawned.length = 0
+    const dataDir = hostedDataDir()
+    const relay = fakeRelay()
+    const globalHostTokenCalls = trapGlobalFetch()
 
     // The shared project's folder: a subfolder of a real repository, in its own temp dir.
     const repoBase = fs.mkdtempSync(path.join(SHORT_BASE, 'nther-'))
@@ -435,18 +477,7 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
     }
 
     // Both boots (step 9 restarts on the same data dir) take this config.
-    const config: Parameters<typeof startServer>[0] = {
-      port: 0,
-      host: '127.0.0.1',
-      dataDir,
-      rendererDir: path.join(dataDir, 'no-renderer'),
-      insecureHttp: false,
-      headless: true,
-      // Never touch the developer's real agent configs (see ServerConfig.installHooks).
-      installHooks: false,
-      relayTestTransport,
-      relayTestFetch
-    }
+    const config = hostedConfig(dataDir, relay)
     const booting = startServer(config)
     // Registered BEFORE the boot is awaited: a boot that outlives its step deadline is still closed
     // once it lands, instead of leaking a server (and its admin socket) into the next test. The wait
@@ -475,11 +506,11 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
     await admin(dataDir, { cmd: 'share', projectId: SHARED, on: true })
 
     // ---- 2. The owner connects: a team member, so the host approves it without a human.
-    const owner = teammate(code, await step('first listener', listeners.next()), ownerKeys, true)
+    const owner = teammate(code, await step('first listener', relay.listeners.next()), ownerKeys, true)
     teardown.push(() => owner.c.close())
     await step('owner approved', owner.approved)
     // The host minted that listener's token for THIS host key, through the seam, proving it holds it.
-    expect(mints[0]).toMatchObject({
+    expect(relay.mints[0]).toMatchObject({
       url: expect.stringMatching(/\/v1\/relay\/host-token$/),
       body: {
         hostPublicKeyB64: code.hostPublicKeyB64,
@@ -508,7 +539,7 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
     // ---- 3. A guest knocks. It waits; only the owner hears of it, with the SAS the guest sees.
     const guestKeys = genKeyPair()
     const knock = owner.event(IPC.relayHostedPeerPending)
-    const guest = teammate(code, await step('second listener', listeners.next()), guestKeys, false)
+    const guest = teammate(code, await step('second listener', relay.listeners.next()), guestKeys, false)
     teardown.push(() => guest.c.close())
     const pending = (await step('owner told of the guest', knock)).args?.[0] as { pendingId: string; sas: string; peerKeyB64: string }
     expect(pending.peerKeyB64).toBe(pub(guestKeys))
@@ -730,12 +761,12 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
     // the authority's stop (which writes what is owed) is pinned in hosted-boot.test.ts.
     expect(positionOf(readProjectFile(sharedCwd).file.nodes, IDLE)).toEqual({ x: 654, y: 0 })
 
-    listeners = fifo<RelayTransport>()
+    relay.listeners = fifo<RelayTransport>()
     const rebooting = startServer(config)
     teardown.push(() => step('second server teardown', rebooting.catch(() => null).then((s) => s?.close())))
     await step('server boot after the restart', rebooting)
     // The owner comes back the way a bookmarked, already-approved host is rejoined: pinned.
-    const back = teammate(code, await step('listener after the restart', listeners.next()), ownerKeys, true)
+    const back = teammate(code, await step('listener after the restart', relay.listeners.next()), ownerKeys, true)
     teardown.push(() => back.c.close())
     await step('owner approved after the restart', back.approved)
     const reloaded = await back.call(IPC.workspaceLoad)
@@ -747,6 +778,82 @@ describe.skipIf(process.platform === 'win32')('hosted team relay, end to end on 
     // The bridge stays gone: the outside edit, not the owner's earlier op, is what was kept.
     expect((again?.bridges ?? []).map((b) => b.id)).not.toContain('bridge-e2e')
 
+    // Nothing ever went around the seams.
+    expect(globalHostTokenCalls).toEqual([])
+  }, 90_000)
+
+  it('team bootstrap sets up the team, the owner and a shared project; a second share appears live; unshare goes', async () => {
+    const dataDir = hostedDataDir()
+    const relay = fakeRelay()
+    const globalHostTokenCalls = trapGlobalFetch()
+    // The folders bootstrap adopts: real directories on this host. Registered before the server's
+    // teardown, so they are removed after it closes (the canvas authority may still write into them).
+    const folderA = fs.mkdtempSync(path.join(SHORT_BASE, 'nte-a-'))
+    teardown.push(() => fs.rmSync(folderA, { recursive: true, force: true }))
+    const folderB = fs.mkdtempSync(path.join(SHORT_BASE, 'nte-b-'))
+    teardown.push(() => fs.rmSync(folderB, { recursive: true, force: true }))
+
+    // No seeded workspace and no `team init`: the server boots with no team at all.
+    const booting = startServer(hostedConfig(dataDir, relay))
+    teardown.push(() => step('server teardown', booting.catch(() => null).then((s) => s?.close())))
+    await step('server boot', booting)
+
+    // ---- 1. One admin call: the team and its host key, hosting, the owner, the adopted folder and
+    // its share.
+    const ownerKeys = genKeyPair()
+    const bootstrap = (adoptCwd: string): Promise<BootstrapResult> =>
+      admin<BootstrapResult>(dataDir, { cmd: 'bootstrap', ownerKey: pub(ownerKeys), ownerLabel: 'Owner', adoptCwd })
+    const a = await bootstrap(folderA)
+    expect(a.created).toEqual({ team: true, owner: true, project: true, share: true })
+    // `starting` is still a success: no relay verdict within the wait, and a join retries.
+    expect(['up', 'starting']).toContain(a.hosting)
+    // What the desktop is handed: a code that decodes and names this host.
+    const code = decodeJoinCode(a.joinCode)
+    expect(code).not.toBeNull()
+    if (!code) return
+    expect(code.hostId).toBe(a.hostId)
+
+    // ---- 2. The owner joins as the desktop's share flow does: its key is a team owner and the host
+    // is pinned on its side, so neither end asks a human to compare a SAS.
+    const owner = teammate(code, await step('first listener', relay.listeners.next()), ownerKeys, true)
+    teardown.push(() => owner.c.close())
+    await step('owner approved', owner.approved)
+    const status = await admin<AdminStatusResult>(dataDir, { cmd: 'status' })
+    expect(status.peers).toEqual([{ label: 'Owner', role: 'owner', connected: true }])
+    expect(status.pending).toEqual([])
+    const ws1 = await owner.call(IPC.workspaceLoad)
+    expect(ws1).toMatchObject({ ok: true })
+    expect((ws1.result as Workspace).projects.map((p) => p.id)).toEqual([a.projectId])
+
+    // ---- 3. A re-run is a no-op with the same code: nothing created, nothing re-shared.
+    const again = await bootstrap(folderA)
+    expect(again.created).toEqual({ team: false, owner: false, project: false, share: false })
+    expect(again.joinCode).toBe(a.joinCode)
+    expect(again.projectId).toBe(a.projectId)
+    // One round trip on the owner's tunnel: anything the host sent it before this answer has arrived.
+    expect(await owner.call(IPC.relayHostedSelf)).toMatchObject({ ok: true, result: { role: 'owner' } })
+    const sharedChanges = (): Frame[] =>
+      owner.frames.filter((f) => f.t === 'ev' && f.channel === IPC.relayHostedSharedChanged)
+    expect(sharedChanges()).toEqual([])
+
+    // ---- 4. A second folder on the same host joins the same team, and the connected owner hears
+    // of it live: the whole shared set, in the team file's order.
+    const projectIdsOf = (f: Frame): unknown => (f.args?.[0] as { projectIds?: unknown } | undefined)?.projectIds
+    const changed = owner.event(IPC.relayHostedSharedChanged, (p) => Array.isArray(p.projectIds) && p.projectIds.length === 2)
+    const b = await bootstrap(folderB)
+    expect(b.created).toEqual({ team: false, owner: false, project: true, share: true })
+    expect(b.joinCode).toBe(a.joinCode)
+    expect(projectIdsOf(await step('shared-changed (2)', changed))).toEqual([a.projectId, b.projectId])
+    const ws2 = await owner.call(IPC.workspaceLoad)
+    expect(ws2).toMatchObject({ ok: true })
+    expect((ws2.result as Workspace).projects.map((p) => p.id).sort()).toEqual([a.projectId, b.projectId].sort())
+
+    // ---- 5. `team unshare` of the second: the owner hears the set shrink.
+    const gone = owner.event(IPC.relayHostedSharedChanged, (p) => Array.isArray(p.projectIds) && p.projectIds.length === 1)
+    await admin(dataDir, { cmd: 'share', projectId: b.projectId, on: false })
+    expect(projectIdsOf(await step('shared-changed (1)', gone))).toEqual([a.projectId])
+
+    expect(owner.denied).toEqual([])
     // Nothing ever went around the seams.
     expect(globalHostTokenCalls).toEqual([])
   }, 90_000)
