@@ -1610,10 +1610,16 @@ describe('HeadlessNodeFactory', () => {
       const pending = factory
         .openAgent('term-source', { agent: 'claude', prompt: 'x'.repeat(1100) }, true)
         .finally(() => (settled = true))
-      for (let i = 0; i < 400 && !settled; i++) {
+      // Bounded by REAL time, not by a turn count: on a loaded CI runner the store's file I/O can
+      // need more turns than any fixed count, and a loop that gave up early left `await pending`
+      // waiting on faked timers nothing advances: a hang until the 5 s test timeout, with the fake
+      // timers then leaking into the next test (two red tests per run). `Date` is not faked here.
+      const deadline = Date.now() + 4000
+      while (!settled && Date.now() < deadline) {
         await new Promise((r) => setImmediate(r))
         await vi.advanceTimersByTimeAsync(100)
       }
+      if (!settled) throw new Error('openAgent did not settle within 4 s of real time')
       reply = await pending
     } finally {
       vi.useRealTimers()

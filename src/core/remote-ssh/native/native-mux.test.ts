@@ -13,11 +13,12 @@ import { parseSshArgv } from './ssh-argv'
 import { childArgs, masterRoundTripArgs, remoteTmuxPtyArgs } from '../control-master'
 import type { ResolvedHost } from './ssh-config'
 import type { SshConnection } from '../../../shared/ssh'
+import { ed25519KeyPair } from './test-keys'
 
-const hostKey = utils.generateKeyPairSync('ed25519')
-const otherHostKey = utils.generateKeyPairSync('ed25519')
-const clientKey = utils.generateKeyPairSync('ed25519')
-const lockedKey = utils.generateKeyPairSync('ed25519', { passphrase: 'open sesame', cipher: 'aes256-cbc', rounds: 4 })
+const hostKey = ed25519KeyPair()
+const otherHostKey = ed25519KeyPair()
+const clientKey = ed25519KeyPair()
+const lockedKey = ed25519KeyPair({ passphrase: 'open sesame', cipher: 'aes256-cbc', rounds: 4 })
 
 let dir: string
 let server: Server
