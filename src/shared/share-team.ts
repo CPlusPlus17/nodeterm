@@ -134,3 +134,32 @@ export function sharePlan(p: ShareProbe): SharePlan {
   }
   return { kind: 'install', reason }
 }
+
+/** Every `shareTeam` answer: never a rejection across IPC. `code` is an `E_*` code when the
+ *  failure has one the renderer branches on (`E_NOT_CONNECTED`, `E_NOT_PROBED`, a server refusal). */
+export type ShareReply<T> = ({ ok: true } & T) | { ok: false; error: string; code?: string }
+
+/** The probe, the plan it implies, and the command each requested node's pane is running on the
+ *  host's remote tmux socket (a node with no live pane is absent). */
+export interface ShareProbeReply {
+  probe: ShareProbe
+  plan: SharePlan
+  paneCommands: Record<string, string>
+}
+
+/** The desktop's "Share with team" verbs for an SSH project (`window.nodeTerminal.shareTeam`).
+ *  Desktop only: the Server Edition and relay tabs answer `E_UNSUPPORTED`. */
+export interface ShareTeamApi {
+  probe(projectId: string, nodeIds: string[]): Promise<ShareReply<ShareProbeReply>>
+  install(projectId: string): Promise<ShareReply<{ exitCode: number }>>
+  cancelInstall(projectId: string): Promise<void>
+  onInstallOutput(projectId: string, listener: (text: string) => void): () => void
+  flushMirror(projectId: string): Promise<ShareReply<{ nodeIds: string[] }>>
+  bootstrap(projectId: string, adoptCwd: string): Promise<ShareReply<{ result: BootstrapResult }>>
+  killSessions(
+    projectId: string,
+    nodeIds: string[]
+  ): Promise<ShareReply<{ results: Array<{ nodeId: string; state: 'gone' | 'alive' | 'unknown' }> }>>
+  resume(projectId: string, serverProjectId: string, sessions: ResumeEntry[]): Promise<ShareReply<ResumeResult>>
+  seedBookmark(joinCode: string): Promise<ShareReply<{ hostId: string; label: string }>>
+}

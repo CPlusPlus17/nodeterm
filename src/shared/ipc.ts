@@ -704,6 +704,19 @@ export const IPC = {
   // their device tokens; `relayHostedBookmarkRemove` (hostId) forgets one.
   relayHostedBookmarks: 'relay:hosted:bookmarks',
   relayHostedBookmarkRemove: 'relay:hosted:bookmark-remove',
+  // "Share with team" for an SSH project (src/main/remote-ssh/share-team.ts): each verb runs one
+  // generated command over the project's ControlMaster. These are raw `ipcMain` handlers, never on
+  // the platform, so a relay peer can never reach them. `shareTeamInstallOutput` is main → renderer,
+  // payload `{ projectId, text }`.
+  shareTeamProbe: 'share-team:probe',
+  shareTeamInstall: 'share-team:install',
+  shareTeamCancelInstall: 'share-team:cancel-install',
+  shareTeamInstallOutput: 'share-team:install-output',
+  shareTeamFlushMirror: 'share-team:flush-mirror',
+  shareTeamBootstrap: 'share-team:bootstrap',
+  shareTeamKillSessions: 'share-team:kill-sessions',
+  shareTeamResume: 'share-team:resume',
+  shareTeamSeedBookmark: 'share-team:seed-bookmark',
   handoffBuild: 'handoff:build',
   // Phone pairing (nodeterm iOS "scan a QR" flow): renderer starts/stops the one-shot LAN
   // listener; main pushes the completion result back over `pairing:done`. The per-device

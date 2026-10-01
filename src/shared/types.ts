@@ -30,6 +30,7 @@ import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
 import type { AlertSoundKind, AlertSoundSaveResult, CustomAlertSounds } from './alert-sound'
 import type { CanvasLayout, LayoutViewports } from './canvas-layout'
+import type { ShareTeamApi } from './share-team'
 import type {
   ModelDiscoveryResult,
   ModelGatewayCredentialStatus,
@@ -4200,6 +4201,9 @@ export interface NodeTerminalApi {
   relayHost: RelayHostApi
   relayClient: RelayClientApi
   relayHosted: RelayHostedApi
+  /** "Share with team" for an SSH project. Desktop only (the Server Edition and relay tabs answer
+   *  `E_UNSUPPORTED`). */
+  shareTeam: ShareTeamApi
   /** The hosted team verbs of THIS session's host — present only on a relay tab joined by a hosted
    *  team's join code; absent everywhere else (local, Server Edition, Team Access relay tabs). */
   hosted?: HostedSessionApi

@@ -165,6 +165,19 @@ export function buildStubApi(): Omit<
       onPassphraseRequest: noopUnsub,
       onPassphraseDismiss: noopUnsub
     },
+    // Desktop only: the Server Edition has no SSH projects, and a relay tab must never drive the
+    // host's ssh (relay-api.ts takes this stub rather than the local preload's member).
+    shareTeam: {
+      probe: U('shareTeam.probe'),
+      install: U('shareTeam.install'),
+      cancelInstall: U('shareTeam.cancelInstall'),
+      onInstallOutput: noopUnsub,
+      flushMirror: U('shareTeam.flushMirror'),
+      bootstrap: U('shareTeam.bootstrap'),
+      killSessions: U('shareTeam.killSessions'),
+      resume: U('shareTeam.resume'),
+      seedBookmark: U('shareTeam.seedBookmark')
+    },
     sshFs: {
       list: U('sshFs.list'),
       read: U('sshFs.read'),

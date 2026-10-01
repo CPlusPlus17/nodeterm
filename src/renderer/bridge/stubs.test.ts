@@ -16,6 +16,7 @@ describe('bridge stubs', () => {
       s.browser.onBrowserNewWindow(() => {}),
       s.onAgentControl(() => {}),
       s.sshProject.onStatus(() => {}),
+      s.shareTeam.onInstallOutput('p', () => {}),
       s.usage.onUpdate(() => {}),
       s.updates.onAvailable(() => {}),
       s.updates.onProgress(() => {}),
@@ -57,6 +58,18 @@ describe('bridge stubs', () => {
       s.relayClient.send('c', '{}')
       s.relayClient.disconnect('c')
     }).not.toThrow()
+  })
+
+  it('share with team is desktop-only: every verb answers E_UNSUPPORTED', async () => {
+    const s = buildStubApi()
+    await expect(s.shareTeam.probe('p', [])).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(s.shareTeam.install('p')).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(s.shareTeam.cancelInstall('p')).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(s.shareTeam.flushMirror('p')).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(s.shareTeam.bootstrap('p', '/x')).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(s.shareTeam.killSessions('p', [])).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(s.shareTeam.resume('p', 'project-1', [])).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(s.shareTeam.seedBookmark('code')).rejects.toMatchObject({ code: E_UNSUPPORTED })
   })
 
   it('hosted-team bookmarks answer an empty list: a browser cannot join a relay host', async () => {

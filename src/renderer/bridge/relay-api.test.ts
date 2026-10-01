@@ -1,6 +1,7 @@
 import { relayPtyDataKey } from '../../shared/relay-pty-channel'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { IPC } from '../../shared/ipc'
+import { E_UNSUPPORTED } from '../../shared/rpc'
 import type { NodeTerminalApi } from '../../shared/types'
 import type { FrameTransport } from './frame-transport'
 import { buildRelayApi } from './relay-api'
@@ -170,6 +171,19 @@ describe('buildRelayApi', () => {
     expect(typeof api.watchLink.onState(() => {})).toBe('function')
     expect(localWatchLink.create).not.toHaveBeenCalled()
     expect(t.sent).toEqual([]) // nothing crossed the relay
+  })
+
+  it('share with team: a relay tab takes the E_UNSUPPORTED stub, never the LOCAL preload member', async () => {
+    const { local } = fakeLocalApi()
+    const localShareTeam = { probe: vi.fn() }
+    ;(local as unknown as { shareTeam: unknown }).shareTeam = localShareTeam
+    ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+    const t = new FakeTransport()
+    const { api } = buildRelayApi('conn-1', t)
+    expect(api.shareTeam).not.toBe(localShareTeam)
+    await expect(api.shareTeam.probe('p', [])).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    expect(localShareTeam.probe).not.toHaveBeenCalled()
+    expect(t.sent).toEqual([])
   })
 
   it('produces a value that satisfies NodeTerminalApi', () => {

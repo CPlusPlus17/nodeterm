@@ -319,6 +319,24 @@ const api: NodeTerminalApi = {
       return () => ipcRenderer.removeListener(IPC.sshPassphraseDismiss, h)
     }
   },
+  shareTeam: {
+    probe: (projectId, nodeIds) => ipcRenderer.invoke(IPC.shareTeamProbe, projectId, nodeIds),
+    install: (projectId) => ipcRenderer.invoke(IPC.shareTeamInstall, projectId),
+    cancelInstall: (projectId) => ipcRenderer.invoke(IPC.shareTeamCancelInstall, projectId),
+    onInstallOutput: (projectId, listener) => {
+      const h = (_e: unknown, p: { projectId?: unknown; text?: unknown }) => {
+        if (p?.projectId === projectId && typeof p.text === 'string') listener(p.text)
+      }
+      ipcRenderer.on(IPC.shareTeamInstallOutput, h)
+      return () => ipcRenderer.removeListener(IPC.shareTeamInstallOutput, h)
+    },
+    flushMirror: (projectId) => ipcRenderer.invoke(IPC.shareTeamFlushMirror, projectId),
+    bootstrap: (projectId, adoptCwd) => ipcRenderer.invoke(IPC.shareTeamBootstrap, projectId, adoptCwd),
+    killSessions: (projectId, nodeIds) => ipcRenderer.invoke(IPC.shareTeamKillSessions, projectId, nodeIds),
+    resume: (projectId, serverProjectId, sessions) =>
+      ipcRenderer.invoke(IPC.shareTeamResume, projectId, serverProjectId, sessions),
+    seedBookmark: (joinCode) => ipcRenderer.invoke(IPC.shareTeamSeedBookmark, joinCode)
+  },
   sshFs: {
     list: (projectId: string, path: string) => ipcRenderer.invoke(IPC.sshFsList, projectId, path),
     read: (projectId: string, path: string) => ipcRenderer.invoke(IPC.sshFsRead, projectId, path),
