@@ -708,6 +708,14 @@ entry for another node.
 `/bin/sh` against a fixture tree. A composed fixture will not tell you that `echo ##MEM` prints an
 empty line because `#` starts a comment.
 
+**Share with team's remote commands are generated shell, and so is their test.** The probe, the
+installer wrapper, the `team` invocations and the kill-verify are built in
+`src/core/remote-ssh/share-team-remote.ts` and run under a real `/bin/sh` against a fake host in its
+test; a change to one of them lands with a run there. The handover kill stays on the `nodeterm-rmt`
+socket only, with exact `=nt-<id>` targets: the every-socket kill used elsewhere would also stop the
+server core's `node-terminal` sessions, which are the ones the handover is starting. See CLAUDE.md
+"Share with team".
+
 **Remote context polling must bound bytes before SSH transports them.** Bootstrap from the
 file's measured end, keep offsets in raw bytes, and distinguish an idle read from failure so
 the poller can back off. A transcript that does not exist yet is idle, not a failure: Claude only

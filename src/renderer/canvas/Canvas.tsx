@@ -81,7 +81,7 @@ import {
   useSharedGlyphActive
 } from './SharedGlyphLayer'
 import { SshReconnector } from '../lib/sshReconnect'
-import { projectMayDialSsh, receivedCanvasMutation } from '../session/relay-ssh'
+import { projectMayDialSsh, receivedCanvasMutation, sanitizeRelayProject } from '../session/relay-ssh'
 import {
   hostAttachmentsFor,
   planActiveProjectDials,
@@ -302,6 +302,7 @@ import { PresenceLayer } from '../components/PresenceLayer'
 import { Facepile } from '../components/Facepile'
 import { PresenceNamePrompt } from '../components/PresenceNamePrompt'
 import { nodeTravel, projectTravel } from '../lib/presenceTravel'
+import { nodeIdsHeldElsewhere, nodeOwner } from '../lib/nodeOwner'
 import {
   closeConfirmCopy,
   closedSessionCounts,
@@ -379,6 +380,11 @@ import {
 import { planSessionKill } from '../lib/sessionKill'
 import { sessionPauseOffer, type SessionPauseOffer } from '../lib/sessionPause'
 import { RemoteAccessDialog } from '../components/RemoteAccessDialog'
+import { ShareTeamDialog } from '../components/ShareTeamDialog'
+import { runShare, type ShareConfirmSummary, type ShareOutcome, type SharePhase } from '../lib/shareSshTeam'
+import { followSharedProject, shareCanvas, shareProjectDeps } from '../lib/shareTeamCanvas'
+import { handedOffWarning } from '../lib/handedOff'
+import { skipNextColdResumeFor } from '../terminal/handed-off-resume'
 import { SshProjectDialog } from '../components/SshProjectDialog'
 import { SshPassphrasePrompt } from '../components/SshPassphrasePrompt'
 import { transport } from '../terminal/local-transport'
@@ -432,7 +438,7 @@ import {
   shouldShowExplorerPinHint,
   writeSeenExplorerPinHint
 } from '../lib/explorerPinHint'
-import { setKanbanPublishHook, setStoredCanvasPublishHook, useProjects } from '../state/projects'
+import { sameSshEndpoint, setKanbanPublishHook, setStoredCanvasPublishHook, useProjects } from '../state/projects'
 import { useAgentStatus, recordsTurnInterrupt } from '../state/agentStatus'
 import { hostChatSend, hostChatSession, hostChatStatus } from '../lib/hostChatQuery'
 import { chatPaneRefusal } from '../lib/chatPaneGate'
@@ -494,6 +500,7 @@ import {
   vanillaEnvStripPattern,
   AGENT_CONFIG,
   BUILTIN_AGENT_IDS,
+  resolvePermissionMode,
   type AgentId,
   type AgentPermissionMode
 } from '@shared/agents/config'
@@ -565,6 +572,8 @@ import {
   presenceForProject,
   setActiveSession,
   disposeSession,
+  holdSessionTeardown,
+  projectIdsBoundToSession,
 } from '../session/session'
 import {
   openRelayTab,
@@ -576,6 +585,8 @@ import { HostedApprovalDialog } from '../components/HostedApprovalDialog'
 import { emitLocalRelayClose, onLocalRelayClose } from '../bridge/relay-local-close'
 import { isJoinCode } from '@shared/relay-join-code'
 import { createHostedJoiner, type HostedJoiner, type HostedMountOutcome } from '../lib/hostedJoin'
+import { createTeamTabs, reconcileTeamTabs, type TeamTabs } from '../lib/hostedTeamTabs'
+import { isOpenTab, teamTabStoreOps } from '../lib/hostedTeamTabStore'
 import { HOSTED_APPROVAL_WAIT_MS, isReadOnlyRole, stripIpcPrefix, viewerBannerText } from '../lib/hostedTeam'
 import { answerHostedRequest, type HostedAnswer } from '../lib/hostedOwner'
 import { headRequest, type QueuedRequest } from '../lib/hostedPendingQueue'
@@ -633,6 +644,8 @@ import { useReopenHistory, type ReopenEntry } from '../state/reopenHistory'
 import { snapshotNode, recreateNodeFromSnapshot } from '../lib/reopenNode'
 import {
   buildClosedSessionEntries,
+  CLOSED_TEAM_TAB_NOTICE,
+  isClosedTeamTab,
   recentlyClosedProjects,
   stateToReopenSnapshot
 } from '../lib/closedHistory'
@@ -895,10 +908,16 @@ function noticeDwellMs(text: string): number {
 /** React Flow props for a hosted team tab whose role is below Editor. */
 const HOSTED_READ_ONLY_FLOW = { nodesDraggable: false, nodesConnectable: false } as const
 
-/** Is this project an open tab (not closed, not deleted)? What a hosted reconnect is for (R40). */
-function isOpenTab(projectId: string): boolean {
-  const p = useProjects.getState().getProject(projectId)
-  return !!p && !p.closed
+/** How a hosted team's connection mounts (see `mountRemoteMirror`). */
+interface HostedMountOpts {
+  /** Switch to the team's tab once it is live (a reconnect nobody asked for does not). */
+  activate: boolean
+  /** This user confirmed the SAS: the owner's approval wait starts now. */
+  onSasConfirmed?: () => void
+  /** The team, for its tabs (one per project it shares). */
+  hostId: string
+  /** The tab to land on when the mount takes the screen, when it is among the placed ones. */
+  focusProjectId?: string
 }
 
 /** What the agent-control handler's `reply` accepts, for helpers that build one outside it. */
@@ -1531,6 +1550,13 @@ export function Canvas() {
   // The hosted-team joiner (created below, with the relay mount it drives): here so the tab disposal
   // can stop a closed tab's reconnect.
   const hostedJoinerRef = useRef<HostedJoiner | null>(null)
+  // One tab per shared project of a hosted team (lib/hostedTeamTabs.ts), over the store ops in
+  // lib/hostedTeamTabStore.ts; the relay binding and the joiner bookkeeping stay here. Built once
+  // (the model holds every team's tab set, and Canvas renders far too often to rebuild it each time).
+  const [teamTabs] = useState<TeamTabs>(() => {
+    const tabs: TeamTabs = createTeamTabs(teamTabStoreOps((id) => tabs.teamOf(id)))
+    return tabs
+  })
   // A relay tab is a live client of a remote core — closing/deleting its project must tear the
   // relay session down (held presence teardown + socket close), or the peer lingers in the host's
   // facepile and the socket leaks until quit. Runs on BOTH close and delete (unlike a local tmux
@@ -1543,20 +1569,33 @@ export function Canvas() {
   // a still-live tab, no-ops them for an already-offline one, and unbinds + drops the entry either
   // way. We also sweep any live relayTabsRef entry for the project so a dead connectionId can't linger.
   const disposeRelayTabForProject = useCallback((projectId: string) => {
+    // One of a hosted team's several tabs: dismiss just this one. The team's connection lives on
+    // for the others (and the joiner keeps reconnecting into one that is still open).
+    const { remaining } = teamTabs.closeTab(projectId)
+    if (remaining.length > 0) {
+      hostedJoinerRef.current?.tabRemoved(projectId, remaining[0])
+      return
+    }
     // A hosted tab's team stops trying to come back into it, in any phase (R40). A no-op otherwise.
     hostedJoinerRef.current?.tabClosed(projectId)
-    for (const [connectionId, tab] of relayTabsRef.current) {
-      if (tab.projectId === projectId) relayTabsRef.current.delete(connectionId)
-    }
     const s = sessionForProject(projectId)
+    for (const [connectionId, tab] of relayTabsRef.current) {
+      // By session too: a team's last tab may be one a share event opened after the mount. Never
+      // while the connection still serves other tabs (one closed earlier lingers in `projectIds`).
+      const ours = tab.projectIds.includes(projectId) || (s.source === 'relay' && tab.sessionId === s.id)
+      const othersBound = projectIdsBoundToSession(tab.sessionId).some((id) => id !== projectId)
+      if (ours && !othersBound) relayTabsRef.current.delete(connectionId)
+    }
     if (s.source === 'relay') {
       disposeSession(s.id)
       useHostedTeams.getState().forget(s.id) // a no-op for a Team Access relay tab
     }
-  }, [])
+  }, [teamTabs])
   const [remoteDialogOpen, setRemoteDialogOpen] = useState(false)
   // "Connect over SSH…" project-creation dialog (from the Welcome screen).
   const [sshDialogOpen, setSshDialogOpen] = useState(false)
+  // The SSH project "Share with team" is running for (its dialog is open while set).
+  const [shareProjectId, setShareProjectId] = useState<string | null>(null)
   // "Clone repository…" dialog (from the Welcome screen + command palette).
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
   // Live SSH ControlMaster status per project id (drives the thin connection banner).
@@ -5107,6 +5146,8 @@ export function Canvas() {
   // `hosted` (a hosted team's join code): build the tab with its hosted api, wait up to the host's
   // own ten-minute pending window for an owner, switch to it only when asked, and hand a failure
   // back to the caller (the hosted joiner decides whether to retry or say so) instead of alerting.
+  // A hosted team's one connection serves one tab per project it shares (`teamTabs`), and follows
+  // the host's share changes for as long as it lives.
   // Absent = a pairing offer, exactly as before. Resolves with the outcome only for `hosted`.
   const mountRemoteMirror = useCallback(
     (
@@ -5114,7 +5155,7 @@ export function Canvas() {
       label = 'Remote host',
       reconnectProjectId?: string,
       staleSessionId?: string,
-      hosted?: { activate: boolean; onSasConfirmed?: () => void }
+      hosted?: HostedMountOpts
     ): Promise<HostedMountOutcome | null> => {
       if (relayTabsRef.current.has(connectionId)) return Promise.resolve(null)
       return openRelayTab(connectionId, label, {
@@ -5135,10 +5176,33 @@ export function Canvas() {
           ? undefined
           : (p) => useProjects.getState().adoptProject(p),
         setActiveProject: (id) => useProjects.getState().setActive(id),
-        ...(hosted ? { hosted: true, timeoutMs: HOSTED_APPROVAL_WAIT_MS, activate: hosted.activate } : {}),
+        ...(hosted
+          ? {
+              hosted: true,
+              timeoutMs: HOSTED_APPROVAL_WAIT_MS,
+              activate: hosted.activate,
+              // One tab per project the team shares, under the host's own ids. A reconnect reuses
+              // the tabs the stale (offline) session still holds, greyed, by id.
+              placeProjects: (projects: Project[]) => {
+                const existing = staleSessionId ? projectIdsBoundToSession(staleSessionId) : []
+                // A reconnect whose team tabs were ALL closed meanwhile must not bring them back (R40).
+                if (reconnectProjectId && !existing.some((id) => isOpenTab(id))) {
+                  throw new Error('The tab this reconnect was for is closed.')
+                }
+                return teamTabs.place({ hostId: hosted.hostId, label }, projects, existing, {
+                  keepActive: !hosted.activate
+                })
+              },
+              ...(hosted.focusProjectId ? { focusProjectId: hosted.focusProjectId } : {}),
+            }
+          : {}),
       })
         .then((tab): HostedMountOutcome | null => {
           relayTabsRef.current.set(connectionId, tab)
+          // The session's api, read ONCE while the mount's tab is surely bound to it: a share event
+          // may close that tab later, and resolving through it then would answer the local session.
+          const bound = sessionForProject(tab.projectId)
+          const api = bound.id === tab.sessionId ? bound.api : null
           if (reconnectProjectId) {
             // The fresh session is now bound to the tab (openRelayTab rebound the SAME project id),
             // so it is finally safe to drop the stale offline session it replaced. Disposing only
@@ -5148,12 +5212,12 @@ export function Canvas() {
               disposeSession(staleSessionId)
               if (hosted) useHostedTeams.getState().forget(staleSessionId)
             }
-            // Back online: un-grey the reused tab.
-            useProjects.getState().setProjectUnavailable(reconnectProjectId, false)
+            // Back online: un-grey every tab the connection serves (a hosted team's are several).
+            for (const id of tab.projectIds) useProjects.getState().setProjectUnavailable(id, false)
           }
-          // A background (unrequested) reconnect did not switch tabs — but if its tab is the one on
-          // screen, the active session must follow the rebind (disposing the stale one reset it).
-          if (hosted && !hosted.activate && useProjects.getState().activeProjectId === tab.projectId) {
+          // A background (unrequested) reconnect did not switch tabs — but if one of its tabs is
+          // on screen, the active session must follow the rebind (disposing the stale one reset it).
+          if (hosted && !hosted.activate && tab.projectIds.includes(useProjects.getState().activeProjectId)) {
             setActiveSession(tab.sessionId)
           }
           // A host/relay drop AFTER approval is INVOLUNTARY (not a user close): grey the tab to
@@ -5166,7 +5230,52 @@ export function Canvas() {
               setProjectUnavailable: (id, v) => useProjects.getState().setProjectUnavailable(id, v),
             })
           })
-          return hosted ? { projectId: tab.projectId } : null
+          // A hosted team follows the host's share changes while this connection lives: a project
+          // it stops sharing loses its tab, a newly shared one gains one (without taking the screen).
+          // Held by the session, so the subscription ends with it (a drop, a close).
+          if (hosted && api?.hosted) {
+            const hostId = hosted.hostId
+            const teamTabIds = (): string[] =>
+              useProjects
+                .getState()
+                .projects.filter((x) => !x.closed && teamTabs.teamOf(x.id) === hostId)
+                .map((x) => x.id)
+            // The tabs the joiner was last told this connection serves. Events overlap (each commits
+            // its close half before awaiting its load), so an earlier event can settle after a later
+            // one closed tabs: each reconcile diffs the store against this set, never against a
+            // snapshot from when its own event began.
+            let known = [...tab.projectIds]
+            const off = api.hosted.onSharedChanged((p) => {
+              const ids = Array.isArray(p?.projectIds) ? p.projectIds : []
+              // What the event changed is read back from the store once it settles. It can reject
+              // (the load failed, the session went away mid-load) and still have closed tabs, so
+              // its resolved value alone does not say what the joiner must follow.
+              void teamTabs
+                .sharedChanged(
+                  { hostId, label, sessionId: tab.sessionId },
+                  ids,
+                  async () => (await api.workspace.load()).projects.map(sanitizeRelayProject),
+                  { keepActive: true }
+                )
+                .catch(() => {}) // never the user's error: the tabs that stand are in the store
+                .then(() => {
+                  const r = reconcileTeamTabs(known, teamTabIds())
+                  known = r.known
+                  const joiner = hostedJoinerRef.current
+                  if (!joiner) return
+                  if (r.added.length) joiner.tabsAdded(hostId, r.added)
+                  // Never tabClosed: a share event does not end the team. Closing its last tab does
+                  // (disposeRelayTabForProject).
+                  for (const id of r.removed) joiner.tabRemoved(id, r.known[0])
+                })
+            })
+            try {
+              holdSessionTeardown(tab.sessionId, off)
+            } catch {
+              off() // the session is already gone: nothing to follow
+            }
+          }
+          return hosted ? { projectId: tab.projectId, projectIds: tab.projectIds } : null
         })
         .catch((err): HostedMountOutcome | null => {
           // A user who declined the SAS triggered this close themselves — don't cry error.
@@ -5177,7 +5286,7 @@ export function Canvas() {
           return null
         })
     },
-    []
+    [teamTabs]
   )
 
   // Surface the SAS so this human can verify it matches the host's before confirming (the
@@ -5191,7 +5300,7 @@ export function Canvas() {
       label: string,
       reconnectProjectId?: string,
       staleSessionId?: string,
-      hosted?: { activate: boolean; onSasConfirmed?: () => void }
+      hosted?: HostedMountOpts
     ): Promise<HostedMountOutcome | null> => {
       const unSas = window.nodeTerminal.relayClient.onSas(connectionId, (sas) => {
         unSas()
@@ -5252,8 +5361,15 @@ export function Canvas() {
           req.label || 'Hosted team',
           req.reconnectProjectId,
           bound?.source === 'relay' ? bound.id : undefined,
-          // Only a reconnect the user asked for takes the screen (or one with nothing on it).
-          { activate: req.manual || !useProjects.getState().activeProjectId, onSasConfirmed: hooks.sasConfirmed }
+          {
+            // Only a reconnect the user asked for takes the screen (or one with nothing on it).
+            activate: req.manual || !useProjects.getState().activeProjectId,
+            onSasConfirmed: hooks.sasConfirmed,
+            hostId: req.hostId,
+            // Where it lands when it does: the project just shared, else the tab a reconnect is for
+            // (a click on one of a team's greyed tabs keeps the user on that tab).
+            focusProjectId: req.focusProjectId ?? req.reconnectProjectId
+          }
         ).then((o): HostedMountOutcome => o ?? { error: new Error('That connection is already open.'), declined: true })
       },
       tabOpen: isOpenTab,
@@ -5270,6 +5386,14 @@ export function Canvas() {
       joiner.dispose()
     }
   }, [confirmAndMount])
+
+  // The share flow's join: a team this desktop just set up over ssh, whose bookmark it seeded
+  // pre-approved. Through the team's one attempt owner (retrying while the relay comes up, with no
+  // SAS), landing on the project that was shared. `busy` = this desktop is already connected to that
+  // team (nothing mounts; the caller lands on the project itself); null = no joiner yet.
+  const joinApprovedTeam = useCallback((code: string, focusProjectId?: string): 'started' | 'busy' | null => {
+    return hostedJoinerRef.current?.joinApproved(code, focusProjectId ? { focusProjectId } : undefined) ?? null
+  }, [])
 
   // Connect to a host from an already-collected pairing offer: open the relay socket, then run the
   // shared SAS-compare + mount flow. The SINGLE place `relayClient.connect` + `confirmAndMount` live,
@@ -9070,21 +9194,113 @@ export function Canvas() {
     [commitActiveToStore, writeDisk]
   )
 
+  // Reopen a previously closed project and make it active — the active-project effect reloads its
+  // serialized nodes, whose TerminalNodes reattach to the surviving tmux sessions (or cold-restore).
+  // The unchecked form asks nothing first: it is also "Share with team"'s own undo, which must put
+  // the project back without a question. Declared here, beside switchProject and for the same TDZ
+  // reason: the ⇧⌘T plan executor just below reopens through the guarded form.
+  //
+  // A relay (team) tab is refused here, the one funnel every reopen goes through: once closed its
+  // relay session is gone, and `sessionForProject` would fall back to the LOCAL session, mounting
+  // the host's node ids on this machine's core (local shells, an agent cold-resume). False = refused.
+  const reopenProjectUnchecked = useCallback(
+    (id: string): boolean => {
+      if (useProjects.getState().getProject(id)?.remote) {
+        setNotice({ kind: 'info', text: CLOSED_TEAM_TAB_NOTICE })
+        return false
+      }
+      commitActiveToStore()
+      useProjects.getState().reopenProject(id)
+      setWelcomeOpen(false)
+      void writeDisk()
+      return true
+    },
+    [commitActiveToStore, writeDisk]
+  )
+
+  /** Ask before opening a project this desktop handed to a hosted team: the server's core writes
+   *  that canvas now, and opening it here too makes a second writer that overwrites it. True = go
+   *  ahead, and going ahead takes the project back — the mark is cleared, so this desktop saves and
+   *  mirrors it again (the caller saves), and its agent nodes skip their next automatic resume. A
+   *  project that was never handed off answers true. */
+  const confirmHandedOffReopen = useCallback(
+    async (id: string): Promise<boolean> => {
+      const marked = useProjects.getState().getProject(id)?.handedOffTo
+      if (!marked) return true
+      const hostId = marked.hostId
+      // The team's name from this device's bookmark of it. Only a label, so every failure (no
+      // relay on this surface, an IPC error, no bookmark for that team) falls back to null.
+      let label: string | null = null
+      if (hostId) {
+        try {
+          const list = await window.nodeTerminal.relayHosted?.bookmarks()
+          label = (Array.isArray(list) ? list : []).find((b) => b.hostId === hostId)?.label ?? null
+        } catch {
+          label = null
+        }
+      }
+      // Read again after the lookup: the project may have been deleted or taken back meanwhile.
+      const project = useProjects.getState().getProject(id)
+      if (!project) return false
+      const message = handedOffWarning(project, label)
+      if (!message) return true
+      // One actionable dialog at a time (`confirmFlags`): replacing an open one would drop its
+      // answer. Say why nothing opened rather than doing nothing.
+      if (confirmBusy()) {
+        setNotice({ kind: 'error', text: `Answer the open dialog first, then open ${project.name} again.` })
+        return false
+      }
+      const ok = await new Promise<boolean>((resolve) =>
+        setConfirm({
+          message,
+          confirmLabel: 'Open here anyway',
+          danger: true,
+          onConfirm: () => {
+            setConfirm(null)
+            resolve(true)
+          },
+          // The dialog's cancel path closes it after this runs.
+          onCancel: () => resolve(false)
+        })
+      )
+      if (ok) {
+        useProjects.getState().setHandedOffTo(id, undefined)
+        // Its agents would resume the conversations the team's server is running: each one skips
+        // its automatic cold-resume once, and says why (terminal/handed-off-resume.ts).
+        skipNextColdResumeFor(useProjects.getState().getProject(id)?.nodes ?? [])
+      }
+      return ok
+    },
+    [confirmBusy, setConfirm]
+  )
+
+  /** The reopen every human path uses (Welcome's and the sidebar's "Recently closed", ⇧⌘T, ⌘K,
+   *  travel, "Open recent", Set folder…). A handed-off project asks first; any other reopens at
+   *  once, synchronously, exactly as before the question existed. Resolves false when the user
+   *  declined or the reopen was refused (a team tab), so a caller that staged follow-up work (a
+   *  focus, a resume) can drop it. */
+  const reopenProject = useCallback(
+    (id: string): Promise<boolean> => {
+      if (!useProjects.getState().getProject(id)?.handedOffTo) {
+        return Promise.resolve(reopenProjectUnchecked(id))
+      }
+      return confirmHandedOffReopen(id).then((ok) => ok && reopenProjectUnchecked(id))
+    },
+    [confirmHandedOffReopen, reopenProjectUnchecked]
+  )
+
   /** Executes a `ReopenPlan` already decided by `planReopen` — the side-effecting half shared by
    *  `Cmd+Shift+T` (`reopenLastClosedCommand`) and reopening a persisted closed-session entry
-   *  from the sidebar (`reopenClosedSessionCommand`). Returns whether it did anything ('skip'
-   *  plans are the caller's problem — this function never receives one). */
+   *  from the sidebar (`reopenClosedSessionCommand`). Returns whether it did anything ('skip' and
+   *  'refuse' plans are the caller's problem — this function never receives one). */
   const executeReopenPlan = useCallback(
-    (plan: Exclude<ReopenPlan, { action: 'skip' }>): boolean => {
+    (plan: Exclude<ReopenPlan, { action: 'skip' } | { action: 'refuse' }>): boolean => {
       switch (plan.action) {
         case 'reopenProject':
-          // A project switch — commit the live canvas back to the store first, or whatever the
-          // user was looking at is silently lost (the same invariant every other project switch/
-          // add/delete in this file honors via commitActiveToStore()).
-          commitActiveToStore()
-          useProjects.getState().reopenProject(plan.projectId)
-          setWelcomeOpen(false)
-          void writeDisk()
+          // The guarded reopen: it commits the live canvas back to the store first (or whatever
+          // the user was looking at is silently lost) and, for a project handed to a hosted team,
+          // asks before this desktop writes it again. Any other project reopens synchronously.
+          void reopenProject(plan.projectId)
           return true
         case 'insertActive':
           setNodes((ns) => [...ns, ...plan.nodes])
@@ -9105,18 +9321,14 @@ export function Canvas() {
               })
           }
           void writeDisk()
-          if (plan.reopenProjectAfter) {
-            commitActiveToStore()
-            useProjects.getState().reopenProject(plan.projectId)
-            setWelcomeOpen(false)
-            void writeDisk()
-          } else {
-            switchProject(plan.projectId)
-          }
+          // A closed project goes through the guarded reopen, which asks first when it was handed
+          // to a hosted team. Declining leaves it closed; the restored nodes stay in its store copy.
+          if (plan.reopenProjectAfter) void reopenProject(plan.projectId)
+          else switchProject(plan.projectId)
           return true
       }
     },
-    [switchProject, setNodes, markDirty, writeDisk, commitActiveToStore]
+    [switchProject, reopenProject, setNodes, markDirty, writeDisk]
   )
 
   /** `app.reopenLastClosed` (Cmd+Shift+T): pops the shared close-history stack and reopens a
@@ -9131,20 +9343,6 @@ export function Canvas() {
     for (;;) {
       const entry = useReopenHistory.getState().popNext()
       if (!entry) return false
-
-      // The persisted twin of this batch (the sidebar's "Recently closed" rows the SAME delete
-      // recorded) must be consumed too — whether this entry ends up restored or skipped as stale,
-      // the ⇧⌘T stack is done with it either way, and leaving the sidebar row behind would let a
-      // later click there restore a duplicate. `writeDisk` runs unconditionally because
-      // `entry.projectId` may not be the active project, whose autosave debounce wouldn't cover it.
-      if (entry.kind === 'nodes') {
-        for (const n of entry.nodes) {
-          if (n.closedSessionId) {
-            useProjects.getState().discardClosedSession(entry.projectId, n.closedSessionId)
-          }
-        }
-        void writeDisk()
-      }
 
       const { projects, activeProjectId } = useProjects.getState()
       const project = projects.find((p) => p.id === entry.projectId)
@@ -9162,6 +9360,28 @@ export function Canvas() {
             permissionModeFor: (agentId) => projectPermissionMode(project, agentId)
           })
       )
+      // A closed team tab: nothing is written into it or reopened, and the entry is dropped. Put
+      // back on top it would answer every later ⇧⌘T with this notice and hide every older entry,
+      // and a closed team tab does not come back through ⇧⌘T anyway. A relay project is never
+      // saved, so it has no persisted twin to discard.
+      if (plan.action === 'refuse') {
+        setNotice({ kind: 'info', text: CLOSED_TEAM_TAB_NOTICE })
+        return true
+      }
+
+      // The persisted twin of this batch (the sidebar's "Recently closed" rows the SAME delete
+      // recorded) must be consumed too — whether this entry ends up restored or skipped as stale,
+      // the ⇧⌘T stack is done with it either way, and leaving the sidebar row behind would let a
+      // later click there restore a duplicate. `writeDisk` runs unconditionally because
+      // `entry.projectId` may not be the active project, whose autosave debounce wouldn't cover it.
+      if (entry.kind === 'nodes') {
+        for (const n of entry.nodes) {
+          if (n.closedSessionId) {
+            useProjects.getState().discardClosedSession(entry.projectId, n.closedSessionId)
+          }
+        }
+        void writeDisk()
+      }
 
       if (plan.action === 'skip') continue
       return executeReopenPlan(plan)
@@ -9192,6 +9412,12 @@ export function Canvas() {
 
   const reopenClosedSessionCommand = useCallback(
     (projectId: string, entryId: string): boolean => {
+      // Restoring a session into a closed team tab reopens that tab: refused before the entry is
+      // consumed (the sidebar does not list these rows; this catches a stale click).
+      if (isClosedTeamTab(useProjects.getState().getProject(projectId))) {
+        setNotice({ kind: 'info', text: CLOSED_TEAM_TAB_NOTICE })
+        return false
+      }
       const consumed = useProjects.getState().consumeClosedSession(projectId, entryId)
       if (!consumed) return false
       // The ⇧⌘T-stack twin of this entry (if the SAME delete also pushed one) must go too, or a
@@ -9221,7 +9447,7 @@ export function Canvas() {
             permissionModeFor: (agentId) => projectPermissionMode(project, agentId)
           })
       )
-      if (plan.action === 'skip') return false
+      if (plan.action === 'skip' || plan.action === 'refuse') return false
       return executeReopenPlan(plan)
     },
     [executeReopenPlan, writeDisk]
@@ -10862,15 +11088,24 @@ export function Canvas() {
         useAgentStatus.getState().clearUnread(nodeId)
         return
       }
-      const owner = useProjects
-        .getState()
-        .projects.find((p) => p.nodes.some((n) => n.id === nodeId))
+      // `nodeOwner`, not the first project holding the id: a closed, handed-off SSH project shares
+      // its node ids with the team tab now serving them, and the tab is where the node lives.
+      const owner = nodeOwner(useProjects.getState().projects, nodeId)
       if (owner && owner.id !== useProjects.getState().activeProjectId) {
         pendingFocusRef.current = nodeId
-        switchProject(owner.id)
+        if (owner.closed) {
+          // A closed project is REOPENED (its tab restored), never activated behind a hidden tab,
+          // and through the guarded reopen: a project handed to a hosted team asks first, and a
+          // decline drops the staged focus.
+          void reopenProject(owner.id).then((ok) => {
+            if (!ok && pendingFocusRef.current === nodeId) pendingFocusRef.current = null
+          })
+        } else {
+          switchProject(owner.id)
+        }
       }
     },
-    [setNodes, goToNode, switchProject]
+    [setNodes, goToNode, switchProject, reopenProject]
   )
   focusNodeRef.current = focusNodeById
 
@@ -15510,7 +15745,7 @@ export function Canvas() {
       if (!nodeId || !title) return
       const projectId = nodesRef.current.some((n) => n.id === nodeId)
         ? activeProjectId
-        : useProjects.getState().projects.find((p) => p.nodes.some((n) => n.id === nodeId))?.id
+        : nodeOwner(useProjects.getState().projects, nodeId)?.id
       if (!projectId) return
       renameSession(projectId, nodeId, title)
     })
@@ -16479,18 +16714,25 @@ export function Canvas() {
   // project for that server folder (its master is opened by the active-project effect on switch),
   // persist. openSshProject dedupes by endpoint+remoteCwd — re-adding a folder must reuse its
   // existing project, never mint a fresh empty one that would clobber the server's project.json.
+  // That reuse is a reopen, so a folder whose project was handed to a hosted team asks first
+  // (sameSshEndpoint is the store's own matcher, so this asks about the project it will reopen).
   const createSshProject = useCallback(
     (input: { server: SshServer; remoteCwd: string; label: string }) => {
-      commitActiveToStore()
-      useProjects
-        .getState()
-        .openSshProject(input.label, { server: input.server, remoteCwd: input.remoteCwd })
-      // Same contract as onRepoCloned: the welcome screen waits behind the SSH dialog and
-      // dismisses only once the project is created (cancel returns to the welcome screen).
-      setWelcomeOpen(false)
-      void writeDisk()
+      const ssh = { server: input.server, remoteCwd: input.remoteCwd }
+      void (async () => {
+        const existing = useProjects
+          .getState()
+          .projects.find((p) => !!p.ssh && sameSshEndpoint(p.ssh, ssh))
+        if (existing?.handedOffTo && !(await confirmHandedOffReopen(existing.id))) return
+        commitActiveToStore()
+        useProjects.getState().openSshProject(input.label, ssh)
+        // Same contract as onRepoCloned: the welcome screen waits behind the SSH dialog and
+        // dismisses only once the project is created (cancel returns to the welcome screen).
+        setWelcomeOpen(false)
+        void writeDisk()
+      })()
     },
-    [commitActiveToStore, writeDisk]
+    [commitActiveToStore, writeDisk, confirmHandedOffReopen]
   )
 
   const addProject = useCallback(() => {
@@ -16513,6 +16755,9 @@ export function Canvas() {
       // folder to another machine's tab (openFolderProject applies the same rule).
       const existing = useProjects.getState().projects.find((p) => p.cwd === folder && !p.remote)
       if (existing) {
+        // That reuse reopens the project, so one handed to a hosted team (an SSH project can carry
+        // a local folder too, via "Set folder…") asks first, like every other reopen.
+        if (existing.handedOffTo && !(await confirmHandedOffReopen(existing.id))) return
         useProjects.getState().openFolderProject(folder)
         // An `unavailable` placeholder never recovers on its own: a save emits a header-only ref
         // for it (never a file), so a deleted project.json stays deleted and every later load
@@ -16537,7 +16782,7 @@ export function Canvas() {
       }
       void writeDisk()
     },
-    [commitActiveToStore, writeDisk]
+    [commitActiveToStore, writeDisk, confirmHandedOffReopen]
   )
 
   /** Returns true when a folder was picked (false on cancel), so callers like the welcome
@@ -16601,18 +16846,6 @@ export function Canvas() {
     [persist]
   )
 
-  // Reopen a previously closed project and make it active — the active-project effect reloads its
-  // serialized nodes, whose TerminalNodes reattach to the surviving tmux sessions (or cold-restore).
-  const reopenProject = useCallback(
-    (id: string) => {
-      commitActiveToStore()
-      useProjects.getState().reopenProject(id)
-      setWelcomeOpen(false)
-      void writeDisk()
-    },
-    [commitActiveToStore, writeDisk]
-  )
-
   const setProjectFolder = useCallback(
     async (id: string) => {
       const folder = await window.nodeTerminal.dialog.selectFolder()
@@ -16630,7 +16863,7 @@ export function Canvas() {
         return
       }
       if (plan.kind === 'switch') {
-        if (plan.reopen) reopenProject(plan.projectId)
+        if (plan.reopen) void reopenProject(plan.projectId)
         else switchProject(plan.projectId)
         return
       }
@@ -16704,7 +16937,11 @@ export function Canvas() {
       const store = useProjects.getState()
       if (id === store.activeProjectId) commitActiveToStore()
       if (endSessions) endProjectSessions(id)
-      useReopenHistory.getState().push({ kind: 'project', projectId: id, closedAt: Date.now() })
+      // A relay tab is never reopened from the history (`planReopen` skips it too): its nodes are
+      // the host's sessions.
+      if (!store.getProject(id)?.remote) {
+        useReopenHistory.getState().push({ kind: 'project', projectId: id, closedAt: Date.now() })
+      }
       disposeRelayTabForProject(id)
       store.closeProject(id)
       void writeDisk()
@@ -16731,6 +16968,98 @@ export function Canvas() {
       setCloseTarget({ id, name: project.name, count: plan.sessionCount, end: false })
     },
     [commitActiveToStore, performCloseProject, setCloseTarget]
+  )
+
+  // ---- Share with team: an SSH project handed to a hosted team on its own host ----
+  // Every step runs over the project's ControlMaster, so the share waits for the same connection
+  // status the connection banner shows.
+  const shareBlockedReason = useCallback(
+    (id: string): string | null =>
+      sshStatus[id] === 'connected' ? null : 'Connect this project first (its SSH connection is down).',
+    [sshStatus]
+  )
+
+  // A share whose join found the team already live here follows the shared project's tab (see
+  // `followSharedProject`). One follower at a time, stopped on unmount.
+  const shareFollowStopRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => shareFollowStopRef.current?.(), [])
+  const followSharedTab = useCallback(
+    (projectId: string) => {
+      shareFollowStopRef.current?.()
+      shareFollowStopRef.current = followSharedProject({
+        targetId: projectId,
+        read: () => ({ activeId: useProjects.getState().activeProjectId, targetOpen: isOpenTab(projectId) }),
+        subscribe: (listener) => useProjects.subscribe(listener),
+        switchTo: (id) => switchProject(id),
+        setTimer: (fn, ms) => setTimeout(fn, ms),
+        clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>)
+      })
+    },
+    [switchProject]
+  )
+
+  // The dialog's `start`: runs the share for one project. The orchestrator owns the order and every
+  // undo, so nothing here catches a failure or puts the project back.
+  const startShare = useCallback(
+    (projectId: string) =>
+      async (ui: { phase(p: SharePhase): void; confirm(s: ShareConfirmSummary): Promise<boolean> }): Promise<ShareOutcome> => {
+        commitActiveToStore()
+        const project = useProjects.getState().getProject(projectId)
+        if (!project?.ssh || project.remote) return { kind: 'refused', reason: 'This is not an SSH project.' }
+        const steps = shareProjectDeps({
+          commit: commitActiveToStore,
+          save: writeDisk,
+          setHandedOffTo: (value) => useProjects.getState().setHandedOffTo(projectId, value),
+          isClosed: () => useProjects.getState().getProject(projectId)?.closed === true,
+          // Never `closeProject`: it may ask whether to end the sessions, and the handover ends them
+          // itself, once the server holds the project.
+          close: () => performCloseProject(projectId),
+          reopen: () => reopenProjectUnchecked(projectId),
+          join: joinApprovedTeam,
+          followTab: followSharedTab,
+          now: () => Date.now()
+        })
+        return runShare(
+          {
+            api: window.nodeTerminal.shareTeam,
+            // Read fresh each time (start, right before the mark, the flush check), committing the
+            // live canvas first so a node added since the last read is in it.
+            canvas: () => {
+              commitActiveToStore()
+              const p = useProjects.getState().getProject(projectId)
+              return shareCanvas(p?.nodes ?? [], useAgentStatus.getState().byId, { id: projectId, server: p?.ssh?.server })
+            },
+            confirm: ui.confirm,
+            phase: ui.phase,
+            ...steps,
+            wait: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+          },
+          {
+            projectId,
+            projectName: project.name,
+            host: project.ssh.server.host,
+            user: project.ssh.server.user,
+            permissionMode: resolvePermissionMode(project, useSettings.getState().settings)
+          }
+        )
+      },
+    [commitActiveToStore, writeDisk, performCloseProject, reopenProjectUnchecked, joinApprovedTeam, followSharedTab]
+  )
+
+  // Every entry (tab menu, sidebar menu, ⌘K) opens the dialog through here, so a blocked share is
+  // refused the same way everywhere.
+  const openShareWithTeam = useCallback(
+    (projectId: string) => {
+      const blocked = shareBlockedReason(projectId)
+      if (blocked) {
+        setNotice({ kind: 'error', text: blocked })
+        return
+      }
+      // One share at a time: a second one would unmount the running dialog and leave its run
+      // going with nothing on screen.
+      setShareProjectId((current) => current ?? projectId)
+    },
+    [shareBlockedReason]
   )
 
   // Right-click on a sidebar project header: mostly the same project actions as the tab caret
@@ -16773,6 +17102,20 @@ export function Canvas() {
             icon: <IconGear />,
             onClick: () => openProjectSettings(projectId)
           },
+          ...(project.ssh && !project.remote
+            ? ((): MenuItem[] => {
+                const blocked = shareBlockedReason(projectId)
+                return [
+                  {
+                    label: 'Share with team…',
+                    icon: <IconRemote />,
+                    disabled: !!blocked,
+                    ...(blocked ? { hint: blocked } : {}),
+                    onClick: () => openShareWithTeam(projectId)
+                  }
+                ]
+              })()
+            : []),
           { type: 'separator' },
           { type: 'colors', onPick: (color) => setProjectColor(projectId, color) },
           { type: 'separator' },
@@ -16792,7 +17135,9 @@ export function Canvas() {
       setProjectFolder,
       setProjectColor,
       closeProject,
-      openProjectSettings
+      openProjectSettings,
+      shareBlockedReason,
+      openShareWithTeam
     ]
   )
 
@@ -16805,7 +17150,7 @@ export function Canvas() {
     (projectId: string) => {
       const { projects, activeProjectId: active } = useProjects.getState()
       const travel = projectTravel(projects, active, projectId)
-      if (travel.kind === 'reopen') reopenProject(travel.projectId)
+      if (travel.kind === 'reopen') void reopenProject(travel.projectId)
       else if (travel.kind === 'switch') switchProject(travel.projectId)
     },
     [reopenProject, switchProject]
@@ -16826,7 +17171,11 @@ export function Canvas() {
       if (travel.kind === 'blocked') return
       if (travel.kind === 'reopen') {
         pendingFocusRef.current = nodeId
-        reopenProject(travel.projectId)
+        // Declined (a project handed to a hosted team stays closed): drop the staged focus so a
+        // later reopen of that project does not jump to a node nobody asked for this time.
+        void reopenProject(travel.projectId).then((ok) => {
+          if (!ok && pendingFocusRef.current === nodeId) pendingFocusRef.current = null
+        })
         return
       }
       focusNodeById(nodeId)
@@ -16998,8 +17347,13 @@ export function Canvas() {
           return
         case 'resume':
           resumeWhenLanded(plan.projectId, conv)
-          if (plan.reopen) reopenProject(plan.projectId)
-          else switchProject(plan.projectId)
+          if (plan.reopen) {
+            // Declined (a project handed to a hosted team stays closed): drop the staged resume, or
+            // a later "Open here anyway" from anywhere would start this conversation unasked.
+            void reopenProject(plan.projectId).then((ok) => {
+              if (!ok && pendingResumeRef.current?.conv === conv) pendingResumeRef.current = null
+            })
+          } else switchProject(plan.projectId)
           return
         case 'open-folder':
           void openOrAdoptFolder(plan.folder)
@@ -17190,6 +17544,9 @@ export function Canvas() {
       // End the tmux sessions of every terminal in the deleted project, and drop their
       // persisted agent status and subagent fan-out (node unmount removes neither — issue #402).
       const project = store.getProject(id)
+      // A handed-off SSH project shares its node ids with the team tab now serving them: that tab
+      // still needs their agent status.
+      const heldElsewhere = nodeIdsHeldElsewhere(store.projects, id)
       project?.nodes.forEach((n) => {
         if ((n.kind ?? 'terminal') === 'terminal') {
           disposeTerminalOnUnmount(sessionForProject(id).id, n.id) // may be parked from a recent switch away
@@ -17199,7 +17556,7 @@ export function Canvas() {
         // outlives the project entry (it is a file in the project's folder), so the run does not
         // stay open in the issue's history forever.
         if (n.issueRef) logIssueRunEnded(id, n)
-        useAgentStatus.getState().remove(n.id)
+        if (!heldElsewhere.has(n.id)) useAgentStatus.getState().remove(n.id)
         useAgentNodes.getState().clearForParent(n.id)
       })
       // SSH project: the per-node `transport.destroy` above only ends the REMOTE session for
@@ -17490,6 +17847,23 @@ export function Canvas() {
             ]
           : []
       })(),
+      // Share the active SSH project with a team. The palette has no disabled row, so a blocked
+      // share keeps its reason in `note` and running it says so (`openShareWithTeam`).
+      ...(activeProject?.ssh && !activeProject.remote
+        ? ((): Command[] => {
+            const blocked = shareBlockedReason(activeProject.id)
+            return [
+              {
+                id: 'share-with-team',
+                label: `Share ${activeProject.name} with team`,
+                hint: 'hosted team invite ssh server share',
+                icon: <IconRemote />,
+                ...(blocked ? { note: blocked } : {}),
+                run: () => openShareWithTeam(activeProject.id)
+              }
+            ]
+          })()
+        : []),
       ...hostedBookmarks.map(
         (b): Command => ({
           id: `hosted-forget-${b.hostId}`,
@@ -17595,7 +17969,9 @@ export function Canvas() {
           label: `Switch to ${p.name}`,
           hint: 'project',
           icon: <IconSwitch />,
-          run: () => switchProject(p.id)
+          // A closed project is REOPENED (tab restored), never activated behind a hidden tab — and
+          // the reopen is the guarded one, which asks first for a project handed to a hosted team.
+          run: () => (p.closed ? void reopenProject(p.id) : switchProject(p.id))
         })
       )
     const cs = useAgentStatus.getState()
@@ -17666,6 +18042,7 @@ export function Canvas() {
     fitView,
     persist,
     switchProject,
+    reopenProject,
     goToNode,
     bufferCache,
     connectRemote,
@@ -17682,6 +18059,8 @@ export function Canvas() {
     copyHostedInviteCode,
     forgetHostedTeam,
     confirmStopAllLiveLinks,
+    shareBlockedReason,
+    openShareWithTeam,
     prepareUpdateAvailable
   ])
 
@@ -17736,6 +18115,8 @@ export function Canvas() {
         onSetDefaultAccount={setProjectDefaultAccount}
         onSetDefaultPermissionMode={setProjectDefaultPermissionMode}
         onOpenProjectSettings={openProjectSettings}
+        onShareWithTeam={openShareWithTeam}
+        shareBlockedReason={shareBlockedReason}
       />
 
       <div className="top-banners">
@@ -18326,6 +18707,15 @@ export function Canvas() {
       )}
 
       {remoteDialogOpen && <RemoteAccessDialog onClose={() => setRemoteDialogOpen(false)} />}
+
+      {shareProjectId && (
+        <ShareTeamDialog
+          projectId={shareProjectId}
+          projectName={useProjects.getState().getProject(shareProjectId)?.name ?? 'project'}
+          start={startShare(shareProjectId)}
+          onClose={() => setShareProjectId(null)}
+        />
+      )}
 
       {sshDialogOpen && (
         <SshProjectDialog

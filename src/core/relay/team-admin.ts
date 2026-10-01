@@ -8,8 +8,11 @@
 // Unix sockets are POSIX. The Server Edition targets Linux; on Windows both ends refuse by name
 // rather than failing with an obscure error (the platform rule: degrade explicitly, never silently).
 //
-// With no hosted team on this server, the channel serves `init`, `status` and `info` only: every
-// other verb would create team state (a team.json, a host key) on a server that never asked to host.
+// With no hosted team on this server, the channel serves `init`, `status`, `info` and `bootstrap`
+// only: every other verb would create team state (a team.json, a host key) on a server that never
+// asked to host. `bootstrap` is `init` plus an owner, an adopted folder and its share, in one call.
+// `resume` restarts handed-over agent sessions on this core's own tmux; it needs a team (a share
+// hands sessions over only to a server that hosts one).
 import net from 'node:net'
 import path from 'node:path'
 import { chmodSync, lstatSync, rmSync } from 'node:fs'
@@ -17,6 +20,9 @@ import { ensurePrivateDir } from './private-dir'
 import { TeamStore, TEAM_LABEL_MAX, TEAM_PROJECT_ID_MAX } from './team-store'
 import { loadHostKey } from './host-key'
 import { publicKeyFromB64, publicKeyToB64 } from './e2ee'
+import { ADMIN_ERROR_CODE_RE, adminErrorCode } from './admin-error'
+import { runBootstrap } from './team-bootstrap'
+import { parseResumeSessions, type ResumeEntry, type ResumeResult } from '../../shared/share-team'
 import type {
   HostedInfo,
   HostedRotateResult,
@@ -24,6 +30,9 @@ import type {
   HostedStartResult,
   HostedStatus
 } from './hosted-service'
+import type { AdoptFolderResult } from '../workspace-store'
+
+export { codedError, adminErrorCode, ADMIN_ERROR_CODE_RE } from './admin-error'
 
 export type AdminRequest =
   | { cmd: 'init' }
@@ -33,7 +42,23 @@ export type AdminRequest =
   | { cmd: 'status' }
   | { cmd: 'share'; projectId: string; on: boolean }
   | { cmd: 'rotate-key' }
-export type AdminReply = { ok: true; result: unknown } | { ok: false; error: string }
+  | { cmd: 'bootstrap'; ownerKey: string; ownerLabel: string; adoptCwd: string }
+  | { cmd: 'resume'; projectId: string; sessions: ResumeEntry[] }
+export type AdminReply = { ok: true; result: unknown } | { ok: false; error: string; code?: string }
+/** A request refused with a stable code (`parseAdminRequest`), so a remote caller can branch on it. */
+export interface AdminRefusal {
+  refused: string
+  code: string
+}
+
+/** What the admin socket needs from the rest of the server beyond the hosted service. A server with
+ *  no workspace passes none, and the verbs that need one answer `E_UNSUPPORTED`. */
+export interface TeamAdminOps {
+  /** Adopt a folder into this core's workspace (saved before it returns) — `team bootstrap`. */
+  adoptFolder?(cwd: string): Promise<AdoptFolderResult>
+  /** Restart handed-over agent sessions on this core's own tmux — `team resume`. */
+  resume?(req: { projectId: string; sessions: ResumeEntry[] }): Promise<ResumeResult>
+}
 
 /** `init`'s answer. The address and join code are present only when hosting is running. */
 export interface AdminInitResult {
@@ -72,6 +97,9 @@ export const ADMIN_REQUEST_MAX = 64 * 1024
 const REQUEST_IDLE_MS = 10_000
 /** How long the CLI waits for an answer. `init` and `rotate-key` do local file work only. */
 const CALL_TIMEOUT_MS = 30_000
+/** Client timeouts for verbs that do more than local file work: bootstrap may wait up to 15 s for
+ *  the first relay registration, resume settles up to 4 agent launches at a time. */
+export const CMD_TIMEOUT_MS: Readonly<Record<string, number>> = Object.freeze({ bootstrap: 45_000, resume: 60_000 })
 /** How long probing an existing socket may take before it is treated as "cannot tell". */
 const PROBE_TIMEOUT_MS = 2_000
 /** A `remove` key is compared, never decoded: bound it only so a line cannot be all key. */
@@ -166,9 +194,22 @@ export function projectIdProblem(id: string): string | null {
   return null
 }
 
-/** A well-formed request, or the reason it is not. The server's own check: the CLI is one client,
- *  but anything running as this user can write to the socket. */
-export function parseAdminRequest(raw: unknown): AdminRequest | string {
+/** The longest folder path `bootstrap` accepts (Linux's PATH_MAX). */
+const ADOPT_CWD_MAX = 4096
+
+/** Why `cwd` cannot be the folder bootstrap adopts, or null. Absolute POSIX path, bounded, no
+ *  control characters — the server resolves and checks it on disk itself. */
+export function adoptCwdProblem(cwd: string): string | null {
+  if (!cwd.startsWith('/')) return 'The folder to adopt must be an absolute path.'
+  if (cwd.length > ADOPT_CWD_MAX) return 'The folder path is too long.'
+  if (CONTROL_RE.test(cwd)) return 'The folder path contains control characters.'
+  return null
+}
+
+/** A well-formed request, or the reason it is not (a bare string, or a refusal carrying a stable
+ *  code). The server's own check: the CLI is one client, but anything running as this user can
+ *  write to the socket. */
+export function parseAdminRequest(raw: unknown): AdminRequest | string | AdminRefusal {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return 'bad request: expected a JSON object'
   const o = raw as Record<string, unknown>
   switch (o.cmd) {
@@ -194,6 +235,26 @@ export function parseAdminRequest(raw: unknown): AdminRequest | string {
       if (typeof o.projectId !== 'string') return 'bad request: share needs a projectId string'
       if (typeof o.on !== 'boolean') return 'bad request: share needs on (a boolean)'
       return projectIdProblem(o.projectId) ?? { cmd: 'share', projectId: o.projectId, on: o.on }
+    }
+    case 'bootstrap': {
+      if (typeof o.ownerKey !== 'string' || typeof o.ownerLabel !== 'string' || typeof o.adoptCwd !== 'string') {
+        return { refused: 'bad request: bootstrap needs ownerKey, ownerLabel and adoptCwd strings', code: 'E_BAD_REQUEST' }
+      }
+      const keyProblem = ownerKeyProblem(o.ownerKey)
+      if (keyProblem) return { refused: keyProblem, code: 'E_BAD_KEY' }
+      const labelProblem = ownerLabelProblem(o.ownerLabel)
+      if (labelProblem) return { refused: labelProblem, code: 'E_BAD_REQUEST' }
+      const cwdProblem = adoptCwdProblem(o.adoptCwd)
+      if (cwdProblem) return { refused: cwdProblem, code: 'E_BAD_CWD' }
+      return { cmd: 'bootstrap', ownerKey: o.ownerKey, ownerLabel: o.ownerLabel, adoptCwd: o.adoptCwd }
+    }
+    case 'resume': {
+      if (typeof o.projectId !== 'string') return { refused: 'bad request: resume needs a projectId string', code: 'E_BAD_REQUEST' }
+      const idProblem = projectIdProblem(o.projectId)
+      if (idProblem) return { refused: idProblem, code: 'E_BAD_REQUEST' }
+      const sessions = parseResumeSessions(o.sessions)
+      if (typeof sessions === 'string') return { refused: sessions, code: 'E_BAD_REQUEST' }
+      return { cmd: 'resume', projectId: o.projectId, sessions }
     }
     default:
       return `bad request: unknown command ${JSON.stringify(typeof o.cmd === 'string' ? o.cmd.slice(0, 40) : o.cmd)}`
@@ -230,7 +291,7 @@ async function offReason(relayDir: string): Promise<HostingOff> {
 }
 
 const ok = (result: unknown): AdminReply => ({ ok: true, result })
-const fail = (error: string): AdminReply => ({ ok: false, error })
+const fail = (error: string, code?: string): AdminReply => (code ? { ok: false, error, code } : { ok: false, error })
 
 /** The address teammates need — only while hosting actually runs. */
 const address = (svc: HostedService, running: boolean): { info: HostedInfo | null; joinCode: string | null } =>
@@ -242,9 +303,16 @@ async function handle(
   relayDir: string,
   svc: HostedService,
   req: AdminRequest,
-  closing: () => boolean
+  closing: () => boolean,
+  ops: TeamAdminOps
 ): Promise<AdminReply> {
-  if (req.cmd !== 'init' && req.cmd !== 'status' && req.cmd !== 'info' && !(await teamIsSetUp(relayDir, svc))) {
+  if (
+    req.cmd !== 'init' &&
+    req.cmd !== 'status' &&
+    req.cmd !== 'info' &&
+    req.cmd !== 'bootstrap' &&
+    !(await teamIsSetUp(relayDir, svc))
+  ) {
     return fail(NO_TEAM)
   }
   switch (req.cmd) {
@@ -286,10 +354,23 @@ async function handle(
       const result: AdminRotateResult = { result: r, ...address(svc, r === 'started') }
       return ok(result)
     }
+    case 'bootstrap': {
+      if (!ops.adoptFolder) return fail('This server cannot adopt folders (no workspace).', 'E_UNSUPPORTED')
+      const adopt = ops.adoptFolder
+      return ok(await runBootstrap({ svc, adoptFolder: (cwd) => adopt(cwd), closing }, req))
+    }
+    case 'resume':
+      return ops.resume ? ok(await ops.resume(req)) : fail('This server cannot resume sessions.', 'E_UNSUPPORTED')
   }
 }
 
-async function answer(relayDir: string, svc: HostedService, line: string, closing: () => boolean): Promise<AdminReply> {
+async function answer(
+  relayDir: string,
+  svc: HostedService,
+  line: string,
+  closing: () => boolean,
+  ops: TeamAdminOps
+): Promise<AdminReply> {
   if (closing()) return fail(SHUTTING_DOWN)
   let raw: unknown
   try {
@@ -299,10 +380,11 @@ async function answer(relayDir: string, svc: HostedService, line: string, closin
   }
   const req = parseAdminRequest(raw)
   if (typeof req === 'string') return fail(req)
+  if ('refused' in req) return fail(req.refused, req.code)
   try {
-    return await handle(relayDir, svc, req, closing)
+    return await handle(relayDir, svc, req, closing, ops)
   } catch (err) {
-    return fail(err instanceof Error ? err.message : String(err))
+    return fail(err instanceof Error ? err.message : String(err), adminErrorCode(err))
   }
 }
 
@@ -351,7 +433,11 @@ async function clearStaleSocket(sock: string): Promise<void> {
   throw new AdminSocketBusyError(`Could not tell whether ${sock} is still in use (${verdict}); not replacing it.`)
 }
 
-export async function startTeamAdmin(dataDir: string, svc: HostedService): Promise<{ close(): Promise<void> }> {
+export async function startTeamAdmin(
+  dataDir: string,
+  svc: HostedService,
+  ops: TeamAdminOps = {}
+): Promise<{ close(): Promise<void> }> {
   const sock = adminSocketPath(dataDir)
   const problem = socketPathProblem(sock)
   if (problem) throw new Error(problem)
@@ -382,7 +468,7 @@ export async function startTeamAdmin(dataDir: string, svc: HostedService): Promi
       if (nl < 0) return
       taken = true
       c.setTimeout(0)
-      void answer(relayDir, svc, buf.slice(0, nl), isClosing).then((reply) => {
+      void answer(relayDir, svc, buf.slice(0, nl), isClosing, ops).then((reply) => {
         if (!c.destroyed) c.end(JSON.stringify(reply) + '\n')
       })
     })
@@ -446,24 +532,29 @@ function parseReply(line: string): AdminReply {
   try {
     const r = JSON.parse(line) as Record<string, unknown> | null
     if (r && r.ok === true && 'result' in r) return { ok: true, result: r.result }
-    if (r && r.ok === false && typeof r.error === 'string') return { ok: false, error: r.error }
+    if (r && r.ok === false && typeof r.error === 'string') {
+      const code = typeof r.code === 'string' && ADMIN_ERROR_CODE_RE.test(r.code) ? r.code : undefined
+      return fail(r.error, code)
+    }
   } catch {
     // fall through
   }
   return fail('The nodeterm server sent a reply this CLI does not understand (is the server a different version?).')
 }
 
-export function callTeamAdmin(dataDir: string, req: AdminRequest): Promise<AdminReply> {
+export function callTeamAdmin(dataDir: string, req: AdminRequest, opts: { timeoutMs?: number } = {}): Promise<AdminReply> {
   const sock = adminSocketPath(dataDir)
   const problem = socketPathProblem(sock)
   if (problem) return Promise.resolve(fail(problem))
+  const perVerb = Object.hasOwn(CMD_TIMEOUT_MS, req.cmd) ? CMD_TIMEOUT_MS[req.cmd] : undefined
+  const timeoutMs = opts.timeoutMs ?? perVerb ?? CALL_TIMEOUT_MS
   return new Promise((resolve) => {
     let done = false
     let buf = ''
     const c = net.connect(sock)
     const timer = setTimeout(
-      () => finish(fail(`The nodeterm server did not answer within ${CALL_TIMEOUT_MS / 1000} s (${sock}).`)),
-      CALL_TIMEOUT_MS
+      () => finish(fail(`The nodeterm server did not answer within ${timeoutMs / 1000} s (${sock}).`)),
+      timeoutMs
     )
     function finish(r: AdminReply): void {
       if (done) return

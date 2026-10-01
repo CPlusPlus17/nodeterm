@@ -61,6 +61,10 @@ afterEach(() => {
 type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectsOfNode' | 'nodeOfSession' | 'killPeer' | 'onSharedChange'>> & {
   recordTimers?: boolean
   dataDir?: string
+  /** The fake API's HTTP status for a host-token mint (default 200; a 403 is a refusal). */
+  mintStatus?: number
+  /** A host-token mint answers only once this settles: holds the first listener back. */
+  mintGate?: Promise<void>
 }
 
 function world(opts: WorldOpts = {}) {
@@ -107,6 +111,8 @@ function world(opts: WorldOpts = {}) {
     fetch: (async (u: string | URL | Request) => {
       if (String(u).endsWith('/v1/relay/challenge')) { challenges++; return new Response('{}', { status: 404 }) }
       mints++
+      if (opts.mintGate) await opts.mintGate
+      if (opts.mintStatus !== undefined && opts.mintStatus !== 200) return new Response('{}', { status: opts.mintStatus })
       return new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 })
     }) as typeof fetch,
     transport: () => { const { hostT, peerT } = transportPair(); peersT.push(peerT); return hostT },
@@ -765,6 +771,24 @@ describe('hosted service — a session with no team entry (R27)', () => {
       warn.mockRestore()
     }
   })
+
+  it('a session served under the viewer fallback still follows share changes (its tabs must not go stale)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const w = world()
+      const owner = await ownerOnline(w)
+      const keys = genKeyPair()
+      const { g, pendingId } = await pendingGuest(w, keys)
+      disk.failTeamWrite = true // the pin write fails once: no team entry, served as a viewer
+      owner.req(5, IPC.relayHostedApprove, [pendingId, 'editor'])
+      await vi.waitFor(() => expect(g.isApproved()).toBe(true))
+      await hostOpened(w, keys)
+      await w.svc.share('p2', true)
+      await vi.waitFor(() => expect(g.events(IPC.relayHostedSharedChanged)).toEqual([{ projectIds: ['P', 'p2'] }]))
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 describe('hosted service — removal', () => {
@@ -980,10 +1004,11 @@ describe('hosted service — lifecycle', () => {
 
   it('every hosted channel lives under the one prefix the access hook refuses outside the interceptor', () => {
     const hosted = Object.entries(IPC).filter(([k]) => k.startsWith('relayHosted')).map(([, v]) => v)
-    // Seven relay-tunnel verbs plus the desktop's two bookmark channels. Those two are raw ipcMain
-    // handlers that never ride the relay; living under the prefix means a relay peer that asks for
-    // one is refused by the access hook here, which is the right answer for them.
-    expect(hosted).toHaveLength(9)
+    // Eight relay-tunnel channels (the verbs and their events) plus the desktop's two bookmark
+    // channels. Those two are raw ipcMain handlers that never ride the relay; living under the prefix
+    // means a relay peer that asks for one is refused by the access hook here, which is the right
+    // answer for them.
+    expect(hosted).toHaveLength(10)
     expect(hosted).toEqual(expect.arrayContaining([IPC.relayHostedBookmarks, IPC.relayHostedBookmarkRemove]))
     for (const ch of hosted) expect(ch).toMatch(/^relay:hosted:/)
   })
@@ -1004,6 +1029,30 @@ describe('hosted service — the canvas authority seam (docs/hosted-team-relay.m
     await w.svc.share('P', false)
     expect([...w.svc.sharedProjectIds()]).toEqual(['Q'])
     expect(seen).toEqual([['P'], ['P', 'Q'], ['Q']])
+  })
+
+  it('share and unshare tell every connected member — viewers too — the whole shared set', async () => {
+    const w = world()
+    // ownerOnline shares 'P' first; this set starts empty so each payload is the whole set.
+    const ownerKeys = genKeyPair()
+    await w.svc.init()
+    await w.svc.addOwner(pub(ownerKeys), 'Enes')
+    expect(await w.svc.start()).toBe('started')
+    await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
+    const owner = w.join(ownerKeys, true)
+    await vi.waitFor(() => expect(owner.isApproved()).toBe(true))
+    const editor = await approvedGuest(w, owner, 'editor', 5)
+    const viewer = await approvedGuest(w, owner, 'viewer', 6)
+    // A device still waiting for an owner is not a member: it is told nothing.
+    const { g: waiting } = await pendingGuest(w)
+    await w.svc.share('p1', true)
+    await w.svc.share('p2', true)
+    await w.svc.share('p1', false)
+    const sets = [{ projectIds: ['p1'] }, { projectIds: ['p1', 'p2'] }, { projectIds: ['p2'] }]
+    await vi.waitFor(() => expect(owner.events(IPC.relayHostedSharedChanged)).toEqual(sets))
+    await vi.waitFor(() => expect(editor.events(IPC.relayHostedSharedChanged)).toEqual(sets))
+    await vi.waitFor(() => expect(viewer.events(IPC.relayHostedSharedChanged)).toEqual(sets))
+    expect(waiting.events(IPC.relayHostedSharedChanged)).toEqual([])
   })
 
   it('a share whose write failed tells nobody', async () => {
@@ -1046,5 +1095,56 @@ describe('hosted service — the canvas authority seam (docs/hosted-team-relay.m
     owner.req(25, IPC.relayHostedSelf)
     await vi.waitFor(() => expect(owner.res(25)).toBeDefined())
     expect(w.casts).not.toContain(IPC.workspaceSave)
+  })
+})
+
+describe('hosted service — waitForHosting (the first verdict `team bootstrap` waits for)', () => {
+  it("answers 'up' once an idle listener is registered", async () => {
+    const w = world()
+    await w.svc.init()
+    expect(await w.svc.start()).toBe('started')
+    expect(await w.svc.waitForHosting(15_000)).toBe('up')
+  })
+
+  it('answers { refused } with the scheduler reason when the backend refuses to mint', async () => {
+    const w = world({ mintStatus: 403 })
+    await w.svc.init()
+    expect(await w.svc.start()).toBe('started')
+    const r = await w.svc.waitForHosting(15_000)
+    expect(r).toMatchObject({ refused: expect.stringMatching(/refused|403/) })
+    expect(w.svc.status().scheduler?.state).toBe('backend-refused')
+  })
+
+  it("answers 'starting' when nothing is decided within the wait, and 'up' on a later wait", async () => {
+    // The in-process mint and open finish inside a millisecond, so the mint is held to keep the
+    // first listener from opening. 300 ms spans more than one poll.
+    let release!: () => void
+    const w = world({ mintGate: new Promise<void>((r) => (release = r)) })
+    await w.svc.init()
+    expect(await w.svc.start()).toBe('started')
+    expect(await w.svc.waitForHosting(300)).toBe('starting')
+    expect(w.svc.status().scheduler?.idle).toBe(0)
+    const waiting = w.svc.waitForHosting(15_000)
+    release()
+    expect(await waiting).toBe('up')
+  })
+
+  it('answers { refused } when hosting is not running at all', async () => {
+    const w = world()
+    expect(await w.svc.waitForHosting(1000)).toMatchObject({ refused: expect.any(String) })
+    await w.svc.init()
+    expect(await w.svc.waitForHosting(1000)).toMatchObject({ refused: expect.stringMatching(/not running/) })
+  })
+})
+
+describe('hosted service — roleOf', () => {
+  it('reports a member role, null for a stranger', async () => {
+    const w = world()
+    await w.svc.init()
+    await w.svc.start()
+    const k = pub(genKeyPair())
+    expect(w.svc.roleOf(k)).toBeNull()
+    await w.svc.addOwner(k, 'Me')
+    expect(w.svc.roleOf(k)).toBe('owner')
   })
 })

@@ -47,6 +47,11 @@ interface TabBarProps {
   /** Deep-link to this project's own pane in Settings — everything this menu can change plus the
    *  shared/machine-local settings families, which have no other entry point. */
   onOpenProjectSettings: (id: string) => void
+  /** Open "Share with team" for an SSH project. Absent = the row is not offered. */
+  onShareWithTeam?: (projectId: string) => void
+  /** Why the share cannot start for this project right now (the row is then disabled with it as
+   *  its tooltip), or null when it can. */
+  shareBlockedReason?: (projectId: string) => string | null
 }
 
 /**
@@ -82,7 +87,9 @@ export function TabBar({
   onRemoteAccess,
   onSetDefaultAccount,
   onSetDefaultPermissionMode,
-  onOpenProjectSettings
+  onOpenProjectSettings,
+  onShareWithTeam,
+  shareBlockedReason
 }: TabBarProps) {
   // Select the raw array and filter in a memo, a `.filter()` inside the selector returns a
   // fresh array every store snapshot, which re-rendered the TabBar on EVERY projects change.
@@ -521,6 +528,24 @@ export function TabBar({
             >
               Remote access…
             </button>
+            {menuProject.ssh &&
+              !menuProject.remote &&
+              onShareWithTeam &&
+              (() => {
+                const blocked = shareBlockedReason?.(menuProject.id) ?? null
+                return (
+                  <button
+                    disabled={!!blocked}
+                    title={blocked ?? undefined}
+                    onClick={() => {
+                      onShareWithTeam(menuProject.id)
+                      closeMenu()
+                    }}
+                  >
+                    Share with team…
+                  </button>
+                )
+              })()}
             {menuAccounts.length > 0 && (
               <>
                 <button

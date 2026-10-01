@@ -367,3 +367,45 @@ describe('sizeVote: false — a viewer never constrains the shared pty size', ()
     expect(spawned[0].resizes.at(-1)).toEqual({ cols: 120, rows: 40 })
   })
 })
+
+// `team resume` asks this before it starts an agent on a handed-over node: the same strict probe a
+// join-only create uses, exposed as a tri-state. The argv is pinned because the exact target
+// (`=nt-<id>`) is the whole point — a bare target prefix-matches a longer, unrelated session.
+describe('sessionVerdict: the strict, exact-target existence probe', () => {
+  /** A manager whose strict probe answers from `live` (or fails to run), recording every argv. */
+  async function verdictManager(live: string[] | 'error') {
+    const calls: Array<readonly string[]> = []
+    const confirmedProcessRun: ConfirmedProcessRun = async (_file, args) => {
+      calls.push(args)
+      if (live === 'error') throw Object.assign(new Error('spawn EAGAIN'), { code: 'EAGAIN' })
+      if (hasSession(live, args)) return { stdout: '', stderr: '' }
+      throw Object.assign(new Error("can't find session"), { code: 1 })
+    }
+    const m = await manager({ confirmedProcessRun })
+    ;(m as unknown as { tmuxPath: string }).tmuxPath = '/usr/bin/tmux'
+    return { m, calls }
+  }
+
+  it('asks tmux for the EXACT session and answers present', async () => {
+    const { m, calls } = await verdictManager(['nt-term-1'])
+    expect(await m.sessionVerdict('term-1')).toBe('present')
+    expect(calls).toEqual([['-L', 'node-terminal', 'has-session', '-t', '=nt-term-1']])
+  })
+
+  it("answers absent on tmux's own exit 1, even while a session whose name extends this one runs", async () => {
+    const { m } = await verdictManager(['nt-term-12'])
+    expect(await m.sessionVerdict('term-1')).toBe('absent')
+  })
+
+  it('answers unknown when the probe could not run (never read as absent)', async () => {
+    const { m } = await verdictManager('error')
+    expect(await m.sessionVerdict('term-1')).toBe('unknown')
+  })
+
+  it('answers absent with no tmux at all, without running anything', async () => {
+    const calls: Array<readonly string[]> = []
+    const m = await manager({ confirmedProcessRun: async (_f, args) => calls.push(args) })
+    expect(await m.sessionVerdict('term-1')).toBe('absent')
+    expect(calls).toEqual([])
+  })
+})

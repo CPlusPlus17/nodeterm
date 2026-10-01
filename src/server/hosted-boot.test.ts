@@ -43,6 +43,14 @@ describe('hosted team boot wiring (source)', () => {
     expect(main).not.toMatch(/argv\[0\] === 'team'/)
   })
 
+  it('team resume shares ONE in-flight set across requests (a set made per call would not dedupe)', () => {
+    const made = src.indexOf('const resumesInFlight = new Set<string>()')
+    const resume = src.indexOf('resume: (req) =>')
+    expect(made).toBeGreaterThan(0)
+    expect(made).toBeLessThan(resume)
+    expect(src.slice(resume, resume + 200)).toContain('inFlight: resumesInFlight')
+  })
+
   it('projectsOfNode uses the store\'s memoized lookup, not a persistedCanvases scan per call', () => {
     expect(src).toMatch(/projectsOfNode: \(nodeId\) => workspaceStore\.projectIdsForNode\(nodeId\)/)
   })

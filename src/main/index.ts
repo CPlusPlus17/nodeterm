@@ -134,6 +134,8 @@ import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-pat
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
 import { makeSshSetupRunner } from './remote-ssh/ssh-setup-runner'
+import { createShareTeamHandlers, SHARE_INSTALL_TIMEOUT_MS } from './remote-ssh/share-team'
+import { registerShareTeamIpc } from './remote-ssh/share-team-ipc'
 import { registerGitHubIntegration } from '../core/github/integration'
 import {
   answerGitHubRead,
@@ -2563,7 +2565,9 @@ app.whenReady().then(async () => {
   initRemoteStatusPush({
     onFlush: onMirrorFlush,
     flush: flushAgentStatusMirror,
-    sshProjectIds: () => workspaceStore.sshProjectIds(),
+    // A project handed to a hosted team runs on the server core now: this desktop has no status
+    // to push for it.
+    sshProjectIds: () => workspaceStore.pollableSshProjectIds(),
     nodeIdsFor: (projectId) => workspaceStore.sshProjectNodeIds(projectId),
     push: (projectId, json) =>
       sshProjectManager ? sshProjectManager.pushAgentStatus(projectId, json) : Promise.resolve(),
@@ -4735,6 +4739,38 @@ app.whenReady().then(async () => {
     ipcMain.handle(IPC.relayHostedBookmarks, async () => (await bookmarks.list()).map(publicBookmark))
     // Forgetting a team also forgets the device token this app run holds for it in memory.
     ipcMain.handle(IPC.relayHostedBookmarkRemove, async (_e, hostId: string) => removeHostedBookmark(String(hostId), bookmarks))
+    // Share an SSH project with a hosted team (the desktop half; see share-team.ts). Here because
+    // the bookmark store is block-scoped to this relay block. Every dependency resolves the ssh
+    // manager lazily: it is created right after this block.
+    registerShareTeamIpc(
+      createShareTeamHandlers({
+        ref: (projectId) => sshProjectManager?.refForProject(projectId),
+        run: (args, stdin, timeoutMs) =>
+          sshProjectManager ? sshProjectManager.sshRun(args, stdin, { timeoutMs }) : Promise.resolve({ code: 1, stdout: '' }),
+        runInstall: (projectId, script, onChunk, signal) => {
+          const r = sshProjectManager?.refForProject(projectId)
+          if (!r) return Promise.resolve({ exitCode: 255 })
+          // The connection is already resolved for this project; the runner's own endpoint match
+          // then checks it against the same connection.
+          const runner = makeSshSetupRunner(() => ({ conn: r.conn, controlPath: r.controlPath }), {
+            timeoutMs: SHARE_INSTALL_TIMEOUT_MS
+          })
+          return runner({ script, cwd: '~', env: {}, onChunk, signal, ssh: { server: r.conn, remoteCwd: '~' } })
+        },
+        flushMirror: () => remoteWorkspaceIO.flush(),
+        readRemoteProject: (projectId) => {
+          const r = sshProjectManager?.refForProject(projectId)
+          return r?.remoteCwd
+            ? remoteWorkspaceIO.read(projectId, { server: r.conn, remoteCwd: r.remoteCwd })
+            : Promise.resolve({ status: 'error' as const })
+        },
+        ownerKey: async () => publicKeyToB64((await loadOrCreatePeerKeyPair()).publicKey),
+        ownerLabel: () => hostname(),
+        bookmarks,
+        now: () => Date.now()
+      }),
+      sendTo
+    )
   }
   // Windows SSH projects: the opt-in to keep passphrase-unlocked keys in the Windows OpenSSH agent
   // (core/remote-ssh/native/agent-add.ts). Read at each unlock, so a toggle applies to the next one.
@@ -4910,7 +4946,7 @@ app.whenReady().then(async () => {
       const mgr = sshProjectManager
       if (!mgr) return
       const plan = planRemoteWorkspacePoll({
-        sshProjectIds: workspaceStore.sshProjectIds(),
+        sshProjectIds: workspaceStore.pollableSshProjectIds(),
         hasLiveRef: (projectId) => !!mgr.refForProject(projectId),
         busy: (projectId) => inFlight.has(projectId),
         // Reuse-only gate: no socket file ⇒ no master to adopt ⇒ this project is left alone.

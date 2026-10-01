@@ -698,12 +698,29 @@ export const IPC = {
   relayHostedDeny: 'relay:hosted:deny',
   relayHostedInviteCode: 'relay:hosted:invite-code',
   relayHostedSelf: 'relay:hosted:self',
+  // Sent to EVERY connected member (viewers too) after `team share`/`unshare` lands: the team's
+  // whole shared set, so a joiner opens a tab for a newly shared project and closes the tab of one
+  // that stopped being shared — with no new code and no new approval.
+  relayHostedSharedChanged: 'relay:hosted:shared-changed',
   // The hosted teams THIS desktop has joined (src/main/remote/relay-bookmarks.ts). Unlike the
   // hosted verbs above, these two never ride the relay: they are raw `ipcMain` handlers in the
   // desktop main process, invisible to any relay peer. `relayHostedBookmarks` () lists them without
   // their device tokens; `relayHostedBookmarkRemove` (hostId) forgets one.
   relayHostedBookmarks: 'relay:hosted:bookmarks',
   relayHostedBookmarkRemove: 'relay:hosted:bookmark-remove',
+  // "Share with team" for an SSH project (src/main/remote-ssh/share-team.ts): each verb runs one
+  // generated command over the project's ControlMaster. These are raw `ipcMain` handlers, never on
+  // the platform, so a relay peer can never reach them. `shareTeamInstallOutput` is main → renderer,
+  // payload `{ projectId, text }`.
+  shareTeamProbe: 'share-team:probe',
+  shareTeamInstall: 'share-team:install',
+  shareTeamCancelInstall: 'share-team:cancel-install',
+  shareTeamInstallOutput: 'share-team:install-output',
+  shareTeamFlushMirror: 'share-team:flush-mirror',
+  shareTeamBootstrap: 'share-team:bootstrap',
+  shareTeamKillSessions: 'share-team:kill-sessions',
+  shareTeamResume: 'share-team:resume',
+  shareTeamSeedBookmark: 'share-team:seed-bookmark',
   handoffBuild: 'handoff:build',
   // Phone pairing (nodeterm iOS "scan a QR" flow): renderer starts/stops the one-shot LAN
   // listener; main pushes the completion result back over `pairing:done`. The per-device

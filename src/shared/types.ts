@@ -30,6 +30,7 @@ import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
 import type { AlertSoundKind, AlertSoundSaveResult, CustomAlertSounds } from './alert-sound'
 import type { CanvasLayout, LayoutViewports } from './canvas-layout'
+import type { ShareTeamApi } from './share-team'
 import type {
   ModelDiscoveryResult,
   ModelGatewayCredentialStatus,
@@ -1026,6 +1027,12 @@ export interface NavStop {
   note: string
 }
 
+/** MACHINE-LOCAL: this SSH project was handed over to a hosted team on its host ("Share with
+ *  team"). From that moment the server core is the only writer of its project.json, so this
+ *  desktop never mirrors, reconciles or polls it again. `hostId` absent = the handover started
+ *  and did not finish (the same guard applies until the user reopens it). */
+export interface HandedOffTo { hostId?: string; projectId?: string; at: number }
+
 /** A project is one canvas/page: its own nodes, viewport, and default working dir. */
 export interface Project {
   id: string
@@ -1113,6 +1120,8 @@ export interface Project {
    *  shared project file, same rule as `closed` itself. Absent on a project closed before this
    *  field existed; such entries sort last. */
   closedAt?: number
+  /** See `HandedOffTo`. Index-only; never written to the shared project.json. */
+  handedOffTo?: HandedOffTo
   /**
    * Sessions (terminal/agent/sticky/…) deleted from this project, most-recent-first, capped at
    * 20. MACHINE-LOCAL, same rule as `closedAt`/`breadcrumbs` — see `IndexEntryV3.closedSessions`,
@@ -3984,6 +3993,8 @@ export interface HostedSessionApi {
   deny(pendingId: string): Promise<boolean>
   onPeerPending(listener: (p: HostedPending) => void): () => void
   onPendingClosed(listener: (p: { pendingId: string; reason: HostedPendingClosedReason }) => void): () => void
+  /** The team's shared projects changed (share or unshare on the host): their whole set. */
+  onSharedChanged(listener: (p: { projectIds: string[] }) => void): () => void
 }
 
 /** A paired device as exposed to the renderer — the bearer token is never included. */
@@ -4197,6 +4208,9 @@ export interface NodeTerminalApi {
   relayHost: RelayHostApi
   relayClient: RelayClientApi
   relayHosted: RelayHostedApi
+  /** "Share with team" for an SSH project. Desktop only (the Server Edition and relay tabs answer
+   *  `E_UNSUPPORTED`). */
+  shareTeam: ShareTeamApi
   /** The hosted team verbs of THIS session's host — present only on a relay tab joined by a hosted
    *  team's join code; absent everywhere else (local, Server Edition, Team Access relay tabs). */
   hosted?: HostedSessionApi

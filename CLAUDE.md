@@ -8298,9 +8298,10 @@ The invariants, each with its reason:
   (`core/relay/team-admin.ts`). Filesystem permissions are the whole gate, so there is nothing to
   leak into a pane's environment. The root of trust is the core's unix user, which also means an
   Editor's shell can run `team add-owner`. With no team, the socket serves only
-  `init`/`status`/`info`. The `relay:hosted:*` verbs are intercepted inside the relay session and
-  never registered on the platform, so a Server Edition browser client cannot call them. An
-  interceptor bypasses `access` and every jail, so each one judges the CALLER's own session key.
+  `init`/`status`/`info`/`bootstrap` (`bootstrap` is `init` plus the rest). The `relay:hosted:*`
+  verbs are intercepted inside the relay session and never registered on the platform, so a Server
+  Edition browser client cannot call them. An interceptor bypasses `access` and every jail, so each
+  one judges the CALLER's own session key.
 - **LOCAL confirms have exactly four call sites on the host side:** the Team Access dialog
   (`relay:host:confirm`), `autoApprove` for a key `team.json` pins, an owner's
   `relay:hosted:approve`, and a live link's `autoApprove` for the ONE viewer key derived from that
@@ -8427,6 +8428,155 @@ The invariants, each with its reason:
   removals are last-writer-wins VALUES; only node, edge, column, label and view removals are rule-4
   deletions.
 
+**Share with team (SSH → hosted team)** (doc section "Share with team from the desktop"). A desktop
+SSH project's "Share with team…" installs (or just probes) nodeterm-server on the host as the SSH
+login user, runs `team bootstrap` (init + owner + adoption by real path + share, one idempotent
+admin verb), hands the terminals over (`team resume`) and joins. The renderer sequences it
+(`lib/shareSshTeam.ts`, pure, every effect injected), main runs each step as ONE generated command
+over the ControlMaster (`main/remote-ssh/share-team.ts`; the server binary, `main.cjs`, data dir and
+the adopted folder come from the cached, validated probe, never from the renderer), and every command
+is built in `core/remote-ssh/share-team-remote.ts` and run under a real `/bin/sh` by its test. The
+invariants:
+
+- **Never a home directory, at three layers.** A new SSH project's folder is `~`, and every teammate,
+  Viewers included, may `fs:read` anything under a shared folder (the jail is the shared root and
+  nothing else), so sharing the home hands out `~/.ssh`, the agents' credentials and the hook
+  tokens. The probe prints the home's real path (`homeReal`); `sharePlan` refuses the root, the home
+  and any ancestor of it, segment-wise (`SHARE_REFUSAL.homeFolder` / `homeAncestor`), and a home it
+  could not read refuses rather than guess (`homeUnknown`). Main re-reads the cached probe's plan
+  before every step (install only for a plan that does not refuse, bootstrap and resume only for a
+  ready one) and bootstrap adopts THAT probe's folder; `bootstrap(projectId)` takes no path. The
+  server's `adoptFolderNow` refuses the same set on real paths (`E_BAD_CWD`, against
+  `os.homedir()`), so a hand-run `team bootstrap --adopt ~` is refused too.
+
+- **Handover ordering: nothing ends before `bootstrap` succeeded; nothing is resumed before its old
+  session is VERIFIED gone.** The kill runs on `nodeterm-rmt` ONLY (`RMT_TMUX_SOCKET`), with the
+  exact target `-t '=nt-<id>'` built only through `sessionName`, then a `has-session` per node.
+  `gone` needs tmux's OWN absence message: exit 1 is also a client/server protocol mismatch or a
+  socket it may not open, where the kill failed too, and reading those as gone starts a second agent
+  on one conversation (two CLIs appending to one transcript). `alive`/`unknown` nodes are reported
+  "still running on SSH" and never resumed. **Never the every-socket kill** (`KILL_TMUX_SOCKETS`):
+  `node-terminal` on that host is where the server core starts the very sessions being handed over.
+  Every failure after the mark and before a successful bootstrap undoes the mark and reopens the
+  project (and says so when the undo itself fails); after it, the SSH project is NEVER reopened,
+  even when the kill or the join fails, because that would be a second writer. `team resume` re-asks
+  with the core's exact `sessionVerdict` (the folded `sessionExists` prefix-matches): present ⇒
+  `already-running`, unknown ⇒ refused, and a node another request in this process is still
+  launching is `already-running` too (`ResumeDeps.inFlight`, ONE set per server process, claimed
+  before the first await): the desktop's call times out at 60 s while the server keeps draining, so
+  a re-run never doubles an agent.
+- **What may be handed over is read twice, and only what the user confirmed may change nothing.**
+  Busy is `working`, `blocked` AND `waiting` (a Codex approval prompt and an open AskUserQuestion
+  are `waiting`); an agent only the status store knows (launched by hand) counts as busy
+  (`ShareNode.liveAgentId`) but is never resumed — resume stays on `node.agentId`, so a stale status
+  agent cannot make the server type `claude --resume`. A terminal attached to another host
+  (`otherHost`, `sshConnectionIdForProject`) refuses the share by title: its kill on the project's
+  host would read "gone" and leave it running elsewhere. The orchestrator re-reads the canvas
+  (`ShareDeps.canvas()`, which commits the live canvas first) right before the mark: a busy agent or
+  a changed terminal SET refuses with nothing changed, and the handover then uses that read. The
+  flush check compares EVERY node id of the project (notes, frames) with the host's file, read
+  again at the flush, because the server adopts that file.
+- **Single writer: `handedOffTo` (machine-local, index entry only, never in `project.json`).** The
+  in-progress mark (`{at}`, no `hostId`) is set and SAVED before the mirror flush, not at the close:
+  a save between the flush and the close would otherwise queue a throttled mirror write that lands
+  after the server adopted the file. From then on `mirrorSshCache`, `reconcileSsh`, the 15 s poll
+  (`pollableSshProjectIds`; `sshProjectIds` stays IDENTITY, a handed-off project is still somebody
+  else's machine), `kanbanWriteNow` and `pushSshSettings` all skip the entry, and the field survives
+  restarts (threaded through every `fileToProject` base; a file field of that name is ignored).
+  Every reopen path (Recently closed, ⇧⌘T, `openSshProject`'s endpoint reuse) warns first, and only
+  "Open here anyway" clears it. That answer also marks the project's terminal nodes to skip their
+  automatic cold-resume ONCE (`terminal/handed-off-resume.ts`; the node raises `CoState.resumeSkipped`
+  and says why): the share killed their SSH sessions, so each would otherwise type `--resume <id>`
+  over SSH while the server runs the same conversation. The mark is TRANSIENT on purpose and taken
+  by the node's first local mount (warm or cold; never by a relay node), unlike the persisted
+  `agentStatus.paused`, which is keyed by a node id the team tab shares.
+- **The SAS skip lives in ONE writer of `approvedAt`, and `source` gates nothing.** The client
+  auto-confirm is `autoApprove: approvedAt !== null` (`hosted-join.ts`, for the bookmark recorded
+  with the code's exact host key); `relay-bookmarks.ts` only validates `source`, it is a label.
+  Normally `approvedAt` is set by a human's OK after a SAS comparison. `shareTeam.seedBookmark`
+  (`main/remote-ssh/share-team.ts`) is the one writer that sets it WITHOUT one: a new bookmark
+  labelled `source:'ssh'`, or, for an existing bookmark with the same hostId and host key,
+  `approvedAt` set on it while it keeps its token and its `source` (often `'code'`). It rides the
+  existing client bookmark auto-confirm, so it is NOT a seventh confirm site. That is sound only for
+  its input: the join code `team bootstrap` returned over the project's own ssh channel (host key
+  authenticated by `known_hosts`; `decodeJoinCode` checks hostId = hash(key) and `wss:`/loopback
+  `ws:`). Main enforces that: it remembers the code each project's last SUCCESSFUL bootstrap
+  returned (in memory) and refuses to seed any other, however valid. A failed seed degrades to the
+  SAS prompt, never to a skip; any pasted code compares the SAS.
+- **Hosted tabs are one per shared project, and the tab id IS the host project id.** relay-api
+  translates no ids, so a tab under any other id asks the host about a project it does not know: a
+  closed relay copy under that id is replaced, anything else holding it (an open tab, a local
+  project) is skipped, never renamed. One relay connection serves all of a team's tabs. They follow
+  `relay:hosted:shared-changed {projectIds}`, which goes to EVERY connection the host serves —
+  `tellMembers` asks `standing`, so the `pinFailed` viewer fallback is included (`EDITOR_ONLY` as a
+  call, always passed by `VIEW_EVENTS`), because `workspace:server-change` ignores unknown ids
+  and viewers never receive `canvas:authority-changed`. A tab the user closes is dismissed until
+  the project is unshared; nothing shared keeps one placeholder tab. A hosted tab never cold-resumes
+  an agent (`canColdRestore` excludes `source === 'relay'`). A CLOSED team tab is NEVER reopened: once
+  closed its relay session is disposed and `sessionForProject` falls back to the LOCAL session, so a
+  reopen mounts the host's node ids on this core (local shells, agent cold-resume). The ONE reopen
+  funnel, `reopenProjectUnchecked`, refuses any `remote` project with `CLOSED_TEAM_TAB_NOTICE`
+  (so does every path through `reopenProject`); "Recently closed" lists neither the tab
+  (`isReopenableClosedProject`) nor its closed sessions (`isClosedTeamTab`); `planReopen` answers
+  `refuse` for ANY entry into a closed team tab BEFORE recreating a node into it (a `nodes` entry
+  would otherwise be written into it and reopen it), and ⇧⌘T drops that entry (kept on top it
+  would answer every later ⇧⌘T with the notice and hide every older entry);
+  `performCloseProject` does not push a project entry for a relay tab. What brings the tab back is
+  joining the team again with none of its tabs open, or an unshare + share (a reconnect keeps it
+  dismissed, `lib/hostedTeamTabs.ts`).
+- **One node id, two projects: owner lookups go through `nodeOwner`** (`lib/nodeOwner.ts`). After a
+  share the closed, handed-off SSH project and the team tab hold the same node ids, and the SSH
+  project comes FIRST in the list (a team tab is appended), so a bare
+  `projects.find(p => p.nodes.some(...))` sent every "go to node" to the reopen warning. `nodeOwner`
+  prefers an open project, then one without `handedOffTo`, then any, and skips a CLOSED team tab
+  entirely (its reopen is refused; the shared node then falls back to the handed-off SSH project,
+  whose reopen asks first); `focusNodeById`, the agent
+  rename-node handler, `presenceTravel.nodeTravel` and the Omni board's rename use it. Deleting a
+  project keeps the agent status of node ids another project still holds (`nodeIdsHeldElsewhere`).
+  Deliberately NOT moved to it: `routeControlSource` (a control request comes from a LOCAL agent, so
+  preferring an open relay tab would route it to another machine).
+- **Admin errors are stable codes, and a `--json` refusal goes to STDOUT.** `E_BAD_KEY`,
+  `E_BAD_CWD`, `E_HOSTING_OFF`, `E_ADOPT_FAILED`, `E_BAD_REQUEST`, `E_UNSUPPORTED`
+  (`core/relay/admin-error.ts`); a remote caller branches on the code, never the sentence, and
+  Node's own errno codes never pass as one (`adminErrorCode`). Under `team <verb> --json` a server
+  failure (exit 1: a refusal, or no server reachable) prints `{"ok":false,"error","code"?}` on
+  stdout beside the human line on stderr (`code` only when the server sent one), because the
+  desktop's ssh exec reads stdout only: a refusal on stderr alone arrives as an empty, unparseable
+  reply. The CLI's own argv/stdin refusals (`parseTeamArgv`, the resume stdin parse) exit 2 on
+  stderr only. Bootstrap starts hosting and waits up to 15 s for the relay's first verdict BEFORE it
+  writes an owner, a project or a share: a refusal (`E_HOSTING_OFF`) writes none of them, and no
+  verdict yet (`hosting:'starting'`) is still a success.
+- **`curl | bash` is a trap: download to a temp file first** (`SHARE_INSTALL_SCRIPT`). With no
+  `pipefail`, a failed download pipes an EMPTY script into bash, which exits 0, so a failed install
+  reads as a success; the temp file goes on every exit, HUP/INT/TERM included. Related: the probe
+  never RUNS a server bundle it has not recognised (`BOOTSTRAP_MARKER` grepped from `main.cjs`),
+  because a build from before the `team` CLI ignores `team` and boots a second server on the live
+  data dir. And a value with `'` or `\` is refused, never nested-quoted: fish's single quotes treat
+  both as escapes, so no nesting survives every login shell.
+
+**Known gap (accepted for v1): two writers of the same agent files on a shared host.** The server
+core and the desktop's `RemoteHooks` (for any SSH project still on that host) write the same files
+under one `$HOME`, with different bytes; the last writer wins.
+- **What collides.** The hook script `~/.nodeterm/agent-hooks/<agent>.sh` (same path, command and
+  event lists; `mergeManagedHook` strips our entries first, so a config never doubles, and under a
+  version skew the last writer's event set stays): only the server's copy carries the Codex
+  thread-identity prelude (`REMOTE_IDENTITY_ROOT` is null). And the discovery files: by default the
+  server writes the `get-linked-context` skill and the context-link blocks in `~/.codex/AGENTS.md`,
+  `~/.gemini/GEMINI.md` and opencode's `AGENTS.md` (`src/server/index.ts` `initServerContextLink`),
+  and with server canvas control on the `manage-nodeterm-canvas` skill and blocks
+  (`src/server/canvas-control.ts`), all naming its own shims under `<dataDir>`, which bake the
+  prelude; `RemoteHooks` writes the same files naming the neutral `~/.nodeterm/context.sh` /
+  `nodeterm.sh`.
+- **When each re-asserts.** The server at every start (the daily auto-update restarts it). The
+  desktop: the hook script on connect and on every hook-tunnel repair (the reuse branch re-runs
+  `setup()`); the discovery files through the agent-tools freshness check, which rewrites any that
+  differ on connect, on every tunnel repair, and hourly while a project on that host is connected.
+- **Who is affected.** Only shared-identity Codex tool shells on the server: they carry no
+  `NODETERM_*` env and need the prelude to find their node, so against the desktop's copies their
+  hooks report nothing. Every other pane carries its own endpoint env and works with either copy
+  (and when a session's endpoint is dead, the script's failover can deliver its event to the other
+  core's endpoint).
+
 **Known limitations** (full list in the doc): non-editors still receive cross-project presence and
 `context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still
 pauses the shared pty through Stage 2 backpressure; the canvas authority's own limits (a project's
@@ -8434,10 +8584,12 @@ non-content fields stay last writer wins between tabs, the share-time window, ov
 edits to another core, load-time repairs that are never cast, the card modal's comments on a relay
 tab) are under "Known limits" in the doc.
 
-**Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab).
-Server Edition is the host (the `team` CLI; its browser clients cannot approve and are not hosted
-peers). Mobile is N/A for v1: the phone still speaks the legacy dialect, and the host it would join
-now exists in core. The iOS follow-up is the tunnel-dialect migration.
+**Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab, plus
+Share with team from any desktop OS onto a Linux host). Server Edition is the host (the `team` CLI,
+`team bootstrap`/`team resume` included; its browser clients cannot approve and are not hosted
+peers, and its `shareTeam` rejects with `E_UNSUPPORTED`, having no SSH projects). Mobile is N/A for
+v1: the phone still speaks the legacy dialect, and the host it would join now exists in core. The
+iOS follow-up is the tunnel-dialect migration.
 
 ## Speech / dictation (desktop + server)
 

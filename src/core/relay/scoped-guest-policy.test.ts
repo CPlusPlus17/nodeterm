@@ -180,6 +180,8 @@ describe('scoped guest — what it receives', () => {
     expect(filterScopedEvent(ev(IPC.githubIssuesChanged('alpha'), [1]), s, owners)).toBe(true)
     expect(filterScopedEvent(ev(IPC.githubIssuesChanged('beta'), [1]), s, owners)).toBe(false)
     expect(filterScopedEvent(ev(IPC.workspaceExternalChange, { id: 'beta' }), s, owners)).toBe(false)
+    // A hosted team's shared set: a viewer of a hosted team receives it, a Team Access guest never.
+    expect(filterScopedEvent(ev(IPC.relayHostedSharedChanged, { projectIds: ['alpha', 'beta'] }), s, owners)).toBe(false)
   })
   it('delivers terminal bytes only for the shared project\'s sessions', () => {
     const hooks = scopedGuestHooks('alpha', deps())

@@ -31,6 +31,7 @@ import type { NodeIcon } from '@shared/node-icon'
 import { columnCategory } from '@shared/kanban-category'
 import { NO_STATIONS, stationsByOpener, type TeamStation } from '../../lib/teamProgress'
 import { stationNodeFromState } from '../../state/teamStations'
+import { nodeOwner } from '../../lib/nodeOwner'
 
 /**
  * Global (Omni) Kanban overview — one swimlane per open project.
@@ -430,7 +431,9 @@ export const GlobalKanbanView = memo(function GlobalKanbanView({ live = null, on
   }, [])
 
   const onRenameNode = useCallback((nodeId: string, title: string) => {
-    const proj = useProjects.getState().projects.find(p => p.nodes.some(n => n.id === nodeId))
+    // The board lists open projects, and `nodeOwner` prefers an open one over a closed, handed-off
+    // SSH project holding the same node id.
+    const proj = nodeOwner(useProjects.getState().projects, nodeId)
     if (!proj) return
     window.dispatchEvent(new CustomEvent('nodeterm:global-rename', { detail: { projectId: proj.id, nodeId, title } }))
   }, [])

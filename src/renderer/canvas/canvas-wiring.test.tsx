@@ -15,7 +15,7 @@ import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { chromeObstacles, FIT_VIEW_GAP } from './fit-view'
 
-const CANVAS_SRC = fs.readFileSync(path.join(__dirname, 'Canvas.tsx'), 'utf8')
+const CANVAS_SRC = fs.readFileSync(path.join(__dirname, 'Canvas.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 /** jsdom lays nothing out, so every rect is 0×0 and `chromeObstacles`'s size filter would drop the
  *  element. Give it the measurement a real bottom-left pill cluster has. */
@@ -282,12 +282,12 @@ describe('deleteNodes also records persisted closed-session history', () => {
 describe('reopening a persisted closed-session entry shares reopenLastClosed\'s execution', () => {
   it('extracts the switch-on-plan-action body into its own callback', () => {
     expect(CANVAS_SRC).toContain('const executeReopenPlan = useCallback(')
-    expect(CANVAS_SRC).toContain('(plan: Exclude<ReopenPlan, { action: \'skip\' }>): boolean => {')
+    expect(CANVAS_SRC).toContain('(plan: Exclude<ReopenPlan, { action: \'skip\' } | { action: \'refuse\' }>): boolean => {')
   })
 
   it('reopenLastClosedCommand delegates to it instead of inlining the switch', () => {
     const fnStart = CANVAS_SRC.indexOf('const reopenLastClosedCommand = useCallback(')
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1700)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 2600)
     expect(fnBody).toContain('return executeReopenPlan(plan)')
     expect(fnBody).not.toContain('switch (plan.action)')
   })
@@ -296,16 +296,17 @@ describe('reopening a persisted closed-session entry shares reopenLastClosed\'s 
     // The bug this pins: restoring via ⇧⌘T without consuming the matching sidebar row would let a
     // later sidebar click restore the same closed session a second time.
     const fnStart = CANVAS_SRC.indexOf('const reopenLastClosedCommand = useCallback(')
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1700)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 2600)
     expect(fnBody).toContain("if (entry.kind === 'nodes') {")
     expect(fnBody).toContain('.discardClosedSession(entry.projectId, n.closedSessionId)')
     expect(fnBody).toContain('void writeDisk()')
   })
 
-  it('consumes the entry before doing anything else, so a stale double-click cannot reopen it twice', () => {
+  it('consumes the entry before anything restores it, so a stale double-click cannot reopen it twice', () => {
+    // (Only the closed-team-tab refusal runs before it, and that one restores nothing.)
     const fnStart = CANVAS_SRC.indexOf('const reopenClosedSessionCommand = useCallback(')
     expect(fnStart).toBeGreaterThan(-1)
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 520)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 900)
     expect(fnBody).toContain('.consumeClosedSession(projectId, entryId)')
     expect(fnBody).toContain('if (!consumed) return false')
     expect(fnBody).toContain('void writeDisk()')
@@ -313,23 +314,23 @@ describe('reopening a persisted closed-session entry shares reopenLastClosed\'s 
 
   it('drops the matching ⇧⌘T-stack entry so the two histories cannot both reopen the same delete', () => {
     const fnStart = CANVAS_SRC.indexOf('const reopenClosedSessionCommand = useCallback(')
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 520)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 900)
     expect(fnBody).toContain('useReopenHistory.getState().dropByClosedSessionId(projectId, entryId)')
   })
 
   it('wraps the consumed entry as a synthetic ReopenEntry and reuses the pure planReopen', () => {
     const fnStart = CANVAS_SRC.indexOf('const reopenClosedSessionCommand = useCallback(')
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1500)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1900)
     expect(fnBody).toContain("kind: 'nodes'")
     expect(fnBody).toContain('nodes: [stateToReopenSnapshot(consumed)]')
     expect(fnBody).toContain('const plan = planReopen(')
-    expect(fnBody).toContain("if (plan.action === 'skip') return false")
+    expect(fnBody).toContain("if (plan.action === 'skip' || plan.action === 'refuse') return false")
     expect(fnBody).toContain('return executeReopenPlan(plan)')
   })
 
   it('resolves permission mode and account against the TARGET project, same as reopenLastClosedCommand', () => {
     const fnStart = CANVAS_SRC.indexOf('const reopenClosedSessionCommand = useCallback(')
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1500)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1900)
     expect(fnBody).toContain('resolveAccountId: (id) => resolveNewNodeAccount(id, project, accounts)')
     expect(fnBody).toContain('permissionModeFor: (agentId) => projectPermissionMode(project, agentId)')
   })
@@ -365,13 +366,23 @@ describe('reopen-last-closed records and dispatches through the shared history s
   it('commits the live canvas to the store before every reopenProject call — never a bare switch', () => {
     // The bug this pins: useProjects.getState().reopenProject(...) is a project SWITCH, and every
     // switch/add/delete elsewhere in this file calls commitActiveToStore() first so the live
-    // canvas isn't silently lost. Both reopen-a-project call sites inside reopenLastClosedCommand
-    // must do the same, rather than referencing the later `reopenProject` wrapper (a TDZ hazard
-    // from this callback's declaration point).
+    // canvas isn't silently lost. Every store reopen lives in `reopenProjectUnchecked`, which
+    // commits first; the two reopen-a-project sites of the ⇧⌘T executor reach it through the
+    // guarded `reopenProject` (it asks first for a project handed to a hosted team).
     const calls = CANVAS_SRC.match(/useProjects\.getState\(\)\.reopenProject\(/g) ?? []
     const guarded = CANVAS_SRC.match(/commitActiveToStore\(\)\n\s+useProjects\.getState\(\)\.reopenProject\(/g) ?? []
-    expect(calls.length).toBeGreaterThanOrEqual(2)
+    expect(calls.length).toBeGreaterThanOrEqual(1)
     expect(guarded.length).toBe(calls.length)
+    const exec = CANVAS_SRC.indexOf('const executeReopenPlan = useCallback(')
+    const execBody = CANVAS_SRC.slice(exec, CANVAS_SRC.indexOf('\n  )\n', exec))
+    expect(execBody.match(/void reopenProject\(plan\.projectId\)/g) ?? []).toHaveLength(2)
+    // Both are declared ABOVE the executor: a useCallback dependency named before its declaration
+    // throws (TDZ) on the first render.
+    for (const decl of ['const reopenProjectUnchecked = useCallback(', 'const reopenProject = useCallback(']) {
+      const at = CANVAS_SRC.indexOf(decl)
+      expect(at, decl).toBeGreaterThan(-1)
+      expect(at, decl).toBeLessThan(exec)
+    }
   })
 
   it('resolves permission mode against the TARGET project being restored into, not the caller\'s active one', () => {
@@ -543,7 +554,7 @@ describe('the canvas lock is remembered only when the user opted in', () => {
 describe('the last-session close offer is wired to the × and to the existing close path (issue #848)', () => {
   // The decision lives in lib/lastSessionClose and is tested there; what those tests cannot see is
   // WHO raises it and WHAT accepting it does. Both are a line each in files with no render harness.
-  const TERMINAL_SRC = fs.readFileSync(path.join(__dirname, '..', 'nodes', 'TerminalNode.tsx'), 'utf8')
+  const TERMINAL_SRC = fs.readFileSync(path.join(__dirname, '..', 'nodes', 'TerminalNode.tsx'), 'utf8').replace(/\r\n/g, '\n')
   const closeButton = TERMINAL_SRC.slice(
     TERMINAL_SRC.indexOf('<Tooltip label="Close (ends the session)">'),
     TERMINAL_SRC.indexOf('<IconClose />', TERMINAL_SRC.indexOf('<Tooltip label="Close (ends the session)">'))

@@ -97,7 +97,9 @@ import { createMemoryPressureMonitor } from '../core/memory-pressure'
 import { createPtyPressureMonitor } from '../core/pty-pressure'
 import { claudeCliCaps, type ClaudeCliCaps } from '../core/claude-cli'
 import { codexCliCaps } from '../core/codex-cli'
+import { codexIdentityCaps } from '../core/codex-identity-caps'
 import type { CodexCliCaps } from '../shared/types'
+import { UNKNOWN_CODEX_CLI_CAPS } from '../shared/types'
 import { claudeConfigDirFor, registerClaudeAccountsSource } from '../core/claude-config-dir'
 import { presenceHub } from '../core/presence/hub'
 import { initCanvasSync, publishCanvasMutation, setReflectedListener } from '../core/canvas-sync'
@@ -117,6 +119,11 @@ import { isPremium, getStoredEntitlement } from '../core/license'
 import { getDeviceId } from '../core/device-id'
 import { createHostedService } from '../core/relay/hosted-service'
 import { startTeamAdmin } from '../core/relay/team-admin'
+import { runResume } from '../core/relay/team-resume'
+import { launchHeadless } from '../core/headless-launch'
+import { HEADLESS_COLS, HEADLESS_ROWS, localNodePtyOptions } from '../shared/node-pty-options'
+import { assembleResumeCommand } from '../shared/agents/launch'
+import { gatePermissionMode, type AgentId, type BuiltinAgentId } from '../shared/agents/config'
 import {
   createWatchLinkService,
   registerWatchLinkIpc,
@@ -984,7 +991,59 @@ export async function startServer(
   // unix socket, or Windows, disables administration — it must not take the rest of the Server
   // Edition down with it.
   let otherServerHere = false
-  const teamAdmin = await startTeamAdmin(config.dataDir, hosted).catch((err: unknown) => {
+  // One set for the whole process: the nodes a `team resume` is launching right now (runResume).
+  const resumesInFlight = new Set<string>()
+  const teamAdmin = await startTeamAdmin(config.dataDir, hosted, {
+    // `team bootstrap`: adopt the folder into THIS core's workspace (saved before it is shared, so
+    // the canvas authority can read it). The server runs as the SSH login user, so its home is the
+    // one an SSH project's `~` cwds meant.
+    adoptFolder: (cwd) => workspaceStore.adoptFolder(cwd, { home: os.homedir() }),
+    // `team resume`: restart a handed-over agent on THIS core (its hook env reports to this core,
+    // so every teammate sees its status). Same launch primitive and the same release rule as the
+    // desktop's headless start: persistent tmux required, the synthetic client released after.
+    resume: (req) =>
+      runResume(
+        {
+          inFlight: resumesInFlight,
+          loadProject: async (id) => (await workspaceStore.load({ sideline: false })).projects.find((p) => p.id === id) ?? null,
+          sessionVerdict: (nodeId) => ptyManager.sessionVerdict(nodeId),
+          command: async (entry, node) => {
+            const settings = settingsStore.get()
+            const permissionMode =
+              entry.permissionMode && entry.agentId === 'claude'
+                ? gatePermissionMode(entry.permissionMode, (await claudeCliCaps().catch(() => null))?.autoPermissionMode === true)
+                : entry.permissionMode
+            const codexCaps = entry.agentId === 'codex' ? await codexCliCaps().catch(() => UNKNOWN_CODEX_CLI_CAPS) : UNKNOWN_CODEX_CLI_CAPS
+            const sharedIdentity = entry.agentId === 'codex' ? await codexIdentityCaps().then((c) => c.shared).catch(() => false) : false
+            return assembleResumeCommand(
+              {
+                agentId: entry.agentId as AgentId,
+                sessionId: entry.sessionId,
+                permissionMode,
+                model: node.agentModel,
+                launchCmdOverride: settings.agentLaunchCommands?.[entry.agentId as BuiltinAgentId],
+                sharedIdentity,
+                approvalCaps: { codexApprovalValues: codexCaps.approvalValues, codexNoDaemon: codexCaps.noDaemon ?? null }
+              },
+              process.env
+            ).command
+          },
+          launch: (project, node, command) =>
+            launchHeadless(
+              {
+                persistentSpawnAvailable: () => ptyManager.persistentSpawnAvailable(),
+                createHeadless: (o) => ptyManager.createHeadless(o),
+                paneCommand: (k) => ptyManager.paneCommand(k),
+                writeHeadless: (k, d) => ptyManager.writeHeadless(k, d),
+                onOutput: (k, cb) => ptyManager.onOutput(k, cb),
+                releaseHeadless: (k) => ptyManager.releaseHeadless(k)
+              },
+              { ptyOptions: localNodePtyOptions(project, node, { cols: HEADLESS_COLS, rows: HEADLESS_ROWS }), command, release: true, requirePersistent: true }
+            )
+        },
+        req
+      )
+  }).catch((err: unknown) => {
     if ((err as { code?: unknown } | null)?.code === 'E_ADMIN_SOCKET_BUSY') otherServerHere = true
     console.error(`[hosted-team] team admin socket disabled: ${err instanceof Error ? err.message : String(err)}`)
     return { close: async (): Promise<void> => {} }

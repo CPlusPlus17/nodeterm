@@ -2,11 +2,12 @@ import { describe, it, expect, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseTeamArgv, runTeamCli, describeStatus, teamArgv } from './team-cli'
-import { startTeamAdmin, adminSocketPath, type AdminStatusResult } from '../core/relay/team-admin'
+import { parseTeamArgv, runTeamCli, describeStatus, teamArgv, TEAM_USAGE } from './team-cli'
+import { startTeamAdmin, adminSocketPath, type AdminStatusResult, type TeamAdminOps } from '../core/relay/team-admin'
 import { genKeyPair, publicKeyToB64 } from '../core/relay/e2ee'
 import type { HostedService, HostedStatus } from '../core/relay/hosted-service'
 import { POP_REFUSED_MESSAGE } from '../core/relay/relay-pop'
+import { BOOTSTRAP_MARKER } from '../core/remote-ssh/share-team-remote'
 
 const KEY = publicKeyToB64(genKeyPair().publicKey)
 
@@ -50,6 +51,41 @@ describe('team argv', () => {
 
   it('share names a bad project id', () => {
     expect(parseTeamArgv(['share', 'x'.repeat(129)])).toEqual({ error: expect.stringMatching(/128/) })
+  })
+
+  it('bootstrap needs an owner key and an absolute folder; the label is optional', () => {
+    expect(parseTeamArgv(['bootstrap', '--owner-key', KEY, '--adopt', '/srv/p'])).toEqual({
+      cmd: 'bootstrap',
+      ownerKey: KEY,
+      ownerLabel: '',
+      adoptCwd: '/srv/p'
+    })
+    expect(parseTeamArgv(['bootstrap', '--owner-key', KEY, '--adopt=/srv/p', '--owner-label', 'Mac', '--json'])).toEqual({
+      cmd: 'bootstrap',
+      ownerKey: KEY,
+      ownerLabel: 'Mac',
+      adoptCwd: '/srv/p'
+    })
+    expect(parseTeamArgv(['bootstrap', '--owner-key', KEY])).toEqual({ error: expect.stringMatching(/needs --owner-key/) })
+    expect(parseTeamArgv(['bootstrap', '--adopt', '/srv/p'])).toEqual({ error: expect.stringMatching(/needs --owner-key/) })
+    expect(parseTeamArgv(['bootstrap', '--owner-key', KEY, '--adopt', 'srv/p'])).toEqual({ error: expect.stringMatching(/absolute/) })
+    expect(parseTeamArgv(['bootstrap', '--owner-key', 'K', '--adopt', '/srv/p'])).toEqual({ error: expect.stringMatching(/32 bytes/) })
+    expect(parseTeamArgv(['bootstrap', '--owner-key', KEY, '--adopt', '/srv/p', 'extra'])).toEqual({
+      error: expect.stringMatching(/takes no arguments/)
+    })
+  })
+
+  it('the usage row carries the text the desktop greps main.cjs for (it never runs the bundle)', () => {
+    expect(TEAM_USAGE).toContain(BOOTSTRAP_MARKER)
+    expect(TEAM_USAGE).toMatch(/^ {2}bootstrap /m)
+  })
+
+  it('resume needs --project (checked) and takes its sessions from stdin, not argv', () => {
+    expect(parseTeamArgv(['resume', '--project', 'p1', '--json'])).toEqual({ cmd: 'resume', projectId: 'p1', sessions: [] })
+    expect(parseTeamArgv(['resume'])).toEqual({ error: expect.stringMatching(/needs --project/) })
+    expect(parseTeamArgv(['resume', '--project', 'x'.repeat(129)])).toEqual({ error: expect.stringMatching(/128/) })
+    expect(parseTeamArgv(['resume', '--project', 'p1', 'extra'])).toEqual({ error: expect.stringMatching(/takes no arguments/) })
+    expect(TEAM_USAGE).toMatch(/^ {2}resume --project <id>/m)
   })
 })
 
@@ -226,22 +262,30 @@ function fake(o: { running?: boolean; rotate?: string } = {}): { svc: HostedServ
   return { svc, calls }
 }
 
-async function served(o: Parameters<typeof fake>[0] = {}, withTeam = true): Promise<{ dataDir: string; calls: string[] }> {
+async function served(
+  o: Parameters<typeof fake>[0] = {},
+  withTeam = true,
+  ops: TeamAdminOps = {}
+): Promise<{ dataDir: string; calls: string[] }> {
   const dataDir = tmp()
   if (withTeam) {
     fs.mkdirSync(path.join(dataDir, 'relay'), { recursive: true, mode: 0o700 })
     fs.writeFileSync(path.join(dataDir, 'relay', 'team.json'), JSON.stringify({ v: 1, peers: [], sharedProjects: [] }))
   }
   const f = fake(o)
-  const admin = await startTeamAdmin(dataDir, f.svc)
+  const admin = await startTeamAdmin(dataDir, f.svc, ops)
   closers.push(() => admin.close())
   return { dataDir, calls: f.calls }
 }
 
-async function run(argv: string[], dataDir: string): Promise<{ code: number; out: string; err: string }> {
+async function run(
+  argv: string[],
+  dataDir: string,
+  readStdin?: () => Promise<string>
+): Promise<{ code: number; out: string; err: string }> {
   const out: string[] = []
   const err: string[] = []
-  const code = await runTeamCli(argv, dataDir, (s) => out.push(s), (s) => err.push(s))
+  const code = await runTeamCli(argv, dataDir, (s) => out.push(s), (s) => err.push(s), readStdin)
   return { code, out: out.join('\n'), err: err.join('\n') }
 }
 
@@ -369,5 +413,105 @@ describe.skipIf(process.platform === 'win32')('runTeamCli over the admin socket 
     const help = await run(['--help'], dataDir)
     expect(help.code).toBe(0)
     expect(help.out).toMatch(/usage/i)
+  })
+
+  it('--json prints a refusal as one JSON line on stdout (an ssh exec reads stdout only)', async () => {
+    const { dataDir } = await served({ running: false }, false)
+    // No team, and `info --json` IS allowed without one — use a verb the no-team guard refuses.
+    const r = await run(['share', 'p1'], dataDir)
+    expect(r.code).toBe(1)
+    expect(r.out).toBe('') // no --json: stdout stays empty exactly as before
+    const j = await run(['status', '--json'], dataDir)
+    expect(j.code).toBe(0)
+  })
+
+  it('bootstrap --json prints the bootstrap result as one JSON document; without --json, a summary', async () => {
+    const dataDir = tmp()
+    const f = fake()
+    Object.assign(f.svc, {
+      waitForHosting: async () => 'starting',
+      roleOf: () => null,
+      sharedProjectIds: () => new Set<string>()
+    })
+    const admin = await startTeamAdmin(dataDir, f.svc, {
+      adoptFolder: async () => ({ projectId: 'project-9', projectName: 'proj', created: true })
+    })
+    closers.push(() => admin.close())
+    const argv = ['bootstrap', '--owner-key', KEY, '--owner-label', 'Mac', '--adopt', '/srv/proj']
+    const json = await run([...argv, '--json'], dataDir)
+    expect(json.code).toBe(0)
+    expect(JSON.parse(json.out)).toEqual({
+      hostId: 'HOSTID',
+      projectId: 'project-9',
+      projectName: 'proj',
+      joinCode: 'nodeterm://join/CODE',
+      hosting: 'starting',
+      created: { team: true, owner: true, project: true, share: true }
+    })
+    const human = await run(argv, dataDir)
+    expect(human.code).toBe(0)
+    expect(human.out).toMatch(/Created the team/)
+    expect(human.out).toMatch(/Project proj \(project-9\) is shared with the team/)
+    expect(human.out).toMatch(/Hosting: starting/)
+    expect(human.out).toContain('nodeterm://join/CODE')
+    expect(f.calls).toEqual([`owner:${KEY}:Mac`, 'share:project-9:true', `owner:${KEY}:Mac`, 'share:project-9:true'])
+  })
+
+  it('a bootstrap refusal under --json is one JSON line on stdout carrying its code', async () => {
+    const { dataDir } = await served({}, false) // no adoptFolder op: E_UNSUPPORTED
+    const r = await run(['bootstrap', '--owner-key', KEY, '--adopt', '/srv/proj', '--json'], dataDir)
+    expect(r.code).toBe(1)
+    expect(JSON.parse(r.out)).toEqual({ ok: false, error: expect.stringMatching(/cannot adopt/), code: 'E_UNSUPPORTED' })
+  })
+
+  it('resume reads the session list from stdin and prints the result as JSON', async () => {
+    const asked: unknown[] = []
+    const { dataDir } = await served({ running: true }, true, {
+      resume: async (req) => {
+        asked.push(req)
+        return { results: [{ nodeId: 'n', status: 'resumed' }] }
+      }
+    })
+    const sessions = [{ nodeId: 'n', agentId: 'claude', sessionId: 's' }]
+    const r = await run(['resume', '--project', 'p', '--json'], dataDir, async () => JSON.stringify(sessions))
+    expect(r.code).toBe(0)
+    expect(JSON.parse(r.out)).toEqual({ results: [{ nodeId: 'n', status: 'resumed' }] })
+    expect(asked).toEqual([{ cmd: 'resume', projectId: 'p', sessions }])
+    const human = await run(['resume', '--project', 'p'], dataDir, async () => JSON.stringify(sessions))
+    expect(human.code).toBe(0)
+    expect(human.out).toBe('  n  resumed')
+  })
+
+  it('resume refuses stdin that is not a JSON list of sessions before reaching the server', async () => {
+    let called = false
+    const { dataDir } = await served({ running: true }, true, {
+      resume: async () => {
+        called = true
+        return { results: [] }
+      }
+    })
+    const notJson = await run(['resume', '--project', 'p', '--json'], dataDir, async () => 'not json')
+    expect(notJson.code).toBe(2)
+    expect(notJson.err).toMatch(/JSON list of sessions/)
+    const notList = await run(['resume', '--project', 'p'], dataDir, async () => '{}')
+    expect(notList.code).toBe(2)
+    expect(notList.err).toMatch(/JSON list of sessions/)
+    expect(called).toBe(false)
+  })
+
+  it('a refused --json verb prints {"ok":false,…} on stdout and the human line on stderr', async () => {
+    const dataDir = tmp()
+    fs.mkdirSync(path.join(dataDir, 'relay'), { recursive: true, mode: 0o700 })
+    fs.writeFileSync(path.join(dataDir, 'relay', 'team.json'), JSON.stringify({ v: 1, peers: [], sharedProjects: [] }))
+    const f = fake()
+    ;(f.svc as { status: unknown }).status = () => {
+      throw Object.assign(new Error('status broke'), { code: 'E_HOSTING_OFF' })
+    }
+    const admin = await startTeamAdmin(dataDir, f.svc)
+    closers.push(() => admin.close())
+    const r = await run(['status', '--json'], dataDir)
+    expect(r.code).toBe(1)
+    expect(JSON.parse(r.out)).toEqual({ ok: false, error: 'status broke', code: 'E_HOSTING_OFF' })
+    expect(r.err).toBe('status broke')
   })
 })
