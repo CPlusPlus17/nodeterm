@@ -61,6 +61,10 @@ afterEach(() => {
 type WorldOpts = Partial<Pick<HostedServiceDeps, 'now' | 'monotonicNow' | 'projectsOfNode' | 'nodeOfSession' | 'killPeer' | 'onSharedChange'>> & {
   recordTimers?: boolean
   dataDir?: string
+  /** The fake API's HTTP status for a host-token mint (default 200; a 403 is a refusal). */
+  mintStatus?: number
+  /** A host-token mint answers only once this settles: holds the first listener back. */
+  mintGate?: Promise<void>
 }
 
 function world(opts: WorldOpts = {}) {
@@ -107,6 +111,8 @@ function world(opts: WorldOpts = {}) {
     fetch: (async (u: string | URL | Request) => {
       if (String(u).endsWith('/v1/relay/challenge')) { challenges++; return new Response('{}', { status: 404 }) }
       mints++
+      if (opts.mintGate) await opts.mintGate
+      if (opts.mintStatus !== undefined && opts.mintStatus !== 200) return new Response('{}', { status: opts.mintStatus })
       return new Response(JSON.stringify({ pairingToken: 'T', hostId: 'H', exp: 0 }), { status: 200 })
     }) as typeof fetch,
     transport: () => { const { hostT, peerT } = transportPair(); peersT.push(peerT); return hostT },
@@ -1046,5 +1052,56 @@ describe('hosted service — the canvas authority seam (docs/hosted-team-relay.m
     owner.req(25, IPC.relayHostedSelf)
     await vi.waitFor(() => expect(owner.res(25)).toBeDefined())
     expect(w.casts).not.toContain(IPC.workspaceSave)
+  })
+})
+
+describe('hosted service — waitForHosting (the first verdict `team bootstrap` waits for)', () => {
+  it("answers 'up' once an idle listener is registered", async () => {
+    const w = world()
+    await w.svc.init()
+    expect(await w.svc.start()).toBe('started')
+    expect(await w.svc.waitForHosting(15_000)).toBe('up')
+  })
+
+  it('answers { refused } with the scheduler reason when the backend refuses to mint', async () => {
+    const w = world({ mintStatus: 403 })
+    await w.svc.init()
+    expect(await w.svc.start()).toBe('started')
+    const r = await w.svc.waitForHosting(15_000)
+    expect(r).toMatchObject({ refused: expect.stringMatching(/refused|403/) })
+    expect(w.svc.status().scheduler?.state).toBe('backend-refused')
+  })
+
+  it("answers 'starting' when nothing is decided within the wait, and 'up' on a later wait", async () => {
+    // The in-process mint and open finish inside a millisecond, so the mint is held to keep the
+    // first listener from opening. 300 ms spans more than one poll.
+    let release!: () => void
+    const w = world({ mintGate: new Promise<void>((r) => (release = r)) })
+    await w.svc.init()
+    expect(await w.svc.start()).toBe('started')
+    expect(await w.svc.waitForHosting(300)).toBe('starting')
+    expect(w.svc.status().scheduler?.idle).toBe(0)
+    const waiting = w.svc.waitForHosting(15_000)
+    release()
+    expect(await waiting).toBe('up')
+  })
+
+  it('answers { refused } when hosting is not running at all', async () => {
+    const w = world()
+    expect(await w.svc.waitForHosting(1000)).toMatchObject({ refused: expect.any(String) })
+    await w.svc.init()
+    expect(await w.svc.waitForHosting(1000)).toMatchObject({ refused: expect.stringMatching(/not running/) })
+  })
+})
+
+describe('hosted service — roleOf', () => {
+  it('reports a member role, null for a stranger', async () => {
+    const w = world()
+    await w.svc.init()
+    await w.svc.start()
+    const k = pub(genKeyPair())
+    expect(w.svc.roleOf(k)).toBeNull()
+    await w.svc.addOwner(k, 'Me')
+    expect(w.svc.roleOf(k)).toBe('owner')
   })
 })

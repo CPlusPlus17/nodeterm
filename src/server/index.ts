@@ -984,7 +984,12 @@ export async function startServer(
   // unix socket, or Windows, disables administration — it must not take the rest of the Server
   // Edition down with it.
   let otherServerHere = false
-  const teamAdmin = await startTeamAdmin(config.dataDir, hosted).catch((err: unknown) => {
+  const teamAdmin = await startTeamAdmin(config.dataDir, hosted, {
+    // `team bootstrap`: adopt the folder into THIS core's workspace (saved before it is shared, so
+    // the canvas authority can read it). The server runs as the SSH login user, so its home is the
+    // one an SSH project's `~` cwds meant.
+    adoptFolder: (cwd) => workspaceStore.adoptFolder(cwd, { home: os.homedir() })
+  }).catch((err: unknown) => {
     if ((err as { code?: unknown } | null)?.code === 'E_ADMIN_SOCKET_BUSY') otherServerHere = true
     console.error(`[hosted-team] team admin socket disabled: ${err instanceof Error ? err.message : String(err)}`)
     return { close: async (): Promise<void> => {} }

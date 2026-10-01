@@ -12,6 +12,7 @@ import {
   ownerKeyProblem,
   ownerLabelProblem,
   projectIdProblem,
+  adoptCwdProblem,
   parseAdminRequest,
   ADMIN_REQUEST_MAX,
   adminErrorCode,
@@ -181,6 +182,38 @@ describe('validation helpers (platform-neutral)', () => {
     expect(parseAdminRequest([1])).toMatch(/bad request/)
   })
 
+  it('a bootstrap request is refused with a stable code per field, or parsed whole', () => {
+    const k = validKey()
+    expect(parseAdminRequest({ cmd: 'bootstrap', ownerKey: k, ownerLabel: 'Mac', adoptCwd: '/srv/p' })).toEqual({
+      cmd: 'bootstrap',
+      ownerKey: k,
+      ownerLabel: 'Mac',
+      adoptCwd: '/srv/p'
+    })
+    expect(parseAdminRequest({ cmd: 'bootstrap', ownerKey: k, adoptCwd: '/srv/p' })).toMatchObject({ code: 'E_BAD_REQUEST' })
+    expect(parseAdminRequest({ cmd: 'bootstrap', ownerKey: 'K', ownerLabel: '', adoptCwd: '/srv/p' })).toMatchObject({
+      code: 'E_BAD_KEY',
+      refused: expect.stringMatching(/32 bytes/)
+    })
+    expect(parseAdminRequest({ cmd: 'bootstrap', ownerKey: k, ownerLabel: 'a\nb', adoptCwd: '/srv/p' })).toMatchObject({
+      code: 'E_BAD_REQUEST',
+      refused: expect.stringMatching(/control/)
+    })
+    expect(parseAdminRequest({ cmd: 'bootstrap', ownerKey: k, ownerLabel: '', adoptCwd: 'srv/p' })).toMatchObject({
+      code: 'E_BAD_CWD',
+      refused: expect.stringMatching(/absolute/)
+    })
+  })
+
+  it('the folder to adopt is an absolute, bounded, control-free path', () => {
+    expect(adoptCwdProblem('/home/u/proj')).toBeNull()
+    expect(adoptCwdProblem('~/proj')).toMatch(/absolute/)
+    expect(adoptCwdProblem('')).toMatch(/absolute/)
+    expect(adoptCwdProblem('/' + 'x'.repeat(4096))).toMatch(/too long/)
+    expect(adoptCwdProblem('/a\nb')).toMatch(/control/)
+    expect(adoptCwdProblem('/a\u202eb')).toMatch(/control/)
+  })
+
   it('a socket path longer than a unix socket allows is refused by name, per platform', () => {
     expect(socketPathProblem('/s/' + 'x'.repeat(104), 'linux')).toBeNull() // 107 bytes
     expect(socketPathProblem('/s/' + 'x'.repeat(105), 'linux')).toMatch(/108 bytes.*107/)
@@ -256,7 +289,7 @@ describe.skipIf(process.platform === 'win32')('team admin socket (unix socket, P
     expect(await callTeamAdmin(other, { cmd: 'remove', pubkey: 'K' })).toEqual({ ok: false, error: expect.stringMatching(/No team member/) })
   })
 
-  it('with no team on this server it serves only init, status and info', async () => {
+  it('with no team on this server it serves only init, status, info and bootstrap', async () => {
     const dataDir = tmp()
     const { svc, calls } = fakeService()
     await boot(dataDir, svc)
@@ -446,6 +479,82 @@ describe.skipIf(process.platform === 'win32')('team admin socket (unix socket, P
     // Let the in-flight handler run to completion.
     await new Promise((r) => setTimeout(r, 20))
     expect(calls).toEqual(['init'])
+  })
+
+  it('bootstrap is served without a team (it creates one) and returns the bootstrap result', async () => {
+    const dataDir = tmp()
+    const { svc, calls } = fakeService()
+    Object.assign(svc, {
+      waitForHosting: async () => 'up',
+      roleOf: () => null,
+      sharedProjectIds: () => new Set<string>()
+    })
+    const adopted: string[] = []
+    const admin = await startTeamAdmin(dataDir, svc, {
+      adoptFolder: async (cwd) => {
+        adopted.push(cwd)
+        return { projectId: 'project-9', projectName: 'p', created: true }
+      }
+    })
+    closers.push(() => admin.close())
+    const k = validKey()
+    const r = await callTeamAdmin(dataDir, { cmd: 'bootstrap', ownerKey: k, ownerLabel: 'Mac', adoptCwd: '/srv/p' })
+    expect(r).toEqual({
+      ok: true,
+      result: {
+        hostId: 'H',
+        projectId: 'project-9',
+        projectName: 'p',
+        joinCode: 'nodeterm://join/CODE',
+        hosting: 'up',
+        created: { team: true, owner: true, project: true, share: true }
+      }
+    })
+    expect(calls).toEqual(['init', 'start', `owner:${k}:Mac`, 'share:project-9:true'])
+    expect(adopted).toEqual(['/srv/p'])
+  })
+
+  it('bootstrap refuses a bad key with E_BAD_KEY and a relative folder with E_BAD_CWD, before touching the service', async () => {
+    const dataDir = tmp()
+    const { svc, calls } = fakeService()
+    const admin = await startTeamAdmin(dataDir, svc, { adoptFolder: async () => ({ projectId: 'x', projectName: 'x', created: true }) })
+    closers.push(() => admin.close())
+    expect(await callTeamAdmin(dataDir, { cmd: 'bootstrap', ownerKey: 'nope', ownerLabel: '', adoptCwd: '/a' })).toMatchObject({
+      ok: false,
+      code: 'E_BAD_KEY'
+    })
+    expect(await callTeamAdmin(dataDir, { cmd: 'bootstrap', ownerKey: validKey(), ownerLabel: '', adoptCwd: 'a/b' })).toMatchObject({
+      ok: false,
+      code: 'E_BAD_CWD'
+    })
+    expect(JSON.parse(await rawExchange(dataDir, '{"cmd":"bootstrap","ownerKey":7}\n'))).toMatchObject({
+      ok: false,
+      code: 'E_BAD_REQUEST'
+    })
+    expect(calls).toEqual([])
+    expect(fs.existsSync(path.join(relayDir(dataDir), 'team.json'))).toBe(false)
+  })
+
+  it('bootstrap without an adoptFolder op answers E_UNSUPPORTED', async () => {
+    const dataDir = tmp()
+    const { svc, calls } = fakeService()
+    await boot(dataDir, svc)
+    expect(await callTeamAdmin(dataDir, { cmd: 'bootstrap', ownerKey: validKey(), ownerLabel: '', adoptCwd: '/a' })).toMatchObject({
+      ok: false,
+      code: 'E_UNSUPPORTED'
+    })
+    expect(calls).toEqual([])
+  })
+
+  it('a bootstrap whose hosting does not start answers E_HOSTING_OFF', async () => {
+    const dataDir = tmp()
+    const { svc } = fakeService({ start: 'host-key-unreadable' })
+    const admin = await startTeamAdmin(dataDir, svc, { adoptFolder: async () => ({ projectId: 'x', projectName: 'x', created: true }) })
+    closers.push(() => admin.close())
+    expect(await callTeamAdmin(dataDir, { cmd: 'bootstrap', ownerKey: validKey(), ownerLabel: '', adoptCwd: '/a' })).toMatchObject({
+      ok: false,
+      code: 'E_HOSTING_OFF'
+    })
   })
 
   it('close() removes the socket and does not hang on a connection that never sends a request', async () => {

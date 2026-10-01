@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseTeamArgv, runTeamCli, describeStatus, teamArgv } from './team-cli'
+import { parseTeamArgv, runTeamCli, describeStatus, teamArgv, TEAM_USAGE } from './team-cli'
 import { startTeamAdmin, adminSocketPath, type AdminStatusResult } from '../core/relay/team-admin'
 import { genKeyPair, publicKeyToB64 } from '../core/relay/e2ee'
 import type { HostedService, HostedStatus } from '../core/relay/hosted-service'
@@ -50,6 +50,32 @@ describe('team argv', () => {
 
   it('share names a bad project id', () => {
     expect(parseTeamArgv(['share', 'x'.repeat(129)])).toEqual({ error: expect.stringMatching(/128/) })
+  })
+
+  it('bootstrap needs an owner key and an absolute folder; the label is optional', () => {
+    expect(parseTeamArgv(['bootstrap', '--owner-key', KEY, '--adopt', '/srv/p'])).toEqual({
+      cmd: 'bootstrap',
+      ownerKey: KEY,
+      ownerLabel: '',
+      adoptCwd: '/srv/p'
+    })
+    expect(parseTeamArgv(['bootstrap', '--owner-key', KEY, '--adopt=/srv/p', '--owner-label', 'Mac', '--json'])).toEqual({
+      cmd: 'bootstrap',
+      ownerKey: KEY,
+      ownerLabel: 'Mac',
+      adoptCwd: '/srv/p'
+    })
+    expect(parseTeamArgv(['bootstrap', '--owner-key', KEY])).toEqual({ error: expect.stringMatching(/needs --owner-key/) })
+    expect(parseTeamArgv(['bootstrap', '--adopt', '/srv/p'])).toEqual({ error: expect.stringMatching(/needs --owner-key/) })
+    expect(parseTeamArgv(['bootstrap', '--owner-key', KEY, '--adopt', 'srv/p'])).toEqual({ error: expect.stringMatching(/absolute/) })
+    expect(parseTeamArgv(['bootstrap', '--owner-key', 'K', '--adopt', '/srv/p'])).toEqual({ error: expect.stringMatching(/32 bytes/) })
+    expect(parseTeamArgv(['bootstrap', '--owner-key', KEY, '--adopt', '/srv/p', 'extra'])).toEqual({
+      error: expect.stringMatching(/takes no arguments/)
+    })
+  })
+
+  it('`team --help` lists bootstrap at the row start a remote probe greps for', () => {
+    expect(TEAM_USAGE).toMatch(/^ {2}bootstrap /m)
   })
 })
 
@@ -379,6 +405,45 @@ describe.skipIf(process.platform === 'win32')('runTeamCli over the admin socket 
     expect(r.out).toBe('') // no --json: stdout stays empty exactly as before
     const j = await run(['status', '--json'], dataDir)
     expect(j.code).toBe(0)
+  })
+
+  it('bootstrap --json prints the bootstrap result as one JSON document; without --json, a summary', async () => {
+    const dataDir = tmp()
+    const f = fake()
+    Object.assign(f.svc, {
+      waitForHosting: async () => 'starting',
+      roleOf: () => null,
+      sharedProjectIds: () => new Set<string>()
+    })
+    const admin = await startTeamAdmin(dataDir, f.svc, {
+      adoptFolder: async () => ({ projectId: 'project-9', projectName: 'proj', created: true })
+    })
+    closers.push(() => admin.close())
+    const argv = ['bootstrap', '--owner-key', KEY, '--owner-label', 'Mac', '--adopt', '/srv/proj']
+    const json = await run([...argv, '--json'], dataDir)
+    expect(json.code).toBe(0)
+    expect(JSON.parse(json.out)).toEqual({
+      hostId: 'HOSTID',
+      projectId: 'project-9',
+      projectName: 'proj',
+      joinCode: 'nodeterm://join/CODE',
+      hosting: 'starting',
+      created: { team: true, owner: true, project: true, share: true }
+    })
+    const human = await run(argv, dataDir)
+    expect(human.code).toBe(0)
+    expect(human.out).toMatch(/Created the team/)
+    expect(human.out).toMatch(/Project proj \(project-9\) is shared with the team/)
+    expect(human.out).toMatch(/Hosting: starting/)
+    expect(human.out).toContain('nodeterm://join/CODE')
+    expect(f.calls).toEqual([`owner:${KEY}:Mac`, 'share:project-9:true', `owner:${KEY}:Mac`, 'share:project-9:true'])
+  })
+
+  it('a bootstrap refusal under --json is one JSON line on stdout carrying its code', async () => {
+    const { dataDir } = await served({}, false) // no adoptFolder op: E_UNSUPPORTED
+    const r = await run(['bootstrap', '--owner-key', KEY, '--adopt', '/srv/proj', '--json'], dataDir)
+    expect(r.code).toBe(1)
+    expect(JSON.parse(r.out)).toEqual({ ok: false, error: expect.stringMatching(/cannot adopt/), code: 'E_UNSUPPORTED' })
   })
 
   it('a refused --json verb prints {"ok":false,…} on stdout and the human line on stderr', async () => {

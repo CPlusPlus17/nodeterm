@@ -7,6 +7,7 @@
 import path from 'node:path'
 import {
   CONTROL_RE,
+  adoptCwdProblem,
   callTeamAdmin,
   ownerKeyProblem,
   ownerLabelProblem,
@@ -33,6 +34,11 @@ const safeJson = (v: unknown): string =>
 
 const USAGE_ROWS: Array<[string, string]> = [
   ['init', 'create the host key and the team, and start hosting'],
+  // The desktop's Share with team probes for this verb by grepping `team --help` for `^  bootstrap `.
+  [
+    'bootstrap --owner-key <key> --adopt <dir> [--owner-label <name>] [--json]',
+    'set up the team, an owner and a shared project in one step'
+  ],
   ['add-owner <device-key> [--label <name>]', 'make a device an owner (its 44-character public key)'],
   ['remove <device-key> [--force]', 'remove a member and cut its live sessions'],
   ['share <projectId>', 'show a project to non-editors'],
@@ -54,6 +60,7 @@ interface CommandSpec {
 }
 const COMMANDS: Record<string, CommandSpec> = {
   init: { positionals: 0, flags: {} },
+  bootstrap: { positionals: 0, flags: { 'owner-key': 'value', 'owner-label': 'value', adopt: 'value', json: 'bool' } },
   'add-owner': { positionals: 1, flags: { label: 'value' } },
   remove: { positionals: 1, flags: { force: 'bool' } },
   share: { positionals: 1, flags: {} },
@@ -114,6 +121,14 @@ export function parseTeamArgv(argv: string[]): AdminRequest | { error: string } 
       const label = typeof flags.label === 'string' ? flags.label : ''
       const problem = ownerKeyProblem(pubkey) ?? ownerLabelProblem(label)
       return problem ? { error: problem } : { cmd, pubkey, label }
+    }
+    case 'bootstrap': {
+      const ownerKey = typeof flags['owner-key'] === 'string' ? flags['owner-key'] : ''
+      const adoptCwd = typeof flags.adopt === 'string' ? flags.adopt : ''
+      const ownerLabel = typeof flags['owner-label'] === 'string' ? flags['owner-label'] : ''
+      if (!ownerKey || !adoptCwd) return usageError('bootstrap needs --owner-key <key> and --adopt <dir>')
+      const problem = ownerKeyProblem(ownerKey) ?? ownerLabelProblem(ownerLabel) ?? adoptCwdProblem(adoptCwd)
+      return problem ? { error: problem } : { cmd: 'bootstrap', ownerKey, ownerLabel, adoptCwd }
     }
     case 'remove':
       return flags.force ? { cmd, pubkey: positionals[0], force: true } : { cmd, pubkey: positionals[0] }
@@ -272,8 +287,8 @@ export function describeStatus(result: AdminStatusResult): string[] {
 }
 
 /** Render a successful reply. The exit code is 1 when the command did its part but the outcome it
- *  exists for did not happen (hosting did not start, there is no address yet). Only `info` and
- *  `status` take `--json`. */
+ *  exists for did not happen (hosting did not start, there is no address yet). Only `info`,
+ *  `status` and `bootstrap` take `--json`. */
 function render(req: AdminRequest, result: unknown, json: boolean): { lines: string[]; code: number } {
   switch (req.cmd) {
     case 'init': {
@@ -317,6 +332,19 @@ function render(req: AdminRequest, result: unknown, json: boolean): { lines: str
     }
     case 'status':
       return { lines: json ? [safeJson(result)] : describeStatus(result as AdminStatusResult), code: 0 }
+    case 'bootstrap': {
+      if (json) return { lines: [safeJson(result)], code: 0 }
+      const r = obj(result)
+      const created = obj(r.created)
+      const lines = [
+        created.team === true ? 'Created the team.' : 'The team already existed.',
+        `Project ${str(r.projectName, '?')} (${str(r.projectId, '?')}) is shared with the team.`,
+        r.hosting === 'up' ? 'Hosting: ON.' : 'Hosting: starting — teammates can join in a moment.',
+        'Join code (give it to teammates; an owner approves each new device):',
+        `  ${str(r.joinCode, '?')}`
+      ]
+      return { lines, code: 0 }
+    }
     case 'rotate-key': {
       const r = obj(result) as Partial<AdminRotateResult>
       if (r.result === 'not-running') {

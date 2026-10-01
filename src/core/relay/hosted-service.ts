@@ -78,6 +78,12 @@ export type PendingClosedReason = HostedPendingClosedReason
 export type HostedStartResult = 'started' | 'no-team' | 'host-key-unreadable' | 'stopped'
 /** `not-running`: the key was rotated on a service that was not hosting, and hosting stays off. */
 export type HostedRotateResult = HostedStartResult | 'not-running'
+/** Hosting's first verdict: a listener is open (`up`), the backend refused to mint (`refused`, with
+ *  the scheduler's reason), or neither within the wait (`starting`). */
+export type HostingWait = 'up' | 'starting' | { refused: string }
+
+/** How often `waitForHosting` re-reads the scheduler's status. */
+const HOSTING_WAIT_POLL_MS = 250
 
 export interface HostedServiceDeps {
   dataDir: string
@@ -139,6 +145,12 @@ export interface HostedService {
   /** Replace the host key. Every teammate needs a new join code. A hosting service restarts on the
    *  new key and answers the start result; one that was not hosting stays off ('not-running'). */
   rotateKey(): Promise<HostedRotateResult>
+  /** Wait (bounded) for hosting's first verdict: an idle listener registered ('up'), the backend
+   *  refused to mint ({ refused: why }), or neither yet ('starting'). `start()` answers 'started'
+   *  before any mint, so this is the only way to learn a refusal synchronously. */
+  waitForHosting(timeoutMs: number): Promise<HostingWait>
+  /** This key's role in the team, or null for a non-member. Read from the team store on every call. */
+  roleOf(pubkeyB64: string): TeamRole | null
 }
 
 /** One relay listener and, once a peer bridges, its session. */
@@ -656,6 +668,31 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
         if (!wasHosting) return 'not-running'
         return startNow(my)
       })
+    },
+    waitForHosting(timeoutMs) {
+      const verdict = (): HostingWait | null => {
+        if (!scheduler) return { refused: 'Hosting is not running on this server.' }
+        const s = scheduler.status()
+        if (s.state === 'backend-refused') {
+          return { refused: s.lastError ?? 'The nodeterm API refused to issue relay tokens.' }
+        }
+        if (s.idle > 0 || s.bridged > 0) return 'up'
+        return null
+      }
+      // Polled on the deps-injected timers, so a test's fake timers drive it like every other wait here.
+      return new Promise<HostingWait>((resolve) => {
+        const deadline = monoNow() + timeoutMs
+        const tick = (): void => {
+          const v = verdict()
+          if (v !== null) return resolve(v)
+          if (monoNow() >= deadline) return resolve('starting')
+          setT(tick, Math.min(HOSTING_WAIT_POLL_MS, Math.max(0, deadline - monoNow())))
+        }
+        tick()
+      })
+    },
+    roleOf(pubkeyB64) {
+      return memberRole(pubkeyB64) ?? null
     }
   }
   return api
