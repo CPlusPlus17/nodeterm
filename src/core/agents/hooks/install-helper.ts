@@ -9,16 +9,18 @@
 //     the fresh one — matching on both sides through `normalizeHookCommand`, WITHOUT which
 //     Windows recognized none of its own entries and appended a fresh set per launch (#558);
 //   - preserve every other hook (other tools', other events);
-//   - fail open: a missing/unparseable settings.json defaults to {} (install) / returns
-//     early (remove); a write error is caught + warned, never thrown.
+//   - fail open for sessions, preserve user settings on errors. Only ENOENT creates a new
+//     shared config; malformed/read-error/concurrently modified files are left untouched.
+//     Grok alone owns its config outright and can heal a malformed copy.
+import { updateSettingsFile } from './settings-file'
 import path from 'path'
 import { homedir } from 'os'
 import { readFileSync, writeFileSync, mkdirSync, chmodSync, rmSync } from 'fs'
-import type { ManagedHookEvent } from '@shared/agents/hook-events'
+import { managedEventName, type ManagedHookEvent } from '@shared/agents/hook-events'
 import { renameAtomicSync, tempNameFor } from '../../fs-atomic'
 import { buildManagedScript } from './managed-script'
 
-type HookDef = { matcher?: string; hooks?: { type: string; command: string }[] }
+type HookDef = { matcher?: string; hooks?: { type: string; command: string; timeout?: number }[] }
 type Settings = { hooks?: Record<string, HookDef[]>; [k: string]: unknown }
 
 /** Public alias for the hook settings shape, shared by local + remote merge callers. */
@@ -34,6 +36,8 @@ export function writeManagedHookFileAtomic(
   const tmp = tempNameFor(target)
   try {
     writeFileSync(tmp, data, { encoding: 'utf8', flag: 'wx', ...(mode === undefined ? {} : { mode }) })
+    // Exact, not umask-filtered: the rename carries the temp's mode, so set it before publishing.
+    if (mode !== undefined) chmodSync(tmp, mode)
     publish(tmp, target)
   } catch (e) {
     rmSync(tmp, { force: true })
@@ -42,9 +46,8 @@ export function writeManagedHookFileAtomic(
 }
 
 /**
- * Shared Claude/Gemini settings keep their existing write-through semantics so a user-owned
- * symlink and its target mode survive. Grok opts into atomic replacement for its nodeterm-owned
- * file under `$GROK_HOME/hooks/`.
+ * Legacy direct writer for owned config callers. Shared Claude/Gemini settings use the guarded
+ * updateSettingsFile transaction instead. Grok opts into atomic replacement for its owned file.
  */
 export function writeManagedHookConfig(target: string, data: string, atomic = false): void {
   if (atomic) writeManagedHookFileAtomic(target, data)
@@ -101,10 +104,42 @@ export function installManagedHookScript(agentId: string, scriptFileName: string
  * Codex builds its own equivalent (`buildManagedCommand` in codex.ts) — its exact bytes are
  * hashed into config.toml's trust entries, so the two must stay separate.
  */
-export function buildManagedHookCommand(scriptPath: string): string {
+export interface ManagedHookCommandOptions {
+  /**
+   * Variables exported to the script. Emitted as `NAME='value'; export NAME; ` BEFORE the `if`
+   * (an assignment prefix cannot precede a compound command). Antigravity is the one user: its
+   * payload carries no event name, so the command carries it.
+   */
+  env?: Readonly<Record<string, string>>
+  /**
+   * Printed by the missing-script branch BEFORE it drains stdin. For an agent that reads hook
+   * stdout as a decision (antigravity), "the script is gone" must still answer — silence there is
+   * the wrong answer for some events. Omitted ⇒ the branch prints nothing, as it always has.
+   */
+  fallbackStdout?: string
+}
+
+const shQuote = (s: string): string => `'${s.replaceAll("'", "'\\''")}'`
+
+export function buildManagedHookCommand(scriptPath: string, opts: ManagedHookCommandOptions = {}): string {
   // POSIX single-quote escape so $, `, " and \ in the path are taken literally.
-  const q = `'${scriptPath.replaceAll("'", "'\\''")}'`
-  return `if [ -r ${q} ]; then sh ${q}; else cat >/dev/null 2>&1 || :; fi`
+  const q = shQuote(scriptPath)
+  const prefix = Object.entries(opts.env ?? {})
+    .map(([name, value]) => {
+      // A name is interpolated bare, so it must be a name — refuse rather than emit a command
+      // that runs something else.
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`invalid env var name: ${name}`)
+      return `${name}=${shQuote(value)}; export ${name}; `
+    })
+    .join('')
+  const answer = opts.fallbackStdout !== undefined ? `printf '%s\\n' ${shQuote(opts.fallbackStdout)}; ` : ''
+  // An agent that reads our stdout as a DECISION (fallbackStdout set) also reads the exit status:
+  // for antigravity a non-zero exit is a measured DENY even when the right answer was already
+  // printed (the script answers FIRST, then sources the endpoint file, whose syntax error would
+  // otherwise leak out as `sh`'s status). So that branch forces 0, as the Windows wrapper does.
+  // Every other agent's command stays byte-identical.
+  const exitZero = opts.fallbackStdout !== undefined ? ' || :' : ''
+  return `${prefix}if [ -r ${q} ]; then sh ${q}${exitZero}; else ${answer}cat >/dev/null 2>&1 || :; fi`
 }
 
 /**
@@ -174,10 +209,12 @@ function stripManaged(defs: HookDef[], isOurs: (command?: string) => boolean): H
 }
 
 /** A subscription's event name, whichever form it was declared in. */
-const eventNameOf = (e: ManagedHookEvent): string => (typeof e === 'string' ? e : e.event)
+const eventNameOf = managedEventName
 /** The matcher to write for it — undefined for the plain string form, so nothing changes for the
  *  agents that never needed one (grok's tool events are the only case; see ManagedHookEvent). */
 const matcherOf = (e: ManagedHookEvent): string | undefined => (typeof e === 'string' ? undefined : e.matcher)
+/** The handler `timeout` (seconds) — only claude's held PermissionRequest declares one. */
+const timeoutOf = (e: ManagedHookEvent): number | undefined => (typeof e === 'string' ? undefined : e.timeout)
 
 /**
  * Pure: make the config's managed hooks EXACTLY ours — our command on every event in `events`, and
@@ -203,18 +240,36 @@ export function mergeManagedHook(
   command: string,
   events: readonly ManagedHookEvent[]
 ): HookSettings {
+  if (config.hooks !== undefined) {
+    if (!config.hooks || typeof config.hooks !== 'object' || Array.isArray(config.hooks)) throw new Error('Invalid hooks')
+    for (const defs of Object.values(config.hooks)) {
+      if (!Array.isArray(defs)) continue
+      for (const d of defs) {
+        if (!d || typeof d !== 'object' || (d.hooks !== undefined &&
+          (!Array.isArray(d.hooks) || d.hooks.some((h) => !h || typeof h !== 'object')))) throw new Error('Invalid hook handlers')
+      }
+    }
+  }
   const isOurs = managedCommandMatcher(managedMarkerFor(command), true)
   const next: HookSettings = { ...config, hooks: { ...(config.hooks ?? {}) } }
-  const definitionsAt = (ev: string): HookDef[] => (Array.isArray(next.hooks![ev]) ? next.hooks![ev] : [])
+  const definitionsAt = (ev: string): HookDef[] => {
+    const defs = next.hooks![ev]
+    if (defs !== undefined && !Array.isArray(defs)) throw new Error('Invalid hook definitions')
+    return defs ?? []
+  }
   for (const e of events) {
     const ev = eventNameOf(e)
     const matcher = matcherOf(e)
+    const timeout = timeoutOf(e)
     const existing = stripManaged(definitionsAt(ev), isOurs)
     // Spread the matcher CONDITIONALLY: an explicit `matcher: undefined` would serialize as a
     // missing key here but still change the object shape snapshots compare. The test is
     // `!== undefined`, not truthiness — the type permits `matcher: ''`, and silently dropping an
     // empty matcher would emit a subscription that does not say what its declaration said.
-    existing.push({ ...(matcher !== undefined ? { matcher } : {}), hooks: [{ type: 'command', command }] })
+    existing.push({
+      ...(matcher !== undefined ? { matcher } : {}),
+      hooks: [{ type: 'command', command, ...(timeout !== undefined ? { timeout } : {}) }]
+    })
     next.hooks![ev] = existing
   }
   const managedEvents = new Set(events.map(eventNameOf))
@@ -247,13 +302,18 @@ export function installHooksInto(opts: InstallHooksOptions): void {
   if (!sp) return
 
   const command = buildManagedHookCommand(sp)
+  if (!atomicConfig) {
+    updateSettingsFile(configPath, (config) => mergeManagedHook(config, command, events))
+    return
+  }
   let config: Settings = {}
   try {
     config = JSON.parse(readFileSync(configPath, 'utf8')) as Settings
+    config = mergeManagedHook(config, command, events)
   } catch {
-    config = {}
+    // This branch owns the entire Grok config, including malformed hook shapes.
+    config = mergeManagedHook({}, command, events)
   }
-  config = mergeManagedHook(config, command, events)
   try {
     mkdirSync(path.dirname(configPath), { recursive: true })
     writeManagedHookConfig(configPath, JSON.stringify(config, null, 2), atomicConfig)
@@ -276,6 +336,19 @@ export function removeHooksFrom(opts: RemoveHooksOptions): void {
   // Same normalized comparison as the installer — a raw `includes` left every entry behind on
   // Windows (issue #558), so uninstall silently did nothing there.
   const isOurs = managedCommandMatcher(`agent-hooks/${scriptFileName}`, false)
+  if (!atomicConfig) {
+    updateSettingsFile(configPath, (config: Settings) => {
+      if (!config.hooks) return config
+      for (const e of events) {
+        const ev = eventNameOf(e)
+        if (!Array.isArray(config.hooks[ev])) continue
+        config.hooks[ev] = stripManaged(config.hooks[ev], isOurs)
+        if (config.hooks[ev].length === 0) delete config.hooks[ev]
+      }
+      return config
+    })
+    return
+  }
   let config: Settings
   try {
     config = JSON.parse(readFileSync(configPath, 'utf8')) as Settings

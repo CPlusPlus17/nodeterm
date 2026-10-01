@@ -3,7 +3,6 @@ import {
   coldGroupChildCount,
   coldGroupCwd,
   coldOpenMessage,
-  coldPlaceBelow,
   coldResolveAfter,
   coldResolveGroup,
   groupSizeFor,
@@ -152,31 +151,6 @@ describe('coldResolveAfter', () => {
         id === 'plain' ? 'claude' : undefined
       )
     ).toEqual({ ok: true, after: ['plain'] })
-  })
-})
-
-describe('coldPlaceBelow — the live path’s placeBelow, off persisted geometry', () => {
-  it('centers below the source and fans siblings right', () => {
-    const src = N('src', { position: { x: 100, y: 200 }, size: { width: 600, height: 400 } })
-    expect(coldPlaceBelow([src], src, 0)).toEqual({ x: 400, y: 890 })
-    expect(coldPlaceBelow([src], src, 1)).toEqual({ x: 860, y: 890 })
-  })
-
-  it('resolves a grouped source to ROOT space', () => {
-    // A stored child's position is frame-relative; placing off it directly would land the new
-    // node by the frame's own offset away from the agent it hangs from.
-    const frame = N('g', { kind: 'group', position: { x: 1000, y: 1000 } })
-    const src = N('src', {
-      parentId: 'g',
-      position: { x: 10, y: 20 },
-      size: { width: 600, height: 400 }
-    })
-    expect(coldPlaceBelow([frame, src], src, 0)).toEqual({ x: 1310, y: 1710 })
-  })
-
-  it('falls back to the default node size when none is persisted', () => {
-    const src = N('src', { position: { x: 0, y: 0 } })
-    expect(coldPlaceBelow([src], src, 0)).toEqual({ x: 300, y: 690 })
   })
 })
 

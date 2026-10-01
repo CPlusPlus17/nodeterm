@@ -1,3 +1,8 @@
+import type { ChatCatalog } from '@shared/chat-catalog'
+import type { NormalizedAgentEvent } from '../../shared/agents/normalize'
+import { subscribeAgentReplay } from '../../shared/agent-replay-subscription'
+import type { DesktopWallpaper, WallpaperStill } from '../../shared/wallpaper'
+import type { RecentConversationsRequest, RecentConversationsResult } from '../../shared/recent-conversations'
 // WebSocket bridge that reconstructs `window.nodeTerminal` in the browser (Server Edition).
 //
 // Under Electron the preload already defines `window.nodeTerminal`; this module only runs when
@@ -28,10 +33,16 @@ import {
   type ClaudeCliCaps,
   type GrokApi,
   type GrokCliCaps,
+  type HostedPending,
+  type HostedSelf,
+  type HostedSessionApi,
   type ClaudeSkillShareResult,
+  type ClaudeSessionCopyResult,
   type CodexApi,
   type CodexIdentityCaps,
   UNKNOWN_CODEX_IDENTITY_CAPS,
+  type CodexCliCaps,
+  UNKNOWN_CODEX_CLI_CAPS,
   type ContextApi,
   type DownloadTicket,
   type FilesApi,
@@ -55,11 +66,15 @@ import {
   type TmuxStatus,
   type TranscriptLine,
   type Workspace,
-  type WorkspaceApi
+  type WorkspaceApi,
+  type WorkspaceSaveOptions
 } from '../../shared/types'
 import type { PeerIdentity } from '../../shared/presence'
 import type { PaneOwner } from '../../shared/agents/pane-owner-predicate'
-import { buildStubApi } from './stubs'
+import { buildStubApi, unsupported } from './stubs'
+import { sanitizeStationNotices } from '@shared/station-notice'
+import { sanitizeOutcomeRecords } from '@shared/station-outcome'
+import { sanitizeHandoverRecords } from '@shared/station-handover'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 import { encodePcmForWire } from './speech-encode'
 import { type FrameTransport, WebSocketFrameTransport } from './frame-transport'
@@ -257,15 +272,22 @@ export function buildRealApi(
       client.request(IPC.ptyReadScrollback, persistKey) as Promise<string>,
     sendText: (persistKey, text, opts) =>
       client.request(IPC.ptySendText, persistKey, text, opts?.enter) as Promise<boolean>,
-    // Fail-open: an errored status must not raise the banner in the browser.
+    // A failed read is unknown, never evidence that persistence is available.
     tmuxStatus: () =>
       client
         .request(IPC.ptyTmuxStatus)
-        .catch(() => ({ available: true, installCommand: null, installLabel: null, platform: null })) as Promise<TmuxStatus>,
+        .catch(() => ({ available: false, installCommand: null, installLabel: null, platform: null, persistence: null })) as Promise<TmuxStatus>,
     // Unknown on failure (null), never a rejection: the restart poller reads null as "not a
     // shell yet" and gives up on its own deadline.
     paneCommand: (persistKey) =>
       client.request(IPC.ptyPaneCommand, persistKey).catch(() => null) as Promise<string | null>,
+    // Real: core registers it. Unknown (null) on failure — a relay host refuses it to a non-editor
+    // (EDITOR_ONLY), which reads as "no live cwd" and file links keep the node's launch cwd.
+    paneCwd: (persistKey) =>
+      client.request(IPC.ptyPaneCwd, persistKey).catch(() => null) as Promise<string | null>,
+    // Documented degrade (#925): the Server Edition starts nodes through its HeadlessNodeFactory,
+    // never through the browser renderer, so there is nothing for this to call.
+    launchHeadless: () => unsupported('pty.launchHeadless'),
     // A REAL implementation, not a stub: core registers the handler, so the server this browser is
     // served from answers it. The hibernation exit fails CLOSED on a null, so a stub here would
     // have silently switched Eco off for the whole Server Edition rather than degrade it.
@@ -299,7 +321,7 @@ export function buildRealApi(
 
   const workspace: WorkspaceApi = {
     load: () => client.request(IPC.workspaceLoad) as Promise<Workspace>,
-    save: (ws: Workspace) => client.request(IPC.workspaceSave, ws) as Promise<void>,
+    save: (ws: Workspace, opts?: WorkspaceSaveOptions) => client.request(IPC.workspaceSave, ws, opts) as Promise<void>,
     // REAL: WorkspaceStore (core) registers IPC.workspaceProbeFolder, so the server serves it.
     // Stubbing it to `null` meant "Open folder…" on a repo that already carries a committed
     // .nodeterm/project.json concluded there was no project there, created an EMPTY one, and the
@@ -447,6 +469,18 @@ export function buildGitHubApi(
       >,
     clearCache: (projectId) =>
       client.request(IPC.githubIssuesClearCache, projectId) as Promise<void>,
+    pullStatus: (projectId) =>
+      client.request(IPC.githubIssuesPullStatus, projectId) as ReturnType<GitHubIssuesApi['pullStatus']>,
+    chasePulls: (projectId) =>
+      client.request(IPC.githubIssuesChasePulls, projectId) as Promise<boolean>,
+    pullChecks: (projectId, pullNumber) =>
+      client.request(IPC.githubIssuesPullChecks, projectId, pullNumber) as ReturnType<
+        GitHubIssuesApi['pullChecks']
+      >,
+    claimPullAutoMove: (request) =>
+      client.request(IPC.githubIssuesClaimPullAutoMove, request) as Promise<boolean>,
+    notePullWaits: (request) =>
+      client.request(IPC.githubIssuesNotePullWaits, request) as Promise<number>,
     projectAvatar: (projectId) =>
       client.request(IPC.githubProjectAvatar, projectId) as ReturnType<
         GitHubIssuesApi['projectAvatar']
@@ -643,6 +677,71 @@ export function buildFilesApi(
 }
 
 /**
+ * The Server Edition's station-failure notices — REAL, because the server's canvas-control runtime
+ * opens stations headlessly and its monitor is the one that decides (src/core/agents/
+ * station-notice.ts). Kept OUT of `buildAgentApi` on purpose: that builder is spread into relay
+ * tabs too, and a relay tab's stations are the host's to report, never this browser's.
+ */
+export function buildStationNoticeApi(
+  client: RpcClient
+): Pick<NodeTerminalApi, 'stationNotice' | 'boardDispatch'> {
+  return {
+    // Same host-only class as the DROPPED report beside it: this tab's own dispatcher state, read by
+    // the server's `issues` control verb (core/board-dispatch-report.ts). Never spread into a relay tab.
+    boardDispatch: {
+      report: (entries) => {
+        void client.request(IPC.boardDispatchReport, entries).catch(() => undefined)
+      }
+    },
+    stationNotice: {
+      list: () =>
+        (client.request(IPC.stationNoticeList) as Promise<unknown>).then(sanitizeStationNotices, () => []),
+      onChanged: (cb) =>
+        client.subscribe(IPC.stationNoticeChanged, ((views: unknown) =>
+          cb(sanitizeStationNotices(views))) as Listener),
+      reportDropped: (nodeId, dropped) => {
+        void client.request(IPC.stationNoticeDropped, nodeId, dropped).catch(() => undefined)
+      }
+    }
+  }
+}
+
+/**
+ * The Server Edition's station task outcomes — REAL, for the same reason as station notices: the
+ * server's canvas-control runtime records `report-outcome` and honours `--after-success` headlessly,
+ * and a browser tab's QUEUED badge and `list` must say what the server knows. Kept out of
+ * `buildAgentApi`, which relay tabs share. The hand-over list (src/core/station-handover.ts) is real
+ * for the same reason: the server's headless factory honours plain `--after` with it, and `list`
+ * names it.
+ */
+export function buildStationHandoverApi(client: RpcClient): Pick<NodeTerminalApi, 'stationHandover'> {
+  return {
+    stationHandover: {
+      list: () =>
+        (client.request(IPC.stationHandoverList) as Promise<unknown>).then(sanitizeHandoverRecords, () => []),
+      onChanged: (cb) =>
+        client.subscribe(IPC.stationHandoverChanged, ((records: unknown) =>
+          cb(sanitizeHandoverRecords(records))) as Listener)
+    }
+  }
+}
+
+/**
+ * The Server Edition's station task outcomes — the real bridge, see `buildStationHandoverApi`'s note.
+ */
+export function buildStationOutcomeApi(client: RpcClient): Pick<NodeTerminalApi, 'stationOutcome'> {
+  return {
+    stationOutcome: {
+      list: () =>
+        (client.request(IPC.stationOutcomeList) as Promise<unknown>).then(sanitizeOutcomeRecords, () => []),
+      onChanged: (cb) =>
+        client.subscribe(IPC.stationOutcomeChanged, ((records: unknown) =>
+          cb(sanitizeOutcomeRecords(records))) as Listener)
+    }
+  }
+}
+
+/**
  * Build the top-level agent-event subscriptions (`onAgentStatus` / `onSubagentActivity`) over an
  * RpcClient. These mirror the preload's `.on(channel, …)` → `client.subscribe(channel, …)` split:
  * each takes a listener and returns an unsubscribe. Declared against its `NodeTerminalApi` slice so
@@ -658,17 +757,25 @@ export function buildAgentApi(
   | 'answerPermission'
   | 'ackDone'
   | 'reportHibernated'
+  | 'seedAgentIdentity'
   | 'onAgentWake'
   | 'onRemoteViewers'
   | 'onAgentRefreshNode'
   | 'onAgentRenameNode'
 > {
   return {
-    onAgentStatus: (listener) => client.subscribe(IPC.agentStatus, listener as Listener),
+    onAgentStatus: (listener) => subscribeAgentReplay(
+      (cb) => client.subscribe(IPC.agentStatus, cb as Listener),
+      () => client.request(IPC.agentSubagentSnapshot) as Promise<NormalizedAgentEvent[]>, listener
+    ),
     // REAL forward: the Server Edition writes its own agent-status mirror, and the phone reads it
     // over its SSH browse path — a browser canvas hibernating a node must reach that file too.
     reportHibernated: (nodeId, on) => {
       void client.request(IPC.agentHibernated, { nodeId, on }).catch(() => undefined)
+    },
+    // REAL forward, same reason: the server's mirror is what a phone browsing that host reads.
+    seedAgentIdentity: (entries) => {
+      void client.request(IPC.agentSeedIdentity, entries).catch(() => undefined)
     },
     // Deliberate no-op subscriptions, not stubs-by-accident: both signals originate in the phone
     // RELAY host, which lives only in the desktop main process — the Server Edition serves no
@@ -713,6 +820,27 @@ export function buildCanvasApi(client: RpcClient): Pick<NodeTerminalApi, 'canvas
 }
 
 /**
+ * Build the `canvasAuthority` namespace over an RpcClient: a REAL implementation for the Server
+ * Edition browser, whose core may run the canvas authority (docs/hosted-team-relay.md). A server
+ * that does not answer (an older one, a failure) governs nothing, so the tab keeps the solo gate
+ * rather than rejecting. Deliberately NOT part of `buildCanvasApi`, which the relay tab shares: a
+ * relay tab answers from its own connection (relay-api.ts) and never asks the host over the wire.
+ */
+export function buildCanvasAuthorityApi(client: RpcClient): Pick<NodeTerminalApi, 'canvasAuthority'> {
+  const ids = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+  return {
+    canvasAuthority: {
+      // A Server Edition core governs the projects its hosted team shares, and says which only when
+      // asked: until it answers, a client publishes for every project (collab-sync `followGoverned`).
+      assumeAllUntilAnswered: true,
+      governed: () => client.request(IPC.canvasAuthority).then(ids, () => []),
+      onChanged: (listener) => client.subscribe(IPC.canvasAuthorityChanged, ((v: unknown) => listener(ids(v))) as Listener)
+    }
+  }
+}
+
+/**
  * Build the `presence` namespace over an RpcClient, mirroring the preload's invoke(→request) /
  * send(→cast) / on(→subscribe) split member-for-member: `hello` is the only request (its response
  * is how a client learns its OWN clientId), cursor/focus/chat/project are casts, and the two event
@@ -732,6 +860,27 @@ export function buildPresenceApi(client: RpcClient): Pick<NodeTerminalApi, 'pres
     onPeer: (listener) => client.subscribe(IPC.presencePeer, listener as Listener)
   }
   return { presence }
+}
+
+/**
+ * Build the hosted-team verbs of ONE relay session (`NodeTerminalApi.hosted`). Only a relay tab
+ * joined by a `nodeterm://join` code spreads this (relay-api.ts, `{ hosted: true }`): a Server
+ * Edition browser never joins a relay host, and a Team Access relay tab (desktop to desktop) talks
+ * to a host that answers none of these, so both leave `hosted` absent. The host core answers every
+ * request itself (src/core/relay/hosted-service.ts) and judges the caller's role: `self` is open to
+ * any member, the rest are owner-only. `peer-pending` / `pending-closed` reach connected OWNERS only.
+ */
+export function buildHostedApi(client: RpcClient): Required<Pick<NodeTerminalApi, 'hosted'>> {
+  const hosted: HostedSessionApi = {
+    self: () => client.request(IPC.relayHostedSelf) as Promise<HostedSelf>,
+    pending: () => client.request(IPC.relayHostedPending) as Promise<HostedPending[]>,
+    inviteCode: () => client.request(IPC.relayHostedInviteCode) as Promise<string | null>,
+    approve: (pendingId, role) => client.request(IPC.relayHostedApprove, pendingId, role) as Promise<boolean>,
+    deny: (pendingId) => client.request(IPC.relayHostedDeny, pendingId) as Promise<boolean>,
+    onPeerPending: (listener) => client.subscribe(IPC.relayHostedPeerPending, listener as Listener),
+    onPendingClosed: (listener) => client.subscribe(IPC.relayHostedPendingClosed, listener as Listener)
+  }
+  return { hosted }
 }
 
 /**
@@ -844,6 +993,29 @@ export function buildSessionMemoryApi(client: RpcClient): Pick<NodeTerminalApi, 
   }
 }
 
+/** The server lists ITS OWN host's history — the machine the browser's sessions run on. A failed
+ *  request is `{ok:false}`, never an empty list. */
+export function buildRecentConversationsApi(client: RpcClient): Pick<NodeTerminalApi, 'recentConversations'> {
+  return {
+    recentConversations: {
+      list: (req?: RecentConversationsRequest) =>
+        (client.request(IPC.recentConversationsList, req) as Promise<RecentConversationsResult>).catch(
+          () => ({ ok: false as const, reason: 'failed' as const })
+        )
+    }
+  }
+}
+
+export function buildWallpaperApi(client: RpcClient): Pick<NodeTerminalApi, 'wallpaper'> {
+  return {
+    wallpaper: {
+      listStills: () => client.request(IPC.wallpaperListStills) as Promise<WallpaperStill[]>,
+      load: (w: DesktopWallpaper) => client.request(IPC.wallpaperLoad, w) as Promise<string | null>,
+      importImage: (p: string) => client.request(IPC.wallpaperImport, p) as Promise<DesktopWallpaper>
+    }
+  }
+}
+
 /**
  * Build the `claude` namespace over an RpcClient. `cliCaps` is a REAL handler on the server
  * (`registerClaudeCliIpc` runs in the server shell too), so the browser resolves the very same
@@ -868,6 +1040,14 @@ export function buildCodexApi(client: RpcClient): CodexApi {
     identityCaps: () =>
       (client.request(IPC.codexIdentityCaps) as Promise<CodexIdentityCaps>).catch(
         () => UNKNOWN_CODEX_IDENTITY_CAPS
+      ),
+    // A REAL handler server-side, unlike `identityCaps` right above it — `registerCodexCliIpc`
+    // runs in that shell for the reason spelled out there: the Server Edition's Codex sessions run
+    // on the server's own `codex`, so the browser needs that binary's real approval vocabulary.
+    // Rejection degrades to the unknown caps, i.e. the baseline vocabulary.
+    cliCaps: () =>
+      (client.request(IPC.codexCliCaps) as Promise<CodexCliCaps>).catch(
+        () => UNKNOWN_CODEX_CLI_CAPS
       ),
     onIdentity: (listener) => client.subscribe(IPC.codexIdentity, listener as Listener)
   }
@@ -909,14 +1089,17 @@ export function buildTranscriptApi(
 ): Pick<NodeTerminalApi, 'chat'> & { claudeReadTranscript: ClaudeApi['readTranscript'] } {
   return {
     chat: {
-      readTranscript: (sessionId, cwd, accountId, nodeId, agentId) =>
+      // `page` rides through untouched: the server validates it (`normalizeChatPage`) — the
+      // browser is the untrusted side of this wire, so checking it here would prove nothing.
+      readTranscript: (sessionId, cwd, accountId, nodeId, agentId, page) =>
         client.request(
           IPC.chatReadTranscript,
           sessionId,
           cwd,
           accountId,
           nodeId,
-          agentId
+          agentId,
+          page
         ) as Promise<ChatTranscriptResult>,
       // A REAL implementation, not a stub: the server runs on the machine holding these
       // transcripts, so its answer is as good as the desktop's local leg. A failed request
@@ -930,7 +1113,11 @@ export function buildTranscriptApi(
             accountId,
             nodeId
           ) as Promise<TranscriptPresence>
-        ).catch(() => 'unknown' as const)
+        ).catch(() => 'unknown' as const),
+      // REAL: the server registers `registerChatCatalogIpc` and runs on the machine whose command
+      // and skill folders these are. The reply is re-checked in the composer (sanitizeChatCatalog).
+      catalog: (nodeId, agentId, accountId, cwd) =>
+        client.request(IPC.chatCatalog, nodeId, agentId, accountId, cwd) as Promise<ChatCatalog>
     },
     claudeReadTranscript: (sessionId, cwd, accountId, nodeId) =>
       client.request(
@@ -985,7 +1172,19 @@ export function buildClaudeAccountsApi(client: RpcClient): Pick<NodeTerminalApi,
           IPC.claudeAccountsSetSkillSharing,
           id,
           enabled
-        ) as Promise<ClaudeSkillShareResult>
+        ) as Promise<ClaudeSkillShareResult>,
+      // Real: the copy is core, on the machine the browser is served from — the same machine whose
+      // account dirs the Server Edition's panes run under.
+      // An SSH ctx is forwarded as-is: the server registers no SSH leg, so core refuses it
+      // (`failed`) instead of copying on the server's own disk.
+      copySession: (sessionId, sourceAccountId, targetAccountId, ctx) =>
+        client.request(
+          IPC.claudeAccountsCopySession,
+          sessionId,
+          sourceAccountId,
+          targetAccountId,
+          ctx
+        ) as Promise<ClaudeSessionCopyResult>
     }
   }
 }
@@ -1100,11 +1299,17 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildRealApi(client),
     ...buildFilesApi(client),
     ...buildAgentApi(client),
+    ...buildStationNoticeApi(client),
+    ...buildStationOutcomeApi(client),
+    ...buildStationHandoverApi(client),
     ...buildCanvasApi(client),
+    ...buildCanvasAuthorityApi(client),
     ...buildPresenceApi(client),
     ...buildSpeechApi(client),
     ...buildUsageApi(client),
     ...buildSessionMemoryApi(client),
+    ...buildRecentConversationsApi(client),
+    ...buildWallpaperApi(client),
     ...buildTriggersApi(client),
     ...buildGitHubApi(client),
     ...buildClaudeAccountsApi(client),

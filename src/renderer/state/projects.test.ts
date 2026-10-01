@@ -6,6 +6,14 @@ beforeEach(() => {
 })
 
 describe('openFolderProject', () => {
+  it('never routes a local folder to a relay tab carrying the same path (another machine)', () => {
+    const relay = useProjects.getState().addProject('host', '/Users/me/dev/my-app')
+    useProjects.setState((st) => ({ projects: st.projects.map((q) => (q.id === relay.id ? { ...q, remote: true } : q)) }))
+    const p = useProjects.getState().openFolderProject('/Users/me/dev/my-app')
+    expect(p.id).not.toBe(relay.id)
+    expect(p.remote).toBeFalsy()
+  })
+
   it('creates a new project named after the folder and activates it', () => {
     const p = useProjects.getState().openFolderProject('/Users/me/dev/my-app')
     expect(p.name).toBe('my-app')
@@ -257,5 +265,68 @@ describe('capability setters schedule a workspace save', () => {
     } finally {
       unregister()
     }
+  })
+})
+
+// #925: canvas-control `--run-now` into a "Recently closed" project restores its tab but must not
+// travel the user's view — `reopenProject` is the human path and also activates.
+describe('unhideProject (#925)', () => {
+  it('restores a closed project WITHOUT activating it', () => {
+    const a = useProjects.getState().addProject('A')
+    const b = useProjects.getState().addProject('B')
+    useProjects.getState().closeProject(b.id)
+    useProjects.getState().setActive(a.id)
+
+    useProjects.getState().unhideProject(b.id)
+    const s = useProjects.getState()
+    expect(s.projects.find((p) => p.id === b.id)?.closed).toBe(false)
+    expect(s.activeProjectId).toBe(a.id)
+  })
+
+  it('is a no-op for an unknown id', () => {
+    const a = useProjects.getState().addProject('A')
+    useProjects.getState().setActive(a.id)
+    useProjects.getState().unhideProject('zzz')
+    expect(useProjects.getState().projects).toHaveLength(1)
+    expect(useProjects.getState().activeProjectId).toBe(a.id)
+  })
+})
+
+describe('rebindNode', () => {
+  const seed = () => {
+    const node = (id: string, accountId?: string) => ({
+      id, kind: 'terminal' as const, position: { x: 0, y: 0 }, size: { width: 1, height: 1 },
+      title: id, color: '#fff', group: null, agentId: 'claude', ...(accountId ? { accountId } : {})
+    })
+    useProjects.getState().hydrate({
+      version: 2,
+      activeProjectId: 'p2',
+      projects: [
+        { id: 'p1', name: 'one', color: '#fff', viewport: { x: 0, y: 0, zoom: 1 }, nodes: [node('n1', 'a'), node('n2', 'a')] },
+        { id: 'p2', name: 'two', color: '#fff', viewport: { x: 0, y: 0, zoom: 1 }, nodes: [node('n3', 'a')] }
+      ]
+    })
+  }
+  const stored = (p: string, n: string) =>
+    useProjects.getState().projects.find((x) => x.id === p)?.nodes.find((x) => x.id === n)
+
+  it('writes the account into a background project\'s serialized node, touching nothing else', () => {
+    seed()
+    useProjects.getState().rebindNode('p1', 'n1', { agentId: 'claude', accountId: 'b' })
+    expect(stored('p1', 'n1')?.accountId).toBe('b')
+    expect(stored('p1', 'n2')?.accountId).toBe('a')
+    expect(stored('p2', 'n3')?.accountId).toBe('a')
+  })
+
+  it('an explicit undefined account moves the node to the system account', () => {
+    seed()
+    useProjects.getState().rebindNode('p1', 'n1', { agentId: 'claude', accountId: undefined })
+    expect(stored('p1', 'n1')?.accountId).toBeUndefined()
+  })
+
+  it('an absent account key leaves the account alone', () => {
+    seed()
+    useProjects.getState().rebindNode('p1', 'n1', { agentId: 'claude' })
+    expect(stored('p1', 'n1')?.accountId).toBe('a')
   })
 })

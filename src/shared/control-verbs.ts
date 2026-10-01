@@ -57,8 +57,8 @@ export const DESTRUCTIVE_VERBS: ReadonlySet<string> = new Set([
  * and answers `false` here (see the file header). And not "is this verb gated": the dialog itself
  * is hand-written per case, so this returning `true` for a new verb would gate nothing on its own.
  *
- * `open-terminal --cmd` is deliberately NOT in the set and never was; the 2026-08-13 argv-leak
- * writeup in `docs/node-identity.md` is the record of what that costs when the bearer leaks.
+ * `open-terminal --cmd` is not confirm-gated; hook-server requires verified node identity
+ * whenever cmd is present (issue #653), independently of the rollout policy.
  */
 export function isDestructiveVerb(verb: string): boolean {
   return DESTRUCTIVE_VERBS.has(verb)
@@ -106,6 +106,21 @@ export function dryRunRequested(args: Record<string, string | undefined>): boole
   if (v === undefined) return false
   return !/^(false|no|0)$/i.test(v.trim())
 }
+
+/**
+ * Is `--run-now` on (#925)? Presence means yes, exactly like `--dry-run`: the shim encodes a
+ * valueless flag as an empty string, and only an explicit false|no|0 turns it off.
+ */
+export function runNowRequested(args: Record<string, string | undefined>): boolean {
+  const v = args['run-now']
+  if (v === undefined) return false
+  return !/^(false|no|0)$/i.test(v.trim())
+}
+
+/** "Start now" and "start when X is done" contradict each other, so `--run-now` with `--after` is
+ *  refused on every open verb. Shared so the desktop and the Server Edition refuse in one sentence. */
+export const RUN_NOW_AFTER_REFUSAL =
+  'run-now-after-unsupported: --run-now cannot be combined with --after'
 
 /** The refusal for `--dry-run` on a verb outside DRY_RUN_VERBS — derived from the set so the
  *  sentence can never name a verb the gate does not honour. */

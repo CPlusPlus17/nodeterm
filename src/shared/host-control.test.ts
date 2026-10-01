@@ -28,6 +28,26 @@ describe('isHostOnlyChannel', () => {
     expect(isHostOnlyChannel(IPC.projectSetupRequestTrust)).toBe(true)
   })
 
+  it('covers pty:launch-headless — the desktop-only headless start is refused to relay peers (#925)', () => {
+    // A relay tab's own bridge already rejects it E_UNSUPPORTED, but that only stops a well-behaved
+    // guest. The host must refuse a peer that sends the raw request too (spec §6: Relay tab refuses).
+    expect(isHostOnlyChannel(IPC.ptyLaunchHeadless)).toBe(true)
+  })
+
+  it('covers the board-comment delivery — a peer must never type a comment into a host pane', () => {
+    // A board comment typed by a relay guest or a team-presence peer is cross-user prompt
+    // injection. The channel is registered with a raw `ipcMain.handle` (invisible to peers), and
+    // listed here as the belt: moving it onto the platform table later must not open it.
+    expect(isHostOnlyChannel(IPC.agentBoardCommentDeliver)).toBe(true)
+  })
+
+  it('covers both station-notice request channels', () => {
+    // A guest may not report a pane verdict about the host's nodes…
+    expect(isHostOnlyChannel(IPC.stationNoticeDropped)).toBe(true)
+    // …nor list every project's failed stations: a guest scoped to one project must not read the rest.
+    expect(isHostOnlyChannel(IPC.stationNoticeList)).toBe(true)
+  })
+
   it('leaves the read-only/lifecycle channels alone — the gate is on ACTION, not on the namespace', () => {
     // Subscribing and receiving events costs a guest nothing the canvas does not already show;
     // running host code, and answering the host's own trust prompt, are the two acts being gated.

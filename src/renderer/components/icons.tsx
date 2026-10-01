@@ -70,6 +70,15 @@ export const IconMinus = () => (
   </svg>
 )
 
+/** Minimap — a map frame with the viewport rectangle inside it: the minimized minimap's restore
+ *  button. */
+export const IconMinimap = () => (
+  <svg {...S}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <rect x="11" y="9" width="6" height="6" rx="1" />
+  </svg>
+)
+
 export const IconSelectAll = () => (
   <svg {...S}>
     <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" />
@@ -182,6 +191,16 @@ export const IconReload = () => (
   <svg {...S}>
     <path d="M20 12a8 8 0 1 1-2.34-5.66" />
     <path d="M20 4v4h-4" />
+  </svg>
+)
+
+/** Two chasing arrows — the title-bar "Update" button (an app update is waiting). */
+export const IconUpdate = () => (
+  <svg {...S}>
+    <path d="M20 11a8 8 0 0 0-14.3-4.9L4 8" />
+    <path d="M4 4v4h4" />
+    <path d="M4 13a8 8 0 0 0 14.3 4.9L20 16" />
+    <path d="M20 20v-4h-4" />
   </svg>
 )
 
@@ -433,6 +452,14 @@ export const IconMoreVertical = () => (
     <circle cx="12" cy="5.5" r="1.6" />
     <circle cx="12" cy="12" r="1.6" />
     <circle cx="12" cy="18.5" r="1.6" />
+  </svg>
+)
+
+/** Two overlapping sheets: copy to the clipboard (the ⌘M thread's per-turn Copy). */
+export const IconCopy = () => (
+  <svg {...S}>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M5 15V6a2 2 0 0 1 2-2h9" />
   </svg>
 )
 

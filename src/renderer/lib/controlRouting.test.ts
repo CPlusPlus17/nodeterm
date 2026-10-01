@@ -10,6 +10,7 @@ import {
   controlVerbSetsForTests,
   sourceIsControlCapable,
   storedNodeListing,
+  controlListingText,
   answerBrowserResolve,
   type ControlProject,
   type BrowserResolveProject
@@ -93,7 +94,7 @@ describe('needsLiveCanvas', () => {
   it('is false for sticky — a scheduled note sync must never travel the camera either', () => {
     // Same G5 shape as send/reply: routing is by SOURCE, and the verb's headline use is a cron
     // agent rewriting one note every few minutes. The non-active write path goes through the
-    // projects store (`applyNodeMutation`), not the live canvas.
+    // projects store (`applyOwnNodeMutation`), not the live canvas.
     expect(needsLiveCanvas('sticky')).toBe(false)
   })
 
@@ -340,6 +341,44 @@ describe('storedNodeListing', () => {
       { id: 'term-b-3', kind: 'terminal', title: '' }
     ])
   })
+
+  it('marks a session started on a GitHub issue on its own row, and only a valid reference', () => {
+    const rows = storedNodeListing([
+      { id: 'term-1', kind: 'terminal', title: 'Claude', issueRef: { owner: 'o', repo: 'r', number: 7 } },
+      { id: 'term-2', kind: 'terminal', title: 'Hostile', issueRef: { owner: 'o', repo: 'r;rm -rf ~', number: 7 } }
+    ])
+    expect(rows[0]).toMatchObject({ issue: 'o/r#7' })
+    expect(rows[1]).not.toHaveProperty('issue')
+    expect(controlListingText(rows)).toBe('term-1 [terminal] Claude — issue o/r#7\nterm-2 [terminal] Hostile')
+  })
+})
+
+describe('storedNodeListing — a dependent held by work handed to its station (core/station-handover.ts)', () => {
+  it('names the station whose `done` is from before the work just handed to it', () => {
+    const nodes = [
+      { id: 'st', kind: 'terminal', title: 'Builder', agentId: 'claude' },
+      { id: 'd', kind: 'terminal', title: 'Reviewer', agentId: 'claude', pendingLaunch: { after: ['st'], command: 'claude go' } },
+      // Hostile shapes are read, never thrown on.
+      { id: 'bad', kind: 'terminal', title: 'Bad', pendingLaunch: { after: 'st', command: 'x' } }
+    ]
+    const statuses = { st: { state: 'done' as const }, d: {}, bad: {} }
+    const handovers = { st: { nodeId: 'st', since: 5 } }
+    const rows = storedNodeListing(nodes, statuses, {}, 0, {}, handovers)
+    expect(rows[1]).toMatchObject({ launchState: 'queued', handoverWait: 'st "Builder"' })
+    expect(rows[2]).not.toHaveProperty('handoverWait')
+    expect(controlListingText(rows).split('\n')[1]).toBe(
+      'd [terminal] Reviewer — QUEUED — waiting for st "Builder" to finish the work handed to it'
+    )
+    // Only background tasks left running: named as such.
+    const bg = storedNodeListing(nodes, statuses, {}, 0, {}, { st: { nodeId: 'st', background: true } })
+    expect(bg[1]).toMatchObject({ backgroundWait: 'st "Builder"' })
+    expect(bg[1]).not.toHaveProperty('handoverWait')
+    expect(controlListingText(bg).split('\n')[1]).toBe(
+      'd [terminal] Reviewer — QUEUED — waiting for st "Builder" to finish the tasks still running in its background'
+    )
+    // Nothing handed over: the row is what it always was.
+    expect(storedNodeListing(nodes, statuses, {}, 0, {}, {})[1]).not.toHaveProperty('handoverWait')
+  })
 })
 
 describe('the off-screen disposition table (the verbs that used to travel)', () => {
@@ -418,4 +457,142 @@ describe('the off-screen disposition table (the verbs that used to travel)', () 
     for (const v of [...coldOpenable, ...offCanvas, ...storedNode]) expect(needsLiveCanvas(v), v).toBe(true)
     for (const v of storeAnswered) expect(needsLiveCanvas(v), v).toBe(false)
   })
+})
+
+
+it('lists held, failed and unconfirmed launches without claiming an agent is healthy', () => {
+  const nodes = [
+    { id: 'queued', pendingLaunch: { command: 'claude' } },
+    { id: 'failed', pendingLaunch: { command: 'codex' } },
+    { id: 'stalled', pendingLaunch: { command: 'claude' } },
+    { id: 'dead', agentId: 'claude' },
+    { id: 'unknown', agentId: 'codex' },
+    { id: 'errored', agentId: 'claude' },
+    { id: 'shell' }
+  ]
+  const rows = storedNodeListing(nodes, {
+    dead: { dropped: true, state: 'done' },
+    errored: { state: 'done', lastTurnError: { at: 1 } }
+  }, {
+    failed: { kind: 'failed', attempts: 5, at: 1 },
+    stalled: { kind: 'stalled', since: 1 }
+  })
+  expect(rows.map((r) => r.launchState)).toEqual(['queued', 'failed', 'stalled', 'dropped', 'unconfirmed', undefined, undefined])
+  const text = controlListingText(rows)
+  expect(text).toContain('queued [terminal]  — QUEUED')
+  expect(text).toContain('failed [terminal]  — LAUNCH FAILED')
+  expect(text).toContain('stalled [terminal]  — QUEUED (terminal not ready)')
+  expect(text).toContain('dead [terminal]  — DROPPED')
+  expect(text).toContain('unknown [terminal]  — AGENT STATUS UNCONFIRMED')
+  expect(text).toContain('errored [terminal]  — LAST TURN ERRORED')
+  expect(text).not.toContain('RUNNING')
+})
+
+it('lists a background start as STARTING, not as the failed launch its manualOnly claim would read as (#925)', () => {
+  const rows = storedNodeListing(
+    [{ id: 'bg', pendingLaunch: { command: 'claude', attempted: true, manualOnly: true } }],
+    {},
+    { bg: { kind: 'starting', since: 1 } }
+  )
+  expect(rows[0].launchState).toBe('starting')
+  expect(controlListingText(rows)).toBe('bg [terminal]  — STARTING')
+})
+
+it('lists a PR wait on the row, and EXPIRED once its deadline has passed (--after-pr)', () => {
+  const hold = (deadlineAt: number) => ({
+    repository: 'o/r',
+    waits: [{ number: 7, until: 'checks' }, { number: 9, until: 'merged' }],
+    deadlineAt,
+    armedAt: 0
+  })
+  const rows = storedNodeListing(
+    [
+      { id: 'waits', pendingLaunch: { after: [], command: 'claude', afterPr: hold(2_000) } },
+      { id: 'late', pendingLaunch: { after: [], command: 'claude', afterPr: hold(1_000) } },
+      { id: 'bad', pendingLaunch: { after: [], command: 'claude', afterPr: { invalid: true, waits: [] } } }
+    ],
+    {},
+    {},
+    1_000
+  )
+  expect(rows.map((r) => r.launchState)).toEqual(['queued', 'expired', 'expired'])
+  const text = controlListingText(rows)
+  expect(text).toContain('waits [terminal]  — QUEUED — waits on PR #7 checks, PR #9 merged')
+  expect(text).toContain('late [terminal]  — EXPIRED (PR wait deadline passed; run it with `run`)')
+  expect(text).toContain('bad [terminal]  — EXPIRED')
+})
+
+it('lists every station’s own report, and where a success wait stands (--after-success)', () => {
+  const NOW = 10_000
+  const wait = (deps: string[], deadlineAt = NOW + 1) => ({
+    command: 'claude',
+    after: deps,
+    afterSuccess: { deps, deadlineAt }
+  })
+  const nodes = [
+    { id: 'build', title: 'Builder', agentId: 'claude' },
+    { id: 'lint', title: 'Linter', agentId: 'claude' },
+    { id: 'rev', title: 'Reviewer', pendingLaunch: wait(['build']) },
+    { id: 'rel', title: 'Release', pendingLaunch: wait(['lint']) },
+    { id: 'late', title: 'Late', pendingLaunch: wait(['build'], NOW) },
+    { id: 'go', title: 'Go', pendingLaunch: wait(['build', 'lint']) }
+  ]
+  const statuses = { build: { state: 'done' as const }, lint: { state: 'done' as const } }
+  const outcomes = {
+    lint: { nodeId: 'lint', outcome: 'failed' as const, note: 'eslint red', at: 1 }
+  }
+  const rows = storedNodeListing(nodes, statuses, {}, NOW, outcomes)
+  const byId = Object.fromEntries(rows.map((r) => [r.id, r]))
+  expect(byId.rev.launchState).toBe('waiting-success')
+  expect(byId.rel.launchState).toBe('blocked-failure')
+  expect(byId.late.launchState).toBe('success-expired')
+  expect(byId.go.launchState).toBe('blocked-failure')
+  expect(byId.lint.outcome).toBe('failed')
+  const text = controlListingText(rows)
+  expect(text).toContain('lint [terminal] Linter — REPORTED FAILURE ("eslint red")')
+  expect(text).toContain(
+    'rev [terminal] Reviewer — WAITING FOR SUCCESS — needs success from: build "Builder" (no outcome reported yet)'
+  )
+  expect(text).toContain(
+    'rel [terminal] Release — BLOCKED BY FAILURE (will not start on its own; run it with `run`) — needs success from: lint "Linter" (reported failure: "eslint red")'
+  )
+  expect(text).toContain('late [terminal] Late — EXPIRED (success wait deadline passed; run it with `run`)')
+
+  // The success arrives: the row stops waiting, and the station's own row says what it reported.
+  const after = storedNodeListing(nodes, statuses, {}, NOW, {
+    build: { nodeId: 'build', outcome: 'succeeded', at: 2 }
+  })
+  const r2 = Object.fromEntries(after.map((r) => [r.id, r]))
+  expect(r2.rev.launchState).toBe('queued')
+  expect(r2.rev.successWait).toBeUndefined()
+  expect(controlListingText(after)).toContain('build [terminal] Builder — REPORTED SUCCESS')
+})
+
+it('a report made before queued new work is listed as not counting, and the wait keeps waiting', () => {
+  const rows = storedNodeListing(
+    [
+      { id: 'build', title: 'Builder', agentId: 'claude' },
+      { id: 'rev', title: 'Reviewer', pendingLaunch: { command: 'claude', after: ['build'], afterSuccess: { deps: ['build'], deadlineAt: 99 } } }
+    ],
+    { build: { state: 'done' } },
+    {},
+    10,
+    { build: { nodeId: 'build', outcome: 'succeeded', at: 1, workPending: true } }
+  )
+  const text = controlListingText(rows)
+  expect(text).toContain('build [terminal] Builder — REPORTED SUCCESS (before new work queued for it; not counted until it reports again)')
+  expect(text).toContain('rev [terminal] Reviewer — WAITING FOR SUCCESS — needs success from: build "Builder" (new work is queued for it; waiting for its next report)')
+})
+
+it('a hostile success hold in a stored project neither throws nor reads as met', () => {
+  const rows = storedNodeListing(
+    [
+      { id: 'x', pendingLaunch: { command: 'claude', after: [], afterSuccess: 'build' } },
+      { id: 'y', pendingLaunch: { command: 'claude', after: [], afterSuccess: { deps: [1], deadlineAt: 'soon' } } }
+    ],
+    {},
+    {},
+    5
+  )
+  expect(rows.map((r) => r.launchState)).toEqual(['success-expired', 'success-expired'])
 })

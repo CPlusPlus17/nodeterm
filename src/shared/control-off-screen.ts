@@ -88,7 +88,15 @@ const STORE_ANSWERED_VERBS: ReadonlySet<string> = new Set([
   // Talks to GitHub on behalf of the caller's OWN project. No node at either end and no dialog, so
   // travelling the user's view would be pure interruption — and the point of the verb is that it
   // works while nobody is watching.
-  'report-issue'
+  'report-issue',
+  // A station's report about ITSELF, recorded in core by the shell's control handler and never
+  // forwarded to a canvas — and the station reporting is, by definition, often not on screen.
+  'report-outcome',
+  // The board's GitHub lane, read by the shell's control handler out of the GitHub service's cache
+  // (core/github/control-read.ts). A read needs no canvas at either end, and a background
+  // orchestrator polling `prs` must never travel the user's view.
+  'issues',
+  'prs'
 ])
 
 /**
@@ -195,6 +203,7 @@ export function answersOffCanvas(verb: string): boolean {
  *     persisted index, with no live client — see core/remote-end.ts) and drops the node through
  *     the store's `removeNode`. That is the cross-project teardown the sessions sidebar has always
  *     used for a node in a project that is not on screen; `closeStoredNodes` is now the one copy.
+ *   - `run` starts a node's held launch headless through the owner's serialized copy (#925).
  *   - `rename` / `color` have dedicated store writers (`renameNode` / `recolorNode`) that mutate
  *     the serialized node directly, with no round-trip through the serializers.
  *   - `link` writes persisted `bridges`, which `appendCanvasLinks` appends to a non-active project —
@@ -211,6 +220,7 @@ export function answersOffCanvas(verb: string): boolean {
 const STORED_NODE_VERBS: ReadonlySet<string> = new Set([
   'write',
   'close',
+  'run',
   'rename',
   'color',
   'link',

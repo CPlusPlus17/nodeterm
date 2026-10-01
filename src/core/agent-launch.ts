@@ -13,6 +13,8 @@ import {
   type PromptInjectionMode,
 } from "../shared/agents/config";
 import { approvalFlags } from "../shared/agents/approval-mode";
+import { CODEX_NO_DAEMON_FLAG } from "../shared/agents/codex-daemon";
+import { SAFE_SESSION_ID } from "../shared/session-id";
 
 /** The parser that owns a live local Windows-profile terminal. */
 export type AgentLaunchDialect =
@@ -54,6 +56,23 @@ export interface AgentLaunchTrustedContext {
   resolveExecutableKind?: AgentLaunchExecutableKindResolver;
   /** Trusted absolute Windows PowerShell executable used only as cmd's ASCII-safe wrapper. */
   windowsPowerShellPath?: string;
+  /**
+   * What the host's `codex` accepts for `--ask-for-approval`, from `core/codex-cli.ts`'s probe of
+   * the binary this plan will exec. Host-authoritative like everything else here, and injected
+   * rather than read inline so this planner stays pure and testable.
+   *
+   * Absent = unknown = the baseline vocabulary, which is the safe degrade everywhere: the launch
+   * still happens, at worst `manual` falls back to codex's own default. The value that makes this
+   * field necessary is `untrusted`, which codex removed in 0.149.0 — clap EXITS on a value it does
+   * not know, so emitting it blind is a dead session, not a degraded one.
+   */
+  codexApprovalValues?: readonly string[] | null;
+  /**
+   * Does the host's `codex` accept `--no-daemon`? Same probe, same provenance. Only a literal
+   * `true` adds the flag — see `withCodexNoDaemon` (shared/agents/codex-daemon.ts) for why every
+   * plain Codex TUI nodeterm starts needs it from codex-cli 0.157.0 on.
+   */
+  codexNoDaemon?: boolean | null;
 }
 
 /** Core-private launch material. It must never cross the renderer/preload/relay boundary. */
@@ -98,7 +117,6 @@ interface ResolvedAgentConfig {
   builtin: boolean;
 }
 
-const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
 const SAFE_NEW_SESSION_UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 // PowerShell and POSIX parsers also treat Unicode line/paragraph separators as command boundaries
@@ -341,9 +359,22 @@ function logicalLaunch(
 
   if (intent.permissionMode !== undefined && !hasPermissionMode(config.id))
     fail("invalid-intent");
-  const modeFlags = intent.permissionMode
-    ? approvalFlags(config.id, intent.permissionMode)
+  const approval = intent.permissionMode
+    ? approvalFlags(config.id, intent.permissionMode, {
+        codexApprovalValues: context.codexApprovalValues,
+      })
     : [];
+  // Same rule as `withCodexNoDaemon`, applied to argv instead of a typed line.
+  const noDaemon =
+    config.id === "codex" &&
+    context.codexNoDaemon === true &&
+    !baseArgs.some(
+      (a) =>
+        a === CODEX_NO_DAEMON_FLAG || a === "--remote" || a.startsWith("--remote="),
+    )
+      ? [CODEX_NO_DAEMON_FLAG]
+      : [];
+  const modeFlags = [...approval, ...noDaemon];
 
   if (intent.action === "resume") {
     if (!config.builtin || !canResume(config.id)) fail("agent-unavailable");

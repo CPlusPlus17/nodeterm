@@ -32,6 +32,11 @@ export const IPC = {
   /** The foreground command of a node's tmux pane (`#{pane_current_command}`) — how the in-place
    *  agent restart sees that the CLI has exited and a shell owns the pane again. */
   ptyPaneCommand: 'pty:pane-command',
+  /** The live working directory of a node's tmux pane (`#{pane_current_path}`) — where a relative
+   *  path an agent printed actually lives when it is not the node's launch cwd (file links). */
+  ptyPaneCwd: 'pty:pane-cwd',
+  /** Desktop-only (#925): start a node's session with no viewer and deliver its held launch. */
+  ptyLaunchHeadless: 'pty:launch-headless',
   /** Kernel truth about a node's tmux pane: its root pid, tty, tmux pane id, and the full argv of
    *  its FOREGROUND process group (`PaneOwner`). The name-only `ptyPaneCommand` above cannot tell
    *  an agent from anything else — an npm-installed CLI reports as `node`, and an agent reached
@@ -54,16 +59,21 @@ export const IPC = {
   ptyRaiseDeviceLimit: 'pty:raise-device-limit',
   claudeReadTranscript: 'claude:read-transcript',
   chatReadTranscript: 'chat:read-transcript',
+  // The ⌘M composer's `/` catalog for a node: built-ins, custom commands, skills (core/chat-catalog.ts).
+  chatCatalog: 'chat:catalog',
   /** Does a claude-shaped transcript exist for this session id? Tri-state
    *  (`present | absent | unknown`) — see `TranscriptPresence`. The one caller that ACTS on a
    *  negative is cold restore, so "we could not look" must never read as "it is gone". */
   transcriptExists: 'transcript:exists',
+  /** "Open recent": the newest agent conversations on THIS machine's disk (core/recent-conversations.ts). */
+  recentConversationsList: 'recent-conversations:list',
   claudeAccountsAdd: 'claude-accounts:add',
   claudeAccountsWaitLogin: 'claude-accounts:wait-login',
   claudeAccountsCancelWait: 'claude-accounts:cancel-wait',
   claudeAccountsRemove: 'claude-accounts:remove',
   claudeAccountsLink: 'claude-accounts:link',
   claudeAccountsSetSkillSharing: 'claude-accounts:set-skill-sharing',
+  claudeAccountsCopySession: 'claude-accounts:copy-session',
   // Machine-scoped managed Codex accounts (S6). Add/device-login/removal, plus the three-phase,
   // owner-authorized account switch (resume the SAME conversation id, never fork) and the
   // source-side leg of moving an idle conversation to an SSH account. See main/codex-accounts.ts.
@@ -77,12 +87,14 @@ export const IPC = {
   codexAccountsCommitSwitch: 'codex-accounts:commit-switch',
   codexAccountsFinishSwitch: 'codex-accounts:finish-switch',
   codexAccountsRollbackSwitch: 'codex-accounts:rollback-switch',
+  codexAccountsSwitchThreadRemote: 'codex-accounts:switch-thread-remote',
   codexAccountsTransferThreadToSsh: 'codex-accounts:transfer-thread-to-ssh',
   claudeCliCaps: 'claude-cli:caps',
   grokCliCaps: 'grok-cli:caps',
   grokTakenSessionIds: 'grok-cli:taken-session-ids',
   /** Can a node on this machine get a managed Codex identity? See core/codex-identity-caps.ts. */
   codexIdentityCaps: 'codex-identity:caps',
+  codexCliCaps: 'codex-cli:caps',
   /** main/server → renderer: a Codex node's identity mode changed ('shared' | 'plain'). The
    *  'plain' events are what make the launcher's fallback visible instead of silent. */
   codexIdentity: 'codex-identity:event',
@@ -154,6 +166,7 @@ export const IPC = {
    *  Edition's browser tab has no raw input stream and keeps the heuristics. */
   canvasTrackpadGesture: 'canvas:trackpad-gesture',
   agentStatus: 'agent:status',
+  agentSubagentSnapshot: 'agent:subagent-snapshot',
   /** Renderer → main/server: answer a held Claude permission hook (deterministic approvals).
    *  Payload: `{ nodeId, pendingId, decision: 'allow'|'deny' }`; resolves boolean. See
    *  docs/hook-reply-approvals.md. */
@@ -173,6 +186,12 @@ export const IPC = {
    *  phone can render SLEEPING, and gives main the `isHibernated` signal the delivery queue's
    *  hibernated leg was recorded as missing (agent-messaging.ts). */
   agentHibernated: 'agent:hibernated',
+  /** Renderer → main/server: seed the agent-status mirror with the node identities (agentId +
+   *  sessionId [+ observed account]) this renderer's persisted agentStatus store holds, for nodes
+   *  the mirror has no session for. Arg: `IdentitySeedEntry[]` (`@shared/agent-identity-seed`,
+   *  validated and capped there). Fire-and-forget; add-only — never overrides a hook-fed id. Feeds
+   *  the phone's chat view, which finds a transcript only by the mirror's session id. */
+  agentSeedIdentity: 'agent:seed-identity',
   /** main → renderer: ask the renderer to wake a hibernated node NOW (a phone viewer attached to
    *  its session over the relay). A nudge, never an assertion: the renderer re-reads the flag and
    *  no-ops for a non-hibernated or unmounted node — same contract as `wakeHibernatedNode`. Arg:
@@ -216,11 +235,43 @@ export const IPC = {
   agentControl: 'agent:control',
   agentControlResult: 'agent:control-result',
   agentMessageDeliver: 'agent:message-deliver',
+  /** Renderer → main: deliver ONE mentioned session's copy of a board comment the local user just
+   *  posted (`deliverBoardCommentFromUi`). Desktop-only, main-window-only, never peer-dispatchable —
+   *  see src/main/board-comment-wiring.test.ts. Arg: `BoardCommentDeliverRequest`. */
+  agentBoardCommentDeliver: 'agent:board-comment-deliver',
+  /** Station-failure notices (src/core/agents/station-notice.ts). invoke: the current list
+   *  (StationNoticeView[]) for a renderer that booted after the last push. */
+  stationNoticeList: 'station-notice:list',
+  /** renderer → core: the renderer's DROPPED verdict for one node (`nodeId, dropped`) — the one
+   *  trigger fact core cannot measure itself (it needs the renderer's hibernated/paused flags). */
+  stationNoticeDropped: 'station-notice:dropped',
+  /** renderer → core: the renderer's board-dispatch map (@shared/board-dispatch-report), replaced
+   *  whole on each change — what the `issues` control verb shows beside an issue. Display only. */
+  boardDispatchReport: 'board-dispatch:report',
+  /** core → every renderer: the FULL current notice list on each change, never a delta. */
+  stationNoticeChanged: 'station-notice:changed',
+  /** Station task outcomes (`report-outcome`, src/core/station-outcome-store.ts). invoke: every
+   *  record this process holds (StationOutcomeRecord[]), for a renderer that booted after a push. */
+  stationOutcomeList: 'station-outcome:list',
+  /** core → every renderer: the FULL current record list on each change, never a delta. */
+  stationOutcomeChanged: 'station-outcome:changed',
+  /** Stations with unfinished HANDED-OVER work (src/core/station-handover.ts): what plain `--after`
+   *  reads so a `done` from before new work arrived does not release a dependent. invoke: the
+   *  current list (StationHandoverRecord[]), for a renderer that booted after a push. */
+  stationHandoverList: 'station-handover:list',
+  /** core → every renderer: the FULL current list on each change, never a delta. */
+  stationHandoverChanged: 'station-handover:changed',
   /** Canvas sync: a client casts its local node mutations here; the core reflector
    *  (src/core/canvas-sync.ts) stamps each with the total order (`seq`) and sends it back out on the
    *  SAME channel to EVERY attached client — the sender included, whose copy is its ack (see
    *  src/shared/canvas-order.ts). Args (both directions): [projectId: string, CanvasMutation]. */
   canvasMut: 'canvas:mut',
+  /** Which projects this core's canvas authority governs (request → `string[]`): a client publishes
+   *  its canvas ops for them even when nobody else is attached, because the authority writes only
+   *  what it hears as ops (docs/hosted-team-relay.md). Server Edition only; the desktop answers none. */
+  canvasAuthority: 'canvas:authority',
+  /** Event: the governed set changed (`string[]`, the new set). Server Edition only. */
+  canvasAuthorityChanged: 'canvas:authority-changed',
   contextLinkSetLinks: 'context-link:set-links',
   contextLinkInfo: 'context-link:info',
   /** Board-log (`.nodeterm/board-log.jsonl`): request/response append + read, routed per project
@@ -283,6 +334,16 @@ export const IPC = {
   /** The scoped machine's RAM (available/total) — the cheap read behind the system-resource
    *  pill. Safe to poll locally; NOT polled for an SSH scope. */
   sessionMemoryHost: 'session-memory:host',
+  /** Dev-server ports (core/dev-ports-service.ts): which TCP ports each node's session listens on
+   *  (ownership by process tree, one round trip per host), and the same-port SSH forward that makes
+   *  `http://localhost:<port>` reach an SSH project's host. Desktop only; host-only for relay peers. */
+  devPortsScan: 'dev-ports:scan',
+  devPortsForward: 'dev-ports:forward',
+  devPortsUnforward: 'dev-ports:unforward',
+  // Canvas wallpaper (core/wallpaper.ts): macOS stills, cached image reads, image import.
+  wallpaperListStills: 'wallpaper:list-stills',
+  wallpaperLoad: 'wallpaper:load',
+  wallpaperImport: 'wallpaper:import',
   // Trigger nodes (issue #493): machine-local arm/disarm + the card's status/run-now.
   triggersArm: 'triggers:arm',
   triggersDisarm: 'triggers:disarm',
@@ -398,6 +459,11 @@ export const IPC = {
   githubIssuesMove: 'githubIssues:move',
   githubIssuesCreateLabels: 'githubIssues:create-labels',
   githubIssuesClearCache: 'githubIssues:clear-cache',
+  githubIssuesPullStatus: 'githubIssues:pull-status',
+  githubIssuesChasePulls: 'githubIssues:chase-pulls',
+  githubIssuesPullChecks: 'githubIssues:pull-checks',
+  githubIssuesClaimPullAutoMove: 'githubIssues:claim-pull-auto-move',
+  githubIssuesNotePullWaits: 'githubIssues:note-pull-waits',
   githubIssuesChanged: (projectId: string) => `githubIssues:changed:${projectId}`,
   githubProjectAvatar: 'github:projectAvatar',
   githubControlStatus: 'githubControl:status',
@@ -521,6 +587,11 @@ export const IPC = {
   // does the CDP work itself; the renderer never runs a CDP command.
   browserControlResolve: 'browser:control-resolve',
   browserControlResolveResult: 'browser:control-resolve-result',
+  // The phone Chat verbs' renderer round-trip (main/remote/host-chat.ts): main asks the renderer —
+  // which owns the agent-status store and the ⌘M send gate — for a node's chat status, or to send
+  // a phone message through that gate; the renderer answers on the reply channel.
+  hostChatQuery: 'host:chat-query',
+  hostChatReply: 'host:chat-reply',
   remoteHostStart: 'remote:host:start',
   remoteHostStop: 'remote:host:stop',
   // Connection approval gate: main → renderer when a client finishes the handshake (carries the
@@ -529,6 +600,7 @@ export const IPC = {
   remoteHostPeerPending: 'remote:host:peer-pending',
   remoteHostPeerPendingCleared: 'remote:host:peer-pending-cleared',
   remoteHostApprove: 'remote:host:approve',
+  remotePhoneApprove: 'remote:phone:approve',
   remoteHostReject: 'remote:host:reject',
   // Host canvas mirror: renderer pushes its serialized active-project canvas to main;
   // main pushes a client's mutation back to the host renderer to apply.
@@ -580,6 +652,26 @@ export const IPC = {
   relayClientApproved: (connectionId: string) => `relay:client:approved:${connectionId}`,
   relayClientFrame: (connectionId: string) => `relay:client:frame:${connectionId}`,
   relayClientClosed: (connectionId: string) => `relay:client:closed:${connectionId}`,
+  // HOSTED team relay (Server Edition, src/core/relay/hosted-service.ts). These ride the relay
+  // tunnel only: the core relay host INTERCEPTS them per session and they are never registered on
+  // the platform, so a browser client (gated by the server password, not a team role) cannot reach
+  // them. `relayHostedPeerPending` / `relayHostedPendingClosed` are events sent to connected OWNERS
+  // only; `relayHostedApprove` (pendingId, role), `relayHostedDeny` (pendingId),
+  // `relayHostedInviteCode` () and `relayHostedPending` () (the open requests, pulled) are
+  // owner-only requests; `relayHostedSelf` () is open to any approved peer and answers its own role.
+  relayHostedPeerPending: 'relay:hosted:peer-pending',
+  relayHostedPendingClosed: 'relay:hosted:pending-closed',
+  relayHostedPending: 'relay:hosted:pending',
+  relayHostedApprove: 'relay:hosted:approve',
+  relayHostedDeny: 'relay:hosted:deny',
+  relayHostedInviteCode: 'relay:hosted:invite-code',
+  relayHostedSelf: 'relay:hosted:self',
+  // The hosted teams THIS desktop has joined (src/main/remote/relay-bookmarks.ts). Unlike the
+  // hosted verbs above, these two never ride the relay: they are raw `ipcMain` handlers in the
+  // desktop main process, invisible to any relay peer. `relayHostedBookmarks` () lists them without
+  // their device tokens; `relayHostedBookmarkRemove` (hostId) forgets one.
+  relayHostedBookmarks: 'relay:hosted:bookmarks',
+  relayHostedBookmarkRemove: 'relay:hosted:bookmark-remove',
   handoffBuild: 'handoff:build',
   // Phone pairing (nodeterm iOS "scan a QR" flow): renderer starts/stops the one-shot LAN
   // listener; main pushes the completion result back over `pairing:done`. The per-device
@@ -590,6 +682,12 @@ export const IPC = {
   pairingProbeSsh: 'pairing:probe-ssh',
   pairingOpenRemoteLoginSettings: 'pairing:open-remote-login-settings',
   pairingListDevices: 'pairing:listDevices',
+  // Push webhook management (core/push-webhook.ts). Under `pairing:` so HOST_ONLY_CHANNEL_PREFIXES
+  // keeps them off the relay: minting a token that pushes to the host's phones is the host's call.
+  pairingWebhookStatus: 'pairing:webhook-status',
+  pairingWebhookMint: 'pairing:webhook-mint',
+  pairingWebhookRevoke: 'pairing:webhook-revoke',
+  pairingWebhookEndpoint: 'pairing:webhook-endpoint',
   pairingRevokeDevice: 'pairing:revokeDevice',
   // Dictation (desktop/server). speechProgress is a main/server → renderer broadcast of
   // { id, pct } while a whisper model downloads (WhisperModelStore.onProgress).
