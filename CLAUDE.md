@@ -8503,8 +8503,9 @@ invariants:
   translates no ids, so a tab under any other id asks the host about a project it does not know: a
   closed relay copy under that id is replaced, anything else holding it (an open tab, a local
   project) is skipped, never renamed. One relay connection serves all of a team's tabs. They follow
-  `relay:hosted:shared-changed {projectIds}`, which goes to EVERY member connection (`EDITOR_ONLY`
-  as a call, always passed by `VIEW_EVENTS`), because `workspace:server-change` ignores unknown ids
+  `relay:hosted:shared-changed {projectIds}`, which goes to EVERY connection the host serves —
+  `tellMembers` asks `standing`, so the `pinFailed` viewer fallback is included (`EDITOR_ONLY` as a
+  call, always passed by `VIEW_EVENTS`), because `workspace:server-change` ignores unknown ids
   and viewers never receive `canvas:authority-changed`. A tab the user closes is dismissed until
   the project is unshared; nothing shared keeps one placeholder tab. A hosted tab never cold-resumes
   an agent (`canColdRestore` excludes `source === 'relay'`). A CLOSED team tab (any `remote`

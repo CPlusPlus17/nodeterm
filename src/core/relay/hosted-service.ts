@@ -281,10 +281,12 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
   const tellOwners = (channel: string, payload: unknown): void => {
     for (const c of conns) if (c.open && memberRole(keyOf(c)) === 'owner') send(c, channel, payload)
   }
-  /** Every connected member, judged per send (a removed member gets nothing). Unlike `tellOwners`
-   *  this reaches viewers: the payload is only what their narrowed workspace already shows. */
+  /** Every connected session that is served at all, judged per send by `standing` (a removed member
+   *  gets nothing). Unlike `tellOwners` this reaches viewers, the viewer fallback of a session whose
+   *  pin write failed included: its tabs follow share changes too, and the payload is only what its
+   *  narrowed workspace already shows. */
   const tellMembers = (channel: string, payload: unknown): void => {
-    for (const c of conns) if (c.open && memberRole(keyOf(c)) !== undefined) send(c, channel, payload)
+    for (const c of conns) if (c.open && c.session && standing(c, c.session) !== null) send(c, channel, payload)
   }
   const pendingList = (): HostedPending[] => [...pending.values()].map((p) => ({ ...p.info }))
 

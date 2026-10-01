@@ -15,7 +15,7 @@ import path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { chromeObstacles, FIT_VIEW_GAP } from './fit-view'
 
-const CANVAS_SRC = fs.readFileSync(path.join(__dirname, 'Canvas.tsx'), 'utf8')
+const CANVAS_SRC = fs.readFileSync(path.join(__dirname, 'Canvas.tsx'), 'utf8').replace(/\r\n/g, '\n')
 
 /** jsdom lays nothing out, so every rect is 0×0 and `chromeObstacles`'s size filter would drop the
  *  element. Give it the measurement a real bottom-left pill cluster has. */
@@ -553,7 +553,7 @@ describe('the canvas lock is remembered only when the user opted in', () => {
 describe('the last-session close offer is wired to the × and to the existing close path (issue #848)', () => {
   // The decision lives in lib/lastSessionClose and is tested there; what those tests cannot see is
   // WHO raises it and WHAT accepting it does. Both are a line each in files with no render harness.
-  const TERMINAL_SRC = fs.readFileSync(path.join(__dirname, '..', 'nodes', 'TerminalNode.tsx'), 'utf8')
+  const TERMINAL_SRC = fs.readFileSync(path.join(__dirname, '..', 'nodes', 'TerminalNode.tsx'), 'utf8').replace(/\r\n/g, '\n')
   const closeButton = TERMINAL_SRC.slice(
     TERMINAL_SRC.indexOf('<Tooltip label="Close (ends the session)">'),
     TERMINAL_SRC.indexOf('<IconClose />', TERMINAL_SRC.indexOf('<Tooltip label="Close (ends the session)">'))

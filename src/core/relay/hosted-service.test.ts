@@ -771,6 +771,24 @@ describe('hosted service — a session with no team entry (R27)', () => {
       warn.mockRestore()
     }
   })
+
+  it('a session served under the viewer fallback still follows share changes (its tabs must not go stale)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const w = world()
+      const owner = await ownerOnline(w)
+      const keys = genKeyPair()
+      const { g, pendingId } = await pendingGuest(w, keys)
+      disk.failTeamWrite = true // the pin write fails once: no team entry, served as a viewer
+      owner.req(5, IPC.relayHostedApprove, [pendingId, 'editor'])
+      await vi.waitFor(() => expect(g.isApproved()).toBe(true))
+      await hostOpened(w, keys)
+      await w.svc.share('p2', true)
+      await vi.waitFor(() => expect(g.events(IPC.relayHostedSharedChanged)).toEqual([{ projectIds: ['P', 'p2'] }]))
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 describe('hosted service — removal', () => {

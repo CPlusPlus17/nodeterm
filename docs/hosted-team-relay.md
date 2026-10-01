@@ -245,8 +245,8 @@ Nothing changes before you press **Share**. The dialog ("Share <name> with a tea
 The installer's output streams into the dialog; a build takes many minutes, and the desktop waits up
 to 30 of them. The desktop downloads the installer to a temp file before running it, never pipes it
 into `bash`: with no `pipefail`, a failed download pipes an empty script that exits 0, which would
-read as a successful install. **Cancel** stops this desktop waiting. Whatever the installer already
-did on the host stays, and the project has not been touched yet.
+read as a successful install. **Cancel** stops the install and ends the share there. Whatever the
+installer already did on the host stays, and the project has not been touched yet.
 
 ### Which terminals continue
 
@@ -612,7 +612,8 @@ project of yours that holds the id is skipped, never renamed.
 
 - **Share changes are live.** Whenever `sharedProjects` changes (`team share`, `team unshare`,
   `team bootstrap`), the host sends `relay:hosted:shared-changed {projectIds}` to every connected
-  member, Viewers included. The desktop opens a tab for a newly shared project, with no new code and
+  session it serves, Viewers included, and a device served as a Viewer because its approval could
+  not be written too. The desktop opens a tab for a newly shared project, with no new code and
   no new approval, and closes the tab of an unshared one; nothing is deleted on the host. A tab that
   a share event opens is added at the end of the tab bar.
 - **A tab you close stays closed** while its project stays shared, for the rest of the app run. Once
@@ -1330,4 +1331,15 @@ on a Mac and a second desktop as a teammate. Record `team status --json` at each
 22. **Reopening the old SSH project warns.** From "Recently closed", with ⇧⌘T, and by opening the
     same host and folder as an SSH project again: each warns, naming the team and the host. Cancel
     leaves it closed; "Open here anyway" opens it, and its later saves reach the host's
-    `.nodeterm/project.json` again.
+    `.nodeterm/project.json` again. Its Claude node does not resume on its own: it shows the
+    "Not resumed" banner, and no second `claude` for that conversation starts on the host.
+23. **A home folder is refused.** An SSH project left at `~` (the dialog's starting folder): Share
+    with team refuses it before anything is installed ("This project's folder is your home
+    directory…"). On the host, `team bootstrap --adopt ~ --json` answers `E_BAD_CWD`.
+24. **Cancel during the install.** On a fresh host, press Cancel while the installer streams: the
+    result says the install was cancelled, the SSH project stays open and unmarked, its terminals
+    keep running, and nothing is bootstrapped.
+25. **Going to a shared node lands on the team's tab.** After item 17, a completion notification of
+    the resumed agent, its sessions-sidebar row, ⌘K and a teammate's face all open the team's tab
+    with the node focused, never the reopen warning of the closed SSH project. A closed team tab is
+    not listed under "Recently closed".
