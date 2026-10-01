@@ -849,6 +849,7 @@ import { canvasTeamStations, useTeamStations } from '../state/teamStations'
 import { applyPullAutoMove } from '../lib/pullAutoMove'
 import { useWallpaperBackground, wallpaperLayers } from '../state/wallpaper'
 import { showCanvasDots } from '../lib/canvasDots'
+import { PROJECT_NAME_MAX, clampProjectName } from '@shared/project-name'
 
 const isMac = /Mac/i.test(navigator.platform || navigator.userAgent)
 
@@ -12475,7 +12476,8 @@ export function Canvas() {
           srcTitle: opTitle,
           resolvedCwd,
           probedName: opProbed?.name,
-          requestedName: args.name
+          // Cut as registerProject will cut it (issue #940); blank still means "no --name".
+          requestedName: args.name === undefined ? undefined : clampProjectName(args.name) || undefined
         })
         if (opPlan.kind === 'silent') {
           // This caller already passed a human decision for this project (Q1): idempotent, quiet.
@@ -16751,8 +16753,15 @@ export function Canvas() {
             label: 'Rename',
             icon: <IconEditor />,
             onClick: () => {
-              void promptDialog({ message: 'Rename project', initialValue: project.name }).then((t) => {
-                if (t && t.trim()) renameProject(projectId, t.trim())
+              void promptDialog({
+                message: 'Rename project',
+                // Shown cut to what a rename would store (issue #940).
+                initialValue: clampProjectName(project.name),
+                maxLength: PROJECT_NAME_MAX
+              }).then((t) => {
+                // Confirming the cut name shown for an over-long one stores that cut (issue #940).
+                const next = t?.trim()
+                if (next && next !== project.name) renameProject(projectId, next)
               })
             }
           },

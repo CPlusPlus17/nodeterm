@@ -48,6 +48,7 @@ import {
 } from '../shared/settings-verb'
 import { CONTROL_REQUEST_TIMEOUT_MS, decideControlConfirm, isWaivableVerb } from '../shared/control-confirm'
 import { DEFAULT_SETTINGS } from '../shared/types'
+import { PROJECT_NAME_MAX } from '../shared/project-name'
 import { serverSettingsControl } from '../server/settings-control'
 import {
   REPORT_CAP_PER_DAY,
@@ -1606,5 +1607,14 @@ describe('the read-only GitHub lane verbs (issues, prs) in both agent-facing bod
     expect(VERBS_FOR_TEST).toContain('prs')
     expect(PROJECT_TARGETABLE_VERBS.has('issues')).toBe(true)
     expect(PROJECT_TARGETABLE_VERBS.has('prs')).toBe(true)
+  })
+})
+
+describe('open-project --name limit in the agent-facing text (issue #940)', () => {
+  it('both bodies name the limit, rendered from PROJECT_NAME_MAX', () => {
+    const sentence = `\`--name\` over ${PROJECT_NAME_MAX} characters`
+    const squash = (s: string): string => s.replace(/\s+/g, ' ')
+    expect(squash(buildCanvasSkillBody('/tmp/nodeterm.sh'))).toContain(sentence)
+    expect(squash(buildCanvasControlInstructions('/tmp/nodeterm.sh'))).toContain(sentence)
   })
 })
