@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { Project } from '@shared/types'
-import { createTeamTabs, type TeamTabOps } from './hostedTeamTabs'
+import { createTeamTabs, openSuccessor, type TeamTabOps } from './hostedTeamTabs'
 
 /** A host's shared project, as the relay hands it over (`sanitizeRelayProject` marks it remote). */
 const proj = (id: string, name = id): Project => ({
@@ -58,7 +58,7 @@ function fakeOps(initial: Project[] = [], active: string | null = null) {
       state.projects.push({ ...local(id), name: label })
       return { id }
     }),
-    removeTab: vi.fn((id: string) => {
+    removeTab: vi.fn((id: string, _hostId: string) => {
       calls.push(`remove:${id}`)
       const index = state.projects.findIndex((p) => p.id === id)
       if (index < 0) return
@@ -472,5 +472,45 @@ describe('createTeamTabs', () => {
     expect(tabs.place(team, [A, B], [], { keepActive: false })).toEqual(['A', 'B'])
     expect(f.ops.isOpenTab('A')).toBe(true)
     expect(f.ops.isOpenTab('B')).toBe(true)
+  })
+
+  it('removeTab names the team the tab belonged to, so the caller can keep the user on that team', async () => {
+    const f = fakeOps()
+    const tabs = createTeamTabs(f.ops)
+    for (const id of tabs.place(team, [A, B], [], { keepActive: false })) f.ops.bind(id, 'relay-1')
+    await tabs.sharedChanged(live, ['A'], async () => [], { keepActive: true })
+    expect(f.ops.removeTab).toHaveBeenCalledWith('B', 'host-1')
+    // The last unshare leaves a placeholder; the next share removes it, named the same way.
+    await tabs.sharedChanged(live, [], async () => [], { keepActive: true })
+    expect(f.ops.removeTab).toHaveBeenCalledWith('A', 'host-1')
+    await tabs.sharedChanged(live, ['C'], async () => [C], { keepActive: true })
+    expect(f.ops.removeTab).toHaveBeenCalledWith('ph-1', 'host-1')
+    // A reconnect that finds a project unshared removes it under the team too.
+    tabs.place(team, [], ['C'], { keepActive: true })
+    expect(f.ops.removeTab).toHaveBeenCalledWith('C', 'host-1')
+  })
+})
+
+describe('openSuccessor', () => {
+  const tab = (id: string, closed = false) => ({ id, closed })
+
+  it('prefers the nearest open tab of the same team', () => {
+    // `x` was removed from index 2: the list is what remains.
+    const projects = [tab('a'), tab('t1'), tab('mine'), tab('other'), tab('t2')]
+    expect(openSuccessor(projects, 2, (id) => id === 't1' || id === 't2')).toBe('t1')
+    expect(openSuccessor(projects, 4, (id) => id === 't1' || id === 't2')).toBe('t2')
+  })
+
+  it('never lands on a closed project, of the team or not', () => {
+    const projects = [tab('mine'), tab('t1', true), tab('closed', true), tab('far')]
+    expect(openSuccessor(projects, 2, (id) => id === 't1')).toBe('far')
+    expect(openSuccessor(projects, 1, () => false)).toBe('mine')
+  })
+
+  it('without a team tab left, the nearest open project; without one at all, the welcome screen', () => {
+    expect(openSuccessor([tab('a'), tab('b'), tab('c')], 1, () => false)).toBe('b')
+    expect(openSuccessor([tab('a'), tab('b')], 2, () => false)).toBe('b')
+    expect(openSuccessor([tab('a', true)], 0, () => false)).toBe('')
+    expect(openSuccessor([], 0, () => false)).toBe('')
   })
 })

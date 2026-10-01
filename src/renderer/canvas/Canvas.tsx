@@ -79,7 +79,7 @@ import {
   useSharedGlyphActive
 } from './SharedGlyphLayer'
 import { SshReconnector } from '../lib/sshReconnect'
-import { projectMayDialSsh, receivedCanvasMutation } from '../session/relay-ssh'
+import { projectMayDialSsh, receivedCanvasMutation, sanitizeRelayProject } from '../session/relay-ssh'
 import {
   hostAttachmentsFor,
   planActiveProjectDials,
@@ -563,6 +563,10 @@ import {
   presenceForProject,
   setActiveSession,
   disposeSession,
+  holdSessionTeardown,
+  projectIdsBoundToSession,
+  unbindProject,
+  bindProjectToSession,
 } from '../session/session'
 import {
   openRelayTab,
@@ -574,6 +578,7 @@ import { HostedApprovalDialog } from '../components/HostedApprovalDialog'
 import { emitLocalRelayClose, onLocalRelayClose } from '../bridge/relay-local-close'
 import { isJoinCode } from '@shared/relay-join-code'
 import { createHostedJoiner, type HostedJoiner, type HostedMountOutcome } from '../lib/hostedJoin'
+import { createTeamTabs, openSuccessor, type TeamTabs } from '../lib/hostedTeamTabs'
 import { HOSTED_APPROVAL_WAIT_MS, isReadOnlyRole, stripIpcPrefix, viewerBannerText } from '../lib/hostedTeam'
 import { answerHostedRequest, type HostedAnswer } from '../lib/hostedOwner'
 import { headRequest, type QueuedRequest } from '../lib/hostedPendingQueue'
@@ -892,6 +897,18 @@ function noticeDwellMs(text: string): number {
 
 /** React Flow props for a hosted team tab whose role is below Editor. */
 const HOSTED_READ_ONLY_FLOW = { nodesDraggable: false, nodesConnectable: false } as const
+
+/** How a hosted team's connection mounts (see `mountRemoteMirror`). */
+interface HostedMountOpts {
+  /** Switch to the team's tab once it is live (a reconnect nobody asked for does not). */
+  activate: boolean
+  /** This user confirmed the SAS: the owner's approval wait starts now. */
+  onSasConfirmed?: () => void
+  /** The team, for its tabs (one per project it shares). */
+  hostId: string
+  /** The tab to land on when the mount takes the screen, when it is among the placed ones. */
+  focusProjectId?: string
+}
 
 /** Is this project an open tab (not closed, not deleted)? What a hosted reconnect is for (R40). */
 function isOpenTab(projectId: string): boolean {
@@ -1529,6 +1546,35 @@ export function Canvas() {
   // The hosted-team joiner (created below, with the relay mount it drives): here so the tab disposal
   // can stop a closed tab's reconnect.
   const hostedJoinerRef = useRef<HostedJoiner | null>(null)
+  // One tab per shared project of a hosted team (lib/hostedTeamTabs.ts); store ops only — the relay
+  // binding and the joiner bookkeeping stay here. Built once (the model holds every team's tab set,
+  // and Canvas renders far too often to rebuild it each time).
+  const [teamTabs] = useState<TeamTabs>(() => {
+    const tabs: TeamTabs = createTeamTabs({
+      getProject: (id) => useProjects.getState().getProject(id),
+      isOpenTab,
+      adoptProject: (p) => useProjects.getState().adoptProject(p),
+      addPlaceholder: (label) => useProjects.getState().addProject(label),
+      // The STORE delete, never Canvas's `deleteProject` (which ends the host's sessions through
+      // the relay transport): a hosted tab leaves this desktop only. The store hands the active
+      // slot to whichever project slides into it, closed or not; the user lands on an open tab
+      // instead, another of the same team's when it has one.
+      removeTab: (id, hostId) => {
+        const store = useProjects.getState()
+        const index = store.projects.findIndex((p) => p.id === id)
+        if (index < 0) return
+        const wasActive = store.activeProjectId === id
+        const next = store.deleteProject(id)
+        if (!wasActive || isOpenTab(next)) return
+        store.setActive(openSuccessor(useProjects.getState().projects, index, (other) => tabs.teamOf(other) === hostId))
+      },
+      activeProjectId: () => useProjects.getState().activeProjectId ?? null,
+      setActive: (id) => useProjects.getState().setActive(id),
+      bind: (projectId, sessionId) => bindProjectToSession(projectId, sessionId),
+      unbind: (projectId) => unbindProject(projectId)
+    })
+    return tabs
+  })
   // A relay tab is a live client of a remote core — closing/deleting its project must tear the
   // relay session down (held presence teardown + socket close), or the peer lingers in the host's
   // facepile and the socket leaks until quit. Runs on BOTH close and delete (unlike a local tmux
@@ -1541,17 +1587,27 @@ export function Canvas() {
   // a still-live tab, no-ops them for an already-offline one, and unbinds + drops the entry either
   // way. We also sweep any live relayTabsRef entry for the project so a dead connectionId can't linger.
   const disposeRelayTabForProject = useCallback((projectId: string) => {
+    // One of a hosted team's several tabs: dismiss just this one. The team's connection lives on
+    // for the others (and the joiner keeps reconnecting into one that is still open).
+    const { remaining } = teamTabs.closeTab(projectId)
+    if (remaining.length > 0) {
+      hostedJoinerRef.current?.tabRemoved(projectId, remaining[0])
+      return
+    }
     // A hosted tab's team stops trying to come back into it, in any phase (R40). A no-op otherwise.
     hostedJoinerRef.current?.tabClosed(projectId)
-    for (const [connectionId, tab] of relayTabsRef.current) {
-      if (tab.projectId === projectId) relayTabsRef.current.delete(connectionId)
-    }
     const s = sessionForProject(projectId)
+    for (const [connectionId, tab] of relayTabsRef.current) {
+      // By session too: a team's last tab may be one a share event opened after the mount.
+      if (tab.projectIds.includes(projectId) || (s.source === 'relay' && tab.sessionId === s.id)) {
+        relayTabsRef.current.delete(connectionId)
+      }
+    }
     if (s.source === 'relay') {
       disposeSession(s.id)
       useHostedTeams.getState().forget(s.id) // a no-op for a Team Access relay tab
     }
-  }, [])
+  }, [teamTabs])
   const [remoteDialogOpen, setRemoteDialogOpen] = useState(false)
   // "Connect over SSH…" project-creation dialog (from the Welcome screen).
   const [sshDialogOpen, setSshDialogOpen] = useState(false)
@@ -5105,6 +5161,8 @@ export function Canvas() {
   // `hosted` (a hosted team's join code): build the tab with its hosted api, wait up to the host's
   // own ten-minute pending window for an owner, switch to it only when asked, and hand a failure
   // back to the caller (the hosted joiner decides whether to retry or say so) instead of alerting.
+  // A hosted team's one connection serves one tab per project it shares (`teamTabs`), and follows
+  // the host's share changes for as long as it lives.
   // Absent = a pairing offer, exactly as before. Resolves with the outcome only for `hosted`.
   const mountRemoteMirror = useCallback(
     (
@@ -5112,7 +5170,7 @@ export function Canvas() {
       label = 'Remote host',
       reconnectProjectId?: string,
       staleSessionId?: string,
-      hosted?: { activate: boolean; onSasConfirmed?: () => void }
+      hosted?: HostedMountOpts
     ): Promise<HostedMountOutcome | null> => {
       if (relayTabsRef.current.has(connectionId)) return Promise.resolve(null)
       return openRelayTab(connectionId, label, {
@@ -5133,10 +5191,33 @@ export function Canvas() {
           ? undefined
           : (p) => useProjects.getState().adoptProject(p),
         setActiveProject: (id) => useProjects.getState().setActive(id),
-        ...(hosted ? { hosted: true, timeoutMs: HOSTED_APPROVAL_WAIT_MS, activate: hosted.activate } : {}),
+        ...(hosted
+          ? {
+              hosted: true,
+              timeoutMs: HOSTED_APPROVAL_WAIT_MS,
+              activate: hosted.activate,
+              // One tab per project the team shares, under the host's own ids. A reconnect reuses
+              // the tabs the stale (offline) session still holds, greyed, by id.
+              placeProjects: (projects: Project[]) => {
+                const existing = staleSessionId ? projectIdsBoundToSession(staleSessionId) : []
+                // A reconnect whose team tabs were ALL closed meanwhile must not bring them back (R40).
+                if (reconnectProjectId && !existing.some((id) => isOpenTab(id))) {
+                  throw new Error('The tab this reconnect was for is closed.')
+                }
+                return teamTabs.place({ hostId: hosted.hostId, label }, projects, existing, {
+                  keepActive: !hosted.activate
+                })
+              },
+              ...(hosted.focusProjectId ? { focusProjectId: hosted.focusProjectId } : {}),
+            }
+          : {}),
       })
         .then((tab): HostedMountOutcome | null => {
           relayTabsRef.current.set(connectionId, tab)
+          // The session's api, read ONCE while the mount's tab is surely bound to it: a share event
+          // may close that tab later, and resolving through it then would answer the local session.
+          const bound = sessionForProject(tab.projectId)
+          const api = bound.id === tab.sessionId ? bound.api : null
           if (reconnectProjectId) {
             // The fresh session is now bound to the tab (openRelayTab rebound the SAME project id),
             // so it is finally safe to drop the stale offline session it replaced. Disposing only
@@ -5146,12 +5227,12 @@ export function Canvas() {
               disposeSession(staleSessionId)
               if (hosted) useHostedTeams.getState().forget(staleSessionId)
             }
-            // Back online: un-grey the reused tab.
-            useProjects.getState().setProjectUnavailable(reconnectProjectId, false)
+            // Back online: un-grey every tab the connection serves (a hosted team's are several).
+            for (const id of tab.projectIds) useProjects.getState().setProjectUnavailable(id, false)
           }
-          // A background (unrequested) reconnect did not switch tabs — but if its tab is the one on
-          // screen, the active session must follow the rebind (disposing the stale one reset it).
-          if (hosted && !hosted.activate && useProjects.getState().activeProjectId === tab.projectId) {
+          // A background (unrequested) reconnect did not switch tabs — but if one of its tabs is
+          // on screen, the active session must follow the rebind (disposing the stale one reset it).
+          if (hosted && !hosted.activate && tab.projectIds.includes(useProjects.getState().activeProjectId)) {
             setActiveSession(tab.sessionId)
           }
           // A host/relay drop AFTER approval is INVOLUNTARY (not a user close): grey the tab to
@@ -5164,7 +5245,52 @@ export function Canvas() {
               setProjectUnavailable: (id, v) => useProjects.getState().setProjectUnavailable(id, v),
             })
           })
-          return hosted ? { projectId: tab.projectId } : null
+          // A hosted team follows the host's share changes while this connection lives: a project
+          // it stops sharing loses its tab, a newly shared one gains one (without taking the screen).
+          // Held by the session, so the subscription ends with it (a drop, a close).
+          if (hosted && api?.hosted) {
+            const hostId = hosted.hostId
+            const teamTabIds = (): string[] =>
+              useProjects
+                .getState()
+                .projects.filter((x) => !x.closed && teamTabs.teamOf(x.id) === hostId)
+                .map((x) => x.id)
+            const off = api.hosted.onSharedChanged((p) => {
+              const ids = Array.isArray(p?.projectIds) ? p.projectIds : []
+              // What the event changed is read back from the store once it settles. It can reject
+              // (the load failed, the session went away mid-load) and still have closed tabs, so
+              // its resolved value alone does not say what the joiner must follow.
+              const before = teamTabIds()
+              void teamTabs
+                .sharedChanged(
+                  { hostId, label, sessionId: tab.sessionId },
+                  ids,
+                  async () => (await api.workspace.load()).projects.map(sanitizeRelayProject),
+                  { keepActive: true }
+                )
+                .catch(() => {}) // never the user's error: the tabs that stand are in the store
+                .then(() => {
+                  const joiner = hostedJoinerRef.current
+                  if (!joiner) return
+                  const after = teamTabIds()
+                  const opened = after.filter((id) => !before.includes(id))
+                  if (opened.length) joiner.tabsAdded(hostId, opened)
+                  for (const id of before) {
+                    if (after.includes(id)) continue
+                    // The team lives on in its other tabs. With none left its session is gone (the
+                    // model always keeps a placeholder otherwise), and so is the attempt.
+                    if (after.length) joiner.tabRemoved(id, after[0])
+                    else joiner.tabClosed(id)
+                  }
+                })
+            })
+            try {
+              holdSessionTeardown(tab.sessionId, off)
+            } catch {
+              off() // the session is already gone: nothing to follow
+            }
+          }
+          return hosted ? { projectId: tab.projectId, projectIds: tab.projectIds } : null
         })
         .catch((err): HostedMountOutcome | null => {
           // A user who declined the SAS triggered this close themselves — don't cry error.
@@ -5175,7 +5301,7 @@ export function Canvas() {
           return null
         })
     },
-    []
+    [teamTabs]
   )
 
   // Surface the SAS so this human can verify it matches the host's before confirming (the
@@ -5189,7 +5315,7 @@ export function Canvas() {
       label: string,
       reconnectProjectId?: string,
       staleSessionId?: string,
-      hosted?: { activate: boolean; onSasConfirmed?: () => void }
+      hosted?: HostedMountOpts
     ): Promise<HostedMountOutcome | null> => {
       const unSas = window.nodeTerminal.relayClient.onSas(connectionId, (sas) => {
         unSas()
@@ -5250,8 +5376,15 @@ export function Canvas() {
           req.label || 'Hosted team',
           req.reconnectProjectId,
           bound?.source === 'relay' ? bound.id : undefined,
-          // Only a reconnect the user asked for takes the screen (or one with nothing on it).
-          { activate: req.manual || !useProjects.getState().activeProjectId, onSasConfirmed: hooks.sasConfirmed }
+          {
+            // Only a reconnect the user asked for takes the screen (or one with nothing on it).
+            activate: req.manual || !useProjects.getState().activeProjectId,
+            onSasConfirmed: hooks.sasConfirmed,
+            hostId: req.hostId,
+            // Where it lands when it does: the project just shared, else the tab a reconnect is for
+            // (a click on one of a team's greyed tabs keeps the user on that tab).
+            focusProjectId: req.focusProjectId ?? req.reconnectProjectId
+          }
         ).then((o): HostedMountOutcome => o ?? { error: new Error('That connection is already open.'), declined: true })
       },
       tabOpen: isOpenTab,
@@ -5268,6 +5401,13 @@ export function Canvas() {
       joiner.dispose()
     }
   }, [confirmAndMount])
+
+  // The share flow's join: a team this desktop just set up over ssh, whose bookmark it seeded
+  // pre-approved. Through the team's one attempt owner (retrying while the relay comes up, with no
+  // SAS), landing on the project that was shared.
+  const joinApprovedTeam = useCallback((code: string, focusProjectId?: string) => {
+    hostedJoinerRef.current?.joinApproved(code, focusProjectId ? { focusProjectId } : undefined)
+  }, [])
 
   // Connect to a host from an already-collected pairing offer: open the relay socket, then run the
   // shared SAS-compare + mount flow. The SINGLE place `relayClient.connect` + `confirmAndMount` live,

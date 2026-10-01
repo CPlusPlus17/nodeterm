@@ -50,9 +50,62 @@ describe('hosted team glue in Canvas', () => {
 
   it('the relay tab is built with hosted options, a long approval wait and no alert ONLY when hosted', () => {
     const body = between('const mountRemoteMirror = useCallback(', 'const confirmAndMount = useCallback(')
-    expect(body).toContain('...(hosted ? { hosted: true, timeoutMs: HOSTED_APPROVAL_WAIT_MS, activate: hosted.activate } : {})')
+    const opts = between('        ...(hosted\n          ? {\n              hosted: true,', '          : {}),')
+    expect(opts).toContain('timeoutMs: HOSTED_APPROVAL_WAIT_MS,')
+    expect(opts).toContain('activate: hosted.activate,')
+    expect(body).toContain(opts)
     expect(body).toContain('if (hosted) return { error: err, declined }')
     expect(body).toContain("window.alert(`Remote session did not open: ${(err as Error).message}`)")
+  })
+
+  it('a hosted team places one tab per shared project; a reconnect reuses the stale session\'s tabs', () => {
+    const opts = between('        ...(hosted\n          ? {\n              hosted: true,', '          : {}),')
+    expect(opts).toContain('const existing = staleSessionId ? projectIdsBoundToSession(staleSessionId) : []')
+    expect(opts).toContain('return teamTabs.place({ hostId: hosted.hostId, label }, projects, existing, {')
+    expect(opts).toContain('keepActive: !hosted.activate')
+    expect(opts).toContain('...(hosted.focusProjectId ? { focusProjectId: hosted.focusProjectId } : {}),')
+    const body = between('const mountRemoteMirror = useCallback(', 'const confirmAndMount = useCallback(')
+    // Back online: every tab the connection serves un-greys, not just the one the reconnect named.
+    expect(body).toContain('for (const id of tab.projectIds) useProjects.getState().setProjectUnavailable(id, false)')
+    expect(body).toContain('return hosted ? { projectId: tab.projectId, projectIds: tab.projectIds } : null')
+  })
+
+  it('share events follow the host live: keep the screen, reconcile the joiner from the store either way', () => {
+    const body = between('const mountRemoteMirror = useCallback(', 'const confirmAndMount = useCallback(')
+    // The api is read once, right after the mount; the event's load never re-resolves it through a tab.
+    const capture = body.indexOf('const bound = sessionForProject(tab.projectId)')
+    const listen = body.indexOf('api.hosted.onSharedChanged((p) => {')
+    expect(capture).toBeGreaterThan(-1)
+    expect(listen).toBeGreaterThan(capture)
+    const handler = body.slice(listen)
+    expect(handler).not.toContain('sessionForProject(')
+    expect(handler).toContain('async () => (await api.workspace.load()).projects.map(sanitizeRelayProject)')
+    expect(handler).toContain('{ keepActive: true }')
+    // A rejected event still closed tabs: the joiner is reconciled after it settles, resolved or not.
+    const settled = handler.indexOf('.catch(() => {})')
+    expect(settled).toBeGreaterThan(-1)
+    expect(handler.indexOf('.then(() => {', settled)).toBeGreaterThan(settled)
+    expect(handler).toContain('const before = teamTabIds()')
+    expect(handler).toContain('joiner.tabsAdded(hostId, opened)')
+    expect(handler).toContain('joiner.tabRemoved(id, after[0])')
+    // The subscription dies with the session.
+    expect(handler).toContain('holdSessionTeardown(tab.sessionId, off)')
+  })
+
+  it('a hosted tab leaves this desktop through the STORE delete, and never onto a closed project', () => {
+    const body = between('const [teamTabs] = useState<TeamTabs>(() => {', '    return tabs\n  })')
+    expect(body).toContain('const next = store.deleteProject(id)')
+    expect(body).toContain('if (!wasActive || isOpenTab(next)) return')
+    expect(body).toContain('openSuccessor(useProjects.getState().projects, index, (other) => tabs.teamOf(other) === hostId)')
+    expect(body).not.toContain('transport.destroy')
+  })
+
+  it('the joiner\'s mount names the team and where to land; the share flow joins through the joiner', () => {
+    const joiner = between('const joiner = createHostedJoiner({', '}, [confirmAndMount])')
+    expect(joiner).toContain('hostId: req.hostId,')
+    expect(joiner).toContain('focusProjectId: req.focusProjectId ?? req.reconnectProjectId')
+    const join = between('const joinApprovedTeam = useCallback(', '}, [])')
+    expect(join).toContain('hostedJoinerRef.current?.joinApproved(code, focusProjectId ? { focusProjectId } : undefined)')
   })
 
   it('the joiner is created once and reconnects the approved bookmarks at boot', () => {
@@ -88,8 +141,14 @@ describe('hosted team glue in Canvas', () => {
   })
 
   it('R40: closing or deleting a tab stops its team\'s attempt (the one disposal both paths share)', () => {
-    const body = between('const disposeRelayTabForProject = useCallback(', '}, [])')
+    const body = between('const disposeRelayTabForProject = useCallback(', '}, [teamTabs])')
     expect(body).toContain('hostedJoinerRef.current?.tabClosed(projectId)')
+    // …unless the team has other tabs open: then only this one goes, and the connection lives on.
+    const multi = body.indexOf('const { remaining } = teamTabs.closeTab(projectId)')
+    expect(multi).toBeGreaterThan(-1)
+    expect(multi).toBeLessThan(body.indexOf('hostedJoinerRef.current?.tabClosed(projectId)'))
+    expect(body).toContain('hostedJoinerRef.current?.tabRemoved(projectId, remaining[0])')
+    expect(body.indexOf('return', multi)).toBeLessThan(body.indexOf('disposeSession(s.id)'))
     expect(src).toContain('disposeRelayTabForProject(id)\n      store.closeProject(id)')
     expect(src).toContain('disposeRelayTabForProject(id)\n      store.deleteProject(id)')
   })
@@ -97,6 +156,8 @@ describe('hosted team glue in Canvas', () => {
   it('R40: a hosted reconnect refuses to bind to a tab that is no longer open; a Team Access one is unchanged', () => {
     const body = between('const mountRemoteMirror = useCallback(', 'const confirmAndMount = useCallback(')
     expect(body).toContain('if (hosted && !isOpenTab(reconnectProjectId)) {')
+    // A team whose tabs were ALL closed while it reconnected gets none of them back.
+    expect(body).toContain('if (reconnectProjectId && !existing.some((id) => isOpenTab(id))) {')
     expect(body).toContain('return { id: reconnectProjectId } // reconnect: reuse the existing tab')
   })
 

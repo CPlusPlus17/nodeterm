@@ -37,8 +37,10 @@ export interface TeamTabOps {
   adoptProject(p: Project): { id: string }
   addPlaceholder(label: string): { id: string }
   /** Drop a hosted tab from THIS desktop only: never the destroying delete (which would kill the
-   *  host's sessions through the relay transport). */
-  removeTab(id: string): void
+   *  host's sessions through the relay transport). `hostId` is the team the tab belonged to (or was
+   *  being opened for), so a caller that has to move the user off it can prefer that team's other
+   *  tabs (`openSuccessor`). */
+  removeTab(id: string, hostId: string): void
   activeProjectId(): string | null
   setActive(id: string): void
   bind(projectId: string, sessionId: string): void
@@ -69,6 +71,23 @@ export interface TeamTabs {
   closeTab(projectId: string): { remaining: string[] }
   /** The team (host id) a tab belongs to, if any. */
   teamOf(projectId: string): string | undefined
+}
+
+/** Which project takes the screen when the active tab is removed from the store: the nearest open
+ *  tab of the same team, else the nearest open project, else '' (the welcome screen). Never a closed
+ *  project — the store's own fallback is whichever project slides into the removed slot, closed or
+ *  not. `projects` is the list without the removed tab and `index` the slot it held. */
+export function openSuccessor(
+  projects: readonly { id: string; closed?: boolean }[],
+  index: number,
+  sameTeam: (id: string) => boolean
+): string {
+  const nearest = (pick: (p: { id: string; closed?: boolean }) => boolean): string | undefined =>
+    projects
+      .map((p, i) => ({ p, d: Math.abs(i - index) }))
+      .filter(({ p }) => !p.closed && pick(p))
+      .sort((a, b) => a.d - b.d)[0]?.p.id
+  return nearest((p) => sameTeam(p.id)) ?? nearest(() => true) ?? ''
 }
 
 /** The host's projects with the planner's id rules applied: first occurrence of each sane id. */
@@ -108,22 +127,22 @@ export function createTeamTabs(ops: TeamTabOps): TeamTabs {
     if (next && ops.isOpenTab(next)) ops.setActive(next)
   }
 
-  /** Open `p` as a tab under the host's own id; null when that id cannot be had. */
-  const tabFor = (p: Project): string | null => {
+  /** Open `p` as a tab of `hostId` under the host's own id; null when that id cannot be had. */
+  const tabFor = (p: Project, hostId: string): string | null => {
     const held = ops.getProject(p.id)
     if (held) {
       if (ops.isOpenTab(p.id)) return null
       // A closed relay copy is a former hosted tab: replace it. A closed local project is the
       // user's own, and removing it from the store would delete it.
       if (held.remote !== true) return null
-      ops.removeTab(p.id)
+      ops.removeTab(p.id, hostId)
     }
     const before = ops.activeProjectId()
     const id = ops.adoptProject(p).id
     if (id === p.id) return id
     // The store derived another id; the relay api would not know it. Drop the tab and keep the user
     // where the adopt found them.
-    ops.removeTab(id)
+    ops.removeTab(id, hostId)
     if (before && ops.isOpenTab(before)) ops.setActive(before)
     return null
   }
@@ -134,7 +153,7 @@ export function createTeamTabs(ops: TeamTabOps): TeamTabs {
     placeholders.delete(hostId)
     team.delete(ph)
     ops.unbind(ph)
-    ops.removeTab(ph)
+    ops.removeTab(ph, hostId)
   }
 
   const applyShared = async (
@@ -153,7 +172,7 @@ export function createTeamTabs(ops: TeamTabOps): TeamTabs {
     for (const id of plan.close) {
       team.delete(id)
       ops.unbind(id)
-      ops.removeTab(id)
+      ops.removeTab(id, host)
     }
     // Commit the close half before awaiting: a failed load, or the next event, reads a set
     // without the closed tabs.
@@ -172,14 +191,14 @@ export function createTeamTabs(ops: TeamTabOps): TeamTabs {
       if (epochOf(host) !== epoch) return { opened: [], closed: plan.close }
       for (const p of loaded) {
         if (!plan.open.includes(p.id) || opened.includes(p.id)) continue
-        const id = tabFor(p)
+        const id = tabFor(p, host)
         if (!id) continue
         try {
           ops.bind(id, t.sessionId)
         } catch (error) {
           // The session was disposed while the workspace loaded; an unbound tab would resolve to the
           // local session.
-          ops.removeTab(id)
+          ops.removeTab(id, host)
           failure = { error }
           sessionGone = true
           break
@@ -204,7 +223,7 @@ export function createTeamTabs(ops: TeamTabOps): TeamTabs {
         placeholders.set(host, ph)
         team.set(ph, host)
       } catch (error) {
-        ops.removeTab(ph)
+        ops.removeTab(ph, host)
         failure = failure ?? { error }
       }
     }
@@ -225,7 +244,7 @@ export function createTeamTabs(ops: TeamTabOps): TeamTabs {
       const ids: string[] = []
       for (const p of shared) {
         if (set.dismissed.includes(p.id)) continue
-        const id = reuse.has(p.id) && ops.isOpenTab(p.id) ? p.id : tabFor(p)
+        const id = reuse.has(p.id) && ops.isOpenTab(p.id) ? p.id : tabFor(p, host)
         if (id) ids.push(id)
       }
       const ph = placeholders.get(host)
@@ -233,7 +252,7 @@ export function createTeamTabs(ops: TeamTabOps): TeamTabs {
         if (ids.includes(id) || id === ph) continue
         team.delete(id)
         ops.unbind(id)
-        ops.removeTab(id)
+        ops.removeTab(id, host)
       }
       // A dismissal is remembered only while the host still shares that project.
       const dismissed = set.dismissed.filter((d) => shared.some((p) => p.id === d))
