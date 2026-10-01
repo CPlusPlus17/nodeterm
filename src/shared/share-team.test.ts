@@ -21,7 +21,7 @@ const probe = (o: Partial<ShareProbe> = {}): ShareProbe => ({
   os: 'Linux', uid: 1000, user: 'u', home: '/home/u', have: { git: true, curl: true }, unit: 'user',
   node: '/usr/bin/node', main: '/home/u/.nodeterm-server-app/out/server/main.cjs', dataDir: '/home/u/.nodeterm-server',
   meta: { version: '0.4.0', commit: 'abc' }, hasBootstrap: true, statusRc: 0, teamExists: false,
-  adoptCwd: '/home/u/proj', panes: [], ...o
+  adoptCwd: '/home/u/proj', homeReal: '/home/u', panes: [], ...o
 })
 
 describe('sharePlan', () => {
@@ -31,6 +31,22 @@ describe('sharePlan', () => {
     expect(sharePlan(probe({ uid: 0, unit: 'system' }))).toEqual({ kind: 'refuse', reason: SHARE_REFUSAL.root })
     expect(sharePlan(probe({ unit: 'system' }))).toEqual({ kind: 'refuse', reason: SHARE_REFUSAL.system })
     expect(sharePlan(probe({ adoptCwd: null }))).toEqual({ kind: 'refuse', reason: SHARE_REFUSAL.noFolder })
+  })
+  it('never shares the home directory, the root, or a folder that contains the home directory', () => {
+    // Viewers may read any file under a shared folder: ~/.ssh, agent credentials, hook tokens.
+    expect(sharePlan(probe({ adoptCwd: '/home/u' }))).toEqual({ kind: 'refuse', reason: SHARE_REFUSAL.homeFolder })
+    expect(sharePlan(probe({ adoptCwd: '/' }))).toEqual({ kind: 'refuse', reason: SHARE_REFUSAL.homeAncestor })
+    expect(sharePlan(probe({ adoptCwd: '/home' }))).toEqual({ kind: 'refuse', reason: SHARE_REFUSAL.homeAncestor })
+    // Segment-wise: a sibling whose name merely starts with the home's is not an ancestor.
+    expect(sharePlan(probe({ adoptCwd: '/home/u2', homeReal: '/home/u2x' }))).toEqual({ kind: 'ready' })
+    expect(sharePlan(probe({ adoptCwd: '/home/u/proj/sub' }))).toEqual({ kind: 'ready' })
+    // Before the installer runs too: a host we would refuse is not worth minutes of install.
+    expect(sharePlan(probe({ adoptCwd: '/home/u', unit: 'none', node: '', main: '' }))).toEqual({
+      kind: 'refuse', reason: SHARE_REFUSAL.homeFolder
+    })
+  })
+  it('a home directory the probe could not read is a refusal, never a guess', () => {
+    expect(sharePlan(probe({ homeReal: null }))).toEqual({ kind: 'refuse', reason: SHARE_REFUSAL.homeUnknown })
   })
   it('install when missing, outdated (no bootstrap verb) or not running', () => {
     expect(sharePlan(probe({ unit: 'none', node: '', main: '' }))).toEqual({ kind: 'install', reason: 'missing' })

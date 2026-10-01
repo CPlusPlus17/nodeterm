@@ -331,7 +331,7 @@ const api: NodeTerminalApi = {
       return () => ipcRenderer.removeListener(IPC.shareTeamInstallOutput, h)
     },
     flushMirror: (projectId) => ipcRenderer.invoke(IPC.shareTeamFlushMirror, projectId),
-    bootstrap: (projectId, adoptCwd) => ipcRenderer.invoke(IPC.shareTeamBootstrap, projectId, adoptCwd),
+    bootstrap: (projectId) => ipcRenderer.invoke(IPC.shareTeamBootstrap, projectId),
     killSessions: (projectId, nodeIds) => ipcRenderer.invoke(IPC.shareTeamKillSessions, projectId, nodeIds),
     resume: (projectId, serverProjectId, sessions) =>
       ipcRenderer.invoke(IPC.shareTeamResume, projectId, serverProjectId, sessions),

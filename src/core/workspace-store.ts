@@ -247,6 +247,20 @@ async function sweepStaleTmp(target: string): Promise<void> {
 }
 
 /**
+ * Whether `real` (already a real path) is the filesystem root, the real home directory, or a folder
+ * that contains it. A shared folder is readable by every teammate, Viewers included, and a home
+ * holds the ssh keys, the agents' credentials and nodeterm's own hook tokens. An unreadable home is
+ * judged by the path as given; an empty one only refuses the root.
+ */
+async function containsHome(real: string, home: string): Promise<boolean> {
+  if (path.parse(real).root === real) return true
+  if (!home) return false
+  const homeReal = await fs.realpath(home).catch(() => home)
+  const rel = path.relative(real, homeReal)
+  return rel === '' || (!path.isAbsolute(rel) && rel.split(path.sep)[0] !== '..')
+}
+
+/**
  * v3 persistence: workspace.json is an index (refs + inline canvases); each local
  * project's data lives in <cwd>/.nodeterm/project.json (source of truth). The
  * renderer contract is unchanged: load() returns / save() takes an assembled
@@ -1746,7 +1760,9 @@ export class WorkspaceStore {
    * the authority could not read) — and an index this load could not read, which the save below
    * would replace with one holding only the adopted project (and, when an earlier load this run did
    * read it, `sweepRemovedDataFiles` would then delete every inline project's data file with it).
-   * Nothing here sidelines a corrupt file either; it is left in place for the user to fix.
+   * Nothing here sidelines a corrupt file either; it is left in place for the user to fix. The root,
+   * the home directory and any folder containing the home are refused with E_BAD_CWD
+   * (`containsHome`): every teammate, Viewers included, may read any file under a shared folder.
    *
    * `home` expands the SSH project's `~` paths and drops its SSH-only node flags
    * (`localizeAdoptedNode`), on a reused project too: a browser's "Open folder…" or an older
@@ -1774,6 +1790,12 @@ export class WorkspaceStore {
       if (!(await fs.stat(real)).isDirectory()) throw new Error('not a directory')
     } catch {
       throw codedError('E_BAD_CWD', `Not a directory on this host: ${cwd}`)
+    }
+    if (await containsHome(real, opts.home)) {
+      throw codedError(
+        'E_BAD_CWD',
+        `Refusing to share ${real}: it is the home directory or contains it, and every teammate, Viewers included, could read every file in it. Share a project folder instead.`
+      )
     }
     // `load` does not queue on `saveChain`, so calling it from this chain step cannot deadlock.
     // Read-only (no sideline): adoption must not rename some OTHER project's conflict-marked file.

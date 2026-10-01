@@ -318,17 +318,12 @@ describe('runShare', () => {
     expect(log.lastIndexOf('probe')).toBeGreaterThan(log.indexOf('install'))
     expect(log.indexOf('release')).toBeGreaterThan(log.lastIndexOf('probe'))
   })
-  it('bootstraps with the folder the re-probe after an install resolved', async () => {
-    let n = 0
+  it('bootstrap names no folder: main adopts the one its own latest probe resolved', async () => {
     const { deps } = setup()
-    const seen: string[] = []
-    deps.api.probe = async () =>
-      (n++ === 0
-        ? { ...READY, plan: { kind: 'install', reason: 'missing' } }
-        : { ...READY, probe: { adoptCwd: '/srv/proj', teamExists: false } }) as never
-    deps.api.bootstrap = async (_p, cwd) => (seen.push(cwd), BOOT as never)
+    const seen: unknown[][] = []
+    deps.api.bootstrap = async (...args: unknown[]) => (seen.push(args), BOOT as never)
     await runShare(deps, INPUT)
-    expect(seen).toEqual(['/srv/proj'])
+    expect(seen).toEqual([['ssh-1']])
   })
   it('says a shared install and re-probe failure once', async () => {
     const { deps } = setup()

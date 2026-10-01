@@ -66,7 +66,7 @@ describe('bridge stubs', () => {
     await expect(s.shareTeam.install('p')).rejects.toMatchObject({ code: E_UNSUPPORTED })
     await expect(s.shareTeam.cancelInstall('p')).rejects.toMatchObject({ code: E_UNSUPPORTED })
     await expect(s.shareTeam.flushMirror('p')).rejects.toMatchObject({ code: E_UNSUPPORTED })
-    await expect(s.shareTeam.bootstrap('p', '/x')).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(s.shareTeam.bootstrap('p')).rejects.toMatchObject({ code: E_UNSUPPORTED })
     await expect(s.shareTeam.killSessions('p', [])).rejects.toMatchObject({ code: E_UNSUPPORTED })
     await expect(s.shareTeam.resume('p', 'project-1', [])).rejects.toMatchObject({ code: E_UNSUPPORTED })
     await expect(s.shareTeam.seedBookmark('code')).rejects.toMatchObject({ code: E_UNSUPPORTED })

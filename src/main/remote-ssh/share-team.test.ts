@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createShareTeamHandlers, SHARE_TIMEOUTS, type ShareTeamDeps } from './share-team'
+import { SHARE_REFUSAL } from '../../shared/share-team'
 import { encodeJoinCode } from '../../core/relay/join-code'
 import { genKeyPair, publicKeyToB64 } from '../../core/relay/e2ee'
 import { hostIdFromPublicKeyB64 } from '../../core/relay/relay-id'
@@ -10,7 +11,7 @@ const hostKey = publicKeyToB64(genKeyPair().publicKey)
 const CODE = encodeJoinCode({ v: 1, relayEndpoint: 'wss://relay.example', hostId: hostIdFromPublicKeyB64(hostKey), hostPublicKeyB64: hostKey, hostDeviceId: 'dev', label: 'box' })
 
 const PROBE_OUT = [
-  '##NTP 1', '##OS Linux', '##UID 1000', '##USER alice', '##HOME /home/alice', '##HAVE git yes', '##HAVE curl yes',
+  '##NTP 1', '##OS Linux', '##UID 1000', '##USER alice', '##HOME /home/alice', '##HOMEREAL /home/alice', '##HAVE git yes', '##HAVE curl yes',
   '##UNIT user', '##NODE /usr/bin/node', '##MAIN /home/alice/app/out/server/main.cjs', '##DATADIR /home/alice/.nodeterm-server',
   '##BOOTSTRAP yes', '##STATUSRC 0', '##STATUS', '{"enabled":true,"off":null}', '##STATUSEND',
   '##CWD /home/alice/proj', '##PANES', 'nt-term-a|claude', 'nt-term-b|npm', '##PANESEND', '##END'
@@ -92,17 +93,42 @@ describe('share-team handlers', () => {
     const { h } = deps({ replies: [PROBE_OUT, '##NTP 1\n##OS Linux\n'] })
     await h.probe('p', [])
     expect(await h.probe('p', [])).toMatchObject({ ok: false, error: expect.stringMatching(/did not finish/) })
-    expect(await h.bootstrap('p', '/home/alice/proj')).toMatchObject({ ok: false, code: 'E_NOT_PROBED' })
+    expect(await h.bootstrap('p')).toMatchObject({ ok: false, code: 'E_NOT_PROBED' })
   })
   it('bootstrap needs a ready probe first', async () => {
     const { h } = deps()
-    expect(await h.bootstrap('p', '/home/alice/proj')).toMatchObject({ ok: false, code: 'E_NOT_PROBED' })
+    expect(await h.bootstrap('p')).toMatchObject({ ok: false, code: 'E_NOT_PROBED' })
+  })
+  it('bootstrap and install never run against a probe whose plan refuses (here: the home directory itself)', async () => {
+    // The folder Viewers could read is the whole home: ~/.ssh, agent credentials, hook tokens.
+    const home = PROBE_OUT.replace('##CWD /home/alice/proj', '##CWD /home/alice')
+    const { h, calls } = deps({ replies: [home] })
+    const probed = await h.probe('p', [])
+    expect(probed).toMatchObject({ ok: true, plan: { kind: 'refuse', reason: SHARE_REFUSAL.homeFolder } })
+    expect(await h.bootstrap('p')).toEqual({ ok: false, code: 'E_NOT_PROBED', error: SHARE_REFUSAL.homeFolder })
+    expect(await h.install('p', () => {})).toEqual({ ok: false, code: 'E_NOT_PROBED', error: SHARE_REFUSAL.homeFolder })
+    expect(await h.resume('p', 'project-1', [])).toMatchObject({ ok: false, code: 'E_NOT_PROBED' })
+    expect(calls).toHaveLength(1) // the probe, and nothing after it
+  })
+  it('bootstrap needs a READY plan: a server that is installed but not answering is installed first', async () => {
+    const down = PROBE_OUT.replace('##STATUSRC 0', '##STATUSRC 1')
+    const { h, calls } = deps({ replies: [down] })
+    expect(await h.probe('p', [])).toMatchObject({ ok: true, plan: { kind: 'install', reason: 'not-running' } })
+    expect(await h.bootstrap('p')).toMatchObject({ ok: false, code: 'E_NOT_PROBED' })
+    expect(calls).toHaveLength(1)
+  })
+  it('install needs a probe first', async () => {
+    let ran = false
+    const { h } = deps({ runInstall: async () => ((ran = true), { exitCode: 0 }) })
+    expect(await h.install('p', () => {})).toMatchObject({ ok: false, code: 'E_NOT_PROBED' })
+    expect(ran).toBe(false)
   })
   it('bootstrap: passes the owner key, a control-free label and the folder; validates the join code', async () => {
     const good = GOOD()
+    // The folder comes from the cached probe's real path, never from the caller.
     const { h, calls } = deps({ replies: [PROBE_OUT, cli(good)] })
     await h.probe('p', [])
-    const r = await h.bootstrap('p', '/home/alice/proj')
+    const r = await h.bootstrap('p')
     expect(r).toMatchObject({ ok: true, result: good })
     const cmd = lastArg(calls[1])
     expect(cmd).toContain(OWNER)
@@ -110,39 +136,47 @@ describe('share-team handlers', () => {
     expect(cmd).toContain("'/home/alice/proj'")
     expect(calls[1].timeoutMs).toBe(SHARE_TIMEOUTS.bootstrap)
   })
+  it('bootstrap adopts the folder of the LATEST probe (a re-probe after an install replaces the cache)', async () => {
+    const { h, calls } = deps({ replies: [PROBE_OUT.replace('##CWD /home/alice/proj', '##CWD /home/alice/old'), PROBE_OUT, cli(GOOD())] })
+    await h.probe('p', [])
+    await h.probe('p', [])
+    expect(await h.bootstrap('p')).toMatchObject({ ok: true })
+    expect(lastArg(calls[2])).toContain("'/home/alice/proj'")
+    expect(lastArg(calls[2])).not.toContain('/home/alice/old')
+  })
   it('bootstrap: a label with an apostrophe or backslash goes through with them removed', async () => {
     const { h, calls } = deps({ label: "Enes's \\Mac", replies: [PROBE_OUT, cli(GOOD())] })
     await h.probe('p', [])
-    expect(await h.bootstrap('p', '/home/alice/proj')).toMatchObject({ ok: true })
+    expect(await h.bootstrap('p')).toMatchObject({ ok: true })
     expect(lastArg(calls[1])).toContain("'Eness Mac'")
   })
   it('bootstrap: an over-long label is capped, never refused', async () => {
     const { h, calls } = deps({ label: 'x'.repeat(80), replies: [PROBE_OUT, cli(GOOD())] })
     await h.probe('p', [])
-    expect(await h.bootstrap('p', '/home/alice/proj')).toMatchObject({ ok: true })
+    expect(await h.bootstrap('p')).toMatchObject({ ok: true })
     expect(lastArg(calls[1])).toContain(`'${'x'.repeat(60)}'`)
     expect(lastArg(calls[1])).not.toContain('x'.repeat(61))
   })
   it('bootstrap: only the known result fields come back', async () => {
     const { h } = deps({ replies: [PROBE_OUT, cli({ ...GOOD(), extra: 'ignored' })] })
     await h.probe('p', [])
-    const r = await h.bootstrap('p', '/home/alice/proj')
+    const r = await h.bootstrap('p')
     expect(r.ok && Object.keys(r.result).sort()).toEqual(['created', 'hostId', 'hosting', 'joinCode', 'projectId', 'projectName'])
   })
   it('bootstrap: a server refusal keeps its code; a join code for another host is refused', async () => {
     const { h } = deps({ replies: [PROBE_OUT, cli({ ok: false, code: 'E_HOSTING_OFF', error: 'refused (403)' }, 1)] })
     await h.probe('p', [])
-    expect(await h.bootstrap('p', '/x')).toEqual({ ok: false, code: 'E_HOSTING_OFF', error: 'refused (403)' })
+    expect(await h.bootstrap('p')).toEqual({ ok: false, code: 'E_HOSTING_OFF', error: 'refused (403)' })
     const forged = { hostId: 'someone-else', projectId: 'project-1', projectName: 'p', joinCode: CODE, hosting: 'up', created: { team: false, owner: false, project: false, share: false } }
     const d2 = deps({ replies: [PROBE_OUT, cli(forged)] })
     await d2.h.probe('p', [])
-    expect(await d2.h.bootstrap('p', '/x')).toMatchObject({ ok: false, error: expect.stringMatching(/join code/i) })
+    expect(await d2.h.bootstrap('p')).toMatchObject({ ok: false, error: expect.stringMatching(/join code/i) })
   })
   it('bootstrap: a refusal code outside the E_* shape is dropped, and a malformed result is refused', async () => {
     const { h } = deps({ replies: [PROBE_OUT, cli({ ok: false, code: 'nope', error: 'no' }, 1), cli({ ...GOOD(), hosting: 'down' })] })
     await h.probe('p', [])
-    expect(await h.bootstrap('p', '/x')).toEqual({ ok: false, error: 'no' })
-    expect(await h.bootstrap('p', '/x')).toMatchObject({ ok: false })
+    expect(await h.bootstrap('p')).toEqual({ ok: false, error: 'no' })
+    expect(await h.bootstrap('p')).toMatchObject({ ok: false })
   })
   it('bootstrap: a key that cannot be read is a reply, never a rejection, and keeps its code', async () => {
     const locked = async (): Promise<string> => {
@@ -150,7 +184,7 @@ describe('share-team handlers', () => {
     }
     const { h, calls } = deps({ ownerKey: locked, replies: [PROBE_OUT] })
     await h.probe('p', [])
-    expect(await h.bootstrap('p', '/x')).toEqual({ ok: false, code: 'E_PEER_KEY_LOCKED', error: 'The keyring is locked.' })
+    expect(await h.bootstrap('p')).toEqual({ ok: false, code: 'E_PEER_KEY_LOCKED', error: 'The keyring is locked.' })
     expect(calls).toHaveLength(1)
   })
   it('killSessions: refuses an unsafe id before running anything; parses per-node states', async () => {
@@ -196,12 +230,14 @@ describe('share-team handlers', () => {
     let release: (v: { exitCode: number }) => void = () => {}
     let seenSignal: AbortSignal | null = null
     const { h } = deps({
+      replies: [PROBE_OUT],
       runInstall: (_p, script, onChunk, signal) => {
         seenSignal = signal
         onChunk(script.includes('install-server.sh') ? 'installing\n' : '?')
         return new Promise((r) => (release = r))
       }
     })
+    await h.probe('p', [])
     const chunks: string[] = []
     const first = h.install('p', (t) => chunks.push(t))
     expect(await h.install('p', () => {})).toEqual({ ok: false, error: 'An install is already running.' })

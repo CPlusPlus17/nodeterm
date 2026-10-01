@@ -8429,9 +8429,21 @@ SSH project's "Share with team…" installs (or just probes) nodeterm-server on 
 login user, runs `team bootstrap` (init + owner + adoption by real path + share, one idempotent
 admin verb), hands the terminals over (`team resume`) and joins. The renderer sequences it
 (`lib/shareSshTeam.ts`, pure, every effect injected), main runs each step as ONE generated command
-over the ControlMaster (`main/remote-ssh/share-team.ts`; the server binary, `main.cjs` and data dir
-come from the cached, validated probe, never from the renderer), and every command is built in
-`core/remote-ssh/share-team-remote.ts` and run under a real `/bin/sh` by its test. The invariants:
+over the ControlMaster (`main/remote-ssh/share-team.ts`; the server binary, `main.cjs`, data dir and
+the adopted folder come from the cached, validated probe, never from the renderer), and every command
+is built in `core/remote-ssh/share-team-remote.ts` and run under a real `/bin/sh` by its test. The
+invariants:
+
+- **Never a home directory, at three layers.** A new SSH project's folder is `~`, and every teammate,
+  Viewers included, may `fs:read` anything under a shared folder (the jail is the shared root and
+  nothing else), so sharing the home hands out `~/.ssh`, the agents' credentials and the hook
+  tokens. The probe prints the home's real path (`homeReal`); `sharePlan` refuses the root, the home
+  and any ancestor of it, segment-wise (`SHARE_REFUSAL.homeFolder` / `homeAncestor`), and a home it
+  could not read refuses rather than guess (`homeUnknown`). Main re-reads the cached probe's plan
+  before every step (install only for a plan that does not refuse, bootstrap and resume only for a
+  ready one) and bootstrap adopts THAT probe's folder; `bootstrap(projectId)` takes no path. The
+  server's `adoptFolderNow` refuses the same set on real paths (`E_BAD_CWD`, against
+  `os.homedir()`), so a hand-run `team bootstrap --adopt ~` is refused too.
 
 - **Handover ordering: nothing ends before `bootstrap` succeeded; nothing is resumed before its old
   session is VERIFIED gone.** The kill runs on `nodeterm-rmt` ONLY (`RMT_TMUX_SOCKET`), with the

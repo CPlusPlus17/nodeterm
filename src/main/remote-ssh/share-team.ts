@@ -11,7 +11,10 @@
 // its own reply is refused.
 //
 // The probe is cached per project. `bootstrap` and `resume` run the server binary, main.cjs and data
-// dir from that cached, validated probe, never from paths the renderer sends.
+// dir from that cached, validated probe, never from paths the renderer sends, and bootstrap adopts
+// the folder that probe resolved. Each verb also re-asks the probe's plan: a host the plan refuses
+// (a home folder Viewers could read, a root login, a system install) is never installed on or run
+// against, whatever the renderer asks for.
 //
 // Electron-free on purpose (only core, shared and the bookmark TYPE), so it is unit-tested directly;
 // share-team-ipc.ts is the only file that touches `ipcMain`. Every handler answers a `ShareReply`
@@ -41,6 +44,7 @@ import {
   type BootstrapResult,
   type ResumeResultEntry,
   type ResumeStatus,
+  type SharePlan,
   type ShareProbe,
   type ShareReply,
   type ShareTeamApi
@@ -184,10 +188,21 @@ export function createShareTeamHandlers(deps: ShareTeamDeps): ShareTeamHandlers 
   const probes = new Map<string, ShareProbe>()
   const installs = new Map<string, AbortController>()
 
-  /** The cached probe, when it found a server that can run `team bootstrap`. */
-  const readyProbe = (projectId: string): ShareProbe | undefined => {
-    const p = probes.get(projectId)
-    return p && p.hasBootstrap && p.node && p.main ? p : undefined
+  /** The cached probe and its plan. A plan that refuses answers with its own reason, under the
+   *  not-probed code: nothing ran, and the renderer must not read it as a server failure. */
+  const plannedProbe = (projectId: string): { probe: ShareProbe; plan: SharePlan } | ShareFail => {
+    const probe = probes.get(projectId)
+    if (!probe) return NOT_PROBED
+    const plan = sharePlan(probe)
+    return plan.kind === 'refuse' ? fail(plan.reason, NOT_PROBED.code) : { probe, plan }
+  }
+  /** The cached probe, only when its plan says the host can take the share now. */
+  const readyProbe = (projectId: string): (ShareProbe & { adoptCwd: string }) | ShareFail => {
+    const planned = plannedProbe(projectId)
+    if ('ok' in planned) return planned
+    const { probe, plan } = planned
+    // `ready` implies a folder (the plan refuses a missing one); the check only narrows the type.
+    return plan.kind === 'ready' && probe.adoptCwd !== null ? { ...probe, adoptCwd: probe.adoptCwd } : NOT_PROBED
   }
 
   return {
@@ -219,6 +234,8 @@ export function createShareTeamHandlers(deps: ShareTeamDeps): ShareTeamHandlers 
     async install(projectId, onChunk) {
       try {
         if (!deps.ref(projectId)) return NOT_CONNECTED
+        const planned = plannedProbe(projectId)
+        if ('ok' in planned) return planned
         if (installs.has(projectId)) return fail('An install is already running.')
         const ctrl = new AbortController()
         installs.set(projectId, ctrl)
@@ -268,18 +285,18 @@ export function createShareTeamHandlers(deps: ShareTeamDeps): ShareTeamHandlers 
       }
     },
 
-    async bootstrap(projectId, adoptCwd) {
+    async bootstrap(projectId) {
       try {
         const ref = deps.ref(projectId)
         if (!ref) return NOT_CONNECTED
         const probe = readyProbe(projectId)
-        if (!probe) return NOT_PROBED
+        if ('ok' in probe) return probe
         const label = ownerLabelFor(deps.ownerLabel())
         const args = [
           'bootstrap',
           ...flag('owner-key', await deps.ownerKey()),
           ...(label ? flag('owner-label', label) : []),
-          ...flag('adopt', adoptCwd),
+          ...flag('adopt', probe.adoptCwd),
           '--json'
         ]
         const r = await deps.run(childArgs(ref.conn, ref.controlPath, teamCliCommand(probe, args)), undefined, SHARE_TIMEOUTS.bootstrap)
@@ -325,7 +342,7 @@ export function createShareTeamHandlers(deps: ShareTeamDeps): ShareTeamHandlers 
         const ref = deps.ref(projectId)
         if (!ref) return NOT_CONNECTED
         const probe = readyProbe(projectId)
-        if (!probe) return NOT_PROBED
+        if ('ok' in probe) return probe
         const idProblem = projectIdProblem(serverProjectId)
         if (idProblem) return fail(idProblem)
         const list = parseResumeSessions(sessions)

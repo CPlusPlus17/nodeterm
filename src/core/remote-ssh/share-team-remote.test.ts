@@ -135,7 +135,7 @@ describe.skipIf(process.platform === 'win32')('share-team remote shell (real /bi
       os: 'Linux', uid: 1000, user: 'alice', home, unit: 'user', node: path.join(bin, 'node'),
       dataDir: path.join(home, '.nodeterm-server'), meta: { version: '0.4.0', commit: 'abc1234' },
       hasBootstrap: true, statusRc: 0, teamExists: true, adoptCwd: fs.realpathSync(path.join(home, 'proj')),
-      have: { git: true, curl: expect.any(Boolean) } // curl is whatever /usr/bin holds on the test machine
+      homeReal: fs.realpathSync(home), have: { git: true, curl: expect.any(Boolean) } // curl is whatever /usr/bin holds on the test machine
     })
     expect(p.panes).toEqual(expect.arrayContaining([{ session: 'nt-term-a', command: 'claude' }, { session: 'nt-term-b', command: 'bash' }]))
     fs.rmSync(path.join(state, 'nt-term-a'))
@@ -150,6 +150,20 @@ describe.skipIf(process.platform === 'win32')('share-team remote shell (real /bi
     const p = parseShareProbe(out)
     if ('error' in p) throw new Error(p.error)
     expect(p).toMatchObject({ unit: 'none', node: '', main: '', hasBootstrap: false, statusRc: null, adoptCwd: null, meta: null })
+  })
+  // Symlinks need a privilege a stock Windows account does not hold (and the suite is POSIX-only).
+  it('reports the real path of the home directory, and none when it cannot be entered', async () => {
+    const realHome = path.join(dir, 'real-home')
+    fs.mkdirSync(realHome, { recursive: true })
+    const linkHome = path.join(dir, 'link-home')
+    fs.symlinkSync(realHome, linkHome)
+    const viaLink = parseShareProbe(await sh(shareProbeCommand('~', noSystemUnit()), undefined, { HOME: linkHome }))
+    if ('error' in viaLink) throw new Error(viaLink.error)
+    // `~` there is the home itself, so the plan can tell the two apart only through real paths.
+    expect(viaLink).toMatchObject({ home: linkHome, homeReal: fs.realpathSync(realHome), adoptCwd: fs.realpathSync(realHome) })
+    const gone = parseShareProbe(await sh(shareProbeCommand('/', noSystemUnit()), undefined, { HOME: path.join(dir, 'no-such-home') }))
+    if ('error' in gone) throw new Error(gone.error)
+    expect(gone).toMatchObject({ homeReal: null, adoptCwd: '/' })
   })
   it('a system unit with no user unit is reported as system', async () => {
     const bare = path.join(dir, 'sys-home')

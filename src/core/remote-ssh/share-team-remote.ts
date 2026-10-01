@@ -68,8 +68,9 @@ export const SHARE_INSTALL_SCRIPT = [
 /**
  * One round trip that tells `sharePlan` everything: the OS and login, whether git/curl exist, which
  * unit runs nodeterm-server and with which node + main.cjs + data dir, the install meta, whether
- * that build knows `team bootstrap`, whether the CLI answers `team status`, the project folder's
- * real path, and the live panes on this desktop's remote tmux socket. Read by `parseShareProbe`.
+ * that build knows `team bootstrap`, whether the CLI answers `team status`, the real paths of the
+ * home directory and the project folder, and the live panes on this desktop's remote tmux socket.
+ * Read by `parseShareProbe`.
  *
  * Bootstrap support is read from main.cjs's text (`BOOTSTRAP_MARKER`), and the server is run only
  * when that text is there: under `timeout`, with no stdin. A host with no `timeout` binary does
@@ -90,6 +91,8 @@ export function shareProbeCommand(remoteCwd: string, systemUnit: string = SYSTEM
       `printf '##UID %s\\n' "$(id -u 2>/dev/null)"`,
       `printf '##USER %s\\n' "$(id -un 2>/dev/null)"`,
       `printf '##HOME %s\\n' "$HOME"`,
+      // The home's REAL path: the plan refuses to share the home itself or anything above it.
+      `printf '##HOMEREAL %s\\n' "$(if [ -n "$HOME" ] && cd "$HOME" 2>/dev/null; then pwd -P; fi)"`,
       `for t in git curl; do if command -v "$t" >/dev/null 2>&1; then printf '##HAVE %s yes\\n' "$t"; else printf '##HAVE %s no\\n' "$t"; fi; done`,
       'U="$HOME/.config/systemd/user/nodeterm-server.service"',
       "NODE=''; MAIN=''; DD=''",
@@ -168,6 +171,7 @@ export function parseShareProbe(stdout: string): ShareProbe | { error: string } 
     statusRc: null,
     teamExists: false,
     adoptCwd: null,
+    homeReal: null,
     panes: []
   }
   let unitSeen = false
@@ -228,6 +232,9 @@ export function parseShareProbe(stdout: string): ShareProbe | { error: string } 
         break
       case '##HOME':
         probe.home = value
+        break
+      case '##HOMEREAL':
+        probe.homeReal = value === '' ? null : value
         break
       case '##HAVE': {
         const m = /^(git|curl) (yes|no)$/.exec(value)

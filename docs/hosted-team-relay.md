@@ -97,8 +97,10 @@ One idempotent call, in this order:
 2. **Owner.** Makes the device key an owner, as `team add-owner` does. A member is promoted; an
    existing owner is left as it is.
 3. **Adopt.** Adds the folder to this core's workspace. `--adopt` must be an absolute path to an
-   existing directory, and it is resolved with `realpath`: a folder already in the workspace (by
-   real path) is reused, never added twice, and reopened if it was closed. A folder with a
+   existing directory, and it is resolved with `realpath`. The root, this user's home directory and
+   any folder that contains it are refused (`E_BAD_CWD`): every teammate, Viewers included, may
+   read any file under a shared folder, and a home holds the ssh keys and the agents' credentials.
+   A folder already in the workspace (by real path) is reused, never added twice, and reopened if it was closed. A folder with a
    `.nodeterm/project.json` is adopted the way the desktop's "Open folder…" adopts one: a fresh
    project id, with the node ids (they are the tmux session names), canvas and board kept, and each
    node's `~/…` folder expanded to this user's home (an SSH project writes its folders that way). A
@@ -122,7 +124,7 @@ sentence:
 | Code | Meaning |
 |---|---|
 | `E_BAD_KEY` | `--owner-key` is not a canonical 44-character base64 public key. |
-| `E_BAD_CWD` | `--adopt` is not an absolute path, does not exist, or is not a directory. |
+| `E_BAD_CWD` | `--adopt` is not an absolute path, does not exist, is not a directory, or is the root, the home directory or a folder that contains the home. |
 | `E_HOSTING_OFF` | Hosting could not start (the scheduler's reason follows), or it stopped before a join code could be issued. |
 | `E_ADOPT_FAILED` | The folder's `.nodeterm/project.json`, or this core's own workspace index, is there but cannot be read. Nothing is set aside; fix the file and run it again. |
 | `E_BAD_REQUEST` | A malformed request: a bad label, project id or resume list. |
@@ -275,8 +277,10 @@ again.
    refused too.
 2. **Probe**, one generated command over the project's ControlMaster: the OS and the login, git and
    curl, which unit runs nodeterm-server and with which binary, its version, whether it knows
-   `team bootstrap`, whether it answers, the project folder's real path, and what each of this
-   desktop's remote panes is running. A refusal stops here (see [Refusals](#refusals)).
+   `team bootstrap`, whether it answers, the real paths of the home directory and the project
+   folder, and what each of this desktop's remote panes is running. A refusal stops here (see
+   [Refusals](#refusals)). Main keeps this probe and re-reads its plan before every later step: it
+   installs only for a plan that does not refuse, and bootstraps and resumes only for a ready one.
 3. **Confirm.** Cancel changes nothing.
 4. **Install**, only when needed, then probe again. The server must now be ready, or the share stops
    with nothing changed.
@@ -289,7 +293,8 @@ again.
    again in a moment."
 8. **Close the SSH project**, non-destructively: it moves to "Recently closed", and its tmux sessions
    keep running.
-9. **`team bootstrap`**, as the login user, with the folder's real path.
+9. **`team bootstrap`**, as the login user, with the folder's real path from main's own probe (the
+   renderer names no folder).
 10. **Record the handover**: `handedOffTo` now names the team (`hostId`) and the project's id on the
     server.
 11. **End the sessions, and check.** One generated command kills each node's session on this
@@ -374,6 +379,9 @@ teammate's, still compares the SAS.
 | The host has a root (system) install | "This host runs nodeterm-server as a system service (root). Share with team needs a per-user install; see docs/hosted-team-relay.md." |
 | The host is not Linux | "Share with team needs a Linux host (nodeterm-server runs on Linux)." |
 | The project folder is missing on the host | "The project folder does not exist on the host." |
+| The project folder is your home directory (a new SSH project starts at `~`) | "This project's folder is your home directory. Everyone in the team, Viewers included, could read every file in it. Move the project into its own folder, then share it." |
+| The project folder is `/` or contains your home directory | "This project's folder contains your home directory. Everyone in the team, Viewers included, could read every file in it. Move the project into its own folder, then share it." |
+| The host's home directory could not be read | "Could not read your home directory on the host, so Share with team cannot check that this project's folder is safe to share. Try again." |
 | git or curl is missing, and the installer has to run | "Installing nodeterm-server needs git and curl on the host (missing: …)." |
 | The folder path contains `'` or `\` | "The folder path contains a quote or backslash, which cannot be passed safely to every login shell." |
 | Hosting cannot start | "Could not share: Hosting could not start on the host: …" with the relay's reason; the SSH project is reopened. |

@@ -26,7 +26,6 @@ import { peekJoinCode } from '@shared/relay-join-code'
 import { SAFE_SESSION_ID } from '@shared/session-id'
 import {
   SHARE_MAX_TERMINALS,
-  SHARE_REFUSAL,
   type ResumeEntry,
   type ShareReply,
   type ShareTeamApi
@@ -195,7 +194,7 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   const ids = terminals.map((n) => n.nodeId)
 
   phase('probing')
-  let probed = await call(() => api.probe(projectId, ids))
+  const probed = await call(() => api.probe(projectId, ids))
   if (!probed.ok) return failed('probing', probed.error, false)
   const plan = probed.plan
   if (plan.kind === 'refuse') return { kind: 'refused', reason: plan.reason }
@@ -226,13 +225,7 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
       // A dead connection fails the install and the re-probe with the same message: say it once.
       return failed('checking-install', why && why !== base ? `${base} ${why}` : base, false)
     }
-    probed = again
   }
-  // The folder the server adopts comes from the LATEST probe. A ready plan implies it exists (the
-  // plan refuses a missing folder); this only narrows the type.
-  const adoptCwd = probed.probe.adoptCwd
-  if (adoptCwd === null) return { kind: 'refused', reason: SHARE_REFUSAL.noFolder }
-
   phase('releasing')
   try {
     await deps.prepare()
@@ -282,7 +275,8 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   }
 
   phase('bootstrapping')
-  const booted = await call(() => api.bootstrap(projectId, adoptCwd))
+  // The folder the server adopts is the one main's latest probe resolved; the renderer names none.
+  const booted = await call(() => api.bootstrap(projectId))
   if (!booted.ok) {
     // Any bootstrap failure reopens the project, even one without a server code that may have
     // left the server set up: the desktop must never stay closed on an unconfirmed handover.

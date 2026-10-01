@@ -13,9 +13,7 @@ export function registerShareTeamIpc(h: ShareTeamHandlers, send: (channel: strin
   )
   ipcMain.handle(IPC.shareTeamCancelInstall, (_e, projectId: string) => h.cancelInstall(String(projectId)))
   ipcMain.handle(IPC.shareTeamFlushMirror, (_e, projectId: string) => h.flushMirror(String(projectId)))
-  ipcMain.handle(IPC.shareTeamBootstrap, (_e, projectId: string, adoptCwd: string) =>
-    h.bootstrap(String(projectId), String(adoptCwd))
-  )
+  ipcMain.handle(IPC.shareTeamBootstrap, (_e, projectId: string) => h.bootstrap(String(projectId)))
   ipcMain.handle(IPC.shareTeamKillSessions, (_e, projectId: string, nodeIds: unknown) =>
     h.killSessions(String(projectId), Array.isArray(nodeIds) ? nodeIds.map(String) : [])
   )

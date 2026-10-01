@@ -109,6 +109,25 @@ describe('WorkspaceStore.adoptFolder', () => {
     await expect(store.adoptFolder(file, { home: dir })).rejects.toMatchObject({ code: 'E_BAD_CWD' })
   })
 
+  it('E_BAD_CWD for the home directory, the root, or a folder that contains the home (nothing saved)', async () => {
+    // Every teammate, Viewers included, may read any file under a shared folder.
+    const home = folder('home/u')
+    await expect(store.adoptFolder(home, { home })).rejects.toMatchObject({ code: 'E_BAD_CWD' })
+    await expect(store.adoptFolder(path.join(dir, 'home'), { home })).rejects.toMatchObject({ code: 'E_BAD_CWD' })
+    await expect(store.adoptFolder(path.parse(dir).root, { home })).rejects.toMatchObject({ code: 'E_BAD_CWD' })
+    // Judged on real paths: a home reached through a link is still the home.
+    if (process.platform !== 'win32') {
+      const link = path.join(dir, 'home-link')
+      fs.symlinkSync(home, link)
+      await expect(store.adoptFolder(link, { home })).rejects.toMatchObject({ code: 'E_BAD_CWD' })
+      await expect(store.adoptFolder(home, { home: link })).rejects.toMatchObject({ code: 'E_BAD_CWD' })
+    }
+    expect(fs.existsSync(indexFile())).toBe(false)
+    // A folder inside the home, or beside it, is fine.
+    expect((await store.adoptFolder(folder('home/u/proj'), { home })).created).toBe(true)
+    expect((await store.adoptFolder(folder('home/u2'), { home })).created).toBe(true)
+  })
+
   it('E_ADOPT_FAILED for a corrupt project file, which is left in place (never sidelined, never adopted empty)', async () => {
     const f = folder('delta')
     fs.mkdirSync(path.join(f, '.nodeterm'))

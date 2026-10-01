@@ -2,6 +2,7 @@
 // verbs. Everything here crosses an ssh exec channel as JSON, so every reader is strict.
 import { NODE_ID_MAX } from './safe-id'
 import { SESSION_ID_MAX } from './session-id'
+import { isAncestorPath } from './worktree'
 
 /** `team bootstrap --json`'s answer: the team's address, the project it adopted and shared, the
  *  join code, and what this call changed (every `created` flag false on a re-run). */
@@ -92,6 +93,8 @@ export interface ShareProbe {
   teamExists: boolean
   /** realpath of the SSH project's remoteCwd on the host; null = it does not exist. */
   adoptCwd: string | null
+  /** realpath of the login's home directory; null = it could not be read. */
+  homeReal: string | null
   /** Live panes on this desktop's own remote tmux socket (`nt-*` sessions only; a session with
    *  several panes appears once per pane). */
   panes: Array<{ session: string; command: string }>
@@ -108,17 +111,32 @@ export const SHARE_REFUSAL = Object.freeze({
   root: 'This SSH login is root. Share with team runs nodeterm-server as your own user, so log in to the project as a regular user and try again.',
   system: 'This host runs nodeterm-server as a system service (root). Share with team needs a per-user install; see docs/hosted-team-relay.md.',
   nonLinux: 'Share with team needs a Linux host (nodeterm-server runs on Linux).',
-  noFolder: 'The project folder does not exist on the host.'
+  noFolder: 'The project folder does not exist on the host.',
+  homeFolder:
+    "This project's folder is your home directory. Everyone in the team, Viewers included, could read every file in it. Move the project into its own folder, then share it.",
+  homeAncestor:
+    "This project's folder contains your home directory. Everyone in the team, Viewers included, could read every file in it. Move the project into its own folder, then share it.",
+  homeUnknown:
+    "Could not read your home directory on the host, so Share with team cannot check that this project's folder is safe to share. Try again."
 })
 
 /** Decide from a probe whether the host can take the share now, needs the installer first, or
  *  cannot take it at all. Refusals come first: installing on a host we would refuse anyway is
- *  wasted minutes. git and curl matter only when the installer has to run. */
+ *  wasted minutes. git and curl matter only when the installer has to run.
+ *
+ *  The folder must not be the home directory, the root, or anything above the home: every
+ *  teammate, Viewers included, may read any file under a shared folder, and a home holds the ssh
+ *  keys, the agents' credentials and nodeterm's own hook tokens. Both paths are the host's real
+ *  paths, compared segment by segment. A home the probe could not read refuses rather than guess. */
 export function sharePlan(p: ShareProbe): SharePlan {
   if (p.os !== 'Linux') return { kind: 'refuse', reason: SHARE_REFUSAL.nonLinux }
   if (p.uid === 0) return { kind: 'refuse', reason: SHARE_REFUSAL.root }
   if (p.unit === 'system') return { kind: 'refuse', reason: SHARE_REFUSAL.system }
   if (p.adoptCwd === null) return { kind: 'refuse', reason: SHARE_REFUSAL.noFolder }
+  if (p.homeReal === null) return { kind: 'refuse', reason: SHARE_REFUSAL.homeUnknown }
+  if (isAncestorPath(p.adoptCwd, p.homeReal)) {
+    return { kind: 'refuse', reason: isAncestorPath(p.homeReal, p.adoptCwd) ? SHARE_REFUSAL.homeFolder : SHARE_REFUSAL.homeAncestor }
+  }
   const reason: 'missing' | 'outdated' | 'not-running' | null =
     p.unit === 'none' || !p.node || !p.main
       ? 'missing'
@@ -155,7 +173,8 @@ export interface ShareTeamApi {
   cancelInstall(projectId: string): Promise<void>
   onInstallOutput(projectId: string, listener: (text: string) => void): () => void
   flushMirror(projectId: string): Promise<ShareReply<{ nodeIds: string[] }>>
-  bootstrap(projectId: string, adoptCwd: string): Promise<ShareReply<{ result: BootstrapResult }>>
+  /** Adopts the folder the last probe resolved; the caller names no path. */
+  bootstrap(projectId: string): Promise<ShareReply<{ result: BootstrapResult }>>
   killSessions(
     projectId: string,
     nodeIds: string[]
