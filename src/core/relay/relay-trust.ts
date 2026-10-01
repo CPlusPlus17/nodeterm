@@ -33,7 +33,9 @@
 // link's own secret, read from the host's own link record (src/core/watch-link/link-host.ts; any
 // other key is denied at once, never asked). Client side: the joining human's
 // `relay:client:confirm`, and the client's `autoApprove` for a hosted team's approved bookmark
-// (src/main/remote/hosted-join.ts). A seventh is a design change.
+// (src/main/remote/hosted-join.ts). That auto-confirm also covers a bookmark Share with team seeds
+// with `source: 'ssh'`, which is not a new confirm site: its code came over an authenticated ssh
+// channel. A seventh is a design change.
 import {
   confirmLocal,
   confirmRemote,

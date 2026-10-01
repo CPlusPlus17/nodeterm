@@ -34,25 +34,35 @@ every message**. The desktop's UI only mirrors it.
 | Canvas authority | `src/core/canvas-authority.ts`; store seams in `src/core/workspace-store.ts`; wired in `src/server/index.ts` | The one writer of a shared project's canvas content. See [Shared canvas authority](#shared-canvas-authority). |
 | Desktop joiner | `src/main/remote/hosted-join.ts`, `relay-bookmarks.ts`; core `join-code.ts`, `join-token.ts` | Runs the core relay client with **no pin store**. |
 | Renderer | `lib/hostedJoin.ts`, `lib/hostedAttempts.ts`, `lib/hostedOwner.ts`, `lib/hostedPendingQueue.ts`, `components/HostedApprovalDialog.tsx`, `bridge/hosted-gate.ts`, `bridge/relay-local-close.ts`, `@shared/hosted-access.ts` | Every hosted branch sits behind a join code, a hosted api or a hosted role, so a Team Access tab and a local tab take their old paths (`canvas/hosted-team.source.test.ts`). |
+| Share with team | Desktop: `lib/shareSshTeam.ts`, `src/main/remote-ssh/share-team.ts`, `src/core/remote-ssh/share-team-remote.ts`. Server: `team-bootstrap.ts`, `team-resume.ts`, `admin-error.ts` | An SSH project handed to a hosted team on its own host. See [Share with team from the desktop](#share-with-team-from-the-desktop). |
 | End-to-end test | `src/server/hosted-e2e.test.ts` | A real headless server boot, the real admin socket, access policy, `PtyManager`, git handlers (a real repository) and trust gates, with an in-process relay and a fake token API. It also checks that shared canvas edits are written with no browser attached and survive a restart. |
 
 ## Setup over SSH
 
-Run every `team` command **as the unix user the nodeterm service runs as**, on the host. The CLI
-never touches `team.json` or the host key itself. It talks to the running server over the admin
-socket, so the service must be up. `install-server.sh` puts the app in `~/.nodeterm-server-app` and
-the data in `~/.nodeterm-server`. When it provisioned its own Node, `node` may not be on `PATH`;
-the service's `ExecStart` line (`systemctl --user cat nodeterm-server`, or the system unit for a
-root install) names the exact binary and script to use.
+From a desktop **SSH project**, **Share with team…** does all of this for you, your device key
+included: see [Share with team from the desktop](#share-with-team-from-the-desktop). By hand it is
+two steps, run on the host **as the unix user the nodeterm service runs as** (the user you install
+it as):
 
 ```bash
-APP=~/.nodeterm-server-app/out/server/main.cjs
+# 1. Install (or update) nodeterm-server: a systemd service plus a daily auto-update.
+curl -fsSL https://raw.githubusercontent.com/eneskirca/nodeterm/main/scripts/install-server.sh | bash
 
-node $APP team init                                    # host key + team.json, starts hosting
-node $APP team add-owner <your device key> --label "<you>"
-node $APP team share <projectId>                       # what the team can see
-node $APP team info --json                             # address + join code
+# 2. Team, owner, project and share in one step. It prints the join code.
+APP=~/.nodeterm-server-app/out/server/main.cjs
+node $APP team bootstrap --owner-key <your device key> --adopt <folder> [--owner-label <name>]
 ```
+
+The installer builds the app from source in `~/.nodeterm-server-app` (about 600 MB), keeps the
+data in `~/.nodeterm-server`, and installs a per-user `systemd --user` service, or a system service
+when run as root (`docs/SERVER.md`, "One-line install"). When it provisioned its own Node, `node`
+may not be on `PATH`; the service's `ExecStart` line (`systemctl --user cat nodeterm-server`, or
+the system unit for a root install) names the exact binary and script to use. Your device key comes
+from your desktop: see [Your desktop's device key](#your-desktops-device-key). `--adopt` is the
+project's folder on the host, as an absolute path.
+
+The CLI never touches `team.json`, the host key or the workspace itself. It talks to the running
+server over the admin socket, so the service must be up.
 
 `--data-dir <dir>` (anywhere on the line) or `NODETERM_DATA_DIR` points the CLI at a server running
 with a non-default data directory. `node $APP team --help` prints the verb list. Exit codes: 0 done,
@@ -61,6 +71,7 @@ such as hosting not starting), 2 the command line is wrong.
 
 | Command | Effect |
 |---|---|
+| `team bootstrap --owner-key <key> --adopt <dir> [--owner-label <name>] [--json]` | `init`, `add-owner`, the folder's adoption into this core's workspace and `share`, in one idempotent call. See [What `team bootstrap` does](#what-team-bootstrap-does). |
 | `team init` | Creates the host key (once) and `team.json` if absent, then starts hosting. Prints the address and join code when hosting started. An unreadable key is refused, never replaced. |
 | `team add-owner <device-key> [--label <name>]` | Pins that device as an **owner**. An existing member's key is promoted to owner. The key must be the canonical 44-character base64 public key; a typo gets its own message before anything is sent. |
 | `team remove <device-key> [--force]` | Unpins the key and cuts its live sessions (they are told `removed`). Removing the last owner needs `--force`. |
@@ -68,45 +79,67 @@ such as hosting not starting), 2 the command line is wrong.
 | `team info [--json]` | The team address and join code. The plain form prints the join code only while hosting is on; `--json` returns `{enabled, info, joinCode}`. |
 | `team status [--json]` | Hosting state, members, and pending join requests (see [Status and troubleshooting](#status-and-troubleshooting)). |
 | `team rotate-key` | Replaces the host key. Every bookmark and join code stops working. A hosting service restarts on the new key; one that was not hosting stays off. |
+| `team resume --project <id> [--json] < sessions.json` | Restarts agent sessions handed over from a desktop, on this core. Reads the session list on stdin. See [`team resume`](#team-resume). |
 
-With no team on the server, the admin socket answers only `init`, `status` and `info`: every other
-verb would create team state on a server that never asked to host.
+With no team on the server, the admin socket answers only `init`, `status`, `info` and `bootstrap`
+(which is `init` plus the rest): every other verb would create team state on a server that never
+asked to host.
 
-### 1. The project must already be on this core
+### What `team bootstrap` does
 
-`team share` takes a project id from this core's workspace index, `<dataDir>/workspace.json`
-(`entries[].id`, beside each entry's `name` and `cwd`). Adopting an existing SSH project into the
-server core is sub-project 3; in v1 the folder has to be opened on the core once, from the Server
-Edition's browser UI. The installer's unit runs the server **headless** (`NODETERM_HEADLESS=1`), so
-there is no UI until you run it once in serving mode:
+One idempotent call, in this order:
 
-```bash
-systemctl --user stop nodeterm-server        # `systemctl stop …` for a root install
-cd ~/.nodeterm-server-app                    # REQUIRED: the UI is found relative to this directory
-NODETERM_SERVER_PASSWORD='<choose one>' node out/server/main.cjs
-# From your desktop: ssh -L 8443:127.0.0.1:8443 <host>, open http://127.0.0.1:8443, sign in,
-# open the folder as a project. Then Ctrl-C the server and:
-systemctl --user start nodeterm-server
-```
+1. **Team.** Creates the host key and `team.json` if absent and starts hosting, as `team init`
+   does, then waits up to 15 s for the relay's first answer. A refusal (`E_HOSTING_OFF`, with the
+   scheduler's reason) stops here: no owner, project or share was written. No answer within the
+   15 s is still a success; the output says "Hosting: starting — teammates can join in a moment.",
+   and a join retries.
+2. **Owner.** Makes the device key an owner, as `team add-owner` does. A member is promoted; an
+   existing owner is left as it is.
+3. **Adopt.** Adds the folder to this core's workspace. `--adopt` must be an absolute path to an
+   existing directory, and it is resolved with `realpath`: a folder already in the workspace (by
+   real path) is reused, never added twice, and reopened if it was closed. A folder with a
+   `.nodeterm/project.json` is adopted the way the desktop's "Open folder…" adopts one: a fresh
+   project id, with the node ids (they are the tmux session names), canvas and board kept, and each
+   node's `~/…` folder expanded to this user's home (an SSH project writes its folders that way). A
+   folder without one becomes an empty project named after the folder. The project is saved before
+   it is shared, so the canvas authority can read it.
+4. **Share.** Adds the project to `sharedProjects`, as `team share` does.
 
-**Run it from the app directory** (or pass `--renderer-dir ~/.nodeterm-server-app/out/renderer`).
-The built UI is looked up as `out/renderer` relative to the current directory; the unit only works
-because it sets `WorkingDirectory` to the app directory. Started from `$HOME`, sign-in succeeds and
-then `/` answers `{"error":"not_found"}`, with no warning at boot.
+A re-run on a host that is already set up changes nothing (every `created` flag in the `--json`
+answer is false) and prints the same join code. Sharing a second folder is the same command with
+another `--adopt`: the same team and the same join code, and teammates who are connected get its tab
+at once (see [Hosted tabs](#hosted-tabs)).
 
-Serving mode puts the web UI (password sign-in) on the configured bind, `127.0.0.1:8443` by
-default, so you reach it through an SSH tunnel. The password seeds only when none exists yet
-(`docs/SERVER.md`), and serving mode hosts the team too. **Stop the service first.** A second server
-on the same data directory still serves the UI, but it skips hosting ("Hosted team relay: NOT
-started — another nodeterm server is already running on this data directory …") and disables its
-agent hooks.
+`--json` prints `{hostId, projectId, projectName, joinCode, hosting, created}`. A refusal under
+`--json` is one JSON line on **stdout**, `{"ok":false,"code":"E_…","error":"…"}` (exit 1), beside
+the human sentence on stderr, because a caller reading over an ssh exec channel (the desktop) reads
+stdout only. The codes are stable; branch on them, never on the sentence:
 
-A joiner's tab shows **one** project: the first shared project in the host's workspace order
-(`openRelayTab` adopts `projects[0]` of the narrowed workspace). With nothing shared, even an owner
-gets an empty tab, because `workspace:load` is narrowed to `sharedProjects` for every hosted peer,
-owners included.
+| Code | Meaning |
+|---|---|
+| `E_BAD_KEY` | `--owner-key` is not a canonical 44-character base64 public key. |
+| `E_BAD_CWD` | `--adopt` is not an absolute path, does not exist, or is not a directory. |
+| `E_HOSTING_OFF` | Hosting could not start (the scheduler's reason follows), or it stopped before a join code could be issued. |
+| `E_ADOPT_FAILED` | The folder's `.nodeterm/project.json`, or this core's own workspace index, is there but cannot be read. Nothing is set aside; fix the file and run it again. |
+| `E_BAD_REQUEST` | A malformed request: a bad label, project id or resume list. |
+| `E_UNSUPPORTED` | This server cannot adopt folders or resume sessions. The desktop's `shareTeam` verbs answer it too, on the Server Edition and in relay tabs. |
 
-### 2. Your desktop's device key
+### `team resume`
+
+`team resume --project <id> [--json]` restarts agent sessions handed over from a desktop, on this
+core. It reads the list on **stdin**, `[{nodeId, agentId, sessionId, permissionMode?}]`, at most 200
+entries, and answers one result per entry: `resumed`, `already-running`, or `refused` with a reason.
+Every entry is checked again here: the node must be a terminal of that project running that agent,
+the agent must be resumable and not run under a managed account, and the session id must pass the
+same rule as every other resume; an unknown permission mode gives the bare command. A node whose
+`nt-<id>` session already exists on this core's socket (`node-terminal`, checked with the exact
+target) is `already-running`, and one whose session this core cannot check is refused rather than
+started, so a re-run never puts a second agent on one conversation. Launches run four at a time, in
+the node's folder and with this core's hook environment, so each agent's status reaches every
+teammate. Share with team calls it only for sessions it has verified gone from the desktop's socket.
+
+### Your desktop's device key
 
 The key is the `publicKey` field of `<userData>/remote-peer-key.json` on your desktop
 (`src/main/remote/peer-identity.ts`). The public key is always stored as plaintext base64, even when
@@ -122,29 +155,30 @@ grep -o '"publicKey":"[^"]*"' ~/Library/Application\ Support/node-terminal/remot
 ls ~/Library/Application\ Support/*/remote-peer-key.json
 ```
 
-No UI shows this key in v1; sub-project 3 automates this step.
+Share with team reads this key for you; nothing else in the UI shows it in v1.
 
 The file is created the first time the desktop hosts a Team Access invite, connects to another
 desktop's pairing code (New Remote Connection) or joins a hosted team. Pairing a **phone** does not
 create it; that uses a different key file (`remote-host-key.json`). Only if the file is really not
-there, paste the team's join code once (step 3); that join spends one of the team's shared device
-mints.
+there, run `team init` and `team info` for a join code and paste it once (see
+[The first connect](#the-first-connect)); that join spends one of the team's shared device mints.
 While your desktop asks you to read a code to an owner, `team status --json` lists your device under
 `pending` with its `peerKeyB64` and `sas`. Take the key whose `sas` matches your prompt, press Cancel
-on the prompt (that ends the request), run `team add-owner` with that key, and paste the code again.
-A request that is still pending when its key becomes an owner is not upgraded; it would wait out its
-10 minutes.
+on the prompt (that ends the request), run `team bootstrap` (or `team add-owner`) with that key, and
+paste the code again. A request that is still pending when its key becomes an owner is not upgraded;
+it would wait out its 10 minutes.
 
-### 3. The first connect
+### The first connect
 
 On the desktop, choose **New Remote Connection** (dock or ⌘K) and paste the
 `nodeterm://join?code=…` code. The host already trusts an owner's key, so it approves its own half
 without anyone. Your desktop has no record of this host yet, so it asks once, with the SAS, to "read
 this code to an owner"; nobody on the host compares it (the host key itself is checked against the
 one in the join code), so press OK. The desktop records the approval in its bookmark, and every
-later connect opens without a prompt.
+later connect opens without a prompt. Share with team joins without this prompt; see
+[The owner's own join skips the SAS](#the-owners-own-join-skips-the-sas).
 
-### 4. Inviting teammates
+### Inviting teammates
 
 An owner's hosted tab has **Copy team invite code** in the command palette; `team info` prints the
 same code. A join code carries public material only (relay endpoint, host id, host public key, host
@@ -156,6 +190,216 @@ The teammate pastes it into New Remote Connection and reads the SAS it shows to 
 or a chat). The owner's desktop shows "A device wants to join" with the same SAS, a device-key
 fingerprint (the key's first 8 characters) and a role picker that defaults to **Viewer**. Allow
 grants the chosen role once the joiner has pressed OK too.
+
+## Share with team from the desktop
+
+**Share with team…** turns a desktop **SSH project** into a hosted team on the same host, with this
+desktop as an owner. It is in the project tab's ⌄ menu and in the sessions sidebar's project menu
+(SSH projects only), and in ⌘K as "Share <name> with team" for the active one. While the project's
+SSH connection is down it is disabled: "Connect this project first (its SSH connection is down)."
+
+The code: `src/renderer/lib/shareSshTeam.ts` (the order, pure), `components/ShareTeamDialog.tsx`,
+`src/main/remote-ssh/share-team.ts` (the `shareTeam` IPC verbs),
+`src/core/remote-ssh/share-team-remote.ts` (every command it runs on the host, generated shell
+tested under a real `/bin/sh`), and the server's `src/core/relay/team-bootstrap.ts` and
+`team-resume.ts`.
+
+### What it does
+
+1. Makes sure nodeterm-server is installed and running on the host, as your SSH login user. It
+   installs it, after you confirm, when it is missing, too old to know `team bootstrap`, or not
+   answering. A server that is ready is never reinstalled; it is only probed.
+2. Sets up a hosted team with this desktop as an owner
+   ([`team bootstrap`](#what-team-bootstrap-does)).
+3. Moves the project to the server core and shares it.
+4. Hands its terminals over to the server core.
+5. Joins the team as an owner: the SSH project closes and the team's tab takes its place.
+6. Shows the invite code for teammates.
+
+Teammates then join from their own desktops with the code
+([Inviting teammates](#inviting-teammates)), and keep working while your computer is off.
+
+### The confirm
+
+Nothing changes before you press **Share**. The dialog ("Share <name> with a team") says:
+
+- the host and the login (`user@host`);
+- what the installer will do, when it has to run: "nodeterm-server will be installed on the host:
+  about 600 MB, built from source, as a systemd --user service that updates itself daily." (or that
+  it will be updated, or reinstalled and restarted). Updating a server whose team already exists
+  adds "Updating restarts the server; teammates connected to it are briefly disconnected.";
+- **"Editors get a shell as <user> on <host> and can make themselves owners; Viewers cannot."** The
+  server core runs as your SSH login, so an Editor's terminal is a shell as that user, and that shell
+  can run `team add-owner` (see [Threat notes](#threat-notes));
+- three lists: "These agents continue on the server:", "These terminals are running something that
+  will stop:" and "These agents will not be resumed — resume them by hand:".
+
+The installer's output streams into the dialog; a build takes many minutes, and the desktop waits up
+to 30 of them. The desktop downloads the installer to a temp file before running it, never pipes it
+into `bash`: with no `pipefail`, a failed download pipes an empty script that exits 0, which would
+read as a successful install. **Cancel** stops this desktop waiting. Whatever the installer already
+did on the host stays, and the project has not been touched yet.
+
+### Which terminals continue
+
+Every terminal of the project is handed over: its session on this desktop's remote tmux socket
+(`nodeterm-rmt`) ends, and the node lives on in the server core's copy of the project.
+
+- **An agent continues its conversation** when its agent is resumable (`RESUMABLE_AGENTS`) and its
+  conversation id is known. The server core restarts it with `--resume` (`claude --resume <id>`,
+  `codex resume <id>`, …), in the project's permission mode, on the core's own tmux socket, where its
+  status reaches every teammate.
+- **Some agents are not resumed**, and the confirm lists each with its reason: "runs under a managed
+  account" (the server core cannot map this desktop's account directory to an account of its own),
+  "no conversation to resume yet" (no session id was ever reported), and "this agent cannot be
+  resumed" (a custom agent, for instance). Resume them by hand from the team's tab. A hosted tab
+  never resumes an agent by itself.
+- **A plain terminal's process stops.** The confirm lists each one whose pane runs something other
+  than a shell. Its node stays; the next time an Editor opens it, it is a fresh shell on the server
+  core.
+
+### The handover, in order
+
+The order is the safety property. No terminal ends before the server has taken the project. No agent
+starts on the server while its old session might still run: two processes on one conversation
+interleave its transcript. And once the server owns the project's file, this desktop never writes it
+again.
+
+1. **Refusals first, before the host is touched.** An agent node that is working, or waiting on a
+   permission prompt (hook state `working` or `blocked`), refuses the share: "Wait for these agents
+   to finish (or stop them), then share again.", with the agents listed. More than 200 terminals is
+   refused too.
+2. **Probe**, one generated command over the project's ControlMaster: the OS and the login, git and
+   curl, which unit runs nodeterm-server and with which binary, its version, whether it knows
+   `team bootstrap`, whether it answers, the project folder's real path, and what each of this
+   desktop's remote panes is running. A refusal stops here (see [Refusals](#refusals)).
+3. **Confirm.** Cancel changes nothing.
+4. **Install**, only when needed, then probe again. The server must now be ready, or the share stops
+   with nothing changed.
+5. **Save the canvas.**
+6. **Mark the project handed off, in progress** (`handedOffTo` with no host yet), and save, so no
+   later save on this desktop mirrors the project to the host.
+7. **Flush the pending mirror write and read the host's `project.json` back.** Every terminal of the
+   project must be in it, because that file is what the server adopts. If one is missing, the share
+   stops: "The canvas on the host is not up to date (N terminals missing). Nothing was changed; try
+   again in a moment."
+8. **Close the SSH project**, non-destructively: it moves to "Recently closed", and its tmux sessions
+   keep running.
+9. **`team bootstrap`**, as the login user, with the folder's real path.
+10. **Record the handover**: `handedOffTo` now names the team (`hostId`) and the project's id on the
+    server.
+11. **End the sessions, and check.** One generated command kills each node's session on this
+    desktop's remote socket only (`nodeterm-rmt`, exact target `=nt-<id>`), then asks tmux whether
+    each one is gone. A session counts as gone only when tmux itself says it does not exist: tmux
+    also exits 1 for a version mismatch or a socket it may not open, and the kill failed there too.
+    Never the server core's socket (`node-terminal`): its sessions are the ones being started.
+12. **`team resume`** for the resumable agents whose sessions are gone, with the list on stdin.
+13. **Join**, and show the invite code.
+
+Any failure after step 6 and before `team bootstrap` succeeds takes the mark back, and reopens the
+SSH project if step 8 had closed it: "The SSH project was reopened; nothing was changed." If that
+undo itself fails, the result says so instead: the project may still be closed and still carry the
+mark that stops its mirror, and reopening it from "Recently closed" (which warns, see below) clears
+it. A bootstrap that failed with no server code (the connection dropped, or it timed out) also says
+the host may have finished setting up anyway, and to run Share with team again. After a successful
+bootstrap the SSH project is **never** reopened, because the server core now writes the project's
+file and a reopened SSH project would be a second writer. Instead:
+
+- a session that is not confirmed gone may still be running, so nothing is resumed for it; the
+  result lists it under "Still running on SSH (not moved):". A kill command that fails outright
+  lists every terminal there;
+- a resume the server refuses is listed under "Not resumed:", with the server's reason;
+- a join that fails keeps the bookmark, which reconnects on its own. The result says "This computer
+  is joining the team; its tab opens when it connects." If the bookmark could not be seeded, the
+  join asks for the SAS like a pasted code.
+
+### `handedOffTo` and reopening
+
+The handover is recorded on this desktop only, in the project's workspace index entry
+(`handedOffTo`, never in the shared `project.json`), and it survives restarts. While it is set, this
+desktop never mirrors the project's file to the host, never reconciles it, never includes it in the
+15 s poll of connected SSH projects, never writes its board on a phone's behalf, and never pushes its
+project settings: the server core's canvas authority is that file's one writer now. A mark with no
+host is a handover that started and did not finish, and the same guard applies.
+
+Reopening the project from "Recently closed", with ⇧⌘T, or by opening the same host and folder as an
+SSH project again, warns first:
+
+> <name> is now managed by team <team> on <host>. Open it from the team tab, or run "team unshare
+> <projectId>" on the server first.
+>
+> Open it here anyway? Two copies editing one canvas can overwrite each other.
+
+or, for a handover that did not finish:
+
+> Sharing <name> with a team did not finish. If the server already took it over, opening it here
+> gives one canvas two editors that can overwrite each other.
+>
+> Open it here anyway?
+
+**Open here anyway** takes the project back: the mark is cleared, and this desktop writes the file
+again.
+
+### The owner's own join skips the SAS
+
+A pasted code makes you read a SAS to an owner ([The first connect](#the-first-connect)). Share with
+team does not, and it is the only join that does not. The join code came back from `team bootstrap`
+over the project's own SSH channel, whose host key `known_hosts` already authenticated, and the code
+names the relay key it was minted for (`decodeJoinCode` checks that the host id is the hash of that
+key). That is the assurance comparing six digits by eye gives. So before joining, the desktop seeds
+the team's bookmark with `approvedAt` and `source: 'ssh'`, and the bookmark's auto-confirm opens the
+connection; the host approves its own half because your key is an owner in `team.json`. A bookmark
+already held for the same team and key keeps its device token. Every other join, a pasted code or a
+teammate's, still compares the SAS.
+
+### Refusals
+
+| When | What the desktop says |
+|---|---|
+| The SSH connection is down | The menu item is disabled: "Connect this project first (its SSH connection is down)." |
+| An agent is working or blocked | "Wait for these agents to finish (or stop them), then share again.", with the agents listed |
+| More than 200 terminals | "This project has more than 200 terminals; Share with team handles at most that many." |
+| The SSH login is root | "This SSH login is root. Share with team runs nodeterm-server as your own user, so log in to the project as a regular user and try again." |
+| The host has a root (system) install | "This host runs nodeterm-server as a system service (root). Share with team needs a per-user install; see docs/hosted-team-relay.md." |
+| The host is not Linux | "Share with team needs a Linux host (nodeterm-server runs on Linux)." |
+| The project folder is missing on the host | "The project folder does not exist on the host." |
+| git or curl is missing, and the installer has to run | "Installing nodeterm-server needs git and curl on the host (missing: …)." |
+| The folder path contains `'` or `\` | "The folder path contains a quote or backslash, which cannot be passed safely to every login shell." |
+| Hosting cannot start | "Could not share: Hosting could not start on the host: …" with the relay's reason; the SSH project is reopened. |
+
+**Root.** A root login is refused because the installer makes a system install for root, and the
+server core would then hand every Editor a root shell. A host that already runs a system install
+can still host a team by hand, as root ([Setup over SSH](#setup-over-ssh)). To share it from the
+desktop instead, remove the system install first (its service, its update timer and their unit files
+under `/etc/systemd/system/`) and share again, which installs a per-user server; nothing of root's
+team or data is carried over.
+
+### Agent hooks on a shared host
+
+The server core's own hook install (`src/core/agents/hooks/install-helper.ts`
+`managedHookScriptPath`, and `codex.ts`'s `scriptPath`) and the desktop's install over SSH
+(`RemoteHooks`, `src/main/remote-ssh/remote-hooks.ts`) point each agent's config
+(`~/.claude/settings.json`, `~/.gemini/settings.json`, `~/.codex/hooks.json`, …) at the same
+machine-wide script, `~/.nodeterm/agent-hooks/<agent>.sh`, with the same command and the same event
+lists (`@shared/agents/hook-events.ts`), so a config never gains a second entry. Both run as the
+same user (the server runs as your SSH login), so it is one file. The script reads
+`$NODETERM_HOOK_ENDPOINT` when it runs, and every session carries its own: the SSH project's
+sessions name the desktop's reverse-tunnel endpoint
+(`~/.nodeterm/hook-endpoint-<projectId>-<owner>.env`), the server core's name
+`<dataDir>/hook-endpoint.env`. One copy therefore serves both sets of sessions, and each reports to
+its own core.
+
+**The bytes are not identical**, and the last writer wins. The server bakes a Codex thread-identity
+prelude into every script, pointing at its own data directory; `RemoteHooks` writes none
+(`REMOTE_IDENTITY_ROOT = null`). The server rewrites the scripts each time it starts, the desktop
+each time an SSH project on that host connects. The prelude does nothing for the desktop's sessions
+(it runs only when `NODETERM_NODE_ID` is empty). Without it, though, the hooks of a Codex node the
+server core runs in shared-identity mode cannot find their node (they run from Codex's shared
+app-server, which carries only `CODEX_THREAD_ID`), so that node reports nothing. That is the state
+right after sharing to a server that was already running (the desktop connected after the server
+last started), and after any later connect of another SSH project on that host, until the server
+restarts (the daily auto-update restarts it, unless it was turned off). Likewise, when the desktop
+and the server run different nodeterm versions, the last writer's script serves both.
 
 ## Roles
 
@@ -285,6 +529,30 @@ Once connected, the host's own refusals arrive over the encrypted tunnel: "An ow
 request.", "No owner answered the request in time." (a first join waits up to the host's 10-minute
 pending window) and "Your access to this team was removed by an owner.". While a mount is still
 unapproved after 2.5 s, the tab says "Waiting for an owner of X to approve this device…".
+
+## Hosted tabs
+
+A hosted team shows **one tab per shared project**, in the host's workspace order, all served by the
+team's one relay connection (`lib/hostedTabs.ts`, `lib/hostedTeamTabs.ts`). The tab's id **is** the
+host's project id: the relay api translates no ids, so a tab under any other id would ask the host
+about a project it does not know. A closed copy of a former tab under that id is replaced; any other
+project of yours that holds the id is skipped, never renamed.
+
+- **Share changes are live.** Whenever `sharedProjects` changes (`team share`, `team unshare`,
+  `team bootstrap`), the host sends `relay:hosted:shared-changed {projectIds}` to every connected
+  member, Viewers included. The desktop opens a tab for a newly shared project, with no new code and
+  no new approval, and closes the tab of an unshared one; nothing is deleted on the host. A tab that
+  a share event opens is added at the end of the tab bar.
+- **A tab you close stays closed** while its project stays shared, for the rest of the app run. Once
+  the host unshares it the dismissal is forgotten, so sharing it again opens it again.
+- **A team with nothing shared keeps one placeholder tab**, named after the team, so the team stays
+  visible and reconnectable. The first shared project replaces it.
+- **One connection, all tabs.** A dropped connection greys all of a team's tabs together. A reconnect
+  restores them all, reusing the greyed tabs by id (their nodes and their place in the tab bar
+  survive), and removes the ones whose project was unshared meanwhile.
+- When the tab you were looking at goes away, you land on another of the team's tabs.
+
+The role is read per connection, as before, so one role covers all of a team's tabs.
 
 ## Owner approval
 
@@ -830,8 +1098,6 @@ are unchanged.
 - **A Viewer's git status can name files in the server's data folder.** When the shared root is a
   repository that contains the data folder, untracked and not ignored (a dotfiles repository at
   `$HOME`, for example), `git:status` lists the FILE NAMES inside it. Their contents stay refused.
-- **One shared project per tab.** A joiner's tab adopts the first shared project; other shared
-  projects are allowed by the policy but not reachable from the UI.
 - **Viewers watch only what is already running.** A terminal must be live on the host (a tmux
   session, or a session a client holds open). An SSH-project node is watchable only while the host
   core holds it live, because `sshRemote` is stripped from a viewer's create.
@@ -859,22 +1125,47 @@ are unchanged.
 - **The 17th concurrent join request** (and an older request replaced by a newer one from the same
   device) is refused with the same `denied` reason an owner's decline sends, so that joiner reads
   "An owner declined the request."
-- **Tabs are not persisted.** After an app restart the tab comes back when its boot reconnect is
-  approved, never as a greyed placeholder.
+- **Tabs are not persisted.** After an app restart a team's tabs come back when its boot reconnect
+  is approved, never as greyed placeholders.
+- **Share with team does not resume managed-account agents.** The server core cannot map this
+  desktop's account directory to an account of its own, so those agents are listed for a manual
+  resume.
+- **A root SSH login cannot share** (see [Refusals](#refusals)): the server core would run as root.
+- **Server Edition browser tabs do not see a newly adopted project until they reload.**
+  `team bootstrap` saves and announces the project, but the browser's merge (`replaceProject`)
+  ignores a project id it does not already hold. Hosted desktop tabs are told by
+  `relay:hosted:shared-changed` and open it at once.
+- **The installed server's idle reaper now also sees this desktop's other sessions on that host.**
+  Every nodeterm-server sweeps both the `node-terminal` and the `nodeterm-rmt` sockets
+  (`docs/SERVER.md`, "Session budget"), so once a server is installed there, the detached sessions
+  of this desktop's OTHER SSH projects on that host fall under the same rules: never an attached
+  one, never one active within the grace window (6 h by default), and only under memory pressure or
+  past the detached-session cap. A reaped session cold-restores the next time it is opened.
+- **Processes in plain terminals stop at the handover.** Only agents continue; the confirm lists
+  every plain terminal that is running something.
+- **A connection that drops while `team bootstrap` runs** leaves the desktop unable to tell whether
+  the server took the project, so it reopens the SSH project (and says the host may have finished
+  anyway), but the server may already hold and share it. Run Share with team again:
+  `team bootstrap` is idempotent, so the second run finishes the job with the same adopted project,
+  not a second one.
 
 ## Surfaces
 
-- **Desktop:** full. It joins by code, reconnects from bookmarks, and an owner's hosted tab
-  approves requests and copies the invite code. A Viewer's tab gets the read-only banner, a
-  read-only canvas and read-only terminals (canvas node and kanban card modal).
+- **Desktop:** full. It joins by code, reconnects from bookmarks, an owner's hosted tab approves
+  requests and copies the invite code, and Share with team turns an SSH project into a hosted team
+  (macOS, Linux and Windows desktops; the host must be Linux). A Viewer's tab gets the read-only
+  banner, a read-only canvas and read-only terminals (canvas node and kanban card modal).
 - **Server Edition:** the **host**, managed with the `team` CLI over SSH. Its browser clients are
   not hosted peers; the access policy never applies to them, and they cannot call `relay:hosted:*`
   (those verbs are intercepted inside the relay session and never registered on the platform). A
-  join code pasted into a browser tab gets one "not supported in the browser build" notice.
+  join code pasted into a browser tab gets one "not supported in the browser build" notice. Share
+  with team does not apply (the Server Edition has no SSH projects, and its `shareTeam` answers
+  `E_UNSUPPORTED`), but `team bootstrap` and `team resume` work from a shell on the host.
 - **Mobile:** N/A for v1. The phone still speaks the legacy relay dialect. The host it would join
   now exists in core (a standing listener on the tunnel dialect); the phone side needs the
   tunnel-dialect migration (`docs/ios-protocol-migration.md`) and a join flow modelled on
   `hosted-join.ts`. Nothing here has run against a phone. That is a follow-up for `nodeterm-ios`.
+  Share with team is N/A there as well: the phone neither hosts nor joins a hosted team.
 
 ## Device checklist
 
@@ -911,9 +1202,9 @@ on a Mac and a second desktop as a teammate. Record `team status --json` at each
     closes with "Another owner answered this request."
 11. **Device-key path on a real Mac.** On a packaged Mac build, after the desktop has joined a hosted
     team or used a Team Access invite or pairing code (phone pairing does not count), the key file
-    is `~/Library/Application Support/node-terminal/remote-peer-key.json` (the setup step 2 command
-    prints the key), and `ls ~/Library/Application\ Support/*/remote-peer-key.json` finds no other
-    copy.
+    is `~/Library/Application Support/node-terminal/remote-peer-key.json` (the command under "Your
+    desktop's device key" prints the key), and
+    `ls ~/Library/Application\ Support/*/remote-peer-key.json` finds no other copy.
 12. **Edits persist with no browser attached.** With the service headless and no Server Edition tab
     open, an Editor adds a node, moves another, draws a link and moves a card in a shared project.
     Wait 5 s, then `systemctl --user restart nodeterm-server`: after the reconnect every edit is
@@ -940,3 +1231,29 @@ on a Mac and a second desktop as a teammate. Record `team status --json` at each
          -d '{"deviceId":"<hostDeviceId>","hostPublicKeyB64":"<hostPublicKeyB64>"}'
        # {"error":"pop_required"} 403
        ```
+17. **Share from a Mac, onto a fresh host.** On a Linux host with no nodeterm-server, an SSH project
+    with one idle Claude node and one plain terminal running a dev server, opened from a Mac. Share
+    with team: the confirm names the host and login, says what will be installed, carries the
+    security sentence, and lists the Claude node under "These agents continue on the server:" and
+    the dev server under "These terminals are running something that will stop:". The installer's
+    output streams, the result shows the invite code, the SSH tab is replaced by the team's tab with
+    no SAS prompt, and `team status --json` lists the Mac as an owner. On the host,
+    `tmux -L nodeterm-rmt ls` no longer lists the project's `nt-<id>` sessions.
+18. **Share from Windows, onto an installed host.** The same from a Windows desktop, onto a host
+    whose per-user nodeterm-server is already running: the confirm has no install line, no
+    installer runs, and the result and the tab are as in item 17. Run each desktop against the other
+    kind of host once too.
+19. **A teammate joins with the code.** A second desktop pastes the result's invite code into New
+    Remote Connection, reads its SAS to the owner, and is approved; it sees the shared project's tab
+    with its nodes, and can watch the resumed agent.
+20. **A resumed agent continues its conversation.** On the team's tab, the Claude node from item 17
+    shows its earlier conversation, answers a follow-up that depends on it, and its status badge
+    moves on both desktops. Its session is on the server core's socket (`tmux -L node-terminal ls`
+    lists `nt-<id>`), and no second `claude` for that conversation runs on the host.
+21. **A second project appears live.** With the teammate from item 19 connected, share a second SSH
+    project on the same host: the result shows the same invite code, and the teammate gets a second
+    tab without reconnecting. `team unshare <projectId>` of it closes that tab on their side.
+22. **Reopening the old SSH project warns.** From "Recently closed", with ⇧⌘T, and by opening the
+    same host and folder as an SSH project again: each warns, naming the team and the host. Cancel
+    leaves it closed; "Open here anyway" opens it, and its later saves reach the host's
+    `.nodeterm/project.json` again.
