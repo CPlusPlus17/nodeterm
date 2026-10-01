@@ -40,7 +40,7 @@ const link = (over: Partial<WatchLinkView> = {}): WatchLinkView => ({
   expiresAt: Date.now() + 3_600_000,
   url: 'u',
   status: 'live',
-  viewers: [{ viewerId: 'v', name: null, joinedAt: 0 }],
+  viewers: [{ viewerId: 'v', name: null, joinedAt: 0, waiting: false }],
   ...over
 })
 const session: KanbanSession = { id: 'n1', title: 'build', color: '#fff', kind: 'terminal', spawn: {} } as KanbanSession

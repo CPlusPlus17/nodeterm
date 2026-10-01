@@ -107,6 +107,7 @@ function setup(o: SetupOpts = {}) {
   const joinArgs: [number, string, string][] = []
   const joinTimes: number[] = []
   let mints = 0
+  let changes = 0
   const clock = o.clock
   const now = clock ? clock.now : () => Date.now()
   const pty: WatchPty = {
@@ -159,7 +160,9 @@ function setup(o: SetupOpts = {}) {
     now,
     setTimeout: clock ? clock.setTimeout : (fn, ms) => setTimeout(fn, ms),
     clearTimeout: clock ? clock.clearTimeout : (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
-    onChange: () => {},
+    onChange: () => {
+      changes++
+    },
     onChat: (m) => chats.push(m),
     onViewerJoined: (n) => joined.push(n),
     onGone: (r) => gone.push(r)
@@ -169,6 +172,8 @@ function setup(o: SetupOpts = {}) {
     record, host, peers, sinks, left, calls, joinArgs, joinTimes, chats, joined, gone,
     keys: deriveWatchLinkKeys(secret),
     mints: () => mints,
+    /** How many times the host reported a change to the registry (`onChange`). */
+    changes: () => changes,
     /** The n-th attached viewer's sink (attach order). */
     sink: (n = 0) => [...sinks.values()][n]
   }
@@ -381,6 +386,45 @@ describe('createLinkHost — joining, waiting, rejoining', () => {
     await clock.advance(REJOIN_BACKOFF_MS[1])
     await vi.waitFor(() => expect(v.log.events.map((e) => e[0])).toEqual([WATCH_EVENT.waiting, WATCH_EVENT.meta, WATCH_EVENT.keyframe]))
     expect(v.named(WATCH_EVENT.meta)[0]).toMatchObject({ cols: 80, rows: 24 })
+  })
+
+  // R63: the OWNER is told a viewer has no session to watch — on a backend with no watcher client of
+  // its own (Windows' session host, no local tmux, Zellij) only a terminal open in the app can be
+  // watched. Reported by a REFUSED join, once per episode, and cleared by a join that lands.
+  it("a refused join marks the viewer waiting in the owner's view, once; a join that lands clears it", async () => {
+    const clock = manualClock()
+    let running = false
+    const t = setup({ clock, join: () => (running ? { sessionId: 's9', cols: 80, rows: 24, altScreen: false } : null) })
+    t.host.start()
+    await vi.waitFor(() => expect(t.peers).toHaveLength(1))
+    const v = viewer(t.peers[0], t.keys)
+    await vi.waitFor(() => expect(t.host.viewers().map((x) => x.waiting)).toEqual([true]))
+    const changesAfterFirst = t.changes()
+    await clock.advance(REJOIN_BACKOFF_MS[0])
+    await clock.advance(REJOIN_BACKOFF_MS[1])
+    expect(t.joinArgs.length).toBeGreaterThanOrEqual(3)
+    expect(t.changes()).toBe(changesAfterFirst) // a failing rejoin loop reports nothing new
+    running = true
+    await clock.advance(REJOIN_BACKOFF_MS[2])
+    await vi.waitFor(() => expect(v.named(WATCH_EVENT.meta)).toHaveLength(1))
+    expect(t.host.viewers().map((x) => x.waiting)).toEqual([false])
+    expect(t.changes()).toBeGreaterThan(changesAfterFirst)
+  })
+
+  it('a session that ENDS is not "waiting" for the owner until a rejoin is refused (a quick rejoin is no news)', async () => {
+    const clock = manualClock()
+    let n = 0
+    let up = true
+    const t = setup({ clock, join: () => (up ? { sessionId: `s${++n}`, cols: 80, rows: 24, altScreen: true } : null) })
+    t.host.start()
+    const v = await openViewer(t)
+    ptyEvent(t.sink(), IPC.ptyExit('s1'), 0)
+    await clock.flush()
+    expect(v.named(WATCH_EVENT.waiting)).toHaveLength(1) // the VIEWER is told at once
+    expect(t.host.viewers().map((x) => x.waiting)).toEqual([false]) // the owner is not, yet
+    up = false
+    await clock.advance(REJOIN_BACKOFF_MS[0])
+    expect(t.host.viewers().map((x) => x.waiting)).toEqual([true]) // the rejoin was refused
   })
 
   it('every join starts the filter mid-stream: the first join AND a rejoin after the session ended', async () => {

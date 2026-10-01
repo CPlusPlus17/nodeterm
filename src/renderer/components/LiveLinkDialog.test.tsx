@@ -30,11 +30,25 @@ describe('LiveLinkDialogBody', () => {
 
   it('shows the URL with Copy and Stop, and until when anyone with it can watch (H25)', () => {
     const expiresAt = new Date(2026, 9, 1, 15, 42, 0).getTime()
-    const html = body({ phase: 'done', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt })
+    const now = new Date(2026, 9, 1, 14, 42, 0).getTime()
+    const html = body({ phase: 'done', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt }, { now })
     expect(html).toContain('https://nodeterm.dev/s/x#1.y')
     expect(html).toContain('Copy')
     expect(html).toContain('Stop sharing')
     expect(html).toContain(`Anyone with this link can watch until ${formatClock(expiresAt)}.`)
+  })
+
+  // R64/M1: a 24 h link made at 15:43 read "until 15:43" — it looks like it ends now.
+  it('names the day when the link ends on another day', () => {
+    const now = new Date(2026, 9, 1, 15, 43, 0).getTime()
+    const expiresAt = now + 24 * 3_600_000
+    const html = body({ phase: 'done', url: 'https://nodeterm.dev/s/x#1.y', linkId: 'x', expiresAt }, { now })
+    expect(html).toContain(`Anyone with this link can watch until tomorrow ${formatClock(expiresAt)}.`)
+  })
+
+  it('R63: the "only while open" note shows in the form when the caller has one', () => {
+    expect(body(FORM, { whileOpenNote: 'NOTE-X' })).toContain('NOTE-X')
+    expect(body(FORM)).not.toContain('live-dialog__note')
   })
 
   it('the header title loses its bidi controls (H26)', () => {
@@ -81,14 +95,23 @@ let api: {
   create: ReturnType<typeof vi.fn<(r: CreateWatchLinkRequest) => Promise<CreateWatchLinkResult>>>
   revoke: ReturnType<typeof vi.fn<(id: string) => Promise<void>>>
 }
+/** What the local core's `tmuxStatus` reports (R63); `undefined` = the read rejects. */
+let persistence: { enabled: boolean; backend: string | null } | undefined
 let host: HTMLDivElement
 let root: Root
 beforeEach(() => {
   resetDialogStack()
   api = { create: vi.fn(async () => created()), revoke: vi.fn(async () => {}) }
+  persistence = { enabled: true, backend: 'tmux' }
   ;(window as unknown as { nodeTerminal: unknown }).nodeTerminal = {
     watchLink: api,
-    clipboard: { writeText: vi.fn() }
+    clipboard: { writeText: vi.fn() },
+    pty: {
+      tmuxStatus: vi.fn(async () => {
+        if (!persistence) throw new Error('no core')
+        return { available: true, installCommand: null, installLabel: null, platform: 'linux', persistence }
+      })
+    }
   }
   localStorage.clear()
   host = document.createElement('div')
@@ -120,6 +143,7 @@ function mount(o: {
   onUpgrade?: () => void
   onClose?: () => void
   surface?: 'desktop' | 'server' | 'relay'
+  remoteNode?: boolean
 } = {}): { onClose: ReturnType<typeof vi.fn> } {
   const onClose = vi.fn(o.onClose ?? (() => {}))
   act(() =>
@@ -128,6 +152,7 @@ function mount(o: {
         nodeId="n1"
         title="build"
         surface={o.surface ?? 'desktop'}
+        remoteNode={o.remoteNode}
         prepare={o.prepare ?? (async () => null)}
         onUpgrade={o.onUpgrade}
         onClose={onClose}
@@ -149,6 +174,45 @@ describe('LiveLinkDialog', () => {
     localStorage.setItem('nodeterm.presence.me', JSON.stringify({ name: 'x'.repeat(60), color: '#fff' }))
     mount()
     expect(document.querySelector<HTMLInputElement>('.live-dialog__label input')!.value).toBe('x'.repeat(40))
+  })
+
+  it('D2/M3: the prefill never splits an emoji at the label limit', () => {
+    localStorage.setItem('nodeterm.presence.me', JSON.stringify({ name: 'x'.repeat(39) + '\u{1F600}', color: '#fff' }))
+    mount()
+    expect(document.querySelector<HTMLInputElement>('.live-dialog__label input')!.value).toBe('x'.repeat(39))
+  })
+
+  it('D2/M3: focus lands in the dialog — the label on open, Copy once created', async () => {
+    mount()
+    expect(document.activeElement).toBe(document.querySelector('.live-dialog__label input'))
+    setLabel('Ada')
+    click(btn('Create live link'))
+    await flush()
+    expect(document.activeElement).toBe(btn('Copy'))
+  })
+
+  // R63: on a machine with no watcher client for a local node (Windows' session host, tmux off or
+  // missing, Zellij), a link works only while the terminal is open here — said before it is created.
+  it('R63: says "only while open" where this machine has no watcher client, and nowhere else', async () => {
+    const note = (): string | null =>
+      [...document.querySelectorAll('.live-dialog__note')].map((e) => e.textContent).join('|') || null
+    for (const [p, remote, shown] of [
+      [{ enabled: true, backend: 'session-host' }, false, true],
+      [{ enabled: true, backend: 'zellij' }, false, true],
+      [{ enabled: false, backend: 'tmux' }, false, true],
+      [{ enabled: true, backend: null }, false, true],
+      [{ enabled: true, backend: 'tmux' }, false, false],
+      [{ enabled: true, backend: 'session-host' }, true, false], // an SSH node: the host's tmux
+      [undefined, false, false] // unknown claims nothing
+    ] as const) {
+      persistence = p
+      act(() => root.unmount())
+      root = createRoot(host)
+      mount({ remoteNode: remote })
+      await flush()
+      if (shown) expect(note(), JSON.stringify(p)).toMatch(/only while it is open in nodeterm/)
+      else expect(note(), JSON.stringify(p)).toBeNull()
+    }
   })
 
   it('R47: prepares BEFORE create, then creates this node with the chosen options', async () => {

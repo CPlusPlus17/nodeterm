@@ -39,13 +39,13 @@ describe('watchLinks store', () => {
     s.setLinks([link('a', 'n1'), link('c', 'n2')])
     const before = useWatchLinks.getState()
     // A fresh deserialized list (new objects, same content) except n2's link gained a viewer.
-    s.setLinks([link('a', 'n1'), link('c', 'n2', { viewers: [{ viewerId: 'v', name: null, joinedAt: 1 }] })])
+    s.setLinks([link('a', 'n1'), link('c', 'n2', { viewers: [{ viewerId: 'v', name: null, joinedAt: 1, waiting: false }] })])
     const after = useWatchLinks.getState()
     expect(after.byNode.n1).toBe(before.byNode.n1)
     expect(after.byNode.n1[0]).toBe(before.byNode.n1[0])
     expect(after.byNode.n2).not.toBe(before.byNode.n2)
     // A push identical in content changes nothing at all.
-    s.setLinks([link('a', 'n1'), link('c', 'n2', { viewers: [{ viewerId: 'v', name: null, joinedAt: 1 }] })])
+    s.setLinks([link('a', 'n1'), link('c', 'n2', { viewers: [{ viewerId: 'v', name: null, joinedAt: 1, waiting: false }] })])
     expect(useWatchLinks.getState()).toBe(after)
   })
 
@@ -53,10 +53,18 @@ describe('watchLinks store', () => {
     // A fixture with every field of the type, iterated by key: a field added to WatchLinkView (and
     // to this fixture, which the type forces) is covered without editing the comparison.
     const base: WatchLinkView = link('a', 'n1', {
-      viewers: [{ viewerId: 'v', name: 'Eve', joinedAt: 5 }]
+      viewers: [{ viewerId: 'v', name: 'Eve', joinedAt: 5, waiting: false }]
     })
     const bump = (v: unknown): unknown =>
-      typeof v === 'number' ? v + 1 : typeof v === 'string' ? `${v}x` : Array.isArray(v) ? [] : v
+      typeof v === 'number'
+        ? v + 1
+        : typeof v === 'string'
+          ? `${v}x`
+          : typeof v === 'boolean'
+            ? !v
+            : Array.isArray(v)
+              ? []
+              : v
     for (const key of Object.keys(base) as (keyof WatchLinkView)[]) {
       useWatchLinks.setState({ links: [], byNode: {}, chats: {}, unread: {}, hydrated: false })
       useWatchLinks.getState().setLinks([base])

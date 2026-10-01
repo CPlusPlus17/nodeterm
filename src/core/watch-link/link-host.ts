@@ -58,7 +58,10 @@
 // drains must not grow the host's memory. meta, keyframe, waiting and end are small and rare.
 //
 // REJOIN. A session that ends (exit, closed, recycled, or found gone after a join or a capture — R30)
-// sends the viewer `watch:waiting` and rejoins on a backoff. The backoff is reset only once a joined
+// sends the viewer `watch:waiting` and rejoins on a backoff. A join that is REFUSED (no session it may
+// join) also marks the viewer `waiting` for the OWNER (`LinkViewer.waiting`, R63): on a backend with no
+// watcher client of its own (Windows' session host, no local tmux, Zellij) only a terminal this app has
+// open can be watched, and the owner is the one who can open it — a LIVE chip alone would say nothing. The backoff is reset only once a joined
 // session stayed up for REJOIN_STABLE_MS from its join keyframe (R26), never on a join or a lifecycle
 // event: an old remote tmux that rejects the client flags, or an owner's repeated `-D`, attaches then
 // exits at once, and resetting on success turned that into a spawn + read + capture every 2 s forever.
@@ -178,6 +181,11 @@ export interface LinkViewer {
   viewerId: string
   name: string | null
   joinedAt: number
+  /** Connected, but its last join found no session to watch (R63): what the owner must be told,
+   *  because only the owner can fix it — on a backend with no watcher client (Windows' session host,
+   *  no local tmux, Zellij) a viewer can co-attach only to a terminal this app has OPEN. Set by a
+   *  REFUSED join, never by a session merely ending: that rejoins in seconds, usually successfully. */
+  waiting: boolean
 }
 export interface LinkHost {
   start(): void
@@ -209,6 +217,8 @@ interface Conn {
   altScreen: boolean
   joining: boolean
   waiting: boolean
+  /** The last join answered no session (LinkViewer.waiting). Cleared by a join that lands. */
+  joinRefused: boolean
   streaming: boolean
   filter: StreamFilter
   bucket: TokenBucket
@@ -510,6 +520,13 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     c.waiting = true
     send(c, WATCH_EVENT.waiting, {})
   }
+  /** The owner's view of a viewer with nothing to watch (LinkViewer.waiting): reported on a change only,
+   *  so a rejoin loop that keeps failing costs one push, not one per attempt. */
+  function setJoinRefused(c: Conn, refused: boolean): void {
+    if (c.joinRefused === refused) return
+    c.joinRefused = refused
+    if (c.joinedAt !== null && !c.ended) safe('onChange', deps.onChange)
+  }
   function scheduleRejoin(c: Conn): void {
     if (c.ended || stopped || c.rejoinTimer !== null) return
     const delay = REJOIN_BACKOFF_MS[Math.min(c.rejoinAttempt, REJOIN_BACKOFF_MS.length - 1)]
@@ -548,9 +565,11 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
     }
     if (!res) {
       enterWaiting(c)
+      setJoinRefused(c, true)
       scheduleRejoin(c)
       return
     }
+    setJoinRefused(c, false)
     const sid = res.sessionId
     // EVERY join restarts the filter mid-stream (R12): this is a running session.
     c.filter.reset({ midStream: true, onSettled: () => onSettled(c, sid) })
@@ -680,6 +699,7 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
       altScreen: false,
       joining: false,
       waiting: false,
+      joinRefused: false,
       streaming: false,
       filter: createStreamFilter({ midStream: true }),
       bucket: createTokenBucket({ ratePerSec: RATE, burst: BURST, now: deps.now }),
@@ -801,7 +821,10 @@ export function createLinkHost(record: WatchLinkRecord, deps: LinkHostDeps): Lin
 
   function viewers(): LinkViewer[] {
     const out: LinkViewer[] = []
-    for (const c of conns) if (c.joinedAt !== null && !c.ended) out.push({ viewerId: c.viewerId, name: c.name, joinedAt: c.joinedAt })
+    for (const c of conns) {
+      if (c.joinedAt === null || c.ended) continue
+      out.push({ viewerId: c.viewerId, name: c.name, joinedAt: c.joinedAt, waiting: c.joinRefused && c.sessionId === null })
+    }
     return out
   }
   function gone(reason: 'revoked' | 'expired'): void {

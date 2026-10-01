@@ -128,7 +128,7 @@ describe('LiveLinkChip', () => {
   // state (empty), so `renderToStaticMarkup` can never show a link.
   it('shows LIVE with the viewer count, as a no-drag button', () => {
     render(<LiveLinkChip nodeId="n1" source="local" className="extra" />)
-    setLinks([link({ viewers: [{ viewerId: 'v', name: null, joinedAt: 0 }] })])
+    setLinks([link({ viewers: [{ viewerId: 'v', name: null, joinedAt: 0, waiting: false }] })])
     const c = chip()!
     expect(c.tagName).toBe('BUTTON')
     expect(c.textContent).toBe('LIVE · 1')
@@ -162,7 +162,7 @@ describe('LiveLinkChip', () => {
 describe('LiveLinkPopover', () => {
   it('opens on click with role, time, the controls and the kick note', () => {
     render(<LiveLinkChip nodeId="n1" source="local" />)
-    setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0 }, { viewerId: 'v2', name: 'Cy', joinedAt: 0 }] })])
+    setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0, waiting: false }, { viewerId: 'v2', name: 'Cy', joinedAt: 0, waiting: false }] })])
     click(chip()!)
     const p = pop()!
     expect(p.textContent).toContain('Can watch')
@@ -194,6 +194,32 @@ describe('LiveLinkPopover', () => {
     setLinks([link({ status: 'refused' })])
     click(chip()!)
     expect(pop()!.querySelector('.live-pop__status')!.textContent).toContain("won't host this link")
+  })
+
+  // R63: a viewer with no session to join is the owner's to fix — the chip and the popover say how.
+  it('viewers waiting for the terminal: an amber chip, a status line and the viewer marked', () => {
+    render(<LiveLinkChip nodeId="n1" source="local" />)
+    setLinks([
+      link({
+        viewers: [
+          { viewerId: 'v1', name: null, joinedAt: 0, waiting: true },
+          { viewerId: 'v2', name: null, joinedAt: 0, waiting: false }
+        ]
+      })
+    ])
+    const c = chip()!
+    expect(c.textContent).toBe('LIVE · 1 waiting')
+    expect(c.className).toContain('live-chip--waiting')
+    expect(c.title).toBe('Viewers are waiting — open this terminal in nodeterm to let them watch.')
+    click(c)
+    const p = pop()!
+    expect(p.querySelector('.live-pop__status')!.textContent).toBe(
+      'Viewers are waiting — open this terminal in nodeterm to let them watch.'
+    )
+    expect(p.querySelector('.live-pop__status')!.className).toContain('live-pop__status--waiting')
+    const rows = [...p.querySelectorAll('.live-pop__viewers li')].map((e) => e.textContent)
+    expect(rows[0]).toContain('waiting for the terminal')
+    expect(rows[1]).not.toContain('waiting')
   })
 
   it('Stop sharing revokes; a stop that did not reach nodeterm says so (H23)', async () => {
@@ -302,7 +328,7 @@ describe('LiveLinkPopover', () => {
 
   it('a failed Kick says so: not reached, or nobody to kick (M3)', async () => {
     render(<LiveLinkChip nodeId="n1" source="local" />)
-    setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0 }] })])
+    setLinks([link({ viewers: [{ viewerId: 'v1', name: null, joinedAt: 0, waiting: false }] })])
     click(chip()!)
     api.kick.mockImplementationOnce(async () => {
       throw new Error('socket down')
@@ -343,7 +369,7 @@ describe('LiveLinkPopover', () => {
 describe('LiveLinkPopover — Commenter chat', () => {
   it('renders every viewer string as text, never as markup', () => {
     render(<LiveLinkChip nodeId="n1" source="local" />)
-    setLinks([link({ role: 'commenter', label: '<b>Ada</b>', viewers: [{ viewerId: 'v', name: '<i>Eve</i>', joinedAt: 0 }] })])
+    setLinks([link({ role: 'commenter', label: '<b>Ada</b>', viewers: [{ viewerId: 'v', name: '<i>Eve</i>', joinedAt: 0, waiting: false }] })])
     act(() => useWatchLinks.getState().addChat('L', msg('1', { name: '<u>Eve</u>', text: '<img src=x onerror=alert(1)>' })))
     click(chip()!)
     const p = pop()!

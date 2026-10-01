@@ -741,15 +741,27 @@ describe('createWatchLinkService — the host seams', () => {
     expect(chat?.[1]).toEqual([r.link.linkId, { id: 'x', name: 'Eve', text: 'hi there \u{1F468}\u200d\u{1F469}', at: 1, from: 'viewer' }])
     h.chat = [{ id: 'y', name: '\u200fMal', text: 'a\u202ab', at: 2, from: 'viewer' }]
     expect(t.s.chatHistory(r.link.linkId)).toEqual([{ id: 'y', name: 'Mal', text: 'ab', at: 2, from: 'viewer' }])
-    h.viewers = [{ viewerId: 'v-1', name: 'E\u202eve', joinedAt: 5 }]
-    expect(t.s.list()[0].viewers).toEqual([{ viewerId: 'v-1', name: 'Eve', joinedAt: 5 }])
+    h.viewers = [{ viewerId: 'v-1', name: 'E\u202eve', joinedAt: 5, waiting: false }]
+    expect(t.s.list()[0].viewers).toEqual([{ viewerId: 'v-1', name: 'Eve', joinedAt: 5, waiting: false }])
+  })
+
+  // R63: a viewer the host could not join to a session reaches the owner's view as `waiting`.
+  it("a viewer's waiting state reaches the owner's view", async () => {
+    const t = service()
+    const r = await t.s.create(req())
+    if (!r.ok) throw new Error('create failed')
+    t.hosts.made[0].viewers = [
+      { viewerId: 'v-1', name: null, joinedAt: 5, waiting: true },
+      { viewerId: 'v-2', name: null, joinedAt: 6, waiting: false }
+    ]
+    expect(t.s.list()[0].viewers.map((v) => v.waiting)).toEqual([true, false])
   })
 
   it('kick, owner chat and history go to the link host; an unknown link answers nothing', async () => {
     const t = service()
     const r = await t.s.create(req({ role: 'commenter' }))
     if (!r.ok) throw new Error('create failed')
-    t.hosts.made[0].viewers = [{ viewerId: 'v-1', name: null, joinedAt: 1 }]
+    t.hosts.made[0].viewers = [{ viewerId: 'v-1', name: null, joinedAt: 1, waiting: false }]
     expect(t.s.kick(r.link.linkId, 'v-1')).toBe(true)
     expect(t.s.kick(r.link.linkId, 'v-9')).toBe(false)
     expect(t.s.sendChat(r.link.linkId, 'hello')).toMatchObject({ text: 'hello', from: 'sharer' })

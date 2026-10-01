@@ -64,6 +64,10 @@ export interface WatchLinkViewerView {
   /** The name the viewer chatted under, if it has chatted; null otherwise ("Viewer 1"…). */
   name: string | null
   joinedAt: number
+  /** Connected, but there is no session it may join (R63): on a machine with no watcher client of its
+   *  own (Windows' session host, no local tmux, Zellij) the terminal must be OPEN in this app. The
+   *  owner is told ("Viewers are waiting — open this terminal in nodeterm to let them watch"). */
+  waiting: boolean
 }
 
 export interface WatchLinkView {

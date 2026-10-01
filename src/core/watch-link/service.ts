@@ -279,7 +279,8 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
         viewers = h.viewers().map((v) => ({
           viewerId: v.viewerId,
           name: v.name === null ? null : stripBidiControls(v.name),
-          joinedAt: v.joinedAt
+          joinedAt: v.joinedAt,
+          waiting: v.waiting === true
         }))
       } catch (err) {
         warn(`reading a link's state failed: ${errorText(err)}`)

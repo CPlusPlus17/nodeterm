@@ -11529,6 +11529,10 @@ button.pull-checks__name {
 .live-chip--offline {
   --live-tone: var(--state-warning);
 }
+/* Viewers are waiting for a session they may join (R63): the owner has to open the terminal. */
+.live-chip--waiting {
+  --live-tone: var(--state-warning);
+}
 /* Refused: nodeterm's service will not host the link — muted, the owner opens it to see why. */
 .live-chip--refused {
   --live-tone: var(--muted);

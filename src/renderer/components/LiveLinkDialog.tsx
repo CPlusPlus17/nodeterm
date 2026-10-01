@@ -10,13 +10,16 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useDialogStack } from './dialog-stack'
 import {
+  capUnits,
   createErrorMessage,
   DEFAULT_TTL,
-  formatClock,
+  formatUntil,
   LIVE_LINK_WARNING,
   ROLE_LABEL,
   SAVE_FIRST_MESSAGE,
   TTL_OPTIONS,
+  watchableOnlyWhileOpen,
+  watchWhileOpenNote,
   type LiveLinkSurface
 } from '../lib/liveLink'
 import { stopLiveLinks } from '../lib/liveLinkEntry'
@@ -56,6 +59,11 @@ export function LiveLinkDialogBody(p: {
   onStop: (linkId: string) => void
   onCopy?: (url: string) => void
   onUpgrade?: () => void
+  /** R63: on a machine with no watcher client for this node, the link works only while the terminal
+   *  is open in this app — said before the owner creates it. Absent: nothing to say (or not known). */
+  whileOpenNote?: string | null
+  /** "now" for the end's day (tomorrow, a weekday): the caller's clock. */
+  now?: number
 }): React.JSX.Element {
   const s = p.state
   // The title is the node's own (git-shared, hand-editable): shown as TEXT, bidi controls stripped.
@@ -72,11 +80,14 @@ export function LiveLinkDialogBody(p: {
             value={s.url}
             onFocus={(e) => e.currentTarget.select()}
           />
-          <button className="confirm__btn primary" onClick={() => p.onCopy?.(s.url)}>
+          {/* Keyboard focus lands here once the link exists (D2/M3): Enter copies it. */}
+          <button className="confirm__btn primary" data-autofocus="" onClick={() => p.onCopy?.(s.url)}>
             {s.copied ? 'Copied!' : 'Copy'}
           </button>
         </div>
-        <p className="live-dialog__note">Anyone with this link can watch until {formatClock(s.expiresAt)}.</p>
+        <p className="live-dialog__note">
+          Anyone with this link can watch until {formatUntil(s.expiresAt, p.now ?? Date.now())}.
+        </p>
         {s.error && (
           <p className="live-dialog__error" role="alert">
             {s.error}
@@ -116,8 +127,11 @@ export function LiveLinkDialogBody(p: {
       </fieldset>
       <label className="live-dialog__label">
         Shown to viewers as
+        {/* Keyboard focus lands here when the dialog opens (D2/M3): keys stay inside the dialog
+            instead of reaching the canvas behind it. */}
         <input
           className="confirm__input"
+          data-autofocus=""
           maxLength={LABEL_MAX}
           value={s.label}
           disabled={s.busy}
@@ -125,6 +139,7 @@ export function LiveLinkDialogBody(p: {
         />
       </label>
       <p className="live-dialog__warning">{LIVE_LINK_WARNING}</p>
+      {p.whileOpenNote && <p className="live-dialog__note">{p.whileOpenNote}</p>}
       {s.error && (
         <p className="live-dialog__error" role="alert">
           {s.error}
@@ -151,6 +166,7 @@ export function LiveLinkDialog({
   nodeId,
   title,
   surface,
+  remoteNode = false,
   prepare,
   onUpgrade,
   onClose
@@ -159,6 +175,8 @@ export function LiveLinkDialog({
   title: string
   /** Where it was opened — decides how `unsupported` reads (H1). */
   surface: LiveLinkSurface
+  /** The node runs on an SSH project's host, whose own tmux gives a viewer a client of its own (R63). */
+  remoteNode?: boolean
   /** R47: publish pending canvas edits before core looks the node up. A sentence = do NOT create. */
   prepare: () => Promise<string | null>
   /** Absent on the Server Edition (R43): no Upgrade button there. */
@@ -169,7 +187,7 @@ export function LiveLinkDialog({
     phase: 'form',
     role: 'viewer',
     ttl: DEFAULT_TTL,
-    label: (loadIdentity()?.name ?? '').slice(0, LABEL_MAX),
+    label: capUnits(loadIdentity()?.name ?? '', LABEL_MAX),
     busy: false,
     error: null
   }))
@@ -179,6 +197,29 @@ export function LiveLinkDialog({
   const isTop = useDialogStack()
   const copiedTimer = useRef<ReturnType<typeof setTimeout>>()
   useEffect(() => () => clearTimeout(copiedTimer.current), [])
+  // R63: does THIS machine have a watcher client for this node? Read once from the local core (the
+  // core that creates the link). Unknown — not read yet, or unreadable — says nothing.
+  const [whileOpenOnly, setWhileOpenOnly] = useState(false)
+  useEffect(() => {
+    let live = true
+    Promise.resolve()
+      .then(() => window.nodeTerminal.pty.tmuxStatus())
+      .then(
+        (st) => {
+          if (live) setWhileOpenOnly(watchableOnlyWhileOpen({ persistence: st?.persistence, remoteNode }))
+        },
+        () => {}
+      )
+    return () => {
+      live = false
+    }
+  }, [remoteNode])
+  // D2/M3: focus lands in the dialog — the label on open, Copy once created — so keys stay inside
+  // it (a bare-key canvas command could otherwise fire behind the overlay).
+  const panelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    panelRef.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus({ preventScroll: true })
+  }, [state.phase])
 
   const busy = state.phase === 'form' && state.busy
   // Every dismissal goes through here: a create in flight cannot be walked away from (H24).
@@ -246,9 +287,10 @@ export function LiveLinkDialog({
   }
 
   return createPortal(
-    <div className="confirm-overlay" onClick={dismiss}>
+    <div className="confirm-overlay" ref={panelRef} onClick={dismiss}>
       <LiveLinkDialogBody
         title={title}
+        whileOpenNote={whileOpenOnly ? watchWhileOpenNote() : null}
         state={state}
         onChange={(next) => {
           if (!busy) setState(next)

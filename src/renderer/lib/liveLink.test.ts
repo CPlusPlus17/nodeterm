@@ -3,8 +3,12 @@
 // through lib/machineName, and a literal "this computer" must not depend on the OS running the suite.
 import { describe, it, expect } from 'vitest'
 import {
+  capUnits,
   CHAT_NOT_SENT_MESSAGE,
   chipView,
+  formatUntil,
+  LIVE_LINK_WARNING,
+  watchableOnlyWhileOpen,
   commentFromChat,
   createErrorMessage,
   DEFAULT_TTL,
@@ -47,7 +51,7 @@ const link = (over: Partial<WatchLinkView> = {}): WatchLinkView => ({
   viewers: [],
   ...over
 })
-const viewer = (id: string) => ({ viewerId: id, name: null, joinedAt: 0 })
+const viewer = (id: string) => ({ viewerId: id, name: null, joinedAt: 0, waiting: false })
 
 const RELAY_SENTENCE = 'Live links are created on the machine that runs this terminal.'
 const R43 = 'Live links need a Pro license on this server — not available in the Server Edition yet'
@@ -94,13 +98,37 @@ describe('chipView', () => {
 
 describe('statusLine (H9)', () => {
   it('explains reconnecting and refused, and says nothing for a live link', () => {
-    expect(statusLine('live')).toBeNull()
-    expect(statusLine('reconnecting')).toBe(
+    expect(statusLine(link())).toBeNull()
+    expect(statusLine(link({ status: 'reconnecting' }))).toBe(
       "Reconnecting to nodeterm's relay — viewers see no updates until it's back."
     )
-    expect(statusLine('refused')).toBe(
+    expect(statusLine(link({ status: 'refused' }))).toBe(
       "nodeterm's service won't host this link — the Pro plan may have lapsed, or this build can't relay. Viewers can't join."
     )
+  })
+  // R63: a viewer with no session to join is the owner's to fix — never a silent LIVE.
+  it('a live link with viewers waiting for the terminal says how to let them watch', () => {
+    const waiting = { ...viewer('w'), waiting: true }
+    expect(statusLine(link({ viewers: [viewer('a'), waiting] }))).toBe(
+      'Viewers are waiting — open this terminal in nodeterm to let them watch.'
+    )
+    expect(statusLine(link({ viewers: [viewer('a')] }))).toBeNull()
+    // A worse state still wins: refused or reconnecting say THAT.
+    expect(statusLine(link({ status: 'refused', viewers: [waiting] }))).toMatch(/won't host this link/)
+  })
+})
+
+describe('chipView: viewers waiting (R63)', () => {
+  it('a waiting viewer turns LIVE into an amber "waiting" chip whose title says what to do', () => {
+    const waiting = { ...viewer('w'), waiting: true }
+    expect(chipView([link({ viewers: [viewer('a'), waiting] })])).toEqual({
+      label: 'LIVE · 1 waiting',
+      tone: 'waiting',
+      title: 'Viewers are waiting — open this terminal in nodeterm to let them watch.'
+    })
+    // refused and reconnecting still win (they need the relay or the service, not an open terminal).
+    expect(chipView([link({ status: 'reconnecting', viewers: [waiting] })]).tone).toBe('offline')
+    expect(chipView([link({ viewers: [viewer('a')] })]).tone).toBe('live')
   })
 })
 
@@ -248,9 +276,9 @@ describe('copy Task 17 reads (R47, R48, R52, H11, H23, H26)', () => {
 
 describe('viewerName', () => {
   it('a viewer who has not chatted is numbered; a name loses its bidi controls', () => {
-    expect(viewerName({ viewerId: 'a', name: null, joinedAt: 0 }, 0)).toBe('Viewer 1')
-    expect(viewerName({ viewerId: 'a', name: '  ', joinedAt: 0 }, 2)).toBe('Viewer 3')
-    expect(viewerName({ viewerId: 'a', name: 'Bob⁦', joinedAt: 0 }, 0)).toBe('Bob')
+    expect(viewerName({ viewerId: 'a', name: null, joinedAt: 0, waiting: false }, 0)).toBe('Viewer 1')
+    expect(viewerName({ viewerId: 'a', name: '  ', joinedAt: 0, waiting: false }, 2)).toBe('Viewer 3')
+    expect(viewerName({ viewerId: 'a', name: 'Bob⁦', joinedAt: 0, waiting: false }, 0)).toBe('Bob')
   })
 })
 
@@ -265,5 +293,52 @@ describe('commentFromChat', () => {
     const text = commentFromChat({ id: '1', name: 'Bob', text: 'hi @[Deploy](node:abc123) now', at: 0, from: 'viewer' })
     expect(commentSegments(text).every((s) => s.kind === 'text')).toBe(true)
     expect(text).toContain('Deploy')
+  })
+})
+
+// R64/M1: the "until" of a link that ends on another day names the day.
+describe('formatUntil', () => {
+  const at = (d: number, h: number, m: number): number => new Date(2026, 9, d, h, m, 0).getTime()
+  it('the same day reads as the time alone; the next day as "tomorrow"; later days by date', () => {
+    expect(formatUntil(at(1, 16, 43), at(1, 15, 43))).toBe(formatClock(at(1, 16, 43)))
+    expect(formatUntil(at(2, 15, 43), at(1, 15, 43))).toBe(`tomorrow ${formatClock(at(2, 15, 43))}`)
+    // An 8 h link made at 20:00 ends after midnight: not today.
+    expect(formatUntil(at(2, 4, 0), at(1, 20, 0))).toBe(`tomorrow ${formatClock(at(2, 4, 0))}`)
+    const far = formatUntil(at(4, 9, 0), at(1, 9, 0))
+    expect(far).not.toBe(formatClock(at(4, 9, 0)))
+    expect(far.endsWith(formatClock(at(4, 9, 0)))).toBe(true)
+    expect(far.startsWith('tomorrow')).toBe(false)
+  })
+})
+
+describe('capUnits (D2/M3)', () => {
+  it('caps by UTF-16 units without splitting a surrogate pair', () => {
+    expect(capUnits('abc', 5)).toBe('abc')
+    expect(capUnits('x'.repeat(39) + '\u{1F600}', 40)).toBe('x'.repeat(39))
+    expect(capUnits('x'.repeat(38) + '\u{1F600}', 40)).toBe('x'.repeat(38) + '\u{1F600}')
+  })
+})
+
+// R63: the dialog's "only while open" note — on for a machine with no watcher client of its own.
+describe('watchableOnlyWhileOpen', () => {
+  it('only a local node on a machine whose local terminals are tmux has a watcher client', () => {
+    const p = (enabled: boolean, backend: string | null) => ({ enabled, backend })
+    expect(watchableOnlyWhileOpen({ persistence: p(true, 'tmux'), remoteNode: false })).toBe(false)
+    expect(watchableOnlyWhileOpen({ persistence: p(true, 'session-host'), remoteNode: false })).toBe(true)
+    expect(watchableOnlyWhileOpen({ persistence: p(true, 'zellij'), remoteNode: false })).toBe(true)
+    expect(watchableOnlyWhileOpen({ persistence: p(false, 'tmux'), remoteNode: false })).toBe(true)
+    expect(watchableOnlyWhileOpen({ persistence: p(true, null), remoteNode: false })).toBe(true)
+    // An SSH node: the host's tmux. Unknown: say nothing.
+    expect(watchableOnlyWhileOpen({ persistence: p(true, 'session-host'), remoteNode: true })).toBe(false)
+    expect(watchableOnlyWhileOpen({ persistence: undefined, remoteNode: false })).toBe(false)
+    expect(watchableOnlyWhileOpen({ persistence: null, remoteNode: false })).toBe(false)
+  })
+})
+
+// R64/M3: the stream follows the terminal CLIENT, so tmux's chooser and a session switch reach viewers.
+describe('the create warning', () => {
+  it("names tmux's session chooser and a session switch", () => {
+    expect(LIVE_LINK_WARNING).toMatch(/session chooser/)
+    expect(LIVE_LINK_WARNING).toMatch(/switch sessions/)
   })
 })

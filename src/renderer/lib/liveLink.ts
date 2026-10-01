@@ -40,8 +40,12 @@ export const TTL_OPTIONS: { value: WatchLinkTtl; label: string }[] = WATCH_LINK_
 }))
 export const DEFAULT_TTL: WatchLinkTtl = DEFAULT_WATCH_LINK_TTL
 
+/** Always on the create dialog. "Everything this terminal shows" is meant literally (R64/M3): the
+ *  stream is the terminal CLIENT's output, so tmux's session chooser (`C-b s` / `C-b w`, a live
+ *  preview of every session — other projects' agents included) or a session switch inside it reaches
+ *  viewers as well. */
 export const LIVE_LINK_WARNING =
-  "Anyone with the link sees everything this terminal shows: what's on screen now, anything printed later (tokens, env dumps), and anything you scroll back to. They can't type or resize it."
+  "Anyone with the link sees everything this terminal shows: what's on screen now, anything printed later (tokens, env dumps), anything you scroll back to — and, if you open tmux's session chooser or switch sessions in it, those other sessions too. They can't type or resize it."
 export const KICK_NOTE =
   'Kick ends this connection; anyone with the link can rejoin. Stop sharing to end it for everyone.'
 
@@ -116,15 +120,27 @@ export function stopAllOutcomeText(o: RevokeAllOutcome | unknown): { ok: boolean
 /** H11: a Settings row whose node no open project holds. */
 export const NOT_IN_OPEN_PROJECT = 'not in an open project'
 
-export type LiveLinkTone = 'live' | 'offline' | 'refused'
+export type LiveLinkTone = 'live' | 'offline' | 'refused' | 'waiting'
+
+/** R63: a connected viewer with no session it may join. On a machine with no watcher client of its
+ *  own (Windows' session host, no local tmux, Zellij) only a terminal open in this app can be
+ *  watched, so the owner is the one who can fix it — and is told how. */
+export const VIEWERS_WAITING_MESSAGE = 'Viewers are waiting — open this terminal in nodeterm to let them watch.'
+
+/** How many of a link's (or node's) connected viewers are waiting for a session (R63). */
+export function waitingViewers(links: readonly Pick<WatchLinkView, 'viewers'>[]): number {
+  return links.reduce((n, l) => n + l.viewers.filter((v) => v.waiting === true).length, 0)
+}
 
 /**
  * What the chip says for one node's links. The WORST state wins: `refused` will not come back on
- * its own and needs the owner; `reconnecting` will. The titles send the owner to the popover, which
- * carries the status line that explains it (H9).
+ * its own and needs the owner; `reconnecting` will; `waiting` (R63) needs the owner to open the
+ * terminal. The titles send the owner to the popover, which carries the status line that explains
+ * it (H9).
  */
 export function chipView(links: readonly WatchLinkView[]): { label: string; tone: LiveLinkTone; title: string } {
   const viewers = links.reduce((n, l) => n + l.viewers.length, 0)
+  const waiting = waitingViewers(links)
   if (links.some((l) => l.status === 'refused')) {
     return {
       label: 'LIVE · refused',
@@ -139,6 +155,7 @@ export function chipView(links: readonly WatchLinkView[]): { label: string; tone
       title: "A live link on this terminal is reconnecting to nodeterm's relay. Open it for details."
     }
   }
+  if (waiting > 0) return { label: `LIVE · ${waiting} waiting`, tone: 'waiting', title: VIEWERS_WAITING_MESSAGE }
   const shared = links.length > 1 ? `This terminal is shared by ${links.length} live links` : 'This terminal is shared by a live link'
   return {
     label: viewers > 0 ? `LIVE · ${viewers}` : 'LIVE',
@@ -147,12 +164,14 @@ export function chipView(links: readonly WatchLinkView[]): { label: string; tone
   }
 }
 
-/** One line per link in the popover explaining a state that is not `live` (H9); null when live. */
-export function statusLine(status: WatchLinkView['status']): string | null {
-  if (status === 'reconnecting') return "Reconnecting to nodeterm's relay — viewers see no updates until it's back."
-  if (status === 'refused') {
+/** One line per link in the popover (and Settings) explaining a state that needs explaining (H9):
+ *  not `live`, or live with viewers waiting for a session (R63). null when there is nothing to say. */
+export function statusLine(link: Pick<WatchLinkView, 'status' | 'viewers'>): string | null {
+  if (link.status === 'reconnecting') return "Reconnecting to nodeterm's relay — viewers see no updates until it's back."
+  if (link.status === 'refused') {
     return "nodeterm's service won't host this link — the Pro plan may have lapsed, or this build can't relay. Viewers can't join."
   }
+  if (waitingViewers([link]) > 0) return VIEWERS_WAITING_MESSAGE
   return null
 }
 
@@ -174,6 +193,55 @@ export function formatClock(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+/**
+ * When a link ends, for "Anyone with this link can watch until …" (R64/M1). The time alone is the
+ * time TODAY: a 24 h link made at 15:43 read "until 15:43", which looks like it ends now, and an 8 h
+ * link past midnight read like today. So a different day is named — "tomorrow 15:43", or the weekday
+ * and date further out.
+ */
+export function formatUntil(expiresAt: number, now: number): string {
+  const end = new Date(expiresAt)
+  const today = new Date(now)
+  const dayStart = (d: Date): number => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const days = Math.round((dayStart(end) - dayStart(today)) / 86_400_000)
+  const time = formatClock(expiresAt)
+  if (days === 0) return time
+  if (days === 1) return `tomorrow ${time}`
+  return `${end.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} ${time}`
+}
+
+/**
+ * At most `max` UTF-16 units — the unit `LABEL_MAX` and the input's `maxLength` count — cut BETWEEN
+ * code points (D2/M3): a plain `slice` of a prefilled name can split an emoji's surrogate pair.
+ */
+export function capUnits(s: string, max: number): string {
+  if (s.length <= max) return s
+  let out = ''
+  for (const ch of s) {
+    if (out.length + ch.length > max) break
+    out += ch
+  }
+  return out
+}
+
+/**
+ * R63: whether a link to a node can be watched ONLY while the node is open in this app. A viewer joins
+ * a session this process holds (the canvas node, a parked view) or — with nothing held — spawns its
+ * own read-only tmux client; a machine whose LOCAL terminals are not tmux (Windows' session host, tmux
+ * switched off or missing, Zellij) has no such client. An SSH project's node runs in the HOST's tmux,
+ * which does. Unknown (the status not read yet, or unreadable) claims nothing: the popover's waiting
+ * line still tells the truth at runtime.
+ */
+export function watchableOnlyWhileOpen(o: {
+  persistence: { enabled: boolean; backend: string | null } | null | undefined
+  remoteNode: boolean
+}): boolean {
+  if (o.remoteNode || !o.persistence) return false
+  return !(o.persistence.enabled && o.persistence.backend === 'tmux')
+}
+export function watchWhileOpenNote(): string {
+  return `On ${thisMachine()}, viewers can watch this terminal only while it is open in nodeterm; otherwise they wait until you open it.`
+}
 /** Which surface a create or a share affordance is on — read by the caller, never by this module. */
 export type LiveLinkSurface = 'desktop' | 'server' | 'relay'
 

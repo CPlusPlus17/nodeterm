@@ -17,7 +17,8 @@ import {
   ROLE_LABEL,
   statusLine,
   STOP_FAILED_MESSAGE,
-  viewerName
+  viewerName,
+  waitingViewers
 } from '../lib/liveLink'
 import { thisMachine } from '../lib/machineName'
 import { EMPTY_LINKS, useWatchLinks, viewLinkThread } from '../state/watchLinks'
@@ -179,7 +180,8 @@ const LinkBlock = memo(function LinkBlock({
   const api = window.nodeTerminal.watchLink
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const status = statusLine(link.status)
+  const status = statusLine(link)
+  const waiting = waitingViewers([link]) > 0
   useEffect(() => {
     if (!copied) return
     const t = setTimeout(() => setCopied(false), 1500)
@@ -195,7 +197,7 @@ const LinkBlock = memo(function LinkBlock({
         Shown to viewers as {stripBidiControls(link.label)}
       </p>
       {status && (
-        <p className={`live-pop__status live-pop__status--${link.status}`} role="status">
+        <p className={`live-pop__status live-pop__status--${link.status === 'live' && waiting ? 'waiting' : link.status}`} role="status">
           {status}
         </p>
       )}
@@ -237,7 +239,10 @@ const LinkBlock = memo(function LinkBlock({
               {link.viewers.map((v, i) => (
                 <li key={v.viewerId}>
                   <span className="live-pop__who">{viewerName(v, i)}</span>
-                  <span className="live-pop__muted">since {formatClock(v.joinedAt)}</span>
+                  <span className="live-pop__muted">
+                    since {formatClock(v.joinedAt)}
+                    {v.waiting ? ' · waiting for the terminal' : ''}
+                  </span>
                   <button
                     type="button"
                     className="confirm__btn live-pop__btn live-pop__kick"

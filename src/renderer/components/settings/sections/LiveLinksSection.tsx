@@ -50,7 +50,7 @@ export function liveLinkProjectLabel(projects: readonly Project[], nodeId: strin
 function LinkRow({ link, now, projects }: { link: WatchLinkView; now: number; projects: readonly Project[] }): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [stopping, setStopping] = useState(false)
-  const status = statusLine(link.status)
+  const status = statusLine(link)
   return (
     <div className="live-settings__row flex items-center justify-between gap-3">
       <div className="min-w-0">

@@ -51,6 +51,10 @@ describe('Canvas live-link wiring', () => {
     expect(src).toContain('prepare={liveLinkPrepareFor(liveLinkDialog)}')
   })
 
+  it("R63: the dialog knows an SSH project's node from its project (the host's tmux serves its viewers)", () => {
+    expect(src).toContain('remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}')
+  })
+
   it('R43: no Upgrade button from the dialog on the Server Edition', () => {
     expect(src).toContain("onUpgrade={isBrowserRuntime() ? undefined : () => void useEntitlement.getState().upgrade('pro')}")
   })
