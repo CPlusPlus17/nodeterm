@@ -1633,7 +1633,11 @@ session.
   never guesses from the browser. Standalone `ssh` terminal nodes remain URL-only because they
   have no remote fs API with which to verify a token; relay tabs do have a core-bound, jailed fs
   API and therefore support file links. Windows existence matching is case-insensitive and accepts
-  both separators; UNC tokens are refused whole before they can be reinterpreted as cwd-relative.
+  both separators; UNC tokens are refused whole before they can be reinterpreted as cwd-relative. A path an
+  agent TUI wrapped under a **hanging indent** (Codex: 2 spaces, broken after a `/` or at a space)
+  is neither a soft nor a hard wrap, so it is offered as extra READINGS (`hangingReadings` — the
+  seam as nothing, and as one space), tried BEFORE the plain row's tokens by both the provider and
+  `linkAtCell`; existence decides, and a click on the indent is not a click on the path.
   **Right-click on a link** opens a link menu (pure `terminal/link-menu.ts`; the listener is
   `installLinkContextMenu`, beside the Cmd+click fallback and sharing its `linkAtCell` hit-test):
   Open / Reveal in Explorer / Download / Copy path for a file, Open in browser / canvas browser /
