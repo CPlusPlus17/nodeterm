@@ -205,6 +205,7 @@ import {
   LIVENESS_QUERY_MS
 } from '../terminal/agent-liveness'
 import { shouldAutoWake, shouldColdResume } from '../terminal/hibernation-policy'
+import { skipsColdResume, takeColdResumeSkip } from '../terminal/handed-off-resume'
 import { coldSelfHealVerdict } from '../terminal/cold-self-heal'
 import { WakeInputBuffer } from '../terminal/wake-input-buffer'
 import { FindBar } from '../components/FindBar'
@@ -1012,6 +1013,13 @@ interface CoState {
    * nothing is typed or relaunched — it names the cause and offers an Antigravity node instead.
    */
   geminiRetired: boolean
+  /**
+   * This node's cold-restore relaunch was skipped once because its project was just taken back from
+   * a hosted team ("Open here anyway", `terminal/handed-off-resume.ts`): the team's server may be
+   * running the same conversation, and resuming it here too would put two processes on one
+   * transcript. A slim banner, like `lostSession`: the shell is alive and nothing was typed.
+   */
+  resumeSkipped: boolean
 }
 const NO_CO: CoState = {
   letterbox: false,
@@ -1022,7 +1030,8 @@ const NO_CO: CoState = {
   staleCwd: false,
   lostSession: false,
   launchTooLongBytes: null,
-  geminiRetired: false
+  geminiRetired: false,
+  resumeSkipped: false
 }
 const coStates = new Map<string, CoState>()
 const coSubs = new Map<string, (s: CoState) => void>()
@@ -1237,7 +1246,8 @@ function setCo(key: string, patch: Partial<CoState>): void {
     next.staleCwd === prev.staleCwd &&
     next.lostSession === prev.lostSession &&
     next.launchTooLongBytes === prev.launchTooLongBytes &&
-    next.geminiRetired === prev.geminiRetired
+    next.geminiRetired === prev.geminiRetired &&
+    next.resumeSkipped === prev.resumeSkipped
   )
     return
   coStates.set(key, next)
@@ -2265,6 +2275,7 @@ export function TerminalNode({
   }
   const dismissStaleCwd = (): void => setCo(termKey, { staleCwd: false })
   const dismissLostSession = (): void => setCo(termKey, { lostSession: false })
+  const dismissResumeSkipped = (): void => setCo(termKey, { resumeSkipped: false })
   const dismissGeminiRetired = (): void => setCo(termKey, { geminiRetired: false })
   // Canvas owns node creation; a terminal node has no direct line to it (same pattern as the
   // file-manager's `nodeterm:open-terminal`). The new node lands beside this one, in its frame.
@@ -3592,7 +3603,8 @@ export function TerminalNode({
               lostSession: false,
               launchTooLongBytes: null,
               letterbox: false,
-              geminiRetired: false
+              geminiRetired: false,
+              resumeSkipped: false
             })
             if (!disposed) term.write(`\r\n\x1b[90m[${refusal.message}]\x1b[0m\r\n`)
             return
@@ -3645,6 +3657,8 @@ export function TerminalNode({
         // cold-restore branch below can raise it) so a respawn that resumes cleanly — or any
         // warm reattach, which never reaches that branch at all — takes the old banner down.
         setCo(termKey, { lostSession: false })
+        // …and the skipped-resume notice, for the same reason.
+        setCo(termKey, { resumeSkipped: false })
         // Catch up a size change that landed while the spawn was in flight (applyFit skips the
         // IPC until sessionId is set, and the observer won't re-fire without another change).
         applyFit()
@@ -4028,6 +4042,15 @@ export function TerminalNode({
         if (data.clearEnv) {
           updateNodeData(id, { clearEnv: undefined })
         }
+        // A project just taken back from a hosted team ("Open here anyway") skips this relaunch
+        // ONCE (see terminal/handed-off-resume.ts). The mark is taken here, warm or cold, so it
+        // never outlives this mount; never by a relay tab's node, which shares the node id and is
+        // the team's own view of the same session.
+        const skipResume = skipsColdResume({
+          coldStart,
+          canColdRestore,
+          marked: session.source !== 'relay' && takeColdResumeSkip(id)
+        })
         // Run a one-shot command on first open (e.g. "gh auth login" or the agent CLI), then
         // forget it.
         if (data.initialCommand) {
@@ -4051,6 +4074,10 @@ export function TerminalNode({
               if (outcome === 'line-too-long') setCo(termKey, { launchTooLongBytes: lineBytes(command) })
             }
           })
+        } else if (skipResume) {
+          // Say so rather than leaving a bare shell under an agent badge in silence. Resuming stays
+          // the user's explicit choice.
+          if (!life.dead) setCo(termKey, { resumeSkipped: true })
         } else if (coldStart && canColdRestore) {
           // Cold restart of an agent node: the live agent is gone, so re-launch it. Resume the
           // prior conversation by its session id when we have one; otherwise start the agent
@@ -6622,6 +6649,30 @@ export function TerminalNode({
               <button
                 className="term-node__stalecwd-dismiss"
                 onClick={dismissLostSession}
+                title="Dismiss"
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
+          )}
+        {/* Resume skipped once after "Open here anyway" on a project handed to a hosted team: the
+            same slim banner as lostSession, and it yields to the same bigger problems. */}
+        {!co.closed &&
+          !co.ended &&
+          !co.spawnError &&
+          !co.offline &&
+          !co.staleCwd &&
+          co.resumeSkipped &&
+          !offscreenDown && (
+            <div className="term-node__stalecwd nodrag">
+              <span className="term-node__stalecwd-text">
+                Not resumed: this project was shared with a team, and its server may be running this
+                conversation. Resume it here only once it has stopped there.
+              </span>
+              <button
+                className="term-node__stalecwd-dismiss"
+                onClick={dismissResumeSkipped}
                 title="Dismiss"
                 aria-label="Dismiss"
               >

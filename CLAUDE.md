@@ -8480,7 +8480,12 @@ invariants:
   else's machine), `kanbanWriteNow` and `pushSshSettings` all skip the entry, and the field survives
   restarts (threaded through every `fileToProject` base; a file field of that name is ignored).
   Every reopen path (Recently closed, ⇧⌘T, `openSshProject`'s endpoint reuse) warns first, and only
-  "Open here anyway" clears it.
+  "Open here anyway" clears it. That answer also marks the project's terminal nodes to skip their
+  automatic cold-resume ONCE (`terminal/handed-off-resume.ts`; the node raises `CoState.resumeSkipped`
+  and says why): the share killed their SSH sessions, so each would otherwise type `--resume <id>`
+  over SSH while the server runs the same conversation. The mark is TRANSIENT on purpose and taken
+  by the node's first local mount (warm or cold; never by a relay node), unlike the persisted
+  `agentStatus.paused`, which is keyed by a node id the team tab shares.
 - **The SAS skip lives in ONE writer of `approvedAt`, and `source` gates nothing.** The client
   auto-confirm is `autoApprove: approvedAt !== null` (`hosted-join.ts`, for the bookmark recorded
   with the code's exact host key); `relay-bookmarks.ts` only validates `source`, it is a label.

@@ -352,17 +352,25 @@ SSH project again, warns first:
 > <name> is now managed by team <team> on <host>. Open it from the team tab, or run "team unshare
 > <projectId>" on the server first.
 >
-> Open it here anyway? Two copies editing one canvas can overwrite each other.
+> Open it here anyway? Two copies editing one canvas can overwrite each other, and its agents would
+> start the same conversations the server is running. Its agents are not resumed here automatically.
 
 or, for a handover that did not finish:
 
 > Sharing <name> with a team did not finish. If the server already took it over, opening it here
-> gives one canvas two editors that can overwrite each other.
+> gives one canvas two editors that can overwrite each other, and its agents would start the same
+> conversations the server is running.
 >
-> Open it here anyway?
+> Open it here anyway? Its agents are not resumed here automatically.
 
 **Open here anyway** takes the project back: the mark is cleared, and this desktop writes the file
-again.
+again. Its agent nodes then skip their automatic cold-resume ONCE: the share ended their SSH
+sessions, so each would otherwise type `claude --resume <id>` (or its agent's equivalent) over SSH
+while the server runs the same conversation, two processes appending to one transcript. Each such
+node says so ("Not resumed: this project was shared with a team, and its server may be running this
+conversation. Resume it here only once it has stopped there."), and resuming it stays your choice.
+The skip is held in memory, never written, so it cannot follow the node id to the team's tab, which
+holds the same ids.
 
 After a share, the closed SSH project and the team's tab hold the **same node ids** (they are the
 tmux session names, and the server keeps them). Every "go to node" (a notification, the sessions

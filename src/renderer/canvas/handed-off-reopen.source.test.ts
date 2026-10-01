@@ -25,7 +25,10 @@ describe('handed-off reopen guard in Canvas', () => {
     expect(ask).toContain('handedOffWarning(project, label)')
     expect(ask).toContain("confirmLabel: 'Open here anyway'")
     expect(ask).toContain('danger: true')
-    expect(ask).toContain('if (ok) useProjects.getState().setHandedOffTo(id, undefined)')
+    expect(ask).toMatch(/if \(ok\) \{\s+useProjects\.getState\(\)\.setHandedOffTo\(id, undefined\)/)
+    // …and its agent nodes skip their next automatic resume (the team's server runs those
+    // conversations): the decision is proven in terminal/handed-off-resume.test.ts.
+    expect(ask).toMatch(/if \(ok\) \{[\s\S]*?skipNextColdResumeFor\(useProjects\.getState\(\)\.getProject\(id\)\?\.nodes \?\? \[\]\)/)
     // The team label is display only: its lookup fails open to null.
     expect(ask).toMatch(/try \{\n\s+const list = await window\.nodeTerminal\.relayHosted\?\.bookmarks\(\)/)
   })

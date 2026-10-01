@@ -382,6 +382,7 @@ import { ShareTeamDialog } from '../components/ShareTeamDialog'
 import { runShare, type ShareConfirmSummary, type ShareOutcome, type SharePhase } from '../lib/shareSshTeam'
 import { followSharedProject, shareCanvas, shareProjectDeps } from '../lib/shareTeamCanvas'
 import { handedOffWarning } from '../lib/handedOff'
+import { skipNextColdResumeFor } from '../terminal/handed-off-resume'
 import { SshProjectDialog } from '../components/SshProjectDialog'
 import { SshPassphrasePrompt } from '../components/SshPassphrasePrompt'
 import { transport } from '../terminal/local-transport'
@@ -9207,7 +9208,8 @@ export function Canvas() {
   /** Ask before opening a project this desktop handed to a hosted team: the server's core writes
    *  that canvas now, and opening it here too makes a second writer that overwrites it. True = go
    *  ahead, and going ahead takes the project back — the mark is cleared, so this desktop saves and
-   *  mirrors it again (the caller saves). A project that was never handed off answers true. */
+   *  mirrors it again (the caller saves), and its agent nodes skip their next automatic resume. A
+   *  project that was never handed off answers true. */
   const confirmHandedOffReopen = useCallback(
     async (id: string): Promise<boolean> => {
       const marked = useProjects.getState().getProject(id)?.handedOffTo
@@ -9248,7 +9250,12 @@ export function Canvas() {
           onCancel: () => resolve(false)
         })
       )
-      if (ok) useProjects.getState().setHandedOffTo(id, undefined)
+      if (ok) {
+        useProjects.getState().setHandedOffTo(id, undefined)
+        // Its agents would resume the conversations the team's server is running: each one skips
+        // its automatic cold-resume once, and says why (terminal/handed-off-resume.ts).
+        skipNextColdResumeFor(useProjects.getState().getProject(id)?.nodes ?? [])
+      }
       return ok
     },
     [confirmBusy, setConfirm]
