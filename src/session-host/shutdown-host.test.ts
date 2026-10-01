@@ -129,6 +129,13 @@ afterEach(() => {
 })
 
 
+// On win32 the host's kill path never calls the fake node-pty kill(): it runs
+// terminateWindowsProcessTree (real taskkill) against the fixture's fake pid, so a session can
+// never be confirmed ended through this harness there. Same limit and precedent as
+// host-routing.test.ts. These two run on POSIX; the Windows kill path itself is covered by
+// windows-process-tree.test.ts, and the end-to-end shutdown is on the device checklist.
+const posixKillPath = it.skipIf(process.platform === 'win32')
+
 const SHUTDOWN_FEATURES = ['geometry', 'shutdown']
 
 async function startHost(): Promise<{
@@ -175,7 +182,7 @@ async function hello(conn: Connection, token: string, features?: string[]): Prom
 }
 
 describe('session-host shutdown (issue #829)', () => {
-  it('ends every session, replies with their names, then exits and removes its identity', async () => {
+  posixKillPath('ends every session, replies with their names, then exits and removes its identity', async () => {
     const { child, dataDir, state, token } = await startHost()
     const sockets: Socket[] = []
     try {
@@ -234,7 +241,7 @@ describe('session-host shutdown (issue #829)', () => {
     }
   }, 30_000)
 
-  it('names a session it could not end, stays up, and accepts attaches again', async () => {
+  posixKillPath('names a session it could not end, stays up, and accepts attaches again', async () => {
     const { child, state, token } = await startHost()
     const sockets: Socket[] = []
     try {
