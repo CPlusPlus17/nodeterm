@@ -19,6 +19,7 @@ import {
   type AdminStatusResult
 } from '../core/relay/team-admin'
 import { POP_REFUSED_MESSAGE } from '../core/relay/relay-pop'
+import { parseResumeSessions } from '../shared/share-team'
 
 // One rule for what never reaches the admin's terminal: the same characters a label may not
 // contain (C0/C1 controls, DEL, and the text-direction controls). Server-supplied strings can carry
@@ -45,7 +46,8 @@ const USAGE_ROWS: Array<[string, string]> = [
   ['unshare <projectId>', 'stop showing it'],
   ['info [--json]', "this host's team address and join code"],
   ['status [--json]', 'hosting state, members and join requests'],
-  ['rotate-key', 'replace the host key (every teammate needs a new join code)']
+  ['rotate-key', 'replace the host key (every teammate needs a new join code)'],
+  ['resume --project <id> [--json] < sessions.json', 'restart handed-over agent sessions (a JSON list on stdin)']
 ]
 const USAGE_WIDTH = Math.max(...USAGE_ROWS.map(([cmd]) => cmd.length))
 export const TEAM_USAGE = [
@@ -67,7 +69,8 @@ const COMMANDS: Record<string, CommandSpec> = {
   unshare: { positionals: 1, flags: {} },
   info: { positionals: 0, flags: { json: 'bool' } },
   status: { positionals: 0, flags: { json: 'bool' } },
-  'rotate-key': { positionals: 0, flags: {} }
+  'rotate-key': { positionals: 0, flags: {} },
+  resume: { positionals: 0, flags: { project: 'value', json: 'bool' } }
 }
 
 const usageError = (why: string): { error: string } => ({ error: `${why}\n${TEAM_USAGE}` })
@@ -136,6 +139,14 @@ export function parseTeamArgv(argv: string[]): AdminRequest | { error: string } 
     case 'unshare': {
       const problem = projectIdProblem(positionals[0])
       return problem ? { error: problem } : { cmd: 'share', projectId: positionals[0], on: cmd === 'share' }
+    }
+    case 'resume': {
+      // The session list is not argv: it arrives on stdin (runTeamCli fills `sessions`), so a long
+      // list never meets ARG_MAX and never shows up in `ps`.
+      const projectId = typeof flags.project === 'string' ? flags.project : ''
+      if (!projectId) return usageError('resume needs --project <id>')
+      const problem = projectIdProblem(projectId)
+      return problem ? { error: problem } : { cmd: 'resume', projectId, sessions: [] }
     }
   }
   return usageError(`unknown command "${clean(cmd)}"`)
@@ -288,7 +299,7 @@ export function describeStatus(result: AdminStatusResult): string[] {
 
 /** Render a successful reply. The exit code is 1 when the command did its part but the outcome it
  *  exists for did not happen (hosting did not start, there is no address yet). Only `info`,
- *  `status` and `bootstrap` take `--json`. */
+ *  `status`, `bootstrap` and `resume` take `--json`. */
 function render(req: AdminRequest, result: unknown, json: boolean): { lines: string[]; code: number } {
   switch (req.cmd) {
     case 'init': {
@@ -345,6 +356,16 @@ function render(req: AdminRequest, result: unknown, json: boolean): { lines: str
       ]
       return { lines, code: 0 }
     }
+    case 'resume': {
+      if (json) return { lines: [safeJson(result)], code: 0 }
+      const rows = Array.isArray(obj(result).results) ? (obj(result).results as unknown[]).map(obj) : []
+      const lines = rows.map(
+        (r) =>
+          `  ${str(r.nodeId, '?')}  ${r.status === 'already-running' ? 'already running' : str(r.status, '?')}` +
+          (typeof r.reason === 'string' ? ` (${str(r.reason)})` : '')
+      )
+      return { lines: lines.length ? lines : ['No sessions to resume.'], code: 0 }
+    }
     case 'rotate-key': {
       const r = obj(result) as Partial<AdminRotateResult>
       if (r.result === 'not-running') {
@@ -370,11 +391,32 @@ function render(req: AdminRequest, result: unknown, json: boolean): { lines: str
   }
 }
 
+/** The longest stdin `team resume` reads: the admin socket's request cap, less its envelope. */
+const RESUME_STDIN_MAX = 60 * 1024
+
+function readProcessStdin(): Promise<string> {
+  if (process.stdin.isTTY) return Promise.reject(new Error('pipe the session list on stdin'))
+  return new Promise((resolve, reject) => {
+    let buf = ''
+    process.stdin.setEncoding('utf8')
+    process.stdin.on('data', (d: string) => {
+      buf += d
+      if (buf.length > RESUME_STDIN_MAX) {
+        process.stdin.destroy()
+        reject(new Error(`the session list is larger than ${RESUME_STDIN_MAX} bytes`))
+      }
+    })
+    process.stdin.on('end', () => resolve(buf))
+    process.stdin.on('error', reject)
+  })
+}
+
 export async function runTeamCli(
   argv: string[],
   dataDir: string,
   out: (s: string) => void,
-  err: (s: string) => void = out
+  err: (s: string) => void = out,
+  readStdin: () => Promise<string> = readProcessStdin
 ): Promise<number> {
   if (argv.length === 1 && (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help')) {
     out(TEAM_USAGE)
@@ -389,6 +431,21 @@ export async function runTeamCli(
   if ('error' in req) {
     err(req.error)
     return 2
+  }
+  if (req.cmd === 'resume') {
+    let raw: unknown
+    try {
+      raw = JSON.parse(await readStdin())
+    } catch (e) {
+      err(`team resume reads a JSON list of sessions on stdin: ${clean(e instanceof Error ? e.message : String(e))}`)
+      return 2
+    }
+    const sessions = parseResumeSessions(raw)
+    if (typeof sessions === 'string') {
+      err(clean(sessions))
+      return 2
+    }
+    req.sessions = sessions
   }
   const r = await callTeamAdmin(dd.dataDir ?? dataDir, req)
   const json = dd.argv.includes('--json')

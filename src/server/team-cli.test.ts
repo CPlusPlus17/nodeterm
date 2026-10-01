@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { parseTeamArgv, runTeamCli, describeStatus, teamArgv, TEAM_USAGE } from './team-cli'
-import { startTeamAdmin, adminSocketPath, type AdminStatusResult } from '../core/relay/team-admin'
+import { startTeamAdmin, adminSocketPath, type AdminStatusResult, type TeamAdminOps } from '../core/relay/team-admin'
 import { genKeyPair, publicKeyToB64 } from '../core/relay/e2ee'
 import type { HostedService, HostedStatus } from '../core/relay/hosted-service'
 import { POP_REFUSED_MESSAGE } from '../core/relay/relay-pop'
@@ -76,6 +76,14 @@ describe('team argv', () => {
 
   it('`team --help` lists bootstrap at the row start a remote probe greps for', () => {
     expect(TEAM_USAGE).toMatch(/^ {2}bootstrap /m)
+  })
+
+  it('resume needs --project (checked) and takes its sessions from stdin, not argv', () => {
+    expect(parseTeamArgv(['resume', '--project', 'p1', '--json'])).toEqual({ cmd: 'resume', projectId: 'p1', sessions: [] })
+    expect(parseTeamArgv(['resume'])).toEqual({ error: expect.stringMatching(/needs --project/) })
+    expect(parseTeamArgv(['resume', '--project', 'x'.repeat(129)])).toEqual({ error: expect.stringMatching(/128/) })
+    expect(parseTeamArgv(['resume', '--project', 'p1', 'extra'])).toEqual({ error: expect.stringMatching(/takes no arguments/) })
+    expect(TEAM_USAGE).toMatch(/^ {2}resume --project <id>/m)
   })
 })
 
@@ -252,22 +260,30 @@ function fake(o: { running?: boolean; rotate?: string } = {}): { svc: HostedServ
   return { svc, calls }
 }
 
-async function served(o: Parameters<typeof fake>[0] = {}, withTeam = true): Promise<{ dataDir: string; calls: string[] }> {
+async function served(
+  o: Parameters<typeof fake>[0] = {},
+  withTeam = true,
+  ops: TeamAdminOps = {}
+): Promise<{ dataDir: string; calls: string[] }> {
   const dataDir = tmp()
   if (withTeam) {
     fs.mkdirSync(path.join(dataDir, 'relay'), { recursive: true, mode: 0o700 })
     fs.writeFileSync(path.join(dataDir, 'relay', 'team.json'), JSON.stringify({ v: 1, peers: [], sharedProjects: [] }))
   }
   const f = fake(o)
-  const admin = await startTeamAdmin(dataDir, f.svc)
+  const admin = await startTeamAdmin(dataDir, f.svc, ops)
   closers.push(() => admin.close())
   return { dataDir, calls: f.calls }
 }
 
-async function run(argv: string[], dataDir: string): Promise<{ code: number; out: string; err: string }> {
+async function run(
+  argv: string[],
+  dataDir: string,
+  readStdin?: () => Promise<string>
+): Promise<{ code: number; out: string; err: string }> {
   const out: string[] = []
   const err: string[] = []
-  const code = await runTeamCli(argv, dataDir, (s) => out.push(s), (s) => err.push(s))
+  const code = await runTeamCli(argv, dataDir, (s) => out.push(s), (s) => err.push(s), readStdin)
   return { code, out: out.join('\n'), err: err.join('\n') }
 }
 
@@ -444,6 +460,41 @@ describe.skipIf(process.platform === 'win32')('runTeamCli over the admin socket 
     const r = await run(['bootstrap', '--owner-key', KEY, '--adopt', '/srv/proj', '--json'], dataDir)
     expect(r.code).toBe(1)
     expect(JSON.parse(r.out)).toEqual({ ok: false, error: expect.stringMatching(/cannot adopt/), code: 'E_UNSUPPORTED' })
+  })
+
+  it('resume reads the session list from stdin and prints the result as JSON', async () => {
+    const asked: unknown[] = []
+    const { dataDir } = await served({ running: true }, true, {
+      resume: async (req) => {
+        asked.push(req)
+        return { results: [{ nodeId: 'n', status: 'resumed' }] }
+      }
+    })
+    const sessions = [{ nodeId: 'n', agentId: 'claude', sessionId: 's' }]
+    const r = await run(['resume', '--project', 'p', '--json'], dataDir, async () => JSON.stringify(sessions))
+    expect(r.code).toBe(0)
+    expect(JSON.parse(r.out)).toEqual({ results: [{ nodeId: 'n', status: 'resumed' }] })
+    expect(asked).toEqual([{ cmd: 'resume', projectId: 'p', sessions }])
+    const human = await run(['resume', '--project', 'p'], dataDir, async () => JSON.stringify(sessions))
+    expect(human.code).toBe(0)
+    expect(human.out).toBe('  n  resumed')
+  })
+
+  it('resume refuses stdin that is not a JSON list of sessions before reaching the server', async () => {
+    let called = false
+    const { dataDir } = await served({ running: true }, true, {
+      resume: async () => {
+        called = true
+        return { results: [] }
+      }
+    })
+    const notJson = await run(['resume', '--project', 'p', '--json'], dataDir, async () => 'not json')
+    expect(notJson.code).toBe(2)
+    expect(notJson.err).toMatch(/JSON list of sessions/)
+    const notList = await run(['resume', '--project', 'p'], dataDir, async () => '{}')
+    expect(notList.code).toBe(2)
+    expect(notList.err).toMatch(/JSON list of sessions/)
+    expect(called).toBe(false)
   })
 
   it('a refused --json verb prints {"ok":false,…} on stdout and the human line on stderr', async () => {

@@ -3169,6 +3169,16 @@ export class PtyManager {
   }
 
   /**
+   * Is the tmux session for `persistKey` running, by the EXACT target (`=nt-<id>`)? Public for
+   * `team resume`, which must never start a second agent on a conversation whose session exists.
+   * `sessionExists` cannot answer this: its tmux leg prefix-matches, and it folds "could not tell"
+   * into "exists". No tmux at all answers 'absent' (nothing can be running there).
+   */
+  sessionVerdict(persistKey: string): Promise<'present' | 'absent' | 'unknown'> {
+    return this.strictTmuxVerdict(persistKey)
+  }
+
+  /**
    * The strict existence probe a JOIN-ONLY create needs, as a tri-state: `unknown` when tmux could
    * not be asked (a spawn error, a timeout), which such a create must refuse rather than read as
    * "exists" the way the warm/cold fold (`tmuxSessionExists`) does.

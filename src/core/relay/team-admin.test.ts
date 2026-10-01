@@ -557,6 +557,57 @@ describe.skipIf(process.platform === 'win32')('team admin socket (unix socket, P
     })
   })
 
+  it('resume hands the parsed session list to the resume op and returns its result', async () => {
+    const dataDir = tmp()
+    writeTeam(dataDir)
+    const asked: unknown[] = []
+    const admin = await startTeamAdmin(dataDir, fakeService().svc, {
+      resume: async (req) => {
+        asked.push(req)
+        return { results: [{ nodeId: 'n', status: 'resumed' }] }
+      }
+    })
+    closers.push(() => admin.close())
+    const sessions = [{ nodeId: 'n', agentId: 'claude', sessionId: 's' }]
+    expect(await callTeamAdmin(dataDir, { cmd: 'resume', projectId: 'p', sessions })).toEqual({
+      ok: true,
+      result: { results: [{ nodeId: 'n', status: 'resumed' }] }
+    })
+    expect(asked).toEqual([{ cmd: 'resume', projectId: 'p', sessions }])
+  })
+
+  it('resume refuses a malformed session list with E_BAD_REQUEST', async () => {
+    const dataDir = tmp()
+    writeTeam(dataDir)
+    const admin = await startTeamAdmin(dataDir, fakeService().svc, {
+      resume: async () => ({ results: [] })
+    })
+    closers.push(() => admin.close())
+    expect(JSON.parse(await rawExchange(dataDir, '{"cmd":"resume","projectId":"p","sessions":{}}\n'))).toMatchObject({
+      ok: false,
+      code: 'E_BAD_REQUEST'
+    })
+  })
+
+  it('resume without a team answers NO_TEAM (no code), and without a resume op E_UNSUPPORTED', async () => {
+    const dataDir = tmp()
+    let called = false
+    const admin = await startTeamAdmin(dataDir, fakeService().svc, {
+      resume: async () => {
+        called = true
+        return { results: [] }
+      }
+    })
+    closers.push(() => admin.close())
+    const req = { cmd: 'resume' as const, projectId: 'p', sessions: [] }
+    expect(await callTeamAdmin(dataDir, req)).toEqual({ ok: false, error: expect.stringMatching(/no hosted team/) })
+    expect(called).toBe(false)
+    const other = tmp()
+    writeTeam(other)
+    await boot(other, fakeService().svc)
+    expect(await callTeamAdmin(other, req)).toMatchObject({ ok: false, code: 'E_UNSUPPORTED' })
+  })
+
   it('close() removes the socket and does not hang on a connection that never sends a request', async () => {
     const dataDir = tmp()
     const admin = await startTeamAdmin(dataDir, fakeService().svc)

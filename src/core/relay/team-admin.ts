@@ -11,6 +11,8 @@
 // With no hosted team on this server, the channel serves `init`, `status`, `info` and `bootstrap`
 // only: every other verb would create team state (a team.json, a host key) on a server that never
 // asked to host. `bootstrap` is `init` plus an owner, an adopted folder and its share, in one call.
+// `resume` restarts handed-over agent sessions on this core's own tmux; it needs a team (a share
+// hands sessions over only to a server that hosts one).
 import net from 'node:net'
 import path from 'node:path'
 import { chmodSync, lstatSync, rmSync } from 'node:fs'
@@ -20,6 +22,7 @@ import { loadHostKey } from './host-key'
 import { publicKeyFromB64, publicKeyToB64 } from './e2ee'
 import { ADMIN_ERROR_CODE_RE, adminErrorCode } from './admin-error'
 import { runBootstrap } from './team-bootstrap'
+import { parseResumeSessions, type ResumeEntry, type ResumeResult } from '../../shared/share-team'
 import type {
   HostedInfo,
   HostedRotateResult,
@@ -40,6 +43,7 @@ export type AdminRequest =
   | { cmd: 'share'; projectId: string; on: boolean }
   | { cmd: 'rotate-key' }
   | { cmd: 'bootstrap'; ownerKey: string; ownerLabel: string; adoptCwd: string }
+  | { cmd: 'resume'; projectId: string; sessions: ResumeEntry[] }
 export type AdminReply = { ok: true; result: unknown } | { ok: false; error: string; code?: string }
 /** A request refused with a stable code (`parseAdminRequest`), so a remote caller can branch on it. */
 export interface AdminRefusal {
@@ -52,6 +56,8 @@ export interface AdminRefusal {
 export interface TeamAdminOps {
   /** Adopt a folder into this core's workspace (saved before it returns) — `team bootstrap`. */
   adoptFolder?(cwd: string): Promise<AdoptFolderResult>
+  /** Restart handed-over agent sessions on this core's own tmux — `team resume`. */
+  resume?(req: { projectId: string; sessions: ResumeEntry[] }): Promise<ResumeResult>
 }
 
 /** `init`'s answer. The address and join code are present only when hosting is running. */
@@ -242,6 +248,14 @@ export function parseAdminRequest(raw: unknown): AdminRequest | string | AdminRe
       if (cwdProblem) return { refused: cwdProblem, code: 'E_BAD_CWD' }
       return { cmd: 'bootstrap', ownerKey: o.ownerKey, ownerLabel: o.ownerLabel, adoptCwd: o.adoptCwd }
     }
+    case 'resume': {
+      if (typeof o.projectId !== 'string') return { refused: 'bad request: resume needs a projectId string', code: 'E_BAD_REQUEST' }
+      const idProblem = projectIdProblem(o.projectId)
+      if (idProblem) return { refused: idProblem, code: 'E_BAD_REQUEST' }
+      const sessions = parseResumeSessions(o.sessions)
+      if (typeof sessions === 'string') return { refused: sessions, code: 'E_BAD_REQUEST' }
+      return { cmd: 'resume', projectId: o.projectId, sessions }
+    }
     default:
       return `bad request: unknown command ${JSON.stringify(typeof o.cmd === 'string' ? o.cmd.slice(0, 40) : o.cmd)}`
   }
@@ -345,6 +359,8 @@ async function handle(
       const adopt = ops.adoptFolder
       return ok(await runBootstrap({ svc, adoptFolder: (cwd) => adopt(cwd), closing }, req))
     }
+    case 'resume':
+      return ops.resume ? ok(await ops.resume(req)) : fail('This server cannot resume sessions.', 'E_UNSUPPORTED')
   }
 }
 
