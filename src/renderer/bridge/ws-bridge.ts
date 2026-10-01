@@ -883,7 +883,8 @@ export function buildPresenceApi(client: RpcClient): Pick<NodeTerminalApi, 'pres
  * Edition browser never joins a relay host, and a Team Access relay tab (desktop to desktop) talks
  * to a host that answers none of these, so both leave `hosted` absent. The host core answers every
  * request itself (src/core/relay/hosted-service.ts) and judges the caller's role: `self` is open to
- * any member, the rest are owner-only. `peer-pending` / `pending-closed` reach connected OWNERS only.
+ * any member, the rest are owner-only. `peer-pending` / `pending-closed` reach connected OWNERS only;
+ * `shared-changed` (the team's whole shared set) reaches every connected member, viewers included.
  */
 export function buildHostedApi(client: RpcClient): Required<Pick<NodeTerminalApi, 'hosted'>> {
   const hosted: HostedSessionApi = {
@@ -893,7 +894,8 @@ export function buildHostedApi(client: RpcClient): Required<Pick<NodeTerminalApi
     approve: (pendingId, role) => client.request(IPC.relayHostedApprove, pendingId, role) as Promise<boolean>,
     deny: (pendingId) => client.request(IPC.relayHostedDeny, pendingId) as Promise<boolean>,
     onPeerPending: (listener) => client.subscribe(IPC.relayHostedPeerPending, listener as Listener),
-    onPendingClosed: (listener) => client.subscribe(IPC.relayHostedPendingClosed, listener as Listener)
+    onPendingClosed: (listener) => client.subscribe(IPC.relayHostedPendingClosed, listener as Listener),
+    onSharedChanged: (listener) => client.subscribe(IPC.relayHostedSharedChanged, listener as Listener)
   }
   return { hosted }
 }

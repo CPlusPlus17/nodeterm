@@ -986,10 +986,11 @@ describe('hosted service — lifecycle', () => {
 
   it('every hosted channel lives under the one prefix the access hook refuses outside the interceptor', () => {
     const hosted = Object.entries(IPC).filter(([k]) => k.startsWith('relayHosted')).map(([, v]) => v)
-    // Seven relay-tunnel verbs plus the desktop's two bookmark channels. Those two are raw ipcMain
-    // handlers that never ride the relay; living under the prefix means a relay peer that asks for
-    // one is refused by the access hook here, which is the right answer for them.
-    expect(hosted).toHaveLength(9)
+    // Eight relay-tunnel channels (the verbs and their events) plus the desktop's two bookmark
+    // channels. Those two are raw ipcMain handlers that never ride the relay; living under the prefix
+    // means a relay peer that asks for one is refused by the access hook here, which is the right
+    // answer for them.
+    expect(hosted).toHaveLength(10)
     expect(hosted).toEqual(expect.arrayContaining([IPC.relayHostedBookmarks, IPC.relayHostedBookmarkRemove]))
     for (const ch of hosted) expect(ch).toMatch(/^relay:hosted:/)
   })
@@ -1010,6 +1011,30 @@ describe('hosted service — the canvas authority seam (docs/hosted-team-relay.m
     await w.svc.share('P', false)
     expect([...w.svc.sharedProjectIds()]).toEqual(['Q'])
     expect(seen).toEqual([['P'], ['P', 'Q'], ['Q']])
+  })
+
+  it('share and unshare tell every connected member — viewers too — the whole shared set', async () => {
+    const w = world()
+    // ownerOnline shares 'P' first; this set starts empty so each payload is the whole set.
+    const ownerKeys = genKeyPair()
+    await w.svc.init()
+    await w.svc.addOwner(pub(ownerKeys), 'Enes')
+    expect(await w.svc.start()).toBe('started')
+    await vi.waitFor(() => expect(w.svc.status().scheduler?.idle).toBe(1))
+    const owner = w.join(ownerKeys, true)
+    await vi.waitFor(() => expect(owner.isApproved()).toBe(true))
+    const editor = await approvedGuest(w, owner, 'editor', 5)
+    const viewer = await approvedGuest(w, owner, 'viewer', 6)
+    // A device still waiting for an owner is not a member: it is told nothing.
+    const { g: waiting } = await pendingGuest(w)
+    await w.svc.share('p1', true)
+    await w.svc.share('p2', true)
+    await w.svc.share('p1', false)
+    const sets = [{ projectIds: ['p1'] }, { projectIds: ['p1', 'p2'] }, { projectIds: ['p2'] }]
+    await vi.waitFor(() => expect(owner.events(IPC.relayHostedSharedChanged)).toEqual(sets))
+    await vi.waitFor(() => expect(editor.events(IPC.relayHostedSharedChanged)).toEqual(sets))
+    await vi.waitFor(() => expect(viewer.events(IPC.relayHostedSharedChanged)).toEqual(sets))
+    expect(waiting.events(IPC.relayHostedSharedChanged)).toEqual([])
   })
 
   it('a share whose write failed tells nobody', async () => {

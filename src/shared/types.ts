@@ -3977,6 +3977,8 @@ export interface HostedSessionApi {
   deny(pendingId: string): Promise<boolean>
   onPeerPending(listener: (p: HostedPending) => void): () => void
   onPendingClosed(listener: (p: { pendingId: string; reason: HostedPendingClosedReason }) => void): () => void
+  /** The team's shared projects changed (share or unshare on the host): their whole set. */
+  onSharedChanged(listener: (p: { projectIds: string[] }) => void): () => void
 }
 
 /** A paired device as exposed to the renderer — the bearer token is never included. */

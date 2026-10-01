@@ -694,6 +694,10 @@ export const IPC = {
   relayHostedDeny: 'relay:hosted:deny',
   relayHostedInviteCode: 'relay:hosted:invite-code',
   relayHostedSelf: 'relay:hosted:self',
+  // Sent to EVERY connected member (viewers too) after `team share`/`unshare` lands: the team's
+  // whole shared set, so a joiner opens a tab for a newly shared project and closes the tab of one
+  // that stopped being shared — with no new code and no new approval.
+  relayHostedSharedChanged: 'relay:hosted:shared-changed',
   // The hosted teams THIS desktop has joined (src/main/remote/relay-bookmarks.ts). Unlike the
   // hosted verbs above, these two never ride the relay: they are raw `ipcMain` handlers in the
   // desktop main process, invisible to any relay peer. `relayHostedBookmarks` () lists them without

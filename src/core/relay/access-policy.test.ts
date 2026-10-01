@@ -323,6 +323,11 @@ describe('outbound filter: deny by default for non-editors', () => {
     expect(filterOutboundEvent(ev(IPC.projectTrustChanged, { projectId: 'Q' }), ctx('viewer'))).toBe(false)
   })
 
+  it('a viewer receives relay:hosted:shared-changed (its tabs follow it; the payload is the shared set)', () => {
+    const shared = JSON.stringify({ t: 'ev', channel: IPC.relayHostedSharedChanged, args: [{ projectIds: ['p1'] }] })
+    expect(filterOutboundEvent(shared, ctx('viewer'))).toBe(true)
+  })
+
   it('per-project channels are filtered by the project in their name', () => {
     expect(filterOutboundEvent(ev(IPC.boardLogChanged('P'), 'P'), ctx('viewer'))).toBe(true)
     expect(filterOutboundEvent(ev(IPC.boardLogChanged('Q'), 'Q'), ctx('viewer'))).toBe(false)

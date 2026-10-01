@@ -239,6 +239,17 @@ describe('buildRelayApi — hosted team tabs', () => {
     expect(seen).toEqual([pending, { pendingId: 'x', reason: 'denied' }])
   })
 
+  it('a shared-set change reaches the onSharedChanged subscribers', () => {
+    const t = new FakeTransport()
+    const { api } = buildRelayApi('conn-1', t, { hosted: true })
+    const seen: unknown[] = []
+    const off = api.hosted!.onSharedChanged((p) => seen.push(p))
+    t.emit(JSON.stringify({ t: 'ev', channel: IPC.relayHostedSharedChanged, args: [{ projectIds: ['p1', 'p2'] }] }))
+    off()
+    t.emit(JSON.stringify({ t: 'ev', channel: IPC.relayHostedSharedChanged, args: [{ projectIds: [] }] }))
+    expect(seen).toEqual([{ projectIds: ['p1', 'p2'] }])
+  })
+
   it('before the role is known, a hosted tab sends only what a viewer may (fail closed)', async () => {
     const t = new FakeTransport()
     const { api } = buildRelayApi('conn-1', t, { hosted: true })

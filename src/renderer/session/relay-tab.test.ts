@@ -380,7 +380,8 @@ function fakeHostedApi(self: HostedSelf | Error, pulled: HostedPending[] = []) {
       onPendingClosed: vi.fn(() => {
         log.push('sub:closed')
         return unClosed
-      })
+      }),
+      onSharedChanged: () => () => {}
     }
   } as unknown as NodeTerminalApi
   return { api, log, unPending, unClosed, push: (p: HostedPending) => pushPending?.(p) }

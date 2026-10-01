@@ -24,7 +24,8 @@
 //    the pin is written (a racing `team add-owner`) keeps it: the approval writes nothing.
 //  - A relay peer never saves the host's workspace (`workspace:save` is refused for every role): the
 //    host's canvas authority writes shared projects' content from canvas ops alone, and the share
-//    set it governs is read through `sharedProjectIds()` and announced by `onSharedChange`.
+//    set it governs is read through `sharedProjectIds()` and announced by `onSharedChange`. Every
+//    connected MEMBER (viewers too) is told the whole new set on `relay:hosted:shared-changed`.
 //  - The scheduler hears about EVERY session end. The core fires `onClose` only for ends the shell
 //    did not ask for; every end this service causes (deny, expiry, removal, a listener the
 //    scheduler closes) runs the same `ended` bookkeeping, at most once per session.
@@ -279,6 +280,11 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
   /** Connected owners ONLY, judged per send. Never a broadcast. */
   const tellOwners = (channel: string, payload: unknown): void => {
     for (const c of conns) if (c.open && memberRole(keyOf(c)) === 'owner') send(c, channel, payload)
+  }
+  /** Every connected member, judged per send (a removed member gets nothing). Unlike `tellOwners`
+   *  this reaches viewers: the payload is only what their narrowed workspace already shows. */
+  const tellMembers = (channel: string, payload: unknown): void => {
+    for (const c of conns) if (c.open && memberRole(keyOf(c)) !== undefined) send(c, channel, payload)
   }
   const pendingList = (): HostedPending[] => [...pending.values()].map((p) => ({ ...p.info }))
 
@@ -626,6 +632,7 @@ export function createHostedService(deps: HostedServiceDeps): HostedService {
     },
     async share(projectId, on) {
       await team.update((d) => setShared(d, projectId, on))
+      tellMembers(IPC.relayHostedSharedChanged, { projectIds: [...team.current().sharedProjects] })
       // The share landed; a failing listener must not report it as failed to the admin.
       try {
         deps.onSharedChange?.()
