@@ -82,6 +82,29 @@ describe('arrange inside a group (source pins)', () => {
     expect(groupBranch).toContain('reply({ ok: false, error: `arrange: ${refusal}` })')
   })
 
+  // Desktop main never runs `parseControlRequest` (the Server Edition's parser), so the shape gate
+  // has to be called in its control handler too — without it `--group` with `--nodes`, an unknown
+  // `--layout` and `--nodes --layout lineage` all reached the renderer and ran as a grid.
+  it('desktop main refuses a malformed arrange before the forward to the renderer', () => {
+    const mainSrc = readFileSync(new URL('../../main/index.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
+    const handler = code(mainSrc.slice(mainSrc.indexOf('hookServer.setControlHandler(')))
+    const gate = handler.indexOf("verb === 'arrange' ? arrangeArgsRefusal(args) : null")
+    expect(gate).toBeGreaterThan(-1)
+    expect(handler.slice(gate, gate + 300)).toContain(
+      'if (arrangeRefusal) return { ok: false, error: arrangeRefusal, message: arrangeRefusal }'
+    )
+    expect(gate).toBeLessThan(handler.indexOf("'window unavailable'"))
+  })
+
+  it('the renderer belt runs the same gate before either form reads its flags', () => {
+    const gate = verb.indexOf("verb === 'arrange' ? arrangeArgsRefusal(args) : null")
+    expect(gate).toBeGreaterThan(-1)
+    expect(verb.slice(gate, gate + 200)).toContain('reply({ ok: false, error: shapeRefusal })')
+    // Before the --group branch: its `?? 'grid'` then only ever answers an ABSENT --layout.
+    expect(gate).toBeLessThan(verb.indexOf("if (verb === 'arrange' && args.group)"))
+    expect(gate).toBeLessThan(verb.indexOf('GROUP_ARRANGE_LAYOUTS.find('))
+  })
+
   it('the --nodes form re-fits the ancestor chain too, not just the one frame', () => {
     const nodesForm = verb.slice(verb.indexOf('const ids ='))
     expect(nodesForm).toContain('fitAncestorChain(next, container, snapGridNow())')

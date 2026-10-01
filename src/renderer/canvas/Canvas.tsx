@@ -7,6 +7,7 @@ import { VisibleMiniMap } from './VisibleMiniMap'
 import { MinimapDock } from './MinimapDock'
 import { keepGlassBlurWhileMoving } from '../lib/glassContrast'
 import { LINK_ENDPOINT_NOT_FOUND } from '@shared/canvas-link'
+import { arrangeArgsRefusal } from '@shared/arrange-verb'
 import { createControlOpenBatch } from '../lib/controlOpenBatch'
 import { commitOwnedLaunchAttempt, registerLaunchCommit } from '../terminal/launch-attempt'
 import { hasLaunchWriter, launchCommand } from '../terminal/launch-command'
@@ -14035,6 +14036,14 @@ export function Canvas() {
           case 'arrange':
           case 'align': {
             const live = nodesRef.current as CanvasNode[]
+            // The flag shape was refused in main (`arrangeArgsRefusal`); this is the belt. With it,
+            // `--layout` on the `--group` form is absent or a known word by the time it is read
+            // below — an unknown one is refused by name, never delivered as a grid.
+            const shapeRefusal = verb === 'arrange' ? arrangeArgsRefusal(args) : null
+            if (shapeRefusal) {
+              reply({ ok: false, error: shapeRefusal })
+              return
+            }
             // `arrange --group <frameId>`: name the FRAME instead of listing its children. The
             // whole rule set is `arrangeGroupChildren` — the same transform the frame's menu rows
             // and the palette run — so this branch only parses, refuses by name and replies.

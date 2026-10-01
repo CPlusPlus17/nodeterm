@@ -4091,7 +4091,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   instead of listing its children: the frame's direct children are laid out and the frame chain is
   re-fitted — `arrangeGroupChildren`, the SAME transform the frame's menu rows run (see
   **Arrange inside a group** under Canvas interaction). The flag gate is the pure
-  `arrangeArgsRefusal` (`@shared/arrange-verb`, called from `parseControlRequest`): `--nodes` and
+  `arrangeArgsRefusal` (`@shared/arrange-verb`), called in THREE places: `parseControlRequest`
+  (Server Edition), desktop main's control handler (which never runs `parseControlRequest` — the
+  `--issue` trap; with the gate only in the parser, all three refusals were missing on the desktop
+  and the request ran as a grid), and Canvas's `case 'arrange'` as the belt: `--nodes` and
   `--group` together are refused rather than resolved silently, an unknown `--layout` on the
   `--group` form is refused by name, and `--layout lineage` on the `--nodes` form is refused
   instead of being delivered as a grid (any OTHER unknown word there still falls back to `grid`,
