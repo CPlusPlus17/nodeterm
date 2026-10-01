@@ -334,6 +334,7 @@ import {
   storedAgentIdOf,
   type ColdNode
 } from '../lib/coldOpen'
+import { geometryMutations } from '../lib/storedGeometry'
 import { stampOpenedBy, withOpenedBy } from '../lib/stationOpener'
 import { installStationNoticeWiring } from '../lib/stationNoticeWiring'
 import { installBoardDispatchReportWiring } from '../lib/boardDispatchReportWiring'
@@ -13336,6 +13337,24 @@ export function Canvas() {
       // against a stranger's project.
       const ctlNodes = (): CanvasNode[] =>
         offCanvas ? offCanvas.nodes : (nodesRef.current as CanvasNode[])
+      // The write twin of `ctlNodes`, for the structural verbs (group/ungroup/move/arrange/align)
+      // that compute a whole new node array. On screen it is the live write it always was. Off
+      // canvas it writes only what changed into the owning project's stored nodes — geometry of
+      // the nodes that moved, plus a frame created or dissolved (lib/storedGeometry.ts) — through
+      // our own store writer, and persists it. The layout was computed from the persisted sizes,
+      // which is what an unmeasured canvas has.
+      const commitCtlNodes = (next: CanvasNode[]): void => {
+        if (!offCanvas) {
+          setNodes(next)
+          markDirty()
+          return
+        }
+        const st = useProjects.getState()
+        const stored = st.getProject(offCanvas.project.id)?.nodes ?? []
+        st.applyOwnNodeMutations(offCanvas.project.id, geometryMutations(stored, next))
+        offCanvas.nodes = next
+        void writeDisk()
+      }
       // `linkEndpointOf` off canvas. Same answer, read out of the hydrated array: the live one
       // holds another project's nodes, so every id would resolve to null (or, worse, to a
       // same-named node over there).
@@ -13970,7 +13989,7 @@ export function Canvas() {
               }
             }
             const ids = (args.nodes ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-            const live = nodesRef.current as CanvasNode[]
+            const live = ctlNodes()
             const resolvable = ids.filter((id) => live.some((node) => node.id === id))
             if (resolvable.length === 0) {
               reply({ ok: false, error: 'group: none of the given node ids exist' })
@@ -14000,8 +14019,7 @@ export function Canvas() {
                   : nd
               )
             }
-            setNodes(grouped)
-            markDirty()
+            commitCtlNodes(grouped)
             const skippedGrouped = ids.length - resolvable.length
             const groupNote = skippedGrouped > 0 ? ` (${skippedGrouped} unknown id(s) skipped)` : ''
             reply({
@@ -14013,15 +14031,14 @@ export function Canvas() {
           }
           case 'ungroup': {
             const gid = (args.group ?? '').trim()
-            const live = nodesRef.current as CanvasNode[]
+            const live = ctlNodes()
             const frame = live.find((nd) => nd.id === gid && nd.type === 'group')
             if (!frame) {
               reply({ ok: false, error: `ungroup: --group names no group frame (${gid || 'missing'})` })
               return
             }
             const freed = live.filter((nd) => nd.parentId === gid).map((nd) => nd.id)
-            setNodes(ungroupNodes(live, gid))
-            markDirty()
+            commitCtlNodes(ungroupNodes(live, gid))
             reply({ ok: true, message: `ungrouped ${gid}, freed ${freed.length} node(s)`, result: { freed } })
             return
           }
@@ -14031,7 +14048,7 @@ export function Canvas() {
             // deliberately won't do. `reparentNode` keeps each node's ROOT-space position fixed
             // and refuses a cycle (a frame into itself or its own descendant).
             const ids = (args.nodes ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-            const live = nodesRef.current as CanvasNode[]
+            const live = ctlNodes()
             const rawTarget = (args.group ?? '').trim().toLowerCase()
             const toTop = !rawTarget || rawTarget === 'top' || rawTarget === 'none' || rawTarget === 'ungrouped'
             const targetGroup = toTop ? null : args.group!.trim()
@@ -14063,8 +14080,7 @@ export function Canvas() {
             for (const g of affected) {
               if (next.some((n) => n.parentId === g)) next = fitGroupToChildren(next, g, snapGridNow())
             }
-            setNodes(next)
-            markDirty()
+            commitCtlNodes(next)
             const where = targetGroup ? `into ${targetGroup}` : 'to the top level'
             reply({ ok: true, message: `moved ${moved.length} node(s) ${where}`, result: { moved, group: targetGroup } })
             return
@@ -14072,7 +14088,7 @@ export function Canvas() {
           case 'arrange':
           case 'align': {
             const ids = (args.nodes ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-            const live = nodesRef.current as CanvasNode[]
+            const live = ctlNodes()
             const edge = (['left', 'right', 'top', 'bottom', 'hcenter', 'vcenter'] as const).find((e2) => e2 === args.edge)
             if (verb === 'align' && !edge) {
               reply({ ok: false, error: 'align requires --edge left|right|top|bottom|hcenter|vcenter' })
@@ -14100,8 +14116,7 @@ export function Canvas() {
             // Tidying a frame's children usually leaves the frame oversized (it was sized to their
             // old scattered spots) — shrink it to hug the new layout. Top-level sets have no frame.
             if (container) next = fitGroupToChildren(next, container, snapGridNow())
-            setNodes(next)
-            markDirty()
+            commitCtlNodes(next)
             const how = verb === 'arrange' ? `as ${layout}` : `to ${edge}`
             reply({ ok: true, message: `${verb === 'arrange' ? 'arranged' : 'aligned'} ${ids.length} node(s) ${how}`, result: { count: ids.length, container } })
             return

@@ -393,24 +393,26 @@ describe('the off-screen disposition table (the verbs that used to travel)', () 
     }
   })
 
-  it('the structural verbs refuse, and each says WHY in its own words', () => {
+  it('the structural layout verbs are answered from the stored nodes (persisted sizes)', () => {
+    for (const v of ['group', 'ungroup', 'move', 'arrange', 'align']) {
+      expect(offScreenDisposition(v), v).toEqual({ kind: 'stored-node' })
+    }
+  })
+
+  it('the verbs that still refuse each say WHY in their own words', () => {
     // A refusal an agent can act on beats hijacking the human's screen. The reasons are per verb
-    // because the caller's next move differs: an `arrange` can wait for the human, a `branch`
+    // because the caller's next move differs: a `verify` can wait for the human, a `branch`
     // cannot happen at all until that terminal is mounted.
     const why = (v: string) => {
       const d = offScreenDisposition(v)
       expect(d.kind, v).toBe('refuse')
       return d.kind === 'refuse' ? d.why : ''
     }
-    expect(why('arrange')).toMatch(/measured/)
-    expect(why('group')).toMatch(/measured/)
     expect(why('branch')).toMatch(/parks the original/)
     expect(why('verify')).toMatch(/live canvas/)
+    expect(why('spawn-team')).toMatch(/live canvas/)
     expect(why('open-worktree')).toMatch(/worktree store/)
     expect(why('browser')).toMatch(/webview/)
-    // …and no two structural verbs share a copy-pasted sentence that names the wrong mechanism.
-    expect(why('move')).toContain('reparenting')
-    expect(why('align')).toContain('aligning')
   })
 
   it('an unknown verb refuses — the fail-closed direction', () => {
@@ -435,9 +437,9 @@ describe('the off-screen disposition table (the verbs that used to travel)', () 
   })
 
   it('the refusal sentence names the project, the reason and the fact that nothing happened', () => {
-    const msg = offScreenRefusal('group', 'web-app')
-    expect(msg.startsWith('group: project "web-app" is not on screen')).toBe(true)
-    expect(msg).toContain('measured node sizes')
+    const msg = offScreenRefusal('branch', 'web-app')
+    expect(msg.startsWith('branch: project "web-app" is not on screen')).toBe(true)
+    expect(msg).toContain('parks the original session')
     expect(msg).toContain('Open that project and run this again')
     expect(msg).toContain('nothing was changed')
   })

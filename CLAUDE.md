@@ -3780,9 +3780,19 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `STORE_ANSWERED_VERBS` (no canvas at either end), `COLD_OPENABLE_VERBS` (a session node, armed
   and inert until shown), `OFF_CANVAS_VERBS` (a display node, complete when written),
   `STORED_NODE_VERBS` (`write`/`close`/`rename`/`color`/`link`/`board`/`assign` — each reaches a
-  pane, a store writer or the board file), and `OFF_SCREEN_REFUSALS` (the eleven that genuinely
+  pane, a store writer or the board file — plus the five layout verbs
+  `group`/`ungroup`/`move`/`arrange`/`align`), and `OFF_SCREEN_REFUSALS` (the six that genuinely
   need live React Flow, each with its own reason in the refusal the agent reads). A refusal an
-  agent can act on is strictly better than hijacking someone's screen. Load-bearing details:
+  agent can act on is strictly better than hijacking someone's screen. **The layout verbs off
+  screen lay out from PERSISTED sizes** (nothing there was measured; a node is born at a persisted
+  default size and a user resize is persisted too, so the gap is at most the overlap a live canvas
+  can already show) and write back through `commitCtlNodes` → `geometryMutations`
+  (`renderer/lib/storedGeometry.ts`): only the geometry that changed (`position`/`size`/`parentId`/
+  `group`) is patched onto the STORED node, a created frame is added whole, only a frame is ever
+  removed, and the batch lands in one `applyOwnNodeMutations` re-sorted parents-first. Never write
+  the hydrated array back whole: that round-trips every node through the serializers. They were
+  refusals until 2026-09-30; an orchestrator that could open a team off screen but never frame it
+  was the report that moved them. Load-bearing details:
   (1) **`ctlNodes()` is the one name for "the node array this call acts on"** — on screen it is
   `nodesRef.current` verbatim, off canvas it is the owning project's serialized nodes hydrated by
   `nodeStatesToFlow`. A verb body that resolves `--node` against the live array while answering
