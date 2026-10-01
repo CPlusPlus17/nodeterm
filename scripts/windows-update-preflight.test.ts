@@ -24,11 +24,14 @@ const staged: Process = {
 }
 function probe(processes: Process[], fail = false, directory = 'C:\\Apps\\nodeterm'): number | null {
   // Override only the query, in a fresh PowerShell process. Never enumerate or stop real sessions.
+  // Emit the parsed rows through a variable: Windows PowerShell 5.1's ConvertFrom-Json writes a
+  // JSON array as ONE pipeline object, so a multi-process fixture reached the script as a single
+  // array-valued "process" (real Get-CimInstance emits one object per process).
   const fixture = path.join(temp, 'processes.json')
   fs.writeFileSync(fixture, JSON.stringify(processes))
   const quote = (s: string): string => "'" + s.replace(/'/g, "''") + "'"
   const command = `function Get-CimInstance { param($ClassName, $ErrorAction)
-    ${fail ? "throw 'fixture query denied'" : `Get-Content -Raw ${quote(fixture)} | ConvertFrom-Json`}
+    ${fail ? "throw 'fixture query denied'" : `$rows = Get-Content -Raw ${quote(fixture)} | ConvertFrom-Json; $rows`}
   }; & ${quote(script)} -InstallDirectory ${quote(directory)}; exit $LASTEXITCODE`
   return spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], {
     timeout: 15000
