@@ -93,6 +93,15 @@ verify and stop any remaining host. Never recommend **End session** (it deletes 
 resume depends on supported, saved conversation history; it does not preserve running tasks.
 See `docs/windows-session-host.md` for the user-controlled preparation/recovery steps and limits.
 
+**Prepare for update** (#829 step 2, Windows only): ⌘K / the update card run
+`components/PrepareUpdateDialog.tsx` over the pure `lib/updatePrep.ts` plan. It refuses while any
+session's agent is working or waiting on the user (renderer store OR core mirror — unmounted nodes
+have no renderer state), asks idle mounted agents to `/exit` through `registerAgentUpdateExit`,
+confirms what still stops (Cancel focused), then sends the host's `shutdown` command and quits only
+once the host process is confirmed gone. `shutdown` is a negotiated hello feature: never send it to
+a host that did not advertise it, and never add a taskkill/name-kill fallback — an older host gets
+the manual steps. The flow never deletes a node. Server Edition: degraded stub (`unsupported`).
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not

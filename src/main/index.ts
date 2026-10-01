@@ -1,3 +1,4 @@
+import { registerUpdatePrepIpc } from './update-prep'
 import { createRemoteContextEnsure } from '../core/remote-context-ensure'
 import { isKnownRemoteCodexAccount } from '../core/remote-ssh/codex-home'
 import { createRemoteCodexContext, type RemoteCodexContextTarget } from '../core/remote-ssh/codex-context'
@@ -2190,6 +2191,18 @@ app.whenReady().then(async () => {
   initUpdater(() => {
     quitting = true
     skipQuitConfirmation = true
+  })
+  // Prepare-for-update (Windows session host, issue #829). The user confirmed the whole flow in
+  // its own dialog, so the quit at its end skips the ordinary quit confirmation, like the
+  // restart-to-update above.
+  registerUpdatePrepIpc({
+    mainWebContents: () => getMainWindow()?.webContents,
+    persistentSessions: () => settingsStore.get().tmuxEnabled !== false,
+    quit: () => {
+      quitting = true
+      skipQuitConfirmation = true
+      app.quit()
+    }
   })
   // Mirror live agent status to <userData>/agent-status.json for the external mobile host agent.
   initAgentStatusMirror()

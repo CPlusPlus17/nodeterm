@@ -418,7 +418,28 @@ path prefix without a directory boundary. Another installation (even a sibling d
 name begins with this installation's name) can therefore block an update. The new preflight must
 cover those legacy targets before invoking the old executable; it never stops them on your behalf.
 
-To update while keeping your saved canvas:
+**The in-app way (nodeterm with the `shutdown` host feature):** open the command palette
+(Ctrl+K) → **Prepare for update…**, or the button on the update card. It:
+
+1. lists every session the host holds — every project, closed ones too — and waits while any agent
+   is working or waiting for your answer (each listed with a **Go** button; **Check again** when
+   it is done);
+2. asks each idle agent whose terminal is open on the canvas to exit normally (`/exit`, `/quit`;
+   Gemini's bare `/quit`, never `--delete`) so its conversation is saved, and reports any that did
+   not;
+3. shows what will still stop — shells and anything running in them (unsaved work there is lost),
+   agents it could not exit — and asks you to confirm (Cancel is the default);
+4. sends the host its `shutdown` command: the host ends every session with its ordinary kill path,
+   replies, removes its state files and exits. nodeterm confirms the process is gone, then quits
+   (optionally opening the download page).
+
+Canvas nodes are kept; on the next launch every terminal cold-starts and agents resume with
+`--resume` where their CLI and saved history allow. If the host cannot end a session it says which
+and keeps running — nothing is quit. A host started by an older nodeterm does not have the
+command; the dialog then shows the manual steps below. nodeterm never kills the host process
+itself. The installer's own refusal is unchanged.
+
+To update by hand (older host, or the in-app flow did not finish), while keeping your saved canvas:
 
 1. Cancel the installer and reopen nodeterm if you already quit it. Save work in every local
    terminal and agent, including closed/other projects and sessions accessed from a phone.

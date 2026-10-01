@@ -74,6 +74,12 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.projectSetupConsentSubmit,
   IPC.projectSetupRequestTrust,
   IPC.ptyLaunchHeadless,
+  // Prepare-for-update ends EVERY session on this machine's session host and quits the app. Only
+  // the host's own user may do that. Raw ipcMain handlers (no peer reaches them); listed here too
+  // so moving them onto the platform table later cannot quietly open them.
+  IPC.appUpdatePrepInspect,
+  IPC.appUpdatePrepShutdown,
+  IPC.appUpdatePrepQuit,
   // A board comment that @mentions a session types into that session's pane. Only the host's own
   // user may do that: a relay peer's comment is display-only. Registered with a raw ipcMain handler
   // (so no peer can reach it at all); listed here too, so moving it onto the platform table later

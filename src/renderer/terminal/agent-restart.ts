@@ -666,6 +666,26 @@ export function agentPauseFns(nodeId: string): AgentPauseFns | undefined {
   return pauseFns.get(nodeId)
 }
 
+/** Prepare-for-update (Windows session host, issue #829): one mounted node's "quit the CLI cleanly
+ *  so the conversation is saved" closure. Its own registry rather than `agentPauseFns`: a pause
+ *  marks the node PAUSED, which would stop the cold restore from resuming it after the update —
+ *  the opposite of what the update flow promises. `'exited'` also answers a node whose CLI had
+ *  already left the pane (nothing to do). */
+export type AgentUpdateExitFn = () => Promise<ExitPhaseOutcome>
+
+const updateExitFns = new Map<string, AgentUpdateExitFn>()
+
+export function registerAgentUpdateExit(nodeId: string, fn: AgentUpdateExitFn): () => void {
+  updateExitFns.set(nodeId, fn)
+  return () => {
+    if (updateExitFns.get(nodeId) === fn) updateExitFns.delete(nodeId)
+  }
+}
+
+export function agentUpdateExitFn(nodeId: string): AgentUpdateExitFn | undefined {
+  return updateExitFns.get(nodeId)
+}
+
 /** TEST ONLY (house pattern: webgl-budget's `__resetWebglBudgetForTests`): the maps above are
  *  module-global, so a test that leaves a restart in flight would otherwise refuse the next
  *  test's restart of the same node id. */
@@ -674,6 +694,7 @@ export function __resetAgentRestartForTests(): void {
   restartFns.clear()
   hibernateFns.clear()
   pauseFns.clear()
+  updateExitFns.clear()
 }
 
 // ── Bulk run: who gets restarted, and how the run is summed up ──────────────────────────

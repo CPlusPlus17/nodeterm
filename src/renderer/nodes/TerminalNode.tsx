@@ -184,6 +184,7 @@ import {
   queryPaneWithin,
   registerAgentHibernate,
   registerAgentPause,
+  registerAgentUpdateExit,
   registerAgentRestart,
   clearEnvEligibility,
   restartEligibility,
@@ -4757,6 +4758,35 @@ export function TerminalNode({
         return 'paused'
       })
     })
+    // Prepare-for-update (Windows session host, issue #829): ask an idle agent to quit cleanly so
+    // its conversation is saved before the host ends every session. The same exit half as Pause,
+    // with the same refusals (busy, not resumable, no session id, CLI not in this pane), but it
+    // records the node as SLEEPING rather than PAUSED: the update ends the session anyway, and on
+    // the next launch the cold restore (`fresh` clears `hibernated`) resumes it with `--resume`.
+    const unregisterUpdateExit = registerAgentUpdateExit(
+      id,
+      guardConcurrentRestart(id, async (): Promise<ExitPhaseOutcome> => {
+        const st = useAgentStatus.getState().byId[id]
+        const agentSessionId = st?.sessionId
+        const gate = restartEligibility(agentId, st?.state, agentSessionId)
+        if (!gate.ok || !agentId || !agentSessionId || !restartTarget()) return 'not-eligible'
+        if (!agentProcessInPane(agentId, st)) return 'exited'
+        if (decideHibernateExit(await readPaneOwner(), agentId, paneBinaries()) !== 'agent-owns-pane')
+          return 'not-eligible'
+        const outcome = await performExitPhase({
+          agentId,
+          sessionId: agentSessionId,
+          io: restartIo,
+          paneCommand: () => api.pty.paneCommand(id),
+          isLive: restartTarget
+        })
+        if (outcome === 'exited') {
+          useAgentStatus.getState().setHibernatedContext(id, captureWakeContext(await readPaneOwner()))
+          useAgentStatus.getState().setHibernated(id, true)
+        }
+        return outcome
+      })
+    )
 
     // Coalesce observer bursts: dragging the NodeResizer fires per animation frame, and every
     // call is a full cell-geometry measure + a resize IPC → node-pty → tmux (which redraws the
@@ -4940,6 +4970,7 @@ export function TerminalNode({
       // node as unwired (`planHibernation` refuses it) and the wake finds nothing to resume into.
       unregisterHibernate()
       unregisterPause()
+      unregisterUpdateExit()
       observer.disconnect()
       rootObserver.disconnect()
       // The visibility observer is NOT disconnected here — it is mount-stable and must outlive an

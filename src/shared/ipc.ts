@@ -329,6 +329,10 @@ export const IPC = {
   appGetVersion: 'app:get-version',
   appUserDataDir: 'app:user-data-dir',
   appUpdatePolicy: 'app:update-policy',
+  // Prepare-for-update (Windows, issue #829). Raw ipcMain handlers, main-window senders only.
+  appUpdatePrepInspect: 'app:update-prep-inspect',
+  appUpdatePrepShutdown: 'app:update-prep-shutdown',
+  appUpdatePrepQuit: 'app:update-prep-quit',
   licenseActivate: 'license:activate',
   licenseDeactivate: 'license:deactivate',
   licenseStatus: 'license:status',

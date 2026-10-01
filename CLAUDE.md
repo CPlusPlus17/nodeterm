@@ -8573,6 +8573,36 @@ verify and stop any remaining host. Never recommend **End session** (it deletes 
 resume depends on supported, saved conversation history; it does not preserve running tasks.
 See `docs/windows-session-host.md` for the user-controlled preparation/recovery steps and limits.
 
+**Prepare for update (#829 step 2).** The in-app answer to the refusal above, Windows only.
+Rules a refactor must not undo:
+- **The host's `shutdown` command is the only thing that stops the host**, and only on a connection
+  that negotiated the `shutdown` hello feature (`SESSION_HOST_FEATURES`). An older host answers
+  `host-unsupported` and the dialog shows `MANUAL_UPDATE_STEPS` — never a taskkill/name-based
+  fallback from the app. The host ends every session through the SAME `handleKill` path (taskkill
+  of the tree, then node-pty's onExit as proof), refuses attach/attachExisting/executeLaunch while
+  it runs, bounds each kill at 20 s, and on ANY unconfirmed kill answers `ok:false` naming the
+  sessions and keeps serving. It exits only after the success reply is flushed (`socket.end`), and
+  removes its state/token files. It touches no node metadata; nodes cold-restore next launch.
+- **Inspection never launches a host** (`SessionHostClient.inspectForUpdate` /
+  `shutdownForUpdate` read the published state first; absent = `no-host`). Once `shutdown` is
+  sent the client latches `shutDownForUpdate` so a dropped connection cannot reconnect into a
+  freshly launched host that re-locks the install dir; only the host's explicit refusal (or a frame
+  provably never sent) clears it. "Shut down" means reply AND state file gone AND pid dead.
+- **Busy blocks, from either source**: `planUpdatePrep` (`renderer/lib/updatePrep.ts`, pure)
+  refuses on working / waiting / blocked / a held question or approval ticket, read from the
+  renderer store AND core's mirror (`app:update-prep-inspect` carries `mirror` per session) — an
+  unmounted node's renderer state is cleared, so the mirror is the only witness for closed/other
+  projects. Only a MOUNTED node can be asked to quit (`registerAgentUpdateExit` in TerminalNode:
+  Pause's exit half with its refusals, marking SLEEPING not PAUSED so cold restore resumes it);
+  every other agent is disclosed as "stopped without a clean exit".
+- The confirm is a danger `ConfirmDialog` with `enterConfirms={false}` (Cancel focused) and says
+  plainly that shells and their unsaved work stop and that nodes are kept. Never route anything
+  through End session / node deletion.
+- IPC (`app:update-prep-*`) is raw `ipcMain`, main-window senders only, and in
+  `HOST_ONLY_CHANNELS`. Server Edition: the bridge stub answers `unsupported` (Linux tmux, no
+  installer; a browser must never end every session on the server). Mobile: N/A — a phone cannot
+  authorize an update shutdown; it sees its sessions end like any other end.
+
 **Follow-ups, in order:** code signing, then Windows auto-update wiring (electron-updater NSIS leg
 + `latest.yml` on the nodeterm.dev feed — blocked on signing: an unsigned auto-update is a
 downgrade in trust), and the fork's PE-identity polish (electron-builder leaves `OriginalFilename`

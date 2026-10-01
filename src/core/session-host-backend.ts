@@ -8,7 +8,9 @@ import type { TextDeliveryResult } from '../shared/text-delivery'
 import { platform } from './platform'
 import {
   SessionHostClient,
-  SessionHostProtocolCompatibilityError
+  SessionHostProtocolCompatibilityError,
+  type HostShutdownOutcome,
+  type HostUpdateInspection
 } from './session-host-client'
 import { SessionHostPty } from './session-host-pty'
 import type { ExecuteLaunchResult, SessionHostSpawnOptions } from '../session-host/protocol'
@@ -140,4 +142,14 @@ export async function sessionHostHasSession(name: string): Promise<boolean> {
  *  (`listNodetermSessions` — the relay host's session browser). */
 export async function sessionHostListSessions(): Promise<string[]> {
   return getClient().listSessions()
+}
+
+/** Prepare-for-update (issue #829): what the running host holds, without ever launching one. */
+export async function sessionHostInspectForUpdate(): Promise<HostUpdateInspection> {
+  return getClient().inspectForUpdate()
+}
+
+/** Prepare-for-update (issue #829): ask the running host to end every session and exit. */
+export async function sessionHostShutdownForUpdate(): Promise<HostShutdownOutcome> {
+  return getClient().shutdownForUpdate()
 }
