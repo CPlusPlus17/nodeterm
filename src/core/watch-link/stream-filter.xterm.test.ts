@@ -107,6 +107,21 @@ function checkNothingHiddenReachesOutput(cps: string[], join: number, midStream:
 }
 
 describe('createStreamFilter against xterm 5.5', () => {
+  // R66: the copied blocks carry xterm.js's MIT notice in full — every line of the installed package's
+  // LICENSE, in order, in the fixture's header comment.
+  it("the fixture carries xterm's MIT permission notice, verbatim from the installed LICENSE", () => {
+    const fixture = read(join(__dirname, '__fixtures__', 'xterm-vt500.ts'))
+    const header = fixture.slice(0, fixture.indexOf('// ---- BEGIN verbatim'))
+    const comment = header
+      .split('\n')
+      .map((l) => l.replace(/^\/\/ ?/, ''))
+      .join('\n')
+    const license = read(join(XTERM_PARSER, '..', '..', '..', 'LICENSE')).trim()
+    expect(license).toMatch(/^Copyright \(c\)/)
+    expect(license).toContain('Permission is hereby granted')
+    expect(comment).toContain(license)
+  })
+
   it('the model is the installed xterm parser table, verbatim', () => {
     const fixture = read(join(__dirname, '__fixtures__', 'xterm-vt500.ts'))
     const constants = read(join(XTERM_PARSER, 'Constants.ts'))
