@@ -8458,6 +8458,17 @@ invariants:
   even when the kill or the join fails, because that would be a second writer. `team resume` re-asks
   with the core's exact `sessionVerdict` (the folded `sessionExists` prefix-matches): present ⇒
   `already-running`, unknown ⇒ refused, so a re-run never doubles an agent.
+- **What may be handed over is read twice, and only what the user confirmed may change nothing.**
+  Busy is `working`, `blocked` AND `waiting` (a Codex approval prompt and an open AskUserQuestion
+  are `waiting`); an agent only the status store knows (launched by hand) counts as busy
+  (`ShareNode.liveAgentId`) but is never resumed — resume stays on `node.agentId`, so a stale status
+  agent cannot make the server type `claude --resume`. A terminal attached to another host
+  (`otherHost`, `sshConnectionIdForProject`) refuses the share by title: its kill on the project's
+  host would read "gone" and leave it running elsewhere. The orchestrator re-reads the canvas
+  (`ShareDeps.canvas()`, which commits the live canvas first) right before the mark: a busy agent or
+  a changed terminal SET refuses with nothing changed, and the handover then uses that read. The
+  flush check compares EVERY node id of the project (notes, frames) with the host's file, read
+  again at the flush, because the server adopts that file.
 - **Single writer: `handedOffTo` (machine-local, index entry only, never in `project.json`).** The
   in-progress mark (`{at}`, no `hostId`) is set and SAVED before the mirror flush, not at the close:
   a save between the flush and the close would otherwise queue a throttled mirror write that lands

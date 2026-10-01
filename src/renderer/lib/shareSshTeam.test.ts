@@ -6,16 +6,40 @@ import {
   INSTALL_CANCELLED,
   INSTALL_REPROBE_ATTEMPTS,
   INSTALL_REPROBE_GAP_MS,
+  BUSY_REFUSAL,
+  CANVAS_CHANGED,
+  otherHostRefusal,
+  busyTerminals,
+  type ShareCanvas,
   type ShareDeps,
-  type ShareInput
+  type ShareInput,
+  type ShareNode
 } from './shareSshTeam'
 
 const READY = { ok: true, probe: { adoptCwd: '/home/alice/proj', teamExists: false } as never, plan: { kind: 'ready' }, paneCommands: { 'term-p': 'npm' } } as const
 const BOOT = { ok: true, result: { hostId: 'H', projectId: 'project-9', projectName: 'proj', joinCode: 'nodeterm://join/CODE', hosting: 'up', created: { team: true, owner: true, project: true, share: true } } } as const
 
-function setup(o: Partial<Record<'probe' | 'flush' | 'bootstrap' | 'kill' | 'resume', unknown>> & { confirm?: boolean; install?: boolean } = {}) {
+const TERMS: ShareNode[] = [
+  { nodeId: 'term-a', title: 'Claude', agentId: 'claude', sessionId: 's-1', state: 'done' },
+  { nodeId: 'term-p', title: 'dev server' },
+  { nodeId: 'term-x', title: 'Work account', agentId: 'claude', sessionId: 's-2', accountId: 'acct' }
+]
+const canvasOf = (terminals: ShareNode[], extraNodeIds: string[] = []): ShareCanvas => ({
+  terminals,
+  nodeIds: [...terminals.map((n) => n.nodeId), ...extraNodeIds]
+})
+
+function setup(
+  o: Partial<Record<'probe' | 'flush' | 'bootstrap' | 'kill' | 'resume', unknown>> & {
+    confirm?: boolean
+    install?: boolean
+    terminals?: ShareNode[]
+  } = {}
+) {
   const log: string[] = []
+  const terminals = o.terminals ?? TERMS
   const deps: ShareDeps = {
+    canvas: () => canvasOf(terminals),
     api: {
       probe: async () => (log.push('probe'), (o.probe ?? READY) as never),
       install: async () => (log.push('install'), { ok: true, exitCode: 0 }),
@@ -37,16 +61,9 @@ function setup(o: Partial<Record<'probe' | 'flush' | 'bootstrap' | 'kill' | 'res
   }
   return { deps, log }
 }
-const INPUT: ShareInput = {
-  projectId: 'ssh-1', projectName: 'proj', host: 'box', user: 'alice', permissionMode: 'auto',
-  terminals: [
-    { nodeId: 'term-a', title: 'Claude', agentId: 'claude', sessionId: 's-1', state: 'done' },
-    { nodeId: 'term-p', title: 'dev server' },
-    { nodeId: 'term-x', title: 'Work account', agentId: 'claude', sessionId: 's-2', accountId: 'acct' }
-  ]
-}
+const INPUT: ShareInput = { projectId: 'ssh-1', projectName: 'proj', host: 'box', user: 'alice', permissionMode: 'auto' }
 /** A second resumable agent, for the cases that need more than one node in the resume request. */
-const TERM_B: ShareInput['terminals'][number] = { nodeId: 'term-b', title: 'Codex', agentId: 'codex', sessionId: 's-3', state: 'done' }
+const TERM_B: ShareNode = { nodeId: 'term-b', title: 'Codex', agentId: 'codex', sessionId: 's-3', state: 'done' }
 const FLUSH_WITH_B = { ok: true, nodeIds: ['term-a', 'term-p', 'term-x', 'term-b'] }
 
 describe('runShare', () => {
@@ -67,26 +84,75 @@ describe('runShare', () => {
     expect(log).not.toContain('restore')
   })
   it('refuses while an agent is working or blocked, before touching the host', async () => {
-    const { deps, log } = setup()
-    const out = await runShare(deps, { ...INPUT, terminals: [{ ...INPUT.terminals[0], state: 'working' }] })
+    const { deps, log } = setup({ terminals: [{ ...TERMS[0], state: 'working' }] })
+    const out = await runShare(deps, INPUT)
     expect(out).toMatchObject({ kind: 'refused', busy: [{ nodeId: 'term-a' }] })
     expect(log).toEqual([])
   })
   it('refuses a blocked agent too', async () => {
-    const { deps, log } = setup()
-    const out = await runShare(deps, { ...INPUT, terminals: [{ ...INPUT.terminals[0], state: 'blocked' }, INPUT.terminals[1]] })
+    const { deps, log } = setup({ terminals: [{ ...TERMS[0], state: 'blocked' }, TERMS[1]] })
+    const out = await runShare(deps, INPUT)
     expect(out).toEqual({
       kind: 'refused',
       reason: 'Wait for these agents to finish (or stop them), then share again.',
-      busy: [{ ...INPUT.terminals[0], state: 'blocked' }]
+      busy: [{ ...TERMS[0], state: 'blocked' }]
     })
     expect(log).toEqual([])
   })
-  it('refuses more terminals than one share handles, before touching the host', async () => {
-    const { deps, log } = setup()
-    const terminals = Array.from({ length: 201 }, (_, i) => ({ nodeId: `t-${i}`, title: `T${i}` }))
-    expect(await runShare(deps, { ...INPUT, terminals })).toMatchObject({ kind: 'refused', reason: expect.stringContaining('more than 200') })
+  it('refuses an agent waiting on a question or an approval (a Codex prompt, an AskUserQuestion)', async () => {
+    const { deps, log } = setup({ terminals: [{ ...TERMS[0], state: 'waiting' }, TERMS[1]] })
+    expect(await runShare(deps, INPUT)).toEqual({ kind: 'refused', reason: BUSY_REFUSAL, busy: [{ ...TERMS[0], state: 'waiting' }] })
     expect(log).toEqual([])
+  })
+  it('refuses more terminals than one share handles, before touching the host', async () => {
+    const terminals = Array.from({ length: 201 }, (_, i) => ({ nodeId: `t-${i}`, title: `T${i}` }))
+    const { deps, log } = setup({ terminals })
+    expect(await runShare(deps, INPUT)).toMatchObject({ kind: 'refused', reason: expect.stringContaining('more than 200') })
+    expect(log).toEqual([])
+  })
+  it('refuses a terminal that runs on another host, naming it, before touching the host', async () => {
+    const { deps, log } = setup({ terminals: [...TERMS, { nodeId: 'term-o', title: 'prod logs', otherHost: true }] })
+    expect(await runShare(deps, INPUT)).toEqual({ kind: 'refused', reason: otherHostRefusal(['prod logs']) })
+    expect(otherHostRefusal(['prod logs', 'db'])).toBe(
+      'These terminals run on another host: prod logs, db. Close them or move them out of this project, then share again.'
+    )
+    expect(log).toEqual([])
+  })
+  it('re-reads the canvas right before the mark: a turn that started during the install refuses, nothing changed', async () => {
+    const { deps, log } = setup()
+    let reads = 0
+    deps.canvas = () => (reads++ === 0 ? canvasOf(TERMS) : canvasOf([{ ...TERMS[0], state: 'working' }, TERMS[1], TERMS[2]]))
+    expect(await runShare(deps, INPUT)).toMatchObject({ kind: 'refused', reason: BUSY_REFUSAL, busy: [{ nodeId: 'term-a' }] })
+    expect(log).toContain('prepare')
+    expect(log.some((l) => /^(mark|flush|release|restore|bootstrap|kill)/.test(l))).toBe(false)
+  })
+  it('re-reads the canvas right before the mark: a terminal added (or removed) meanwhile refuses, nothing changed', async () => {
+    for (const later of [[...TERMS, { nodeId: 'term-new', title: 'new' }], TERMS.slice(0, 2)]) {
+      const { deps, log } = setup()
+      let reads = 0
+      deps.canvas = () => (reads++ === 0 ? canvasOf(TERMS) : canvasOf(later))
+      expect(await runShare(deps, INPUT)).toEqual({ kind: 'refused', reason: CANVAS_CHANGED })
+      expect(log.some((l) => /^(mark|flush|release|restore|bootstrap|kill)/.test(l))).toBe(false)
+    }
+    expect(CANVAS_CHANGED).toBe('The canvas changed while preparing the share. Nothing was changed; share again.')
+  })
+  it('resumes with the session id of the read right before the mark (a /clear during the install)', async () => {
+    const { deps, log } = setup()
+    const seen: string[] = []
+    let reads = 0
+    deps.canvas = () => (reads++ === 0 ? canvasOf(TERMS) : canvasOf([{ ...TERMS[0], sessionId: 's-new' }, TERMS[1], TERMS[2]]))
+    deps.api.resume = async (_p, _sid, sessions) => (seen.push(...sessions.map((e) => e.sessionId)), { ok: true, results: sessions.map((e) => ({ nodeId: e.nodeId, status: 'resumed' as const })) })
+    expect(await runShare(deps, INPUT)).toMatchObject({ kind: 'shared' })
+    expect(seen).toEqual(['s-new'])
+    expect(log).toContain('mark')
+  })
+  it('the flush check covers every node of the project, not only terminals', async () => {
+    const { deps, log } = setup()
+    deps.canvas = () => canvasOf(TERMS, ['sticky-1'])
+    const out = await runShare(deps, INPUT)
+    expect(out).toMatchObject({ kind: 'failed', step: 'releasing', error: expect.stringContaining('(1 node missing)') })
+    expect(log).not.toContain('release')
+    expect(log.indexOf('restore')).toBeGreaterThan(log.indexOf('flush'))
   })
   it('a probe failure fails at probing, and a refusing plan is a refusal; neither asks to confirm', async () => {
     const failed = setup({ probe: { ok: false, error: 'not connected' } })
@@ -103,7 +169,7 @@ describe('runShare', () => {
   it('a canvas missing on the host stops BEFORE release and clears the pending mark', async () => {
     const { deps, log } = setup({ flush: { ok: true, nodeIds: ['term-a'] } })
     const out = await runShare(deps, INPUT)
-    expect(out).toMatchObject({ kind: 'failed', step: 'releasing', reopened: false, error: expect.stringContaining('2 terminals missing') })
+    expect(out).toMatchObject({ kind: 'failed', step: 'releasing', reopened: false, error: expect.stringContaining('2 nodes missing') })
     expect(log).not.toContain('release')
     expect(log).not.toContain('bootstrap')
     expect(log.indexOf('restore')).toBeGreaterThan(log.indexOf('mark'))
@@ -176,7 +242,7 @@ describe('runShare', () => {
     expect(await runShare(deps, INPUT)).toEqual({
       kind: 'failed',
       step: 'releasing',
-      error: 'The canvas on the host is not up to date (1 terminal missing). Try again in a moment.',
+      error: 'The canvas on the host is not up to date (1 node missing). Try again in a moment.',
       reopened: false,
       restoreFailed: true
     })
@@ -286,8 +352,8 @@ describe('runShare', () => {
     expect(await runShare(deps, INPUT)).toMatchObject({ kind: 'shared', resumed: [{ nodeId: 'term-a' }] })
   })
   it('a failed resume reply puts every sent node in notResumed with that error', async () => {
-    const { deps } = setup({ flush: FLUSH_WITH_B, resume: { ok: false, error: 'server busy' } })
-    const out = await runShare(deps, { ...INPUT, terminals: [...INPUT.terminals, TERM_B] })
+    const { deps } = setup({ flush: FLUSH_WITH_B, resume: { ok: false, error: 'server busy' }, terminals: [...TERMS, TERM_B] })
+    const out = await runShare(deps, INPUT)
     expect(out).toMatchObject({
       kind: 'shared',
       resumed: [],
@@ -299,8 +365,8 @@ describe('runShare', () => {
     })
   })
   it('a node the resume reply leaves out is reported as unanswered, not resumed', async () => {
-    const { deps } = setup({ flush: FLUSH_WITH_B, resume: { ok: true, results: [{ nodeId: 'term-a', status: 'resumed' }] } })
-    const out = await runShare(deps, { ...INPUT, terminals: [...INPUT.terminals, TERM_B] })
+    const { deps } = setup({ flush: FLUSH_WITH_B, resume: { ok: true, results: [{ nodeId: 'term-a', status: 'resumed' }] }, terminals: [...TERMS, TERM_B] })
+    const out = await runShare(deps, INPUT)
     expect(out).toMatchObject({ kind: 'shared', resumed: [{ nodeId: 'term-a' }] })
     expect((out as { notResumed: unknown[] }).notResumed).toContainEqual({
       node: expect.objectContaining({ nodeId: 'term-b' }),
@@ -395,6 +461,19 @@ describe('runShare', () => {
   })
 })
 
+describe('busyTerminals', () => {
+  it('working, blocked and waiting are busy; done and an unknown state are not', () => {
+    const at = (state: ShareNode['state']): ShareNode => ({ nodeId: 'a', title: 'A', agentId: 'codex', state })
+    expect(busyTerminals([at('working'), at('blocked'), at('waiting')])).toHaveLength(3)
+    expect(busyTerminals([at('done'), at(undefined)])).toEqual([])
+  })
+  it('an agent known only to the status store (launched by hand) counts as busy; a plain terminal never does', () => {
+    const hand: ShareNode = { nodeId: 'h', title: 'H', liveAgentId: 'claude', state: 'working' }
+    expect(busyTerminals([hand])).toEqual([hand])
+    expect(busyTerminals([{ nodeId: 'p', title: 'P', state: 'working' }])).toEqual([])
+  })
+})
+
 describe('classifyTerminals', () => {
   it('sorts agents into resumable / manual and plain terminals into stopping (only a non-shell command)', () => {
     const r = classifyTerminals(
@@ -411,6 +490,15 @@ describe('classifyTerminals', () => {
     expect(r.resumable.map((n) => n.nodeId)).toEqual(['a'])
     expect(r.manual.map((m) => m.node.nodeId)).toEqual(['b', 'c', 'd'])
     expect(r.stopping).toEqual([{ node: { nodeId: 'e', title: 'E' }, command: 'npm' }])
+  })
+  it('an agent known only to the status store is never resumed: its pane is a plain terminal that stops', () => {
+    // A stale status agent must never make the server type `claude --resume` into a node created
+    // as a plain terminal.
+    const hand: ShareNode = { nodeId: 'h', title: 'H', liveAgentId: 'claude', sessionId: 's1', state: 'done' }
+    const r = classifyTerminals([hand], { h: 'claude' })
+    expect(r.resumable).toEqual([])
+    expect(r.manual).toEqual([])
+    expect(r.stopping).toEqual([{ node: hand, command: 'claude' }])
   })
 })
 

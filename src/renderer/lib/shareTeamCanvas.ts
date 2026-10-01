@@ -3,29 +3,47 @@
 // over injected canvas operations, so each rule below is pinned by a test rather than by a reading
 // of Canvas.tsx.
 import type { AgentState } from '@shared/agents/normalize'
+import { sshConnectionIdForProject, type SshConnection } from '@shared/ssh'
 import type { CanvasNodeState, HandedOffTo } from '@shared/types'
-import type { ShareDeps, ShareNode } from './shareSshTeam'
+import type { ShareCanvas, ShareDeps, ShareNode } from './shareSshTeam'
+
+type AgentStatusView = Record<string, { sessionId?: string; state?: AgentState; agentId?: string } | undefined>
+/** The project the nodes belong to: its id and, for an SSH project, the server it is bound to. */
+export interface ShareProjectRef {
+  id: string
+  server?: SshConnection
+}
 
 /** The project's terminal nodes as the share sees them. The hook-fed session id wins over the one
- *  persisted at launch: `/clear` and `--fork-session` mint a new one inside the CLI. */
-export function shareTerminals(
-  nodes: CanvasNodeState[],
-  status: Record<string, { sessionId?: string; state?: AgentState } | undefined>
-): ShareNode[] {
+ *  persisted at launch: `/clear` and `--fork-session` mint a new one inside the CLI. The status
+ *  store's agent rides beside the node's own (`liveAgentId`), so a hand-launched agent still counts
+ *  as busy, while only the node's own agent is ever resumed. A remote-tmux node whose endpoint is
+ *  not the project's own (`sshConnectionIdForProject`, the rule every remote consumer uses) is a
+ *  host attachment, marked `otherHost`. */
+export function shareTerminals(nodes: CanvasNodeState[], status: AgentStatusView, project: ShareProjectRef): ShareNode[] {
   return nodes
     .filter((n) => (n.kind ?? 'terminal') === 'terminal')
     .map((n) => {
       const live = status[n.id]
       const sessionId = live?.sessionId ?? n.agentSessionId
+      const otherHost =
+        !!n.ssh && n.sshRemoteTmux === true && sshConnectionIdForProject(project.id, n.ssh, project.server) !== project.id
       return {
         nodeId: n.id,
         title: n.title || n.id,
         ...(n.agentId ? { agentId: n.agentId } : {}),
+        ...(live?.agentId ? { liveAgentId: live.agentId } : {}),
         ...(sessionId ? { sessionId } : {}),
         ...(n.accountId ? { accountId: n.accountId } : {}),
-        ...(live?.state ? { state: live.state } : {})
+        ...(live?.state ? { state: live.state } : {}),
+        ...(otherHost ? { otherHost: true } : {})
       }
     })
+}
+
+/** The project as the share reads it at one moment: its terminals, and every node id. */
+export function shareCanvas(nodes: CanvasNodeState[], status: AgentStatusView, project: ShareProjectRef): ShareCanvas {
+  return { terminals: shareTerminals(nodes, status, project), nodeIds: nodes.map((n) => n.id) }
 }
 
 /** What the share needs from the canvas for ONE project. */

@@ -6,9 +6,12 @@ import {
   followSharedProject,
   shareFocusStep,
   shareProjectDeps,
+  shareCanvas,
   shareTerminals,
   type ShareCanvasOps
 } from './shareTeamCanvas'
+
+const PROJ = { id: 'ssh-1', server: { host: 'box', user: 'alice' } }
 
 const node = (over: Partial<CanvasNodeState> & { id: string }): CanvasNodeState => ({
   kind: 'terminal',
@@ -29,7 +32,7 @@ describe('shareTerminals', () => {
       node({ id: 's', kind: 'sticky' }),
       node({ id: 'g', kind: 'group' })
     ]
-    const out = shareTerminals(nodes, { a: { sessionId: 'hooked', state: 'done' } })
+    const out = shareTerminals(nodes, { a: { sessionId: 'hooked', state: 'done' } }, PROJ)
     expect(out).toEqual([
       // The hook-fed id wins over the minted one: /clear and --fork-session mint a new one in-CLI.
       { nodeId: 'a', title: 'Claude', agentId: 'claude', sessionId: 'hooked', accountId: 'acc', state: 'done' },
@@ -40,9 +43,42 @@ describe('shareTerminals', () => {
   })
 
   it('falls back to the persisted session id when no hook reported one', () => {
-    const out = shareTerminals([node({ id: 'a', agentId: 'claude', agentSessionId: 'minted' })], {})
+    const out = shareTerminals([node({ id: 'a', agentId: 'claude', agentSessionId: 'minted' })], {}, PROJ)
     expect(out[0].sessionId).toBe('minted')
     expect('state' in out[0]).toBe(false)
+  })
+
+  it('carries the status store agent beside the node own one, and only when the store knows one', () => {
+    const out = shareTerminals(
+      [node({ id: 'hand' }), node({ id: 'made', agentId: 'claude' })],
+      { hand: { agentId: 'codex', state: 'working' }, made: { state: 'done' } },
+      PROJ
+    )
+    expect(out[0]).toEqual({ nodeId: 'hand', title: 'hand', liveAgentId: 'codex', state: 'working' })
+    expect(out[1]).toEqual({ nodeId: 'made', title: 'made', agentId: 'claude', state: 'done' })
+  })
+
+  it('marks a remote-tmux terminal on another host (a host attachment); same host and plain ssh are not', () => {
+    const out = shareTerminals(
+      [
+        node({ id: 'own', ssh: { host: 'box', user: 'alice' }, sshRemoteTmux: true }),
+        // The project's own host under another login is still served by the project's master.
+        node({ id: 'own-other-user', ssh: { host: 'box', user: 'bob' }, sshRemoteTmux: true }),
+        node({ id: 'att', ssh: { host: 'prod', user: 'alice' }, sshRemoteTmux: true }),
+        node({ id: 'plain-ssh', ssh: { host: 'prod', user: 'alice' } })
+      ],
+      {},
+      PROJ
+    )
+    expect(out.filter((n) => n.otherHost).map((n) => n.nodeId)).toEqual(['att'])
+  })
+})
+
+describe('shareCanvas', () => {
+  it('lists every node id of the project (notes and frames too) beside its terminals', () => {
+    const c = shareCanvas([node({ id: 't' }), node({ id: 's', kind: 'sticky' }), node({ id: 'g', kind: 'group' })], {}, PROJ)
+    expect(c.terminals.map((n) => n.nodeId)).toEqual(['t'])
+    expect(c.nodeIds).toEqual(['t', 's', 'g'])
   })
 })
 

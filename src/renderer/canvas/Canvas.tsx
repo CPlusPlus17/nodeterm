@@ -379,7 +379,7 @@ import { sessionPauseOffer, type SessionPauseOffer } from '../lib/sessionPause'
 import { RemoteAccessDialog } from '../components/RemoteAccessDialog'
 import { ShareTeamDialog } from '../components/ShareTeamDialog'
 import { runShare, type ShareConfirmSummary, type ShareOutcome, type SharePhase } from '../lib/shareSshTeam'
-import { followSharedProject, shareProjectDeps, shareTerminals } from '../lib/shareTeamCanvas'
+import { followSharedProject, shareCanvas, shareProjectDeps } from '../lib/shareTeamCanvas'
 import { handedOffWarning } from '../lib/handedOff'
 import { SshProjectDialog } from '../components/SshProjectDialog'
 import { SshPassphrasePrompt } from '../components/SshPassphrasePrompt'
@@ -16986,6 +16986,13 @@ export function Canvas() {
         return runShare(
           {
             api: window.nodeTerminal.shareTeam,
+            // Read fresh each time (start, right before the mark, the flush check), committing the
+            // live canvas first so a node added since the last read is in it.
+            canvas: () => {
+              commitActiveToStore()
+              const p = useProjects.getState().getProject(projectId)
+              return shareCanvas(p?.nodes ?? [], useAgentStatus.getState().byId, { id: projectId, server: p?.ssh?.server })
+            },
             confirm: ui.confirm,
             phase: ui.phase,
             ...steps,
@@ -16996,7 +17003,6 @@ export function Canvas() {
             projectName: project.name,
             host: project.ssh.server.host,
             user: project.ssh.server.user,
-            terminals: shareTerminals(project.nodes, useAgentStatus.getState().byId),
             permissionMode: resolvePermissionMode(project, useSettings.getState().settings)
           }
         )

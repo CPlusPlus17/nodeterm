@@ -35,17 +35,28 @@ import {
 export interface ShareNode {
   nodeId: string
   title: string
+  /** The agent the node was created to run: the only one the server is asked to resume. */
   agentId?: string
+  /** The agent the status store saw in this pane (a hand-launched one included). It decides only
+   *  whether the pane is busy, never what is resumed. */
+  liveAgentId?: string
   sessionId?: string
   accountId?: string
   state?: AgentState
+  /** A remote-tmux terminal on a different host than the project's (a host attachment). */
+  otherHost?: boolean
+}
+/** The project as the share reads it at one moment. */
+export interface ShareCanvas {
+  terminals: ShareNode[]
+  /** Every node id of the project (terminals, notes, frames…): what the host's file must hold. */
+  nodeIds: string[]
 }
 export interface ShareInput {
   projectId: string
   projectName: string
   host: string
   user: string
-  terminals: ShareNode[]
   permissionMode: AgentPermissionMode
 }
 export type SharePhase =
@@ -95,6 +106,9 @@ export type ShareOutcome =
     }
 export interface ShareDeps {
   api: Pick<ShareTeamApi, 'probe' | 'install' | 'flushMirror' | 'bootstrap' | 'killSessions' | 'resume' | 'seedBookmark'>
+  /** The project as it is right now (read at the start, right before the mark, and at the flush): a
+   *  long install leaves plenty of time for a turn to start or a node to be added. */
+  canvas(): ShareCanvas
   confirm(summary: ShareConfirmSummary): Promise<boolean>
   phase(p: SharePhase): void
   /** Commit the live canvas and save, so the latest nodes are on their way to the host. */
@@ -112,11 +126,46 @@ export interface ShareDeps {
   wait(ms: number): Promise<void>
 }
 
-const BUSY_STATES = new Set<AgentState>(['working', 'blocked'])
+/** Mid-turn, or holding a question or an approval nobody has answered yet (a Codex approval prompt
+ *  and an open AskUserQuestion are `waiting`); a finished turn is `done`. Ending such a session loses
+ *  the turn or the answer. */
+const BUSY_STATES = new Set<AgentState>(['working', 'blocked', 'waiting'])
 const isAgentResumable = (id: string | undefined): boolean =>
   !!id && (RESUMABLE_AGENTS as readonly string[]).includes(id)
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+export const BUSY_REFUSAL = 'Wait for these agents to finish (or stop them), then share again.'
+export const CANVAS_CHANGED = 'The canvas changed while preparing the share. Nothing was changed; share again.'
+export const otherHostRefusal = (titles: string[]): string =>
+  `These terminals run on another host: ${titles.join(', ')}. Close them or move them out of this project, then share again.`
+
+/** The agents whose session the handover must not end now. An agent known only to the status store
+ *  (launched by hand in a plain terminal) counts too: its pane is as busy as any other. */
+export function busyTerminals(terminals: ShareNode[]): ShareNode[] {
+  return terminals.filter((n) => (n.agentId || n.liveAgentId) && n.state !== undefined && BUSY_STATES.has(n.state))
+}
+
+/** The refusals the canvas alone decides. A terminal on another host would be "killed" on the
+ *  project's host (where it has no session, so it reads as gone) and left running where it is. */
+function canvasRefusal(terminals: ShareNode[]): Extract<ShareOutcome, { kind: 'refused' }> | null {
+  const foreign = terminals.filter((n) => n.otherHost)
+  if (foreign.length) return { kind: 'refused', reason: otherHostRefusal(foreign.map((n) => n.title)) }
+  const busy = busyTerminals(terminals)
+  if (busy.length) return { kind: 'refused', reason: BUSY_REFUSAL, busy }
+  if (terminals.length > SHARE_MAX_TERMINALS) {
+    return {
+      kind: 'refused',
+      reason: `This project has more than ${SHARE_MAX_TERMINALS} terminals; Share with team handles at most that many.`
+    }
+  }
+  return null
+}
+
+const sameIds = (a: readonly string[], b: readonly string[]): boolean => {
+  const set = new Set(a)
+  return set.size === new Set(b).size && b.every((id) => set.has(id))
+}
 
 /** How often the host is probed after an install that exited 0, and how far apart: the restarted
  *  service can take a moment before its admin socket answers `team status`. */
@@ -171,7 +220,7 @@ const BOOTSTRAP_MAY_HAVE_FINISHED =
 
 export async function runShare(deps: ShareDeps, input: ShareInput): Promise<ShareOutcome> {
   const { api } = deps
-  const { projectId, terminals, host, user } = input
+  const { projectId, host, user } = input
   const failed = (step: SharePhase, error: string, reopened: boolean, restoreFailed = false): ShareOutcome => ({
     kind: 'failed',
     step,
@@ -190,17 +239,10 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   }
 
   // Refusals that need no host: checked before anything is asked of it.
-  const busy = terminals.filter((n) => n.agentId && n.state && BUSY_STATES.has(n.state))
-  if (busy.length) {
-    return { kind: 'refused', reason: 'Wait for these agents to finish (or stop them), then share again.', busy }
-  }
-  if (terminals.length > SHARE_MAX_TERMINALS) {
-    return {
-      kind: 'refused',
-      reason: `This project has more than ${SHARE_MAX_TERMINALS} terminals; Share with team handles at most that many.`
-    }
-  }
-  const ids = terminals.map((n) => n.nodeId)
+  const start = deps.canvas()
+  const refusedAtStart = canvasRefusal(start.terminals)
+  if (refusedAtStart) return refusedAtStart
+  const ids = start.terminals.map((n) => n.nodeId)
 
   phase('probing')
   const probed = await call(() => api.probe(projectId, ids))
@@ -208,13 +250,13 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   const plan = probed.plan
   if (plan.kind === 'refuse') return { kind: 'refused', reason: plan.reason }
 
-  const classified = classifyTerminals(terminals, probed.paneCommands)
+  const confirmed = classifyTerminals(start.terminals, probed.paneCommands)
   const agreed = await deps.confirm({
     host,
     user,
     install: plan.kind === 'install' ? plan.reason : null,
     restartsService: plan.kind === 'install' && probed.probe.teamExists,
-    ...classified,
+    ...confirmed,
     security: securityNote(user, host)
   })
   if (!agreed) return { kind: 'cancelled' }
@@ -251,6 +293,20 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   } catch (e) {
     return failed('releasing', errorText(e), false)
   }
+  // Read the canvas again right before the mark: an install can take many minutes, in which a turn
+  // can start (a cron, a loop, an armed launch) and a node can be added. Either refuses with nothing
+  // changed. From here on the handover works on THIS read (fresh session ids included).
+  let now: ShareCanvas
+  try {
+    now = deps.canvas()
+  } catch (e) {
+    return failed('releasing', errorText(e), false)
+  }
+  const refusedNow = canvasRefusal(now.terminals)
+  if (refusedNow) return refusedNow
+  if (!sameIds(ids, now.terminals.map((n) => n.nodeId))) return { kind: 'refused', reason: CANVAS_CHANGED }
+  const terminals = now.terminals
+  const classified = classifyTerminals(terminals, probed.paneCommands)
   // From the mark until a successful bootstrap, every failure clears the mark (and reopens the
   // project if it was closed) before it is reported. The original failure stays the reported error;
   // whether restore worked is reported beside it, because a mark left behind stops the project's
@@ -275,10 +331,18 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   }
   const flushed = await call(() => api.flushMirror(projectId))
   if (!flushed.ok) return failAndUndo('releasing', flushed.error, false)
+  // EVERY node of the project, read now, must be in the host's file the server adopts: a note or a
+  // frame an earlier mirror write dropped would otherwise be adopted stale.
+  let projectNodeIds: string[]
+  try {
+    projectNodeIds = deps.canvas().nodeIds
+  } catch (e) {
+    return failAndUndo('releasing', errorText(e), false)
+  }
   const onHost = new Set(flushed.nodeIds)
-  const missing = terminals.filter((n) => !onHost.has(n.nodeId))
+  const missing = projectNodeIds.filter((id) => !onHost.has(id))
   if (missing.length) {
-    const stale = `The canvas on the host is not up to date (${missing.length} terminal${missing.length === 1 ? '' : 's'} missing).`
+    const stale = `The canvas on the host is not up to date (${missing.length} node${missing.length === 1 ? '' : 's'} missing).`
     // "Nothing was changed" holds only when the mark was cleared again.
     return failAndUndo(
       'releasing',
@@ -322,7 +386,7 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   const resumed: ShareNode[] = []
   const notResumed: Array<{ node: ShareNode; reason: string }> = []
   let stillOnSsh: ShareNode[]
-  const killed = await call(() => api.killSessions(projectId, ids))
+  const killed = await call(() => api.killSessions(projectId, terminals.map((n) => n.nodeId)))
   if (!killed.ok) {
     stillOnSsh = terminals
     for (const n of classified.resumable) notResumed.push({ node: n, reason: 'its SSH session could not be stopped' })

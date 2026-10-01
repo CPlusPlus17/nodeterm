@@ -271,10 +271,15 @@ starts on the server while its old session might still run: two processes on one
 interleave its transcript. And once the server owns the project's file, this desktop never writes it
 again.
 
-1. **Refusals first, before the host is touched.** An agent node that is working, or waiting on a
-   permission prompt (hook state `working` or `blocked`), refuses the share: "Wait for these agents
-   to finish (or stop them), then share again.", with the agents listed. More than 200 terminals is
-   refused too.
+1. **Refusals first, before the host is touched.** An agent that is working, waiting on a
+   permission prompt, or holding a question or an approval nobody has answered (hook state
+   `working`, `blocked` or `waiting`; a Codex approval prompt and an open AskUserQuestion are
+   `waiting`, a finished turn is `done`) refuses the share: "Wait for these agents to finish (or
+   stop them), then share again.", with the agents listed. An agent launched by hand in a plain
+   terminal counts too (the status store knows it), though only a node created as an agent is ever
+   resumed. A terminal attached to another host than the project's refuses it, naming each one,
+   because the handover would "stop" it on the project's host (where it has no session) and leave it
+   running where it is. More than 200 terminals is refused too.
 2. **Probe**, one generated command over the project's ControlMaster: the OS and the login, git and
    curl, which unit runs nodeterm-server and with which binary, its version, whether it knows
    `team bootstrap`, whether it answers, the real paths of the home directory and the project
@@ -289,13 +294,16 @@ again.
    Enter does not stop a long install): no second probe, nothing saved, marked or closed, and the
    result says "The install was cancelled, so nothing was shared. The host may keep a partly
    installed nodeterm-server; the next install replaces it."
-5. **Save the canvas.**
+5. **Save the canvas, and read it again.** The install can take many minutes. If an agent became
+   busy meanwhile, or a terminal was added or removed, the share stops with nothing changed (the
+   busy refusal above, or "The canvas changed while preparing the share. Nothing was changed; share
+   again."). The rest of the handover works on this read.
 6. **Mark the project handed off, in progress** (`handedOffTo` with no host yet), and save, so no
    later save on this desktop mirrors the project to the host.
-7. **Flush the pending mirror write and read the host's `project.json` back.** Every terminal of the
-   project must be in it, because that file is what the server adopts. If one is missing, the share
-   stops: "The canvas on the host is not up to date (N terminals missing). Nothing was changed; try
-   again in a moment."
+7. **Flush the pending mirror write and read the host's `project.json` back.** Every node of the
+   project, read again now (terminals, notes, frames), must be in it, because that file is what the
+   server adopts. If one is missing, the share stops: "The canvas on the host is not up to date (N
+   nodes missing). Nothing was changed; try again in a moment."
 8. **Close the SSH project**, non-destructively: it moves to "Recently closed", and its tmux sessions
    keep running.
 9. **`team bootstrap`**, as the login user, with the folder's real path from main's own probe (the
@@ -379,7 +387,9 @@ teammate's, still compares the SAS.
 | When | What the desktop says |
 |---|---|
 | The SSH connection is down | The menu item is disabled: "Connect this project first (its SSH connection is down)." |
-| An agent is working or blocked | "Wait for these agents to finish (or stop them), then share again.", with the agents listed |
+| An agent is working, blocked, or waiting on a question or an approval | "Wait for these agents to finish (or stop them), then share again.", with the agents listed |
+| A terminal runs on another host than the project's | "These terminals run on another host: <titles>. Close them or move them out of this project, then share again." |
+| A terminal was added or removed, or an agent became busy, while the share was being prepared | "The canvas changed while preparing the share. Nothing was changed; share again." (a busy agent gets the busy refusal) |
 | More than 200 terminals | "This project has more than 200 terminals; Share with team handles at most that many." |
 | The SSH login is root | "This SSH login is root. Share with team runs nodeterm-server as your own user, so log in to the project as a regular user and try again." |
 | The host has a root (system) install | "This host runs nodeterm-server as a system service (root). Share with team needs a per-user install; see docs/hosted-team-relay.md." |
