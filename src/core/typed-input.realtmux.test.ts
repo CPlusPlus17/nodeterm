@@ -35,6 +35,13 @@ let binDir: string
 const env = (): NodeJS.ProcessEnv => ({ ...process.env, TMUX_TMPDIR: work })
 const tmux = (args: string[]): string =>
   execFileSync(TMUX as string, args, { encoding: 'utf8', env: env() })
+/**
+ * The environment the typed SCRIPT runs under: only what it needs, never this process's. The script
+ * names tmux by absolute path and uses shell builtins; inheriting `process.env` into a `sh -c` hands
+ * the shell variables nobody chose (CodeQL: indirect uncontrolled command line). The SSH leg below
+ * gets the same treatment, as `tmux-paste.realtmux.test.ts` does.
+ */
+const scriptEnv = (): NodeJS.ProcessEnv => ({ PATH: '/usr/bin:/bin', TMUX_TMPDIR: work })
 
 beforeAll(() => {
   if (!TMUX) return
@@ -97,7 +104,7 @@ function type(leg: 'local' | 'ssh', session: string, text: string): void {
   const stdin = typedStdin(typedLines(text))
   if (leg === 'local') {
     execFileSync('/bin/sh', localTypedArgs(TMUX as string, SOCKET, session, pasteBufferName()), {
-      env: env(),
+      env: scriptEnv(),
       input: stdin
     })
     return
