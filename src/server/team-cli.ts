@@ -35,7 +35,8 @@ const safeJson = (v: unknown): string =>
 
 const USAGE_ROWS: Array<[string, string]> = [
   ['init', 'create the host key and the team, and start hosting'],
-  // The desktop's Share with team probes for this verb by grepping `team --help` for `^  bootstrap `.
+  // The desktop's Share with team detects this verb by grepping the built main.cjs for this row's
+  // `bootstrap --owner-key` (BOOTSTRAP_MARKER); it never runs an unrecognised bundle. Keep that text.
   [
     'bootstrap --owner-key <key> --adopt <dir> [--owner-label <name>] [--json]',
     'set up the team, an owner and a shared project in one step'

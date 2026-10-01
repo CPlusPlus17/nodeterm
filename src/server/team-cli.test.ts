@@ -7,6 +7,7 @@ import { startTeamAdmin, adminSocketPath, type AdminStatusResult, type TeamAdmin
 import { genKeyPair, publicKeyToB64 } from '../core/relay/e2ee'
 import type { HostedService, HostedStatus } from '../core/relay/hosted-service'
 import { POP_REFUSED_MESSAGE } from '../core/relay/relay-pop'
+import { BOOTSTRAP_MARKER } from '../core/remote-ssh/share-team-remote'
 
 const KEY = publicKeyToB64(genKeyPair().publicKey)
 
@@ -74,7 +75,8 @@ describe('team argv', () => {
     })
   })
 
-  it('`team --help` lists bootstrap at the row start a remote probe greps for', () => {
+  it('the usage row carries the text the desktop greps main.cjs for (it never runs the bundle)', () => {
+    expect(TEAM_USAGE).toContain(BOOTSTRAP_MARKER)
     expect(TEAM_USAGE).toMatch(/^ {2}bootstrap /m)
   })
 
