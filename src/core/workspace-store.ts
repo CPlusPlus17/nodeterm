@@ -369,7 +369,8 @@ export class WorkspaceStore {
    * workspace and `saveNow` rebuilds the index from it, so a browser tab opened before a headless
    * adoption would otherwise delete the adopted entry on its next autosave. A renderer can only
    * delete a project it has loaded, so an entry no renderer has seen is never treated as deleted:
-   * the renderer save path re-appends it (`withPendingAdoptions`) until a renderer load hands it out.
+   * the renderer save path re-appends it (`withPendingAdoptions`) until an OWNER client's load
+   * hands it out (a client that cannot save cannot be the one whose save would drop it).
    */
   private pendingAdoptions = new Set<string>()
   /** The content authority, when this process runs one (Server Edition hosting a team). */
@@ -389,11 +390,17 @@ export class WorkspaceStore {
   }
 
   registerIpc(): void {
-    platform().handle(IPC.workspaceLoad, async () => {
+    platform().handleWithSender(IPC.workspaceLoad, async (senderId: number) => {
       const workspace = await this.load()
       // The renderer now holds these, so from here on its saves speak for them. Only the ids this
       // load actually returned: an adoption that landed while the load was in flight stays pending.
-      for (const p of workspace.projects) this.pendingAdoptions.delete(p.id)
+      // And only for a client that CAN save: a relay peer or a hosted-team guest reaches this same
+      // handler but is refused `workspace:save`, so its load proves nothing about the owner's tabs,
+      // and clearing on it let the first teammate to join hand a stale owner tab the right to drop
+      // the shared project. A platform that cannot tell (a test double) counts every caller.
+      if (platform().isOwnerClient?.(senderId) !== false) {
+        for (const p of workspace.projects) this.pendingAdoptions.delete(p.id)
+      }
       return workspace
     })
     platform().handle(IPC.workspaceSave, (workspace: Workspace, opts?: WorkspaceSaveOptions) =>

@@ -171,7 +171,10 @@ describe('WorkspaceStore.adoptFolder', () => {
 
   describe('a renderer that loaded before the adoption', () => {
     const save = (ws: Workspace): Promise<unknown> => Promise.resolve(fake.handlers[IPC.workspaceSave](ws))
-    const load = (): Promise<Workspace> => Promise.resolve(fake.handlers[IPC.workspaceLoad]() as Workspace)
+    // The load handler takes the caller's client id first (it is registered with its sender).
+    const OWNER = 1
+    const load = (sender = OWNER): Promise<Workspace> =>
+      Promise.resolve(fake.handlers[IPC.workspaceLoad](sender) as Workspace)
 
     it('cannot drop the adopted project with its stale autosave; once a renderer has loaded it, it can', async () => {
       store.registerIpc()
@@ -186,6 +189,22 @@ describe('WorkspaceStore.adoptFolder', () => {
       const fresh = await load()
       expect(fresh.projects.map((p) => p.id)).toContain(r.projectId)
       await save(withA) // a renderer that HAS seen it and saves without it is deleting it
+      expect(indexIds()).toEqual(['p-a'])
+    })
+
+    it('a load by a client that cannot save (a relay peer, a hosted guest) does not hand the adoption out', async () => {
+      fake.isOwnerClient = (id: number) => id === OWNER
+      store.registerIpc()
+      const stale = await load(OWNER) // the owner's tab, loaded before the bootstrap
+      const withA: Workspace = { ...stale, activeProjectId: 'p-a', projects: [emptyProject('p-a', 'mu-a', folder('mu-a'))] }
+      await save(withA)
+      const r = await store.adoptFolder(folder('mu-b'), { home: dir })
+      const guest = await load(7) // a teammate joins and loads: it sees the project, but it can never save
+      expect(guest.projects.map((p) => p.id)).toContain(r.projectId)
+      await save(withA) // the owner's stale tab autosaves
+      expect(indexIds()).toEqual(['p-a', r.projectId])
+      await load(OWNER) // the owner's tab reloads: now its saves speak for the project
+      await save(withA)
       expect(indexIds()).toEqual(['p-a'])
     })
   })
