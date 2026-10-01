@@ -33,5 +33,19 @@ describe('localizeAdoptedNode', () => {
   it('returns the same object when nothing changes', () => {
     const n = node({ cwd: '/abs' })
     expect(localizeAdoptedNode(n, '/home/u')).toBe(n)
+    const editor = node({ kind: 'editor', filePath: '/srv/a.ts', cwd: '/srv' })
+    expect(localizeAdoptedNode(editor, '/home/u')).toBe(editor)
+  })
+  it('drops sshFs, so an editor or video node reads the local filesystem instead of an SSH project fs', () => {
+    const out = localizeAdoptedNode(node({ kind: 'editor', filePath: '/srv/a.ts', sshFs: true }), '/home/u')
+    expect(out.sshFs).toBeUndefined()
+    expect('sshFs' in out).toBe(false)
+    expect(out.filePath).toBe('/srv/a.ts')
+  })
+  it('expands a leading ~ in filePath, and only that', () => {
+    expect(localizeAdoptedNode(node({ kind: 'video', filePath: '~/clips/a.mp4' }), '/home/u').filePath)
+      .toBe('/home/u/clips/a.mp4')
+    const other = node({ kind: 'editor', filePath: '~other/a.ts' })
+    expect(localizeAdoptedNode(other, '/home/u')).toBe(other)
   })
 })

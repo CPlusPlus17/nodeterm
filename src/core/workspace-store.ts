@@ -355,6 +355,23 @@ export class WorkspaceStore {
    * them, so the phone kept listing deleted sessions for up to the 30-day identity TTL.
    */
   private indexRebuiltThisRun = false
+  /**
+   * What the most recent `loadInner` found at the index path: `read` (a shape this build builds a
+   * workspace from, empty or not), `absent` (no file — a first run), or `unreadable` (the file is
+   * there but could not be read, did not parse, or is a shape this build does not recognise, such
+   * as a newer build's). Unlike `indexRebuiltThisRun` it describes the LAST load, not the run, so a
+   * caller about to write a fresh index can ask whether doing so would replace one it never read
+   * (`adoptFolder`, which loads without sidelining and so leaves no backup behind).
+   */
+  private indexReadState: 'read' | 'absent' | 'unreadable' = 'absent'
+  /**
+   * Projects `adoptFolder` added that no renderer has loaded yet. A renderer's save is its whole
+   * workspace and `saveNow` rebuilds the index from it, so a browser tab opened before a headless
+   * adoption would otherwise delete the adopted entry on its next autosave. A renderer can only
+   * delete a project it has loaded, so an entry no renderer has seen is never treated as deleted:
+   * the renderer save path re-appends it (`withPendingAdoptions`) until a renderer load hands it out.
+   */
+  private pendingAdoptions = new Set<string>()
   /** The content authority, when this process runs one (Server Edition hosting a team). */
   private contentAuthority: ContentAuthorityHooks | null = null
 
@@ -372,9 +389,15 @@ export class WorkspaceStore {
   }
 
   registerIpc(): void {
-    platform().handle(IPC.workspaceLoad, () => this.load())
+    platform().handle(IPC.workspaceLoad, async () => {
+      const workspace = await this.load()
+      // The renderer now holds these, so from here on its saves speak for them. Only the ids this
+      // load actually returned: an adoption that landed while the load was in flight stays pending.
+      for (const p of workspace.projects) this.pendingAdoptions.delete(p.id)
+      return workspace
+    })
     platform().handle(IPC.workspaceSave, (workspace: Workspace, opts?: WorkspaceSaveOptions) =>
-      this.save(workspace, { localOnly: opts?.localOnly === true }))
+      this.saveFromRenderer(workspace, opts?.localOnly === true))
     platform().handle(IPC.workspaceProbeFolder, (folder: string) => this.probeFolder(folder))
     platform().handle(IPC.workspaceProjectFileState, (cwd: unknown) =>
       typeof cwd === 'string' && cwd ? this.projectFileState(cwd) : 'unreadable')
@@ -419,7 +442,8 @@ export class WorkspaceStore {
     let raw: string
     try {
       raw = await fs.readFile(this.indexPath, 'utf-8')
-    } catch {
+    } catch (err) {
+      this.indexReadState = (err as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'absent' : 'unreadable'
       this.indexRebuiltThisRun = true // R44: see the field
       // No index. Usually a first run — but it is also what a crash BETWEEN the sideline rename
       // below and the next index write leaves behind, and that case owes the user the note. Only
@@ -431,6 +455,7 @@ export class WorkspaceStore {
     try {
       parsed = JSON.parse(raw)
     } catch {
+      this.indexReadState = 'unreadable'
       this.indexRebuiltThisRun = true // R44: see the field
       // Same rule as a corrupt project.json: sideline the only copy so the boot flow's
       // unconditional save cannot replace it with an empty index. Read-only callers must not
@@ -450,8 +475,11 @@ export class WorkspaceStore {
     // and throw (`index.entries is not iterable`); now it falls through, like any unrecognised shape.
     if (anyParsed?.version === 3 && Array.isArray(anyParsed.entries) && anyParsed.entries.every(isObjectEntry)) {
       try {
-        return await this.loadV3(parsed as WorkspaceIndexV3, sideline)
+        const built = await this.loadV3(parsed as WorkspaceIndexV3, sideline)
+        this.indexReadState = 'read'
+        return built
       } catch (e) {
+        this.indexReadState = 'unreadable'
         this.indexRebuiltThisRun = true // R44: an index we could not build is not a read of it
         throw e
       }
@@ -462,6 +490,7 @@ export class WorkspaceStore {
     // a v3 without entries, a newer build's version): the run's index is rebuilt from nothing exactly
     // as for an unparsable file (R44 / re-review NEW-1). A readable EMPTY v2/v3 index is not this.
     if (legacy === EMPTY_WORKSPACE) this.indexRebuiltThisRun = true
+    this.indexReadState = legacy === EMPTY_WORKSPACE ? 'unreadable' : 'read'
     if (legacy.projects.length) this.pendingV2Backup = raw
     return legacy
   }
@@ -1161,6 +1190,31 @@ export class WorkspaceStore {
     return run
   }
 
+  /**
+   * A RENDERER's whole-workspace save (the `workspace:save` IPC). Exactly `save()`, plus the
+   * pending-adoption rule (see `pendingAdoptions`). The merge runs inside the chain step, never
+   * before the enqueue: an await ahead of it would let a later save overtake this one.
+   */
+  private saveFromRenderer(workspace: Workspace, localOnly: boolean): Promise<void> {
+    const run = this.saveChain.then(async () =>
+      this.saveNow(this.pendingAdoptions.size ? await this.withPendingAdoptions(workspace) : workspace, localOnly))
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
+  /** `workspace` plus the store's own copy of every pending adoption it does not carry. Runs on
+   *  `saveChain`. An entry whose file cannot be read right now is left out, as before this rule. */
+  private async withPendingAdoptions(workspace: Workspace): Promise<Workspace> {
+    const carried = new Set(workspace.projects.map((p) => p.id))
+    const missing: Project[] = []
+    for (const id of this.pendingAdoptions) {
+      if (carried.has(id)) continue
+      const own = await this.readLocalRef(id)
+      if (own) missing.push(own)
+    }
+    return missing.length ? { ...workspace, projects: [...workspace.projects, ...missing] } : workspace
+  }
+
   /** The parse of `lastWritten.get(file)`, cached per raw string (see `lastWrittenParsed`). Throws
    *  exactly where the inline `JSON.parse` it replaces did. */
   private parsedLastWritten(file: string): ProjectFileV1 | null {
@@ -1626,11 +1680,16 @@ export class WorkspaceStore {
    * index entry owns the id for good.
    */
   async probeFolder(folder: string): Promise<Project | null> {
+    return (await this.probeFolderFile(folder))?.project ?? null
+  }
+
+  /** `probeFolder` plus the file's own `rev`, from the SAME read (`adoptFolder` continues it). */
+  private async probeFolderFile(folder: string): Promise<{ project: Project; rev: number } | null> {
     const read = await this.readProjectFile(folder, false)
     // No `localExec`: this folder is being ADOPTED (its project.json may have been cloned from
     // anywhere), so its nodes come up with no custom shell and no extra ssh args — the safe
     // defaults. Only values this machine typed itself are ever restored (@shared/node-exec).
-    return read ? fileToProject(read.file, { id: freshProjectId(), cwd: folder }) : null
+    return read ? { project: fileToProject(read.file, { id: freshProjectId(), cwd: folder }), rev: fileRev(read.file) } : null
   }
 
   /**
@@ -1658,17 +1717,29 @@ export class WorkspaceStore {
    * an entry whose folder resolves to the same directory is reused, never duplicated, because the
    * desktop names the folder by whatever path it holds and a symlink must not mint a second
    * project. A reused project that was closed is reopened. A folder with a project file is adopted
-   * with `probeFolder` semantics (fresh project id, node ids kept — they are tmux session names).
-   * One without becomes an empty project named after the folder. A file that is present but cannot
-   * be read is a refusal, never an empty project: that would overwrite the only copy on the next
-   * save (see `projectFileState`). Nothing here sidelines a corrupt file either — it is left in
-   * place for the user to fix.
+   * with `probeFolder` semantics (fresh project id, node ids kept — they are tmux session names),
+   * and its `rev` continues from the file's own. One without becomes an empty project named after
+   * the folder.
    *
-   * `home` expands the SSH project's `~` node cwds (`localizeAdoptedNode`). The server runs as the
-   * same user the desktop logged in as, so the home is the same.
+   * Every refusal is one that keeps the only copy of something: a project file that is present
+   * but cannot be read (see `projectFileState`) — whether or not an entry already names the folder
+   * (a reused entry whose file did not load is an `unavailable` placeholder with no content, which
+   * the authority could not read) — and an index this load could not read, which the save below
+   * would replace with one holding only the adopted project (and, when an earlier load this run did
+   * read it, `sweepRemovedDataFiles` would then delete every inline project's data file with it).
+   * Nothing here sidelines a corrupt file either; it is left in place for the user to fix.
+   *
+   * `home` expands the SSH project's `~` paths and drops its SSH-only node flags
+   * (`localizeAdoptedNode`), on a reused project too: a browser's "Open folder…" or an older
+   * desktop mirror push can have left that entry holding the SSH view. The server runs as the same
+   * user the desktop logged in as, so the home is the same. For a project the canvas authority
+   * already governs, the save is overlaid with the authority's own content (it owns shared
+   * content), so this localizes only a project that is not shared yet.
    *
    * The whole read-modify-write runs ON `saveChain`: a save queued meanwhile would otherwise write
-   * an index built before this project existed over the one that adds it.
+   * an index built before this project existed over the one that adds it. A created project stays
+   * in `pendingAdoptions` until a renderer loads it, so a browser tab that loaded before this call
+   * cannot drop it with its next autosave.
    */
   adoptFolder(cwd: string, opts: { home: string }): Promise<AdoptFolderResult> {
     const run = this.saveChain.then(() => this.adoptFolderNow(cwd, opts))
@@ -1688,24 +1759,39 @@ export class WorkspaceStore {
     // `load` does not queue on `saveChain`, so calling it from this chain step cannot deadlock.
     // Read-only (no sideline): adoption must not rename some OTHER project's conflict-marked file.
     const workspace = structuredClone(await this.load({ sideline: false }))
+    // Set by the load just above. A load running beside it reads the same file, so it can only
+    // report a different state if the file itself changed in between.
+    if (this.indexReadState === 'unreadable') {
+      throw codedError('E_ADOPT_FAILED', `This server's workspace index could not be read; fix or move ${this.indexPath} first.`)
+    }
     for (const p of workspace.projects) {
       if (!p.cwd || p.ssh) continue
       const theirs = await fs.realpath(p.cwd).catch(() => p.cwd as string)
       if (theirs !== real) continue
-      if (p.closed) {
+      if (p.unavailable) {
+        throw codedError('E_ADOPT_FAILED', `${projectFilePath(real)} could not be read; fix it before sharing this folder.`)
+      }
+      const nodes = p.nodes.map((n) => localizeAdoptedNode(n, opts.home))
+      const localized = nodes.some((n, i) => n !== p.nodes[i])
+      if (localized) p.nodes = nodes
+      const reopened = p.closed === true
+      if (reopened) {
         p.closed = false
         delete p.closedAt
-        await this.saveNow(workspace, false)
       }
+      if (localized || reopened) await this.saveNow(workspace, false)
       return { projectId: p.id, projectName: p.name, created: false }
     }
     const state = await this.projectFileState(real)
     if (state === 'unreadable') throw codedError('E_ADOPT_FAILED', `Could not read ${projectFilePath(real)}.`)
     let project: Project
     if (state === 'present') {
-      const probed = await this.probeFolder(real)
+      const probed = await this.probeFolderFile(real)
       if (!probed) throw codedError('E_ADOPT_FAILED', `${projectFilePath(real)} is not a project file this server can read.`)
-      project = { ...probed, nodes: probed.nodes.map((n) => localizeAdoptedNode(n, opts.home)) }
+      project = { ...probed.project, nodes: probed.project.nodes.map((n) => localizeAdoptedNode(n, opts.home)) }
+      // The save numbers the file from `revs` (+1). Without this the fresh id has no entry and the
+      // file would go back to rev 1, while every other writer keeps a project file's rev rising.
+      this.revs.set(project.id, probed.rev)
     } else {
       project = {
         id: freshProjectId(),
@@ -1719,6 +1805,7 @@ export class WorkspaceStore {
     workspace.projects.push(project)
     if (!workspace.activeProjectId) workspace.activeProjectId = project.id
     await this.saveNow(workspace, false)
+    this.pendingAdoptions.add(project.id)
     return { projectId: project.id, projectName: project.name, created: true }
   }
 

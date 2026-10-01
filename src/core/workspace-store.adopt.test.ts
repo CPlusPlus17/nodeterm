@@ -5,15 +5,19 @@ import path from 'node:path'
 import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform } from './platform-fake'
 import { WorkspaceStore } from './workspace-store'
-import type { Project } from '../shared/types'
+import { IPC } from '../shared/ipc'
+import type { Project, Workspace } from '../shared/types'
 
 let dir: string
+let userData: string
+let fake: ReturnType<typeof fakePlatform>
 let store: WorkspaceStore
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nt-adopt-'))
-  const userData = path.join(dir, 'data')
+  userData = path.join(dir, 'data')
   fs.mkdirSync(userData)
-  initPlatform(fakePlatform({ userDataDir: userData }))
+  fake = fakePlatform({ userDataDir: userData })
+  initPlatform(fake)
   store = new WorkspaceStore()
 })
 afterEach(() => {
@@ -26,13 +30,14 @@ const folder = (name: string): string => {
   fs.mkdirSync(f, { recursive: true })
   return f
 }
-const writeProjectFile = (cwd: string, nodes: unknown[]): void => {
+const projectFile = (cwd: string): string => path.join(cwd, '.nodeterm', 'project.json')
+const writeProjectFile = (cwd: string, nodes: unknown[], rev = 3): void => {
   fs.mkdirSync(path.join(cwd, '.nodeterm'), { recursive: true })
-  fs.writeFileSync(
-    path.join(cwd, '.nodeterm', 'project.json'),
-    JSON.stringify({ version: 1, name: 'Shared', color: '#0a84ff', rev: 3, nodes })
-  )
+  fs.writeFileSync(projectFile(cwd), JSON.stringify({ version: 1, name: 'Shared', color: '#0a84ff', rev, nodes }))
 }
+const indexFile = (): string => path.join(userData, 'workspace.json')
+const indexIds = (): string[] =>
+  (JSON.parse(fs.readFileSync(indexFile(), 'utf8')) as { entries: { id: string }[] }).entries.map((e) => e.id)
 const emptyProject = (id: string, name: string, cwd: string): Project =>
   ({ id, name, color: '#7aa2f7', cwd, viewport: { x: 0, y: 0, zoom: 1 }, nodes: [] })
 
@@ -110,6 +115,79 @@ describe('WorkspaceStore.adoptFolder', () => {
     fs.writeFileSync(path.join(f, '.nodeterm', 'project.json'), '{ not json')
     await expect(store.adoptFolder(f, { home: dir })).rejects.toMatchObject({ code: 'E_ADOPT_FAILED' })
     expect(fs.readFileSync(path.join(f, '.nodeterm', 'project.json'), 'utf8')).toBe('{ not json')
+    expect((await store.load({ sideline: false })).projects).toHaveLength(0)
+    expect(fs.existsSync(indexFile())).toBe(false) // nothing was saved at all
+  })
+
+  it('E_ADOPT_FAILED when the folder is already a project whose file cannot be read (an unavailable placeholder)', async () => {
+    const f = folder('zeta')
+    await store.adoptFolder(f, { home: dir })
+    fs.writeFileSync(projectFile(f), '<<<<<<< HEAD')
+    await expect(store.adoptFolder(f, { home: dir })).rejects.toMatchObject({ code: 'E_ADOPT_FAILED' })
+    expect(fs.readFileSync(projectFile(f), 'utf8')).toBe('<<<<<<< HEAD')
+  })
+
+  it('a reused project is localized too: its ~ cwds expand and its SSH-session flags go', async () => {
+    const f = folder('eta')
+    await store.save({
+      version: 2, activeProjectId: 'p-r',
+      projects: [{
+        ...emptyProject('p-r', 'eta', f),
+        nodes: [{ id: 'term-r', kind: 'terminal', position: { x: 0, y: 0 }, title: 'R', color: '#fff', cwd: '~/eta', sshRemoteTmux: true } as Project['nodes'][number]]
+      }]
+    })
+    expect((await store.load({ sideline: false })).projects[0].nodes[0].sshRemoteTmux).toBe(true) // the precondition is real
+    const r = await store.adoptFolder(f, { home: '/home/u' })
+    expect(r).toMatchObject({ projectId: 'p-r', created: false })
+    const n = (await store.load({ sideline: false })).projects[0].nodes[0]
+    expect(n.cwd).toBe('/home/u/eta')
+    expect(n.sshRemoteTmux).toBeUndefined()
+  })
+
+  it('keeps the adopted file\'s rev monotonic: a file at rev 7 is written back at rev 8', async () => {
+    const f = folder('theta-rev')
+    writeProjectFile(f, [{ id: 'term-v', kind: 'terminal', position: { x: 0, y: 0 }, title: 'V', color: '#fff' }], 7)
+    await store.adoptFolder(f, { home: dir })
+    expect(JSON.parse(fs.readFileSync(projectFile(f), 'utf8')).rev).toBe(8)
+  })
+
+  it('E_ADOPT_FAILED, and the index left byte for byte, when this server\'s workspace index cannot be read', async () => {
+    const f = folder('iota')
+    fs.writeFileSync(indexFile(), '{ garbage')
+    await expect(store.adoptFolder(f, { home: dir })).rejects.toMatchObject({ code: 'E_ADOPT_FAILED' })
+    expect(fs.readFileSync(indexFile(), 'utf8')).toBe('{ garbage')
+    // A shape this build does not recognise (a newer build's index) is just as unreadable to it.
+    fs.writeFileSync(indexFile(), '{"version":99,"entries":[]}')
+    await expect(store.adoptFolder(f, { home: dir })).rejects.toMatchObject({ code: 'E_ADOPT_FAILED' })
+    expect(fs.readFileSync(indexFile(), 'utf8')).toBe('{"version":99,"entries":[]}')
+  })
+
+  it('a readable index with no projects is not a failure (a server opened in a browser once, never used)', async () => {
+    fs.writeFileSync(indexFile(), JSON.stringify({ version: 3, entries: [] }))
+    const r = await store.adoptFolder(folder('kappa'), { home: dir })
+    expect(r.created).toBe(true)
+    expect(indexIds()).toEqual([r.projectId])
+  })
+
+  describe('a renderer that loaded before the adoption', () => {
+    const save = (ws: Workspace): Promise<unknown> => Promise.resolve(fake.handlers[IPC.workspaceSave](ws))
+    const load = (): Promise<Workspace> => Promise.resolve(fake.handlers[IPC.workspaceLoad]() as Workspace)
+
+    it('cannot drop the adopted project with its stale autosave; once a renderer has loaded it, it can', async () => {
+      store.registerIpc()
+      const a = folder('lam-a')
+      const stale = await load() // an open browser tab, loaded before the bootstrap
+      expect(stale.projects).toHaveLength(0)
+      const withA: Workspace = { ...stale, activeProjectId: 'p-a', projects: [emptyProject('p-a', 'lam-a', a)] }
+      await save(withA)
+      const r = await store.adoptFolder(folder('lam-b'), { home: dir })
+      await save(withA) // that tab's next autosave knows nothing of the adoption
+      expect(indexIds()).toEqual(['p-a', r.projectId])
+      const fresh = await load()
+      expect(fresh.projects.map((p) => p.id)).toContain(r.projectId)
+      await save(withA) // a renderer that HAS seen it and saves without it is deleting it
+      expect(indexIds()).toEqual(['p-a'])
+    })
   })
 
   it('a closed adopted project is reopened when adopted again', async () => {
