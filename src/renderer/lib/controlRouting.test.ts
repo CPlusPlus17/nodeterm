@@ -477,14 +477,14 @@ it('lists held, failed and unconfirmed launches without claiming an agent is hea
     failed: { kind: 'failed', attempts: 5, at: 1 },
     stalled: { kind: 'stalled', since: 1 }
   })
-  expect(rows.map((r) => r.launchState)).toEqual(['queued', 'failed', 'stalled', 'dropped', 'unconfirmed', undefined, undefined])
+  expect(rows.map((r) => r.launchState)).toEqual(['queued', 'failed', 'stalled', 'dropped', 'unconfirmed', 'idle', undefined])
   const text = controlListingText(rows)
   expect(text).toContain('queued [terminal]  — QUEUED')
   expect(text).toContain('failed [terminal]  — LAUNCH FAILED')
   expect(text).toContain('stalled [terminal]  — QUEUED (terminal not ready)')
   expect(text).toContain('dead [terminal]  — DROPPED')
   expect(text).toContain('unknown [terminal]  — AGENT STATUS UNCONFIRMED')
-  expect(text).toContain('errored [terminal]  — LAST TURN ERRORED')
+  expect(text).toContain('errored [terminal]  — IDLE — LAST TURN ERRORED')
   expect(text).not.toContain('RUNNING')
 })
 
@@ -549,7 +549,7 @@ it('lists every station’s own report, and where a success wait stands (--after
   expect(byId.go.launchState).toBe('blocked-failure')
   expect(byId.lint.outcome).toBe('failed')
   const text = controlListingText(rows)
-  expect(text).toContain('lint [terminal] Linter — REPORTED FAILURE ("eslint red")')
+  expect(text).toContain('lint [terminal] Linter — IDLE — REPORTED FAILURE ("eslint red")')
   expect(text).toContain(
     'rev [terminal] Reviewer — WAITING FOR SUCCESS — needs success from: build "Builder" (no outcome reported yet)'
   )
@@ -565,7 +565,7 @@ it('lists every station’s own report, and where a success wait stands (--after
   const r2 = Object.fromEntries(after.map((r) => [r.id, r]))
   expect(r2.rev.launchState).toBe('queued')
   expect(r2.rev.successWait).toBeUndefined()
-  expect(controlListingText(after)).toContain('build [terminal] Builder — REPORTED SUCCESS')
+  expect(controlListingText(after)).toContain('build [terminal] Builder — IDLE — REPORTED SUCCESS')
 })
 
 it('a report made before queued new work is listed as not counting, and the wait keeps waiting', () => {
@@ -580,7 +580,7 @@ it('a report made before queued new work is listed as not counting, and the wait
     { build: { nodeId: 'build', outcome: 'succeeded', at: 1, workPending: true } }
   )
   const text = controlListingText(rows)
-  expect(text).toContain('build [terminal] Builder — REPORTED SUCCESS (before new work queued for it; not counted until it reports again)')
+  expect(text).toContain('build [terminal] Builder — IDLE — REPORTED SUCCESS (before new work queued for it; not counted until it reports again)')
   expect(text).toContain('rev [terminal] Reviewer — WAITING FOR SUCCESS — needs success from: build "Builder" (new work is queued for it; waiting for its next report)')
 })
 
@@ -595,4 +595,31 @@ it('a hostile success hold in a stored project neither throws nor reads as met',
     5
   )
   expect(rows.map((r) => r.launchState)).toEqual(['success-expired', 'success-expired'])
+})
+
+it('names every agent row\'s state, so a station waiting on a person does not read as finished', () => {
+  const rows = storedNodeListing(
+    [
+      { id: 'idle', agentId: 'claude' },
+      { id: 'asks', agentId: 'claude' },
+      { id: 'gated', agentId: 'codex' },
+      { id: 'busy', agentId: 'claude' },
+      { id: 'shell' }
+    ],
+    {
+      idle: { state: 'done' },
+      asks: { state: 'waiting' },
+      gated: { state: 'blocked' },
+      busy: { state: 'working' },
+      shell: { state: 'done' }
+    }
+  )
+  expect(rows.map((r) => r.launchState)).toEqual(['idle', 'needs-you', 'needs-you', 'working', undefined])
+  expect(controlListingText(rows).split('\n')).toEqual([
+    'idle [terminal]  — IDLE',
+    'asks [terminal]  — NEEDS YOU',
+    'gated [terminal]  — NEEDS YOU',
+    'busy [terminal]  — WORKING',
+    'shell [terminal] '
+  ])
 })

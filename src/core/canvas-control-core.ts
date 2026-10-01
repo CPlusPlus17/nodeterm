@@ -900,6 +900,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  `queued: false` is not proof the agent is running. `deliveredIds` confirms command delivery only.',
     '  `list` names QUEUED, STARTING, LAUNCH FAILED, EXPIRED, DROPPED and AGENT STATUS UNCONFIRMED',
     '  where observed. STARTING means a background start is in flight: do not `run` that node again.',
+    '  Every other agent row names its state: WORKING, IDLE (its turn ended; it waits for input) or',
+    '  NEEDS YOU (a question or approval waits for a person, not for you). A plain terminal row carries no state.',
     '  `--prompt` arrives on ONE LINE: every run of whitespace in it, newlines included, is',
     '  collapsed to a single space before the session starts (the prompt rides the launch command',
     '  line typed into the pane). For a structured or multi-line brief use `--prompt-file <abs',
@@ -1462,6 +1464,8 @@ Verbs:
   \`queued: false\` does not prove the agent is running. \`deliveredIds\` confirms command delivery only.
   \`list\` names QUEUED, STARTING, LAUNCH FAILED, EXPIRED, DROPPED and AGENT STATUS UNCONFIRMED
   where observed. STARTING means a background start is in flight: do not \`run\` that node again.
+  Every other agent row names its state: WORKING, IDLE (its turn ended; it waits for input) or
+  NEEDS YOU (a question or approval waits for a person, not for you). A plain terminal row carries no state.
   \`--prompt\` arrives on ONE LINE. Every run of whitespace in it — newlines included — is
   collapsed to a single space before the session starts, because the prompt is passed as an
   argument on the agent CLI's launch command line and that line is typed into the pane. Two

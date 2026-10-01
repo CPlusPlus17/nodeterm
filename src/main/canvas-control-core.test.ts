@@ -1435,6 +1435,7 @@ describe('--after-pr: open a node that waits on a pull request', () => {
     expect(flat).toContain('default 24h, at most 14d')
     expect(flat).toContain('`list` marks it EXPIRED')
     expect(flat).toContain('`list` names QUEUED, STARTING, LAUNCH FAILED, EXPIRED, DROPPED and AGENT STATUS UNCONFIRMED')
+    expect(flat).toContain('Every other agent row names its state: WORKING, IDLE (its turn ended; it waits for input) or NEEDS YOU')
     expect(flat).toContain('you start it with the `run` verb')
     // What is refused.
     expect(flat).toContain('the pull request must exist in the repository this project\'s kanban board syncs with')
