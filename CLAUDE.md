@@ -8603,6 +8603,35 @@ Rules a refactor must not undo:
   installer; a browser must never end every session on the server). Mobile: N/A — a phone cannot
   authorize an update shutdown; it sees its sessions end like any other end.
 
+**Staged host runtime (#829 step 3).** The host used to run as a hard link of `nodeterm.exe` INSIDE
+the install dir, so it mapped the installed exe/DLLs/`resources.pak` and every update stopped until
+the user ended it (and every session). Packaged Windows builds now copy what the host needs into
+`%LOCALAPPDATA%\nodeterm\session-host\<version>-<fingerprint>\` and launch
+`nodeterm-sessionhost-v2.exe` from there (`core/session-host-runtime.ts`, wired in
+`session-host-backend.ts`; the client waits at most `STAGED_RUNTIME_WAIT_MS` for the first staging
+of a version). Rules a refactor must not undo:
+- **Only a published, verified copy is launched.** Files are copied into `.staging-<uuid>`, each
+  re-read and compared by SHA-256, the copy is smoke-run once (`ELECTRON_RUN_AS_NODE`, requires its
+  node-pty, must exit `SMOKE_OK`), the marker is written LAST, and the dir is published by one
+  `renameAtomic`. A dir without a valid marker (sizes checked on reuse) is moved aside, never run.
+- **A new image name.** Old uninstallers match `nodeterm.exe`/`nodeterm-session-host.exe` by NAME
+  machine-wide; the staged host must never answer to either. The preflight deliberately does not
+  match it by name (path test still applies).
+- **Fail-safe, not fail-open.** Any staging failure, or a staged host that dies within 10 s with a
+  code other than the host's own 0/1 (`stagedExitWantsFallback` — a missing DLL, a policy block),
+  falls back to the legacy hard-link launch for the rest of the run. That host still blocks the
+  installer through the unchanged read-only preflight.
+- **GC is fail-closed.** An old version dir is deleted only when a successful Win32_Process query
+  shows nothing running under it, no staged-host process has an unreadable path, it is older than
+  10 min, AND a rename aside succeeds (Windows refuses while an image inside is mapped). The
+  uninstaller leaves the staged runtimes alone (never kills a host); `docs/uninstall.md` lists them.
+- **The file set is not measured yet** (written on Linux): exe, top-level `*.dll`, `icudtl.dat`
+  (required), `resources.pak`, snapshot blobs, `locales/`, `resources/session-host/**`. The smoke
+  run is what proves it per machine; device checklist in docs/windows-session-host.md.
+- **Protocol is additive-only across versions.** A newer app keeps using an older staged host
+  (protocol v1/v2 + `hello` features); an unsupported one is left running and reported
+  (`SessionHostProtocolCompatibilityError`), never killed. ~250 MB of disk per staged version.
+
 **Follow-ups, in order:** code signing, then Windows auto-update wiring (electron-updater NSIS leg
 + `latest.yml` on the nodeterm.dev feed — blocked on signing: an unsigned auto-update is a
 downgrade in trust), and the fork's PE-identity polish (electron-builder leaves `OriginalFilename`
