@@ -13,6 +13,7 @@ import {
   sessionForProject,
   sessionCount,
   resetSessionsForTest,
+  projectIdsBoundToSession,
 } from './session'
 import { LocalTransport } from '../terminal/local-transport'
 import { planActiveProjectDials } from '../lib/sshAttachments'
@@ -528,5 +529,90 @@ describe('openRelayTab — hosted team tabs', () => {
     const tab = await openRelayTab('conn-h', 'box', { ...deps, activate: false })
     expect(setActiveProject).not.toHaveBeenCalled()
     expect(sessionForProject(tab.projectId).id).toBe(tab.sessionId) // still bound
+  })
+})
+
+// ── Hosted team: one tab per shared project ───────────────────────────────────────────────────────
+
+describe('openRelayTab — placing several shared projects (hosted team)', () => {
+  const hostProjects = ['A', 'B'].map(
+    (id) => ({ id, name: `Project ${id}`, color: '#fff', viewport: { x: 0, y: 0, zoom: 1 }, nodes: [] }) as Project
+  )
+
+  it('binds every placed tab to the one session and activates the first, or the focused one', async () => {
+    const { api } = fakeBridgedApi({ version: 2, activeProjectId: 'A', projects: hostProjects })
+    const handle: RelayApiHandle = { api, ready: () => Promise.resolve(), close: vi.fn() }
+    const { deps, addProject, adoptProject, setActiveProject } = makeDeps({ handle })
+    const placeProjects = vi.fn((_projects: Project[]) => ['A', 'B'])
+
+    const tab = await openRelayTab('conn-1', 'Team', { ...deps, placeProjects })
+
+    // The placer got every shared project, sanitized like the single adopt always was.
+    expect(placeProjects).toHaveBeenCalledTimes(1)
+    const placed = placeProjects.mock.calls[0][0]
+    expect(placed.map((p) => p.id)).toEqual(['A', 'B'])
+    expect(placed.every((p) => p.remote === true)).toBe(true)
+    expect(adoptProject).not.toHaveBeenCalled()
+    expect(addProject).not.toHaveBeenCalled()
+
+    expect(tab.projectIds).toEqual(['A', 'B'])
+    expect(tab.projectId).toBe('A')
+    expect(projectIdsBoundToSession(tab.sessionId)).toEqual(['A', 'B'])
+    expect(sessionForProject('B').id).toBe(tab.sessionId)
+    expect(setActiveProject).toHaveBeenCalledWith('A')
+  })
+
+  it('activates focusProjectId when it is among the placed tabs, the first one otherwise', async () => {
+    const { api } = fakeBridgedApi({ version: 2, activeProjectId: 'A', projects: hostProjects })
+    const handle: RelayApiHandle = { api, ready: () => Promise.resolve(), close: vi.fn() }
+    const { deps, setActiveProject } = makeDeps({ handle })
+
+    const tab = await openRelayTab('conn-1', 'Team', { ...deps, placeProjects: () => ['A', 'B'], focusProjectId: 'B' })
+    expect(tab.projectId).toBe('B')
+    expect(setActiveProject).toHaveBeenCalledWith('B')
+
+    const other = await openRelayTab('conn-2', 'Team', { ...deps, placeProjects: () => ['A', 'B'], focusProjectId: 'Z' })
+    expect(other.projectId).toBe('A')
+  })
+
+  it('a placer that returns nothing still opens one labelled tab', async () => {
+    const { api } = fakeBridgedApi({ version: 2, activeProjectId: '', projects: [] })
+    const handle: RelayApiHandle = { api, ready: () => Promise.resolve(), close: vi.fn() }
+    const { deps, addProject } = makeDeps({ handle })
+
+    const tab = await openRelayTab('conn-1', 'Team', { ...deps, placeProjects: () => [] })
+    expect(addProject).toHaveBeenCalledWith('Team')
+    expect(tab.projectIds).toEqual(['proj-1'])
+    expect(sessionForProject('proj-1').id).toBe(tab.sessionId)
+  })
+
+  it('without a placer (a Team Access tab) it adopts projects[0] alone, exactly as before', async () => {
+    const { api } = fakeBridgedApi({ version: 2, activeProjectId: 'A', projects: hostProjects })
+    const handle: RelayApiHandle = { api, ready: () => Promise.resolve(), close: vi.fn() }
+    const { deps, adoptProject } = makeDeps({ handle })
+
+    const tab = await openRelayTab('conn-1', 'Mac', deps)
+    expect(adoptProject).toHaveBeenCalledTimes(1)
+    expect((adoptProject.mock.calls[0][0] as Project).id).toBe('A')
+    expect(tab.projectIds).toEqual(['A-adopted'])
+    expect(tab.projectId).toBe('A-adopted')
+    expect(projectIdsBoundToSession(tab.sessionId)).toEqual(['A-adopted'])
+  })
+
+  it('handleRelayDrop greys every tab the connection served', async () => {
+    const { api } = fakeBridgedApi({ version: 2, activeProjectId: 'A', projects: hostProjects })
+    const handle: RelayApiHandle = { api, ready: () => Promise.resolve(), close: vi.fn() }
+    const { deps } = makeDeps({ handle })
+    const tab = await openRelayTab('conn-1', 'Team', { ...deps, placeProjects: () => ['A', 'B'] })
+
+    const setProjectUnavailable = vi.fn()
+    handleRelayDrop(tab, { setProjectUnavailable })
+    expect(setProjectUnavailable.mock.calls).toEqual([
+      ['A', true],
+      ['B', true],
+    ])
+    // Both stay bound to the (now offline) relay session, so each reconnects in place.
+    expect(projectIdsBoundToSession(tab.sessionId)).toEqual(['A', 'B'])
+    expect(sessionForProject('B').status).toBe('offline')
   })
 })
