@@ -93,6 +93,26 @@ verify and stop any remaining host. Never recommend **End session** (it deletes 
 resume depends on supported, saved conversation history; it does not preserve running tasks.
 See `docs/windows-session-host.md` for the user-controlled preparation/recovery steps and limits.
 
+**Prepare for update** (#829 step 2, Windows only): ⌘K / the update card run
+`components/PrepareUpdateDialog.tsx` over the pure `lib/updatePrep.ts` plan. It refuses while any
+session's agent is working or waiting on the user (renderer store OR core mirror — unmounted nodes
+have no renderer state), asks idle mounted agents to `/exit` through `registerAgentUpdateExit`,
+confirms what still stops (Cancel focused), then sends the host's `shutdown` command and quits only
+once the host process is confirmed gone. `shutdown` is a negotiated hello feature: never send it to
+a host that did not advertise it, and never add a taskkill/name-kill fallback — an older host gets
+the manual steps. The flow never deletes a node. Server Edition: degraded stub (`unsupported`).
+
+Staged host runtime (#829 step 3): a packaged Windows build launches the host from a private
+copy, `%LOCALAPPDATA%\nodeterm\session-host\<version>-<fingerprint>\nodeterm-sessionhost-v2.exe`
+(`src/core/session-host-runtime.ts`), so it maps no installed file and no longer blocks updates.
+Rules: a copy is launched only after it was published by one rename of a hash-verified,
+smoke-tested temp dir (marker written last); the image name must stay unlike `nodeterm.exe` /
+`nodeterm-session-host.exe` (old uninstallers match those by name machine-wide); every staging
+failure falls back to the legacy in-install-dir launch, which the preflight still blocks on; old
+copies are deleted only after a SUCCESSFUL process query shows nothing runs from them and the
+directory can be renamed aside. The host protocol stays additive-only — an older host is kept and
+used, an incompatible one is left running and reported, never killed.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not

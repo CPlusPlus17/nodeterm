@@ -1,3 +1,5 @@
+import { PrepareUpdateDialog } from '../components/PrepareUpdateDialog'
+import type { PrepNode } from '../lib/updatePrep'
 import { reportTextDelivery } from '../lib/textDelivery'
 import { useDevPortScanner } from './useDevPortScanner'
 import { withCodexNoDaemon } from '@shared/agents/codex-daemon'
@@ -16838,6 +16840,47 @@ export function Canvas() {
     travelToNodeRef.current = travelToNode
   })
 
+  // Prepare-for-update (Windows session host, issue #829). Opened from the update card or ⌘K via
+  // `nodeterm:prepare-update`. `prepareUpdateAvailable` gates the ⌘K entry: the main process answers
+  // `unsupported` off Windows, when the session host is not the backend, and in the Server Edition.
+  const [prepareUpdateOpen, setPrepareUpdateOpen] = useState(false)
+  const [prepareUpdateAvailable, setPrepareUpdateAvailable] = useState(false)
+  useEffect(() => {
+    let live = true
+    void window.nodeTerminal.updates
+      .prepareInspect()
+      .then((r) => {
+        if (live) setPrepareUpdateAvailable(r.kind !== 'unsupported')
+      })
+      .catch(() => {})
+    const open = (): void => setPrepareUpdateOpen(true)
+    window.addEventListener('nodeterm:prepare-update', open)
+    return () => {
+      live = false
+      window.removeEventListener('nodeterm:prepare-update', open)
+    }
+  }, [])
+  const collectUpdatePrepNodes = useCallback((): PrepNode[] => {
+    // The active project's live nodes first reach the store, so a node created a moment ago is
+    // matched to its host session like every other.
+    commitActiveToStore()
+    const out: PrepNode[] = []
+    for (const p of useProjects.getState().projects) {
+      for (const n of p.nodes) {
+        if (n.kind !== 'terminal') continue
+        out.push({
+          nodeId: n.id,
+          projectId: p.id,
+          projectName: p.name,
+          projectClosed: !!p.closed,
+          title: n.title,
+          agentId: n.agentId
+        })
+      }
+    }
+    return out
+  }, [commitActiveToStore])
+
   // ── "Open recent": resume a past agent conversation from its CLI's own history ──────────────
   // The list is THIS machine's (window.nodeTerminal: the desktop's core, or the Server Edition's
   // host), read on demand — one read per welcome-screen appearance and per palette open, never a
@@ -17478,6 +17521,16 @@ export function Canvas() {
           ]
         : []),
       { id: 'zoom-100', label: 'Zoom to 100%', icon: <IconFit />, run: zoomTo100 },
+      ...(prepareUpdateAvailable
+        ? [
+            {
+              id: 'prepare-update',
+              label: 'Prepare for update…',
+              hint: 'install update installer stop session host windows quit',
+              run: () => setPrepareUpdateOpen(true)
+            } as Command
+          ]
+        : []),
       // Layouts mirror the Dock's menu, and both are withheld on a relay tab for the same reason:
       // it is a live connection to another machine, never a workspace on this disk. The Dock says
       // so on a disabled button; the palette has no disabled row, so the entries are omitted.
@@ -17628,7 +17681,8 @@ export function Canvas() {
     hostedBookmarks,
     copyHostedInviteCode,
     forgetHostedTeam,
-    confirmStopAllLiveLinks
+    confirmStopAllLiveLinks,
+    prepareUpdateAvailable
   ])
 
   // Build the palette's command list only when its inputs change — the inline `buildCommands()`
@@ -18465,6 +18519,14 @@ export function Canvas() {
           and it must be answerable wherever the user is, not only while a settings pane happens to
           be open — see components/SetupConsentDialog.tsx. */}
       <SetupConsentDialog />
+
+      {prepareUpdateOpen && (
+        <PrepareUpdateDialog
+          collectNodes={collectUpdatePrepNodes}
+          onTravel={travelToNode}
+          onClose={() => setPrepareUpdateOpen(false)}
+        />
+      )}
 
       {confirm && (
         <ConfirmDialog
