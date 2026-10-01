@@ -98,10 +98,11 @@ export function ShareTeamDialogBody(p: {
       </>
     )
     // Only the install can be stopped: every later step is short, and stopping one half-way would
-    // leave the very state the orchestrator's own undo exists to avoid.
+    // leave the very state the orchestrator's own undo exists to avoid. The panel keeps the focus,
+    // not this button: a stray Enter must not stop a long install.
     actions =
       s.step === 'installing' ? (
-        <button className="confirm__btn" data-autofocus="" onClick={p.onCancelInstall}>
+        <button className="confirm__btn" onClick={p.onCancelInstall}>
           Cancel
         </button>
       ) : null
@@ -321,7 +322,7 @@ export function ShareTeamDialog({
     setState({ ...s, copied: true })
   }
 
-  // The orchestrator's install then answers with a non-zero exit, and that failure is what renders.
+  // The install then answers E_CANCELLED, and the orchestrator ends the share with that failure.
   const cancelInstall = (): void => {
     try {
       window.nodeTerminal.shareTeam.cancelInstall(projectId).catch(() => {})

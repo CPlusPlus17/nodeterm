@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { runShare, classifyTerminals, securityNote, type ShareDeps, type ShareInput } from './shareSshTeam'
+import {
+  runShare,
+  classifyTerminals,
+  securityNote,
+  INSTALL_CANCELLED,
+  INSTALL_REPROBE_ATTEMPTS,
+  INSTALL_REPROBE_GAP_MS,
+  type ShareDeps,
+  type ShareInput
+} from './shareSshTeam'
 
 const READY = { ok: true, probe: { adoptCwd: '/home/alice/proj', teamExists: false } as never, plan: { kind: 'ready' }, paneCommands: { 'term-p': 'npm' } } as const
 const BOOT = { ok: true, result: { hostId: 'H', projectId: 'project-9', projectName: 'proj', joinCode: 'nodeterm://join/CODE', hosting: 'up', created: { team: true, owner: true, project: true, share: true } } } as const
@@ -23,7 +32,8 @@ function setup(o: Partial<Record<'probe' | 'flush' | 'bootstrap' | 'kill' | 'res
     release: async () => void log.push('release'),
     restore: async () => void log.push('restore'),
     markHandedOff: async (to) => void log.push(`handed:${to.hostId}:${to.projectId}`),
-    join: (code, focus) => void log.push(`join:${focus}`)
+    join: (code, focus) => void log.push(`join:${focus}`),
+    wait: async (ms) => void log.push(`wait:${ms}`)
   }
   return { deps, log }
 }
@@ -346,10 +356,42 @@ describe('runShare', () => {
   })
   it('an install that does not leave a ready server fails without releasing anything', async () => {
     const { deps, log } = setup()
-    deps.api.probe = async () => ({ ...READY, plan: { kind: 'install', reason: 'missing' } }) as never
+    deps.api.probe = async () => (log.push('probe'), { ...READY, plan: { kind: 'install', reason: 'missing' } }) as never
     expect(await runShare(deps, INPUT)).toMatchObject({ kind: 'failed', step: 'checking-install', reopened: false })
     expect(log).not.toContain('release')
     expect(log).not.toContain('mark')
+    // The re-probe was given a few chances (the restarted service may not answer at once).
+    expect(log.filter((l) => l === 'probe')).toHaveLength(1 + INSTALL_REPROBE_ATTEMPTS)
+    expect(log.filter((l) => l.startsWith('wait:'))).toEqual(Array(INSTALL_REPROBE_ATTEMPTS - 1).fill(`wait:${INSTALL_REPROBE_GAP_MS}`))
+  })
+  it('a re-probe right after a completed install retries while the server is not ready yet, then shares', async () => {
+    let n = 0
+    const { deps, log } = setup()
+    const notRunning = { ...READY, plan: { kind: 'install', reason: 'not-running' } }
+    deps.api.probe = async () => (log.push('probe'), (n++ < 2 ? notRunning : READY) as never)
+    expect(await runShare(deps, INPUT)).toMatchObject({ kind: 'shared' })
+    expect(log.filter((l) => l === 'probe')).toHaveLength(3)
+    expect(log.indexOf('wait:2000')).toBeGreaterThan(log.indexOf('install'))
+  })
+  it('an install that exited non-zero, or a refusing re-probe, is not retried', async () => {
+    const failedInstall = setup()
+    failedInstall.deps.api.install = async () => ({ ok: true, exitCode: 1 })
+    failedInstall.deps.api.probe = async () => (failedInstall.log.push('probe'), { ...READY, plan: { kind: 'install', reason: 'missing' } }) as never
+    expect(await runShare(failedInstall.deps, INPUT)).toMatchObject({ kind: 'failed', step: 'checking-install' })
+    expect(failedInstall.log.filter((l) => l === 'probe')).toHaveLength(2)
+    let n = 0
+    const refusing = setup()
+    refusing.deps.api.probe = async () =>
+      (refusing.log.push('probe'), (n++ === 0 ? { ...READY, plan: { kind: 'install', reason: 'missing' } } : { ...READY, plan: { kind: 'refuse', reason: 'nope' } })) as never
+    expect(await runShare(refusing.deps, INPUT)).toMatchObject({ kind: 'failed', step: 'checking-install' })
+    expect(refusing.log.filter((l) => l === 'probe')).toHaveLength(2)
+  })
+  it('a cancelled install ends the share: no re-probe, nothing released, killed or bootstrapped', async () => {
+    const { deps, log } = setup({ probe: { ...READY, plan: { kind: 'install', reason: 'missing' } } })
+    deps.api.install = async () => (log.push('install'), { ok: false, code: 'E_CANCELLED', error: 'The install was cancelled.' })
+    expect(await runShare(deps, INPUT)).toEqual({ kind: 'failed', step: 'installing', error: INSTALL_CANCELLED, reopened: false })
+    expect(log.filter((l) => l === 'probe')).toHaveLength(1)
+    expect(log.some((l) => /^(prepare|mark|flush|release|restore|bootstrap|kill|resume|seed|join)/.test(l))).toBe(false)
   })
 })
 

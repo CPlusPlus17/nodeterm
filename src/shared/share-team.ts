@@ -154,7 +154,8 @@ export function sharePlan(p: ShareProbe): SharePlan {
 }
 
 /** Every `shareTeam` answer: never a rejection across IPC. `code` is an `E_*` code when the
- *  failure has one the renderer branches on (`E_NOT_CONNECTED`, `E_NOT_PROBED`, a server refusal). */
+ *  failure has one the renderer branches on (`E_NOT_CONNECTED`, `E_NOT_PROBED`, `E_CANCELLED` for
+ *  an install the user stopped, a server refusal). */
 export type ShareReply<T> = ({ ok: true } & T) | { ok: false; error: string; code?: string }
 
 /** The probe, the plan it implies, and the command each requested node's pane is running on the

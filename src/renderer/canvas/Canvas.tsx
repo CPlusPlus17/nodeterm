@@ -16984,7 +16984,13 @@ export function Canvas() {
           now: () => Date.now()
         })
         return runShare(
-          { api: window.nodeTerminal.shareTeam, confirm: ui.confirm, phase: ui.phase, ...steps },
+          {
+            api: window.nodeTerminal.shareTeam,
+            confirm: ui.confirm,
+            phase: ui.phase,
+            ...steps,
+            wait: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+          },
           {
             projectId,
             projectName: project.name,

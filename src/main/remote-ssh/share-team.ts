@@ -107,6 +107,7 @@ const PROJECT_READ_FAILED = 'Could not read the project file on the host.'
 const BAD_JOIN_CODE = 'The server sent an invalid join code.'
 const BAD_BOOTSTRAP = 'The server answered bootstrap with a result this build cannot read.'
 const BAD_RESUME = 'The server answered resume with a result this build cannot read.'
+const INSTALL_CANCELLED = { ok: false, code: 'E_CANCELLED', error: 'The install was cancelled.' } as const
 const NOT_ISSUED = 'Only the invite code Share with team just received can be added without the verification code.'
 
 /** The most of a server-sent sentence shown to the user. */
@@ -255,6 +256,9 @@ export function createShareTeamHandlers(deps: ShareTeamDeps): ShareTeamHandlers 
         }
         try {
           const { exitCode } = await deps.runInstall(projectId, SHARE_INSTALL_SCRIPT, chunk, ctrl.signal)
+          // A cancelled run is never "finished": the renderer must end the share, not re-probe a
+          // host that may still read as ready.
+          if (ctrl.signal.aborted) return INSTALL_CANCELLED
           return { ok: true, exitCode }
         } finally {
           installs.delete(projectId)

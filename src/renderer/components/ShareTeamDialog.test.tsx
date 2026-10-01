@@ -99,6 +99,8 @@ describe('ShareTeamDialogBody', () => {
     expect(html).toContain('Installing nodeterm-server on the host.')
     expect(html).toContain('cloning…')
     expect(html).toContain('Cancel')
+    // The panel takes focus, not the Cancel: a stray Enter must not stop a long install.
+    expect(html).not.toContain('data-autofocus')
     expect(body({ phase: 'running', step: 'bootstrapping', log: '' })).not.toContain('Cancel')
     expect(body({ phase: 'running', step: 'bootstrapping', log: 'cloning…' })).not.toContain('cloning…')
   })
@@ -348,6 +350,8 @@ describe('ShareTeamDialog', () => {
     act(() => output!('cloning…\n'))
     act(() => output!('building…\n'))
     expect(document.querySelector('[role="log"]')!.textContent).toBe('cloning…\nbuilding…\n')
+    expect(document.activeElement?.classList.contains('share-team')).toBe(true)
+    expect(document.activeElement).not.toBe(btn('Cancel'))
     click(btn('Cancel')!)
     expect(api.cancelInstall).toHaveBeenCalledWith('p1')
   })

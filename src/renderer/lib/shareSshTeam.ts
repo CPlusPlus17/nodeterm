@@ -108,6 +108,8 @@ export interface ShareDeps {
   restore(): Promise<void>
   markHandedOff(to: { hostId: string; projectId: string }): Promise<void>
   join(joinCode: string, focusProjectId: string): void
+  /** Wait `ms` (the pause between re-probes after an install). */
+  wait(ms: number): Promise<void>
 }
 
 const BUSY_STATES = new Set<AgentState>(['working', 'blocked'])
@@ -115,6 +117,13 @@ const isAgentResumable = (id: string | undefined): boolean =>
   !!id && (RESUMABLE_AGENTS as readonly string[]).includes(id)
 
 const errorText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+/** How often the host is probed after an install that exited 0, and how far apart: the restarted
+ *  service can take a moment before its admin socket answers `team status`. */
+export const INSTALL_REPROBE_ATTEMPTS = 3
+export const INSTALL_REPROBE_GAP_MS = 2000
+export const INSTALL_CANCELLED =
+  'The install was cancelled, so nothing was shared. The host may keep a partly installed nodeterm-server; the next install replaces it.'
 
 /** An IPC verb that throws (a dead bridge, a renderer-side bug) reads as an ordinary failed reply,
  *  so every step below handles exactly one failure shape. */
@@ -213,10 +222,20 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   if (plan.kind === 'install') {
     phase('installing')
     const installed = await call(() => api.install(projectId))
-    // Probe again whatever the install answered: only a ready server lets the share go on, and a
-    // failed reply (a dropped stream, say) does not by itself mean the server is not ready.
+    // A cancelled install ends the share here: nothing is released, and the host is not probed
+    // again (it may read as ready, and the user asked to stop).
+    if (!installed.ok && installed.code === 'E_CANCELLED') return failed('installing', INSTALL_CANCELLED, false)
+    // Probe again whatever else the install answered: only a ready server lets the share go on, and
+    // a failed reply (a dropped stream, say) does not by itself mean the server is not ready. After
+    // an install that exited 0 the restarted service may not answer yet, so a not-ready answer gets
+    // a few more tries.
     phase('checking-install')
-    const again = await call(() => api.probe(projectId, ids))
+    const attempts = installed.ok && installed.exitCode === 0 ? INSTALL_REPROBE_ATTEMPTS : 1
+    let again = await call(() => api.probe(projectId, ids))
+    for (let i = 1; i < attempts && again.ok && again.plan.kind === 'install'; i++) {
+      await deps.wait(INSTALL_REPROBE_GAP_MS)
+      again = await call(() => api.probe(projectId, ids))
+    }
     if (!again.ok || again.plan.kind !== 'ready') {
       const base = installed.ok
         ? `The install finished (exit ${installed.exitCode}) but nodeterm-server is not ready on the host.`

@@ -283,7 +283,12 @@ again.
    installs only for a plan that does not refuse, and bootstraps and resumes only for a ready one.
 3. **Confirm.** Cancel changes nothing.
 4. **Install**, only when needed, then probe again. The server must now be ready, or the share stops
-   with nothing changed.
+   with nothing changed. After an install that exited 0 a not-ready answer gets three probes, 2 s
+   apart, because the restarted service may not answer `team status` at once. **Cancel** during the
+   install ends the share there (the dialog keeps the focus on itself, not on Cancel, so a stray
+   Enter does not stop a long install): no second probe, nothing saved, marked or closed, and the
+   result says "The install was cancelled, so nothing was shared. The host may keep a partly
+   installed nodeterm-server; the next install replaces it."
 5. **Save the canvas.**
 6. **Mark the project handed off, in progress** (`handedOffTo` with no host yet), and save, so no
    later save on this desktop mirrors the project to the host.

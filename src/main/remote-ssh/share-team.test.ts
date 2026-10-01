@@ -237,7 +237,7 @@ describe('share-team handlers', () => {
     expect(await deps({ remote: { status: 'absent' } }).h.flushMirror('p')).toEqual({ ok: true, nodeIds: [] })
     expect(await deps({ remote: { status: 'ok', content: '{not json' } }).h.flushMirror('p')).toMatchObject({ ok: false })
   })
-  it('install: one run per project at a time, cancellable, output streamed', async () => {
+  it('install: one run per project at a time, cancellable (answered E_CANCELLED), output streamed', async () => {
     let release: (v: { exitCode: number }) => void = () => {}
     let seenSignal: AbortSignal | null = null
     const { h } = deps({
@@ -255,7 +255,8 @@ describe('share-team handlers', () => {
     await h.cancelInstall('p')
     expect(seenSignal!.aborted).toBe(true)
     release({ exitCode: 143 })
-    expect(await first).toEqual({ ok: true, exitCode: 143 })
+    // A cancelled install is never an install that "finished": the share must end there.
+    expect(await first).toEqual({ ok: false, code: 'E_CANCELLED', error: 'The install was cancelled.' })
     expect(chunks).toEqual(['installing\n'])
     // The slot is free again once the run ends.
     const again = h.install('p', () => {})
