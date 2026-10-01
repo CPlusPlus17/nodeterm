@@ -279,13 +279,9 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   const booted = await call(() => api.bootstrap(projectId))
   if (!booted.ok) {
     // Any bootstrap failure reopens the project, even one without a server code that may have
-    // left the server set up: the desktop must never stay closed on an unconfirmed handover.
-    const error =
-      booted.code === 'E_HOSTING_OFF'
-        ? `Hosting could not start on the host: ${booted.error}`
-        : booted.code
-          ? booted.error
-          : booted.error + BOOTSTRAP_MAY_HAVE_FINISHED
+    // left the server set up: the desktop must never stay closed on an unconfirmed handover. A coded
+    // failure is the server's (or main's) own sentence and is shown as it came.
+    const error = booted.code ? booted.error : booted.error + BOOTSTRAP_MAY_HAVE_FINISHED
     return failAndUndo('bootstrapping', error, true)
   }
   const result = booted.result

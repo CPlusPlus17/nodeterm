@@ -8477,8 +8477,9 @@ invariants:
   existing client bookmark auto-confirm, so it is NOT a seventh confirm site. That is sound only for
   its input: the join code `team bootstrap` returned over the project's own ssh channel (host key
   authenticated by `known_hosts`; `decodeJoinCode` checks hostId = hash(key) and `wss:`/loopback
-  `ws:`). Feed it nothing else; the code does NOT yet enforce "only the last bootstrap's code". A
-  failed seed degrades to the SAS prompt, never to a skip; any pasted code compares the SAS.
+  `ws:`). Main enforces that: it remembers the code each project's last SUCCESSFUL bootstrap
+  returned (in memory) and refuses to seed any other, however valid. A failed seed degrades to the
+  SAS prompt, never to a skip; any pasted code compares the SAS.
 - **Hosted tabs are one per shared project, and the tab id IS the host project id.** relay-api
   translates no ids, so a tab under any other id asks the host about a project it does not know: a
   closed relay copy under that id is replaced, anything else holding it (an open tab, a local

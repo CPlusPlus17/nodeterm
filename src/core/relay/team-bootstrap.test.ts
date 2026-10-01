@@ -101,9 +101,10 @@ describe('runBootstrap', () => {
     expect(calls.some((c) => c.startsWith('share'))).toBe(false)
   })
 
-  it('a server shutting down after init does not start hosting', async () => {
+  it('a server shutting down after init does not start hosting, and says so with a code', async () => {
+    // Coded, so the desktop never reads it as a bootstrap that may have finished.
     const { d, calls } = deps({ closing: true })
-    await expect(runBootstrap(d, REQ)).rejects.toThrow(/shutting down/)
+    await expect(runBootstrap(d, REQ)).rejects.toMatchObject({ code: 'E_HOSTING_OFF', message: expect.stringMatching(/shutting down/) })
     expect(calls).toEqual(['init'])
   })
 })

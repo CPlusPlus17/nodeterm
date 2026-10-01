@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { createShareTeamHandlers, SHARE_TIMEOUTS, type ShareTeamDeps } from './share-team'
 import { SHARE_REFUSAL } from '../../shared/share-team'
 import { encodeJoinCode } from '../../core/relay/join-code'
@@ -66,6 +68,15 @@ const GOOD = (): Record<string, unknown> => ({
   created: { team: true, owner: true, project: true, share: true }
 })
 const lastArg = (c: { args: string[] }): string => c.args[c.args.length - 1]
+
+describe('share-team wiring in main', () => {
+  it('passes each verb timeout through to sshRun (a dropped argument falls back to the runner 15 s)', () => {
+    // The runner end is pinned in ssh-project.test.ts; this is the glue between the two.
+    const src = readFileSync(path.resolve(__dirname, '../index.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const block = src.slice(src.indexOf('createShareTeamHandlers({'), src.indexOf('runInstall:', src.indexOf('createShareTeamHandlers({')))
+    expect(block).toMatch(/run: \(args, stdin, timeoutMs\) =>\s+sshProjectManager \? sshProjectManager\.sshRun\(args, stdin, \{ timeoutMs \}\)/)
+  })
+})
 
 describe('share-team handlers', () => {
   it('probe: refuses a disconnected project with E_NOT_CONNECTED', async () => {
@@ -251,11 +262,18 @@ describe('share-team handlers', () => {
     release({ exitCode: 0 })
     expect(await again).toEqual({ ok: true, exitCode: 0 })
   })
+  /** Handlers whose last bootstrap returned CODE: the only code `seedBookmark` may seed. */
+  const bootstrapped = async (o: Parameters<typeof deps>[0] = {}) => {
+    const d = deps({ ...o, replies: [PROBE_OUT, cli(GOOD())] })
+    await d.h.probe('p', [])
+    expect(await d.h.bootstrap('p')).toMatchObject({ ok: true })
+    return d
+  }
   it('seedBookmark: a new team gets an approved ssh bookmark; an existing unapproved one is approved; a bad code is refused', async () => {
-    const a = deps()
+    const a = await bootstrapped()
     expect(await a.h.seedBookmark(CODE)).toMatchObject({ ok: true, label: 'box' })
     expect(a.saved).toEqual([{ hostId: hostIdFromPublicKeyB64(hostKey), code: CODE, label: 'box', deviceToken: null, approvedAt: '2026-10-01T10:00:00.000Z', source: 'ssh' }])
-    const b = deps({ bookmarks: [{ hostId: hostIdFromPublicKeyB64(hostKey), code: CODE, label: 'box', deviceToken: 'tok', approvedAt: null, source: 'code' }] })
+    const b = await bootstrapped({ bookmarks: [{ hostId: hostIdFromPublicKeyB64(hostKey), code: CODE, label: 'box', deviceToken: 'tok', approvedAt: null, source: 'code' }] })
     await b.h.seedBookmark(CODE)
     expect(b.saved[0]).toMatchObject({ deviceToken: 'tok', approvedAt: '2026-10-01T10:00:00.000Z', source: 'code' })
     expect(await a.h.seedBookmark('nodeterm://join/garbage')).toMatchObject({ ok: false })
@@ -263,13 +281,31 @@ describe('share-team handlers', () => {
   it('seedBookmark: an approved bookmark for the same key is left alone; one for another key is replaced', async () => {
     const hostId = hostIdFromPublicKeyB64(hostKey)
     const kept: RelayBookmark = { hostId, code: CODE, label: 'box', deviceToken: 'tok', approvedAt: '2026-01-01T00:00:00.000Z', source: 'code' }
-    const a = deps({ bookmarks: [kept] })
+    const a = await bootstrapped({ bookmarks: [kept] })
     await a.h.seedBookmark(CODE)
     expect(a.saved).toEqual([kept])
     // Same hostId, different stored key: the stored code no longer decodes to this key.
     const stale: RelayBookmark = { ...kept, code: 'nodeterm://join?code=stale' }
-    const b = deps({ bookmarks: [stale] })
+    const b = await bootstrapped({ bookmarks: [stale] })
     await b.h.seedBookmark(CODE)
     expect(b.saved).toEqual([{ hostId, code: CODE, label: 'box', deviceToken: null, approvedAt: '2026-10-01T10:00:00.000Z', source: 'ssh' }])
+  })
+  it('seedBookmark skips the SAS only for a code a successful bootstrap handed out', async () => {
+    // A valid code nobody bootstrapped: no SAS skip, and nothing written.
+    const fresh = deps()
+    expect(await fresh.h.seedBookmark(CODE)).toMatchObject({ ok: false })
+    expect(fresh.saved).toEqual([])
+    // A failed bootstrap hands out nothing either, even when the reply carried a code.
+    const refused = deps({ replies: [PROBE_OUT, cli({ ok: false, code: 'E_HOSTING_OFF', error: 'no' }, 1)] })
+    await refused.h.probe('p', [])
+    await refused.h.bootstrap('p')
+    expect(await refused.h.seedBookmark(CODE)).toMatchObject({ ok: false })
+    expect(refused.saved).toEqual([])
+    // A code for another team, valid and well-formed, after a bootstrap that returned CODE.
+    const otherKey = publicKeyToB64(genKeyPair().publicKey)
+    const other = encodeJoinCode({ v: 1, relayEndpoint: 'wss://relay.example', hostId: hostIdFromPublicKeyB64(otherKey), hostPublicKeyB64: otherKey, hostDeviceId: 'dev2', label: 'evil' })
+    const done = await bootstrapped()
+    expect(await done.h.seedBookmark(other)).toMatchObject({ ok: false })
+    expect(done.saved).toEqual([])
   })
 })

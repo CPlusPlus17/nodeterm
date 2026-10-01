@@ -133,9 +133,10 @@ describe('runShare', () => {
     expect(log).not.toContain('bootstrap')
   })
   it('a bootstrap failure reopens the SSH project and kills nothing', async () => {
-    const { deps, log } = setup({ bootstrap: { ok: false, code: 'E_HOSTING_OFF', error: 'refused (403)' } })
+    // The server's own sentence already says hosting could not start; it is shown as it came.
+    const { deps, log } = setup({ bootstrap: { ok: false, code: 'E_HOSTING_OFF', error: 'Hosting could not start: refused (403)' } })
     const out = await runShare(deps, INPUT)
-    expect(out).toEqual({ kind: 'failed', step: 'bootstrapping', reopened: true, error: 'Hosting could not start on the host: refused (403)' })
+    expect(out).toEqual({ kind: 'failed', step: 'bootstrapping', reopened: true, error: 'Hosting could not start: refused (403)' })
     expect(log).toContain('restore')
     expect(log.some((l) => l.startsWith('kill:'))).toBe(false)
   })

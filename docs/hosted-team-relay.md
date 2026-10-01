@@ -362,10 +362,11 @@ and host key already exists, sets `approvedAt` on it and keeps its device token 
 That is safe only because of what `seedBookmark` is given: the join code `team bootstrap` just
 returned over the project's own SSH channel, whose host key `known_hosts` already authenticated. The
 code names the relay key it was minted for (`decodeJoinCode` checks that the host id is the hash of
-that key), which is the assurance comparing six digits by eye gives. Its input must be such a code
-and nothing else; the desktop does not yet check that the code it is handed is the one the last
-bootstrap returned. The host approves its own half because your key is an owner in `team.json`. If
-the seed fails, the join asks for the SAS like a pasted code. Every other join, a pasted code or a
+that key), which is the assurance comparing six digits by eye gives. Main enforces that input: it
+seeds only a code a successful `team bootstrap` returned during this app run (kept per project, in
+memory), and refuses any other code, however valid, so that join compares the SAS. The host approves
+its own half because your key is an owner in `team.json`. If the seed fails, the join asks for the
+SAS like a pasted code. Every other join, a pasted code or a
 teammate's, still compares the SAS.
 
 ### Refusals
@@ -384,7 +385,7 @@ teammate's, still compares the SAS.
 | The host's home directory could not be read | "Could not read your home directory on the host, so Share with team cannot check that this project's folder is safe to share. Try again." |
 | git or curl is missing, and the installer has to run | "Installing nodeterm-server needs git and curl on the host (missing: …)." |
 | The folder path contains `'` or `\` | "The folder path contains a quote or backslash, which cannot be passed safely to every login shell." |
-| Hosting cannot start | "Could not share: Hosting could not start on the host: …" with the relay's reason; the SSH project is reopened. |
+| Hosting cannot start | "Could not share: " and the server's own sentence, e.g. "Hosting could not start: …" with the relay's reason, or "The nodeterm server is shutting down. Hosting was not started."; the SSH project is reopened. |
 
 **Root.** A root login is refused because the installer makes a system install for root, and the
 server core would then hand every Editor a root shell. A host that already runs a system install

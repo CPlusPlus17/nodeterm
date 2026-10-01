@@ -16,7 +16,6 @@ const write = (p: string, body: string, mode = 0o644): void => {
   fs.mkdirSync(path.dirname(p), { recursive: true })
   fs.writeFileSync(p, body, { mode })
 }
-const REAL_TIMEOUT = ['/usr/bin/timeout', '/bin/timeout'].find((p) => fs.existsSync(p)) ?? ''
 const findTool = (name: string): string => ['/usr/bin', '/bin'].map((d) => path.join(d, name)).find((p) => fs.existsSync(p)) ?? ''
 // A server bundle that knows `team bootstrap` carries its usage row as text; the probe detects the
 // verb from that text and never by running the bundle.
@@ -35,6 +34,9 @@ beforeAll(() => {
   write(path.join(bin, 'uname'), '#!/bin/sh\necho Linux\n', 0o755)
   write(path.join(bin, 'id'), '#!/bin/sh\ncase "$1" in -u) echo 1000;; -un) echo alice;; esac\n', 0o755)
   write(path.join(bin, 'git'), '#!/bin/sh\nexit 0\n', 0o755)
+  // A fake `timeout` that just runs the command: a stock macOS has no `timeout` binary, and the
+  // probe skips `team status` without one. The bounding behaviour has its own test below.
+  write(path.join(bin, 'timeout'), '#!/bin/sh\nshift\nexec "$@"\n', 0o755)
   // A fake tmux: sessions are files in $STATE; a "*.stuck" one survives kill-session. Like real
   // tmux, a target WITHOUT the leading `=` that matches no session exactly falls back to a prefix
   // match, and a miss prints tmux's own message (measured on tmux 3.4) with exit 1. Any socket but
@@ -193,10 +195,27 @@ describe.skipIf(process.platform === 'win32')('share-team remote shell (real /bi
     const hung = path.join(dir, 'bin-hung', 'node')
     write(hung, ['#!/bin/sh', 'if read -r line; then echo "stdin:$line" >> ' + JSON.stringify(hangLog) + '; fi', `echo "$*" >> ${JSON.stringify(hangLog)}`, 'exec sleep 30'].join('\n'), 0o755)
     const hungHome = homeWithUnit('hung-home', hung, NEW_MAIN)
-    // A stand-in `timeout` records the duration it was given and then waits 1 s instead of it.
+    // A stand-in `timeout` records the duration it was given, then kills the command after 1 s
+    // instead and answers 124 as the real one does. Plain sh, so the test needs no `timeout` binary.
     const timeoutLog = path.join(dir, 'timeout-calls.log')
     const fastTimeout = path.join(dir, 'bin-fast-timeout')
-    write(path.join(fastTimeout, 'timeout'), ['#!/bin/sh', `echo "$1" >> ${JSON.stringify(timeoutLog)}`, 'shift', `exec ${REAL_TIMEOUT} 1 "$@"`].join('\n'), 0o755)
+    write(
+      path.join(fastTimeout, 'timeout'),
+      [
+        '#!/bin/sh',
+        `echo "$1" >> ${JSON.stringify(timeoutLog)}`,
+        'shift',
+        '"$@" &',
+        'pid=$!',
+        '( sleep 1; kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &',
+        'watcher=$!',
+        'wait "$pid"; rc=$?',
+        'kill "$watcher" 2>/dev/null',
+        '[ "$rc" -gt 128 ] && exit 124',
+        'exit "$rc"'
+      ].join('\n'),
+      0o755
+    )
     const started = Date.now()
     const out = await sh(shareProbeCommand('~', noSystemUnit()), 'leaked\n', { HOME: hungHome, PATH: `${fastTimeout}:${bin}:/usr/bin:/bin` })
     expect(Date.now() - started).toBeLessThan(4000)

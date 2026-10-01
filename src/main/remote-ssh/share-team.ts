@@ -8,7 +8,8 @@
 // The server is not trusted with what it says about itself. A join code is accepted only through
 // `decodeJoinCode`, which checks that the hostId is the hash of the key the code carries and that the
 // relay endpoint is `wss:` (or loopback `ws:`); a bootstrap whose code names a different host than
-// its own reply is refused.
+// its own reply is refused. `seedBookmark`, which skips the SAS, seeds only a code a successful
+// bootstrap returned here.
 //
 // The probe is cached per project. `bootstrap` and `resume` run the server binary, main.cjs and data
 // dir from that cached, validated probe, never from paths the renderer sends, and bootstrap adopts
@@ -106,6 +107,7 @@ const PROJECT_READ_FAILED = 'Could not read the project file on the host.'
 const BAD_JOIN_CODE = 'The server sent an invalid join code.'
 const BAD_BOOTSTRAP = 'The server answered bootstrap with a result this build cannot read.'
 const BAD_RESUME = 'The server answered resume with a result this build cannot read.'
+const NOT_ISSUED = 'Only the invite code Share with team just received can be added without the verification code.'
 
 /** The most of a server-sent sentence shown to the user. */
 const SHOWN_MAX = 500
@@ -187,6 +189,9 @@ function resumeResults(body: unknown): ResumeResultEntry[] | null {
 export function createShareTeamHandlers(deps: ShareTeamDeps): ShareTeamHandlers {
   const probes = new Map<string, ShareProbe>()
   const installs = new Map<string, AbortController>()
+  /** The join code each project's last SUCCESSFUL bootstrap returned: the only codes `seedBookmark`
+   *  may seed, because only those arrived over the project's own authenticated ssh channel. */
+  const issuedCodes = new Map<string, string>()
 
   /** The cached probe and its plan. A plan that refuses answers with its own reason, under the
    *  not-probed code: nothing ran, and the renderer must not read it as a server failure. */
@@ -309,6 +314,7 @@ export function createShareTeamHandlers(deps: ShareTeamDeps): ShareTeamHandlers 
         if (!result) return fail(BAD_BOOTSTRAP)
         const code = decodeJoinCode(result.joinCode)
         if (!code || code.hostId !== result.hostId) return fail(BAD_JOIN_CODE)
+        issuedCodes.set(projectId, result.joinCode)
         return { ok: true, result }
       } catch (e) {
         return caught(e)
@@ -365,13 +371,15 @@ export function createShareTeamHandlers(deps: ShareTeamDeps): ShareTeamHandlers 
 
     async seedBookmark(joinCode) {
       try {
+        // The ONE join that skips the SAS, so it takes only a code a successful bootstrap handed
+        // out here: that code arrived over the project's own ssh channel, whose host key
+        // known_hosts authenticated, and it names the relay key it was minted for — the same
+        // assurance a human comparing six digits gives. Any other code, valid or not, still
+        // compares the SAS.
+        if (![...issuedCodes.values()].includes(joinCode)) return fail(NOT_ISSUED)
         const code = decodeJoinCode(joinCode)
         if (!code) return fail('That is not a valid team invite code.')
         const at = new Date(deps.now()).toISOString()
-        // The ONE join that skips the SAS: this code arrived over the project's own ssh channel,
-        // whose host key known_hosts authenticated, and it names the relay key it was minted for —
-        // the same assurance a human comparing six digits gives. Any pasted code still compares the
-        // SAS.
         const existing = (await deps.bookmarks.list()).find((b) => b.hostId === code.hostId)
         if (existing && decodeJoinCode(existing.code)?.hostPublicKeyB64 === code.hostPublicKeyB64) {
           // Same team, same key: keep its device token; approve it if it never was.

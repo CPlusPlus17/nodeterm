@@ -30,7 +30,7 @@ export async function runBootstrap(
   const { created: team } = await svc.init()
   // The admin closes BEFORE the server stops hosting: a `start()` issued after that stop would bring
   // a scheduler up on a server that is going away (the same rule `team init` follows).
-  if (deps.closing()) throw new Error('The nodeterm server is shutting down. Hosting was not started.')
+  if (deps.closing()) throw codedError('E_HOSTING_OFF', 'The nodeterm server is shutting down. Hosting was not started.')
   const start = await svc.start()
   if (start !== 'started') throw codedError('E_HOSTING_OFF', `Hosting did not start (${start}). See \`team status\`.`)
   const wait = await svc.waitForHosting(deps.hostingWaitMs ?? BOOTSTRAP_HOSTING_WAIT_MS)
