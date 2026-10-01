@@ -21,7 +21,8 @@ import type {
   UpdateProgress,
   Workspace,
   WorkspaceSaveOptions,
-  WorkspaceMigrationKind
+  WorkspaceMigrationKind,
+  ZoomActualSizeModifiers
 } from '../shared/types'
 import type { ClientId, PeerDiff, PeerIdentity, PeerState } from '../shared/presence'
 import type { ProjectConsentRequest, ProjectSetupEvent } from '../shared/project-settings'
@@ -815,7 +816,7 @@ const api: NodeTerminalApi = {
   },
   onMarkdownToggle: subscribe(IPC.appToggleMarkdown),
   onCloseNode: subscribe(IPC.appCloseNode),
-  onZoomActualSize: subscribe(IPC.appZoomActualSize),
+  onZoomActualSize: subscribe<[ZoomActualSizeModifiers?]>(IPC.appZoomActualSize),
   // Native View menu → renderer.
   onToggleAutoAlign: subscribe(IPC.appToggleAutoAlign),
   onFitView: subscribe(IPC.appFitView),

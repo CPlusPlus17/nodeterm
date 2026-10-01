@@ -6607,6 +6607,33 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
   `main/index.ts` intercepts it in `before-input-event` and forwards `app:zoom-actual-size`, which
   re-asks the same refusals. Server Edition needs no intercept (no menu; Chrome/Firefox hand ⌘0 to
   the page) and stubs the subscription.
+- **Per-terminal font size** (`renderer/terminal/terminal-font-zoom.ts`, issue #915). Opt-in
+  `settings.terminalFontZoomKeys` (Settings → Terminal, default OFF). On, with a terminal focused:
+  ⌘+ / ⌘− (Ctrl off-mac — exactly one primary, since Ctrl+− on mac is readline undo) step THAT
+  node's `data.terminalFontSize` by 1 within the global field's 8–28 range; ⌘0 clears it back to the
+  global `fontSize`. + and − match on `e.key` (German `+` key), 0 on `e.code` like the canvas chord.
+  Before #915 ⌘+ / ⌘− did NOTHING (no menu zoom roles, React Flow's key zoom is off; only
+  webview guests zoom on them) and ⌘0 in a terminal was claimed by main and then refused. Off, or
+  with no terminal focused, every key behaves as before. The override is persisted per node
+  (`normalizeTerminalFontSize` on both sides of `nodeStatesToFlow`/`flowToNodeStates`) and layered
+  by `useXtermVisualSettings(projectId, fontSizeOverride)` — the SAME path for the canvas node and
+  the card modal (`ModalSpawn.terminalFontSize`); the settings preview passes none. Font size is
+  cell geometry, so `applyLiveOptions` reports `metricsChanged` and both surfaces re-fit and report
+  the new grid exactly as for a global font change. **One writer:** both xterm key handlers and the
+  forwarded desktop ⌘0 (resolved from focus via `data-font-zoom-node` on the xterm host) dispatch
+  `nodeterm:terminal-font-zoom`; Canvas applies it (`nextTerminalFontSizeOverride`, `markDirty`).
+  The toolbar / dock +/− buttons stay CANVAS zoom (they have no focused terminal to act on).
+  Two review fixes: main forwards ⌘0 WITH `{meta, control}` and the renderer resets only on the
+  platform chord (`forwardedResetMatches` — a mac Ctrl+0 keeps its old meaning); and under
+  `terminalGpuRendering: 'shared'` a node whose size differs from the global one is held OFF the
+  shared glyph canvas (`leavesSharedGlyphAtlas` → `glyphOff`) and paints its own pixels, because the
+  shared atlas is rasterized for the global font and a grid's cell is fixed at `register`.
+  Round 2: every xterm is BUILT from the effective visual (`visualRef`, both surfaces) — a refresh
+  or offscreen revive recreates it in the same mount, where the live-options effect does not re-run;
+  and keypad 0 resets only when it types `0` (Num Lock off it is Insert, and Ctrl+Insert copies).
+  Round 3: Canvas also mirrors the step into the projects store for the ACTIVE project
+  (`patchStoredFontSize`, same epoch guard as `commitActiveToStore`), because the Omni board builds
+  its card modal's spawn from the store and would otherwise lag until the next autosave commit.
 - **"Go to node" (`goToNode` → `frameNode`)** — the one camera-travel path (notification click,
   sessions sidebar, ⌘K jump, presence travel, minimap double-click, double-click focus).
   **It computes the viewport itself and applies it with `setViewport`. It must never go through

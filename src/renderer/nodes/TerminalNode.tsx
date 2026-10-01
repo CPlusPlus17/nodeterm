@@ -101,6 +101,12 @@ import {
   type SessionLife
 } from '../terminal/terminal-config'
 import { useXtermVisualSettings } from '../terminal/useXtermVisualSettings'
+import {
+  FONT_ZOOM_NODE_ATTR,
+  leavesSharedGlyphAtlas,
+  requestTerminalFontZoom,
+  terminalFontZoomAction
+} from '../terminal/terminal-font-zoom'
 import { ensureProjectLaunchInfo } from '../state/projectLaunchInfo'
 import { loseWebglContexts, registerWebglClient, type WebglClientHandle } from '../terminal/webgl-budget'
 import { quantizeCharSize } from '../terminal/char-size-quantize'
@@ -1368,7 +1374,17 @@ export function TerminalNode({
   // One shallow-compared subscription for the whole appearance slice — see useXtermVisualSettings.
   // Scoped to the OWNING project so its `terminal.theme` / `terminal.fontFamily` layer over the
   // global settings for this node, and for no other project's nodes.
-  const visual = useXtermVisualSettings(owningProjectId())
+  // `data.terminalFontSize` is this node's own ⌘+ / ⌘− size (issue #915), layered last by the hook
+  // so the card modal (which passes the same value) re-options through the identical path.
+  const visual = useXtermVisualSettings(owningProjectId(), data.terminalFontSize)
+  // Mirrored for the lifecycle effect, which builds a NEW xterm on a refresh (`respawnNonce`) or an
+  // offscreen revive without remounting — the [visual, glass] live-options effect does not re-run
+  // then, so the instance must be born with the effective appearance (the node's font override, the
+  // project's theme/font), not the bare global settings (review round 2 of #915).
+  const visualRef = useRef(visual)
+  visualRef.current = visual
+  // The GLOBAL size the shared glyph atlas is rasterized for (see `fontLeavesAtlas`).
+  const globalFontSize = useSettings((s) => s.settings.fontSize)
   // Glass terminals (Settings → Appearance): xterm paints no background and the node supplies a
   // translucent tint of THIS node's effective theme (lib/useTerminalGlass.ts).
   const { glass, tint, vars: glassVars } = useTerminalGlass(visual.terminalTheme)
@@ -1717,7 +1733,13 @@ export function TerminalNode({
   // React Flow viewport, so the shared layer's glyphs — positioned from on-canvas geometry —
   // would paint somewhere the node no longer is. Routes through the same setup/teardown the
   // collapse/⌘M/stacking/drag reasons always used; v1 deliberately forces the DOM/WebGL path.
-  const glyphOff = collapsed || mdMode || glyphOpaque || dragging || focused
+  // `fontLeavesAtlas` is a MUST-BE-OPAQUE reason too (issue #915 review): the shared atlas is
+  // rasterized for the GLOBAL font with a cell fixed at `register`, so a node rendering at its own
+  // ⌘+/⌘− size would keep painting old-size glyphs over a pty that was resized to the new cell.
+  // Holding it off the shared canvas makes it paint its own pixels; clearing the override rejoins.
+  // `visual` is declared above, so this reads the same effective size xterm is re-optioned with.
+  const fontLeavesAtlas = leavesSharedGlyphAtlas(visual.fontSize, globalFontSize)
+  const glyphOff = collapsed || mdMode || glyphOpaque || dragging || focused || fontLeavesAtlas
   const glyphOffRef = useRef(glyphOff)
   glyphOffRef.current = glyphOff
   // The NOT-ON-SCREEN half on its own. `setupGlyph`'s gate needs to tell the two reasons apart:
@@ -2415,7 +2437,8 @@ export function TerminalNode({
     const s = useSettings.getState().settings
     // Appearance comes from ONE place, shared with the kanban card modal's viewer of this same
     // session (`ModalTerminal`) — see `xtermOptionsFromSettings`.
-    const term = parked?.term ?? new Terminal(xtermOptionsFromSettings(s, isLiquidGlass(s.appTheme)))
+    const term =
+      parked?.term ?? new Terminal(xtermOptionsFromSettings(visualRef.current, isLiquidGlass(s.appTheme)))
     // A hosted team's Viewer/Commenter watches and never types: keystrokes and pastes are not taken
     // at all (the host refuses pty:write for them anyway). Set only for such a tab — every other
     // session never touches the option. The role is known before the session exists (relay-tab).
@@ -3365,6 +3388,22 @@ export function TerminalNode({
     // dispatcher that honors the policy for every other chord, so it owes the check itself.
     // `liveProjectJumpTarget` is the same decision Canvas's handler makes.
     term.attachCustomKeyEventHandler((e) => {
+      // ⌘+ / ⌘− / ⌘0 → THIS terminal's font size (issue #915), only when the user opted in
+      // (`terminalFontZoomKeys`). First, and swallowed: off-mac xterm would otherwise write ^_ for
+      // Ctrl+− to the pty, and a prevented event keeps the window dispatcher's canvas ⌘0 out of it.
+      // Canvas applies the step (the one writer — see terminal-font-zoom.ts); the live re-option
+      // effect below then re-fits and reports the new grid like any font change. The desktop ⌘0
+      // never arrives here (main's before-input-event claims it); Canvas resolves that one from
+      // focus via FONT_ZOOM_NODE_ATTR on the xterm host.
+      const fontZoom = terminalFontZoomAction(e, {
+        enabled: useSettings.getState().settings.terminalFontZoomKeys,
+        isMac
+      })
+      if (fontZoom) {
+        e.preventDefault()
+        requestTerminalFontZoom(id, fontZoom)
+        return false
+      }
       const ownsProjectJump =
         terminalShortcutPolicy() !== 'terminal-first' && liveProjectJumpTarget(e) !== null
       const registryOwns = terminalChordBubbles(
@@ -6523,6 +6562,7 @@ export function TerminalNode({
         <div
           className={`term-node__xterm nodrag nowheel${co.letterbox ? ' letterboxed' : ''}`}
           ref={bodyRef}
+          {...{ [FONT_ZOOM_NODE_ATTR]: id }}
         />
         {uploadNote && (
           <div className={`term-node__upload${uploadNote.failed ? ' failed' : ''}`}>

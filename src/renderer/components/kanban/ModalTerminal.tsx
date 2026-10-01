@@ -21,6 +21,12 @@ import { useProjects } from '../../state/projects'
 import { useSession } from '../../session/session'
 import { isHostedReadOnly } from '../../state/hostedTeams'
 import { useSettings } from '../../state/settings'
+import { isMacPlatform } from '@shared/platform-utils'
+import {
+  FONT_ZOOM_NODE_ATTR,
+  requestTerminalFontZoom,
+  terminalFontZoomAction
+} from '../../terminal/terminal-font-zoom'
 import { useTerminalSearch } from '../../terminal/useTerminalSearch'
 import { useTerminalGlass } from '../../lib/useTerminalGlass'
 import { LocalTransport } from '../../terminal/local-transport'
@@ -78,6 +84,10 @@ export interface ModalSpawn {
   sshRemoteTmux?: boolean
   /** One-shot launch command for a fresh session (agent CLIs). */
   initialCommand?: string
+  /** The node's own font size (issue #915, `data.terminalFontSize`). The modal is a second view of
+   *  the SAME session, so it renders at the node's size, not the global one — and, being a
+   *  co-attach subscriber, re-reports its grid when that changes like any font change. */
+  terminalFontSize?: number
 }
 
 /**
@@ -147,7 +157,11 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
   // only ever opens over it), deliberately NOT this card's connection scope. `sshConnectionScope`
   // answers a project×host attachment id for a session on a foreign host, which names no project at
   // all — the per-project appearance would silently vanish for exactly those cards.
-  const visual = useXtermVisualSettings(owningProjectId())
+  // …and the NODE's own font size (issue #915), so this second view matches the canvas one.
+  const visual = useXtermVisualSettings(owningProjectId(), spawn.terminalFontSize)
+  // MIRROR TerminalNode: the xterm is BUILT from the effective appearance, not the bare globals.
+  const visualRef = useRef(visual)
+  visualRef.current = visual
   // Liquid Glass: the same glass as the canvas node (a second view of one session must look like
   // it). The DOM renderer keeps app-painted cell backgrounds opaque (see CLAUDE.md).
   const { glass, vars: glassVars } = useTerminalGlass(visual.terminalTheme)
@@ -211,7 +225,7 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
     // Appearance comes from the SAME source as the canvas node's terminal — this modal is a second
     // view of one session, and a card that renders it in different colours reads as a different
     // terminal. (It used to hardcode its own background, which is exactly what happened.)
-    const term = new Terminal(xtermOptionsFromSettings(s, glassRef.current))
+    const term = new Terminal(xtermOptionsFromSettings(visualRef.current, glassRef.current))
     // The same read-only rule as the canvas node: a hosted team's Viewer/Commenter never types here.
     if (isHostedReadOnly(session.id)) term.options.disableStdin = true
     // Without a handler xterm answers an OSC 8 click with a window.confirm — the one surface
@@ -311,6 +325,17 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
     // digit addressing an open project, AND app-first: under terminal-first the digit belongs to
     // the PTY), which `liveProjectJumpTarget` + the policy decide for both surfaces.
     term.attachCustomKeyEventHandler((e) => {
+      // MIRROR TerminalNode: ⌘+ / ⌘− / ⌘0 step the NODE's own font size (issue #915) when opted
+      // in. The modal renders `spawn.terminalFontSize`, so the step lands on both views at once.
+      const fontZoom = terminalFontZoomAction(e, {
+        enabled: useSettings.getState().settings.terminalFontZoomKeys,
+        isMac: isMacPlatform()
+      })
+      if (fontZoom) {
+        e.preventDefault()
+        requestTerminalFontZoom(nodeId, fontZoom)
+        return false
+      }
       const ownsProjectJump =
         terminalShortcutPolicy() !== 'terminal-first' && liveProjectJumpTarget(e) !== null
       // MIRROR TerminalNode's registryOwns — but with `kanbanOpen: true` ALWAYS: the modal only
@@ -614,7 +639,7 @@ export function ModalTerminal({ nodeId, spawn, searchOpen, onCloseSearch, covere
           onClose={onCloseSearch}
         />
       )}
-      <div ref={hostRef} className="kanban-modal__term" />
+      <div ref={hostRef} className="kanban-modal__term" {...{ [FONT_ZOOM_NODE_ATTR]: nodeId }} />
       {linkMenu && (
         <ContextMenu
           x={linkMenu.x}

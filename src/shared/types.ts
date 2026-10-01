@@ -501,6 +501,10 @@ export interface CanvasNodeState {
   /** Parent group node id, if this node belongs to a group frame. */
   parentId?: string
   // terminal-only
+  /** This terminal's own font size (issue #915), set with ⌘+ / ⌘− when
+   *  `settings.terminalFontZoomKeys` is on; absent = follow the global `fontSize`. Hand-editable,
+   *  so every reader goes through `normalizeTerminalFontSize` (renderer/terminal/terminal-font-zoom). */
+  terminalFontSize?: number
   shell?: string
   cwd?: string
   /** Which agent runs in this terminal node (claude/codex/gemini/custom). */
@@ -1720,6 +1724,14 @@ export interface SpeechSettings {
 export type TerminalCursorStyle = 'block' | 'bar' | 'underline'
 export type TerminalCursorInactiveStyle = TerminalCursorStyle | 'outline' | 'none'
 
+/** The primary modifiers of a forwarded desktop ⌘/Ctrl+0 (issue #915): the renderer applies the
+ *  per-platform terminal-font-reset predicate to them. Optional on the listener because the Server
+ *  Edition stub never fires and an absent value must read as "not a font reset". */
+export interface ZoomActualSizeModifiers {
+  meta: boolean
+  control: boolean
+}
+
 /** User-configurable application settings (settings.json). */
 export interface Settings {
   fontSize: number
@@ -1908,6 +1920,13 @@ export interface Settings {
    * terminal. Logic: `renderer/terminal/copy-on-select.ts`.
    */
   copyOnSelect: boolean
+  /** ⌘+ / ⌘− / ⌘0 (Ctrl off-mac) change the FOCUSED terminal's own font size instead of doing
+   *  nothing / zooming the canvas (issue #915). The size is stored per node
+   *  (`CanvasNodeState.terminalFontSize`); ⌘0 clears it back to `fontSize`. OFF by default: off-mac
+   *  the chord is Ctrl+−, which a focused terminal passes to the shell today (readline undo). With
+   *  it off, and whenever no terminal has focus, the keys behave exactly as before. See
+   *  renderer/terminal/terminal-font-zoom.ts. */
+  terminalFontZoomKeys: boolean
   /**
    * Windows SSH projects: after a key is unlocked with its passphrase, also load it into the
    * Windows OpenSSH agent service, so later connections (and the user's own `ssh`) do not prompt
@@ -2297,6 +2316,7 @@ export const DEFAULT_SETTINGS: Settings = {
   openMarkdownPreviewMigrated: true,
   terminalMiddleClickPaste: false,
   copyOnSelect: false,
+  terminalFontZoomKeys: false,
   windowsSshAgentAddKeys: false,
   wheelZoom: false,
   wheelZoomSpeed: 1,
@@ -4225,7 +4245,7 @@ export interface NodeTerminalApi {
   /** Fires when the user presses Cmd/Ctrl+0 (zoom the canvas back to 100%). Desktop only: the
    *  key is intercepted in main because Electron's default View menu owns the accelerator. In the
    *  Server Edition the renderer's own keydown handler sees the key and this is a no-op stub. */
-  onZoomActualSize(listener: () => void): () => void
+  onZoomActualSize(listener: (mods?: ZoomActualSizeModifiers) => void): () => void
   /** Native View menu → Snap to Grid toggle. Returns unsubscribe. */
   onToggleAutoAlign(listener: () => void): () => void
   /** Native View menu → Fit View. Returns unsubscribe. */

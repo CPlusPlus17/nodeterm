@@ -272,6 +272,17 @@ import {
   zoomShortcutChord
 } from '../lib/zoomShortcut'
 import {
+  TERMINAL_FONT_ZOOM_EVENT,
+  fontZoomTargetNodeId,
+  forwardedResetMatches,
+  nextTerminalFontSizeOverride,
+  normalizeTerminalFontSize,
+  patchProjectFontSize,
+  requestTerminalFontZoom,
+  type TerminalFontZoomRequest
+} from '../terminal/terminal-font-zoom'
+import { isMacPlatform } from '@shared/platform-utils'
+import {
   dispatchGlobalKeydown,
   type GlobalKeyEvent,
   type GlobalKeydownDeps
@@ -9980,11 +9991,64 @@ export function Canvas() {
   // the same module rather than re-derived. Server Edition has no menu and no intercept: there the
   // keydown branch above is the whole path (the browser's own ⌘0 means the same thing, so the two
   // agree rather than fight, and the bridge stubs this subscription out).
+  //
+  // Issue #915: with `terminalFontZoomKeys` on and a terminal focused, the same forwarded ⌘0 means
+  // "this terminal back to the global font size" instead. Asked FIRST — `zoomShortcutAllowed`
+  // refuses in a terminal anyway (text focus), so this is the only thing ⌘0 can mean there — and
+  // resolved from focus, because the forwarded signal names no node (FONT_ZOOM_NODE_ATTR is on
+  // both the canvas node's and the card modal's xterm host).
   useEffect(() => {
-    return window.nodeTerminal.onZoomActualSize(() => {
+    return window.nodeTerminal.onZoomActualSize((mods) => {
+      // Only the platform's reset chord (⌘0 on mac, Ctrl+0 elsewhere — main forwards either, and
+      // both together): any other forwarded ⌘/Ctrl+0 keeps exactly its pre-#915 meaning.
+      const target =
+        useSettings.getState().settings.terminalFontZoomKeys && forwardedResetMatches(mods, isMacPlatform())
+          ? fontZoomTargetNodeId(typeof document === 'undefined' ? null : document.activeElement)
+          : null
+      if (target) {
+        requestTerminalFontZoom(target, 'reset')
+        return
+      }
       if (zoomShortcutAllowed(liveZoomShortcutContext())) zoomTo100()
     })
   }, [zoomTo100])
+
+  // Per-terminal font size (issue #915): the ONE writer of `data.terminalFontSize`. Every entry
+  // point — the canvas terminal's and the card modal's xterm key handlers, and the forwarded ⌘0
+  // above — dispatches TERMINAL_FONT_ZOOM_EVENT, so the read-modify-write, the clamp and the
+  // persist happen here once. The node's live re-option effect (and the modal's) then sees the new
+  // size through `useXtermVisualSettings`, re-fits and reports the new grid to the pty. Read from
+  // `nodesRef` so the no-op case (already at a bound, reset with no override) costs no save. A
+  // node that is not on THIS canvas (a global-board card of another project) is left alone.
+  useEffect(() => {
+    const onFontZoom = (e: Event): void => {
+      const d = (e as CustomEvent<TerminalFontZoomRequest>).detail
+      if (!d?.nodeId) return
+      const node = nodesRef.current.find((n) => n.id === d.nodeId)
+      if (!node || node.type !== 'terminal') return
+      const prev = normalizeTerminalFontSize(node.data.terminalFontSize)
+      const next = nextTerminalFontSizeOverride(d.action, prev, useSettings.getState().settings.fontSize)
+      if (next === prev) return
+      setNodes((ns) =>
+        ns.map((n) => (n.id === d.nodeId ? { ...n, data: { ...n.data, terminalFontSize: next } } : n))
+      )
+      // Mirror into the projects store too (review round 3): the Omni board reads the ACTIVE
+      // project's card spawn from the store, not React Flow, so without this its focused terminal
+      // lagged until the next autosave commit — or never, while a conflict suspends autosave.
+      // Same epoch guard as `commitActiveToStore`; the next commit writes the identical value.
+      const activeId = useProjects.getState().activeProjectId
+      if (activeId && canCommitCanvas(nodesProjectIdRef.current, activeId)) {
+        useProjects.setState((st) => {
+          const projects = patchProjectFontSize(st.projects, activeId, d.nodeId, next)
+          // A no-op step returns the same array: hand back the same state so nothing re-renders.
+          return projects === st.projects ? st : { projects }
+        })
+      }
+      markDirty()
+    }
+    window.addEventListener(TERMINAL_FONT_ZOOM_EVENT, onFontZoom)
+    return () => window.removeEventListener(TERMINAL_FONT_ZOOM_EVENT, onFontZoom)
+  }, [setNodes, markDirty, nodesRef])
 
   // Apply the accent color as a CSS variable.
   useEffect(() => {
