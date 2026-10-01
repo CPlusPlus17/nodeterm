@@ -19,6 +19,8 @@ export interface TravelProject {
   unavailable?: boolean
   /** Set on an SSH project handed to a hosted team; that team's tab holds the same node ids. */
   handedOffTo?: unknown
+  /** A relay tab (a hosted team's project); a closed one owns no node (`nodeOwner`). */
+  remote?: boolean
   nodes: { id: string }[]
 }
 

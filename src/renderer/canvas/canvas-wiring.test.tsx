@@ -282,12 +282,12 @@ describe('deleteNodes also records persisted closed-session history', () => {
 describe('reopening a persisted closed-session entry shares reopenLastClosed\'s execution', () => {
   it('extracts the switch-on-plan-action body into its own callback', () => {
     expect(CANVAS_SRC).toContain('const executeReopenPlan = useCallback(')
-    expect(CANVAS_SRC).toContain('(plan: Exclude<ReopenPlan, { action: \'skip\' }>): boolean => {')
+    expect(CANVAS_SRC).toContain('(plan: Exclude<ReopenPlan, { action: \'skip\' } | { action: \'refuse\' }>): boolean => {')
   })
 
   it('reopenLastClosedCommand delegates to it instead of inlining the switch', () => {
     const fnStart = CANVAS_SRC.indexOf('const reopenLastClosedCommand = useCallback(')
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1700)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 2600)
     expect(fnBody).toContain('return executeReopenPlan(plan)')
     expect(fnBody).not.toContain('switch (plan.action)')
   })
@@ -296,16 +296,17 @@ describe('reopening a persisted closed-session entry shares reopenLastClosed\'s 
     // The bug this pins: restoring via ⇧⌘T without consuming the matching sidebar row would let a
     // later sidebar click restore the same closed session a second time.
     const fnStart = CANVAS_SRC.indexOf('const reopenLastClosedCommand = useCallback(')
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1700)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 2600)
     expect(fnBody).toContain("if (entry.kind === 'nodes') {")
     expect(fnBody).toContain('.discardClosedSession(entry.projectId, n.closedSessionId)')
     expect(fnBody).toContain('void writeDisk()')
   })
 
-  it('consumes the entry before doing anything else, so a stale double-click cannot reopen it twice', () => {
+  it('consumes the entry before anything restores it, so a stale double-click cannot reopen it twice', () => {
+    // (Only the closed-team-tab refusal runs before it, and that one restores nothing.)
     const fnStart = CANVAS_SRC.indexOf('const reopenClosedSessionCommand = useCallback(')
     expect(fnStart).toBeGreaterThan(-1)
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 520)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 900)
     expect(fnBody).toContain('.consumeClosedSession(projectId, entryId)')
     expect(fnBody).toContain('if (!consumed) return false')
     expect(fnBody).toContain('void writeDisk()')
@@ -313,23 +314,23 @@ describe('reopening a persisted closed-session entry shares reopenLastClosed\'s 
 
   it('drops the matching ⇧⌘T-stack entry so the two histories cannot both reopen the same delete', () => {
     const fnStart = CANVAS_SRC.indexOf('const reopenClosedSessionCommand = useCallback(')
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 520)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 900)
     expect(fnBody).toContain('useReopenHistory.getState().dropByClosedSessionId(projectId, entryId)')
   })
 
   it('wraps the consumed entry as a synthetic ReopenEntry and reuses the pure planReopen', () => {
     const fnStart = CANVAS_SRC.indexOf('const reopenClosedSessionCommand = useCallback(')
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1500)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1900)
     expect(fnBody).toContain("kind: 'nodes'")
     expect(fnBody).toContain('nodes: [stateToReopenSnapshot(consumed)]')
     expect(fnBody).toContain('const plan = planReopen(')
-    expect(fnBody).toContain("if (plan.action === 'skip') return false")
+    expect(fnBody).toContain("if (plan.action === 'skip' || plan.action === 'refuse') return false")
     expect(fnBody).toContain('return executeReopenPlan(plan)')
   })
 
   it('resolves permission mode and account against the TARGET project, same as reopenLastClosedCommand', () => {
     const fnStart = CANVAS_SRC.indexOf('const reopenClosedSessionCommand = useCallback(')
-    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1500)
+    const fnBody = CANVAS_SRC.slice(fnStart, fnStart + 1900)
     expect(fnBody).toContain('resolveAccountId: (id) => resolveNewNodeAccount(id, project, accounts)')
     expect(fnBody).toContain('permissionModeFor: (agentId) => projectPermissionMode(project, agentId)')
   })

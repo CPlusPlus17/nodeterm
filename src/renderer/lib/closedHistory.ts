@@ -206,6 +206,20 @@ export function isReopenableClosedProject(p: { closed?: boolean; unavailable?: b
   return !!p.closed && !p.unavailable && !p.remote
 }
 
+/** A relay tab (a hosted team's project) the user closed on this computer. Its relay session is
+ *  gone, so anything that reopened it (or restored a node into it) would mount the HOST's node ids
+ *  on this machine's core: local shells, and an agent cold-resume. Nothing reopens one. */
+export function isClosedTeamTab(p: { closed?: boolean; remote?: boolean } | undefined): boolean {
+  return !!p?.remote && !!p.closed
+}
+
+/** Said instead of reopening a closed team tab. A closed tab stays dismissed while its project
+ *  stays shared (even across a reconnect of the team's other tabs); what brings it back is joining
+ *  the team again once none of its tabs is open, or the team unsharing the project and sharing it
+ *  again (`lib/hostedTeamTabs.ts`). */
+export const CLOSED_TEAM_TAB_NOTICE =
+  'This team tab was closed on this computer. It opens again when you join the team again (close its other tabs first), or when the team stops sharing the project and shares it again.'
+
 /**
  * Narrows the "Recently closed" list by name or folder — both already rendered on the row, and
  * `cwd` is the row's `title`. Empty/whitespace query = everything, unchanged.
@@ -222,6 +236,9 @@ export function filterClosedProjects<T extends { name: string; cwd?: string }>(
 export function mergeClosedHistory(projects: readonly Project[]): ClosedHistoryRow[] {
   const rows: ClosedHistoryRow[] = []
   for (const p of projects) {
+    // A closed team tab offers neither itself nor its closed sessions: restoring a session puts the
+    // node back into that project and reopens it.
+    if (isClosedTeamTab(p)) continue
     if (isReopenableClosedProject(p)) {
       rows.push({ kind: 'project', projectId: p.id, closedAt: p.closedAt ?? -1, project: p })
     }

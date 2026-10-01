@@ -22,6 +22,14 @@ describe('nodeOwner', () => {
     expect(nodeOwner([closedMarked], 'x')?.id).toBe('d')
   })
 
+  it('a CLOSED team tab owns nothing: the shared node falls back to the handed-off SSH project, whose reopen asks', () => {
+    const closedTab = { ...teamTab, closed: true, remote: true }
+    expect(nodeOwner([sshProject, closedTab], 'n1')?.id).toBe('ssh-1')
+    expect(nodeOwner([closedTab], 'n1')).toBeUndefined()
+    // An open team tab still wins, as before.
+    expect(nodeOwner([sshProject, { ...teamTab, remote: true }], 'n1')?.id).toBe('p-9')
+  })
+
   it('ties go to the first in the list; an unknown node has no owner', () => {
     expect(nodeOwner([{ id: 'a', nodes: [{ id: 'x' }] }, { id: 'b', nodes: [{ id: 'x' }] }], 'x')?.id).toBe('a')
     expect(nodeOwner([teamTab], 'nope')).toBeUndefined()

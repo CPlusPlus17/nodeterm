@@ -8508,15 +8508,24 @@ invariants:
   call, always passed by `VIEW_EVENTS`), because `workspace:server-change` ignores unknown ids
   and viewers never receive `canvas:authority-changed`. A tab the user closes is dismissed until
   the project is unshared; nothing shared keeps one placeholder tab. A hosted tab never cold-resumes
-  an agent (`canColdRestore` excludes `source === 'relay'`). A CLOSED team tab (any `remote`
-  project) is never offered by "Recently closed" (`isReopenableClosedProject`) or ⇧⌘T (`planReopen`
-  skips it, `performCloseProject` does not push it): its nodes are the host's sessions, and a reopen
-  from here mounts them on the LOCAL core.
+  an agent (`canColdRestore` excludes `source === 'relay'`). A CLOSED team tab is NEVER reopened: once
+  closed its relay session is disposed and `sessionForProject` falls back to the LOCAL session, so a
+  reopen mounts the host's node ids on this core (local shells, agent cold-resume). The ONE reopen
+  funnel, `reopenProjectUnchecked`, refuses any `remote` project with `CLOSED_TEAM_TAB_NOTICE`
+  (so does every path through `reopenProject`); "Recently closed" lists neither the tab
+  (`isReopenableClosedProject`) nor its closed sessions (`isClosedTeamTab`); `planReopen` answers
+  `refuse` for ANY entry into a closed team tab BEFORE recreating a node into it (a `nodes` entry
+  would otherwise be written into it and reopen it), and ⇧⌘T puts the entry back untouched;
+  `performCloseProject` does not push a project entry for a relay tab. What brings the tab back is
+  joining the team again with none of its tabs open, or an unshare + share (a reconnect keeps it
+  dismissed, `lib/hostedTeamTabs.ts`).
 - **One node id, two projects: owner lookups go through `nodeOwner`** (`lib/nodeOwner.ts`). After a
   share the closed, handed-off SSH project and the team tab hold the same node ids, and the SSH
   project comes FIRST in the list (a team tab is appended), so a bare
   `projects.find(p => p.nodes.some(...))` sent every "go to node" to the reopen warning. `nodeOwner`
-  prefers an open project, then one without `handedOffTo`, then any; `focusNodeById`, the agent
+  prefers an open project, then one without `handedOffTo`, then any, and skips a CLOSED team tab
+  entirely (its reopen is refused; the shared node then falls back to the handed-off SSH project,
+  whose reopen asks first); `focusNodeById`, the agent
   rename-node handler, `presenceTravel.nodeTravel` and the Omni board's rename use it. Deleting a
   project keeps the agent status of node ids another project still holds (`nodeIdsHeldElsewhere`).
   Deliberately NOT moved to it: `routeControlSource` (a control request comes from a LOCAL agent, so

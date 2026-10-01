@@ -376,7 +376,8 @@ After a share, the closed SSH project and the team's tab hold the **same node id
 tmux session names, and the server keeps them). Every "go to node" (a notification, the sessions
 sidebar, ⌘K, a teammate's face, a rename from the board) goes to the project that owns the node in
 this order: an open project before a closed one, and one not handed off before one that was
-(`lib/nodeOwner.ts`). So it lands on the team's tab, never on the reopen warning. Deleting the closed
+(`lib/nodeOwner.ts`). So it lands on the team's tab, never on the reopen warning. A closed team tab
+owns no node: with the team's tab closed, it goes to the SSH project, whose reopen warning asks first. Deleting the closed
 SSH project from "Recently closed" keeps the agent status of every node id another project still
 holds.
 
@@ -618,8 +619,12 @@ project of yours that holds the id is skipped, never renamed.
   a share event opens is added at the end of the tab bar.
 - **A tab you close stays closed** while its project stays shared, for the rest of the app run. Once
   the host unshares it the dismissal is forgotten, so sharing it again opens it again. A closed team
-  tab is not offered under "Recently closed", nor by ⇧⌘T: its nodes are the host's sessions, and
-  reopening it from there would mount them on this computer's core. It comes back through the team.
+  tab is never reopened on this computer: once closed its relay connection is gone, and a reopen
+  would mount the host's sessions on this computer's core. "Recently closed" lists neither the tab
+  nor its closed sessions, and every other way back (⇧⌘T, a notification, ⌘K, a teammate's face)
+  is refused with "This team tab was closed on this computer. It opens again when you join the team
+  again (close its other tabs first), or when the team stops sharing the project and shares it
+  again." Those two are what bring it back: a reconnect of the team's other tabs keeps it dismissed.
 - **A team with nothing shared keeps one placeholder tab**, named after the team, so the team stays
   visible and reconnectable. The first shared project replaces it.
 - **One connection, all tabs.** A dropped connection greys all of a team's tabs together. A reconnect
@@ -1341,5 +1346,8 @@ on a Mac and a second desktop as a teammate. Record `team status --json` at each
     keep running, and nothing is bootstrapped.
 25. **Going to a shared node lands on the team's tab.** After item 17, a completion notification of
     the resumed agent, its sessions-sidebar row, ⌘K and a teammate's face all open the team's tab
-    with the node focused, never the reopen warning of the closed SSH project. A closed team tab is
-    not listed under "Recently closed".
+    with the node focused, never the reopen warning of the closed SSH project. Close the team's tab:
+    it is not listed under "Recently closed" (nor are its closed sessions), ⇧⌘T on a node deleted in
+    it shows the closed-tab notice and opens nothing, and a notification for the shared node now
+    shows the SSH project's reopen warning. No `nt-<id>` session appears on this computer's own
+    tmux socket at any point.

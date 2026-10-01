@@ -5,6 +5,8 @@ import {
   filterClosedProjects,
   mergeClosedHistory,
   recentlyClosedProjects,
+  isClosedTeamTab,
+  CLOSED_TEAM_TAB_NOTICE,
   stateToReopenSnapshot
 } from './closedHistory'
 import type { CanvasNode } from '@renderer/state/workspace'
@@ -168,6 +170,30 @@ describe('mergeClosedHistory', () => {
   it('excludes a closed relay (team) tab: reopening it here would mount the host nodes on this core', () => {
     const rows = mergeClosedHistory([proj({ id: 'team', closed: true, remote: true, closedAt: 5 })])
     expect(rows).toHaveLength(0)
+  })
+
+  it('excludes the closed SESSIONS of a closed team tab too (restoring one reopens the tab); an open one keeps them', () => {
+    const entry: ClosedSessionEntry = {
+      id: 's1', closedAt: 9,
+      node: { id: 'n', kind: 'terminal', position: { x: 0, y: 0 }, size: { width: 1, height: 1 }, title: 't', color: '#fff', group: null },
+      absolutePosition: { x: 0, y: 0 }
+    }
+    expect(mergeClosedHistory([proj({ id: 'team', closed: true, remote: true, closedSessions: [entry] })])).toHaveLength(0)
+    expect(mergeClosedHistory([proj({ id: 'team', remote: true, closedSessions: [entry] })]).map((r) => r.kind)).toEqual(['session'])
+  })
+})
+
+describe('closed team tabs', () => {
+  it('isClosedTeamTab is a closed relay project only', () => {
+    expect(isClosedTeamTab({ closed: true, remote: true })).toBe(true)
+    expect(isClosedTeamTab({ remote: true })).toBe(false)
+    expect(isClosedTeamTab({ closed: true })).toBe(false)
+    expect(isClosedTeamTab(undefined)).toBe(false)
+  })
+  it('the refusal says what actually brings the tab back', () => {
+    expect(CLOSED_TEAM_TAB_NOTICE).toBe(
+      'This team tab was closed on this computer. It opens again when you join the team again (close its other tabs first), or when the team stops sharing the project and shares it again.'
+    )
   })
 })
 

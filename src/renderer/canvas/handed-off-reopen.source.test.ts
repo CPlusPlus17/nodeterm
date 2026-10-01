@@ -42,6 +42,29 @@ describe('handed-off reopen guard in Canvas', () => {
     expect(unchecked.length).toBe(inGuard.length + 1)
   })
 
+  it('the one reopen funnel refuses a team tab with the notice, and every path reports the refusal', () => {
+    // The decisions are proven in lib/closedHistory, lib/reopenPlan and lib/nodeOwner; what only the
+    // source shows is that Canvas's funnel and the two history paths ask them, BEFORE any write.
+    const unchecked = between('const reopenProjectUnchecked = useCallback(', CALLBACK_END)
+    const refuse = unchecked.indexOf('if (useProjects.getState().getProject(id)?.remote) {')
+    expect(refuse).toBeGreaterThan(-1)
+    expect(unchecked.indexOf("setNotice({ kind: 'info', text: CLOSED_TEAM_TAB_NOTICE })", refuse)).toBeGreaterThan(refuse)
+    expect(unchecked.indexOf('useProjects.getState().reopenProject(id)')).toBeGreaterThan(refuse)
+    const human = between('const reopenProject = useCallback(', CALLBACK_END)
+    expect(human).toContain('return Promise.resolve(reopenProjectUnchecked(id))')
+    expect(human).toContain('ok && reopenProjectUnchecked(id)')
+    // ⇧⌘T: a refused plan puts the entry back before its persisted twin would be discarded.
+    const last = between('const reopenLastClosedCommand = useCallback(', '}, [executeReopenPlan, writeDisk])')
+    const refused = last.indexOf("if (plan.action === 'refuse') {")
+    expect(refused).toBeGreaterThan(-1)
+    expect(last.indexOf('useReopenHistory.getState().push(entry)', refused)).toBeGreaterThan(refused)
+    expect(last.indexOf('discardClosedSession(')).toBeGreaterThan(refused)
+    // The sidebar's session restore checks before it consumes the entry.
+    const session = between('const reopenClosedSessionCommand = useCallback(', CALLBACK_END)
+    expect(session.indexOf('isClosedTeamTab(')).toBeGreaterThan(-1)
+    expect(session.indexOf('isClosedTeamTab(')).toBeLessThan(session.indexOf('consumeClosedSession('))
+  })
+
   it('the store reopen is called in exactly one place, the unchecked reopen', () => {
     const calls = src.match(/useProjects\.getState\(\)\.reopenProject\(/g) ?? []
     expect(calls).toHaveLength(1)

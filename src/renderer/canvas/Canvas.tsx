@@ -642,6 +642,8 @@ import { useReopenHistory, type ReopenEntry } from '../state/reopenHistory'
 import { snapshotNode, recreateNodeFromSnapshot } from '../lib/reopenNode'
 import {
   buildClosedSessionEntries,
+  CLOSED_TEAM_TAB_NOTICE,
+  isClosedTeamTab,
   recentlyClosedProjects,
   stateToReopenSnapshot
 } from '../lib/closedHistory'
@@ -9195,12 +9197,21 @@ export function Canvas() {
   // The unchecked form asks nothing first: it is also "Share with team"'s own undo, which must put
   // the project back without a question. Declared here, beside switchProject and for the same TDZ
   // reason: the ⇧⌘T plan executor just below reopens through the guarded form.
+  //
+  // A relay (team) tab is refused here, the one funnel every reopen goes through: once closed its
+  // relay session is gone, and `sessionForProject` would fall back to the LOCAL session, mounting
+  // the host's node ids on this machine's core (local shells, an agent cold-resume). False = refused.
   const reopenProjectUnchecked = useCallback(
-    (id: string) => {
+    (id: string): boolean => {
+      if (useProjects.getState().getProject(id)?.remote) {
+        setNotice({ kind: 'info', text: CLOSED_TEAM_TAB_NOTICE })
+        return false
+      }
       commitActiveToStore()
       useProjects.getState().reopenProject(id)
       setWelcomeOpen(false)
       void writeDisk()
+      return true
     },
     [commitActiveToStore, writeDisk]
   )
@@ -9264,27 +9275,24 @@ export function Canvas() {
   /** The reopen every human path uses (Welcome's and the sidebar's "Recently closed", ⇧⌘T, ⌘K,
    *  travel, "Open recent", Set folder…). A handed-off project asks first; any other reopens at
    *  once, synchronously, exactly as before the question existed. Resolves false when the user
-   *  declined, so a caller that staged follow-up work (a focus, a resume) can drop it. */
+   *  declined or the reopen was refused (a team tab), so a caller that staged follow-up work (a
+   *  focus, a resume) can drop it. */
   const reopenProject = useCallback(
     (id: string): Promise<boolean> => {
       if (!useProjects.getState().getProject(id)?.handedOffTo) {
-        reopenProjectUnchecked(id)
-        return Promise.resolve(true)
+        return Promise.resolve(reopenProjectUnchecked(id))
       }
-      return confirmHandedOffReopen(id).then((ok) => {
-        if (ok) reopenProjectUnchecked(id)
-        return ok
-      })
+      return confirmHandedOffReopen(id).then((ok) => ok && reopenProjectUnchecked(id))
     },
     [confirmHandedOffReopen, reopenProjectUnchecked]
   )
 
   /** Executes a `ReopenPlan` already decided by `planReopen` — the side-effecting half shared by
    *  `Cmd+Shift+T` (`reopenLastClosedCommand`) and reopening a persisted closed-session entry
-   *  from the sidebar (`reopenClosedSessionCommand`). Returns whether it did anything ('skip'
-   *  plans are the caller's problem — this function never receives one). */
+   *  from the sidebar (`reopenClosedSessionCommand`). Returns whether it did anything ('skip' and
+   *  'refuse' plans are the caller's problem — this function never receives one). */
   const executeReopenPlan = useCallback(
-    (plan: Exclude<ReopenPlan, { action: 'skip' }>): boolean => {
+    (plan: Exclude<ReopenPlan, { action: 'skip' } | { action: 'refuse' }>): boolean => {
       switch (plan.action) {
         case 'reopenProject':
           // The guarded reopen: it commits the live canvas back to the store first (or whatever
@@ -9334,20 +9342,6 @@ export function Canvas() {
       const entry = useReopenHistory.getState().popNext()
       if (!entry) return false
 
-      // The persisted twin of this batch (the sidebar's "Recently closed" rows the SAME delete
-      // recorded) must be consumed too — whether this entry ends up restored or skipped as stale,
-      // the ⇧⌘T stack is done with it either way, and leaving the sidebar row behind would let a
-      // later click there restore a duplicate. `writeDisk` runs unconditionally because
-      // `entry.projectId` may not be the active project, whose autosave debounce wouldn't cover it.
-      if (entry.kind === 'nodes') {
-        for (const n of entry.nodes) {
-          if (n.closedSessionId) {
-            useProjects.getState().discardClosedSession(entry.projectId, n.closedSessionId)
-          }
-        }
-        void writeDisk()
-      }
-
       const { projects, activeProjectId } = useProjects.getState()
       const project = projects.find((p) => p.id === entry.projectId)
       const accounts = useSettings.getState().settings.claudeAccounts
@@ -9364,6 +9358,27 @@ export function Canvas() {
             permissionModeFor: (agentId) => projectPermissionMode(project, agentId)
           })
       )
+      // A closed team tab: nothing is written into it or reopened, and the entry goes back on the
+      // stack untouched (its persisted twin too), so it still restores once the tab is back.
+      if (plan.action === 'refuse') {
+        useReopenHistory.getState().push(entry)
+        setNotice({ kind: 'info', text: CLOSED_TEAM_TAB_NOTICE })
+        return true
+      }
+
+      // The persisted twin of this batch (the sidebar's "Recently closed" rows the SAME delete
+      // recorded) must be consumed too — whether this entry ends up restored or skipped as stale,
+      // the ⇧⌘T stack is done with it either way, and leaving the sidebar row behind would let a
+      // later click there restore a duplicate. `writeDisk` runs unconditionally because
+      // `entry.projectId` may not be the active project, whose autosave debounce wouldn't cover it.
+      if (entry.kind === 'nodes') {
+        for (const n of entry.nodes) {
+          if (n.closedSessionId) {
+            useProjects.getState().discardClosedSession(entry.projectId, n.closedSessionId)
+          }
+        }
+        void writeDisk()
+      }
 
       if (plan.action === 'skip') continue
       return executeReopenPlan(plan)
@@ -9394,6 +9409,12 @@ export function Canvas() {
 
   const reopenClosedSessionCommand = useCallback(
     (projectId: string, entryId: string): boolean => {
+      // Restoring a session into a closed team tab reopens that tab: refused before the entry is
+      // consumed (the sidebar does not list these rows; this catches a stale click).
+      if (isClosedTeamTab(useProjects.getState().getProject(projectId))) {
+        setNotice({ kind: 'info', text: CLOSED_TEAM_TAB_NOTICE })
+        return false
+      }
       const consumed = useProjects.getState().consumeClosedSession(projectId, entryId)
       if (!consumed) return false
       // The ⇧⌘T-stack twin of this entry (if the SAME delete also pushed one) must go too, or a
@@ -9423,7 +9444,7 @@ export function Canvas() {
             permissionModeFor: (agentId) => projectPermissionMode(project, agentId)
           })
       )
-      if (plan.action === 'skip') return false
+      if (plan.action === 'skip' || plan.action === 'refuse') return false
       return executeReopenPlan(plan)
     },
     [executeReopenPlan, writeDisk]

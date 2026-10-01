@@ -10,19 +10,23 @@
 export interface OwnerProject {
   closed?: boolean
   handedOffTo?: unknown
+  /** A relay tab (a hosted team's project). */
+  remote?: boolean
   nodes: readonly { id: string }[]
 }
 
 /**
  * The project that owns `nodeId`: an open project before a closed one, and, among those, one not
  * handed off to a hosted team before one that was; ties go to the first in the list. `undefined`
- * when no project holds the node.
+ * when no project holds the node. A CLOSED team tab never owns a node: reopening it would mount the
+ * host's node ids on this machine's core, so a shared node whose team tab is closed falls back to
+ * the handed-off SSH project, whose reopen asks first.
  */
 export function nodeOwner<T extends OwnerProject>(projects: readonly T[], nodeId: string): T | undefined {
   let best: T | undefined
   let bestRank = Number.POSITIVE_INFINITY
   for (const p of projects) {
-    if (!p.nodes.some((n) => n.id === nodeId)) continue
+    if ((p.remote && p.closed) || !p.nodes.some((n) => n.id === nodeId)) continue
     const rank = (p.closed ? 2 : 0) + (p.handedOffTo ? 1 : 0)
     if (rank < bestRank) {
       best = p
