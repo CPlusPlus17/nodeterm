@@ -1,0 +1,5 @@
+# Adds the "Sponsor" button to the repo header.
+# `custom` takes http(s) URLs only (no mailto:), so it points at the README section,
+# which carries the contact address. Swap in `github: [eneskirca]` once GitHub Sponsors
+# is enabled on the account.
+custom: ["https://github.com/eneskirca/nodeterm#sponsor"]
