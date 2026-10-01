@@ -25,6 +25,7 @@ import {
   SSH_AGENT_SUCCESS
 } from './agent-add'
 import { findExecutableSync } from '../../exec-path'
+import { ed25519KeyPair } from './test-keys'
 
 function parsed(k: string, pass?: string): ParsedKey {
   const p = utils.parseKey(k, pass)
@@ -35,7 +36,7 @@ function parsed(k: string, pass?: string): ParsedKey {
 
 const PASS = 'pw'
 const KEYS: Record<string, ParsedKey> = {
-  ed25519: parsed(utils.generateKeyPairSync('ed25519', { passphrase: PASS, cipher: 'aes256-ctr', rounds: 4 }).private, PASS),
+  ed25519: parsed(ed25519KeyPair({ passphrase: PASS, cipher: 'aes256-ctr', rounds: 4 }).private, PASS),
   ecdsa256: parsed(utils.generateKeyPairSync('ecdsa', { bits: 256, passphrase: PASS, cipher: 'aes256-ctr', rounds: 4 }).private, PASS),
   ecdsa384: parsed(utils.generateKeyPairSync('ecdsa', { bits: 384 }).private),
   ecdsa521: parsed(utils.generateKeyPairSync('ecdsa', { bits: 521 }).private),
