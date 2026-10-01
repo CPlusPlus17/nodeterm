@@ -95,13 +95,27 @@ export type WatchLinkNotice =
    *  saved" unless the renderer knows it is the first cause. */
   | { kind: 'not-persistent' }
 
+/**
+ * What "Stop all" reached. THIS machine's links always stop at once, before the answer; the answer
+ * is about the license-wide server revoke, the only thing that ends links shared from other machines:
+ *  - `stopped` — the server accepted it: every other machine's links end at their next mint (≤ ~90 s)
+ *    or, while a link is full, at its status poll (≤ 5 min).
+ *  - `no-entitlement` — no Pro entitlement is stored here, so the server was not asked: links on
+ *    other machines keep running.
+ *  - `failed` — the server call failed (no answer, a refusal, an expired token): they keep running.
+ *  - `unsupported` — this surface stops nothing (the Server Edition until it has a license layer, a
+ *    relay tab, a client that is not the machine's owner).
+ */
+export type RevokeAllOutcome = 'stopped' | 'no-entitlement' | 'failed' | 'unsupported'
+
 /** `window.nodeTerminal.watchLink`. Desktop: real (preload). Server Edition: real bridge, and create
  *  answers `unsupported` until that edition has a license layer. Relay tab: an inert stub. */
 export interface WatchLinkApi {
   create(req: CreateWatchLinkRequest): Promise<CreateWatchLinkResult>
   list(): Promise<WatchLinkView[]>
   revoke(linkId: string): Promise<void>
-  revokeAll(): Promise<void>
+  /** Stop every link of the license, other machines included. Resolves once the server answered. */
+  revokeAll(): Promise<RevokeAllOutcome>
   kick(linkId: string, viewerId: string): Promise<boolean>
   /** A Commenter link's owner reply; null when the link is not a Commenter link or the text is empty. */
   sendChat(linkId: string, text: string): Promise<WatchChatMessage | null>

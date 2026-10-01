@@ -8,6 +8,7 @@
 // display side's own belt), and every caller renders the result as TEXT, never as HTML.
 import type {
   CreateWatchLinkError,
+  RevokeAllOutcome,
   WatchChatMessage,
   WatchLinkNotice,
   WatchLinkRole,
@@ -65,8 +66,52 @@ export const CHAT_NOT_SENT_MESSAGE = "Your reply wasn't sent — viewers didn't 
 /** R48: Stop all revokes every link of the LICENSE, other machines included — both entry points confirm. */
 export const STOP_ALL_PALETTE_LABEL = 'Stop all live links (every machine on this license)'
 export const STOP_ALL_BUTTON = 'Stop all'
+/** The timing is part of the promise (R62): this machine cuts its own viewers itself, while another
+ *  machine learns of the revoke at its next mint (≤ ~90 s) or, for a full link, its status poll. */
 export function stopAllConfirmMessage(): string {
-  return `Stop every live link on your license? This also ends links shared from ${otherMachines()}. Viewers are disconnected at once.`
+  return `Stop every live link on your license? This also ends links shared from ${otherMachines()}. Viewers on ${thisMachine()} are disconnected at once; links on ${otherMachines()} stop within a few minutes.`
+}
+/** Settings, beside Stop all when THIS machine lists no link: the button still reaches the others. */
+export function stopAllElsewhereNote(): string {
+  return `No live links are shared from ${thisMachine()}. Stop all also ends the ones shared from ${otherMachines()} on your license.`
+}
+
+/**
+ * Where "Stop all" is offered (R62): wherever the owner could have links to stop — this machine lists
+ * one, or holds a Pro license (its links on OTHER machines are invisible here, and Stop all is the one
+ * control that reaches them: an office desktop left sharing, a lost laptop whose links resume at
+ * launch). Never in the Server Edition (R43: no license layer, nothing to stop).
+ */
+export function showsStopAll(o: { serverEdition: boolean; entitled: boolean; activeLinks: number }): boolean {
+  return !o.serverEdition && (o.activeLinks > 0 || o.entitled)
+}
+
+/**
+ * What Stop all says once core answered (R62). This machine's links are always stopped by then; the
+ * outcome is about the server revoke, the only thing that reaches other machines' links, and a
+ * success is reported too — with nothing listed here, the sentence is the only sign anything happened.
+ */
+export function stopAllOutcomeText(o: RevokeAllOutcome | unknown): { ok: boolean; text: string } {
+  switch (o) {
+    case 'stopped':
+      return {
+        ok: true,
+        text: `Stopped every live link on your license. Links on ${otherMachines()} end within a few minutes.`
+      }
+    case 'no-entitlement':
+      return {
+        ok: false,
+        text: `Stopped the live links on ${thisMachine()}. Links shared from ${otherMachines()} can't be stopped from here: ${thisMachine()} has no Pro license. Activate Pro here, or stop them on the machine that shared them.`
+      }
+    case 'unsupported':
+      return { ok: false, text: "Live links can't be stopped from here." }
+    // `failed`, and anything an older core might answer: the server was not reached.
+    default:
+      return {
+        ok: false,
+        text: `${STOP_FAILED_MESSAGE} Links on ${thisMachine()} are stopped; links shared from ${otherMachines()} may still be running.`
+      }
+  }
 }
 /** H11: a Settings row whose node no open project holds. */
 export const NOT_IN_OPEN_PROJECT = 'not in an open project'

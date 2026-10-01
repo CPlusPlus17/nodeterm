@@ -11,14 +11,17 @@ import type { ReactNode } from 'react'
 import type { Command } from '../components/CommandPalette'
 import type { MenuItem } from '../components/ContextMenu'
 import type { SessionSource } from '../session/session'
+import type { RevokeAllOutcome } from '@shared/watch-link-types'
 import {
   PRO_GATE_FEATURE,
   SAVE_FIRST_MESSAGE,
   shareDisabledReason,
+  showsStopAll,
   STOP_ALL_BUTTON,
   STOP_ALL_PALETTE_LABEL,
   STOP_FAILED_MESSAGE,
-  stopAllConfirmMessage
+  stopAllConfirmMessage,
+  stopAllOutcomeText
 } from './liveLink'
 import { syncMessageScope } from './messageScopeSync'
 import { isHidden } from './ui-visibility'
@@ -168,9 +171,9 @@ export function stopAllConfirm(o: { close: () => void; stop: () => void }): {
   }
 }
 
-/** Run a stop (one revoke, or revoke-all) and report a rejection (H23 — the Server Edition's
- *  socket can be down). Desktop IPC never rejects; this is the belt, not the common path.
- *  Resolves true when the stop went through. */
+/** Run one link's stop and report a rejection (H23 — the Server Edition's socket can be down).
+ *  Desktop IPC never rejects; this is the belt, not the common path. Resolves true when the stop
+ *  went through. Stop all is `stopAllLiveLinks`: it has an answer to report, not just a rejection. */
 export async function stopLiveLinks(stop: () => Promise<void>, onError: (text: string) => void): Promise<boolean> {
   try {
     await stop()
@@ -181,10 +184,31 @@ export async function stopLiveLinks(stop: () => Promise<void>, onError: (text: s
   }
 }
 
-/** The palette's live-link entries. "Stop all" appears only while this machine lists a link, and
- *  its `run` opens the confirm — it never stops anything itself. */
+/**
+ * R62: run Stop all and say what it reached — a success too (with no link listed here, that sentence
+ * is the only sign anything happened). This machine's links are stopped whatever the answer; the
+ * outcome is about the server revoke that reaches the others. A rejection (the Server Edition's socket
+ * was down) means nothing reached nodeterm. Never rejects.
+ */
+export async function stopAllLiveLinks(
+  revokeAll: () => Promise<RevokeAllOutcome>
+): Promise<{ ok: boolean; text: string }> {
+  try {
+    return stopAllOutcomeText(await revokeAll())
+  } catch {
+    return { ok: false, text: STOP_FAILED_MESSAGE }
+  }
+}
+
+/** The palette's live-link entries. "Stop all" appears wherever the owner could have links to stop
+ *  (`showsStopAll`: a link listed here, OR a Pro license — its links on other machines are invisible
+ *  here), and its `run` opens the confirm — it never stops anything itself. */
 export function liveLinkCommands(o: {
   activeLinks: number
+  /** Pro is active on this machine (`useEntitlement` `isPremium`). */
+  entitled: boolean
+  /** `isBrowserRuntime()`: no license layer there (R43), so nothing to stop. */
+  serverEdition: boolean
   icon: ReactNode
   manage: () => void
   confirmStopAll: () => void
@@ -197,7 +221,7 @@ export function liveLinkCommands(o: {
       icon: o.icon,
       run: o.manage
     },
-    ...(o.activeLinks > 0
+    ...(showsStopAll({ serverEdition: o.serverEdition, entitled: o.entitled, activeLinks: o.activeLinks })
       ? [
           {
             id: 'live-links-stop-all',

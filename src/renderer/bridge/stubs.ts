@@ -641,7 +641,7 @@ export function buildStubApi(): Omit<
       create: async () => ({ ok: false, error: 'unsupported' }),
       list: async () => [],
       revoke: async () => {},
-      revokeAll: async () => {},
+      revokeAll: async () => 'unsupported' as const,
       kick: async () => false,
       sendChat: async () => null,
       chatHistory: async () => [],

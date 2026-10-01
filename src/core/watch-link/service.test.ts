@@ -387,7 +387,7 @@ describe('createWatchLinkService — create', () => {
     await t.s.init()
     expect(await t.s.create(req())).toEqual({ ok: false, error: 'unsupported' })
     expect(t.s.list()).toEqual([])
-    await t.s.revokeAll()
+    expect(await t.s.revokeAll()).toBe('unsupported')
     t.s.onWorkspaceChanged()
     await flush()
     expect(load).not.toHaveBeenCalled()
@@ -442,6 +442,49 @@ describe('createWatchLinkService — ending a link', () => {
     expect(t.notices()).toEqual([])
     expect(f.discarded()).toBe(1)
     expect(f.saves.at(-1)).toEqual([])
+  })
+
+  // R62: Stop all is the only control that reaches links on OTHER machines, so its server call is
+  // awaited and its answer reported — a failed call must not look like a stop.
+  it('revokeAll AWAITS the server and answers what it reached; this machine stops first, whatever the answer', async () => {
+    const answer = deferred<boolean>()
+    const t = service({ api: { revokeAll: () => answer.promise } })
+    await t.s.create(req())
+    let settled: string | null = null
+    const p = t.s.revokeAll().then((o) => (settled = o))
+    await flush()
+    // Local first: stopped and listed as gone before the server answered.
+    expect(t.hosts.made[0].stopped).toEqual(['revoked'])
+    expect(t.s.list()).toEqual([])
+    expect(settled).toBeNull()
+    answer.resolve(true)
+    await p
+    expect(settled).toBe('stopped')
+  })
+
+  it("revokeAll: a refused or failed server call is 'failed', never 'stopped'", async () => {
+    const refused = service({ api: { revokeAll: async () => false } })
+    await refused.s.create(req())
+    expect(await refused.s.revokeAll()).toBe('failed')
+    expect(refused.s.list()).toEqual([]) // this machine's links are stopped all the same
+    const thrown = service({
+      api: {
+        revokeAll: async () => {
+          throw new Error('offline')
+        }
+      }
+    })
+    expect(await thrown.s.revokeAll()).toBe('failed')
+  })
+
+  it("revokeAll with no entitlement stops this machine and answers 'no-entitlement' — no request", async () => {
+    const t = service({ entitlement: null })
+    t.ent.value = 'ent'
+    await t.s.create(req())
+    t.ent.value = null
+    expect(await t.s.revokeAll()).toBe('no-entitlement')
+    expect(t.s.list()).toEqual([])
+    expect(t.calls.filter((c) => c === 'revokeAll')).toEqual([])
   })
 
   it('Stop all reaches the server even when the boot load hangs (a stop never waits on the disk)', async () => {
@@ -764,7 +807,7 @@ describe('registerWatchLinkIpc / sendToOwners', () => {
     const made = (await p.handlers[IPC.watchLinkCreate](1, req())) as { ok: boolean; link: WatchLinkView }
     expect(made.ok).toBe(true)
     expect(await p.handlers[IPC.watchLinkRevoke](2, made.link.linkId)).toBeUndefined()
-    await p.handlers[IPC.watchLinkRevokeAll](2)
+    expect(await p.handlers[IPC.watchLinkRevokeAll](2)).toBe('unsupported')
     expect((await p.handlers[IPC.watchLinkList](1)) as WatchLinkView[]).toHaveLength(1) // a non-owner stopped nothing
     await p.handlers[IPC.watchLinkRevoke](1, made.link.linkId)
     expect(await p.handlers[IPC.watchLinkList](1)).toEqual([])

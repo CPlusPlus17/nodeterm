@@ -14,10 +14,12 @@ import {
   NOT_IN_OPEN_PROJECT,
   ROLE_LABEL,
   SERVER_EDITION_UNSUPPORTED,
+  showsStopAll,
   statusLine,
-  STOP_ALL_BUTTON
+  STOP_ALL_BUTTON,
+  stopAllElsewhereNote
 } from '../../../lib/liveLink'
-import { stopAllConfirm, stopLiveLinks } from '../../../lib/liveLinkEntry'
+import { stopAllConfirm, stopAllLiveLinks, stopLiveLinks } from '../../../lib/liveLinkEntry'
 import { stripBidiControls, type WatchLinkView } from '@shared/watch-link-types'
 import type { Project } from '@shared/types'
 
@@ -94,7 +96,11 @@ export function LiveLinksSection({ isActive }: { isActive: boolean }): React.JSX
   const serverEdition = isBrowserRuntime()
   const [now, setNow] = useState(() => Date.now())
   const [confirmStopAll, setConfirmStopAll] = useState(false)
-  const [stopAllError, setStopAllError] = useState<string | null>(null)
+  /** What the last Stop all reached (R62) — said for a success too: with no link listed on this
+   *  machine, nothing else on this page changes. */
+  const [stopAllResult, setStopAllResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const [stoppingAll, setStoppingAll] = useState(false)
+  const stopAllShown = showsStopAll({ serverEdition, entitled: premium, activeLinks: links.length })
   useEffect(() => {
     if (!isActive) return
     setNow(Date.now())
@@ -104,8 +110,12 @@ export function LiveLinksSection({ isActive }: { isActive: boolean }): React.JSX
   const confirm = stopAllConfirm({
     close: () => setConfirmStopAll(false),
     stop: () => {
-      setStopAllError(null)
-      void stopLiveLinks(() => window.nodeTerminal.watchLink.revokeAll(), setStopAllError)
+      setStopAllResult(null)
+      setStoppingAll(true)
+      void stopAllLiveLinks(() => window.nodeTerminal.watchLink.revokeAll()).then((r) => {
+        setStoppingAll(false)
+        setStopAllResult(r)
+      })
     }
   })
   return (
@@ -127,22 +137,19 @@ export function LiveLinksSection({ isActive }: { isActive: boolean }): React.JSX
                 <LinkRow key={l.linkId} link={l} now={now} projects={projects} />
               ))}
             </div>
-            <div className="flex items-center gap-3">
-              <Button onClick={() => setConfirmStopAll(true)}>{STOP_ALL_BUTTON}</Button>
-              {stopAllError && (
-                <span className="text-xs" role="alert" style={{ color: 'var(--danger)' }}>
-                  {stopAllError}
-                </span>
-              )}
-            </div>
           </div>
         ) : serverEdition ? (
           // R43: no license layer in the Server Edition yet — say so, never offer an Upgrade.
           <p className="text-sm text-muted">{SERVER_EDITION_UNSUPPORTED}</p>
         ) : premium ? (
-          <p className="text-sm text-muted">
-            No active live links. Right-click a terminal and choose "Share live link…".
-          </p>
+          <div className="space-y-1">
+            <p className="text-sm text-muted">
+              No active live links. Right-click a terminal and choose "Share live link…".
+            </p>
+            {/* Links shared from OTHER machines are invisible here, and Stop all is the one control
+                that reaches them (R62): say so, beside the button. */}
+            <p className="text-xs text-muted">{stopAllElsewhereNote()}</p>
+          </div>
         ) : (
           <div className="space-y-3">
             <p className="text-sm text-muted">
@@ -152,6 +159,22 @@ export function LiveLinksSection({ isActive }: { isActive: boolean }): React.JSX
             <Button variant="primary" onClick={() => void useEntitlement.getState().upgrade('pro')}>
               Upgrade to Pro
             </Button>
+          </div>
+        )}
+        {stopAllShown && (
+          <div className="mt-3 flex items-center gap-3">
+            <Button disabled={stoppingAll} onClick={() => setConfirmStopAll(true)}>
+              {STOP_ALL_BUTTON}
+            </Button>
+            {stopAllResult && (
+              <span
+                className="text-xs"
+                role={stopAllResult.ok ? 'status' : 'alert'}
+                style={stopAllResult.ok ? undefined : { color: 'var(--danger)' }}
+              >
+                {stopAllResult.text}
+              </span>
+            )}
           </div>
         )}
       </SearchableRow>

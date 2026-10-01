@@ -63,6 +63,14 @@ describe('Canvas live-link wiring', () => {
     expect(src).toContain('confirmStopAll: confirmStopAllLiveLinks')
   })
 
+  it('R62: what Stop all reached is always said, and it is offered to a Pro owner with no link here', () => {
+    const confirm = callback('confirmStopAllLiveLinks')
+    expect(confirm).toMatch(/stopAllLiveLinks\(\(\) => window\.nodeTerminal\.watchLink\.revokeAll\(\)\)\.then\(\(r\) =>\s*setNotice\(\{ kind: r\.ok \? 'info' : 'error', text: r\.text \}\)/)
+    const cmds = src.slice(src.indexOf('...liveLinkCommands({'))
+    expect(cmds.slice(0, 400)).toContain('entitled: useEntitlement.getState().isPremium,')
+    expect(cmds.slice(0, 400)).toContain('serverEdition: isBrowserRuntime(),')
+  })
+
   it('one row builder, declared before selectionItems and listed in its deps (H15)', () => {
     const builder = src.indexOf('const liveLinkMenuItems = useCallback(')
     const selection = src.indexOf('const selectionItems = useCallback(')

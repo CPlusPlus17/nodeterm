@@ -21,7 +21,7 @@ pinNeutralMachineNoun()
 
 const api = {
   revoke: vi.fn(async (_id: string) => {}),
-  revokeAll: vi.fn(async () => {})
+  revokeAll: vi.fn(async (): Promise<string> => 'stopped')
 }
 const writeText = vi.fn()
 const upgrade = vi.fn(async () => ({ tier: null, active: false, expiresAt: null, termEndsAt: null, seats: 0, error: null }))
@@ -67,7 +67,7 @@ beforeEach(() => {
   flags.browser = false
   flags.relay.clear()
   api.revoke.mockReset().mockImplementation(async () => {})
-  api.revokeAll.mockReset().mockImplementation(async () => {})
+  api.revokeAll.mockReset().mockImplementation(async () => 'stopped')
   writeText.mockClear()
   upgrade.mockClear()
   useEntitlement.setState({ isPremium: true })
@@ -177,7 +177,7 @@ describe('LiveLinksSection', () => {
     click(buttons('Stop all')[0])
     const dialog = document.querySelector<HTMLElement>('.confirm')!
     expect(dialog.textContent).toContain(
-      'Stop every live link on your license? This also ends links shared from other computers. Viewers are disconnected at once.'
+      'Stop every live link on your license? This also ends links shared from other computers. Viewers on this computer are disconnected at once; links on other computers stop within a few minutes.'
     )
     expect(api.revokeAll).not.toHaveBeenCalled()
     click([...dialog.querySelectorAll('button')].find((b) => b.textContent === 'Cancel')!)
@@ -192,6 +192,48 @@ describe('LiveLinksSection', () => {
     await flush()
     expect(api.revokeAll).toHaveBeenCalledTimes(1)
     expect(document.querySelector('.confirm')).toBeNull()
+  })
+
+  // R62: Stop all is the one control that reaches links shared from OTHER machines — so it is there
+  // whenever the owner could have one, not only when THIS machine lists a link.
+  it('R62: Pro with no link listed here still offers Stop all, says why, and reports the success', async () => {
+    render()
+    expect(host.textContent).toContain('No live links are shared from this computer. Stop all also ends the ones shared from other computers on your license.')
+    click(buttons('Stop all')[0])
+    click([...document.querySelectorAll<HTMLButtonElement>('.confirm button')].find((b) => b.textContent === 'Stop all')!)
+    await flush()
+    expect(api.revokeAll).toHaveBeenCalledTimes(1)
+    const said = host.querySelector('[role="status"]')
+    expect(said?.textContent).toBe('Stopped every live link on your license. Links on other computers end within a few minutes.')
+  })
+
+  it('R62: no Stop all without a link or Pro, and never in the Server Edition', () => {
+    useEntitlement.setState({ isPremium: false })
+    render()
+    expect(buttons('Stop all')).toEqual([])
+    act(() => root.unmount())
+    root = createRoot(host)
+    flags.browser = true
+    useEntitlement.setState({ isPremium: true })
+    render()
+    expect(buttons('Stop all')).toEqual([])
+  })
+
+  it('R62: a server call that failed, or no entitlement, is NOT reported as stopped', async () => {
+    render()
+    setLinks([link()])
+    api.revokeAll.mockResolvedValueOnce('failed')
+    click(buttons('Stop all')[0])
+    click([...document.querySelectorAll<HTMLButtonElement>('.confirm button')].find((b) => b.textContent === 'Stop all')!)
+    await flush()
+    expect(host.querySelector('[role="alert"]')?.textContent).toBe(
+      "The stop didn't reach nodeterm — try again. Links on this computer are stopped; links shared from other computers may still be running."
+    )
+    api.revokeAll.mockResolvedValueOnce('no-entitlement')
+    click(buttons('Stop all')[0])
+    click([...document.querySelectorAll<HTMLButtonElement>('.confirm button')].find((b) => b.textContent === 'Stop all')!)
+    await flush()
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain("can't be stopped from here: this computer has no Pro license")
   })
 
   it('a rejected Stop all says so (H23)', async () => {

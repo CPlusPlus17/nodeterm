@@ -4,7 +4,7 @@
 // view carries the link's URL, and the URL carries the secret.
 //
 // A LINK ENDS on: the owner's Stop (`revoke`, no notice — the owner did it), Stop all (`revokeAll`,
-// one server call), its expiry (a timer, plus a re-check on every host change because timers are
+// one server call, awaited and reported — it is what reaches other machines' links), its expiry (a timer, plus a re-check on every host change because timers are
 // monotonic and a closed lid pauses them — G24), the node leaving every project, or the server saying
 // it is gone (a mint or status answering 410 — `onGone`, which does raise a notice).
 //
@@ -54,6 +54,7 @@ import {
   type CreateWatchLinkError,
   type CreateWatchLinkRequest,
   type CreateWatchLinkResult,
+  type RevokeAllOutcome,
   type WatchLinkNotice,
   type WatchLinkView,
   type WatchLinkViewerView
@@ -112,7 +113,9 @@ export interface WatchLinkService {
   create(req: unknown): Promise<CreateWatchLinkResult>
   list(): WatchLinkView[]
   revoke(linkId: string): Promise<void>
-  revokeAll(): Promise<void>
+  /** Stop this machine's links at once, then ask the server to revoke every link of the license and
+   *  answer what that reached (`RevokeAllOutcome`). Never rejects. */
+  revokeAll(): Promise<RevokeAllOutcome>
   kick(linkId: string, viewerId: string): boolean
   sendChat(linkId: string, text: string): WatchChatMessage | null
   chatHistory(linkId: string): WatchChatMessage[]
@@ -608,7 +611,7 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
     },
 
     async revokeAll() {
-      if (unsupported) return
+      if (unsupported) return 'unsupported'
       // Bounded like revoke: on a disk that hangs, "Stop all" still reaches the server below.
       await within(init(), initWaitMs)
       const gone = [...records.keys()].map(drop)
@@ -621,8 +624,21 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
       void persist()
       for (const g of gone) stopHost(g?.host, 'revoked')
       emitState()
-      const ent = deps.entitlement()
-      if (ent) void deps.api.revokeAll(ent).catch(() => false)
+      // This machine's links are stopped. The server call is the only thing that reaches the links of
+      // OTHER machines on the license, so it is AWAITED and its answer reported (R62): a stop that did
+      // not reach the server must not look like one that did.
+      let ent: string | null
+      try {
+        ent = deps.entitlement()
+      } catch {
+        ent = null
+      }
+      if (!ent) return 'no-entitlement'
+      try {
+        return (await deps.api.revokeAll(ent)) ? 'stopped' : 'failed'
+      } catch {
+        return 'failed'
+      }
     },
 
     kick(linkId, viewerId) {
@@ -722,7 +738,8 @@ export function registerWatchLinkIpc(
   p.handleWithSender(IPC.watchLinkList, (sender: number) => (owner(sender) ? s.list() : []))
   p.handleWithSender(IPC.watchLinkRevoke, (sender: number, id: unknown) =>
     owner(sender) && str(id) ? s.revoke(id) : undefined)
-  p.handleWithSender(IPC.watchLinkRevokeAll, (sender: number) => (owner(sender) ? s.revokeAll() : undefined))
+  p.handleWithSender(IPC.watchLinkRevokeAll, (sender: number) =>
+    owner(sender) ? s.revokeAll() : ('unsupported' satisfies RevokeAllOutcome))
   p.handleWithSender(IPC.watchLinkKick, (sender: number, id: unknown, viewer: unknown) =>
     owner(sender) && str(id) && str(viewer) ? s.kick(id, viewer) : false)
   p.handleWithSender(IPC.watchLinkChatSend, (sender: number, id: unknown, text: unknown) =>

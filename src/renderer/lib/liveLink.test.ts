@@ -234,7 +234,7 @@ describe('copy Task 17 reads (R47, R48, R52, H11, H23, H26)', () => {
     expect(STOP_ALL_PALETTE_LABEL).toBe('Stop all live links (every machine on this license)')
     expect(STOP_ALL_BUTTON).toBe('Stop all')
     expect(stopAllConfirmMessage()).toBe(
-      'Stop every live link on your license? This also ends links shared from other computers. Viewers are disconnected at once.'
+      'Stop every live link on your license? This also ends links shared from other computers. Viewers on this computer are disconnected at once; links on other computers stop within a few minutes.'
     )
     expect(STOP_FAILED_MESSAGE).toBe("The stop didn't reach nodeterm — try again.")
     expect(KICK_FAILED_MESSAGE).toBe("The kick didn't reach nodeterm — try again.")

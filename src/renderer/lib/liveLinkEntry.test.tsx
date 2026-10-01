@@ -9,6 +9,7 @@ import {
   liveLinkUnavailable,
   openLiveLink,
   stopAllConfirm,
+  stopAllLiveLinks,
   stopLiveLinks,
   type LiveLinkAvailabilityFacts
 } from './liveLinkEntry'
@@ -210,8 +211,9 @@ describe('Stop all (R48)', () => {
     const close = vi.fn()
     const stop = vi.fn()
     const spec = stopAllConfirm({ close, stop })
+    // R62: the timing is part of the promise — at once HERE, within minutes elsewhere.
     expect(spec.message).toBe(
-      'Stop every live link on your license? This also ends links shared from other computers. Viewers are disconnected at once.'
+      'Stop every live link on your license? This also ends links shared from other computers. Viewers on this computer are disconnected at once; links on other computers stop within a few minutes.'
     )
     expect(spec.confirmLabel).toBe('Stop all')
     expect(spec.danger).toBe(true)
@@ -231,13 +233,54 @@ describe('Stop all (R48)', () => {
   })
 })
 
+// R62: what Stop all reached is always said. This machine's links are stopped whatever the answer;
+// the outcome is about the server revoke, the only thing that reaches the OTHER machines' links.
+describe('stopAllLiveLinks (R62)', () => {
+  it('a success is reported too (with nothing listed here, nothing else on screen changes)', async () => {
+    expect(await stopAllLiveLinks(async () => 'stopped')).toEqual({
+      ok: true,
+      text: 'Stopped every live link on your license. Links on other computers end within a few minutes.'
+    })
+  })
+  it('no entitlement: this machine stopped, the others could not be — and why', async () => {
+    const r = await stopAllLiveLinks(async () => 'no-entitlement')
+    expect(r.ok).toBe(false)
+    expect(r.text).toBe(
+      "Stopped the live links on this computer. Links shared from other computers can't be stopped from here: this computer has no Pro license. Activate Pro here, or stop them on the machine that shared them."
+    )
+  })
+  it('a failed server call is NOT a success: the others may still be running', async () => {
+    const r = await stopAllLiveLinks(async () => 'failed')
+    expect(r).toEqual({
+      ok: false,
+      text: `${STOP_FAILED_MESSAGE} Links on this computer are stopped; links shared from other computers may still be running.`
+    })
+    // An answer this build does not know (an older core) reads the same way, never as a success.
+    expect((await stopAllLiveLinks(async () => undefined as never)).ok).toBe(false)
+  })
+  it('a rejection (the Server Edition socket was down) says nothing reached nodeterm', async () => {
+    expect(await stopAllLiveLinks(() => Promise.reject(new Error('socket')))).toEqual({ ok: false, text: STOP_FAILED_MESSAGE })
+  })
+  it('unsupported says so', async () => {
+    expect((await stopAllLiveLinks(async () => 'unsupported')).ok).toBe(false)
+  })
+})
+
 describe('liveLinkCommands (palette)', () => {
-  it('Manage always; Stop all only with links, labelled for every machine, and it CONFIRMS', () => {
+  const base = { entitled: false, serverEdition: false, icon: null }
+  it('Manage always; Stop all with links OR a Pro license (R62), labelled for every machine, and it CONFIRMS', () => {
     const manage = vi.fn()
     const confirmStopAll = vi.fn()
-    const none = liveLinkCommands({ activeLinks: 0, icon: null, manage, confirmStopAll })
+    const none = liveLinkCommands({ ...base, activeLinks: 0, manage, confirmStopAll })
     expect(none.map((c) => c.id)).toEqual(['live-links-manage'])
-    const some = liveLinkCommands({ activeLinks: 2, icon: null, manage, confirmStopAll })
+    // Pro, and nothing listed HERE: links shared from another machine are invisible on this one,
+    // and Stop all is the only control that reaches them.
+    const entitled = liveLinkCommands({ ...base, entitled: true, activeLinks: 0, manage, confirmStopAll })
+    expect(entitled.map((c) => c.id)).toEqual(['live-links-manage', 'live-links-stop-all'])
+    // Never in the Server Edition (R43): no license layer, nothing to stop.
+    const server = liveLinkCommands({ ...base, serverEdition: true, entitled: true, activeLinks: 3, manage, confirmStopAll })
+    expect(server.map((c) => c.id)).toEqual(['live-links-manage'])
+    const some = liveLinkCommands({ ...base, activeLinks: 2, manage, confirmStopAll })
     expect(some.map((c) => c.id)).toEqual(['live-links-manage', 'live-links-stop-all'])
     expect(some[0].label).toBe('Manage live links')
     expect(some[1].label).toBe('Stop all live links (every machine on this license)')

@@ -77,6 +77,7 @@ import { sanitizeOutcomeRecords } from '@shared/station-outcome'
 import { sanitizeHandoverRecords } from '@shared/station-handover'
 import type {
   CreateWatchLinkResult,
+  RevokeAllOutcome,
   WatchChatMessage,
   WatchLinkNotice,
   WatchLinkView
@@ -1009,9 +1010,8 @@ export function buildWatchLinkApi(client: RpcClient): Pick<NodeTerminalApi, 'wat
       revoke: async (linkId) => {
         await client.request(IPC.watchLinkRevoke, linkId)
       },
-      revokeAll: async () => {
-        await client.request(IPC.watchLinkRevokeAll)
-      },
+      // Rejects on a dropped socket, like revoke: the server half did not happen and the UI must say so.
+      revokeAll: () => client.request(IPC.watchLinkRevokeAll) as Promise<RevokeAllOutcome>,
       kick: (linkId, viewerId) =>
         (client.request(IPC.watchLinkKick, linkId, viewerId) as Promise<boolean>).catch(() => false),
       sendChat: (linkId, text) =>

@@ -252,7 +252,7 @@ import {
   liveLinkPrepare,
   openLiveLink,
   stopAllConfirm,
-  stopLiveLinks,
+  stopAllLiveLinks,
   type LiveLinkAvailabilityFacts,
   type LiveLinkTarget
 } from '../lib/liveLinkEntry'
@@ -3623,16 +3623,17 @@ export function Canvas() {
   )
 
   /** R48: "Stop all" revokes every link of the LICENSE — other machines' included — and cannot be
-   *  undone, so the palette asks first, with the same sentence and danger button as Settings. */
+   *  undone, so the palette asks first, with the same sentence and danger button as Settings. R62:
+   *  what it reached is ALWAYS said — a success too, since with no link listed here nothing else on
+   *  screen changes, and a server call that failed leaves other machines' links running. */
   const confirmStopAllLiveLinks = useCallback(
     () =>
       setConfirm(
         stopAllConfirm({
           close: () => setConfirm(null),
           stop: () =>
-            void stopLiveLinks(
-              () => window.nodeTerminal.watchLink.revokeAll(),
-              (text) => setNotice({ kind: 'error', text })
+            void stopAllLiveLinks(() => window.nodeTerminal.watchLink.revokeAll()).then((r) =>
+              setNotice({ kind: r.ok ? 'info' : 'error', text: r.text })
             )
         })
       ),
@@ -17437,6 +17438,8 @@ export function Canvas() {
       // Live links: Manage (the Settings section), and Stop all — which CONFIRMS (R48).
       ...liveLinkCommands({
         activeLinks: useWatchLinks.getState().links.length,
+        entitled: useEntitlement.getState().isPremium,
+        serverEdition: isBrowserRuntime(),
         icon: <IconBroadcast />,
         manage: () => {
           setSettingsSection('live-links')
