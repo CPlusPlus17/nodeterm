@@ -1026,6 +1026,12 @@ export interface NavStop {
   note: string
 }
 
+/** MACHINE-LOCAL: this SSH project was handed over to a hosted team on its host ("Share with
+ *  team"). From that moment the server core is the only writer of its project.json, so this
+ *  desktop never mirrors, reconciles or polls it again. `hostId` absent = the handover started
+ *  and did not finish (the same guard applies until the user reopens it). */
+export interface HandedOffTo { hostId?: string; projectId?: string; at: number }
+
 /** A project is one canvas/page: its own nodes, viewport, and default working dir. */
 export interface Project {
   id: string
@@ -1113,6 +1119,8 @@ export interface Project {
    *  shared project file, same rule as `closed` itself. Absent on a project closed before this
    *  field existed; such entries sort last. */
   closedAt?: number
+  /** See `HandedOffTo`. Index-only; never written to the shared project.json. */
+  handedOffTo?: HandedOffTo
   /**
    * Sessions (terminal/agent/sticky/…) deleted from this project, most-recent-first, capped at
    * 20. MACHINE-LOCAL, same rule as `closedAt`/`breadcrumbs` — see `IndexEntryV3.closedSessions`,

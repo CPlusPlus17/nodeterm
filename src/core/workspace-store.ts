@@ -6,14 +6,15 @@ import { IPC } from '../shared/ipc'
 import { platform } from './platform'
 import {
   DEFAULT_PROJECT_ID, EMPTY_WORKSPACE,
-  type BridgeLink, type CanvasNodeState, type KanbanColumn, type KanbanLabel, type Project, type ProjectKanban,
-  type Workspace, type WorkspaceSaveOptions, type WorkspaceV1
+  type BridgeLink, type CanvasNodeState, type HandedOffTo, type KanbanColumn, type KanbanLabel, type Project,
+  type ProjectKanban, type Workspace, type WorkspaceSaveOptions, type WorkspaceV1
 } from '../shared/types'
 import { contentOf, type CanvasContent } from '../shared/canvas-content'
 import {
   PROJECT_DIR, PROJECT_FILE, fileToProject, inlineProjectFileRelPath, isInlineProjectFileId,
   projectToFile, resolveNodes, sameProjectContent,
   sanitizeLoadedClosedSessions, sanitizeNodeTriggers, serializeProjectFile, splitWorkspace,
+  sanitizeHandedOffTo,
   sanitizeKanban,
   sanitizeLinks,
   type IndexEntryV3, type ProjectFileV1, type WorkspaceIndexV3
@@ -537,6 +538,9 @@ export class WorkspaceStore {
       // layouts happens later, in `fileToProject`, which is the first point that knows what the
       // project file actually carries.
       entry.layoutViewports = sanitizeLayoutViewports(entry.layoutViewports)
+      // Same rule for the "Share with team" handover record: it decides whether this desktop may
+      // write an SSH project's file at all, so only a well-formed record is honoured.
+      entry.handedOffTo = sanitizeHandedOffTo(entry.handedOffTo)
     }
     this.index = index
     const built: LoadedEntry[] = []
@@ -599,6 +603,7 @@ export class WorkspaceStore {
               cwd: e.cwd,
               closed: e.closed,
               closedAt: e.closedAt,
+              handedOffTo: e.handedOffTo,
               viewport: e.viewport,
               defaultAccountId: e.defaultAccountId,
               breadcrumbs: e.breadcrumbs,
@@ -622,6 +627,7 @@ export class WorkspaceStore {
               ssh: e.ssh,
               closed: e.closed,
               closedAt: e.closedAt,
+              handedOffTo: e.handedOffTo,
               viewport: e.viewport,
               defaultAccountId: e.defaultAccountId,
               breadcrumbs: e.breadcrumbs,
@@ -1113,6 +1119,7 @@ export class WorkspaceStore {
       id: e.id,
       closed: e.closed,
       closedAt: e.closedAt,
+      handedOffTo: e.handedOffTo,
       viewport: e.viewport,
       defaultAccountId: e.defaultAccountId,
       breadcrumbs: e.breadcrumbs,
@@ -1509,6 +1516,7 @@ export class WorkspaceStore {
     // ssh caches: bump rev on change so a later remote write can win; mirror write in Task 8.
     for (const e of index.entries) {
       if (!e.ssh || !e.cache) continue
+      if (e.handedOffTo) continue // handed to a hosted team: the server core is the only writer now
       const prevRev = this.revs.get(e.id) ?? 0
       const previousCache = this.index?.entries.find((old) => old.id === e.id && old.cache)?.cache
       const changedSinceLoad = !(previousCache && sameProjectContent(previousCache, e.cache))
@@ -1839,6 +1847,7 @@ export class WorkspaceStore {
       cwd: e.cwd,
       closed: e.closed,
       closedAt: e.closedAt,
+      handedOffTo: e.handedOffTo,
       viewport: e.viewport,
       defaultAccountId: e.defaultAccountId,
       breadcrumbs: e.breadcrumbs,
@@ -1890,9 +1899,10 @@ export class WorkspaceStore {
     return adopted
   }
 
-  /** The ssh entry ids of the current index — what the connected-project poll iterates. */
+  /** The ssh entry ids of the current index — what the connected-project poll iterates — except
+   *  one handed to a hosted team (never polled again). */
   sshProjectIds(): string[] {
-    return (this.index?.entries ?? []).filter((e) => e.ssh).map((e) => e.id)
+    return (this.index?.entries ?? []).filter((e) => e.ssh && !e.handedOffTo).map((e) => e.id)
   }
 
   /**
@@ -2390,6 +2400,7 @@ export class WorkspaceStore {
           cwd: e.cwd,
           closed: e.closed,
           closedAt: e.closedAt,
+          handedOffTo: e.handedOffTo,
           viewport: e.viewport,
           defaultAccountId: e.defaultAccountId,
           breadcrumbs: e.breadcrumbs,
@@ -2449,6 +2460,7 @@ export class WorkspaceStore {
             cwd: e.cwd,
             closed: e.closed,
             closedAt: e.closedAt,
+            handedOffTo: e.handedOffTo,
             viewport: e.viewport,
             defaultAccountId: e.defaultAccountId,
             breadcrumbs: e.breadcrumbs,
@@ -2670,6 +2682,7 @@ export class WorkspaceStore {
           ssh: e.ssh,
           closed: e.closed,
           closedAt: e.closedAt,
+          handedOffTo: e.handedOffTo,
           viewport: e.viewport,
           defaultAccountId: e.defaultAccountId,
           breadcrumbs: e.breadcrumbs,
@@ -2737,7 +2750,7 @@ export class WorkspaceStore {
     }
     this.revs.set(e.id, e.cache.rev)
     return fileToProject(e.cache, {
-      id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt,
+      id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt, handedOffTo: e.handedOffTo,
       viewport: e.viewport, defaultAccountId: e.defaultAccountId, breadcrumbs: e.breadcrumbs,
       closedSessions: e.closedSessions, layoutViewports: e.layoutViewports,
       capabilityAck: e.capabilityAck, localExec: e.localExec
@@ -2816,6 +2829,7 @@ export class WorkspaceStore {
    * Returns the adopted project (for the caller to surface) or null when our cache stood/pushed.
    */
   private async reconcileSsh(e: IndexEntryV3, pushIfStanding = true): Promise<Project | null> {
+    if (e.handedOffTo) return null // handed to a hosted team: the server core is the only writer now
     if (!e.ssh || !this.remoteIO) return null
     const res = await this.remoteIO.read(e.id, e.ssh)
     if (res.status === 'error') {
@@ -2885,7 +2899,7 @@ export class WorkspaceStore {
       if (owed) this.unmirrored.add(e.id)
       else this.unmirrored.delete(e.id) // pure adopt: the server copy IS the truth now — nothing owed
       return fileToProject(adopted, {
-        id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt,
+        id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt, handedOffTo: e.handedOffTo,
         viewport: e.viewport, defaultAccountId: e.defaultAccountId, breadcrumbs: e.breadcrumbs,
         closedSessions: e.closedSessions, layoutViewports: e.layoutViewports,
         capabilityAck: e.capabilityAck, localExec: e.localExec
@@ -2901,7 +2915,7 @@ export class WorkspaceStore {
         this.revs.set(e.id, e.cache.rev)
         this.unmirrored.add(e.id) // the merged set must land on the server
         merged = fileToProject(e.cache, {
-          id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt,
+          id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt, handedOffTo: e.handedOffTo,
           viewport: e.viewport, defaultAccountId: e.defaultAccountId, breadcrumbs: e.breadcrumbs,
           closedSessions: e.closedSessions, layoutViewports: e.layoutViewports,
           capabilityAck: e.capabilityAck, localExec: e.localExec
@@ -2941,13 +2955,19 @@ function nodesMissingFrom(base: CanvasNodeState[], from: CanvasNodeState[]): Can
 }
 
 /** A labeled grey placeholder for a ref whose file can't be read right now. */
-function unavailableProject(e: { id: string; name: string; color: string; closed?: boolean; closedAt?: number; cwd?: string; ssh?: Project['ssh'] }): Project {
+function unavailableProject(e: {
+  id: string; name: string; color: string; closed?: boolean; closedAt?: number
+  handedOffTo?: HandedOffTo; cwd?: string; ssh?: Project['ssh']
+}): Project {
   return {
     id: e.id, name: e.name, color: e.color,
     viewport: { x: 0, y: 0, zoom: 1 }, nodes: [],
     ...(e.cwd ? { cwd: e.cwd } : {}), ...(e.ssh ? { ssh: e.ssh } : {}),
     ...(e.closed ? { closed: true } : {}),
     ...(e.closedAt ? { closedAt: e.closedAt } : {}),
+    // The placeholder is what the renderer saves back for this entry, so the guard must ride it:
+    // an unreachable handed-off project must stay handed off.
+    ...(e.handedOffTo ? { handedOffTo: e.handedOffTo } : {}),
     unavailable: true
   }
 }
