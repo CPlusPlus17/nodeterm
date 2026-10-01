@@ -539,3 +539,85 @@ describe('the canvas lock is remembered only when the user opted in', () => {
     expect(effect).toContain('if (!canvasLockRestored.current) {')
   })
 })
+
+describe('the last-session close offer is wired to the × and to the existing close path (issue #848)', () => {
+  // The decision lives in lib/lastSessionClose and is tested there; what those tests cannot see is
+  // WHO raises it and WHAT accepting it does. Both are a line each in files with no render harness.
+  const TERMINAL_SRC = fs.readFileSync(path.join(__dirname, '..', 'nodes', 'TerminalNode.tsx'), 'utf8')
+  const closeButton = TERMINAL_SRC.slice(
+    TERMINAL_SRC.indexOf('<Tooltip label="Close (ends the session)">'),
+    TERMINAL_SRC.indexOf('<IconClose />', TERMINAL_SRC.indexOf('<Tooltip label="Close (ends the session)">'))
+  )
+
+  it('only the × announces a user close, and before the node leaves the canvas', () => {
+    // Before `deleteElements`: the decision needs the closed node still present, so a second
+    // click on a node already gone finds nothing to offer.
+    expect(indexOfPresent(closeButton, 'announceUserClosedSession(id)')).toBeLessThan(
+      indexOfPresent(closeButton, 'deleteElements({ nodes: [{ id }] })')
+    )
+    // Exactly one announcer in the node: no other teardown (restart, respawn, exit) may ask.
+    expect(TERMINAL_SRC.split('announceUserClosedSession(').length - 1).toBe(1)
+  })
+
+  it('Canvas decides with the opt-in setting and the live canvas, and accepts through closeProject', () => {
+    const listener = CANVAS_SRC.slice(
+      CANVAS_SRC.indexOf('window.addEventListener(USER_CLOSED_SESSION_EVENT'),
+      CANVAS_SRC.indexOf('window.removeEventListener(USER_CLOSED_SESSION_EVENT')
+    )
+    expect(CANVAS_SRC).toContain('const onUserClosedSession = (e: Event): void => {')
+    const handler = CANVAS_SRC.slice(
+      CANVAS_SRC.indexOf('const onUserClosedSession = (e: Event): void => {'),
+      CANVAS_SRC.indexOf('window.addEventListener(USER_CLOSED_SESSION_EVENT')
+    )
+    expect(listener).toContain('onUserClosedSession')
+    expect(handler).toContain('useSettings.getState().settings.offerCloseProjectOnLastSession')
+    expect(handler).toContain('nodes: nodesRef.current')
+    const dialog = CANVAS_SRC.slice(CANVAS_SRC.indexOf('{lastSessionOffer && ('))
+    expect(dialog.slice(0, 2500)).toContain('closeProject(offer.id)')
+  })
+})
+
+describe('the last-session offer joins the one-confirmation-at-a-time guard (issue #848 review)', () => {
+  // `confirmBusy()` is what refuses a second actionable dialog (agent `write`/`close`, worktree
+  // removal, …). An offer it cannot see lets another dialog stack over it, and an offer raised
+  // while another dialog is open (or being opened) stacks over that one.
+  const guard = CANVAS_SRC.slice(
+    CANVAS_SRC.indexOf('const confirmFlags = useRef({'),
+    CANVAS_SRC.indexOf('const nodeTypes = useMemo(')
+  )
+
+  it('has a synchronous flag, flipped at call time, that confirmBusy reads', () => {
+    expect(guard).toContain('lastSessionOffer: false')
+    expect(guard).toContain('confirmFlags.current.lastSessionOffer = !!v')
+    expect(guard).toContain('f.lastSessionOffer ||')
+  })
+
+  it('skips the offer (never queues it) while another confirm is busy', () => {
+    const handler = CANVAS_SRC.slice(
+      CANVAS_SRC.indexOf('const onUserClosedSession = (e: Event): void => {'),
+      CANVAS_SRC.indexOf('window.addEventListener(USER_CLOSED_SESSION_EVENT')
+    )
+    expect(handler).toContain('if (confirmBusy()) return')
+    expect(indexOfPresent(handler, 'if (confirmBusy()) return')).toBeLessThan(
+      indexOfPresent(handler, 'setLastSessionOffer(')
+    )
+  })
+
+  it('accepting clears the offer BEFORE closing, so a follow-up #442 confirm is not refused or stacked', () => {
+    const dialog = CANVAS_SRC.slice(CANVAS_SRC.indexOf('{lastSessionOffer && (')).slice(0, 2500)
+    expect(indexOfPresent(dialog, 'setLastSessionOffer(null)')).toBeLessThan(
+      indexOfPresent(dialog, 'closeProject(offer.id)')
+    )
+  })
+
+  it('closes the project the offer NAMED even after a tab switch, touching the active one only when it is that project', () => {
+    // The offer stores the project id at raise time; closeProject commits the live canvas only
+    // when that id is the active project, and the store keeps activeProjectId when a background
+    // project closes (pinned in state/projects.test.ts).
+    const body = CANVAS_SRC.slice(
+      CANVAS_SRC.indexOf('const closeProject = useCallback('),
+      CANVAS_SRC.indexOf('// Right-click on a sidebar project header')
+    )
+    expect(body).toContain('if (id === store.activeProjectId) commitActiveToStore()')
+  })
+})

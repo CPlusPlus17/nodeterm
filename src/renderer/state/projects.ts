@@ -26,6 +26,7 @@ import {
 import { clampProjectName } from '@shared/project-name'
 import { applyCanvasOp as applyCanvasOpTo, contentOf } from '@shared/canvas-content'
 import { diffToMutations, type CanvasScene } from '@shared/canvas-mutations'
+import { groupsFirst } from '@shared/node-order'
 import { applyOwnCanvasMutation, createProject, reorderGroupWithinParent } from './workspace'
 import { registerCodexRelayProjectCheck } from './codexCli'
 import { markWorkspaceDirty } from './workspaceDirty'
@@ -192,6 +193,9 @@ interface ProjectsState {
    * Never route a peer's mutation through this.
    */
   applyOwnNodeMutation(projectId: string, mutation: CanvasMutation): boolean
+  /** Several of our own node writes as ONE store write, re-sorted parents-first (`groupsFirst`) —
+   *  a structural control verb run off screen adds a frame after the children it now holds. */
+  applyOwnNodeMutations(projectId: string, mutations: readonly CanvasMutation[]): boolean
   /** Renames a node within a project (source of truth for inactive projects). */
   renameNode(projectId: string, nodeId: string, title: string): void
   /** Recolors a node within a project. */
@@ -742,6 +746,19 @@ export const useProjects = create<ProjectsState>((set, get) => ({
       set((s) => ({
         projects: mapProjectNodes(s.projects, projectId, (nodes) =>
           applyOwnCanvasMutation(nodes, mutation)
+        )
+      }))
+    )
+    return true
+  },
+
+  applyOwnNodeMutations(projectId, mutations) {
+    if (!get().projects.some((p) => p.id === projectId)) return false
+    if (mutations.length === 0) return true
+    ownWrite(get, projectId, () =>
+      set((s) => ({
+        projects: mapProjectNodes(s.projects, projectId, (nodes) =>
+          groupsFirst(mutations.reduce(applyOwnCanvasMutation, nodes))
         )
       }))
     )

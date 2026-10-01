@@ -444,6 +444,10 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   IPC.agentGatewayCredentialStatus,
   IPC.agentGatewayCredentialSave,
   IPC.agentGatewayCredentialClear,
+  // Custom alert sounds: host-wide files in the host's data dir, owned by no project.
+  IPC.filesSaveAlertSound,
+  IPC.filesReadAlertSound,
+  IPC.filesClearAlertSound,
   // The host's debug log spans every project; relay-api.ts keeps `logs` LOCAL.
   IPC.logSnapshot,
   IPC.logClear,

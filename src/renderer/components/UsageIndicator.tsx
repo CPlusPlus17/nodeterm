@@ -648,12 +648,20 @@ export function UsageIndicator({
           .catch((): RemoteAccountUsage[] => [])
         if (remoteScope.current === requestedScope) setRemote(rows)
       } else {
-        const [sys, def] = await Promise.all([
+        // The other providers sit behind the same debounce, so a stale failure (an expired token
+        // the CLI has since renewed) would otherwise stay on screen until it runs out. Settled
+        // separately: one read failing must not throw away the others' fresh answers.
+        const [sys, def, ps] = await Promise.allSettled([
           window.nodeTerminal.usage.refresh(),
-          localDefaultId ? window.nodeTerminal.usage.refresh(localDefaultId) : Promise.resolve(null)
+          localDefaultId ? window.nodeTerminal.usage.refresh(localDefaultId) : Promise.resolve(null),
+          window.nodeTerminal.usage.providers(true)
         ])
-        setUsage(sys)
-        if (localDefaultId && def) setAcctUsage((m) => ({ ...m, [localDefaultId]: def }))
+        if (sys.status === 'fulfilled') setUsage(sys.value)
+        if (localDefaultId && def.status === 'fulfilled' && def.value) {
+          const fresh = def.value
+          setAcctUsage((m) => ({ ...m, [localDefaultId]: fresh }))
+        }
+        if (ps.status === 'fulfilled') setProviders(ps.value)
       }
     } finally {
       setRefreshing(false)

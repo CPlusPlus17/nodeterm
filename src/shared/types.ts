@@ -28,6 +28,7 @@ import type { BoardDispatch } from './board-dispatch'
 import type { CodexAccount } from './codex-account'
 import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
+import type { AlertSoundKind, AlertSoundSaveResult, CustomAlertSounds } from './alert-sound'
 import type { CanvasLayout, LayoutViewports } from './canvas-layout'
 import type {
   ModelDiscoveryResult,
@@ -1543,6 +1544,17 @@ export interface FilesApi {
    * Resolves null when it could not be written; callers drop that file like a failed drop.
    */
   saveCanvasImage(projectId: string, name: string, dataBase64: string): Promise<string | null>
+  /**
+   * Store a custom sound for an agent alert (issue #289). The core validates kind, extension,
+   * size and magic bytes, then writes a FIXED per-kind file under its own data dir — the picked
+   * file's path is never sent, only its bytes and base name. Resolves `{ ok: false, error }` for a
+   * refusal; never rejects on a bad file.
+   */
+  saveAlertSound(kind: AlertSoundKind, name: string, dataBase64: string): Promise<AlertSoundSaveResult>
+  /** The stored custom sound for `kind` as base64, or null when there is none (or it is unreadable). */
+  readAlertSound(kind: AlertSoundKind): Promise<string | null>
+  /** Delete the custom sound for `kind` (Reset to default). */
+  clearAlertSound(kind: AlertSoundKind): Promise<boolean>
 }
 
 export interface MediaApi {
@@ -1815,6 +1827,13 @@ export interface Settings {
   worktreePathTemplate: string
   /** ms to dwell over a terminal before it takes pointer focus (pan-across guard). */
   panHoverDelay: number
+  /** Issue #757. Whether a terminal node's keyboard focus follows the POINTER (the long-standing
+   *  behaviour and the default): a `panHoverDelay` dwell takes it and leaving the node gives it
+   *  back. Off = click to focus (the Mac model): the pointer decides nothing, a click or a "go to
+   *  node" takes the keyboard, and the terminal keeps it until focus really moves elsewhere
+   *  (another node, the empty canvas, a field). Machine-local, Settings → Behavior. Decisions live
+   *  in `renderer/lib/terminalFocusMode.ts`. */
+  terminalFocusFollowsPointer: boolean
   doubleClickFocus: boolean
   /** "Go to node" (sessions sidebar, notification click, ⌘K jump, breadcrumb steps, presence
    *  travel) fits the node in view. Off: the camera keeps the CURRENT zoom and only pans, which is
@@ -1822,6 +1841,12 @@ export interface Settings {
    *  costs them the sense of where they were. Either way the node is centred and kept clear of the
    *  floating chrome (renderer/lib/nodeFocus). */
   focusZoomToNode: boolean
+  /** Closing the LAST session (terminal/agent) node of a project with its × offers to close the
+   *  project too (issue #848). Opt-in — default OFF, because not everyone closes their last
+   *  session when they are done with a project. Only the user's × click asks; a restart, an exit,
+   *  a hibernated agent (still a node) or a bulk/programmatic close never does
+   *  (renderer/lib/lastSessionClose). Declining keeps the project open. */
+  offerCloseProjectOnLastSession: boolean
   /** Whether the bottom-left canvas lock survives a restart. OFF by default, and deliberately so:
    *  the lock was transient by design, because a canvas that will not pan on the next launch reads
    *  as "the app is frozen" to whoever opens it, and the lit button is a small thing to spot. Users
@@ -1874,6 +1899,17 @@ export interface Settings {
    * terminal. Logic: `renderer/terminal/copy-on-select.ts`.
    */
   copyOnSelect: boolean
+  /**
+   * Windows SSH projects: after a key is unlocked with its passphrase, also load it into the
+   * Windows OpenSSH agent service, so later connections (and the user's own `ssh`) do not prompt
+   * again. OFF by default because that agent STORES the key — DPAPI-encrypted in
+   * `HKCU\Software\OpenSSH\Agent\Keys`, surviving service restarts — until it is removed
+   * (`ssh-add -d` / `-D`), and it refuses a lifetime constraint (measured on windows-latest,
+   * OpenSSH_for_Windows_9.5p2), so there is no "for this session only". A host whose own
+   * `~/.ssh/config` says `AddKeysToAgent yes` gets the add without this switch: that user already
+   * asked OpenSSH for exactly this. Logic: `core/remote-ssh/native/agent-add.ts`.
+   */
+  windowsSshAgentAddKeys: boolean
   /** Plain mouse wheel zooms the canvas (no Cmd/Ctrl needed). On macOS a two-finger trackpad
    *  scroll keeps panning independently (see canvas/wheel-gesture.ts), so mouse and trackpad
    *  coexist; elsewhere this still trades away scroll-to-pan, so it stays opt-in. */
@@ -1985,6 +2021,11 @@ export interface Settings {
   soundEffects: boolean
   /** Sound-effect volume, 0..1. */
   soundVolume: number
+  /** User-picked replacements for the built-in chimes, per alert kind (issue #289). Holds only a
+   *  display name + a stamp — the FILE lives in the core's data dir (`<userData>/sounds/`), never
+   *  at the user's original path. Read through `customAlertSoundFor` (hand-editable JSON); an
+   *  absent/malformed entry, or a file that is gone or will not decode, plays the built-in chime. */
+  customAlertSounds: CustomAlertSounds
   /** User-defined agents (BYO CLI) appended to the Add menus. */
   customAgents: CustomAgent[]
   /** One gateway root + non-secret credential reference used by model-switch-capable harnesses. */
@@ -2238,13 +2279,16 @@ export const DEFAULT_SETTINGS: Settings = {
   omniKanbanAsDefault: false,
   worktreePathTemplate: DEFAULT_WORKTREE_PATH_TEMPLATE,
   panHoverDelay: 600,
+  terminalFocusFollowsPointer: true,
   doubleClickFocus: true,
   focusZoomToNode: true,
+  offerCloseProjectOnLastSession: false,
   rememberCanvasLock: false,
   openMarkdownPreview: true,
   openMarkdownPreviewMigrated: true,
   terminalMiddleClickPaste: false,
   copyOnSelect: false,
+  windowsSshAgentAddKeys: false,
   wheelZoom: false,
   wheelZoomSpeed: 1,
   trackpadPan: true,
@@ -2273,6 +2317,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notifyConsentAsked: false,
   soundEffects: true,
   soundVolume: 0.5,
+  customAlertSounds: {},
   customAgents: [],
   modelGateway: { baseUrl: '', apiKey: '' },
   // No default gateway model until the user picks one in Settings → Model gateway. Absent ⇒
@@ -4363,4 +4408,9 @@ export interface NodeTerminalApi {
     list(): Promise<import('./station-handover').StationHandoverRecord[]>
     onChanged(cb: (records: import('./station-handover').StationHandoverRecord[]) => void): () => void
   }
+  /** Live links (src/core/watch-link/service.ts): a read-only, expiring browser link to one terminal,
+   *  hosted by THIS machine. Owner-only (`watchLink:*` is host-only). Desktop: real. Server Edition:
+   *  the real bridge, whose create answers `unsupported` until that edition has a license layer.
+   *  Relay tab: an inert stub (a peer's terminals are not this machine's to publish). */
+  watchLink: import('./watch-link-types').WatchLinkApi
 }
