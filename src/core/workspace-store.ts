@@ -37,6 +37,18 @@ import {
 import { appendProjectNode, removeProjectNode, type RemoteNodeInput } from './project-node-append'
 import { editProjectCardLabels, ensureProjectBoard, setProjectCardColumn, type CardLabelEdit } from './project-kanban-write'
 import { boardLabels, cardMeta } from '../shared/kanban-labels'
+import { localizeAdoptedNode } from '../shared/adopt-cwd'
+import { clampProjectName, folderName } from '../shared/project-name'
+import { SYSTEM_NODE_COLORS } from '../shared/node-colors'
+import { codedError } from './relay/admin-error'
+
+/** What `WorkspaceStore.adoptFolder` did: the project now holding the folder, and whether this call
+ *  added it (`created: false` = an existing project already held the same real directory). */
+export interface AdoptFolderResult {
+  projectId: string
+  projectName: string
+  created: boolean
+}
 
 /**
  * The seam a content authority (the Server Edition's canvas authority, `core/canvas-authority.ts`)
@@ -1638,6 +1650,76 @@ export class WorkspaceStore {
     } catch (err) {
       return (err as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'absent' : 'unreadable'
     }
+  }
+
+  /**
+   * HEADLESS adoption (`team bootstrap`): add the folder at `cwd` as a project of this core and
+   * save it, so the canvas authority can read it before it is shared. One project per REAL path:
+   * an entry whose folder resolves to the same directory is reused, never duplicated, because the
+   * desktop names the folder by whatever path it holds and a symlink must not mint a second
+   * project. A reused project that was closed is reopened. A folder with a project file is adopted
+   * with `probeFolder` semantics (fresh project id, node ids kept — they are tmux session names).
+   * One without becomes an empty project named after the folder. A file that is present but cannot
+   * be read is a refusal, never an empty project: that would overwrite the only copy on the next
+   * save (see `projectFileState`). Nothing here sidelines a corrupt file either — it is left in
+   * place for the user to fix.
+   *
+   * `home` expands the SSH project's `~` node cwds (`localizeAdoptedNode`). The server runs as the
+   * same user the desktop logged in as, so the home is the same.
+   *
+   * The whole read-modify-write runs ON `saveChain`: a save queued meanwhile would otherwise write
+   * an index built before this project existed over the one that adds it.
+   */
+  adoptFolder(cwd: string, opts: { home: string }): Promise<AdoptFolderResult> {
+    const run = this.saveChain.then(() => this.adoptFolderNow(cwd, opts))
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
+  private async adoptFolderNow(cwd: string, opts: { home: string }): Promise<AdoptFolderResult> {
+    if (!path.isAbsolute(cwd)) throw codedError('E_BAD_CWD', `Not an absolute path: ${cwd}`)
+    let real: string
+    try {
+      real = await fs.realpath(cwd)
+      if (!(await fs.stat(real)).isDirectory()) throw new Error('not a directory')
+    } catch {
+      throw codedError('E_BAD_CWD', `Not a directory on this host: ${cwd}`)
+    }
+    // `load` does not queue on `saveChain`, so calling it from this chain step cannot deadlock.
+    // Read-only (no sideline): adoption must not rename some OTHER project's conflict-marked file.
+    const workspace = structuredClone(await this.load({ sideline: false }))
+    for (const p of workspace.projects) {
+      if (!p.cwd || p.ssh) continue
+      const theirs = await fs.realpath(p.cwd).catch(() => p.cwd as string)
+      if (theirs !== real) continue
+      if (p.closed) {
+        p.closed = false
+        delete p.closedAt
+        await this.saveNow(workspace, false)
+      }
+      return { projectId: p.id, projectName: p.name, created: false }
+    }
+    const state = await this.projectFileState(real)
+    if (state === 'unreadable') throw codedError('E_ADOPT_FAILED', `Could not read ${projectFilePath(real)}.`)
+    let project: Project
+    if (state === 'present') {
+      const probed = await this.probeFolder(real)
+      if (!probed) throw codedError('E_ADOPT_FAILED', `${projectFilePath(real)} is not a project file this server can read.`)
+      project = { ...probed, nodes: probed.nodes.map((n) => localizeAdoptedNode(n, opts.home)) }
+    } else {
+      project = {
+        id: freshProjectId(),
+        name: clampProjectName(folderName(real)) || 'Project',
+        color: SYSTEM_NODE_COLORS[workspace.projects.length % SYSTEM_NODE_COLORS.length],
+        cwd: real,
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: []
+      }
+    }
+    workspace.projects.push(project)
+    if (!workspace.activeProjectId) workspace.activeProjectId = project.id
+    await this.saveNow(workspace, false)
+    return { projectId: project.id, projectName: project.name, created: true }
   }
 
   localRefPaths(): string[] {
