@@ -18,6 +18,8 @@ export type ReopenPlan =
 export interface PlanReopenProject {
   id: string
   closed?: boolean
+  /** A relay tab (a hosted team's project): never reopened from the history. */
+  remote?: boolean
   nodes: readonly { id: string }[]
 }
 
@@ -41,8 +43,10 @@ export function planReopen(
 ): ReopenPlan {
   if (entry.kind === 'project') {
     const project = projects.find((p) => p.id === entry.projectId)
-    // Only stale if it isn't sitting closed right now — already reopened another way, or gone.
-    return project?.closed ? { action: 'reopenProject', projectId: entry.projectId } : { action: 'skip' }
+    // Only stale if it isn't sitting closed right now — already reopened another way, or gone. A
+    // relay tab is never reopened from here: its nodes are the host's sessions, and a reopen would
+    // mount them on this machine's core (the team brings its own tabs back).
+    return project?.closed && !project.remote ? { action: 'reopenProject', projectId: entry.projectId } : { action: 'skip' }
   }
 
   const project = projects.find((p) => p.id === entry.projectId)

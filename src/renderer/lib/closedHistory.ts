@@ -175,7 +175,7 @@ export type ClosedHistoryRow =
  * sentinel — never `NaN` from subtracting `undefined`.
  */
 /**
- * The start screen's "Recently closed" list: closed, AVAILABLE projects, newest-closed first
+ * The start screen's "Recently closed" list: closed, AVAILABLE, local projects, newest-closed first
  * (issue #506).
  *
  * The heading promises recency and the list did not deliver it — it was
@@ -190,11 +190,20 @@ export type ClosedHistoryRow =
  * those sort last rather than becoming `NaN`.
  */
 export function recentlyClosedProjects<
-  T extends { closed?: boolean; unavailable?: boolean; closedAt?: number }
+  T extends { closed?: boolean; unavailable?: boolean; closedAt?: number; remote?: boolean }
 >(projects: readonly T[]): T[] {
   return projects
-    .filter((p) => p.closed && !p.unavailable)
+    .filter(isReopenableClosedProject)
     .sort((a, b) => (b.closedAt ?? -1) - (a.closedAt ?? -1))
+}
+
+/**
+ * A closed project that "Recently closed" may offer. Not an `unavailable` one (see above), and not a
+ * relay tab (`remote`, a hosted team's project): its nodes are the HOST's sessions, and reopening it
+ * from here would mount them on this machine's core. A team tab comes back through the team.
+ */
+export function isReopenableClosedProject(p: { closed?: boolean; unavailable?: boolean; remote?: boolean }): boolean {
+  return !!p.closed && !p.unavailable && !p.remote
 }
 
 /**
@@ -213,7 +222,7 @@ export function filterClosedProjects<T extends { name: string; cwd?: string }>(
 export function mergeClosedHistory(projects: readonly Project[]): ClosedHistoryRow[] {
   const rows: ClosedHistoryRow[] = []
   for (const p of projects) {
-    if (p.closed && !p.unavailable) {
+    if (isReopenableClosedProject(p)) {
       rows.push({ kind: 'project', projectId: p.id, closedAt: p.closedAt ?? -1, project: p })
     }
     for (const entry of p.closedSessions ?? []) {

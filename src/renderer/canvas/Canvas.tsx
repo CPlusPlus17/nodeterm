@@ -300,6 +300,7 @@ import { PresenceLayer } from '../components/PresenceLayer'
 import { Facepile } from '../components/Facepile'
 import { PresenceNamePrompt } from '../components/PresenceNamePrompt'
 import { nodeTravel, projectTravel } from '../lib/presenceTravel'
+import { nodeIdsHeldElsewhere, nodeOwner } from '../lib/nodeOwner'
 import {
   closeConfirmCopy,
   closedSessionCounts,
@@ -11056,9 +11057,9 @@ export function Canvas() {
         useAgentStatus.getState().clearUnread(nodeId)
         return
       }
-      const owner = useProjects
-        .getState()
-        .projects.find((p) => p.nodes.some((n) => n.id === nodeId))
+      // `nodeOwner`, not the first project holding the id: a closed, handed-off SSH project shares
+      // its node ids with the team tab now serving them, and the tab is where the node lives.
+      const owner = nodeOwner(useProjects.getState().projects, nodeId)
       if (owner && owner.id !== useProjects.getState().activeProjectId) {
         pendingFocusRef.current = nodeId
         if (owner.closed) {
@@ -15713,7 +15714,7 @@ export function Canvas() {
       if (!nodeId || !title) return
       const projectId = nodesRef.current.some((n) => n.id === nodeId)
         ? activeProjectId
-        : useProjects.getState().projects.find((p) => p.nodes.some((n) => n.id === nodeId))?.id
+        : nodeOwner(useProjects.getState().projects, nodeId)?.id
       if (!projectId) return
       renameSession(projectId, nodeId, title)
     })
@@ -16905,7 +16906,11 @@ export function Canvas() {
       const store = useProjects.getState()
       if (id === store.activeProjectId) commitActiveToStore()
       if (endSessions) endProjectSessions(id)
-      useReopenHistory.getState().push({ kind: 'project', projectId: id, closedAt: Date.now() })
+      // A relay tab is never reopened from the history (`planReopen` skips it too): its nodes are
+      // the host's sessions.
+      if (!store.getProject(id)?.remote) {
+        useReopenHistory.getState().push({ kind: 'project', projectId: id, closedAt: Date.now() })
+      }
       disposeRelayTabForProject(id)
       store.closeProject(id)
       void writeDisk()
@@ -17467,6 +17472,9 @@ export function Canvas() {
       // End the tmux sessions of every terminal in the deleted project, and drop their
       // persisted agent status and subagent fan-out (node unmount removes neither — issue #402).
       const project = store.getProject(id)
+      // A handed-off SSH project shares its node ids with the team tab now serving them: that tab
+      // still needs their agent status.
+      const heldElsewhere = nodeIdsHeldElsewhere(store.projects, id)
       project?.nodes.forEach((n) => {
         if ((n.kind ?? 'terminal') === 'terminal') {
           disposeTerminalOnUnmount(sessionForProject(id).id, n.id) // may be parked from a recent switch away
@@ -17476,7 +17484,7 @@ export function Canvas() {
         // outlives the project entry (it is a file in the project's folder), so the run does not
         // stay open in the issue's history forever.
         if (n.issueRef) logIssueRunEnded(id, n)
-        useAgentStatus.getState().remove(n.id)
+        if (!heldElsewhere.has(n.id)) useAgentStatus.getState().remove(n.id)
         useAgentNodes.getState().clearForParent(n.id)
       })
       // SSH project: the per-node `transport.destroy` above only ends the REMOTE session for

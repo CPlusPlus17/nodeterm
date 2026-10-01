@@ -164,6 +164,11 @@ describe('mergeClosedHistory', () => {
     const rows = mergeClosedHistory([proj({ id: 'a', closed: true, unavailable: true, closedAt: 5 })])
     expect(rows).toHaveLength(0)
   })
+
+  it('excludes a closed relay (team) tab: reopening it here would mount the host nodes on this core', () => {
+    const rows = mergeClosedHistory([proj({ id: 'team', closed: true, remote: true, closedAt: 5 })])
+    expect(rows).toHaveLength(0)
+  })
 })
 
 // Issue #531: closing a node used to destroy the ONLY pointer to its transcript (the live session
@@ -261,7 +266,7 @@ describe('closedTranscriptTarget', () => {
 })
 
 describe('recentlyClosedProjects — the heading promises recency (issue #506)', () => {
-  type Probe = { id: string; name: string; closed?: boolean; unavailable?: boolean; closedAt?: number }
+  type Probe = { id: string; name: string; closed?: boolean; unavailable?: boolean; closedAt?: number; remote?: boolean }
   const p = (id: string, over: Partial<Probe> = {}): Probe => ({ id, name: id, ...over })
 
   it('orders newest-closed first, NOT tab order', () => {
@@ -280,6 +285,11 @@ describe('recentlyClosedProjects — the heading promises recency (issue #506)',
       p('gone', { closed: true, unavailable: true, closedAt: 999 }),
       p('kept', { closed: true, closedAt: 1 })
     ])
+    expect(rows.map((r) => r.id)).toEqual(['kept'])
+  })
+
+  it('drops a closed relay (team) tab: its nodes belong to the host, not to this core', () => {
+    const rows = recentlyClosedProjects([p('team', { closed: true, remote: true, closedAt: 999 }), p('kept', { closed: true, closedAt: 1 })])
     expect(rows.map((r) => r.id)).toEqual(['kept'])
   })
 

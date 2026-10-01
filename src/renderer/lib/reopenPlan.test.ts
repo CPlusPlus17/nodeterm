@@ -53,6 +53,12 @@ describe('planReopen', () => {
     expect(plan).toEqual({ action: 'skip' })
   })
 
+  it('skips a closed relay (team) tab: a reopen would mount the host nodes on this core', () => {
+    const projects: PlanReopenProject[] = [{ id: 'team', closed: true, remote: true, nodes: [] }]
+    const plan = planReopen({ kind: 'project', projectId: 'team', closedAt: 1 }, projects, 'p2', new Set(), neverRecreates)
+    expect(plan).toEqual({ action: 'skip' })
+  })
+
   it('skips a project entry whose project was permanently deleted since', () => {
     const plan = planReopen({ kind: 'project', projectId: 'gone', closedAt: 1 }, [], 'p2', new Set(), neverRecreates)
     expect(plan).toEqual({ action: 'skip' })

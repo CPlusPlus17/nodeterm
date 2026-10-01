@@ -8502,7 +8502,19 @@ invariants:
   as a call, always passed by `VIEW_EVENTS`), because `workspace:server-change` ignores unknown ids
   and viewers never receive `canvas:authority-changed`. A tab the user closes is dismissed until
   the project is unshared; nothing shared keeps one placeholder tab. A hosted tab never cold-resumes
-  an agent (`canColdRestore` excludes `source === 'relay'`).
+  an agent (`canColdRestore` excludes `source === 'relay'`). A CLOSED team tab (any `remote`
+  project) is never offered by "Recently closed" (`isReopenableClosedProject`) or ⇧⌘T (`planReopen`
+  skips it, `performCloseProject` does not push it): its nodes are the host's sessions, and a reopen
+  from here mounts them on the LOCAL core.
+- **One node id, two projects: owner lookups go through `nodeOwner`** (`lib/nodeOwner.ts`). After a
+  share the closed, handed-off SSH project and the team tab hold the same node ids, and the SSH
+  project comes FIRST in the list (a team tab is appended), so a bare
+  `projects.find(p => p.nodes.some(...))` sent every "go to node" to the reopen warning. `nodeOwner`
+  prefers an open project, then one without `handedOffTo`, then any; `focusNodeById`, the agent
+  rename-node handler, `presenceTravel.nodeTravel` and the Omni board's rename use it. Deleting a
+  project keeps the agent status of node ids another project still holds (`nodeIdsHeldElsewhere`).
+  Deliberately NOT moved to it: `routeControlSource` (a control request comes from a LOCAL agent, so
+  preferring an open relay tab would route it to another machine).
 - **Admin errors are stable codes, and a `--json` refusal goes to STDOUT.** `E_BAD_KEY`,
   `E_BAD_CWD`, `E_HOSTING_OFF`, `E_ADOPT_FAILED`, `E_BAD_REQUEST`, `E_UNSUPPORTED`
   (`core/relay/admin-error.ts`); a remote caller branches on the code, never the sentence, and

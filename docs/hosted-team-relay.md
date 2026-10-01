@@ -364,6 +364,14 @@ or, for a handover that did not finish:
 **Open here anyway** takes the project back: the mark is cleared, and this desktop writes the file
 again.
 
+After a share, the closed SSH project and the team's tab hold the **same node ids** (they are the
+tmux session names, and the server keeps them). Every "go to node" (a notification, the sessions
+sidebar, ⌘K, a teammate's face, a rename from the board) goes to the project that owns the node in
+this order: an open project before a closed one, and one not handed off before one that was
+(`lib/nodeOwner.ts`). So it lands on the team's tab, never on the reopen warning. Deleting the closed
+SSH project from "Recently closed" keeps the agent status of every node id another project still
+holds.
+
 ### The owner's own join skips the SAS
 
 A pasted code makes you read a SAS to an owner ([The first connect](#the-first-connect)). Share with
@@ -600,7 +608,9 @@ project of yours that holds the id is skipped, never renamed.
   no new approval, and closes the tab of an unshared one; nothing is deleted on the host. A tab that
   a share event opens is added at the end of the tab bar.
 - **A tab you close stays closed** while its project stays shared, for the rest of the app run. Once
-  the host unshares it the dismissal is forgotten, so sharing it again opens it again.
+  the host unshares it the dismissal is forgotten, so sharing it again opens it again. A closed team
+  tab is not offered under "Recently closed", nor by ⇧⌘T: its nodes are the host's sessions, and
+  reopening it from there would mount them on this computer's core. It comes back through the team.
 - **A team with nothing shared keeps one placeholder tab**, named after the team, so the team stays
   visible and reconnectable. The first shared project replaces it.
 - **One connection, all tabs.** A dropped connection greys all of a team's tabs together. A reconnect
