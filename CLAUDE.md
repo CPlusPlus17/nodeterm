@@ -8455,12 +8455,18 @@ come from the cached, validated probe, never from the renderer), and every comma
   restarts (threaded through every `fileToProject` base; a file field of that name is ignored).
   Every reopen path (Recently closed, ⇧⌘T, `openSshProject`'s endpoint reuse) warns first, and only
   "Open here anyway" clears it.
-- **The SAS skip is ONE bookmark shape**: `approvedAt` + `source:'ssh'`, seeded by
-  `shareTeam.seedBookmark` from the code `team bootstrap` just returned over the project's own ssh
-  channel (host key authenticated by `known_hosts`; `decodeJoinCode` checks hostId = hash(key) and
-  `wss:`/loopback `ws:`). It rides the existing client bookmark auto-confirm, so it is NOT a seventh
-  confirm site. Feed `seedBookmark` nothing but a code a bootstrap returned over that channel; a
-  pasted code always compares the SAS. A failed seed degrades to the SAS prompt, never to a skip.
+- **The SAS skip lives in ONE writer of `approvedAt`, and `source` gates nothing.** The client
+  auto-confirm is `autoApprove: approvedAt !== null` (`hosted-join.ts`, for the bookmark recorded
+  with the code's exact host key); `relay-bookmarks.ts` only validates `source`, it is a label.
+  Normally `approvedAt` is set by a human's OK after a SAS comparison. `shareTeam.seedBookmark`
+  (`main/remote-ssh/share-team.ts`) is the one writer that sets it WITHOUT one: a new bookmark
+  labelled `source:'ssh'`, or, for an existing bookmark with the same hostId and host key,
+  `approvedAt` set on it while it keeps its token and its `source` (often `'code'`). It rides the
+  existing client bookmark auto-confirm, so it is NOT a seventh confirm site. That is sound only for
+  its input: the join code `team bootstrap` returned over the project's own ssh channel (host key
+  authenticated by `known_hosts`; `decodeJoinCode` checks hostId = hash(key) and `wss:`/loopback
+  `ws:`). Feed it nothing else; the code does NOT yet enforce "only the last bootstrap's code". A
+  failed seed degrades to the SAS prompt, never to a skip; any pasted code compares the SAS.
 - **Hosted tabs are one per shared project, and the tab id IS the host project id.** relay-api
   translates no ids, so a tab under any other id asks the host about a project it does not know: a
   closed relay copy under that id is replaced, anything else holding it (an open tab, a local
@@ -8473,10 +8479,12 @@ come from the cached, validated probe, never from the renderer), and every comma
 - **Admin errors are stable codes, and a `--json` refusal goes to STDOUT.** `E_BAD_KEY`,
   `E_BAD_CWD`, `E_HOSTING_OFF`, `E_ADOPT_FAILED`, `E_BAD_REQUEST`, `E_UNSUPPORTED`
   (`core/relay/admin-error.ts`); a remote caller branches on the code, never the sentence, and
-  Node's own errno codes never pass as one (`adminErrorCode`). `team <verb> --json` prints
-  `{"ok":false,"code","error"}` on stdout (exit 1) beside the human line on stderr, because the
+  Node's own errno codes never pass as one (`adminErrorCode`). Under `team <verb> --json` a server
+  failure (exit 1: a refusal, or no server reachable) prints `{"ok":false,"error","code"?}` on
+  stdout beside the human line on stderr (`code` only when the server sent one), because the
   desktop's ssh exec reads stdout only: a refusal on stderr alone arrives as an empty, unparseable
-  reply. Bootstrap starts hosting and waits up to 15 s for the relay's first verdict BEFORE it
+  reply. The CLI's own argv/stdin refusals (`parseTeamArgv`, the resume stdin parse) exit 2 on
+  stderr only. Bootstrap starts hosting and waits up to 15 s for the relay's first verdict BEFORE it
   writes an owner, a project or a share: a refusal (`E_HOSTING_OFF`) writes none of them, and no
   verdict yet (`hosting:'starting'`) is still a success.
 - **`curl | bash` is a trap: download to a temp file first** (`SHARE_INSTALL_SCRIPT`). With no
@@ -8487,16 +8495,28 @@ come from the cached, validated probe, never from the renderer), and every comma
   data dir. And a value with `'` or `\` is refused, never nested-quoted: fish's single quotes treat
   both as escapes, so no nesting survives every login shell.
 
-**Known gap: one hook script, two writers.** The server core's local install and the desktop's
-`RemoteHooks` write the same `~/.nodeterm/agent-hooks/<agent>.sh` (same command, same event lists;
-the script reads `$NODETERM_HOOK_ENDPOINT` per session, so one copy serves both cores), but not the
-same bytes: only the server bakes the Codex thread-identity prelude (`REMOTE_IDENTITY_ROOT` is
-null). Last writer wins, so after a desktop connect a server-run shared-identity Codex node reports
-no status until the server restarts.
-
-**Surfaces (Share with team):** Desktop is full (any desktop OS; the host must be Linux). Server
-Edition runs `team bootstrap`/`team resume` from a shell, and its `shareTeam` answers
-`E_UNSUPPORTED` (it has no SSH projects). Mobile is N/A.
+**Known gap (accepted for v1): two writers of the same agent files on a shared host.** The server
+core and the desktop's `RemoteHooks` (for any SSH project still on that host) write the same files
+under one `$HOME`, with different bytes; the last writer wins.
+- **What collides.** The hook script `~/.nodeterm/agent-hooks/<agent>.sh` (same path, command and
+  event lists; `mergeManagedHook` strips our entries first, so a config never doubles, and under a
+  version skew the last writer's event set stays): only the server's copy carries the Codex
+  thread-identity prelude (`REMOTE_IDENTITY_ROOT` is null). And the discovery files: by default the
+  server writes the `get-linked-context` skill and the context-link blocks in `~/.codex/AGENTS.md`,
+  `~/.gemini/GEMINI.md` and opencode's `AGENTS.md` (`src/server/index.ts` `initServerContextLink`),
+  and with server canvas control on the `manage-nodeterm-canvas` skill and blocks
+  (`src/server/canvas-control.ts`), all naming its own shims under `<dataDir>`, which bake the
+  prelude; `RemoteHooks` writes the same files naming the neutral `~/.nodeterm/context.sh` /
+  `nodeterm.sh`.
+- **When each re-asserts.** The server at every start (the daily auto-update restarts it). The
+  desktop: the hook script on connect and on every hook-tunnel repair (the reuse branch re-runs
+  `setup()`); the discovery files through the agent-tools freshness check, which rewrites any that
+  differ on connect, on every tunnel repair, and hourly while a project on that host is connected.
+- **Who is affected.** Only shared-identity Codex tool shells on the server: they carry no
+  `NODETERM_*` env and need the prelude to find their node, so against the desktop's copies their
+  hooks report nothing. Every other pane carries its own endpoint env and works with either copy
+  (and when a session's endpoint is dead, the script's failover can deliver its event to the other
+  core's endpoint).
 
 **Known limitations** (full list in the doc): non-editors still receive cross-project presence and
 `context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still
@@ -8505,10 +8525,12 @@ non-content fields stay last writer wins between tabs, the share-time window, ov
 edits to another core, load-time repairs that are never cast, the card modal's comments on a relay
 tab) are under "Known limits" in the doc.
 
-**Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab).
-Server Edition is the host (the `team` CLI; its browser clients cannot approve and are not hosted
-peers). Mobile is N/A for v1: the phone still speaks the legacy dialect, and the host it would join
-now exists in core. The iOS follow-up is the tunnel-dialect migration.
+**Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab, plus
+Share with team from any desktop OS onto a Linux host). Server Edition is the host (the `team` CLI,
+`team bootstrap`/`team resume` included; its browser clients cannot approve and are not hosted
+peers, and its `shareTeam` rejects with `E_UNSUPPORTED`, having no SSH projects). Mobile is N/A for
+v1: the phone still speaks the legacy dialect, and the host it would join now exists in core. The
+iOS follow-up is the tunnel-dialect migration.
 
 ## Speech / dictation (desktop + server)
 

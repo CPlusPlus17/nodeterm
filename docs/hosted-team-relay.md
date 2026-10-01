@@ -1,8 +1,8 @@
 # Hosted team relay (a Server Edition as the relay host)
 
-**Status:** sub-project 1 of "team on an SSH host", built on `feat/hosted-team-relay` (2026-09).
-Everything below was checked against the code on that branch. Where the design spec says something
-else, the code wins; the spec is a local planning file and is not the reference.
+**Status:** built from 2026-09 on: the relay host, the shared canvas authority, host key proof of
+possession and Share with team. Everything below was checked against the code. Where a design spec
+says something else, the code wins; the specs are local planning files and are not the reference.
 
 **Builds on:** `docs/remote-sessions.md` (relay tabs, the trust gate, Team Access) and
 `docs/team-presence.md` (presence, co-attach, canvas sync).
@@ -111,10 +111,13 @@ answer is false) and prints the same join code. Sharing a second folder is the s
 another `--adopt`: the same team and the same join code, and teammates who are connected get its tab
 at once (see [Hosted tabs](#hosted-tabs)).
 
-`--json` prints `{hostId, projectId, projectName, joinCode, hosting, created}`. A refusal under
-`--json` is one JSON line on **stdout**, `{"ok":false,"code":"E_…","error":"…"}` (exit 1), beside
-the human sentence on stderr, because a caller reading over an ssh exec channel (the desktop) reads
-stdout only. The codes are stable; branch on them, never on the sentence:
+`--json` prints `{hostId, projectId, projectName, joinCode, hosting, created}`. Under `--json`, a
+failure from the server (a refusal, or a server that cannot be reached; exit 1) is one JSON
+line on **stdout**, `{"ok":false,"error":"…","code":"E_…"}`, beside the human sentence on stderr,
+because a caller reading over an ssh exec channel (the desktop) reads stdout only. `code` is there
+only when the server sent one. A command line (or, for `team resume`, a stdin) that the CLI itself
+refuses exits 2 and prints to stderr only. The codes are stable; branch on them, never on the
+sentence:
 
 | Code | Meaning |
 |---|---|
@@ -123,7 +126,7 @@ stdout only. The codes are stable; branch on them, never on the sentence:
 | `E_HOSTING_OFF` | Hosting could not start (the scheduler's reason follows), or it stopped before a join code could be issued. |
 | `E_ADOPT_FAILED` | The folder's `.nodeterm/project.json`, or this core's own workspace index, is there but cannot be read. Nothing is set aside; fix the file and run it again. |
 | `E_BAD_REQUEST` | A malformed request: a bad label, project id or resume list. |
-| `E_UNSUPPORTED` | This server cannot adopt folders or resume sessions. The desktop's `shareTeam` verbs answer it too, on the Server Edition and in relay tabs. |
+| `E_UNSUPPORTED` | This server cannot adopt folders or resume sessions. (Separately, the renderer's `shareTeam` verbs REJECT with an error coded `E_UNSUPPORTED` in the Server Edition's browser and in relay tabs; that is the bridge refusing, not a JSON reply from a server.) |
 
 ### `team resume`
 
@@ -158,15 +161,15 @@ ls ~/Library/Application\ Support/*/remote-peer-key.json
 Share with team reads this key for you; nothing else in the UI shows it in v1.
 
 The file is created the first time the desktop hosts a Team Access invite, connects to another
-desktop's pairing code (New Remote Connection) or joins a hosted team. Pairing a **phone** does not
-create it; that uses a different key file (`remote-host-key.json`). Only if the file is really not
-there, run `team init` and `team info` for a join code and paste it once (see
+desktop's pairing code (New Remote Connection), joins a hosted team or runs Share with team. Pairing
+a **phone** does not create it; that uses a different key file (`remote-host-key.json`). Only if the
+file is really not there, run `team init` and `team info` for a join code and paste it once (see
 [The first connect](#the-first-connect)); that join spends one of the team's shared device mints.
 While your desktop asks you to read a code to an owner, `team status --json` lists your device under
-`pending` with its `peerKeyB64` and `sas`. Take the key whose `sas` matches your prompt, press Cancel
-on the prompt (that ends the request), run `team bootstrap` (or `team add-owner`) with that key, and
-paste the code again. A request that is still pending when its key becomes an owner is not upgraded;
-it would wait out its 10 minutes.
+`pending` with its `peerKeyB64` and `sas`. Take the key whose `sas` matches your prompt, press
+Cancel on the prompt (that ends the request), run `team bootstrap` (or `team add-owner`) with that
+key, and paste the code again. A request that is still pending when its key becomes an owner is not
+upgraded; it would wait out its 10 minutes.
 
 ### The first connect
 
@@ -196,7 +199,8 @@ grants the chosen role once the joiner has pressed OK too.
 **Share with team…** turns a desktop **SSH project** into a hosted team on the same host, with this
 desktop as an owner. It is in the project tab's ⌄ menu and in the sessions sidebar's project menu
 (SSH projects only), and in ⌘K as "Share <name> with team" for the active one. While the project's
-SSH connection is down it is disabled: "Connect this project first (its SSH connection is down)."
+SSH connection is down the two menu items are disabled with the reason "Connect this project first
+(its SSH connection is down).", and the ⌘K row shows that reason and does nothing when run.
 
 The code: `src/renderer/lib/shareSshTeam.ts` (the order, pure), `components/ShareTeamDialog.tsx`,
 `src/main/remote-ssh/share-team.ts` (the `shareTeam` IPC verbs),
@@ -296,7 +300,7 @@ again.
 12. **`team resume`** for the resumable agents whose sessions are gone, with the list on stdin.
 13. **Join**, and show the invite code.
 
-Any failure after step 6 and before `team bootstrap` succeeds takes the mark back, and reopens the
+Any failure from step 6 on, before `team bootstrap` succeeds, takes the mark back, and reopens the
 SSH project if step 8 had closed it: "The SSH project was reopened; nothing was changed." If that
 undo itself fails, the result says so instead: the project may still be closed and still carry the
 mark that stops its mirror, and reopening it from "Recently closed" (which warns, see below) clears
@@ -343,13 +347,20 @@ again.
 ### The owner's own join skips the SAS
 
 A pasted code makes you read a SAS to an owner ([The first connect](#the-first-connect)). Share with
-team does not, and it is the only join that does not. The join code came back from `team bootstrap`
-over the project's own SSH channel, whose host key `known_hosts` already authenticated, and the code
-names the relay key it was minted for (`decodeJoinCode` checks that the host id is the hash of that
-key). That is the assurance comparing six digits by eye gives. So before joining, the desktop seeds
-the team's bookmark with `approvedAt` and `source: 'ssh'`, and the bookmark's auto-confirm opens the
-connection; the host approves its own half because your key is an owner in `team.json`. A bookmark
-already held for the same team and key keeps its device token. Every other join, a pasted code or a
+team does not. The client's auto-confirm reads one thing, the bookmark's `approvedAt` (for the host
+key the bookmark was recorded with; `hosted-join.ts`), and normally only a human's OK after a SAS
+comparison sets it. `shareTeam.seedBookmark` is the one writer that sets it without one: it writes a
+new bookmark with `approvedAt` (labelled `source: 'ssh'`), or, when a bookmark for the same host id
+and host key already exists, sets `approvedAt` on it and keeps its device token and its label
+(`source: 'code'` stays `code`). `source` is a label only; nothing reads it to decide.
+
+That is safe only because of what `seedBookmark` is given: the join code `team bootstrap` just
+returned over the project's own SSH channel, whose host key `known_hosts` already authenticated. The
+code names the relay key it was minted for (`decodeJoinCode` checks that the host id is the hash of
+that key), which is the assurance comparing six digits by eye gives. Its input must be such a code
+and nothing else; the desktop does not yet check that the code it is handed is the one the last
+bootstrap returned. The host approves its own half because your key is an owner in `team.json`. If
+the seed fails, the join asks for the SAS like a pasted code. Every other join, a pasted code or a
 teammate's, still compares the SAS.
 
 ### Refusals
@@ -374,32 +385,51 @@ desktop instead, remove the system install first (its service, its update timer 
 under `/etc/systemd/system/`) and share again, which installs a per-user server; nothing of root's
 team or data is carried over.
 
-### Agent hooks on a shared host
+### Agent hooks and discovery files on a shared host (a known gap)
 
-The server core's own hook install (`src/core/agents/hooks/install-helper.ts`
-`managedHookScriptPath`, and `codex.ts`'s `scriptPath`) and the desktop's install over SSH
-(`RemoteHooks`, `src/main/remote-ssh/remote-hooks.ts`) point each agent's config
-(`~/.claude/settings.json`, `~/.gemini/settings.json`, `~/.codex/hooks.json`, …) at the same
-machine-wide script, `~/.nodeterm/agent-hooks/<agent>.sh`, with the same command and the same event
-lists (`@shared/agents/hook-events.ts`), so a config never gains a second entry. Both run as the
-same user (the server runs as your SSH login), so it is one file. The script reads
-`$NODETERM_HOOK_ENDPOINT` when it runs, and every session carries its own: the SSH project's
-sessions name the desktop's reverse-tunnel endpoint
-(`~/.nodeterm/hook-endpoint-<projectId>-<owner>.env`), the server core's name
-`<dataDir>/hook-endpoint.env`. One copy therefore serves both sets of sessions, and each reports to
-its own core.
+After a share, two nodeterm writers keep the same files under the same `$HOME`: the server core (it
+runs as your SSH login) and this desktop's `RemoteHooks` (`src/main/remote-ssh/remote-hooks.ts`)
+for any SSH project it still has on that host. This is accepted for v1 and stated in full here.
 
-**The bytes are not identical**, and the last writer wins. The server bakes a Codex thread-identity
-prelude into every script, pointing at its own data directory; `RemoteHooks` writes none
-(`REMOTE_IDENTITY_ROOT = null`). The server rewrites the scripts each time it starts, the desktop
-each time an SSH project on that host connects. The prelude does nothing for the desktop's sessions
-(it runs only when `NODETERM_NODE_ID` is empty). Without it, though, the hooks of a Codex node the
-server core runs in shared-identity mode cannot find their node (they run from Codex's shared
-app-server, which carries only `CODEX_THREAD_ID`), so that node reports nothing. That is the state
-right after sharing to a server that was already running (the desktop connected after the server
-last started), and after any later connect of another SSH project on that host, until the server
-restarts (the daily auto-update restarts it, unless it was turned off). Likewise, when the desktop
-and the server run different nodeterm versions, the last writer's script serves both.
+**What they share.** Both point each agent's hook config (`~/.claude/settings.json`,
+`~/.gemini/settings.json`, `~/.codex/hooks.json`, …) at the same machine-wide script,
+`~/.nodeterm/agent-hooks/<agent>.sh` (`src/core/agents/hooks/install-helper.ts`
+`managedHookScriptPath`, `codex.ts`'s `scriptPath`). A config does not gain a second entry because
+`mergeManagedHook` strips every entry carrying our marker before it adds its own; under a version
+skew between the two, the last writer's event set is the one left. The script reads
+`$NODETERM_HOOK_ENDPOINT` when it runs, and every pane carries its own: the SSH project's sessions
+name the desktop's reverse-tunnel endpoint (`~/.nodeterm/hook-endpoint-<projectId>-<owner>.env`),
+the server core's name `<dataDir>/hook-endpoint.env`. Normally each session reports to its own
+core; when a session's endpoint is dead, the script's failover walks the other endpoint files on the
+host, so a desktop session whose tunnel is down can have its event delivered to the server's
+endpoint instead.
+
+**What collides.** The two writers do not write the same bytes:
+
+- **The hook script.** The server bakes a Codex thread-identity prelude into it, pointing at its own
+  data directory; `RemoteHooks` writes none (`REMOTE_IDENTITY_ROOT = null`).
+- **The discovery files.** At boot, by default, the server writes the context-link skill
+  (`~/.claude/skills/get-linked-context/SKILL.md`) and its marker blocks in `~/.codex/AGENTS.md`,
+  `~/.gemini/GEMINI.md` and opencode's `AGENTS.md`, all naming its own shim under
+  `<dataDir>/context-links/`; with server canvas control on, also the `manage-nodeterm-canvas` skill
+  (system and managed-account dirs) and its blocks, naming `<dataDir>/canvas-control/nodeterm.sh`.
+  Those shims bake in the same prelude. `RemoteHooks` writes the same files naming its neutral
+  `~/.nodeterm/context.sh` and `~/.nodeterm/nodeterm.sh`, which carry none.
+
+**When each one writes.** The server, each time it starts (the daily auto-update restarts it, unless
+that was turned off). The desktop rewrites the hook script whenever it sets up an SSH project on
+that host, which is on connect and again on every hook-tunnel repair; its agent-tools freshness
+check rewrites any discovery file that differs from its own on connect, on every tunnel repair, and
+hourly while a project on that host stays connected. The last writer wins.
+
+**Who is affected.** Only Codex nodes the server core runs in shared-identity mode, and only their
+tool shells: those run from Codex's shared app-server, carry `CODEX_THREAD_ID` and none of the
+`NODETERM_*` environment, and need the prelude to find their node. Against the desktop's copies,
+such a node's hooks report nothing (the script exits at its `NODETERM_NODE_ID` gate) and its shell
+calls to the canvas and context shims cannot say which node they come from. That is the state right
+after sharing to a server that was already running (the desktop connected after the server last
+started), and whenever the desktop re-asserts its copies later, until the server's next start. Every
+other pane, on either core, carries its own endpoint in its environment and works with either copy.
 
 ## Roles
 
@@ -1159,7 +1189,7 @@ are unchanged.
   not hosted peers; the access policy never applies to them, and they cannot call `relay:hosted:*`
   (those verbs are intercepted inside the relay session and never registered on the platform). A
   join code pasted into a browser tab gets one "not supported in the browser build" notice. Share
-  with team does not apply (the Server Edition has no SSH projects, and its `shareTeam` answers
+  with team does not apply (the Server Edition has no SSH projects, and its `shareTeam` rejects with
   `E_UNSUPPORTED`), but `team bootstrap` and `team resume` work from a shell on the host.
 - **Mobile:** N/A for v1. The phone still speaks the legacy relay dialect. The host it would join
   now exists in core (a standing listener on the tunnel dialect); the phone side needs the

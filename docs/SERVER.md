@@ -233,10 +233,11 @@ hosting, makes the key an owner, adopts the folder into this core's workspace (d
 path; an existing `.nodeterm/project.json` keeps its nodes) and shares it, then prints the join
 code. `team resume --project <id>` restarts, on this core's own tmux socket, the agent sessions a
 desktop handed over, each with its conversation resumed; it reads its session list as JSON on
-**stdin**, never from the command line. Under `--json` both print a refusal as one JSON line on
-stdout with a stable code (`E_BAD_KEY`, `E_BAD_CWD`, `E_HOSTING_OFF`, `E_ADOPT_FAILED`,
-`E_BAD_REQUEST`, `E_UNSUPPORTED`). The browser build itself cannot start Share with team (it has no
-SSH projects; its `shareTeam` answers `E_UNSUPPORTED`).
+**stdin**, never from the command line. Under `--json`, a server failure (exit 1) prints one JSON
+line on stdout, with a stable code when the server sent one (`E_BAD_KEY`, `E_BAD_CWD`,
+`E_HOSTING_OFF`, `E_ADOPT_FAILED`, `E_BAD_REQUEST`, `E_UNSUPPORTED`); a command line the CLI itself
+refuses exits 2 on stderr only. The browser build cannot start Share with team: it has no SSH
+projects, and its `shareTeam` rejects with `E_UNSUPPORTED`.
 
 ## Security model
 
