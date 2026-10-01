@@ -69,3 +69,68 @@ export function parseResumeSessions(raw: unknown): ResumeEntry[] | string {
   }
   return out
 }
+
+/** What the desktop learns about the SSH host before it shares a project there, read by one
+ *  generated probe script (`core/remote-ssh/share-team-remote.ts`). */
+export interface ShareProbe {
+  os: string
+  uid: number | null
+  user: string
+  home: string
+  have: { git: boolean; curl: boolean }
+  /** Which systemd unit runs nodeterm-server: the user's own, a root system service, or none. */
+  unit: 'user' | 'system' | 'none'
+  /** The node binary and `main.cjs` the user unit runs ('' when there is no user unit). */
+  node: string
+  main: string
+  dataDir: string
+  meta: { version: string; commit: string } | null
+  /** The installed server knows `team bootstrap` (an older one must be updated first). */
+  hasBootstrap: boolean
+  /** `team status --json` exit code; null = the CLI could not be run at all. */
+  statusRc: number | null
+  teamExists: boolean
+  /** realpath of the SSH project's remoteCwd on the host; null = it does not exist. */
+  adoptCwd: string | null
+  /** Live panes on this desktop's own remote tmux socket (`nt-*` sessions only; a session with
+   *  several panes appears once per pane). */
+  panes: Array<{ session: string; command: string }>
+}
+export type SharePlan =
+  | { kind: 'ready' }
+  | { kind: 'install'; reason: 'missing' | 'outdated' | 'not-running' }
+  | { kind: 'refuse'; reason: string }
+
+/** The most terminal nodes one share hands over. */
+export const SHARE_MAX_TERMINALS = 200
+
+export const SHARE_REFUSAL = Object.freeze({
+  root: 'This SSH login is root. Share with team runs nodeterm-server as your own user, so log in to the project as a regular user and try again.',
+  system: 'This host runs nodeterm-server as a system service (root). Share with team needs a per-user install; see docs/hosted-team-relay.md.',
+  nonLinux: 'Share with team needs a Linux host (nodeterm-server runs on Linux).',
+  noFolder: 'The project folder does not exist on the host.'
+})
+
+/** Decide from a probe whether the host can take the share now, needs the installer first, or
+ *  cannot take it at all. Refusals come first: installing on a host we would refuse anyway is
+ *  wasted minutes. git and curl matter only when the installer has to run. */
+export function sharePlan(p: ShareProbe): SharePlan {
+  if (p.os !== 'Linux') return { kind: 'refuse', reason: SHARE_REFUSAL.nonLinux }
+  if (p.uid === 0) return { kind: 'refuse', reason: SHARE_REFUSAL.root }
+  if (p.unit === 'system') return { kind: 'refuse', reason: SHARE_REFUSAL.system }
+  if (p.adoptCwd === null) return { kind: 'refuse', reason: SHARE_REFUSAL.noFolder }
+  const reason: 'missing' | 'outdated' | 'not-running' | null =
+    p.unit === 'none' || !p.node || !p.main
+      ? 'missing'
+      : !p.hasBootstrap
+        ? 'outdated'
+        : p.statusRc !== 0
+          ? 'not-running'
+          : null
+  if (reason === null) return { kind: 'ready' }
+  const missing = [...(p.have.git ? [] : ['git']), ...(p.have.curl ? [] : ['curl'])]
+  if (missing.length) {
+    return { kind: 'refuse', reason: `Installing nodeterm-server needs git and curl on the host (missing: ${missing.join(', ')}).` }
+  }
+  return { kind: 'install', reason }
+}
