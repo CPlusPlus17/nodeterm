@@ -71,7 +71,9 @@ export interface SchedulerDeps {
   clearTimeout(h: unknown): void
   onStatus?(s: SchedulerStatus): void
   /** Open no idle listener while this many sessions are bridged (a live link's viewer cap). The
-   *  broker closes a client that finds no idle host listener, so the cap needs no other code. */
+   *  broker closes a client that finds no idle host listener, so the cap needs no other code.
+   *  Undefined = no cap; anything else must be an integer >= 1 (`createHostedScheduler` throws):
+   *  0 or a negative would be hosting that silently never listens, NaN a cap that never applies. */
   maxBridged?: number
 }
 
@@ -86,6 +88,9 @@ const clampDelay = (ms: number): number => Math.min(MAX_DELAY_MS, ms)
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 export function createHostedScheduler(deps: SchedulerDeps, now: () => number) {
+  if (deps.maxBridged !== undefined && !(Number.isInteger(deps.maxBridged) && deps.maxBridged >= 1)) {
+    throw new RangeError(`maxBridged must be an integer >= 1 or undefined, not ${String(deps.maxBridged)}`)
+  }
   let state: SchedulerStatus['state'] = 'stopped'
   let lastError: string | null = null
   let opening = false

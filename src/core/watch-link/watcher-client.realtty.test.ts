@@ -287,7 +287,10 @@ describe("keeping a watcher's own client at the window size (sync)", () => {
     await until(() => win(name) === '200x50')
     seen.push(win(name))
     if (sync) {
-      // syncWatcherClientSize: read the window, resize the watcher's OWN pty to exactly that.
+      // syncWatcherClientSize's step, restated here: read the window, resize the watcher's OWN pty to
+      // exactly that. This file measures the TMUX rule the step relies on; the production step itself
+      // (one read, the client resized only when the size changed, never a vote, serialized per
+      // session) is pinned in src/core/pty-watch-join.test.ts ("syncWatcherClientSize").
       const now = readSize(name)
       watcher.proc.resize(now.cols, now.rows)
       await sleep(200)

@@ -647,6 +647,16 @@ describe('hosted scheduler maxBridged', () => {
     }
   })
 
+  // Task 8 review: a cap that is not a whole number of peers is a wiring slip — 0 or a negative would
+  // be hosting that never listens, NaN a cap that never applies. Refused at construction, loudly.
+  it('refuses a maxBridged that is not an integer >= 1', () => {
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => harness([], { maxBridged: bad }), String(bad)).toThrow(RangeError)
+    }
+    expect(() => harness([], { maxBridged: 1 })).not.toThrow()
+    expect(() => harness([], { maxBridged: undefined })).not.toThrow()
+  })
+
   it('maxBridged: 1 serves one peer at a time: no listener while it is connected, one again when it leaves', async () => {
     const h = harness(okMany(10), { maxBridged: 1 })
     h.s.start(); await flush()

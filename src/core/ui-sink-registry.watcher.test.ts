@@ -117,6 +117,36 @@ describe('sink options follow the sink', () => {
     expect(r.broadcastIds()).toEqual([3])
   })
 
+  // Task 6 review: registering over a LIVE id replaces the sink, and the old sink's flow state must
+  // not outlive it — a stale pause under a self-paced re-register would never be handed back.
+  it('re-registering a live id hands back the pause the old sink booked and forgets its desync', () => {
+    vi.useFakeTimers()
+    try {
+      const r = new UiSinkRegistry()
+      const flow = vi.fn()
+      r.setFlowController(flow)
+      r.setResyncProvider(async () => 'SCREEN')
+      r.register(9, sink(2_000_000))
+      r.sendTo(9, IPC.ptyData('s1'), 'x') // past the high water: a pause ticket
+      expect(flow).toHaveBeenLastCalledWith(9, 's1', false, 'socket')
+      flow.mockClear()
+      r.register(9, sink(0), { selfPaced: true })
+      expect(flow).toHaveBeenCalledWith(9, 's1', true, 'socket')
+      // And a desync of the old sink does not carry over either: a re-registered ordinary sink streams.
+      const big = sink(50_000_000)
+      r.register(10, sink(2_000_000))
+      r.sendTo(10, IPC.ptyData('s2'), 'a')
+      r.register(10, big)
+      r.sendTo(10, IPC.ptyData('s2'), 'b') // the old sink's backlog, not this one's
+      const fresh = sink(0)
+      r.register(10, fresh)
+      r.sendTo(10, IPC.ptyData('s2'), 'c')
+      expect(fresh.bin).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a quiet sink evicted for throwing is no longer listed anywhere', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const r = new UiSinkRegistry()

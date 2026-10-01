@@ -264,14 +264,42 @@ describe('joinAsWatcher', () => {
     expect([spawned[0].cols, spawned[0].rows]).toEqual([150, 45])
   })
 
-  it('reads the window size only when it has to', async () => {
+  // R64/M4: joining a HELD session reads nothing from tmux — the session's own size is the answer.
+  // The read used to take the CALLER's sshRemote, which is absent for a remote node whose master is
+  // down, and so asked the LOCAL tmux about a remote node's name.
+  it('reads the window size only to SPAWN a client — never to join a held session', async () => {
     const m = await tmuxManager(['nt-n1'], { window: { cols: 132, rows: 43 } })
     const read = (m as unknown as { readWindowSize: ReturnType<typeof vi.fn> }).readWindowSize
-    await create(OWNER, { cols: 120, rows: 40 })
+    const a = await create(OWNER, { cols: 120, rows: 40 })
     await m.joinAsWatcher(WATCHER, WATCH) // a live Session is held and the caller gave a size
+    await m.joinAsWatcher(WATCHER + 1, { persistKey: 'n1', viewerId: 'watch-s2', requireRemote: true }) // no size
     expect(read).not.toHaveBeenCalled()
-    await m.joinAsWatcher(WATCHER + 1, { persistKey: 'n1', viewerId: 'watch-s2' }) // no caller size
-    expect(read).toHaveBeenCalledTimes(1)
+    // The view is shown the held session's own size (nothing to correct, so nothing more is sent).
+    expect(fake.sent.filter((x) => x.channel === IPC.ptySize(a.sessionId) && x.to === WATCHER + 1)).toEqual([])
+    // With nothing held, the spawn reads it — once, by the node's exact target.
+    const m2 = await tmuxManager(['nt-n2'], { window: { cols: 132, rows: 43 } })
+    const read2 = (m2 as unknown as { readWindowSize: ReturnType<typeof vi.fn> }).readWindowSize
+    await m2.joinAsWatcher(WATCHER, { persistKey: 'n2', viewerId: 'watch-s3' })
+    expect(read2).toHaveBeenCalledTimes(1)
+    expect(read2.mock.calls[0][0]).toBe('n2')
+  })
+
+  // R64/M4: a watcher never paints from the co-attach screen (its keyframe is a visible-only capture),
+  // so a join captures nothing for it. On SSH that was a `-S -200` history capture per viewer join.
+  it("a watcher's join takes no co-attach capture; a second owner view still does (control)", async () => {
+    const m = await tmuxManager(['nt-n1'])
+    const spies = m as unknown as { captureForResync: (s: string) => Promise<string>; paneCursor: (s: string) => Promise<unknown> }
+    const capture = vi.spyOn(spies, 'captureForResync').mockResolvedValue('SCREEN')
+    const cursor = vi.spyOn(spies, 'paneCursor').mockResolvedValue(undefined)
+    await create(OWNER, { cols: 120, rows: 40 })
+    const w = await m.joinAsWatcher(WATCHER, WATCH)
+    expect(w.unavailable).toBeUndefined()
+    expect(w.screen).toBeUndefined()
+    expect(capture).not.toHaveBeenCalled()
+    expect(cursor).not.toHaveBeenCalled()
+    const second = await create(VIEWER, { cols: 120, rows: 40 })
+    expect(second.screen).toBe('SCREEN')
+    expect(capture).toHaveBeenCalledTimes(1)
   })
 
   it('local tmux < 3.2 has no client flags: FAIL CLOSED, nothing spawned, logged once', async () => {

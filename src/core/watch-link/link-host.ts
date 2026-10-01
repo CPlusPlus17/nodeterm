@@ -46,8 +46,9 @@
 // tmux 3.4): when the watcher is the only client, tmux's `window-size latest` sizes the window to it.
 // So `syncSize` (PtyManager.syncWatcherClientSize, serialized per session there — R24) keeps that
 // client at the window's size: before every keyframe capture (the screen then matches the size) and
-// every WATCHER_SIZE_SYNC_MS while this link has a joined viewer. Residual: the window lands on the
-// last-synced size until another client sizes it, for up to one interval.
+// every WATCHER_SIZE_SYNC_MS while this link has a joined viewer. Residual: when the watcher becomes the
+// only client, the window stays at the last-synced size until another client sizes it (an owner resize
+// in the last interval before leaving is not caught).
 //
 // SPLIT PANES: a keyframe captures the session's ACTIVE pane only (`=nt-<id>:`); the stream, which is
 // the tmux client's own output, repairs the rest as tmux redraws it.

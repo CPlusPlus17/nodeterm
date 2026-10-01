@@ -2411,6 +2411,10 @@ export class PtyManager {
         }
       : { sessionId: existingId, fresh: false, coAttachMouse, coAttachAltScreen, tmuxClient, persistent }
     if (resized) return Promise.resolve(base) // tmux is redrawing this client — do not paint twice
+    // A live link's watcher never paints from this screen (its keyframe is a VISIBLE-only capture —
+    // this one is history on SSH and the session host), so it is not captured for one (R64/M4): on SSH
+    // that was a `-S -200` capture over the master on every viewer join and rejoin, thrown away.
+    if (isWatcherCreate(options)) return Promise.resolve(base)
     // An empty capture (plain shell — no tmux to capture; a tmux/ssh blip) is OMITTED, never sent
     // as '': the renderer must not reset a terminal for nothing. A plain-shell joiner therefore
     // still lands on a blank-but-live screen — there is no source of truth for its past output,
@@ -2562,6 +2566,10 @@ export class PtyManager {
     // while an unflagged client is attached somewhere on the server; if the watcher is ever the only
     // one, tmux sizes the window to it, so a wrong spawn size is a wrong window size. Unknown ⇒ refused
     // ("not now": the link host backs off and asks again).
+    // The read runs INSIDE the node's in-flight barrier (`create`), on purpose: a second viewer's join
+    // waits for this client and then shares it, instead of spawning another. The cost, accepted: an
+    // owner opening the same node in that instant waits for the read too — bounded by the probe and
+    // process timeouts (`runAsync`) — and then spawns its own client as usual.
     if (isWatcherCreate(options)) {
       const windowSize = await this.readWindowSize(options.persistKey as string, options.sshRemote)
       if (!windowSize) return { sessionId: '', fresh: false, unavailable: 'join-only' }
@@ -4913,8 +4921,9 @@ export class PtyManager {
    * is the only one, tmux's `window-size latest` sizes the window to it. So the client is spawned at
    * the window's CURRENT size, read immediately before the spawn and REFUSED when it cannot be read
    * (`spawnNew`), and `syncWatcherClientSize` keeps it there while the link host has viewers. Residual:
-   * the window can drift for up to one sync interval, and a read can race an owner resizing or leaving
-   * (the window then keeps the size read a moment before).
+   * when the watcher becomes the only client, the window stays at the last-synced size until another
+   * client sizes it, and a read can race an owner resizing or leaving (the window then keeps the size
+   * read a moment before).
    * A local tmux older than 3.2 has no client flags: refused. Only the named fields are forwarded, and
    * the watcher rules are set after them. A remote node is never watched through the local tmux
    * (`requireRemote` whenever `sshRemote` is given).
@@ -4940,10 +4949,12 @@ export class PtyManager {
         : undefined
     // The size this view starts at when it JOINS a client that already exists (it is told the
     // authoritative size right after). It is never a spawn size: a watcher's own client is spawned only
-    // at the window size `spawnNew` reads itself, or not at all.
+    // at the window size `spawnNew` reads itself, or not at all. For a HELD session that is the
+    // session's own size — no tmux read (R64/M4): the read took the CALLER's `sshRemote`, which is
+    // absent for a remote node whose master is down, and so asked the LOCAL tmux about a remote node.
     const size =
       given ??
-      (held ? await this.readWindowSize(persistKey, sshRemote) : undefined) ??
+      (held && indexedId ? this.sessionSize(indexedId) : null) ??
       this.watchSizeFor(persistKey) ?? { cols: 80, rows: 24 }
     const options: WatcherCreateOptions = {
       persistKey,
@@ -5044,10 +5055,15 @@ export class PtyManager {
   }
 
   /**
-   * The CURRENT size of a node's tmux window (`#{window_width} #{window_height}`, exact target), read
-   * from tmux rather than from memory: with no Session held there is nothing to remember it from.
-   * Local, or over the ControlMaster for an SSH node (never the local tmux for a remote node).
-   * undefined on any failure or an exact-target miss (tmux answers exit 0 with empty formats).
+   * The CURRENT size a client of a node's tmux window has, read from tmux rather than from memory:
+   * with no Session held there is nothing to remember it from. One `display-message` by exact target
+   * reads `#{window_width} #{window_height} #{status}`, and the status lines are ADDED to the height
+   * (`parseWindowSize`): a client is window + status rows tall, so a client spawned at the bare window
+   * height would make tmux shrink the window. With the production conf (`status off`) the two agree.
+   * Local, or over the ControlMaster for an SSH node (never the local tmux for a remote node: the
+   * caller passes the node's `sshRemote`, and a remote node with no master is not read at all).
+   * undefined on any failure, an exact-target miss (tmux answers exit 0 with empty formats) or a
+   * status value it does not know.
    */
   async readWindowSize(
     persistKey: string,

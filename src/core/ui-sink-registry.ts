@@ -29,7 +29,12 @@ const PTY_RECYCLED_PREFIX = 'pty:recycled:'
  *    count it as watching (pty-reap.ts `liveClientIds`).
  *  - `selfPaced`: the sink paces itself. The registry takes no pause ticket for it (a stranger's
  *    slow socket must never freeze the owner's terminal) and never drops or resyncs its output
- *    (the watcher's stream filter must see every frame — src/core/watch-link/watcher-policy.ts). */
+ *    (the watcher's stream filter must see every frame — src/core/watch-link/watcher-policy.ts).
+ *    That hands the sink an OBLIGATION: the registry's 8 MB `WS_DROP_WATER` ceiling no longer bounds
+ *    its backlog, so the sink MUST bound it itself, or a socket that never drains grows the host's
+ *    memory until the process dies (relay-host's "OBLIGATION 2"). The watcher does it in two steps:
+ *    it stops forwarding pty frames past `WATCHER_BUFFER_LIMIT` (512 KB, watcher-policy.ts) and the
+ *    link host closes a viewer past `VIEWER_BACKLOG_CLOSE` (8 MB). A new self-paced sink owes the same. */
 export interface SinkOptions {
   quiet?: boolean
   selfPaced?: boolean
@@ -147,6 +152,11 @@ export class UiSinkRegistry {
   private onSinkGone?: (id: number) => void
 
   register(id: number, sink: UiSink, opts: SinkOptions = {}): void {
+    // Over an id that is still live this REPLACES the sink, and the flow state belongs to the old one:
+    // it is released, not kept (a stale `paused` key under a self-paced re-register would never reach
+    // the resume check again, so the pty stayed paused for good). Unreachable today — every shell mints
+    // monotonic ids — which makes this the belt, not a path anyone takes.
+    if (this.sinks.has(id)) this.releaseFlowState(id)
     this.sinks.set(id, sink)
     // A copy, so a caller mutating its options object later cannot change how this sink is served.
     if (opts.quiet || opts.selfPaced)
@@ -208,6 +218,21 @@ export class UiSinkRegistry {
   /** Key of one client's view of one session — the unit backpressure is tracked in. */
   private static flowKey(uiId: number, sessionId: string): string {
     return `${uiId} ${sessionId}`
+  }
+
+  /** Release every flow entry of a client that STAYS registered (`register` over its live id): a
+   *  pause it booked is handed back to PtyManager — the client is not leaving, so `dropClient` will not
+   *  return it — and its desync, strikes and sweep interest are forgotten. */
+  private releaseFlowState(id: number): void {
+    const prefix = `${id} `
+    for (const key of [...this.paused]) {
+      if (!key.startsWith(prefix)) continue
+      this.paused.delete(key)
+      this.flowController?.(id, key.slice(prefix.length), true, UiSinkRegistry.OWNER)
+    }
+    for (const key of [...this.desynced.keys()]) if (key.startsWith(prefix)) this.desynced.delete(key)
+    this.failures.delete(id)
+    this.stopSweepIfIdle()
   }
 
   /** Drop the departing (or gone) client's sink and prune only ITS backpressure entries. Nothing
@@ -315,8 +340,9 @@ export class UiSinkRegistry {
     // Dead. Drop the sink FIRST, for two reasons:
     //  - re-entrancy: the teardown below broadcasts (a presence `leave` diff fans out to every
     //    client), which would come straight back through sendTo into this same dying sink;
-    //  - iteration safety: callers fan out over the `ids()` SNAPSHOT (an array), so removing this
-    //    entry cannot disturb their loop — a later `sendTo` for an evicted id is simply a miss.
+    //  - iteration safety: callers fan out over an id SNAPSHOT (`broadcastIds()` / `ids()` return a
+    //    fresh array), so removing this entry cannot disturb their loop — a later `sendTo` for an
+    //    evicted id is simply a miss.
     this.sinks.delete(uiId)
     this.failures.delete(uiId)
     this.options.delete(uiId)
