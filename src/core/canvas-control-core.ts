@@ -876,7 +876,7 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  A cold-opened node has NO session yet, so a `send` to it cannot land: it is queued for up to',
     '  24 hours and flushed after the node starts and finishes its first turn (`targetNotStarted` when',
     '  it cannot be queued; a message queued before the node started does not survive an app restart).',
-    '  To coordinate with a station now, open it with `--run-now` or start it with `run --node <id>`.',
+    '  To coordinate with a station now, open it with `--run-now` or start it with `run --node <id> [--project <id>]`.',
     '  A station started a moment ago that has not reported its status yet is queued the same way.',
     '  Add `--run-now` to start a cold-opened session immediately instead. Put it LAST on the line,',
     '  in either form (`--run-now` or `--run-now=1`): an older shim can still sit on an SSH host (it',
