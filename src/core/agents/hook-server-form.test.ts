@@ -16,4 +16,12 @@ describe('parseControlBody — form bodies from a native Windows curl', () => {
     const body = 'nodeId=n1&arg.prompt=n%C3%A3o+%E2%86%92+sim'
     expect(parseControlBody(body, FORM).args).toEqual({ prompt: 'não → sim' })
   })
+
+  // Field names come from the request: a `__proto__` field is an ordinary key, never a prototype.
+  it('keeps a __proto__ field as an own key', () => {
+    const { args } = parseControlBody('nodeId=n1&__proto__=x&arg.__proto__=y&arg.title=t', FORM)
+    expect(Object.getPrototypeOf(args)).toBe(Object.prototype)
+    expect(Object.keys(args).sort()).toEqual(['__proto__', 'title'])
+    expect(Object.getOwnPropertyDescriptor(args, '__proto__')?.value).toBe('y')
+  })
 })
