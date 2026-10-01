@@ -2550,7 +2550,9 @@ app.whenReady().then(async () => {
   initRemoteStatusPush({
     onFlush: onMirrorFlush,
     flush: flushAgentStatusMirror,
-    sshProjectIds: () => workspaceStore.sshProjectIds(),
+    // A project handed to a hosted team runs on the server core now: this desktop has no status
+    // to push for it.
+    sshProjectIds: () => workspaceStore.pollableSshProjectIds(),
     nodeIdsFor: (projectId) => workspaceStore.sshProjectNodeIds(projectId),
     push: (projectId, json) =>
       sshProjectManager ? sshProjectManager.pushAgentStatus(projectId, json) : Promise.resolve(),
@@ -4897,7 +4899,7 @@ app.whenReady().then(async () => {
       const mgr = sshProjectManager
       if (!mgr) return
       const plan = planRemoteWorkspacePoll({
-        sshProjectIds: workspaceStore.sshProjectIds(),
+        sshProjectIds: workspaceStore.pollableSshProjectIds(),
         hasLiveRef: (projectId) => !!mgr.refForProject(projectId),
         busy: (projectId) => inFlight.has(projectId),
         // Reuse-only gate: no socket file ⇒ no master to adopt ⇒ this project is left alone.

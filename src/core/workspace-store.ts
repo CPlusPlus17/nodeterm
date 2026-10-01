@@ -889,6 +889,9 @@ export class WorkspaceStore {
     ssh: NonNullable<Project['ssh']>,
     file: ProjectSettingsFileV1
   ): Promise<boolean> {
+    // Handed to a hosted team: the server core owns the host's `.nodeterm/` now. The cache keeps
+    // this machine's copy; nothing is pushed over the server's.
+    if (this.index?.entries.find((x) => x.id === projectId)?.handedOffTo) return false
     const io = this.remoteIO
     if (!io?.writeSettings) return false
     try {
@@ -1517,6 +1520,7 @@ export class WorkspaceStore {
     for (const e of index.entries) {
       if (!e.ssh || !e.cache) continue
       if (e.handedOffTo) continue // handed to a hosted team: the server core is the only writer now
+      // (`markUnmirrored` may still add a handed-off id; every consumer of that debt refuses it.)
       const prevRev = this.revs.get(e.id) ?? 0
       const previousCache = this.index?.entries.find((old) => old.id === e.id && old.cache)?.cache
       const changedSinceLoad = !(previousCache && sameProjectContent(previousCache, e.cache))
@@ -1899,9 +1903,17 @@ export class WorkspaceStore {
     return adopted
   }
 
-  /** The ssh entry ids of the current index — what the connected-project poll iterates — except
-   *  one handed to a hosted team (never polled again). */
+  /** The ssh entry ids of the current index: the IDENTITY list ("this project runs on someone
+   *  else's machine", connected or not, handed off or not), which the session-memory and dev-ports
+   *  scope checks read. */
   sshProjectIds(): string[] {
+    return (this.index?.entries ?? []).filter((e) => e.ssh).map((e) => e.id)
+  }
+
+  /** The ssh entry ids this desktop still keeps in sync — what the connected-project poll and the
+   *  agent-status push iterate. Leaves out a project handed to a hosted team: the server core on its
+   *  host owns its file and sessions now, so it is never polled again. */
+  pollableSshProjectIds(): string[] {
     return (this.index?.entries ?? []).filter((e) => e.ssh && !e.handedOffTo).map((e) => e.id)
   }
 
@@ -2610,6 +2622,10 @@ export class WorkspaceStore {
     if (!e) return null
 
     if (e.ssh && e.cache) {
+      // Handed to a hosted team: the server core is the only writer of this file now. Refused
+      // BEFORE the transform, so the local cache never diverges and the renderer is never told
+      // about a change that will not land.
+      if (e.handedOffTo) return null
       const updated = transform(serializeProjectFile(e.cache))
       if (updated === null) return { file: e.cache, written: false }
       let parsed: ProjectFileV1
@@ -2703,6 +2719,9 @@ export class WorkspaceStore {
    * session — the canvas node is gone on both machines while the tmux session keeps running.
    */
   private async mirrorSshCache(e: IndexEntryV3): Promise<void> {
+    // Handed to a hosted team: the server core is the only writer now. Together with
+    // `reconcileSsh`'s guard this covers every `remoteIO.write`, whatever the caller checked.
+    if (e.handedOffTo) return
     if (!e.ssh || !e.cache || !this.remoteIO) return
     const rescued = await this.rescueRemoteNodes(e)
     // AFTER the rescue: it replaces e.cache with the merged copy, which is what must land.

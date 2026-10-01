@@ -945,7 +945,7 @@ describe('handedOffTo — a project shared to a hosted team is never written aga
     expect(state.writes).toBe(0)
   })
 
-  it('sshProjectIds() leaves it out of the connected-project poll and still lists the others', async () => {
+  it('pollableSshProjectIds() leaves it out of the poll; sshProjectIds() still names it as remote', async () => {
     const { io } = countingIO()
     const store = new WorkspaceStore(io)
     await store.save(ws([
@@ -953,7 +953,10 @@ describe('handedOffTo — a project shared to a hosted team is never written aga
       project({ id: 'other', ssh: { ...sshConn, remoteCwd: '~/other' }, cwd: undefined }),
       project({ id: 'local', cwd: projRoot })
     ]))
-    expect(store.sshProjectIds()).toEqual(['other'])
+    expect(store.pollableSshProjectIds()).toEqual(['other'])
+    // IDENTITY, not liveness: a handed-off project still runs on someone else's machine, and the
+    // session-memory / dev-ports scope checks read this list to know it.
+    expect(store.sshProjectIds()).toEqual(['ps', 'other'])
   })
 
   it('survives a restart: load() returns it, and the reloaded store still never touches the file', async () => {
@@ -966,13 +969,29 @@ describe('handedOffTo — a project shared to a hosted team is never written aga
     const loaded = await restarted.load()
     expect(loaded.projects.find((p) => p.id === 'ps')!.handedOffTo).toEqual(handed)
     expect(loaded.projects.find((p) => p.id === 'other')!.handedOffTo).toBeUndefined()
-    expect(restarted.sshProjectIds()).toEqual(['other'])
+    expect(restarted.pollableSshProjectIds()).toEqual(['other'])
     expect(await restarted.refreshSshProject('ps')).toBeNull()
     await restarted.save(loaded)
     // The other SSH project is reconciled and mirrored as usual; the handed-off one never is.
     expect(state.readIds).toContain('other')
     expect(state.readIds).not.toContain('ps')
     expect(state.writeIds).not.toContain('ps')
+  })
+
+  // Every remote write funnels through `mirrorSshCache` or `reconcileSsh`; both refuse a handed-off
+  // entry on their own, so a future caller that forgets its own guard still cannot write the file.
+  it('mirrorSshCache itself refuses a handed-off entry, whoever calls it', async () => {
+    const { state, io } = countingIO()
+    const store = new WorkspaceStore(io)
+    await store.save(ws([project({ id: 'ps', ssh: sshConn, cwd: undefined, handedOffTo: handed })]))
+    const internals = store as unknown as {
+      index: { entries: { id: string }[] }
+      mirrorSshCache(e: unknown): Promise<void>
+    }
+    const entry = internals.index.entries.find((x) => x.id === 'ps')
+    await internals.mirrorSshCache(entry)
+    expect(state.reads).toBe(0)
+    expect(state.writes).toBe(0)
   })
 
   it('an unreadable (cache-less) handed-off entry keeps the record through its placeholder', async () => {
@@ -1001,7 +1020,7 @@ describe('handedOffTo — a project shared to a hosted team is never written aga
     expect(loaded.projects.find((p) => p.id === 'ps')!.handedOffTo).toEqual({ at: 5 })
     // No timestamp: not a record at all, so the project is an ordinary SSH project again.
     expect('handedOffTo' in loaded.projects.find((p) => p.id === 'junk')!).toBe(false)
-    expect(store.sshProjectIds()).toEqual(['junk'])
+    expect(store.pollableSshProjectIds()).toEqual(['junk'])
   })
 })
 
