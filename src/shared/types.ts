@@ -1827,6 +1827,13 @@ export interface Settings {
   worktreePathTemplate: string
   /** ms to dwell over a terminal before it takes pointer focus (pan-across guard). */
   panHoverDelay: number
+  /** Issue #757. Whether a terminal node's keyboard focus follows the POINTER (the long-standing
+   *  behaviour and the default): a `panHoverDelay` dwell takes it and leaving the node gives it
+   *  back. Off = click to focus (the Mac model): the pointer decides nothing, a click or a "go to
+   *  node" takes the keyboard, and the terminal keeps it until focus really moves elsewhere
+   *  (another node, the empty canvas, a field). Machine-local, Settings → Behavior. Decisions live
+   *  in `renderer/lib/terminalFocusMode.ts`. */
+  terminalFocusFollowsPointer: boolean
   doubleClickFocus: boolean
   /** "Go to node" (sessions sidebar, notification click, ⌘K jump, breadcrumb steps, presence
    *  travel) fits the node in view. Off: the camera keeps the CURRENT zoom and only pans, which is
@@ -1893,6 +1900,17 @@ export interface Settings {
    *  it off, and whenever no terminal has focus, the keys behave exactly as before. See
    *  renderer/terminal/terminal-font-zoom.ts. */
   terminalFontZoomKeys: boolean
+  /**
+   * Windows SSH projects: after a key is unlocked with its passphrase, also load it into the
+   * Windows OpenSSH agent service, so later connections (and the user's own `ssh`) do not prompt
+   * again. OFF by default because that agent STORES the key — DPAPI-encrypted in
+   * `HKCU\Software\OpenSSH\Agent\Keys`, surviving service restarts — until it is removed
+   * (`ssh-add -d` / `-D`), and it refuses a lifetime constraint (measured on windows-latest,
+   * OpenSSH_for_Windows_9.5p2), so there is no "for this session only". A host whose own
+   * `~/.ssh/config` says `AddKeysToAgent yes` gets the add without this switch: that user already
+   * asked OpenSSH for exactly this. Logic: `core/remote-ssh/native/agent-add.ts`.
+   */
+  windowsSshAgentAddKeys: boolean
   /** Plain mouse wheel zooms the canvas (no Cmd/Ctrl needed). On macOS a two-finger trackpad
    *  scroll keeps panning independently (see canvas/wheel-gesture.ts), so mouse and trackpad
    *  coexist; elsewhere this still trades away scroll-to-pan, so it stays opt-in. */
@@ -2257,6 +2275,7 @@ export const DEFAULT_SETTINGS: Settings = {
   omniKanbanAsDefault: false,
   worktreePathTemplate: DEFAULT_WORKTREE_PATH_TEMPLATE,
   panHoverDelay: 600,
+  terminalFocusFollowsPointer: true,
   doubleClickFocus: true,
   focusZoomToNode: true,
   rememberCanvasLock: false,
@@ -2265,6 +2284,7 @@ export const DEFAULT_SETTINGS: Settings = {
   terminalMiddleClickPaste: false,
   copyOnSelect: false,
   terminalFontZoomKeys: false,
+  windowsSshAgentAddKeys: false,
   wheelZoom: false,
   wheelZoomSpeed: 1,
   trackpadPan: true,
@@ -4383,4 +4403,9 @@ export interface NodeTerminalApi {
     list(): Promise<import('./station-handover').StationHandoverRecord[]>
     onChanged(cb: (records: import('./station-handover').StationHandoverRecord[]) => void): () => void
   }
+  /** Live links (src/core/watch-link/service.ts): a read-only, expiring browser link to one terminal,
+   *  hosted by THIS machine. Owner-only (`watchLink:*` is host-only). Desktop: real. Server Edition:
+   *  the real bridge, whose create answers `unsupported` until that edition has a license layer.
+   *  Relay tab: an inert stub (a peer's terminals are not this machine's to publish). */
+  watchLink: import('./watch-link-types').WatchLinkApi
 }

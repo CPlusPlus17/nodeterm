@@ -156,6 +156,7 @@ describe('terminal font zoom — shortcuts panel', () => {
     panHoverDelay: 500,
     dragMode: 'select',
     doubleClickFocus: false,
+    focusFollowsPointer: true,
     wheelZoom: false,
     bindingsFor: () => []
   }
