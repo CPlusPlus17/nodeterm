@@ -35,11 +35,17 @@ const ENTRIES = Object.values(ROWS)
  * Which project a link's node is in, as the row names it (H11): an open project on THIS machine
  * first, else a closed one (a closed project keeps its sessions running, so its links run too),
  * else "not in an open project". A project bound to a relay session is another machine's canvas —
- * a node there with the same id is not the node this machine's link broadcasts (R57).
+ * a node there with the same id is not the node this machine's link broadcasts (R57). A CLOSED relay
+ * tab no longer has a session (closing it unbinds the project, so its source reads as the local one),
+ * which is why `remote` — the relay tab's own mark — is checked too (D2/M2).
  */
 export function liveLinkProjectLabel(projects: readonly Project[], nodeId: string): string {
   const holders = projects.filter(
-    (p) => Array.isArray(p.nodes) && p.nodes.some((n) => n?.id === nodeId) && showsLiveLinks(projectSessionSource(p.id))
+    (p) =>
+      !p.remote &&
+      Array.isArray(p.nodes) &&
+      p.nodes.some((n) => n?.id === nodeId) &&
+      showsLiveLinks(projectSessionSource(p.id))
   )
   const open = holders.find((p) => !p.closed)
   if (open) return open.name

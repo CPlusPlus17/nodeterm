@@ -135,6 +135,42 @@ export function liveLinkMenuRow(o: {
 }
 
 /**
+ * The menu row for one node, composed (D2/M1): which project the node is in (the caller's, else the
+ * active one), where to read the node (live canvas or stored copy), and the availability facts — of
+ * THAT project, never the active one. A non-active relay project's sidebar row or Omni lane card was
+ * judged by the active LOCAL tab's facts, and showed an enabled row the opener then refused.
+ */
+export function liveLinkMenuItemsFor(o: {
+  nodeId: string
+  /** The node's own project; absent = the active one (the canvas node menu). */
+  projectId?: string
+  activeProjectId: string | null
+  live: readonly { id: string; type?: string; data?: { title?: unknown } }[]
+  stored: (projectId: string) => readonly { id: string; kind?: string; title?: unknown }[] | undefined
+  hidden: readonly string[]
+  facts: (projectId: string) => LiveLinkAvailabilityFacts
+  icon: ReactNode
+  open: (target: LiveLinkTarget) => void
+}): MenuItem[] {
+  const pid = o.projectId ?? o.activeProjectId
+  if (!pid) return []
+  return liveLinkMenuRow({
+    node: liveLinkNodeFor({
+      nodeId: o.nodeId,
+      projectId: pid,
+      activeProjectId: o.activeProjectId,
+      live: o.live,
+      stored: o.stored(pid)
+    }),
+    projectId: pid,
+    hidden: o.hidden,
+    facts: o.facts(pid),
+    icon: o.icon,
+    open: o.open
+  })
+}
+
+/**
  * R47: before a create, publish pending canvas edits — a node opened seconds ago is not in the
  * saved project core checks, and would answer `node-missing`. The existing rule for "publish before
  * core reads the store" (`syncMessageScope`): never saves over an unresolved external-edit conflict.

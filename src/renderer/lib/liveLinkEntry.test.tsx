@@ -3,6 +3,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   liveLinkCommands,
+  liveLinkMenuItemsFor,
   liveLinkMenuRow,
   liveLinkNodeFor,
   liveLinkPrepare,
@@ -170,6 +171,48 @@ describe('liveLinkNodeFor (R49)', () => {
     expect(
       liveLinkNodeFor({ nodeId: 'n1', projectId: 'b', activeProjectId: 'a', live, stored: 5 as never })
     ).toBeNull()
+  })
+})
+
+// D2/M1: the composition Canvas calls for every surface. With a LOCAL tab on screen, a non-active
+// RELAY project's sidebar row (or Omni lane card) must be judged by THAT project's session.
+describe('liveLinkMenuItemsFor (D2/M1)', () => {
+  const stored: Record<string, { id: string; kind: string; title: string }[]> = {
+    'p-relay': [{ id: 'n9', kind: 'terminal', title: 'theirs' }],
+    'p-local': [{ id: 'n1', kind: 'terminal', title: 'ours' }]
+  }
+  const factsOf = (projectId: string): LiveLinkAvailabilityFacts =>
+    facts({ source: projectId === 'p-relay' ? 'relay' : 'local' })
+  const compose = (over: Partial<Parameters<typeof liveLinkMenuItemsFor>[0]>) =>
+    liveLinkMenuItemsFor({
+      nodeId: 'n9',
+      projectId: 'p-relay',
+      activeProjectId: 'p-local',
+      live: [{ id: 'n1', type: 'terminal', data: { title: 'ours' } }],
+      stored: (pid) => stored[pid],
+      hidden: [],
+      facts: factsOf,
+      icon: null,
+      open: vi.fn(),
+      ...over
+    })
+
+  it("a non-active relay project's node is judged by ITS session, not the active local tab's", () => {
+    const open = vi.fn()
+    const rows = compose({ open })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ disabled: true, hint: RELAY })
+    ;(rows[0] as { onClick: () => void }).onClick()
+    expect(open).toHaveBeenCalledWith({ nodeId: 'n9', title: 'theirs', projectId: 'p-relay' })
+  })
+
+  it('no project given: the active one, read from the live canvas', () => {
+    const open = vi.fn()
+    const rows = compose({ nodeId: 'n1', projectId: undefined, open })
+    expect(rows[0]).toMatchObject({ disabled: false })
+    ;(rows[0] as { onClick: () => void }).onClick()
+    expect(open).toHaveBeenCalledWith({ nodeId: 'n1', title: 'ours', projectId: 'p-local' })
+    expect(compose({ projectId: undefined, activeProjectId: null })).toEqual([])
   })
 })
 

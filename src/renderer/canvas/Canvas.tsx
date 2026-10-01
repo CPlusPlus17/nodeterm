@@ -247,8 +247,7 @@ import { startWatchLinkSync, useWatchLinks } from '../state/watchLinks'
 import { noticeText } from '../lib/liveLink'
 import {
   liveLinkCommands,
-  liveLinkMenuRow,
-  liveLinkNodeFor,
+  liveLinkMenuItemsFor,
   liveLinkPrepare,
   openLiveLink,
   stopAllConfirm,
@@ -3583,19 +3582,16 @@ export function Canvas() {
   const liveLinkMenuItems = useCallback(
     (nodeId: string, projectId?: string): MenuItem[] => {
       const store = useProjects.getState()
-      const pid = projectId ?? store.activeProjectId
-      if (!pid) return []
-      return liveLinkMenuRow({
-        node: liveLinkNodeFor({
-          nodeId,
-          projectId: pid,
-          activeProjectId: store.activeProjectId,
-          live: nodesRef.current,
-          stored: store.getProject(pid)?.nodes
-        }),
-        projectId: pid,
+      // The composition (which project, which node, whose facts) is lib/liveLinkEntry's, where it is
+      // behaviour-tested: the facts are the NODE's project's, never the active tab's (D2/M1).
+      return liveLinkMenuItemsFor({
+        nodeId,
+        projectId,
+        activeProjectId: store.activeProjectId,
+        live: nodesRef.current,
+        stored: (pid) => store.getProject(pid)?.nodes,
         hidden: useSettings.getState().settings.hiddenNodeMenuItems,
-        facts: liveLinkFacts(pid),
+        facts: liveLinkFacts,
         icon: <IconBroadcast />,
         open: openLiveLinkFor
       })

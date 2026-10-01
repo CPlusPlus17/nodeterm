@@ -154,6 +154,24 @@ describe('LiveLinksSection', () => {
     expect(host.innerHTML).not.toContain('SECRET')
   })
 
+  // D2/M2: closing a relay tab unbinds its session, so its source reads LOCAL — but it is still the
+  // other machine's canvas, and its copy of a git-shared node id is not this machine's node.
+  it("never names a CLOSED relay tab's project for this machine's link", () => {
+    act(() =>
+      useProjects.setState({
+        projects: [
+          { id: 'p-peer', name: 'PeerProject', closed: true, remote: true, nodes: [{ id: 'n1', kind: 'terminal', title: 'theirs' }] },
+          { id: 'p-mine', name: 'Mine', closed: true, nodes: [{ id: 'n1', kind: 'terminal', title: 'build' }] }
+        ]
+      } as never)
+    )
+    render()
+    setLinks([link()])
+    const row = host.querySelector<HTMLElement>('.live-settings__row')!
+    expect(row.textContent).toContain('Mine (closed)')
+    expect(row.textContent).not.toContain('PeerProject')
+  })
+
   it('Copy copies the URL', () => {
     render()
     setLinks([link()])

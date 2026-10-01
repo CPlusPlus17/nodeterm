@@ -75,6 +75,13 @@ describe('Canvas live-link wiring', () => {
     expect(cmds.slice(0, 400)).toContain('serverEdition: isBrowserRuntime(),')
   })
 
+  it("D2/M1: the row is composed by the lib with the facts FUNCTION (the node's project's facts)", () => {
+    const items = callback('liveLinkMenuItems')
+    expect(items).toContain('liveLinkMenuItemsFor({')
+    expect(items).toContain('facts: liveLinkFacts,')
+    expect(items).toContain('projectId,')
+  })
+
   it('one row builder, declared before selectionItems and listed in its deps (H15)', () => {
     const builder = src.indexOf('const liveLinkMenuItems = useCallback(')
     const selection = src.indexOf('const selectionItems = useCallback(')
