@@ -14,6 +14,7 @@ import {
   sessionCount,
   resetSessionsForTest,
   projectIdsBoundToSession,
+  bindProjectToSession,
 } from './session'
 import { LocalTransport } from '../terminal/local-transport'
 import { planActiveProjectDials } from '../lib/sshAttachments'
@@ -614,5 +615,20 @@ describe('openRelayTab — placing several shared projects (hosted team)', () =>
     // Both stay bound to the (now offline) relay session, so each reconnects in place.
     expect(projectIdsBoundToSession(tab.sessionId)).toEqual(['A', 'B'])
     expect(sessionForProject('B').status).toBe('offline')
+  })
+
+  it('handleRelayDrop also greys a tab a share event bound to the session after mount', async () => {
+    const { api } = fakeBridgedApi({ version: 2, activeProjectId: 'A', projects: hostProjects })
+    const handle: RelayApiHandle = { api, ready: () => Promise.resolve(), close: vi.fn() }
+    const { deps } = makeDeps({ handle })
+    const tab = await openRelayTab('conn-1', 'Team', { ...deps, placeProjects: () => ['A'] })
+    bindProjectToSession('C', tab.sessionId) // the host shared C while the connection was live
+
+    const setProjectUnavailable = vi.fn()
+    handleRelayDrop(tab, { setProjectUnavailable })
+    expect(setProjectUnavailable.mock.calls).toEqual([
+      ['A', true],
+      ['C', true],
+    ])
   })
 })

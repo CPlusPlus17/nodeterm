@@ -18,7 +18,9 @@ export const EMPTY_TAB_SET: HostedTabSet = Object.freeze({ shown: [], dismissed:
 
 const MAX = 256
 
-const clean = (ids: readonly unknown[]): string[] =>
+/** The host's project ids, made safe to act on: non-empty strings of at most 128 characters,
+ *  first occurrence kept, at most 256. */
+export const cleanSharedIds = (ids: readonly unknown[]): string[] =>
   [...new Set(ids.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 128))].slice(0, MAX)
 
 /** The host now shares `shared`: which tabs to open (new and not dismissed), which to close (shown
@@ -27,7 +29,7 @@ export function planSharedChange(
   set: HostedTabSet,
   shared: readonly string[]
 ): { open: string[]; close: string[]; next: HostedTabSet } {
-  const ids = clean(shared)
+  const ids = cleanSharedIds(shared)
   const open = ids.filter((id) => !set.shown.includes(id) && !set.dismissed.includes(id))
   const close = set.shown.filter((id) => !ids.includes(id))
   return {

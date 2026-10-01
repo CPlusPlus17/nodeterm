@@ -31,6 +31,7 @@ import {
   disposeSession,
   getSessionStores,
   takeSessionOffline,
+  projectIdsBoundToSession,
   type SessionSource,
 } from './session'
 
@@ -210,8 +211,10 @@ export interface RelayDropDeps {
  *  reconnect in place. NEVER removes the project (that is only a user close). Idempotent. */
 export function handleRelayDrop(tab: RelayTab, deps: RelayDropDeps): void {
   takeSessionOffline(tab.sessionId)
-  // Every tab the connection served greys, so each one can reconnect in place.
-  for (const id of tab.projectIds ?? [tab.projectId]) deps.setProjectUnavailable(id, true)
+  // Every tab the connection served greys, so each one can reconnect in place: the ones placed at
+  // mount and any a share event bound to the session since (bindings survive going offline).
+  const ids = new Set([...tab.projectIds, ...projectIdsBoundToSession(tab.sessionId)])
+  for (const id of ids) deps.setProjectUnavailable(id, true)
 }
 
 export interface RelayReconnectDeps {
