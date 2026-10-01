@@ -35,6 +35,9 @@ const INPUT: ShareInput = {
     { nodeId: 'term-x', title: 'Work account', agentId: 'claude', sessionId: 's-2', accountId: 'acct' }
   ]
 }
+/** A second resumable agent, for the cases that need more than one node in the resume request. */
+const TERM_B: ShareInput['terminals'][number] = { nodeId: 'term-b', title: 'Codex', agentId: 'codex', sessionId: 's-3', state: 'done' }
+const FLUSH_WITH_B = { ok: true, nodeIds: ['term-a', 'term-p', 'term-x', 'term-b'] }
 
 describe('runShare', () => {
   it('the whole flow, in order: no kill before bootstrap, no resume before the kill', async () => {
@@ -57,6 +60,16 @@ describe('runShare', () => {
     const { deps, log } = setup()
     const out = await runShare(deps, { ...INPUT, terminals: [{ ...INPUT.terminals[0], state: 'working' }] })
     expect(out).toMatchObject({ kind: 'refused', busy: [{ nodeId: 'term-a' }] })
+    expect(log).toEqual([])
+  })
+  it('refuses a blocked agent too', async () => {
+    const { deps, log } = setup()
+    const out = await runShare(deps, { ...INPUT, terminals: [{ ...INPUT.terminals[0], state: 'blocked' }, INPUT.terminals[1]] })
+    expect(out).toEqual({
+      kind: 'refused',
+      reason: 'Wait for these agents to finish (or stop them), then share again.',
+      busy: [{ ...INPUT.terminals[0], state: 'blocked' }]
+    })
     expect(log).toEqual([])
   })
   it('refuses more terminals than one share handles, before touching the host', async () => {
@@ -122,17 +135,110 @@ describe('runShare', () => {
   it('a bootstrap failure reopens the SSH project and kills nothing', async () => {
     const { deps, log } = setup({ bootstrap: { ok: false, code: 'E_HOSTING_OFF', error: 'refused (403)' } })
     const out = await runShare(deps, INPUT)
-    expect(out).toMatchObject({ kind: 'failed', step: 'bootstrapping', reopened: true, error: expect.stringContaining('refused (403)') })
+    expect(out).toEqual({ kind: 'failed', step: 'bootstrapping', reopened: true, error: 'Hosting could not start on the host: refused (403)' })
     expect(log).toContain('restore')
     expect(log.some((l) => l.startsWith('kill:'))).toBe(false)
   })
-  it('a bootstrap failure still reports the failure when restore itself throws', async () => {
-    const { deps, log } = setup({ bootstrap: { ok: false, error: 'boom' } })
+  it('a restore that throws is reported: never "reopened", always restoreFailed, the original error kept', async () => {
+    const { deps, log } = setup({ bootstrap: { ok: false, code: 'E_ADOPT_FAILED', error: 'boom' } })
     deps.restore = async () => {
       throw new Error('restore failed')
     }
-    expect(await runShare(deps, INPUT)).toEqual({ kind: 'failed', step: 'bootstrapping', error: 'boom', reopened: true })
+    expect(await runShare(deps, INPUT)).toEqual({ kind: 'failed', step: 'bootstrapping', error: 'boom', reopened: false, restoreFailed: true })
     expect(log.some((l) => l.startsWith('kill:'))).toBe(false)
+  })
+  it('a release and a restore that both throw report neither a reopen nor the release as undone', async () => {
+    const { deps } = setup()
+    deps.release = async () => {
+      throw new Error('close failed')
+    }
+    deps.restore = async () => {
+      throw new Error('restore failed')
+    }
+    expect(await runShare(deps, INPUT)).toEqual({ kind: 'failed', step: 'releasing', error: 'close failed', reopened: false, restoreFailed: true })
+  })
+  it('a missing canvas whose restore throws does not claim nothing was changed', async () => {
+    const { deps } = setup({ flush: { ok: true, nodeIds: ['term-a', 'term-p'] } })
+    deps.restore = async () => {
+      throw new Error('restore failed')
+    }
+    expect(await runShare(deps, INPUT)).toEqual({
+      kind: 'failed',
+      step: 'releasing',
+      error: 'The canvas on the host is not up to date (1 terminal missing). Try again in a moment.',
+      reopened: false,
+      restoreFailed: true
+    })
+  })
+  it('a bootstrap failure without a server code says the host may have finished; a throw counts as one', async () => {
+    const uncoded = setup({ bootstrap: { ok: false, error: 'timed out' } })
+    expect(await runShare(uncoded.deps, INPUT)).toEqual({
+      kind: 'failed',
+      step: 'bootstrapping',
+      error: 'timed out The host may have finished setting up anyway; run Share with team again to complete it.',
+      reopened: true
+    })
+    expect(uncoded.log).toContain('restore')
+    const thrown = setup()
+    thrown.deps.api.bootstrap = async () => {
+      throw new Error('socket hang up')
+    }
+    expect(await runShare(thrown.deps, INPUT)).toMatchObject({
+      kind: 'failed',
+      step: 'bootstrapping',
+      error: 'socket hang up The host may have finished setting up anyway; run Share with team again to complete it.',
+      reopened: true
+    })
+  })
+  it('a coded bootstrap failure other than hosting-off keeps its error as is', async () => {
+    const { deps } = setup({ bootstrap: { ok: false, code: 'E_BAD_CWD', error: 'not a folder' } })
+    expect(await runShare(deps, INPUT)).toEqual({ kind: 'failed', step: 'bootstrapping', error: 'not a folder', reopened: true })
+  })
+  it('markHandedOff is retried once, then given up without failing the share', async () => {
+    const once = setup()
+    let calls = 0
+    once.deps.markHandedOff = async (to) => {
+      calls++
+      if (calls === 1) throw new Error('disk busy')
+      once.log.push(`handed:${to.hostId}:${to.projectId}`)
+    }
+    expect(await runShare(once.deps, INPUT)).toMatchObject({ kind: 'shared' })
+    expect(calls).toBe(2)
+    expect(once.log).toContain('handed:H:project-9')
+    const never = setup()
+    let tries = 0
+    never.deps.markHandedOff = async () => {
+      tries++
+      throw new Error('disk full')
+    }
+    expect(await runShare(never.deps, INPUT)).toMatchObject({ kind: 'shared', resumed: [{ nodeId: 'term-a' }] })
+    expect(tries).toBe(2)
+    expect(never.log).not.toContain('restore')
+  })
+  it('after a successful bootstrap a throwing phase or join never rejects, skips no step, and still answers shared', async () => {
+    const { deps, log } = setup()
+    deps.phase = (p) => {
+      log.push(`phase:${p}`)
+      if (p === 'handing-over' || p === 'joining') throw new Error('ui gone')
+    }
+    deps.join = () => {
+      throw new Error('ui gone')
+    }
+    const out = await runShare(deps, INPUT)
+    expect(out).toMatchObject({ kind: 'shared', joinCode: 'nodeterm://join/CODE', resumed: [{ nodeId: 'term-a' }] })
+    expect(log.some((l) => l.startsWith('kill:'))).toBe(true)
+    expect(log).toContain('resume:project-9:term-a')
+    expect(log).toContain('seed')
+    expect(log).not.toContain('restore')
+  })
+  it('a throwing phase before the bootstrap does not strand the project closed', async () => {
+    const { deps, log } = setup()
+    deps.phase = (p) => {
+      log.push(`phase:${p}`)
+      if (p === 'bootstrapping') throw new Error('ui gone')
+    }
+    expect(await runShare(deps, INPUT)).toMatchObject({ kind: 'shared' })
+    expect(log).toContain('bootstrap')
   })
   it('after a successful bootstrap nothing ever reopens: a failed kill resumes nothing and reports every node still on SSH', async () => {
     const { deps, log } = setup({ kill: { ok: false, error: 'ssh died' } })
@@ -142,11 +248,53 @@ describe('runShare', () => {
     expect(log).not.toContain('restore')
     expect(log.some((l) => l.startsWith('resume:'))).toBe(false)
   })
+  it('a kill verdict of unknown is not gone: nothing is resumed and the node stays on SSH', async () => {
+    const { deps, log } = setup({ kill: { ok: true, results: [{ nodeId: 'term-a', state: 'unknown' }, { nodeId: 'term-p', state: 'gone' }, { nodeId: 'term-x', state: 'gone' }] } })
+    const out = await runShare(deps, INPUT)
+    expect(log.some((l) => l.startsWith('resume:'))).toBe(false)
+    expect(out).toMatchObject({ kind: 'shared', resumed: [], stillOnSsh: [{ nodeId: 'term-a' }] })
+    expect((out as { notResumed: Array<{ node: { nodeId: string }; reason: string }> }).notResumed).toContainEqual({
+      node: expect.objectContaining({ nodeId: 'term-a' }),
+      reason: 'still running on SSH'
+    })
+  })
+  it('a node the kill reply leaves out is not gone: nothing is resumed and the node stays on SSH', async () => {
+    const { deps, log } = setup({ kill: { ok: true, results: [{ nodeId: 'term-p', state: 'gone' }, { nodeId: 'term-x', state: 'gone' }] } })
+    const out = await runShare(deps, INPUT)
+    expect(log.some((l) => l.startsWith('resume:'))).toBe(false)
+    expect(out).toMatchObject({ kind: 'shared', resumed: [], stillOnSsh: [{ nodeId: 'term-a' }] })
+  })
   it('only verified-gone agents are resumed; an alive one is reported, not resumed', async () => {
     const { deps, log } = setup({ kill: { ok: true, results: [{ nodeId: 'term-a', state: 'alive' }, { nodeId: 'term-p', state: 'gone' }, { nodeId: 'term-x', state: 'gone' }] } })
     const out = await runShare(deps, INPUT)
     expect(log.some((l) => l.startsWith('resume:'))).toBe(false)
     expect(out).toMatchObject({ kind: 'shared', stillOnSsh: [{ nodeId: 'term-a' }] })
+  })
+  it('already-running counts as resumed', async () => {
+    const { deps } = setup({ resume: { ok: true, results: [{ nodeId: 'term-a', status: 'already-running' }] } })
+    expect(await runShare(deps, INPUT)).toMatchObject({ kind: 'shared', resumed: [{ nodeId: 'term-a' }] })
+  })
+  it('a failed resume reply puts every sent node in notResumed with that error', async () => {
+    const { deps } = setup({ flush: FLUSH_WITH_B, resume: { ok: false, error: 'server busy' } })
+    const out = await runShare(deps, { ...INPUT, terminals: [...INPUT.terminals, TERM_B] })
+    expect(out).toMatchObject({
+      kind: 'shared',
+      resumed: [],
+      notResumed: [
+        { node: { nodeId: 'term-a' }, reason: 'server busy' },
+        { node: { nodeId: 'term-b' }, reason: 'server busy' },
+        { node: { nodeId: 'term-x' }, reason: 'runs under a managed account' }
+      ]
+    })
+  })
+  it('a node the resume reply leaves out is reported as unanswered, not resumed', async () => {
+    const { deps } = setup({ flush: FLUSH_WITH_B, resume: { ok: true, results: [{ nodeId: 'term-a', status: 'resumed' }] } })
+    const out = await runShare(deps, { ...INPUT, terminals: [...INPUT.terminals, TERM_B] })
+    expect(out).toMatchObject({ kind: 'shared', resumed: [{ nodeId: 'term-a' }] })
+    expect((out as { notResumed: unknown[] }).notResumed).toContainEqual({
+      node: expect.objectContaining({ nodeId: 'term-b' }),
+      reason: 'the server did not answer for it'
+    })
   })
   it('a refused resume is reported with its reason, beside the manual agents', async () => {
     const { deps } = setup({ resume: { ok: true, results: [{ nodeId: 'term-a', status: 'refused', reason: 'unknown agent' }] } })
@@ -181,6 +329,24 @@ describe('runShare', () => {
     deps.api.bootstrap = async (_p, cwd) => (seen.push(cwd), BOOT as never)
     await runShare(deps, INPUT)
     expect(seen).toEqual(['/srv/proj'])
+  })
+  it('says a shared install and re-probe failure once', async () => {
+    const { deps } = setup()
+    let n = 0
+    deps.api.probe = async () => (n++ === 0 ? { ...READY, plan: { kind: 'install', reason: 'missing' } } : { ok: false, error: 'not connected' }) as never
+    deps.api.install = async () => ({ ok: false, error: 'not connected' })
+    expect(await runShare(deps, INPUT)).toEqual({ kind: 'failed', step: 'checking-install', error: 'not connected', reopened: false })
+  })
+  it('joins a re-probe failure that differs from the install message', async () => {
+    const { deps } = setup()
+    let n = 0
+    deps.api.probe = async () => (n++ === 0 ? { ...READY, plan: { kind: 'install', reason: 'missing' } } : { ok: false, error: 'ssh died' }) as never
+    expect(await runShare(deps, INPUT)).toEqual({
+      kind: 'failed',
+      step: 'checking-install',
+      error: 'The install finished (exit 0) but nodeterm-server is not ready on the host. ssh died',
+      reopened: false
+    })
   })
   it('an install that does not leave a ready server fails without releasing anything', async () => {
     const { deps, log } = setup()

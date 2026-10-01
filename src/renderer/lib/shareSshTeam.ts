@@ -13,7 +13,8 @@
 // 3. After a successful bootstrap the SSH project is never reopened: the server is now the only
 //    writer of the project file, and a desktop mirror write would race it. Every failure before
 //    that point leaves the project as it was: once the share has marked (or closed) it, the
-//    failure clears the mark and reopens it before it is reported.
+//    failure clears the mark and reopens it before it is reported, and says so when that undo
+//    itself fails.
 //
 // The in-progress mark is set BEFORE the mirror is flushed, not with the close: a desktop save
 // between the flush and the close could otherwise queue a throttled mirror write that lands on the
@@ -72,7 +73,17 @@ export interface ShareConfirmSummary {
 export type ShareOutcome =
   | { kind: 'refused'; reason: string; busy?: ShareNode[] }
   | { kind: 'cancelled' }
-  | { kind: 'failed'; step: SharePhase; error: string; reopened: boolean; log?: string }
+  | {
+      kind: 'failed'
+      step: SharePhase
+      error: string
+      /** The share had closed the project and reopened it again. */
+      reopened: boolean
+      /** Undoing the share's own changes threw: the project may still be closed and still carry the
+       *  in-progress mark that stops its mirror, so the UI must not say nothing changed. */
+      restoreFailed?: boolean
+      log?: string
+    }
   | {
       kind: 'shared'
       joinCode: string
@@ -144,15 +155,31 @@ export function classifyTerminals(
   return { resumable, manual, stopping }
 }
 
+/** Said after a bootstrap that failed without a server error code: a transport failure or a timeout
+ *  says nothing about whether the server finished, and a second run of the idempotent bootstrap
+ *  completes whatever it did. */
+const BOOTSTRAP_MAY_HAVE_FINISHED =
+  ' The host may have finished setting up anyway; run Share with team again to complete it.'
+
 export async function runShare(deps: ShareDeps, input: ShareInput): Promise<ShareOutcome> {
   const { api } = deps
   const { projectId, terminals, host, user } = input
-  const failed = (step: SharePhase, error: string, reopened: boolean): ShareOutcome => ({
+  const failed = (step: SharePhase, error: string, reopened: boolean, restoreFailed = false): ShareOutcome => ({
     kind: 'failed',
     step,
     error,
-    reopened
+    reopened,
+    ...(restoreFailed ? { restoreFailed: true } : {})
   })
+  // A phase report only updates the UI; a throw there must never stop a step, least of all one that
+  // leaves the project closed and marked with nothing left to undo it.
+  const phase = (p: SharePhase): void => {
+    try {
+      deps.phase(p)
+    } catch {
+      /* display only */
+    }
+  }
 
   // Refusals that need no host: checked before anything is asked of it.
   const busy = terminals.filter((n) => n.agentId && n.state && BUSY_STATES.has(n.state))
@@ -167,7 +194,7 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   }
   const ids = terminals.map((n) => n.nodeId)
 
-  deps.phase('probing')
+  phase('probing')
   let probed = await call(() => api.probe(projectId, ids))
   if (!probed.ok) return failed('probing', probed.error, false)
   const plan = probed.plan
@@ -185,18 +212,19 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   if (!agreed) return { kind: 'cancelled' }
 
   if (plan.kind === 'install') {
-    deps.phase('installing')
+    phase('installing')
     const installed = await call(() => api.install(projectId))
     // Probe again whatever the install answered: only a ready server lets the share go on, and a
     // failed reply (a dropped stream, say) does not by itself mean the server is not ready.
-    deps.phase('checking-install')
+    phase('checking-install')
     const again = await call(() => api.probe(projectId, ids))
     if (!again.ok || again.plan.kind !== 'ready') {
       const base = installed.ok
         ? `The install finished (exit ${installed.exitCode}) but nodeterm-server is not ready on the host.`
         : installed.error
-      const why = !again.ok ? ` ${again.error}` : again.plan.kind === 'refuse' ? ` ${again.plan.reason}` : ''
-      return failed('checking-install', base + why, false)
+      const why = !again.ok ? again.error : again.plan.kind === 'refuse' ? again.plan.reason : ''
+      // A dead connection fails the install and the re-probe with the same message: say it once.
+      return failed('checking-install', why && why !== base ? `${base} ${why}` : base, false)
     }
     probed = again
   }
@@ -205,40 +233,44 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   const adoptCwd = probed.probe.adoptCwd
   if (adoptCwd === null) return { kind: 'refused', reason: SHARE_REFUSAL.noFolder }
 
-  deps.phase('releasing')
+  phase('releasing')
   try {
     await deps.prepare()
   } catch (e) {
     return failed('releasing', errorText(e), false)
   }
   // From the mark until a successful bootstrap, every failure clears the mark (and reopens the
-  // project if it was closed) before it is reported. Restore's own failure is swallowed: the
-  // original failure is the one the user must see.
-  const undo = async (): Promise<void> => {
+  // project if it was closed) before it is reported. The original failure stays the reported error;
+  // whether restore worked is reported beside it, because a mark left behind stops the project's
+  // mirror for good and a project left closed is not "reopened".
+  const undo = async (): Promise<boolean> => {
     try {
       await deps.restore()
+      return true
     } catch {
-      /* best effort */
+      return false
     }
+  }
+  /** Undo, then report `error`; `released` says whether the project had been closed by now. */
+  const failAndUndo = async (step: SharePhase, error: string | ((restored: boolean) => string), released: boolean) => {
+    const restored = await undo()
+    return failed(step, typeof error === 'string' ? error : error(restored), released && restored, !restored)
   }
   try {
     await deps.markPending()
   } catch (e) {
-    await undo()
-    return failed('releasing', errorText(e), false)
+    return failAndUndo('releasing', errorText(e), false)
   }
   const flushed = await call(() => api.flushMirror(projectId))
-  if (!flushed.ok) {
-    await undo()
-    return failed('releasing', flushed.error, false)
-  }
+  if (!flushed.ok) return failAndUndo('releasing', flushed.error, false)
   const onHost = new Set(flushed.nodeIds)
   const missing = terminals.filter((n) => !onHost.has(n.nodeId))
   if (missing.length) {
-    await undo()
-    return failed(
+    const stale = `The canvas on the host is not up to date (${missing.length} terminal${missing.length === 1 ? '' : 's'} missing).`
+    // "Nothing was changed" holds only when the mark was cleared again.
+    return failAndUndo(
       'releasing',
-      `The canvas on the host is not up to date (${missing.length} terminal${missing.length === 1 ? '' : 's'} missing). Nothing was changed; try again in a moment.`,
+      (restored) => (restored ? `${stale} Nothing was changed; try again in a moment.` : `${stale} Try again in a moment.`),
       false
     )
   }
@@ -246,28 +278,38 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
     await deps.release()
   } catch (e) {
     // A close can throw part-way, so restore reopens it whatever state it was left in.
-    await undo()
-    return failed('releasing', errorText(e), true)
+    return failAndUndo('releasing', errorText(e), true)
   }
 
-  deps.phase('bootstrapping')
+  phase('bootstrapping')
   const booted = await call(() => api.bootstrap(projectId, adoptCwd))
   if (!booted.ok) {
-    await undo()
-    const error = booted.code === 'E_HOSTING_OFF' ? `Hosting could not start on the host: ${booted.error}` : booted.error
-    return failed('bootstrapping', error, true)
+    // Any bootstrap failure reopens the project, even one without a server code that may have
+    // left the server set up: the desktop must never stay closed on an unconfirmed handover.
+    const error =
+      booted.code === 'E_HOSTING_OFF'
+        ? `Hosting could not start on the host: ${booted.error}`
+        : booted.code
+          ? booted.error
+          : booted.error + BOOTSTRAP_MAY_HAVE_FINISHED
+    return failAndUndo('bootstrapping', error, true)
   }
   const result = booted.result
 
-  // Best effort: the server already owns the project, and the in-progress mark keeps the desktop
-  // from writing it even if this store write fails.
-  try {
-    await deps.markHandedOff({ hostId: result.hostId, projectId: result.projectId })
-  } catch {
-    /* best effort */
+  // From here on the server owns the project: nothing below may reject or reopen it, so every dep
+  // call is guarded and the shared outcome is always returned.
+  // The store write is retried once, then given up: the in-progress mark already keeps the desktop
+  // from writing the project, so a failure costs only the host binding.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await deps.markHandedOff({ hostId: result.hostId, projectId: result.projectId })
+      break
+    } catch {
+      /* retried once, then best effort */
+    }
   }
 
-  deps.phase('handing-over')
+  phase('handing-over')
   const resumed: ShareNode[] = []
   const notResumed: Array<{ node: ShareNode; reason: string }> = []
   let stillOnSsh: ShareNode[]
@@ -305,10 +347,14 @@ export async function runShare(deps: ShareDeps, input: ShareInput): Promise<Shar
   }
   notResumed.push(...classified.manual)
 
-  deps.phase('joining')
+  phase('joining')
   // A failed seed only means the join shows the verification code instead of a pinned bookmark.
   await call(() => api.seedBookmark(result.joinCode))
-  deps.join(result.joinCode, result.projectId)
+  try {
+    deps.join(result.joinCode, result.projectId)
+  } catch {
+    /* the outcome carries the join code, so the team can still be joined from it */
+  }
 
   return {
     kind: 'shared',
