@@ -1,6 +1,7 @@
 // HTTP client for the live-link routes (nodeterm-server, Plan 1). Credentials ride the JSON body
 // over TLS, never argv. Every call is bounded by a timeout that also covers the body read.
 import { tokenTtlMs, type MintResult } from '../relay/host-token'
+import { LINK_ID_RE } from '../../shared/watch-link/link'
 
 export type CreateError = 'not-entitled' | 'limit-active' | 'limit-daily' | 'rate-limited' | 'license-check' | 'bad-request' | 'network'
 export type HostTokenResult = MintResult | { ok: false; kind: 'gone'; reason: 'revoked' | 'expired' }
@@ -81,12 +82,15 @@ export function createWatchLinkApi(o: { apiBase: string; fetch?: typeof fetch; n
       const exp = r.json?.expiresAt
       // A link always ends in the future; 0, a negative or a non-finite instant is a malformed reply,
       // and tokenTtlMs would turn it into its two-minute HOST-TOKEN default (a link that "expires" in
-      // 2 minutes while its server row stays live and counts against the active-link cap).
-      if (r.status === 200 && typeof r.json?.linkId === 'string' && typeof exp === 'number' && Number.isFinite(exp) && exp > 0) {
+      // 2 minutes while its server row stays live and counts against the active-link cap). A link id
+      // the URL could not carry (`formatWatchLink` refuses it, and the store would drop the record at
+      // the next boot) is malformed too.
+      const linkId = r.json?.linkId
+      if (r.status === 200 && typeof linkId === 'string' && LINK_ID_RE.test(linkId) && typeof exp === 'number' && Number.isFinite(exp) && exp > 0) {
         // `expiresAt` is an instant on the SERVER's clock; the Date header turns it into time left,
         // which is then anchored on this machine's clock (see tokenTtlMs).
         const t = now()
-        return { ok: true, linkId: r.json.linkId, expiresAt: t + tokenTtlMs(exp, r.date, t) }
+        return { ok: true, linkId, expiresAt: t + tokenTtlMs(exp, r.date, t) }
       }
       if (r.status === 402 || r.status === 403) return { ok: false, error: 'not-entitled' }
       if (r.status === 429) {

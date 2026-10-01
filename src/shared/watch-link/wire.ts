@@ -21,11 +21,17 @@ export const TAG_TUNNEL_TEXT = 0x03
 export const TAG_TUNNEL_BIN = 0x04
 export const ROLE_HOST = 1
 export const ROLE_CLIENT = 2
+/** The HANDSHAKE nonce each side sends in `e2ee_hello` (the session key's HKDF salt is
+ *  hostNonce ‖ clientNonce). NOT the 24-byte box nonce: that one is `nacl.box.nonceLength`, drawn
+ *  fresh inside `sealBox` for every frame and carried in front of it. */
 export const NONCE_BYTES = 16
 export const RELAY_SESSION_INFO = 'nodeterm-relay-session-v2'
 const HEADER_BYTES = 9
 
-export function sealBox(plain: Uint8Array, key: Uint8Array, nonce: Uint8Array = nacl.randomBytes(nacl.box.nonceLength)): Uint8Array {
+/** Seal one frame under the session key. The box nonce is drawn here, fresh per frame, and never
+ *  taken from a caller: a reused nonce under one key leaks the XOR of two plaintexts. */
+export function sealBox(plain: Uint8Array, key: Uint8Array): Uint8Array {
+  const nonce = nacl.randomBytes(nacl.box.nonceLength)
   return concatBytes(nonce, nacl.box.after(plain, nonce, key))
 }
 

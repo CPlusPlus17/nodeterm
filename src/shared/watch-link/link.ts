@@ -7,7 +7,19 @@ export const WATCH_LINK_ORIGIN = 'https://nodeterm.dev'
 export const WATCH_LINK_FRAGMENT_VERSION = '1'
 export const LINK_ID_RE = /^[A-Za-z0-9_-]{22}$/
 
+/** A scheme and a host (and a port), nothing else: a path, query or fragment here would change what
+ *  the URL names, or put the secret somewhere other than the fragment. */
+const ORIGIN_RE = /^https?:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?$/
+
+/**
+ * The viewer URL for a link. Throws on an input that would not make one — an id `parseWatchLinkLocation`
+ * would refuse, a secret of the wrong length, an origin that is more than an origin — rather than
+ * format a link nobody can open (or one whose secret leaves the fragment).
+ */
 export function formatWatchLink(linkId: string, secret: Uint8Array, origin: string = WATCH_LINK_ORIGIN): string {
+  if (typeof linkId !== 'string' || !LINK_ID_RE.test(linkId)) throw new Error('A live link id is 22 base64url characters.')
+  if (!secret || secret.length !== WATCH_LINK_SECRET_BYTES) throw new Error('A live link secret is 32 bytes.')
+  if (typeof origin !== 'string' || !ORIGIN_RE.test(origin)) throw new Error('A live link origin is a scheme and a host.')
   return `${origin}/s/${linkId}#${WATCH_LINK_FRAGMENT_VERSION}.${bytesToB64url(secret)}`
 }
 

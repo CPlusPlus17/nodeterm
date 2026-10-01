@@ -17,6 +17,12 @@ describe('bytes', () => {
     expect(bytesToHex(Uint8Array.of(0, 255, 16))).toBe('00ff10')
     expect(concatBytes(utf8('a'), utf8('bc'))).toEqual(utf8('abc'))
   })
+  it("pins base64url's two URL-safe characters with a fixed vector (random bytes may never hit them)", () => {
+    // 0xfb 0xff = 111110 111111 1111(00): 62 → '-', 63 → '_', 60 → '8'.
+    expect(bytesToB64url(Uint8Array.of(0xfb, 0xff))).toBe('-_8')
+    expect(b64urlToBytes('-_8')).toEqual(Uint8Array.of(0xfb, 0xff))
+    expect(bytesToB64(Uint8Array.of(0xfb, 0xff))).toBe('+/8=')
+  })
   it('refuses malformed base64 instead of silently truncating', () => {
     expect(b64ToBytes('not base64!!')).toBeNull()
     expect(b64urlToBytes('+/+/')).toBeNull()
@@ -33,6 +39,9 @@ describe('deriveWatchLinkKeys', () => {
     expect(k.viewer.secretKey).toEqual(sub('viewer'))
     expect(k.joinKey).toEqual(sub('join'))
     expect(k.host.publicKey).not.toEqual(k.viewer.publicKey)
+  })
+  it('refuses a secret of any other length rather than derive keys from it', () => {
+    for (const n of [0, 16, 31, 33, 64]) expect(() => deriveWatchLinkKeys(new Uint8Array(n))).toThrow(/32 bytes/)
   })
   it('makes a fresh 32-byte secret each time', () => {
     const a = newWatchLinkSecret()
@@ -60,5 +69,14 @@ describe('link format', () => {
     expect(parseWatchLinkLocation(`/s/${id}`, `#1.${s.slice(1)}`)).toBeNull()
     expect(parseWatchLinkLocation(`/s/${id}/x`, `#1.${s}`)).toBeNull()
     expect(LINK_ID_RE.test(id)).toBe(true)
+  })
+  // A link nobody can open — or one whose secret ends up outside the fragment — is never formatted.
+  it('formats only what it could parse back: a bad id, secret or origin throws', () => {
+    for (const bad of ['short', `${id}x`, 'AbCdEfGhIjKlMnOpQrSt/v', 'AbCdEfGhIjKlMnOpQrSt#v', ''])
+      expect(() => formatWatchLink(bad, secret)).toThrow(/link id/)
+    for (const n of [0, 31, 33]) expect(() => formatWatchLink(id, new Uint8Array(n))).toThrow(/secret/)
+    for (const origin of ['https://nodeterm.dev/', 'https://nodeterm.dev/x', 'https://a.dev?x=1', 'https://a.dev#f', 'javascript:alert(1)', 'nodeterm.dev', ''])
+      expect(() => formatWatchLink(id, secret, origin)).toThrow(/origin/)
+    expect(formatWatchLink(id, secret, 'http://localhost:4321')).toMatch(/^http:\/\/localhost:4321\/s\//)
   })
 })

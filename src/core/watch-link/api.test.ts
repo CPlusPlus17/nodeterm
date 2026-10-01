@@ -68,13 +68,25 @@ function trackTimers(delay: number) {
   }
 }
 
+/** A link id as the server mints it: 16 random bytes, base64url, 22 characters. */
+const LID = 'AbCdEfGhIjKlMnOpQrStUv'
+
 describe('createWatchLinkApi', () => {
   it('create posts the hash and corrects expiry to the local clock', async () => {
     const serverNow = Date.parse('Tue, 29 Sep 2026 10:00:00 GMT')
-    const { a, calls } = api(() => res(200, { linkId: 'L', expiresAt: serverNow / 1000 + 3600 }, { date: new Date(serverNow).toUTCString() }), 5_000)
+    const { a, calls } = api(() => res(200, { linkId: LID, expiresAt: serverNow / 1000 + 3600 }, { date: new Date(serverNow).toUTCString() }), 5_000)
     const r = await a.create('ent', 'ab'.repeat(32), 3600)
     expect(calls[0]).toEqual({ url: 'https://api.test/v1/watch-links', body: { entitlement: 'ent', joinKeyHash: 'ab'.repeat(32), ttlSeconds: 3600 } })
-    expect(r).toEqual({ ok: true, linkId: 'L', expiresAt: 5_000 + 3_600_000 })
+    expect(r).toEqual({ ok: true, linkId: LID, expiresAt: 5_000 + 3_600_000 })
+  })
+
+  // A link id the URL cannot carry: formatWatchLink refuses it, and the store would drop the record
+  // at the next boot. A malformed reply, like a missing expiry — never a link.
+  it('create refuses a link id that is not 22 base64url characters', async () => {
+    const exp = Date.now() / 1000 + 3600
+    for (const linkId of ['L', `${LID}x`, 'AbCdEfGhIjKlMnOpQrSt/v', 'AbCdEfGhIjKlMnOpQrSt%v', 42]) {
+      expect(await api(() => res(200, { linkId, expiresAt: exp })).a.create('e', 'h', 3600)).toEqual({ ok: false, error: 'network' })
+    }
   })
 
   it('maps create errors', async () => {
@@ -241,8 +253,8 @@ describe('createWatchLinkApi', () => {
     // instant in ms (local now + (instant - local now)).
     const serverExp = Date.parse('Tue, 29 Sep 2026 11:00:00 GMT') / 1000
     for (const headers of [{}, { date: 'yesterday' }] as Record<string, string>[]) {
-      const r = await api(() => res(200, { linkId: 'L', expiresAt: serverExp }, headers), 5_000).a.create('e', 'h', 3600)
-      expect(r).toEqual({ ok: true, linkId: 'L', expiresAt: serverExp * 1000 })
+      const r = await api(() => res(200, { linkId: LID, expiresAt: serverExp }, headers), 5_000).a.create('e', 'h', 3600)
+      expect(r).toEqual({ ok: true, linkId: LID, expiresAt: serverExp * 1000 })
     }
   })
 

@@ -305,7 +305,14 @@ export function createWatchLinkService(deps: WatchLinkServiceDeps): WatchLinkSer
     statePending = true
     queueMicrotask(() => {
       statePending = false
-      safeEmit(IPC.watchLinkState, list())
+      // `formatWatchLink` throws on a record it could not make a URL of. Every record passed its
+      // checks (the API client's link-id rule, the store's load rules), but a throw here would be
+      // uncaught inside a microtask, so it is caught and reported instead.
+      try {
+        safeEmit(IPC.watchLinkState, list())
+      } catch (err) {
+        warn(`listing live links failed: ${errorText(err)}`)
+      }
     })
   }
   /** Links this machine holds but cannot host this run (sealed, keychain locked) — they count against
