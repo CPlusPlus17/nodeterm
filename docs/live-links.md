@@ -560,35 +560,35 @@ From the spec:
 
 Added while building it:
 
-16. An idle terminal for more than 3 minutes, with the viewer page visible AND hidden: 0 rejoins. Again
+19. An idle terminal for more than 3 minutes, with the viewer page visible AND hidden: 0 rejoins. Again
     with nodeterm hidden on macOS (App Nap).
-17. A link on a node whose project is closed (or after a relaunch, no owner Session held): the watcher's
+20. A link on a node whose project is closed (or after a relaunch, no owner Session held): the watcher's
     own client attaches, the owner's window size does not change when the owner then opens the node,
     and the account environment of the session is intact.
-18. The owner attaches the same session with `-D` elsewhere: viewers see one "waiting" and come back.
-19. A link on an SSH-project node: keyframe and stream over the ControlMaster; a downed master shows
+21. The owner attaches the same session with `-D` elsewhere: viewers see one "waiting" and come back.
+22. A link on an SSH-project node: keyframe and stream over the ControlMaster; a downed master shows
     "waiting", never a local shell.
-20. Relaunch with the login keychain locked: links come back once it unlocks (opaque entries), none are
+23. Relaunch with the login keychain locked: links come back once it unlocks (opaque entries), none are
     erased.
-21. A relay tab showing a git-shared node with the same id as a locally linked node shows no chip.
+24. A relay tab showing a git-shared node with the same id as a locally linked node shows no chip.
 
 Visual checks (renderer, Mac and a Server Edition browser tab):
 
-22. Node right-click: "Share live link…" right after Refresh terminal, the broadcast glyph at 16 px; a
+25. Node right-click: "Share live link…" right after Refresh terminal, the broadcast glyph at 16 px; a
     DISABLED row's tooltip (relay tab, 5 links).
-23. Sessions sidebar row menu — active project and a non-active project (Duplicate · Share live link… ·
+26. Sessions sidebar row menu — active project and a non-active project (Duplicate · Share live link… ·
     End session).
-24. Kanban card menu (per-project, after the account rows) and the Omni board lane card menu.
-25. Card modal header: the broadcast action between ✦ and the comments button; disabled look + tooltip
+27. Kanban card menu (per-project, after the account rows) and the Omni board lane card menu.
+28. Card modal header: the broadcast action between ✦ and the comments button; disabled look + tooltip
     (Chromium shows `title` on disabled buttons — confirm on the packaged build).
-26. The create dialog: 460 px `.confirm` shell, radios wrapping, the warning wash, the URL row with
+29. The create dialog: 460 px `.confirm` shell, radios wrapping, the warning wash, the URL row with
     Copy/Copied!, "until HH:MM" in 12/24 h locales; long node titles; dark + light; Liquid Glass.
-27. The dialog opened from the card modal (z 70 over 55), and the UpgradeDialog opened from the card
+30. The dialog opened from the card modal (z 70 over 55), and the UpgradeDialog opened from the card
     modal / board.
-28. Palette: "Manage live links" and "Stop all live links (every machine on this license)" with the
+31. Palette: "Manage live links" and "Stop all live links (every machine on this license)" with the
     glyph; the Stop-all confirm after the palette closes.
-29. Settings → Live links: nav glyph, rows with long titles, Copy/Stop, the Stop-all confirm over the
+32. Settings → Live links: nav glyph, rows with long titles, Copy/Stop, the Stop-all confirm over the
     Settings overlay, the pitch; the Server Edition sentence in a browser tab.
-30. The sticky `not-persistent` strip after a create, visible after closing a card modal.
-31. The chip popover over a zoomed canvas node, near the bottom edge (flips above), over the card modal,
+33. The sticky `not-persistent` strip after a create, visible after closing a card modal.
+34. The chip popover over a zoomed canvas node, near the bottom edge (flips above), over the card modal,
     and in the hover-peek sidebar (it must stay open); under Liquid Glass (opaque, `.live-pop`).
