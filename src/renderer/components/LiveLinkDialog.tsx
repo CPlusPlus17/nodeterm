@@ -167,6 +167,7 @@ export function LiveLinkDialog({
   title,
   surface,
   remoteNode = false,
+  readPersistence,
   prepare,
   onUpgrade,
   onClose
@@ -177,6 +178,10 @@ export function LiveLinkDialog({
   surface: LiveLinkSurface
   /** The node runs on an SSH project's host, whose own tmux gives a viewer a client of its own (R63). */
   remoteNode?: boolean
+  /** R63: the LOCAL core's session-protection status (`localSession.api.pty.tmuxStatus` — the core that
+   *  creates the link, never a relay peer's). Absent, rejected or unreadable: no note (unknown claims
+   *  nothing). */
+  readPersistence?: () => Promise<{ persistence?: { enabled: boolean; backend: string | null } | null } | null>
   /** R47: publish pending canvas edits before core looks the node up. A sentence = do NOT create. */
   prepare: () => Promise<string | null>
   /** Absent on the Server Edition (R43): no Upgrade button there. */
@@ -201,9 +206,10 @@ export function LiveLinkDialog({
   // core that creates the link). Unknown — not read yet, or unreadable — says nothing.
   const [whileOpenOnly, setWhileOpenOnly] = useState(false)
   useEffect(() => {
+    if (!readPersistence) return
     let live = true
     Promise.resolve()
-      .then(() => window.nodeTerminal.pty.tmuxStatus())
+      .then(() => readPersistence())
       .then(
         (st) => {
           if (live) setWhileOpenOnly(watchableOnlyWhileOpen({ persistence: st?.persistence, remoteNode }))
@@ -213,7 +219,7 @@ export function LiveLinkDialog({
     return () => {
       live = false
     }
-  }, [remoteNode])
+  }, [remoteNode, readPersistence])
   // D2/M3: focus lands in the dialog — the label on open, Copy once created — so keys stay inside
   // it (a bare-key canvas command could otherwise fire behind the overlay).
   const panelRef = useRef<HTMLDivElement>(null)

@@ -53,6 +53,9 @@ describe('Canvas live-link wiring', () => {
 
   it("R63: the dialog knows an SSH project's node from its project (the host's tmux serves its viewers)", () => {
     expect(src).toContain('remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}')
+    // …and reads THIS machine's session protection from the local core, never a relay peer's.
+    expect(src).toContain('readPersistence={readLocalPersistence}')
+    expect(callback('readLocalPersistence')).toContain('localSession.api.pty.tmuxStatus()')
   })
 
   it('R43: no Upgrade button from the dialog on the Server Edition', () => {

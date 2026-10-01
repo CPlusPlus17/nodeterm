@@ -97,6 +97,10 @@ let api: {
 }
 /** What the local core's `tmuxStatus` reports (R63); `undefined` = the read rejects. */
 let persistence: { enabled: boolean; backend: string | null } | undefined
+const readPersistence = async () => {
+  if (!persistence) throw new Error('no core')
+  return { persistence }
+}
 let host: HTMLDivElement
 let root: Root
 beforeEach(() => {
@@ -105,13 +109,7 @@ beforeEach(() => {
   persistence = { enabled: true, backend: 'tmux' }
   ;(window as unknown as { nodeTerminal: unknown }).nodeTerminal = {
     watchLink: api,
-    clipboard: { writeText: vi.fn() },
-    pty: {
-      tmuxStatus: vi.fn(async () => {
-        if (!persistence) throw new Error('no core')
-        return { available: true, installCommand: null, installLabel: null, platform: 'linux', persistence }
-      })
-    }
+    clipboard: { writeText: vi.fn() }
   }
   localStorage.clear()
   host = document.createElement('div')
@@ -153,6 +151,7 @@ function mount(o: {
         title="build"
         surface={o.surface ?? 'desktop'}
         remoteNode={o.remoteNode}
+        readPersistence={readPersistence}
         prepare={o.prepare ?? (async () => null)}
         onUpgrade={o.onUpgrade}
         onClose={onClose}

@@ -3618,6 +3618,10 @@ export function Canvas() {
     [persist]
   )
 
+  /** R63: the create dialog's "only while open" note reads the LOCAL core's session protection — the
+   *  core that hosts the link (never a relay tab's peer). Stable, so the dialog reads it once. */
+  const readLocalPersistence = useCallback(() => localSession.api.pty.tmuxStatus(), [])
+
   /** R48: "Stop all" revokes every link of the LICENSE — other machines' included — and cannot be
    *  undone, so the palette asks first, with the same sentence and danger button as Settings. R62:
    *  what it reached is ALWAYS said — a success too, since with no link listed here nothing else on
@@ -18569,6 +18573,7 @@ export function Canvas() {
           // R63: an SSH project's node runs in the HOST's tmux, which gives a viewer a client of its
           // own — the "only while open" note is about this machine's local terminals.
           remoteNode={!!useProjects.getState().getProject(liveLinkDialog.projectId)?.ssh}
+          readPersistence={readLocalPersistence}
           prepare={liveLinkPrepareFor(liveLinkDialog)}
           // No license layer in the Server Edition (R43): never an Upgrade button there.
           onUpgrade={isBrowserRuntime() ? undefined : () => void useEntitlement.getState().upgrade('pro')}
