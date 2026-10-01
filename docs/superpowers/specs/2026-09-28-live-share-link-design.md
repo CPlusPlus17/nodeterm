@@ -219,8 +219,9 @@ protocol.**
   listener.
 - **Node gone:** on every workspace-store change and before every join, the registry asks whether
   the node is `present`, `absent` or `unknown`: present = some project holds it
-  (`projectIdsForNode`); absent = the store has a complete read of every project (`knownNodeIds()`)
-  and the id is not in it; anything else is unknown. Only **absent** ends the link with `node-gone`
+  (`projectIdsForNode`); absent = the store has a complete read of every project
+  (`knownNodeIdsStrict()` — unknown, too, for the rest of a run whose index was rebuilt from nothing;
+  the agent-status mirror keeps `knownNodeIds()`, which does not read that flag) and the id is not in it; anything else is unknown. Only **absent** ends the link with `node-gone`
   and revokes it server-side — an empty answer during the launch-time workspace load, or for a node
   in an unreadable project, is not evidence the node is gone. Create requires `present`. This covers
   a node removed by the canvas authority on a peer's op, which the local renderer's delete funnel
@@ -451,7 +452,12 @@ server is the gate.
 - **Card modal header:** a "Share live link" action on terminal cards.
 - **Command palette:** "Manage live links" (opens the Settings section) and "Stop all live links
   (every machine on this license)". Stop all revokes every link of the license, other machines
-  included, so both entry points (palette and Settings) confirm first.
+  included, so both entry points (palette and Settings) confirm first. It is offered wherever the owner
+  could have a link to stop — a link listed on this machine, OR a Pro license (links shared from another
+  machine are invisible here, and Stop all is the only control that reaches them) — never in the Server
+  Edition. The confirm names the timing ("Viewers on this machine are disconnected at once; links on
+  other machines stop within a few minutes"), and what the server call reached is always reported:
+  stopped, could not be asked (no entitlement here), or did not reach nodeterm.
 - **Disabled with a reason, never hidden:**
   - relay-tab node: "Live links are created on the machine that runs this terminal."
   - Server Edition tab: the R43 sentence ("Live links need a Pro license on this server — not
@@ -459,8 +465,13 @@ server is the gate.
   - unpackaged build (`relayAllowed()` false): "Live links need the installed app." — shown when
     Create is pressed (the renderer has no `relayAllowed` probe; a dev-build-only case).
   - 5 active links: "Stop a live link first — 5 can be active at once."
-- Creating a link does not need the node on screen (`joinOnly` attaches in core), so the Omni
-  board's cards of other projects can create links too.
+- Creating a link does not need the node on screen, so the Omni board's cards of other projects can
+  create links too. Watching one does — on a machine whose local terminals are not tmux: with no Session
+  held, a viewer spawns its own read-only TMUX client, which Windows' session host, a machine with tmux
+  off or missing, and the Zellij backend do not have. There a viewer can co-attach only to a terminal
+  the app has open, and the owner is told (below: the create dialog's note, the chip's waiting state).
+  A session-host watcher join (an additive, negotiated attach-only subscribe with no size vote, beside
+  the visible capture) is the follow-up.
 
 ### Create dialog
 
@@ -469,10 +480,14 @@ server is the gate.
 - Expiry: 15 min / **1 hour** / 8 hours / 24 hours.
 - "Shown to viewers as": prefilled with the presence name, ≤ 40 chars.
 - An always-visible warning: "Anyone with the link sees everything this terminal shows: what's on
-  screen now, anything printed later (tokens, env dumps), and anything you scroll back to. They
-  can't type or resize it."
-- "Create live link" → the URL with **Copy**, "Anyone with this link can watch until 15:42", and
-  **Stop sharing**.
+  screen now, anything printed later (tokens, env dumps), anything you scroll back to — and, if you
+  open tmux's session chooser or switch sessions in it, those other sessions too. They can't type or
+  resize it." (The stream is the terminal CLIENT's output, not the node's; see the residuals.)
+- On a machine whose local terminals are not tmux, for a node that is not an SSH project's: "On this
+  machine, viewers can watch this terminal only while it is open in nodeterm; otherwise they wait until
+  you open it." An unread status claims nothing.
+- "Create live link" → the URL with **Copy**, "Anyone with this link can watch until 15:42" ("until
+  tomorrow 15:42", or the weekday and date, when it ends on another day), and **Stop sharing**.
 - Errors: 402 → "Live links need an active Pro plan." + Upgrade; 429 → which limit; network →
   "Couldn't reach nodeterm's service. Nothing was shared."
 
@@ -481,6 +496,8 @@ server is the gate.
 Node header (beside `PresenceChips`), kanban card, card modal header, sessions sidebar row.
 
 - `● LIVE` (a link, no viewers), `● LIVE · 2` (watchers), amber `LIVE · offline` (reconnecting),
+  amber `LIVE · 1 waiting` (a connected viewer whose join was refused — no session it may join; the
+  title and the popover say "Viewers are waiting — open this terminal in nodeterm to let them watch"),
   muted `LIVE · refused` (the API refuses mints). A dot marks unread Commenter chat.
 - **Not hideable.** It is the owner's signal that a terminal is being broadcast; it is not in
   `HIDEABLE_HEADER_BUTTONS`, pinned by a guard test.
@@ -494,8 +511,9 @@ Node header (beside `PresenceChips`), kanban card, card modal header, sessions s
 
 ### Settings → "Live links"
 
-Every active link (node, project, role, viewers, remaining time, Copy, Stop) and "Stop all". Non-Pro
-users see a short pitch and Upgrade.
+Every active link (node, project, role, viewers, remaining time, Copy, Stop) and "Stop all" (also for
+a Pro owner with no link listed here — it reaches the other machines' links). Non-Pro users with no link
+see a short pitch and Upgrade.
 
 ### ProCompare
 
@@ -556,6 +574,11 @@ only calls `requireProOr`, which today has zero callers.)
 - **Residual — the owner-supplied label and node title are shown to viewers.** They are rendered as
   text inside fixed nodeterm chrome, marked as sharer-set; terminal output cannot draw over the
   chrome and has no clickable links.
+- **Residual — the stream follows the owner's tmux client, not the node.** A keyframe targets exactly
+  `=nt-<id>:`, but a co-attached viewer receives what the owner's client draws: tmux's session chooser
+  (`C-b s` / `C-b w`, a live preview of every `nt-*` session on the server) or a session switch shows
+  other sessions to every viewer. It is the owner's own action, on the owner's screen too, and the
+  create dialog's warning names it.
 
 ## Testing
 

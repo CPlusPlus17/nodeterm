@@ -5674,10 +5674,23 @@ creating one is Pro and the backend is the gate. Reference: **`docs/live-links.m
   history (exact `=nt-<id>:`, no `-S`; session host, plain shell and a Zellij node get no keyframe). A
   viewer sizes nothing: `joinOnly` + `sizeVote: false`; its own tmux client is `-E -f ignore-size,read-only`,
   and a Zellij node never gets one (refused, never a Zellij attach — that client could type).
-- Node gone is tri-state (only ABSENT ends a link; a lost or corrupt index is never a complete read).
+- Node gone is tri-state (only ABSENT ends a link; a lost or corrupt index is never a complete read —
+  `knownNodeIdsStrict()`, which only live links call; the agent-status mirror keeps `knownNodeIds()`,
+  which ignores that flag, because a whole-process pause of its pruning was R54's mistake).
   Link state is never canvas content, no canvas-control verb touches links, the chip is not hideable
   (`src/renderer/lib/live-link.guard.test.ts`); both shells wire one core service, the Server Edition as
   `unsupported` until it has a license layer (`src/main/watch-link-wiring.test.ts`).
+- `src/shared/watch-link/` is vendored byte for byte into nodeterm-web: siblings and `tweetnacl` only,
+  no Node API, type imports spelled `import type` (`isomorphism.guard.test.ts`); a change there owes the
+  web repo a re-vendor. Chat text is stripped of controls AND bidi controls there, capped by code point.
+- Never silent about what a viewer gets. Where local terminals are not tmux (Windows' session host, tmux
+  off or missing, Zellij) a viewer can watch only a terminal the app has OPEN (there is no read-only
+  client to spawn): the create dialog says so, and a refused join turns the chip amber `LIVE · 1
+  waiting` ("Viewers are waiting — open this terminal in nodeterm…"). The stream is the owner's tmux
+  CLIENT's output, so its session chooser or a session switch reaches viewers; the warning names it.
+- Stop all is the only control that reaches other machines' links: it is offered to a Pro owner even
+  with no link listed here, awaits the server and reports what it reached (`RevokeAllOutcome`) — a
+  failed or skipped server call must never look like a stop.
 
 ## Dev-server ports (the Ports chip + same-port SSH forwarding)
 

@@ -509,7 +509,10 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   event reaches a viewer only once it is added to `watcherEventAllowed`
   (`src/core/watch-link/watcher-policy.ts`) on purpose — and only if its payload is the visible screen,
   never history (why `pty:resync` is refused). Never add link state to a node, a board or a canvas op:
-  canvas sync and the canvas authority would publish it. `docs/live-links.md`.
+  canvas sync and the canvas authority would publish it. `src/shared/watch-link/` is copied byte for
+  byte into the viewer page's repo: import only siblings and `tweetnacl`, write type imports as
+  `import type` (`isomorphism.guard.test.ts` fails otherwise), and expect a change there to need a
+  re-vendor. `docs/live-links.md`.
 
 - **A change to canvas content that does not travel as a `canvas:mut` op is lost on a hosted core —
   route new content edits through the op vocabulary (`src/shared/canvas-content.ts`).** On a Server

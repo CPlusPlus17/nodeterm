@@ -34,9 +34,9 @@ link"**, the code says **`watchLink`** (owner IPC, `src/core/watch-link/`), the 
 
 | Piece | Where | Notes |
 |---|---|---|
-| Keys, URL, wire, protocol, browser client | `src/shared/watch-link/` (`keys.ts`, `link.ts`, `wire.ts`, `protocol.ts`, `client.ts`, `vectors.json`) | Isomorphic: tweetnacl + WebCrypto, no Node API. **nodeterm-web vendors it byte-identically** and runs the same vectors. A protocol change lands here first, with new vectors, then is copied. |
+| Keys, URL, wire, protocol, browser client | `src/shared/watch-link/` (`keys.ts`, `link.ts`, `wire.ts`, `protocol.ts`, `client.ts`, `vectors.json`) | Isomorphic: tweetnacl + WebCrypto, no Node API. **nodeterm-web vendors it byte-identically** and runs the same vectors. A protocol change lands here first, with new vectors, then is copied. `isomorphism.guard.test.ts` fails on an import from outside the directory (only siblings and `tweetnacl`), a Node API, or a type imported without `type` (the web repo compiles with `verbatimModuleSyntax`). |
 | Owner types | `src/shared/watch-link-types.ts` | NOT vendored. TTLs, `MAX_LINKS_PER_MACHINE` (5), `LABEL_MAX` (40) / `TITLE_MAX` (80, UTF-16 units), the renderer-facing `WatchLinkApi`, `stripBidiControls`. |
-| Registry / service | `src/core/watch-link/service.ts` | Lifecycle, limits, persistence, node-gone, owner state, the ten owner channels (`registerWatchLinkIpc`). Both shells create it. |
+| Registry / service | `src/core/watch-link/service.ts` | Lifecycle, limits, persistence, node-gone, owner state, the seven owner request channels (`registerWatchLinkIpc`) and the three owner pushes (state, chat, notice). Both shells create it. |
 | Link host | `src/core/watch-link/link-host.ts` | One hosted scheduler per link, a `connectRelayHost` session per viewer, joins, keyframes, throttling, chat, kick. |
 | Watcher policy | `src/core/watch-link/watcher-policy.ts` | The `RelayHostHooks` of a viewer session: `watcherAccess` (inbound) and `wrapWatcherSink` (outbound). |
 | Output filter | `src/core/watch-link/stream-filter.ts` | Strips string-type escape sequences from the viewer's stream. |
@@ -46,7 +46,7 @@ link"**, the code says **`watchLink`** (owner IPC, `src/core/watch-link/`), the 
 | Pty seam | `src/core/watch-link/pty-seam.ts` (`createWatchPty`) | ONE definition of the join rules, both shells wire it. |
 | Store | `src/core/watch-link/store.ts` | `<userData>/watch-links.json`, sealed. |
 | API client | `src/core/watch-link/api.ts` | create / host-token / status / revoke / revoke-all. |
-| Existing-code seams | `ui-sink-registry.ts` (`quiet`, `selfPaced`), `pty-reap.ts` (`liveClientIds`), `hosted-scheduler.ts` (`maxBridged`), `host-control.ts` (`watchLink:`), `workspace-store.ts` (`knownNodeIds`, `indexRebuiltThisRun`) | The registry and scheduler options are inert for every caller that passes none. `knownNodeIds()` answering unknown after a rebuilt index is NOT link-only: the agent-status mirror's existence pruning pauses for that run too (R54). |
+| Existing-code seams | `ui-sink-registry.ts` (`quiet`, `selfPaced`), `pty-reap.ts` (`liveClientIds`), `hosted-scheduler.ts` (`maxBridged`), `host-control.ts` (`watchLink:`), `workspace-store.ts` (`knownNodeIdsStrict`, `indexRebuiltThisRun`) | The registry and scheduler options are inert for every caller that passes none; a `selfPaced` sink owes the registry a bound on its own backlog, and `maxBridged` must be an integer ≥ 1. Only `knownNodeIdsStrict()` (live links) answers unknown after a rebuilt index: the agent-status mirror keeps calling `knownNodeIds()`, unchanged from before live links (R64/M2; R54 had paused the mirror's pruning for the whole process). |
 | Shell wiring | `src/main/index.ts`, `src/server/index.ts` (search "Live links") | Pinned at source level by `src/main/watch-link-wiring.test.ts`. |
 | Renderer | `state/watchLinks.ts`, `lib/liveLink.ts`, `lib/liveLinkEntry.tsx`, `components/LiveLinkChip.tsx`, `LiveLinkPopover.tsx`, `LiveLinkDialog.tsx`, `settings/sections/LiveLinksSection.tsx` | One chip on four surfaces; availability before the Pro gate. |
 | API | nodeterm-server `watch_links` table + six routes | Merged (server#8). |
@@ -98,7 +98,9 @@ Host → viewer: `ev watch:meta {v, role, label, title, expiresAt, cols, rows}` 
 only the first: the page leaves "waiting" on a meta), pty output as binary `encodePtyData` frames,
 `ev pty:size:<sid>`, `ev watch:keyframe {sessionId, screen, altScreen, cursor?}`, `ev watch:chat`,
 `ev watch:waiting {}`, `ev watch:end {reason}`. Viewer → host: `cast watch:chat {name, text}`
-(Commenter only), `trust:confirm`, keepalives. **There is no input, resize or flow message in the
+(Commenter only; `sanitizeChatText` / `sanitizeChatName` bound the raw value by code point before
+cleaning, drop C0/C1 controls and the bidi controls, and cap at 500 / 32 UTF-16 units without splitting
+a surrogate pair — the same functions the viewer page runs), `trust:confirm`, keepalives. **There is no input, resize or flow message in the
 protocol.** `session-ended` is a defined end reason the host never sends in v1: a session that exits
 answers `watch:waiting`, and the host rejoins when one appears.
 
@@ -280,9 +282,9 @@ only client sizes the window like any other (spawned at 40x10 alone → window 4
   vote, never a viewer's size) before every keyframe capture and every `WATCHER_SIZE_SYNC_MS` (10 s)
   while the link has a joined viewer; serialized per session in PtyManager (one read in flight, one
   shared rerun — R24), so two links on one node share it;
-- **residual:** when the watcher becomes the sole client, the window lands on the last-synced size
-  until another client sizes it — drift for up to one interval, and a read racing an owner's resize or
-  departure keeps the size read a moment before.
+- **residual:** when the watcher becomes the sole client, the window stays at the last-synced size
+  until another client sizes it (an owner resize in the last interval before the owner left is not
+  caught), and a read racing an owner's resize or departure keeps the size read a moment before.
 
 A second viewer shares the watcher client (refcounted by subscribers); the watcher client is unindexed,
 so every persistKey lookup behaves as "no watcher". An owner attaching with `-D` detaches the watcher's
@@ -344,16 +346,19 @@ and resurrect a revoked link at the next boot).
 the installed app's links).
 
 **Node gone is tri-state** (R40, `workspaceNodeState`). Present = some project holds it; absent = the
-store has a complete read of every project (`knownNodeIds()`) and the id is not in it; anything else is
-unknown. **Only absent** ends a link (`node-gone`, server revoke). An empty answer during the launch-time
+store has a complete read of every project (`knownNodeIdsStrict()`) and the id is not in it; anything
+else is unknown. **Only absent** ends a link (`node-gone`, server revoke). An empty answer during the launch-time
 load, or for a node in a project whose file was not read, is not evidence, and a revoke cannot be
 undone. The check runs on every workspace load/save (`onWorkspaceChanged`, which also covers a node
 removed by the canvas authority on a peer's op) and before every join (R29). **An index rebuilt from
 nothing is never a complete read** (R44, R54, R55): a `workspace.json` that is missing, unreadable,
-corrupt, or parses but is no index this build recognises marks the run, and `knownNodeIds()` answers
-unknown until the next launch — otherwise the renderer's empty boot save made every node absent and
-every link was revoked a second after launch (probe-confirmed). A genuinely empty v2/v3 index is not
-flagged.
+corrupt, or parses but is no index this build recognises marks the run, and `knownNodeIdsStrict()`
+answers unknown until the next launch — otherwise the renderer's empty boot save made every node absent
+and every link was revoked a second after launch (probe-confirmed). A genuinely empty v2/v3 index is not
+flagged. **The strict accessor is live links' alone** (R64/M2): the agent-status mirror prunes
+identities with `knownNodeIds()`, which ignores the flag. A wrongly pruned identity costs one hook event
+to restore, while the flag lasts the whole process: a Server Edition started on a fresh data dir runs
+for weeks, and under R54's first version the phone kept listing deleted sessions there.
 
 **End** (expiry, owner Stop, node gone, server 410): drop the record, ISSUE the write (never awaited
 before the server revoke — a hung disk must not keep a revoked link's viewers connected or its row
@@ -361,7 +366,15 @@ alive), `watch:end` to every viewer, stop the scheduler, emit state, notify (exp
 the owner's own Stop raises nothing), then the best-effort server revoke. Local revoke is complete even
 offline, because the host is the only listener. **Stop all** is `POST /v1/watch-links/revoke-all`:
 every link of the LICENSE, other machines included, so both entry points (palette, Settings) confirm
-first; it also discards opaque entries (else they would host again once the keychain unlocks).
+first; it also discards opaque entries (else they would host again once the keychain unlocks). It is
+**offered wherever the owner could have a link to stop** (`showsStopAll`, R62): a link listed here, OR a
+Pro license — links shared from another machine are invisible on this one, and Stop all is the only
+control that reaches them (a desktop left sharing at the office, a lost laptop whose links resume at
+launch); never in the Server Edition. This machine's links stop at once; then the server call is
+**awaited** and its answer reported (`RevokeAllOutcome`: `stopped`; `no-entitlement`, the server was not
+asked; `failed`; `unsupported`), a success included. The confirm names the timing: this machine's
+viewers at once, other machines' links within a few minutes (their next mint, ≤ ~90 s, or a full link's
+status poll, ≤ 5 min).
 
 **The listener pool.** One hosted scheduler per link with `maxBridged: 10`: at 10 bridged viewers no
 replacement listener opens, so the broker closes an 11th client ("no host waiting"). The scheduler's
@@ -383,7 +396,8 @@ untouched. A Pro lapse lets open links run out their term (≤ 24 h): host token
 link row, not keygen.
 
 **Hung-disk and quit rules.** Create waits for its write ≤ 10 s; revoke / revoke-all wait for `init()`
-only boundedly, so Stop all still reaches the server on a hung disk; `init()`'s own workspace bound fires
+only boundedly, so Stop all still reaches the server on a hung disk (its wait for the server's answer
+is the API client's 8 s timeout); `init()`'s own workspace bound fires
 before any wait on it, so a slow workspace never reads as a failed write. Desktop: `shutdown()` runs on
 the FIRST before-quit pass, before `ptyManager.killAll()`, inside the 1.5 s raced flush — viewers get
 `host-stopping` while the sockets are up; the records stay on disk and resume at the next launch. Server
@@ -400,15 +414,30 @@ carry it to teammates and the canvas authority would write it into the git-share
 
 - **Desktop:** full. Entry points: node right-click "Share live link…" (`selectionItems`, shared by the
   sessions-sidebar row; hideable as `live-link`), the kanban card menu (per-project board AND the Omni
-  board's lanes, non-active projects included — `joinOnly` attaches in core, so the node need not be on
-  screen), the card modal header action, the palette ("Manage live links", "Stop all live links (every
-  machine on this license)"), Settings → Live links (Remote & team). ProCompare lists "Live read-only
+  board's lanes, non-active projects included — a viewer of a node with no Session held spawns its own
+  read-only tmux client, so on a machine whose local terminals are tmux the node need not be on screen),
+  the card modal header action, the palette ("Manage live links", and "Stop all live links (every
+  machine on this license)" for a Pro owner or while a link is listed), Settings → Live links (Remote &
+  team). Each row is judged by its node's OWN project's session (`liveLinkMenuItemsFor`, D2/M1).
+  ProCompare lists "Live read-only
   links to a terminal — viewers need nothing installed"; the Core list is untouched. **Availability is
   checked before the Pro gate** (`liveLinkUnavailable` then `requireProOr`), so a Server Edition or relay
   tab never sees an Upgrade dialog; an unavailable row is disabled with its reason, never hidden.
+- **Desktop where local terminals are not tmux** (Windows' session host; tmux switched off or missing;
+  the Zellij backend): there is no watcher client of its own, so a viewer can co-attach only to a
+  terminal this app has OPEN (mounted, or parked) — after a restart, for a background project or an
+  offscreen-released node, viewers wait. This is said, never silent (R63): the create dialog states it
+  before the link exists (`watchableOnlyWhileOpen`, from the local core's `tmuxStatus().persistence`; an
+  SSH project's node is served by the host's tmux and gets no note), and while a viewer's join is
+  refused the chip turns amber (`LIVE · 1 waiting`) and its title and the popover say "Viewers are
+  waiting — open this terminal in nodeterm to let them watch." The fix is a session-host watcher join
+  (an additive, negotiated attach-only subscribe with no size vote, beside the visible capture): a
+  follow-up.
 - **The LIVE chip** (`LiveLinkChip`, one component): node header (beside `PresenceChips`), kanban card,
   card modal header, sessions-sidebar row. `● LIVE`, `● LIVE · 2`, amber `LIVE · offline`
-  (reconnecting), muted `LIVE · refused`; an unread dot for Commenter chat. **Not hideable** — it is the
+  (reconnecting), amber `LIVE · 1 waiting` (a viewer's join was refused — R63), muted `LIVE · refused`;
+  an unread dot for Commenter chat. A viewer is reported waiting only once a join is REFUSED: a session
+  that merely ends rejoins in seconds and is no news. **Not hideable** — it is the
   owner's signal that a terminal is being broadcast. It shows only for a node viewed through a LOCAL
   session (R57): a relay tab's copy of a git-shared node with the same id must not show this machine's
   chip, and the boards and the sidebar sit outside the node's SessionProvider, so they resolve the
@@ -466,11 +495,21 @@ Found while building it:
   genuinely have no capture, and the flag cannot tell the two apart.
 - **Frames between a capture and its delivery are dropped for that viewer** (inherent to
   capture-then-stream; the next redraw repairs). A keyframe shows the active pane only.
-- **Window-size drift** for up to one sync interval when the watcher becomes the sole client (above).
+- **Window size when the watcher becomes the sole client**: the window stays at the last-synced size
+  until another client sizes it (above).
+- **The stream follows the owner's tmux CLIENT, not the node** (R64/M3). A keyframe targets exactly
+  `=nt-<id>:`, but the stream is what the owner's client draws: in a shared terminal, tmux's session
+  chooser (`C-b s` / `C-b w`, a live preview of every `nt-*` session on the server, other projects'
+  agents included) or a session switch (`C-b (` / `)`) reaches every viewer. It is the owner's own
+  action, shown on the owner's own screen too, and the create dialog's warning says so. Following
+  `#{client_session}` and treating a switch as a lifecycle event is a possible follow-up.
+- **Windows, and any machine whose local terminals are not tmux:** a link to a terminal that is not
+  open in the app cannot be watched until it is (Surfaces, above). Said, never silent; the session-host
+  watcher join is the follow-up.
 - **A tmux < 3.2 host cannot be watched** (fail closed, "waiting").
 - **After a run whose index was missing, unreadable or corrupt, node-gone waits for the next launch**
   (R44/R54): a link to a node deleted in that run lives until its expiry (≤ 24 h) with nobody able to
-  join it (its session is destroyed), and the agent-status mirror's existence pruning is off that run.
+  join it (its session is destroyed). The agent-status mirror is not affected (R64/M2).
   Likewise a link to a truly deleted node in an unread project lingers until the next complete read.
 - **Opaque entries** (an unsealable secret) live in the file ≤ 24 h.
 - **A node cold-opened into a background project** whose disk write has not landed answers
@@ -510,6 +549,14 @@ From the spec:
 15. **A viewer stays connected for more than 2 minutes without a drop** — whether production ends a
     bridged socket at its token's lifetime is unverified (the same open question as hosted checklist
     item 8).
+16. **Windows:** create a link to a background project's node (or relaunch with a link resumed): the
+    create dialog says "only while it is open", a viewer waits, the owner's chip reads `LIVE · 1
+    waiting` with the waiting sentence; opening the terminal lets the viewer watch.
+17. **`C-b s` / `C-b w` in a shared terminal:** the viewer sees the chooser's previews of other
+    sessions, exactly as the owner does (the create dialog's warning names it).
+18. **Stop all from a second machine with no link listed:** the palette and Settings offer it to a Pro
+    owner; the first machine's links end within a few minutes; with the network cut, the stop says it
+    did not reach nodeterm.
 
 Added while building it:
 
