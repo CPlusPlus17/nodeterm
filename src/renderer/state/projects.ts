@@ -5,6 +5,7 @@ import type {
   CanvasMutation,
   CanvasNodeState,
   ClosedSessionEntry,
+  HandedOffTo,
   NavStop,
   Project,
   ProjectKanban,
@@ -103,6 +104,10 @@ interface ProjectsState {
   /** Sets (or clears, with undefined = fall back to the global setting) the project's default
    *  permission mode for new Claude terminal (CLI) sessions. Chat nodes are not covered. */
   setProjectDefaultPermissionMode(id: string, mode: AgentPermissionMode | undefined): void
+  /** Sets (or clears, with undefined) the machine-local mark that this SSH project was handed to a
+   *  hosted team (see `HandedOffTo`). Cleared means the field is gone, so the next save drops it
+   *  from the index entry. The caller saves. No-op for an unknown id. */
+  setHandedOffTo(id: string, value: HandedOffTo | undefined): void
   /**
    * THE strict per-project capability setter (@shared/project-capabilities). `on` writes the
    * literal `true` the validators accept AND records this machine's 'kept' answer — setting a
@@ -601,6 +606,17 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   setProjectDefaultPermissionMode(id, mode) {
     set((s) => ({
       projects: s.projects.map((p) => (p.id === id ? { ...p, defaultPermissionMode: mode } : p))
+    }))
+  },
+
+  setHandedOffTo(id, value) {
+    set((s) => ({
+      projects: s.projects.map((p) => {
+        if (p.id !== id) return p
+        if (value) return { ...p, handedOffTo: value }
+        const { handedOffTo: _drop, ...rest } = p
+        return rest
+      })
     }))
   },
 

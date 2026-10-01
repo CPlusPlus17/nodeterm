@@ -376,3 +376,30 @@ describe('closeProject on a background project (issue #848: the offer outlives a
     expect(s.getProject(b.id)).toBe(activeBefore)
   })
 })
+
+describe('setHandedOffTo', () => {
+  it('sets and clears the handover mark, and toWorkspace carries it to the save', () => {
+    const p = useProjects.getState().addProject('box', undefined, {
+      server: { host: 'box', user: 'alice' },
+      remoteCwd: '~/proj'
+    })
+    useProjects.getState().setHandedOffTo(p.id, { at: 5 })
+    expect(useProjects.getState().getProject(p.id)?.handedOffTo).toEqual({ at: 5 })
+    useProjects.getState().setHandedOffTo(p.id, { hostId: 'H', projectId: 'project-9', at: 6 })
+    const saved = useProjects.getState().toWorkspace().projects.find((x) => x.id === p.id)
+    expect(saved?.handedOffTo).toEqual({ hostId: 'H', projectId: 'project-9', at: 6 })
+    useProjects.getState().setHandedOffTo(p.id, undefined)
+    const cleared = useProjects.getState().getProject(p.id)!
+    // Cleared means absent, not `undefined`: the index entry must lose the field.
+    expect('handedOffTo' in cleared).toBe(false)
+  })
+
+  it('leaves other projects alone and ignores an unknown id', () => {
+    const a = useProjects.getState().addProject('a', '/a')
+    const b = useProjects.getState().addProject('b', '/b')
+    useProjects.getState().setHandedOffTo(a.id, { at: 1 })
+    useProjects.getState().setHandedOffTo('nope', { at: 2 })
+    expect(useProjects.getState().getProject(b.id)?.handedOffTo).toBeUndefined()
+    expect(useProjects.getState().projects).toHaveLength(2)
+  })
+})

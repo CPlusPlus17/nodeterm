@@ -11771,6 +11771,75 @@ button.pull-checks__name {
   color: var(--muted);
   font-size: 12px;
 }
+/* "Share with team" (ShareTeamDialog): the `.confirm` shell, wider for the lists, with the body as
+   the scrolling region so Share / Close stay on screen however long the lists are. */
+.confirm.share-team {
+  width: 480px;
+}
+.share-team__title {
+  flex: 0 0 auto;
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.share-team__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin-bottom: 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.share-team__body p {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+.share-team__heading {
+  color: var(--muted);
+}
+.share-team__list {
+  margin: -4px 0 10px;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+/* The security sentence: always visible, the status-chip recipe like the live link warning. */
+.share-team__warning {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--state-warning) 12%, transparent);
+}
+.share-team__error {
+  color: var(--danger);
+}
+.share-team__code {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.share-team__code .confirm__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+/* The installer's output: a sunken well, the tail only (the component keeps the last 4000 chars). */
+.share-team__log {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-sunken);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
 /* The session name in the card modal header: sized to its text, not a flex-filling detail line. */
 .kanban-modal__session {
   flex: 0 1 auto;

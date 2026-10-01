@@ -377,6 +377,9 @@ import {
 import { planSessionKill } from '../lib/sessionKill'
 import { sessionPauseOffer, type SessionPauseOffer } from '../lib/sessionPause'
 import { RemoteAccessDialog } from '../components/RemoteAccessDialog'
+import { ShareTeamDialog } from '../components/ShareTeamDialog'
+import { runShare, type ShareConfirmSummary, type ShareOutcome, type SharePhase } from '../lib/shareSshTeam'
+import { followSharedProject, shareProjectDeps, shareTerminals } from '../lib/shareTeamCanvas'
 import { SshProjectDialog } from '../components/SshProjectDialog'
 import { SshPassphrasePrompt } from '../components/SshPassphrasePrompt'
 import { transport } from '../terminal/local-transport'
@@ -492,6 +495,7 @@ import {
   vanillaEnvStripPattern,
   AGENT_CONFIG,
   BUILTIN_AGENT_IDS,
+  resolvePermissionMode,
   type AgentId,
   type AgentPermissionMode
 } from '@shared/agents/config'
@@ -1583,6 +1587,8 @@ export function Canvas() {
   const [remoteDialogOpen, setRemoteDialogOpen] = useState(false)
   // "Connect over SSH…" project-creation dialog (from the Welcome screen).
   const [sshDialogOpen, setSshDialogOpen] = useState(false)
+  // The SSH project "Share with team" is running for (its dialog is open while set).
+  const [shareProjectId, setShareProjectId] = useState<string | null>(null)
   // "Clone repository…" dialog (from the Welcome screen + command palette).
   const [cloneDialogOpen, setCloneDialogOpen] = useState(false)
   // Live SSH ControlMaster status per project id (drives the thin connection banner).
@@ -5376,9 +5382,10 @@ export function Canvas() {
 
   // The share flow's join: a team this desktop just set up over ssh, whose bookmark it seeded
   // pre-approved. Through the team's one attempt owner (retrying while the relay comes up, with no
-  // SAS), landing on the project that was shared.
-  const joinApprovedTeam = useCallback((code: string, focusProjectId?: string) => {
-    hostedJoinerRef.current?.joinApproved(code, focusProjectId ? { focusProjectId } : undefined)
+  // SAS), landing on the project that was shared. `busy` = this desktop is already connected to that
+  // team (nothing mounts; the caller lands on the project itself); null = no joiner yet.
+  const joinApprovedTeam = useCallback((code: string, focusProjectId?: string): 'started' | 'busy' | null => {
+    return hostedJoinerRef.current?.joinApproved(code, focusProjectId ? { focusProjectId } : undefined) ?? null
   }, [])
 
   // Connect to a host from an already-collected pairing offer: open the relay socket, then run the
@@ -16713,7 +16720,9 @@ export function Canvas() {
 
   // Reopen a previously closed project and make it active — the active-project effect reloads its
   // serialized nodes, whose TerminalNodes reattach to the surviving tmux sessions (or cold-restore).
-  const reopenProject = useCallback(
+  // The unchecked form asks nothing first: it is also "Share with team"'s own undo, which must put
+  // the project back without a question.
+  const reopenProjectUnchecked = useCallback(
     (id: string) => {
       commitActiveToStore()
       useProjects.getState().reopenProject(id)
@@ -16722,6 +16731,7 @@ export function Canvas() {
     },
     [commitActiveToStore, writeDisk]
   )
+  const reopenProject = useCallback((id: string) => reopenProjectUnchecked(id), [reopenProjectUnchecked])
 
   const setProjectFolder = useCallback(
     async (id: string) => {
@@ -16843,6 +16853,86 @@ export function Canvas() {
     [commitActiveToStore, performCloseProject, setCloseTarget]
   )
 
+  // ---- Share with team: an SSH project handed to a hosted team on its own host ----
+  // Every step runs over the project's ControlMaster, so the share waits for the same connection
+  // status the connection banner shows.
+  const shareBlockedReason = useCallback(
+    (id: string): string | null =>
+      sshStatus[id] === 'connected' ? null : 'Connect this project first (its SSH connection is down).',
+    [sshStatus]
+  )
+
+  // A share whose join found the team already live here follows the shared project's tab (see
+  // `followSharedProject`). One follower at a time, stopped on unmount.
+  const shareFollowStopRef = useRef<(() => void) | null>(null)
+  useEffect(() => () => shareFollowStopRef.current?.(), [])
+  const followSharedTab = useCallback(
+    (projectId: string) => {
+      shareFollowStopRef.current?.()
+      shareFollowStopRef.current = followSharedProject({
+        targetId: projectId,
+        read: () => ({ activeId: useProjects.getState().activeProjectId, targetOpen: isOpenTab(projectId) }),
+        subscribe: (listener) => useProjects.subscribe(listener),
+        switchTo: (id) => switchProject(id),
+        setTimer: (fn, ms) => setTimeout(fn, ms),
+        clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>)
+      })
+    },
+    [switchProject]
+  )
+
+  // The dialog's `start`: runs the share for one project. The orchestrator owns the order and every
+  // undo, so nothing here catches a failure or puts the project back.
+  const startShare = useCallback(
+    (projectId: string) =>
+      async (ui: { phase(p: SharePhase): void; confirm(s: ShareConfirmSummary): Promise<boolean> }): Promise<ShareOutcome> => {
+        commitActiveToStore()
+        const project = useProjects.getState().getProject(projectId)
+        if (!project?.ssh || project.remote) return { kind: 'refused', reason: 'This is not an SSH project.' }
+        const steps = shareProjectDeps({
+          commit: commitActiveToStore,
+          save: writeDisk,
+          setHandedOffTo: (value) => useProjects.getState().setHandedOffTo(projectId, value),
+          isClosed: () => useProjects.getState().getProject(projectId)?.closed === true,
+          // Never `closeProject`: it may ask whether to end the sessions, and the handover ends them
+          // itself, once the server holds the project.
+          close: () => performCloseProject(projectId),
+          reopen: () => reopenProjectUnchecked(projectId),
+          join: joinApprovedTeam,
+          followTab: followSharedTab,
+          now: () => Date.now()
+        })
+        return runShare(
+          { api: window.nodeTerminal.shareTeam, confirm: ui.confirm, phase: ui.phase, ...steps },
+          {
+            projectId,
+            projectName: project.name,
+            host: project.ssh.server.host,
+            user: project.ssh.server.user,
+            terminals: shareTerminals(project.nodes, useAgentStatus.getState().byId),
+            permissionMode: resolvePermissionMode(project, useSettings.getState().settings)
+          }
+        )
+      },
+    [commitActiveToStore, writeDisk, performCloseProject, reopenProjectUnchecked, joinApprovedTeam, followSharedTab]
+  )
+
+  // Every entry (tab menu, sidebar menu, ⌘K) opens the dialog through here, so a blocked share is
+  // refused the same way everywhere.
+  const openShareWithTeam = useCallback(
+    (projectId: string) => {
+      const blocked = shareBlockedReason(projectId)
+      if (blocked) {
+        setNotice({ kind: 'error', text: blocked })
+        return
+      }
+      // One share at a time: a second one would unmount the running dialog and leave its run
+      // going with nothing on screen.
+      setShareProjectId((current) => current ?? projectId)
+    },
+    [shareBlockedReason]
+  )
+
   // Right-click on a sidebar project header: mostly the same project actions as the tab caret
   // menu (plus a color swatch the tab caret menu doesn't have), in the shared ContextMenu shell.
   const onProjectContextMenu = useCallback(
@@ -16883,6 +16973,20 @@ export function Canvas() {
             icon: <IconGear />,
             onClick: () => openProjectSettings(projectId)
           },
+          ...(project.ssh && !project.remote
+            ? ((): MenuItem[] => {
+                const blocked = shareBlockedReason(projectId)
+                return [
+                  {
+                    label: 'Share with team…',
+                    icon: <IconRemote />,
+                    disabled: !!blocked,
+                    ...(blocked ? { hint: blocked } : {}),
+                    onClick: () => openShareWithTeam(projectId)
+                  }
+                ]
+              })()
+            : []),
           { type: 'separator' },
           { type: 'colors', onPick: (color) => setProjectColor(projectId, color) },
           { type: 'separator' },
@@ -16902,7 +17006,9 @@ export function Canvas() {
       setProjectFolder,
       setProjectColor,
       closeProject,
-      openProjectSettings
+      openProjectSettings,
+      shareBlockedReason,
+      openShareWithTeam
     ]
   )
 
@@ -17559,6 +17665,23 @@ export function Canvas() {
             ]
           : []
       })(),
+      // Share the active SSH project with a team. The palette has no disabled row, so a blocked
+      // share keeps its reason in `note` and running it says so (`openShareWithTeam`).
+      ...(activeProject?.ssh && !activeProject.remote
+        ? ((): Command[] => {
+            const blocked = shareBlockedReason(activeProject.id)
+            return [
+              {
+                id: 'share-with-team',
+                label: `Share ${activeProject.name} with team`,
+                hint: 'hosted team invite ssh server share',
+                icon: <IconRemote />,
+                ...(blocked ? { note: blocked } : {}),
+                run: () => openShareWithTeam(activeProject.id)
+              }
+            ]
+          })()
+        : []),
       ...hostedBookmarks.map(
         (b): Command => ({
           id: `hosted-forget-${b.hostId}`,
@@ -17740,7 +17863,9 @@ export function Canvas() {
     hostedBookmarks,
     copyHostedInviteCode,
     forgetHostedTeam,
-    confirmStopAllLiveLinks
+    confirmStopAllLiveLinks,
+    shareBlockedReason,
+    openShareWithTeam
   ])
 
   // Build the palette's command list only when its inputs change — the inline `buildCommands()`
@@ -17794,6 +17919,8 @@ export function Canvas() {
         onSetDefaultAccount={setProjectDefaultAccount}
         onSetDefaultPermissionMode={setProjectDefaultPermissionMode}
         onOpenProjectSettings={openProjectSettings}
+        onShareWithTeam={openShareWithTeam}
+        shareBlockedReason={shareBlockedReason}
       />
 
       <div className="top-banners">
@@ -18384,6 +18511,15 @@ export function Canvas() {
       )}
 
       {remoteDialogOpen && <RemoteAccessDialog onClose={() => setRemoteDialogOpen(false)} />}
+
+      {shareProjectId && (
+        <ShareTeamDialog
+          projectId={shareProjectId}
+          projectName={useProjects.getState().getProject(shareProjectId)?.name ?? 'project'}
+          start={startShare(shareProjectId)}
+          onClose={() => setShareProjectId(null)}
+        />
+      )}
 
       {sshDialogOpen && (
         <SshProjectDialog
