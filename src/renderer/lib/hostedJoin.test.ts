@@ -721,6 +721,28 @@ describe('hosted joiner', () => {
     expect(h.mounts[1].req).toMatchObject({ hostId: 'H1', code: codeFor('H1'), reconnectProjectId: 'C' })
   })
 
+  it('a share event that replaces the placeholder (added, then removed onto it) keeps the team live in the new tab', async () => {
+    const h = harness([{ hostId: 'H1', label: 'box', approved: true, code: codeFor('H1') }])
+    const j = createHostedJoiner(h.deps)
+    await j.bootReconnect()
+    await goLive(h, 0, 'ph-1') // the team shared nothing: its placeholder is the tab
+    h.open.add('C')
+    j.tabsAdded('H1', ['C'])
+    j.tabRemoved('ph-1', 'C')
+    h.open.delete('ph-1')
+    expect(j.isHostedTab('C')).toBe(true)
+    expect(j.isHostedTab('ph-1')).toBe(false)
+    j.joinWithCode(codeFor('H1'))
+    expect(h.notices.at(-1)).toMatchObject({ kind: 'info', text: "You're already connected to box." })
+    expect(h.connects).toHaveLength(1)
+    h.closeCbs.get('c0')!(undefined)
+    await flush()
+    fireRetry(h)
+    h.connects[1].resolve('c1')
+    await flush()
+    expect(h.mounts[1].req).toMatchObject({ hostId: 'H1', reconnectProjectId: 'C' })
+  })
+
   it('joinApproved retries a network failure (unlike a pasted code) and auto-confirms', async () => {
     const h = harness()
     const j = createHostedJoiner(h.deps)

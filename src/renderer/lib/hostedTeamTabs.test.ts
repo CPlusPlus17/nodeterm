@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import type { Project } from '@shared/types'
-import { createTeamTabs, openSuccessor, type TeamTabOps } from './hostedTeamTabs'
+import { createTeamTabs, openSuccessor, reconcileTeamTabs, type TeamTabOps } from './hostedTeamTabs'
 
 /** A host's shared project, as the relay hands it over (`sanitizeRelayProject` marks it remote). */
 const proj = (id: string, name = id): Project => ({
@@ -488,6 +488,59 @@ describe('createTeamTabs', () => {
     // A reconnect that finds a project unshared removes it under the team too.
     tabs.place(team, [], ['C'], { keepActive: true })
     expect(f.ops.removeTab).toHaveBeenCalledWith('C', 'host-1')
+  })
+})
+
+describe('reconcileTeamTabs', () => {
+  it('reports the tabs gone and the tabs new since the joiner was last told', () => {
+    expect(reconcileTeamTabs(['A', 'B'], ['B', 'C'])).toEqual({ removed: ['A'], added: ['C'], known: ['B', 'C'] })
+    expect(reconcileTeamTabs(['ph-1'], ['C'])).toEqual({ removed: ['ph-1'], added: ['C'], known: ['C'] })
+    expect(reconcileTeamTabs(['A'], ['A'])).toEqual({ removed: [], added: [], known: ['A'] })
+  })
+
+  it('with no open team tab, removes nothing and keeps what it knew for the next reconcile', () => {
+    expect(reconcileTeamTabs(['A', 'B'], [])).toEqual({ removed: [], added: [], known: ['A', 'B'] })
+  })
+
+  it('an earlier event reconciled after a later one closed every tab ends nothing; the later one moves the team on', async () => {
+    // The joiner as Canvas drives it: what it was told, in order.
+    const joiner: string[] = []
+    const f = fakeOps([local('mine')], 'mine')
+    const tabs = createTeamTabs(f.ops)
+    const placed = tabs.place(team, [], [], { keepActive: true })
+    for (const id of placed) f.ops.bind(id, 'relay-1')
+    let known = [...placed]
+    const seen: string[][] = []
+    const teamTabIds = () => f.state.projects.filter((p) => !p.closed && tabs.teamOf(p.id) === 'host-1').map((p) => p.id)
+    // Canvas's handler: run the event, then reconcile from the store whether it resolved or not.
+    const follow = (ids: string[], load: () => Promise<Project[]>) =>
+      tabs
+        .sharedChanged(live, ids, load, { keepActive: true })
+        .catch(() => {})
+        .then(() => {
+          const after = teamTabIds()
+          seen.push(after)
+          const r = reconcileTeamTabs(known, after)
+          known = r.known
+          if (r.added.length) joiner.push(`added:${r.added.join(',')}`)
+          for (const id of r.removed) joiner.push(`removed:${id}->${r.known[0]}`)
+        })
+
+    const l1 = deferred<Project[]>()
+    const l2 = deferred<Project[]>()
+    const e1 = follow(['A', 'B'], () => l1.promise)
+    const e2 = follow(['C'], () => l2.promise) // a full replace, queued behind e1
+    l1.resolve([A, B])
+    await e1
+    // e2's close half ran before e1's reconcile: the team had no open tab at that moment…
+    expect(seen).toEqual([[]])
+    // …and the joiner was told nothing (a "tab closed" here would release the live connection).
+    expect(joiner).toEqual([])
+    l2.resolve([C])
+    await e2
+    expect(seen.at(-1)).toEqual(['C'])
+    expect(joiner).toEqual(['added:C', 'removed:ph-1->C'])
+    expect(known).toEqual(['C'])
   })
 })
 

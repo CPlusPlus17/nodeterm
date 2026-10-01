@@ -90,6 +90,25 @@ export function openSuccessor(
   return nearest((p) => sameTeam(p.id)) ?? nearest(() => true) ?? ''
 }
 
+/** What the joiner must follow after a share event settled, read back from the store (the event can
+ *  reject and still have closed tabs, so its own result says too little). `known` is what the joiner
+ *  was last told this connection serves, `after` the team's open tabs now, in store order.
+ *  `removed` = tabs gone since, each to move onto the first of the returned `known`; `added` = tabs
+ *  new since. While the team has no open tab at all, nothing is removed and `known` is kept: another
+ *  event for the team may sit between closing its tabs and opening the new ones, and a removal needs
+ *  a tab to move onto. A share event never ends the team in the joiner; closing its last tab does. */
+export function reconcileTeamTabs(
+  known: readonly string[],
+  after: readonly string[]
+): { removed: string[]; added: string[]; known: string[] } {
+  if (after.length === 0) return { removed: [], added: [], known: [...known] }
+  return {
+    removed: known.filter((id) => !after.includes(id)),
+    added: after.filter((id) => !known.includes(id)),
+    known: [...after]
+  }
+}
+
 /** The host's projects with the planner's id rules applied: first occurrence of each sane id. */
 function cleanProjects(projects: readonly Project[]): Project[] {
   const byId = new Map<string, Project>()

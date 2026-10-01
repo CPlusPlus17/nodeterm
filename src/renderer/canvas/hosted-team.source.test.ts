@@ -85,19 +85,27 @@ describe('hosted team glue in Canvas', () => {
     const settled = handler.indexOf('.catch(() => {})')
     expect(settled).toBeGreaterThan(-1)
     expect(handler.indexOf('.then(() => {', settled)).toBeGreaterThan(settled)
-    expect(handler).toContain('const before = teamTabIds()')
-    expect(handler).toContain('joiner.tabsAdded(hostId, opened)')
-    expect(handler).toContain('joiner.tabRemoved(id, after[0])')
+    // The joiner follows a per-connection set (lib/hostedTeamTabs.test.ts `reconcileTeamTabs`), seeded
+    // with the mount's tabs, never a per-event snapshot, and a share event never ends the team.
+    expect(body.indexOf('let known = [...tab.projectIds]')).toBeGreaterThan(capture)
+    expect(body.indexOf('let known = [...tab.projectIds]')).toBeLessThan(listen)
+    expect(handler).toContain('const r = reconcileTeamTabs(known, teamTabIds())')
+    expect(handler).toContain('known = r.known')
+    expect(handler).toContain('joiner.tabsAdded(hostId, r.added)')
+    expect(handler).toContain('for (const id of r.removed) joiner.tabRemoved(id, r.known[0])')
+    expect(handler.slice(0, handler.indexOf('holdSessionTeardown('))).not.toContain('tabClosed(')
+    expect(handler).not.toContain('const before =')
     // The subscription dies with the session.
     expect(handler).toContain('holdSessionTeardown(tab.sessionId, off)')
   })
 
-  it('a hosted tab leaves this desktop through the STORE delete, and never onto a closed project', () => {
+  it('the team tab model runs on the store ops module (placeholder and removal: lib/hostedTeamTabStore.test.ts)', () => {
     const body = between('const [teamTabs] = useState<TeamTabs>(() => {', '    return tabs\n  })')
-    expect(body).toContain('const next = store.deleteProject(id)')
-    expect(body).toContain('if (!wasActive || isOpenTab(next)) return')
-    expect(body).toContain('openSuccessor(useProjects.getState().projects, index, (other) => tabs.teamOf(other) === hostId)')
-    expect(body).not.toContain('transport.destroy')
+    expect(body).toContain('createTeamTabs(teamTabStoreOps((id) => tabs.teamOf(id)))')
+    expect(src).not.toContain('function isOpenTab(')
+    const store = readFileSync(new URL('../lib/hostedTeamTabStore.ts', import.meta.url), 'utf8')
+    expect(store).toContain('const next = store.deleteProject(id)')
+    expect(store).not.toContain('transport.destroy')
   })
 
   it('the joiner\'s mount names the team and where to land; the share flow joins through the joiner', () => {
@@ -148,6 +156,9 @@ describe('hosted team glue in Canvas', () => {
     expect(multi).toBeGreaterThan(-1)
     expect(multi).toBeLessThan(body.indexOf('hostedJoinerRef.current?.tabClosed(projectId)'))
     expect(body).toContain('hostedJoinerRef.current?.tabRemoved(projectId, remaining[0])')
+    // A connection that still serves other tabs keeps its entry, even for a tab it once served.
+    expect(body).toContain('const othersBound = projectIdsBoundToSession(tab.sessionId).some((id) => id !== projectId)')
+    expect(body).toContain('if (ours && !othersBound) relayTabsRef.current.delete(connectionId)')
     expect(body.indexOf('return', multi)).toBeLessThan(body.indexOf('disposeSession(s.id)'))
     expect(src).toContain('disposeRelayTabForProject(id)\n      store.closeProject(id)')
     expect(src).toContain('disposeRelayTabForProject(id)\n      store.deleteProject(id)')

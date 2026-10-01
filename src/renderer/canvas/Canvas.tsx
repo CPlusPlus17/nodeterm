@@ -565,8 +565,6 @@ import {
   disposeSession,
   holdSessionTeardown,
   projectIdsBoundToSession,
-  unbindProject,
-  bindProjectToSession,
 } from '../session/session'
 import {
   openRelayTab,
@@ -578,7 +576,8 @@ import { HostedApprovalDialog } from '../components/HostedApprovalDialog'
 import { emitLocalRelayClose, onLocalRelayClose } from '../bridge/relay-local-close'
 import { isJoinCode } from '@shared/relay-join-code'
 import { createHostedJoiner, type HostedJoiner, type HostedMountOutcome } from '../lib/hostedJoin'
-import { createTeamTabs, openSuccessor, type TeamTabs } from '../lib/hostedTeamTabs'
+import { createTeamTabs, reconcileTeamTabs, type TeamTabs } from '../lib/hostedTeamTabs'
+import { isOpenTab, teamTabStoreOps } from '../lib/hostedTeamTabStore'
 import { HOSTED_APPROVAL_WAIT_MS, isReadOnlyRole, stripIpcPrefix, viewerBannerText } from '../lib/hostedTeam'
 import { answerHostedRequest, type HostedAnswer } from '../lib/hostedOwner'
 import { headRequest, type QueuedRequest } from '../lib/hostedPendingQueue'
@@ -908,12 +907,6 @@ interface HostedMountOpts {
   hostId: string
   /** The tab to land on when the mount takes the screen, when it is among the placed ones. */
   focusProjectId?: string
-}
-
-/** Is this project an open tab (not closed, not deleted)? What a hosted reconnect is for (R40). */
-function isOpenTab(projectId: string): boolean {
-  const p = useProjects.getState().getProject(projectId)
-  return !!p && !p.closed
 }
 
 /** What the agent-control handler's `reply` accepts, for helpers that build one outside it. */
@@ -1546,33 +1539,11 @@ export function Canvas() {
   // The hosted-team joiner (created below, with the relay mount it drives): here so the tab disposal
   // can stop a closed tab's reconnect.
   const hostedJoinerRef = useRef<HostedJoiner | null>(null)
-  // One tab per shared project of a hosted team (lib/hostedTeamTabs.ts); store ops only — the relay
-  // binding and the joiner bookkeeping stay here. Built once (the model holds every team's tab set,
-  // and Canvas renders far too often to rebuild it each time).
+  // One tab per shared project of a hosted team (lib/hostedTeamTabs.ts), over the store ops in
+  // lib/hostedTeamTabStore.ts; the relay binding and the joiner bookkeeping stay here. Built once
+  // (the model holds every team's tab set, and Canvas renders far too often to rebuild it each time).
   const [teamTabs] = useState<TeamTabs>(() => {
-    const tabs: TeamTabs = createTeamTabs({
-      getProject: (id) => useProjects.getState().getProject(id),
-      isOpenTab,
-      adoptProject: (p) => useProjects.getState().adoptProject(p),
-      addPlaceholder: (label) => useProjects.getState().addProject(label),
-      // The STORE delete, never Canvas's `deleteProject` (which ends the host's sessions through
-      // the relay transport): a hosted tab leaves this desktop only. The store hands the active
-      // slot to whichever project slides into it, closed or not; the user lands on an open tab
-      // instead, another of the same team's when it has one.
-      removeTab: (id, hostId) => {
-        const store = useProjects.getState()
-        const index = store.projects.findIndex((p) => p.id === id)
-        if (index < 0) return
-        const wasActive = store.activeProjectId === id
-        const next = store.deleteProject(id)
-        if (!wasActive || isOpenTab(next)) return
-        store.setActive(openSuccessor(useProjects.getState().projects, index, (other) => tabs.teamOf(other) === hostId))
-      },
-      activeProjectId: () => useProjects.getState().activeProjectId ?? null,
-      setActive: (id) => useProjects.getState().setActive(id),
-      bind: (projectId, sessionId) => bindProjectToSession(projectId, sessionId),
-      unbind: (projectId) => unbindProject(projectId)
-    })
+    const tabs: TeamTabs = createTeamTabs(teamTabStoreOps((id) => tabs.teamOf(id)))
     return tabs
   })
   // A relay tab is a live client of a remote core — closing/deleting its project must tear the
@@ -1598,10 +1569,11 @@ export function Canvas() {
     hostedJoinerRef.current?.tabClosed(projectId)
     const s = sessionForProject(projectId)
     for (const [connectionId, tab] of relayTabsRef.current) {
-      // By session too: a team's last tab may be one a share event opened after the mount.
-      if (tab.projectIds.includes(projectId) || (s.source === 'relay' && tab.sessionId === s.id)) {
-        relayTabsRef.current.delete(connectionId)
-      }
+      // By session too: a team's last tab may be one a share event opened after the mount. Never
+      // while the connection still serves other tabs (one closed earlier lingers in `projectIds`).
+      const ours = tab.projectIds.includes(projectId) || (s.source === 'relay' && tab.sessionId === s.id)
+      const othersBound = projectIdsBoundToSession(tab.sessionId).some((id) => id !== projectId)
+      if (ours && !othersBound) relayTabsRef.current.delete(connectionId)
     }
     if (s.source === 'relay') {
       disposeSession(s.id)
@@ -5255,12 +5227,16 @@ export function Canvas() {
                 .getState()
                 .projects.filter((x) => !x.closed && teamTabs.teamOf(x.id) === hostId)
                 .map((x) => x.id)
+            // The tabs the joiner was last told this connection serves. Events overlap (each commits
+            // its close half before awaiting its load), so an earlier event can settle after a later
+            // one closed tabs: each reconcile diffs the store against this set, never against a
+            // snapshot from when its own event began.
+            let known = [...tab.projectIds]
             const off = api.hosted.onSharedChanged((p) => {
               const ids = Array.isArray(p?.projectIds) ? p.projectIds : []
               // What the event changed is read back from the store once it settles. It can reject
               // (the load failed, the session went away mid-load) and still have closed tabs, so
               // its resolved value alone does not say what the joiner must follow.
-              const before = teamTabIds()
               void teamTabs
                 .sharedChanged(
                   { hostId, label, sessionId: tab.sessionId },
@@ -5270,18 +5246,14 @@ export function Canvas() {
                 )
                 .catch(() => {}) // never the user's error: the tabs that stand are in the store
                 .then(() => {
+                  const r = reconcileTeamTabs(known, teamTabIds())
+                  known = r.known
                   const joiner = hostedJoinerRef.current
                   if (!joiner) return
-                  const after = teamTabIds()
-                  const opened = after.filter((id) => !before.includes(id))
-                  if (opened.length) joiner.tabsAdded(hostId, opened)
-                  for (const id of before) {
-                    if (after.includes(id)) continue
-                    // The team lives on in its other tabs. With none left its session is gone (the
-                    // model always keeps a placeholder otherwise), and so is the attempt.
-                    if (after.length) joiner.tabRemoved(id, after[0])
-                    else joiner.tabClosed(id)
-                  }
+                  if (r.added.length) joiner.tabsAdded(hostId, r.added)
+                  // Never tabClosed: a share event does not end the team. Closing its last tab does
+                  // (disposeRelayTabForProject).
+                  for (const id of r.removed) joiner.tabRemoved(id, r.known[0])
                 })
             })
             try {
