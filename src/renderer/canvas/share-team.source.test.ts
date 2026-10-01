@@ -28,7 +28,10 @@ describe('Share with team glue in Canvas', () => {
 
   it('reopens through the unchecked reopen (the share undoes its own close without a question)', () => {
     expect(body).toContain('reopen: () => reopenProjectUnchecked(projectId)')
-    expect(between('const reopenProject = useCallback(', '\n')).toContain('reopenProjectUnchecked(id)')
+    // The human reopen asks first for a handed-off project, then goes through the same unchecked one.
+    const human = between('const reopenProject = useCallback(', '\n  )\n')
+    expect(human).toContain('confirmHandedOffReopen(id)')
+    expect(human).toContain('reopenProjectUnchecked(id)')
   })
 
   it('never undoes anything itself: the orchestrator owns every undo', () => {

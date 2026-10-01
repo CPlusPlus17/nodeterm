@@ -476,6 +476,19 @@ function ownWrite(get: () => ProjectsState, projectId: string, write: () => void
   hook(projectId, () => diffToMutations(sceneOf(before), sceneOf(after)))
 }
 
+/** One server folder is one project: the same endpoint (host, user, and port — 22 when unset) and
+ *  the same remoteCwd. The server entry's own id and label do not count, so a re-added server entry
+ *  still finds its folder's project. `openSshProject` dedupes by this, and so does anything that
+ *  must know in advance which project that call will reopen. */
+export function sameSshEndpoint(a: NonNullable<Project['ssh']>, b: NonNullable<Project['ssh']>): boolean {
+  return (
+    a.remoteCwd === b.remoteCwd &&
+    a.server.host === b.server.host &&
+    a.server.user === b.server.user &&
+    (a.server.port ?? 22) === (b.server.port ?? 22)
+  )
+}
+
 export const useProjects = create<ProjectsState>((set, get) => ({
   projects: [],
   activeProjectId: '',
@@ -522,14 +535,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
   },
 
   openSshProject(label, ssh) {
-    const existing = get().projects.find(
-      (p) =>
-        p.ssh &&
-        p.ssh.remoteCwd === ssh.remoteCwd &&
-        p.ssh.server.host === ssh.server.host &&
-        p.ssh.server.user === ssh.server.user &&
-        (p.ssh.server.port ?? 22) === (ssh.server.port ?? 22)
-    )
+    const existing = get().projects.find((p) => !!p.ssh && sameSshEndpoint(p.ssh, ssh))
     if (existing) {
       get().reopenProject(existing.id)
       return existing

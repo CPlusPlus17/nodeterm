@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useProjects } from './projects'
+import { sameSshEndpoint, useProjects } from './projects'
 import { PROJECT_NAME_MAX } from '@shared/project-name'
 
 beforeEach(() => {
@@ -219,6 +219,26 @@ describe('openSshProject', () => {
     const alt = { id: 's3', label: 'alt', host: 'h', user: 'root', port: 2222 } as never
     const other = useProjects.getState().openSshProject('app · alt', { server: alt, remoteCwd: '~/app' })
     expect(other.id).not.toBe(first.id)
+  })
+})
+
+// The one "same server folder" rule: openSshProject's dedupe and Canvas's handed-off check before
+// it must agree, or the check would look at one project and the store would reopen another.
+describe('sameSshEndpoint', () => {
+  const at = (server: object, remoteCwd = '~/app') => ({ server, remoteCwd }) as never
+  const base = { id: 's1', label: 'niova', host: 'h', user: 'root' }
+
+  it('ignores the server entry id and label', () => {
+    expect(sameSshEndpoint(at(base), at({ ...base, id: 's2', label: 'renamed' }))).toBe(true)
+  })
+  it('an unset port is port 22', () => {
+    expect(sameSshEndpoint(at(base), at({ ...base, port: 22 }))).toBe(true)
+    expect(sameSshEndpoint(at(base), at({ ...base, port: 2222 }))).toBe(false)
+  })
+  it('host, user and remoteCwd must all match', () => {
+    expect(sameSshEndpoint(at(base), at({ ...base, host: 'other' }))).toBe(false)
+    expect(sameSshEndpoint(at(base), at({ ...base, user: 'alice' }))).toBe(false)
+    expect(sameSshEndpoint(at(base), at(base, '~/web'))).toBe(false)
   })
 })
 

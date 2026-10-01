@@ -380,6 +380,7 @@ import { RemoteAccessDialog } from '../components/RemoteAccessDialog'
 import { ShareTeamDialog } from '../components/ShareTeamDialog'
 import { runShare, type ShareConfirmSummary, type ShareOutcome, type SharePhase } from '../lib/shareSshTeam'
 import { followSharedProject, shareProjectDeps, shareTerminals } from '../lib/shareTeamCanvas'
+import { handedOffWarning } from '../lib/handedOff'
 import { SshProjectDialog } from '../components/SshProjectDialog'
 import { SshPassphrasePrompt } from '../components/SshPassphrasePrompt'
 import { transport } from '../terminal/local-transport'
@@ -433,7 +434,7 @@ import {
   shouldShowExplorerPinHint,
   writeSeenExplorerPinHint
 } from '../lib/explorerPinHint'
-import { setKanbanPublishHook, setStoredCanvasPublishHook, useProjects } from '../state/projects'
+import { sameSshEndpoint, setKanbanPublishHook, setStoredCanvasPublishHook, useProjects } from '../state/projects'
 import { useAgentStatus, recordsTurnInterrupt } from '../state/agentStatus'
 import { hostChatSend, hostChatSession, hostChatStatus } from '../lib/hostChatQuery'
 import { chatPaneRefusal } from '../lib/chatPaneGate'
@@ -9187,6 +9188,89 @@ export function Canvas() {
     [commitActiveToStore, writeDisk]
   )
 
+  // Reopen a previously closed project and make it active — the active-project effect reloads its
+  // serialized nodes, whose TerminalNodes reattach to the surviving tmux sessions (or cold-restore).
+  // The unchecked form asks nothing first: it is also "Share with team"'s own undo, which must put
+  // the project back without a question. Declared here, beside switchProject and for the same TDZ
+  // reason: the ⇧⌘T plan executor just below reopens through the guarded form.
+  const reopenProjectUnchecked = useCallback(
+    (id: string) => {
+      commitActiveToStore()
+      useProjects.getState().reopenProject(id)
+      setWelcomeOpen(false)
+      void writeDisk()
+    },
+    [commitActiveToStore, writeDisk]
+  )
+
+  /** Ask before opening a project this desktop handed to a hosted team: the server's core writes
+   *  that canvas now, and opening it here too makes a second writer that overwrites it. True = go
+   *  ahead, and going ahead takes the project back — the mark is cleared, so this desktop saves and
+   *  mirrors it again (the caller saves). A project that was never handed off answers true. */
+  const confirmHandedOffReopen = useCallback(
+    async (id: string): Promise<boolean> => {
+      const marked = useProjects.getState().getProject(id)?.handedOffTo
+      if (!marked) return true
+      const hostId = marked.hostId
+      // The team's name from this device's bookmark of it. Only a label, so every failure (no
+      // relay on this surface, an IPC error, no bookmark for that team) falls back to null.
+      let label: string | null = null
+      if (hostId) {
+        try {
+          const list = await window.nodeTerminal.relayHosted?.bookmarks()
+          label = (Array.isArray(list) ? list : []).find((b) => b.hostId === hostId)?.label ?? null
+        } catch {
+          label = null
+        }
+      }
+      // Read again after the lookup: the project may have been deleted or taken back meanwhile.
+      const project = useProjects.getState().getProject(id)
+      if (!project) return false
+      const message = handedOffWarning(project, label)
+      if (!message) return true
+      // One actionable dialog at a time (`confirmFlags`): replacing an open one would drop its
+      // answer. Say why nothing opened rather than doing nothing.
+      if (confirmBusy()) {
+        setNotice({ kind: 'error', text: `Answer the open dialog first, then open ${project.name} again.` })
+        return false
+      }
+      const ok = await new Promise<boolean>((resolve) =>
+        setConfirm({
+          message,
+          confirmLabel: 'Open here anyway',
+          danger: true,
+          onConfirm: () => {
+            setConfirm(null)
+            resolve(true)
+          },
+          // The dialog's cancel path closes it after this runs.
+          onCancel: () => resolve(false)
+        })
+      )
+      if (ok) useProjects.getState().setHandedOffTo(id, undefined)
+      return ok
+    },
+    [confirmBusy, setConfirm]
+  )
+
+  /** The reopen every human path uses (Welcome's and the sidebar's "Recently closed", ⇧⌘T, ⌘K,
+   *  travel, "Open recent", Set folder…). A handed-off project asks first; any other reopens at
+   *  once, synchronously, exactly as before the question existed. Resolves false when the user
+   *  declined, so a caller that staged follow-up work (a focus, a resume) can drop it. */
+  const reopenProject = useCallback(
+    (id: string): Promise<boolean> => {
+      if (!useProjects.getState().getProject(id)?.handedOffTo) {
+        reopenProjectUnchecked(id)
+        return Promise.resolve(true)
+      }
+      return confirmHandedOffReopen(id).then((ok) => {
+        if (ok) reopenProjectUnchecked(id)
+        return ok
+      })
+    },
+    [confirmHandedOffReopen, reopenProjectUnchecked]
+  )
+
   /** Executes a `ReopenPlan` already decided by `planReopen` — the side-effecting half shared by
    *  `Cmd+Shift+T` (`reopenLastClosedCommand`) and reopening a persisted closed-session entry
    *  from the sidebar (`reopenClosedSessionCommand`). Returns whether it did anything ('skip'
@@ -9195,13 +9279,10 @@ export function Canvas() {
     (plan: Exclude<ReopenPlan, { action: 'skip' }>): boolean => {
       switch (plan.action) {
         case 'reopenProject':
-          // A project switch — commit the live canvas back to the store first, or whatever the
-          // user was looking at is silently lost (the same invariant every other project switch/
-          // add/delete in this file honors via commitActiveToStore()).
-          commitActiveToStore()
-          useProjects.getState().reopenProject(plan.projectId)
-          setWelcomeOpen(false)
-          void writeDisk()
+          // The guarded reopen: it commits the live canvas back to the store first (or whatever
+          // the user was looking at is silently lost) and, for a project handed to a hosted team,
+          // asks before this desktop writes it again. Any other project reopens synchronously.
+          void reopenProject(plan.projectId)
           return true
         case 'insertActive':
           setNodes((ns) => [...ns, ...plan.nodes])
@@ -9222,18 +9303,14 @@ export function Canvas() {
               })
           }
           void writeDisk()
-          if (plan.reopenProjectAfter) {
-            commitActiveToStore()
-            useProjects.getState().reopenProject(plan.projectId)
-            setWelcomeOpen(false)
-            void writeDisk()
-          } else {
-            switchProject(plan.projectId)
-          }
+          // A closed project goes through the guarded reopen, which asks first when it was handed
+          // to a hosted team. Declining leaves it closed; the restored nodes stay in its store copy.
+          if (plan.reopenProjectAfter) void reopenProject(plan.projectId)
+          else switchProject(plan.projectId)
           return true
       }
     },
-    [switchProject, setNodes, markDirty, writeDisk, commitActiveToStore]
+    [switchProject, reopenProject, setNodes, markDirty, writeDisk]
   )
 
   /** `app.reopenLastClosed` (Cmd+Shift+T): pops the shared close-history stack and reopens a
@@ -10984,10 +11061,19 @@ export function Canvas() {
         .projects.find((p) => p.nodes.some((n) => n.id === nodeId))
       if (owner && owner.id !== useProjects.getState().activeProjectId) {
         pendingFocusRef.current = nodeId
-        switchProject(owner.id)
+        if (owner.closed) {
+          // A closed project is REOPENED (its tab restored), never activated behind a hidden tab,
+          // and through the guarded reopen: a project handed to a hosted team asks first, and a
+          // decline drops the staged focus.
+          void reopenProject(owner.id).then((ok) => {
+            if (!ok && pendingFocusRef.current === nodeId) pendingFocusRef.current = null
+          })
+        } else {
+          switchProject(owner.id)
+        }
       }
     },
-    [setNodes, goToNode, switchProject]
+    [setNodes, goToNode, switchProject, reopenProject]
   )
   focusNodeRef.current = focusNodeById
 
@@ -16596,18 +16682,25 @@ export function Canvas() {
   // project for that server folder (its master is opened by the active-project effect on switch),
   // persist. openSshProject dedupes by endpoint+remoteCwd — re-adding a folder must reuse its
   // existing project, never mint a fresh empty one that would clobber the server's project.json.
+  // That reuse is a reopen, so a folder whose project was handed to a hosted team asks first
+  // (sameSshEndpoint is the store's own matcher, so this asks about the project it will reopen).
   const createSshProject = useCallback(
     (input: { server: SshServer; remoteCwd: string; label: string }) => {
-      commitActiveToStore()
-      useProjects
-        .getState()
-        .openSshProject(input.label, { server: input.server, remoteCwd: input.remoteCwd })
-      // Same contract as onRepoCloned: the welcome screen waits behind the SSH dialog and
-      // dismisses only once the project is created (cancel returns to the welcome screen).
-      setWelcomeOpen(false)
-      void writeDisk()
+      const ssh = { server: input.server, remoteCwd: input.remoteCwd }
+      void (async () => {
+        const existing = useProjects
+          .getState()
+          .projects.find((p) => !!p.ssh && sameSshEndpoint(p.ssh, ssh))
+        if (existing?.handedOffTo && !(await confirmHandedOffReopen(existing.id))) return
+        commitActiveToStore()
+        useProjects.getState().openSshProject(input.label, ssh)
+        // Same contract as onRepoCloned: the welcome screen waits behind the SSH dialog and
+        // dismisses only once the project is created (cancel returns to the welcome screen).
+        setWelcomeOpen(false)
+        void writeDisk()
+      })()
     },
-    [commitActiveToStore, writeDisk]
+    [commitActiveToStore, writeDisk, confirmHandedOffReopen]
   )
 
   const addProject = useCallback(() => {
@@ -16630,6 +16723,9 @@ export function Canvas() {
       // folder to another machine's tab (openFolderProject applies the same rule).
       const existing = useProjects.getState().projects.find((p) => p.cwd === folder && !p.remote)
       if (existing) {
+        // That reuse reopens the project, so one handed to a hosted team (an SSH project can carry
+        // a local folder too, via "Set folder…") asks first, like every other reopen.
+        if (existing.handedOffTo && !(await confirmHandedOffReopen(existing.id))) return
         useProjects.getState().openFolderProject(folder)
         // An `unavailable` placeholder never recovers on its own: a save emits a header-only ref
         // for it (never a file), so a deleted project.json stays deleted and every later load
@@ -16654,7 +16750,7 @@ export function Canvas() {
       }
       void writeDisk()
     },
-    [commitActiveToStore, writeDisk]
+    [commitActiveToStore, writeDisk, confirmHandedOffReopen]
   )
 
   /** Returns true when a folder was picked (false on cancel), so callers like the welcome
@@ -16718,21 +16814,6 @@ export function Canvas() {
     [persist]
   )
 
-  // Reopen a previously closed project and make it active — the active-project effect reloads its
-  // serialized nodes, whose TerminalNodes reattach to the surviving tmux sessions (or cold-restore).
-  // The unchecked form asks nothing first: it is also "Share with team"'s own undo, which must put
-  // the project back without a question.
-  const reopenProjectUnchecked = useCallback(
-    (id: string) => {
-      commitActiveToStore()
-      useProjects.getState().reopenProject(id)
-      setWelcomeOpen(false)
-      void writeDisk()
-    },
-    [commitActiveToStore, writeDisk]
-  )
-  const reopenProject = useCallback((id: string) => reopenProjectUnchecked(id), [reopenProjectUnchecked])
-
   const setProjectFolder = useCallback(
     async (id: string) => {
       const folder = await window.nodeTerminal.dialog.selectFolder()
@@ -16750,7 +16831,7 @@ export function Canvas() {
         return
       }
       if (plan.kind === 'switch') {
-        if (plan.reopen) reopenProject(plan.projectId)
+        if (plan.reopen) void reopenProject(plan.projectId)
         else switchProject(plan.projectId)
         return
       }
@@ -17021,7 +17102,7 @@ export function Canvas() {
     (projectId: string) => {
       const { projects, activeProjectId: active } = useProjects.getState()
       const travel = projectTravel(projects, active, projectId)
-      if (travel.kind === 'reopen') reopenProject(travel.projectId)
+      if (travel.kind === 'reopen') void reopenProject(travel.projectId)
       else if (travel.kind === 'switch') switchProject(travel.projectId)
     },
     [reopenProject, switchProject]
@@ -17042,7 +17123,11 @@ export function Canvas() {
       if (travel.kind === 'blocked') return
       if (travel.kind === 'reopen') {
         pendingFocusRef.current = nodeId
-        reopenProject(travel.projectId)
+        // Declined (a project handed to a hosted team stays closed): drop the staged focus so a
+        // later reopen of that project does not jump to a node nobody asked for this time.
+        void reopenProject(travel.projectId).then((ok) => {
+          if (!ok && pendingFocusRef.current === nodeId) pendingFocusRef.current = null
+        })
         return
       }
       focusNodeById(nodeId)
@@ -17173,8 +17258,13 @@ export function Canvas() {
           return
         case 'resume':
           resumeWhenLanded(plan.projectId, conv)
-          if (plan.reopen) reopenProject(plan.projectId)
-          else switchProject(plan.projectId)
+          if (plan.reopen) {
+            // Declined (a project handed to a hosted team stays closed): drop the staged resume, or
+            // a later "Open here anyway" from anywhere would start this conversation unasked.
+            void reopenProject(plan.projectId).then((ok) => {
+              if (!ok && pendingResumeRef.current?.conv === conv) pendingResumeRef.current = null
+            })
+          } else switchProject(plan.projectId)
           return
         case 'open-folder':
           void openOrAdoptFolder(plan.folder)
@@ -17777,7 +17867,9 @@ export function Canvas() {
           label: `Switch to ${p.name}`,
           hint: 'project',
           icon: <IconSwitch />,
-          run: () => switchProject(p.id)
+          // A closed project is REOPENED (tab restored), never activated behind a hidden tab — and
+          // the reopen is the guarded one, which asks first for a project handed to a hosted team.
+          run: () => (p.closed ? void reopenProject(p.id) : switchProject(p.id))
         })
       )
     const cs = useAgentStatus.getState()
@@ -17848,6 +17940,7 @@ export function Canvas() {
     fitView,
     persist,
     switchProject,
+    reopenProject,
     goToNode,
     bufferCache,
     connectRemote,

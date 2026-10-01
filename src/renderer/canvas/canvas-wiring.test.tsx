@@ -365,13 +365,23 @@ describe('reopen-last-closed records and dispatches through the shared history s
   it('commits the live canvas to the store before every reopenProject call — never a bare switch', () => {
     // The bug this pins: useProjects.getState().reopenProject(...) is a project SWITCH, and every
     // switch/add/delete elsewhere in this file calls commitActiveToStore() first so the live
-    // canvas isn't silently lost. Both reopen-a-project call sites inside reopenLastClosedCommand
-    // must do the same, rather than referencing the later `reopenProject` wrapper (a TDZ hazard
-    // from this callback's declaration point).
+    // canvas isn't silently lost. Every store reopen lives in `reopenProjectUnchecked`, which
+    // commits first; the two reopen-a-project sites of the ⇧⌘T executor reach it through the
+    // guarded `reopenProject` (it asks first for a project handed to a hosted team).
     const calls = CANVAS_SRC.match(/useProjects\.getState\(\)\.reopenProject\(/g) ?? []
     const guarded = CANVAS_SRC.match(/commitActiveToStore\(\)\n\s+useProjects\.getState\(\)\.reopenProject\(/g) ?? []
-    expect(calls.length).toBeGreaterThanOrEqual(2)
+    expect(calls.length).toBeGreaterThanOrEqual(1)
     expect(guarded.length).toBe(calls.length)
+    const exec = CANVAS_SRC.indexOf('const executeReopenPlan = useCallback(')
+    const execBody = CANVAS_SRC.slice(exec, CANVAS_SRC.indexOf('\n  )\n', exec))
+    expect(execBody.match(/void reopenProject\(plan\.projectId\)/g) ?? []).toHaveLength(2)
+    // Both are declared ABOVE the executor: a useCallback dependency named before its declaration
+    // throws (TDZ) on the first render.
+    for (const decl of ['const reopenProjectUnchecked = useCallback(', 'const reopenProject = useCallback(']) {
+      const at = CANVAS_SRC.indexOf(decl)
+      expect(at, decl).toBeGreaterThan(-1)
+      expect(at, decl).toBeLessThan(exec)
+    }
   })
 
   it('resolves permission mode against the TARGET project being restored into, not the caller\'s active one', () => {
