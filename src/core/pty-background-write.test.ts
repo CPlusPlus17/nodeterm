@@ -112,6 +112,8 @@ class FakeControlSpawn implements ControlSpawn {
       feed: (s) => onData?.(Buffer.from(s, 'latin1'))
     }
     this.children.push(child)
+    // argv's attach-session answers before commands subsequently written on stdin.
+    void Promise.resolve().then(() => child.feed('%begin 1700 0 0\n%end 1700 0 0\n'))
     return {
       stdin: {
         write: (s: string) => {

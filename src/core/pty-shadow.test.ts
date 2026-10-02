@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+vi.mock('./native-windows-pane', () => ({ NativeWindowsPane: class {} }))
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -128,6 +129,7 @@ class FakeControlSpawn implements ControlSpawn {
       feed: (s) => onData?.(Buffer.from(s, 'latin1'))
     }
     this.children.push(child)
+    void Promise.resolve().then(() => child.feed('%begin 1700 0 0\n%end 1700 0 0\n'))
     return {
       stdin: {
         write: (s: string) => {
