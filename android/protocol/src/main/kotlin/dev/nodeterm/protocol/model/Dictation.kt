@@ -18,9 +18,12 @@ package dev.nodeterm.protocol.model
  * How heard text meets the draft: the draft as it was when the dictation started is the [State.base];
  * every partial result shows as `base` + the words heard so far, and the final result replaces them
  * ([join]). So a draft typed before is kept and the dictation appends to it, an empty draft is filled,
- * and a partial result the recognizer then corrects is not left behind. Any other change to the draft
- * while listening (the user types, or Send clears it) ends the dictation ([Event.Edited]): later
- * results would otherwise be joined to the old base and bring back text the user deleted or sent.
+ * and a partial result the recognizer then corrects is not left behind. The screen puts the cursor at
+ * the end of every draft it writes from a [Step.draft], after the heard words, so typing after a
+ * dictation continues there. Any other change to the draft's text while listening (the user types, or
+ * Send clears it) ends the dictation ([Event.Edited]): later results would otherwise be joined to the
+ * old base and bring back text the user deleted or sent. Moving the cursor changes no text and is not
+ * an edit.
  * What the draft shows when a dictation is cancelled or fails stays in it, partial words included:
  * the user saw them there and can edit them.
  */

@@ -638,13 +638,17 @@ for the final result (finishing), and a second tap cancels, so a recognizer that
 cannot keep the button stuck. The final result is an event that fills the draft and returns to idle.
 The draft as it was when the dictation started is kept, and the heard words are appended after a
 space (none after a trailing space or newline). Each partial result replaces the previous one rather
-than piling up, and a blank final result keeps what the partial results showed. Any other change to
-the draft while listening (typing, or Send clearing it) ends the dictation, so its late results
-cannot bring back text that was sent or deleted. Whatever the draft shows when a dictation is
-cancelled or fails stays in it. Each of the 15 `SpeechRecognizer.ERROR_*` codes maps to a failure
-with a short message, and any other code to a generic one; a test reads the codes out of the
-android-all jar the type-check compiles against, and is skipped where that jar is not in the Gradle
-cache (CI). The microphone permission (`RECORD_AUDIO`) is asked for on the first tap. A refusal says
+than piling up, and a blank final result keeps what the partial results showed. Each time dictation
+writes the draft the cursor goes to its end, after the heard words, so typing after a dictation
+continues there. (The draft was a plain string at first, and the field's string overload keeps the
+previous cursor when the text is set from code: after dictating into an empty draft the cursor stayed
+at the start, and the next keystroke went in front of the words.) Any other change to the draft's
+text while listening (typing, or Send clearing it) ends the dictation, so its late results cannot
+bring back text that was sent or deleted; moving the cursor changes no text and ends nothing.
+Whatever the draft shows when a dictation is cancelled or fails stays in it. Each of the 15
+`SpeechRecognizer.ERROR_*` codes maps to a failure with a short message, and any other code to a
+generic one; a test reads the codes out of the android-all jar the type-check compiles against,
+and is skipped where that jar is not in the Gradle cache (CI). The microphone permission (`RECORD_AUDIO`) is asked for on the first tap. A refusal says
 how to allow it, and the manifest does not require a microphone. The button is hidden when
 `SpeechRecognizer.isRecognitionAvailable` is false, which on Android 11 and later needs the
 manifest's `<queries>` entry for `android.speech.RecognitionService`. The screen cancels a dictation
@@ -959,14 +963,16 @@ later fix left to a device.
 61. In a terminal, tap the mic beside Send. The first time, Android asks for the microphone: deny it,
     and the input bar says how to allow it; tap again and allow it. Speak a sentence: the words show in
     the draft as you speak, the final words replace them when you stop, and nothing reaches the pane
-    until you tap Send. With text already typed, the dictation is added after it with one space. Tap
+    until you tap Send. With text already typed, the dictation is added after it with one space. Type
+    right after a dictation, with the keyboard still up: the text goes at the end, after the dictated
+    words, both into an empty draft and after text typed before with the cursor moved into it. Tap
     the mic while speaking: it stops and fills the draft. Type while it listens: the dictation stops
-    and later words do not come back. Start one and say nothing: one line says so ("No speech heard."
-    or "Didn't catch that."), with an OK. In airplane mode, on a phone without offline speech
-    recognition, one line says it could not reach the network. Send the app to the background while
-    it listens: the microphone indicator (Android 12 and later) goes off. On a phone with no speech
-    recognition service (no Google app, say) the mic is not shown, and the keyboard's own voice typing
-    still fills the field. *(A59)*
+    and later words do not come back. Move the cursor while it listens: it keeps listening. Start one
+    and say nothing: one line says so ("No speech heard." or "Didn't catch that."), with an OK. In
+    airplane mode, on a phone without offline speech recognition, one line says it could not reach
+    the network. Send the app to the background while it listens: the microphone indicator (Android
+    12 and later) goes off. On a phone with no speech recognition service (no Google app, say) the mic
+    is not shown, and the keyboard's own voice typing still fills the field. *(A59)*
 
 ### A computer a desktop drives over SSH
 

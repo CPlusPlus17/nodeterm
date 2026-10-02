@@ -57,8 +57,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -76,11 +78,15 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
     val graph = NodetermApp.graph(context)
     val session = remember(hostId) { graph.connections.session(hostId) }
     val controller = remember(hostId, nodeId) { TerminalController(graph, session, nodeId) }
-    var draft by remember { mutableStateOf("") }
+    // The draft with its cursor, not just its text (review of A59): the field's String overload keeps
+    // the previous cursor when the text is set from code, so after a dictation the cursor sat where it
+    // was before it (at 0 in an empty draft) and the next keystroke went into the middle of the words.
+    var draft by remember { mutableStateOf(TextFieldValue()) }
     // The mic (audit A59) writes what it hears into the draft and nothing else: it has no way to send.
-    val dictation = remember { DictationController(context.applicationContext) { draft = it } }
+    // Its words go at the end of the draft, and so does the cursor, so typing after it continues there.
+    val dictation = remember { DictationController(context.applicationContext) { draft = cursorAtEnd(it) } }
     val askMic = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) dictation.start(draft) else dictation.denied()
+        if (granted) dictation.start(draft.text) else dictation.denied()
     }
 
     // Attached and watching only while the screen is STARTED (audit A18): in the background the
@@ -236,11 +242,13 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                 // The draft is cleared only once it was sent: while nothing is attached (connecting,
                 // disconnected, ended) Send is disabled and the keyboard's Send leaves the text in place,
                 // with the overlay above saying why (A41). Typing a draft meanwhile stays possible.
-                // Any change to the draft that is not dictation's ends a dictation (A59): its later
-                // results would bring back text that was sent or deleted.
+                // Any change to the draft's text that is not dictation's ends a dictation (A59): its
+                // later results would bring back text that was sent or deleted. Moving the cursor, or the
+                // keyboard marking the word it composes, changes no text and ends nothing: the field
+                // reports those too, which its String overload did not.
                 val send: () -> Unit = {
-                    if (controller.submit(draft, enter = true)) {
-                        draft = ""
+                    if (controller.submit(draft.text, enter = true)) {
+                        draft = TextFieldValue()
                         dictation.edited()
                     }
                 }
@@ -248,8 +256,9 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                     OutlinedTextField(
                         value = draft,
                         onValueChange = {
+                            val typed = it.text != draft.text
                             draft = it
-                            dictation.edited()
+                            if (typed) dictation.edited()
                         },
                         modifier = Modifier.weight(1f),
                         placeholder = { Text(if (dictation.active) "Listening…" else "Type a command or a prompt") },
@@ -265,7 +274,7 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
                             when {
                                 dictation.active -> dictation.stop()
                                 ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                                    PackageManager.PERMISSION_GRANTED -> dictation.start(draft)
+                                    PackageManager.PERMISSION_GRANTED -> dictation.start(draft.text)
                                 // Asked on the first tap; the answer starts the dictation or says why not.
                                 else -> askMic.launch(Manifest.permission.RECORD_AUDIO)
                             }
@@ -286,6 +295,12 @@ fun TerminalScreen(nav: Navigator, hostId: String, nodeId: String, title: String
         }
     }
 }
+
+/**
+ * A draft dictation wrote (review of A59): the cursor after its last character, where the heard words
+ * went ([dev.nodeterm.protocol.model.Dictation.join] appends them), and nothing selected or composing.
+ */
+private fun cursorAtEnd(text: String) = TextFieldValue(text, TextRange(text.length))
 
 /**
  * "Open <host>?" for a link tapped in the terminal (audit A32): the host, a choice, and the URL. The URL
