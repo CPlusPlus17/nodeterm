@@ -104,8 +104,10 @@ open class HostKeyChangedException protected constructor(
  * The first SSH connect to a paired computer met a host key that is none of the keys the computer
  * named in its sealed pairing answer (audit A49-anchor), or reported since through the relay (audit
  * A74-refresh, [LanRefresh]). Nothing was pinned, and this phone's key was never offered. A
- * [HostKeyChangedException], so [SshFallback] treats it as one: never used over SSH, and in Auto the
- * relay leg, which checks the computer on its own, is still tried.
+ * [HostKeyChangedException], so [SshFallback] routes it as one: never used over SSH, and in Auto the
+ * relay leg, which checks the computer on its own, is still tried. Its advice differs
+ * ([SshFallback.NOT_REPORTED_NOTE]): pairing again re-reads the same keys, so it is no way out when the
+ * computer's SSH server uses a key nodeterm on it cannot read.
  */
 class HostKeyNotPairedException(val paired: List<String>, actual: String) : HostKeyChangedException(
     paired.joinToString(" or "),

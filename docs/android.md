@@ -30,8 +30,8 @@ Settings ("How to reach each computer").
 
 **SSH host key.** Anchored in the pairing (audit `A49-anchor`): the desktop's sealed `/pair` answer
 names its SSH host keys (`sshHostKeyFingerprints`, the `SHA256:…` of every
-`/etc/ssh/ssh_host_*_key.pub` and of the keys `sshd_config` names, read by
-`src/main/ssh-host-keys.ts`; macOS 10.10 and older kept them in `/etc`). The phone stores them on
+`/etc/ssh/ssh_host_*_key.pub` and of the keys `sshd_config` and every file in `sshd_config.d/`
+name, read by `src/main/ssh-host-keys.ts`; macOS 10.10 and older kept them in `/etc`). The phone stores them on
 the paired computer (`PairedHost.sshHostKeyAnchors`), and its first SSH connect must present one of
 them: a server whose key is none of them is refused during the key exchange, before the phone's key
 is offered, and nothing is pinned (`HostKeyNotPairedException`). The keys ride only the SEALED
@@ -50,7 +50,11 @@ on my network" stops with the warning. The usual cause is benign: the LAN leg di
 the computer last reported (at pairing, or since through the relay, below), and another SSH-running
 machine now has it (or the phone is on another network using the same range). The message points at "Only through the relay". A reinstalled
 computer's new key is trusted again by the refresh below, or by pairing again (for a computer added
-by its SSH address, by forgetting it and adding it again). The iOS app can adopt the same field: it
+by its SSH address, by forgetting it and adding it again). A key the computer never reported
+(`HostKeyNotPairedException`) takes the same route but not that promise
+(`SshFallback.NOT_REPORTED_NOTE`): pairing again and the refresh both re-read the computer's keys the
+same way, so they help only when those keys changed, and an SSH server using a key the reader cannot
+see stays refused on the network (see Known gaps). The iOS app can adopt the same field: it
 is additive in the sealed answer, and a phone that does not read it pairs exactly as before (a
 follow-up for @eneskirca in nodeterm-ios).
 
@@ -448,7 +452,11 @@ OpenSSH prints them (`src/main/ssh-host-keys.test.ts` checks the desktop's reade
 pair), the parsing and the record, and that a plaintext answer's keys are ignored.
 `SshFallbackTest` pins what follows a failed SSH leg (`A74`): a changed key goes on to the relay in
 Auto with a warning, stops on the SSH-only route, and its text names "Only through the relay" rather
-than only re-pairing. `LanRefreshTest` pins the refresh (`A74-refresh`): only a relay listing counts,
+than only re-pairing; a key the computer never reported is sent to the relay without the promise
+that pairing again trusts it (review of `A49-anchor`). `HostKeyAnchorsTest` also pins, in the app's
+source, that its pin (`ConnectionManager.pinFor`) hands the verifier the anchors its record keeps and
+that the SSH dial uses that pin: the interface's default (no anchors) would compile without it.
+`LanRefreshTest` pins the refresh (`A74-refresh`): only a relay listing counts,
 only a dialable IPv4 is taken, reported keys replace a pin not among them and keep one that is, no
 keys leave the pin alone, and a computer added by its SSH address or paired relay-only is untouched.
 The app's use of them (the relay dial behind `RelayApprovalGate`, the warning on the host screen,
@@ -864,7 +872,10 @@ later fix left to a device.
     one the computer reported, and pins nothing. With a current desktop, regenerate its host keys
     (or move it to another address on the LAN) while the phone is away, connect through the relay,
     then come back: the next connect on the network dials the new address and accepts the new key
-    without pairing again, and the host screen's warning (when one was up) says what changed.
+    without pairing again, and the host screen's warning (when one was up) says what changed. On a
+    Linux computer, make sshd serve only a key the desktop cannot see (a `HostKey` outside
+    `/etc/ssh` with no `.pub` beside it) and pair: the phone refuses SSH, connects through the relay
+    on Automatic, and its warning says that pairing again changes this only if the keys changed.
     *(A49, A74)*
 12. On cellular, off the LAN: connect through the relay. The desktop shows the SAS dialog and the phone
     shows the same code; approve. Reconnect later: no second prompt. On another pairing press Deny: the
@@ -1264,10 +1275,22 @@ later fix left to a device.
   answer and the first connect must present one of them; an older desktop, one that could not read
   its keys, a computer paired before this build and one added by its SSH address still pin on first
   use (on the pairing LAN, right after the QR, so normally the real computer), where a server that
-  accepts any key could become the pin. An sshd that serves a key from a place `ssh-host-keys.ts`
-  does not read (a `HostKey` in a file `sshd_config` includes from elsewhere than `sshd_config.d/`,
-  or a relative path) is refused over SSH, as a key the computer did not report at pairing, and the
-  phone then uses the relay in Auto. The iOS app does not read the field yet. The relay refresh
+  accepts any key could become the pin. An sshd that serves a key `ssh-host-keys.ts` cannot see is
+  refused over SSH, as a key the computer did not report: a `HostKey` in a file `sshd_config`
+  includes from elsewhere than `sshd_config.d/`, a relative `HostKey` path, a key with no `.pub`
+  beside it (sshd needs only the private key), and a `HostKey` named only in a config file the
+  desktop's user cannot read (some distributions install `sshd_config` and its drop-ins readable by
+  root only; `/etc/ssh/ssh_host_*_key.pub` are still read there). Pairing again does not help: it
+  re-reads the same files and names the same keys, and the phone has no way to accept the key it was
+  refused (forgetting the computer and pairing again sets the same anchors). In Auto, with a relay
+  leg, the phone then uses the relay and keeps its warning up at every connect; with "Only on my
+  network", or a pairing with no relay leg, the computer is unreachable over SSH. The ways out:
+  choose "Only through the relay" for it; or make the key visible to nodeterm on the computer (a
+  readable `.pub` beside a key that is an `/etc/ssh/ssh_host_*_key` or a `HostKey` in a readable
+  config) and pair again, or let a relay connect report it; or forget it and add it by its SSH
+  address, which trusts on first use and has no relay or push (its screen's `ssh-keygen` command
+  reads only `/etc/ssh`, so compare the fingerprint with `ssh-keyscan localhost | ssh-keygen -lf -`
+  on the computer instead). The iOS app does not read the field yet. The relay refresh
   (`A74-refresh`) takes the same reader's answer as the truth: on a computer whose sshd serves a key
   the reader misses, it drops a pin that works (one trusted on first use with an older desktop) and
   the phone then uses the relay in Auto, as a fresh pairing there would. The refreshed address is the

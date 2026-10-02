@@ -48,6 +48,33 @@ object SshFallback {
             "(Settings → Phone) and pair again, which also trusts the computer's current key."
 
     /**
+     * For a key none of the reported keys name ([HostKeyNotPairedException], audit A49-anchor), in
+     * place of [REPAIR_NOTE] (review of A49-anchor). Those keys are what nodeterm on the computer read
+     * of its own SSH server, at pairing or since in a relay report ([LanRefresh]), and both read them
+     * the same way (`src/main/ssh-host-keys.ts`). So pairing again, or a report, changes which key the
+     * phone accepts only when the computer's keys changed since. When its SSH server uses a key that
+     * reader cannot see (one named in a config file it cannot open, or with no `.pub` beside it), every
+     * pairing and every report names the same keys again: promising otherwise sends the user round a
+     * loop that ends where it started, and the relay is the way that works.
+     */
+    const val NOT_REPORTED_NOTE =
+        "Pairing again, or the computer reporting its keys through the relay, changes this only if its SSH " +
+            "host keys changed since it reported them: nodeterm on the computer reads them the same way each " +
+            "time, so if its SSH server uses a key nodeterm cannot read there, the phone keeps refusing it on " +
+            "your network and reaches it only through the relay."
+
+    /**
+     * [NO_RELAY_ADVICE] for a [HostKeyNotPairedException]: pair again to GET a relay leg, without the
+     * promise that it also trusts the computer's key (see [NOT_REPORTED_NOTE]).
+     */
+    const val NOT_REPORTED_NO_RELAY_ADVICE =
+        "This phone has no relay connection to it yet: turn on remote access in nodeterm on the computer " +
+            "(Settings → Phone) and pair again, and the phone reaches it through the relay when your network " +
+            "refuses it. Pairing again changes which SSH key the phone accepts only if the computer's keys " +
+            "changed since it was paired: nodeterm on the computer reads them the same way each time, so if " +
+            "its SSH server uses a key nodeterm cannot read there, the phone keeps refusing it on your network."
+
+    /**
      * A computer added by its SSH address (audit A27) has no relay leg to fall back to, and no pairing
      * to repeat: forgetting it and adding it again is what trusts a new key.
      */
@@ -69,13 +96,18 @@ object SshFallback {
         }
         if (error is HostKeyChangedException) {
             val fact = error.message ?: "This computer's SSH host key changed."
+            // A changed pin and a key the computer never reported take the same route, but not the same
+            // promise: re-reading the computer's keys trusts a regenerated key, never one it cannot read.
+            val notReported = error is HostKeyNotPairedException
+            val noRelay = if (notReported) NOT_REPORTED_NO_RELAY_ADVICE else NO_RELAY_ADVICE
+            val note = if (notReported) NOT_REPORTED_NOTE else REPAIR_NOTE
             return when {
-                !relayConfigured -> Next.Stop("$fact $NO_RELAY_ADVICE")
-                !relayAllowed -> Next.Stop("$fact To reach it through the relay instead, $RELAY_ONLY_SETTING $REPAIR_NOTE")
+                !relayConfigured -> Next.Stop("$fact $noRelay")
+                !relayAllowed -> Next.Stop("$fact To reach it through the relay instead, $RELAY_ONLY_SETTING $note")
                 else -> Next.TryRelay(
-                    error = "On your network: $fact To reach it through the relay only, $RELAY_ONLY_SETTING $REPAIR_NOTE",
+                    error = "On your network: $fact To reach it through the relay only, $RELAY_ONLY_SETTING $note",
                     warning = "$fact The phone connected through the relay instead, which checks the computer's " +
-                        "identity separately. To stop trying your network for it, $RELAY_ONLY_SETTING $REPAIR_NOTE"
+                        "identity separately. To stop trying your network for it, $RELAY_ONLY_SETTING $note"
                 )
             }
         }

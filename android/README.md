@@ -212,7 +212,10 @@ iOS app does receive the detail, in the push the desktop sends.
   older desktop names none, and the first connect is then trust on first use. Either way the key is
   pinned on the first connect that authenticates (a server that refuses the phone's key is never
   pinned). A changed key is never used over SSH; in Auto the phone goes on to the relay, which
-  verifies the computer separately, and shows a warning.
+  verifies the computer separately, and shows a warning. If the computer's SSH server uses a host key
+  nodeterm on the computer cannot read (one with no readable `.pub` beside it, or one named only in a
+  config file that only root can read), SSH to it stays refused even after pairing again, which re-reads the
+  same keys; the relay still reaches it (see Known gaps in `docs/android.md`).
 - Over the relay (and only there) a current desktop also reports its LAN address and SSH host keys
   as they are now, and the phone updates the computer from that: the address it dials on your
   network, and a pin the computer's current keys no longer include (the next connect then has to

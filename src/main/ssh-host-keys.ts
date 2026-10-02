@@ -99,12 +99,19 @@ export function hostKeyPathsInSshdConfig(text: string): string[] {
   return out
 }
 
-/** The host key paths `<dir>/sshd_config` and its `sshd_config.d/*.conf` drop-ins configure. */
+/**
+ * The host key paths `<dir>/sshd_config` and every file in its `sshd_config.d/` configure. Every file,
+ * not only `*.conf`: which drop-ins sshd reads is its `Include` glob's call (`*.conf` on Debian and
+ * Fedora; a config may as well include the whole directory), and a key read from a drop-in sshd skips costs
+ * nothing (the list is a superset), while a key sshd serves from one this skipped makes the phone
+ * refuse SSH to its own computer, and pairing again would only read the same files (review of
+ * A49-anchor).
+ */
 async function configuredHostKeys(dir: string): Promise<string[]> {
   const files = [path.join(dir, 'sshd_config')]
   const dropIns = path.join(dir, 'sshd_config.d')
   const names = await fs.readdir(dropIns).catch(() => [] as string[])
-  for (const name of names.filter((n) => n.endsWith('.conf')).sort()) files.push(path.join(dropIns, name))
+  for (const name of [...names].sort()) files.push(path.join(dropIns, name))
   const out: string[] = []
   for (const file of files) {
     const text = await readSmallText(file)
@@ -115,8 +122,8 @@ async function configuredHostKeys(dir: string): Promise<string[]> {
 
 /**
  * The fingerprints of this computer's SSH host keys: every `ssh_host_*_key.pub` in [dirs], then the
- * `.pub` beside every key a `HostKey` line in `<dir>/sshd_config` (or a `sshd_config.d/*.conf`
- * drop-in) names (or that file itself when it is already a `.pub`, which sshd accepts when the private
+ * `.pub` beside every key a `HostKey` line in `<dir>/sshd_config` (or a file in `sshd_config.d/`)
+ * names (or that file itself when it is already a `.pub`, which sshd accepts when the private
  * key lives in an agent), in that order, without duplicates and at most [MAX_SSH_HOST_KEYS]. sshd serves one
  * of its keys per connection, so the list is a superset rather than a guess: a key here that sshd
  * does not serve costs nothing, a key sshd serves that is missing here makes the phone refuse SSH.
