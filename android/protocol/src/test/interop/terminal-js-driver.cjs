@@ -6,11 +6,13 @@
 // Usage: node terminal-js-driver.cjs <path to terminal.js>
 // stdin:  {"copyLimit": <number the stub bridge answers>, "osc52": ["<OSC 52 data>", ...],
 //          "textareaFocused": <bool, the textarea's focus before the calls>, "nt": ["<window.nt fn>", ...],
-//          "screen": {"cols": n, "rows": n, "viewportY": n,
+//          "screen": {"cols": n, "rows": n, "viewportY": n, "cellHeight": px,
 //                     "lines": [{"text": "...", "wrapped": <bool>, "links": [{"from": col, "to": col, "uri": "..."}]}]},
 //          "provideLinks": [<1-based buffer line>, ...],
 //          "linkHandler": ["<OSC 8 URI>", ...],
-//          "taps": [{"col": c, "row": <viewport row>, "move": [dx, dy], "fingers": n}],
+//          "fontSize": px,
+//          "taps": [{"col": c, "row": <viewport row>, "move": [dx, dy], "moves": [[dx,dy], ...], "fingers": n,
+//                    "before": [action, ...], "after": [action, ...], "frameDelay": ms}],
 //          "copySheet": <bool>}
 //         (every field but copyLimit is optional; with no "screen" the buffer is 80×24 and empty)
 // stdout: one JSON object:
@@ -18,7 +20,8 @@
 //    "nt": [{"fn": name, "focusChanges": ["blur" | "focus", ...], "focusedAfter": bool}],
 //    "provideLinks": [{"links": null | [{"text", "range", "opened": [url, ...]}]}],
 //    "linkHandler": [{"opened": [url, ...]}],
-//    "taps": [{"prevented": bool, "movePrevented": bool, "opened": [url, ...], "scrolls": [[up, notches], ...]}],
+//    "taps": [{"prevented": bool, "movePrevented": bool, "opened": [url, ...], "scrolls": [[up, notches], ...],
+//              "scrollsBeforeFrame": [...], "scrollFrames": [{"frame": n, "up": bool, "notches": n}], "inputs": [text, ...]}],
 //    "copySheet": {"raw": "<the JSON string the page handed onCopySheet>", "calls": n},
 //    "confirmCalls": n}
 // where an onCopy call's argument is reported as {"length": n, "sameAsInput": bool}, so a payload of
@@ -30,8 +33,12 @@
 // translateToString(trim) (a row's text padded to `cols` untrimmed, right-trimmed otherwise), and
 // getCell(col).extended.urlId for the cells of an OSC 8 link, whose URI `_core._oscLinkService` holds.
 // The screen element sits at (4, 2) with 10×20 px cells; a tap is a touchstart at the cell's centre,
-// a touchmove by `move` when given, and a touchend at the end point. `fingers` > 1 starts with that many
-// touches. "opened" lists the URLs the page handed bridge.openUrl.
+// touchmoves at offsets in `moves` (or one `move`), and a touchend at the end point. `fingers` > 1
+// starts with that many touches. Actions are {"nt": fn, "args": [...]}, {"event": "blur"|"pagehide"|"hidden"|
+// "touchcancel"|"multitouch"}, {"frame": true}, {"data": text} or {"binary": text}.
+// They run before touchstart or after touchend, before the queued
+// animation frames drain deterministically (16ms per frame, or `frameDelay` for the first frame).
+// "scrollsBeforeFrame" catches unbatched calls; "inputs" records bridge.onInput. "opened" lists URLs.
 'use strict'
 const fs = require('fs')
 const vm = require('vm')
@@ -43,6 +50,18 @@ let current = null
 let copyLimitCalls = 0
 let opened = []
 let scrolls = []
+let scrollFrames = []
+let inputs = []
+let frameNumber = 0
+let frameTime = 0
+let nextFrameId = 1
+const animationFrames = new Map()
+function requestAnimationFrame(callback) {
+  const id = nextFrameId++
+  animationFrames.set(id, callback)
+  return id
+}
+function cancelAnimationFrame(id) { animationFrames.delete(id) }
 let copySheetRaw = null
 let copySheetCalls = 0
 let confirmCalls = 0
@@ -68,9 +87,10 @@ const bridge = {
   },
   onResize() {},
   onReady() {},
-  onInput() {},
+  onInput(data) { inputs.push(data) },
   onScroll(up, notches) {
     scrolls.push([up, notches])
+    scrollFrames.push({ frame: frameNumber, up, notches })
   }
 }
 
@@ -78,7 +98,7 @@ const screenIn = input.screen || { cols: 80, rows: 24, lines: [] }
 const COLS = screenIn.cols
 const ROWS = screenIn.rows
 const CELL_W = 10
-const CELL_H = 20
+const CELL_H = screenIn.cellHeight === undefined ? 20 : screenIn.cellHeight
 const SCREEN_LEFT = 4
 const SCREEN_TOP = 2
 const linkUris = []
@@ -159,8 +179,8 @@ class Terminal {
     linkProviders.push(provider)
     return { dispose() {} }
   }
-  onData() {}
-  onBinary() {}
+  onData(fn) { this.dataCallback = fn }
+  onBinary(fn) { this.binaryCallback = fn }
   write() {}
   reset() {}
   focus() {
@@ -173,12 +193,17 @@ class Terminal {
     textareaFocused = false
     if (focusChanges) focusChanges.push('blur')
   }
-  paste() {}
+  paste(text) { if (this.dataCallback) this.dataCallback(text) }
 }
 class FitAddonStub {
   fit() {}
 }
 const hostListeners = {}
+const windowListeners = {}
+const documentListeners = {}
+function listen(listeners, type, fn) {
+  ;(listeners[type] = listeners[type] || []).push(fn)
+}
 const element = {
   addEventListener(type, fn) {
     ;(hostListeners[type] = hostListeners[type] || []).push(fn)
@@ -188,8 +213,11 @@ const element = {
 const sandbox = {
   Terminal,
   FitAddon: { FitAddon: FitAddonStub },
-  document: { getElementById: () => element },
-  window: { NodetermBridge: bridge, addEventListener() {} },
+  document: { getElementById: () => element, visibilityState: 'visible',
+    addEventListener(type, fn) { listen(documentListeners, type, fn) } },
+  window: { NodetermBridge: bridge, requestAnimationFrame, cancelAnimationFrame,
+    addEventListener(type, fn) { listen(windowListeners, type, fn) } },
+  performance: { now: () => frameTime },
   setTimeout: () => 0,
   // xterm's default OSC 8 activation asks with confirm(); the page must never get there.
   confirm() {
@@ -264,22 +292,61 @@ function dispatch(type, event) {
   for (const fn of hostListeners[type] || []) fn(event)
 }
 const tapped = []
+function actions(items) {
+  for (const action of items || []) {
+    if (action.nt) {
+      if (typeof nt[action.nt] !== 'function') fail('unknown nt action ' + action.nt)
+      nt[action.nt](...(action.args || []))
+    } else if (action.event) {
+      if (action.event === 'touchcancel') dispatch('touchcancel', { touches: [], changedTouches: [] })
+      else if (action.event === 'multitouch') dispatch('touchstart', { touches: [touchAt(10, 10), touchAt(60, 10)] })
+      else if (action.event === 'hidden') {
+        sandbox.document.visibilityState = 'hidden'
+        for (const fn of documentListeners.visibilitychange || []) fn()
+      } else {
+        for (const fn of windowListeners[action.event] || []) fn()
+      }
+    } else if (action.frame) runFrame()
+    else if (action.data !== undefined) createdTerm.dataCallback(action.data)
+    else if (action.binary !== undefined) createdTerm.binaryCallback(action.binary)
+  }
+}
+function runFrame(delay) {
+  if (!animationFrames.size) return
+  if (++frameNumber > 100) fail('scroll animation did not drain within 100 frames')
+  frameTime += delay === undefined ? 16 : delay
+  const callbacks = Array.from(animationFrames.values())
+  animationFrames.clear()
+  for (const callback of callbacks) callback(frameTime)
+}
+function drainFrames(firstDelay) {
+  let first = true
+  while (animationFrames.size) {
+    runFrame(first ? firstDelay : undefined)
+    first = false
+  }
+}
+if (input.fontSize !== undefined) nt.setFontSize(input.fontSize)
 for (const tap of input.taps || []) {
   opened = []
   scrolls = []
+  scrollFrames = []
+  inputs = []
+  frameNumber = 0
   let prevented = false
   let movePrevented = false
   const x = SCREEN_LEFT + tap.col * CELL_W + CELL_W / 2
   const y = SCREEN_TOP + tap.row * CELL_H + CELL_H / 2
   const fingers = tap.fingers || 1
   const start = []
+  actions(tap.before)
   for (let i = 0; i < fingers; i++) start.push(touchAt(x + i * 50, y))
   dispatch('touchstart', { touches: start, changedTouches: start, preventDefault() {} })
   let ex = x
   let ey = y
-  if (tap.move) {
-    ex = x + tap.move[0]
-    ey = y + tap.move[1]
+  for (const move of tap.moves || (tap.move ? [tap.move] : [])) {
+    ex = x + move[0]
+    ey = y + move[1]
     const moved = []
     for (let i = 0; i < fingers; i++) moved.push(touchAt(ex + i * 50, ey))
     dispatch('touchmove', { touches: moved, changedTouches: moved, preventDefault() { movePrevented = true } })
@@ -291,7 +358,10 @@ for (const tap of input.taps || []) {
       prevented = true
     }
   })
-  tapped.push({ prevented, movePrevented, opened, scrolls })
+  actions(tap.after)
+  const scrollsBeforeFrame = scrolls.slice()
+  drainFrames(tap.frameDelay)
+  tapped.push({ prevented, movePrevented, opened, scrolls, scrollsBeforeFrame, scrollFrames, inputs })
 }
 
 let copySheet = null

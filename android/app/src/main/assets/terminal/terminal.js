@@ -50,8 +50,8 @@
 
   // Keystrokes typed INTO the terminal (a hardware keyboard, or the soft keyboard when the user
   // taps the terminal itself) go straight to the pane.
-  term.onData(function (d) { bridge.onInput(d) })
-  term.onBinary(function (d) { bridge.onInput(d) })
+  term.onData(function (d) { cancelScroll(); bridge.onInput(d) })
+  term.onBinary(function (d) { cancelScroll(); bridge.onInput(d) })
 
   // Copy: tmux's copy-mode emits OSC 52 (set-clipboard on). The whole sequence goes to Kotlin's
   // Osc52.parse, which mirrors the desktop's parseOsc52: the ';' is required, a read query ('?') is
@@ -314,14 +314,68 @@
   var acc = 0
   var tapX = null
   var tapY = null
+  // Stock tmux advances five history rows per wheel notch (measured with the beta's real SSH
+  // client). Match the finger's distance to those rows instead of moving five rows for one row
+  // of touch movement. A host with custom wheel bindings can have a different scroll distance.
+  var WHEEL_ROWS = 5
+  var scrollStep = fontSize * 1.4 * WHEEL_ROWS
+  var pendingScroll = []
+  var scrollFrame = null
+  var scrollRequestedAt = 0
+  var scrollActive = true
+  function cancelScroll() {
+    if (scrollFrame !== null) window.cancelAnimationFrame(scrollFrame)
+    scrollFrame = null
+    pendingScroll = []
+    acc = 0
+    startY = null
+    tapX = null
+  }
+  function scheduleScroll() {
+    if (scrollFrame !== null || !pendingScroll.length || !scrollActive) return
+    scrollRequestedAt = performance.now()
+    scrollFrame = window.requestAnimationFrame(function (time) {
+      scrollFrame = null
+      // A suspended page must not replay an old swipe after returning or after an input/reset.
+      if (time - scrollRequestedAt > 250) { cancelScroll(); return }
+      var next = pendingScroll[0]
+      if (!next || !scrollActive) return
+      // Both transports clamp to 20. Retain the rest and drain one ordered request per frame,
+      // including after touchend, rather than silently losing a fast swipe's distance.
+      var notches = Math.min(20, next.notches)
+      next.notches -= notches
+      if (!next.notches) pendingScroll.shift()
+      bridge.onScroll(next.up, notches)
+      scheduleScroll()
+    })
+  }
+  function queueScroll(up, notches) {
+    if (!notches || !scrollActive) return
+    var last = pendingScroll[pendingScroll.length - 1]
+    if (last && last.up === up) last.notches += notches
+    else pendingScroll.push({ up: up, notches: notches })
+    scheduleScroll()
+  }
+  function measuredScrollStep() {
+    var screen = term.element && term.element.querySelector('.xterm-screen')
+    var rowHeight = screen && term.rows > 0 ? screen.getBoundingClientRect().height / term.rows : 0
+    return (rowHeight > 0 && isFinite(rowHeight) ? rowHeight : fontSize * 1.4) * WHEEL_ROWS
+  }
+  window.addEventListener('pagehide', cancelScroll)
+  window.addEventListener('blur', cancelScroll)
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') cancelScroll()
+  })
   host.addEventListener('touchstart', function (e) {
     if (e.touches.length === 1) {
       startY = e.touches[0].clientY
       acc = 0
+      // Measure once per gesture; querying layout on every touchmove would force repeated work.
+      scrollStep = measuredScrollStep()
       tapX = e.touches[0].clientX
       tapY = e.touches[0].clientY
     } else {
-      tapX = null
+      cancelScroll()
     }
   }, { passive: true })
   host.addEventListener('touchmove', function (e) {
@@ -330,13 +384,12 @@
     if (tapX !== null && (Math.abs(e.touches[0].clientX - tapX) > TAP_SLOP || Math.abs(y - tapY) > TAP_SLOP)) tapX = null
     acc += y - startY
     startY = y
-    var step = fontSize * 1.4
-    var up = 0
-    var down = 0
-    while (acc > step) { acc -= step; up++ }
-    while (acc < -step) { acc += step; down++ }
-    if (up) bridge.onScroll(true, up)
-    if (down) bridge.onScroll(false, down)
+    var notches = Math.floor(Math.abs(acc) / scrollStep)
+    if (notches) {
+      var up = acc > 0
+      acc -= (up ? 1 : -1) * notches * scrollStep
+      queueScroll(up, notches)
+    }
     e.preventDefault()
   }, { passive: false })
   host.addEventListener('touchend', function (e) {
@@ -351,16 +404,18 @@
     e.preventDefault()
     openUrl(url)
   }, { passive: false })
-  host.addEventListener('touchcancel', function () {
-    startY = null
-    tapX = null
-  }, { passive: true })
+  host.addEventListener('touchcancel', cancelScroll, { passive: true })
 
   window.nt = {
     write: function (b64) { term.write(b64ToBytes(b64)) },
     // The attach snapshot: the current screen, painted before live output.
-    paint: function (b64) { term.reset(); term.write(b64ToText(b64).replace(/\r?\n/g, '\r\n')) },
-    reset: function () { term.reset() },
+    paint: function (b64) { cancelScroll(); term.reset(); term.write(b64ToText(b64).replace(/\r?\n/g, '\r\n')) },
+    reset: function () { cancelScroll(); term.reset() },
+    cancelScroll: cancelScroll,
+    suspendScroll: function () { scrollActive = false; cancelScroll() },
+    resumeScroll: function () { scrollActive = true },
+    // Native raw chips cancel on this JS thread before their input reaches the host.
+    raw: function (b64) { cancelScroll(); bridge.onInput(b64ToText(b64)) },
     focus: function () { term.focus() },
     blur: function () { term.blur() },
     // The ⌨ chip (audit A46): the Kotlin side has just given the WebView Android's focus and asks
@@ -371,7 +426,7 @@
     focusForKeyboard: function () { term.blur(); term.focus() },
     // The Copy sheet (audit A32): what the buffer holds, as JSON, for the app to show.
     copySheet: function () { bridge.onCopySheet(JSON.stringify(snapshot())) },
-    setFontSize: function (n) { fontSize = n; term.options.fontSize = n; doFit(true) },
+    setFontSize: function (n) { cancelScroll(); fontSize = n; term.options.fontSize = n; doFit(true) },
     refit: function () { doFit(true) },
     // A composed line from the native input bar. `term.paste` frames it as a bracketed paste when
     // the client side asked for one, so a multi-line prompt reaches an agent CLI as ONE paste; the
@@ -380,6 +435,7 @@
     // Special keys from the native key row. Arrows follow the pane's DECCKM state, which this
     // emulator tracks because it parses the very stream the pane writes.
     key: function (name) {
+      cancelScroll()
       var app = term.modes.applicationCursorKeysMode
       var csi = app ? '\x1bO' : '\x1b['
       var map = {
@@ -391,6 +447,7 @@
       if (seq) bridge.onInput(seq)
     },
     submit: function (b64, enter) {
+      cancelScroll()
       var text = b64ToText(b64)
       if (text) term.paste(text)
       if (enter) setTimeout(function () { bridge.onInput('\r') }, text ? 150 : 0)
